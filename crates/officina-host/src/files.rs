@@ -14,6 +14,10 @@ use officina_core::events::{EVENT_LINE_VERSION, EventLine};
 /// only, so each write lands at the current end of file whatever other
 /// writers do; one write per line is what keeps concurrent hooks from
 /// interleaving (stress-tested, AD-10). Creates the directory on first use.
+///
+/// A writer killed mid-line leaves the file without a final newline; the next
+/// line then starts with one, so it is not glued to the partial line and lost
+/// with it. Two writers doing this at once only produce an empty line.
 pub fn append_line(path: &Path, line: &str) -> io::Result<()> {
     let open = || OpenOptions::new().append(true).create(true).open(path);
     let mut file = match open() {
@@ -26,7 +30,20 @@ pub fn append_line(path: &Path, line: &str) -> io::Result<()> {
         }
         Err(e) => return Err(e),
     };
-    file.write_all(line.as_bytes())
+    if ends_without_newline(path) {
+        file.write_all(format!("\n{line}").as_bytes())
+    } else {
+        file.write_all(line.as_bytes())
+    }
+}
+
+fn ends_without_newline(path: &Path) -> bool {
+    use std::io::{Read, Seek, SeekFrom};
+    let Ok(mut file) = fs::File::open(path) else {
+        return false;
+    };
+    let mut last = [0u8; 1];
+    file.seek(SeekFrom::End(-1)).is_ok() && file.read_exact(&mut last).is_ok() && last[0] != b'\n'
 }
 
 /// Replaces `path` with `content` atomically: temp file in the same directory,
@@ -71,17 +88,33 @@ pub fn event_file_for(events_dir: &Path, now_ms: i64) -> std::path::PathBuf {
 
 /// Events of the last two UTC days, plus the number of lines that could not
 /// be parsed. A partial last line (hook killed mid-write) and lines of another
-/// format version are not corrupt; anything else that fails to parse is.
+/// format version are not corrupt; anything else that fails to parse is,
+/// including a line that is not valid UTF-8. Lines are decoded one by one, so
+/// a bad byte costs one line, never the whole day.
 pub fn read_recent_events(events_dir: &Path, now_ms: i64) -> (Vec<EventLine>, u32) {
     let mut events = Vec::new();
     let mut corrupt = 0u32;
     for name in event_files_to_read(now_ms) {
-        let Ok(content) = fs::read_to_string(events_dir.join(&name)) else {
-            continue;
+        let bytes = match fs::read(events_dir.join(&name)) {
+            Ok(bytes) => bytes,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
+            Err(_) => {
+                corrupt += 1;
+                continue;
+            }
         };
-        let ends_with_newline = content.ends_with('\n');
-        let lines: Vec<&str> = content.lines().collect();
-        for (index, line) in lines.iter().enumerate() {
+        let ends_with_newline = bytes.ends_with(b"\n");
+        let raw_lines: Vec<&[u8]> = bytes.split(|b| *b == b'\n').collect();
+        let last_index = raw_lines.len().saturating_sub(1);
+        for (index, raw) in raw_lines.iter().enumerate() {
+            let is_partial_tail = index == last_index && !ends_with_newline;
+            let Ok(line) = std::str::from_utf8(raw) else {
+                if !is_partial_tail {
+                    corrupt += 1;
+                }
+                continue;
+            };
+            let line = line.trim_end_matches('\r');
             if line.trim().is_empty() {
                 continue;
             }
@@ -89,7 +122,6 @@ pub fn read_recent_events(events_dir: &Path, now_ms: i64) -> (Vec<EventLine>, u3
                 Ok(event) if event.v == EVENT_LINE_VERSION => events.push(event),
                 Ok(_) => {}
                 Err(_) => {
-                    let is_partial_tail = index + 1 == lines.len() && !ends_with_newline;
                     let is_foreign_version = serde_json::from_str::<serde_json::Value>(line)
                         .ok()
                         .and_then(|v| v.get("v").and_then(serde_json::Value::as_u64))
@@ -167,6 +199,29 @@ mod tests {
         let (read, corrupt) = read_recent_events(dir.path(), NOW);
         assert_eq!(read.len(), 2);
         assert_eq!(corrupt, 1);
+    }
+
+    #[test]
+    fn invalid_utf8_costs_one_line_and_a_partial_line_does_not_swallow_the_next() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = event_file_for(dir.path(), NOW);
+        let mut content = line(NOW, "Stop").into_bytes();
+        content.extend_from_slice(b"{\"v\":1,\"bad\":\"\xff\xfe\"}\n");
+        content.extend_from_slice(line(NOW, "Stop").as_bytes());
+        content.extend_from_slice(b"{\"v\":1,\"ts\":5,\"ev");
+        fs::write(&file, content).unwrap();
+
+        append_line(&file, &line(NOW, "SessionEnd")).unwrap();
+
+        let (read, corrupt) = read_recent_events(dir.path(), NOW);
+        assert_eq!(
+            read.iter().map(|e| e.event.as_str()).collect::<Vec<_>>(),
+            ["Stop", "Stop", "SessionEnd"]
+        );
+        assert_eq!(
+            corrupt, 2,
+            "the invalid UTF-8 line and the now-closed partial line"
+        );
     }
 
     #[test]
