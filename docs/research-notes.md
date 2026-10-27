@@ -239,6 +239,21 @@ Windows 11.
   `CLAUDE_PROJECT_DIR` or the project of `cwd` is guarded, so `cd ..` does
   not leave containment.
 
+## E16. A contained model call for triage
+
+- **Verified (2.1.312, Haiku, from an empty folder).** `claude -p <prompt>
+  --model haiku --tools "" --strict-mcp-config --mcp-config
+  '{"mcpServers":{}}' --setting-sources "" --output-format json
+  --json-schema <schema>` runs and returns the constrained answer in
+  `structured_output` (with `result` holding the same JSON as text).
+- **Verified.** Asked to run a shell command, that call has no tool: it
+  wrote a fake tool call and a fake result in its text, ran nothing (one
+  turn, no file created). Model text is untrusted even when it describes
+  actions; only the schema-constrained field may be read.
+- **Measured.** One triage proposal on a short excerpt: about 4.5k input
+  tokens (system prompt, cached for an hour) and 380 output tokens (260 of
+  thinking), USD 0.0011 at API prices.
+
 ## E7. Configuration directory
 
 - **Documented.** `CLAUDE_CONFIG_DIR` redirects settings, session history and
