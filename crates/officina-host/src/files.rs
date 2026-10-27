@@ -1,0 +1,197 @@
+//! File primitives (AD-9, AD-10): single-write appends, atomic replaces, the
+//! event buffer reader and its retention pass.
+
+use std::fs::{self, OpenOptions};
+use std::io::{self, Write};
+use std::path::Path;
+use std::time::Duration;
+
+use officina_core::dates::{event_file_name, event_files_to_read, is_expired_event_file};
+use officina_core::events::{EVENT_LINE_VERSION, EventLine};
+
+/// Appends `line` to `path` with one `write_all` on a file opened in append
+/// mode. On Windows, Rust opens append-mode files with `FILE_APPEND_DATA`
+/// only, so each write lands at the current end of file whatever other
+/// writers do; one write per line is what keeps concurrent hooks from
+/// interleaving (stress-tested, AD-10). Creates the directory on first use.
+pub fn append_line(path: &Path, line: &str) -> io::Result<()> {
+    let open = || OpenOptions::new().append(true).create(true).open(path);
+    let mut file = match open() {
+        Ok(file) => file,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {
+            if let Some(dir) = path.parent() {
+                fs::create_dir_all(dir)?;
+            }
+            open()?
+        }
+        Err(e) => return Err(e),
+    };
+    file.write_all(line.as_bytes())
+}
+
+/// Replaces `path` with `content` atomically: temp file in the same directory,
+/// flushed, then renamed over the target. A third-party handle (antivirus,
+/// indexer) can make the rename fail transiently, hence three retries.
+pub fn atomic_write(path: &Path, content: &[u8]) -> io::Result<()> {
+    let dir = path
+        .parent()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "path has no parent"))?;
+    fs::create_dir_all(dir)?;
+    let file_name = path
+        .file_name()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "path has no file name"))?;
+    let tmp = dir.join(format!(
+        "{}.{}.tmp",
+        file_name.to_string_lossy(),
+        std::process::id()
+    ));
+    {
+        let mut file = fs::File::create(&tmp)?;
+        file.write_all(content)?;
+        file.sync_all()?;
+    }
+    let mut last_error = None;
+    for attempt in 0..4 {
+        if attempt > 0 {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        match fs::rename(&tmp, path) {
+            Ok(()) => return Ok(()),
+            Err(e) => last_error = Some(e),
+        }
+    }
+    let _ = fs::remove_file(&tmp);
+    Err(last_error.unwrap_or_else(|| io::Error::other("rename failed")))
+}
+
+/// Path of the event file a hook running at `now_ms` appends to.
+pub fn event_file_for(events_dir: &Path, now_ms: i64) -> std::path::PathBuf {
+    events_dir.join(event_file_name(now_ms))
+}
+
+/// Events of the last two UTC days, plus the number of lines that could not
+/// be parsed. A partial last line (hook killed mid-write) and lines of another
+/// format version are not corrupt; anything else that fails to parse is.
+pub fn read_recent_events(events_dir: &Path, now_ms: i64) -> (Vec<EventLine>, u32) {
+    let mut events = Vec::new();
+    let mut corrupt = 0u32;
+    for name in event_files_to_read(now_ms) {
+        let Ok(content) = fs::read_to_string(events_dir.join(&name)) else {
+            continue;
+        };
+        let ends_with_newline = content.ends_with('\n');
+        let lines: Vec<&str> = content.lines().collect();
+        for (index, line) in lines.iter().enumerate() {
+            if line.trim().is_empty() {
+                continue;
+            }
+            match serde_json::from_str::<EventLine>(line) {
+                Ok(event) if event.v == EVENT_LINE_VERSION => events.push(event),
+                Ok(_) => {}
+                Err(_) => {
+                    let is_partial_tail = index + 1 == lines.len() && !ends_with_newline;
+                    let is_foreign_version = serde_json::from_str::<serde_json::Value>(line)
+                        .ok()
+                        .and_then(|v| v.get("v").and_then(serde_json::Value::as_u64))
+                        .is_some_and(|v| v != u64::from(EVENT_LINE_VERSION));
+                    if !is_partial_tail && !is_foreign_version {
+                        corrupt += 1;
+                    }
+                }
+            }
+        }
+    }
+    (events, corrupt)
+}
+
+/// Deletes event files older than yesterday (UTC). Never called by the hook.
+/// Returns how many files were removed.
+pub fn retention_pass(events_dir: &Path, now_ms: i64) -> usize {
+    let Ok(entries) = fs::read_dir(events_dir) else {
+        return 0;
+    };
+    entries
+        .filter_map(Result::ok)
+        .filter(|e| is_expired_event_file(&e.file_name().to_string_lossy(), now_ms))
+        .filter(|e| fs::remove_file(e.path()).is_ok())
+        .count()
+}
+
+/// Current time in Unix milliseconds.
+pub fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const DAY: i64 = 86_400_000;
+    const NOW: i64 = 1_793_102_400_000;
+
+    fn line(ts: i64, event: &str) -> String {
+        format!("{{\"v\":1,\"ts\":{ts},\"event\":\"{event}\",\"session_id\":\"s\"}}\n")
+    }
+
+    #[test]
+    fn append_creates_directory_and_reader_spans_two_days() {
+        let dir = tempfile::tempdir().unwrap();
+        let events = dir.path().join("events");
+        append_line(
+            &event_file_for(&events, NOW - DAY),
+            &line(NOW - DAY, "SessionStart"),
+        )
+        .unwrap();
+        append_line(&event_file_for(&events, NOW), &line(NOW, "Stop")).unwrap();
+        append_line(&event_file_for(&events, NOW - 2 * DAY), &line(1, "Old")).unwrap();
+        let (read, corrupt) = read_recent_events(&events, NOW);
+        assert_eq!(
+            read.iter().map(|e| e.event.as_str()).collect::<Vec<_>>(),
+            ["SessionStart", "Stop"]
+        );
+        assert_eq!(corrupt, 0);
+    }
+
+    #[test]
+    fn partial_tail_and_foreign_version_are_not_corrupt_garbage_is() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = event_file_for(dir.path(), NOW);
+        let content = format!(
+            "{}garbage line\n{{\"v\":2,\"ts\":1,\"event\":\"X\",\"new\":true}}\n{}{{\"v\":1,\"ts\":5,\"ev",
+            line(NOW, "Stop"),
+            line(NOW, "Stop")
+        );
+        fs::write(&file, content).unwrap();
+        let (read, corrupt) = read_recent_events(dir.path(), NOW);
+        assert_eq!(read.len(), 2);
+        assert_eq!(corrupt, 1);
+    }
+
+    #[test]
+    fn atomic_write_replaces_and_leaves_no_temp_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("sub").join("q.json");
+        atomic_write(&target, b"one").unwrap();
+        atomic_write(&target, b"two").unwrap();
+        assert_eq!(fs::read_to_string(&target).unwrap(), "two");
+        let names: Vec<_> = fs::read_dir(target.parent().unwrap())
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert_eq!(names.len(), 1);
+    }
+
+    #[test]
+    fn retention_removes_only_expired_event_files() {
+        let dir = tempfile::tempdir().unwrap();
+        for ts in [NOW, NOW - DAY, NOW - 2 * DAY, NOW - 9 * DAY] {
+            append_line(&event_file_for(dir.path(), ts), &line(ts, "Stop")).unwrap();
+        }
+        fs::write(dir.path().join("keep.txt"), "x").unwrap();
+        assert_eq!(retention_pass(dir.path(), NOW), 2);
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 3);
+        assert_eq!(retention_pass(&dir.path().join("missing"), NOW), 0);
+    }
+}

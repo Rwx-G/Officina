@@ -1,0 +1,24 @@
+[package]
+name = "officina-host"
+description = "Officina host layer: paths, claude invocation, event buffer, quota and state files, collector, platform calls."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+officina-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror = "2.0.21"
+
+[lints]
+workspace = true
+
+[target."cfg(windows)".dependencies]
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_System_Diagnostics_ToolHelp", "Win32_System_Threading"] }
+
+[dev-dependencies]
+tempfile = "3.27.0"

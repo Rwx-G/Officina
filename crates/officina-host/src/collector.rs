@@ -1,0 +1,230 @@
+//! Gathers every source into a [`Board`] (AD-2 to AD-5). The CLI calls it once;
+//! the window drives it from its collector thread (see [`crate::watch`]).
+
+use std::fs;
+use std::path::{Path, PathBuf};
+
+use officina_core::agents::{AgentRecord, parse_agents};
+use officina_core::board::{Board, BoardInput, ContractView, ProjectRule, Staleness, build_board};
+use officina_core::contract::check_agents;
+use officina_core::floor::{FloorFile, parse_floor, resolve_project_path};
+use officina_core::quota::{QuotaFile, parse_quota_file};
+use serde::{Deserialize, Serialize};
+
+use crate::claude;
+use crate::files::{atomic_write, read_recent_events};
+use crate::paths::{Paths, excerpts_disabled_by_env};
+
+/// Why the collector cannot start at all.
+#[derive(Debug, thiserror::Error)]
+pub enum CollectorError {
+    #[error("no home directory: set OFFICINA_HOME or USERPROFILE")]
+    NoHome,
+}
+
+/// A floor file as loaded, with the problem that prevented using it.
+#[derive(Debug, Clone, Default)]
+pub struct LoadedFloor {
+    pub path: Option<PathBuf>,
+    pub file: Option<FloorFile>,
+    pub projects: Vec<ProjectRule>,
+    pub error: Option<String>,
+}
+
+/// Loads and resolves the floor file, if any.
+pub fn load_floor(path: Option<&Path>) -> LoadedFloor {
+    let Some(path) = path else {
+        return LoadedFloor::default();
+    };
+    let loaded = |error: String| LoadedFloor {
+        path: Some(path.to_path_buf()),
+        error: Some(error),
+        ..Default::default()
+    };
+    let content = match fs::read_to_string(path) {
+        Ok(c) => c,
+        Err(e) => return loaded(format!("{}: {e}", path.display())),
+    };
+    let file = match parse_floor(&content) {
+        Ok(f) => f,
+        Err(e) => return loaded(format!("{}: {e}", path.display())),
+    };
+    let floor_dir = path
+        .parent()
+        .map(|d| d.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let projects = file
+        .projects
+        .iter()
+        .map(|p| ProjectRule {
+            name: p.name.clone(),
+            path: resolve_project_path(&floor_dir, &p.path),
+            color: p.color,
+        })
+        .collect();
+    LoadedFloor {
+        path: Some(path.to_path_buf()),
+        file: Some(file),
+        projects,
+        error: None,
+    }
+}
+
+/// Contract results per Claude Code version, `state/contract.json` (AD-8).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ContractStore {
+    pub schema: u32,
+    pub versions: std::collections::BTreeMap<String, ContractRecord>,
+}
+
+/// One version's contract result.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ContractRecord {
+    pub checked_at: i64,
+    pub held: bool,
+    pub missing: Vec<String>,
+    pub not_observed: Vec<String>,
+}
+
+/// The collector's state between two boards.
+#[derive(Debug)]
+pub struct Collector {
+    pub paths: Paths,
+    pub floor: LoadedFloor,
+    pub claude: Option<PathBuf>,
+    agents: Option<Vec<AgentRecord>>,
+    agents_raw: Option<Vec<serde_json::Value>>,
+    stale: Option<Staleness>,
+    contract: ContractView,
+}
+
+impl Collector {
+    /// Resolves paths, the floor and the `claude` binary.
+    pub fn new(floor_arg: Option<&Path>) -> Result<Collector, CollectorError> {
+        let paths = Paths::from_env(floor_arg).ok_or(CollectorError::NoHome)?;
+        let floor = load_floor(paths.floor_file.as_deref());
+        let config_dir = floor.file.as_ref().and_then(|f| f.config_dir.clone());
+        let paths = paths.with_floor_config_dir(config_dir.as_deref());
+        Ok(Collector::from_parts(
+            paths,
+            floor,
+            claude::resolve_claude(),
+        ))
+    }
+
+    /// Builds a collector from already resolved parts. Used by tests, which
+    /// must not depend on the process environment.
+    pub fn from_parts(paths: Paths, floor: LoadedFloor, claude: Option<PathBuf>) -> Collector {
+        Collector {
+            paths,
+            floor,
+            claude,
+            agents: None,
+            agents_raw: None,
+            stale: None,
+            contract: ContractView::default(),
+        }
+    }
+
+    /// Runs `claude agents --json --all`. On failure the previous list is
+    /// kept and the board is marked stale (FR-1): a failed call never empties
+    /// the board.
+    pub fn refresh_agents(&mut self, now_ms: i64) {
+        let result = match &self.claude {
+            None => Err(claude::ClaudeError::NotFound.to_string()),
+            Some(bin) => claude::agents_json(bin, self.paths.claude_config_override.as_deref())
+                .map_err(|e| e.to_string())
+                .and_then(|out| {
+                    let raw: Vec<serde_json::Value> = serde_json::from_str(out.trim())
+                        .map_err(|e| format!("claude agents output is not a JSON array: {e}"))?;
+                    let records = parse_agents(out.trim()).map_err(|e| e.to_string())?;
+                    Ok((raw, records))
+                }),
+        };
+        match result {
+            Ok((raw, records)) => {
+                self.agents = Some(records);
+                self.agents_raw = Some(raw);
+                self.stale = None;
+            }
+            Err(error) => {
+                let since_ms = self.stale.as_ref().map_or(now_ms, |s| s.since_ms);
+                self.stale = Some(Staleness { since_ms, error });
+            }
+        }
+    }
+
+    /// Runs the contract canary for the current `claude` version against the
+    /// last agents sample, stores the result and shows it on the board.
+    pub fn refresh_contract(&mut self, now_ms: i64) {
+        let Some(bin) = &self.claude else {
+            return;
+        };
+        let version = claude::version(bin, self.paths.claude_config_override.as_deref()).ok();
+        let Some(raw) = &self.agents_raw else {
+            self.contract.claude_version = version;
+            return;
+        };
+        let check = check_agents(raw);
+        self.contract = ContractView {
+            claude_version: version.clone(),
+            held: Some(check.held()),
+            missing: check.missing.clone(),
+        };
+        if let Some(version) = version {
+            let path = self.paths.state_dir().join("contract.json");
+            let mut store: ContractStore = fs::read_to_string(&path)
+                .ok()
+                .and_then(|c| serde_json::from_str(&c).ok())
+                .unwrap_or(ContractStore {
+                    schema: 1,
+                    ..Default::default()
+                });
+            store.versions.insert(
+                version,
+                ContractRecord {
+                    checked_at: now_ms,
+                    held: check.held(),
+                    missing: check.missing,
+                    not_observed: check.not_observed,
+                },
+            );
+            if let Ok(bytes) = serde_json::to_vec_pretty(&store) {
+                let _ = atomic_write(&path, &bytes);
+            }
+        }
+    }
+
+    /// The quota file of this floor's account, if readable.
+    pub fn read_quota(&self) -> Option<QuotaFile> {
+        parse_quota_file(&fs::read_to_string(self.paths.quota_file()).ok()?)
+    }
+
+    /// Computes the board from the current state and the files on disk.
+    pub fn board(&self, now_ms: i64) -> Board {
+        let (events, corrupt_event_lines) = read_recent_events(&self.paths.events_dir(), now_ms);
+        let floor_file = self.floor.file.as_ref();
+        let input = BoardInput {
+            agents: self.agents.clone(),
+            stale: self.stale.clone(),
+            events,
+            corrupt_event_lines,
+            quota: self.read_quota(),
+            floor_name: floor_file.and_then(|f| f.name.clone()),
+            projects: self.floor.projects.clone(),
+            contract: self.contract.clone(),
+            no_excerpts: excerpts_disabled_by_env() || floor_file.is_some_and(|f| f.no_excerpts),
+        };
+        let mut board = build_board(&input, now_ms);
+        board.diagnostics.floor_error.clone_from(&self.floor.error);
+        board
+    }
+
+    /// Looks up a card of the last board by key, for the focus action.
+    pub fn agent_by_key(&self, key: &str) -> Option<&AgentRecord> {
+        self.agents
+            .iter()
+            .flatten()
+            .find(|r| officina_core::board::card_key(r).as_deref() == Some(key))
+    }
+}
