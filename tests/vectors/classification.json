@@ -60,6 +60,26 @@
       ]
     },
     {
+      "name": "live status wins over a lagging state: busy and blocked is working, idle and blocked needs you",
+      "now_ms": 1761555600000,
+      "agents": [
+        {"pid": 4700, "id": "bg20", "cwd": "C:/work/repo-b", "kind": "background", "startedAt": 1761550000000, "sessionId": "00000000-0000-0000-0000-000000000030", "name": "j", "status": "busy", "state": "blocked"},
+        {"pid": 4701, "id": "bg21", "cwd": "C:/work/repo-b", "kind": "background", "startedAt": 1761551000000, "sessionId": "00000000-0000-0000-0000-000000000031", "name": "k", "status": "idle", "state": "blocked", "waitingFor": "dialog open"}
+      ],
+      "events": [],
+      "expect": [
+        {"key": "bg:bg21", "column": "needs_you", "badge": null, "waiting_for": "dialog open"},
+        {"key": "bg:bg20", "column": "working", "badge": null, "waiting_for": null}
+      ]
+    },
+    {
+      "name": "an elicitation dialog notification blocks a session without live status",
+      "now_ms": 1761555600000,
+      "agents": [{"id": "bg22", "cwd": "C:/work/repo-b", "kind": "background", "startedAt": 1761550000000, "sessionId": "00000000-0000-0000-0000-000000000032", "name": "l"}],
+      "events": [{"v": 1, "ts": 1761555500000, "event": "Notification", "session_id": "00000000-0000-0000-0000-000000000032", "notification_type": "elicitation_dialog"}],
+      "expect": [{"key": "bg:bg22", "column": "needs_you", "badge": null, "waiting_for": null}]
+    },
+    {
       "name": "done older than the window is not listed",
       "now_ms": 1761555600000,
       "agents": [{"id": "bg06", "cwd": "C:/work/repo-b", "kind": "background", "startedAt": 1761400000000, "sessionId": "00000000-0000-0000-0000-000000000009", "name": "f", "state": "done"}],

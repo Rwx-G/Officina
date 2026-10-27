@@ -85,6 +85,7 @@ fn vector_set_covers_every_column_badge_and_documented_value() {
     let mut statuses = BTreeSet::new();
     let mut states = BTreeSet::new();
     let mut end_reasons = BTreeSet::new();
+    let mut notifications = BTreeSet::new();
     for case in &set.cases {
         for e in &case.expect {
             columns.insert(serialized(&e.column));
@@ -103,6 +104,9 @@ fn vector_set_covers_every_column_badge_and_documented_value() {
         for e in &case.events {
             if let Some(r) = &e.reason {
                 end_reasons.insert(r.clone());
+            }
+            if let Some(n) = &e.notification_type {
+                notifications.insert(n.clone());
             }
         }
     }
@@ -134,6 +138,12 @@ fn vector_set_covers_every_column_badge_and_documented_value() {
         assert!(
             end_reasons.contains(reason),
             "no case for SessionEnd reason {reason}"
+        );
+    }
+    for notification in officina_core::board::BLOCKING_NOTIFICATIONS {
+        assert!(
+            notifications.contains(notification),
+            "no case for blocking notification {notification}"
         );
     }
 }

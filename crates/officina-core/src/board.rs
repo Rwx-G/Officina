@@ -343,12 +343,6 @@ const UNKNOWN: Placement = Placement {
 /// Places one listed session (FR-6). A live `status` is authoritative; hook
 /// events only count when `status` is absent.
 pub fn classify(record: &AgentRecord, events: &SessionEvents) -> Placement {
-    if record.state == Some(LifecycleState::Blocked) {
-        return Placement {
-            column: Column::NeedsYou,
-            badge: None,
-        };
-    }
     match record.status {
         Some(LiveStatus::Waiting) => Placement {
             column: Column::NeedsYou,
