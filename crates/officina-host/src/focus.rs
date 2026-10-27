@@ -59,30 +59,22 @@ fn open_attach(card: &Card, ctx: &FocusContext) -> FocusOutcome {
     else {
         return FocusOutcome::Failed("invalid or missing background session id".into());
     };
-    let Some(cwd) = card
-        .cwd
-        .as_deref()
-        .map(Path::new)
-        .filter(|p| p.is_absolute() && p.is_dir())
-    else {
-        return FocusOutcome::Failed("session folder not found".into());
-    };
     let Some(claude) = &ctx.claude else {
         return FocusOutcome::Failed("claude not found".into());
     };
-    spawn_attach(claude, id, cwd, ctx.config_override.as_deref())
+    spawn_attach(claude, id, ctx.config_override.as_deref())
 }
 
 #[cfg(windows)]
-fn spawn_attach(claude: &Path, id: &str, cwd: &Path, config: Option<&Path>) -> FocusOutcome {
-    match crate::platform::windows::open_attach_console(claude, id, cwd, config) {
+fn spawn_attach(claude: &Path, id: &str, config: Option<&Path>) -> FocusOutcome {
+    match crate::platform::windows::open_attach_console(claude, id, config) {
         Ok(()) => FocusOutcome::AttachOpened,
         Err(e) => FocusOutcome::Failed(e.to_string()),
     }
 }
 
 #[cfg(not(windows))]
-fn spawn_attach(_claude: &Path, _id: &str, _cwd: &Path, _config: Option<&Path>) -> FocusOutcome {
+fn spawn_attach(_claude: &Path, _id: &str, _config: Option<&Path>) -> FocusOutcome {
     FocusOutcome::Unsupported
 }
 
@@ -195,21 +187,12 @@ mod tests {
     }
 
     #[test]
-    fn attach_refuses_bad_ids_and_folders_before_spawning() {
+    fn attach_refuses_bad_ids_and_a_missing_claude_before_spawning() {
         let dir = tempfile::tempdir().unwrap();
         let cwd = dir.path().to_string_lossy().into_owned();
         let bad_id = card(SessionKindView::Background, Some("a;calc"), Some(&cwd));
         assert!(matches!(
             focus_card(&bad_id, &ctx(dir.path())),
-            FocusOutcome::Failed(_)
-        ));
-        let bad_dir = card(
-            SessionKindView::Background,
-            Some("abc"),
-            Some("relative/dir"),
-        );
-        assert!(matches!(
-            focus_card(&bad_dir, &ctx(dir.path())),
             FocusOutcome::Failed(_)
         ));
         let no_claude = card(SessionKindView::Background, Some("abc"), Some(&cwd));

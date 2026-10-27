@@ -42,7 +42,15 @@ pub fn resolve_claude() -> Option<PathBuf> {
         .map(|p| std::env::split_paths(&p).collect())
         .unwrap_or_default();
     for name in names {
-        if let Some(found) = path_dirs.iter().map(|d| d.join(name)).find(|p| p.is_file()) {
+        // Relative PATH entries resolve against whatever directory Officina
+        // was started from; they are skipped so a planted `claude.exe` there
+        // is never run.
+        if let Some(found) = path_dirs
+            .iter()
+            .filter(|d| d.is_absolute())
+            .map(|d| d.join(name))
+            .find(|p| p.is_file())
+        {
             return Some(found);
         }
     }

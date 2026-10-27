@@ -166,16 +166,21 @@ pub fn focus_session_window(pid: u32, names: &[String]) -> officina_core::focus:
 pub fn open_attach_console(
     claude: &std::path::Path,
     id: &str,
-    cwd: &std::path::Path,
     config_dir: Option<&std::path::Path>,
 ) -> std::io::Result<()> {
     use std::os::windows::process::CommandExt;
     const CREATE_NEW_CONSOLE: u32 = 0x0000_0010;
     let mut cmd = std::process::Command::new(claude);
-    cmd.arg("attach")
-        .arg(id)
-        .current_dir(cwd)
-        .creation_flags(CREATE_NEW_CONSOLE);
+    cmd.arg("attach").arg(id).creation_flags(CREATE_NEW_CONSOLE);
+    // `attach` needs no working directory. Running it from the session's
+    // folder would let `cmd.exe` (behind a `claude.cmd` shim) pick up a
+    // planted `node.cmd` there; the binary's own folder is not the session's
+    // to write, and the variable stops `cmd.exe` searching the current
+    // directory at all.
+    if let Some(dir) = claude.parent().filter(|d| !d.as_os_str().is_empty()) {
+        cmd.current_dir(dir);
+    }
+    cmd.env("NoDefaultCurrentDirectoryInExePath", "1");
     if let Some(dir) = config_dir {
         cmd.env(crate::paths::ENV_CLAUDE_CONFIG_DIR, dir);
     }
