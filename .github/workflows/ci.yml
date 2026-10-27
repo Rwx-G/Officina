@@ -50,6 +50,10 @@ jobs:
       - name: Test (includes the TypeScript bindings drift check)
         run: cargo test --workspace --features officina-core/ts
       - name: Hook latency and concurrent appends
+        # Hosted runners start any process several times slower than a
+        # workstation; the test still gates Officina's own cost at 30 ms.
+        env:
+          OFFICINA_HOOK_P95_BUDGET_MS: "150"
         run: cargo test --release -p officina --test perf -- --ignored --nocapture
       - name: Frontend checks
         working-directory: app
