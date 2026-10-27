@@ -80,6 +80,22 @@
       "expect": [{"key": "bg:bg22", "column": "needs_you", "badge": null, "waiting_for": null}]
     },
     {
+      "name": "a cleared interactive session stays on its live card, never a ghost",
+      "now_ms": 1761555600000,
+      "agents": [{"pid": 4800, "cwd": "C:/work/repo-a", "kind": "interactive", "startedAt": 1761550000000, "sessionId": "00000000-0000-0000-0000-000000000040", "name": "a", "status": "idle"}],
+      "events": [
+        {"v": 1, "ts": 1761551000000, "event": "UserPromptSubmit", "session_id": "00000000-0000-0000-0000-000000000040", "claude_pid": 4800, "prompt": "before clear"},
+        {"v": 1, "ts": 1761552000000, "event": "SessionEnd", "session_id": "00000000-0000-0000-0000-000000000040", "claude_pid": 4800, "reason": "clear"},
+        {"v": 1, "ts": 1761552000500, "event": "SessionStart", "session_id": "00000000-0000-0000-0000-000000000041", "claude_pid": 4800, "source": "clear"},
+        {"v": 1, "ts": 1761553000000, "event": "UserPromptSubmit", "session_id": "00000000-0000-0000-0000-000000000041", "claude_pid": 4800, "prompt": "after clear"},
+        {"v": 1, "ts": 1761540000000, "event": "UserPromptSubmit", "session_id": "00000000-0000-0000-0000-000000000042", "claude_pid": 4800, "cwd": "C:/work/repo-a", "prompt": "an older process that reused the pid"}
+      ],
+      "expect": [
+        {"key": "pid:4800:1761550000000", "column": "your_turn", "badge": null, "waiting_for": null},
+        {"key": "sid:00000000-0000-0000-0000-000000000042", "column": "to_resume", "badge": "interrupted", "waiting_for": null}
+      ]
+    },
+    {
       "name": "done older than the window is not listed",
       "now_ms": 1761555600000,
       "agents": [{"id": "bg06", "cwd": "C:/work/repo-b", "kind": "background", "startedAt": 1761400000000, "sessionId": "00000000-0000-0000-0000-000000000009", "name": "f", "state": "done"}],

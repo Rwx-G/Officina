@@ -261,6 +261,10 @@ pub struct SessionEvents {
     pub end_reason: Option<String>,
     pub ended_at_ms: Option<i64>,
     pub saw_prompt: bool,
+    /// Id of the `claude` process the hook ran under (E14), if recorded.
+    pub claude_pid: Option<u32>,
+    /// Time of the session's first event.
+    pub first_event_at_ms: Option<i64>,
 }
 
 fn later(a: Option<i64>, b: i64) -> Option<i64> {
@@ -278,6 +282,14 @@ pub fn group_events(events: &[EventLine]) -> BTreeMap<String, SessionEvents> {
         };
         let entry = grouped.entry(sid.clone()).or_default();
         entry.last_event_at_ms = later(entry.last_event_at_ms, event.ts);
+        entry.first_event_at_ms = Some(
+            entry
+                .first_event_at_ms
+                .map_or(event.ts, |f| f.min(event.ts)),
+        );
+        if event.claude_pid.is_some() {
+            entry.claude_pid = event.claude_pid;
+        }
         if event.cwd.is_some() {
             entry.cwd.clone_from(&event.cwd);
         }
@@ -611,17 +623,37 @@ pub fn build_board(input: &BoardInput, now_ms: i64) -> Board {
 
     for record in input.agents.iter().flatten() {
         unrecognized.extend(record.unrecognized.iter().cloned());
-        let events = record
-            .session_id
-            .as_ref()
-            .and_then(|sid| grouped.get(sid))
+        let own = record.session_id.as_deref();
+        // Sessions run by this live process (E14): after `/clear` the hook
+        // reports a new session id while the process, and its card, stay.
+        // Only sessions that began after the process started count, so a
+        // reused pid cannot capture an older, ended session.
+        let same_process: Vec<&str> = match (record.kind, record.pid) {
+            (Some(SessionKind::Interactive), Some(pid)) => grouped
+                .iter()
+                .filter(|(sid, ev)| {
+                    Some(sid.as_str()) != own
+                        && ev.claude_pid == Some(pid)
+                        && ev
+                            .first_event_at_ms
+                            .zip(record.started_at_ms)
+                            .is_some_and(|(f, s)| f >= s)
+                })
+                .map(|(sid, _)| sid.as_str())
+                .collect(),
+            _ => Vec::new(),
+        };
+        let events = own
+            .into_iter()
+            .chain(same_process.iter().copied())
+            .filter_map(|sid| grouped.get(sid))
+            .max_by_key(|ev| ev.last_event_at_ms)
             .unwrap_or(&empty);
         let Some(card) = listed_card(record, events, input) else {
             continue;
         };
-        if let Some(sid) = &record.session_id {
-            listed.insert(sid);
-        }
+        listed.extend(own);
+        listed.extend(same_process);
         if on_board(&card, now_ms) {
             columns.get_mut(card.column).push(card);
         }
@@ -854,6 +886,32 @@ mod tests {
         let board = build_board(&input, now);
         assert!(board.columns.all().all(|c| c.last_prompt.is_none()));
         assert_eq!(board.columns.all().count(), 2);
+    }
+
+    #[test]
+    fn a_cleared_session_brings_its_latest_excerpts_to_the_live_card() {
+        let mut before = event(10, "s1", "UserPromptSubmit");
+        before.prompt = Some("before clear".into());
+        before.claude_pid = Some(7);
+        let mut after = event(30, "s2", "UserPromptSubmit");
+        after.prompt = Some("after clear".into());
+        after.claude_pid = Some(7);
+        let input = BoardInput {
+            agents: Some(
+                parse_agents(
+                    r#"[{"pid":7,"sessionId":"s1","kind":"interactive","status":"idle","startedAt":5}]"#,
+                )
+                .unwrap(),
+            ),
+            events: vec![before, after],
+            ..Default::default()
+        };
+        let board = build_board(&input, 10_000_000);
+        assert_eq!(board.columns.all().count(), 1);
+        assert_eq!(
+            board.columns.your_turn[0].last_prompt.as_deref(),
+            Some("after clear")
+        );
     }
 
     #[test]

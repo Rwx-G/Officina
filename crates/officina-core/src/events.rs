@@ -38,8 +38,8 @@ pub struct EventLine {
     pub prompt: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_message: Option<String>,
-    /// Reserved by AD-11 for re-pointing a card after `/clear` if the agents
-    /// snapshot turns out not to track the new session id. Not written yet.
+    /// Id of the `claude` process, from the hook's `CLAUDE_PID` (E14): ties a
+    /// session id that `/clear` replaced to the live card of its process.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub claude_pid: Option<u32>,
     /// Set when excerpts were dropped to keep the line under [`MAX_LINE_BYTES`].

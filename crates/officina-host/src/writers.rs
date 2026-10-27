@@ -41,13 +41,21 @@ pub fn hook_keeps_excerpts(paths: &Paths) -> bool {
 }
 
 /// Reduces one hook payload and appends it to today's event file.
-pub fn record_hook(paths: &Paths, stdin: &[u8], now_ms: i64, with_excerpts: bool) -> HookOutcome {
+/// `claude_pid` is the hook's `CLAUDE_PID` (E14), recorded on the line.
+pub fn record_hook(
+    paths: &Paths,
+    stdin: &[u8],
+    now_ms: i64,
+    with_excerpts: bool,
+    claude_pid: Option<u32>,
+) -> HookOutcome {
     let Ok(payload) = serde_json::from_slice::<serde_json::Value>(stdin) else {
         return HookOutcome::NotAHookPayload;
     };
-    let Some(line) = reduce_payload(&payload, now_ms, with_excerpts) else {
+    let Some(mut line) = reduce_payload(&payload, now_ms, with_excerpts) else {
         return HookOutcome::NotAHookPayload;
     };
+    line.claude_pid = claude_pid;
     match append_line(
         &event_file_for(&paths.events_dir(), now_ms),
         &line.to_bounded_line(),
@@ -119,19 +127,21 @@ mod tests {
                 &p,
                 br#"{"hook_event_name":"Stop","session_id":"s"}"#,
                 now,
-                true
+                true,
+                Some(4242),
             ),
             HookOutcome::Appended
         );
         assert_eq!(
-            record_hook(&p, b"not json", now, true),
+            record_hook(&p, b"not json", now, true, None),
             HookOutcome::NotAHookPayload
         );
         assert_eq!(
-            record_hook(&p, b"{}", now, true),
+            record_hook(&p, b"{}", now, true, None),
             HookOutcome::NotAHookPayload
         );
         let (events, corrupt) = read_recent_events(&p.events_dir(), now);
+        assert_eq!(events[0].claude_pid, Some(4242));
         assert_eq!((events.len(), corrupt), (1, 0));
     }
 

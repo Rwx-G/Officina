@@ -37,7 +37,16 @@ fn hook() -> ExitCode {
     let _ = std::panic::catch_unwind(|| {
         let stdin = read_stdin();
         if let Some(paths) = Paths::from_env(None) {
-            let _ = record_hook(&paths, &stdin, now_ms(), hook_keeps_excerpts(&paths));
+            let claude_pid = std::env::var("CLAUDE_PID")
+                .ok()
+                .and_then(|v| v.parse().ok());
+            let _ = record_hook(
+                &paths,
+                &stdin,
+                now_ms(),
+                hook_keeps_excerpts(&paths),
+                claude_pid,
+            );
         }
     });
     ExitCode::SUCCESS

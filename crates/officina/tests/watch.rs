@@ -54,12 +54,14 @@ fn emits_first_board_then_only_on_change() {
         br#"{"hook_event_name":"UserPromptSubmit","session_id":"s-gone","cwd":"C:/work/api","prompt":"x"}"#,
         now - 120_000,
         true,
+        None,
     );
     record_hook(
         &paths,
         br#"{"hook_event_name":"SessionEnd","session_id":"s-gone","reason":"prompt_input_exit"}"#,
         now - 60_000,
         true,
+        None,
     );
     let next = rx
         .recv_timeout(Duration::from_secs(5))
