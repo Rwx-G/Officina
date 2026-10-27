@@ -3,7 +3,15 @@
 
 mod common;
 
+use std::path::PathBuf;
+use std::sync::mpsc;
+use std::time::{Duration, Instant};
+
 use common::{TestEnv, fingerprint, now_ms};
+use officina_core::board::Board;
+use officina_host::collector::{Collector, LoadedFloor};
+use officina_host::paths::Paths;
+use officina_host::watch::{CollectorMsg, spawn};
 
 const STATUSLINE: &str = r#"{"session_id":"s1","model":{"display_name":"Opus"},
   "rate_limits":{"five_hour":{"used_percentage":62.0,"resets_at":1800000000},
@@ -96,10 +104,39 @@ fn no_command_writes_under_the_claude_config_dir() {
     );
     let before = fingerprint(&config);
 
+    // The window's collector thread runs alongside the commands, pointed at
+    // the same config dir, as a floor's `config_dir` would point it.
+    let paths = Paths {
+        officina_home: env.officina_home(),
+        claude_config_dir: config.clone(),
+        claude_config_override: Some(config.clone()),
+        floor_file: None,
+    };
+    let collector = Collector::from_parts(
+        paths,
+        LoadedFloor::default(),
+        Some(PathBuf::from(common::FAKE_CLAUDE)),
+    );
+    let (boards, received) = mpsc::channel::<Board>();
+    let watch = spawn(collector, move |board| {
+        let _ = boards.send(board.clone());
+    })
+    .unwrap();
+    received
+        .recv_timeout(Duration::from_secs(10))
+        .expect("first board");
+    let running_since = Instant::now();
+
     env.run(&["hook"], br#"{"hook_event_name":"Stop","session_id":"s"}"#);
     env.run(&["quota", "write", "--tee"], STATUSLINE.as_bytes());
     env.run(&["board", "--json"], b"");
     env.run(&["doctor"], b"");
+
+    // Long enough for the collector to see the hook and quota writes, spawn
+    // `claude` again and run its follow-up refresh.
+    std::thread::sleep(Duration::from_secs(2).saturating_sub(running_since.elapsed()));
+    watch.sender.send(CollectorMsg::Shutdown).unwrap();
+    watch.thread.join().unwrap();
 
     assert_eq!(fingerprint(&config), before);
 }
