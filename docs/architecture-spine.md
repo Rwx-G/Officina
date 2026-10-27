@@ -153,7 +153,7 @@ Top level (field list owned by the Rust type; this outline is orientation only):
 
 The frontend never re-implements classification, so the vector set (AD-14) is replayed in Rust only. Project colours: TypeScript maps `Record<ProjectColor, string>` to CSS variables, so a new Rust variant breaks `pnpm check`.
 
-`officina board --json` prints the board and exits 0 when fresh, 3 when stale (board still printed), 2 on a usage error.
+`officina board --json` prints the board and exits 0 when fresh, 3 when stale (board still printed), 64 on a usage error. No command ever exits 2: Claude Code reads a hook exiting 2 as "block", so a mistyped hook command must not be able to stop sessions (found in story review, 2026-10-27).
 
 ### AD-14: Classification vector set
 
@@ -187,7 +187,7 @@ All in `officina-host/src/platform/windows/`, crate `windows-sys`, features `Win
 4. Focus: `ShowWindow(SW_RESTORE)` if iconic, then `SetForegroundWindow`. The click comes from Officina's own foreground window, which satisfies the foreground-lock rule; `AllowSetForegroundWindow` and the `AttachThreadInput` trick are not used. If Windows refuses, `FlashWindowEx` on the target and outcome `refused`.
 5. Outcomes: `focused`, `candidates(list of titles)`, `no_window`, `refused`, `attach_opened`, `failed(reason)`.
 
-**Background session.** See PRD amendment 1: spawn `claude.exe attach <id>` directly with `CREATE_NEW_CONSOLE`, `current_dir(cwd)` and the floor's `CLAUDE_CONFIG_DIR`. `id` must match `^[A-Za-z0-9_-]{1,64}$`; `cwd` must be an existing absolute directory; otherwise `failed`. The child is not waited on and not tracked: Officina owns no session process, and the attach client is the author's terminal. On Windows 11 with Windows Terminal as default terminal, the console lands in Windows Terminal through the default-terminal handoff. The card also offers "copy attach command" (`navigator.clipboard`, no plugin) for the cases where the author prefers an editor terminal.
+**Background session.** See PRD amendment 1: spawn `claude.exe attach <id>` directly with `CREATE_NEW_CONSOLE`, the floor's `CLAUDE_CONFIG_DIR`, the `claude` binary's folder as working directory and `NoDefaultCurrentDirectoryInExePath=1` (security audit 2026-10-27: from the session folder, a `claude.cmd` shim would let `cmd.exe` run a planted `node.cmd`). `id` must match `^[A-Za-z0-9_-]{1,64}$`; `cwd` must be an existing absolute directory; otherwise `failed`. The child is not waited on and not tracked: Officina owns no session process, and the attach client is the author's terminal. On Windows 11 with Windows Terminal as default terminal, the console lands in Windows Terminal through the default-terminal handoff. The card also offers "copy attach command" (`navigator.clipboard`, no plugin) for the cases where the author prefers an editor terminal.
 
 **Metric.** Each click appends an outcome line (AD-8); "wrong window" appends a line. Doctor prints the rate over 10 working days: first clicks with outcome `focused`/`attach_opened`, not followed within 10 s by "wrong window" or a second click on the same card.
 
