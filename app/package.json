@@ -13,7 +13,8 @@
     "e2e": "playwright test",
     "tauri": "tauri",
     "e2e:fixtures": "cargo build -p officina && node scripts/e2e-fixtures.mjs",
-    "readme-assets": "playwright test --config playwright.readme.config.ts"
+    "readme-assets": "playwright test --config playwright.readme.config.ts",
+    "bundle": "tauri build --config src-tauri/tauri.bundle.conf.json"
   },
   "dependencies": {
     "@fontsource/plus-jakarta-sans": "^5.2.8",

@@ -4,6 +4,12 @@ targets = [{ triple = "x86_64-pc-windows-msvc" }, { triple = "x86_64-unknown-lin
 
 [advisories]
 version = 2
+# Vulnerabilities fail the build wherever they sit in the graph. "Unmaintained"
+# notices are checked on our direct dependencies only: the ones reported today
+# (proc-macro-error, zbus_names, zvariant) come in through Tauri's Linux and
+# macro stacks, which we cannot replace; they are re-evaluated with each Tauri
+# upgrade.
+unmaintained = "workspace"
 ignore = []
 
 [licenses]

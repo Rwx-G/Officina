@@ -174,7 +174,7 @@ Requirements: Rust (pinned by `rust-toolchain.toml`), Node 22 or later, `pnpm`, 
 ```bash
 cd app && pnpm install && cd ..
 cargo build --release -p officina          # the CLI
-cd app && pnpm tauri build                 # the window and its NSIS installer
+cd app && pnpm bundle                      # the window, the CLI and the NSIS installer
 ```
 
 Tests:

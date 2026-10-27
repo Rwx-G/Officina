@@ -1,0 +1,10 @@
+{
+  "build": {
+    "beforeBuildCommand": "pnpm build && cargo build --release -p officina"
+  },
+  "bundle": {
+    "resources": {
+      "../../target/release/officina.exe": "officina.exe"
+    }
+  }
+}
