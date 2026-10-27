@@ -17,3 +17,21 @@ stories:
   - {id: "1.11", file: story-1.11-contract-canary-and-zero-write.md, slice: B, status: in-progress}
   - {id: "1.12", file: story-1.12-window-polish.md, slice: B, status: in-progress}
   - {id: "1.13", file: story-1.13-release-and-readme.md, slice: B, status: in-progress}
+---
+epic: 2
+version: v0.2
+# approved: written and approved, implementation not started.
+# Slice A (2.1-2.7, 2.10, stop included) is usable alone; 2.10 depends on 2.1-2.7 only and can run right after 2.7.
+# HTTP actions (AD-36) close the PRD as story 2.11 (owner rule, epic-2-decisions.md P-7).
+stories:
+  - {id: "2.1", file: story-2.1-relay-core.md, slice: A, status: approved}
+  - {id: "2.2", file: story-2.2-catalogue-approval-core.md, slice: A, status: approved}
+  - {id: "2.3", file: story-2.3-command-lexer-and-gate.md, slice: A, status: approved}
+  - {id: "2.4", file: story-2.4-gate-in-the-hook.md, slice: A, status: approved}
+  - {id: "2.5", file: story-2.5-officina-run.md, slice: A, status: approved}
+  - {id: "2.6", file: story-2.6-after-check-and-relay-view.md, slice: A, status: approved}
+  - {id: "2.7", file: story-2.7-window-catalogue-approval.md, slice: A, status: approved}
+  - {id: "2.8", file: story-2.8-approvals-and-class-human.md, slice: B, status: approved}
+  - {id: "2.9", file: story-2.9-relay-view.md, slice: B, status: approved}
+  - {id: "2.10", file: story-2.10-doctor-relay-and-docs.md, slice: A, status: approved}
+  - {id: "2.11", file: story-2.11-http-actions.md, slice: B, status: approved}
