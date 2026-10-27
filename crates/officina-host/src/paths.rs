@@ -23,10 +23,16 @@ pub fn user_home() -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
-fn env_path(name: &str) -> Option<PathBuf> {
+/// A path from the environment; an empty value counts as unset.
+pub fn env_path(name: &str) -> Option<PathBuf> {
     std::env::var_os(name)
         .filter(|v| !v.is_empty())
         .map(PathBuf::from)
+}
+
+/// The Officina home: `OFFICINA_HOME`, else `.officina` in the user's home.
+pub fn officina_home_from_env() -> Option<PathBuf> {
+    env_path(ENV_HOME).or_else(|| user_home().map(|h| h.join(".officina")))
 }
 
 /// Resolved locations for one run.
@@ -50,8 +56,7 @@ impl Paths {
     /// override is set: there is nowhere sensible to write.
     pub fn from_env(floor_arg: Option<&Path>) -> Option<Paths> {
         let home = user_home();
-        let officina_home =
-            env_path(ENV_HOME).or_else(|| home.as_ref().map(|h| h.join(".officina")))?;
+        let officina_home = officina_home_from_env()?;
         let default_config = home.as_ref().map(|h| h.join(".claude"));
         let claude_config_override =
             env_path(ENV_CLAUDE_CONFIG_DIR).filter(|dir| !is_default_config_dir(dir));
