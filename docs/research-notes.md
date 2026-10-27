@@ -1,0 +1,122 @@
+---
+title: Officina research notes
+author: Rwx-G
+---
+
+# Research notes
+
+Facts about Claude Code that Officina depends on. Each entry says how it is
+known: **verified** (observed on a workstation, with the version), or
+**documented** (read in the official documentation, with the page). An
+assumption that is neither is listed as such and is never used to decide.
+
+Step 0 of the framing, run on 2026-10-27 against Claude Code 2.1.311 on
+Windows 11.
+
+## E1. `claude agents --json`
+
+- **Verified (2.1.311).** `claude agents --json` prints active sessions,
+  interactive and background, as a JSON array, without a TTY. `--all` adds
+  completed background sessions.
+- **Verified.** Fields observed: `pid`, `id` (background only), `cwd`, `kind`
+  (`interactive`, `background`), `startedAt` (Unix ms), `sessionId`, `name`,
+  `status` (only while the process lives), `state` (background).
+- **Verified values.** `status`: `busy`, `idle`. `state`: `done`, `failed`.
+  A background session that answered and waits for its next instruction reads
+  `status: idle, state: done`; after `claude stop` it keeps `state: done` and
+  loses `pid` and `status`.
+- **Documented** (agent-view page). `status`: `busy`, `waiting`, `idle`.
+  `state`: `working`, `blocked`, `done`, `failed`, `stopped`. `waitingFor` is
+  present when `status` is `waiting`: `permission prompt`, `input needed`,
+  `sandbox request`, `worker request`, `dialog open`. "A session that finished
+  its turn and is waiting for your next instruction reads done, not blocked."
+- **Verified (2.1.311).** A background session started with
+  `--permission-mode default` and asked to run a shell command reads
+  `status: waiting, state: blocked, waitingFor: "permission prompt"`. One
+  asked to use `AskUserQuestion` reads
+  `status: waiting, state: blocked, waitingFor: "input needed"`. Both held
+  steadily over 30 s.
+- **Inferred, not verified.** An interactive session that ends its turn with a
+  plain-text question reads `status: idle`, like any finished turn: nothing
+  distinguishes "asked something" from "finished". Officina must therefore
+  treat interactive `idle` as "your turn", never as "done".
+- Consequence: the framing's step 0 item 1 is answered. `state` is not present
+  on interactive sessions; their signal is `status`.
+
+## E2. Hook payloads
+
+- **Verified (2.1.311)**, through `claude -p --settings <hooks>`:
+  - `SessionStart`: `session_id`, `transcript_path`, `cwd`, `hook_event_name`,
+    `source` (`startup` observed).
+  - `UserPromptSubmit`: adds `permission_mode`, `prompt`, `prompt_id`.
+  - `Stop`: adds `last_assistant_message`, `stop_hook_active`,
+    `background_tasks`, `session_crons`, `effort`.
+  - `SessionEnd`: adds `reason` (`other` observed for `-p`).
+- **Documented** (hooks page). `Notification` carries `message`, `title`,
+  `notification_type`, among them `permission_prompt`, `idle_prompt`,
+  `elicitation_dialog`, `agent_needs_input`, `agent_completed`.
+  `SessionStart.source`: `startup`, `resume`, `clear`, `compact`, `fork`.
+  `SessionEnd.reason`: `clear`, `resume`, `logout`, `prompt_input_exit`,
+  `other`.
+- **Documented.** Hooks from several settings levels merge rather than
+  replace; an identical handler defined twice runs once. Exit code 0 is
+  success, 2 blocks, any other code is a non-blocking error. Command hooks
+  accept `async: true` and `timeout`. Answers step 0 item 4 on paper; the
+  merge of `--settings` hooks with project hooks is not stated explicitly.
+- **Verified.** Hooks from `--settings` ran alongside the probe directory's
+  (empty) project settings.
+
+## E3. Statusline
+
+- **Documented** (statusline page). Input JSON carries
+  `rate_limits.five_hour` and `rate_limits.seven_day`, each with
+  `used_percentage` (0-100) and `resets_at` (Unix seconds), on subscription
+  accounts only and after the first API response.
+- **Not documented.** Whether a statusline runs for `--bg` sessions. Open.
+- **Not verified.** Which statusline wins when user and project settings both
+  define one (step 0 item 2). The general precedence puts project above user.
+
+## E4. Background sessions
+
+- **Verified.** `claude --bg --name <name> "<prompt>"` returns immediately and
+  prints the id for `attach`, `logs`, `stop`. `claude stop <id>` and
+  `claude rm <id>` work. A directory must have been trusted once
+  interactively before `--bg` runs in it.
+- **Documented.** Background sessions are run by a separate supervisor process
+  and need no open terminal. Survival when the supervisor itself dies is
+  documented for macOS and Linux only.
+
+## E5. Flags for restricted sessions
+
+- **Documented.** `--tools` restricts built-in tools (`""` disables all),
+  `--strict-mcp-config` keeps only `--mcp-config` servers, `--setting-sources`
+  selects `user`, `project`, `local`, `--settings` overrides given keys only.
+  Not exercised yet; needed from v0.3 (triage session) and v0.5
+  (orchestrator).
+
+## E6. Long-lived token
+
+- **Documented.** `claude setup-token` prints a one-year OAuth token after a
+  browser authorization flow and does not store it; it is consumed through
+  `CLAUDE_CODE_OAUTH_TOKEN`. It must be generated on a machine with a browser
+  and injected into a container. Terms of use for scripted sessions remain to
+  check (framing open point, before v0.6).
+
+## E8. Process chain of an interactive session in VS Code
+
+- **Verified (Windows 11, VS Code).** Two interactive sessions open in two
+  different VS Code windows (different repositories) both walk up
+  `claude.exe` -> `bash.exe` x3 -> `Code.exe` (no window) -> `Code.exe`
+  (main process). The main process reports a single `MainWindowTitle`, the
+  title of one of its windows, not of the session's window: the session in
+  repository A reported the window of repository B.
+- Consequence: the focus action must enumerate every top-level window of the
+  main editor process and match the title against the session's folder name.
+  "First window of the ancestor" is wrong in the normal multi-window case.
+- **Verified.** The native install puts `claude.exe` in `~/.local/bin`.
+
+## E7. Configuration directory
+
+- **Documented.** `CLAUDE_CONFIG_DIR` redirects settings, session history and
+  credentials; an absolute path is required. The sessions directory Officina
+  watches is `<config dir>/sessions`.

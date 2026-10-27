@@ -1,0 +1,19 @@
+# The only place a story's status is stated (.claude/rules/officina-project.md).
+epic: 1
+version: v0.1
+# review: code and automated tests in place, multi-auditor QA not yet run.
+# in-progress: a manual check or a remaining task is open (see the story).
+stories:
+  - {id: "1.1", file: story-1.1-foundation.md, slice: A, status: review}
+  - {id: "1.2", file: story-1.2-core-formats.md, slice: A, status: review}
+  - {id: "1.3", file: story-1.3-hook-and-event-buffer.md, slice: A, status: review}
+  - {id: "1.4", file: story-1.4-classification-and-board.md, slice: A, status: review}
+  - {id: "1.5", file: story-1.5-collector-and-headless-board.md, slice: A, status: review}
+  - {id: "1.6", file: story-1.6-board-window.md, slice: A, status: review}
+  - {id: "1.7", file: story-1.7-focus.md, slice: A, status: in-progress}
+  - {id: "1.8", file: story-1.8-doctor-slice-a.md, slice: A, status: review}
+  - {id: "1.9", file: story-1.9-quota.md, slice: B, status: review}
+  - {id: "1.10", file: story-1.10-floor-file.md, slice: B, status: review}
+  - {id: "1.11", file: story-1.11-contract-canary-and-zero-write.md, slice: B, status: in-progress}
+  - {id: "1.12", file: story-1.12-window-polish.md, slice: B, status: in-progress}
+  - {id: "1.13", file: story-1.13-release-and-readme.md, slice: B, status: in-progress}
