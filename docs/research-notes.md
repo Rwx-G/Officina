@@ -115,6 +115,22 @@ Windows 11.
   "First window of the ancestor" is wrong in the normal multi-window case.
 - **Verified.** The native install puts `claude.exe` in `~/.local/bin`.
 
+## E9. Hook cost and idle cost (2026-10-27, release build)
+
+- **Verified (workstation).** 200 sequential `officina hook` runs with a
+  200 KB payload: p95 19.5 ms. An executable that does nothing (the test
+  fake answering `--version`) has a p95 of 21.6 ms on the same machine: the
+  hook's own cost is lost in the noise of Windows process creation.
+- **Verified (GitHub hosted Windows runner).** The same hook measures 82 ms
+  at p95: hosted runners start processes several times slower. CI therefore
+  gates the hook's cost over an empty process, not the absolute figure.
+- **Verified (workstation).** 16 processes x 500 concurrent hook runs
+  produced 8000 parseable lines, none interleaved.
+- **Verified (workstation).** The board window with two live sessions:
+  35 MB working set, 0.013 % of the machine's CPU over 30 s idle.
+- **Not measured yet.** The latency added inside a real Claude Code turn,
+  where the hook runs through Claude Code's own shell (story 1.3, AC 13).
+
 ## E7. Configuration directory
 
 - **Documented.** `CLAUDE_CONFIG_DIR` redirects settings, session history and
