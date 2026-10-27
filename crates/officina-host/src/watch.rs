@@ -84,11 +84,177 @@ fn sessions_fingerprint(dir: &std::path::Path) -> u64 {
     hasher.finish()
 }
 
-struct Watched {
+/// What the refresh plan asks the collector thread to do now.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct Due {
+    /// Run `claude agents`.
+    agents: bool,
+    /// Then re-read the `claude` version and re-check the contract.
+    contract: bool,
+    /// Run the retention pass.
+    retention: bool,
+    /// Rebuild the board, and emit it if it changed.
+    recompute: bool,
+}
+
+/// The refresh plan of AD-4. Each trigger has its method, which records what
+/// the trigger asks for; [`RefreshPlan::due`], called once per tick, decides
+/// what runs now under the spawn rate limit and the timers. Triggers that
+/// arrive within one tick, or while a spawn is held back by the rate limit,
+/// coalesce into one spawn. No IO, and time comes only from `clock`, so the
+/// plan is tested without waiting.
+struct RefreshPlan<C> {
+    clock: C,
+    visible: bool,
+    agents_wanted: bool,
+    contract_wanted: bool,
+    recompute_wanted: bool,
+    last_spawn: Option<Instant>,
+    follow_up_at: Option<Instant>,
+    last_retention: Instant,
+}
+
+impl<C: Fn() -> Instant> RefreshPlan<C> {
+    /// At startup the session list, the contract check and a first board are
+    /// due; the retention pass has just run.
+    fn new(clock: C) -> Self {
+        let now = clock();
+        RefreshPlan {
+            clock,
+            visible: true,
+            agents_wanted: true,
+            contract_wanted: true,
+            recompute_wanted: true,
+            last_spawn: None,
+            follow_up_at: None,
+            last_retention: now,
+        }
+    }
+
+    /// `CollectorMsg::Refresh`.
+    fn refresh_requested(&mut self) {
+        self.agents_wanted = true;
+    }
+
+    /// `CollectorMsg::Visibility`: picks the safety poll interval.
+    fn visibility_changed(&mut self, visible: bool) {
+        self.visible = visible;
+    }
+
+    /// Today's event file grew: a hook fired. Its line shows at once; the
+    /// session list is refreshed now and once more after [`FOLLOW_UP`].
+    fn event_file_changed(&mut self) {
+        self.recompute_wanted = true;
+        self.agents_wanted = true;
+        self.follow_up_at = Some((self.clock)() + FOLLOW_UP);
+    }
+
+    /// A session file appeared, changed or went away (E10).
+    fn session_files_changed(&mut self) {
+        self.agents_wanted = true;
+    }
+
+    /// The quota file changed: a new board, no spawn.
+    fn quota_changed(&mut self) {
+        self.recompute_wanted = true;
+    }
+
+    /// The `claude` binary changed: the contract is checked with the next
+    /// session list, which this does not bring forward.
+    fn claude_binary_changed(&mut self) {
+        self.contract_wanted = true;
+    }
+
+    /// What runs now.
+    fn due(&mut self) -> Due {
+        let now = (self.clock)();
+        if self.follow_up_at.is_some_and(|at| now >= at) {
+            self.follow_up_at = None;
+            self.agents_wanted = true;
+        }
+        let poll = if self.visible {
+            POLL_VISIBLE
+        } else {
+            POLL_HIDDEN
+        };
+        let since_spawn = |interval| {
+            self.last_spawn
+                .is_none_or(|t| now.duration_since(t) >= interval)
+        };
+        if since_spawn(poll) {
+            self.agents_wanted = true;
+        }
+        let mut due = Due::default();
+        if self.agents_wanted && since_spawn(MIN_SPAWN_INTERVAL) {
+            self.agents_wanted = false;
+            self.last_spawn = Some(now);
+            self.recompute_wanted = true;
+            due.agents = true;
+            due.contract = std::mem::take(&mut self.contract_wanted);
+        }
+        if now.duration_since(self.last_retention) >= RETENTION_EVERY {
+            self.last_retention = now;
+            due.retention = true;
+        }
+        due.recompute = std::mem::take(&mut self.recompute_wanted);
+        due
+    }
+}
+
+/// The paths the collector stats each tick (AD-4) and what they looked like
+/// last time.
+struct WatchedPaths {
     events_dir: PathBuf,
     sessions_dir: PathBuf,
     quota_file: PathBuf,
     claude: Option<PathBuf>,
+    event_file: Stamp,
+    sessions: u64,
+    quota: Stamp,
+    claude_binary: Option<Stamp>,
+}
+
+impl WatchedPaths {
+    fn new(collector: &Collector) -> WatchedPaths {
+        let events_dir = collector.paths.events_dir();
+        let sessions_dir = collector.paths.claude_sessions_dir();
+        let quota_file = collector.paths.quota_file();
+        let claude = collector.claude.clone();
+        WatchedPaths {
+            event_file: stamp(&event_file_for(&events_dir, now_ms())),
+            sessions: sessions_fingerprint(&sessions_dir),
+            quota: stamp(&quota_file),
+            claude_binary: claude.as_deref().map(stamp),
+            events_dir,
+            sessions_dir,
+            quota_file,
+            claude,
+        }
+    }
+
+    /// Stats every watched path and tells `plan` what changed.
+    fn poll(&mut self, plan: &mut RefreshPlan<impl Fn() -> Instant>) {
+        let current = stamp(&event_file_for(&self.events_dir, now_ms()));
+        if current != self.event_file {
+            self.event_file = current;
+            plan.event_file_changed();
+        }
+        let current = sessions_fingerprint(&self.sessions_dir);
+        if current != self.sessions {
+            self.sessions = current;
+            plan.session_files_changed();
+        }
+        let current = stamp(&self.quota_file);
+        if current != self.quota {
+            self.quota = current;
+            plan.quota_changed();
+        }
+        let current = self.claude.as_deref().map(stamp);
+        if current != self.claude_binary {
+            self.claude_binary = current;
+            plan.claude_binary_changed();
+        }
+    }
 }
 
 /// Starts the collector thread. `emit` is called with each board that differs
@@ -116,105 +282,232 @@ fn run(
     shared: &Arc<RwLock<Option<Board>>>,
     emit: &dyn Fn(&Board),
 ) {
-    let watched = Watched {
-        events_dir: collector.paths.events_dir(),
-        sessions_dir: collector.paths.claude_sessions_dir(),
-        quota_file: collector.paths.quota_file(),
-        claude: collector.claude.clone(),
+    let retention = |collector: &Collector| {
+        retention_pass(&collector.paths.events_dir(), now_ms());
+        crate::focus::prune_focus_log(&collector.paths.state_dir(), now_ms());
     };
-    let mut visible = true;
-    let mut last_spawn: Option<Instant> = None;
-    let mut agents_due = Some(Instant::now());
-    let mut follow_up_due: Option<Instant> = None;
-    let mut recompute = true;
-    let mut contract_due = true;
-    let mut last_retention = Instant::now();
+    retention(collector);
+    let mut watched = WatchedPaths::new(collector);
+    let mut plan = RefreshPlan::new(Instant::now);
     let mut last_bytes: Vec<u8> = Vec::new();
-
-    retention_pass(&watched.events_dir, now_ms());
-    crate::focus::prune_focus_log(&collector.paths.state_dir(), now_ms());
-    let mut event_stamp = stamp(&event_file_for(&watched.events_dir, now_ms()));
-    let mut sessions_stamp = sessions_fingerprint(&watched.sessions_dir);
-    let mut quota_stamp = stamp(&watched.quota_file);
-    let mut claude_stamp = watched.claude.as_deref().map(stamp);
 
     loop {
         match receiver.recv_timeout(TICK) {
             Ok(CollectorMsg::Shutdown) | Err(RecvTimeoutError::Disconnected) => return,
-            Ok(CollectorMsg::Refresh) => agents_due = Some(Instant::now()),
-            Ok(CollectorMsg::Visibility(v)) => visible = v,
+            Ok(CollectorMsg::Refresh) => plan.refresh_requested(),
+            Ok(CollectorMsg::Visibility(visible)) => plan.visibility_changed(visible),
             Err(RecvTimeoutError::Timeout) => {}
         }
-        let now = Instant::now();
-
-        let current = stamp(&event_file_for(&watched.events_dir, now_ms()));
-        if current != event_stamp {
-            event_stamp = current;
-            recompute = true;
-            agents_due = Some(now);
-            follow_up_due = Some(now + FOLLOW_UP);
-        }
-        let current = sessions_fingerprint(&watched.sessions_dir);
-        if current != sessions_stamp {
-            sessions_stamp = current;
-            agents_due = Some(now);
-        }
-        let current = stamp(&watched.quota_file);
-        if current != quota_stamp {
-            quota_stamp = current;
-            recompute = true;
-        }
-        let current = watched.claude.as_deref().map(stamp);
-        if current != claude_stamp {
-            claude_stamp = current;
-            contract_due = true;
-        }
-        if follow_up_due.is_some_and(|d| now >= d) {
-            follow_up_due = None;
-            agents_due = Some(now);
-        }
-        let poll = if visible { POLL_VISIBLE } else { POLL_HIDDEN };
-        if last_spawn.is_none_or(|t| now.duration_since(t) >= poll) && agents_due.is_none() {
-            agents_due = Some(now);
-        }
-
-        let spawn_allowed = last_spawn.is_none_or(|t| now.duration_since(t) >= MIN_SPAWN_INTERVAL);
-        if agents_due.is_some_and(|d| now >= d) && spawn_allowed {
-            agents_due = None;
-            last_spawn = Some(now);
+        watched.poll(&mut plan);
+        let due = plan.due();
+        if due.agents {
             collector.refresh_agents(now_ms());
-            recompute = true;
-            if contract_due {
-                contract_due = false;
+            if due.contract {
                 collector.refresh_contract(now_ms());
             }
         }
-        if now.duration_since(last_retention) >= RETENTION_EVERY {
-            last_retention = now;
-            retention_pass(&watched.events_dir, now_ms());
-            crate::focus::prune_focus_log(&collector.paths.state_dir(), now_ms());
+        if due.retention {
+            retention(collector);
         }
+        if due.recompute {
+            publish(collector.board(now_ms()), shared, emit, &mut last_bytes);
+        }
+    }
+}
 
-        if recompute {
-            recompute = false;
-            let board = collector.board(now_ms());
-            let mut comparable = board.clone();
-            comparable.generated_at_ms = 0;
-            let bytes = serde_json::to_vec(&comparable).unwrap_or_default();
-            if let Ok(mut slot) = shared.write() {
-                *slot = Some(board.clone());
-            }
-            if bytes != last_bytes {
-                last_bytes = bytes;
-                emit(&board);
-            }
-        }
+/// Shares `board` with the window's commands, and emits it when it differs
+/// from the last one emitted, generation time aside (AD-5).
+fn publish(
+    board: Board,
+    shared: &Arc<RwLock<Option<Board>>>,
+    emit: &dyn Fn(&Board),
+    last_bytes: &mut Vec<u8>,
+) {
+    let mut comparable = board.clone();
+    comparable.generated_at_ms = 0;
+    let bytes = serde_json::to_vec(&comparable).unwrap_or_default();
+    if let Ok(mut slot) = shared.write() {
+        *slot = Some(board.clone());
+    }
+    if bytes != *last_bytes {
+        *last_bytes = bytes;
+        emit(&board);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    /// A plan on a clock that moves only when the test says so.
+    fn plan_on_fake_clock() -> (RefreshPlan<impl Fn() -> Instant>, Rc<Cell<Instant>>) {
+        let now = Rc::new(Cell::new(Instant::now()));
+        let clock = Rc::clone(&now);
+        (RefreshPlan::new(move || clock.get()), now)
+    }
+
+    /// The same, with the startup spawn done at the clock's time zero.
+    fn started() -> (RefreshPlan<impl Fn() -> Instant>, Rc<Cell<Instant>>) {
+        let (mut plan, now) = plan_on_fake_clock();
+        assert!(plan.due().agents);
+        (plan, now)
+    }
+
+    fn advance(now: &Cell<Instant>, by: Duration) {
+        now.set(now.get() + by);
+    }
+
+    fn agents_and_board() -> Due {
+        Due {
+            agents: true,
+            recompute: true,
+            ..Due::default()
+        }
+    }
+
+    #[test]
+    fn startup_lists_sessions_checks_the_contract_and_builds_a_board() {
+        let (mut plan, now) = plan_on_fake_clock();
+        assert_eq!(
+            plan.due(),
+            Due {
+                contract: true,
+                ..agents_and_board()
+            }
+        );
+        advance(&now, TICK);
+        assert_eq!(plan.due(), Due::default());
+    }
+
+    #[test]
+    fn hook_event_shows_at_once_and_refreshes_now_and_after_the_follow_up() {
+        let (mut plan, now) = started();
+        advance(&now, Duration::from_secs(5));
+        plan.event_file_changed();
+        assert_eq!(plan.due(), agents_and_board());
+        advance(&now, FOLLOW_UP - TICK);
+        assert_eq!(plan.due(), Due::default());
+        advance(&now, TICK);
+        assert_eq!(plan.due(), agents_and_board(), "the follow-up");
+        advance(&now, TICK);
+        assert_eq!(plan.due(), Due::default());
+    }
+
+    #[test]
+    fn a_later_event_postpones_the_follow_up() {
+        let (mut plan, now) = started();
+        advance(&now, Duration::from_secs(5));
+        plan.event_file_changed();
+        plan.due();
+        advance(&now, FOLLOW_UP / 2);
+        plan.event_file_changed();
+        assert!(plan.due().agents);
+        advance(&now, FOLLOW_UP / 2);
+        assert!(!plan.due().agents, "the first follow-up was replaced");
+        advance(&now, FOLLOW_UP / 2);
+        assert!(plan.due().agents);
+    }
+
+    #[test]
+    fn spawns_are_rate_limited_and_a_burst_coalesces_into_one() {
+        let (mut plan, now) = started();
+        advance(&now, TICK / 2);
+        plan.session_files_changed();
+        plan.refresh_requested();
+        plan.event_file_changed();
+        assert_eq!(
+            plan.due(),
+            Due {
+                recompute: true,
+                ..Due::default()
+            },
+            "the event shows, the spawn waits"
+        );
+        advance(&now, TICK / 2);
+        plan.session_files_changed();
+        assert_eq!(plan.due(), Due::default());
+        advance(&now, MIN_SPAWN_INTERVAL - TICK);
+        assert_eq!(plan.due(), agents_and_board(), "one spawn for the burst");
+        advance(&now, TICK);
+        assert_eq!(plan.due(), Due::default());
+    }
+
+    #[test]
+    fn manual_refresh_spawns_at_the_next_tick() {
+        let (mut plan, now) = started();
+        advance(&now, Duration::from_secs(3));
+        plan.refresh_requested();
+        assert_eq!(plan.due(), agents_and_board());
+    }
+
+    #[test]
+    fn safety_poll_slows_down_while_the_window_is_hidden() {
+        let (mut plan, now) = started();
+        advance(&now, POLL_VISIBLE - TICK);
+        assert!(!plan.due().agents);
+        advance(&now, TICK);
+        assert!(plan.due().agents);
+
+        plan.visibility_changed(false);
+        advance(&now, POLL_VISIBLE);
+        assert!(!plan.due().agents);
+        advance(&now, POLL_HIDDEN - POLL_VISIBLE - TICK);
+        assert!(!plan.due().agents);
+        advance(&now, TICK);
+        assert!(plan.due().agents);
+
+        plan.visibility_changed(true);
+        advance(&now, POLL_VISIBLE);
+        assert!(plan.due().agents);
+    }
+
+    #[test]
+    fn quota_change_rebuilds_the_board_without_a_spawn() {
+        let (mut plan, now) = started();
+        advance(&now, TICK);
+        plan.quota_changed();
+        assert_eq!(
+            plan.due(),
+            Due {
+                recompute: true,
+                ..Due::default()
+            }
+        );
+    }
+
+    #[test]
+    fn binary_change_checks_the_contract_with_the_next_spawn_only() {
+        let (mut plan, now) = started();
+        advance(&now, Duration::from_secs(1));
+        plan.claude_binary_changed();
+        assert_eq!(plan.due(), Due::default(), "no spawn of its own");
+        plan.session_files_changed();
+        assert_eq!(
+            plan.due(),
+            Due {
+                contract: true,
+                ..agents_and_board()
+            }
+        );
+        advance(&now, Duration::from_secs(1));
+        plan.session_files_changed();
+        assert_eq!(plan.due(), agents_and_board(), "checked once");
+    }
+
+    #[test]
+    fn retention_runs_hourly() {
+        let (mut plan, now) = started();
+        advance(&now, RETENTION_EVERY - TICK);
+        assert!(!plan.due().retention);
+        advance(&now, TICK);
+        assert!(plan.due().retention);
+        advance(&now, TICK);
+        assert!(!plan.due().retention);
+        advance(&now, RETENTION_EVERY);
+        assert!(plan.due().retention);
+    }
 
     #[test]
     fn session_file_rewrites_change_the_fingerprint_and_key_files_do_not() {
