@@ -144,6 +144,22 @@ Windows 11.
   event. The PRD's 30 ms target holds for the binary (E9, first bullet), not
   for the shell hop Claude Code adds on Windows.
 
+## E10. What changes on disk when a session changes state
+
+- **Verified (2.1.311, stat only, contents never read).** In the Claude
+  sessions directory, each live session has a `<pid>.json` (and a `.key`
+  file). The session's `.json` is rewritten on every state transition
+  (`busy` to `idle`, to `waiting`), while the directory's own modification
+  time changes only when a session appears or ends.
+- **Verified.** One `claude agents --json --all` call takes about 210 ms
+  and 200 ms of CPU on the workstation: polling it every second would cost a
+  fifth of a core.
+- **Verified (release build, end to end).** With the collector stat'ing each
+  session `.json` every 250 ms and spawning `claude agents` on change, a
+  session entering a permission prompt reaches the window title 329 ms after
+  its file was rewritten. The window process used no measurable CPU over 30 s
+  idle.
+
 ## E7. Configuration directory
 
 - **Documented.** `CLAUDE_CONFIG_DIR` redirects settings, session history and

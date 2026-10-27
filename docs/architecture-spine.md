@@ -49,17 +49,17 @@ Trade-off: a slow `claude agents` delays quota updates by up to 5 s; acceptable,
 
 ### AD-4: Collector triggers and refresh plan
 
-Every 500 ms the collector stats a fixed set of paths (4 `metadata` calls, no file watcher crate):
+Every 250 ms the collector stats a small set of paths (a few `metadata` calls, no file watcher crate):
 
 | Watched | Signal | Action |
 |---|---|---|
 | today's event file | length grew | read new lines incrementally; recompute; schedule agents refresh (debounce 250 ms) and a follow-up refresh at +1.5 s |
-| `<config dir>/sessions` | mtime changed | schedule agents refresh; the directory is never listed or read (FR-2) |
+| `<config dir>/sessions/*.json` | name, size or mtime of any session file changed (E10: a session's file is rewritten on every state change, the directory only on create and delete) | agents refresh now; files are stat'ed, never opened, and `.key` files are not even stat'ed (FR-2) |
 | `<officina home>/quota/<account key>.json` | mtime changed | re-read quota; recompute; no spawn |
 | resolved `claude` binary | mtime changed, or startup | run `claude --version`; on a new version run the canary (AD-12) |
 | safety timer | 15 s while the window is visible, 60 s while minimized or hidden | agents refresh |
 
-Spawns are rate-limited to one per second. The +1.5 s follow-up exists because a `Stop` hook can fire before `claude agents` reports `idle` (race not measured; the follow-up costs one spawn per event and closes it).
+Spawns are rate-limited to one per 500 ms (one call costs about 200 ms of CPU, E10), so `claude agents` runs on change, never on a short timer. The +1 s follow-up exists because a `Stop` hook can fire before `claude agents` reports `idle` (race not measured; the follow-up costs one spawn per event and closes it).
 
 Trade-off of stat polling over `notify`: up to 500 ms extra latency, and no dependency, no ReadDirectoryChangesW edge cases on synced or redirected folders.
 
