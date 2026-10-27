@@ -214,7 +214,7 @@ version, alongside the agents fields, in the existing per-version record.
 | Memory | zero session, subject or verdict lost across restarts, crashes and a closed weekend | e2e: kill mid-write, reopen; e2e: three days of event files ingested before retention |
 | Attention | one confirmation per finished subject, not per session | e2e on seeded multi-session subjects |
 | Evidence | per-source false-`finished` rate shown | e2e on seeded confirmations |
-| Containment | triage call has no tool, writes nothing under the Claude config dir, gets excerpts on stdin only | e2e on the argument vector and environment; fingerprint test; manual flag check recorded (E16) |
+| Containment | triage call has no tool, gets excerpts on stdin only, leaves no transcript; Officina itself writes nothing under the Claude config dir or into `~/.claude.json` (the claude process keeps its own state, E17) | e2e on the argument vector and environment; fingerprint test; manual flag check recorded (E16) |
 
 ## 8. Open Questions
 
