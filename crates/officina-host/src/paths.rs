@@ -53,15 +53,8 @@ impl Paths {
         let officina_home =
             env_path(ENV_HOME).or_else(|| home.as_ref().map(|h| h.join(".officina")))?;
         let default_config = home.as_ref().map(|h| h.join(".claude"));
-        // A CLAUDE_CONFIG_DIR that names the default dir is no override: the
-        // statusline of a session that sets it and the window started without
-        // it must agree on the quota account key.
-        let claude_config_override = env_path(ENV_CLAUDE_CONFIG_DIR).filter(|dir| {
-            default_config.as_ref().is_none_or(|d| {
-                officina_core::quota::normalise_path(&dir.to_string_lossy())
-                    != officina_core::quota::normalise_path(&d.to_string_lossy())
-            })
-        });
+        let claude_config_override =
+            env_path(ENV_CLAUDE_CONFIG_DIR).filter(|dir| !is_default_config_dir(dir));
         let claude_config_dir = claude_config_override.clone().or(default_config)?;
         let default_floor = officina_home.join("floor.toml");
         let floor_file = floor_arg
@@ -78,9 +71,9 @@ impl Paths {
 
     /// Applies a floor's `config_dir`, which wins over the environment.
     pub fn with_floor_config_dir(mut self, config_dir: Option<&str>) -> Paths {
-        if let Some(dir) = config_dir {
-            self.claude_config_dir = PathBuf::from(dir);
-            self.claude_config_override = Some(PathBuf::from(dir));
+        if let Some(dir) = config_dir.map(PathBuf::from) {
+            self.claude_config_override = (!is_default_config_dir(&dir)).then(|| dir.clone());
+            self.claude_config_dir = dir;
         }
         self
     }
@@ -122,7 +115,19 @@ impl Paths {
     }
 }
 
-/// True when prompt and assistant excerpts are disabled by the environment.
+/// True when `dir` is the default Claude config dir. Naming the default dir
+/// through `CLAUDE_CONFIG_DIR` or a floor is no override: a statusline that
+/// sets it and a window started without it must agree on the quota account
+/// key, so both treat it as the default account.
+pub fn is_default_config_dir(dir: &Path) -> bool {
+    user_home().is_some_and(|home| {
+        officina_core::quota::normalise_path(&dir.to_string_lossy())
+            == officina_core::quota::normalise_path(&home.join(".claude").to_string_lossy())
+    })
+}
+
+/// True when prompt and assistant excerpts are disabled by the environment
+/// (`1` or `true`).
 pub fn excerpts_disabled_by_env() -> bool {
-    std::env::var_os(ENV_NO_EXCERPTS).is_some_and(|v| v == "1")
+    std::env::var(ENV_NO_EXCERPTS).is_ok_and(|v| v == "1" || v.eq_ignore_ascii_case("true"))
 }
