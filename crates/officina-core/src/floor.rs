@@ -86,6 +86,26 @@ pub fn parse_floor(content: &str) -> Result<FloorFile, FloorError> {
     Ok(floor)
 }
 
+/// True when a floor file's content sets `no_excerpts = true`. Only that key
+/// is read, on purpose: a floor that [`parse_floor`] refuses for an unrelated
+/// mistake (an unknown key, another schema) still keeps the author's text out
+/// of the event buffer. Content that is not TOML, or a value that is not a
+/// boolean, asks for nothing.
+///
+/// ```
+/// use officina_core::floor::requests_no_excerpts;
+/// assert!(requests_no_excerpts("schema = 1\nno_excerpts = true\n"));
+/// assert!(!requests_no_excerpts("schema = 1\n"));
+/// ```
+pub fn requests_no_excerpts(content: &str) -> bool {
+    #[derive(Deserialize)]
+    struct ExcerptSwitch {
+        #[serde(default)]
+        no_excerpts: bool,
+    }
+    toml::from_str::<ExcerptSwitch>(content).is_ok_and(|switch| switch.no_excerpts)
+}
+
 /// Absolute on Windows (`C:\x`, `\\server\x`) or POSIX (`/x`). Decided on the
 /// text so core stays free of the platform's path rules.
 pub fn is_absolute(path: &str) -> bool {
@@ -158,6 +178,25 @@ path = "D:/abs/scripts"
             parse_floor("schema = 1\nconfig_dir = \"rel/dir\"\n").unwrap_err(),
             FloorError::RelativeConfigDir("rel/dir".into())
         );
+    }
+
+    #[test]
+    fn no_excerpts_is_read_even_from_a_refused_floor() {
+        let refused = "schema = 2\nno_excerpts = true\nunknown_key = 1\n";
+        assert!(parse_floor(refused).is_err());
+        assert!(requests_no_excerpts(refused));
+        assert!(requests_no_excerpts(
+            "no_excerpts = true\n[[project]]\nname = \"a\"\npath = \"a\"\n"
+        ));
+        for asks_nothing in [
+            "",
+            "schema = 1\nno_excerpts = false\n",
+            "no_excerpts = \"yes\"\n",
+            "no_excerpts = true\n[[[",
+            "[section]\nno_excerpts = true\n",
+        ] {
+            assert!(!requests_no_excerpts(asks_nothing), "{asks_nothing}");
+        }
     }
 
     #[test]

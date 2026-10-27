@@ -19,7 +19,8 @@ project uses [Semantic Versioning](https://semver.org/).
   Done columns, quota gauges with reset times and freshness, stale and
   diagnostics banners, keyboard shortcuts, pin on top, single instance.
 - Focus: one click brings an interactive session's editor window to the
-  front, or opens `claude attach` for a background session; ambiguous
-  windows are listed, never guessed.
-- Optional floor file (`officina.toml`): project names, colours and a
-  dedicated Claude config dir.
+  front, or opens `claude attach` for a background session, whose command
+  can also be copied, floor config dir included; ambiguous windows are
+  listed, never guessed.
+- Optional floor file (`officina.toml`): project names, colours, a
+  dedicated Claude config dir, and `no_excerpts`, which the hook honours too.

@@ -117,7 +117,7 @@ Run `officina-app.exe`. A second launch focuses the existing window. Keep it on 
 
 Everything stays on your machine, under `~/.officina`:
 
-- **Hook events**: the first 280 characters of each prompt and answer, plus the event type, session id and folder, in daily files deleted after at most 48 hours. Set `OFFICINA_NO_EXCERPTS=1` (or `no_excerpts = true` in the floor file) to keep no prompt or answer text at all.
+- **Hook events**: the first 280 characters of each prompt and answer, plus the event type, session id and folder, in daily files deleted after at most 48 hours. Set `OFFICINA_NO_EXCERPTS=1` (or `no_excerpts = true` in the floor file) to keep no prompt or answer text at all. The hook finds the floor file at `~/.officina/floor.toml` or through `OFFICINA_FLOOR`; one passed only with `--floor` does not reach it.
 - **Quota**: the two rate-limit windows, nothing else.
 - **Focus statistics**: outcome codes and a hash of the card, never a window title or a path.
 

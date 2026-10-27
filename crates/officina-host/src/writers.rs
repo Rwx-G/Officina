@@ -4,10 +4,11 @@
 use std::fs;
 
 use officina_core::events::reduce_payload;
+use officina_core::floor::requests_no_excerpts;
 use officina_core::quota::{from_statusline, parse_quota_file};
 
 use crate::files::{append_line, atomic_write, event_file_for};
-use crate::paths::Paths;
+use crate::paths::{Paths, excerpts_disabled_by_env};
 
 /// A quota file younger than this is not rewritten when its windows are
 /// unchanged: the statusline runs on every render (AD-10).
@@ -20,6 +21,23 @@ pub enum HookOutcome {
     Appended,
     NotAHookPayload,
     WriteFailed(String),
+}
+
+/// Whether the hook keeps prompt and assistant excerpts. Not when
+/// `OFFICINA_NO_EXCERPTS` is set, nor when the floor in `paths` sets
+/// `no_excerpts` (the hook resolves it through [`Paths::from_env`]:
+/// `OFFICINA_FLOOR`, else `<officina home>/floor.toml`; a floor given only as
+/// `--floor` to the window is not seen). A floor that cannot be read keeps
+/// them: the hook never fails on its own configuration.
+pub fn hook_keeps_excerpts(paths: &Paths) -> bool {
+    if excerpts_disabled_by_env() {
+        return false;
+    }
+    !paths
+        .floor_file
+        .as_deref()
+        .and_then(|floor| fs::read_to_string(floor).ok())
+        .is_some_and(|content| requests_no_excerpts(&content))
 }
 
 /// Reduces one hook payload and appends it to today's event file.

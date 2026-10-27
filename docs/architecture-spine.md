@@ -92,7 +92,7 @@ Each schema is a Rust type in `officina-core` with `#[serde(deny_unknown_fields)
 {"v":1,"ts":1761555600123,"event":"Notification","session_id":"<UUID>","cwd":"C:/path/to/repo","notification_type":"permission_prompt","message":"..."}
 ```
 
-Fields: `v`, `ts` (ms, taken by the hook on receipt), `event`, `session_id`, `cwd`, and when present `source`, `reason`, `notification_type`, `message`, `prompt`, `last_message`. `prompt`, `last_message` and `message` are cut to 280 chars on a char boundary; `OFFICINA_NO_EXCERPTS=1` drops `prompt` and `last_message`. If the serialized line exceeds 4096 bytes, excerpts are dropped and `"truncated":true` is set. Absent fields are omitted, never `null`.
+Fields: `v`, `ts` (ms, taken by the hook on receipt), `event`, `session_id`, `cwd`, and when present `source`, `reason`, `notification_type`, `message`, `prompt`, `last_message`. `prompt`, `last_message` and `message` are cut to 280 chars on a char boundary; `OFFICINA_NO_EXCERPTS=1`, or `no_excerpts = true` in the floor the hook resolves (`OFFICINA_FLOOR`, else `<officina home>\floor.toml`), drops `prompt` and `last_message`. If the serialized line exceeds 4096 bytes, excerpts are dropped and `"truncated":true` is set. Absent fields are omitted, never `null`.
 
 **Quota file** - `quota/<account key>.json`:
 

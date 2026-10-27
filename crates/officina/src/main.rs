@@ -13,8 +13,8 @@ use std::process::ExitCode;
 use officina_host::collector::Collector;
 use officina_host::doctor::{self, Level};
 use officina_host::files::now_ms;
-use officina_host::paths::{Paths, excerpts_disabled_by_env};
-use officina_host::writers::{record_hook, record_quota};
+use officina_host::paths::Paths;
+use officina_host::writers::{hook_keeps_excerpts, record_hook, record_quota};
 
 const USAGE: &str = "\
 usage: officina <command>
@@ -37,7 +37,7 @@ fn hook() -> ExitCode {
     let _ = std::panic::catch_unwind(|| {
         let stdin = read_stdin();
         if let Some(paths) = Paths::from_env(None) {
-            let _ = record_hook(&paths, &stdin, now_ms(), !excerpts_disabled_by_env());
+            let _ = record_hook(&paths, &stdin, now_ms(), hook_keeps_excerpts(&paths));
         }
     });
     ExitCode::SUCCESS

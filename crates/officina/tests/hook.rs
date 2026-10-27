@@ -80,6 +80,90 @@ fn no_excerpts_env_drops_author_text() {
     );
 }
 
+/// Runs one `UserPromptSubmit` through `cmd` and returns the line it wrote.
+fn prompt_line(env: &TestEnv, cmd: std::process::Command) -> serde_json::Value {
+    let out = common::run_with(cmd, payload("UserPromptSubmit").as_bytes());
+    assert_eq!(out.status.code(), Some(0));
+    assert!(out.stdout.is_empty() && out.stderr.is_empty());
+    let mut lines = read_events(env);
+    assert_eq!(lines.len(), 1);
+    lines.remove(0)
+}
+
+#[test]
+fn floor_no_excerpts_drops_author_text_wherever_the_hook_finds_the_floor() {
+    let at_default = TestEnv::new();
+    std::fs::create_dir_all(at_default.officina_home()).unwrap();
+    std::fs::write(
+        at_default.officina_home().join("floor.toml"),
+        "schema = 1\nno_excerpts = true\n",
+    )
+    .unwrap();
+    let line = prompt_line(&at_default, at_default.officina(&["hook"]));
+    assert!(line.get("prompt").is_none() && line.get("last_message").is_none());
+    assert_eq!(line["message"], "Claude needs your permission to use Bash");
+
+    let named = TestEnv::new();
+    let floor = named.root.path().join("work.toml");
+    std::fs::write(&floor, "schema = 1\nno_excerpts = true\n").unwrap();
+    let mut cmd = named.officina(&["hook"]);
+    cmd.env("OFFICINA_FLOOR", &floor);
+    assert!(prompt_line(&named, cmd).get("prompt").is_none());
+
+    // OFFICINA_FLOOR wins over the default location, as for the window.
+    let overridden = TestEnv::new();
+    std::fs::create_dir_all(overridden.officina_home()).unwrap();
+    std::fs::write(
+        overridden.officina_home().join("floor.toml"),
+        "schema = 1\nno_excerpts = true\n",
+    )
+    .unwrap();
+    let floor = overridden.root.path().join("work.toml");
+    std::fs::write(&floor, "schema = 1\nno_excerpts = false\n").unwrap();
+    let mut cmd = overridden.officina(&["hook"]);
+    cmd.env("OFFICINA_FLOOR", &floor);
+    assert_eq!(prompt_line(&overridden, cmd)["prompt"], "check the build");
+}
+
+#[test]
+fn a_floor_doctor_refuses_still_withholds_excerpts() {
+    let env = TestEnv::new();
+    let floor = env.root.path().join("work.toml");
+    std::fs::write(&floor, "schema = 1\nno_excerpts = true\nunknown_key = 1\n").unwrap();
+    let mut cmd = env.officina(&["hook"]);
+    cmd.env("OFFICINA_FLOOR", &floor);
+    assert!(prompt_line(&env, cmd).get("prompt").is_none());
+}
+
+#[test]
+fn an_unusable_floor_never_fails_the_hook() {
+    let contents: [&[u8]; 3] = [b"not toml [[[", b"no_excerpts = \"yes\"\n", b"\xff\xfe\x00"];
+    for content in contents {
+        let env = TestEnv::new();
+        let floor = env.root.path().join("work.toml");
+        std::fs::write(&floor, content).unwrap();
+        let mut cmd = env.officina(&["hook"]);
+        cmd.env("OFFICINA_FLOOR", &floor);
+        assert_eq!(prompt_line(&env, cmd)["prompt"], "check the build");
+    }
+    let missing_file_or_directory: [fn(&TestEnv) -> std::path::PathBuf; 2] = [
+        |env| env.root.path().join("missing.toml"),
+        |env| env.root.path().to_path_buf(),
+    ];
+    for floor_of in missing_file_or_directory {
+        let env = TestEnv::new();
+        let floor = floor_of(&env);
+        let mut cmd = env.officina(&["hook"]);
+        cmd.env("OFFICINA_FLOOR", &floor);
+        assert_eq!(
+            prompt_line(&env, cmd)["prompt"],
+            "check the build",
+            "OFFICINA_FLOOR={}",
+            floor.display()
+        );
+    }
+}
+
 #[test]
 fn hook_spawns_no_claude_and_never_deletes() {
     let env = TestEnv::new();
