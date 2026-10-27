@@ -18,18 +18,11 @@ README, not here.
 
 ## Medium
 
-- Split `build_board` into one card builder per source; the two `Card`
-  literals can drift.
-- Split the collector loop (`watch::run`) into a state struct with one method
-  per trigger, and test it with an injected clock instead of wall time.
-- The floor's `no_excerpts` does not reach the hook, which only reads
-  `OFFICINA_NO_EXCERPTS`; excerpts are still written, then hidden.
 - Pin GitHub Actions to commit SHAs.
 
 ## Low
 
-- `doctor::run` is long; hook detection is a substring match.
-- The claude pipe readers are not bounded in time after a kill, and the kill
-  reaches only the direct child.
-- "Copy attach command" leaves out the floor's config dir.
-- The zero-write test does not include a collector thread run.
+- The kill of a timed-out `claude` reaches only the direct child: a process
+  it started keeps running, and keeps the abandoned pipe reader threads
+  blocked, until it exits. A Job Object around the child would end the whole
+  tree (E13).
