@@ -260,6 +260,22 @@ Windows 11.
   tokens (system prompt, cached for an hour) and 380 output tokens (260 of
   thinking), USD 0.0011 at API prices.
 
+## E17. Notification hooks, and what any claude process writes
+
+- **Verified (2.1.312, background session in `default` mode asked to use
+  Write).** While the session reads `waiting / blocked / permission prompt`,
+  the `Notification` hook fires with `notification_type:
+  "permission_prompt"`, `message: "Claude needs your permission"`, and the
+  fields `cwd`, `hook_event_name`, `prompt_id`, `scratchpad_dir`,
+  `session_id`, `transcript_path`. E2's documented shape holds.
+- **Observed.** `~/.claude.json` changes continuously while any `claude`
+  process runs (every interactive session updates it), so a write by one
+  call cannot be isolated on a live workstation. Officina's guarantee is
+  that Officina itself never writes under the Claude config dir or into
+  `~/.claude.json`; the `claude` processes it starts (`claude agents`,
+  `--version`, the triage call) maintain their own state like any session.
+  The zero-write tests run against the fake claude.
+
 ## E7. Configuration directory
 
 - **Documented.** `CLAUDE_CONFIG_DIR` redirects settings, session history and
