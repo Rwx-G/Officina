@@ -1,0 +1,93 @@
+# The gates every change passes (AD-18). The Windows job is the reference:
+# Officina targets Windows until v1. The Linux job keeps the pure crates
+# portable from day one.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  core-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - name: Format
+        run: cargo fmt --all -- --check
+      - name: Clippy
+        run: cargo clippy -p officina-core -p officina-host -p officina --all-targets --features officina-core/ts -- -D warnings
+      - name: Test
+        run: cargo test -p officina-core -p officina-host -p officina --features officina-core/ts
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - name: pnpm
+        run: npm install -g pnpm@11
+      - name: Format
+        run: cargo fmt --all -- --check
+      - name: Frontend install
+        working-directory: app
+        run: pnpm install --frozen-lockfile
+      - name: Frontend build (embedded by the app crate)
+        working-directory: app
+        run: pnpm build
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --features officina-core/ts -- -D warnings
+      - name: Test (includes the TypeScript bindings drift check)
+        run: cargo test --workspace --features officina-core/ts
+      - name: Hook latency and concurrent appends
+        run: cargo test --release -p officina --test perf -- --ignored --nocapture
+      - name: Frontend checks
+        working-directory: app
+        run: |
+          pnpm check
+          pnpm lint
+          pnpm test
+      - name: e2e fixtures from the real CLI
+        working-directory: app
+        run: |
+          cargo build -p officina
+          node scripts/e2e-fixtures.mjs
+      - name: Playwright
+        working-directory: app
+        run: |
+          pnpm exec playwright install chromium
+          pnpm e2e
+      - name: Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: playwright-report
+          path: app/playwright-report
+
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - name: cargo deny
+        run: |
+          cargo install cargo-deny --locked
+          cargo deny check
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - name: pnpm audit
+        working-directory: app
+        run: |
+          npm install -g pnpm@11
+          pnpm audit --prod
