@@ -3,12 +3,18 @@
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant};
 
 use crate::paths::{ENV_CLAUDE_BIN, ENV_CLAUDE_CONFIG_DIR, user_home};
 
 /// Deadline of one `claude agents` call.
 pub const AGENTS_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// How long the output pipes may stay open once `claude` has exited. What it
+/// wrote is drained within microseconds; only a process it started and left
+/// running, which inherited the pipes, keeps them open longer.
+pub const OUTPUT_GRACE: Duration = Duration::from_millis(500);
 
 /// Cap on captured stdout; `claude agents --all` stays far below it.
 const STDOUT_CAP: u64 = 8 * 1024 * 1024;
@@ -22,6 +28,8 @@ pub enum ClaudeError {
     Spawn(String),
     #[error("claude did not answer within {0} s")]
     Timeout(u64),
+    #[error("claude exited but a process it started still holds its output")]
+    OutputHeld,
     #[error("claude exited with {code}: {stderr}")]
     Failed { code: String, stderr: String },
 }
@@ -83,7 +91,25 @@ fn command(binary: &Path, config_dir: Option<&Path>) -> Command {
     cmd
 }
 
-/// Runs `claude <args>` with a deadline and returns its stdout.
+/// Reads `pipe` to its end, at most `cap` bytes, on a thread of its own, and
+/// sends what it read once the pipe closes. A pipe that never closes keeps
+/// its thread blocked; the caller stops waiting and abandons it.
+fn read_on_thread(pipe: Option<impl Read + Send + 'static>, cap: u64) -> Receiver<Vec<u8>> {
+    let (sender, receiver) = mpsc::channel();
+    std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        if let Some(pipe) = pipe {
+            let _ = pipe.take(cap).read_to_end(&mut buf);
+        }
+        let _ = sender.send(buf);
+    });
+    receiver
+}
+
+/// Runs `claude <args>` with a deadline and returns its stdout. Returns
+/// within about `timeout` plus [`OUTPUT_GRACE`] whatever `claude` leaves running:
+/// the kill on timeout reaches only `claude` itself, and a process it started
+/// can hold the output pipes open after it exits.
 pub fn run(
     binary: &Path,
     args: &[&str],
@@ -98,24 +124,10 @@ pub fn run(
         .spawn()
         .map_err(|e| ClaudeError::Spawn(e.to_string()))?;
 
-    let stdout = child.stdout.take();
-    let stderr = child.stderr.take();
     // Pipes are drained on their own threads: a child that fills a pipe
     // buffer while we only poll `try_wait` would otherwise never exit.
-    let out_reader = std::thread::spawn(move || {
-        let mut buf = Vec::new();
-        if let Some(out) = stdout {
-            let _ = out.take(STDOUT_CAP).read_to_end(&mut buf);
-        }
-        buf
-    });
-    let err_reader = std::thread::spawn(move || {
-        let mut buf = Vec::new();
-        if let Some(err) = stderr {
-            let _ = err.take(64 * 1024).read_to_end(&mut buf);
-        }
-        buf
-    });
+    let stdout = read_on_thread(child.stdout.take(), STDOUT_CAP);
+    let stderr = read_on_thread(child.stderr.take(), 64 * 1024);
 
     let deadline = Instant::now() + timeout;
     let status = loop {
@@ -130,9 +142,10 @@ pub fn run(
             Err(e) => return Err(ClaudeError::Spawn(e.to_string())),
         }
     };
-    let out = out_reader.join().unwrap_or_default();
-    let err = err_reader.join().unwrap_or_default();
+    let drained_by = Instant::now() + OUTPUT_GRACE;
+    let remaining = || drained_by.saturating_duration_since(Instant::now());
     if !status.success() {
+        let err = stderr.recv_timeout(remaining()).unwrap_or_default();
         let stderr: String = String::from_utf8_lossy(&err).chars().take(500).collect();
         return Err(ClaudeError::Failed {
             code: status
@@ -141,6 +154,9 @@ pub fn run(
             stderr: stderr.trim().to_owned(),
         });
     }
+    let out = stdout
+        .recv_timeout(remaining())
+        .map_err(|_| ClaudeError::OutputHeld)?;
     Ok(String::from_utf8_lossy(&out).into_owned())
 }
 

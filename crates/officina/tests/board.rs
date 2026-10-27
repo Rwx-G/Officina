@@ -2,7 +2,11 @@
 
 mod common;
 
+use std::process::Stdio;
+use std::time::{Duration, Instant};
+
 use common::{TestEnv, now_ms};
+use officina_host::claude::{AGENTS_TIMEOUT, OUTPUT_GRACE};
 
 fn agents_fixture(now: i64) -> String {
     serde_json::json!([
@@ -88,12 +92,47 @@ fn hanging_claude_times_out_instead_of_blocking() {
     let env = TestEnv::new();
     let mut cmd = env.officina(&["board", "--json"]);
     cmd.env("FAKE_CLAUDE_MODE", "hang");
-    let started = std::time::Instant::now();
+    let started = Instant::now();
     let out = common::run_with(cmd, b"");
+    let elapsed = started.elapsed();
     assert_eq!(out.status.code(), Some(3));
-    assert!(started.elapsed() < std::time::Duration::from_secs(15));
+    assert!(
+        elapsed < AGENTS_TIMEOUT + Duration::from_secs(1),
+        "{elapsed:?}"
+    );
     let board: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert!(board["stale"]["error"].as_str().unwrap().contains("within"));
+}
+
+#[test]
+fn a_process_claude_leaves_running_cannot_hold_the_board() {
+    let env = TestEnv::new();
+    env.write_agents("[]");
+    // The process left behind inherits every inheritable handle down the
+    // chain, this test's pipes included: reading officina's stdout through a
+    // pipe would wait for it. A file does not.
+    let board_file = env.root.path().join("board.json");
+    let mut cmd = env.officina(&["board", "--json"]);
+    cmd.env("FAKE_CLAUDE_MODE", "orphan")
+        .stdin(Stdio::null())
+        .stdout(std::fs::File::create(&board_file).unwrap())
+        .stderr(Stdio::null());
+    let started = Instant::now();
+    let status = cmd.status().unwrap();
+    let elapsed = started.elapsed();
+    // The fake's orphan holds the output for 5 s, so waiting on it would
+    // take that long; the bound is the grace period plus process start-up.
+    assert!(
+        elapsed < OUTPUT_GRACE + Duration::from_secs(2),
+        "{elapsed:?}"
+    );
+    assert_eq!(status.code(), Some(3));
+    let board: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&board_file).unwrap()).unwrap();
+    assert_eq!(
+        board["stale"]["error"],
+        officina_host::claude::ClaudeError::OutputHeld.to_string()
+    );
 }
 
 #[test]
