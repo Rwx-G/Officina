@@ -1,7 +1,15 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "The board window may only call Officina's own commands and listen to its events.",
+  "description": "The board window may call Officina's own commands, listen to its events and pin itself on top; nothing else (no shell, filesystem, HTTP or opener access).",
   "windows": ["main"],
-  "permissions": ["core:default", "core:window:allow-set-always-on-top"]
+  "permissions": [
+    "core:default",
+    "core:window:allow-set-always-on-top",
+    "allow-get-board",
+    "allow-refresh",
+    "allow-focus",
+    "allow-report-wrong-window",
+    "allow-copy-attach-command"
+  ]
 }
