@@ -36,6 +36,10 @@ Windows 11.
   asked to use `AskUserQuestion` reads
   `status: waiting, state: blocked, waitingFor: "input needed"`. Both held
   steadily over 30 s.
+- **Verified (2.1.311, in daily use).** An interactive session in a VS Code
+  terminal answering a question through a dialog reads
+  `status: waiting, waitingFor: "input needed"` (no `state`): interactive
+  sessions do report waits, not only background ones.
 - **Inferred, not verified.** An interactive session that ends its turn with a
   plain-text question reads `status: idle`, like any finished turn: nothing
   distinguishes "asked something" from "finished". Officina must therefore
