@@ -206,6 +206,39 @@ Windows 11.
   commands a session runs through its Bash tool, so `officina run` can record
   which session called it.
 
+## E14. The claude process id in hooks
+
+- **Verified (2.1.312).** Every hook process receives `CLAUDE_PID`, the id of
+  the `claude` process that runs the session, and `CLAUDE_CODE_SESSION_ID`.
+  `CLAUDE_PID` equals the `pid` that `claude agents --json` reports for that
+  session (checked on a live interactive session).
+- Consequence: the hook records `claude_pid` (reserved in event lines since
+  schema 1), and the board attaches events to a live card by process as well
+  as by session id. Whatever `/clear` does to the session id reported by
+  `claude agents`, the events of the cleared session stay on the live card
+  instead of surfacing as an "interrupted" ghost. The `/clear` question of
+  AD-11 no longer needs an answer.
+- Not verifiable here: driving `/clear` in a background session. `claude
+  --bg --resume <id>` on a running session starts a copy instead.
+
+## E15. The PreToolUse payload and the working directory
+
+- **Verified (2.1.312, `claude -p` with a logging `PreToolUse` hook).** The
+  payload of a `Bash` call carries exactly: `cwd`, `effort`,
+  `hook_event_name`, `permission_mode`, `prompt_id`, `session_id`,
+  `tool_input` (`command`, `description`), `tool_name`, `tool_use_id`,
+  `transcript_path`. `cwd` uses Windows backslashes.
+- **Verified.** `cwd` follows the shell: after a call running `cd crates`,
+  the next call's `cwd` ends in `\crates`. `CLAUDE_PROJECT_DIR`, in the hook's
+  environment, stays the session's project root (forward slashes).
+- **Verified (E12).** The deny that holds in every mode is the hook printing
+  `{"hookSpecificOutput": {"hookEventName": "PreToolUse",
+  "permissionDecision": "deny", "permissionDecisionReason": "..."}}` on
+  stdout and exiting 0.
+- Consequence: a repository is guarded for a call if the project of
+  `CLAUDE_PROJECT_DIR` or the project of `cwd` is guarded, so `cd ..` does
+  not leave containment.
+
 ## E7. Configuration directory
 
 - **Documented.** `CLAUDE_CONFIG_DIR` redirects settings, session history and
