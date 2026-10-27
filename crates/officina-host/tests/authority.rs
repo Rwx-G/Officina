@@ -132,6 +132,28 @@ fn approval_hashes_the_relay_floor_not_another() {
 }
 
 #[test]
+fn approved_floor_is_read_back_from_the_path_as_given() {
+    let home = Home::new();
+    let floor = home.root.join("Mixed").join("Case").join("Officina.toml");
+    home.write(&floor, FLOOR);
+    let relay = home.relay(Some(floor.clone()));
+    let approved = approve_catalogue(&relay, &home.displayed(&floor)).unwrap();
+    assert_eq!(
+        approved.floor_file.as_deref(),
+        Some(floor.to_string_lossy().as_ref())
+    );
+
+    let after = home.relay(None);
+    let resolved = after.relay_floor(&after.read_approved());
+    assert_eq!(
+        resolved.as_os_str().as_encoded_bytes(),
+        floor.as_os_str().as_encoded_bytes(),
+        "byte-equal to the path read at approval, never the normalised one"
+    );
+    assert!(approve_catalogue(&after, &approved.hash).is_ok());
+}
+
+#[test]
 fn approval_records_known_projects() {
     let home = Home::new();
     let relay = home.relay(None);

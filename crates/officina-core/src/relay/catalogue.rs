@@ -864,8 +864,9 @@ pub struct CanonicalProject {
 #[serde(deny_unknown_fields)]
 pub struct CanonicalCatalogue {
     pub format: u32,
-    /// Normalised: lowercase, forward slashes. Windows opens it whatever the
-    /// case; Linux (v1) will need the original spelling kept beside it.
+    /// Normalised (lowercase, forward slashes) so two spellings of one floor
+    /// hash alike. Never opened: the approved record keeps the path as read
+    /// in [`ApprovedCatalogue::floor_file`].
     pub floor_path: String,
     pub guarded_programs: Vec<String>,
     pub projects: BTreeMap<String, CanonicalProject>,
@@ -1070,7 +1071,23 @@ pub fn diff(approved: &CanonicalCatalogue, current: &CanonicalCatalogue) -> Cata
 pub struct ApprovedCatalogue {
     pub approved_at_ms: i64,
     pub hash: String,
+    /// The floor's path exactly as the approval read it, which the relay
+    /// floor resolution opens (AD-24). Absent from records written before
+    /// it existed; see [`ApprovedCatalogue::floor_file`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub floor_file: Option<String>,
     pub canonical: CanonicalCatalogue,
+}
+
+impl ApprovedCatalogue {
+    /// The path of the approved floor: as read at approval, or for an older
+    /// record the canonical path, which only a case-insensitive file system
+    /// opens.
+    pub fn floor_file(&self) -> &str {
+        self.floor_file
+            .as_deref()
+            .unwrap_or(&self.canonical.floor_path)
+    }
 }
 
 /// Content of `relay/known-projects.json` (D-15): the last readable state

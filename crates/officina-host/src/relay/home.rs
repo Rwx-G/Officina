@@ -130,15 +130,16 @@ impl RelayHome {
     }
 
     /// The floor the relay reads (AD-24): `OFFICINA_FLOOR`, else the floor
-    /// path recorded in the approved catalogue, else `floor.toml` in the
-    /// home. The gate, `officina run` and the window's approval all use it
-    /// (D-8); a different floor fails the hash check.
+    /// path recorded in the approved catalogue, as the approval read it,
+    /// else `floor.toml` in the home. The gate, `officina run` and the
+    /// window's approval all use it (D-8); a different floor fails the hash
+    /// check.
     pub fn relay_floor(&self, approved: &ApprovedState) -> PathBuf {
         if let Some(path) = &self.floor_override {
             return path.clone();
         }
         match approved.approved() {
-            Some(approved) => PathBuf::from(&approved.canonical.floor_path),
+            Some(approved) => PathBuf::from(approved.floor_file()),
             None => self.default_floor(),
         }
     }

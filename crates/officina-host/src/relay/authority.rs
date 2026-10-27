@@ -70,6 +70,7 @@ pub fn approve_catalogue(
     let approved = ApprovedCatalogue {
         approved_at_ms: now_ms(),
         hash: current.hash,
+        floor_file: Some(floor_path.to_string_lossy().into_owned()),
         canonical: current.canonical,
     };
     write_json(&home.approved_file(), &approved)?;

@@ -14,6 +14,7 @@ fn approved_for(floor_path: &Path) -> ApprovedCatalogue {
     ApprovedCatalogue {
         approved_at_ms: 1_793_102_400_000,
         hash: relay_floor.hash,
+        floor_file: Some(floor_path.to_string_lossy().into_owned()),
         canonical: relay_floor.canonical,
     }
 }
@@ -91,6 +92,16 @@ fn approved_round_trips() {
     write_approved(&home, &serde_json::to_vec_pretty(&approved).unwrap());
     assert_eq!(home.read_approved(), ApprovedState::Valid(approved.clone()));
     assert_eq!(home.read_approved().approved(), Some(&approved));
+
+    let mut older = serde_json::to_value(&approved).unwrap();
+    older.as_object_mut().unwrap().remove("floor_file");
+    write_approved(&home, &serde_json::to_vec(&older).unwrap());
+    let read = home.read_approved();
+    let read = read
+        .approved()
+        .expect("a record without floor_file still reads");
+    assert_eq!(read.floor_file, None);
+    assert_eq!(read.floor_file(), approved.canonical.floor_path);
 }
 
 #[test]
@@ -110,11 +121,19 @@ fn floor_resolution_order() {
     }
 
     let without = RelayHome::new(dir.path(), None);
-    let from_approved = without.relay_floor(&approved);
     assert_eq!(
-        from_approved.to_string_lossy(),
-        officina_core::quota::normalise_path(&approved_floor.to_string_lossy()),
-        "the approved floor path, normalised as the canonical form records it"
+        without.relay_floor(&approved),
+        approved_floor,
+        "the approved floor path as the approval read it, not normalised"
+    );
+    let mut older = approved_for(&approved_floor);
+    older.floor_file = None;
+    assert_eq!(
+        without
+            .relay_floor(&ApprovedState::Valid(older.clone()))
+            .to_string_lossy(),
+        older.canonical.floor_path,
+        "a record written before floor_file falls back to the canonical path"
     );
     for state in [
         ApprovedState::Missing,

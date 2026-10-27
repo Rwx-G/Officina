@@ -60,7 +60,7 @@ so that a floor edited by a session cannot run anything until I approve the chan
 - `every_canonical_field_changes_the_hash` mutates each leaf of the serialized form: a suffix or another string of the catalogue for strings (so the closed enums get another valid variant; the golden floor uses at least two of class, runner and autonomy), plus one for numbers, a value for nulls and empty containers. A leaf with no mutation that still deserializes fails the test. Map keys (projects, actions, parameters, env) are renamed too.
 - `diff` works field by field over the serialized entries; `catalogue.rs::tests::diff_covers_every_canonical_field` fails when a top-level canonical field has no slot in `CatalogueDiff`.
 - `OFFICINA_FLOOR` is used as given. A relative value would resolve against each process's working directory and give the window and the gate different floor paths; not solved, it is a misconfiguration doctor can report (story 2.10).
-- The canonical floor path is lowercase (Dev Notes): Windows opens it whatever the case; Linux (v1) will need the original spelling. Noted on `CanonicalCatalogue::floor_path`.
+- The canonical floor path is lowercase (Dev Notes), for the hash only. The relay floor resolution opens `ApprovedCatalogue::floor_file`, the path as `approve_catalogue` read it; a record written before that field falls back to the canonical path, which only a case-insensitive file system opens (fix of 2026-10-28, found by the Linux CI job).
 
 ### Completion Notes
 
@@ -104,3 +104,4 @@ so that a floor edited by a session cannot run anything until I approve the chan
 - 2026-10-27 created
 - 2026-10-27 reworked after review: D-8 (relay floor hashed), D-9 (marker used, positive control, fresh build), D-15 (known-projects file)
 - 2026-10-28 implemented: canonical form, hash and diff, relay home, window authority with the `approve_catalogue` command, CI authority check with positive control; status Review
+- 2026-10-28 fixed: the relay floor resolution reads the approved floor from the path as given (`ApprovedCatalogue::floor_file`), not the lowercased canonical path; `authority.rs::approved_floor_is_read_back_from_the_path_as_given`
