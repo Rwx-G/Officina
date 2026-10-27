@@ -192,6 +192,20 @@ Windows 11.
   the request in Officina, and let the same call through once the author
   approved it in the window.
 
+## E13. Running commands through WSL
+
+- **Verified (WSL 2.7.14, Debian).** `wsl.exe -d <distro> --exec <program>
+  <args...>` started with an argument vector (MSVC quoting, as Rust and
+  Python build it) delivers every argument intact to the Linux program:
+  spaces, double quotes, `$HOME`, `*`, `;`, backslashes, a trailing
+  backslash, accented letters. With `--exec` no shell interprets anything.
+- **Verified.** Killing the Windows `wsl.exe` process ends the Linux process
+  it started: a Job Object around `wsl.exe` is enough to stop a timed-out
+  action.
+- **Verified.** `CLAUDE_CODE_SESSION_ID` is set in the environment of the
+  commands a session runs through its Bash tool, so `officina run` can record
+  which session called it.
+
 ## E7. Configuration directory
 
 - **Documented.** `CLAUDE_CONFIG_DIR` redirects settings, session history and
