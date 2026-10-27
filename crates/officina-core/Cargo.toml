@@ -1,0 +1,23 @@
+[package]
+name = "officina-core"
+description = "Officina core: session model, hook events, quota contract, board computation."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror = "2.0.21"
+toml.workspace = true
+ts-rs = { version = "12.0.1", optional = true }
+
+[lints]
+workspace = true
+
+[features]
+# Generates the TypeScript types of the board contract (AD-13).
+ts = ["dep:ts-rs"]

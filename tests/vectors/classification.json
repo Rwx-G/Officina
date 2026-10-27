@@ -1,0 +1,143 @@
+{
+  "schema": 1,
+  "cases": [
+    {
+      "name": "interactive waiting on a permission prompt",
+      "now_ms": 1761555600000,
+      "agents": [{"pid": 4100, "cwd": "C:/work/repo-a", "kind": "interactive", "startedAt": 1761550000000, "sessionId": "00000000-0000-0000-0000-000000000001", "name": "repo-a", "status": "waiting", "waitingFor": "permission prompt"}],
+      "events": [],
+      "expect": [{"key": "pid:4100:1761550000000", "column": "needs_you", "badge": null, "waiting_for": "permission prompt"}]
+    },
+    {
+      "name": "background blocked on a question",
+      "now_ms": 1761555600000,
+      "agents": [{"pid": 4200, "id": "bg01", "cwd": "C:/work/repo-b", "kind": "background", "startedAt": 1761550000000, "sessionId": "00000000-0000-0000-0000-000000000002", "name": "nightly", "status": "waiting", "state": "blocked", "waitingFor": "input needed"}],
+      "events": [],
+      "expect": [{"key": "bg:bg01", "column": "needs_you", "badge": null, "waiting_for": "input needed"}]
+    },
+    {
+      "name": "interactive busy",
+      "now_ms": 1761555600000,
+      "agents": [{"pid": 4300, "cwd": "C:/work/repo-a", "kind": "interactive", "startedAt": 1761550000000, "sessionId": "00000000-0000-0000-0000-000000000003", "name": "a", "status": "busy"}],
+      "events": [],
+      "expect": [{"key": "pid:4300:1761550000000", "column": "working", "badge": null, "waiting_for": null}]
+    },
+    {
+      "name": "background working without live status",
+      "now_ms": 1761555600000,
+      "agents": [{"id": "bg02", "cwd": "C:/work/repo-b", "kind": "background", "startedAt": 1761550000000, "sessionId": "00000000-0000-0000-0000-000000000004", "name": "b", "state": "working"}],
+      "events": [],
+      "expect": [{"key": "bg:bg02", "column": "working", "badge": null, "waiting_for": null}]
+    },
+    {
+      "name": "interactive idle is your turn, even after a question in plain text",
+      "now_ms": 1761555600000,
+      "agents": [{"pid": 4400, "cwd": "C:/work/repo-a", "kind": "interactive", "startedAt": 1761550000000, "sessionId": "00000000-0000-0000-0000-000000000005", "name": "a", "status": "idle"}],
+      "events": [
+        {"v": 1, "ts": 1761555000000, "event": "UserPromptSubmit", "session_id": "00000000-0000-0000-0000-000000000005", "prompt": "check the build"},
+        {"v": 1, "ts": 1761555100000, "event": "Stop", "session_id": "00000000-0000-0000-0000-000000000005", "last_message": "Which branch should I use?"}
+      ],
+      "expect": [{"key": "pid:4400:1761550000000", "column": "your_turn", "badge": null, "waiting_for": null}]
+    },
+    {
+      "name": "background idle and done",
+      "now_ms": 1761555600000,
+      "agents": [{"pid": 4500, "id": "bg03", "cwd": "C:/work/repo-b", "kind": "background", "startedAt": 1761550000000, "sessionId": "00000000-0000-0000-0000-000000000006", "name": "c", "status": "idle", "state": "done"}],
+      "events": [],
+      "expect": [{"key": "bg:bg03", "column": "done", "badge": null, "waiting_for": null}]
+    },
+    {
+      "name": "background failed and stopped go to resume",
+      "now_ms": 1761555600000,
+      "agents": [
+        {"id": "bg04", "cwd": "C:/work/repo-b", "kind": "background", "startedAt": 1761550000000, "sessionId": "00000000-0000-0000-0000-000000000007", "name": "d", "state": "failed"},
+        {"id": "bg05", "cwd": "C:/work/repo-b", "kind": "background", "startedAt": 1761551000000, "sessionId": "00000000-0000-0000-0000-000000000008", "name": "e", "state": "stopped"}
+      ],
+      "events": [],
+      "expect": [
+        {"key": "bg:bg05", "column": "to_resume", "badge": "stopped", "waiting_for": null},
+        {"key": "bg:bg04", "column": "to_resume", "badge": "interrupted", "waiting_for": null}
+      ]
+    },
+    {
+      "name": "done older than the window is not listed",
+      "now_ms": 1761555600000,
+      "agents": [{"id": "bg06", "cwd": "C:/work/repo-b", "kind": "background", "startedAt": 1761400000000, "sessionId": "00000000-0000-0000-0000-000000000009", "name": "f", "state": "done"}],
+      "events": [],
+      "expect": []
+    },
+    {
+      "name": "unknown state never counts as done",
+      "now_ms": 1761555600000,
+      "agents": [{"id": "bg07", "cwd": "C:/work/repo-b", "kind": "background", "startedAt": 1761550000000, "sessionId": "00000000-0000-0000-0000-000000000010", "name": "g"}],
+      "events": [],
+      "expect": [{"key": "bg:bg07", "column": "working", "badge": "unknown", "waiting_for": null}]
+    },
+    {
+      "name": "permission notification counts only without live status",
+      "now_ms": 1761555600000,
+      "agents": [
+        {"id": "bg08", "cwd": "C:/work/repo-b", "kind": "background", "startedAt": 1761550000000, "sessionId": "00000000-0000-0000-0000-000000000011", "name": "h"},
+        {"pid": 4600, "cwd": "C:/work/repo-a", "kind": "interactive", "startedAt": 1761550000000, "sessionId": "00000000-0000-0000-0000-000000000012", "name": "i", "status": "busy"}
+      ],
+      "events": [
+        {"v": 1, "ts": 1761555500000, "event": "Notification", "session_id": "00000000-0000-0000-0000-000000000011", "notification_type": "permission_prompt", "message": "Claude needs your permission to use Bash"},
+        {"v": 1, "ts": 1761555500000, "event": "Notification", "session_id": "00000000-0000-0000-0000-000000000012", "notification_type": "permission_prompt", "message": "Claude needs your permission to use Bash"}
+      ],
+      "expect": [
+        {"key": "bg:bg08", "column": "needs_you", "badge": null, "waiting_for": null},
+        {"key": "pid:4600:1761550000000", "column": "working", "badge": null, "waiting_for": null}
+      ]
+    },
+    {
+      "name": "ended interactive sessions reconstructed from events",
+      "now_ms": 1761555600000,
+      "agents": [],
+      "events": [
+        {"v": 1, "ts": 1761540000000, "event": "UserPromptSubmit", "session_id": "00000000-0000-0000-0000-000000000013", "cwd": "C:/work/repo-a", "prompt": "refactor"},
+        {"v": 1, "ts": 1761541000000, "event": "SessionEnd", "session_id": "00000000-0000-0000-0000-000000000013", "cwd": "C:/work/repo-a", "reason": "prompt_input_exit"},
+        {"v": 1, "ts": 1761542000000, "event": "UserPromptSubmit", "session_id": "00000000-0000-0000-0000-000000000014", "cwd": "C:/work/repo-a", "prompt": "long task"},
+        {"v": 1, "ts": 1761543000000, "event": "UserPromptSubmit", "session_id": "00000000-0000-0000-0000-000000000015", "cwd": "C:/work/repo-a"},
+        {"v": 1, "ts": 1761544000000, "event": "SessionEnd", "session_id": "00000000-0000-0000-0000-000000000015", "reason": "clear"},
+        {"v": 1, "ts": 1761545000000, "event": "UserPromptSubmit", "session_id": "00000000-0000-0000-0000-000000000016", "cwd": "C:/work/repo-a"},
+        {"v": 1, "ts": 1761546000000, "event": "SessionEnd", "session_id": "00000000-0000-0000-0000-000000000016", "reason": "other"},
+        {"v": 1, "ts": 1761547000000, "event": "UserPromptSubmit", "session_id": "00000000-0000-0000-0000-000000000017", "cwd": "C:/work/repo-a"},
+        {"v": 1, "ts": 1761548000000, "event": "SessionEnd", "session_id": "00000000-0000-0000-0000-000000000017", "reason": "resume"},
+        {"v": 1, "ts": 1761548500000, "event": "UserPromptSubmit", "session_id": "00000000-0000-0000-0000-000000000018", "cwd": "C:/work/repo-a"},
+        {"v": 1, "ts": 1761549000000, "event": "SessionEnd", "session_id": "00000000-0000-0000-0000-000000000018", "reason": "logout"}
+      ],
+      "expect": [
+        {"key": "sid:00000000-0000-0000-0000-000000000018", "column": "to_resume", "badge": "ended", "waiting_for": null},
+        {"key": "sid:00000000-0000-0000-0000-000000000014", "column": "to_resume", "badge": "interrupted", "waiting_for": null},
+        {"key": "sid:00000000-0000-0000-0000-000000000013", "column": "to_resume", "badge": "ended", "waiting_for": null}
+      ]
+    },
+    {
+      "name": "unlisted session seen seconds ago is presumed alive",
+      "now_ms": 1761555600000,
+      "agents": [],
+      "events": [{"v": 1, "ts": 1761555590000, "event": "UserPromptSubmit", "session_id": "00000000-0000-0000-0000-000000000019", "cwd": "C:/work/repo-a"}],
+      "expect": []
+    },
+    {
+      "name": "ordering: needs you oldest first, working newest start first",
+      "now_ms": 1761555600000,
+      "agents": [
+        {"pid": 5001, "cwd": "C:/work/a", "kind": "interactive", "startedAt": 1761550000000, "sessionId": "00000000-0000-0000-0000-000000000020", "status": "waiting", "waitingFor": "permission prompt"},
+        {"pid": 5002, "cwd": "C:/work/b", "kind": "interactive", "startedAt": 1761551000000, "sessionId": "00000000-0000-0000-0000-000000000021", "status": "waiting", "waitingFor": "permission prompt"},
+        {"pid": 5003, "cwd": "C:/work/c", "kind": "interactive", "startedAt": 1761552000000, "sessionId": "00000000-0000-0000-0000-000000000022", "status": "busy"},
+        {"pid": 5004, "cwd": "C:/work/d", "kind": "interactive", "startedAt": 1761553000000, "sessionId": "00000000-0000-0000-0000-000000000023", "status": "busy"}
+      ],
+      "events": [
+        {"v": 1, "ts": 1761555000000, "event": "Notification", "session_id": "00000000-0000-0000-0000-000000000020", "notification_type": "permission_prompt"},
+        {"v": 1, "ts": 1761554000000, "event": "Notification", "session_id": "00000000-0000-0000-0000-000000000021", "notification_type": "permission_prompt"}
+      ],
+      "expect": [
+        {"key": "pid:5002:1761551000000", "column": "needs_you", "badge": null, "waiting_for": "permission prompt"},
+        {"key": "pid:5001:1761550000000", "column": "needs_you", "badge": null, "waiting_for": "permission prompt"},
+        {"key": "pid:5004:1761553000000", "column": "working", "badge": null, "waiting_for": null},
+        {"key": "pid:5003:1761552000000", "column": "working", "badge": null, "waiting_for": null}
+      ]
+    }
+  ]
+}
