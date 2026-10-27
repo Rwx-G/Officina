@@ -1,4 +1,5 @@
-//! The catalogue (FR-1, FR-2, AD-22, AD-23): phase 2 of the floor parse.
+//! The catalogue (FR-1, FR-2, FR-4, AD-22 to AD-24): phase 2 of the floor
+//! parse, the canonical form the author approves, its hash and its diff.
 //!
 //! Phase 2 converts each raw `[[action]]` alone and validates it; a failure
 //! becomes an [`ActionIssue`] and drops that action, never the floor. Issues
@@ -10,7 +11,11 @@ use std::ops::RangeInclusive;
 use serde::{Deserialize, Serialize};
 
 use super::params::{self, Param, ParamRule, PatternError};
-use crate::floor::{Autonomy, FloorFile, is_windows_absolute};
+use crate::floor::{
+    Autonomy, FloorError, FloorFile, floor_dir_of, is_windows_absolute, parse_floor,
+    resolve_project_path,
+};
+use crate::quota::normalise_path;
 
 /// Programs the gate denies in a guarded project when the floor declares no
 /// `guarded_programs` (AD-22, PRD amendment 6). A trailing `*` is a prefix.
@@ -33,6 +38,13 @@ pub const MAX_NAME_CHARS: usize = 32;
 pub const MAX_ENV_KEY_CHARS: usize = 64;
 /// Longest `distro` (D-4).
 pub const MAX_DISTRO_CHARS: usize = 64;
+
+/// Version of the canonical form. Bumping it invalidates every approval on
+/// purpose (AD-24).
+pub const CANONICAL_FORMAT: u32 = 1;
+
+/// Version of `relay/known-projects.json` (D-15).
+pub const KNOWN_PROJECTS_SCHEMA: u32 = 1;
 
 /// The name an issue carries when the action has no readable name.
 pub const UNNAMED: &str = "(unnamed)";
@@ -778,10 +790,334 @@ fn check_target_problem(
     None
 }
 
+/// The canonical form of one parameter.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub enum CanonicalParam {
+    /// Sorted, deduplicated.
+    Values(Vec<String>),
+    Pattern(String),
+}
+
+/// The canonical form of one valid action, every default explicit.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CanonicalAction {
+    pub description: String,
+    pub class: ActionClass,
+    pub runner: Runner,
+    pub distro: Option<String>,
+    pub program: String,
+    pub env: BTreeMap<String, String>,
+    pub args: Vec<String>,
+    pub params: BTreeMap<String, CanonicalParam>,
+    pub check: Option<String>,
+    pub timeout_s: u32,
+    pub max_output_kib: u32,
+}
+
+impl From<&Action> for CanonicalAction {
+    fn from(action: &Action) -> CanonicalAction {
+        CanonicalAction {
+            description: action.description.clone(),
+            class: action.class,
+            runner: action.runner,
+            distro: action.distro.clone(),
+            program: action.program.clone(),
+            env: action.env.clone(),
+            args: action.args.iter().map(ArgTemplate::source).collect(),
+            params: action
+                .params
+                .iter()
+                .map(|(name, param)| {
+                    let canonical = match &param.rule {
+                        ParamRule::Values(values) => CanonicalParam::Values(values.clone()),
+                        ParamRule::Pattern(pattern) => {
+                            CanonicalParam::Pattern(pattern.source().to_owned())
+                        }
+                    };
+                    (name.clone(), canonical)
+                })
+                .collect(),
+            check: action.check.clone(),
+            timeout_s: action.timeout_s,
+            max_output_kib: action.max_output_kib,
+        }
+    }
+}
+
+/// The canonical form of one project.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CanonicalProject {
+    /// Resolved against the floor and normalised.
+    pub path: String,
+    pub autonomy: Autonomy,
+    /// Sorted.
+    pub actions: Vec<String>,
+}
+
+/// What the author approves (AD-24): the catalogue's meaning, not its text.
+/// Colours, the floor's `name`, `config_dir`, `no_excerpts`, comments and
+/// invalid actions are not part of it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CanonicalCatalogue {
+    pub format: u32,
+    /// Normalised: lowercase, forward slashes. Windows opens it whatever the
+    /// case; Linux (v1) will need the original spelling kept beside it.
+    pub floor_path: String,
+    pub guarded_programs: Vec<String>,
+    pub projects: BTreeMap<String, CanonicalProject>,
+    pub actions: BTreeMap<String, CanonicalAction>,
+}
+
+/// The canonical form of a validated catalogue read from `floor_path`.
+pub fn canonical(catalogue: &Catalogue, floor_path: &str) -> CanonicalCatalogue {
+    let floor_dir = floor_dir_of(floor_path);
+    CanonicalCatalogue {
+        format: CANONICAL_FORMAT,
+        floor_path: normalise_path(floor_path),
+        guarded_programs: catalogue.guarded_programs.clone(),
+        projects: catalogue
+            .projects
+            .iter()
+            .map(|p| {
+                let project = CanonicalProject {
+                    path: resolve_project_path(floor_dir, &p.path),
+                    autonomy: p.autonomy,
+                    actions: p.actions.clone(),
+                };
+                (p.name.clone(), project)
+            })
+            .collect(),
+        actions: catalogue
+            .actions
+            .iter()
+            .map(|(name, action)| (name.clone(), CanonicalAction::from(action)))
+            .collect(),
+    }
+}
+
+/// SHA-256 of `serde_json::to_vec` of the canonical form, lowercase hex
+/// (AD-24).
+pub fn hash(canonical: &CanonicalCatalogue) -> String {
+    // Plain structs and string-keyed maps always serialize.
+    let bytes = serde_json::to_vec(canonical).unwrap_or_default();
+    super::sha256_hex(&bytes)
+}
+
+/// A floor read for the relay: both phases, the canonical form and its hash.
+#[derive(Debug, Clone)]
+pub struct RelayFloor {
+    pub floor: FloorFile,
+    pub catalogue: Catalogue,
+    pub canonical: CanonicalCatalogue,
+    pub hash: String,
+}
+
+/// Runs phase 1 and phase 2 on a floor's content and computes its canonical
+/// form and hash. Only phase 1 can fail.
+pub fn load(content: &str, floor_path: &str) -> Result<RelayFloor, FloorError> {
+    let floor = parse_floor(content)?;
+    let catalogue = validate(&floor, content);
+    let canonical = canonical(&catalogue, floor_path);
+    let hash = hash(&canonical);
+    Ok(RelayFloor {
+        floor,
+        catalogue,
+        canonical,
+        hash,
+    })
+}
+
+/// One changed field, as JSON so any field type renders.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FieldChange {
+    pub field: String,
+    pub before: serde_json::Value,
+    pub after: serde_json::Value,
+}
+
+/// One entry present on both sides with different content.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EntryChange {
+    pub name: String,
+    pub fields: Vec<FieldChange>,
+}
+
+/// Entries added, removed and changed, by name.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct SectionDiff {
+    pub added: Vec<String>,
+    pub removed: Vec<String>,
+    pub changed: Vec<EntryChange>,
+}
+
+impl SectionDiff {
+    fn is_empty(&self) -> bool {
+        self.added.is_empty() && self.removed.is_empty() && self.changed.is_empty()
+    }
+}
+
+/// Entries added to and removed from a list.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ListDiff {
+    pub added: Vec<String>,
+    pub removed: Vec<String>,
+}
+
+/// What changed between the approved catalogue and the current one (AD-24).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct CatalogueDiff {
+    pub format: Option<FieldChange>,
+    pub floor_path: Option<FieldChange>,
+    pub guarded_programs: ListDiff,
+    pub projects: SectionDiff,
+    pub actions: SectionDiff,
+}
+
+impl CatalogueDiff {
+    /// True when both sides mean the same thing.
+    pub fn is_empty(&self) -> bool {
+        self.format.is_none()
+            && self.floor_path.is_none()
+            && self.guarded_programs.added.is_empty()
+            && self.guarded_programs.removed.is_empty()
+            && self.projects.is_empty()
+            && self.actions.is_empty()
+    }
+}
+
+fn scalar_change<T: Serialize + PartialEq>(
+    field: &str,
+    before: &T,
+    after: &T,
+) -> Option<FieldChange> {
+    (before != after).then(|| FieldChange {
+        field: field.to_owned(),
+        before: serde_json::to_value(before).unwrap_or_default(),
+        after: serde_json::to_value(after).unwrap_or_default(),
+    })
+}
+
+/// Field by field over the serialized entries, so a field added to an entry
+/// type is diffed without touching this function.
+fn section_diff<T: Serialize + PartialEq>(
+    before: &BTreeMap<String, T>,
+    after: &BTreeMap<String, T>,
+) -> SectionDiff {
+    let mut diff = SectionDiff::default();
+    for (name, old) in before {
+        let Some(new) = after.get(name) else {
+            diff.removed.push(name.clone());
+            continue;
+        };
+        if old == new {
+            continue;
+        }
+        let old_value = serde_json::to_value(old).unwrap_or_default();
+        let new_value = serde_json::to_value(new).unwrap_or_default();
+        let empty = serde_json::Map::new();
+        let old_fields = old_value.as_object().unwrap_or(&empty);
+        let new_fields = new_value.as_object().unwrap_or(&empty);
+        let keys: BTreeSet<&String> = old_fields.keys().chain(new_fields.keys()).collect();
+        let fields = keys
+            .into_iter()
+            .filter_map(|key| {
+                let before = old_fields.get(key).cloned().unwrap_or_default();
+                let after = new_fields.get(key).cloned().unwrap_or_default();
+                (before != after).then(|| FieldChange {
+                    field: key.clone(),
+                    before,
+                    after,
+                })
+            })
+            .collect();
+        diff.changed.push(EntryChange {
+            name: name.clone(),
+            fields,
+        });
+    }
+    diff.added = after
+        .keys()
+        .filter(|name| !before.contains_key(*name))
+        .cloned()
+        .collect();
+    diff
+}
+
+/// Compares the approved catalogue with the current one.
+pub fn diff(approved: &CanonicalCatalogue, current: &CanonicalCatalogue) -> CatalogueDiff {
+    let old: BTreeSet<&String> = approved.guarded_programs.iter().collect();
+    let new: BTreeSet<&String> = current.guarded_programs.iter().collect();
+    CatalogueDiff {
+        format: scalar_change("format", &approved.format, &current.format),
+        floor_path: scalar_change("floor_path", &approved.floor_path, &current.floor_path),
+        guarded_programs: ListDiff {
+            added: new.difference(&old).map(|p| (*p).clone()).collect(),
+            removed: old.difference(&new).map(|p| (*p).clone()).collect(),
+        },
+        projects: section_diff(&approved.projects, &current.projects),
+        actions: section_diff(&approved.actions, &current.actions),
+    }
+}
+
+/// Content of `relay/approved.json`, written by the window only (AD-24,
+/// AD-25).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ApprovedCatalogue {
+    pub approved_at_ms: i64,
+    pub hash: String,
+    pub canonical: CanonicalCatalogue,
+}
+
+/// Content of `relay/known-projects.json` (D-15): the last readable state
+/// the gate falls back to when both the floor and the snapshot fail.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct KnownProjects {
+    pub schema: u32,
+    /// The hash of the last approved catalogue, if any was approved.
+    pub approved_hash: Option<String>,
+    /// Every project path the floor declares, resolved and normalised,
+    /// sorted and deduplicated.
+    pub project_paths: Vec<String>,
+}
+
+impl KnownProjects {
+    /// The record for a floor read from `floor_path`. Every declared project
+    /// counts, valid actions or not: the record only ever widens the gate.
+    pub fn from_floor(
+        floor: &FloorFile,
+        floor_path: &str,
+        approved_hash: Option<String>,
+    ) -> KnownProjects {
+        let floor_dir = floor_dir_of(floor_path);
+        let paths: BTreeSet<String> = floor
+            .projects
+            .iter()
+            .map(|p| resolve_project_path(floor_dir, &p.path))
+            .collect();
+        KnownProjects {
+            schema: KNOWN_PROJECTS_SCHEMA,
+            approved_hash,
+            project_paths: paths.into_iter().collect(),
+        }
+    }
+}
+
+/// Parses `relay/known-projects.json`, refusing other schema versions.
+pub fn parse_known_projects(content: &str) -> Option<KnownProjects> {
+    serde_json::from_str::<KnownProjects>(content)
+        .ok()
+        .filter(|k| k.schema == KNOWN_PROJECTS_SCHEMA)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::floor::{FloorError, parse_floor};
 
     const PROJECT: &str = "[[project]]\nname = \"lab\"\npath = \"Lab\"\nactions = [\"probe\"]\n";
     const VALID_PROBE: &str = "name = \"probe\"\nclass = \"free\"\nprogram = \"C:/path/to/tool.exe\"\nargs = [\"--host\", \"{host}\"]\n[action.params.host]\nvalues = [\"web01\", \"db01\"]\n";
@@ -1365,6 +1701,11 @@ mod tests {
         };
         assert_eq!(catalogue.guarded_programs, expected);
         assert_eq!(catalogue.projects[0].autonomy, Autonomy::Guarded);
+        let canonical = serde_json::to_value(CanonicalAction::from(action)).unwrap();
+        assert_eq!(canonical["runner"], "native");
+        assert_eq!(canonical["timeout_s"], DEFAULT_TIMEOUT_S);
+        assert_eq!(canonical["max_output_kib"], DEFAULT_MAX_OUTPUT_KIB);
+        assert!(canonical["distro"].is_null() && canonical["check"].is_null());
     }
 
     #[test]
@@ -1382,5 +1723,138 @@ mod tests {
         let catalogue = validated("schema = 1\n[[project]]\nname = \"a\"\npath = \"a\"\n");
         assert_eq!(catalogue.projects[0].autonomy, Autonomy::Free);
         assert!(catalogue.actions.is_empty() && catalogue.issues.is_empty());
+    }
+
+    fn canonical_of(content: &str) -> CanonicalCatalogue {
+        canonical(&validated(content), "C:/Work/officina.toml")
+    }
+
+    #[test]
+    fn canonical_resolves_paths_and_sorts() {
+        let content = floor_with(&[
+            &VALID_PROBE.replace("[\"web01\", \"db01\"]", "[\"web01\", \"db01\", \"web01\"]")
+        ]);
+        let canonical = canonical_of(&content);
+        assert_eq!(canonical.floor_path, "c:/work/officina.toml");
+        assert_eq!(canonical.projects["lab"].path, "c:/work/lab");
+        assert_eq!(
+            canonical.actions["probe"].params["host"],
+            CanonicalParam::Values(vec!["db01".into(), "web01".into()])
+        );
+        assert_eq!(canonical.actions["probe"].args, ["--host", "{host}"]);
+        assert_eq!(hash(&canonical).len(), 64);
+        assert!(
+            hash(&canonical)
+                .chars()
+                .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
+        );
+    }
+
+    #[test]
+    fn identical_catalogues_have_an_empty_diff() {
+        let canonical = canonical_of(&floor_with(&[VALID_PROBE]));
+        assert!(diff(&canonical, &canonical.clone()).is_empty());
+    }
+
+    #[test]
+    fn diff_reports_added_and_removed() {
+        let before = canonical_of(&floor_with(&[VALID_PROBE]));
+        let after = canonical_of(
+            &floor_with(&[&VALID_PROBE.replace("\"probe\"", "\"status\"")])
+                .replace("name = \"lab\"", "name = \"ops\"")
+                .replace("[\"probe\"]", "[\"status\"]"),
+        );
+        let d = diff(&before, &after);
+        assert_eq!(d.actions.added, ["status"]);
+        assert_eq!(d.actions.removed, ["probe"]);
+        assert_eq!(d.projects.added, ["ops"]);
+        assert_eq!(d.projects.removed, ["lab"]);
+        assert!(d.actions.changed.is_empty() && d.projects.changed.is_empty());
+        assert!(!d.is_empty());
+    }
+
+    #[test]
+    fn diff_reports_changed_fields() {
+        let before = canonical_of(&floor_with(&[VALID_PROBE]));
+        let after = canonical_of(
+            &floor_with(&[&probe_top(
+                "timeout_s = 60\ndescription = \"Probe a host\"\n",
+            )])
+            .replace("path = \"Lab\"", "path = \"Lab2\"\nautonomy = \"free\""),
+        );
+        let d = diff(&before, &after);
+        let action = &d.actions.changed[0];
+        assert_eq!(action.name, "probe");
+        let fields: Vec<&str> = action.fields.iter().map(|f| f.field.as_str()).collect();
+        assert_eq!(fields, ["description", "timeout_s"]);
+        assert_eq!(action.fields[1].before, DEFAULT_TIMEOUT_S);
+        assert_eq!(action.fields[1].after, 60);
+        let project = &d.projects.changed[0];
+        let fields: Vec<&str> = project.fields.iter().map(|f| f.field.as_str()).collect();
+        assert_eq!(fields, ["autonomy", "path"]);
+        assert_eq!(project.fields[0].before, "guarded");
+    }
+
+    #[test]
+    fn diff_reports_guarded_programs() {
+        let before = canonical_of(&floor_with(&[VALID_PROBE]));
+        let after = canonical_of(&floor_with(&[VALID_PROBE]).replacen(
+            "schema = 2\n",
+            "schema = 2\nguarded_programs = [\"ssh\", \"terraform\"]\n",
+            1,
+        ));
+        let d = diff(&before, &after);
+        assert_eq!(d.guarded_programs.added, ["terraform"]);
+        let mut removed: Vec<String> = DEFAULT_GUARDED_PROGRAMS
+            .iter()
+            .filter(|p| **p != "ssh")
+            .map(|p| (*p).to_owned())
+            .collect();
+        removed.sort();
+        assert_eq!(d.guarded_programs.removed, removed);
+        assert!(d.actions.is_empty() && d.projects.is_empty());
+    }
+
+    #[test]
+    fn diff_covers_every_canonical_field() {
+        let canonical = canonical_of(&floor_with(&[VALID_PROBE]));
+        let canonical_keys: BTreeSet<String> = serde_json::to_value(&canonical)
+            .unwrap()
+            .as_object()
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect();
+        let diff_keys: BTreeSet<String> = serde_json::to_value(CatalogueDiff::default())
+            .unwrap()
+            .as_object()
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect();
+        assert_eq!(canonical_keys, diff_keys);
+        let mut moved = canonical.clone();
+        moved.floor_path = "d:/other/officina.toml".into();
+        moved.format += 1;
+        let d = diff(&canonical, &moved);
+        assert_eq!(d.floor_path.unwrap().after, "d:/other/officina.toml");
+        assert_eq!(d.format.unwrap().before, CANONICAL_FORMAT);
+    }
+
+    #[test]
+    fn known_projects_lists_every_declared_project() {
+        let content = format!(
+            "{}[[project]]\nname = \"free-one\"\npath = \"D:/Other\"\nautonomy = \"free\"\n",
+            floor_with(&[VALID_PROBE])
+        );
+        let floor = parse_floor(&content).unwrap();
+        let known = KnownProjects::from_floor(&floor, r"C:\Work\officina.toml", Some("ab".into()));
+        assert_eq!(known.project_paths, ["c:/work/lab", "d:/other"]);
+        let text = serde_json::to_string(&known).unwrap();
+        assert_eq!(parse_known_projects(&text), Some(known));
+        assert_eq!(
+            parse_known_projects(&text.replace("\"schema\":1", "\"schema\":2")),
+            None
+        );
     }
 }

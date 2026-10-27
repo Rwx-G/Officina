@@ -1,0 +1,90 @@
+# The golden floor with the same meaning and a different text: comments,
+# key order, action order, values order, colours, floor name, config_dir,
+# no_excerpts, defaults written out, and an invalid action. Its canonical
+# form must equal the golden one.
+schema = 2
+no_excerpts = true
+config_dir = "D:/elsewhere/claude-config"
+name = "home"
+guarded_programs = ["wsl", "SSH", "ansible*", "scp", "ssh"]
+
+[[project]]
+actions = ["status", "broken", "apply-sensitive", "apply", "check"]
+autonomy = "guarded"
+color = "terracotta"
+path = "Supervision"
+name = "supervision"
+
+[[project]]
+name = "notes"
+autonomy = "free"
+path = "C:/path/to/Notes"
+
+[[action]]
+name = "status"
+runner = "native"
+class = "free"
+description = "Service status on one host"
+program = "C:/Windows/System32/OpenSSH/ssh.exe"
+args = ["{host}", "systemctl", "status", "--no-pager", "{unit}"]
+timeout_s = 540
+max_output_kib = 64
+
+[action.params.unit]
+pattern = "[a-z0-9-]+\\.service"
+
+[action.params.host]
+values = ["db01", "web01", "db01"]
+
+# Not part of the catalogue: its program is relative.
+[[action]]
+name = "broken"
+class = "free"
+program = "relative/tool.exe"
+
+[[action]]
+name = "apply-sensitive"
+class = "human"
+description = "Apply a sensitive playbook, once per approval"
+runner = "wsl"
+program = "/home/user01/venv/bin/ansible-playbook"
+args = ["-i", "inventory/lab", "playbooks/{playbook}"]
+env = {}
+params = { playbook = { values = ["firewall.yml"] } }
+
+[[action]]
+name = "check"
+class = "free"
+runner = "wsl"
+distro = "Ubuntu"
+description = "Dry run of a playbook on one lab group"
+program = "/home/user01/venv/bin/ansible-playbook"
+args = ["--check", "--diff", "-i", "inventory/lab", "--limit", "{group}", "playbooks/{playbook}"]
+timeout_s = 600
+
+[action.env]
+ANSIBLE_CONFIG = "/home/user01/ansible.cfg"
+
+[action.params.group]
+pattern = "lab-[a-z0-9-]{1,30}"
+
+[action.params.playbook]
+values = ["alerting.yml", "node-exporter.yml"]
+
+[[action]]
+check = "check"
+class = "after-check"
+name = "apply"
+description = "Apply a playbook on one lab group after its dry run"
+runner = "wsl"
+distro = "Ubuntu"
+program = "/home/user01/venv/bin/ansible-playbook"
+env = { ANSIBLE_CONFIG = "/home/user01/ansible.cfg" }
+args = ["--diff", "-i", "inventory/lab", "--limit", "{group}", "playbooks/{playbook}"]
+max_output_kib = 256
+
+[action.params.group]
+pattern = "lab-[a-z0-9-]{1,30}"
+
+[action.params.playbook]
+values = ["alerting.yml", "node-exporter.yml"]
