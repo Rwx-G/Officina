@@ -72,7 +72,7 @@ fn report_wrong_window(state: State<'_, AppState>, key: String) {
 
 #[tauri::command]
 fn copy_attach_command(state: State<'_, AppState>, key: String) -> Option<String> {
-    card_for(&state, &key).and_then(|c| attach_command(&c))
+    card_for(&state, &key).and_then(|c| attach_command(&c, &state.focus))
 }
 
 fn floor_arg() -> Option<PathBuf> {

@@ -78,13 +78,33 @@ fn spawn_attach(_claude: &Path, _id: &str, _config: Option<&Path>) -> FocusOutco
     FocusOutcome::Unsupported
 }
 
-/// The attach command line shown for copying. Built from validated parts only.
-pub fn attach_command(card: &Card) -> Option<String> {
+/// Characters an interactive bash still interprets inside double quotes:
+/// the closing quote, expansion, command substitution and history expansion.
+/// A pasted command must not run anything its text does not show.
+pub const BASH_DOUBLE_QUOTE_SPECIALS: [char; 4] = ['"', '$', '`', '!'];
+
+/// The attach command line shown for copying, in bash syntax (the author
+/// pastes it into Git Bash). Built from validated parts only. When the floor
+/// names a config dir, the command sets `CLAUDE_CONFIG_DIR` for itself, with
+/// forward slashes as in the hooks block. A dir holding one of
+/// [`BASH_DOUBLE_QUOTE_SPECIALS`] or a control character is left out: the
+/// command then attaches through the default config dir.
+pub fn attach_command(card: &Card, ctx: &FocusContext) -> Option<String> {
     let id = card
         .background_id
         .as_deref()
         .filter(|id| is_valid_attach_id(id))?;
-    Some(format!("claude attach {id}"))
+    let config_prefix = ctx
+        .config_override
+        .as_deref()
+        .map(|dir| dir.to_string_lossy().replace('\\', "/"))
+        .filter(|dir| {
+            !dir.chars()
+                .any(|c| BASH_DOUBLE_QUOTE_SPECIALS.contains(&c) || c.is_control())
+        })
+        .map(|dir| format!("{}=\"{dir}\" ", crate::paths::ENV_CLAUDE_CONFIG_DIR))
+        .unwrap_or_default();
+    Some(format!("{config_prefix}claude attach {id}"))
 }
 
 fn card_hash(key: &str) -> String {
@@ -234,8 +254,41 @@ mod tests {
             focus_card(&no_claude, &ctx(dir.path())),
             FocusOutcome::Failed("claude not found".into())
         );
-        assert_eq!(attach_command(&no_claude).unwrap(), "claude attach abc");
-        assert_eq!(attach_command(&bad_id), None);
+        let context = ctx(dir.path());
+        assert_eq!(
+            attach_command(&no_claude, &context).unwrap(),
+            "claude attach abc"
+        );
+        assert_eq!(attach_command(&bad_id, &context), None);
+    }
+
+    #[test]
+    fn attach_command_carries_the_floor_config_dir_when_bash_keeps_it_literal() {
+        let dir = tempfile::tempdir().unwrap();
+        let bg = card(SessionKindView::Background, Some("abc"), None);
+        let with_config = |config: &str| FocusContext {
+            config_override: Some(PathBuf::from(config)),
+            ..ctx(dir.path())
+        };
+        assert_eq!(
+            attach_command(&bg, &with_config(r"C:\Users\user01\.claude-work")).unwrap(),
+            "CLAUDE_CONFIG_DIR=\"C:/Users/user01/.claude-work\" claude attach abc"
+        );
+        assert_eq!(
+            attach_command(&bg, &with_config("D:/My Configs/claude (work)")).unwrap(),
+            "CLAUDE_CONFIG_DIR=\"D:/My Configs/claude (work)\" claude attach abc"
+        );
+        let interpreted = BASH_DOUBLE_QUOTE_SPECIALS
+            .iter()
+            .chain(&['\n', '\t'])
+            .map(|c| format!("C:/a{c}b"));
+        for dir in interpreted {
+            assert_eq!(
+                attach_command(&bg, &with_config(&dir)).unwrap(),
+                "claude attach abc",
+                "{dir:?}"
+            );
+        }
     }
 
     #[test]
