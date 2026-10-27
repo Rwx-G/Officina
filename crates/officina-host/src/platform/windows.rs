@@ -6,9 +6,12 @@
 
 use std::collections::HashMap;
 
-use windows_sys::Win32::Foundation::{CloseHandle, HWND, INVALID_HANDLE_VALUE, LPARAM};
+use windows_sys::Win32::Foundation::{CloseHandle, FILETIME, HWND, INVALID_HANDLE_VALUE, LPARAM};
 use windows_sys::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW, TH32CS_SNAPPROCESS,
+};
+use windows_sys::Win32::System::Threading::{
+    GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     EnumWindows, FLASHW_ALL, FLASHW_TIMERNOFG, FLASHWINFO, FlashWindowEx, GW_OWNER,
@@ -41,19 +44,53 @@ fn parent_map() -> HashMap<u32, u32> {
     parents
 }
 
+/// Creation time of a process in 100 ns ticks, `None` when it cannot be read.
+fn creation_time(pid: u32) -> Option<u64> {
+    // SAFETY: plain call; the handle is checked and closed below.
+    let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+    if handle.is_null() {
+        return None;
+    }
+    let zero = FILETIME {
+        dwLowDateTime: 0,
+        dwHighDateTime: 0,
+    };
+    let (mut created, mut exited, mut kernel, mut user) = (zero, zero, zero, zero);
+    // SAFETY: `handle` is a valid process handle with query rights and the
+    // four out pointers are writable FILETIMEs for the duration of the call.
+    let ok = unsafe { GetProcessTimes(handle, &mut created, &mut exited, &mut kernel, &mut user) };
+    // SAFETY: the handle came from OpenProcess and is closed once.
+    unsafe { CloseHandle(handle) };
+    (ok != 0).then(|| (u64::from(created.dwHighDateTime) << 32) | u64::from(created.dwLowDateTime))
+}
+
 /// `pid` and its ancestors, nearest first, at most 16 hops, cycle-safe.
+///
+/// Windows reuses process ids: when a parent exits, its id can be given to an
+/// unrelated process, which the snapshot then reports as the parent. A real
+/// parent is always older than its child, so the walk stops at the first
+/// "parent" created after the process it supposedly started (AD-15 step 1).
 fn ancestors(pid: u32) -> Vec<u32> {
     let parents = parent_map();
     let mut chain = vec![pid];
     let mut current = pid;
+    let mut current_created = creation_time(pid);
     for _ in 0..16 {
-        match parents.get(&current) {
-            Some(&parent) if parent != 0 && !chain.contains(&parent) => {
-                chain.push(parent);
-                current = parent;
-            }
-            _ => break,
+        let Some(&parent) = parents.get(&current) else {
+            break;
+        };
+        if parent == 0 || chain.contains(&parent) {
+            break;
         }
+        let parent_created = creation_time(parent);
+        if let (Some(child), Some(candidate)) = (current_created, parent_created)
+            && candidate > child
+        {
+            break;
+        }
+        chain.push(parent);
+        current = parent;
+        current_created = parent_created;
     }
     chain
 }
@@ -196,6 +233,11 @@ mod tests {
         let chain = ancestors(std::process::id());
         assert_eq!(chain[0], std::process::id());
         assert!(chain.len() >= 2, "the test runner has a parent");
+        let times: Vec<u64> = chain.iter().filter_map(|p| creation_time(*p)).collect();
+        assert!(
+            times.windows(2).all(|w| w[1] <= w[0]),
+            "every ancestor is older than its child"
+        );
     }
 
     #[test]

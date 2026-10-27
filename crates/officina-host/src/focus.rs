@@ -115,6 +115,40 @@ pub fn log_wrong_window(state_dir: &Path, key: &str, now_ms: i64) {
     let _ = append_line(&state_dir.join("focus.jsonl"), &format!("{line}\n"));
 }
 
+/// Focus outcomes are kept this long (AD-8): enough for the 10-working-day
+/// success rate, not a history of the author's clicks.
+pub const FOCUS_LOG_RETENTION_MS: i64 = 30 * 24 * 60 * 60 * 1000;
+
+/// Drops focus log lines older than [`FOCUS_LOG_RETENTION_MS`]. Unparsable
+/// lines are dropped too: nothing reads them. Returns how many were removed.
+pub fn prune_focus_log(state_dir: &Path, now_ms: i64) -> usize {
+    let path = state_dir.join("focus.jsonl");
+    let Ok(content) = std::fs::read_to_string(&path) else {
+        return 0;
+    };
+    let total = content.lines().filter(|l| !l.trim().is_empty()).count();
+    let kept: String = content
+        .lines()
+        .filter(|line| {
+            serde_json::from_str::<serde_json::Value>(line)
+                .ok()
+                .and_then(|v| v["ts"].as_i64())
+                .is_some_and(|ts| now_ms - ts <= FOCUS_LOG_RETENTION_MS)
+        })
+        .map(|line| {
+            format!(
+                "{line}
+"
+            )
+        })
+        .collect();
+    let removed = total - kept.lines().count();
+    if removed > 0 {
+        let _ = crate::files::atomic_write(&path, kept.as_bytes());
+    }
+    removed
+}
+
 /// Focus success rate over the log (AD-15 metric): first clicks that focused
 /// or opened an attach and were not followed within 10 s by a wrong-window
 /// report or a second click on the same card. `None` when nothing was logged.
@@ -209,6 +243,24 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let c = card(SessionKindView::Interactive, None, Some("C:/x"));
         assert_eq!(focus_card(&c, &ctx(dir.path())), FocusOutcome::NoWindow);
+    }
+
+    #[test]
+    fn focus_log_keeps_thirty_days() {
+        let dir = tempfile::tempdir().unwrap();
+        let c = card(SessionKindView::Interactive, None, None);
+        let now = 100 * FOCUS_LOG_RETENTION_MS;
+        log_outcome(
+            dir.path(),
+            &c,
+            &FocusOutcome::Focused,
+            now - FOCUS_LOG_RETENTION_MS - 1,
+        );
+        log_outcome(dir.path(), &c, &FocusOutcome::Focused, now - 1000);
+        assert_eq!(prune_focus_log(dir.path(), now), 1);
+        assert_eq!(prune_focus_log(dir.path(), now), 0);
+        assert_eq!(success_rate(dir.path()), Some((1, 1)));
+        assert_eq!(prune_focus_log(&dir.path().join("missing"), now), 0);
     }
 
     #[test]

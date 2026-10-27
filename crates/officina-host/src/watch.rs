@@ -101,6 +101,7 @@ fn run(
     let mut last_bytes: Vec<u8> = Vec::new();
 
     retention_pass(&watched.events_dir, now_ms());
+    crate::focus::prune_focus_log(&collector.paths.state_dir(), now_ms());
     let mut event_stamp = stamp(&event_file_for(&watched.events_dir, now_ms()));
     let mut sessions_stamp = stamp(&watched.sessions_dir);
     let mut quota_stamp = stamp(&watched.quota_file);
@@ -160,6 +161,7 @@ fn run(
         if now.duration_since(last_retention) >= RETENTION_EVERY {
             last_retention = now;
             retention_pass(&watched.events_dir, now_ms());
+            crate::focus::prune_focus_log(&collector.paths.state_dir(), now_ms());
         }
 
         if recompute {
