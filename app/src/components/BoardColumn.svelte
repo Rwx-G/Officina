@@ -1,0 +1,105 @@
+<script lang="ts">
+  import type { Card } from "../lib/generated/Card";
+  import type { Column } from "../lib/generated/Column";
+  import type { BoardStore } from "../lib/board.svelte";
+  import SessionCard from "./SessionCard.svelte";
+
+  interface Props {
+    column: Column;
+    title: string;
+    hint: string;
+    cards: Card[];
+    store: BoardStore;
+    collapseAfter?: number;
+    numbered?: boolean;
+  }
+  let { column, title, hint, cards, store, collapseAfter, numbered = false }: Props = $props();
+
+  let expanded = $state(false);
+  let visible = $derived(
+    collapseAfter !== undefined && !expanded ? cards.slice(0, collapseAfter) : cards,
+  );
+  let hidden = $derived(cards.length - visible.length);
+</script>
+
+<section class="column {column}" data-testid="column-{column}" aria-labelledby="title-{column}">
+  <header>
+    <h2 id="title-{column}">{title}</h2>
+    <span class="count" data-testid="count-{column}">{cards.length}</span>
+  </header>
+  <p class="hint">{hint}</p>
+  <div class="cards">
+    {#each visible as card, i (card.key)}
+      <SessionCard {card} {store} index={numbered ? i : undefined} />
+    {:else}
+      <p class="empty">Nothing here.</p>
+    {/each}
+  </div>
+  {#if hidden > 0}
+    <button class="more" onclick={() => (expanded = true)}>Show {hidden} more</button>
+  {:else if expanded && collapseAfter !== undefined && cards.length > collapseAfter}
+    <button class="more" onclick={() => (expanded = false)}>Show less</button>
+  {/if}
+</section>
+
+<style>
+  .column {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    min-width: 0;
+    padding: 14px;
+    border-radius: 28px;
+    background: rgb(255 253 248 / 0.55);
+    border: 1px solid var(--color-border);
+  }
+  .column.needs_you {
+    background: rgb(245 183 49 / 0.12);
+    border: 2px solid var(--color-attention-border);
+  }
+  header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  h2 {
+    margin: 0;
+    padding: 4px 14px;
+    font-size: 14px;
+    font-weight: 700;
+    border-radius: var(--radius-pill);
+    background: var(--color-text);
+    color: var(--color-bg);
+  }
+  .needs_you h2 {
+    background: var(--color-attention);
+    color: var(--color-attention-text);
+  }
+  .count {
+    font-weight: 700;
+    color: var(--color-text-muted);
+  }
+  .hint {
+    margin: 0;
+    font-size: 12.5px;
+    color: var(--color-text-muted);
+  }
+  .cards {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .empty {
+    margin: 4px 0;
+    font-size: 13px;
+    color: var(--color-text-muted);
+  }
+  .more {
+    min-height: var(--target-min);
+    border: 1px dashed var(--color-border);
+    border-radius: var(--radius-pill);
+    background: transparent;
+    cursor: pointer;
+    font-weight: 600;
+  }
+</style>

@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="512" height="512">
+  <title>Officina</title>
+  <!-- Officina: a Roman arch of five voussoirs on two piers. The keystone,
+       the stone that holds the others, stands proud and amber. -->
+  <path d="M10.00 66.00A40 40 0 0 1 17.19 43.11L31.14 52.84A23 23 0 0 0 27.00 66.00Z" fill="#7FA8C9"/>
+  <path d="M18.10 41.87A40 40 0 0 1 36.91 28.20L42.47 44.27A23 23 0 0 0 31.66 52.13Z" fill="#7FA8C9"/>
+  <path d="M36.34 21.03A47 47 0 0 1 63.66 21.03L56.69 43.99A23 23 0 0 0 43.31 43.99Z" fill="#F5B731"/>
+  <path d="M63.09 28.20A40 40 0 0 1 81.90 41.87L68.34 52.13A23 23 0 0 0 57.53 44.27Z" fill="#7FA8C9"/>
+  <path d="M82.81 43.11A40 40 0 0 1 90.00 66.00L73.00 66.00A23 23 0 0 0 68.86 52.84Z" fill="#7FA8C9"/>
+  <rect x="10" y="68" width="17" height="18" fill="#FAF4E8"/>
+  <rect x="73" y="68" width="17" height="18" fill="#FAF4E8"/>
+  <rect x="5" y="88" width="90" height="5" rx="2" fill="#FAF4E8"/>
+</svg>

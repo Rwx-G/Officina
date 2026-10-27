@@ -1,0 +1,72 @@
+/* "Synthese" orientation, validated on 2026-10-27: warm, light, rounded,
+   amber reserved for what waits on the author. This file is the only
+   committed copy of the design tokens. */
+
+@import "@fontsource/plus-jakarta-sans/400.css";
+@import "@fontsource/plus-jakarta-sans/600.css";
+@import "@fontsource/plus-jakarta-sans/700.css";
+
+:root {
+  --color-bg: #faf4e8;
+  --color-surface: #fffdf8;
+  --color-border: #e2d6bf;
+  --color-text: #2a241c;
+  --color-text-muted: #625849;
+  --color-attention: #f5b731;
+  --color-attention-text: #2a1f05;
+  --color-attention-border: #b07800;
+  --color-working: #3d6b8e;
+  --color-project-green: #3f8f6b;
+  --color-project-blue: #4c6fbf;
+  --color-project-terracotta: #c0603c;
+  --color-project-none: #9a8e7a;
+
+  --radius-card: 24px;
+  --radius-pill: 999px;
+  --target-min: 44px;
+
+  font-family: "Plus Jakarta Sans", system-ui, sans-serif;
+  font-size: 15px;
+  line-height: 1.45;
+  color: var(--color-text);
+  background: var(--color-bg);
+  font-variant-numeric: tabular-nums;
+  -webkit-font-smoothing: antialiased;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--color-bg);
+  min-height: 100vh;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+}
+
+:focus-visible {
+  outline: 3px solid var(--color-working);
+  outline-offset: 2px;
+}
+
+@keyframes halo-breath {
+  0%,
+  100% {
+    box-shadow: 0 0 0 3px var(--color-attention);
+  }
+  50% {
+    box-shadow: 0 0 0 7px rgb(245 183 49 / 0.35);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation: none !important;
+    transition: none !important;
+  }
+}

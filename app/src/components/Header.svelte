@@ -1,0 +1,128 @@
+<script lang="ts">
+  import type { BoardStore } from "../lib/board.svelte";
+  import Gauge from "./Gauge.svelte";
+  import logo from "../assets/logo.svg";
+
+  interface Props {
+    store: BoardStore;
+  }
+  let { store }: Props = $props();
+
+  let board = $derived(store.board);
+  let waiting = $derived(board?.waiting_count ?? 0);
+  let contract = $derived(board?.contract);
+</script>
+
+<header class="bar">
+  <div class="brand">
+    <img src={logo} alt="" width="40" height="40" />
+    <div>
+      <h1>Officina</h1>
+      <div class="floor">{board?.floor ?? "this workstation"}</div>
+    </div>
+  </div>
+
+  {#if waiting > 0}
+    <div class="pill" data-testid="waiting-pill" role="status">{waiting} waiting</div>
+  {/if}
+
+  <div class="gauges">
+    <Gauge
+      label="5 h"
+      window={board?.quota.five_hour ?? null}
+      weekly={false}
+      writtenAtMs={board?.quota.written_at_ms ?? null}
+      staleAfterMs={board?.quota.stale_after_ms ?? 1_800_000}
+      nowMs={store.nowMs}
+    />
+    <Gauge
+      label="Week"
+      window={board?.quota.seven_day ?? null}
+      weekly={true}
+      writtenAtMs={board?.quota.written_at_ms ?? null}
+      staleAfterMs={board?.quota.stale_after_ms ?? 1_800_000}
+      nowMs={store.nowMs}
+    />
+  </div>
+
+  <div class="tools">
+    {#if contract?.held === true}
+      <span class="contract" data-testid="contract" title="Claude Code {contract.claude_version ?? ''}">contract held</span>
+    {:else if contract?.held === false}
+      <span class="contract broken" data-testid="contract">contract broken: {contract.missing.join(", ")}</span>
+    {/if}
+    <button class="tool" onclick={() => store.refresh()} title="Refresh now (r)">Refresh</button>
+    <button
+      class="tool"
+      aria-pressed={store.alwaysOnTop}
+      onclick={() => store.toggleAlwaysOnTop()}
+      title="Keep the board above other windows"
+    >
+      {store.alwaysOnTop ? "Pinned" : "Pin on top"}
+    </button>
+  </div>
+</header>
+
+<style>
+  .bar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 14px 20px;
+    padding: 14px 20px;
+  }
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  h1 {
+    margin: 0;
+    font-size: 22px;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+  }
+  .floor {
+    font-size: 13px;
+    color: var(--color-text-muted);
+  }
+  .pill {
+    padding: 6px 16px;
+    border-radius: var(--radius-pill);
+    background: var(--color-attention);
+    color: var(--color-attention-text);
+    font-weight: 700;
+  }
+  .gauges {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+  .tools {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-left: auto;
+  }
+  .tool {
+    min-height: var(--target-min);
+    padding: 0 18px;
+    border-radius: var(--radius-pill);
+    border: 1px solid var(--color-text);
+    background: var(--color-surface);
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .tool[aria-pressed="true"] {
+    background: var(--color-text);
+    color: var(--color-bg);
+  }
+  .contract {
+    font-size: 12.5px;
+    color: var(--color-text-muted);
+  }
+  .contract.broken {
+    color: #8a2b14;
+    font-weight: 600;
+  }
+</style>

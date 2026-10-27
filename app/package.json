@@ -1,0 +1,45 @@
+{
+  "name": "officina-app",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "license": "Apache-2.0",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "check": "svelte-check --tsconfig ./tsconfig.app.json && tsc -p tsconfig.node.json",
+    "lint": "eslint \"src/**/*.{ts,svelte}\" \"e2e/**/*.ts\"",
+    "test": "vitest run",
+    "e2e": "playwright test",
+    "tauri": "tauri",
+    "e2e:fixtures": "cargo build -p officina && node scripts/e2e-fixtures.mjs",
+    "readme-assets": "playwright test --config playwright.readme.config.ts"
+  },
+  "dependencies": {
+    "@fontsource/plus-jakarta-sans": "^5.2.8",
+    "@tauri-apps/api": "^2.9.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.4",
+    "@playwright/test": "^1.57.0",
+    "@sveltejs/vite-plugin-svelte": "^7.1.2",
+    "@tauri-apps/cli": "^2.9.0",
+    "@testing-library/svelte": "^5.3.1",
+    "@tsconfig/svelte": "^5.0.8",
+    "@types/node": "^24.12.4",
+    "@types/pngjs": "^6.0.5",
+    "@typescript-eslint/parser": "^8.59.3",
+    "eslint": "^9.39.4",
+    "eslint-plugin-svelte": "^3.17.1",
+    "gifenc": "^1.0.3",
+    "globals": "^16.5.0",
+    "jsdom": "^29.1.1",
+    "pngjs": "^7.0.0",
+    "svelte": "^5.55.7",
+    "svelte-check": "^4.4.8",
+    "svelte-eslint-parser": "^1.6.1",
+    "typescript": "~5.9.3",
+    "vite": "^8.2.2",
+    "vitest": "^4.1.6"
+  }
+}
