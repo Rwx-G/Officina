@@ -1,0 +1,11 @@
+/target/
+node_modules/
+/app/dist/
+/app/test-results/
+/app/playwright-report/
+/app/coverage/
+*.log
+.env
+.env.*
+/app/e2e/.fixtures/
+/app/src-tauri/gen/
