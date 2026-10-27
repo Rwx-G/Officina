@@ -53,7 +53,7 @@ Every 250 ms the collector stats a small set of paths (a few `metadata` calls, n
 
 | Watched | Signal | Action |
 |---|---|---|
-| today's event file | length grew | read new lines incrementally; recompute; schedule agents refresh (debounce 250 ms) and a follow-up refresh at +1.5 s |
+| today's event file | length grew | read new lines incrementally; recompute; agents refresh now and a follow-up refresh at +1 s |
 | `<config dir>/sessions/*.json` | name, size or mtime of any session file changed (E10: a session's file is rewritten on every state change, the directory only on create and delete) | agents refresh now; files are stat'ed, never opened, and `.key` files are not even stat'ed (FR-2) |
 | `<officina home>/quota/<account key>.json` | mtime changed | re-read quota; recompute; no spawn |
 | resolved `claude` binary | mtime changed, or startup | run `claude --version`; on a new version run the canary (AD-12) |
@@ -136,7 +136,7 @@ On `NotFound` the hook creates `events/` and retries once. Any other error: exit
 `core::classify(entry: Option<&AgentEntry>, events: &SessionEvents, now_ms) -> Placement { column, badge, waiting_for }` is pure. The precedence is FR-6, verbatim in code order. Additions this spine fixes:
 
 - **Card key.** Live interactive: `pid:<pid>:<startedAt>` (pid reuse within 24 h is real on Windows; `startedAt` disambiguates). Background: `bg:<id>`. Ended interactive: `sid:<sessionId>`.
-- **Events attach by `session_id`.** The current `sessionId` of a live card is taken from the latest agents snapshot, which is authoritative for pid -> sessionId. Excerpts come from the events of that sessionId. **Gate, unverified:** before the classification story, run `/clear` in an interactive session and record in research notes whether `claude agents --json` shows the new `sessionId` for the same pid. If it does not, the hook line gains an optional `claude_pid` (first ancestor named `claude.exe`, via the toolhelp snapshot) and re-pointing uses `SessionStart` with `source` in `clear|resume|fork` matching `claude_pid` and `cwd`. The field is reserved in schema v1 so either outcome is non-breaking.
+- **Events attach by `session_id`.** The current `sessionId` of a live card is taken from the latest agents snapshot, which is authoritative for pid -> sessionId. Excerpts come from the events of that sessionId. **Resolved by E14:** the hook records `claude_pid` from `CLAUDE_PID`, which equals the agents pid; a live interactive card takes the latest events of every session its process ran since it started, so `/clear` cannot leave a ghost whatever `claude agents` reports as the session id.
 - **Ended interactive sessions** are not in `claude agents` output, so they are reconstructed from the event buffer: a `session_id` absent from the live list and from the background list, whose events in the last 24 h include a `UserPromptSubmit`. Last event `SessionEnd` with `reason` in `clear|resume` -> superseded, not shown. `SessionEnd` with `prompt_input_exit|logout` -> To resume, badge `ended`. `SessionEnd` with `other` -> not shown (this is what `claude -p` scripts produce, E2). No `SessionEnd` -> To resume, badge `interrupted`. This keeps `board --json` stateless: no extra file, same answer after a restart.
 - **Done window.** Background `done` is listed when its last event, else `startedAt`, is within 24 h.
 - **Ordering.** Needs you: oldest wait first. Your turn: oldest first. Working: most recent start first. To resume and Done: most recent first.
