@@ -7,6 +7,7 @@ const COMMANDS: &[&str] = &[
     "focus",
     "report_wrong_window",
     "copy_attach_command",
+    "approve_catalogue",
 ];
 
 fn main() {

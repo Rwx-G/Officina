@@ -178,7 +178,9 @@ pattern = "lab-[a-z0-9-]{1,30}"      # anchored: the whole value must match
 - A parameter declares `values` or a `pattern`, never both. Whatever it declares, a value is refused when it starts with `-`, holds a control, bidirectional or invisible formatting character, or has a `.` or `..` path segment; on the `native` runner also when it starts with `/` or `@`.
 - An invalid action is skipped and reported with its line; it never invalidates the floor, so the board keeps working.
 
-Today the floor's catalogue is parsed and validated; running actions, the gate and the approval in the window arrive with the rest of v0.2.
+The relay runs only a catalogue you approved in the window. Approval records a hash of the catalogue's meaning (projects, actions, parameters, guarded programs), not of its text: comments, key order, colours or an invalid action do not change it, any change of meaning does. Only `officina-app.exe` contains the code that approves; `officina.exe`, which sessions can call, does not, and CI checks the shipped binary for it.
+
+Today the floor's catalogue is parsed, validated and hashed; running actions, the gate and the approval banner in the window arrive with the rest of v0.2.
 
 ## Command line
 

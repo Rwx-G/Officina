@@ -31,3 +31,8 @@ project uses [Semantic Versioning](https://semver.org/).
   an anchored `pattern`, `class`, `timeout_s`, `max_output_kib`). An invalid
   action is skipped with its line and never invalidates the floor for the
   board. A schema 1 floor still loads, every project `free`.
+- Relay catalogue approval, the core of it: the catalogue is reduced to its
+  meaning and hashed, the approved copy is kept in `relay/approved.json`,
+  and an approval is refused when the floor changed since it was displayed.
+  Only the window build contains the code that approves; CI checks that the
+  shipped `officina.exe` does not.

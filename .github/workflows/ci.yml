@@ -55,6 +55,29 @@ jobs:
         env:
           OFFICINA_HOOK_P95_BUDGET_MS: "150"
         run: cargo test --release -p officina --test perf -- --ignored --nocapture
+      - name: officina holds no authority
+        # AD-21, P-5, D-9. The exe a session can call is built alone, as the
+        # release builds it, right before the search: the test build above
+        # left one in target/release with the dev-dependency feature on. The
+        # window links the authority, so the same search must find the marker
+        # there, or the search proves nothing.
+        shell: bash
+        run: |
+          marker=$(sed -n 's/^pub const AUTHORITY_MARKER: &str = "\(.*\)";$/\1/p' crates/officina-host/src/relay/authority.rs)
+          test -n "$marker"
+          tree=$(cargo tree -p officina -e normal,features)
+          grep -q -F 'officina-host feature' <<<"$tree"
+          if grep -F window-authority <<<"$tree"; then
+            echo "officina enables window-authority outside its tests"; exit 1
+          fi
+          cargo build --release -p officina-app
+          cargo build --release -p officina
+          if grep -a -q -F "$marker" target/release/officina.exe; then
+            echo "officina.exe contains the authority marker"; exit 1
+          fi
+          if ! grep -a -q -F "$marker" target/release/officina-app.exe; then
+            echo "positive control failed: officina-app.exe lacks the authority marker"; exit 1
+          fi
       - name: Frontend checks
         working-directory: app
         run: |

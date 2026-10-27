@@ -17,6 +17,16 @@ thiserror = "2.0.21"
 [lints]
 workspace = true
 
+[features]
+# Compiles `relay::authority`, what only the author may decide (AD-21).
+# Enabled by the window; the `officina` binary enables it only for its
+# tests, so the shipped exe a session can call holds no authority (P-5).
+window-authority = []
+
+[[test]]
+name = "authority"
+required-features = ["window-authority"]
+
 [target."cfg(windows)".dependencies]
 windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_System_Diagnostics_ToolHelp", "Win32_System_Threading"] }
 

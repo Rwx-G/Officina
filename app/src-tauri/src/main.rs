@@ -13,6 +13,8 @@ use officina_host::files::now_ms;
 use officina_host::focus::{
     FocusContext, attach_command, focus_card, log_outcome, log_wrong_window,
 };
+use officina_host::relay::authority;
+use officina_host::relay::home::RelayHome;
 use officina_host::watch::{CollectorMsg, spawn};
 use tauri::{Emitter, Manager, State, WindowEvent};
 
@@ -73,6 +75,21 @@ fn report_wrong_window(state: State<'_, AppState>, key: String) {
 #[tauri::command]
 fn copy_attach_command(state: State<'_, AppState>, key: String) -> Option<String> {
     card_for(&state, &key).and_then(|c| attach_command(&c, &state.focus))
+}
+
+/// Approves the relay's catalogue when `hash` is still the current one
+/// (AD-24, D-8). Returns the approved hash.
+#[tauri::command]
+async fn approve_catalogue(hash: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let home = RelayHome::from_env()
+            .ok_or_else(|| "no Officina home: set OFFICINA_HOME or USERPROFILE".to_owned())?;
+        authority::approve_catalogue(&home, &hash)
+            .map(|approved| approved.hash)
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 fn floor_arg() -> Option<PathBuf> {
@@ -154,7 +171,8 @@ fn main() {
             refresh,
             focus,
             report_wrong_window,
-            copy_attach_command
+            copy_attach_command,
+            approve_catalogue
         ])
         .run(tauri::generate_context!())
         .expect("failed to run the Officina window");
