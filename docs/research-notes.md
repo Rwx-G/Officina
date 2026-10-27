@@ -128,8 +128,17 @@ Windows 11.
   produced 8000 parseable lines, none interleaved.
 - **Verified (workstation).** The board window with two live sessions:
   35 MB working set, 0.013 % of the machine's CPU over 30 s idle.
-- **Not measured yet.** The latency added inside a real Claude Code turn,
-  where the hook runs through Claude Code's own shell (story 1.3, AC 13).
+- **Verified (workstation, Claude Code 2.1.311, 6 real `claude -p` turns,
+  timings from `--debug-file`).** Through Claude Code's own shell, `officina
+  hook` takes 38-50 ms on `UserPromptSubmit`, 39-52 ms on `Stop` and
+  71-107 ms on `SessionStart` (first spawn of the turn). In the same turns
+  the project's Python hooks took 87-118 ms (`UserPromptSubmit`) and
+  122-187 ms (`SessionStart`), and a hook that fetches git 1.1-1.4 s.
+- **Verified (debug log).** Claude Code runs the hooks of one event in
+  parallel: the event waits for its slowest hook. Next to an existing Python
+  hook, `officina hook` adds no wait at all; alone, it adds about 40 ms per
+  event. The PRD's 30 ms target holds for the binary (E9, first bullet), not
+  for the shell hop Claude Code adds on Windows.
 
 ## E7. Configuration directory
 
