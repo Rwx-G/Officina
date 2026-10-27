@@ -55,7 +55,7 @@ pub fn candidate_names(cwd: &str, user_home: Option<&str>) -> Vec<String> {
         let Some((parent, name)) = current.rsplit_once('/') else {
             break;
         };
-        if name.is_empty() || name.ends_with(':') || parent.is_empty() && name.is_empty() {
+        if name.is_empty() || name.ends_with(':') {
             break;
         }
         names.push(name.to_owned());
@@ -67,16 +67,18 @@ pub fn candidate_names(cwd: &str, user_home: Option<&str>) -> Vec<String> {
     names
 }
 
-/// True when `name` appears in `title` as a whole word: bounded by the start,
-/// the end, or a character that is not alphanumeric. `api` matches
-/// `api - Visual Studio Code` but not `rapid`.
+/// True when `name` appears in `title` as a whole name: bounded by the start,
+/// the end, or a character that cannot belong to a folder name. `-`, `_` and
+/// `.` belong to names, so `api` matches `api - Visual Studio Code` but
+/// neither `rapid`, `billing-api` nor `api.ts`.
 pub fn title_contains_word(title: &str, name: &str) -> bool {
     if name.is_empty() {
         return false;
     }
     let title = title.to_lowercase();
     let name = name.to_lowercase();
-    let boundary = |c: Option<char>| c.is_none_or(|c| !c.is_alphanumeric());
+    let in_name = |c: char| c.is_alphanumeric() || matches!(c, '-' | '_' | '.');
+    let boundary = |c: Option<char>| c.is_none_or(|c| !in_name(c));
     title.match_indices(&name).any(|(start, _)| {
         boundary(title[..start].chars().next_back())
             && boundary(title[start + name.len()..].chars().next())
@@ -154,6 +156,15 @@ mod tests {
         ));
         assert!(!title_contains_word("rapid - Visual Studio Code", "api"));
         assert!(!title_contains_word("apis", "api"));
+        assert!(!title_contains_word(
+            "billing-api - Visual Studio Code",
+            "api"
+        ));
+        assert!(!title_contains_word("api.ts - web - Code", "api"));
+        assert!(title_contains_word(
+            "billing-api - Visual Studio Code",
+            "billing-api"
+        ));
         assert!(title_contains_word("Écrit - Code", "écrit"));
         assert!(!title_contains_word("x", ""));
     }
