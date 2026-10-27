@@ -1,0 +1,31 @@
+[package]
+name = "officina"
+description = "Officina command line: hook, quota writer, doctor, headless board."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+default-run = "officina"
+
+[[bin]]
+name = "officina"
+path = "src/main.rs"
+
+[[bin]]
+name = "officina-fake-claude"
+path = "src/bin/officina-fake-claude.rs"
+test = false
+doc = false
+
+[dependencies]
+officina-host.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+officina-core.workspace = true
+tempfile = "3.27.0"
+
+[lints]
+workspace = true
