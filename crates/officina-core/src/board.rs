@@ -464,10 +464,110 @@ pub fn project_for(cwd: Option<&str>, projects: &[ProjectRule]) -> ProjectView {
         )
 }
 
-fn recent(card: &Card, now_ms: i64) -> bool {
-    card.last_event_at_ms
-        .or(card.started_at_ms)
-        .is_some_and(|t| now_ms - t <= DONE_WINDOW_MS)
+/// Finished sessions (Done, To resume) stay on the board for
+/// [`DONE_WINDOW_MS`] after their last activity; the others always do.
+fn on_board(card: &Card, now_ms: i64) -> bool {
+    !matches!(card.column, Column::Done | Column::ToResume)
+        || card
+            .last_event_at_ms
+            .or(card.started_at_ms)
+            .is_some_and(|t| now_ms - t <= DONE_WINDOW_MS)
+}
+
+/// What one source knows about a session. Each source states every field;
+/// what all sources share (placement, project, name fallback, excerpts) is
+/// derived once, in [`new_card`].
+struct CardFacts {
+    key: String,
+    kind: Option<SessionKindView>,
+    name: Option<String>,
+    session_id: Option<String>,
+    background_id: Option<String>,
+    pid: Option<u32>,
+    cwd: Option<String>,
+    waiting_for: Option<String>,
+    last_event_at_ms: Option<i64>,
+    started_at_ms: Option<i64>,
+    attach_available: bool,
+}
+
+/// Assembles a board [`Card`]; every source goes through here.
+fn new_card(
+    facts: CardFacts,
+    placement: Placement,
+    events: &SessionEvents,
+    input: &BoardInput,
+) -> Card {
+    let project = project_for(facts.cwd.as_deref(), &input.projects);
+    let excerpt = |text: &Option<String>| {
+        if input.no_excerpts {
+            None
+        } else {
+            text.clone()
+        }
+    };
+    Card {
+        key: facts.key,
+        column: placement.column,
+        badge: placement.badge,
+        kind: facts.kind,
+        name: facts.name.unwrap_or_else(|| project.name.clone()),
+        project,
+        session_id: facts.session_id,
+        background_id: facts.background_id,
+        pid: facts.pid,
+        cwd: facts.cwd,
+        waiting_for: facts.waiting_for,
+        last_prompt: excerpt(&events.last_prompt),
+        last_message: excerpt(&events.last_message),
+        last_event_at_ms: facts.last_event_at_ms,
+        started_at_ms: facts.started_at_ms,
+        attach_available: facts.attach_available,
+    }
+}
+
+/// The card of a session `claude agents` lists. `None` when the record has
+/// no card key.
+fn listed_card(record: &AgentRecord, events: &SessionEvents, input: &BoardInput) -> Option<Card> {
+    let facts = CardFacts {
+        key: card_key(record)?,
+        kind: record.kind.map(Into::into),
+        name: record.name.clone(),
+        session_id: record.session_id.clone(),
+        background_id: record.id.clone(),
+        pid: record.pid,
+        cwd: record.cwd.clone().or_else(|| events.cwd.clone()),
+        waiting_for: record.waiting_for.clone(),
+        last_event_at_ms: events.last_event_at_ms,
+        started_at_ms: record.started_at_ms,
+        attach_available: record.kind == Some(SessionKind::Background) && record.id.is_some(),
+    };
+    Some(new_card(facts, classify(record, events), events, input))
+}
+
+/// The card of an interactive session seen only in hook events (AD-11).
+/// `None` when [`classify_unlisted`] does not show it.
+fn unlisted_card(
+    session_id: &str,
+    events: &SessionEvents,
+    input: &BoardInput,
+    now_ms: i64,
+) -> Option<Card> {
+    let placement = classify_unlisted(events, now_ms)?;
+    let facts = CardFacts {
+        key: format!("sid:{session_id}"),
+        kind: Some(SessionKindView::Interactive),
+        name: None,
+        session_id: Some(session_id.to_owned()),
+        background_id: None,
+        pid: None,
+        cwd: events.cwd.clone(),
+        waiting_for: None,
+        last_event_at_ms: events.ended_at_ms.or(events.last_event_at_ms),
+        started_at_ms: None,
+        attach_available: false,
+    };
+    Some(new_card(facts, placement, events, input))
 }
 
 fn sort_column(column: Column, cards: &mut [Card]) {
@@ -509,52 +609,22 @@ pub fn build_board(input: &BoardInput, now_ms: i64) -> Board {
     let mut listed: HashSet<&str> = HashSet::new();
     let mut unrecognized: Vec<String> = Vec::new();
 
-    let excerpt = |text: &Option<String>| {
-        if input.no_excerpts {
-            None
-        } else {
-            text.clone()
-        }
-    };
-
     for record in input.agents.iter().flatten() {
         unrecognized.extend(record.unrecognized.iter().cloned());
-        let Some(key) = card_key(record) else {
-            continue;
-        };
-        if let Some(sid) = &record.session_id {
-            listed.insert(sid);
-        }
         let events = record
             .session_id
             .as_ref()
             .and_then(|sid| grouped.get(sid))
             .unwrap_or(&empty);
-        let placement = classify(record, events);
-        let cwd = record.cwd.clone().or_else(|| events.cwd.clone());
-        let project = project_for(cwd.as_deref(), &input.projects);
-        let card = Card {
-            key,
-            column: placement.column,
-            badge: placement.badge,
-            kind: record.kind.map(Into::into),
-            name: record.name.clone().unwrap_or_else(|| project.name.clone()),
-            project,
-            session_id: record.session_id.clone(),
-            background_id: record.id.clone(),
-            pid: record.pid,
-            cwd,
-            waiting_for: record.waiting_for.clone(),
-            last_prompt: excerpt(&events.last_prompt),
-            last_message: excerpt(&events.last_message),
-            last_event_at_ms: events.last_event_at_ms,
-            started_at_ms: record.started_at_ms,
-            attach_available: record.kind == Some(SessionKind::Background) && record.id.is_some(),
-        };
-        if matches!(placement.column, Column::Done | Column::ToResume) && !recent(&card, now_ms) {
+        let Some(card) = listed_card(record, events, input) else {
             continue;
+        };
+        if let Some(sid) = &record.session_id {
+            listed.insert(sid);
         }
-        columns.get_mut(placement.column).push(card);
+        if on_board(&card, now_ms) {
+            columns.get_mut(card.column).push(card);
+        }
     }
 
     // Unlisted sessions are only judged once the session list is known:
@@ -564,30 +634,10 @@ pub fn build_board(input: &BoardInput, now_ms: i64) -> Board {
             if listed.contains(sid.as_str()) {
                 continue;
             }
-            let Some(placement) = classify_unlisted(events, now_ms) else {
-                continue;
-            };
-            let project = project_for(events.cwd.as_deref(), &input.projects);
-            let card = Card {
-                key: format!("sid:{sid}"),
-                column: placement.column,
-                badge: placement.badge,
-                kind: Some(SessionKindView::Interactive),
-                name: project.name.clone(),
-                project,
-                session_id: Some(sid.clone()),
-                background_id: None,
-                pid: None,
-                cwd: events.cwd.clone(),
-                waiting_for: None,
-                last_prompt: excerpt(&events.last_prompt),
-                last_message: excerpt(&events.last_message),
-                last_event_at_ms: events.ended_at_ms.or(events.last_event_at_ms),
-                started_at_ms: None,
-                attach_available: false,
-            };
-            if recent(&card, now_ms) {
-                columns.get_mut(placement.column).push(card);
+            if let Some(card) =
+                unlisted_card(sid, events, input, now_ms).filter(|c| on_board(c, now_ms))
+            {
+                columns.get_mut(card.column).push(card);
             }
         }
     }
@@ -761,6 +811,49 @@ mod tests {
         let board = build_board(&input, DONE_WINDOW_MS + 10);
         assert_eq!(board.columns.working[0].last_prompt, None);
         assert!(board.columns.done.is_empty());
+    }
+
+    #[test]
+    fn listed_and_unlisted_cards_derive_project_name_and_excerpts_alike() {
+        let rules = vec![ProjectRule {
+            name: "api".into(),
+            path: "c:/work/api".into(),
+            color: Some(ProjectColor::Blue),
+        }];
+        let mut listed_prompt = event(10, "live", "UserPromptSubmit");
+        listed_prompt.prompt = Some("deploy".into());
+        let mut gone_prompt = event(10, "gone", "UserPromptSubmit");
+        gone_prompt.prompt = Some("deploy".into());
+        let mut gone_end = event(20, "gone", "SessionEnd");
+        gone_end.reason = Some("prompt_input_exit".into());
+        let mut input = BoardInput {
+            agents: Some(
+                parse_agents(
+                    r#"[{"pid":1,"sessionId":"live","kind":"interactive","status":"idle",
+                         "cwd":"C:/work/api/src","startedAt":1}]"#,
+                )
+                .unwrap(),
+            ),
+            events: vec![listed_prompt, gone_prompt, gone_end],
+            projects: rules,
+            ..Default::default()
+        };
+        let now = UNLISTED_GRACE_MS + 100;
+        let board = build_board(&input, now);
+        let listed = &board.columns.your_turn[0];
+        let unlisted = &board.columns.to_resume[0];
+        assert_eq!(unlisted.key, "sid:gone");
+        for card in [listed, unlisted] {
+            assert_eq!(card.project.name, "api", "{}", card.key);
+            assert_eq!(card.project.color, Some(ProjectColor::Blue), "{}", card.key);
+            assert_eq!(card.name, "api", "{}", card.key);
+            assert_eq!(card.last_prompt.as_deref(), Some("deploy"), "{}", card.key);
+        }
+
+        input.no_excerpts = true;
+        let board = build_board(&input, now);
+        assert!(board.columns.all().all(|c| c.last_prompt.is_none()));
+        assert_eq!(board.columns.all().count(), 2);
     }
 
     #[test]
