@@ -1,6 +1,6 @@
 # Story 2.1: Relay core: floor schema 2, two-phase parse, values and argument vectors
 
-**Status:** Approved
+**Status:** Review
 
 ## Story
 
@@ -25,14 +25,14 @@ so that every later relay story builds on one validated, pure model of what may 
 
 ## Tasks
 
-- [ ] Add `regex` and `sha2` to `crates/officina-core/Cargo.toml`; run `cargo deny check` (AC 11)
-- [ ] `floor.rs`: accept schema 1 and 2, project `autonomy` and `actions`, top-level `guarded_programs`, `action` as `Vec<toml::Spanned<toml::Value>>`; relay keys constant and schema 1 error (AC 1, 2, 3)
-- [ ] Default guarded program list as one constant in `relay::catalogue` (its content is settled by story 2.3, D-11) (AC 1)
-- [ ] Module `crates/officina-core/src/relay/` with `mod.rs`, `catalogue.rs` (phase 2, issue kinds with `ALL`), `params.rs`, `argv.rs` (AC 3-10)
-- [ ] Prove or replace `Spanned` line location; record the result in research notes if the fallback is used (AC 5)
-- [ ] Write `tests/vectors/argv.json` by hand (redacted) and `crates/officina-core/tests/argv_vectors.rs` with the coverage test (AC 9, 10)
-- [ ] CLI tests in `board.rs` (AC 3, 12)
-- [ ] Update `CHANGELOG.md` `[Unreleased]` and the README's floor example for schema 2 (D-34)
+- [x] Add `regex` and `sha2` to `crates/officina-core/Cargo.toml`; run `cargo deny check` (AC 11)
+- [x] `floor.rs`: accept schema 1 and 2, project `autonomy` and `actions`, top-level `guarded_programs`, `action` as `Vec<toml::Spanned<toml::Value>>`; relay keys constant and schema 1 error (AC 1, 2, 3)
+- [x] Default guarded program list as one constant in `relay::catalogue` (its content is settled by story 2.3, D-11) (AC 1)
+- [x] Module `crates/officina-core/src/relay/` with `mod.rs`, `catalogue.rs` (phase 2, issue kinds with `ALL`), `params.rs`, `argv.rs` (AC 3-10)
+- [x] Prove or replace `Spanned` line location; record the result in research notes if the fallback is used (AC 5)
+- [x] Write `tests/vectors/argv.json` by hand (redacted) and `crates/officina-core/tests/argv_vectors.rs` with the coverage test (AC 9, 10)
+- [x] CLI tests in `board.rs` (AC 3, 12)
+- [x] Update `CHANGELOG.md` `[Unreleased]` and the README's floor example for schema 2 (D-34)
 
 ## Dev Notes
 
@@ -56,11 +56,56 @@ so that every later relay story builds on one validated, pure model of what may 
 
 ### Debug Log
 
+- **AD-23 gate holds.** With toml 0.9.12, `toml::Spanned<toml::Value>` as the element type of the `[[action]]` array keeps a span per table, and the span starts at the `[[action]]` header. `catalogue.rs::tests::issue_line_points_at_the_action` (three actions, the second invalid) asserts the issue line equals that header's line. The fallback (locate by `name`) is not shipped, so nothing is added to the research notes.
+- Project and `guarded_programs` lines come from a second, lenient parse of the same text in phase 2 (`Positions`): phase 1 keeps both as plain values for its callers (the board, the gate).
+- `action` must be an array: `action = 1` is a type error of phase 1 and invalidates the floor. Keeping `Vec<Spanned<Value>>` (AC 3) rules out accepting any value there; the gate's D-15 fallback covers a floor broken this way.
+- Choices where the documents are silent, each the stricter reading:
+  - the forbidden formatting ranges are wider than AD-30's parenthesis: they add the Arabic letter mark (a bidi control AD-30 misses), the soft hyphen, the Mongolian vowel separator, the invisible operators, the deprecated format controls, the interlinear annotation controls and the tag characters, which can carry hidden ASCII. `params::FORBIDDEN_FORMAT_RANGES` is the list;
+  - parameter names follow `^[a-z][a-z0-9_-]{0,31}$` (issue `param_name`), so `name=value` and `{name}` always round-trip;
+  - an `env` value holding a brace is an issue (`env_value_placeholder`): D-1 says values are literals, and a brace suggests the author expected a substitution;
+  - two actions sharing a name drop every copy, an invalid copy included; two projects sharing a name leave the catalogue (`duplicate_project`) but stay in the floor, so the board and the gate still see both paths;
+  - `check` on a class other than `after-check` is an issue; `class` has no default;
+  - `kind = "http"` is "not in this build"; any other `kind` is `malformed` (unknown key);
+  - `timeout_s` and `max_output_kib` are read as signed integers so a negative value reports the range rule, not a type error;
+  - a `native` program is absolute only as a drive or UNC path (`/x` is drive-relative on Windows); the `.bat`/`.cmd` check ignores trailing dots and spaces, which Windows strips;
+  - `guarded_programs` entries are lowercased (program names are matched lowercase, AD-27); an entry breaking D-3 is reported and ignored.
+- `DEFAULT_GUARDED_PROGRAMS` holds PRD amendment 6's list; story 2.3 extends it (D-11). It is a slice, so the extension does not change its type.
+- `sha2` 0.11.1 is the current release; Tauri still pulls 0.10, so `cargo deny check` reports duplicate versions (warnings only). Licences, advisories and sources pass.
+
 ### Completion Notes
 
+- AC 1: `floor.rs::tests::{schema_2_example_parses, schema_2_project_defaults_to_guarded}`, `catalogue.rs::tests::defaults_are_explicit_after_validation`.
+- AC 2: `floor.rs::tests::{schema_1_projects_are_free, schema_1_with_each_relay_key_names_schema_2, unsupported_schema_is_refused, relay_keys_constant_matches_the_type}`. The schema 1 check finds relay keys in the serialized floor, iterating `RELAY_KEYS`; the constant test builds `FloorFile` and `ProjectEntry` as struct literals, so a new field does not compile until it is populated.
+- AC 3: `catalogue.rs::tests::{malformed_project_invalidates_the_floor, malformed_action_never_invalidates_the_floor}`, `crates/officina/tests/board.rs::invalid_action_leaves_the_board_floor_valid`.
+- AC 4: `catalogue.rs::tests::every_issue_kind_has_a_case` (iterates `IssueKind::ALL`; the fixture function is an exhaustive match) and one named test per kind. `ALL` is generated with the enum by the `closed_enum!` macro, so it cannot miss a variant.
+- AC 5: `catalogue.rs::tests::issue_line_points_at_the_action`.
+- AC 6: `catalogue.rs::tests::project_keeps_valid_actions_when_one_is_dropped`.
+- AC 7: `params.rs::tests::*`, the refusal cases of `argv.json`, `params.rs::tests::every_forbidden_range_bound_is_refused`.
+- AC 8: `params.rs::tests::{pattern_is_anchored, oversized_pattern_is_an_issue, invalid_pattern_is_an_issue}`.
+- AC 9: `crates/officina-core/tests/argv_vectors.rs::every_case_matches` replaying `tests/vectors/argv.json`.
+- AC 10: `argv_vectors.rs::every_rule_and_runner_has_a_case` (iterates `Runner::ALL`, `ValueRefusal::ALL` and `argv::WSL_VERIFIED_CLASSES`).
+- AC 11: `cargo deny check` passes locally (advisories, bans, licenses, sources ok); clippy with `-D warnings` and the core `clippy.toml` passes.
+- AC 12: `crates/officina/tests/board.rs::schema_2_floor_maps_projects_like_schema_1`; the classification vector replay is unchanged and passes.
+- Gates at the end of the story: `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets --features officina-core/ts -- -D warnings`, `cargo test --workspace --features officina-core/ts` all green.
+
 ## File List
+
+- `Cargo.lock`
+- `crates/officina-core/Cargo.toml`
+- `crates/officina-core/src/lib.rs`
+- `crates/officina-core/src/floor.rs`
+- `crates/officina-core/src/relay/mod.rs`
+- `crates/officina-core/src/relay/catalogue.rs`
+- `crates/officina-core/src/relay/params.rs`
+- `crates/officina-core/src/relay/argv.rs`
+- `crates/officina-core/tests/argv_vectors.rs`
+- `tests/vectors/argv.json`
+- `crates/officina/tests/board.rs`
+- `README.md`
+- `CHANGELOG.md`
 
 ## Change Log
 
 - 2026-10-27 created
 - 2026-10-27 reworked after review: decisions D-1 to D-7 and P-2 (native `/` and `@`, `.bat`/`.cmd`, absolute WSL tools, inner timeout margin, `WSLENV`, relay keys constant)
+- 2026-10-27 implemented: floor schema 2, phase 2 validation, value rules, argument vectors; AD-23 `Spanned` gate proved; status Review

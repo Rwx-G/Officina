@@ -24,7 +24,7 @@ version: v0.2
 # Slice A (2.1-2.7, 2.10, stop included) is usable alone; 2.10 depends on 2.1-2.7 only and can run right after 2.7.
 # HTTP actions (AD-36) close the PRD as story 2.11 (owner rule, epic-2-decisions.md P-7).
 stories:
-  - {id: "2.1", file: story-2.1-relay-core.md, slice: A, status: approved}
+  - {id: "2.1", file: story-2.1-relay-core.md, slice: A, status: review}
   - {id: "2.2", file: story-2.2-catalogue-approval-core.md, slice: A, status: approved}
   - {id: "2.3", file: story-2.3-command-lexer-and-gate.md, slice: A, status: approved}
   - {id: "2.4", file: story-2.4-gate-in-the-hook.md, slice: A, status: approved}
