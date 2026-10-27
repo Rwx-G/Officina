@@ -250,6 +250,12 @@ Windows 11.
   wrote a fake tool call and a fake result in its text, ran nothing (one
   turn, no file created). Model text is untrusted even when it describes
   actions; only the schema-constrained field may be read.
+- **Verified.** The prompt can come on stdin (`claude -p` with no prompt
+  argument), so untrusted excerpts never reach a command line, and
+  `--no-session-persistence` writes no transcript under the config dir (the
+  run's session id has no file afterwards). With `--setting-sources ""` the
+  user-level hooks do not load either, so the triage run does not record
+  itself through `officina hook`.
 - **Measured.** One triage proposal on a short excerpt: about 4.5k input
   tokens (system prompt, cached for an hour) and 380 output tokens (260 of
   thinking), USD 0.0011 at API prices.
