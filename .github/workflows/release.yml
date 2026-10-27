@@ -1,0 +1,52 @@
+# Builds the Windows artifacts of a version tag (AD-18): the NSIS installer of
+# the window and a portable zip of both executables, with SHA-256 sums.
+# Binaries are unsigned until a signing certificate exists (risk R7).
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - name: pnpm
+        run: npm install -g pnpm@11
+      - name: Check the tag matches the workspace version
+        shell: bash
+        run: |
+          version=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          test "v$version" = "$GITHUB_REF_NAME" || { echo "tag $GITHUB_REF_NAME, workspace $version"; exit 1; }
+      - name: Frontend install
+        working-directory: app
+        run: pnpm install --frozen-lockfile
+      - name: Window and installer
+        working-directory: app
+        run: pnpm tauri build
+      - name: CLI
+        run: cargo build --release -p officina
+      - name: Package
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          mkdir -p dist/portable
+          cp target/release/officina.exe target/release/officina-app.exe README.md LICENSE dist/portable/
+          (cd dist/portable && 7z a "../officina-${version}-windows-x64-portable.zip" . > /dev/null)
+          cp target/release/bundle/nsis/*-setup.exe "dist/officina-${version}-windows-x64-setup.exe"
+          (cd dist && sha256sum *.zip *.exe > SHA256SUMS.txt)
+      - name: Publish the release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/*.zip dist/*.exe dist/SHA256SUMS.txt \
+            --title "Officina $GITHUB_REF_NAME" --notes "See CHANGELOG.md." --draft
