@@ -193,6 +193,83 @@ fn invalid_floor_is_reported_on_the_board() {
     );
 }
 
+/// One session inside `<root>/work/Api` and one outside every project.
+fn sessions_in_and_out_of_a_project(env: &TestEnv, now: i64) {
+    let api = env.root.path().join("work").join("Api");
+    std::fs::create_dir_all(&api).unwrap();
+    env.write_agents(
+        &serde_json::json!([
+            {"pid": 4100, "cwd": api.to_string_lossy().replace('\\', "/"), "kind": "interactive",
+             "startedAt": now - 60_000, "sessionId": "00000000-0000-0000-0000-000000000001",
+             "name": "api", "status": "idle"},
+            {"pid": 4200, "cwd": "C:/work/elsewhere", "kind": "interactive", "startedAt": now - 50_000,
+             "sessionId": "00000000-0000-0000-0000-000000000002", "name": "elsewhere", "status": "idle"}
+        ])
+        .to_string(),
+    );
+}
+
+fn board_with_floor(env: &TestEnv, name: &str, content: &str) -> serde_json::Value {
+    let floor = env.root.path().join("work").join(name);
+    std::fs::write(&floor, content).unwrap();
+    let out = env.run(
+        &["board", "--json", "--floor", floor.to_str().unwrap()],
+        b"",
+    );
+    assert_eq!(out.status.code(), Some(0), "{name}");
+    serde_json::from_slice(&out.stdout).unwrap()
+}
+
+#[test]
+fn schema_2_floor_maps_projects_like_schema_1() {
+    let env = TestEnv::new();
+    sessions_in_and_out_of_a_project(&env, now_ms());
+    let config = env.root.path().join("other-config");
+    std::fs::create_dir_all(&config).unwrap();
+    let config = config.to_string_lossy().replace('\\', "/");
+    let v1 = format!(
+        "schema = 1\nname = \"work\"\nconfig_dir = \"{config}\"\n\n[[project]]\nname = \"api\"\npath = \"Api\"\ncolor = \"blue\"\n"
+    );
+    let v2 = format!(
+        "schema = 2\nname = \"work\"\nconfig_dir = \"{config}\"\nguarded_programs = [\"ssh\"]\n\n[[project]]\nname = \"api\"\npath = \"Api\"\ncolor = \"blue\"\nautonomy = \"guarded\"\nactions = [\"probe\"]\n\n[[action]]\nname = \"probe\"\nclass = \"free\"\nprogram = \"C:/path/to/tool.exe\"\nargs = [\"{{host}}\"]\n\n[action.params.host]\nvalues = [\"web01\"]\n"
+    );
+
+    let mut boards = Vec::new();
+    for (name, content) in [("v1.toml", &v1), ("v2.toml", &v2)] {
+        std::fs::write(env.fake_log(), "").unwrap();
+        let board = board_with_floor(&env, name, content);
+        let log = std::fs::read_to_string(env.fake_log()).unwrap();
+        assert!(
+            log.contains(&format!("CLAUDE_CONFIG_DIR={config}")),
+            "{name}: {log}"
+        );
+        assert!(board["diagnostics"]["floor_error"].is_null(), "{name}");
+        boards.push(board);
+    }
+    assert_eq!(boards[0]["floor"], "work");
+    assert_eq!(boards[0]["floor"], boards[1]["floor"]);
+    assert_eq!(boards[0]["columns"], boards[1]["columns"]);
+    let api = &boards[1]["columns"]["your_turn"][0];
+    assert_eq!(api["project"]["name"], "api");
+    assert_eq!(api["project"]["color"], "blue");
+}
+
+#[test]
+fn invalid_action_leaves_the_board_floor_valid() {
+    let env = TestEnv::new();
+    sessions_in_and_out_of_a_project(&env, now_ms());
+    let floor = "schema = 2\n\n[[project]]\nname = \"api\"\npath = \"Api\"\ncolor = \"green\"\nactions = [\"broken\", \"also-broken\"]\n\n[[action]]\nname = \"broken\"\nclass = \"free\"\nprogram = \"relative/tool.exe\"\n\n[[action]]\nname = \"also-broken\"\nclass = \"sometimes\"\nunknown_key = 1\n";
+    let board = board_with_floor(&env, "officina.toml", floor);
+    assert!(
+        board["diagnostics"]["floor_error"].is_null(),
+        "{}",
+        board["diagnostics"]
+    );
+    let api = &board["columns"]["your_turn"][0];
+    assert_eq!(api["project"]["name"], "api");
+    assert_eq!(api["project"]["color"], "green");
+}
+
 #[test]
 fn contract_is_unknown_on_an_empty_sample_and_held_on_a_real_one() {
     let env = TestEnv::new();
