@@ -24,3 +24,10 @@ project uses [Semantic Versioning](https://semver.org/).
   listed, never guessed.
 - Optional floor file (`officina.toml`): project names, colours, a
   dedicated Claude config dir, and `no_excerpts`, which the hook honours too.
+- Floor schema 2, the relay's catalogue: projects declare `autonomy`
+  (`free` or `guarded`) and `actions`; `[[action]]` entries declare a closed
+  command (`runner` `native` or `wsl`, an absolute `program`, literal `env`,
+  `args` with at most one placeholder each, parameters limited to `values` or
+  an anchored `pattern`, `class`, `timeout_s`, `max_output_kib`). An invalid
+  action is skipped with its line and never invalidates the floor for the
+  board. A schema 1 floor still loads, every project `free`.

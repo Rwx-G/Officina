@@ -1,6 +1,6 @@
 [package]
 name = "officina-core"
-description = "Officina core: session model, hook events, quota contract, board computation."
+description = "Officina core: session model, hook events, quota contract, board computation, relay catalogue."
 version.workspace = true
 edition.workspace = true
 license.workspace = true

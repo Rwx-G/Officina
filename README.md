@@ -129,7 +129,7 @@ Without configuration, a session's project is the name of its folder. A floor fi
 
 ```toml
 # ~/.officina/floor.toml, or pass --floor <path>, or set OFFICINA_FLOOR
-schema = 1
+schema = 2
 name = "work"
 # config_dir = "C:/path/to/claude-config"   # optional, absolute
 
@@ -137,9 +137,48 @@ name = "work"
 name = "api"
 path = "Api"            # relative to this file, or absolute
 color = "blue"          # green, blue or terracotta
+autonomy = "free"       # "free" or "guarded"; a schema 2 project without it is guarded
 ```
 
-Sessions outside every declared project go to `other`; none is hidden.
+Sessions outside every declared project go to `other`; none is hidden. A v0.1 floor (`schema = 1`) still loads, with every project `free`; the relay keys below need `schema = 2`.
+
+## Relay (v0.2, in progress)
+
+In a guarded repository, sessions run the actions of a closed catalogue through Officina instead of calling guarded programs (remote shells, Ansible, WSL) themselves. The floor file declares the catalogue:
+
+```toml
+schema = 2
+# guarded_programs = ["ssh", "ansible*"]   # optional, replaces the default list
+
+[[project]]
+name = "supervision"
+path = "Supervision"
+autonomy = "guarded"
+actions = ["check"]
+
+[[action]]
+name = "check"
+description = "Dry run of a playbook on one lab group"
+class = "free"                       # "free", "after-check" or "human"
+runner = "wsl"                       # "native" (default) or "wsl"
+distro = "Ubuntu"                    # wsl only, optional
+program = "/home/user01/venv/bin/ansible-playbook"   # absolute for its runner
+env = { ANSIBLE_CONFIG = "/home/user01/ansible.cfg" } # literals only
+args = ["--check", "--diff", "-i", "inventory/lab", "--limit", "{group}", "playbooks/{playbook}"]
+# timeout_s = 540, max_output_kib = 64 when not set
+
+[action.params.playbook]
+values = ["alerting.yml", "node-exporter.yml"]
+
+[action.params.group]
+pattern = "lab-[a-z0-9-]{1,30}"      # anchored: the whole value must match
+```
+
+- An `args` item holds at most one `{placeholder}`, with an optional literal prefix and suffix, and always becomes exactly one argument: no shell ever reads it.
+- A parameter declares `values` or a `pattern`, never both. Whatever it declares, a value is refused when it starts with `-`, holds a control, bidirectional or invisible formatting character, or has a `.` or `..` path segment; on the `native` runner also when it starts with `/` or `@`.
+- An invalid action is skipped and reported with its line; it never invalidates the floor, so the board keeps working.
+
+Today the floor's catalogue is parsed and validated; running actions, the gate and the approval in the window arrive with the rest of v0.2.
 
 ## Command line
 

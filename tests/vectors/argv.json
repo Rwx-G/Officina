@@ -1,0 +1,223 @@
+{
+  "schema": 1,
+  "system_dir": "C:\\Windows\\System32",
+  "project_dir": "C:/path/to/Supervision",
+  "cases": [
+    {
+      "name": "native: literal arguments, env added, the project folder as working directory",
+      "action": {"name": "status", "class": "free", "program": "C:/path/to/tools/probe.exe", "env": {"PROBE_MODE": "read-only"}, "args": ["--host", "{host}", "--json"], "params": {"host": {"values": ["web01", "db01"]}}},
+      "params": {"host": "web01"},
+      "expect": {"program": "C:/path/to/tools/probe.exe", "args": ["--host", "web01", "--json"], "cwd": "C:/path/to/Supervision", "env": {"PROBE_MODE": "read-only"}, "env_remove": []}
+    },
+    {
+      "name": "native: a placeholder with a prefix and a suffix yields one argument",
+      "action": {"name": "check", "class": "free", "program": "C:/path/to/tools/probe.exe", "args": ["--limit={group}:80"], "params": {"group": {"pattern": "lab-[a-z0-9-]{1,30}"}}},
+      "params": {"group": "lab-web"},
+      "expect": {"program": "C:/path/to/tools/probe.exe", "args": ["--limit=lab-web:80"], "cwd": "C:/path/to/Supervision", "env": {}, "env_remove": []}
+    },
+    {
+      "name": "native: a value with a space stays one argument",
+      "action": {"name": "note", "class": "free", "program": "C:/path/to/tools/note.exe", "args": ["{text}"], "params": {"text": {"pattern": ".+"}}},
+      "params": {"text": "two words"},
+      "expect": {"program": "C:/path/to/tools/note.exe", "args": ["two words"], "cwd": "C:/path/to/Supervision", "env": {}, "env_remove": []}
+    },
+    {
+      "name": "wsl: distro, env through /usr/bin/env, inner timeout with its margin, WSLENV removed",
+      "action": {"name": "check", "description": "Dry run of a playbook on one lab group", "class": "free", "runner": "wsl", "distro": "Ubuntu", "program": "/home/user01/venv/bin/ansible-playbook", "env": {"ANSIBLE_CONFIG": "/home/user01/ansible.cfg"}, "args": ["--check", "--diff", "-i", "inventory/lab", "--limit", "{group}", "playbooks/{playbook}"], "params": {"playbook": {"values": ["alerting.yml", "node-exporter.yml"]}, "group": {"pattern": "lab-[a-z0-9-]{1,30}"}}},
+      "params": {"playbook": "alerting.yml", "group": "lab-web"},
+      "expect": {"program": "C:\\Windows\\System32\\wsl.exe", "args": ["-d", "Ubuntu", "--cd", "C:/path/to/Supervision", "--exec", "/usr/bin/env", "ANSIBLE_CONFIG=/home/user01/ansible.cfg", "/usr/bin/timeout", "-k", "10", "545", "/home/user01/venv/bin/ansible-playbook", "--check", "--diff", "-i", "inventory/lab", "--limit", "lab-web", "playbooks/alerting.yml"], "cwd": "C:/path/to/Supervision", "env": {}, "env_remove": ["WSLENV"]}
+    },
+    {
+      "name": "wsl: no distro runs the default one, no env, timeout_s set",
+      "action": {"name": "unit-status", "class": "free", "runner": "wsl", "program": "/usr/bin/systemctl", "args": ["status", "{unit}"], "params": {"unit": {"values": ["nginx.service"]}}, "timeout_s": 60},
+      "params": {"unit": "nginx.service"},
+      "expect": {"program": "C:\\Windows\\System32\\wsl.exe", "args": ["--cd", "C:/path/to/Supervision", "--exec", "/usr/bin/env", "/usr/bin/timeout", "-k", "10", "65", "/usr/bin/systemctl", "status", "nginx.service"], "cwd": "C:/path/to/Supervision", "env": {}, "env_remove": ["WSLENV"]}
+    },
+    {
+      "name": "wsl, E13 space: the value stays one argument",
+      "action": {"name": "note", "class": "free", "runner": "wsl", "program": "/usr/bin/printf", "args": ["%s\\n", "{text}"], "params": {"text": {"pattern": ".+"}}},
+      "params": {"text": "two words"},
+      "expect": {"program": "C:\\Windows\\System32\\wsl.exe", "args": ["--cd", "C:/path/to/Supervision", "--exec", "/usr/bin/env", "/usr/bin/timeout", "-k", "10", "545", "/usr/bin/printf", "%s\\n", "two words"], "cwd": "C:/path/to/Supervision", "env": {}, "env_remove": ["WSLENV"]}
+    },
+    {
+      "name": "wsl, E13 double quotes",
+      "action": {"name": "note", "class": "free", "runner": "wsl", "program": "/usr/bin/printf", "args": ["%s\\n", "{text}"], "params": {"text": {"pattern": ".+"}}},
+      "params": {"text": "say \"hi\""},
+      "expect": {"program": "C:\\Windows\\System32\\wsl.exe", "args": ["--cd", "C:/path/to/Supervision", "--exec", "/usr/bin/env", "/usr/bin/timeout", "-k", "10", "545", "/usr/bin/printf", "%s\\n", "say \"hi\""], "cwd": "C:/path/to/Supervision", "env": {}, "env_remove": ["WSLENV"]}
+    },
+    {
+      "name": "wsl, E13 dollar: no expansion",
+      "action": {"name": "note", "class": "free", "runner": "wsl", "program": "/usr/bin/printf", "args": ["%s\\n", "{text}"], "params": {"text": {"pattern": ".+"}}},
+      "params": {"text": "$HOME"},
+      "expect": {"program": "C:\\Windows\\System32\\wsl.exe", "args": ["--cd", "C:/path/to/Supervision", "--exec", "/usr/bin/env", "/usr/bin/timeout", "-k", "10", "545", "/usr/bin/printf", "%s\\n", "$HOME"], "cwd": "C:/path/to/Supervision", "env": {}, "env_remove": ["WSLENV"]}
+    },
+    {
+      "name": "wsl, E13 asterisk: no glob",
+      "action": {"name": "note", "class": "free", "runner": "wsl", "program": "/usr/bin/printf", "args": ["%s\\n", "{text}"], "params": {"text": {"pattern": ".+"}}},
+      "params": {"text": "*.yml"},
+      "expect": {"program": "C:\\Windows\\System32\\wsl.exe", "args": ["--cd", "C:/path/to/Supervision", "--exec", "/usr/bin/env", "/usr/bin/timeout", "-k", "10", "545", "/usr/bin/printf", "%s\\n", "*.yml"], "cwd": "C:/path/to/Supervision", "env": {}, "env_remove": ["WSLENV"]}
+    },
+    {
+      "name": "wsl, E13 semicolon: no second command",
+      "action": {"name": "note", "class": "free", "runner": "wsl", "program": "/usr/bin/printf", "args": ["%s\\n", "{text}"], "params": {"text": {"pattern": ".+"}}},
+      "params": {"text": "lab;id"},
+      "expect": {"program": "C:\\Windows\\System32\\wsl.exe", "args": ["--cd", "C:/path/to/Supervision", "--exec", "/usr/bin/env", "/usr/bin/timeout", "-k", "10", "545", "/usr/bin/printf", "%s\\n", "lab;id"], "cwd": "C:/path/to/Supervision", "env": {}, "env_remove": ["WSLENV"]}
+    },
+    {
+      "name": "wsl, E13 inner backslashes",
+      "action": {"name": "note", "class": "free", "runner": "wsl", "program": "/usr/bin/printf", "args": ["%s\\n", "{text}"], "params": {"text": {"pattern": ".+"}}},
+      "params": {"text": "C:\\path\\to\\file"},
+      "expect": {"program": "C:\\Windows\\System32\\wsl.exe", "args": ["--cd", "C:/path/to/Supervision", "--exec", "/usr/bin/env", "/usr/bin/timeout", "-k", "10", "545", "/usr/bin/printf", "%s\\n", "C:\\path\\to\\file"], "cwd": "C:/path/to/Supervision", "env": {}, "env_remove": ["WSLENV"]}
+    },
+    {
+      "name": "wsl, E13 trailing backslash",
+      "action": {"name": "note", "class": "free", "runner": "wsl", "program": "/usr/bin/printf", "args": ["%s\\n", "{text}"], "params": {"text": {"pattern": ".+"}}},
+      "params": {"text": "folder\\"},
+      "expect": {"program": "C:\\Windows\\System32\\wsl.exe", "args": ["--cd", "C:/path/to/Supervision", "--exec", "/usr/bin/env", "/usr/bin/timeout", "-k", "10", "545", "/usr/bin/printf", "%s\\n", "folder\\"], "cwd": "C:/path/to/Supervision", "env": {}, "env_remove": ["WSLENV"]}
+    },
+    {
+      "name": "wsl, E13 accented letters",
+      "action": {"name": "note", "class": "free", "runner": "wsl", "program": "/usr/bin/printf", "args": ["%s\\n", "{text}"], "params": {"text": {"pattern": ".+"}}},
+      "params": {"text": "d\u00e9j\u00e0-vu"},
+      "expect": {"program": "C:\\Windows\\System32\\wsl.exe", "args": ["--cd", "C:/path/to/Supervision", "--exec", "/usr/bin/env", "/usr/bin/timeout", "-k", "10", "545", "/usr/bin/printf", "%s\\n", "d\u00e9j\u00e0-vu"], "cwd": "C:/path/to/Supervision", "env": {}, "env_remove": ["WSLENV"]}
+    },
+    {
+      "name": "refused: a declared parameter is missing",
+      "action": {"name": "check", "class": "free", "runner": "wsl", "program": "/home/user01/venv/bin/ansible-playbook", "args": ["--limit", "{group}", "playbooks/{playbook}"], "params": {"playbook": {"values": ["alerting.yml"]}, "group": {"pattern": "lab-[a-z0-9-]{1,30}"}}},
+      "params": {"playbook": "alerting.yml"},
+      "refusal": {"kind": "missing_parameter", "param": "group"}
+    },
+    {
+      "name": "refused: a parameter the action does not declare",
+      "action": {"name": "check", "class": "free", "runner": "wsl", "program": "/home/user01/venv/bin/ansible-playbook", "args": ["--limit", "{group}", "playbooks/{playbook}"], "params": {"playbook": {"values": ["alerting.yml"]}, "group": {"pattern": "lab-[a-z0-9-]{1,30}"}}},
+      "params": {"playbook": "alerting.yml", "group": "lab-web", "extra_vars": "x=1"},
+      "refusal": {"kind": "unknown_parameter", "param": "extra_vars"}
+    },
+    {
+      "name": "refused: an empty value",
+      "action": {"name": "note", "class": "free", "runner": "wsl", "program": "/usr/bin/printf", "args": ["%s\\n", "{text}"], "params": {"text": {"pattern": ".*"}}},
+      "params": {"text": ""},
+      "refusal": {"kind": "value", "param": "text", "refusal": "empty"}
+    },
+    {
+      "name": "refused: a value over 256 characters",
+      "action": {"name": "note", "class": "free", "runner": "wsl", "program": "/usr/bin/printf", "args": ["%s\\n", "{text}"], "params": {"text": {"pattern": ".+"}}},
+      "params": {"text": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+      "refusal": {"kind": "value", "param": "text", "refusal": "too_long"}
+    },
+    {
+      "name": "refused: a leading dash would become an option",
+      "action": {"name": "note", "class": "free", "runner": "wsl", "program": "/usr/bin/printf", "args": ["%s\\n", "{text}"], "params": {"text": {"pattern": ".+"}}},
+      "params": {"text": "--become"},
+      "refusal": {"kind": "value", "param": "text", "refusal": "leading_dash"}
+    },
+    {
+      "name": "refused: a leading dash even when the pattern allows it",
+      "action": {"name": "check", "class": "free", "program": "C:/path/to/tools/probe.exe", "args": ["--limit={group}"], "params": {"group": {"pattern": "-?lab-[a-z]+"}}},
+      "params": {"group": "-lab-web"},
+      "refusal": {"kind": "value", "param": "group", "refusal": "leading_dash"}
+    },
+    {
+      "name": "refused on native: a Windows switch",
+      "action": {"name": "note", "class": "free", "program": "C:/path/to/tools/note.exe", "args": ["{text}"], "params": {"text": {"pattern": ".+"}}},
+      "params": {"text": "/S"},
+      "refusal": {"kind": "value", "param": "text", "refusal": "native_switch"}
+    },
+    {
+      "name": "refused on native: a response file",
+      "action": {"name": "note", "class": "free", "program": "C:/path/to/tools/note.exe", "args": ["{text}"], "params": {"text": {"pattern": ".+"}}},
+      "params": {"text": "@C:/path/to/args.txt"},
+      "refusal": {"kind": "value", "param": "text", "refusal": "native_switch"}
+    },
+    {
+      "name": "wsl: a leading slash is a path, not a switch",
+      "action": {"name": "note", "class": "free", "runner": "wsl", "program": "/usr/bin/printf", "args": ["%s\\n", "{text}"], "params": {"text": {"pattern": ".+"}}},
+      "params": {"text": "/srv/data"},
+      "expect": {"program": "C:\\Windows\\System32\\wsl.exe", "args": ["--cd", "C:/path/to/Supervision", "--exec", "/usr/bin/env", "/usr/bin/timeout", "-k", "10", "545", "/usr/bin/printf", "%s\\n", "/srv/data"], "cwd": "C:/path/to/Supervision", "env": {}, "env_remove": ["WSLENV"]}
+    },
+    {
+      "name": "refused: a NUL byte",
+      "action": {"name": "note", "class": "free", "runner": "wsl", "program": "/usr/bin/printf", "args": ["%s\\n", "{text}"], "params": {"text": {"pattern": "(?s).+"}}},
+      "params": {"text": "lab\u0000web"},
+      "refusal": {"kind": "value", "param": "text", "refusal": "control_character"}
+    },
+    {
+      "name": "refused: a newline",
+      "action": {"name": "note", "class": "free", "runner": "wsl", "program": "/usr/bin/printf", "args": ["%s\\n", "{text}"], "params": {"text": {"pattern": "(?s).+"}}},
+      "params": {"text": "lab-web\nid"},
+      "refusal": {"kind": "value", "param": "text", "refusal": "control_character"}
+    },
+    {
+      "name": "refused: a terminal escape",
+      "action": {"name": "note", "class": "free", "program": "C:/path/to/tools/note.exe", "args": ["{text}"], "params": {"text": {"pattern": "(?s).+"}}},
+      "params": {"text": "\u001b[31mred"},
+      "refusal": {"kind": "value", "param": "text", "refusal": "control_character"}
+    },
+    {
+      "name": "refused: a right-to-left override",
+      "action": {"name": "note", "class": "free", "runner": "wsl", "program": "/usr/bin/printf", "args": ["%s\\n", "{text}"], "params": {"text": {"pattern": ".+"}}},
+      "params": {"text": "alerting\u202elmy.yml"},
+      "refusal": {"kind": "value", "param": "text", "refusal": "format_character"}
+    },
+    {
+      "name": "refused: a zero-width space",
+      "action": {"name": "note", "class": "free", "program": "C:/path/to/tools/note.exe", "args": ["{text}"], "params": {"text": {"pattern": ".+"}}},
+      "params": {"text": "web\u200b01"},
+      "refusal": {"kind": "value", "param": "text", "refusal": "format_character"}
+    },
+    {
+      "name": "refused: a byte order mark",
+      "action": {"name": "note", "class": "free", "program": "C:/path/to/tools/note.exe", "args": ["{text}"], "params": {"text": {"pattern": ".+"}}},
+      "params": {"text": "\ufeffweb01"},
+      "refusal": {"kind": "value", "param": "text", "refusal": "format_character"}
+    },
+    {
+      "name": "refused: a bidi isolate",
+      "action": {"name": "note", "class": "free", "program": "C:/path/to/tools/note.exe", "args": ["{text}"], "params": {"text": {"pattern": ".+"}}},
+      "params": {"text": "\u2066web01\u2069"},
+      "refusal": {"kind": "value", "param": "text", "refusal": "format_character"}
+    },
+    {
+      "name": "refused: a tag character hiding ASCII",
+      "action": {"name": "note", "class": "free", "program": "C:/path/to/tools/note.exe", "args": ["{text}"], "params": {"text": {"pattern": ".+"}}},
+      "params": {"text": "web01\udb40\udc41"},
+      "refusal": {"kind": "value", "param": "text", "refusal": "format_character"}
+    },
+    {
+      "name": "refused: a parent segment with forward slashes",
+      "action": {"name": "note", "class": "free", "runner": "wsl", "program": "/usr/bin/printf", "args": ["%s\\n", "{text}"], "params": {"text": {"pattern": ".+"}}},
+      "params": {"text": "playbooks/../secrets.yml"},
+      "refusal": {"kind": "value", "param": "text", "refusal": "dot_segment"}
+    },
+    {
+      "name": "refused: a parent segment with backslashes",
+      "action": {"name": "note", "class": "free", "program": "C:/path/to/tools/note.exe", "args": ["{text}"], "params": {"text": {"pattern": ".+"}}},
+      "params": {"text": "playbooks\\..\\secrets.yml"},
+      "refusal": {"kind": "value", "param": "text", "refusal": "dot_segment"}
+    },
+    {
+      "name": "refused: a lone dot",
+      "action": {"name": "note", "class": "free", "program": "C:/path/to/tools/note.exe", "args": ["{text}"], "params": {"text": {"pattern": ".+"}}},
+      "params": {"text": "."},
+      "refusal": {"kind": "value", "param": "text", "refusal": "dot_segment"}
+    },
+    {
+      "name": "refused: a value outside the declared values",
+      "action": {"name": "check", "class": "free", "runner": "wsl", "program": "/home/user01/venv/bin/ansible-playbook", "args": ["--limit", "{group}", "playbooks/{playbook}"], "params": {"playbook": {"values": ["alerting.yml"]}, "group": {"pattern": "lab-[a-z0-9-]{1,30}"}}},
+      "params": {"playbook": "firewall.yml", "group": "lab-web"},
+      "refusal": {"kind": "value", "param": "playbook", "refusal": "not_in_values"}
+    },
+    {
+      "name": "refused: the pattern is anchored at both ends",
+      "action": {"name": "check", "class": "free", "runner": "wsl", "program": "/home/user01/venv/bin/ansible-playbook", "args": ["--limit", "{group}", "playbooks/{playbook}"], "params": {"playbook": {"values": ["alerting.yml"]}, "group": {"pattern": "lab-[a-z0-9-]{1,30}"}}},
+      "params": {"playbook": "alerting.yml", "group": "lab-web,prod-web"},
+      "refusal": {"kind": "value", "param": "group", "refusal": "pattern_mismatch"}
+    },
+    {
+      "name": "refused: an alternation stays inside the anchors",
+      "action": {"name": "note", "class": "free", "program": "C:/path/to/tools/note.exe", "args": ["{text}"], "params": {"text": {"pattern": "web01|db01"}}},
+      "params": {"text": "web01db01"},
+      "refusal": {"kind": "value", "param": "text", "refusal": "pattern_mismatch"}
+    }
+  ]
+}
