@@ -153,3 +153,25 @@ fn invalid_floor_is_reported_on_the_board() {
             .contains("unknown_key")
     );
 }
+
+#[test]
+fn contract_is_unknown_on_an_empty_sample_and_held_on_a_real_one() {
+    let env = TestEnv::new();
+    env.write_agents("[]");
+    let (_, empty) = board(&env);
+    assert!(
+        empty["contract"]["held"].is_null(),
+        "an empty list proves nothing"
+    );
+
+    env.write_agents(&agents_fixture(now_ms()));
+    let (_, full) = board(&env);
+    assert_eq!(full["contract"]["held"], true);
+
+    env.write_agents(
+        r#"[{"cwd":"C:/x","kind":"interactive","startedAt":1,"pid":1,"status":"busy"}]"#,
+    );
+    let (_, broken) = board(&env);
+    assert_eq!(broken["contract"]["held"], false);
+    assert_eq!(broken["contract"]["missing"][0], "sessionId");
+}

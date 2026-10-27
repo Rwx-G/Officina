@@ -146,6 +146,7 @@ impl Collector {
                 self.agents = Some(records);
                 self.agents_raw = Some(raw);
                 self.stale = None;
+                self.check_contract(now_ms);
             }
             Err(error) => {
                 let since_ms = self.stale.as_ref().map_or(now_ms, |s| s.since_ms);
@@ -154,44 +155,55 @@ impl Collector {
         }
     }
 
-    /// Runs the contract canary for the current `claude` version against the
-    /// last agents sample, stores the result and shows it on the board.
+    /// Reads the `claude` version, once per binary (a spawn), then re-runs the
+    /// contract check against the last sample (FR-12).
     pub fn refresh_contract(&mut self, now_ms: i64) {
         let Some(bin) = &self.claude else {
             return;
         };
-        let version = claude::version(bin, self.paths.claude_config_override.as_deref()).ok();
-        let Some(raw) = &self.agents_raw else {
-            self.contract.claude_version = version;
+        self.contract.claude_version =
+            claude::version(bin, self.paths.claude_config_override.as_deref()).ok();
+        self.check_contract(now_ms);
+    }
+
+    /// Checks the last agents sample against the contract. An empty sample
+    /// proves nothing, so it leaves the result unknown rather than "held".
+    /// The per-version record is written only when the result changes.
+    fn check_contract(&mut self, now_ms: i64) {
+        let Some(raw) = self.agents_raw.as_ref().filter(|r| !r.is_empty()) else {
             return;
         };
         let check = check_agents(raw);
-        self.contract = ContractView {
-            claude_version: version.clone(),
-            held: Some(check.held()),
-            missing: check.missing.clone(),
+        self.contract.held = Some(check.held());
+        self.contract.missing.clone_from(&check.missing);
+        let Some(version) = self.contract.claude_version.clone() else {
+            return;
         };
-        if let Some(version) = version {
-            let path = self.paths.state_dir().join("contract.json");
-            let mut store: ContractStore = fs::read_to_string(&path)
-                .ok()
-                .and_then(|c| serde_json::from_str(&c).ok())
-                .unwrap_or(ContractStore {
-                    schema: 1,
-                    ..Default::default()
-                });
-            store.versions.insert(
-                version,
-                ContractRecord {
-                    checked_at: now_ms,
-                    held: check.held(),
-                    missing: check.missing,
-                    not_observed: check.not_observed,
-                },
-            );
-            if let Ok(bytes) = serde_json::to_vec_pretty(&store) {
-                let _ = atomic_write(&path, &bytes);
-            }
+        let path = self.paths.state_dir().join("contract.json");
+        let mut store: ContractStore = fs::read_to_string(&path)
+            .ok()
+            .and_then(|c| serde_json::from_str(&c).ok())
+            .unwrap_or(ContractStore {
+                schema: 1,
+                ..Default::default()
+            });
+        let record = ContractRecord {
+            checked_at: now_ms,
+            held: check.held(),
+            missing: check.missing,
+            not_observed: check.not_observed,
+        };
+        let unchanged = store.versions.get(&version).is_some_and(|r| {
+            r.held == record.held
+                && r.missing == record.missing
+                && r.not_observed == record.not_observed
+        });
+        if unchanged {
+            return;
+        }
+        store.versions.insert(version, record);
+        if let Ok(bytes) = serde_json::to_vec_pretty(&store) {
+            let _ = atomic_write(&path, &bytes);
         }
     }
 
