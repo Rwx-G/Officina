@@ -19,8 +19,12 @@ export function installE2eMock(): void {
           return window.__officinaFocus?.[key] ?? { outcome: "focused" };
         }
         case "copy_attach_command": {
+          // Mirrors the backend: the command is built from the card's
+          // background id, never from the key.
           const key = (args as { key: string }).key;
-          return key.startsWith("bg:") ? `claude attach ${key.slice(3)}` : null;
+          const columns = window.__officinaBoard?.columns;
+          const card = columns && Object.values(columns).flat().find((c) => c.key === key);
+          return card?.background_id ? `claude attach ${card.background_id}` : null;
         }
         default:
           return null;

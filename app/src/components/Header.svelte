@@ -26,24 +26,26 @@
     <div class="pill" data-testid="waiting-pill" role="status">{waiting} waiting</div>
   {/if}
 
-  <div class="gauges">
-    <Gauge
-      label="5 h"
-      window={board?.quota.five_hour ?? null}
-      weekly={false}
-      writtenAtMs={board?.quota.written_at_ms ?? null}
-      staleAfterMs={board?.quota.stale_after_ms ?? 1_800_000}
-      nowMs={store.nowMs}
-    />
-    <Gauge
-      label="Week"
-      window={board?.quota.seven_day ?? null}
-      weekly={true}
-      writtenAtMs={board?.quota.written_at_ms ?? null}
-      staleAfterMs={board?.quota.stale_after_ms ?? 1_800_000}
-      nowMs={store.nowMs}
-    />
-  </div>
+  {#if board}
+    <div class="gauges">
+      <Gauge
+        label="5 h"
+        window={board.quota.five_hour}
+        weekly={false}
+        writtenAtMs={board.quota.written_at_ms}
+        staleAfterMs={board.quota.stale_after_ms}
+        nowMs={store.nowMs}
+      />
+      <Gauge
+        label="Week"
+        window={board.quota.seven_day}
+        weekly={true}
+        writtenAtMs={board.quota.written_at_ms}
+        staleAfterMs={board.quota.stale_after_ms}
+        nowMs={store.nowMs}
+      />
+    </div>
+  {/if}
 
   <div class="tools">
     {#if contract?.held === true}

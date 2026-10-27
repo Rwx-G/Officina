@@ -1,14 +1,12 @@
 import { expect, test } from "@playwright/test";
 import { calls, loadBoard, openBoard } from "./fixtures";
 
-const COLUMNS = ["needs_you", "your_turn", "working", "to_resume", "done"] as const;
-
 test.describe("busy morning", () => {
   test("every column shows the cards the backend classified, in order", async ({ page }) => {
     const board = loadBoard("busy");
     await openBoard(page, board);
-    for (const column of COLUMNS) {
-      await expect(page.getByTestId(`count-${column}`)).toHaveText(String(board.columns[column].length));
+    for (const [column, cards] of Object.entries(board.columns)) {
+      await expect(page.getByTestId(`count-${column}`)).toHaveText(String(cards.length));
     }
     const needsYou = page.getByTestId("column-needs_you").getByTestId("card");
     await expect(needsYou).toHaveCount(board.columns.needs_you.length);
@@ -129,6 +127,13 @@ test.describe("focus", () => {
     expect((await calls(page)).filter((c) => c.cmd === "focus")).toHaveLength(1);
   });
 
+  test("a held key opens a session once, not once per auto-repeat", async ({ page }) => {
+    const board = loadBoard("busy");
+    await openBoard(page, board);
+    for (let i = 0; i < 5; i++) await page.keyboard.press("1");
+    expect((await calls(page)).filter((c) => c.cmd === "focus")).toHaveLength(1);
+  });
+
   test("background cards copy their attach command", async ({ page, context }) => {
     await context.grantPermissions(["clipboard-read", "clipboard-write"]);
     const board = loadBoard("busy");
@@ -145,6 +150,7 @@ test.describe("degraded states", () => {
     await openBoard(page, loadBoard("stale"));
     await expect(page.getByTestId("stale-banner")).toContainText("claude exited with 1: fake failure");
     await expect(page.getByTestId("stale-banner")).toContainText("Showing the last known state");
+    await expect(page.getByTestId("stale-banner")).toContainText(/not refreshed since \d{2}:\d{2}/);
   });
 
   test("an empty workstation shows empty columns and no quota data", async ({ page }) => {

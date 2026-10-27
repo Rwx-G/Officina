@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { BoardStore } from "./lib/board.svelte";
-  import { ago } from "./lib/time";
+  import { clock } from "./lib/time";
   import Header from "./components/Header.svelte";
   import BoardColumn from "./components/BoardColumn.svelte";
 
@@ -17,6 +17,7 @@
   let board = $derived(store.board);
   let columns = $derived(board?.columns);
   let diagnostics = $derived(board?.diagnostics);
+  let doneWindow = $derived(board ? `${Math.round(board.done_window_ms / 3_600_000)} h` : "");
 
   function onKey(event: KeyboardEvent): void {
     if (event.ctrlKey || event.altKey || event.metaKey) return;
@@ -40,7 +41,7 @@
 
 {#if board?.stale}
   <div class="banner" role="alert" data-testid="stale-banner">
-    Session list not refreshed for {ago(board.stale.since_ms, store.nowMs).replace(" ago", "")}:
+    Session list not refreshed since {clock(board.stale.since_ms, store.nowMs)}:
     {board.stale.error}. Showing the last known state.
   </div>
 {/if}
@@ -79,7 +80,7 @@
     <BoardColumn
       column="to_resume"
       title="To resume"
-      hint="Ended or interrupted in the last 24 h."
+      hint="Ended or interrupted in the last {doneWindow}."
       cards={columns.to_resume}
       {store}
       collapseAfter={DONE_VISIBLE}
@@ -87,7 +88,7 @@
     <BoardColumn
       column="done"
       title="Done"
-      hint="Background sessions that finished in the last 24 h."
+      hint="Background sessions that finished in the last {doneWindow}."
       cards={columns.done}
       {store}
       collapseAfter={DONE_VISIBLE}

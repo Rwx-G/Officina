@@ -13,7 +13,7 @@
 
   const BADGE_TEXT = { unknown: "unknown", interrupted: "interrupted", stopped: "stopped", ended: "ended" } as const;
 
-  let shown = $derived(store.outcomes[card.key]);
+  let shown = $derived(store.outcomes[card.key]?.pending ? undefined : store.outcomes[card.key]);
   let outcomeText = $derived.by(() => {
     if (!shown) return null;
     const o = shown.outcome;

@@ -29,6 +29,7 @@ export async function openBoard(
     [board, focus] as const,
   );
   await page.goto("/");
+  if (board) await page.getByTestId("column-needs_you").waitFor();
 }
 
 export async function calls(page: Page): Promise<{ cmd: string; args: unknown }[]> {

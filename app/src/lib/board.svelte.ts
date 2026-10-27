@@ -6,11 +6,16 @@ import type { FocusOutcome } from "./generated/FocusOutcome";
 import * as ipc from "./ipc";
 
 export const OUTCOME_VISIBLE_MS = 10_000;
+/** A second focus of the same card within this delay is ignored: a held key
+ *  must not open one attach console per auto-repeat. */
+export const FOCUS_REPEAT_GUARD_MS = 1_500;
 const CLOCK_TICK_MS = 30_000;
 
 export interface ShownOutcome {
   outcome: FocusOutcome;
   atMs: number;
+  /** Set while the backend has not answered yet; nothing is shown. */
+  pending?: boolean;
 }
 
 export class BoardStore {
@@ -48,7 +53,15 @@ export class BoardStore {
   }
 
   async focus(card: Card): Promise<void> {
-    const outcome = await ipc.focus(card.key);
+    const last = this.outcomes[card.key];
+    if (last && Date.now() - last.atMs < FOCUS_REPEAT_GUARD_MS) return;
+    this.outcomes = { ...this.outcomes, [card.key]: { outcome: { outcome: "focused" }, atMs: Date.now(), pending: true } };
+    let outcome: FocusOutcome;
+    try {
+      outcome = await ipc.focus(card.key);
+    } catch (error) {
+      outcome = { outcome: "failed", detail: String(error) };
+    }
     const atMs = Date.now();
     this.outcomes = { ...this.outcomes, [card.key]: { outcome, atMs } };
     setTimeout(() => {
