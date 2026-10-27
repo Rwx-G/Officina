@@ -143,18 +143,6 @@ pub fn reduce_payload(
     })
 }
 
-/// Parses event buffer content, skipping blank, truncated or foreign lines.
-/// A hook killed mid-write leaves a partial last line; that must not hide the
-/// lines before it.
-pub fn parse_event_lines(content: &str) -> Vec<EventLine> {
-    content
-        .lines()
-        .filter(|line| !line.trim().is_empty())
-        .filter_map(|line| serde_json::from_str::<EventLine>(line).ok())
-        .filter(|line| line.v == EVENT_LINE_VERSION)
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -221,18 +209,5 @@ mod tests {
             .unwrap()
             .to_bounded_line();
         assert!(!small.contains("truncated"));
-    }
-
-    #[test]
-    fn truncated_and_foreign_lines_are_skipped() {
-        let good = serde_json::to_string(
-            &reduce_payload(&json!({"hook_event_name": "Stop"}), 1, true).unwrap(),
-        )
-        .unwrap();
-        let content =
-            format!("{good}\n{{\"v\":99,\"ts\":1,\"event\":\"Stop\"}}\n\n{{\"v\":1,\"ts\":2,\"ev");
-        let lines = parse_event_lines(&content);
-        assert_eq!(lines.len(), 1);
-        assert_eq!(lines[0].event, "Stop");
     }
 }

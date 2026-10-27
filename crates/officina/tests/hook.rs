@@ -4,13 +4,7 @@ mod common;
 
 use common::{TestEnv, read_events};
 
-const EVENTS: [&str; 5] = [
-    "SessionStart",
-    "SessionEnd",
-    "UserPromptSubmit",
-    "Stop",
-    "Notification",
-];
+use officina_host::doctor::HOOK_EVENTS as EVENTS;
 
 fn payload(event: &str) -> String {
     serde_json::json!({

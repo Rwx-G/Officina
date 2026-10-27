@@ -118,7 +118,7 @@ pub fn run(collector: &Collector, exe: &Path) -> Vec<Check> {
         None => checks.push(check(
             Level::Fail,
             "claude",
-            "not found in OFFICINA_CLAUDE_BIN, PATH or ~/.local/bin",
+            claude::ClaudeError::NotFound.to_string(),
         )),
         Some(bin) => {
             match claude::version(bin, config_dir) {
