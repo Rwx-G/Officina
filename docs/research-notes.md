@@ -160,6 +160,38 @@ Windows 11.
   its file was rewritten. The window process used no measurable CPU over 30 s
   idle.
 
+## E11. What Claude Code gives a stdio MCP server
+
+- **Verified (Claude Code 2.1.312, a spy server started through
+  `--mcp-config`).** The first request is `server/discover`, carrying
+  protocol `2026-07-28` in `_meta`. A server that answers it with JSON-RPC
+  error `-32601` (method not found) gets the classic handshake next:
+  `initialize` with `protocolVersion: "2025-11-25"`, then
+  `notifications/initialized`, `tools/list`, `tools/call`. Tool calls carry
+  `_meta.claudecode/toolUseId` and a `progressToken`.
+- **Verified.** The server runs in the session's project folder and its
+  environment carries `CLAUDE_CODE_SESSION_ID` (the session id the board
+  already knows), `CLAUDE_PROJECT_DIR` and `CLAUDE_PID`. It also carries
+  Claude Code's internal messaging socket and token: a server must never log
+  its environment wholesale.
+- **Verified.** Claude Code updated itself from 2.1.311 to 2.1.312 during the
+  day, without action from the author: the contract canary exists for this.
+
+## E12. PreToolUse decisions and permission modes
+
+- **Verified (2.1.312).** A `PreToolUse` hook on `Bash` answering
+  `permissionDecision: "deny"` blocks the command in every mode tried,
+  `bypassPermissions` included, and the session reports the hook's reason.
+- **Verified, background sessions.** `permissionDecision: "ask"` raises a
+  real permission prompt (`status: waiting, state: blocked, waitingFor:
+  "permission prompt"`). In `default` mode the prompt held for the 60 s
+  observed and the command did not run. In `bypassPermissions` mode the
+  prompt resolved by itself after 8 to 22 s and the command ran, twice out of
+  two. What resolved it is unknown.
+- Consequence: a human approval gate cannot rely on `ask`. It must deny, keep
+  the request in Officina, and let the same call through once the author
+  approved it in the window.
+
 ## E7. Configuration directory
 
 - **Documented.** `CLAUDE_CONFIG_DIR` redirects settings, session history and
