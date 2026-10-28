@@ -245,7 +245,8 @@ fn a_dripping_body_ends_at_the_timeout() {
 
 #[test]
 fn no_listener_exits_127() {
-    let url = format!("http://127.0.0.1:{}/", closed_port());
+    let closed = closed_port();
+    let url = format!("http://127.0.0.1:{}/", closed.port);
     let http = Http::new(&[("health", get(&url))]);
     let out = http.run(&["health"]);
     assert_eq!(out.status.code(), Some(127), "{:?}", stderr_lines(&out));

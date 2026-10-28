@@ -9,7 +9,7 @@
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
 /// What the stub answers to one connection.
@@ -93,6 +93,7 @@ impl Stub {
     /// Starts a stub answering connections with `replies` in order, the
     /// last one repeating.
     pub fn start(replies: Vec<Reply>) -> Stub {
+        let _binding = PORTS.lock().unwrap_or_else(PoisonError::into_inner);
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind 127.0.0.1:0");
         listener.set_nonblocking(true).unwrap();
         let addr = listener.local_addr().unwrap();
@@ -138,13 +139,30 @@ impl Drop for Stub {
     }
 }
 
-/// A port nothing listens on: bound, then released.
-pub fn closed_port() -> u16 {
-    TcpListener::bind("127.0.0.1:0")
+/// Taken by [`Stub::start`] to bind, and held by a [`ClosedPort`]: tests run
+/// in parallel, and a port released by [`closed_port`] is the next one the
+/// system hands a stub of the same binary.
+static PORTS: Mutex<()> = Mutex::new(());
+
+/// A port nothing listens on, while this value lives.
+pub struct ClosedPort {
+    pub port: u16,
+    _no_stub_binds: MutexGuard<'static, ()>,
+}
+
+/// A port nothing listens on: bound, then released, with no stub of this
+/// test binary able to bind until the [`ClosedPort`] is dropped.
+pub fn closed_port() -> ClosedPort {
+    let held = PORTS.lock().unwrap_or_else(PoisonError::into_inner);
+    let port = TcpListener::bind("127.0.0.1:0")
         .unwrap()
         .local_addr()
         .unwrap()
-        .port()
+        .port();
+    ClosedPort {
+        port,
+        _no_stub_binds: held,
+    }
 }
 
 fn serve(listener: &TcpListener, replies: &[Reply], state: &State) {
