@@ -581,17 +581,51 @@ fn today_journal(relay: &RelayHome) -> PathBuf {
     relay.journal_dir().join(event_file_name(now_ms()))
 }
 
-/// The shared slots of one collector thread, where it emits, and the bytes
-/// it last emitted.
+/// One payload the collector shares with the window's commands and emits:
+/// its slot, and the bytes it last emitted (quality audit M7: one shape
+/// for the board, the relay view and the registry view).
+struct Published<T> {
+    slot: Arc<RwLock<Option<T>>>,
+    last: Vec<u8>,
+}
+
+impl<T: Clone + serde::Serialize> Published<T> {
+    fn new(slot: &Arc<RwLock<Option<T>>>) -> Published<T> {
+        Published {
+            slot: Arc::clone(slot),
+            last: Vec::new(),
+        }
+    }
+
+    /// Shares `value`, and says whether to emit it: when `comparable`, the
+    /// value with what does not count for a change cleared, serialises to
+    /// other bytes than the last emitted, or when `force`.
+    fn share(&mut self, value: &T, comparable: &T, force: bool) -> bool {
+        let bytes = serde_json::to_vec(comparable).unwrap_or_default();
+        if let Ok(mut slot) = self.slot.write() {
+            *slot = Some(value.clone());
+        }
+        if force || bytes != self.last {
+            self.last = bytes;
+            return true;
+        }
+        false
+    }
+
+    /// What was last shared.
+    fn current(&self) -> Option<T> {
+        self.slot.read().ok().and_then(|slot| slot.clone())
+    }
+}
+
+/// The payloads of one collector thread, the shared paths, and where it
+/// emits.
 struct Outputs<E> {
-    board: Arc<RwLock<Option<Board>>>,
-    relay: Arc<RwLock<Option<RelayView>>>,
-    registry: Arc<RwLock<Option<RegistryView>>>,
+    board: Published<Board>,
+    relay: Published<RelayView>,
+    registry: Published<RegistryView>,
     paths: Arc<RwLock<Paths>>,
     emit: E,
-    last_board: Vec<u8>,
-    last_relay: Vec<u8>,
-    last_registry: Vec<u8>,
 }
 
 /// Starts the collector thread. `emit` receives each board, relay view and
@@ -604,14 +638,11 @@ pub fn spawn(mut collector: Collector, emit: impl Emit) -> std::io::Result<Watch
     let registry = Arc::new(RwLock::new(None));
     let paths = Arc::new(RwLock::new(collector.paths().clone()));
     let mut outputs = Outputs {
-        board: Arc::clone(&board),
-        relay: Arc::clone(&relay),
-        registry: Arc::clone(&registry),
+        board: Published::new(&board),
+        relay: Published::new(&relay),
+        registry: Published::new(&registry),
         paths: Arc::clone(&paths),
         emit,
-        last_board: Vec::new(),
-        last_relay: Vec::new(),
-        last_registry: Vec::new(),
     };
     let thread = std::thread::Builder::new()
         .name("collector".into())
@@ -777,18 +808,28 @@ fn publish_both<E: Emit>(
     outputs: &mut Outputs<E>,
     force: bool,
 ) {
-    let board = collector.board(now_ms());
-    let view = registry.view(Some(&board), &collector.paths().events_dir(), now_ms());
-    publish(board, outputs);
-    publish_registry(view, outputs, force);
+    let now = now_ms();
+    rebuild_and_publish(collector, registry, outputs, force, now);
     // After each view build (D-70): what it archived, or its switch turned
     // off, shows in the next view at once.
-    if registry.auto_archive(now_ms()) {
-        let board = collector.board(now_ms());
-        let view = registry.view(Some(&board), &collector.paths().events_dir(), now_ms());
-        publish(board, outputs);
-        publish_registry(view, outputs, false);
+    if registry.auto_archive(now) {
+        rebuild_and_publish(collector, registry, outputs, false, now_ms());
     }
+}
+
+/// Builds the board and the registry view at `now`, one time for both, and
+/// publishes each.
+fn rebuild_and_publish<E: Emit>(
+    collector: &Collector,
+    registry: &mut WindowRegistry,
+    outputs: &mut Outputs<E>,
+    force: bool,
+    now: i64,
+) {
+    let board = collector.board(now);
+    let view = registry.view(Some(&board), &collector.paths().events_dir(), now);
+    publish(board, outputs);
+    publish_registry(view, outputs, force);
 }
 
 /// Runs one author request on the registry's writer (AD-38), unless its
@@ -809,7 +850,7 @@ fn answer_author<E: Emit>(
     let writes = !matches!(request.command, AuthorCommand::ListArchived);
     let reply = match request.command {
         AuthorCommand::ListArchived => {
-            let board = outputs.board.read().ok().and_then(|slot| slot.clone());
+            let board = outputs.board.current();
             registry
                 .archived(board.as_ref())
                 .map(AuthorAnswer::Archived)
@@ -902,12 +943,7 @@ fn pump_triage<E: Emit>(
 fn publish<E: Emit>(board: Board, outputs: &mut Outputs<E>) {
     let mut comparable = board.clone();
     comparable.generated_at_ms = 0;
-    let bytes = serde_json::to_vec(&comparable).unwrap_or_default();
-    if let Ok(mut slot) = outputs.board.write() {
-        *slot = Some(board.clone());
-    }
-    if bytes != outputs.last_board {
-        outputs.last_board = bytes;
+    if outputs.board.share(&board, &comparable, false) {
         outputs.emit.board(&board);
     }
 }
@@ -915,12 +951,7 @@ fn publish<E: Emit>(board: Board, outputs: &mut Outputs<E>) {
 /// Shares `view` with the window's commands, and emits it when its bytes
 /// differ from the last one emitted (AD-5, AD-35).
 fn publish_relay<E: Emit>(view: RelayView, outputs: &mut Outputs<E>) {
-    let bytes = serde_json::to_vec(&view).unwrap_or_default();
-    if let Ok(mut slot) = outputs.relay.write() {
-        *slot = Some(view.clone());
-    }
-    if bytes != outputs.last_relay {
-        outputs.last_relay = bytes;
+    if outputs.relay.share(&view, &view, false) {
         outputs.emit.relay(&view);
     }
 }
@@ -930,12 +961,7 @@ fn publish_relay<E: Emit>(view: RelayView, outputs: &mut Outputs<E>) {
 fn publish_registry<E: Emit>(view: RegistryView, outputs: &mut Outputs<E>, force: bool) {
     let mut comparable = view.clone();
     comparable.generated_at_ms = 0;
-    let bytes = serde_json::to_vec(&comparable).unwrap_or_default();
-    if let Ok(mut slot) = outputs.registry.write() {
-        *slot = Some(view.clone());
-    }
-    if force || bytes != outputs.last_registry {
-        outputs.last_registry = bytes;
+    if outputs.registry.share(&view, &comparable, force) {
         outputs.emit.registry(&view);
     }
 }
