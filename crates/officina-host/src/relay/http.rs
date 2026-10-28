@@ -1,12 +1,15 @@
 //! Sends an HTTP action's request (AD-36, D-35, D-36) with `ureq` over
 //! rustls and the platform verifier, so the Windows store, an enterprise CA
-//! included, decides trust and no root set is bundled. No redirect is
+//! included, decides trust and no root set is bundled. The crypto provider
+//! is ring, given to ureq here: without one ureq would panic at the first
+//! request. No redirect is
 //! followed, no proxy is used (the environment's proxy variables are
 //! ignored), the whole exchange is bounded by the plan's timeout, the body
 //! is read up to the plan's cap and the connection is then dropped; `HEAD`
 //! reads no body. The request headers are never logged.
 
 use std::io::{self, Read, Write};
+use std::sync::Arc;
 use std::time::Duration;
 
 use officina_core::relay::StreamHash;
@@ -51,6 +54,9 @@ fn agent(plan: &HttpPlan) -> ureq::Agent {
         .tls_config(
             TlsConfig::builder()
                 .root_certs(RootCerts::PlatformVerifier)
+                .unversioned_rustls_crypto_provider(Arc::new(
+                    rustls::crypto::ring::default_provider(),
+                ))
                 .build(),
         )
         .build()

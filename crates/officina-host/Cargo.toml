@@ -15,10 +15,14 @@ serde_json.workspace = true
 thiserror = "2.0.21"
 # HTTP actions (AD-36): rustls with ring and the platform verifier, so the
 # Windows store and an enterprise CA are trusted and no root set is bundled
-# (`webpki-roots` stays out). ureq's stable `rustls` feature pulls
-# `webpki-roots`, so its unstable `rustls-no-provider` and `_ring` are named
-# instead: pinned, since ureq may change them in a minor version.
-ureq = { version = "=3.5.0", default-features = false, features = ["rustls-no-provider", "_ring", "platform-verifier"] }
+# (`webpki-roots` stays out, banned in deny.toml). ureq's stable `rustls`
+# feature pulls `webpki-roots`, so its unstable `rustls-no-provider` is named
+# instead: pinned, since ureq may change it in a minor version. The ring
+# provider is rustls's own feature, given to ureq by `relay::http`, not
+# ureq's internal `_ring`. Canaries: `tests/relay_http.rs` (a TLS handshake)
+# and CI's "No bundled roots" step.
+ureq = { version = "=3.5.0", default-features = false, features = ["rustls-no-provider", "platform-verifier"] }
+rustls = { version = "0.23.46", default-features = false, features = ["ring"] }
 
 [lints]
 workspace = true
