@@ -146,12 +146,7 @@ pub fn approve_catalogue(
         Some(current.hash.clone()),
     );
     write_json(&home.known_projects_file(), &known)?;
-    let approved = ApprovedCatalogue {
-        approved_at_ms: now_ms(),
-        hash: current.hash,
-        floor_file: Some(floor_path.to_string_lossy().into_owned()),
-        canonical: current.canonical,
-    };
+    let approved = ApprovedCatalogue::approving(&current, &floor_path.to_string_lossy(), now_ms());
     write_json(&home.approved_file(), &approved)?;
     update_record(home, approved.approved_at_ms, |record| {
         record.approved_hash = Some(approved.hash.clone());

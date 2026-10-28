@@ -7,6 +7,7 @@
 //! hand-built plan over plain `http` to the stub, bypassing the catalogue's
 //! rule on purpose.
 
+mod common;
 #[path = "../../../tests/support/fake_store.rs"]
 mod fake_store;
 #[path = "../../../tests/support/stub_server.rs"]
@@ -16,6 +17,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+use common::TestHome;
 use fake_store::{FakeStore, MARKER_SECRET};
 use officina_core::relay::approvals::FileKind;
 use officina_core::relay::http::{CredentialBinding, HttpMethod, HttpPlan};
@@ -34,23 +36,22 @@ use stub_server::{Reply, Stub};
 /// HTTP action sending the credential `monitoring` to the stub's address
 /// over `https`, of class `class`.
 struct Relay {
-    root: tempfile::TempDir,
+    test: TestHome,
     home: RelayHome,
 }
 
 impl Relay {
     fn new(stub: &Stub, class: &str) -> Relay {
-        let root = tempfile::tempdir().unwrap();
-        let home = RelayHome::new(root.path().join("officina-home"), None);
-        let relay = Relay { root, home };
+        let test = TestHome::new();
+        let home = test.relay(None);
+        let relay = Relay { test, home };
         std::fs::create_dir_all(relay.project()).unwrap();
         let floor = format!(
             "schema = 2\n[[project]]\nname = \"monitoring\"\npath = \"{}\"\nactions = [\"health\"]\n[[action]]\nname = \"health\"\nkind = \"http\"\nclass = \"{class}\"\nmethod = \"GET\"\nurl = \"https://{}/api/health\"\ncredential = \"monitoring\"\ntimeout_s = 5\n[[credential]]\nname = \"monitoring\"\nhosts = [\"127.0.0.1\"]\nheader = \"Authorization\"\nscheme = \"Bearer\"\n",
             relay.project().to_string_lossy().replace('\\', "/"),
             stub.addr,
         );
-        std::fs::create_dir_all(relay.home.officina_home()).unwrap();
-        std::fs::write(relay.home.default_floor(), floor).unwrap();
+        relay.test.write(&relay.home.default_floor(), &floor);
         let loaded = load_relay_floor(&relay.home.default_floor()).unwrap();
         assert!(
             loaded.catalogue.issues.is_empty(),
@@ -62,7 +63,7 @@ impl Relay {
     }
 
     fn project(&self) -> PathBuf {
-        self.root.path().join("work").join("monitoring")
+        self.test.root.join("work").join("monitoring")
     }
 
     /// `officina run health` with `store`, the response captured; what
@@ -308,7 +309,7 @@ fn secret_never_leaves_the_header() {
     let view = officina_host::relay::view::read_view(&relay.home, now_ms()).unwrap();
     captured.push(serde_json::to_vec(&view).unwrap());
     let mut files = Vec::new();
-    files_under(relay.root.path(), &mut files);
+    files_under(&relay.test.root, &mut files);
     assert!(
         files
             .iter()

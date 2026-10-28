@@ -8,82 +8,52 @@ mod common;
 #[path = "../../../tests/support/stub_server.rs"]
 mod stub_server;
 
-use std::path::PathBuf;
 use std::process::Output;
 use std::time::{Duration, Instant};
 
-use common::TestEnv;
+use common::relay::{Relay, stderr_lines};
 use officina_core::relay::http::HttpMethod;
-use officina_core::relay::journal::{JournalEntry, RunFinished, RunOutcome, RunStarted};
+use officina_core::relay::journal::RunOutcome;
 use officina_core::relay::sha256_hex;
 use stub_server::{Reply, Stub, closed_port};
 
-/// An approved relay whose project `monitoring` lists the given HTTP
-/// actions, each a `(name, table body)` pair.
-struct Http {
-    env: TestEnv,
-}
+/// The shared relay harness, its project listing the given HTTP actions.
+type Http = Relay;
 
-impl Http {
-    fn new(actions: &[(&str, String)]) -> Http {
-        let env = TestEnv::new();
-        let http = Http { env };
-        std::fs::create_dir_all(http.project()).unwrap();
+impl Relay {
+    /// An approved relay whose project `monitoring` lists the given HTTP
+    /// actions, each a `(name, table body)` pair.
+    fn new(actions: &[(&str, String)]) -> Relay {
         let names: Vec<String> = actions.iter().map(|(n, _)| format!("\"{n}\"")).collect();
         let mut floor = format!(
-            "schema = 2\n[[project]]\nname = \"monitoring\"\npath = \"{}\"\nactions = [{}]\n",
-            http.project().to_string_lossy().replace('\\', "/"),
+            "schema = 2
+[[project]]
+name = \"monitoring\"
+path = \"{{project}}\"
+actions = [{}]
+",
             names.join(", ")
         );
         for (name, body) in actions {
             floor.push_str(&format!(
-                "\n[[action]]\nname = \"{name}\"\nkind = \"http\"\nclass = \"free\"\n{body}"
+                "
+[[action]]
+name = \"{name}\"
+kind = \"http\"
+class = \"free\"
+{body}"
             ));
         }
-        http.env.write_floor(&floor);
-        http.env.approve();
-        http
+        Relay::approved(&floor)
     }
 
-    fn project(&self) -> PathBuf {
-        self.env.root.path().join("work").join("monitoring")
-    }
-
+    /// `officina run <args>` with `vars` added to its environment.
     fn run_with(&self, args: &[&str], vars: &[(&str, String)]) -> Output {
-        let mut full = vec!["run"];
-        full.extend_from_slice(args);
-        let mut cmd = self.env.officina(&full);
-        cmd.current_dir(self.project());
+        let mut cmd = self.command(&self.project(), args);
         for (key, value) in vars {
             cmd.env(key, value);
         }
         common::run_with(cmd, b"")
-    }
-
-    fn run(&self, args: &[&str]) -> Output {
-        self.run_with(args, &[])
-    }
-
-    fn started(&self) -> Vec<RunStarted> {
-        self.env
-            .journal_after_approvals()
-            .into_iter()
-            .filter_map(|e| match e {
-                JournalEntry::RunStarted(s) => Some(s),
-                _ => None,
-            })
-            .collect()
-    }
-
-    fn finished(&self) -> Vec<RunFinished> {
-        self.env
-            .journal_after_approvals()
-            .into_iter()
-            .filter_map(|e| match e {
-                JournalEntry::RunFinished(f) => Some(f),
-                _ => None,
-            })
-            .collect()
     }
 }
 
@@ -93,13 +63,6 @@ fn get(url: &str) -> String {
 
 fn stdout(out: &Output) -> String {
     String::from_utf8_lossy(&out.stdout).into_owned()
-}
-
-fn stderr_lines(out: &Output) -> Vec<String> {
-    String::from_utf8_lossy(&out.stderr)
-        .lines()
-        .map(str::to_owned)
-        .collect()
 }
 
 #[test]

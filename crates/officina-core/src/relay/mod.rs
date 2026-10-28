@@ -18,6 +18,24 @@ pub mod shell;
 pub mod url;
 pub mod view;
 
+#[cfg(test)]
+pub(crate) mod fixtures {
+    //! What the relay's unit tests share.
+
+    use std::collections::BTreeMap;
+
+    /// Where the unit tests' floors are read.
+    pub const FLOOR_PATH: &str = "C:/path/to/officina.toml";
+
+    /// Parameters from `(name, value)` pairs.
+    pub fn params(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
+        pairs
+            .iter()
+            .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+            .collect()
+    }
+}
+
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 

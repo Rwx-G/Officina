@@ -639,23 +639,11 @@ mod tests {
     use super::*;
     use crate::relay::catalogue::load;
 
-    const FLOOR_PATH: &str = "C:/path/to/officina.toml";
+    use crate::relay::fixtures::{FLOOR_PATH, params};
     const FLOOR: &str = "schema = 2\n[[project]]\nname = \"lab\"\npath = \"Lab\"\nactions = [\"probe\", \"apply\"]\n[[project]]\nname = \"notes\"\npath = \"Notes\"\nautonomy = \"free\"\nactions = [\"probe\"]\n[[action]]\nname = \"probe\"\ndescription = \"Reads one host\"\nclass = \"free\"\nprogram = \"C:/path/to/tool.exe\"\nargs = [\"--host\", \"{host}\"]\n[action.params.host]\nvalues = [\"web01\", \"db01\"]\n[[action]]\nname = \"apply\"\nclass = \"human\"\nprogram = \"C:/path/to/tool.exe\"\nargs = [\"{group}\"]\n[action.params.group]\npattern = \"lab-[a-z]+\"\n";
 
     fn approved_of(relay: &RelayFloor) -> ApprovedCatalogue {
-        ApprovedCatalogue {
-            approved_at_ms: 1,
-            hash: relay.hash.clone(),
-            floor_file: Some(FLOOR_PATH.to_owned()),
-            canonical: relay.canonical.clone(),
-        }
-    }
-
-    fn params(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
-        pairs
-            .iter()
-            .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
-            .collect()
+        ApprovedCatalogue::approving(relay, FLOOR_PATH, 1)
     }
 
     fn inputs<'a>(

@@ -2,9 +2,12 @@
 //! AD-24, AD-34, D-8, D-15, D-26). Built only with `window-authority`, like
 //! the window.
 
-use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+mod common;
 
+use std::collections::BTreeMap;
+use std::path::Path;
+
+use common::TestHome;
 use officina_core::quota::normalise_path;
 use officina_core::relay::StopFlag;
 use officina_core::relay::approvals::{
@@ -22,39 +25,17 @@ use officina_host::relay::journal::{JournalLock, read_recent};
 
 const FLOOR: &str = "schema = 2\n\n[[project]]\nname = \"lab\"\npath = \"Lab\"\nactions = [\"probe\"]\n\n[[project]]\nname = \"notes\"\npath = \"Notes\"\nautonomy = \"free\"\n\n[[action]]\nname = \"probe\"\nclass = \"free\"\nprogram = \"C:/path/to/tool.exe\"\nargs = [\"{host}\"]\n\n[action.params.host]\nvalues = [\"web01\"]\n";
 
-struct Home {
-    _dir: tempfile::TempDir,
-    root: PathBuf,
-}
-
-impl Home {
-    fn new() -> Home {
-        let dir = tempfile::tempdir().unwrap();
-        let root = dir.path().to_path_buf();
-        Home { _dir: dir, root }
-    }
-
-    fn relay(&self, floor_override: Option<PathBuf>) -> RelayHome {
-        RelayHome::new(self.root.join("officina-home"), floor_override)
-    }
-
-    fn write(&self, path: &Path, content: &str) {
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(path, content).unwrap();
-    }
-
-    /// The hash the window would display for the floor at `path`.
-    fn displayed(&self, path: &Path) -> String {
-        load_relay_floor(path).unwrap().hash
-    }
+/// The hash the window would display for the floor at `path`.
+fn displayed(path: &Path) -> String {
+    load_relay_floor(path).unwrap().hash
 }
 
 #[test]
 fn approves_the_displayed_hash() {
-    let home = Home::new();
+    let home = TestHome::new();
     let relay = home.relay(None);
     home.write(&relay.default_floor(), FLOOR);
-    let displayed = home.displayed(&relay.default_floor());
+    let displayed = displayed(&relay.default_floor());
 
     let approved = approve_catalogue(&relay, &displayed).unwrap();
     assert_eq!(approved.hash, displayed);
@@ -76,10 +57,10 @@ fn approves_the_displayed_hash() {
 
 #[test]
 fn edited_floor_between_display_and_click_is_not_approved() {
-    let home = Home::new();
+    let home = TestHome::new();
     let relay = home.relay(None);
     home.write(&relay.default_floor(), FLOOR);
-    let displayed = home.displayed(&relay.default_floor());
+    let displayed = displayed(&relay.default_floor());
     home.write(
         &relay.default_floor(),
         &FLOOR.replace("C:/path/to/tool.exe", "C:/Windows/System32/cmd.exe"),
@@ -94,7 +75,7 @@ fn edited_floor_between_display_and_click_is_not_approved() {
 
 #[test]
 fn invalid_actions_do_not_block_approval() {
-    let home = Home::new();
+    let home = TestHome::new();
     let relay = home.relay(None);
     let with_broken = format!(
         "{FLOOR}\n[[action]]\nname = \"broken\"\nclass = \"free\"\nprogram = \"relative.exe\"\n"
@@ -107,7 +88,7 @@ fn invalid_actions_do_not_block_approval() {
     assert!(!approved.canonical.actions.contains_key("broken"));
     home.write(&relay.default_floor(), FLOOR);
     assert_eq!(
-        home.displayed(&relay.default_floor()),
+        displayed(&relay.default_floor()),
         approved.hash,
         "an invalid action is no part of the approved meaning"
     );
@@ -115,7 +96,7 @@ fn invalid_actions_do_not_block_approval() {
 
 #[test]
 fn approval_hashes_the_relay_floor_not_another() {
-    let home = Home::new();
+    let home = TestHome::new();
     let window_floor = home.root.join("window").join("officina.toml");
     let relay_floor = home.root.join("relay").join("officina.toml");
     home.write(&window_floor, FLOOR);
@@ -125,11 +106,11 @@ fn approval_hashes_the_relay_floor_not_another() {
     );
     let relay = home.relay(Some(relay_floor.clone()));
 
-    let error = approve_catalogue(&relay, &home.displayed(&window_floor)).unwrap_err();
+    let error = approve_catalogue(&relay, &displayed(&window_floor)).unwrap_err();
     assert!(matches!(error, AuthorityError::CatalogueChanged { .. }));
     assert_eq!(relay.read_approved(), ApprovedState::Missing);
 
-    let approved = approve_catalogue(&relay, &home.displayed(&relay_floor)).unwrap();
+    let approved = approve_catalogue(&relay, &displayed(&relay_floor)).unwrap();
     assert_eq!(
         approved.canonical.floor_path,
         normalise_path(&relay_floor.to_string_lossy())
@@ -146,11 +127,11 @@ fn approval_hashes_the_relay_floor_not_another() {
 
 #[test]
 fn approved_floor_is_read_back_from_the_path_as_given() {
-    let home = Home::new();
+    let home = TestHome::new();
     let floor = home.root.join("Mixed").join("Case").join("Officina.toml");
     home.write(&floor, FLOOR);
     let relay = home.relay(Some(floor.clone()));
-    let approved = approve_catalogue(&relay, &home.displayed(&floor)).unwrap();
+    let approved = approve_catalogue(&relay, &displayed(&floor)).unwrap();
     assert_eq!(
         approved.floor_file.as_deref(),
         Some(floor.to_string_lossy().as_ref())
@@ -168,10 +149,10 @@ fn approved_floor_is_read_back_from_the_path_as_given() {
 
 #[test]
 fn approval_records_known_projects() {
-    let home = Home::new();
+    let home = TestHome::new();
     let relay = home.relay(None);
     home.write(&relay.default_floor(), FLOOR);
-    let approved = approve_catalogue(&relay, &home.displayed(&relay.default_floor())).unwrap();
+    let approved = approve_catalogue(&relay, &displayed(&relay.default_floor())).unwrap();
 
     let known = relay.read_known_projects().unwrap();
     assert_eq!(known.approved_hash.as_deref(), Some(approved.hash.as_str()));
@@ -197,10 +178,10 @@ fn approvals_journaled(relay: &RelayHome) -> Vec<CatalogueApproved> {
 
 #[test]
 fn approval_is_journaled_once_with_previous_hash() {
-    let home = Home::new();
+    let home = TestHome::new();
     let relay = home.relay(None);
     home.write(&relay.default_floor(), FLOOR);
-    let first = approve_catalogue(&relay, &home.displayed(&relay.default_floor())).unwrap();
+    let first = approve_catalogue(&relay, &displayed(&relay.default_floor())).unwrap();
     assert_eq!(
         approvals_journaled(&relay),
         [CatalogueApproved {
@@ -213,7 +194,7 @@ fn approval_is_journaled_once_with_previous_hash() {
         &relay.default_floor(),
         &FLOOR.replace("values = [\"web01\"]", "values = [\"web01\", \"db01\"]"),
     );
-    let second = approve_catalogue(&relay, &home.displayed(&relay.default_floor())).unwrap();
+    let second = approve_catalogue(&relay, &displayed(&relay.default_floor())).unwrap();
     let journaled = approvals_journaled(&relay);
     assert_eq!(journaled.len(), 2, "one line per approval");
     assert_eq!(
@@ -235,11 +216,11 @@ fn approval_is_journaled_once_with_previous_hash() {
 
 #[test]
 fn a_locked_journal_approves_nothing() {
-    let home = Home::new();
+    let home = TestHome::new();
     let relay = home.relay(None);
     home.write(&relay.default_floor(), FLOOR);
     let held = JournalLock::acquire(&relay).unwrap();
-    let error = approve_catalogue(&relay, &home.displayed(&relay.default_floor())).unwrap_err();
+    let error = approve_catalogue(&relay, &displayed(&relay.default_floor())).unwrap_err();
     assert!(matches!(error, AuthorityError::Journal(_)), "{error}");
     assert!(error.to_string().starts_with(AUTHORITY_MARKER));
     assert_eq!(relay.read_approved(), ApprovedState::Missing);
@@ -249,7 +230,7 @@ fn a_locked_journal_approves_nothing() {
 
 #[test]
 fn a_missing_floor_is_an_error_that_writes_nothing() {
-    let home = Home::new();
+    let home = TestHome::new();
     let relay = home.relay(None);
     let error = approve_catalogue(&relay, "00").unwrap_err();
     assert!(matches!(error, AuthorityError::Floor(_)));
@@ -274,7 +255,7 @@ fn stop_lines(relay: &RelayHome) -> Vec<JournalEntry> {
 
 #[test]
 fn stop_writes_the_flag_and_journals() {
-    let home = Home::new();
+    let home = TestHome::new();
     let relay = home.relay(None);
     let before = now_ms();
     assert!(set_relay_stopped(&relay, true).unwrap());
@@ -294,7 +275,7 @@ fn stop_writes_the_flag_and_journals() {
 
 #[test]
 fn resume_deletes_the_flag_and_journals() {
-    let home = Home::new();
+    let home = TestHome::new();
     let relay = home.relay(None);
     set_relay_stopped(&relay, true).unwrap();
     assert!(set_relay_stopped(&relay, false).unwrap());
@@ -312,7 +293,7 @@ fn resume_deletes_the_flag_and_journals() {
 
 #[test]
 fn stopping_twice_journals_once() {
-    let home = Home::new();
+    let home = TestHome::new();
     let relay = home.relay(None);
     let first = std::thread::scope(|scope| {
         let calls: Vec<_> = (0..4)
@@ -340,7 +321,7 @@ fn stopping_twice_journals_once() {
 
 #[test]
 fn a_locked_journal_stops_nothing() {
-    let home = Home::new();
+    let home = TestHome::new();
     let relay = home.relay(None);
     let held = JournalLock::acquire(&relay).unwrap();
     let error = set_relay_stopped(&relay, true).unwrap_err();
@@ -355,10 +336,10 @@ fn a_locked_journal_stops_nothing() {
 const HUMAN_FLOOR: &str = "schema = 2\n\n[[project]]\nname = \"lab\"\npath = \"Lab\"\nactions = [\"restart\"]\n\n[[action]]\nname = \"restart\"\nclass = \"human\"\nprogram = \"C:/path/to/tool.exe\"\nargs = [\"{service}\"]\n\n[action.params.service]\nvalues = [\"web01\", \"db01\"]\n";
 
 /// An approved relay with one `human` action.
-fn human_relay(home: &Home) -> RelayHome {
+fn human_relay(home: &TestHome) -> RelayHome {
     let relay = home.relay(None);
     home.write(&relay.default_floor(), HUMAN_FLOOR);
-    approve_catalogue(&relay, &home.displayed(&relay.default_floor())).unwrap();
+    approve_catalogue(&relay, &displayed(&relay.default_floor())).unwrap();
     relay
 }
 
@@ -416,7 +397,7 @@ fn decision_file(relay: &RelayHome, id: &str, kind: FileKind) -> Option<Decision
 
 #[test]
 fn decide_approves_a_pending_request() {
-    let home = Home::new();
+    let home = TestHome::new();
     let relay = human_relay(&home);
     let (id, request) = write_request(&relay, "web01", 60_000);
     decide_approval(&relay, &id, true).unwrap();
@@ -452,7 +433,7 @@ fn decide_approves_a_pending_request() {
 
 #[test]
 fn decide_refuses_unknown_decided_expired_and_stale_hash() {
-    let home = Home::new();
+    let home = TestHome::new();
     let relay = human_relay(&home);
     let refused = |id: &str| match decide_approval(&relay, id, true) {
         Err(AuthorityError::Decide(refusal)) => refusal,
@@ -476,7 +457,7 @@ fn decide_refuses_unknown_decided_expired_and_stale_hash() {
         &relay.default_floor(),
         &HUMAN_FLOOR.replace("\"web01\", \"db01\"", "\"web01\", \"db01\", \"cache01\""),
     );
-    approve_catalogue(&relay, &home.displayed(&relay.default_floor())).unwrap();
+    approve_catalogue(&relay, &displayed(&relay.default_floor())).unwrap();
     let error = decide_approval(&relay, &stale, true).unwrap_err();
     assert!(error.to_string().starts_with(AUTHORITY_MARKER));
     assert!(
@@ -495,7 +476,7 @@ fn decide_refuses_unknown_decided_expired_and_stale_hash() {
 
 #[test]
 fn decide_refuses_a_forged_request() {
-    let home = Home::new();
+    let home = TestHome::new();
     let relay = human_relay(&home);
     let (real, request) = write_request(&relay, "db01", 60_000);
     // A harmless stored command under the key of another parameter set.
@@ -534,7 +515,7 @@ fn anomalies_now(relay: &RelayHome) -> Vec<officina_core::relay::record::Anomaly
 fn a_foreign_approval_file_is_an_anomaly() {
     use officina_core::relay::record::AnomalyKind;
     use officina_host::relay::authority::acknowledge_anomaly;
-    let home = Home::new();
+    let home = TestHome::new();
     let relay = human_relay(&home);
     let (given, _) = write_request(&relay, "web01", 60_000);
     decide_approval(&relay, &given, true).unwrap();
@@ -575,7 +556,7 @@ fn a_foreign_approval_file_is_an_anomaly() {
 fn a_run_without_a_window_decision_is_an_anomaly() {
     use officina_core::relay::journal::RunStarted;
     use officina_core::relay::record::AnomalyKind;
-    let home = Home::new();
+    let home = TestHome::new();
     let relay = human_relay(&home);
     let start = |approval_id: &str| {
         JournalEntry::RunStarted(RunStarted {

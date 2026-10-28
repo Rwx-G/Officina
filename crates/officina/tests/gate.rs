@@ -6,6 +6,7 @@ mod common;
 
 use std::process::Output;
 
+use common::relay::Relay;
 use common::{TestEnv, read_events};
 use officina_core::relay::catalogue::DEFAULT_GUARDED_PROGRAMS;
 use officina_core::relay::gate::{DenyKind, LIST_COMMAND};
@@ -123,15 +124,11 @@ fn not_decided(env: &TestEnv, payload: &serde_json::Value, project_dir: Option<&
 }
 
 fn guarded_env() -> TestEnv {
-    let env = TestEnv::new();
-    env.write_floor(FLOOR);
-    env
+    Relay::unapproved(FLOOR).env
 }
 
 fn approved_env() -> TestEnv {
-    let env = guarded_env();
-    env.approve();
-    env
+    Relay::approved(FLOOR).env
 }
 
 fn gate_denied(env: &TestEnv) -> Vec<GateDenied> {
@@ -378,12 +375,11 @@ fn write_elsewhere_gets_no_decision() {
         ),
         Some(GUARDED_ROOT),
     );
-    let free = TestEnv::new();
-    free.write_floor(&FLOOR.replace(
+    let free = Relay::approved(&FLOOR.replace(
         "actions = [\"check\", \"apply\"]\n",
         "autonomy = \"free\"\nactions = [\"check\", \"apply\"]\n",
-    ));
-    free.approve();
+    ))
+    .env;
     let flag = free.relay_home().stopped_file();
     not_decided(
         &free,

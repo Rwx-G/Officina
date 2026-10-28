@@ -11,6 +11,7 @@ mod common;
 use std::path::PathBuf;
 use std::process::Output;
 
+use common::relay::fill;
 use common::{TestEnv, fingerprint, git, git_dir_or_skip, now_ms, printed_hooks_block};
 use officina_core::floor::Autonomy;
 use officina_core::relay::catalogue::CanonicalCatalogue;
@@ -118,13 +119,14 @@ impl Doctor {
 
     /// Writes the relay floor (the home's `floor.toml`), folders filled in.
     fn write(&self, floor: &str) {
-        let slashed = |p: PathBuf| p.to_string_lossy().replace('\\', "/");
-        self.env.write_floor(
-            &floor
-                .replace("{lab}", &slashed(self.lab()))
-                .replace("{notes}", &slashed(self.notes()))
-                .replace("{quiet}", &slashed(self.quiet())),
-        );
+        self.env.write_floor(&fill(
+            floor,
+            &[
+                ("lab", self.lab()),
+                ("notes", self.notes()),
+                ("quiet", self.quiet()),
+            ],
+        ));
     }
 
     fn output(&self, args: &[&str]) -> Output {

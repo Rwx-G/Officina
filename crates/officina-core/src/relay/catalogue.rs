@@ -1902,6 +1902,22 @@ pub struct ApprovedCatalogue {
 }
 
 impl ApprovedCatalogue {
+    /// The record of approving `relay`, read at `floor_file`, at
+    /// `approved_at_ms`: what the window writes, and what a test approves
+    /// without it.
+    pub fn approving(
+        relay: &RelayFloor,
+        floor_file: &str,
+        approved_at_ms: i64,
+    ) -> ApprovedCatalogue {
+        ApprovedCatalogue {
+            approved_at_ms,
+            hash: relay.hash.clone(),
+            floor_file: Some(floor_file.to_owned()),
+            canonical: relay.canonical.clone(),
+        }
+    }
+
     /// The path of the approved floor: as read at approval, or for an older
     /// record the canonical path, which only a case-insensitive file system
     /// opens.

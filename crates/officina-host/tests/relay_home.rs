@@ -2,8 +2,11 @@
 //! `relay/approved.json` and the relay floor resolution (AD-24). Every test
 //! works in its own temp home and sets nothing process-wide.
 
+mod common;
+
 use std::path::{Path, PathBuf};
 
+use common::TestHome;
 use officina_core::relay::approvals::{FileKind, file_name, kept_output_name};
 use officina_core::relay::catalogue::{ApprovedCatalogue, load};
 use officina_host::relay::approvals::prune;
@@ -12,13 +15,8 @@ use officina_host::relay::home::{ApprovedState, RelayFloorError, RelayHome, load
 const FLOOR: &str = "schema = 2\n\n[[project]]\nname = \"lab\"\npath = \"Lab\"\nactions = [\"probe\"]\n\n[[action]]\nname = \"probe\"\nclass = \"free\"\nprogram = \"C:/path/to/tool.exe\"\n";
 
 fn approved_for(floor_path: &Path) -> ApprovedCatalogue {
-    let relay_floor = load(FLOOR, &floor_path.to_string_lossy()).unwrap();
-    ApprovedCatalogue {
-        approved_at_ms: 1_793_102_400_000,
-        hash: relay_floor.hash,
-        floor_file: Some(floor_path.to_string_lossy().into_owned()),
-        canonical: relay_floor.canonical,
-    }
+    let path = floor_path.to_string_lossy();
+    ApprovedCatalogue::approving(&load(FLOOR, &path).unwrap(), &path, 1_793_102_400_000)
 }
 
 fn write_approved(home: &RelayHome, content: &[u8]) {
@@ -232,24 +230,16 @@ fn kept_outputs_older_than_7_days_are_pruned() {
 
 #[test]
 fn run_never_deletes_approval_files() {
-    let dir = tempfile::tempdir().unwrap();
-    let home = RelayHome::new(dir.path().join("officina"), None);
-    let lab = dir.path().join("Lab");
+    let test = TestHome::new();
+    let home = test.relay(None);
+    let lab = test.root.join("Lab");
     std::fs::create_dir_all(&lab).unwrap();
     let floor = format!(
         "schema = 2\n[[project]]\nname = \"lab\"\npath = \"{}\"\nactions = [\"restart\"]\n[[action]]\nname = \"restart\"\nclass = \"human\"\nprogram = \"C:/path/to/tool.exe\"\n",
         lab.to_string_lossy().replace('\\', "/")
     );
-    std::fs::create_dir_all(home.officina_home()).unwrap();
-    std::fs::write(home.default_floor(), &floor).unwrap();
-    let relay_floor = load(&floor, &home.default_floor().to_string_lossy()).unwrap();
-    let approved = ApprovedCatalogue {
-        approved_at_ms: 1_793_102_400_000,
-        hash: relay_floor.hash,
-        floor_file: Some(home.default_floor().to_string_lossy().into_owned()),
-        canonical: relay_floor.canonical,
-    };
-    write_approved(&home, &serde_json::to_vec(&approved).unwrap());
+    test.write(&home.default_floor(), &floor);
+    test.approve_by_hand(&home);
     let old: Vec<PathBuf> = FileKind::ALL
         .iter()
         .map(|kind| {

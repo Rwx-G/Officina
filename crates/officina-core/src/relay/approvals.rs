@@ -638,7 +638,7 @@ mod tests {
 
     const NOW: i64 = 1_793_102_400_000;
     const MIN: i64 = 60_000;
-    const FLOOR_PATH: &str = "C:/path/to/officina.toml";
+    use crate::relay::fixtures::{FLOOR_PATH, params};
     const SYSTEM: &str = r"C:\Windows\System32";
     const FLOOR: &str = "schema = 2
 [[project]]
@@ -678,13 +678,6 @@ args = [\"{group}\"]
 pattern = \"lab-[a-z]+\"
 ";
 
-    fn params(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
-        pairs
-            .iter()
-            .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
-            .collect()
-    }
-
     fn approved() -> ApprovedCatalogue {
         let relay = load(FLOOR, FLOOR_PATH).unwrap();
         assert!(
@@ -692,12 +685,7 @@ pattern = \"lab-[a-z]+\"
             "{:?}",
             relay.catalogue.issues
         );
-        ApprovedCatalogue {
-            approved_at_ms: NOW - 60 * MIN,
-            hash: relay.hash.clone(),
-            floor_file: Some(FLOOR_PATH.to_owned()),
-            canonical: relay.canonical,
-        }
+        ApprovedCatalogue::approving(&relay, FLOOR_PATH, NOW - 60 * MIN)
     }
 
     fn dirs() -> BTreeMap<String, String> {

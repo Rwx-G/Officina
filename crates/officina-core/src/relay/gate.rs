@@ -1141,7 +1141,7 @@ mod tests {
         }
     }
 
-    const FLOOR_PATH: &str = "C:/path/to/officina.toml";
+    use crate::relay::fixtures::FLOOR_PATH;
 
     fn floor(text: &str) -> FloorFile {
         crate::floor::parse_floor(text).unwrap()

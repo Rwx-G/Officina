@@ -981,13 +981,8 @@ values = [\"web01\"]
         const WAITING: &str = "[{\"pid\":1,\"sessionId\":\"s1\",\"kind\":\"interactive\",\"status\":\"waiting\",\"name\":\"deploy-lab\",\"startedAt\":1}]";
 
         fn approved() -> ApprovedCatalogue {
-            let relay = load(FLOOR, "C:/path/to/officina.toml").unwrap();
-            ApprovedCatalogue {
-                approved_at_ms: NOW - 60 * MIN,
-                hash: relay.hash,
-                floor_file: None,
-                canonical: relay.canonical,
-            }
+            let path = crate::relay::fixtures::FLOOR_PATH;
+            ApprovedCatalogue::approving(&load(FLOOR, path).unwrap(), path, NOW - 60 * MIN)
         }
 
         fn fingerprint(text: &str) -> TreeFingerprint {

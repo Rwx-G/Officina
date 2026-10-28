@@ -13,16 +13,15 @@ use std::process::{Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
 use common::fake_output::{stderr_byte, stdout_byte, stream};
-use common::{
-    TestEnv, git, git_dir_or_skip, heartbeat_len, heartbeat_stopped, read_tool_log, stop_heartbeat,
-};
+use common::relay::{Relay, assert_refused, assert_refused_after, slashed, stderr_lines};
+use common::{git, git_dir_or_skip, heartbeat_len, heartbeat_stopped, stop_heartbeat};
 use officina_core::relay::argv::{
     ArgvRefusal, Launch, WSL_KILL_AFTER_S, WSL_TIMEOUT_MARGIN_S, WSL_TIMEOUT_PROGRAM,
 };
 use officina_core::relay::classes::CHECK_VALID_MS;
 use officina_core::relay::journal::{
-    JOURNAL_RETENTION_DAYS, JournalEntry, RefusalReason, Refused, RunFinished, RunOutcome,
-    RunStarted, StreamSummary, TreeFingerprint, is_expired_journal_file,
+    JOURNAL_RETENTION_DAYS, JournalEntry, RefusalReason, RunFinished, RunOutcome, RunStarted,
+    StreamSummary, TreeFingerprint, is_expired_journal_file,
 };
 use officina_core::relay::sha256_hex;
 use officina_host::relay::journal::JournalLock;
@@ -112,154 +111,14 @@ args = ["{group}"]
 pattern = "lab-[a-z0-9-]{1,30}"
 "#;
 
-struct Relay {
-    env: TestEnv,
-}
-
-fn slashed(path: &Path) -> String {
-    path.to_string_lossy().replace('\\', "/")
-}
-
 impl Relay {
-    /// A relay whose floor is `floor`, approved through the window's
-    /// authority (story 2.2), never written by hand.
     fn with_floor(floor: &str) -> Relay {
-        let relay = Relay {
-            env: TestEnv::new(),
-        };
-        for dir in [relay.project(), relay.notes(), relay.outside()] {
-            std::fs::create_dir_all(dir).unwrap();
-        }
-        relay.write(floor);
-        relay.env.approve();
-        relay
+        Relay::approved(floor)
     }
 
     fn new() -> Relay {
         Relay::with_floor(FLOOR)
     }
-
-    /// Writes a floor, filling in the folders and the tool, unapproved.
-    fn write(&self, floor: &str) {
-        self.env.write_floor(
-            &floor
-                .replace("{project}", &slashed(&self.project()))
-                .replace("{notes}", &slashed(&self.notes())),
-        );
-    }
-
-    fn project(&self) -> PathBuf {
-        self.env.root.path().join("work").join("Supervision")
-    }
-
-    fn notes(&self) -> PathBuf {
-        self.env.root.path().join("work").join("Notes")
-    }
-
-    fn outside(&self) -> PathBuf {
-        self.env.root.path().join("elsewhere")
-    }
-
-    /// `officina run <args>` from `dir`, the tool logging its launches.
-    fn command(&self, dir: &Path, args: &[&str]) -> Command {
-        let mut full = vec!["run"];
-        full.extend_from_slice(args);
-        let mut cmd = self.env.officina(&full);
-        cmd.current_dir(dir)
-            .env("FAKE_TOOL_LOG", self.env.tool_log());
-        cmd
-    }
-
-    fn run_in(&self, dir: &Path, args: &[&str]) -> Output {
-        common::run_with(self.command(dir, args), b"")
-    }
-
-    fn run(&self, args: &[&str]) -> Output {
-        self.run_in(&self.project(), args)
-    }
-
-    fn launches(&self) -> Vec<serde_json::Value> {
-        read_tool_log(&self.env.tool_log())
-    }
-
-    fn entries(&self) -> Vec<JournalEntry> {
-        self.env.journal_after_approvals()
-    }
-
-    fn refused(&self) -> Vec<Refused> {
-        self.entries()
-            .into_iter()
-            .filter_map(|e| match e {
-                JournalEntry::Refused(r) => Some(r),
-                _ => None,
-            })
-            .collect()
-    }
-
-    fn started(&self) -> Vec<RunStarted> {
-        self.entries()
-            .into_iter()
-            .filter_map(|e| match e {
-                JournalEntry::RunStarted(s) => Some(s),
-                _ => None,
-            })
-            .collect()
-    }
-
-    fn finished(&self) -> Vec<RunFinished> {
-        self.entries()
-            .into_iter()
-            .filter_map(|e| match e {
-                JournalEntry::RunFinished(f) => Some(f),
-                _ => None,
-            })
-            .collect()
-    }
-}
-
-fn stderr_lines(out: &Output) -> Vec<String> {
-    String::from_utf8_lossy(&out.stderr)
-        .lines()
-        .map(str::to_owned)
-        .collect()
-}
-
-/// [`assert_refused`] after `launches_before` launches of earlier calls.
-fn assert_refused_after(
-    relay: &Relay,
-    out: &Output,
-    reason: RefusalReason,
-    launches_before: usize,
-) {
-    assert_eq!(out.status.code(), Some(126), "{:?}", stderr_lines(out));
-    let lines = stderr_lines(out);
-    assert_eq!(lines.len(), 1, "{lines:?}");
-    assert!(lines[0].starts_with("officina: refused: "), "{lines:?}");
-    assert!(
-        lines[0].ends_with(&format!("({})", reason.code())),
-        "{lines:?}"
-    );
-    assert_eq!(
-        relay.launches().len(),
-        launches_before,
-        "the tool must not start"
-    );
-    assert_eq!(relay.refused().last().map(|r| r.reason), Some(reason));
-}
-
-/// Asserts a refusal: exit 126, one stderr line naming the code, the tool
-/// never started. Returns the reason the journal recorded last.
-fn assert_refused(relay: &Relay, out: &Output, reason: RefusalReason) {
-    assert_eq!(out.status.code(), Some(126), "{:?}", stderr_lines(out));
-    let lines = stderr_lines(out);
-    assert_eq!(lines.len(), 1, "{lines:?}");
-    assert!(lines[0].starts_with("officina: refused: "), "{lines:?}");
-    assert!(
-        lines[0].ends_with(&format!("({})", reason.code())),
-        "{lines:?}"
-    );
-    assert!(relay.launches().is_empty(), "the tool must not start");
-    assert_eq!(relay.refused().last().map(|r| r.reason), Some(reason));
 }
 
 fn sorted_keys(value: &serde_json::Value) -> Vec<String> {
@@ -478,14 +337,7 @@ fn scenario(reason: RefusalReason) -> Option<Scenario> {
         _ => {}
     }
     let relay = match reason {
-        RefusalReason::NotApproved => {
-            let relay = Relay {
-                env: TestEnv::new(),
-            };
-            std::fs::create_dir_all(relay.project()).unwrap();
-            relay.write(FLOOR);
-            relay
-        }
+        RefusalReason::NotApproved => Relay::unapproved(FLOOR),
         _ => Relay::new(),
     };
     let home = relay.env.relay_home();
@@ -1376,11 +1228,7 @@ fn list_outside_every_project() {
     let relay = Relay::new();
     let text = list(&relay, &relay.outside());
     assert!(text.contains("lies in no project"), "{text}");
-    let unapproved = Relay {
-        env: TestEnv::new(),
-    };
-    std::fs::create_dir_all(unapproved.project()).unwrap();
-    unapproved.write(FLOOR);
+    let unapproved = Relay::unapproved(FLOOR);
     assert!(list(&unapproved, &unapproved.project()).contains("No relay catalogue is approved"));
 }
 

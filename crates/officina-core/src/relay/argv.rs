@@ -193,16 +193,10 @@ pub fn build(
 mod tests {
     use super::*;
     use crate::relay::catalogue::action_from_value;
+    use crate::relay::fixtures::params;
 
     fn action(toml_text: &str) -> Action {
         action_from_value(&toml::from_str(toml_text).unwrap()).unwrap()
-    }
-
-    fn params(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
-        pairs
-            .iter()
-            .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
-            .collect()
     }
 
     #[test]

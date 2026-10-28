@@ -9,10 +9,11 @@
 mod common;
 
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Output};
+use std::process::Child;
 use std::time::{Duration, Instant};
 
-use common::{TestEnv, git, git_dir_or_skip, read_tool_log};
+use common::relay::{Relay, assert_refused, assert_refused_after, stderr_text as stderr};
+use common::{git, git_dir_or_skip};
 use officina_core::relay::approvals::{
     ApprovalRequest, DEFAULT_WAIT_S, Decision, FileKind, KEPT_OUTPUT_BYTES, file_name,
     kept_output_name, request_id,
@@ -25,7 +26,7 @@ const FLOOR: &str = r#"schema = 2
 
 [[project]]
 name = "lab"
-path = "{lab}"
+path = "{project}"
 actions = ["restart", "missing", "verify", "apply-sensitive"]
 
 [[action]]
@@ -63,24 +64,9 @@ args = ["{group}"]
 pattern = "lab-[a-z0-9-]{1,30}"
 "#;
 
-struct Relay {
-    env: TestEnv,
-    /// `git`'s folder on the commands' `PATH`, for a project in git.
-    git_dir: Option<PathBuf>,
-}
-
 impl Relay {
     fn new() -> Relay {
-        let relay = Relay {
-            env: TestEnv::new(),
-            git_dir: None,
-        };
-        std::fs::create_dir_all(relay.lab()).unwrap();
-        relay.env.write_floor(
-            &FLOOR.replace("{lab}", &relay.lab().to_string_lossy().replace('\\', "/")),
-        );
-        relay.env.approve();
-        relay
+        Relay::approved(FLOOR)
     }
 
     /// A relay whose project is a git work tree with one commit, which
@@ -93,44 +79,20 @@ impl Relay {
             return None;
         }
         let mut relay = Relay::new();
-        git(&git_dir, &relay.lab(), &["init", "-q"]);
-        std::fs::write(relay.lab().join("site.yml"), "- hosts: lab\n").unwrap();
-        git(&git_dir, &relay.lab(), &["add", "site.yml"]);
-        git(&git_dir, &relay.lab(), &["commit", "-q", "-m", "first"]);
+        git(&git_dir, &relay.project(), &["init", "-q"]);
+        std::fs::write(relay.project().join("site.yml"), "- hosts: lab\n").unwrap();
+        git(&git_dir, &relay.project(), &["add", "site.yml"]);
+        git(&git_dir, &relay.project(), &["commit", "-q", "-m", "first"]);
         relay.git_dir = Some(git_dir);
         Some(relay)
-    }
-
-    fn lab(&self) -> PathBuf {
-        self.env.root.path().join("work").join("Lab")
     }
 
     fn approvals_dir(&self) -> PathBuf {
         self.env.relay_home().approvals_dir()
     }
 
-    fn command(&self, args: &[&str]) -> Command {
-        let mut full = vec!["run"];
-        full.extend_from_slice(args);
-        let mut cmd = self.env.officina(&full);
-        cmd.current_dir(self.lab())
-            .env("FAKE_TOOL_LOG", self.env.tool_log());
-        if let Some(dir) = &self.git_dir {
-            cmd.env("PATH", dir);
-        }
-        cmd
-    }
-
-    fn run(&self, args: &[&str]) -> Output {
-        common::run_with(self.command(args), b"")
-    }
-
     fn spawn(&self, args: &[&str]) -> Child {
-        self.command(args).spawn().unwrap()
-    }
-
-    fn launches(&self) -> Vec<serde_json::Value> {
-        read_tool_log(&self.env.tool_log())
+        self.command(&self.project(), args).spawn().unwrap()
     }
 
     /// The ids of the files of `kind`, sorted.
@@ -185,10 +147,6 @@ impl Relay {
         std::fs::write(&path, serde_json::to_vec(&decision).unwrap()).unwrap();
     }
 
-    fn entries(&self) -> Vec<JournalEntry> {
-        self.env.journal_after_approvals()
-    }
-
     fn refusals(&self) -> Vec<RefusalReason> {
         self.entries()
             .into_iter()
@@ -200,21 +158,6 @@ impl Relay {
     }
 }
 
-fn stderr(out: &Output) -> String {
-    String::from_utf8_lossy(&out.stderr).into_owned()
-}
-
-/// A refusal: exit 126, one stderr line ending with the code.
-fn assert_refused(out: &Output, reason: RefusalReason) {
-    let text = stderr(out);
-    assert_eq!(out.status.code(), Some(126), "{text}");
-    assert_eq!(text.lines().count(), 1, "{text}");
-    assert!(
-        text.trim_end().ends_with(&format!("({})", reason.code())),
-        "{text}"
-    );
-}
-
 const RESTART: [&str; 4] = ["restart", "service=web01", "--wait", "1"];
 
 // ---- AC 2: request, reuse, rejection, approval ----
@@ -223,7 +166,7 @@ const RESTART: [&str; 4] = ["restart", "service=web01", "--wait", "1"];
 fn first_call_creates_a_request() {
     let relay = Relay::new();
     let out = relay.run(&RESTART);
-    assert_refused(&out, RefusalReason::ApprovalPending);
+    assert_refused(&relay, &out, RefusalReason::ApprovalPending);
     assert!(
         stderr(&out).contains("approval still pending; run the same command again to keep waiting")
     );
@@ -272,7 +215,7 @@ fn concurrent_identical_calls_make_one_request() {
     let children: Vec<Child> = (0..4).map(|_| relay.spawn(&RESTART)).collect();
     for child in children {
         let out = child.wait_with_output().unwrap();
-        assert_refused(&out, RefusalReason::ApprovalPending);
+        assert_refused(&relay, &out, RefusalReason::ApprovalPending);
     }
     assert_eq!(relay.ids(FileKind::Request).len(), 1);
     let requested = relay
@@ -290,12 +233,12 @@ fn rejection_blocks_retries_for_15_min() {
     let id = relay.ids(FileKind::Request).remove(0);
     relay.decide(&id, false);
     let out = relay.run(&RESTART);
-    assert_refused(&out, RefusalReason::ApprovalRejected);
+    assert_refused(&relay, &out, RefusalReason::ApprovalRejected);
     assert!(stderr(&out).contains("rejected in Officina; do not retry"));
     assert_eq!(relay.ids(FileKind::Request).len(), 1, "no new request");
 
     relay.age_decision(&id, FileKind::Rejected, Duration::from_secs(15 * 60));
-    assert_refused(&relay.run(&RESTART), RefusalReason::ApprovalPending);
+    assert_refused(&relay, &relay.run(&RESTART), RefusalReason::ApprovalPending);
     assert_eq!(relay.ids(FileKind::Request).len(), 2, "a new request");
 }
 
@@ -306,7 +249,7 @@ fn approval_older_than_15_min_is_not_used() {
     let id = relay.ids(FileKind::Request).remove(0);
     relay.decide(&id, true);
     relay.age_decision(&id, FileKind::Approved, Duration::from_secs(15 * 60));
-    assert_refused(&relay.run(&RESTART), RefusalReason::ApprovalPending);
+    assert_refused(&relay, &relay.run(&RESTART), RefusalReason::ApprovalPending);
     assert!(relay.launches().is_empty());
     assert_eq!(relay.ids(FileKind::Approved), [id], "left unused");
     assert_eq!(relay.ids(FileKind::Request).len(), 2);
@@ -323,7 +266,12 @@ fn approval_is_single_use() {
     assert_eq!(relay.launches().len(), 1);
     assert_eq!(relay.ids(FileKind::Consumed), std::slice::from_ref(&id));
     assert!(relay.ids(FileKind::Approved).is_empty());
-    assert_refused(&relay.run(&RESTART), RefusalReason::ApprovalPending);
+    assert_refused_after(
+        &relay,
+        &relay.run(&RESTART),
+        RefusalReason::ApprovalPending,
+        1,
+    );
     assert_eq!(relay.launches().len(), 1, "the approval ran once");
     assert_eq!(relay.ids(FileKind::Request).len(), 2);
 }
@@ -382,7 +330,10 @@ fn forged_request_argv_is_not_shown_or_approvable() {
 fn http_relay() -> Relay {
     let relay = Relay::new();
     let floor = FLOOR
-        .replace("{lab}", &relay.lab().to_string_lossy().replace('\\', "/"))
+        .replace(
+            "{project}",
+            &relay.project().to_string_lossy().replace('\\', "/"),
+        )
         .replace(
             "actions = [\"restart\",",
             "actions = [\"health\", \"restart\",",
@@ -404,6 +355,7 @@ fn board_approvals(relay: &Relay) -> (Vec<serde_json::Value>, Vec<u8>) {
 fn http_request_shows_rebuilt_method_and_url() {
     let relay = http_relay();
     assert_refused(
+        &relay,
         &relay.run(&["health", "check=a b", "--wait", "1"]),
         RefusalReason::ApprovalPending,
     );
@@ -484,7 +436,7 @@ fn wait_times_out_with_the_retry_message() {
     let started = Instant::now();
     let out = relay.run(&["restart", "service=web01", "--wait", "2"]);
     let took = started.elapsed();
-    assert_refused(&out, RefusalReason::ApprovalPending);
+    assert_refused(&relay, &out, RefusalReason::ApprovalPending);
     assert!(stderr(&out).contains("run the same command again to keep waiting"));
     assert!(took >= Duration::from_secs(2), "{took:?}");
     assert!(took < Duration::from_secs(6), "{took:?}");
@@ -499,7 +451,7 @@ fn stop_during_a_wait_refuses() {
     assert!(set_relay_stopped(&relay.env.relay_home(), true).unwrap());
     let out = child.wait_with_output().unwrap();
     assert!(stopped_at.elapsed() < Duration::from_secs(2));
-    assert_refused(&out, RefusalReason::Stopped);
+    assert_refused(&relay, &out, RefusalReason::Stopped);
     assert!(relay.launches().is_empty());
 }
 
@@ -523,7 +475,12 @@ fn approve_while_waiting_runs_once_under_2_s() {
     );
     assert_eq!(relay.launches().len(), 1);
 
-    assert_refused(&relay.run(&RESTART), RefusalReason::ApprovalPending);
+    assert_refused_after(
+        &relay,
+        &relay.run(&RESTART),
+        RefusalReason::ApprovalPending,
+        1,
+    );
     assert_eq!(
         relay.ids(FileKind::Request).len(),
         2,
@@ -549,7 +506,7 @@ fn failure_after_consume_burns_the_approval() {
         .into_iter()
         .any(|e| matches!(e, JournalEntry::RunFinished(f) if f.outcome == RunOutcome::SpawnFailed));
     assert!(failed);
-    assert_refused(&relay.run(&missing), RefusalReason::ApprovalPending);
+    assert_refused(&relay, &relay.run(&missing), RefusalReason::ApprovalPending);
     assert_eq!(relay.ids(FileKind::Request).len(), 2, "a new request");
 }
 
@@ -636,7 +593,7 @@ fn a_request_with_a_dry_run_says_so() {
 fn human_with_check_needs_the_check_first() {
     let relay = Relay::new();
     let out = relay.run(&["apply-sensitive", "group=lab-web", "--wait", "1"]);
-    assert_refused(&out, RefusalReason::CheckRequired);
+    assert_refused(&relay, &out, RefusalReason::CheckRequired);
     assert!(
         stderr(&out).contains("run `verify` first"),
         "{}",
@@ -714,7 +671,7 @@ fn check_output_is_kept_and_capped() {
         )
         .unwrap()
     };
-    let mut small = relay.command(&["verify", "group=lab-web"]);
+    let mut small = relay.command(&relay.project(), &["verify", "group=lab-web"]);
     small.env("FAKE_TOOL_MODE", "bytes:10");
     assert_eq!(common::run_with(small, b"").status.code(), Some(0));
     let run_id = dry_run_id(&relay);
@@ -726,7 +683,7 @@ fn check_output_is_kept_and_capped() {
     assert_eq!(kept(&run_id), expected, "stdout, then stderr");
 
     let big = KEPT_OUTPUT_BYTES as u64;
-    let mut large = relay.command(&["verify", "group=lab-web"]);
+    let mut large = relay.command(&relay.project(), &["verify", "group=lab-web"]);
     large.env("FAKE_TOOL_MODE", format!("bytes:{big}"));
     assert_eq!(common::run_with(large, b"").status.code(), Some(0));
     let text = kept(&dry_run_id(&relay));
@@ -785,10 +742,10 @@ fn an_approval_is_not_consumed_after_a_tree_change() {
     let launches = relay.launches().len();
     let child = relay.spawn(&["apply-sensitive", "group=lab-web", "--wait", "30"]);
     let id = relay.next_request(&[]);
-    std::fs::write(relay.lab().join("site.yml"), "- hosts: all\n").unwrap();
+    std::fs::write(relay.project().join("site.yml"), "- hosts: all\n").unwrap();
     relay.decide(&id, true);
     let out = child.wait_with_output().unwrap();
-    assert_refused(&out, RefusalReason::CheckNotSatisfied);
+    assert_refused_after(&relay, &out, RefusalReason::CheckNotSatisfied, launches);
     assert_eq!(relay.launches().len(), launches, "nothing ran");
     assert_eq!(
         relay.ids(FileKind::Approved),
@@ -818,7 +775,7 @@ fn a_human_action_without_check_is_bound_to_its_tree() {
     assert_eq!(request.check_run_id, None, "no dry run");
     assert_eq!(
         Some(&bound),
-        officina_host::relay::tree::fingerprint(&relay.lab())
+        officina_host::relay::tree::fingerprint(&relay.project())
             .unwrap()
             .as_ref()
     );
@@ -857,17 +814,17 @@ fn an_edit_while_waiting_refuses_tree_changed() {
     };
     let child = relay.spawn(&["restart", "service=web01", "--wait", "30"]);
     let id = relay.next_request(&[]);
-    std::fs::write(relay.lab().join("site.yml"), "- hosts: everything\n").unwrap();
+    std::fs::write(relay.project().join("site.yml"), "- hosts: everything\n").unwrap();
     relay.decide(&id, true);
     let out = child.wait_with_output().unwrap();
-    assert_refused(&out, RefusalReason::TreeChanged);
+    assert_refused(&relay, &out, RefusalReason::TreeChanged);
     assert!(relay.launches().is_empty(), "nothing ran");
     assert_eq!(relay.ids(FileKind::Approved), [id], "left unconsumed");
     assert!(relay.ids(FileKind::Consumed).is_empty());
     assert_eq!(relay.refusals().last(), Some(&RefusalReason::TreeChanged));
 
     // Put back, the files are the ones the approval was given for again.
-    std::fs::write(relay.lab().join("site.yml"), "- hosts: lab\n").unwrap();
+    std::fs::write(relay.project().join("site.yml"), "- hosts: lab\n").unwrap();
     let out = relay.run(&["restart", "service=web01", "--wait", "1"]);
     assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
     assert_eq!(relay.launches().len(), 1);

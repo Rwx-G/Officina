@@ -2,54 +2,15 @@
 //! temporary repositories built with `git init`. Each test skips with a
 //! printed reason on a machine without `git`.
 
+mod common;
+
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Command;
+
+use common::git_support::{git_ok, git_or_skip, run_git};
 
 use officina_core::relay::journal::TreeFingerprint;
 use officina_host::relay::tree::fingerprint_with;
-
-const GIT_EXE: &str = if cfg!(windows) { "git.exe" } else { "git" };
-
-/// `git` from this process's `PATH`, or `None` after printing why `test`
-/// skips (D-23).
-fn git_or_skip(test: &str) -> Option<PathBuf> {
-    let found = std::env::var_os("PATH").and_then(|path| {
-        std::env::split_paths(&path)
-            .map(|dir| dir.join(GIT_EXE))
-            .find(|exe| exe.is_file())
-    });
-    if found.is_none() {
-        println!("skipped {test}: no git on this machine's PATH");
-    }
-    found
-}
-
-/// Runs `git <args>` in `dir` with a fixed identity; returns its output.
-fn run_git(git: &Path, dir: &Path, args: &[&str]) -> std::process::Output {
-    Command::new(git)
-        .args([
-            "-c",
-            "user.name=user01",
-            "-c",
-            "user.email=user@example.com",
-            "-c",
-            "init.defaultBranch=main",
-        ])
-        .args(args)
-        .current_dir(dir)
-        .stdin(Stdio::null())
-        .output()
-        .unwrap()
-}
-
-fn git_ok(git: &Path, dir: &Path, args: &[&str]) {
-    let out = run_git(git, dir, args);
-    assert!(
-        out.status.success(),
-        "git {args:?}: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-}
 
 /// A temporary work tree: `git init`, no line ending conversion, and
 /// optionally one commit holding `playbook.yml`.

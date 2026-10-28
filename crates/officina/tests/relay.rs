@@ -7,6 +7,7 @@ mod common;
 use std::collections::BTreeMap;
 use std::process::{Command, Output, Stdio};
 
+use common::relay::Relay;
 use common::{TestEnv, fingerprint, now_ms};
 use officina_core::relay::catalogue::ActionClass;
 use officina_core::relay::gate::DenyKind;
@@ -38,10 +39,7 @@ values = ["web01", "db01"]
 "#;
 
 fn approved_env() -> TestEnv {
-    let env = TestEnv::new();
-    env.write_floor(FLOOR);
-    env.approve();
-    env
+    Relay::approved(FLOOR).env
 }
 
 fn relay_json(env: &TestEnv) -> Output {
@@ -126,18 +124,17 @@ fn floor_edit_shows_a_pending_diff() {
     assert_eq!(changed[0].fields[0].field, "params");
     assert!(pending.diff.projects.changed.is_empty());
 
-    let unapproved = TestEnv::new();
-    unapproved.write_floor(FLOOR);
+    let unapproved = Relay::unapproved(FLOOR).env;
     let first = view(&unapproved).pending.expect("a first catalogue waits");
     assert_eq!(first.diff.actions.added, ["probe"]);
 }
 
 #[test]
 fn issues_carry_their_lines() {
-    let env = TestEnv::new();
-    env.write_floor(&format!(
+    let env = Relay::unapproved(&format!(
         "{FLOOR}\n[[action]]\nname = \"broken\"\nclass = \"free\"\nprogram = \"relative.exe\"\n"
-    ));
+    ))
+    .env;
     let shown = view(&env);
     let broken_line = FLOOR.lines().count() + 2;
     assert_eq!(shown.issues.len(), 1, "{:?}", shown.issues);
@@ -159,10 +156,10 @@ fn issues_carry_their_lines() {
 /// for a floor that declares no action and no guarded project.
 #[test]
 fn a_snapshot_gone_after_an_approval_can_be_approved_again() {
-    let env = TestEnv::new();
-    env.write_floor(
+    let env = Relay::unapproved(
         "schema = 2\n[[project]]\nname = \"notes\"\npath = \"Notes\"\nautonomy = \"free\"\n",
-    );
+    )
+    .env;
     assert_eq!(view(&env).pending, None, "nothing to approve yet");
     env.approve();
     std::fs::remove_file(env.relay_home().approved_file()).unwrap();
@@ -291,10 +288,10 @@ fn recent_pairs_runs_and_marks_abandoned() {
 /// credential below, stored nowhere, would read `false`; it reads `null`.
 #[test]
 fn relay_json_never_reads_credentials() {
-    let env = TestEnv::new();
-    env.write_floor(&format!(
+    let env = Relay::unapproved(&format!(
         "{FLOOR}\n[[credential]]\nname = \"officina-test-unstored\"\nhosts = [\"monitoring.example.com\"]\nheader = \"Authorization\"\nscheme = \"Bearer\"\n\n[[action]]\nname = \"health\"\nkind = \"http\"\nclass = \"free\"\nmethod = \"GET\"\nurl = \"https://monitoring.example.com/api/{{check}}\"\ncredential = \"officina-test-unstored\"\n[action.params.check]\nvalues = [\"health\"]\n"
-    ));
+    ))
+    .env;
     env.approve();
     let view = view(&env);
     assert_eq!(view.credentials.len(), 1, "{:?}", view.credentials);

@@ -42,12 +42,8 @@ impl Fixture {
             "{:?}",
             relay.catalogue.issues
         );
-        let approved = ApprovedCatalogue {
-            approved_at_ms: now_ms(),
-            hash: relay.hash,
-            floor_file: Some(floor_path.to_string_lossy().into_owned()),
-            canonical: relay.canonical,
-        };
+        let approved =
+            ApprovedCatalogue::approving(&relay, &floor_path.to_string_lossy(), now_ms());
         std::fs::write(home.approved_file(), serde_json::to_vec(&approved).unwrap()).unwrap();
         Fixture {
             _dir: dir,

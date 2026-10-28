@@ -390,16 +390,11 @@ mod tests {
 
     const NOW: i64 = 1_793_102_400_000;
     const MIN: i64 = 60_000;
-    const FLOOR_PATH: &str = "C:/path/to/officina.toml";
+    use crate::relay::fixtures::FLOOR_PATH;
     const FLOOR: &str = "schema = 2\n[[project]]\nname = \"lab\"\npath = \"Lab\"\nactions = [\"probe\"]\n[[action]]\nname = \"probe\"\ndescription = \"Reads one host\"\nclass = \"free\"\nprogram = \"C:/path/to/tool.exe\"\nargs = [\"{host}\"]\n[action.params.host]\nvalues = [\"web01\"]\n";
 
     fn approved_of(relay: &RelayFloor) -> ApprovedCatalogue {
-        ApprovedCatalogue {
-            approved_at_ms: NOW - 60 * MIN,
-            hash: relay.hash.clone(),
-            floor_file: Some(FLOOR_PATH.to_owned()),
-            canonical: relay.canonical.clone(),
-        }
+        ApprovedCatalogue::approving(relay, FLOOR_PATH, NOW - 60 * MIN)
     }
 
     fn inputs<'a>(
