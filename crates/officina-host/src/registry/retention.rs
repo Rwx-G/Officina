@@ -7,13 +7,15 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use officina_core::dates::{dated_file_day, parse_utc_day, utc_date};
+use officina_core::dates::{dated_file_day, utc_date};
 use officina_core::registry::retention::{
     COPIES_KEPT, TRIAGE_CALL_TTL_MS, event_file_deletable, excerpt_cutoff, kept,
 };
 
 use super::ingest::{IngestContext, IngestReport};
-use super::store::{Writer, copy_is_valid, daily_copies, quarantined, read_only_connection};
+use super::store::{
+    Writer, copy_is_valid, daily_copies, pre_migration_day, quarantined, read_only_connection,
+};
 use super::write::RegistryError;
 
 /// What one hourly pass did.
@@ -35,14 +37,6 @@ pub struct PassReport {
     pub deleted_calls: usize,
     /// False when a reader kept the WAL from being truncated.
     pub checkpointed: bool,
-}
-
-/// The UTC day of a pre-migration copy, `pre-v<n>-<date>.db`.
-fn pre_migration_day(name: &str) -> Option<(i64, u32, u32)> {
-    let rest = name.strip_prefix("pre-v")?.strip_suffix(".db")?;
-    let (version, date) = rest.split_once('-')?;
-    version.parse::<u32>().ok()?;
-    parse_utc_day(date)
 }
 
 /// The UTC day of a quarantine folder, named by its time in milliseconds.

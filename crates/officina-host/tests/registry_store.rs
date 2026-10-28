@@ -386,6 +386,32 @@ fn damaged_newest_copy_falls_back_to_the_next() {
     assert_eq!(notice.copy, older.file_name().unwrap().to_string_lossy());
 }
 
+/// Penetration audit L5: restore follows the UTC day in the copies' names,
+/// so an older copy whose modification time was moved ahead is not tried
+/// first, and a file of another name is never restored.
+#[test]
+fn restore_follows_the_day_in_the_name_not_the_modification_time() {
+    let home = Home::new();
+    let older = with_copy(&home, NOW - 2 * DAY);
+    let mut writer = home.writer(NOW - DAY);
+    let newer = writer.copy_if_due(NOW - DAY).unwrap().unwrap();
+    drop(writer);
+    let planted = home.paths().backup_dir().join("planted.db");
+    std::fs::copy(&older, &planted).unwrap();
+    let ahead = std::time::SystemTime::now() + Duration::from_secs(365 * 86_400);
+    for copy in [&older, &planted] {
+        std::fs::File::options()
+            .write(true)
+            .open(copy)
+            .unwrap()
+            .set_modified(ahead)
+            .unwrap();
+    }
+    damage_page(&home.paths().database());
+    let (_, notice) = restored(open_writer(&home.home, &[], NOW));
+    assert_eq!(notice.copy, newer.file_name().unwrap().to_string_lossy());
+}
+
 fn started_empty(opened: WriterOpen) -> PathBuf {
     match opened {
         WriterOpen::Writable {

@@ -335,6 +335,57 @@ pub fn daily_copy_day(name: &str) -> Option<(i64, u32, u32)> {
     parse_utc_day(name.strip_prefix(DAILY_COPY_PREFIX)?.strip_suffix(".db")?)
 }
 
+/// A pre-migration copy's file name prefix (AD-41): `pre-v<n>-<UTC date>.db`.
+const PRE_MIGRATION_PREFIX: &str = "pre-v";
+
+/// The copy taken before migrating to `version` on the UTC day of `now_ms`.
+pub fn pre_migration_copy_name(version: i64, now_ms: i64) -> String {
+    format!(
+        "{PRE_MIGRATION_PREFIX}{version}-{}.db",
+        utc_day_text(now_ms)
+    )
+}
+
+/// The UTC day a pre-migration copy's name stands for; `None` for any
+/// other name.
+pub fn pre_migration_day(name: &str) -> Option<(i64, u32, u32)> {
+    let rest = name
+        .strip_prefix(PRE_MIGRATION_PREFIX)?
+        .strip_suffix(".db")?;
+    let (version, date) = rest.split_once('-')?;
+    version.parse::<u32>().ok()?;
+    parse_utc_day(date)
+}
+
+/// The order restore tries the copies under `registry/backup/` in, given
+/// their file names (D-94): newest UTC day in the name first, a daily copy
+/// before a pre-migration copy of the same day (taken at window start,
+/// before the day's daily copy), then by name. A name of neither kind is
+/// not a copy Officina wrote and is never restored. The modification time
+/// plays no part: any process of the author's can set it.
+///
+/// ```
+/// use officina_host::registry::store::restore_order;
+/// let names = ["pre-v2-2026-10-27.db", "notes.db", "registry-2026-10-26.db", "registry-2026-10-27.db"];
+/// assert_eq!(
+///     restore_order(names.iter().map(|n| n.to_string())),
+///     ["registry-2026-10-27.db", "pre-v2-2026-10-27.db", "registry-2026-10-26.db"],
+/// );
+/// ```
+pub fn restore_order(names: impl IntoIterator<Item = String>) -> Vec<String> {
+    let mut found: Vec<((i64, u32, u32), bool, String)> = names
+        .into_iter()
+        .filter_map(|name| {
+            if let Some(day) = daily_copy_day(&name) {
+                return Some((day, true, name));
+            }
+            pre_migration_day(&name).map(|day| (day, false, name))
+        })
+        .collect();
+    found.sort_by(|a, b| b.cmp(a));
+    found.into_iter().map(|(_, _, name)| name).collect()
+}
+
 /// A daily copy under `registry/backup/`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DailyCopy {
@@ -383,7 +434,6 @@ mod writing {
     use std::fs;
     use std::path::{Path, PathBuf};
 
-    use officina_core::dates::utc_day_text;
     use officina_core::registry::retention::COPIES_KEPT;
     use officina_core::registry::types::{RestoreNotice, SettingKey, Source};
     use rusqlite::{Connection, OpenFlags};
@@ -394,7 +444,7 @@ mod writing {
     use super::super::write::RegistryError;
     use super::{
         Location, SystemProbe, classify, copy_is_valid, daily_copies, daily_copy_name, passed,
-        quick_check, read_only_connection,
+        pre_migration_copy_name, quick_check, read_only_connection, restore_order,
     };
 
     /// The writer's settings, applied at every open (AD-39): name, value
@@ -593,7 +643,7 @@ mod writing {
                             let dest = self
                                 .paths
                                 .backup_dir()
-                                .join(format!("pre-v{target}-{}.db", utc_day_text(self.now_ms)));
+                                .join(pre_migration_copy_name(target, self.now_ms));
                             copy_to(&conn, &dest)?;
                             Some(dest)
                         } else {
@@ -748,22 +798,18 @@ mod writing {
         }
     }
 
-    /// Every copy under `registry/backup/`, daily or pre-migration, newest
-    /// modification first: the order restore tries them in (D-94).
+    /// Every copy under `registry/backup/`, daily or pre-migration, in
+    /// [`restore_order`].
     fn restore_candidates(paths: &RegistryPaths) -> Vec<PathBuf> {
-        let mut found: Vec<(Option<std::time::SystemTime>, PathBuf)> =
-            fs::read_dir(paths.backup_dir())
-                .into_iter()
-                .flatten()
-                .flatten()
-                .filter(|entry| entry.path().extension().is_some_and(|x| x == "db"))
-                .map(|entry| {
-                    let modified = entry.metadata().and_then(|m| m.modified()).ok();
-                    (modified, entry.path())
-                })
-                .collect();
-        found.sort_by(|a, b| b.cmp(a));
-        found.into_iter().map(|(_, path)| path).collect()
+        let names = fs::read_dir(paths.backup_dir())
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|entry| entry.file_name().to_string_lossy().into_owned());
+        restore_order(names)
+            .into_iter()
+            .map(|name| paths.backup_dir().join(name))
+            .collect()
     }
 
     /// Copies `copy` to `db` through a temporary name renamed once complete.
