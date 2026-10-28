@@ -86,7 +86,7 @@ test.describe("Triage evidence", () => {
     const counts = page.getByTestId("call-counts");
     await expect(counts).toContainText(`Today ${today.calls} calls`);
     await expect(counts).toContainText(usd(today.cost_microusd));
-    await expect(counts).toContainText(`last 30 days ${month.calls} calls`);
+    await expect(counts).toContainText(`last ${view.thresholds.count_window_ms / 86_400_000} days ${month.calls} calls`);
     expect(refusals.length).toBeGreaterThan(0);
     const shown = page.getByTestId("refusal");
     await expect(shown).toHaveCount(refusals.length);
@@ -95,6 +95,22 @@ test.describe("Triage evidence", () => {
       await expect(shown.nth(i)).toContainText(TRIAGE_REFUSAL_TEXT[refusal.cause]);
     }
   });
+});
+
+// Debt audit H1: the page writes the windows the view ships, never its own.
+test("the windows the evidence names come from the view's thresholds", async ({ page }) => {
+  const base = loadRegistry("evidence");
+  const view: RegistryView = {
+    ...base,
+    thresholds: { ...base.thresholds, count_window_ms: 14 * 86_400_000, auto_count_after_ms: 3 * 86_400_000 },
+  };
+  expect(view.recent_auto_archives.length).toBeGreaterThan(0);
+  await openEvidence(page, view);
+  await expect(page.getByTestId("call-counts")).toContainText("last 14 days");
+  await expect(page.getByTestId("recent-auto-archives")).toHaveAttribute(
+    "aria-label",
+    "Archived by itself in the last 3 days",
+  );
 });
 
 // Story 3.10: the measured error and the auto-archive gate (FR-11, FR-12,

@@ -19,6 +19,12 @@ export function duration(ms: number): string {
   return `${Math.floor(safe / DAY)} d`;
 }
 
+/** A window the backend sends in milliseconds, in whole days: "30 days". */
+export function days(ms: number): string {
+  const count = Math.round(Math.max(0, ms) / DAY);
+  return `${count} ${count === 1 ? "day" : "days"}`;
+}
+
 /** A window the backend sends in milliseconds, in whole hours: "24 h". */
 export function hours(ms: number): string {
   return `${Math.round(Math.max(0, ms) / HOUR)} h`;

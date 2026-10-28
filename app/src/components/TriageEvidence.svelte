@@ -16,7 +16,7 @@
     usd,
   } from "../lib/registry-text";
   import { subjectTarget } from "../lib/registry.svelte";
-  import { clock } from "../lib/time";
+  import { clock, days } from "../lib/time";
   import type { CallCounts } from "../lib/generated/CallCounts";
 
   interface Props {
@@ -117,7 +117,7 @@
       </div>
     {/if}
     {#if recent.length > 0}
-      <ul class="recent" data-testid="recent-auto-archives" aria-label="Archived by itself in the last 7 days">
+      <ul class="recent" data-testid="recent-auto-archives" aria-label={`Archived by itself in the last ${days(view?.thresholds.auto_count_after_ms ?? 0)}`}>
         {#each recent as archived (archived.subject.id)}
           <li data-testid="auto-archived" data-subject={archived.subject.id}>
             <span class="name">{archived.subject.name}</span>
@@ -232,7 +232,8 @@
       <p class="muted" data-testid="no-dry-run">No dry run yet.</p>
     {/if}
     <p class="muted" data-testid="call-counts">
-      Today {counted(model.calls.today)}; last 30 days {counted(model.calls.last_30_days)}.
+      Today {counted(model.calls.today)}; last {days(view?.thresholds.count_window_ms ?? 0)}
+      {counted(model.calls.last_30_days)}.
     </p>
     {#if model.calls.refusals.length > 0}
       <ul class="refusals" data-testid="refusals">

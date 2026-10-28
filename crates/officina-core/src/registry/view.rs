@@ -9,21 +9,14 @@ use serde::{Deserialize, Serialize};
 
 use crate::board::{Badge, Board, Card, Column, SessionKindView};
 
-use super::dry_run::{DRY_RUN_MAX_CASES, DryRunProgress, DryRunState, DryRunStop, Evaluation};
+use super::dry_run::{DryRunProgress, DryRunState, DryRunStop, Evaluation};
 use super::filing::excerpt_time;
-use super::fold::SUPERSESSION_WINDOW_MS;
 use super::model::{ModelFacts, PAUSE_AFTER_FAILED_CALLS, RowModel, row_model};
 use super::proposal::Proposal;
 use super::rates::{
-    AUTO_ARCHIVE_FLIP_PERCENT, AUTO_ARCHIVE_MIN_CASES, AUTO_COUNT_AFTER_MS, GateState, Gates,
-    MODEL_GATE_MAX_AGE_MS, MODEL_GATE_MIN_CASES, RATE_WINDOW, SELF_DISABLE_MIN_CASES, SourceRate,
-    VerdictRecord, gates, rates,
+    AUTO_COUNT_AFTER_MS, GateState, Gates, SourceRate, VerdictRecord, gates, rates,
 };
-use super::retention::EXCERPT_TTL_MS;
-use super::triage_call::{
-    CALL_SPACING_MS, CALLS_PER_DAY, CALLS_PER_HOUR, COUNT_WINDOW_MS, CallRecord, CallsView,
-    count_calls,
-};
+use super::triage_call::{COUNT_WINDOW_MS, CallRecord, CallsView, count_calls};
 use super::types::{
     ConfirmationRecord, Ending, ExcerptRecord, RegistryReport, RestoreNotice, RowKind,
     SessionRecord, Source, SubjectRecord, SubjectRef, SubjectStatus, TriageOutcome, TriageRefusal,
@@ -202,34 +195,34 @@ pub struct IngestionView {
     pub corrupt_lines: u32,
 }
 
-/// Numbers the view is built with (AD-5).
+/// The numbers the page writes in its own words (AD-5), each from the
+/// constant that owns it (debt audit H1): the page reads them here and
+/// writes none itself. A number the page does not write is not shipped;
+/// the gates carry their own counts and the reasons theirs.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct Thresholds {
-    #[cfg_attr(feature = "ts", ts(type = "number"))]
-    pub restore_notice_ms: i64,
-    #[cfg_attr(feature = "ts", ts(type = "number"))]
-    pub excerpt_ttl_ms: i64,
-    pub non_interactive_listed: u32,
-    #[cfg_attr(feature = "ts", ts(type = "number"))]
-    pub supersession_window_ms: i64,
-    pub dry_run_max_cases: u32,
-    #[cfg_attr(feature = "ts", ts(type = "number"))]
-    pub call_spacing_ms: i64,
-    pub calls_per_hour: u32,
-    pub calls_per_day: u32,
+    /// The window the call counts cover beside today: [`COUNT_WINDOW_MS`].
     #[cfg_attr(feature = "ts", ts(type = "number"))]
     pub count_window_ms: i64,
-    pub rate_window: u32,
+    /// How far back the recent auto-archives are listed:
+    /// [`AUTO_COUNT_AFTER_MS`].
     #[cfg_attr(feature = "ts", ts(type = "number"))]
     pub auto_count_after_ms: i64,
-    pub auto_archive_min_cases: u32,
-    pub auto_archive_flip_percent: u32,
-    #[cfg_attr(feature = "ts", ts(type = "number"))]
-    pub model_gate_max_age_ms: i64,
-    pub model_gate_min_cases: u32,
-    pub self_disable_min_cases: u32,
+    /// How many failed calls in a row pause the model:
+    /// [`PAUSE_AFTER_FAILED_CALLS`].
     pub pause_after_failed_calls: u32,
+}
+
+impl Thresholds {
+    /// The thresholds of this build.
+    pub fn current() -> Thresholds {
+        Thresholds {
+            count_window_ms: COUNT_WINDOW_MS,
+            auto_count_after_ms: AUTO_COUNT_AFTER_MS,
+            pause_after_failed_calls: PAUSE_AFTER_FAILED_CALLS,
+        }
+    }
 }
 
 /// One subject that is not archived.
@@ -859,25 +852,7 @@ pub fn build_view(input: &ViewInput, now_ms: i64) -> RegistryView {
             .unwrap_or_default(),
         recent_auto_archives: recent_auto_archives(&input.evidence.verdicts, &by_id, now_ms),
         routine_candidates: routine_candidates(input.subjects),
-        thresholds: Thresholds {
-            restore_notice_ms: RESTORE_NOTICE_MS,
-            excerpt_ttl_ms: EXCERPT_TTL_MS,
-            non_interactive_listed: u32::try_from(NON_INTERACTIVE_LISTED).unwrap_or(u32::MAX),
-            supersession_window_ms: SUPERSESSION_WINDOW_MS,
-            dry_run_max_cases: u32::try_from(DRY_RUN_MAX_CASES).unwrap_or(u32::MAX),
-            call_spacing_ms: CALL_SPACING_MS,
-            calls_per_hour: u32::try_from(CALLS_PER_HOUR).unwrap_or(u32::MAX),
-            calls_per_day: u32::try_from(CALLS_PER_DAY).unwrap_or(u32::MAX),
-            count_window_ms: COUNT_WINDOW_MS,
-            rate_window: u32::try_from(RATE_WINDOW).unwrap_or(u32::MAX),
-            auto_count_after_ms: AUTO_COUNT_AFTER_MS,
-            auto_archive_min_cases: AUTO_ARCHIVE_MIN_CASES,
-            auto_archive_flip_percent: AUTO_ARCHIVE_FLIP_PERCENT,
-            model_gate_max_age_ms: MODEL_GATE_MAX_AGE_MS,
-            model_gate_min_cases: MODEL_GATE_MIN_CASES,
-            self_disable_min_cases: SELF_DISABLE_MIN_CASES,
-            pause_after_failed_calls: PAUSE_AFTER_FAILED_CALLS,
-        },
+        thresholds: Thresholds::current(),
     }
 }
 

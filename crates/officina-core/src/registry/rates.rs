@@ -4,9 +4,9 @@
 //! and its `unsure` apart; the auto-archive gate, the model enable gate and
 //! the model self-disable test, each with its state. Read from the
 //! confirmations; an auto confirmation counts once 7 days old, or once its
-//! subject was reopened within them, which is a flip. The counts, rates and
-//! thresholds travel in the view (AD-5), so the panel and the switches read
-//! the same numbers (AD-38).
+//! subject was reopened within them, which is a flip. The counts and rates
+//! travel in the view (AD-5), each gate with the count it needs, so the
+//! panel and the switches read the same numbers (AD-38).
 
 use serde::{Deserialize, Serialize};
 
