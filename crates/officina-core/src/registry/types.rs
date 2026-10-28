@@ -164,6 +164,26 @@ closed_enum! {
 
 closed_enum! {
     #[serde(rename_all = "snake_case")]
+    /// Why a triage call was refused before anything was started (AD-51,
+    /// D-65, D-87): stored with its `refused` row, counted and shown.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+    #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+    pub enum TriageRefusal {
+        /// No `claude` binary was found.
+        ClaudeNotFound,
+        /// `claude` resolves to a `.cmd` or `.bat` shim, which only
+        /// `cmd.exe` runs, and `cmd.exe` reparses its arguments.
+        CmdShim,
+        /// `no_excerpts` is set (environment or the window's floor): there
+        /// is nothing the call may be sent.
+        NoExcerpts,
+        /// The empty folder the call runs in holds something.
+        WorkdirNotEmpty,
+    }
+}
+
+closed_enum! {
+    #[serde(rename_all = "snake_case")]
     /// What opening the registry found (AD-41's table, D-47): in every
     /// state but `ready`, nothing is read.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -639,7 +659,12 @@ mod tests {
     /// Runs `check` once per enum of this file, giving it the enum's `ALL`,
     /// `code` and `from_code`; returns how many enums it ran on.
     fn each_enum(check: &dyn Fn(&dyn EnumUnderTest)) -> usize {
-        let enums: [&dyn EnumUnderTest; 15] = [
+        let enums: [&dyn EnumUnderTest; 16] = [
+            &Closed(
+                TriageRefusal::ALL,
+                TriageRefusal::code,
+                TriageRefusal::from_code,
+            ),
             &Closed(
                 ConfirmRefusal::ALL,
                 ConfirmRefusal::code,

@@ -129,6 +129,19 @@ pub fn propose(session: &SessionRecord, model: &ModelInput) -> Proposal {
             call_id: answer.call_id,
         };
     }
+    default_proposal()
+}
+
+/// The default, when no earlier source matched (FR-8): `to_resume`, by
+/// rule. The model takes this place only, and the dry run scores the
+/// model against it (AD-52).
+///
+/// ```
+/// use officina_core::registry::proposal::default_proposal;
+/// use officina_core::registry::types::ReasonCode;
+/// assert_eq!(default_proposal().reason, ReasonCode::DefaultToResume);
+/// ```
+pub fn default_proposal() -> Proposal {
     Proposal {
         verdict: ModelVerdict::ToResume,
         source: ProposalSource::Rules,

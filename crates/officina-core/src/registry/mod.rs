@@ -9,6 +9,7 @@ pub mod fold;
 pub mod ingestion;
 pub mod proposal;
 pub mod retention;
+pub mod triage_call;
 pub mod types;
 pub mod verdict;
 pub mod view;

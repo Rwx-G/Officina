@@ -25,6 +25,10 @@ use officina_core::registry::fold::{
 use officina_core::registry::ingestion::{ExcerptObservation, excerpt_observation};
 use officina_core::registry::proposal::ModelInput;
 use officina_core::registry::proposal::Proposal;
+use officina_core::registry::triage_call::{
+    CallAnswer, CallUsage, ModelOutputError, PromptError, STDOUT_CAP_BYTES, TriageCase, prompt,
+    read_output,
+};
 use officina_core::registry::types::{
     AuthorRefusal, ConfirmRefusal, ConfirmationRecord, Ending, ExcerptRecord, FactRow, FactValue,
     ModelVerdict, NotNeeded, ProposalSource, ReasonCode, RowKind, SessionFact, SessionRecord,
@@ -44,13 +48,58 @@ struct VectorSet {
     fold: Vec<FoldCase>,
     filing: Vec<SubjectCase>,
     confirm: Vec<SubjectCase>,
-    triage: Vec<TriageCase>,
+    triage: Vec<RowsCase>,
+    prompt: Vec<PromptCase>,
+    model_output: Vec<ModelOutputCase>,
 }
 
+/// A case of the `prompt` section (AD-51): a case and a nonce in, the data
+/// line the prompt carries out, or a refusal.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PromptCase {
+    name: String,
+    nonce: String,
+    case: TriageCase,
+    expect: PromptExpect,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PromptExpect {
+    #[serde(default)]
+    data_line: Option<String>,
+    #[serde(default)]
+    refused: bool,
+}
+
+/// A case of the `model_output` section (AD-51): raw stdout in, an answer
+/// or an error out, and the usage when the case says it.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ModelOutputCase {
+    name: String,
+    stdout: String,
+    /// Spaces appended until stdout is this long, for the cap's cases.
+    #[serde(default)]
+    pad_to_bytes: Option<usize>,
+    expect: OutputExpect,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OutputExpect {
+    #[serde(default)]
+    answer: Option<CallAnswer>,
+    #[serde(default)]
+    error: Option<ModelOutputError>,
+    #[serde(default)]
+    usage: Option<CallUsage>,
+}
 /// A case of the `triage` section: state in, rows out (AD-49, D-76).
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct TriageCase {
+struct RowsCase {
     name: String,
     /// The triage model's part, disabled when absent.
     #[serde(default)]
@@ -809,6 +858,93 @@ fn every_case_matches() {
             case.name
         );
     }
+    assert!(!set.prompt.is_empty() && !set.model_output.is_empty());
+    for case in &set.prompt {
+        replay_prompt(case);
+    }
+    for case in &set.model_output {
+        replay_output(case);
+    }
+}
+
+/// AD-51: the prompt carries the expected line, alone on its own line
+/// between the markers, and the line reads back as the case; or the case
+/// is refused for holding the nonce.
+fn replay_prompt(case: &PromptCase) {
+    let built = prompt(&case.case, &case.nonce);
+    match (&case.expect.data_line, case.expect.refused) {
+        (Some(line), false) => {
+            let text = built.unwrap_or_else(|e| panic!("prompt case {}: {e}", case.name));
+            let opening = format!(
+                "<<<OFFICINA-DATA-{}
+",
+                case.nonce
+            );
+            let closing = format!(
+                "
+OFFICINA-DATA-{}>>>
+",
+                case.nonce
+            );
+            let start = text.find(&opening).expect("opening marker") + opening.len();
+            let end = text.rfind(&closing).expect("closing marker");
+            assert_eq!(&text[start..end], line, "prompt case: {}", case.name);
+            assert!(
+                line.chars().all(|c| !c.is_control()) && !line.contains(['<', '>']),
+                "prompt case {}: the line holds a raw control or angle bracket",
+                case.name
+            );
+            assert_eq!(
+                serde_json::from_str::<TriageCase>(line).unwrap(),
+                case.case,
+                "prompt case {}: the line reads back as the case",
+                case.name
+            );
+            assert_eq!(text.matches(&opening).count(), 1, "{}", case.name);
+            assert_eq!(text.matches(&closing).count(), 1, "{}", case.name);
+        }
+        (None, true) => assert_eq!(
+            built,
+            Err(PromptError::NonceInInput),
+            "prompt case: {}",
+            case.name
+        ),
+        _ => panic!("prompt case {}: expect a data line or a refusal", case.name),
+    }
+}
+
+/// AD-51: raw stdout in, the answer or the error out; the usage, read
+/// permissively, when the case states it.
+fn replay_output(case: &ModelOutputCase) {
+    let mut stdout = case.stdout.clone().into_bytes();
+    if let Some(len) = case.pad_to_bytes {
+        assert!(len >= stdout.len(), "{}", case.name);
+        stdout.resize(len, b' ');
+        assert!(
+            len.abs_diff(STDOUT_CAP_BYTES) <= 1,
+            "{}: padding is for the cap's edge",
+            case.name
+        );
+    }
+    let (answer, usage) = read_output(&stdout);
+    match (&case.expect.answer, case.expect.error) {
+        (Some(expected), None) => {
+            assert_eq!(
+                answer.as_ref(),
+                Ok(expected),
+                "model_output case: {}",
+                case.name
+            )
+        }
+        (None, Some(error)) => assert_eq!(answer, Err(error), "model_output case: {}", case.name),
+        _ => panic!(
+            "model_output case {}: expect an answer or an error",
+            case.name
+        ),
+    }
+    if let Some(expected) = &case.expect.usage {
+        assert_eq!(&usage, expected, "model_output case usage: {}", case.name);
+    }
 }
 
 /// The wire name serde gives an enum value.
@@ -937,6 +1073,28 @@ fn every_value_has_a_case() {
     let sources: HashSet<ProposalSource> = expected().map(|r| r.proposal.1).collect();
     let proposed: HashSet<ModelVerdict> = expected().map(|r| r.proposal.0).collect();
     let verdicts: HashSet<Verdict> = expected().filter_map(|r| r.verdict).collect();
+    let output_errors: HashSet<ModelOutputError> = set
+        .model_output
+        .iter()
+        .filter_map(|c| c.expect.error)
+        .collect();
+    for error in ModelOutputError::ALL {
+        assert!(
+            output_errors.contains(error),
+            "no model_output case for {error:?}"
+        );
+    }
+    let answered: HashSet<ModelVerdict> = set
+        .model_output
+        .iter()
+        .filter_map(|c| c.expect.answer.as_ref().map(|a| a.verdict))
+        .collect();
+    for verdict in ModelVerdict::ALL {
+        assert!(
+            answered.contains(verdict),
+            "no model_output case answering {verdict:?}"
+        );
+    }
     for kind in RowKind::ALL {
         assert!(kinds.contains(kind), "no triage case for row kind {kind:?}");
     }
