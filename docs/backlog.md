@@ -14,10 +14,6 @@ README, not here.
   session, a minimised window, another virtual desktop, Windows Terminal) and
   record the results in `docs/research-notes.md`.
 
-## Medium
-
-- Pin GitHub Actions to commit SHAs.
-
 ## Low
 
 - The kill of a timed-out `claude` reaches only the direct child: a process
