@@ -148,6 +148,18 @@ impl TestEnv {
     }
 }
 
+/// A copy of the fake claude in `dir`, configured by `sidecar`, written
+/// next to it as `fake-claude.json` (D-86). A test that runs the collector
+/// in its own process points it at this copy, since no test may set the
+/// process environment.
+pub fn fake_claude_in(dir: &Path, sidecar: &serde_json::Value) -> PathBuf {
+    std::fs::create_dir_all(dir).unwrap();
+    let exe = dir.join(Path::new(FAKE_CLAUDE).file_name().unwrap());
+    std::fs::copy(FAKE_CLAUDE, &exe).unwrap();
+    std::fs::write(dir.join("fake-claude.json"), sidecar.to_string()).unwrap();
+    exe
+}
+
 /// The fake tool's path as a floor writes it: forward slashes, so it needs
 /// no escaping in a TOML string. A `native` program is a Windows absolute
 /// path (AD-22; Linux is v1), which the fake tool's own path is not off
