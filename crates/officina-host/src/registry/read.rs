@@ -31,10 +31,8 @@ use officina_core::registry::view::{
     AutoArchiveSetting, EvidenceInput, IngestionView, RegistryView, SubjectView, ViewInput,
     archived_subjects, build_view,
 };
-use rusqlite::Connection;
-#[cfg(feature = "window-authority")]
-use rusqlite::OptionalExtension;
 use rusqlite::types::ValueRef;
+use rusqlite::{Connection, OptionalExtension};
 
 use super::store::{self, Location};
 
@@ -248,23 +246,18 @@ const SUBJECT_COLUMNS: &str =
     "id, project, name, status, status_src, status_at_ms, created_at_ms, routine, merged_into";
 
 fn subject_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SubjectRecord> {
-    let text = |index: usize, value: String| {
-        rusqlite::Error::InvalidColumnType(index, value, rusqlite::types::Type::Text)
-    };
-    let status: String = row.get(3)?;
-    let src: String = row.get(4)?;
     Ok(SubjectRecord {
         id: row.get(0)?,
         project: row.get(1)?,
         name: row.get(2)?,
         // Both columns' `CHECK` list every value this build knows.
         status: Sourced {
-            value: SubjectStatus::from_code(&status).ok_or_else(|| text(3, status.clone()))?,
-            src: Source::from_code(&src).ok_or_else(|| text(4, src.clone()))?,
+            value: code_of(row, 3, SubjectStatus::from_code)?,
+            src: code_of(row, 4, Source::from_code)?,
             at_ms: row.get(5)?,
         },
         created_at_ms: row.get(6)?,
-        routine: row.get::<_, i64>(7)? == 1,
+        routine: bool_of(row, 7)?,
         merged_into: row.get(8)?,
     })
 }
@@ -395,16 +388,23 @@ fn setting_of<T: serde::de::DeserializeOwned>(
     conn: &Connection,
     key: SettingKey,
 ) -> rusqlite::Result<Option<Sourced<T>>> {
-    Ok(settings(conn)?
-        .into_iter()
-        .find(|row| row.key == key)
-        .and_then(|row| {
-            Some(Sourced {
-                value: serde_json::from_str(&row.value).ok()?,
-                src: row.src,
-                at_ms: row.at_ms,
-            })
-        }))
+    let found = conn
+        .prepare_cached("SELECT value, src, at_ms FROM setting WHERE key = ?1")?
+        .query_row([key.code()], |row| {
+            Ok((
+                text_of(row.get_ref(0)?),
+                row.get::<_, String>(1)?,
+                row.get::<_, i64>(2)?,
+            ))
+        })
+        .optional()?;
+    Ok(found.and_then(|(value, src, at_ms)| {
+        Some(Sourced {
+            value: serde_json::from_str(&value).ok()?,
+            src: Source::from_code(&src)?,
+            at_ms,
+        })
+    }))
 }
 
 /// The triage model as the registry holds it (AD-52, D-66, D-69, D-87),
@@ -506,15 +506,12 @@ fn fact_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<FactRow> {
         ValueRef::Integer(i) => FactValue::Integer(i),
         other => FactValue::Text(text_of(other)),
     };
-    let src: String = row.get(3)?;
     Ok(FactRow {
         session_id: row.get(0)?,
         fact: row.get(1)?,
         value,
         // The column's `CHECK` lists every source this build knows.
-        src: Source::from_code(&src).ok_or_else(|| {
-            rusqlite::Error::InvalidColumnType(3, src.clone(), rusqlite::types::Type::Text)
-        })?,
+        src: code_of(row, 3, Source::from_code)?,
         at_ms: row.get(4)?,
     })
 }
@@ -789,6 +786,11 @@ pub(crate) fn known_projects(conn: &Connection) -> rusqlite::Result<Vec<String>>
         .collect()
 }
 
+/// A 0 or 1 column (its `CHECK` allows nothing else), read back.
+fn bool_of(row: &rusqlite::Row<'_>, index: usize) -> rusqlite::Result<bool> {
+    Ok(row.get::<_, i64>(index)? == 1)
+}
+
 /// A text column holding a closed enum's code, read back; an unknown code
 /// is a type error, as for the columns whose `CHECK` lists every value.
 fn code_of<T>(
@@ -877,7 +879,7 @@ pub(crate) fn evaluable_confirmations(
                 answer_head: row.get(9)?,
                 answer_tail: row.get(10)?,
                 end_reason: row.get(11)?,
-                cut_mid_turn: row.get::<_, i64>(12)? == 1,
+                cut_mid_turn: bool_of(row, 12)?,
                 expires_at_ms: row.get(13)?,
             }),
             None => None,
@@ -940,7 +942,7 @@ pub(crate) fn verdict_records(conn: &Connection) -> rusqlite::Result<Vec<Verdict
                 call_id: row.get(5)?,
             },
             verdict: code_of(row, 6, Verdict::from_code)?,
-            auto: row.get::<_, i64>(7)? == 1,
+            auto: bool_of(row, 7)?,
             confirmed_at_ms: row.get(8)?,
             reopened_at_ms: row.get(9)?,
         })
