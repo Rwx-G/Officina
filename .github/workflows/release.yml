@@ -39,6 +39,39 @@ jobs:
         run: pnpm bundle
       - name: CLI
         run: cargo build --locked --release -p officina
+      - name: The shipped binaries are the ones CI checks
+        # The checks of ci.yml's "officina holds no authority" and "No
+        # bundled roots", on the very files the package takes (story 2.16):
+        # officina.exe holds no authority marker and enables neither the
+        # authority nor the test seams, officina-app.exe holds the marker
+        # (positive control), and webpki-roots stays out of the graph
+        # while rustls is in it (positive control).
+        shell: bash
+        run: |
+          marker=$(sed -n 's/^pub const AUTHORITY_MARKER: &str = "\(.*\)";$/\1/p' crates/officina-host/src/relay/authority.rs)
+          test -n "$marker"
+          tree=$(cargo tree --locked -p officina -e normal,features)
+          grep -q -F 'officina-host feature' <<<"$tree"
+          if grep -F -e window-authority -e test-seams <<<"$tree"; then
+            echo "officina enables window-authority or test-seams outside its tests"; exit 1
+          fi
+          if grep -a -q -F "$marker" target/release/officina.exe; then
+            echo "officina.exe contains the authority marker"; exit 1
+          fi
+          if ! grep -a -q -F "$marker" target/release/officina-app.exe; then
+            echo "positive control failed: officina-app.exe lacks the authority marker"; exit 1
+          fi
+          out=$(cargo tree --locked -p officina -e normal --target all -i webpki-roots 2>&1) || true
+          if grep -q '^webpki-roots v' <<<"$out"; then
+            echo "$out"; echo "webpki-roots is in the graph of officina"; exit 1
+          fi
+          if ! grep -q -e 'nothing to print' -e 'did not match any packages' <<<"$out"; then
+            echo "$out"; echo "cargo tree did not answer"; exit 1
+          fi
+          control=$(cargo tree --locked -p officina -e normal --target all -i rustls 2>&1) || true
+          if ! grep -q '^rustls v' <<<"$control"; then
+            echo "$control"; echo "positive control failed: rustls not found"; exit 1
+          fi
       - name: Package
         shell: bash
         run: |
