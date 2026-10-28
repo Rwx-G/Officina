@@ -28,6 +28,26 @@ export default defineConfig([
       "no-undef": "off",
     },
   },
+  // No clock and no randomness in the scene (AD-64, D-110, D-470): it moves
+  // on a changed payload only, and its layout and furniture are pure. Story
+  // 4.10 exempts the mover's own module, and that module only.
+  {
+    files: ["src/lib/scene/**", "src/components/scene/**"],
+    rules: {
+      "no-restricted-globals": [
+        "error",
+        { name: "setInterval", message: "The scene has no timer: it changes on a changed payload only (AD-64)." },
+        { name: "setTimeout", message: "The scene has no timer: it changes on a changed payload only (AD-64)." },
+        { name: "requestAnimationFrame", message: "The scene's only frame loop is the mover's (D-470)." },
+      ],
+      "no-restricted-properties": [
+        "error",
+        { object: "Date", property: "now", message: "The scene never reads the clock (AD-64)." },
+        { object: "performance", property: "now", message: "The scene never reads the clock (AD-64)." },
+        { object: "Math", property: "random", message: "The scene is drawn from seeds, never at random (AD-60, AD-173)." },
+      ],
+    },
+  },
   {
     files: ["**/*.svelte", "**/*.svelte.ts"],
     languageOptions: {
