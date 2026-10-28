@@ -1,6 +1,6 @@
 # Story 3.5: Subjects view and author actions in the window
 
-**Status:** Approved
+**Status:** review
 
 ## Story
 
@@ -25,14 +25,14 @@ so that I find where I left each subject without opening a single session.
 
 ## Tasks
 
-- [ ] `watch.rs`: `CollectorMsg::Author`, `AuthorRequest` with reply and deadline, `Emit` trait, registry emit, view cache (AC 1, 2)
-- [ ] `app/src-tauri/src/main.rs`: commands, waiting helper, `registry://updated`; `build.rs`, `capabilities/default.json` (AC 1, 3)
-- [ ] `ipc.ts`, `lib/registry.svelte.ts`, `e2e-mock.ts`, `e2e-globals.d.ts` (AC 4)
-- [ ] `Header.svelte` switch; `App.svelte` key rule per view (AC 5)
-- [ ] Components `SubjectsView`, `SubjectCard`, `UnfiledSessions`, `ArchivedList`, `SubjectPicker`; `SessionCard` subject chip (AC 6-10)
-- [ ] `examples/registry_fixture.rs` (`required-features = ["window-authority"]`); scenarios in `app/scripts/e2e-fixtures.mjs`; `pnpm e2e:fixtures` and the CI fixture step run the example (AC 11)
-- [ ] `app/e2e/subjects.spec.ts`, board case, Vitest cases (AC 5-10)
-- [ ] Update `CHANGELOG.md` and the README (AC 12)
+- [x] `watch.rs`: `CollectorMsg::Author`, `AuthorRequest` with reply and deadline, `Emit` trait, registry emit, view cache (AC 1, 2)
+- [x] `app/src-tauri/src/main.rs`: commands, waiting helper, `registry://updated`; `build.rs`, `capabilities/default.json` (AC 1, 3)
+- [x] `ipc.ts`, `lib/registry.svelte.ts`, `e2e-mock.ts`, `e2e-globals.d.ts` (AC 4)
+- [x] `Header.svelte` switch; `App.svelte` key rule per view (AC 5)
+- [x] Components `SubjectsView`, `SubjectCard`, `UnfiledSessions`, `ArchivedList`, `SubjectPicker`; `SessionCard` subject chip (AC 6-10)
+- [x] `examples/registry_fixture.rs` (`required-features = ["window-authority"]`); scenarios in `app/scripts/e2e-fixtures.mjs`; `pnpm e2e:fixtures` and the CI fixture step run the example (AC 11)
+- [x] `app/e2e/subjects.spec.ts`, board case, Vitest cases (AC 5-10)
+- [x] Update `CHANGELOG.md` and the README (AC 12)
 
 ## Dev Notes
 
@@ -55,11 +55,44 @@ so that I find where I left each subject without opening a single session.
 
 ### Debug Log
 
+- **Decisions where the story is silent:**
+  - AC 1: `AuthorRequest { command, deadline, reply }`, with `AuthorCommand::{ListArchived, Act(AuthorAction)}` and the reply `Result<AuthorAnswer, IpcError>`. The collector drops a request once within `AUTHOR_HEADROOM` (1 s) of its deadline rather than at the deadline itself: the action, the views it emits and the reply then land before the window stops waiting, so D-92's "never an error for an action that later happened" holds at the edge too. The waiting helper `ask_collector` treats a dropped request (its reply sender gone) as a timeout, "nothing was changed".
+  - AC 1, AC 3: `IpcError` gains `refusal: Option<AuthorRefusal>` and the codes `author_refused`, `registry_unavailable` and `timeout`; the window words a refusal through an exhaustive `Record` (`AUTHOR_REFUSAL_TEXT`), as AD-54 does for `ReasonCode`. An action on a registry that is read only, unavailable or on a network folder answers `registry_unavailable` with the state and its detail; a SQLite failure answers `write_failed`, or `registry_unavailable` when it is corruption, which also makes the registry unavailable until the next start (AD-42).
+  - AC 2: the registry view is rebuilt with every board recompute and after the hourly pass (which can clear excerpts), joined to the board just built, and emitted when its bytes differ, `generated_at_ms` aside, like the board. After an author action, refused or not, the cards' subjects are refreshed and the board and the registry view are published, the view forced, before the reply is sent.
+  - AC 3: `file_sessions(sessions, subject: null)` unfiles (D-56); `create_subject(name, origin)` takes core's `SubjectOrigin` (`{sessions}` or `{project}`), now exported to TypeScript.
+  - AC 6: "live" is a session not ended that has a board card: an ended session's To resume card is not live. The view carries `projects` (every session's and subject's, archived included: those the writer accepts, D-95) and each subject's `routine`, for the archived list.
+  - AC 6, AC 7: `list_archived` lists archived subjects not merged (core `view::is_listed_archived`), latest archived first, with their sessions; it reloads after a reopen, and after an archive while shown. A `SessionRow` component, shared by subjects and unfiled sessions, carries the selection box; the selection bar files, unfiles or creates from the selected sessions through `SubjectPicker`. The header always shows Board and Subjects; Relay joins them while the relay is in use (the 2.9 case "no view switch" now reads "no Relay view").
+  - AC 11: the example takes a steps file (`ingest`, `agents`, `author`, `copy`, `damage`) and an explicit `now_ms`; the fixture script builds it once (`cargo build --locked --example registry_fixture --features window-authority`), which both `pnpm e2e:fixtures` and the CI step "e2e fixtures from the real CLI" run. The scenarios write `<scenario>.json` (the registry view) and `<scenario>-board.json`; `subjects-unavailable` prints an unreadable registry (exit 3). The script checks what each scenario must show and fails otherwise, so a changed constant (the sync marker it plants, for one) turns it red. Story 4.1's index (D-181) can file these under `registry` and `board` from the same table.
+- **Adversarial pass** (a request expiring during a hung `claude agents`, a refusal, an unwritable registry, selection surviving a new view, markup in names and prompts, the push global, digit keys in the Subjects view, an archived list shown while archiving): one real miss, an author action on an unavailable registry had no test; `watch.rs::unavailable_registry_keeps_the_board_and_deletes_nothing` now asserts the `registry_unavailable` answer and the view's reason. Mutation check: removing the expiry check turns `expired_author_request_is_dropped_unexecuted` red.
+- **Per-commit gates:** fmt; clippy on the workspace with `officina-core/ts`, and on the host without `window-authority`; the tests of the crates touched; `pnpm check`, `lint`, `test`; Playwright on the specs touched, then the whole suite (68 passed). Node 25.4 locally, 22 in CI: nothing here depends on the difference. The full gate runs at the end of story 3.6.
+
 ### Completion Notes
 
+- AC 1: `crates/officina/tests/watch.rs::{author_request_is_answered_by_the_collector_thread, author_request_waits_behind_a_running_refresh, expired_author_request_is_dropped_unexecuted}`; `app/src-tauri/src/main.rs::tests::author_reply_times_out`; `crates/officina-host/src/watch.rs::tests::a_request_within_the_headroom_of_its_deadline_is_expired`.
+- AC 2: `watch.rs::{registry_view_is_emitted_only_on_change, author_action_emits_a_new_view}`.
+- AC 3: `main.rs::tests::every_declared_command_is_allowed`.
+- AC 4: the Playwright cases below, against `e2e-mock.ts` and `window.__officinaPushRegistry`.
+- AC 5: `app/e2e/subjects.spec.ts > the header switches between Board and Subjects`, `> number keys do nothing in the Subjects view`.
+- AC 6: `subjects.spec.ts > active and to-resume subjects come first with their sessions' live state`, `> a subject without a live session shows its last prompt and the end of its last answer`, `> unfiled sessions are listed under their project`, `> non-interactive runs are counted and collapsed`, `> archived subjects appear on demand`; core `crates/officina-core/src/registry/view.rs::tests::{archived_list_leaves_merged_out_latest_first, projects_are_those_of_every_session_and_subject}`.
+- AC 7: `subjects.spec.ts > each action sends its command with the shown arguments`, `> creating from selected sessions takes their project`, `> archive offers the routine box`, `> a refused action shows the reason and changes nothing`; Vitest `app/src/components/components.test.ts > SubjectPicker lists the project's open subjects first and accepts a new name`, `> refusalText words the rule that refused an author action, and passes other errors through`.
+- AC 8: `app/e2e/board.spec.ts > cards show their subject`; Vitest `components.test.ts > SessionCard renders its subject as text`.
+- AC 9: `subjects.spec.ts > a synced registry names the folder to exclude`, `> a restored registry names the copy used`, `> an unavailable registry says why`.
+- AC 10: `subjects.spec.ts > session and subject text renders as text, never as HTML`; the `svelte/no-at-html-tags` lint.
+- AC 11: `crates/officina-host/examples/registry_fixture.rs`, the scenarios of `app/scripts/e2e-fixtures.mjs`, run by `pnpm e2e:fixtures` and the CI fixture step; the Playwright cases load them.
+- AC 12: `CHANGELOG.md` `[Unreleased]` Added; README "The Subjects view".
+
 ## File List
+
+- `crates/officina-core/src/{ipc,registry/view,registry/confirm}.rs`, `crates/officina-core/tests/typescript_bindings.rs`
+- `crates/officina-host/Cargo.toml`, `crates/officina-host/src/watch.rs`, `crates/officina-host/src/registry/{window,read,commands}.rs`, `crates/officina-host/src/relay/authority.rs`, `crates/officina-host/examples/registry_fixture.rs`
+- `crates/officina/tests/{watch,quota_doctor}.rs`, `crates/officina/tests/common/mod.rs`
+- `app/src-tauri/src/main.rs`, `app/src-tauri/build.rs`, `app/src-tauri/capabilities/default.json`
+- `app/src/{App.svelte,e2e-mock.ts,e2e-globals.d.ts}`, `app/src/lib/{ipc.ts,relay.svelte.ts,registry.svelte.ts,registry-text.ts}`, `app/src/lib/generated/{IpcError,IpcErrorCode,AuthorRefusal,RegistryView,SubjectView,SubjectOrigin}.ts`, `app/src/components/{Header,SessionCard,SubjectsView,SubjectCard,SubjectPicker,SessionRow,UnfiledSessions,ArchivedList}.svelte`, `app/src/components/components.test.ts`
+- `app/scripts/e2e-fixtures.mjs`, `app/e2e/{fixtures.ts,subjects.spec.ts,board.spec.ts,relay-view.spec.ts}`
+- `README.md`, `CHANGELOG.md`, `docs/stories/story-3.5-subjects-view.md`, `docs/stories/sprint-status.yaml`
 
 ## Change Log
 
 - 2026-10-28 created
 - 2026-10-28 reworked after review: requests carry their deadline and expired ones are dropped, `get_registry` reads the cache (D-92); `create_subject` takes a project (D-95); non-interactive runs bounded (D-96); restore notice for 7 days (D-93); fixtures read with the window closed and the example run by the fixture script, `pnpm e2e:fixtures` and CI (D-72, D-82)
+- 2026-10-28 implemented: author requests on the collector thread with their deadline, the `Emit` trait and the registry view's emission, the window's registry commands, the Subjects view and its actions, card subjects, fixtures through `registry_fixture`; one adversarial test added. Status review
