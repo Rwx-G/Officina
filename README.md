@@ -180,7 +180,9 @@ pattern = "lab-[a-z0-9-]{1,30}"      # anchored: the whole value must match
 
 The relay runs only a catalogue you approved in the window. Approval records a hash of the catalogue's meaning (projects, actions, parameters, guarded programs), not of its text: comments, key order, colours or an invalid action do not change it, any change of meaning does. Only `officina-app.exe` contains the code that approves; `officina.exe`, which sessions can call, does not, and CI checks the shipped binary for it.
 
-Today the floor's catalogue is parsed, validated and hashed; running actions, the gate and the approval banner in the window arrive with the rest of v0.2.
+In a guarded repository the gate reads each `Bash` command and refuses one that would start a guarded program, even through quotes, wrappers, `bash -c`, an interpreter one-liner or a command substitution, along with a command name built at run time, a PowerShell encoded command, a redirection of Officina's home, and any mention of an `OFFICINA_` setting or of Officina's own files. It is a guardrail, not a boundary: a text match cannot catch a guarded program hidden in a script file (`bash deploy.sh`, `make apply`), called by another tool (`git` over SSH, a Python import), renamed, aliased from an earlier command, or reached by a `cd` from a free repository into a guarded one. Those stay the author's to watch; the limits are listed in the architecture (AD-27).
+
+Today the floor's catalogue is parsed, validated and hashed, and the gate decision is computed; running actions, wiring the gate into the hook and the approval banner in the window arrive with the rest of v0.2.
 
 ## Command line
 

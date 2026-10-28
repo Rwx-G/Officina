@@ -36,3 +36,12 @@ project uses [Semantic Versioning](https://semver.org/).
   and an approval is refused when the floor changed since it was displayed.
   Only the window build contains the code that approves; CI checks that the
   shipped `officina.exe` does not.
+- Relay gate decision, the core of it: a command lexer reads a `Bash` command
+  the way bash splits it and finds every program it would start, through
+  quotes, wrappers, `bash -c`, interpreter one-liners and command
+  substitutions; in a guarded repository the gate refuses a guarded program
+  (remote shells, Ansible, WSL and the Windows distro launchers), a command
+  name built at run time, a PowerShell encoded command, a redirection of
+  Officina's home, and any mention of an `OFFICINA_` setting or of Officina's
+  own files. Outside a guarded repository it decides nothing. The documented
+  limits of a text match are recorded in the architecture.

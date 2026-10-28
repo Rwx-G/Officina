@@ -1,6 +1,6 @@
 # Story 2.3: Command lexer and gate decision
 
-**Status:** Approved
+**Status:** Review
 
 ## Story
 
@@ -27,12 +27,12 @@ so that a raw `ansible-playbook` or `ssh` is refused while ordinary commands pas
 
 ## Tasks
 
-- [ ] `crates/officina-core/src/relay/shell.rs`: tokens, word joining, command-position tracking, wrapper option tables, interpreters, heredocs, recursion, step counter (AC 1, 3-6, 14)
-- [ ] Constants for every family of AD-27 and D-10 to D-12, each iterable (AC 3-9)
-- [ ] Extend the default guarded list constant of story 2.1 per D-11 (AC 7)
-- [ ] `crates/officina-core/src/relay/gate.rs`: `decide`, `normalise_cwd`, `guarded_project`, `deny_reason` (AC 2, 8, 11-13)
-- [ ] Write `tests/vectors/gate.json` by hand (redacted) and `crates/officina-core/tests/gate_vectors.rs` (AC 2-10)
-- [ ] Update `CHANGELOG.md` `[Unreleased]` (D-34)
+- [x] `crates/officina-core/src/relay/shell.rs`: tokens, word joining, command-position tracking, wrapper option tables, interpreters, heredocs, recursion, step counter (AC 1, 3-6, 14)
+- [x] Constants for every family of AD-27 and D-10 to D-12, each iterable (AC 3-9)
+- [x] Extend the default guarded list constant of story 2.1 per D-11 (AC 7)
+- [x] `crates/officina-core/src/relay/gate.rs`: `decide`, `normalise_cwd`, `guarded_project`, `deny_reason` (AC 2, 8, 11-13)
+- [x] Write `tests/vectors/gate.json` by hand (redacted) and `crates/officina-core/tests/gate_vectors.rs` (AC 2-10)
+- [x] Update `CHANGELOG.md` `[Unreleased]` (D-34)
 
 ## Dev Notes
 
@@ -54,11 +54,58 @@ so that a raw `ansible-playbook` or `ssh` is refused while ordinary commands pas
 
 ### Debug Log
 
+- **Git Bash behaviours verified on the workstation** (bash 5.2.37, Git for Windows), each a rule in the lexer:
+  - Git Bash drops every carriage return of its input, quoted or not, before lexing; a CR inside a word does not split it. The lexer filters CR from each text, so `ss\rh` is `ssh`.
+  - A line continuation (`\` then newline) is removed everywhere outside single quotes and comments, including inside a double-quoted string, between the two bytes of an operator (`&\<nl>&`), between `$` and `(`, and inside an unquoted here-document delimiter before it is compared. The lexer joins continuations in `peek` and in the heredoc delimiter comparison.
+  - `$(( ... ))` and `(( ... ))` are arithmetic only when the content is names, numbers, operators and simple expansions; a substitution, a quote or `) )` makes bash read them as nested subshells, and the lexer does the same (`arithmetic_end`). A `for (( ))` header is arithmetic too.
+  - An unquoted here-document body is expanded like a double-quoted string (so `$(...)` in it runs); a quoted delimiter (`<<'E'`, `<<"E"`, `<<\E`) makes the body literal.
+  - `cmd.exe` does not join quoted parts of a program name the way bash does (`cmd /c e"c"ho` fails), but bash strips the quotes before cmd sees them, so `cmd /c s"s"h` reaches cmd as `ssh`; `cmd` removes carets (`s^sh`); `//c` is Git Bash's `/c`.
+  - `BASH_CMDS[name]=path` binds a command name to a program under non-interactive `bash -c` (verified), like `hash -p`; `BASH_ALIASES[name]=line` is the array form of `alias`. Both are handled. `PROMPT_COMMAND` and a `DEBUG` trap set from a variable do not run in the gate's non-interactive context or are already caught as dynamic, so they are limit or dynamic cases, not silent passes.
+- **Choices where the documents are silent, each the stricter reading:**
+  - case folding is upper-then-lower (`fold`), so the letters Windows folds to ASCII (`ſ` to `s`, the dotless `ı` to `i`) compare equal; program names strip trailing dots, spaces and a `::$DATA` stream suffix, which Windows ignores, but keep `.exe` for D-11's written-form match.
+  - a dynamic command word whose last path segment is literal (`$DIR/ssh`) is still matched by name, and also reported dynamic; the gate checks the guarded name first.
+  - an unknown wrapper option is assumed to take no value (AC 5); when a real value-taking option is missing from a wrapper's table the next word is read as the command and the guarded program is missed: that is a `limit` case (`sudo -X value ssh host01`), fixed by adding the option, never a generic skip-one-word rule.
+  - `$'...'` and `$"..."` in command position are dynamic (AC 3), but their decoded text is read for an assignment name or value, so `env $'OFFICINA\x5fHOME=...' officina` is a home redirection with the name known. The runtime-`computed` flag, not mere quoting, decides whether a name or value is unknown.
+  - an interpreter reading its program from an explicit plain file (`bash deploy.sh`) is a limit; from a here-document or here-string the program is lexed (shell) or scanned (others); from a pipe, a process substitution, a loop's input or another descriptor it is dynamic.
+  - the protected-directory match is on path boundaries with `\`/`/`, any case, doubled slashes and `/./` segments collapsed, and for a drive path also its Git Bash (`/c/...`), Cygwin (`/cygdrive/c/...`) and administrative-share (`c$/...`) spellings; a bare `relay/` or a sibling (`relay-notes.md`, `.officinarelay`) is not matched (D-13).
+- **Adversarial pass.** After the first green run, about 120 crafted commands were replayed through `gate::decide` (quoting tricks, wrappers, interpreters, Windows paths, case folding, `.exe`, env prefixes, heredocs, process substitution, line continuations, `BASH_CMDS`/`BASH_ALIASES`, `xargs` replace strings, protected-dir spellings). Two genuine misses were found and fixed: a `BASH_CMDS[k]=path` binding (now treated like `hash -p`) and an `xargs` replace string templating a shell's `-c` text from stdin (now any word carrying the replace string is dynamic). Each attempt that passed is now a vector case.
+- The replay and coverage guards were proved able to fail: mutating a case's `matched`, turning a guarded case into an ordinary one, and removing the only case for a shell interpreter or an encoded spelling each turn a test red.
+
 ### Completion Notes
 
+- AC 1: `shell.rs::tests::{single_quotes_are_literal, double_quote_escapes, unterminated_quote_is_an_error, oversized_input_is_an_error, depth_over_three_is_an_error}`, plus `nesting_is_bounded`.
+- AC 2: `tests/vectors/gate.json` replayed by `gate_vectors.rs::every_case_matches`; the no-decision side by the `free:` and `expect: "none"` cases.
+- AC 3: `gate.json` cases `ss?`, `ss[h]`, `ss{h,}`, `/usr/bin/ss?`, `$'\x73sh'`, `$"ssh"`, each `dynamic`.
+- AC 4: `gate.json` joining cases (`s"s"h`, `"ss"h`, `s'sh'`, `\ssh`, `ss\<nl>h`), `matched: "ssh"`; `shell.rs::tests::joined_words_equal_what_bash_runs`.
+- AC 5: one `gate.json` case per entry of each wrapper's value-option table, enforced by `every_constant_appears_in_a_case`; the unknown-option rule by `sudo --unknown-flag` and the `sudo -X value` limit.
+- AC 6: `gate.json` interpreter cases for the sh-family clusters, `-o pipefail -c`, `python`/`python3`/`py`/`pythonw`/`node`/`perl`/`ruby`, `powershell`/`pwsh` in any case, every encoded-command spelling (`expect: "encoded_command"`), and `cmd /c s^sh`; `coproc` as a reserved word.
+- AC 7: `gate.json` cases `bash.exe -c`, `C:/Windows/System32/bash -c`, `ubuntu.exe run`, `debian run`, and bare `bash -c 'ls'` (`none`), enforced by `every_constant_appears_in_a_case` iterating `DEFAULT_GUARDED_PROGRAMS`.
+- AC 8: `gate.json` home-redirection cases, one per `HOME_REDIRECTION_NAMES` entry, enforced by `every_constant_appears_in_a_case`.
+- AC 9: `gate_vectors.rs::every_constant_appears_in_a_case` iterating the lexer constants, the default list, the home-redirection names and the deny kinds.
+- AC 10: `gate_vectors.rs::limits_are_flagged`; the `cd ../other && ssh` case and the other `limit` cases; the README limits paragraph (finalised in story 2.10).
+- AC 11: `gate.rs::tests::{cwd_forms_normalise_alike, longest_prefix_wins, outside_every_project_is_none}`.
+- AC 12: `gate.rs::tests::{reason_lists_actions_and_the_list_command, reason_marks_unavailable_classes, reason_is_cut_at_2_kib_on_a_char_boundary}`.
+- AC 13: `gate.rs::tests::gate_modules_import_no_regex_or_hash` (scans both modules' source before `#[cfg(test)]`).
+- AC 14: `shell.rs::tests::step_count_grows_linearly` (a 256 KiB input completes; 128 KiB under 2.2x the 64 KiB step count).
+- `decide` orders the kinds unparsable, guarded program, encoded command, dynamic, home redirection, `OFFICINA_`, protected dir; a guarded program is reported even when the word is also dynamic (`$DIR/ssh`), which R15 (false positives) favours.
+- `normalise_cwd` and `guarded_project` are this story; combining the floor's and the snapshot's project sets, and wiring `decide` into the hook with the journal, is story 2.4 (D-14 to D-16).
+- Gates at the end of the story: `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets --features officina-core/ts -- -D warnings`, `cargo test --workspace --features officina-core/ts`, the TypeScript bindings drift check and `cargo deny check` all green (deny reports only pre-existing duplicate-version warnings).
+
 ## File List
+
+- `crates/officina-core/src/relay/mod.rs`
+- `crates/officina-core/src/relay/shell.rs`
+- `crates/officina-core/src/relay/gate.rs`
+- `crates/officina-core/src/relay/catalogue.rs`
+- `crates/officina-host/src/relay/home.rs`
+- `crates/officina-host/src/paths.rs`
+- `crates/officina-core/tests/gate_vectors.rs`
+- `tests/vectors/gate.json`
+- `README.md`
+- `CHANGELOG.md`
 
 ## Change Log
 
 - 2026-10-27 created
 - 2026-10-27 reworked after review: D-10 (non-literal words, joining, wrapper tables, interpreter variants, encoded commands, `coproc`, carets), D-11 (`bash.exe`, distro launchers), D-12 (home redirection), linear bound made exact
+- 2026-10-28 implemented: the command lexer, the gate decision (`decide`, `normalise_cwd`, `guarded_project`, `deny_reason`), the default list extended per D-11, the `gate.json` vector set and its coverage tests; adversarial pass with two misses fixed (`BASH_CMDS` binding, `xargs` replace templating); status Review
