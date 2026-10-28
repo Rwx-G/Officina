@@ -34,10 +34,11 @@ jobs:
         run: pnpm install --frozen-lockfile
       - name: Window and installer
         working-directory: app
-        # The bundle overlay builds the CLI first and ships it next to the app.
+        # The bundle overlay builds the CLI first and ships it next to the app;
+        # both builds take --locked (the script and the overlay pass it on).
         run: pnpm bundle
       - name: CLI
-        run: cargo build --release -p officina
+        run: cargo build --locked --release -p officina
       - name: Package
         shell: bash
         run: |

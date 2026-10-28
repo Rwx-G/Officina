@@ -1,6 +1,6 @@
 {
   "build": {
-    "beforeBuildCommand": "pnpm build && cargo build --release -p officina"
+    "beforeBuildCommand": "pnpm build && cargo build --locked --release -p officina"
   },
   "bundle": {
     "resources": {

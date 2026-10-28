@@ -7,6 +7,10 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Advisories land whether or not anyone pushes: the audit job runs weekly
+  # on its own, the build jobs only on a change.
+  schedule:
+    - cron: "0 5 * * 1"
 
 permissions:
   contents: read
@@ -16,6 +20,7 @@ env:
 
 jobs:
   core-linux:
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -23,11 +28,12 @@ jobs:
       - name: Format
         run: cargo fmt --all -- --check
       - name: Clippy
-        run: cargo clippy -p officina-core -p officina-host -p officina --all-targets --features officina-core/ts -- -D warnings
+        run: cargo clippy --locked -p officina-core -p officina-host -p officina --all-targets --features officina-core/ts -- -D warnings
       - name: Test
-        run: cargo test -p officina-core -p officina-host -p officina --features officina-core/ts
+        run: cargo test --locked -p officina-core -p officina-host -p officina --features officina-core/ts
 
   windows:
+    if: github.event_name != 'schedule'
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -46,9 +52,9 @@ jobs:
         working-directory: app
         run: pnpm build
       - name: Clippy
-        run: cargo clippy --workspace --all-targets --features officina-core/ts -- -D warnings
+        run: cargo clippy --locked --workspace --all-targets --features officina-core/ts -- -D warnings
       - name: Test (includes the TypeScript bindings drift check)
-        run: cargo test --workspace --features officina-core/ts
+        run: cargo test --locked --workspace --features officina-core/ts
       - name: Hook latency and concurrent appends
         # Hosted runners start any process several times slower than a
         # workstation; the test still gates Officina's own cost at 30 ms.
@@ -58,10 +64,10 @@ jobs:
         env:
           OFFICINA_HOOK_P95_BUDGET_MS: "150"
           OFFICINA_GATE_OWN_COST_BUDGET_MS: "15"
-        run: cargo test --release -p officina --test perf -- --ignored --nocapture
+        run: cargo test --locked --release -p officina --test perf -- --ignored --nocapture
       - name: An approval runs once under concurrency
         # AD-33, AD-37: two runs using one approval at once, exactly one wins.
-        run: cargo test --release -p officina-host --test approvals_stress -- --ignored
+        run: cargo test --locked --release -p officina-host --test approvals_stress -- --ignored
       - name: officina holds no authority
         # AD-21, P-5, D-9. The exe a session can call is built alone, as the
         # release builds it, right before the search: the test build above
@@ -73,13 +79,13 @@ jobs:
         run: |
           marker=$(sed -n 's/^pub const AUTHORITY_MARKER: &str = "\(.*\)";$/\1/p' crates/officina-host/src/relay/authority.rs)
           test -n "$marker"
-          tree=$(cargo tree -p officina -e normal,features)
+          tree=$(cargo tree --locked -p officina -e normal,features)
           grep -q -F 'officina-host feature' <<<"$tree"
           if grep -F -e window-authority -e test-seams <<<"$tree"; then
             echo "officina enables window-authority or test-seams outside its tests"; exit 1
           fi
-          cargo build --release -p officina-app
-          cargo build --release -p officina
+          cargo build --locked --release -p officina-app
+          cargo build --locked --release -p officina
           if grep -a -q -F "$marker" target/release/officina.exe; then
             echo "officina.exe contains the authority marker"; exit 1
           fi
@@ -96,14 +102,14 @@ jobs:
         # search proves nothing.
         shell: bash
         run: |
-          out=$(cargo tree -p officina -e normal --target all -i webpki-roots 2>&1) || true
+          out=$(cargo tree --locked -p officina -e normal --target all -i webpki-roots 2>&1) || true
           if grep -q '^webpki-roots v' <<<"$out"; then
             echo "$out"; echo "webpki-roots is in the graph of officina"; exit 1
           fi
           if ! grep -q -e 'nothing to print' -e 'did not match any packages' <<<"$out"; then
             echo "$out"; echo "cargo tree did not answer"; exit 1
           fi
-          control=$(cargo tree -p officina -e normal --target all -i rustls 2>&1) || true
+          control=$(cargo tree --locked -p officina -e normal --target all -i rustls 2>&1) || true
           if ! grep -q '^rustls v' <<<"$control"; then
             echo "$control"; echo "positive control failed: rustls not found"; exit 1
           fi
@@ -116,7 +122,7 @@ jobs:
       - name: e2e fixtures from the real CLI
         working-directory: app
         run: |
-          cargo build -p officina
+          cargo build --locked -p officina
           node scripts/e2e-fixtures.mjs
       - name: Playwright
         working-directory: app
@@ -138,12 +144,15 @@ jobs:
       - name: cargo deny
         run: |
           cargo install cargo-deny --locked
-          cargo deny check
+          cargo deny --locked check
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: 22
       - name: pnpm audit
+        # Dev dependencies too: they run on the author's machine and in CI.
+        # A finding without a fixed version is listed, with its reason, in
+        # app/pnpm-workspace.yaml.
         working-directory: app
         run: |
           npm install -g pnpm@11
-          pnpm audit --prod
+          pnpm audit
