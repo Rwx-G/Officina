@@ -1,6 +1,6 @@
 # Story 4.3: The scene state in core: zones, alerts and escalation
 
-**Status:** Approved
+**Status:** In progress (code and tests done; AC 2's case for the question shape gate 4 records waits for the owner's gate 4 entry, story 4.1)
 
 ## Story
 
@@ -23,14 +23,14 @@ so that the scene never classifies, missing data shows as unknown without ever c
 
 ## Tasks
 
-- [ ] Read story 4.1's gate 4 entry; add its question shape to the vectors (AC 2)
-- [ ] `crates/officina-core/src/board.rs`: fold `last_session_start_source` beside `saw_prompt`; `BoardInput.previous_scene` (AC 1, 2)
-- [ ] `crates/officina-core/src/scene.rs`: types, `place`, the unknown carry-over, next escalation; call from `build_board` after classification (AC 1-3, 5, 6)
-- [ ] `tests/vectors/scene.json` and `crates/officina-core/tests/scene_vectors.rs`; formatter ignore entries (AC 2-4, 6)
-- [ ] `crates/officina-host/src/watch.rs`: escalation wake on the tick, recompute without spawn, `previous_scene` from the last built board; `tests/watch_escalation.rs` (AC 7)
-- [ ] Regenerate the TypeScript bindings (AC 1)
-- [ ] Zone intents in `e2e-fixtures.mjs` (AC 8)
-- [ ] CLI test; `CHANGELOG.md` (AC 9, 10)
+- [ ] Read story 4.1's gate 4 entry; add its question shape to the vectors (AC 2) (open: gate 4 is the owner's; both shapes are in the vectors meanwhile)
+- [x] `crates/officina-core/src/board.rs`: fold `last_session_start_source` beside `saw_prompt`; `BoardInput.previous_scene` (AC 1, 2)
+- [x] `crates/officina-core/src/scene.rs`: types, `place`, the unknown carry-over, next escalation; call from `build_board` after classification (AC 1-3, 5, 6)
+- [x] `tests/vectors/scene.json` and `crates/officina-core/tests/scene_vectors.rs`; formatter ignore entries (AC 2-4, 6)
+- [x] `crates/officina-host/src/watch.rs`: escalation wake on the tick, recompute without spawn, `previous_scene` from the last built board; `tests/watch_escalation.rs` (AC 7)
+- [x] Regenerate the TypeScript bindings (AC 1)
+- [x] Zone intents in `e2e-fixtures.mjs` (AC 8)
+- [x] CLI test; `CHANGELOG.md` (AC 9, 10)
 
 ## Dev Notes
 
@@ -54,11 +54,39 @@ so that the scene never classifies, missing data shows as unknown without ever c
 
 ### Debug Log
 
+- Story order: gate 4 was to be recorded before this story started (D-499). It is not: the owner's buffer only started recording real use on 2026-10-28. The rule a gate 4 finding could change is rule 3's wait start, and the code already handles both possible shapes of a question: with a blocking notification (`elicitation_dialog`), the wait has a known start and escalates by time; without one (the agents `waiting` status only), the start is unknown and it never escalates by time (D-465). Both are vector cases. If gate 4 shows a shape neither covers, a case is added and, if needed, rule 3 changes before story 4.14 closes.
+- `SceneState.approval` is true for an approval-only wait (a Working card with a valid pending request) only; a Needs you card with a request keeps Needs you's start and `approval = false`, so its ticket is numbered. Only valid requests count, as `waiting_count` counts them. An unknown card keeps the previous `alert` and `waiting_since_ms` and gets `approval = false`.
+- `FRESH_START_SOURCE` (`startup`) is one constant of `events.rs`, asserted to be one of `SESSION_START_SOURCES`. `SessionEvents` keeps the latest `SessionStart`'s time and source; a prompt at or after it ends the arrival.
+- The collector keeps the scene states of the board it built last in a `RefCell`, emitted or not, and passes them as `previous_scene`; `watch::publish` records the board's `next_escalation_at_ms`, and the loop rebuilds when the tick reaches it.
+- AC 7's tests live in `crates/officina/tests/watch_escalation.rs`, not `crates/officina-host/tests/`: the fake claude is a binary of the `officina` crate, which only that crate's tests can locate (`CARGO_BIN_EXE_*`), and its log counts the spawns.
+- `tests/vectors/scene.json` is JSON, which no formatter of the repository touches (rustfmt formats Rust, ESLint lints TypeScript and Svelte, no JSON formatter runs), so it needs no ignore entry; the expectations compare cards by key, so the board's column order does not matter to a case.
+- `relay/mod.rs`'s check of `code()` against serde covers `Zone` and `AlertCause`, and reads `scene.rs`.
+- Adversarial pass: a stale board on the first build, an unknown badge with a pending request, an invalid request, the earliest of two requests, a request on a Your turn card, a notification answered by a later prompt, an `idle_prompt`, a `SessionStart` without a source, a startup then a compact start, the floor's own threshold, one millisecond short and exactly at it, building one millisecond before and at the next escalation. All are cases above; no miss found that needed a code change.
+
 ### Completion Notes
 
+- AC 1: `typescript_bindings.rs::committed_bindings_match_the_rust_types`; `scene.rs::tests::ended_cards_have_no_scene_state`.
+- AC 2: `tests/vectors/scene.json` replayed by `scene_vectors.rs::every_case_places_its_cards` (cases named after each rule of the AC). Open: the case for the question shape gate 4 records (owner).
+- AC 3: vector cases "a stale board keeps an alerted card's alert", "an unknown badge keeps an alerted card's alert", "an unknown card past the threshold gains no alert", "fresh data in the lounge clears the alert", "a stale board makes every live card unknown, and a first board while stale has no alert"; `scene.rs::tests::alert_count_counts_unknown_cards_that_keep_their_alert`.
+- AC 4: `scene_vectors.rs::every_zone_and_cause_has_a_case`; no formatter runs on JSON (Debug Log).
+- AC 5: `scene.rs::tests::{board_order_is_unchanged_by_alerts, alert_count_counts_alerted_cards}`.
+- AC 6: vector cases with `expect_next_escalation_at_ms`, one with an approval-only and an unknown card that do not set it; `scene_vectors.rs::building_at_the_next_escalation_alerts_the_card`.
+- AC 7: `crates/officina/tests/watch_escalation.rs::{an_escalation_recomputes_without_spawning, no_escalation_no_recompute, a_failed_snapshot_keeps_the_alert}`.
+- AC 8: CI step "e2e fixtures from the real CLI" (each scene session's zone against its intent).
+- AC 9: `crates/officina/tests/board.rs::board_prints_scene_states_and_the_alert_count`.
+- AC 10: `CHANGELOG.md` Changed.
+
 ## File List
+
+- `crates/officina-core/src/scene.rs` (new), `board.rs`, `events.rs`, `lib.rs`, `relay/mod.rs`
+- `crates/officina-core/tests/scene_vectors.rs` (new), `tests/vectors/scene.json` (new)
+- `crates/officina-host/src/collector.rs`, `watch.rs`, `focus.rs`
+- `crates/officina/tests/board.rs`, `crates/officina/tests/watch_escalation.rs` (new)
+- `app/src/lib/generated/` (Board, Card, SceneState, Zone, AlertCause), `app/src/components/components.test.ts`, `app/src/lib/board.test.ts`
+- `app/scripts/e2e-fixtures.mjs`, `CHANGELOG.md`
 
 ## Change Log
 
 - 2026-10-28 created with the scene v2 rework (D-460)
 - 2026-10-28 reworked after the plan challenge (D-494 to D-496, D-499): unknown keeps the last known alert through `previous_scene`; reception on a `startup` start only; approval-only waits while Working and never by time; gate 4 before this story starts
+- 2026-10-28 implemented: the scene state in core with its vector set, the escalation recompute in the collector, the last known alert kept on a stale board, zone intents in the scene fixtures. Status in progress until gate 4's question shape is recorded

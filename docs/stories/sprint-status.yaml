@@ -89,7 +89,8 @@ stories:
   # 4.1: tooling done (D-518); gates 1, 2, 4 and 5's entries are the owner's (Completion Notes).
   - {id: "4.1", file: story-4.1-workstation-checks.md, slice: "0", status: in-progress}
   - {id: "4.2", file: story-4.2-floor-keys-payloads-and-scene-fixtures.md, slice: A, status: review}
-  - {id: "4.3", file: story-4.3-scene-state-in-core.md, slice: A, status: approved}
+  # 4.3: code done; AC 2's gate 4 case waits for the owner's gate 4 entry (story 4.1).
+  - {id: "4.3", file: story-4.3-scene-state-in-core.md, slice: A, status: in-progress}
   - {id: "4.4", file: story-4.4-halo-memo-and-board-halo.md, slice: A, status: review}
   - {id: "4.5", file: story-4.5-alert-band-title-and-taskbar.md, slice: A, status: approved}
   - {id: "4.6", file: story-4.6-scene-geometry-spots-and-layout.md, slice: A, status: approved}
