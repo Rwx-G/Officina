@@ -559,3 +559,36 @@ fn triage_workdir_lines_are_skipped() {
         .collect();
     assert_eq!(sessions, ["s1"]);
 }
+
+/// Adversarial pass: an entry named like an event file that cannot be read
+/// (a folder, or a file deleted between the listing and the read, as an
+/// older `board --json` still installed would do) must not stop the pass,
+/// or every later file waits forever.
+#[test]
+fn an_unreadable_entry_does_not_stop_the_pass() {
+    let home = Home::new();
+    std::fs::create_dir_all(home.events.join(day_file(NOW - DAY))).unwrap();
+    home.append(&day_file(NOW), &[line("Stop", "s1", NOW, CWD)]);
+    let mut writer = home.writer(NOW);
+    let report = writer.ingest(&home.ctx(), NOW).unwrap();
+    assert_eq!(report.lines, 1);
+    assert_eq!(project_of(&home, "s1"), "api");
+}
+
+/// Adversarial pass: a line without a session id, or with an empty one,
+/// records nothing and is not corrupt.
+#[test]
+fn a_line_without_a_session_id_records_nothing() {
+    let home = Home::new();
+    home.append(
+        &day_file(NOW),
+        &[
+            "{\"v\":1,\"ts\":5,\"event\":\"Stop\"}\n".to_owned(),
+            line("Stop", "", NOW, CWD),
+        ],
+    );
+    let mut writer = home.writer(NOW);
+    let report = writer.ingest(&home.ctx(), NOW).unwrap();
+    assert_eq!((report.lines, report.corrupt_lines), (0, 0));
+    assert!(writer.sessions().unwrap().is_empty());
+}

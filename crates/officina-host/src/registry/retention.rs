@@ -177,7 +177,8 @@ impl Writer {
             .collect();
         for name in names {
             if here.contains(&name) && event_file_deletable(&name, now_ms, &copies) {
-                remove(&events_dir.join(&name))?;
+                let file = events_dir.join(&name);
+                fs::remove_file(&file).map_err(|e| RegistryError::io(&file, e))?;
                 deleted.push(name);
             }
         }

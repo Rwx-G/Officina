@@ -201,7 +201,10 @@ impl Writer {
                 continue;
             }
             let path = ctx.events_dir.join(&name);
-            let Ok(meta) = fs::metadata(&path) else {
+            // Only a file is read; one gone since the listing (an older
+            // `board --json` deleting it) waits for nothing. Neither may stop
+            // the pass, or every later file would wait with it.
+            let Some(meta) = fs::metadata(&path).ok().filter(|m| m.is_file()) else {
                 continue;
             };
             let mut changed = false;
@@ -212,8 +215,11 @@ impl Writer {
                 report.rewritten.push(name.clone());
                 changed = true;
             }
-            let bytes =
-                read_from(&path, row.ingested_bytes).map_err(|e| RegistryError::io(&path, e))?;
+            let bytes = match read_from(&path, row.ingested_bytes) {
+                Ok(bytes) => bytes,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(e) => return Err(RegistryError::io(&path, e)),
+            };
             let (lines, partial) = complete_lines(&bytes);
             for chunk in chunks(&lines) {
                 let tx = self
@@ -289,7 +295,7 @@ fn apply(
     ctx: &IngestContext,
     now_ms: i64,
 ) -> rusqlite::Result<bool> {
-    let Some(session_id) = line.session_id.as_deref() else {
+    let Some(session_id) = line.session_id.as_deref().filter(|id| !id.is_empty()) else {
         return Ok(false);
     };
     let home = ctx.officina_home.to_string_lossy();
