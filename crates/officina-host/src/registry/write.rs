@@ -8,6 +8,7 @@ use officina_core::registry::types::{
     EventFileRecord, ExcerptRecord, SessionRow, SettingKey, Source,
 };
 use rusqlite::ErrorCode;
+use rusqlite::config::DbConfig;
 
 use super::read::{self, SettingRow};
 use super::store::Writer;
@@ -94,6 +95,15 @@ impl Writer {
     /// The value a setting of this connection reads back, by its name.
     pub fn pragma(&self, name: &str) -> Option<String> {
         read::pragma_value(&self.conn, name)
+    }
+
+    /// Closes the connection without the checkpoint SQLite runs when the
+    /// last connection closes, so a database found damaged is left as it
+    /// was, its WAL beside it, for the next start to set aside (AD-42).
+    pub fn abandon(self) {
+        let _ = self
+            .conn
+            .set_db_config(DbConfig::SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE, true);
     }
 
     /// The schema version the database is at.

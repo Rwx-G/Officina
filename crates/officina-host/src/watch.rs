@@ -1,5 +1,7 @@
-//! The collector thread of the window (AD-3 to AD-5, AD-35): stat polling,
-//! refresh plan, diff before emit, for the board and the relay view.
+//! The collector thread of the window (AD-3 to AD-5, AD-35, AD-43, AD-44):
+//! stat polling, refresh plan, diff before emit, for the board and the
+//! relay view; the registry's only writer (AD-38), which ingests the event
+//! files before anything reads or deletes them.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -9,11 +11,15 @@ use std::time::{Duration, Instant, SystemTime};
 
 use officina_core::board::Board;
 use officina_core::dates::event_file_name;
+use officina_core::registry::retention::PASS_INTERVAL_MS;
 use officina_core::relay::view::RelayView;
 
 use crate::collector::Collector;
-use crate::files::{event_file_for, now_ms, retention_pass};
+use crate::files::{event_file_for, now_ms};
 use crate::paths::Paths;
+use crate::registry::ingest::IngestContext;
+use crate::registry::store::onedrive_roots_from_env;
+use crate::registry::window::WindowRegistry;
 use crate::relay::home::RelayHome;
 use crate::relay::view::{credential_presence, read_view_with};
 
@@ -31,8 +37,9 @@ pub const MIN_SPAWN_INTERVAL: Duration = Duration::from_millis(500);
 /// Second refresh after a hook event: the hook can fire before `claude agents`
 /// reports the new status.
 pub const FOLLOW_UP: Duration = Duration::from_secs(1);
-/// Retention pass interval.
-pub const RETENTION_EVERY: Duration = Duration::from_secs(3600);
+/// The hourly pass's interval, the one the registry's retention bounds
+/// count with.
+pub const RETENTION_EVERY: Duration = Duration::from_millis(PASS_INTERVAL_MS as u64);
 /// The relay view is rebuilt at least this often, so a run turns
 /// "abandoned" and old gate errors leave the 24 h count without a file
 /// change.
@@ -141,6 +148,10 @@ fn relay_fingerprint(dir: &Path) -> u64 {
 /// What the refresh plan asks the collector thread to do now.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 struct Due {
+    /// Ingest the event files into the registry, before the session list
+    /// and the board read them (D-78): today's file grew, or a session list
+    /// is due.
+    ingest: bool,
     /// Run `claude agents`.
     agents: bool,
     /// Then re-read the `claude` version and re-check the contract.
@@ -164,6 +175,7 @@ struct Due {
 struct RefreshPlan<C> {
     clock: C,
     visible: bool,
+    ingest_wanted: bool,
     agents_wanted: bool,
     contract_wanted: bool,
     recompute_wanted: bool,
@@ -178,12 +190,13 @@ struct RefreshPlan<C> {
 
 impl<C: Fn() -> Instant> RefreshPlan<C> {
     /// At startup the session list, the contract check, a first board and a
-    /// first relay view are due; the retention pass has just run.
+    /// first relay view are due; the hourly pass has just run.
     fn new(clock: C) -> Self {
         let now = clock();
         RefreshPlan {
             clock,
             visible: true,
+            ingest_wanted: false,
             agents_wanted: true,
             contract_wanted: true,
             recompute_wanted: true,
@@ -207,9 +220,11 @@ impl<C: Fn() -> Instant> RefreshPlan<C> {
         self.visible = visible;
     }
 
-    /// Today's event file grew: a hook fired. Its line shows at once; the
-    /// session list is refreshed now and once more after [`FOLLOW_UP`].
+    /// Today's event file grew: a hook fired. Its line is ingested and shows
+    /// at once; the session list is refreshed now and once more after
+    /// [`FOLLOW_UP`].
     fn event_file_changed(&mut self) {
+        self.ingest_wanted = true;
         self.recompute_wanted = true;
         self.agents_wanted = true;
         self.follow_up_at = Some((self.clock)() + FOLLOW_UP);
@@ -294,6 +309,7 @@ impl<C: Fn() -> Instant> RefreshPlan<C> {
             self.last_retention = now;
             due.retention = true;
         }
+        due.ingest = std::mem::take(&mut self.ingest_wanted) || due.agents;
         due.recompute = std::mem::take(&mut self.recompute_wanted);
         if std::mem::take(&mut self.relay_wanted)
             || now.duration_since(self.last_relay) >= RELAY_POLL
@@ -455,18 +471,53 @@ pub fn spawn(
     })
 }
 
+/// What an ingestion pass needs from the collector: the window's floor and
+/// excerpt setting (AD-43, D-53).
+fn ingest_context<'a>(collector: &'a Collector, events: &'a Path) -> IngestContext<'a> {
+    IngestContext {
+        events_dir: events,
+        officina_home: &collector.paths().officina_home,
+        projects: &collector.floor().projects,
+        no_excerpts: collector.no_excerpts(),
+    }
+}
+
+/// One ingestion pass into the window's registry (AD-43), with the
+/// window's floor and excerpt setting; the board then reports its state.
+fn ingest(collector: &mut Collector, registry: &mut WindowRegistry) {
+    let events = collector.paths().events_dir();
+    let ctx = ingest_context(collector, &events);
+    registry.ingest(&ctx, now_ms());
+    collector.set_registry(registry.report());
+}
+
+/// The hourly pass, also run at start before the first board (AD-44,
+/// D-44, D-85): the registry's part (ingest, copy when due, retention, the
+/// WAL truncated) only while the registry is writable, then v0.2's focus
+/// log, approval and journal cleanups, which do not depend on it.
+fn hourly_pass(collector: &mut Collector, registry: &mut WindowRegistry) {
+    let events = collector.paths().events_dir();
+    let ctx = ingest_context(collector, &events);
+    registry.hourly_pass(&ctx, now_ms());
+    crate::focus::prune_focus_log(&collector.paths().state_dir(), now_ms());
+    crate::relay::approvals::prune(collector.relay(), SystemTime::now());
+    crate::relay::journal::prune(collector.relay(), now_ms());
+    collector.set_registry(registry.report());
+}
+
 fn run(
     collector: &mut Collector,
     receiver: &Receiver<CollectorMsg>,
     outputs: &Outputs<impl Fn(&Board), impl Fn(&RelayView)>,
 ) {
-    let retention = |collector: &Collector| {
-        retention_pass(&collector.paths().events_dir(), now_ms());
-        crate::focus::prune_focus_log(&collector.paths().state_dir(), now_ms());
-        crate::relay::approvals::prune(collector.relay(), SystemTime::now());
-        crate::relay::journal::prune(collector.relay(), now_ms());
-    };
-    retention(collector);
+    // At start, every incomplete file is ingested and the privacy bounds
+    // applied before the first board is built (D-85).
+    let mut registry = WindowRegistry::open(
+        &collector.paths().officina_home,
+        &onedrive_roots_from_env(),
+        now_ms(),
+    );
+    hourly_pass(collector, &mut registry);
     let mut watched = WatchedPaths::new(collector);
     let mut plan = RefreshPlan::new(Instant::now);
     let mut last_bytes: Vec<u8> = Vec::new();
@@ -490,6 +541,10 @@ fn run(
             plan.floor_changed();
         }
         let due = plan.due();
+        // Before the session list and the board read anything (D-78).
+        if due.ingest {
+            ingest(collector, &mut registry);
+        }
         if due.agents {
             collector.refresh_agents(now_ms());
             if due.contract {
@@ -497,7 +552,7 @@ fn run(
             }
         }
         if due.retention {
-            retention(collector);
+            hourly_pass(collector, &mut registry);
         }
         if due.recompute {
             publish(
@@ -589,6 +644,7 @@ mod tests {
 
     fn agents_and_board() -> Due {
         Due {
+            ingest: true,
             agents: true,
             recompute: true,
             ..Due::default()
@@ -744,10 +800,11 @@ mod tests {
         assert_eq!(
             plan.due(),
             Due {
+                ingest: true,
                 recompute: true,
                 ..Due::default()
             },
-            "the event shows, the spawn waits"
+            "the event is ingested and shows, the spawn waits"
         );
         advance(&now, TICK / 2);
         plan.session_files_changed();
@@ -756,6 +813,32 @@ mod tests {
         assert_eq!(plan.due(), agents_and_board(), "one spawn for the burst");
         advance(&now, TICK);
         assert_eq!(plan.due(), Due::default());
+    }
+
+    /// D-78: every session list is preceded by an ingestion pass, and a
+    /// hook event is ingested before the board shows it, spawn or not.
+    #[test]
+    fn ingestion_comes_with_every_session_list_and_every_event() {
+        let (mut plan, now) = started();
+        advance(&now, POLL_VISIBLE);
+        let polled = plan.due();
+        assert!(polled.agents && polled.ingest, "the safety poll");
+        advance(&now, TICK);
+        plan.event_file_changed();
+        let event = plan.due();
+        assert!(
+            event.ingest && event.recompute && !event.agents,
+            "the spawn waits, the event does not"
+        );
+        advance(&now, MIN_SPAWN_INTERVAL);
+        let delayed = plan.due();
+        assert!(
+            delayed.agents && delayed.ingest,
+            "the delayed spawn ingests again"
+        );
+        advance(&now, TICK);
+        plan.quota_changed();
+        assert!(!plan.due().ingest, "a quota change reads no event");
     }
 
     #[test]

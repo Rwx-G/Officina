@@ -5,7 +5,6 @@ mod common;
 #[path = "../../../tests/support/stub_server.rs"]
 mod stub_server;
 
-use std::path::PathBuf;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
@@ -156,30 +155,37 @@ fn doctor_with_a_guarded_project_requires_every_gated_tool() {
     assert!(text.contains("[ok  ] hooks"), "{text}");
 }
 
+/// FR-13, D-80: Officina writes nothing under the Claude config dir nor
+/// into `~/.claude.json`, whatever command runs, with the window's
+/// collector running beside them, ingesting into its registry.
 #[test]
 fn no_command_writes_under_the_claude_config_dir() {
     let env = TestEnv::new();
     let config = env.claude_config();
     std::fs::write(config.join("settings.json"), r#"{"permissions":{}}"#).unwrap();
     std::fs::write(config.join("sessions").join("1234.json"), "{}").unwrap();
+    let claude_json = env.user_home().join(".claude.json");
+    std::fs::write(&claude_json, r#"{"numStartups":1}"#).unwrap();
     env.write_agents(
         r#"[{"pid":1,"cwd":"C:/x","kind":"interactive","startedAt":1,"sessionId":"s","status":"busy"}]"#,
     );
     let before = fingerprint(&config);
+    let claude_json_before = std::fs::read(&claude_json).unwrap();
 
     // The window's collector thread runs alongside the commands, pointed at
-    // the same config dir, as a floor's `config_dir` would point it.
+    // the same config dir, as a floor's `config_dir` would point it, with
+    // a copy of the fake listing the agents fixture (D-86).
     let paths = Paths {
         officina_home: env.officina_home(),
         claude_config_dir: config.clone(),
         claude_config_override: Some(config.clone()),
         floor_file: None,
     };
-    let collector = Collector::from_parts(
-        paths,
-        LoadedFloor::default(),
-        Some(PathBuf::from(common::FAKE_CLAUDE)),
+    let fake = common::fake_claude_in(
+        &env.root.path().join("bin"),
+        &serde_json::json!({"fixture": env.fixture()}),
     );
+    let collector = Collector::from_parts(paths, LoadedFloor::default(), Some(fake));
     let (boards, received) = mpsc::channel::<Board>();
     let watch = spawn(
         collector,
@@ -244,5 +250,18 @@ fn no_command_writes_under_the_claude_config_dir() {
     watch.thread.join().unwrap();
 
     assert_eq!(stub.requests().len(), 1, "the HTTP run went out");
+    let ingested: Vec<String> =
+        officina_host::registry::store::open_reader(&env.officina_home(), &[])
+            .unwrap()
+            .sessions()
+            .unwrap()
+            .into_iter()
+            .map(|s| s.session_id)
+            .collect();
+    assert!(
+        ingested.contains(&"s".to_owned()),
+        "the collector ingested: {ingested:?}"
+    );
     assert_eq!(fingerprint(&config), before);
+    assert_eq!(std::fs::read(&claude_json).unwrap(), claude_json_before);
 }

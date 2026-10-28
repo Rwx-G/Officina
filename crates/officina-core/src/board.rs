@@ -12,10 +12,13 @@ use crate::agents::{AgentRecord, LifecycleState, LiveStatus, SessionKind};
 use crate::events::EventLine;
 use crate::floor::ProjectColor;
 use crate::quota::{QuotaFile, QuotaWindow};
+use crate::registry::types::RegistryReport;
 use crate::relay::approvals::ApprovalView;
 
-/// Version of the board JSON contract. 2: approval requests (AD-35).
-pub const BOARD_SCHEMA: u32 = 2;
+/// Version of the board JSON contract. 2: approval requests (AD-35). 3:
+/// the registry's state (v0.3, AD-54); later v0.3 stories extend the board
+/// under this number, since no release ships in between (P-13).
+pub const BOARD_SCHEMA: u32 = 3;
 
 /// Sessions that ended, failed or finished are listed for this long.
 pub const DONE_WINDOW_MS: i64 = 24 * 60 * 60 * 1000;
@@ -204,6 +207,9 @@ pub struct Diagnostics {
     pub unrecognized_values: Vec<String>,
     /// Why the floor file was ignored, if it was.
     pub floor_error: Option<String>,
+    /// The registry's state (AD-54, D-47): why it is not read or written
+    /// when it is not. `None` when the board was built without it.
+    pub registry: Option<RegistryReport>,
 }
 
 /// The board contract shared by `officina board --json` and the window.
@@ -253,6 +259,8 @@ pub struct BoardInput {
     pub no_excerpts: bool,
     /// The pending approval requests, from `relay::approvals::pending`.
     pub approvals: Vec<ApprovalView>,
+    /// The registry's state as the caller found it.
+    pub registry: Option<RegistryReport>,
 }
 
 /// Events of one session, reduced to what a card shows.
@@ -722,6 +730,7 @@ pub fn build_board(input: &BoardInput, now_ms: i64) -> Board {
             corrupt_event_lines: input.corrupt_event_lines,
             unrecognized_values: unrecognized,
             floor_error: None,
+            registry: input.registry.clone(),
         },
         done_window_ms: DONE_WINDOW_MS,
     }
@@ -753,6 +762,38 @@ mod tests {
             claude_pid: None,
             truncated: false,
         }
+    }
+
+    /// AD-54, D-47: the registry's state reaches the board as the caller
+    /// found it, sessions or not; the board never reads the registry itself.
+    #[test]
+    fn registry_state_reaches_the_diagnostics() {
+        use crate::registry::types::{RegistryReport, RegistryState};
+        for state in RegistryState::ALL {
+            let report = RegistryReport {
+                state: *state,
+                detail: Some(format!("why {}", state.code())),
+                exclude_from_sync: Some("C:/path/to/registry".into()),
+            };
+            let input = BoardInput {
+                agents: Some(vec![record(
+                    r#"{"pid":7,"sessionId":"s","kind":"interactive","status":"idle","cwd":"C:/work/api","startedAt":1}"#,
+                )]),
+                registry: Some(report.clone()),
+                ..Default::default()
+            };
+            let board = build_board(&input, 10);
+            assert_eq!(board.diagnostics.registry, Some(report));
+            assert_eq!(
+                board.columns.your_turn.len(),
+                1,
+                "the board keeps its sessions"
+            );
+        }
+        assert_eq!(
+            build_board(&BoardInput::default(), 10).diagnostics.registry,
+            None
+        );
     }
 
     #[test]

@@ -12,6 +12,7 @@ use officina_core::board::{Board, BoardInput, ContractView, ProjectRule, Stalene
 use officina_core::contract::check_agents;
 use officina_core::floor::{FloorFile, parse_floor, resolve_project_path};
 use officina_core::quota::{QuotaFile, parse_quota_file};
+use officina_core::registry::types::RegistryReport;
 use serde::{Deserialize, Serialize};
 
 use crate::claude;
@@ -138,6 +139,9 @@ pub struct Collector {
     contract: ContractView,
     trees: TreeCache,
     known_projects: KnownProjectsKeeper,
+    /// The registry's state as its holder last reported it: the window's
+    /// collector thread, or `board --json`'s read-only reader.
+    registry: Option<RegistryReport>,
 }
 
 impl Collector {
@@ -186,7 +190,20 @@ impl Collector {
             contract: ContractView::default(),
             trees: TreeCache::default(),
             known_projects: KnownProjectsKeeper::default(),
+            registry: None,
         }
+    }
+
+    /// Records the registry's state, which the next board reports
+    /// (`Diagnostics.registry`, D-47).
+    pub fn set_registry(&mut self, report: RegistryReport) {
+        self.registry = Some(report);
+    }
+
+    /// True when no prompt or answer text may be kept: the environment or
+    /// the window's floor says so (AD-8, AD-43).
+    pub fn no_excerpts(&self) -> bool {
+        excerpts_disabled_by_env() || self.floor.file.as_ref().is_some_and(|f| f.no_excerpts)
     }
 
     /// The collector checking credentials in `store` (D-41): the
@@ -356,8 +373,9 @@ impl Collector {
             floor_name: floor_file.and_then(|f| f.name.clone()),
             projects: self.floor.projects.clone(),
             contract: self.contract.clone(),
-            no_excerpts: excerpts_disabled_by_env() || floor_file.is_some_and(|f| f.no_excerpts),
+            no_excerpts: self.no_excerpts(),
             approvals: board_approvals(&self.relay, now_ms, &mut |dir| self.trees.fingerprint(dir)),
+            registry: self.registry.clone(),
         };
         let mut board = build_board(&input, now_ms);
         board.diagnostics.floor_error.clone_from(&self.floor.error);

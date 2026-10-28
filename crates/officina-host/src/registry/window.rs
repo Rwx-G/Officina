@@ -107,7 +107,10 @@ impl WindowRegistry {
                 Some(done)
             }
             Err(error) if error.is_corruption() => {
-                self.slot = Slot::Unavailable(error.to_string());
+                let found = std::mem::replace(&mut self.slot, Slot::Unavailable(error.to_string()));
+                if let Slot::Writable(writer) = found {
+                    writer.abandon();
+                }
                 None
             }
             Err(error) => {

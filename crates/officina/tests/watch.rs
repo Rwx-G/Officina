@@ -1,12 +1,14 @@
-//! The window's collector thread end to end (stories 1.5 and 2.7, AD-3 to
-//! AD-5, AD-35): first board, re-emission on a hook event, no re-emission
-//! when nothing changed; the floor reloaded with the paths it names; the
-//! relay view rebuilt on the relay's files, the journal and `RelayChanged`,
-//! emitted on change only; the known-projects record kept current.
+//! The window's collector thread end to end (stories 1.5, 2.7 and 3.2,
+//! AD-3 to AD-5, AD-35, AD-43, AD-44): first board, re-emission on a hook
+//! event, no re-emission when nothing changed; the floor reloaded with the
+//! paths it names; the relay view rebuilt on the relay's files, the journal
+//! and `RelayChanged`, emitted on change only; the known-projects record
+//! kept current; the registry ingested before the first board, before each
+//! session list and before each board, and reported when it cannot be.
 //!
-//! The fake claude is given no fixture here (it then lists no session):
-//! classification of real fixtures is covered by the `board` CLI tests, and
-//! passing a fixture would need a process-wide environment variable.
+//! The tests of stories 1.5 and 2.7 give the fake claude no fixture (it
+//! then lists no session). Story 3.2's run a copy of the fake configured by
+//! its sidecar (D-86), with an agents fixture.
 
 mod common;
 #[path = "../../../tests/support/fake_store.rs"]
@@ -14,13 +16,18 @@ mod fake_store;
 
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use officina_core::board::Board;
+use officina_core::registry::retention::EXCERPT_TTL_MS;
+use officina_core::registry::types::{RegistryState, SettingKey, Source};
 use officina_core::relay::journal::{CatalogueApproved, JournalEntry};
 use officina_core::relay::view::{RecentEvent, RelayView};
 use officina_host::collector::{Collector, LoadedFloor, load_floor};
 use officina_host::paths::Paths;
+use officina_host::registry::ingest::IngestContext;
+use officina_host::registry::store::{open_reader, open_writer};
 use officina_host::relay::credential::OwnedStore;
 use officina_host::relay::journal::append;
 use officina_host::watch::{CollectorMsg, WatchHandle, spawn};
@@ -464,5 +471,346 @@ fn credential_presence_is_polled_at_most_once_a_minute() {
         );
         std::thread::sleep(Duration::from_millis(50));
     }
+    stop(handle);
+}
+
+/// One interactive session the agents fixture lists, with its id.
+fn listed_session(id: &str, now: i64) -> String {
+    serde_json::json!([{"pid": 4100, "cwd": "C:/work/api", "kind": "interactive", "startedAt": now - 60_000,
+        "sessionId": id, "name": "api", "status": "idle"}])
+    .to_string()
+}
+
+/// A collector thread on `env` whose `claude` is a copy of the fake,
+/// configured by its sidecar to list `env`'s agents fixture (D-86); every
+/// board goes through `on_board` on the collector thread, then arrives on
+/// the receiver. Returns the sidecar's path too, which a test may rewrite.
+fn watch_listing(
+    env: &common::TestEnv,
+    on_board: impl Fn(&Board) + Send + 'static,
+) -> (WatchHandle, Receiver<Board>, PathBuf) {
+    let bin = env.root.path().join("bin");
+    let sidecar = serde_json::json!({"fixture": env.fixture(), "log": env.fake_log()});
+    let fake = common::fake_claude_in(&bin, &sidecar);
+    let collector = Collector::from_parts(paths_of(env, None), LoadedFloor::default(), Some(fake))
+        .with_credential_store(OwnedStore(Box::new(FakeStore::empty())));
+    let (boards, board_rx) = mpsc::channel::<Board>();
+    let handle = spawn(
+        collector,
+        move |b| {
+            on_board(b);
+            let _ = boards.send(b.clone());
+        },
+        |_| {},
+    )
+    .unwrap();
+    (handle, board_rx, bin.join("fake-claude.json"))
+}
+
+fn registry_state(board: &Board) -> Option<RegistryState> {
+    board.diagnostics.registry.as_ref().map(|r| r.state)
+}
+
+/// The sessions the registry holds, read as another process would.
+fn registered(env: &common::TestEnv) -> Vec<String> {
+    open_reader(&env.officina_home(), &[])
+        .map(|r| {
+            r.sessions()
+                .unwrap()
+                .into_iter()
+                .map(|s| s.session_id)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn hook_line(env: &common::TestEnv, payload: serde_json::Value, ts: i64) {
+    record_hook(
+        &paths_of(env, None),
+        payload.to_string().as_bytes(),
+        ts,
+        true,
+        None,
+    );
+}
+
+fn shows(board: &Board, session: &str) -> bool {
+    board
+        .columns
+        .all()
+        .any(|card| card.session_id.as_deref() == Some(session))
+}
+
+/// AD-43, AD-44, D-85: at start, every event file is ingested and the
+/// privacy bounds applied before the first board is built.
+#[test]
+fn start_ingests_and_purges_before_the_first_board() {
+    let env = common::TestEnv::new();
+    let now = officina_host::files::now_ms();
+    env.write_agents(&listed_session("s-live", now));
+    // An earlier window stored an excerpt that has expired since.
+    let expired = now - EXCERPT_TTL_MS - DAY_MS;
+    hook_line(
+        &env,
+        serde_json::json!({"hook_event_name": "UserPromptSubmit", "session_id": "s-old", "cwd": "C:/work/api", "prompt": "expired prompt"}),
+        expired,
+    );
+    {
+        let events = env.events_dir();
+        let home = env.officina_home();
+        let ctx = IngestContext {
+            events_dir: &events,
+            officina_home: &home,
+            projects: &[],
+            no_excerpts: false,
+        };
+        let mut earlier = open_writer(&home, &[], expired).writer().unwrap();
+        earlier.ingest(&ctx, expired + 1_000).unwrap();
+        assert_eq!(earlier.excerpts().unwrap().len(), 1, "positive control");
+    }
+    for days in 0..4 {
+        hook_line(
+            &env,
+            serde_json::json!({"hook_event_name": "Stop", "session_id": format!("day-{days}"), "cwd": "C:/work/api"}),
+            now - days * DAY_MS,
+        );
+    }
+    let seen = Arc::new(Mutex::new(None));
+    let first = Arc::clone(&seen);
+    let home = env.officina_home();
+    let (handle, rx, _) = watch_listing(&env, move |_| {
+        let mut slot = first.lock().unwrap();
+        if slot.is_none() {
+            let reader = open_reader(&home, &[]).unwrap();
+            let sessions: Vec<String> = reader
+                .sessions()
+                .unwrap()
+                .into_iter()
+                .map(|s| s.session_id)
+                .collect();
+            *slot = Some((sessions, reader.excerpts().unwrap().len()));
+        }
+    });
+    let board = until(&rx, |_| true);
+    assert_eq!(registry_state(&board), Some(RegistryState::Ready));
+    let (sessions, excerpts) = seen.lock().unwrap().clone().unwrap();
+    for days in 0..4 {
+        assert!(sessions.contains(&format!("day-{days}")), "{sessions:?}");
+    }
+    assert_eq!(excerpts, 0, "the expired excerpt was cleared first");
+    stop(handle);
+}
+
+/// D-78: a tick ingests before it runs `claude agents`: while the fake
+/// hangs in the call this event triggered, the registry already holds the
+/// event's session.
+#[test]
+fn each_tick_ingests_before_the_agents_snapshot() {
+    let env = common::TestEnv::new();
+    let now = officina_host::files::now_ms();
+    env.write_agents(&listed_session("s-live", now));
+    let (handle, rx, sidecar) = watch_listing(&env, |_| {});
+    until(&rx, |_| true);
+    // Past the startup's spawns and follow-ups.
+    std::thread::sleep(Duration::from_millis(1500));
+    let mut config: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&sidecar).unwrap()).unwrap();
+    config["mode"] = "hang".into();
+    config["hang_ms"] = 1500.into();
+    std::fs::write(&sidecar, config.to_string()).unwrap();
+    let calls = || {
+        std::fs::read_to_string(env.fake_log())
+            .unwrap_or_default()
+            .lines()
+            .count()
+    };
+    let before = calls();
+    hook_line(
+        &env,
+        serde_json::json!({"hook_event_name": "UserPromptSubmit", "session_id": "s-tick", "cwd": "C:/work/api", "prompt": "x"}),
+        officina_host::files::now_ms(),
+    );
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while calls() == before {
+        assert!(
+            Instant::now() < deadline,
+            "the event brought no session list"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(
+        registered(&env).contains(&"s-tick".to_owned()),
+        "claude agents ran before the event was ingested"
+    );
+    config["mode"] = "ok".into();
+    std::fs::write(&sidecar, config.to_string()).unwrap();
+    stop(handle);
+}
+
+/// D-78: today's growth is ingested before the board that shows it is
+/// built: when that board is emitted, the registry holds its session.
+#[test]
+fn today_growth_is_ingested_before_the_recompute() {
+    let env = common::TestEnv::new();
+    let now = officina_host::files::now_ms();
+    env.write_agents(&listed_session("s-live", now));
+    let held_when_shown = Arc::new(Mutex::new(None));
+    let seen = Arc::clone(&held_when_shown);
+    let home = env.officina_home();
+    let (handle, rx, _) = watch_listing(&env, move |board| {
+        let mut slot = seen.lock().unwrap();
+        if shows(board, "s-growth") && slot.is_none() {
+            let reader = open_reader(&home, &[]).unwrap();
+            *slot = Some(
+                reader
+                    .sessions()
+                    .unwrap()
+                    .iter()
+                    .any(|s| s.session_id == "s-growth"),
+            );
+        }
+    });
+    until(&rx, |_| true);
+    let at = officina_host::files::now_ms();
+    hook_line(
+        &env,
+        serde_json::json!({"hook_event_name": "UserPromptSubmit", "session_id": "s-growth", "cwd": "C:/work/api", "prompt": "x"}),
+        at - 120_000,
+    );
+    hook_line(
+        &env,
+        serde_json::json!({"hook_event_name": "SessionEnd", "session_id": "s-growth", "reason": "prompt_input_exit"}),
+        at - 60_000,
+    );
+    until(&rx, |b| shows(b, "s-growth"));
+    assert_eq!(*held_when_shown.lock().unwrap(), Some(true));
+    stop(handle);
+}
+
+fn old_event_file(env: &common::TestEnv, days: i64) -> PathBuf {
+    let ts = officina_host::files::now_ms() - days * DAY_MS;
+    hook_line(
+        env,
+        serde_json::json!({"hook_event_name": "Stop", "session_id": format!("old-{days}"), "cwd": "C:/work/api"}),
+        ts,
+    );
+    env.events_dir()
+        .join(officina_core::dates::event_file_name(ts))
+}
+
+/// FR-1, D-47, P-13: a registry that cannot be opened leaves the board
+/// working from live sources, deletes nothing, and the board says why.
+#[test]
+fn unavailable_registry_keeps_the_board_and_deletes_nothing() {
+    let env = common::TestEnv::new();
+    let now = officina_host::files::now_ms();
+    env.write_agents(&listed_session("s-live", now));
+    std::fs::create_dir_all(env.officina_home()).unwrap();
+    std::fs::write(
+        env.officina_home().join("registry"),
+        b"a file where the folder goes",
+    )
+    .unwrap();
+    let old = old_event_file(&env, 5);
+    let (handle, rx, _) = watch_listing(&env, |_| {});
+    let board = until(&rx, |b| shows(b, "s-live"));
+    assert_eq!(registry_state(&board), Some(RegistryState::Unavailable));
+    assert!(
+        board
+            .diagnostics
+            .registry
+            .as_ref()
+            .unwrap()
+            .detail
+            .is_some()
+    );
+    assert!(old.exists(), "nothing is deleted");
+    stop(handle);
+}
+
+/// AD-42 last sentence, D-91: a registry found damaged while the window
+/// runs becomes unavailable until the next start; the board continues,
+/// nothing is deleted, no offset moves; the next start sets it aside.
+#[test]
+fn corruption_while_running_makes_the_registry_unavailable_until_restart() {
+    let env = common::TestEnv::new();
+    let now = officina_host::files::now_ms();
+    env.write_agents(&listed_session("s-live", now));
+    let old = old_event_file(&env, 5);
+    let (handle, rx, _) = watch_listing(&env, |_| {});
+    let first = until(&rx, |_| true);
+    assert_eq!(registry_state(&first), Some(RegistryState::Ready));
+    // The collector's page cache holds the database's pages; a commit by
+    // another connection makes it read the file again at its next
+    // transaction, as SQLite does whenever its cache no longer covers a
+    // page. No transaction of the collector's comes before the event below:
+    // its next session list is the safety poll's, 15 s away.
+    let mut other = open_writer(&env.officina_home(), &[], now)
+        .writer()
+        .unwrap();
+    other
+        .set_setting(SettingKey::AutoArchive, "false", Source::Author, now)
+        .unwrap();
+    drop(other);
+    let db = officina_host::registry::RegistryPaths::new(&env.officina_home()).database();
+    {
+        use std::io::{Seek, SeekFrom, Write};
+        // Windows' sharing mode lets another process write the open file.
+        let bytes = std::fs::read(&db).unwrap();
+        let page = usize::from(u16::from_be_bytes([bytes[16], bytes[17]]));
+        let mut file = std::fs::OpenOptions::new().write(true).open(&db).unwrap();
+        file.seek(SeekFrom::Start(page as u64)).unwrap();
+        file.write_all(&vec![0xFF; bytes.len() - page]).unwrap();
+    }
+    let damaged = std::fs::read(&db).unwrap();
+    hook_line(
+        &env,
+        serde_json::json!({"hook_event_name": "UserPromptSubmit", "session_id": "s-after", "cwd": "C:/work/api", "prompt": "x"}),
+        officina_host::files::now_ms(),
+    );
+    let board = until(&rx, |b| {
+        registry_state(b) == Some(RegistryState::Unavailable)
+    });
+    assert!(
+        board
+            .diagnostics
+            .registry
+            .as_ref()
+            .unwrap()
+            .detail
+            .is_some()
+    );
+    assert!(shows(&board, "s-live"), "the board keeps its sessions");
+    hook_line(
+        &env,
+        serde_json::json!({"hook_event_name": "Stop", "session_id": "s-live", "cwd": "C:/work/api", "last_assistant_message": "done"}),
+        officina_host::files::now_ms(),
+    );
+    std::thread::sleep(Duration::from_millis(1500));
+    let still = handle.board.read().unwrap().clone().unwrap();
+    assert_eq!(
+        registry_state(&still),
+        Some(RegistryState::Unavailable),
+        "until the next start"
+    );
+    assert_eq!(
+        std::fs::read(&db).unwrap(),
+        damaged,
+        "no write, no offset moved"
+    );
+    assert!(old.exists(), "nothing is deleted");
+    stop(handle);
+
+    let (handle, rx, _) = watch_listing(&env, |_| {});
+    let restarted = until(&rx, |_| true);
+    assert_eq!(
+        registry_state(&restarted),
+        Some(RegistryState::Ready),
+        "set aside and restored"
+    );
+    assert!(
+        registered(&env).contains(&"s-after".to_owned()),
+        "ingested again from the files"
+    );
     stop(handle);
 }

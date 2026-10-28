@@ -10,5 +10,6 @@ pub mod paths;
 pub mod platform;
 pub mod registry;
 pub mod relay;
+#[cfg(feature = "window-authority")]
 pub mod watch;
 pub mod writers;
