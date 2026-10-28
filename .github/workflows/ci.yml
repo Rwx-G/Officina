@@ -85,6 +85,27 @@ jobs:
           if ! grep -a -q -F "$marker" target/release/officina-app.exe; then
             echo "positive control failed: officina-app.exe lacks the authority marker"; exit 1
           fi
+      - name: No bundled roots
+        # AD-36, story 2.11 AC 14: HTTP actions trust the Windows store
+        # through rustls' platform verifier, so webpki-roots must stay out of
+        # the graph of the exe sessions call, on every target. cargo tree
+        # says "nothing to print" or "did not match any packages" when the
+        # crate is absent; any other output fails, so a cargo error cannot
+        # pass for a clean graph. The same query must find rustls, or the
+        # search proves nothing.
+        shell: bash
+        run: |
+          out=$(cargo tree -p officina -e normal --target all -i webpki-roots 2>&1) || true
+          if grep -q '^webpki-roots v' <<<"$out"; then
+            echo "$out"; echo "webpki-roots is in the graph of officina"; exit 1
+          fi
+          if ! grep -q -e 'nothing to print' -e 'did not match any packages' <<<"$out"; then
+            echo "$out"; echo "cargo tree did not answer"; exit 1
+          fi
+          control=$(cargo tree -p officina -e normal --target all -i rustls 2>&1) || true
+          if ! grep -q '^rustls v' <<<"$control"; then
+            echo "$control"; echo "positive control failed: rustls not found"; exit 1
+          fi
       - name: Frontend checks
         working-directory: app
         run: |
