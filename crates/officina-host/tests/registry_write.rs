@@ -979,3 +979,318 @@ fn confirmation_copies_the_proposal_it_answered() {
         "the verdict chosen, not the one proposed"
     );
 }
+
+/// Auto-archive (story 3.10 AC 3; FR-12, AD-50, D-62, D-69, D-70, R18).
+mod auto_archive {
+    use super::*;
+    use officina_core::registry::fold::FactWrite;
+    use officina_core::registry::rates::GateState;
+    use officina_core::registry::types::{FactValue, RowKind, SessionFact, SettingKey};
+    use officina_core::registry::verdict::{Row, auto_archivable};
+    use officina_core::registry::view::RegistryView;
+
+    const OPS: &str = "C:/work/ops";
+    const HOUR: i64 = 3_600_000;
+
+    /// Sessions of `ops` that saw a prompt `DAY` before `NOW`, ingested.
+    fn sessions_of_ops(home: &Home, writer: &mut Writer, ids: &[String]) {
+        let lines: Vec<String> = ids
+            .iter()
+            .enumerate()
+            .map(|(i, id)| prompt(id, NOW - DAY + i as i64, OPS, &format!("run {id}")))
+            .collect();
+        home.append(&day_file(NOW - DAY), &lines);
+        writer.ingest(&home.ctx(), NOW - DAY + 60_000).unwrap();
+    }
+
+    /// Makes `id` a background session Claude Code reports `done`.
+    fn background_done(writer: &mut Writer, id: &str, at: i64) {
+        let fact = |fact, value: &str| FactWrite {
+            session_id: id.to_owned(),
+            fact,
+            value: FactValue::Text(value.to_owned()),
+            src: Source::Agents,
+            at_ms: at,
+        };
+        writer
+            .record_facts(&[
+                fact(SessionFact::Kind, "background"),
+                fact(SessionFact::State, "done"),
+            ])
+            .unwrap();
+    }
+
+    fn view(writer: &Writer, home: &Home, at: i64) -> RegistryView {
+        writer.view(None, &home.events, at).unwrap()
+    }
+
+    /// Confirms the row of `key` at `at` with `verdict`, from the proposal
+    /// shown.
+    fn confirm_row(writer: &mut Writer, home: &Home, key: &str, verdict: Verdict, at: i64) {
+        let shown = view(writer, home, at)
+            .triage
+            .into_iter()
+            .find(|r| r.key == key)
+            .unwrap_or_else(|| panic!("no row {key}"))
+            .proposal;
+        let answers = writer
+            .confirm_triage(
+                &[ConfirmItem {
+                    key: key.to_owned(),
+                    shown,
+                    verdict,
+                    routine: false,
+                    file_under: None,
+                }],
+                at,
+            )
+            .unwrap();
+        assert!(
+            matches!(answers[0].outcome, ItemOutcome::Confirmed { .. }),
+            "{answers:?}"
+        );
+    }
+
+    /// `count` background sessions, each in a subject of its own, whose
+    /// `state` `finished` proposal the author confirmed, `flipped` of them
+    /// as `to_resume`, an hour before `NOW`.
+    fn state_finished_confirmations(
+        home: &Home,
+        writer: &mut Writer,
+        count: usize,
+        flipped: usize,
+    ) {
+        let ids: Vec<String> = (0..count).map(|i| format!("bg-{i:03}")).collect();
+        sessions_of_ops(home, writer, &ids);
+        for (i, id) in ids.iter().enumerate() {
+            background_done(writer, id, NOW - DAY + 120_000);
+            let at = NOW - HOUR + i as i64 * 1_000;
+            let subject = writer
+                .create_subject(
+                    &format!("job {i}"),
+                    SubjectOrigin::Sessions(vec![id.clone()]),
+                    at,
+                )
+                .unwrap();
+            let verdict = if i < flipped {
+                Verdict::ToResume
+            } else {
+                Verdict::Finished
+            };
+            confirm_row(
+                writer,
+                home,
+                &format!("subject:{subject}"),
+                verdict,
+                at + 500,
+            );
+        }
+    }
+
+    fn setting(writer: &Writer) -> Option<(String, Source)> {
+        writer
+            .settings()
+            .unwrap()
+            .into_iter()
+            .find(|row| row.key == SettingKey::AutoArchive)
+            .map(|row| (row.value, row.src))
+    }
+
+    #[test]
+    fn auto_archive_is_refused_while_the_gate_does_not_hold() {
+        let home = Home::new();
+        let mut writer = home.writer(NOW - DAY);
+        state_finished_confirmations(&home, &mut writer, 49, 0);
+        assert_eq!(
+            writer.set_auto_archive(true, NOW).unwrap(),
+            Err(GateState::NotEnoughCases)
+        );
+        assert_eq!(setting(&writer), None, "nothing written");
+        assert_eq!(writer.set_auto_archive(false, NOW).unwrap(), Ok(()));
+        let gate = view(&writer, &home, NOW).gates.auto_archive;
+        assert_eq!(
+            (gate.state, gate.cases, gate.needed),
+            (GateState::NotEnoughCases, 49, 50)
+        );
+        // The fiftieth case opens it.
+        let home = Home::new();
+        let mut writer = home.writer(NOW - DAY);
+        state_finished_confirmations(&home, &mut writer, 50, 0);
+        assert_eq!(writer.set_auto_archive(true, NOW).unwrap(), Ok(()));
+        let shown = view(&writer, &home, NOW).auto_archive;
+        assert!(shown.on);
+        assert_eq!((shown.src, shown.at_ms), (Some(Source::Author), Some(NOW)));
+    }
+
+    /// Rows of every kind beside the one auto-archive takes: a filed
+    /// subject whose background session is done (taken), an unfiled
+    /// background session done, an empty subject, and a filed interactive
+    /// session ended normally (none taken). Returns the taken subject.
+    fn every_kind_of_row(home: &Home, writer: &mut Writer) -> i64 {
+        let at = NOW - 10 * 60_000;
+        let end = serde_json::json!({"v": 1, "ts": at + 2_000, "event": "SessionEnd",
+            "session_id": "plain", "cwd": OPS, "reason": "prompt_input_exit"});
+        let lines = vec![
+            prompt("live", at, OPS, "nightly report"),
+            prompt("loose", at, OPS, "weekly report"),
+            prompt("plain", at, OPS, "rotate the logs"),
+            answer("plain", at + 1_000, OPS, "Done.", None),
+            format!("{end}\n"),
+        ];
+        home.append(&day_file(at), &lines);
+        writer.ingest(&home.ctx(), at + 3_000).unwrap();
+        background_done(writer, "live", at + 4_000);
+        background_done(writer, "loose", at + 4_000);
+        let live = writer
+            .create_subject(
+                "live job",
+                SubjectOrigin::Sessions(vec!["live".into()]),
+                at + 5_000,
+            )
+            .unwrap();
+        writer
+            .create_subject(
+                "plain job",
+                SubjectOrigin::Sessions(vec!["plain".into()]),
+                at + 5_000,
+            )
+            .unwrap();
+        writer
+            .create_subject(
+                "nothing yet",
+                SubjectOrigin::Project("ops".into()),
+                at + 5_000,
+            )
+            .unwrap();
+        live
+    }
+
+    #[test]
+    fn auto_archive_confirms_state_finished_rows_of_filed_subjects_only() {
+        let home = Home::new();
+        let mut writer = home.writer(NOW - DAY);
+        state_finished_confirmations(&home, &mut writer, 50, 0);
+        writer
+            .set_auto_archive(true, NOW - 60_000)
+            .unwrap()
+            .unwrap();
+        let live = every_kind_of_row(&home, &mut writer);
+        let before = view(&writer, &home, NOW);
+        assert_eq!(before.triage.len(), 4, "{:?}", before.triage);
+        let run = writer.auto_archive(NOW).unwrap();
+        assert_eq!(run.archived, [live]);
+        assert_eq!(run.turned_off, None);
+        let after = view(&writer, &home, NOW);
+        let keys: Vec<String> = after.triage.iter().map(|r| r.key.clone()).collect();
+        assert_eq!(keys.len(), 3, "{keys:?}");
+        assert!(!keys.contains(&format!("subject:{live}")));
+        let archived = subject(&home, live);
+        assert_eq!(archived.status.value, SubjectStatus::Archived);
+        assert!(
+            !archived.routine,
+            "an auto-archive never marks routine (D-62)"
+        );
+        assert_eq!(after.recent_auto_archives.len(), 1);
+        assert_eq!(after.recent_auto_archives[0].subject.id, live);
+        assert!(after.recent_auto_archives[0].archived);
+        let pass = writer.auto_archive(NOW + 1).unwrap();
+        assert!(pass.archived.is_empty(), "nothing more to take");
+    }
+
+    #[test]
+    fn auto_archive_never_takes_a_model_unfiled_or_empty_subject_row() {
+        let home = Home::new();
+        let mut writer = home.writer(NOW - DAY);
+        state_finished_confirmations(&home, &mut writer, 50, 0);
+        writer
+            .set_auto_archive(true, NOW - 60_000)
+            .unwrap()
+            .unwrap();
+        every_kind_of_row(&home, &mut writer);
+        writer.auto_archive(NOW).unwrap();
+        let left = view(&writer, &home, NOW).triage;
+        let unfiled = left
+            .iter()
+            .find(|r| r.kind == RowKind::UnfiledSession)
+            .expect("the unfiled row stays");
+        assert_eq!(
+            (unfiled.proposal.source, unfiled.proposal.verdict),
+            (ProposalSource::State, ModelVerdict::Finished),
+            "a state finished proposal, left since it is unfiled"
+        );
+        let empty = left
+            .iter()
+            .find(|r| r.kind == RowKind::EmptySubject)
+            .expect("the empty subject's row stays");
+        assert_eq!(empty.proposal.verdict, ModelVerdict::Finished);
+        // A model `finished` on a filed subject's row: the model stays off
+        // until story 3.11, so the row is built as its queue will build it.
+        let model_row = Row {
+            kind: RowKind::Subject,
+            key: "subject:9".into(),
+            project: "ops".into(),
+            subject: Some(9),
+            session_id: Some("s9".into()),
+            proposal: Proposal {
+                verdict: ModelVerdict::Finished,
+                source: ProposalSource::Model,
+                reason: ReasonCode::Model,
+                call_id: Some(1),
+            },
+            at_ms: NOW,
+            proposed_subject: None,
+            choices: Vec::new(),
+        };
+        assert!(!auto_archivable(&model_row));
+    }
+
+    #[test]
+    fn gate_break_turns_auto_archive_off_with_its_reason() {
+        let home = Home::new();
+        let mut writer = home.writer(NOW - DAY);
+        state_finished_confirmations(&home, &mut writer, 50, 0);
+        writer
+            .set_auto_archive(true, NOW - 60_000)
+            .unwrap()
+            .unwrap();
+        // The author flips a `state` `finished` proposal: one flip among
+        // the last 50 is 2 %, no longer below it.
+        let at = NOW - 30 * 60_000;
+        home.append(&day_file(at), &[prompt("flip", at, OPS, "one more")]);
+        writer.ingest(&home.ctx(), at + 1_000).unwrap();
+        background_done(&mut writer, "flip", at + 2_000);
+        let flipped = writer
+            .create_subject(
+                "flipped",
+                SubjectOrigin::Sessions(vec!["flip".into()]),
+                at + 3_000,
+            )
+            .unwrap();
+        confirm_row(
+            &mut writer,
+            &home,
+            &format!("subject:{flipped}"),
+            Verdict::ToResume,
+            at + 4_000,
+        );
+        let run = writer.auto_archive(NOW).unwrap();
+        assert_eq!(run.turned_off, Some(GateState::TooManyFlips));
+        assert!(run.archived.is_empty());
+        let (value, src) = setting(&writer).unwrap();
+        assert_eq!(src, Source::Rules);
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&value).unwrap(),
+            serde_json::json!({"on": false, "reason": "too_many_flips"})
+        );
+        let shown = view(&writer, &home, NOW).auto_archive;
+        assert_eq!(
+            (shown.on, shown.reason),
+            (false, Some(GateState::TooManyFlips))
+        );
+        assert_eq!(
+            writer.set_auto_archive(true, NOW).unwrap(),
+            Err(GateState::TooManyFlips),
+            "turning it on again needs the gate again (D-69)"
+        );
+    }
+}

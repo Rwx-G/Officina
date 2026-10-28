@@ -262,6 +262,32 @@ impl WindowRegistry {
         }
     }
 
+    /// Turns auto-archive on or off at `now_ms` (FR-12): refused, with the
+    /// gate's state, unless its gate holds to turn it on.
+    pub fn set_auto_archive(&mut self, on: bool, now_ms: i64) -> Result<(), IpcError> {
+        let Slot::Writable(writer) = &mut self.slot else {
+            return Err(self.not_writable());
+        };
+        match writer.set_auto_archive(on, now_ms) {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(state)) => Err(IpcError::new(
+                IpcErrorCode::Refused,
+                format!(
+                    "auto-archive cannot be turned on: its gate does not hold ({})",
+                    state.code()
+                ),
+            )),
+            Err(error) => Err(self.write_failed(&error)),
+        }
+    }
+
+    /// One auto-archive pass at `now_ms`, when the registry is writable:
+    /// true when it archived a subject or turned itself off.
+    pub fn auto_archive(&mut self, now_ms: i64) -> bool {
+        self.on_writer(|writer| writer.auto_archive(now_ms))
+            .is_some_and(|run| !run.archived.is_empty() || run.turned_off.is_some())
+    }
+
     /// What the view shows of dry runs.
     pub fn triage_state(&self) -> DryRunState {
         self.triage.state()

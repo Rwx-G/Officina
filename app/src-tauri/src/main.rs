@@ -266,6 +266,21 @@ async fn confirm_triage(
     }
 }
 
+/// Turns auto-archive on, only while its gate holds, or off (FR-12,
+/// AD-50): a refusal names the gate's state, and the registry view says why
+/// the toggle is disabled.
+#[tauri::command]
+async fn set_auto_archive(state: State<'_, AppState>, on: bool) -> Result<(), IpcError> {
+    match ask(state, AuthorCommand::SetAutoArchive(on)).await? {
+        AuthorAnswer::Done { .. } => Ok(()),
+        AuthorAnswer::Archived(_)
+        | AuthorAnswer::Confirmed(_)
+        | AuthorAnswer::Evaluating { .. } => {
+            Err(IpcError::internal("the collector answered another request"))
+        }
+    }
+}
+
 /// Queues a dry run of the triage model on the author's past
 /// confirmations (AD-52, D-92): answered once queued, with how many cases
 /// it holds; its progress and its result come in the registry view, never
@@ -490,7 +505,8 @@ fn main() {
             archive_subject,
             reopen_subject,
             confirm_triage,
-            evaluate_triage_model
+            evaluate_triage_model,
+            set_auto_archive
         ])
         .run(tauri::generate_context!())
         .expect("failed to run the Officina window");

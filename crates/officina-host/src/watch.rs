@@ -75,6 +75,8 @@ pub enum AuthorCommand {
     Confirm(Vec<ConfirmItem>),
     /// A dry run of the triage model, answered once queued (AD-52, D-92).
     Evaluate,
+    /// Auto-archive turned on, under its gate, or off (FR-12).
+    SetAutoArchive(bool),
 }
 
 /// What the collector answers to an author request.
@@ -711,6 +713,14 @@ fn publish_both<E: Emit>(
     let view = registry.view(Some(&board), &collector.paths().events_dir(), now_ms());
     publish(board, outputs);
     publish_registry(view, outputs, force);
+    // After each view build (D-70): what it archived, or its switch turned
+    // off, shows in the next view at once.
+    if registry.auto_archive(now_ms()) {
+        let board = collector.board(now_ms());
+        let view = registry.view(Some(&board), &collector.paths().events_dir(), now_ms());
+        publish(board, outputs);
+        publish_registry(view, outputs, false);
+    }
 }
 
 /// Runs one author request on the registry's writer (AD-38), unless its
@@ -743,6 +753,11 @@ fn answer_author<E: Emit>(
             report_registry(collector, registry);
             publish_both(collector, registry, outputs, true);
             answered.map(AuthorAnswer::Confirmed)
+        }
+        AuthorCommand::SetAutoArchive(on) => {
+            let done = registry.set_auto_archive(on, now_ms());
+            publish_both(collector, registry, outputs, true);
+            done.map(|()| AuthorAnswer::Done { created: None })
         }
         AuthorCommand::Evaluate => {
             let queued = registry.evaluate(now_ms());

@@ -22,6 +22,7 @@ const COMMANDS: &[&str] = &[
     "reopen_subject",
     "confirm_triage",
     "evaluate_triage_model",
+    "set_auto_archive",
 ];
 
 fn main() {

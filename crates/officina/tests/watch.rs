@@ -1647,3 +1647,170 @@ fn board_keeps_its_pace_while_a_triage_call_hangs() {
     assert!(still.model.dry_run.is_some(), "the call is still out");
     stop(handle);
 }
+
+/// A home whose registry holds 50 `state` `finished` proposals the author
+/// confirmed (the auto-archive gate holds), a subject `live job` filed
+/// with the background session `bg-live`, which saw a prompt, and
+/// auto-archive on; the agents fixture lists `bg-live` in `state`.
+/// Written through the window's writer before the window starts.
+fn auto_archive_home(env: &common::TestEnv, state: &str) -> i64 {
+    use officina_core::registry::fold::FactWrite;
+    use officina_core::registry::types::{FactValue, SessionFact};
+    let now = officina_host::files::now_ms();
+    let ops = "C:/work/ops";
+    let start = now - DAY_MS;
+    for i in 0..50 {
+        hook_line(
+            env,
+            serde_json::json!({"hook_event_name": "UserPromptSubmit", "session_id": format!("bg-{i:03}"), "cwd": ops, "prompt": "nightly"}),
+            start + i,
+        );
+    }
+    hook_line(
+        env,
+        serde_json::json!({"hook_event_name": "UserPromptSubmit", "session_id": "bg-live", "cwd": ops, "prompt": "nightly report"}),
+        now - 60_000,
+    );
+    let events = env.events_dir();
+    let home = env.officina_home();
+    let ctx = IngestContext {
+        events_dir: &events,
+        officina_home: &home,
+        projects: &[],
+        no_excerpts: false,
+    };
+    let mut writer = open_writer(&home, &[], start).writer().unwrap();
+    writer.ingest(&ctx, now - 50_000).unwrap();
+    for i in 0..50 {
+        let id = format!("bg-{i:03}");
+        let fact = |fact, value: &str| FactWrite {
+            session_id: id.clone(),
+            fact,
+            value: FactValue::Text(value.to_owned()),
+            src: Source::Agents,
+            at_ms: start + 60_000,
+        };
+        writer
+            .record_facts(&[
+                fact(SessionFact::Kind, "background"),
+                fact(SessionFact::State, "done"),
+            ])
+            .unwrap();
+        let at = now - 3_600_000 + i * 1_000;
+        let subject = writer
+            .create_subject(&format!("job {i}"), SubjectOrigin::Sessions(vec![id]), at)
+            .unwrap();
+        let key = format!("subject:{subject}");
+        let view = writer.view(None, &events, at).unwrap();
+        let shown = view.triage.iter().find(|r| r.key == key).unwrap().proposal;
+        writer
+            .confirm_triage(
+                &[ConfirmItem {
+                    key,
+                    shown,
+                    verdict: Verdict::Finished,
+                    routine: false,
+                    file_under: None,
+                }],
+                at + 500,
+            )
+            .unwrap();
+    }
+    let live = writer
+        .create_subject(
+            "live job",
+            SubjectOrigin::Sessions(vec!["bg-live".into()]),
+            now - 40_000,
+        )
+        .unwrap();
+    writer
+        .set_auto_archive(true, now - 30_000)
+        .unwrap()
+        .unwrap();
+    write_background_listing(env, state, now);
+    live
+}
+
+/// The agents fixture listing `bg-live` as a background session in `state`.
+fn write_background_listing(env: &common::TestEnv, state: &str, now: i64) {
+    env.write_agents(
+        &serde_json::json!([{"pid": 4301, "id": "bg0001", "cwd": "C:/work/ops", "kind": "background",
+            "startedAt": now - 120_000, "sessionId": "bg-live", "name": "nightly", "status": "idle", "state": state}])
+        .to_string(),
+    );
+}
+
+/// Story 3.10 AC 3 (FR-12, D-70): with auto-archive on and its gate
+/// holding, the collector confirms the `state` `finished` row of a filed
+/// subject right after the view that shows it, and the next view shows the
+/// subject archived and listed among the recent auto-archives.
+#[test]
+fn auto_archive_runs_after_the_view_build() {
+    let env = common::TestEnv::new();
+    let live = auto_archive_home(&env, "done");
+    let (handle, emitted, _) = watch_all(&env, |_| {});
+    let view = until(&emitted.registries, |v| {
+        v.recent_auto_archives
+            .iter()
+            .any(|a| a.subject.id == live && a.archived)
+    });
+    assert!(
+        view.triage
+            .iter()
+            .all(|r| r.key != format!("subject:{live}"))
+    );
+    assert!(view.auto_archive.on);
+    let subjects = open_reader(&env.officina_home(), &[])
+        .unwrap()
+        .subjects()
+        .unwrap();
+    let archived = subjects.iter().find(|s| s.id == live).unwrap();
+    assert_eq!(
+        archived.status.value,
+        officina_core::registry::types::SubjectStatus::Archived
+    );
+    assert!(!archived.routine);
+    stop(handle);
+}
+
+/// Story 3.10 AC 4 (D-77, FR-12 amendment 10): the background session of
+/// an auto-archived subject re-instructed within 7 days reopens the
+/// subject, the `state` source counts one flip, and the gate it breaks
+/// turns auto-archive off with its reason.
+#[test]
+fn a_re_instructed_auto_archived_session_counts_as_a_flip() {
+    let env = common::TestEnv::new();
+    let live = auto_archive_home(&env, "done");
+    let (handle, emitted, _) = watch_all(&env, |_| {});
+    until(&emitted.registries, |v| {
+        v.recent_auto_archives
+            .iter()
+            .any(|a| a.subject.id == live && a.archived)
+    });
+    write_background_listing(&env, "working", officina_host::files::now_ms());
+    handle.sender.send(CollectorMsg::Refresh).unwrap();
+    let view = until(&emitted.registries, |v| {
+        v.recent_auto_archives
+            .iter()
+            .any(|a| a.subject.id == live && a.reopened_at_ms.is_some())
+    });
+    let state = view
+        .rates
+        .iter()
+        .find(|r| r.source == ProposalSource::State)
+        .unwrap();
+    let finished = state.finished.unwrap();
+    assert_eq!((finished.cases, finished.flipped), (50, 1));
+    let reopened = view.subjects.iter().find(|s| s.id == live).unwrap();
+    assert_eq!(
+        reopened.status,
+        officina_core::registry::types::SubjectStatus::Active
+    );
+    let off = until(&emitted.registries, |v| !v.auto_archive.on);
+    assert_eq!(
+        off.auto_archive.reason,
+        Some(officina_core::registry::rates::GateState::TooManyFlips)
+    );
+    assert_eq!(off.auto_archive.src, Some(Source::Rules));
+    stop(handle);
+}

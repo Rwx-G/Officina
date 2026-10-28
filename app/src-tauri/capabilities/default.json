@@ -25,6 +25,7 @@
     "allow-archive-subject",
     "allow-reopen-subject",
     "allow-confirm-triage",
-    "allow-evaluate-triage-model"
+    "allow-evaluate-triage-model",
+    "allow-set-auto-archive"
   ]
 }

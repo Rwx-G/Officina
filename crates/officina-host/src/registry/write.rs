@@ -15,12 +15,14 @@ use officina_core::registry::confirm::{
 use officina_core::registry::dry_run::DryRunState;
 use officina_core::registry::filing::excerpts_to_clear;
 use officina_core::registry::fold::FactWrite;
+use officina_core::registry::rates::{Gate, GateState, auto_archive_gate};
 pub use officina_core::registry::types::AuthorRefusal;
 use officina_core::registry::types::{
     EventFileRecord, ExcerptRecord, FactValue, RegistryReport, RegistryState, SessionRecord,
-    SessionRow, SettingKey, Source, SubjectRecord, SubjectStatus,
+    SessionRow, SettingKey, Source, SubjectRecord, SubjectStatus, Verdict,
 };
-use officina_core::registry::view::RegistryView;
+use officina_core::registry::verdict::{VerdictInput, auto_archivable, rows};
+use officina_core::registry::view::{AutoArchiveSetting, RegistryView};
 use rusqlite::config::DbConfig;
 use rusqlite::types::Value;
 use rusqlite::{Connection, ErrorCode, TransactionBehavior};
@@ -251,6 +253,7 @@ fn apply_decision(
     conn: &Connection,
     planned: &ConfirmPlan,
     subject: i64,
+    auto: bool,
     now_ms: i64,
 ) -> rusqlite::Result<()> {
     let Ok(decision) = &planned.decision else {
@@ -275,7 +278,7 @@ fn apply_decision(
     conn.prepare_cached(
         "INSERT INTO confirmation (subject_id, session_id, proposed_verdict, proposed_source,
              proposed_reason, call_id, verdict, auto, confirmed_at_ms)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0, ?8)",
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
     )?
     .execute(rusqlite::params![
         subject,
@@ -285,6 +288,7 @@ fn apply_decision(
         decision.proposal.reason.code(),
         decision.proposal.call_id,
         decision.verdict.code(),
+        i64::from(auto),
         now_ms
     ])?;
     if let Some(input) = &decision.input {
@@ -314,6 +318,7 @@ fn apply_decision(
 fn confirm_one(
     conn: &Connection,
     item: &ConfirmItem,
+    auto: bool,
     now_ms: i64,
 ) -> rusqlite::Result<(ItemOutcome, bool)> {
     let subjects = read::subjects(conn)?;
@@ -342,7 +347,7 @@ fn confirm_one(
         Target::Existing(id) => id,
         Target::Created => created.unwrap_or_default(),
     };
-    apply_decision(conn, &planned, subject, now_ms)?;
+    apply_decision(conn, &planned, subject, auto, now_ms)?;
     Ok((planned.outcome(subject), planned.checkpoint()))
 }
 
@@ -371,13 +376,25 @@ impl Writer {
         now_ms: i64,
         observe: &mut dyn FnMut(usize),
     ) -> Result<Vec<ItemAnswer>, RegistryError> {
+        self.confirm_items(items, false, now_ms, observe)
+    }
+
+    /// Confirms `items` in one transaction, `auto` when auto-archive gives
+    /// them rather than the author (FR-12).
+    fn confirm_items(
+        &mut self,
+        items: &[ConfirmItem],
+        auto: bool,
+        now_ms: i64,
+        observe: &mut dyn FnMut(usize),
+    ) -> Result<Vec<ItemAnswer>, RegistryError> {
         let tx = self
             .conn
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         let mut answers = Vec::with_capacity(items.len());
         let mut cleared = false;
         for (index, item) in items.iter().enumerate() {
-            let (outcome, cleared_now) = confirm_one(&tx, item, now_ms)?;
+            let (outcome, cleared_now) = confirm_one(&tx, item, auto, now_ms)?;
             cleared |= cleared_now;
             answers.push(ItemAnswer {
                 key: item.key.clone(),
@@ -631,6 +648,108 @@ impl Writer {
         }
         tx.commit()?;
         Ok(())
+    }
+}
+
+/// What one auto-archive pass did (FR-12, D-69, D-70).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AutoArchiveRun {
+    /// The subjects archived, by id.
+    pub archived: Vec<i64>,
+    /// The gate state that turned auto-archive off, when its gate broke.
+    pub turned_off: Option<GateState>,
+}
+
+impl Writer {
+    /// The auto-archive setting, when one is recorded.
+    pub fn auto_archive_setting(&self) -> Option<AutoArchiveSetting> {
+        read::auto_archive_setting(&self.conn).map(|(setting, _, _)| setting)
+    }
+
+    /// The auto-archive gate at `now_ms` (AD-50).
+    pub fn auto_archive_gate(&self, now_ms: i64) -> Result<Gate, RegistryError> {
+        Ok(auto_archive_gate(
+            &read::verdict_records(&self.conn)?,
+            now_ms,
+        ))
+    }
+
+    /// Turns auto-archive on or off at `now_ms`, source `author` (FR-12,
+    /// D-69): turning it on is refused, with the gate's state, unless its
+    /// gate holds; turning it off always succeeds.
+    pub fn set_auto_archive(
+        &mut self,
+        on: bool,
+        now_ms: i64,
+    ) -> Result<Result<(), GateState>, RegistryError> {
+        if on {
+            let gate = self.auto_archive_gate(now_ms)?;
+            if gate.state != GateState::Holds {
+                return Ok(Err(gate.state));
+            }
+        }
+        let value =
+            serde_json::to_string(&AutoArchiveSetting { on, reason: None }).unwrap_or_default();
+        self.set_setting(SettingKey::AutoArchive, &value, Source::Author, now_ms)?;
+        Ok(Ok(()))
+    }
+
+    /// One auto-archive pass at `now_ms` (FR-12, AD-50, D-69, D-70), run by
+    /// the collector after each view build: nothing while the switch is
+    /// off; when its gate no longer holds, the switch turns off with source
+    /// `rules` and the gate's state; otherwise every row [`auto_archivable`]
+    /// takes is confirmed `finished`, `auto`, without the routine mark.
+    pub fn auto_archive(&mut self, now_ms: i64) -> Result<AutoArchiveRun, RegistryError> {
+        if !self.auto_archive_setting().is_some_and(|s| s.on) {
+            return Ok(AutoArchiveRun::default());
+        }
+        let gate = self.auto_archive_gate(now_ms)?;
+        if gate.state != GateState::Holds {
+            let value = serde_json::to_string(&AutoArchiveSetting {
+                on: false,
+                reason: Some(gate.state),
+            })
+            .unwrap_or_default();
+            self.set_setting(SettingKey::AutoArchive, &value, Source::Rules, now_ms)?;
+            return Ok(AutoArchiveRun {
+                archived: Vec::new(),
+                turned_off: Some(gate.state),
+            });
+        }
+        let subjects = read::subjects(&self.conn)?;
+        let sessions = read::session_records(&self.conn)?;
+        let confirmations = read::confirmations(&self.conn)?;
+        let model = read::model_input();
+        let items: Vec<ConfirmItem> = rows(&VerdictInput {
+            subjects: &subjects,
+            sessions: &sessions,
+            confirmations: &confirmations,
+            model: &model,
+        })
+        .into_iter()
+        .filter(auto_archivable)
+        .map(|row| ConfirmItem {
+            key: row.key,
+            shown: row.proposal,
+            verdict: Verdict::Finished,
+            routine: false,
+            file_under: None,
+        })
+        .collect();
+        if items.is_empty() {
+            return Ok(AutoArchiveRun::default());
+        }
+        let answers = self.confirm_items(&items, true, now_ms, &mut |_| {})?;
+        Ok(AutoArchiveRun {
+            archived: answers
+                .iter()
+                .filter_map(|answer| match answer.outcome {
+                    ItemOutcome::Confirmed { subject, .. } => Some(subject),
+                    _ => None,
+                })
+                .collect(),
+            turned_off: None,
+        })
     }
 }
 
