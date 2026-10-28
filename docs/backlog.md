@@ -50,6 +50,50 @@ README, not here.
   `docs/research-notes.md` (E13). The `--cd` part of D-6 is already
   verified there.
 
+- Story 3.12 AC 4: on the workstation, with the Claude Code version each
+  time, record in `docs/research-notes.md` the `SessionEnd.reason` sent
+  when a VS Code terminal hosting an interactive session is closed; for
+  `/clear` and `/resume`, the session ids before and after and the gap
+  between `SessionEnd` and `SessionStart` (revisit `SUPERSESSION_WINDOW_MS`
+  if it does not fit, D-52); that `claude --resume <id>` and `claude -c`
+  keep the session id (D-75); and the Subjects view, the Triage panel and
+  the evidence in WebView2 against Playwright Chromium, by eye.
+- Story 3.12 AC 5: a week of real use on a build holding the Epic 3 audit
+  fixes, with the counts the AC names (restarts and closed nights, sessions,
+  subjects and confirmations before and after each restart, sessions filed
+  by rule and how many were moved, confirmations per finished subject,
+  subjects woken up, doctor's state), recorded in `docs/research-notes.md`.
+- Epic 3 audits, D-439: the triage call's environment is now an allow list.
+  Run `examples/triage_probe.rs` once more on the workstation and record in
+  E16 that the call still authenticates and answers (through the corporate
+  proxy if one is set) with the variables the allow lists keep; if a
+  variable the author's setup needs is missing, add it to the list that
+  owns it, with its reason.
+- Epic 3 security audit, Info: whether `--setting-sources ""` stops Claude
+  Code reading a `CLAUDE.md` in the folders above the triage work folder
+  (`<home>/.officina/triage/`, `<home>/.officina/`) is not proved. Extend
+  the probe with a `CLAUDE.md` planted in `<home>/.officina/triage/` and
+  check the input tokens do not move; if they do, refuse a call while a
+  `CLAUDE.md` or `.claude/` sits in those folders, with a vector case.
+
+## Recurring, at each PRD close
+
+The dependency checks no advisory database raises (Epic 3 dependency
+audit, D-450), run before the PRD's QA report and recorded in it:
+
+- The bundled SQLite: compare `SQLITE_VERSION` in the locked
+  `libsqlite3-sys`'s `bindgen_bundled_version.rs` with the latest release
+  on sqlite.org, and run `cargo update -p libsqlite3-sys` when it is
+  behind (a SQLite fix without a CVE never reaches RustSec).
+- The toolchain: move `rust-toolchain.toml` to the latest point release of
+  its minor version, with CI, which reads the same file.
+- The audit tools: bump the exact cargo-deny and pnpm versions of
+  `.github/workflows/ci.yml` (and pnpm in `release.yml`) on purpose, reading
+  their release notes for changes in what they report.
+- The ignores: re-check each `auditConfig.ignoreGhsas` entry of
+  `app/pnpm-workspace.yaml` and each `deny.toml` exception, and date the
+  review in its comment.
+
 ## Low
 
 From the Epic 2 security delta audit (story 2.16 AC 6, D-175); each waits

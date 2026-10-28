@@ -47,7 +47,11 @@ stories:
 ---
 epic: 3
 version: v0.3
-# approved: written and approved, implementation not started.
+# Closed on code (docs/qa/epic-3-report.md, story 3.12 AC 7): every story implemented, its acceptance criteria proved by named tests, the five audits fixed, decided (epic-3-decisions.md D-435 to D-451) or not reproduced, the open items in docs/backlog.md.
+# review: code and automated tests in place. in-progress: an owner's manual check is open (Epic 1's convention):
+#   3.12 AC 4, the workstation checks (the VS Code close reason, the /clear and /resume ids and gaps, claude --resume and -c, WebView2 against Playwright Chromium);
+#   3.12 AC 5, a week of real use with the counts the AC names.
+# Closed on use after those checks and that week (P-7, P-16).
 # Slice A (3.1-3.8: FR-1 to FR-9, FR-14) is usable alone. Slice B (3.9-3.11: FR-10 to FR-13).
 # Reworked after review with the owner's final decisions (epic-3-decisions.md D-75 to D-97).
 # v0.2 stories 2.1 and 2.2 have merged (D-42, D-43); the other v0.2 seams are D-44.
@@ -65,6 +69,7 @@ stories:
   - {id: "3.9", file: story-3.9-triage-call-and-dry-run.md, slice: B, status: review}
   - {id: "3.10", file: story-3.10-measured-error-and-auto-archive.md, slice: B, status: review}
   - {id: "3.11", file: story-3.11-model-proposals.md, slice: B, status: review}
+  # 3.12 stays in progress: its code, documentation and QA closure (AC 1, 2, 3, 6, 7) are done; AC 4 and AC 5 are the owner's.
   - {id: "3.12", file: story-3.12-docs-doctor-and-qa.md, slice: B, status: in-progress}
 ---
 epic: 4
