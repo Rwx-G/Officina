@@ -397,7 +397,28 @@ function registryWith(rows: Row[]): RegistryStore {
     triage: rows,
     to_sort: rows.length,
     restore_notice: null,
-    thresholds: { restore_notice_ms: 1, excerpt_ttl_ms: 1, non_interactive_listed: 10, supersession_window_ms: 1 },
+    model: {
+      enabled: false,
+      latest_dry_run: null,
+      dry_run: null,
+      last_stop: null,
+      calls: {
+        today: { calls: 0, unanswered: 0, refused: 0, input_tokens: 0, output_tokens: 0, cost_microusd: 0 },
+        last_30_days: { calls: 0, unanswered: 0, refused: 0, input_tokens: 0, output_tokens: 0, cost_microusd: 0 },
+        refusals: [],
+      },
+    },
+    thresholds: {
+      restore_notice_ms: 1,
+      excerpt_ttl_ms: 1,
+      non_interactive_listed: 10,
+      supersession_window_ms: 1,
+      dry_run_max_cases: 50,
+      call_spacing_ms: 5_000,
+      calls_per_hour: 60,
+      calls_per_day: 300,
+      count_window_ms: 1,
+    },
   };
   const store = new RegistryStore();
   store.view = view;

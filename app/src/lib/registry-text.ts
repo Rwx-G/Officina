@@ -4,6 +4,7 @@
 import type { AuthorRefusal } from "./generated/AuthorRefusal";
 import type { Column } from "./generated/Column";
 import type { ConfirmRefusal } from "./generated/ConfirmRefusal";
+import type { DryRunStop } from "./generated/DryRunStop";
 import type { EndHow } from "./generated/EndHow";
 import type { ModelVerdict } from "./generated/ModelVerdict";
 import type { NotNeeded } from "./generated/NotNeeded";
@@ -11,6 +12,7 @@ import type { ProposalSource } from "./generated/ProposalSource";
 import type { ReasonCode } from "./generated/ReasonCode";
 import type { RegistryState } from "./generated/RegistryState";
 import type { SubjectStatus } from "./generated/SubjectStatus";
+import type { TriageRefusal } from "./generated/TriageRefusal";
 import type { Verdict } from "./generated/Verdict";
 
 /** The Board view's banner per state; `null` where nothing needs saying.
@@ -112,3 +114,23 @@ export const NOT_NEEDED_TEXT: Record<NotNeeded, string> = {
   not_latest: "a later session of that subject decides its verdict",
   live_session: "a session of that subject is still running",
 };
+
+/** Why a triage call was refused before anything started (AD-51, D-65). */
+export const TRIAGE_REFUSAL_TEXT: Record<TriageRefusal, string> = {
+  claude_not_found: "claude was not found",
+  cmd_shim: "claude resolves to a .cmd or .bat shim, which the call refuses: install the native claude.exe",
+  no_excerpts: "no_excerpts is set, so nothing may be sent",
+  workdir_not_empty: "the empty folder the call runs in holds something",
+};
+
+/** How the last dry run ended (D-67). */
+export const DRY_RUN_STOP_TEXT: Record<DryRunStop, string> = {
+  completed: "The last dry run ran every case.",
+  budget_spent: "The last dry run stopped when the call budget was spent; what ran is recorded.",
+  refused: "The last dry run stopped on a refused call; its cause is listed below.",
+};
+
+/** A cost in millionths of a dollar, as the evidence shows it. */
+export function usd(microusd: number | null): string {
+  return microusd === null ? "unknown" : `USD ${(microusd / 1_000_000).toFixed(4)}`;
+}

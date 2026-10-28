@@ -30,6 +30,8 @@ declare global {
     /** What `confirm_triage` answers for an item, by row key (story 3.7);
      *  an item not named is confirmed. */
     __officinaConfirmOutcome?: Record<string, ItemOutcome>;
+    /** The refusal `evaluate_triage_model` answers, when set (story 3.9). */
+    __officinaEvaluateRefused?: string;
   }
 }
 

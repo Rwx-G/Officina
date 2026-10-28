@@ -4,11 +4,13 @@
   // and `t` set the focused row's verdict, `Enter` confirms that row only;
   // a held key repeats nothing. Confirm all shown takes a pointer click only
   // (D-28) and leaves out, counted apart, the rows without a verdict, those
-  // without a subject and those being confirmed.
+  // without a subject and those being confirmed. The evidence on the triage
+  // model closes the panel.
   import { tick } from "svelte";
   import type { TriageRow as Row } from "../lib/generated/TriageRow";
   import type { LeftOut, RegistryStore } from "../lib/registry.svelte";
   import { isPointerClick } from "../lib/relay.svelte";
+  import TriageEvidence from "./TriageEvidence.svelte";
   import TriageRow from "./TriageRow.svelte";
 
   interface Props {
@@ -176,6 +178,7 @@
       </li>
     {/each}
   </ol>
+  <TriageEvidence {store} />
 </section>
 
 <style>

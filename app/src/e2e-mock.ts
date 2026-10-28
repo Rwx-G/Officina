@@ -61,6 +61,8 @@ export function installE2eMock(): void {
           return window.__officinaArchived ?? [];
         case "confirm_triage":
           return confirmTriage((args as { items: ConfirmItem[] }).items);
+        case "evaluate_triage_model":
+          return evaluate();
         default:
           if (AUTHOR_COMMANDS.includes(cmd)) return author(cmd);
           return null;
@@ -102,6 +104,18 @@ function confirmTriage(items: ConfirmItem[]): ItemAnswer[] {
     key: item.key,
     outcome: window.__officinaConfirmOutcome?.[item.key] ?? { kind: "confirmed", subject: 0, verdict: item.verdict },
   }));
+}
+
+/** Mirrors the collector's answer to `evaluate_triage_model` (D-92): the
+ *  number of cases once queued, or the refusal the test sets; a test shows
+ *  the progress by pushing the next registry view. */
+function evaluate(): Promise<number> {
+  const refused = window.__officinaEvaluateRefused;
+  if (refused) {
+    const error: IpcError = { code: "refused", message: refused, refusal: null };
+    return Promise.reject(error);
+  }
+  return Promise.resolve(window.__officinaRegistry?.model.latest_dry_run?.tally.cases ?? 1);
 }
 
 /** Mirrors `authority::approve_catalogue`: approves only the hash the

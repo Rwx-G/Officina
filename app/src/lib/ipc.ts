@@ -116,6 +116,13 @@ export function confirmTriage(items: ConfirmItem[]): Promise<ItemAnswer[]> {
   return invoke<ItemAnswer[]>("confirm_triage", { items });
 }
 
+/** Queues a dry run of the disabled triage model on past confirmations
+ *  (AD-52): answered once queued, with how many cases it holds; its
+ *  progress and result come in the registry view, never as a proposal. */
+export function evaluateTriageModel(): Promise<number> {
+  return invoke<number>("evaluate_triage_model");
+}
+
 export function getBoard(): Promise<Board | null> {
   return invoke<Board | null>("get_board");
 }

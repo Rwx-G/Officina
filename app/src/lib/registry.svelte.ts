@@ -25,9 +25,9 @@ function only<T>(record: Record<string, T>, keys: string[]): Record<string, T> {
 }
 
 /** What a request acts on: one subject, the selected sessions, a new
- *  subject in a chosen project, or the archived list. Requests and their
- *  refusals are kept per target. */
-export type Target = `subject:${number}` | "selection" | "create" | "archived";
+ *  subject in a chosen project, the archived list, or the dry run.
+ *  Requests and their refusals are kept per target. */
+export type Target = `subject:${number}` | "selection" | "create" | "archived" | "evaluate";
 
 export function subjectTarget(id: number): Target {
   return `subject:${id}`;
@@ -174,6 +174,12 @@ export class RegistryStore {
     const done = await this.#run(subjectTarget(subject), () => ipc.reopenSubject(subject));
     if (done) await this.loadArchived();
     return done;
+  }
+
+  /** Queues a dry run of the triage model (AD-52): its progress and its
+   *  result arrive with the next views. */
+  evaluate(): Promise<boolean> {
+    return this.#run("evaluate", () => ipc.evaluateTriageModel());
   }
 
   /** Asks the collector for the archived subjects. */
