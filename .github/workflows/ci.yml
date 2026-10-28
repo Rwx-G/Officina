@@ -159,17 +159,19 @@ jobs:
           if ! grep -q '^rustls v' <<<"$control"; then
             echo "$control"; echo "positive control failed: rustls not found"; exit 1
           fi
+      # Before the frontend checks: Vitest cases read the fixture boards
+      # through their index (D-101, D-181).
+      - name: e2e fixtures from the real CLI
+        working-directory: app
+        run: |
+          cargo build --locked -p officina
+          node scripts/e2e-fixtures.mjs
       - name: Frontend checks
         working-directory: app
         run: |
           pnpm check
           pnpm lint
           pnpm test
-      - name: e2e fixtures from the real CLI
-        working-directory: app
-        run: |
-          cargo build --locked -p officina
-          node scripts/e2e-fixtures.mjs
       - name: Playwright
         working-directory: app
         # Three times over (D-91): a case that passes once and fails once is

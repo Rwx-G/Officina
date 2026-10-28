@@ -20,7 +20,14 @@ export type Scenario =
   | "triage-board"
   | "evidence-board"
   | "model-board"
-  | "contract-hook-missing";
+  | "contract-hook-missing"
+  | "scene-a"
+  | "scene-b"
+  | "scene-c"
+  | "scene-alert"
+  | "scene-alert-early"
+  | "scene-eight"
+  | "scene-overflow";
 
 /** Registry views printed by `officina subjects --json` after the
  *  `registry_fixture` example wrote the registry (stories 3.5, 3.7, 3.9 and

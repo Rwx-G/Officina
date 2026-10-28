@@ -5,6 +5,8 @@ import { defineConfig, devices } from "@playwright/test";
 // output against the fake claude (AD-17).
 export default defineConfig({
   testDir: "./e2e",
+  // Specs only: the `*.test.ts` files beside them are Vitest's.
+  testMatch: "**/*.spec.ts",
   testIgnore: "**/readme-assets.spec.ts",
   fullyParallel: true,
   reporter: process.env.CI ? [["list"], ["html", { open: "never" }]] : "list",
