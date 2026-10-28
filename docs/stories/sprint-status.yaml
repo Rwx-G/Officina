@@ -35,6 +35,7 @@ stories:
   - {id: "2.9", file: story-2.9-relay-view.md, slice: B, status: approved}
   - {id: "2.10", file: story-2.10-doctor-relay-and-docs.md, slice: A, status: review}
   - {id: "2.11", file: story-2.11-http-actions.md, slice: B, status: approved}
+  - {id: "2.12", file: story-2.12-every-shell-tool-in-the-gate.md, slice: A, status: approved}
 ---
 epic: 3
 version: v0.3
