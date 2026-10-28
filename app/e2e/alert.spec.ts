@@ -94,15 +94,26 @@ test.describe("alert band", () => {
     await expect(band(page)).toHaveCount(0);
   });
 
-  test("an alert changes no theme token", async ({ page }) => {
-    await openScene(page, loadBoard("scene-c"));
-    const calm = await colourTokens(page);
-    expect(Object.keys(calm).length).toBeGreaterThan(5);
-    expect(Object.keys(calm).filter((name) => name.startsWith("--scene-")).length).toBeGreaterThan(5);
-    await push(page, loadBoard("scene-alert"));
-    await expect(band(page)).toBeVisible();
-    expect(await colourTokens(page)).toEqual(calm);
-  });
+  // In both themes (story 4.13): the system's scheme decides, on Auto.
+  for (const theme of ["light", "dark"] as const) {
+    test(`an alert changes no theme token (${theme})`, async ({ page }) => {
+      await page.emulateMedia({ colorScheme: theme });
+      await openScene(page, loadBoard("scene-c"));
+      const switcher = page.getByTestId("theme-switch");
+      await expect(switcher).toHaveAttribute("data-theme-resolved", theme);
+      const attribute = () => page.evaluate(() => document.documentElement.getAttribute("data-theme"));
+      const before = await attribute();
+      const calm = await colourTokens(page);
+      expect(Object.keys(calm).length).toBeGreaterThan(5);
+      expect(Object.keys(calm).filter((name) => name.startsWith("--scene-")).length).toBeGreaterThan(5);
+      await push(page, loadBoard("scene-alert"));
+      await expect(band(page)).toBeVisible();
+      expect(await colourTokens(page)).toEqual(calm);
+      expect(await attribute()).toBe(before);
+      await expect(switcher).toHaveAttribute("data-theme-resolved", theme);
+      await expect(switcher).toHaveAttribute("data-theme-choice", "auto");
+    });
+  }
 
   // Two boards the real CLI built, the timed wait one minute short of the
   // floor's threshold, then past it: the band follows from the board alone.

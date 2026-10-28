@@ -2,12 +2,13 @@
 // D-497): every live session of every fixture board drawn once, a changed
 // board placing figures at once, nothing written while the payloads are
 // unchanged, the scale following the sessions area, eight projects on the
-// owner's screen (D-520, D-525), and the light baselines (D-119, D-508).
+// owner's screen (D-520, D-525), and the light and dark baselines (D-119,
+// D-508).
 // Boards are `officina board --json` output (AD-17); expected places come
 // from `layoutScene`, imported, never retyped.
 import { existsSync } from "node:fs";
 import { expect, test, type Page } from "@playwright/test";
-import { SCREENSHOT_MAX_DIFF_RATIO, calls, loadBoard, openScene, sceneSettled } from "./fixtures";
+import { SCREENSHOT_MAX_DIFF_RATIO, calls, loadBoard, loadRelay, openScene, sceneSettled } from "./fixtures";
 import { fixturesOf } from "./fixture-index";
 import { beaconPair } from "../src/lib/alert";
 import { HALO_BREATHING_MS, HALO_CYCLE_MS } from "../src/lib/halo";
@@ -409,8 +410,13 @@ test.describe("scene", () => {
         first.scene = { ...first.scene!, zone: "alert", alert: "priority" };
         board.alert_count = 1;
       }
-      await openScene(page, board);
+      // The relay in use: its toggle is the widest set of fixed header
+      // controls, beside the theme control (story 4.13).
+      await openScene(page, board, loadRelay("relay-clean"));
       if (alert) await expect(page.getByTestId("alert-band")).toBeVisible();
+      // The header on one line (D-526), every fixed control included.
+      const tops = await page.locator("header.bar > *").evaluateAll((items) => items.map((e) => Math.round(e.getBoundingClientRect().top)));
+      expect(new Set(tops).size, `the header's items start at ${tops.join(", ")}`).toBe(1);
       expect(Number(await scene(page).getAttribute("data-columns"))).toBe(layouts(board)[0]!.columns);
       expect(Number(await scene(page).getAttribute("data-scale"))).toBeGreaterThanOrEqual(MIN_SCALE);
       const area = await scene(page).evaluate((s) => {
@@ -426,23 +432,28 @@ test.describe("scene", () => {
     });
   }
 
-  test("the three densities match their light baselines", async ({ page }, testInfo) => {
-    const densities = ["scene-a", "scene-b", "scene-c"] as const;
-    const updating = testInfo.config.updateSnapshots === "all" || testInfo.config.updateSnapshots === "changed";
-    const missing = densities.filter((name) => !existsSync(testInfo.snapshotPath(`${name}-light.png`)));
-    // D-508: the baselines come from the CI snapshot run and are committed
-    // only after the owner compared them with the prototype's render.
-    test.fixme(missing.length > 0 && !updating, `baselines not committed yet (D-508): ${missing.join(", ")}`);
-    await page.emulateMedia({ colorScheme: "light" });
-    await openScene(page, loadBoard(densities[0]));
-    for (const name of densities) {
-      await reopenScene(page, loadBoard(name));
-      await expect(scene(page)).toHaveScreenshot(`${name}-light.png`, {
-        maxDiffPixelRatio: SCREENSHOT_MAX_DIFF_RATIO,
-        animations: "disabled",
-      });
-    }
-  });
+  // The dark ones (story 4.13) are compared with the prototype's dark
+  // render, `scene-interactive-dark-target.png`.
+  for (const theme of ["light", "dark"] as const) {
+    test(`the three densities match their ${theme} baselines`, async ({ page }, testInfo) => {
+      const densities = ["scene-a", "scene-b", "scene-c"] as const;
+      const updating = testInfo.config.updateSnapshots === "all" || testInfo.config.updateSnapshots === "changed";
+      const missing = densities.filter((name) => !existsSync(testInfo.snapshotPath(`${name}-${theme}.png`)));
+      // D-508: the baselines come from the CI snapshot run and are committed
+      // only after the owner compared them with the prototype's render.
+      test.fixme(missing.length > 0 && !updating, `baselines not committed yet (D-508): ${missing.join(", ")}`);
+      await page.emulateMedia({ colorScheme: theme });
+      await openScene(page, loadBoard(densities[0]));
+      await expect(page.getByTestId("theme-switch")).toHaveAttribute("data-theme-resolved", theme);
+      for (const name of densities) {
+        await reopenScene(page, loadBoard(name));
+        await expect(scene(page)).toHaveScreenshot(`${name}-${theme}.png`, {
+          maxDiffPixelRatio: SCREENSHOT_MAX_DIFF_RATIO,
+          animations: "disabled",
+        });
+      }
+    });
+  }
 });
 
 // ------------------------------------------------------------ acting from the scene (story 4.8)
