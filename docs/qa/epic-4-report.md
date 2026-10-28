@@ -14,21 +14,24 @@ every job of `.github/workflows/ci.yml` is green on the last commit, and
 every rule the stories added has its case. Epic 4 cannot close on code
 alone: its proof of FR-9 (CPU), of the real taskbar, of the live theme and
 of the WebView2 look is a set of workstation runs that only the owner can
-make (story 4.14 AC 5 to 10), and three Slice 0 gates still wait for the
-owner's real-use data (gates 1, 4 and 5). Story 4.12 (sub-agents) is not
+make (story 4.14 AC 5, 6 and 8 to 10; AC 7 passed), and two Slice 0
+gates still wait for the owner's real-use data (gates 1 and 5; gate 4 is
+recorded, E81). Story 4.12 (sub-agents) is not
 implemented: gate 1 has not run, and D-476 and D-518 keep it approved and
 unimplemented until it passes.
 
 What closes the epic, in order:
 
-1. The owner's gates 1, 4 and 5 entries (story 4.1 Completion Notes give
+1. The owner's gates 1 and 5 entries (story 4.1 Completion Notes give
    each command); gate 1's verdict decides story 4.12 (D-476).
 2. The CI snapshot run, then the owner's comparison of the light and dark
    baselines with the prototype v2's renders (D-508, stories 4.7 AC 8 and
-   4.13 AC 5).
-3. The workstation runs of story 4.14 AC 5 to 10, the walking run first: it
-   alone decides `DEFAULT_WALKING` (D-480, D-500, D-515).
-4. The owner's review of the README assets (story 4.14 AC 2).
+   4.13 AC 5). Owner decision (2026-10-28): it waits until his visual
+   fixes are done (story 4.15 is the first set).
+3. The workstation runs of story 4.14 AC 5, 6 and 8 to 10, the walking run
+   first: it alone decides `DEFAULT_WALKING` (D-480, D-500, D-515).
+4. The owner's review of the README assets (story 4.14 AC 2), waiting on
+   the same visual fixes (owner decision); story 4.15 rendered them again.
 
 Findings of the implementation, all decided:
 
@@ -79,9 +82,9 @@ binary without the gate, process-start noise: the next run read 4.7 ms.
 
 | Story | Status | What is open |
 |---|---|---|
-| 4.1 Workstation checks | in progress | gates 1, 4, 5 (owner) |
+| 4.1 Workstation checks | in progress | gates 1, 5 (owner); gate 4 recorded (E81) |
 | 4.2 Floor keys, payloads, fixtures | review | |
-| 4.3 Scene state in core | in progress | gate 4's question shape (owner) |
+| 4.3 Scene state in core | review | |
 | 4.4 Halo | review | |
 | 4.5 Alert band, title, taskbar | review | |
 | 4.6 Geometry, spots, layout | review | |
@@ -92,7 +95,8 @@ binary without the gate, process-start noise: the next run read 4.7 ms.
 | 4.11 Focus mode and keys | review | |
 | 4.12 Sub-agents | approved, not implemented | gate 1 (D-476, D-518) |
 | 4.13 Dark theme | in progress | dark baselines (CI run, owner comparison) |
-| 4.14 Docs, checks, QA | in progress | AC 2 review, AC 5 to 10 (owner), this report's closure |
+| 4.14 Docs, checks, QA | in progress | AC 2 review, AC 5, 6, 8 to 10 (owner), this report's closure; AC 7 passed |
+| 4.15 First-use feedback | review | the owner's next use of the real window |
 
 ## Slice 0 order (story 4.14 AC 11)
 
@@ -101,7 +105,7 @@ binary without the gate, process-start noise: the next run read 4.7 ms.
 | 1 Sub-agent signals | before 4.12 starts | not run; 4.12 not started |
 | 2 Taskbar | before 4.5 closes | E80, passed (light taskbar, 100 %); 4.5 in review |
 | 3 Walking cost | withdrawn (D-500) | AD-71's walking run in 4.14 AC 5 |
-| 4 What a real wait emits | before 4.3 starts | **not met**: 4.3 was built for both question shapes before it (story 4.3 Dev Notes); the case for the shape gate 4 records is open |
+| 4 What a real wait emits | before 4.3 starts | **not met**, recorded late: E81 (2026-10-28) after 4.3 was built for both question shapes; a question emits `permission_prompt`, a known start, now a vector case; rule 3 unchanged |
 | 5 Floor and window | before 4.6 merges | the owner's answers before 4.6 (D-519, D-520); the real-use counts open |
 
 ## Workstation runs (story 4.14 AC 5 to 10)
@@ -116,7 +120,7 @@ change every 10 s for 10 minutes.
 |---|---|---|
 | 5 | Idle and walking CPU, five 10-minute runs, both units (1 % of the machine, D-515) | open |
 | 6 | Taskbar on the real app, 100 % and 150 % | open (gate 2 passed on the probe) |
-| 7 | Live theme switch in WebView2 | open |
+| 7 | Live theme switch in WebView2 | **pass** (owner, 2026-10-28): the window followed a Windows theme switch on Auto, no restart |
 | 8 | WebView2 look, 100 % and 150 %, light and dark, settled and walking | open |
 | 9 | Readability, five fixtures, under 2 s | open |
 | 10 | Adoption day | open |
@@ -144,6 +148,36 @@ The AD-59 to AD-72 and AD-167 to AD-178 rows map to the stories' ACs as
 each story's Dev Notes name them; the per-AD table is written at closure,
 with the owner's entries.
 
+## Story 4.15 (the owner's first-use feedback)
+
+After using the installed build of `44d0f92` on his real sessions, the
+owner gave nine items; story 4.15 answers each, with the decisions D-535
+to D-546:
+
+1. Controls: one radius family, 4 px on controls, 6 px on surfaces, pills
+   for count badges only (D-539).
+2. Wide screens: cards side by side in a board column with room, reading
+   views capped and centred, the session file docked beside the scene
+   when there is room (D-543).
+3. Moving an ended card by drag, menu or keyboard, to Done, back to To
+   resume or to a Discard target, with Undo and a Restore in the archived
+   list; the author's verdict is a registry fact covering only what came
+   before it (D-536 to D-538, D-542).
+4. To resume and Done counted in the header (D-541).
+5. A minimum window size of 1140 x 820, derived from the layouts (D-546).
+6. The shadow under the scene removed (D-544).
+7. The bug: archiving a subject left its ended session in To resume,
+   since the board never read the subject's status; fixed, with a Rust test
+   written first and a real-CLI fixture (D-535).
+8. Transitions, 160 ms, opacity and transform only, none under reduced
+   motion (D-545).
+9. One header in every view and mode, gauges included (D-540, amending
+   D-533).
+
+Not verified on the real window, which this run did not open: the drag in
+WebView2, the minimum size as Windows applies it, and the transitions'
+feel; each is covered in Playwright's Chromium.
+
 ## Decisions taken under delegation, for the owner to confirm
 
 - D-529: the "relay stopped" chip in the danger colour.
@@ -153,3 +187,9 @@ with the owner's entries.
   off, marks hidden while walking, the turn-back rule).
 - D-532: Focus as a flag over the base.
 - D-533: the compact gauges at 190 px.
+- D-535 to D-546 (story 4.15): above all D-536 (discard as a state of its
+  own, restored from the archived list, not an archive with a reason),
+  D-540 (the Walking toggle in every view, "Pin" for "Pin on top", the
+  gauges at 150 px), D-542 (a card done by its archived subject goes back
+  by reopening the subject, without Undo) and D-546 (1140 x 820, which
+  rules out half of a Full HD screen).
