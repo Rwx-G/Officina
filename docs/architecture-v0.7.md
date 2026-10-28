@@ -2,7 +2,7 @@
 title: "Architecture addendum: Officina v0.7 - The Governor"
 author: Rwx-G
 date: 2026-10-28
-status: approved 2026-10-28 (owner delegated design decisions; windows-sys features Win32_System_Time and Win32_UI_Input_KeyboardAndMouse accepted; gates open); addendum of section 6 (2026-10-28: the critic and research helpers)
+status: approved 2026-10-28 (owner delegated design decisions; windows-sys features Win32_System_Time and Win32_UI_Input_KeyboardAndMouse accepted; gates open); addendum of section 6 (2026-10-28: the critic and research helpers), AD-184 amended the same day after the Epic 4 plan challenge (epic-4-decisions.md D-505, D-510)
 inputs:
   - prd/prd-v0.7.md (revised after the requirement challenge)
   - (requirement challenge, not published)
@@ -510,8 +510,9 @@ Inputs: prd-v0.4.md and architecture-v0.4.md as reworked on 2026-10-28; architec
 ### AD-184: Helpers in the scene
 
 - `SceneInput` gains `helpers: { runId: string; role: "critic" | "research" }[] | null`, the live helper runs from the workshop view (nullable, AD-68's rule).
-- Each is a rig scaled 0.68 without a cap, in `--orch-tunic` (v0.4 AD-171); its place is a spot beside the orchestrator's desk (one per role, then the decision office's group), reached through the staff door nodes of v0.4 AD-170; it walks in when the run appears and out when it ends (v0.4 AD-172). It is static once placed: no bubbles, no blinking. Its target opens the run's card.
-- Helpers are never counted as waiting; a helper whose run waits on the author (a package to review) is shown by the run's card, not by a second figure.
+- Each is a rig scaled 0.68 without a cap, in `--orch-tunic` (v0.4 AD-171); its place is a spot beside the orchestrator's desk (one per role, then the decision office's group), reached from the entrance along the corridor like any arrival (v0.4 AD-170's graph; there is no staff door, epic-4-decisions.md D-510); it walks in when the run appears and out when it ends (v0.4 AD-172). It is static once placed: no bubbles, no blinking. Its target opens the run's card.
+- **Identity** (D-510): a helper is told from a sub-agent by its place, only beside the orchestrator's desk or in the decision office's group and never beside an employee's desk, and by its accessible name ("critic helper", "research helper"); the tunic is a third cue, never the only one (prd-v0.4.md FR-6). AD-70's geometry property and the layout tests assert that no helper spot is beside an employee's desk.
+- Helpers are never counted as waiting; a helper declares no Import (AD-183), so its run never waits on a package to review.
 
 ## 7. Risks of the addendum
 

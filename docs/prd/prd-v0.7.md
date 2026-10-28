@@ -2,7 +2,7 @@
 title: "PRD: Officina v0.7 - The Governor"
 author: Rwx-G
 date: 2026-10-28
-status: approved 2026-10-28 (owner delegated design decisions), with the amendments of ../architecture-v0.7.md section 4 applied; Slice B gated (gate 0, eligibility, shadow evidence); addendum of section 9 (2026-10-28: the critic and research helpers)
+status: approved 2026-10-28 (owner delegated design decisions), with the amendments of ../architecture-v0.7.md section 4 applied; Slice B gated (gate 0, eligibility, shadow evidence); addendum of section 9 (2026-10-28: the critic and research helpers), item 3 amended the same day after the Epic 4 plan challenge (epic-4-decisions.md D-510)
 inputs:
   - (framing, not published)
   - (requirement challenge, not published)
@@ -1248,7 +1248,12 @@ The owner's approved scene prototype (prd-v0.4.md, Change Log) shows, in its
 v0.5-and-later mode, a critic and a research helper that come to the
 orchestrator's desk when it works on a question. This section places them in
 v0.7; the architecture's section 6 says how, and `epic-7-decisions.md` D-492
-and D-493 say why.
+and D-493 say why. The owner asked for these helpers on 2026-10-28 (the
+orchestrator spawning a critic agent and a research agent to find best
+practices); a requirement challenge that called them unrequested was rejected
+on that ground (epic-4-decisions.md D-505). "Spawning" is realised within the
+non-goals: the orchestrator proposes, the author's click or the governor's
+deterministic rule launches.
 
 1. **Helpers are governor-launched work.** A helper is a v0.6 workshop run of
    an author-written template whose `role` is `critic` or `research`: read-only
@@ -1264,8 +1269,9 @@ and D-493 say why.
    only through an answer the author sends (prd-v0.5.md section 9, item 3).
 3. **FR-17, Scene.** Replace "no new element" for helpers: a live helper run
    is a smaller figure without a cap, in the orchestrator's tunic, that walks
-   in through the decision office's staff door when the run starts, stands at
-   the orchestrator's desk while it runs and walks out when it ends. Other
+   in from the entrance when the run starts, stands at the orchestrator's desk
+   while it runs and walks out when it ends. It is told from a sub-agent by
+   its place and its name, never by its colour alone (prd-v0.4.md FR-6). Other
    autonomous workers still sit at their project's desks, and a held package
    is still not drawn.
 4. **Delivery.** Helpers belong to Slice B (they launch). Their templates and
