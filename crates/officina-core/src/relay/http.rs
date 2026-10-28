@@ -12,6 +12,18 @@ use super::catalogue::{Action, Credential};
 use super::params::{self, ValueTarget};
 use super::url::UrlRefusal;
 
+/// D-35: an HTTP run succeeds on a 2xx status whose body did not break off;
+/// a body cut at the cap still succeeds.
+///
+/// ```
+/// use officina_core::relay::http::http_succeeded;
+/// assert!(http_succeeded(204, false));
+/// assert!(!http_succeeded(200, true) && !http_succeeded(503, false));
+/// ```
+pub fn http_succeeded(status: u16, body_broke_off: bool) -> bool {
+    (200..300).contains(&status) && !body_broke_off
+}
+
 /// The longest an HTTP request waits, whatever the action's `timeout_s`
 /// (AD-36).
 pub const MAX_HTTP_TIMEOUT_S: u32 = 60;

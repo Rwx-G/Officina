@@ -212,6 +212,7 @@ fn recent_pairs_runs_and_marks_abandoned() {
     let home = env.relay_home();
     let now = now_ms();
     let finished = JournalEntry::RunFinished(RunFinished {
+        body_broke_off: false,
         run_id: "done".to_owned(),
         outcome: RunOutcome::Exited,
         exit_code: Some(3),

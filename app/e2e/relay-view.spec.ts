@@ -3,7 +3,6 @@
 // refusals, a gate deny and a gate error, a seeded abandoned run and an
 // unreadable line, and a pending change with issues.
 import { expect, test, type Page } from "@playwright/test";
-import { activityRow } from "../src/lib/relay-text";
 import { runDuration } from "../src/lib/time";
 import { loadBoard, loadRelay, openBoard } from "./fixtures";
 import type { RelayView } from "../src/lib/generated/RelayView";
@@ -96,27 +95,44 @@ test.describe("Relay view", () => {
     const relay = loadRelay("relay-activity");
     await openRelayView(page, relay);
     const rows = page.getByTestId("recent-entry");
+    await expect(rows).toHaveCount(relay.recent.length);
+    // Each row is its entry, coloured by the tone Rust computed for it.
+    const toneClass = { ok: /\bok\b/, failed: /\bfault\b/, refused: /\bfault\b/ } as const;
     for (const [i, entry] of relay.recent.entries()) {
       const row = rows.nth(i);
       await expect(row).toHaveAttribute("data-kind", entry.event.kind);
-      await expect(row.getByTestId("recent-outcome")).toHaveText(activityRow(entry).outcome);
+      const abandoned = entry.event.kind === "run" && entry.event.state === "abandoned";
+      if (abandoned) await expect(row).toHaveClass(/\babandoned\b/);
+      else if (entry.tone) await expect(row).toHaveClass(toneClass[entry.tone]);
     }
+
+    // What the fixture script ran, as the window must say it.
+    const rowOf = (match: (entry: RelayView["recent"][number]) => boolean) => {
+      const index = relay.recent.findIndex(match);
+      expect(index).toBeGreaterThanOrEqual(0);
+      return rows.nth(index);
+    };
+    const ran = (action: string) => (e: RelayView["recent"][number]) =>
+      e.event.kind === "run" && e.event.state === "finished" && e.event.started.action === action;
+    const refused = (action: string) => (e: RelayView["recent"][number]) =>
+      e.event.kind === "refused" && e.event.action === action;
+    await expect(rowOf(ran("check")).getByTestId("recent-outcome")).toHaveText("exit 0");
+    await expect(rowOf(ran("check"))).toHaveClass(/\bok\b/);
+    const probe = rowOf(ran("probe"));
+    await expect(probe.getByTestId("recent-outcome")).toHaveText("exit 3");
+    await expect(probe).toHaveClass(/\bfault\b/);
+    const probed = relay.recent.find(ran("probe"))!;
+    if (probed.event.kind === "run") await expect(probe).toContainText(runDuration(probed.event.finished!.duration_ms));
+    await expect(rowOf(ran("status-page")).getByTestId("recent-outcome")).toHaveText("no response");
+    await expect(rowOf(refused("apply")).getByTestId("recent-outcome")).toHaveText("refused: its check has not run");
+    await expect(rowOf(refused("probe")).getByTestId("recent-outcome")).toHaveText("refused: invalid value");
+    await expect(rowOf((e) => e.event.kind === "gate_denied").getByTestId("recent-outcome")).toHaveText(
+      "denied: guarded program ssh",
+    );
 
     const abandoned = page.locator('[data-testid="recent-entry"][data-state="abandoned"]');
     await expect(abandoned).toHaveCount(relay.recent.filter((e) => e.event.kind === "run" && e.event.state === "abandoned").length);
     await expect(abandoned.first().getByTestId("recent-outcome")).toHaveText("abandoned");
-
-    const failed = relay.recent.find(
-      (e) => e.event.kind === "run" && e.event.finished?.outcome === "exited" && e.event.finished.exit_code !== 0,
-    )!;
-    expect(failed).toBeDefined();
-    const failedRow = rows.nth(relay.recent.indexOf(failed));
-    await expect(failedRow.getByTestId("recent-outcome")).toHaveText(activityRow(failed).outcome);
-    await expect(failedRow).toContainText(runDuration(activityRow(failed).durationMs!));
-
-    const refused = page.locator('[data-testid="recent-entry"][data-kind="refused"]');
-    await expect(refused.first().getByTestId("recent-outcome")).toContainText("refused:");
-    await expect(page.locator('[data-testid="recent-entry"][data-kind="gate_denied"]').first()).toContainText("ssh");
   });
 
   test("journal and gate diagnostics are surfaced", async ({ page }) => {
@@ -164,7 +180,8 @@ test.describe("Relay view", () => {
     const http = relay.recent.find((e) => e.event.kind === "run" && e.event.started.method)!;
     expect(http).toBeDefined();
     const row = page.getByTestId("recent-entry").nth(relay.recent.indexOf(http));
-    await expect(row.getByTestId("recent-outcome")).toHaveText(activityRow(http).outcome);
+    // The fixture's one HTTP run had nothing listening on its port.
+    await expect(row.getByTestId("recent-outcome")).toHaveText("no response");
   });
 
   test("credential status shows present, missing and unchecked", async ({ page }) => {

@@ -61,6 +61,42 @@ pub struct RunView {
     pub finished_at_ms: Option<i64>,
 }
 
+closed_enum! {
+    #[serde(rename_all = "snake_case")]
+    /// How a recent entry ended, for the window's colour (AD-35): computed
+    /// here, so the window holds no relay rule.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+    #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+    pub enum Tone {
+        /// A run that did what it was asked ([`RunFinished::succeeded`]).
+        Ok,
+        /// A run that did not, a run abandoned, or a gate error.
+        Failed,
+        /// A refusal of `officina run` or a deny of the gate.
+        Refused,
+    }
+}
+
+/// The tone of an entry; `None` for one that is no outcome (an approval, a
+/// stop) or a run still going.
+pub fn tone_of(event: &RecentEvent) -> Option<Tone> {
+    match event {
+        RecentEvent::Run(run) => match (run.state, &run.finished) {
+            (RunState::Finished, Some(finished)) if finished.succeeded() => Some(Tone::Ok),
+            (RunState::Finished | RunState::Abandoned, _) => Some(Tone::Failed),
+            (RunState::Running, _) => None,
+        },
+        RecentEvent::Refused(_) | RecentEvent::GateDenied(_) => Some(Tone::Refused),
+        RecentEvent::GateError(_) => Some(Tone::Failed),
+        RecentEvent::CatalogueApproved(_)
+        | RecentEvent::ApprovalRequested(_)
+        | RecentEvent::ApprovalGiven(_)
+        | RecentEvent::ApprovalRejected(_)
+        | RecentEvent::RelayStopped
+        | RecentEvent::RelayResumed => None,
+    }
+}
+
 /// What one recent entry records: a journal line, runs paired.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
@@ -87,6 +123,8 @@ pub struct RecentEntry {
     /// Unix milliseconds.
     pub ts: i64,
     pub event: RecentEvent,
+    /// How it ended ([`tone_of`]).
+    pub tone: Option<Tone>,
 }
 
 /// A credential of the approved catalogue (AD-36, D-41): where it may go,
@@ -300,7 +338,11 @@ fn recent(lines: &[JournalLine], now_ms: i64) -> Vec<RecentEntry> {
                 JournalEntry::RelayStopped => RecentEvent::RelayStopped,
                 JournalEntry::RelayResumed => RecentEvent::RelayResumed,
             };
-            Some(RecentEntry { ts: line.ts, event })
+            Some(RecentEntry {
+                ts: line.ts,
+                tone: tone_of(&event),
+                event,
+            })
         })
         .collect();
     entries.sort_by_key(|entry| entry.ts);
@@ -445,6 +487,7 @@ mod tests {
         JournalLine::new(
             ts,
             JournalEntry::RunFinished(RunFinished {
+                body_broke_off: false,
                 run_id: run_id.to_owned(),
                 outcome: RunOutcome::Exited,
                 exit_code: Some(0),
@@ -756,6 +799,94 @@ mod tests {
             };
             assert_eq!(tag, expected, "{kind:?}");
         }
+    }
+
+    /// AC 7 of story 2.15: each recent entry's tone is computed here, every
+    /// run outcome included, so the window renders it and computes nothing.
+    #[test]
+    fn tone_for_every_outcome_kind() {
+        let run = |state: RunState, finished: Option<RunFinished>| {
+            let JournalEntry::RunStarted(started) = started(NOW, "r", Some(5)).entry else {
+                unreachable!("started() builds a run_started line")
+            };
+            RecentEvent::Run(Box::new(RunView {
+                state,
+                started,
+                finished_at_ms: finished.as_ref().map(|_| NOW),
+                finished,
+            }))
+        };
+        let ended = |outcome: RunOutcome, exit_code: Option<i64>, status: Option<u16>| {
+            let JournalEntry::RunFinished(mut finished) = finished(NOW, "r").entry else {
+                unreachable!("finished() builds a run_finished line")
+            };
+            finished.outcome = outcome;
+            finished.exit_code = exit_code;
+            finished.status = status;
+            finished
+        };
+        for outcome in RunOutcome::ALL {
+            let failed = ended(*outcome, Some(1), Some(500));
+            assert_eq!(
+                tone_of(&run(RunState::Finished, Some(failed))),
+                Some(Tone::Failed),
+                "{outcome:?}"
+            );
+        }
+        let ok = [
+            ended(RunOutcome::Exited, Some(0), None),
+            ended(RunOutcome::Http, None, Some(204)),
+        ];
+        for finished in ok {
+            assert_eq!(
+                tone_of(&run(RunState::Finished, Some(finished.clone()))),
+                Some(Tone::Ok),
+                "{finished:?}"
+            );
+        }
+        let mut broke_off = ended(RunOutcome::Http, None, Some(200));
+        broke_off.body_broke_off = true;
+        assert_eq!(
+            tone_of(&run(RunState::Finished, Some(broke_off))),
+            Some(Tone::Failed)
+        );
+        assert_eq!(tone_of(&run(RunState::Running, None)), None);
+        assert_eq!(tone_of(&run(RunState::Abandoned, None)), Some(Tone::Failed));
+
+        let lines = [
+            started(NOW - 2, "r", Some(5)),
+            finished(NOW - 1, "r"),
+            gate_error(NOW),
+        ];
+        let view = build(&inputs(SnapshotState::Missing, FloorRead::Missing, &lines));
+        let tones: Vec<Option<Tone>> = view.recent.iter().map(|e| e.tone).collect();
+        assert_eq!(
+            tones,
+            [Some(Tone::Failed), Some(Tone::Ok)],
+            "the view carries them"
+        );
+        assert_eq!(
+            tone_of(&RecentEvent::Refused(Refused {
+                project: None,
+                session_id: None,
+                action: "a".to_owned(),
+                params: None,
+                reason: RefusalReason::Stopped,
+                detail: "x".to_owned(),
+            })),
+            Some(Tone::Refused)
+        );
+        assert_eq!(
+            tone_of(&RecentEvent::GateDenied(GateDenied {
+                project: "lab".to_owned(),
+                session_id: None,
+                deny: DenyKind::Dynamic,
+                matched: None,
+                command_excerpt: None,
+            })),
+            Some(Tone::Refused)
+        );
+        assert_eq!(tone_of(&RecentEvent::RelayStopped), None);
     }
 
     const HTTP: &str = r#"

@@ -3,7 +3,7 @@
 use std::io::Write;
 use std::time::Instant;
 
-use officina_core::relay::http::HttpPlan;
+use officina_core::relay::http::{HttpPlan, http_succeeded};
 use officina_core::relay::journal::RunOutcome;
 use officina_core::relay::run::{EXIT_NOT_STARTED, EXIT_TIMEOUT, RunPlan};
 
@@ -24,10 +24,9 @@ struct HttpEnd {
     code: i32,
 }
 
-/// The ending of `outcome` for `request`, sent by `action`: 0 for a 2xx
-/// status whose body arrived whole or was cut at the cap, 1 for any other
-/// status or a body that broke off (one line `officina: http <status>`),
-/// 124 on timeout, 127 without a response; never 2.
+/// The ending of `outcome` for `request`, sent by `action`: 0 when the
+/// response [`http_succeeded`], 1 otherwise (one line `officina: http
+/// <status>`), 124 on timeout, 127 without a response; never 2.
 fn http_end(outcome: HttpOutcome, request: &HttpPlan, action: &str) -> HttpEnd {
     match outcome {
         HttpOutcome::Response {
@@ -45,7 +44,7 @@ fn http_end(outcome: HttpOutcome, request: &HttpPlan, action: &str) -> HttpEnd {
                 )),
                 (None, false) => None,
             };
-            let success = (200..300).contains(&status) && read_error.is_none();
+            let success = http_succeeded(status, read_error.is_some());
             let said = (!success).then(|| match &read_error {
                 Some(e) => format!("officina: http {status}, the body broke off: {e}"),
                 None => format!("officina: http {status}"),
@@ -56,6 +55,7 @@ fn http_end(outcome: HttpOutcome, request: &HttpPlan, action: &str) -> HttpEnd {
                     status,
                     body_bytes,
                     body_sha256,
+                    body_broke_off: read_error.is_some(),
                 }),
                 detail,
                 said,

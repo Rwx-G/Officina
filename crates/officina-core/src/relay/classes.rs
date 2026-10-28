@@ -138,6 +138,7 @@ mod tests {
         JournalLine::new(
             ts,
             JournalEntry::RunFinished(RunFinished {
+                body_broke_off: false,
                 run_id: run_id.to_owned(),
                 outcome,
                 exit_code: code,

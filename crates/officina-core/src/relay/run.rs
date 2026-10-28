@@ -1002,6 +1002,7 @@ program = \"C:/path/to/tool.exe\"
             JournalLine::new(
                 now - 30_000,
                 JournalEntry::RunFinished(RunFinished {
+                    body_broke_off: false,
                     run_id: "r1".to_owned(),
                     outcome: RunOutcome::Exited,
                     exit_code: Some(0),

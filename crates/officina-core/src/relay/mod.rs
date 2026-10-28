@@ -131,6 +131,7 @@ mod tests {
     use super::params::ValueRefusal;
     use super::record::AnomalyKind;
     use super::url::UrlIssue;
+    use super::view::Tone;
     use crate::floor::Autonomy;
 
     fn assert_codes<T: Serialize + Copy + Debug>(all: &[T], code: fn(T) -> &'static str) {
@@ -146,7 +147,7 @@ mod tests {
     /// of this crate without a line here.
     #[test]
     fn code_equals_the_serde_name_for_every_variant() {
-        let checked: [fn(); 15] = [
+        let checked: [fn(); 16] = [
             || assert_codes(ActionClass::ALL, ActionClass::code),
             || assert_codes(Autonomy::ALL, Autonomy::code),
             || assert_codes(ForwardedValues::ALL, ForwardedValues::code),
@@ -162,6 +163,7 @@ mod tests {
             || assert_codes(ValueRefusal::ALL, ValueRefusal::code),
             || assert_codes(AnomalyKind::ALL, AnomalyKind::code),
             || assert_codes(UrlIssue::ALL, UrlIssue::code),
+            || assert_codes(Tone::ALL, Tone::code),
         ];
         for check in checked {
             check();

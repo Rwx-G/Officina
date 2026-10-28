@@ -35,4 +35,10 @@ body_sha256?: string | null,
  * Why the program could not start, why no response came, or that the
  * body was cut.
  */
-detail?: string | null, };
+detail?: string | null, 
+/**
+ * An HTTP body broke off before its end for another reason than the
+ * cap: the run failed whatever its status (D-35). Absent from older
+ * lines.
+ */
+body_broke_off?: boolean, };

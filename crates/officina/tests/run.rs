@@ -1508,6 +1508,7 @@ fn seed_check(git: &GitRelay, run_id: &str, ago: i64) {
         timeout_s: Some(540),
     });
     let end = JournalEntry::RunFinished(RunFinished {
+        body_broke_off: false,
         run_id: run_id.to_owned(),
         outcome: RunOutcome::Exited,
         exit_code: Some(0),

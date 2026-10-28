@@ -243,10 +243,34 @@ pub struct RunFinished {
     /// body was cut.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
+    /// An HTTP body broke off before its end for another reason than the
+    /// cap: the run failed whatever its status (D-35). Absent from older
+    /// lines.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub body_broke_off: bool,
+}
+
+impl RunFinished {
+    /// True when the run did what it was asked: a program that exited 0, or
+    /// a response that [`super::http::http_succeeded`]. The one rule the
+    /// exit code of `officina run` and the window's colour share.
+    pub fn succeeded(&self) -> bool {
+        match self.outcome {
+            RunOutcome::Exited => self.exit_code == Some(0),
+            RunOutcome::Http => self
+                .status
+                .is_some_and(|status| super::http::http_succeeded(status, self.body_broke_off)),
+            RunOutcome::Timeout | RunOutcome::SpawnFailed | RunOutcome::ConnectFailed => false,
+        }
+    }
 }
 
 fn is_zero(value: &u64) -> bool {
     *value == 0
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 closed_enum! {
@@ -495,6 +519,7 @@ mod tests {
                 timeout_s: Some(540),
             }),
             JournalKind::RunFinished => JournalEntry::RunFinished(RunFinished {
+                body_broke_off: false,
                 run_id: "r1".into(),
                 outcome: RunOutcome::Exited,
                 exit_code: Some(3_221_225_477),
@@ -642,6 +667,7 @@ mod tests {
                         body: Option<&[u8]>,
                         detail: Option<&str>| {
             JournalEntry::RunFinished(RunFinished {
+                body_broke_off: false,
                 run_id: "r2".into(),
                 outcome,
                 exit_code: None,

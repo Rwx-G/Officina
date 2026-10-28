@@ -78,15 +78,18 @@ pub(super) fn process_finished(
         body_bytes: None,
         body_sha256: None,
         detail,
+        body_broke_off: false,
     })
 }
 
-/// The response half of a `run_finished` line: status, body bytes and hash.
+/// The response half of a `run_finished` line: status, body bytes and
+/// hash, and whether the body broke off.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct Response {
     pub status: u16,
     pub body_bytes: u64,
     pub body_sha256: String,
+    pub body_broke_off: bool,
 }
 
 /// The `run_finished` line of an HTTP run.
@@ -107,6 +110,7 @@ pub(super) fn http_finished(
         dropped_bytes: 0,
         status: response.as_ref().map(|r| r.status),
         body_bytes: response.as_ref().map(|r| r.body_bytes),
+        body_broke_off: response.as_ref().is_some_and(|r| r.body_broke_off),
         body_sha256: response.map(|r| r.body_sha256),
         detail,
     })

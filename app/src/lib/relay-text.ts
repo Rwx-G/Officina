@@ -10,6 +10,7 @@ import type { RecentEntry } from "./generated/RecentEntry";
 import type { RefusalReason } from "./generated/RefusalReason";
 import type { RunOutcome } from "./generated/RunOutcome";
 import type { RunState } from "./generated/RunState";
+import type { Tone } from "./generated/Tone";
 import type { TreeBinding } from "./generated/TreeBinding";
 
 export const REFUSAL_TEXT: Record<RefusalReason, string> = {
@@ -112,7 +113,14 @@ export const RUN_STATE_TEXT: Record<RunState, string> = {
 
 /** How an entry reads in a row: `fault` marks what failed or was refused,
  *  `abandoned` a run that never reported its end. */
-export type Tone = "ok" | "fault" | "abandoned" | "neutral";
+export type RowTone = "ok" | "fault" | "abandoned" | "neutral";
+
+/** The row class of each tone Rust computes for an entry. */
+export const TONE_CLASS: Record<Tone, RowTone> = {
+  ok: "ok",
+  failed: "fault",
+  refused: "fault",
+};
 
 /** One row of the recent activity, every field as text. */
 export interface ActivityRow {
@@ -124,7 +132,7 @@ export interface ActivityRow {
    *  shown as text. */
   detail: string;
   durationMs: number | null;
-  tone: Tone;
+  tone: RowTone;
 }
 
 function entries(params: { [key in string]?: string } | null | undefined): [string, string][] {
@@ -135,7 +143,8 @@ function entries(params: { [key in string]?: string } | null | undefined): [stri
  *  outcome, duration, "abandoned" when so). */
 export function activityRow(entry: RecentEntry): ActivityRow {
   const event = entry.event;
-  const row: ActivityRow = { project: "", action: "", params: [], outcome: "", detail: "", durationMs: null, tone: "neutral" };
+  const tone: RowTone = entry.tone === null ? "neutral" : TONE_CLASS[entry.tone];
+  const row: ActivityRow = { project: "", action: "", params: [], outcome: "", detail: "", durationMs: null, tone };
   switch (event.kind) {
     case "run": {
       const { started, finished, state } = event;
@@ -144,20 +153,16 @@ export function activityRow(entry: RecentEntry): ActivityRow {
       row.params = entries(started.params);
       if (state !== "finished" || !finished) {
         row.outcome = RUN_STATE_TEXT[state];
-        row.tone = state === "abandoned" ? "abandoned" : "neutral";
+        if (state === "abandoned") row.tone = "abandoned";
         return row;
       }
       row.durationMs = finished.duration_ms;
       if (finished.outcome === "exited") {
         row.outcome = `${RUN_OUTCOME_TEXT.exited} ${finished.exit_code ?? "?"}`;
-        row.tone = finished.exit_code === 0 ? "ok" : "fault";
       } else if (finished.outcome === "http") {
-        const status = finished.status ?? 0;
         row.outcome = `${RUN_OUTCOME_TEXT.http} ${finished.status ?? "?"}`;
-        row.tone = status >= 200 && status < 300 ? "ok" : "fault";
       } else {
         row.outcome = RUN_OUTCOME_TEXT[finished.outcome];
-        row.tone = "fault";
       }
       row.detail = finished.detail ?? "";
       return row;
@@ -168,21 +173,18 @@ export function activityRow(entry: RecentEntry): ActivityRow {
       row.params = entries(event.params);
       row.outcome = `refused: ${REFUSAL_TEXT[event.reason]}`;
       row.detail = event.detail;
-      row.tone = "fault";
       return row;
     case "gate_denied":
       row.project = event.project;
       row.action = "gate";
       row.outcome = `denied: ${DENY_TEXT[event.deny]}${event.matched ? ` ${event.matched}` : ""}`;
       row.detail = event.command_excerpt ?? "";
-      row.tone = "fault";
       return row;
     case "gate_error":
       row.project = event.project ?? "";
       row.action = "gate";
       row.outcome = `gate error: ${GATE_FAULT_TEXT[event.cause]}`;
       row.detail = event.detail;
-      row.tone = "fault";
       return row;
     case "catalogue_approved":
       row.action = "catalogue";
