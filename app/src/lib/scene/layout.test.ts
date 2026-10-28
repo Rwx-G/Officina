@@ -327,6 +327,16 @@ describe("layoutScene: places", () => {
     expect(employee(third, "o").pose).toBe("seated-working");
   });
 
+  it("an unknown employee whose last place left the floor is placed as first seen", () => {
+    const memory: SceneMemory = {
+      ...emptyMemory(),
+      last: { u: { spot: "office99:desk0", group: null, pose: "standing", facing: "front" } },
+    };
+    const l = lay(board([card("u", "unknown")]), memory);
+    expect(employee(l, "u")).toMatchObject({ spot: officeSpots(0).desks[0]!.id, pose: "seated-facing" });
+    expect(deskOf(l, "u")).toMatchObject({ index: 0, state: "occupied" });
+  });
+
   it("a live card without a scene state is placed as unknown", () => {
     const bare = { ...card("s", "office"), scene: null };
     const l = lay(board([bare]));
