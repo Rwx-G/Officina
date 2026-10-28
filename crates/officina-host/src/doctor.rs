@@ -7,7 +7,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use officina_core::contract::check_agents;
-use officina_core::dates::{day_start_ms, utc_date};
+use officina_core::dates::{dated_file_day, day_start_ms, utc_date};
 use officina_core::floor::{Autonomy, parse_floor};
 use officina_core::quota::STALE_AFTER_MS;
 use officina_core::registry::types::RegistryState;
@@ -450,6 +450,11 @@ fn check_officina_home(home: &Path) -> Check {
 /// How long a restore stays a warning: as long as the view shows it (D-93).
 const RESTORE_NOTICE_MS: i64 = 7 * 86_400_000;
 
+/// More event files than this waiting for ingestion or deletion is a
+/// warning (AD-44, R21): normally today's, yesterday's and the two before
+/// them, until both kept copies hold them.
+pub const WAITING_EVENT_FILES: usize = 7;
+
 /// The registry (FR-1 as amended, AD-53's doctor line, D-47, D-91): where
 /// it lies, its version, `quick_check`, its daily copies, a quarantine and
 /// the last restore. Doctor opens it read-only and never creates it; on a
@@ -547,6 +552,40 @@ pub fn check_registry(officina_home: &Path, onedrive_roots: &[PathBuf], now: i64
                 )
             }
         });
+    }
+    let waiting = fs::read_dir(officina_home.join("events"))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|entry| dated_file_day(&entry.file_name().to_string_lossy()).is_some())
+        .count();
+    if waiting > WAITING_EVENT_FILES {
+        checks.push(check(
+            Level::Warn,
+            "event files",
+            format!(
+                "{waiting} event files wait for ingestion or deletion: the window has not run with a usable registry for days; nothing is lost, they are ingested when it does"
+            ),
+        ));
+    }
+    let rewritten: Vec<String> = opened
+        .as_ref()
+        .ok()
+        .and_then(|reader| reader.event_files().ok())
+        .into_iter()
+        .flatten()
+        .filter(|row| row.rewrites > 0)
+        .map(|row| format!("{} ({} times)", row.name, row.rewrites))
+        .collect();
+    if !rewritten.is_empty() {
+        checks.push(check(
+            Level::Warn,
+            "event files rewritten",
+            format!(
+                "found shorter than what was ingested, and read again from their start: {}; something other than the hook writes them",
+                rewritten.join(", ")
+            ),
+        ));
     }
     let set_aside = quarantined(&paths);
     if !set_aside.is_empty() {
@@ -964,6 +1003,66 @@ mod tests {
         );
         assert_eq!(exit_code(&checks), 1);
         assert_eq!(fs::read(&db).unwrap(), bytes, "doctor changed nothing");
+    }
+
+    /// AD-44, R21: event files pile up while the window does not run with a
+    /// usable registry; doctor warns past the threshold, whatever the
+    /// registry's state.
+    #[test]
+    fn more_than_seven_waiting_event_files_warn() {
+        let dir = tempfile::tempdir().unwrap();
+        let events = dir.path().join("events");
+        fs::create_dir_all(&events).unwrap();
+        fs::write(events.join("notes.txt"), b"not an event file").unwrap();
+        let waiting = |checks: &[Check]| checks.iter().any(|c| c.title == "event files");
+        for back in 0..WAITING_EVENT_FILES as i64 {
+            fs::write(
+                events.join(officina_core::dates::event_file_name(NOW - back * DAY)),
+                b"",
+            )
+            .unwrap();
+        }
+        assert!(
+            !waiting(&check_registry(dir.path(), &[], NOW)),
+            "at the threshold"
+        );
+        fs::write(
+            events.join(officina_core::dates::event_file_name(NOW - 30 * DAY)),
+            b"",
+        )
+        .unwrap();
+        let checks = check_registry(dir.path(), &[], NOW);
+        let line = registry_line(&checks, "event files");
+        assert_eq!(line.level, Level::Warn);
+        assert!(
+            line.detail
+                .starts_with(&format!("{} event files wait", WAITING_EVENT_FILES + 1)),
+            "{}",
+            line.detail
+        );
+    }
+
+    /// D-84: a file found shorter than its offset was read again; doctor
+    /// names it.
+    #[test]
+    fn rewritten_event_files_are_reported() {
+        let dir = tempfile::tempdir().unwrap();
+        let conn = registry_at(dir.path(), crate::registry::schema::SCHEMA_VERSION);
+        conn.execute(
+            "INSERT INTO event_file (name, ingested_bytes, corrupt_lines, rewrites) VALUES ('2026-10-27.jsonl', 10, 0, 2), ('2026-10-26.jsonl', 99, 0, 0)",
+            [],
+        )
+        .unwrap();
+        drop(conn);
+        let checks = check_registry(dir.path(), &[], NOW);
+        let line = registry_line(&checks, "event files rewritten");
+        assert_eq!(line.level, Level::Warn);
+        assert!(
+            line.detail.contains("2026-10-27.jsonl (2 times)"),
+            "{}",
+            line.detail
+        );
+        assert!(!line.detail.contains("2026-10-26"), "{}", line.detail);
     }
 
     #[test]
