@@ -2,10 +2,15 @@
 import type { ActionClass } from "./ActionClass";
 import type { CanonicalHttp } from "./CanonicalHttp";
 import type { CanonicalParam } from "./CanonicalParam";
+import type { ForwardedValues } from "./ForwardedValues";
 import type { Runner } from "./Runner";
 
 /**
  * The canonical form of one valid action, every default explicit. An HTTP
  * action carries `http` and the process fields' defaults.
  */
-export type CanonicalAction = { description: string, class: ActionClass, runner: Runner, distro: string | null, program: string, env: { [key in string]: string }, args: Array<string>, http?: CanonicalHttp, params: { [key in string]: CanonicalParam }, check: string | null, timeout_s: number, max_output_kib: number, };
+export type CanonicalAction = { description: string, class: ActionClass, runner: Runner, distro: string | null, program: string, env: { [key in string]: string }, args: Array<string>, http?: CanonicalHttp, params: { [key in string]: CanonicalParam }, check: string | null, timeout_s: number, max_output_kib: number, 
+/**
+ * Absent unless the author accepted forwarded values (D-173).
+ */
+forwarded_values?: ForwardedValues, };

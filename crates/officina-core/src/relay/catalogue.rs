@@ -11,7 +11,7 @@ use std::ops::RangeInclusive;
 use serde::{Deserialize, Serialize};
 
 use super::http::HttpMethod;
-use super::params::{self, Param, ParamRule, PatternError, ValueTarget};
+use super::params::{self, Param, ParamRule, Pattern, PatternError, ValueTarget};
 use super::url::{UrlIssue, UrlScheme, UrlTemplate, host_entry};
 use crate::floor::{
     Autonomy, FloorError, FloorFile, floor_dir_of, is_windows_absolute, join_project_path,
@@ -62,8 +62,9 @@ pub const MAX_ENV_KEY_CHARS: usize = 64;
 pub const MAX_DISTRO_CHARS: usize = 64;
 
 /// Version of the canonical form. Bumping it invalidates every approval on
-/// purpose (AD-24); 2 added credentials and HTTP actions (D-39).
-pub const CANONICAL_FORMAT: u32 = 2;
+/// purpose (AD-24); 2 added credentials and HTTP actions (D-39), 3 an
+/// action's `forwarded_values` (D-173).
+pub const CANONICAL_FORMAT: u32 = 3;
 
 /// Version of `relay/known-projects.json` (D-15).
 pub const KNOWN_PROJECTS_SCHEMA: u32 = 1;
@@ -173,6 +174,11 @@ closed_enum! {
         PatternTooComplex,
         /// A `pattern` that does not compile.
         PatternInvalid,
+        /// A `pattern` on a parameter a program forwards to a remote shell
+        /// or a template (a notice of D-172) that admits a character of
+        /// [`FORWARDED_PROBE_CHARS`], without `forwarded_values =
+        /// "accepted"` (D-173).
+        ForwardedPattern,
         /// `check` is missing on an `after-check` action, set on another
         /// class, or does not name a valid `free` action with the same
         /// parameter names.
@@ -296,6 +302,18 @@ pub struct Action {
     pub check: Option<String>,
     pub timeout_s: u32,
     pub max_output_kib: u32,
+    pub forwarded_values: Option<ForwardedValues>,
+}
+
+closed_enum! {
+    /// The author's word that a parameter a program forwards to a remote
+    /// shell or a template may hold whatever its `pattern` admits (D-173).
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+    #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+    #[serde(rename_all = "snake_case")]
+    pub enum ForwardedValues {
+        Accepted,
+    }
 }
 
 /// What an HTTP action sends (AD-36).
@@ -401,6 +419,8 @@ struct RawAction {
     timeout_s: Option<i64>,
     #[serde(default)]
     max_output_kib: Option<i64>,
+    #[serde(default)]
+    forwarded_values: Option<ForwardedValues>,
 }
 
 #[derive(Deserialize)]
@@ -839,6 +859,23 @@ pub fn action_from_value(value: &toml::Value) -> Result<Action, Vec<ActionIssue>
         max_output_kib: raw.max_output_kib,
     };
     let checked = check_common(&mut report, &common, ValueTarget::from(raw.runner), &used);
+    if raw.forwarded_values != Some(ForwardedValues::Accepted) {
+        for (kind, item, param) in forwarded_items(&raw.program, &raw.args) {
+            let Some(ParamRule::Pattern(pattern)) = checked.params.get(&param).map(|p| &p.rule)
+            else {
+                continue;
+            };
+            if let Some(admitted) = admitted_forwarded_char(pattern) {
+                report.add(
+                    IssueKind::ForwardedPattern,
+                    format!(
+                        "parameter {param} (args item {item}) is read by {}, and its pattern admits {admitted:?}: give it a `values` list, or set `forwarded_values = \"accepted\"` to keep the action",
+                        kind.program()
+                    ),
+                );
+            }
+        }
+    }
 
     if !report.issues.is_empty() {
         return Err(report.issues);
@@ -857,6 +894,7 @@ pub fn action_from_value(value: &toml::Value) -> Result<Action, Vec<ActionIssue>
         check: raw.check,
         timeout_s: checked.timeout_s,
         max_output_kib: checked.max_output_kib,
+        forwarded_values: raw.forwarded_values,
     })
 }
 
@@ -945,6 +983,7 @@ fn http_action_from_value(
         check: raw.check,
         timeout_s: checked.timeout_s,
         max_output_kib: checked.max_output_kib,
+        forwarded_values: None,
     })
 }
 
@@ -1311,6 +1350,10 @@ pub struct CanonicalAction {
     pub check: Option<String>,
     pub timeout_s: u32,
     pub max_output_kib: u32,
+    /// Absent unless the author accepted forwarded values (D-173).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
+    pub forwarded_values: Option<ForwardedValues>,
 }
 
 /// The canonical form of one valid credential (D-39): hosts lowercase,
@@ -1355,6 +1398,7 @@ impl From<&Action> for CanonicalAction {
             check: action.check.clone(),
             timeout_s: action.timeout_s,
             max_output_kib: action.max_output_kib,
+            forwarded_values: action.forwarded_values,
         }
     }
 }
@@ -1807,14 +1851,12 @@ fn program_name(program: &str) -> String {
     lower.strip_suffix(".exe").unwrap_or(&lower).to_owned()
 }
 
-/// The notices of one canonical action (D-172).
-fn action_notices(name: &str, action: &CanonicalAction) -> Vec<Notice> {
-    if action.http.is_some() {
-        return Vec::new();
-    }
-    let program = program_name(&action.program);
-    let items: Vec<Option<String>> = action
-        .args
+/// The parameters a process action's program reads past the argument
+/// vector (D-172): what reads them, the index of the `args` item, and the
+/// parameter.
+fn forwarded_items(program: &str, args: &[String]) -> Vec<(NoticeKind, usize, String)> {
+    let program = program_name(program);
+    let items: Vec<Option<String>> = args
         .iter()
         .map(|item| {
             ArgTemplate::parse(item)
@@ -1822,19 +1864,12 @@ fn action_notices(name: &str, action: &CanonicalAction) -> Vec<Notice> {
                 .and_then(|t| t.param().map(str::to_owned))
         })
         .collect();
-    let notice = |kind: NoticeKind, index: usize, param: &str| Notice {
-        action: name.to_owned(),
-        kind,
-        param: param.to_owned(),
-        item: u32::try_from(index).unwrap_or(u32::MAX),
-        explanation: kind.explanation().to_owned(),
-    };
-    let mut notices = Vec::new();
+    let mut found = Vec::new();
     if program == "ssh" {
         let mut destination = None;
         let mut index = 0;
-        while index < action.args.len() {
-            let item = &action.args[index];
+        while index < args.len() {
+            let item = &args[index];
             if item == "--" {
                 destination = Some(index + 1);
                 break;
@@ -1852,26 +1887,128 @@ fn action_notices(name: &str, action: &CanonicalAction) -> Vec<Notice> {
         if let Some(destination) = destination {
             for (index, param) in items.iter().enumerate().skip(destination + 1) {
                 if let Some(param) = param {
-                    notices.push(notice(NoticeKind::RemoteCommandValue, index, param));
+                    found.push((NoticeKind::RemoteCommandValue, index, param.clone()));
                 }
             }
         }
     } else if program.starts_with("ansible") {
         for (index, param) in items.iter().enumerate() {
             let Some(param) = param else { continue };
-            let item = &action.args[index];
+            let item = &args[index];
             let after_option =
-                index > 0 && ANSIBLE_TEMPLATED_OPTIONS.contains(&action.args[index - 1].as_str());
+                index > 0 && ANSIBLE_TEMPLATED_OPTIONS.contains(&args[index - 1].as_str());
             let inline = ANSIBLE_TEMPLATED_OPTIONS
                 .iter()
                 .filter(|option| option.starts_with("--"))
                 .any(|option| item.starts_with(&format!("{option}=")));
             if after_option || inline {
-                notices.push(notice(NoticeKind::TemplatedValue, index, param));
+                found.push((NoticeKind::TemplatedValue, index, param.clone()));
             }
         }
     }
-    notices
+    found
+}
+
+/// The notices of one canonical action (D-172).
+fn action_notices(name: &str, action: &CanonicalAction) -> Vec<Notice> {
+    if action.http.is_some() {
+        return Vec::new();
+    }
+    forwarded_items(&action.program, &action.args)
+        .into_iter()
+        .map(|(kind, index, param)| Notice {
+            action: name.to_owned(),
+            kind,
+            param,
+            item: u32::try_from(index).unwrap_or(u32::MAX),
+            explanation: kind.explanation().to_owned(),
+        })
+        .collect()
+}
+
+/// What a value forwarded to a remote shell or a template must not hold for
+/// a `pattern` to stand without `forwarded_values = "accepted"` (D-173):
+/// whitespace, the characters a POSIX shell reads, and the ones that open a
+/// Jinja template. Control characters are refused in every value already.
+pub const FORWARDED_PROBE_CHARS: &str = " ;&|$`'\"\\<>()*?[]{}~#!%";
+
+/// Short values a probe builds on, between a pattern's literal edges.
+const PROBE_FILLERS: &[&str] = &["", "a", "0", "aa", "00", "a0", "a-0", "aaa", "000"];
+
+/// The literal text a pattern starts and ends with, escapes read: what the
+/// probe of [`admitted_forwarded_char`] wraps its fillers in, so a pattern
+/// such as `lab-[a-z ]+` or `.+\.service` is probed inside its shape.
+fn literal_edges(source: &str) -> (String, String) {
+    let mut prefix = String::new();
+    let mut prefix_open = true;
+    let mut run = String::new();
+    let mut chars = source.chars().peekable();
+    while let Some(c) = chars.next() {
+        let literal = match c {
+            '\\' => match chars.next() {
+                Some(next) if next.is_ascii_punctuation() => Some(next),
+                _ => None,
+            },
+            '.' | '^' | '$' | '|' | '(' | ')' | '[' | ']' | '{' | '}' => None,
+            '*' | '+' | '?' => {
+                // A quantifier makes the character before it optional or
+                // repeated: neither edge may hold it.
+                run.pop();
+                if prefix_open {
+                    prefix.pop();
+                }
+                None
+            }
+            other => Some(other),
+        };
+        match literal {
+            Some(c) => {
+                if prefix_open {
+                    prefix.push(c);
+                }
+                run.push(c);
+            }
+            None => {
+                prefix_open = false;
+                run.clear();
+            }
+        }
+    }
+    (prefix, run)
+}
+
+/// A character of [`FORWARDED_PROBE_CHARS`] that `pattern` admits in a
+/// value, found by probing: each character alone and around the fillers,
+/// then inserted at every place of each short value the pattern accepts,
+/// those values built from its literal edges and the fillers. A probe, not a
+/// proof: a `values` list is the only closed form.
+pub fn admitted_forwarded_char(pattern: &Pattern) -> Option<char> {
+    let (prefix, suffix) = literal_edges(pattern.source());
+    let accepted: Vec<String> = PROBE_FILLERS
+        .iter()
+        .flat_map(|filler| {
+            [
+                (*filler).to_owned(),
+                format!("{prefix}{filler}"),
+                format!("{filler}{suffix}"),
+                format!("{prefix}{filler}{suffix}"),
+            ]
+        })
+        .filter(|value| pattern.matches(value))
+        .collect();
+    FORWARDED_PROBE_CHARS.chars().find(|c| {
+        let around = PROBE_FILLERS
+            .iter()
+            .any(|f| pattern.matches(&format!("{f}{c}")) || pattern.matches(&format!("{c}{f}")));
+        around
+            || accepted.iter().any(|value| {
+                value
+                    .char_indices()
+                    .map(|(i, _)| i)
+                    .chain(std::iter::once(value.len()))
+                    .any(|i| pattern.matches(&format!("{}{c}{}", &value[..i], &value[i..])))
+            })
+    })
 }
 
 /// Every notice of a catalogue (D-172), by action then item. Derived from
@@ -2051,6 +2188,7 @@ mod tests {
             }
             IssueKind::ParamName => floor_with(&[&replaced("host", "Host")]),
             IssueKind::ValuesOrPattern => floor_with(&[&probe("pattern = \"web[0-9]+\"\n")]),
+            IssueKind::ForwardedPattern => forwarding("pattern = \".+\"", false),
             IssueKind::InvalidValue => floor_with(&[&replaced("\"db01\"", "\"--db01\"")]),
             IssueKind::PatternTooLong => floor_with(&[&replaced(
                 "values = [\"web01\", \"db01\"]",
@@ -2083,6 +2221,139 @@ mod tests {
     /// `VALID_PROBE` with `keys` added among its top-level keys.
     fn probe_top(keys: &str) -> String {
         VALID_PROBE.replace("class = \"free\"\n", &format!("class = \"free\"\n{keys}"))
+    }
+
+    /// An ssh action forwarding `{unit}` to the remote shell, and an Ansible
+    /// one templating `{vars}`, each parameter declared with `rule`.
+    fn forwarding(rule: &str, accepted: bool) -> String {
+        let accepted = if accepted {
+            "forwarded_values = \"accepted\"\n"
+        } else {
+            ""
+        };
+        format!(
+            "schema = 2\n[[project]]\nname = \"lab\"\npath = \"Lab\"\nactions = [\"status\", \"deploy\"]\n[[action]]\nname = \"status\"\nclass = \"free\"\nprogram = \"C:/Windows/System32/OpenSSH/ssh.exe\"\nargs = [\"web01\", \"systemctl\", \"status\", \"{{unit}}\"]\n{accepted}[action.params.unit]\n{rule}\n[[action]]\nname = \"deploy\"\nclass = \"human\"\nrunner = \"wsl\"\nprogram = \"/opt/venv/bin/ansible-playbook\"\nargs = [\"-e\", \"{{vars}}\", \"site.yml\"]\n{accepted}[action.params.vars]\n{rule}\n"
+        )
+    }
+
+    /// `text` as a TOML basic string.
+    fn toml_string(text: &str) -> String {
+        format!("\"{}\"", text.replace('\\', "\\\\").replace('"', "\\\""))
+    }
+
+    /// AC 9 of story 2.14 (D-173): a pattern admitting any character of the
+    /// probe constant, on a value ssh or Ansible reads, drops the action
+    /// with `ForwardedPattern`; one character at a time, from the constant.
+    #[test]
+    fn a_permissive_pattern_on_a_forwarded_value_is_an_issue() {
+        for c in FORWARDED_PROBE_CHARS.chars() {
+            let pattern = format!("[a-z0-9{}]+", regex::escape(&c.to_string()));
+            let rule = format!("pattern = {}", toml_string(&pattern));
+            let catalogue = validated(&forwarding(&rule, false));
+            let flagged: Vec<&str> = catalogue
+                .issues
+                .iter()
+                .filter(|i| i.kind == IssueKind::ForwardedPattern)
+                .map(|i| i.name.as_str())
+                .collect();
+            assert_eq!(flagged, ["status", "deploy"], "{c:?}: {catalogue:#?}");
+            assert!(catalogue.actions.is_empty(), "{c:?}: both dropped");
+            let compiled = params::compile_pattern(&pattern).unwrap();
+            assert_eq!(admitted_forwarded_char(&compiled), Some(c), "{pattern}");
+        }
+        for broad in [
+            ".+",
+            ".*",
+            "\\S+",
+            "[^/]+",
+            "lab-[a-z ]+",
+            ".+\\.service",
+            "web[0-9]{2}( .*)?",
+        ] {
+            let compiled = params::compile_pattern(broad).unwrap();
+            assert!(admitted_forwarded_char(&compiled).is_some(), "{broad}");
+        }
+        for closed in [
+            "[a-z0-9-]+\\.service",
+            "lab-[a-z0-9-]{1,30}",
+            "[A-Za-z0-9_.:/=,-]+",
+        ] {
+            let compiled = params::compile_pattern(closed).unwrap();
+            assert_eq!(admitted_forwarded_char(&compiled), None, "{closed}");
+            let catalogue = validated(&forwarding(
+                &format!("pattern = {}", toml_string(closed)),
+                false,
+            ));
+            assert!(
+                catalogue.issues.is_empty(),
+                "{closed}: {:#?}",
+                catalogue.issues
+            );
+        }
+    }
+
+    /// AC 9 of story 2.14: a `values` list is closed whatever it holds; the
+    /// notice of D-172 still says the program reads the value.
+    #[test]
+    fn values_on_a_forwarded_value_is_fine() {
+        let values: Vec<String> = FORWARDED_PROBE_CHARS
+            .chars()
+            .map(|c| toml_string(&format!("a{c}b")))
+            .collect();
+        let catalogue = validated(&forwarding(
+            &format!("values = [{}]", values.join(", ")),
+            false,
+        ));
+        assert!(
+            catalogue
+                .issues
+                .iter()
+                .all(|i| i.kind != IssueKind::ForwardedPattern),
+            "{:#?}",
+            catalogue.issues
+        );
+        assert!(
+            catalogue.actions.contains_key("status") && catalogue.actions.contains_key("deploy")
+        );
+        let relay = load(
+            &forwarding("values = [\"nginx.service\"]", false),
+            "C:/path/to/officina.toml",
+        )
+        .unwrap();
+        assert_eq!(notices(&relay.canonical).len(), 2);
+    }
+
+    /// AC 9 of story 2.14: `forwarded_values = "accepted"` keeps the action
+    /// with its pattern; the key is canonical, so accepting changes the
+    /// hash, and the notices stay.
+    #[test]
+    fn forwarded_values_accepted_keeps_the_action() {
+        let path = "C:/path/to/officina.toml";
+        let accepted = load(&forwarding("pattern = \".+\"", true), path).unwrap();
+        assert!(
+            accepted.catalogue.issues.is_empty(),
+            "{:#?}",
+            accepted.catalogue.issues
+        );
+        for name in ["status", "deploy"] {
+            assert_eq!(
+                accepted.canonical.actions[name].forwarded_values,
+                Some(ForwardedValues::Accepted)
+            );
+        }
+        assert_eq!(notices(&accepted.canonical).len(), 2);
+        let refused = load(&forwarding("pattern = \".+\"", false), path).unwrap();
+        assert!(refused.canonical.actions.is_empty());
+        let closed = load(&forwarding("values = [\"x\"]", false), path).unwrap();
+        let closed_accepted = load(&forwarding("values = [\"x\"]", true), path).unwrap();
+        assert_ne!(closed.hash, closed_accepted.hash, "the key is canonical");
+        let rebuilt =
+            action_from_canonical("deploy", &accepted.canonical.actions["deploy"]).unwrap();
+        assert_eq!(
+            rebuilt.forwarded_values,
+            Some(ForwardedValues::Accepted),
+            "it rebuilds"
+        );
     }
 
     #[test]

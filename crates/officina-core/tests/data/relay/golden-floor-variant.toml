@@ -26,6 +26,7 @@ runner = "native"
 class = "free"
 description = "Service status on one host"
 program = "C:/Windows/System32/OpenSSH/ssh.exe"
+forwarded_values = "accepted"
 args = ["{host}", "systemctl", "status", "--no-pager", "{unit}"]
 timeout_s = 540
 max_output_kib = 64

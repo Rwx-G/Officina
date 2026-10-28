@@ -20,8 +20,8 @@ const FLOOR_PATH: &str = "C:/path/to/work/officina.toml";
 /// and the new pair pinned here: every approval is then invalidated on
 /// purpose (AD-24).
 const PINNED: (u32, &str) = (
-    2,
-    "3113cd73c06f616216aed61dc1910f43f4176920f4c0988011f41cb5de3cdb14",
+    3,
+    "2309c2c749a5c6395b1640eb47741dbaedbf642de50205e23f25db27877f1829",
 );
 
 fn golden() -> RelayFloor {
@@ -134,7 +134,8 @@ fn strings(value: &Value, out: &mut BTreeSet<String>) {
 
 /// Replacements for a leaf. Strings also try every other string of the
 /// catalogue, so a closed enum (class, runner, autonomy) gets another valid
-/// variant; the golden floor uses at least two of each.
+/// variant; the golden floor uses at least two of each. They try null last,
+/// for an optional field whose enum has one variant (`forwarded_values`).
 fn mutations(leaf: &Value, pool: &BTreeSet<String>) -> Vec<Value> {
     let others: Vec<Value> = pool
         .iter()
@@ -144,6 +145,7 @@ fn mutations(leaf: &Value, pool: &BTreeSet<String>) -> Vec<Value> {
     match leaf {
         Value::String(s) => std::iter::once(Value::String(format!("{s}x")))
             .chain(others)
+            .chain(std::iter::once(Value::Null))
             .collect(),
         Value::Number(n) => vec![Value::from(n.as_u64().unwrap_or(0) + 1)],
         Value::Bool(b) => vec![Value::Bool(!b)],

@@ -69,6 +69,7 @@ description = "Service status on one host"
 class = "free"
 program = "C:/Windows/System32/OpenSSH/ssh.exe"
 args = ["{host}", "systemctl", "status", "--no-pager", "{unit}"]
+forwarded_values = "accepted"
 
 [action.params.host]
 values = ["web01", "db01"]
