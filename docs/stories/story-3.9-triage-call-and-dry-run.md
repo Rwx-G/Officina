@@ -36,7 +36,7 @@ so that I can see how a model would have scored before deciding anything, and pa
 - [x] Fake claude `triage` and invalid modes, through the sidecar (AC 5)
 - [x] `TriageEvidence` component, view fields, `ipc.ts`, mock, `evidence` scenario from `registry_fixture` (AC 9)
 - [x] `triage_call` retention; doctor lines; zero-write extension to `<home>/.claude.json` (AC 10-12)
-- [ ] `examples/triage_probe.rs`; run it; research notes (AC 13): the example is written; running it and recording E16's re-check are the owner's (a real call is never made by the developer)
+- [x] `examples/triage_probe.rs`; run it; research notes (AC 13): the example is written; the owner ran it on the workstation on 2026-10-28 and E16 records the result (a real call is never made by the developer)
 - [x] Update `CHANGELOG.md` and the README (AC 14)
 
 ## Dev Notes
@@ -95,7 +95,7 @@ Per commit: `cargo fmt`, clippy on the workspace with `--all-targets --features 
 - AC 10: `crates/officina-host/tests/registry_retention.rs::triage_call_rows_are_kept_90_days`.
 - AC 11: `crates/officina-host/src/doctor.rs::tests::{cmd_shim_is_reported_as_refusing_triage, model_state_and_counts_are_reported}`.
 - AC 12: `crates/officina/tests/quota_doctor.rs::no_command_writes_under_the_claude_config_dir`, a triage call through the fake pointed at the fingerprinted config dir.
-- AC 13: open for the owner: `cargo run -p officina-host --features window-authority --example triage_probe`, then an E16 entry in `docs/research-notes.md` with the Claude Code version and the result.
+- AC 13: proved by the owner's workstation run of `cargo run -p officina-host --features window-authority --example triage_probe` on 2026-10-28 with Claude Code 2.1.312: PASS (schema-valid answer, input tokens 1 % from E16's figure, no transcript for the call's session id); recorded in `docs/research-notes.md` E16.
 - AC 14: `CHANGELOG.md` `[Unreleased]`; README "The triage model, and its dry run".
 
 ## File List
@@ -111,3 +111,4 @@ Per commit: `cargo fmt`, clippy on the workspace with `--all-targets --features 
 - 2026-10-28 created
 - 2026-10-28 reworked after review: zero write is Officina's own, probe checks the transcript and the answer with a pass criterion (D-80, D-91); pause moved to story 3.11, dry runs run while disabled or paused (D-81); refusals not re-queued until inputs change (D-87); dry-run cost columns (D-88); evaluation set held under 30 days (D-85); base environment as an argument and fake claude sidecar (D-86); draining past the cap, job feature (D-97); answer once queued with progress (D-92)
 - 2026-10-28 implemented: the contained call in core and its vectors, the runner, the `triage` thread, the budget and counts, the dry run and its evidence in the panel, retention, doctor, zero write, the probe written; three adversarial tests added. Status review; AC 13 (the probe's real call) open for the owner
+- 2026-10-28 AC 13 proved: the owner ran the probe on the workstation (Claude Code 2.1.312, PASS); E16 records it. Every acceptance criterion is now proved

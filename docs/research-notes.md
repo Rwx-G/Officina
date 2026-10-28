@@ -274,6 +274,14 @@ Windows 11.
 - **Measured.** One triage proposal on a short excerpt: about 4.5k input
   tokens (system prompt, cached for an hour) and 380 output tokens (260 of
   thinking), USD 0.0011 at API prices.
+- **Verified with Rust's argument vector (2026-10-28, 2.1.312, story 3.9
+  AC 13).** `examples/triage_probe.rs` ran one real call with the argument
+  vector as `Command` quotes it (the empty `--tools` and `--setting-sources`
+  values passed as separate arguments, no shell): exit 0 in 3.66 s; the
+  answer was schema-valid (`finished`, with a coherent reason); 4,581 input
+  tokens (1 % from the 4,500 above, tolerance 20 %), 266 output tokens,
+  1,049 micro-USD; no transcript under the config dir for the session id the
+  call reported, so `--no-session-persistence` holds. PASS.
 
 ## E17. Notification hooks, and what any claude process writes
 
