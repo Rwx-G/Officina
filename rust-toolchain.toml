@@ -1,6 +1,6 @@
 # Single source of truth for the Rust toolchain, read by rustup locally and
 # by CI. Bump on our own schedule: update `channel`, run the gates, commit.
 [toolchain]
-channel = "1.99.0"
+channel = "1.99.1"
 components = ["clippy", "rustfmt"]
 profile = "minimal"
