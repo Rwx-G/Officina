@@ -29,6 +29,10 @@ One click brings the right session to the front. The 5-hour and weekly quotas si
 </p>
 
 <p align="center">
+  <img src="docs/assets/scene.png" alt="The Officina scene: the sessions as employees of a small company, in reception, the decision office's queue, the project offices and the lounge, with the quota gauges in the header" width="900">
+</p>
+
+<p align="center">
   <img src="docs/assets/demo.gif" alt="A session waiting on a permission prompt: one click focuses it, and once answered it moves back to Working" width="900">
 </p>
 
@@ -483,7 +487,11 @@ A call is refused before anything starts, and spends nothing, when `claude` reso
 
 ## The scene (v0.4, in progress)
 
-v0.4 draws the board's sessions as the employees of a small company. The parts that already ship:
+v0.4 draws the board's sessions as the employees of a small company.
+
+<p align="center">
+  <img src="docs/assets/scene.gif" alt="A session at reception gets its first prompt and walks to its desk; another walks to the decision office, where its halo breathes; its file opens and brings it to front; answered, it walks back" width="900">
+</p>
 
 ### Board, Scene and Focus
 
@@ -495,13 +503,13 @@ The window's first view is now called **Sessions**; it has three modes, **Board*
 
 - **Reception**: a session just started, before its first prompt.
 - **The decision office**: everything that waits on you, queued in board order with its number on a ticket and a breathing halo (an amber ticket without a number for a wait on a relay approval alone); its register in the corner lists them.
-- **The offices**, one per project in the floor file's order, then by first appearance, kept until the window restarts: a working session sits at its desk, back turned, screen lit. A session keeps its desk while it is away; the empty chair then shows its number. Beyond four desks a session stands by the office's plaque.
+- **The offices**, one per project in the floor file's order, then by first appearance, remembered on this machine: after a restart, a project that still has a live session keeps its office and a session its desk, and the others are given up: a working session sits at its desk, back turned, screen lit. A session keeps its desk while it is away; the empty chair then shows its number. Beyond four desks a session stands by the office's plaque.
 - **The lounge**: your turn, a raised hand and the desk's number.
 - **The alert room**: every session in alert (below), in board order, with a halo in the alert colour. While anyone stands in it the room lights up: its floor, its hazard outline, its status board and its plaque turn to the alert colour, and its beacon lights, its glow breathing for two minutes and then steady, so nothing moves for as long as the alert lasts. A session whose data goes unknown keeps its place there, and the room stays lit.
 - **High priority**: the office of a project marked `priority = "high"` carries a "high priority" pill above its plaque.
 - **More offices**, when there are more than eight projects: the projects beyond the seventh share it.
 
-Nothing moves while nothing changes: an employee moves only when the board changes its place (see **Walking** below), a halo breathes for two minutes then rests, and nothing in the scene reads the clock between payloads. Missing data leaves an employee where it was, with a question mark. The floor grows a column for a fifth and a seventh project, up to eight offices; below the size at which every employee stays at least 44 px wide, the sessions area scrolls instead of shrinking it.
+Nothing moves while nothing changes: an employee moves only when the board changes its place (see **Walking** below), a halo breathes for two minutes from the start of the wait and then rests, steady, for as long as the wait lasts, and nothing in the scene reads the clock between payloads. Missing data leaves an employee where it was, with a question mark. The floor grows a column for a fifth and a seventh project, up to eight offices; below the size at which every employee stays at least 44 px wide, the sessions area scrolls instead of shrinking it.
 
 ### Walking
 
@@ -524,6 +532,10 @@ A session that waits for you is **in alert** when its project is marked `priorit
 While anyone is in alert, a band under the header, in every view, names the first one, its project, what it waits on and why, and how many more; it has no dismiss and leaves when nobody is in alert any more. The taskbar button carries the waiting count on an amber badge ("9+" above nine), a red badge with an exclamation mark while anyone is in alert, and flashes once when a session newly enters alert, until you bring the window forward. The window's title says the same in words. There is no toast, no sound, and the theme never changes.
 
 When Claude Code's session list cannot be read, Officina keeps the last known alerts rather than clearing them: the band ends with "Last known state: data unknown." and the title says "data unknown", until fresh data places each session again.
+
+### Sub-agents
+
+The scene does not draw sub-agents yet. Officina records each sub-agent's start and stop, with its id and type only, so that real use can check that Claude Code names the session that spawned it (see [Wiring the hooks](#wiring-the-hooks)); the scene draws them only once that check has passed.
 
 ### Light and dark
 
@@ -552,13 +564,13 @@ Each minor version is one PRD and is useful alone.
 | **v0.1 The board** | this release: who needs you, quotas, one click to the right session |
 | v0.2 The relay | in progress: a closed catalogue of actions sessions run on their own, gated and journaled, so they stop asking you to run commands and paste results |
 | v0.3 The registry and triage | in progress: subjects that survive restarts, finished sessions sorted into history or to resume, a model that proposes only while it measurably helps |
-| v0.4 The scene | the isometric workshop: rooms, focus mode, the attention halo |
+| v0.4 The scene | in progress: the company drawn in place, walking, the alert room and band, Focus mode, the dark theme |
 | v0.5 The orchestrator | a restricted session that sees every subject and proposes work orders, launched in one gesture |
 | v0.6 The isolated workshop | autonomous tasks in a container that holds no key, behind an allow-list gateway |
 | v0.7 The governor | spends the perishable 5-hour margin on routine tasks, never your weekly quota or your attention |
 | v1 | installer, update, Linux build, documentation |
 
-Design documents: [PRD v0.1](docs/prd/prd-v0.1.md), [PRD v0.2](docs/prd/prd-v0.2.md), [PRD v0.3](docs/prd/prd-v0.3.md), [architecture](docs/architecture-spine.md) and its [v0.2](docs/architecture-v0.2.md) and [v0.3](docs/architecture-v0.3.md) addenda, [research notes](docs/research-notes.md), [stories](docs/stories/).
+Design documents: [PRD v0.1](docs/prd/prd-v0.1.md), [PRD v0.2](docs/prd/prd-v0.2.md), [PRD v0.3](docs/prd/prd-v0.3.md), [PRD v0.4](docs/prd/prd-v0.4.md), [architecture](docs/architecture-spine.md) and its [v0.2](docs/architecture-v0.2.md), [v0.3](docs/architecture-v0.3.md) and [v0.4](docs/architecture-v0.4.md) addenda, [research notes](docs/research-notes.md), [stories](docs/stories/).
 
 ## Building from source
 
