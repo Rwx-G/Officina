@@ -192,7 +192,7 @@
     right: 0;
     bottom: 0;
     z-index: 1;
-    width: 420px;
+    width: var(--file-width);
     max-width: 100%;
     overflow: auto;
     padding: 16px 20px 20px;

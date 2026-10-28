@@ -116,9 +116,12 @@
     font-size: 12.5px;
     color: var(--color-text-muted);
   }
+  /* One card per line on a Full HD window; on a wide one, as many as the
+     column holds at their reading width, so no card stretches (D-543). */
   .cards {
-    display: flex;
-    flex-direction: column;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr));
+    align-items: start;
     gap: 10px;
   }
   .empty {

@@ -121,6 +121,13 @@
      the same in every view and mode (D-540), narrow enough for the status
      chips to keep their room beside the fixed buttons (D-533). */
   --gauge-width: 150px;
+  /* Wide screens (D-543): views of rows and tables to read stop at this
+     width, centred, so a 3440 px window draws no line across the screen;
+     the board and the scene use the whole width instead. */
+  --reading-width: 1760px;
+  /* The session file beside the scene: docked in the room the scene
+     leaves when there is enough, laid over its right edge otherwise. */
+  --file-width: 420px;
   /* The halo's opacity at rest: after breathing, and from the start under
      reduced motion. */
   --halo-rest: 0.8;

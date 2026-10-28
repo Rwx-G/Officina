@@ -149,6 +149,9 @@
     display: flex;
     flex-direction: column;
     gap: 12px;
+    width: 100%;
+    max-width: var(--reading-width);
+    margin-inline: auto;
     padding: 0 20px 20px;
   }
   .block {
