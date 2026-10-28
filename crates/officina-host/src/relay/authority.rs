@@ -1,9 +1,12 @@
 //! What only the author may decide, from the window (AD-21): approving the
-//! catalogue. Compiled only with the `window-authority` feature, so the
-//! `officina` binary a session can call holds none of it (P-5).
+//! catalogue, stopping and resuming the relay. Compiled only with the
+//! `window-authority` feature, so the `officina` binary a session can call
+//! holds none of it (P-5).
 
+use std::io;
 use std::path::Path;
 
+use officina_core::relay::StopFlag;
 use officina_core::relay::catalogue::{ApprovedCatalogue, KnownProjects};
 use officina_core::relay::journal::{CatalogueApproved, JournalEntry};
 use serde::Serialize;
@@ -94,4 +97,41 @@ pub fn approve_catalogue(
         .append(&[line], approved.approved_at_ms)
         .map_err(|e| AuthorityError::Journal(e.to_string()))?;
     Ok(approved)
+}
+
+/// Stops or resumes the relay (FR-11, AD-34, D-26): stopping writes
+/// `relay/stopped` (`{"since_ms":...}`) atomically and journals
+/// `relay_stopped`; resuming deletes it and journals `relay_resumed`. A call
+/// that changes nothing (stopping a stopped relay) writes and journals
+/// nothing. Returns whether the state changed.
+///
+/// The journal lock is held across the check, the change and its line, so
+/// two calls at once journal one change.
+pub fn set_relay_stopped(home: &RelayHome, stopped: bool) -> Result<bool, AuthorityError> {
+    let journal = JournalLock::acquire(home).map_err(|e| AuthorityError::Journal(e.to_string()))?;
+    let flag = home.stopped_file();
+    if home.relay_stopped() == stopped {
+        return Ok(false);
+    }
+    let now = now_ms();
+    let line = if stopped {
+        write_json(&flag, &StopFlag { since_ms: now })?;
+        JournalEntry::RelayStopped
+    } else {
+        match std::fs::remove_file(&flag) {
+            Ok(()) => {}
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+            Err(e) => {
+                return Err(AuthorityError::Write {
+                    path: flag.display().to_string(),
+                    error: e.to_string(),
+                });
+            }
+        }
+        JournalEntry::RelayResumed
+    };
+    journal
+        .append(&[line], now)
+        .map_err(|e| AuthorityError::Journal(e.to_string()))?;
+    Ok(true)
 }

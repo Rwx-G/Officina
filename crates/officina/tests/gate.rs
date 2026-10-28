@@ -502,6 +502,33 @@ fn the_test_floor_is_valid_on_every_os() {
     );
 }
 
+/// AD-34: the stop flag stops the relay, not the gate. Every payload gets
+/// the same answer, byte for byte, with the relay stopped.
+#[test]
+fn stop_does_not_change_gate_decisions() {
+    let env = approved_env();
+    let payloads = [
+        fixture("bash-guarded-program.json"),
+        fixture("bash-officina-run.json"),
+        fixture("read-file.json"),
+        bash("ssh host01", r"C:\path\to\Notes"),
+        bash("ls -la", r"C:\path\to\Supervision"),
+        bash("bash -c 'scp a host01:'", r"C:\path\to\Supervision\roles"),
+    ];
+    let running: Vec<Vec<u8>> = payloads
+        .iter()
+        .map(|p| hook(&env, p, Some(GUARDED_ROOT)).stdout)
+        .collect();
+    assert!(running.iter().any(|out| !out.is_empty()), "some deny");
+    assert!(running.iter().any(Vec::is_empty), "some pass");
+    officina_host::relay::authority::set_relay_stopped(&env.relay_home(), true).unwrap();
+    let stopped: Vec<Vec<u8>> = payloads
+        .iter()
+        .map(|p| hook(&env, p, Some(GUARDED_ROOT)).stdout)
+        .collect();
+    assert_eq!(running, stopped);
+}
+
 #[test]
 fn reason_lists_approved_actions() {
     let env = approved_env();

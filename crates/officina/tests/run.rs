@@ -406,6 +406,52 @@ fn stop_flag_written_by_hand_refuses() {
     assert_eq!(relay.run(&["probe", "host=web01"]).status.code(), Some(0));
 }
 
+// ---- story 2.7: stop and resume through the window's authority ----
+
+#[test]
+fn stop_through_the_authority_refuses() {
+    let relay = Relay::new();
+    let home = relay.env.relay_home();
+    assert!(officina_host::relay::authority::set_relay_stopped(&home, true).unwrap());
+    let out = relay.run(&["probe", "host=web01"]);
+    assert_refused(&relay, &out, RefusalReason::Stopped);
+    assert!(stderr_lines(&out)[0].contains("the relay is stopped in the Officina window"));
+    let listed = list(&relay, &relay.project());
+    assert!(listed.contains("The relay is stopped"), "{listed}");
+}
+
+#[test]
+fn resume_lets_runs_through() {
+    let relay = Relay::new();
+    let home = relay.env.relay_home();
+    officina_host::relay::authority::set_relay_stopped(&home, true).unwrap();
+    assert_refused(
+        &relay,
+        &relay.run(&["probe", "host=web01"]),
+        RefusalReason::Stopped,
+    );
+    assert!(officina_host::relay::authority::set_relay_stopped(&home, false).unwrap());
+    let out = relay.run(&["probe", "host=web01"]);
+    assert_eq!(out.status.code(), Some(0), "{:?}", stderr_lines(&out));
+    assert_eq!(relay.launches().len(), 1);
+    let kinds: Vec<&'static str> = relay
+        .entries()
+        .iter()
+        .map(|e| match e {
+            JournalEntry::RelayStopped => "stopped",
+            JournalEntry::RelayResumed => "resumed",
+            JournalEntry::Refused(_) => "refused",
+            JournalEntry::RunStarted(_) => "started",
+            JournalEntry::RunFinished(_) => "finished",
+            _ => "other",
+        })
+        .collect();
+    assert_eq!(
+        kinds,
+        ["stopped", "refused", "resumed", "started", "finished"]
+    );
+}
+
 #[test]
 fn free_action_runs() {
     let relay = Relay::new();

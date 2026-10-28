@@ -1,12 +1,16 @@
-//! The window's authority over the catalogue (AD-21, AD-24, D-8, D-15).
-//! Built only with `window-authority`, like the window.
+//! The window's authority over the catalogue and the stop flag (AD-21,
+//! AD-24, AD-34, D-8, D-15, D-26). Built only with `window-authority`, like
+//! the window.
 
 use std::path::{Path, PathBuf};
 
 use officina_core::quota::normalise_path;
+use officina_core::relay::StopFlag;
 use officina_core::relay::journal::{CatalogueApproved, JournalEntry};
 use officina_host::files::now_ms;
-use officina_host::relay::authority::{AUTHORITY_MARKER, AuthorityError, approve_catalogue};
+use officina_host::relay::authority::{
+    AUTHORITY_MARKER, AuthorityError, approve_catalogue, set_relay_stopped,
+};
 use officina_host::relay::home::{ApprovedState, RelayHome, load_relay_floor};
 use officina_host::relay::journal::{JournalLock, read_recent};
 
@@ -245,4 +249,97 @@ fn a_missing_floor_is_an_error_that_writes_nothing() {
     assert!(matches!(error, AuthorityError::Floor(_)));
     assert!(error.to_string().starts_with(AUTHORITY_MARKER));
     assert!(!relay.relay_dir().exists());
+}
+
+fn stop_lines(relay: &RelayHome) -> Vec<JournalEntry> {
+    let (lines, corrupt) = read_recent(relay, now_ms());
+    assert_eq!(corrupt, 0);
+    lines
+        .into_iter()
+        .map(|line| line.entry)
+        .filter(|entry| {
+            matches!(
+                entry,
+                JournalEntry::RelayStopped | JournalEntry::RelayResumed
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn stop_writes_the_flag_and_journals() {
+    let home = Home::new();
+    let relay = home.relay(None);
+    let before = now_ms();
+    assert!(set_relay_stopped(&relay, true).unwrap());
+    assert!(relay.relay_stopped());
+    let flag = StopFlag::parse(&std::fs::read(relay.stopped_file()).unwrap()).unwrap();
+    assert!(flag.since_ms >= before && flag.since_ms <= now_ms());
+    assert_eq!(stop_lines(&relay), [JournalEntry::RelayStopped]);
+    assert!(
+        !relay.relay_dir().read_dir().unwrap().any(|e| e
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .ends_with(".tmp")),
+        "an atomic write leaves no temp file"
+    );
+}
+
+#[test]
+fn resume_deletes_the_flag_and_journals() {
+    let home = Home::new();
+    let relay = home.relay(None);
+    set_relay_stopped(&relay, true).unwrap();
+    assert!(set_relay_stopped(&relay, false).unwrap());
+    assert!(!relay.stopped_file().exists() && !relay.relay_stopped());
+    assert_eq!(
+        stop_lines(&relay),
+        [JournalEntry::RelayStopped, JournalEntry::RelayResumed]
+    );
+    assert!(
+        !set_relay_stopped(&relay, false).unwrap(),
+        "resuming a running relay changes nothing"
+    );
+    assert_eq!(stop_lines(&relay).len(), 2);
+}
+
+#[test]
+fn stopping_twice_journals_once() {
+    let home = Home::new();
+    let relay = home.relay(None);
+    let first = std::thread::scope(|scope| {
+        let calls: Vec<_> = (0..4)
+            .map(|_| scope.spawn(|| set_relay_stopped(&relay, true).unwrap()))
+            .collect();
+        calls
+            .into_iter()
+            .map(|c| c.join().unwrap())
+            .collect::<Vec<bool>>()
+    });
+    assert_eq!(
+        first.iter().filter(|changed| **changed).count(),
+        1,
+        "{first:?}"
+    );
+    let since = std::fs::read(relay.stopped_file()).unwrap();
+    assert!(!set_relay_stopped(&relay, true).unwrap());
+    assert_eq!(
+        std::fs::read(relay.stopped_file()).unwrap(),
+        since,
+        "the time it was stopped stays"
+    );
+    assert_eq!(stop_lines(&relay), [JournalEntry::RelayStopped]);
+}
+
+#[test]
+fn a_locked_journal_stops_nothing() {
+    let home = Home::new();
+    let relay = home.relay(None);
+    let held = JournalLock::acquire(&relay).unwrap();
+    let error = set_relay_stopped(&relay, true).unwrap_err();
+    assert!(matches!(error, AuthorityError::Journal(_)), "{error}");
+    assert!(error.to_string().starts_with(AUTHORITY_MARKER));
+    assert!(!relay.relay_stopped());
+    drop(held);
 }
