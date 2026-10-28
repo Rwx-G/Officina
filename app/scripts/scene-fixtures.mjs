@@ -221,7 +221,8 @@ export function sceneScenarios(now) {
         arriving(47, P.docs, "docs-site"),
       ],
     },
-    // More waiting than the queue holds, an office with five live sessions,
+    // More waiting than the queue holds, an office with more sessions at
+    // work than its desks and its chip spot hold (its chip lists the rest),
     // and live sessions in the eighth to tenth projects.
     "scene-overflow": {
       floor: { projects: tenProjects },
@@ -231,6 +232,8 @@ export function sceneScenarios(now) {
         workingOn(21, P.billing, "payment-retry"),
         workingOn(22, P.billing, "ledger-sync"),
         workingOn(23, P.billing, "refund-flow"),
+        workingOn(28, P.billing, "audit-ledger"),
+        workingOn(29, P.billing, "tax-report"),
         workingOn(24, P.ml, "train-baseline"),
         workingOn(25, P.status, "uptime-probe"),
         resting(26, P.search, "search-index"),
