@@ -3,6 +3,8 @@
 //! the SQLite file, reads the event files and passes `now_ms`; what is kept,
 //! for how long and in which order is decided here.
 
+pub mod confirm;
+pub mod filing;
 pub mod fold;
 pub mod ingestion;
 pub mod retention;

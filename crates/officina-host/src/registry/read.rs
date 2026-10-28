@@ -7,7 +7,7 @@ use officina_core::registry::fold::pivot;
 use officina_core::registry::fold::{Mark, MarkQuery};
 use officina_core::registry::types::{
     EventFileRecord, ExcerptRecord, FactRow, FactValue, RestoreNotice, SessionRecord, SessionRow,
-    SettingKey, Source, Sourced,
+    SettingKey, Source, Sourced, SubjectRecord, SubjectStatus,
 };
 #[cfg(feature = "window-authority")]
 use officina_core::registry::types::{HookEnd, HookStart, SessionFact};
@@ -112,6 +112,45 @@ impl Reader {
     pub fn session_records(&self) -> rusqlite::Result<Vec<SessionRecord>> {
         session_records(&self.conn)
     }
+
+    /// Every `subject` row, by id.
+    pub fn subjects(&self) -> rusqlite::Result<Vec<SubjectRecord>> {
+        subjects(&self.conn)
+    }
+}
+
+const SUBJECT_COLUMNS: &str =
+    "id, project, name, status, status_src, status_at_ms, created_at_ms, routine, merged_into";
+
+fn subject_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SubjectRecord> {
+    let text = |index: usize, value: String| {
+        rusqlite::Error::InvalidColumnType(index, value, rusqlite::types::Type::Text)
+    };
+    let status: String = row.get(3)?;
+    let src: String = row.get(4)?;
+    Ok(SubjectRecord {
+        id: row.get(0)?,
+        project: row.get(1)?,
+        name: row.get(2)?,
+        // Both columns' `CHECK` list every value this build knows.
+        status: Sourced {
+            value: SubjectStatus::from_code(&status).ok_or_else(|| text(3, status.clone()))?,
+            src: Source::from_code(&src).ok_or_else(|| text(4, src.clone()))?,
+            at_ms: row.get(5)?,
+        },
+        created_at_ms: row.get(6)?,
+        routine: row.get::<_, i64>(7)? == 1,
+        merged_into: row.get(8)?,
+    })
+}
+
+/// Every `subject` row, by id.
+pub(crate) fn subjects(conn: &Connection) -> rusqlite::Result<Vec<SubjectRecord>> {
+    conn.prepare_cached(&format!(
+        "SELECT {SUBJECT_COLUMNS} FROM subject ORDER BY id"
+    ))?
+    .query_map([], subject_row)?
+    .collect()
 }
 
 /// `subject_id`, `subject_src` and `subject_at_ms` as one value: `None`
@@ -343,4 +382,71 @@ pub(crate) fn restore_notice(conn: &Connection) -> Option<RestoreNotice> {
         .into_iter()
         .find(|row| row.key == SettingKey::RestoreNotice)
         .and_then(|row| serde_json::from_str(&row.value).ok())
+}
+
+#[cfg(feature = "window-authority")]
+/// The `active` subjects of `project`: those a new session of it may join
+/// (AD-48).
+pub(crate) fn active_subjects_of(
+    conn: &Connection,
+    project: &str,
+) -> rusqlite::Result<Vec<SubjectRecord>> {
+    conn.prepare_cached(&format!(
+        "SELECT {SUBJECT_COLUMNS} FROM subject WHERE project = ?1 AND status = ?2 ORDER BY id"
+    ))?
+    .query_map([project, SubjectStatus::Active.code()], subject_row)?
+    .collect()
+}
+
+#[cfg(feature = "window-authority")]
+/// The sessions whose `subject_id` is `subject`.
+pub(crate) fn session_ids_of_subject(
+    conn: &Connection,
+    subject: i64,
+) -> rusqlite::Result<Vec<String>> {
+    conn.prepare_cached("SELECT session_id FROM session WHERE subject_id = ?1 ORDER BY session_id")?
+        .query_map([subject], |row| row.get(0))?
+        .collect()
+}
+
+#[cfg(feature = "window-authority")]
+/// The `subject_id` of `session_id`, when it is filed.
+pub(crate) fn subject_id_of(conn: &Connection, session_id: &str) -> rusqlite::Result<Option<i64>> {
+    Ok(conn
+        .prepare_cached("SELECT subject_id FROM session WHERE session_id = ?1")?
+        .query_row([session_id], |row| row.get(0))
+        .optional()?
+        .flatten())
+}
+
+#[cfg(feature = "window-authority")]
+/// The `session_excerpt` row of `session_id`, when it has one.
+pub(crate) fn excerpt_of(
+    conn: &Connection,
+    session_id: &str,
+) -> rusqlite::Result<Option<ExcerptRecord>> {
+    conn.prepare_cached(
+        "SELECT session_id, prompt, prompt_at_ms, answer_head, answer_tail, answer_at_ms
+         FROM session_excerpt WHERE session_id = ?1",
+    )?
+    .query_row([session_id], |row| {
+        Ok(ExcerptRecord {
+            session_id: row.get(0)?,
+            prompt: row.get(1)?,
+            prompt_at_ms: row.get(2)?,
+            answer_head: row.get(3)?,
+            answer_tail: row.get(4)?,
+            answer_at_ms: row.get(5)?,
+        })
+    })
+    .optional()
+}
+
+#[cfg(feature = "window-authority")]
+/// The projects the registry knows: those of its sessions and subjects
+/// (D-95).
+pub(crate) fn known_projects(conn: &Connection) -> rusqlite::Result<Vec<String>> {
+    conn.prepare_cached("SELECT project FROM session UNION SELECT project FROM subject ORDER BY 1")?
+        .query_map([], |row| row.get(0))?
+        .collect()
 }

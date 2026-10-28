@@ -373,5 +373,500 @@
          "ended": {"kind": "interrupted"}, "superseded": false, "non_interactive": false}
       ]
     }
+  ],
+  "filing": [
+    {
+      "name": "a new session joins the single active subject of its project",
+      "steps": [
+        {"events": [
+          {"v": 1, "ts": 1793102400000, "event": "SessionStart", "session_id": "s0", "cwd": "C:/work/api", "source": "startup", "claude_pid": 4100},
+          {"v": 1, "ts": 1793102400000, "event": "SessionStart", "session_id": "w0", "cwd": "C:/work/web", "source": "startup", "claude_pid": 4200}
+        ]},
+        {"author": {"at_ms": 1793102401000, "action": {"kind": "create", "name": "rollout", "origin": {"project": "api"}}}},
+        {"events": [
+          {"v": 1, "ts": 1793102402000, "event": "SessionStart", "session_id": "s1", "cwd": "C:/work/api", "source": "startup", "claude_pid": 4300},
+          {"v": 1, "ts": 1793102403000, "event": "SessionStart", "session_id": "s2", "cwd": "C:/work/web", "source": "startup", "claude_pid": 4400}
+        ]}
+      ],
+      "expect": {
+        "sessions": {"s0": {"filed": null, "src": null}, "w0": {"filed": null, "src": null}, "s1": {"filed": 1, "src": "rules"}, "s2": {"filed": null, "src": null}},
+        "subjects": [{"id": 1, "project": "api", "name": "rollout", "status": "active", "status_src": "author", "status_at_ms": 1793102401000, "routine": false, "merged_into": null}],
+        "excerpts": []
+      }
+    },
+    {
+      "name": "with two active subjects in its project, a new session stays unfiled",
+      "steps": [
+        {"events": [
+          {"v": 1, "ts": 1793102400000, "event": "SessionStart", "session_id": "s0", "cwd": "C:/work/api", "source": "startup", "claude_pid": 4100}
+        ]},
+        {"author": {"at_ms": 1793102401000, "action": {"kind": "create", "name": "rollout", "origin": {"project": "api"}}}},
+        {"author": {"at_ms": 1793102402000, "action": {"kind": "create", "name": "renewal", "origin": {"project": "api"}}}},
+        {"events": [
+          {"v": 1, "ts": 1793102403000, "event": "SessionStart", "session_id": "s1", "cwd": "C:/work/api", "source": "startup", "claude_pid": 4300}
+        ]}
+      ],
+      "expect": {
+        "sessions": {"s0": {"filed": null, "src": null}, "s1": {"filed": null, "src": null}},
+        "subjects": [
+          {"id": 1, "project": "api", "name": "rollout", "status": "active", "status_src": "author", "status_at_ms": 1793102401000, "routine": false, "merged_into": null},
+          {"id": 2, "project": "api", "name": "renewal", "status": "active", "status_src": "author", "status_at_ms": 1793102402000, "routine": false, "merged_into": null}
+        ],
+        "excerpts": []
+      }
+    },
+    {
+      "name": "a to_resume subject takes no new session",
+      "steps": [
+        {"events": [
+          {"v": 1, "ts": 1793102400000, "event": "SessionStart", "session_id": "s0", "cwd": "C:/work/api", "source": "startup", "claude_pid": 4100}
+        ]},
+        {"author": {"at_ms": 1793102401000, "action": {"kind": "create", "name": "rollout", "origin": {"project": "api"}}}},
+        {"author": {"at_ms": 1793102402000, "action": {"kind": "archive", "subject": 1, "routine": false}}},
+        {"author": {"at_ms": 1793102403000, "action": {"kind": "reopen", "subject": 1}}},
+        {"events": [
+          {"v": 1, "ts": 1793102404000, "event": "SessionStart", "session_id": "s1", "cwd": "C:/work/api", "source": "startup", "claude_pid": 4300}
+        ]}
+      ],
+      "expect": {
+        "sessions": {"s0": {"filed": null, "src": null}, "s1": {"filed": null, "src": null}},
+        "subjects": [{"id": 1, "project": "api", "name": "rollout", "status": "to_resume", "status_src": "author", "status_at_ms": 1793102403000, "routine": false, "merged_into": null}],
+        "excerpts": []
+      }
+    },
+    {
+      "name": "the never-filed project names never file",
+      "steps": [
+        {"events": [
+          {"v": 1, "ts": 1793102400000, "event": "SessionStart", "session_id": "o0", "cwd": "C:/work/other", "source": "startup", "claude_pid": 4100},
+          {"v": 1, "ts": 1793102400000, "event": "SessionStart", "session_id": "u0", "source": "startup", "claude_pid": 4200}
+        ]},
+        {"author": {"at_ms": 1793102401000, "action": {"kind": "create", "name": "misc", "origin": {"project": "other"}}}},
+        {"author": {"at_ms": 1793102402000, "action": {"kind": "create", "name": "loose", "origin": {"project": "unknown"}}}},
+        {"events": [
+          {"v": 1, "ts": 1793102403000, "event": "SessionStart", "session_id": "o1", "cwd": "C:/work/other", "source": "startup", "claude_pid": 4300},
+          {"v": 1, "ts": 1793102404000, "event": "SessionStart", "session_id": "u1", "source": "startup", "claude_pid": 4400}
+        ]}
+      ],
+      "expect": {
+        "sessions": {"o0": {"filed": null, "src": null}, "u0": {"filed": null, "src": null}, "o1": {"filed": null, "src": null}, "u1": {"filed": null, "src": null}},
+        "subjects": [
+          {"id": 1, "project": "other", "name": "misc", "status": "active", "status_src": "author", "status_at_ms": 1793102401000, "routine": false, "merged_into": null},
+          {"id": 2, "project": "unknown", "name": "loose", "status": "active", "status_src": "author", "status_at_ms": 1793102402000, "routine": false, "merged_into": null}
+        ],
+        "excerpts": []
+      }
+    },
+    {
+      "name": "a clear successor follows the normal rule",
+      "steps": [
+        {"events": [
+          {"v": 1, "ts": 1793102400000, "event": "SessionStart", "session_id": "s0", "cwd": "C:/work/api", "source": "startup", "claude_pid": 4100}
+        ]},
+        {"author": {"at_ms": 1793102401000, "action": {"kind": "create", "name": "rollout", "origin": {"project": "api"}}}},
+        {"events": [
+          {"v": 1, "ts": 1793102402000, "event": "UserPromptSubmit", "session_id": "s1", "cwd": "C:/work/api", "prompt": "plan the rollout", "claude_pid": 4300},
+          {"v": 1, "ts": 1793102403000, "event": "SessionEnd", "session_id": "s1", "cwd": "C:/work/api", "reason": "clear", "claude_pid": 4300},
+          {"v": 1, "ts": 1793102403200, "event": "SessionStart", "session_id": "s2", "cwd": "C:/work/api", "source": "clear", "claude_pid": 4300}
+        ]}
+      ],
+      "expect": {
+        "sessions": {"s0": {"filed": null, "src": null}, "s1": {"filed": 1, "src": "rules"}, "s2": {"filed": 1, "src": "rules"}},
+        "subjects": [{"id": 1, "project": "api", "name": "rollout", "status": "active", "status_src": "author", "status_at_ms": 1793102401000, "routine": false, "merged_into": null}],
+        "excerpts": ["s1"]
+      }
+    },
+    {
+      "name": "a resume of a known id keeps its subject",
+      "steps": [
+        {"events": [
+          {"v": 1, "ts": 1793102400000, "event": "SessionStart", "session_id": "s0", "cwd": "C:/work/api", "source": "startup", "claude_pid": 4100}
+        ]},
+        {"author": {"at_ms": 1793102401000, "action": {"kind": "create", "name": "rollout", "origin": {"project": "api"}}}},
+        {"events": [
+          {"v": 1, "ts": 1793102402000, "event": "UserPromptSubmit", "session_id": "s1", "cwd": "C:/work/api", "prompt": "plan the rollout", "claude_pid": 4300},
+          {"v": 1, "ts": 1793102403000, "event": "SessionEnd", "session_id": "s1", "cwd": "C:/work/api", "reason": "prompt_input_exit", "claude_pid": 4300}
+        ]},
+        {"author": {"at_ms": 1793102404000, "action": {"kind": "create", "name": "renewal", "origin": {"project": "api"}}}},
+        {"events": [
+          {"v": 1, "ts": 1793102405000, "event": "SessionStart", "session_id": "s1", "cwd": "C:/work/api", "source": "resume", "claude_pid": 5200},
+          {"v": 1, "ts": 1793102406000, "event": "UserPromptSubmit", "session_id": "s1", "cwd": "C:/work/api", "prompt": "carry on", "claude_pid": 5200}
+        ]}
+      ],
+      "expect": {
+        "sessions": {"s0": {"filed": null, "src": null}, "s1": {"filed": 1, "src": "rules"}},
+        "subjects": [
+          {"id": 1, "project": "api", "name": "rollout", "status": "active", "status_src": "author", "status_at_ms": 1793102401000, "routine": false, "merged_into": null},
+          {"id": 2, "project": "api", "name": "renewal", "status": "active", "status_src": "author", "status_at_ms": 1793102404000, "routine": false, "merged_into": null}
+        ],
+        "excerpts": ["s1"]
+      }
+    },
+    {
+      "name": "a session first seen in claude agents is filed at creation",
+      "steps": [
+        {"events": [
+          {"v": 1, "ts": 1793102400000, "event": "SessionStart", "session_id": "s0", "cwd": "C:/work/api", "source": "startup", "claude_pid": 4100}
+        ]},
+        {"author": {"at_ms": 1793102401000, "action": {"kind": "create", "name": "rollout", "origin": {"project": "api"}}}},
+        {"agents": {"now_ms": 1793102402000, "records": [
+          {"pid": 4300, "sessionId": "s1", "kind": "interactive", "cwd": "C:/work/api", "name": "api", "status": "idle", "startedAt": 1793102340000}
+        ]}}
+      ],
+      "expect": {
+        "sessions": {"s0": {"filed": null, "src": null}, "s1": {"filed": 1, "src": "rules"}},
+        "subjects": [{"id": 1, "project": "api", "name": "rollout", "status": "active", "status_src": "author", "status_at_ms": 1793102401000, "routine": false, "merged_into": null}],
+        "excerpts": []
+      }
+    },
+    {
+      "name": "a later session's excerpts clear the older one's in its subject",
+      "steps": [
+        {"events": [
+          {"v": 1, "ts": 1793102400000, "event": "SessionStart", "session_id": "s0", "cwd": "C:/work/api", "source": "startup", "claude_pid": 4100}
+        ]},
+        {"author": {"at_ms": 1793102401000, "action": {"kind": "create", "name": "rollout", "origin": {"project": "api"}}}},
+        {"agents": {"now_ms": 1793102402000, "records": [
+          {"pid": 4300, "sessionId": "s1", "kind": "interactive", "cwd": "C:/work/api", "name": "api", "status": "idle", "startedAt": 1793102340000},
+          {"pid": 4400, "sessionId": "s2", "kind": "interactive", "cwd": "C:/work/api", "name": "api", "status": "idle", "startedAt": 1793102340000}
+        ]}},
+        {"events": [
+          {"v": 1, "ts": 1793102403000, "event": "UserPromptSubmit", "session_id": "s1", "cwd": "C:/work/api", "prompt": "first", "claude_pid": 4300},
+          {"v": 1, "ts": 1793102404000, "event": "UserPromptSubmit", "session_id": "s2", "cwd": "C:/work/api", "prompt": "second", "claude_pid": 4400}
+        ]}
+      ],
+      "expect": {
+        "sessions": {"s0": {"filed": null, "src": null}, "s1": {"filed": 1, "src": "rules"}, "s2": {"filed": 1, "src": "rules"}},
+        "subjects": [{"id": 1, "project": "api", "name": "rollout", "status": "active", "status_src": "author", "status_at_ms": 1793102401000, "routine": false, "merged_into": null}],
+        "excerpts": ["s2"]
+      }
+    },
+    {
+      "name": "a non-interactive run filed at first sight neither counts nor clears excerpts",
+      "steps": [
+        {"events": [
+          {"v": 1, "ts": 1793102400000, "event": "SessionStart", "session_id": "s0", "cwd": "C:/work/api", "source": "startup", "claude_pid": 4100}
+        ]},
+        {"author": {"at_ms": 1793102401000, "action": {"kind": "create", "name": "rollout", "origin": {"project": "api"}}}},
+        {"agents": {"now_ms": 1793102402000, "records": [
+          {"pid": 4300, "sessionId": "s1", "kind": "interactive", "cwd": "C:/work/api", "name": "api", "status": "idle", "startedAt": 1793102340000}
+        ]}},
+        {"events": [
+          {"v": 1, "ts": 1793102403000, "event": "UserPromptSubmit", "session_id": "s1", "cwd": "C:/work/api", "prompt": "first", "claude_pid": 4300},
+          {"v": 1, "ts": 1793102404000, "event": "SessionStart", "session_id": "p1", "cwd": "C:/work/api", "source": "startup"},
+          {"v": 1, "ts": 1793102405000, "event": "UserPromptSubmit", "session_id": "p1", "cwd": "C:/work/api", "prompt": "summarise the log"},
+          {"v": 1, "ts": 1793102406000, "event": "SessionEnd", "session_id": "p1", "cwd": "C:/work/api", "reason": "other"}
+        ]}
+      ],
+      "expect": {
+        "sessions": {"s0": {"filed": null, "src": null}, "s1": {"filed": 1, "src": "rules"}, "p1": {"filed": null, "src": "rules"}},
+        "subjects": [{"id": 1, "project": "api", "name": "rollout", "status": "active", "status_src": "author", "status_at_ms": 1793102401000, "routine": false, "merged_into": null}],
+        "excerpts": ["p1", "s1"]
+      }
+    },
+    {
+      "name": "an unlisted session's end shows it was driven and clears the older excerpts",
+      "steps": [
+        {"events": [
+          {"v": 1, "ts": 1793102400000, "event": "SessionStart", "session_id": "s0", "cwd": "C:/work/api", "source": "startup", "claude_pid": 4100}
+        ]},
+        {"author": {"at_ms": 1793102401000, "action": {"kind": "create", "name": "rollout", "origin": {"project": "api"}}}},
+        {"agents": {"now_ms": 1793102402000, "records": [
+          {"pid": 4300, "sessionId": "s1", "kind": "interactive", "cwd": "C:/work/api", "name": "api", "status": "idle", "startedAt": 1793102340000}
+        ]}},
+        {"events": [
+          {"v": 1, "ts": 1793102403000, "event": "UserPromptSubmit", "session_id": "s1", "cwd": "C:/work/api", "prompt": "first", "claude_pid": 4300},
+          {"v": 1, "ts": 1793102404000, "event": "UserPromptSubmit", "session_id": "s2", "cwd": "C:/work/api", "prompt": "second", "claude_pid": 4400},
+          {"v": 1, "ts": 1793102405000, "event": "SessionEnd", "session_id": "s2", "cwd": "C:/work/api", "reason": "prompt_input_exit", "claude_pid": 4400}
+        ]}
+      ],
+      "expect": {
+        "sessions": {"s0": {"filed": null, "src": null}, "s1": {"filed": 1, "src": "rules"}, "s2": {"filed": 1, "src": "rules"}},
+        "subjects": [{"id": 1, "project": "api", "name": "rollout", "status": "active", "status_src": "author", "status_at_ms": 1793102401000, "routine": false, "merged_into": null}],
+        "excerpts": ["s2"]
+      }
+    }
+  ],
+  "confirm": [
+    {
+      "name": "create from the selected sessions takes their project and files them",
+      "steps": [
+        {"events": [
+          {"v": 1, "ts": 1793102400000, "event": "UserPromptSubmit", "session_id": "s1", "cwd": "C:/work/api", "prompt": "rules for the alerts", "claude_pid": 4100},
+          {"v": 1, "ts": 1793102401000, "event": "UserPromptSubmit", "session_id": "s2", "cwd": "C:/work/api", "prompt": "and their tests", "claude_pid": 4200}
+        ]},
+        {"author": {"at_ms": 1793102402000, "action": {"kind": "create", "name": "  Alert rules ", "origin": {"sessions": ["s1", "s2"]}}}}
+      ],
+      "expect": {
+        "sessions": {"s1": {"filed": 1, "src": "author"}, "s2": {"filed": 1, "src": "author"}},
+        "subjects": [{"id": 1, "project": "api", "name": "Alert rules", "status": "active", "status_src": "author", "status_at_ms": 1793102402000, "routine": false, "merged_into": null}],
+        "excerpts": ["s1", "s2"]
+      }
+    },
+    {
+      "name": "create from no session, an unknown one or two projects is refused",
+      "steps": [
+        {"events": [
+          {"v": 1, "ts": 1793102400000, "event": "UserPromptSubmit", "session_id": "s1", "cwd": "C:/work/api", "prompt": "api work", "claude_pid": 4100},
+          {"v": 1, "ts": 1793102401000, "event": "UserPromptSubmit", "session_id": "w1", "cwd": "C:/work/web", "prompt": "web work", "claude_pid": 4200}
+        ]},
+        {"author": {"at_ms": 1793102402000, "action": {"kind": "create", "name": "mixed", "origin": {"sessions": ["s1", "w1"]}}, "refused": "sessions_of_several_projects"}},
+        {"author": {"at_ms": 1793102403000, "action": {"kind": "create", "name": "solo", "origin": {"sessions": []}}, "refused": "no_session"}},
+        {"author": {"at_ms": 1793102404000, "action": {"kind": "create", "name": "ghost", "origin": {"sessions": ["nope"]}}, "refused": "unknown_session"}}
+      ],
+      "expect": {
+        "sessions": {"s1": {"filed": null, "src": null}, "w1": {"filed": null, "src": null}},
+        "subjects": [],
+        "excerpts": ["s1", "w1"]
+      }
+    },
+    {
+      "name": "create in a known project; an unknown project is refused",
+      "steps": [
+        {"events": [
+          {"v": 1, "ts": 1793102400000, "event": "SessionStart", "session_id": "s1", "cwd": "C:/work/api", "source": "startup", "claude_pid": 4100}
+        ]},
+        {"author": {"at_ms": 1793102401000, "action": {"kind": "create", "name": "rollout", "origin": {"project": "api"}}}},
+        {"author": {"at_ms": 1793102402000, "action": {"kind": "create", "name": "elsewhere", "origin": {"project": "nowhere"}}, "refused": "unknown_project"}}
+      ],
+      "expect": {
+        "sessions": {"s1": {"filed": null, "src": null}},
+        "subjects": [{"id": 1, "project": "api", "name": "rollout", "status": "active", "status_src": "author", "status_at_ms": 1793102401000, "routine": false, "merged_into": null}],
+        "excerpts": []
+      }
+    },
+    {
+      "name": "rename keeps names unique ignoring case among open subjects",
+      "steps": [
+        {"events": [
+          {"v": 1, "ts": 1793102400000, "event": "SessionStart", "session_id": "s1", "cwd": "C:/work/api", "source": "startup", "claude_pid": 4100}
+        ]},
+        {"author": {"at_ms": 1793102401000, "action": {"kind": "create", "name": "Rollout", "origin": {"project": "api"}}}},
+        {"author": {"at_ms": 1793102402000, "action": {"kind": "create", "name": "Renewal", "origin": {"project": "api"}}}},
+        {"author": {"at_ms": 1793102403000, "action": {"kind": "rename", "subject": 2, "name": "ROLLOUT"}, "refused": "name_taken"}},
+        {"author": {"at_ms": 1793102404000, "action": {"kind": "rename", "subject": 99, "name": "x"}, "refused": "unknown_subject"}},
+        {"author": {"at_ms": 1793102405000, "action": {"kind": "rename", "subject": 2, "name": "  Certificates  "}}},
+        {"author": {"at_ms": 1793102406000, "action": {"kind": "archive", "subject": 1, "routine": false}}},
+        {"author": {"at_ms": 1793102407000, "action": {"kind": "rename", "subject": 2, "name": "rollout"}}},
+        {"author": {"at_ms": 1793102408000, "action": {"kind": "rename", "subject": 1, "name": "again"}, "refused": "archived"}}
+      ],
+      "expect": {
+        "sessions": {"s1": {"filed": null, "src": null}},
+        "subjects": [
+          {"id": 1, "project": "api", "name": "Rollout", "status": "archived", "status_src": "author", "status_at_ms": 1793102406000, "routine": false, "merged_into": null},
+          {"id": 2, "project": "api", "name": "rollout", "status": "active", "status_src": "author", "status_at_ms": 1793102402000, "routine": false, "merged_into": null}
+        ],
+        "excerpts": []
+      }
+    },
+    {
+      "name": "a name is refused empty, too long or with a hidden character",
+      "steps": [
+        {"events": [
+          {"v": 1, "ts": 1793102400000, "event": "SessionStart", "session_id": "s1", "cwd": "C:/work/api", "source": "startup", "claude_pid": 4100}
+        ]},
+        {"author": {"at_ms": 1793102401000, "action": {"kind": "create", "name": "   ", "origin": {"project": "api"}}, "refused": "name_empty"}},
+        {"author": {"at_ms": 1793102402000, "action": {"kind": "create", "name": "bell\u0007here", "origin": {"project": "api"}}, "refused": "name_has_forbidden_characters"}},
+        {"author": {"at_ms": 1793102403000, "action": {"kind": "create", "name": "flip\u202eped", "origin": {"project": "api"}}, "refused": "name_has_forbidden_characters"}},
+        {"author": {"at_ms": 1793102404000, "action": {"kind": "create", "name": "123456789012345678901234567890123456789012345678901234567890123456789012345678901", "origin": {"project": "api"}}, "refused": "name_too_long"}},
+        {"author": {"at_ms": 1793102405000, "action": {"kind": "create", "name": "12345678901234567890123456789012345678901234567890123456789012345678901234567890", "origin": {"project": "api"}}}}
+      ],
+      "expect": {
+        "sessions": {"s1": {"filed": null, "src": null}},
+        "subjects": [{"id": 1, "project": "api", "name": "12345678901234567890123456789012345678901234567890123456789012345678901234567890", "status": "active", "status_src": "author", "status_at_ms": 1793102405000, "routine": false, "merged_into": null}],
+        "excerpts": []
+      }
+    },
+    {
+      "name": "filing into an archived subject is refused until it is reopened",
+      "steps": [
+        {"events": [
+          {"v": 1, "ts": 1793102400000, "event": "UserPromptSubmit", "session_id": "s1", "cwd": "C:/work/api", "prompt": "rotate the keys", "claude_pid": 4100}
+        ]},
+        {"author": {"at_ms": 1793102401000, "action": {"kind": "create", "name": "rollout", "origin": {"project": "api"}}}},
+        {"author": {"at_ms": 1793102402000, "action": {"kind": "archive", "subject": 1, "routine": false}}},
+        {"author": {"at_ms": 1793102403000, "action": {"kind": "file", "sessions": ["s1"], "subject": 1}, "refused": "archived"}},
+        {"author": {"at_ms": 1793102404000, "action": {"kind": "file", "sessions": [], "subject": 1}, "refused": "no_session"}},
+        {"author": {"at_ms": 1793102405000, "action": {"kind": "reopen", "subject": 1}}},
+        {"author": {"at_ms": 1793102406000, "action": {"kind": "file", "sessions": ["s1"], "subject": 1}}}
+      ],
+      "expect": {
+        "sessions": {"s1": {"filed": 1, "src": "author"}},
+        "subjects": [{"id": 1, "project": "api", "name": "rollout", "status": "active", "status_src": "author", "status_at_ms": 1793102406000, "routine": false, "merged_into": null}],
+        "excerpts": ["s1"]
+      }
+    },
+    {
+      "name": "filing an ended session leaves a to_resume subject; a live one makes it active",
+      "steps": [
+        {"events": [
+          {"v": 1, "ts": 1793102400000, "event": "UserPromptSubmit", "session_id": "s1", "cwd": "C:/work/api", "prompt": "done work", "claude_pid": 4100},
+          {"v": 1, "ts": 1793102401000, "event": "SessionEnd", "session_id": "s1", "cwd": "C:/work/api", "reason": "prompt_input_exit", "claude_pid": 4100},
+          {"v": 1, "ts": 1793102402000, "event": "UserPromptSubmit", "session_id": "s2", "cwd": "C:/work/api", "prompt": "live work", "claude_pid": 4200}
+        ]},
+        {"author": {"at_ms": 1793102403000, "action": {"kind": "create", "name": "rollout", "origin": {"project": "api"}}}},
+        {"author": {"at_ms": 1793102404000, "action": {"kind": "archive", "subject": 1, "routine": false}}},
+        {"author": {"at_ms": 1793102405000, "action": {"kind": "reopen", "subject": 1}}},
+        {"author": {"at_ms": 1793102406000, "action": {"kind": "file", "sessions": ["s1"], "subject": 1}}},
+        {"author": {"at_ms": 1793102407000, "action": {"kind": "create", "name": "renewal", "origin": {"project": "api"}}}},
+        {"author": {"at_ms": 1793102408000, "action": {"kind": "archive", "subject": 2, "routine": false}}},
+        {"author": {"at_ms": 1793102409000, "action": {"kind": "reopen", "subject": 2}}},
+        {"author": {"at_ms": 1793102410000, "action": {"kind": "file", "sessions": ["s2"], "subject": 2}}}
+      ],
+      "expect": {
+        "sessions": {"s1": {"filed": 1, "src": "author"}, "s2": {"filed": 2, "src": "author"}},
+        "subjects": [
+          {"id": 1, "project": "api", "name": "rollout", "status": "to_resume", "status_src": "author", "status_at_ms": 1793102405000, "routine": false, "merged_into": null},
+          {"id": 2, "project": "api", "name": "renewal", "status": "active", "status_src": "author", "status_at_ms": 1793102410000, "routine": false, "merged_into": null}
+        ],
+        "excerpts": ["s1", "s2"]
+      }
+    },
+    {
+      "name": "merge moves the sessions, archives the source with merged_into and wakes the target",
+      "steps": [
+        {"events": [
+          {"v": 1, "ts": 1793102400000, "event": "UserPromptSubmit", "session_id": "s1", "cwd": "C:/work/api", "prompt": "part one", "claude_pid": 4100},
+          {"v": 1, "ts": 1793102401000, "event": "UserPromptSubmit", "session_id": "s2", "cwd": "C:/work/api", "prompt": "part two", "claude_pid": 4200}
+        ]},
+        {"author": {"at_ms": 1793102402000, "action": {"kind": "create", "name": "first", "origin": {"sessions": ["s1"]}}}},
+        {"author": {"at_ms": 1793102403000, "action": {"kind": "create", "name": "second", "origin": {"sessions": ["s2"]}}}},
+        {"author": {"at_ms": 1793102404000, "action": {"kind": "archive", "subject": 2, "routine": false}}},
+        {"author": {"at_ms": 1793102405000, "action": {"kind": "reopen", "subject": 2}}},
+        {"author": {"at_ms": 1793102406000, "action": {"kind": "merge", "source": 1, "target": 2}}},
+        {"author": {"at_ms": 1793102407000, "action": {"kind": "merge", "source": 2, "target": 2}, "refused": "same_subject"}},
+        {"author": {"at_ms": 1793102408000, "action": {"kind": "merge", "source": 2, "target": 1}, "refused": "archived"}}
+      ],
+      "expect": {
+        "sessions": {"s1": {"filed": 2, "src": "author"}, "s2": {"filed": 2, "src": "author"}},
+        "subjects": [
+          {"id": 1, "project": "api", "name": "first", "status": "archived", "status_src": "author", "status_at_ms": 1793102406000, "routine": false, "merged_into": 2},
+          {"id": 2, "project": "api", "name": "second", "status": "active", "status_src": "author", "status_at_ms": 1793102406000, "routine": false, "merged_into": null}
+        ],
+        "excerpts": ["s1"]
+      }
+    },
+    {
+      "name": "unfile one or several sessions; none or an unknown one is refused",
+      "steps": [
+        {"events": [
+          {"v": 1, "ts": 1793102400000, "event": "UserPromptSubmit", "session_id": "s1", "cwd": "C:/work/api", "prompt": "one", "claude_pid": 4100},
+          {"v": 1, "ts": 1793102401000, "event": "UserPromptSubmit", "session_id": "s2", "cwd": "C:/work/api", "prompt": "two", "claude_pid": 4200}
+        ]},
+        {"author": {"at_ms": 1793102402000, "action": {"kind": "create", "name": "rollout", "origin": {"sessions": ["s1", "s2"]}}}},
+        {"author": {"at_ms": 1793102403000, "action": {"kind": "unfile", "sessions": ["s1", "s2"]}}},
+        {"author": {"at_ms": 1793102404000, "action": {"kind": "unfile", "sessions": []}, "refused": "no_session"}},
+        {"author": {"at_ms": 1793102405000, "action": {"kind": "unfile", "sessions": ["nope"]}, "refused": "unknown_session"}}
+      ],
+      "expect": {
+        "sessions": {"s1": {"filed": null, "src": "author"}, "s2": {"filed": null, "src": "author"}},
+        "subjects": [{"id": 1, "project": "api", "name": "rollout", "status": "active", "status_src": "author", "status_at_ms": 1793102402000, "routine": false, "merged_into": null}],
+        "excerpts": ["s1", "s2"]
+      }
+    },
+    {
+      "name": "archive with the routine box clears the excerpts; archiving again is refused",
+      "steps": [
+        {"events": [
+          {"v": 1, "ts": 1793102400000, "event": "UserPromptSubmit", "session_id": "s1", "cwd": "C:/work/api", "prompt": "renew the certificate", "claude_pid": 4100},
+          {"v": 1, "ts": 1793102401000, "event": "Stop", "session_id": "s1", "cwd": "C:/work/api", "last_message": "Renewed.", "claude_pid": 4100}
+        ]},
+        {"author": {"at_ms": 1793102402000, "action": {"kind": "create", "name": "renewal", "origin": {"sessions": ["s1"]}}}},
+        {"author": {"at_ms": 1793102403000, "action": {"kind": "archive", "subject": 1, "routine": true}}},
+        {"author": {"at_ms": 1793102404000, "action": {"kind": "archive", "subject": 1, "routine": false}, "refused": "archived"}}
+      ],
+      "expect": {
+        "sessions": {"s1": {"filed": 1, "src": "author"}},
+        "subjects": [{"id": 1, "project": "api", "name": "renewal", "status": "archived", "status_src": "author", "status_at_ms": 1793102403000, "routine": true, "merged_into": null}],
+        "excerpts": []
+      }
+    },
+    {
+      "name": "reopen sets to_resume and stamps the latest confirmation; only an archived subject, never a merged one",
+      "steps": [
+        {"events": [
+          {"v": 1, "ts": 1793102400000, "event": "SessionStart", "session_id": "s0", "cwd": "C:/work/api", "source": "startup", "claude_pid": 4100}
+        ]},
+        {"author": {"at_ms": 1793102401000, "action": {"kind": "create", "name": "rollout", "origin": {"project": "api"}}}},
+        {"confirmed": {"subject": 1, "at_ms": 1793102402000}},
+        {"confirmed": {"subject": 1, "at_ms": 1793102403000}},
+        {"author": {"at_ms": 1793102404000, "action": {"kind": "reopen", "subject": 1}, "refused": "not_archived"}},
+        {"author": {"at_ms": 1793102405000, "action": {"kind": "archive", "subject": 1, "routine": false}}},
+        {"author": {"at_ms": 1793102406000, "action": {"kind": "reopen", "subject": 1}}},
+        {"author": {"at_ms": 1793102407000, "action": {"kind": "create", "name": "renewal", "origin": {"project": "api"}}}},
+        {"author": {"at_ms": 1793102408000, "action": {"kind": "merge", "source": 2, "target": 1}}},
+        {"author": {"at_ms": 1793102409000, "action": {"kind": "reopen", "subject": 2}, "refused": "merged"}}
+      ],
+      "expect": {
+        "sessions": {"s0": {"filed": null, "src": null}},
+        "subjects": [
+          {"id": 1, "project": "api", "name": "rollout", "status": "active", "status_src": "author", "status_at_ms": 1793102408000, "routine": false, "merged_into": null},
+          {"id": 2, "project": "api", "name": "renewal", "status": "archived", "status_src": "author", "status_at_ms": 1793102408000, "routine": false, "merged_into": 1}
+        ],
+        "excerpts": [],
+        "reopened": [[1, 1793102403000, 1793102406000]]
+      }
+    },
+    {
+      "name": "to_resume subject, session listed live",
+      "steps": [
+        {"events": [
+          {"v": 1, "ts": 1793102400000, "event": "UserPromptSubmit", "session_id": "s1", "cwd": "C:/work/api", "prompt": "rollout", "claude_pid": 4100},
+          {"v": 1, "ts": 1793102401000, "event": "SessionEnd", "session_id": "s1", "cwd": "C:/work/api", "reason": "prompt_input_exit", "claude_pid": 4100}
+        ]},
+        {"author": {"at_ms": 1793102402000, "action": {"kind": "create", "name": "rollout", "origin": {"sessions": ["s1"]}}}},
+        {"author": {"at_ms": 1793102403000, "action": {"kind": "archive", "subject": 1, "routine": false}}},
+        {"author": {"at_ms": 1793102404000, "action": {"kind": "reopen", "subject": 1}}},
+        {"agents": {"now_ms": 1793102405000, "records": [
+          {"pid": 4100, "sessionId": "s1", "kind": "interactive", "cwd": "C:/work/api", "name": "api", "status": "idle", "startedAt": 1793102340000}
+        ]}}
+      ],
+      "expect": {
+        "sessions": {"s1": {"filed": 1, "src": "author"}},
+        "subjects": [{"id": 1, "project": "api", "name": "rollout", "status": "active", "status_src": "rules", "status_at_ms": 1793102405000, "routine": false, "merged_into": null}],
+        "excerpts": []
+      }
+    },
+    {
+      "name": "archived subject, newer prompt",
+      "steps": [
+        {"events": [
+          {"v": 1, "ts": 1793102400000, "event": "UserPromptSubmit", "session_id": "s1", "cwd": "C:/work/api", "prompt": "rollout", "claude_pid": 4100},
+          {"v": 1, "ts": 1793102401000, "event": "SessionEnd", "session_id": "s1", "cwd": "C:/work/api", "reason": "prompt_input_exit", "claude_pid": 4100}
+        ]},
+        {"author": {"at_ms": 1793102402000, "action": {"kind": "create", "name": "rollout", "origin": {"sessions": ["s1"]}}}},
+        {"confirmed": {"subject": 1, "at_ms": 1793102403000}},
+        {"author": {"at_ms": 1793102404000, "action": {"kind": "archive", "subject": 1, "routine": false}}},
+        {"events": [
+          {"v": 1, "ts": 1793102405000, "event": "UserPromptSubmit", "session_id": "s1", "cwd": "C:/work/api", "prompt": "one more thing", "claude_pid": 4100}
+        ]}
+      ],
+      "expect": {
+        "sessions": {"s1": {"filed": 1, "src": "author"}},
+        "subjects": [{"id": 1, "project": "api", "name": "rollout", "status": "active", "status_src": "rules", "status_at_ms": 1793102405000, "routine": false, "merged_into": null}],
+        "excerpts": ["s1"],
+        "reopened": [[1, 1793102403000, 1793102405000]]
+      }
+    },
+    {
+      "name": "auto-archived subject, background done then working",
+      "steps": [
+        {"agents": {"now_ms": 1793102400000, "records": [
+          {"pid": 4301, "id": "bg01", "sessionId": "b1", "kind": "background", "cwd": "C:/work/web", "name": "report", "status": "idle", "state": "done", "startedAt": 1793102340000}
+        ]}},
+        {"author": {"at_ms": 1793102401000, "action": {"kind": "create", "name": "weekly report", "origin": {"sessions": ["b1"]}}}},
+        {"confirmed": {"subject": 1, "at_ms": 1793102402000}},
+        {"author": {"at_ms": 1793102403000, "action": {"kind": "archive", "subject": 1, "routine": true}}},
+        {"agents": {"now_ms": 1793102404000, "records": [
+          {"pid": 4301, "id": "bg01", "sessionId": "b1", "kind": "background", "cwd": "C:/work/web", "name": "report", "status": "busy", "state": "working", "startedAt": 1793102340000}
+        ]}}
+      ],
+      "expect": {
+        "sessions": {"b1": {"filed": 1, "src": "author"}},
+        "subjects": [{"id": 1, "project": "web", "name": "weekly report", "status": "active", "status_src": "rules", "status_at_ms": 1793102404000, "routine": true, "merged_into": null}],
+        "excerpts": [],
+        "reopened": [[1, 1793102402000, 1793102404000]]
+      }
+    }
   ]
 }

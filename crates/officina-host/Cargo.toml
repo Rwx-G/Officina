@@ -67,6 +67,10 @@ name = "registry_read"
 required-features = ["window-authority"]
 
 [[test]]
+name = "registry_write"
+required-features = ["window-authority"]
+
+[[test]]
 name = "registry_retention"
 required-features = ["window-authority"]
 

@@ -730,6 +730,71 @@ fn no_waiting_for_and_no_status_history_are_stored() {
     }
 }
 
+/// AD-43, D-79: filing runs in the transaction that creates the session,
+/// on both creation paths. Inside the chunk's transaction another
+/// connection sees no trace of the new session; once it commits, the
+/// session and its filing are there together, filed when it was first seen.
+#[test]
+fn filing_runs_in_the_creating_transaction() {
+    use officina_core::registry::confirm::SubjectOrigin;
+    let home = Home::new();
+    home.append(
+        &day_file(NOW),
+        &[line("SessionStart", "s0", NOW - 100, CWD)],
+    );
+    let mut writer = home.writer(NOW);
+    writer.ingest(&home.ctx(), NOW).unwrap();
+    let id = writer
+        .create_subject("rollout", SubjectOrigin::Project("api".into()), NOW)
+        .unwrap();
+    home.append(
+        &day_file(NOW),
+        &[
+            line("SessionStart", "s1", NOW + 5, CWD),
+            line("Stop", "s1", NOW + 6, CWD),
+        ],
+    );
+    let reader = open_reader(&home.home, &[]).unwrap();
+    let mut seen_inside = Vec::new();
+    writer
+        .ingest_observed(&home.ctx(), NOW + 10, &mut |_| {
+            seen_inside.push(
+                reader
+                    .session_records()
+                    .unwrap()
+                    .iter()
+                    .any(|r| r.session_id == "s1"),
+            );
+        })
+        .unwrap();
+    assert_eq!(seen_inside, [false, false], "nothing before the commit");
+    let filed_at_first_sight = |session: &str, at: i64| {
+        let record = reader
+            .session_records()
+            .unwrap()
+            .into_iter()
+            .find(|r| r.session_id == session)
+            .unwrap();
+        let filing = record.subject.clone().unwrap();
+        assert_eq!(
+            (filing.value, filing.src, filing.at_ms, record.first_seen_ms),
+            (Some(id), Source::Rules, at, at),
+            "{session}"
+        );
+    };
+    filed_at_first_sight("s1", NOW + 5);
+
+    let mut snapshot = None;
+    let records = parse_agents(
+        r#"[{"pid":4100,"sessionId":"s2","kind":"interactive","cwd":"C:/work/api","status":"idle"}]"#,
+    )
+    .unwrap();
+    writer
+        .apply_agents(&mut snapshot, &records, &[], NOW + 20)
+        .unwrap();
+    filed_at_first_sight("s2", NOW + 20);
+}
+
 /// Adversarial pass: a line without a session id, or with an empty one,
 /// records nothing and is not corrupt.
 #[test]

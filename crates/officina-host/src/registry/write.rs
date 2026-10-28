@@ -1,12 +1,21 @@
 //! The window's writes to the registry (AD-38): compiled only with the
 //! `window-authority` feature (D-43), so `officina.exe` built alone holds
-//! none of it.
+//! none of it. Author actions on subjects (AD-48, D-54 to D-58) are planned
+//! by core `registry::confirm` and written here in one transaction, with
+//! source `author` and the action's time (AD-39, AD-40).
 
+use std::collections::BTreeSet;
 use std::path::Path;
 
+use officina_core::registry::confirm::{
+    AuthorAction, AuthorContext, Plan, SubjectOrigin, Target, Wake, plan,
+};
+use officina_core::registry::filing::excerpts_to_clear;
 use officina_core::registry::fold::FactWrite;
+pub use officina_core::registry::types::AuthorRefusal;
 use officina_core::registry::types::{
     EventFileRecord, ExcerptRecord, FactValue, SessionRecord, SessionRow, SettingKey, Source,
+    SubjectRecord, SubjectStatus,
 };
 use rusqlite::config::DbConfig;
 use rusqlite::types::Value;
@@ -61,7 +70,307 @@ impl RegistryError {
     }
 }
 
+/// Why an author action wrote nothing: refused by a rule, the registry
+/// unchanged, or the registry itself failed (D-57). The refusal enum is
+/// fieldless; only the registry's error carries the marker.
+#[derive(Debug, thiserror::Error)]
+pub enum AuthorError {
+    #[error("refused: {}", .0.code())]
+    Refused(AuthorRefusal),
+    #[error(transparent)]
+    Registry(#[from] RegistryError),
+}
+
+impl From<rusqlite::Error> for AuthorError {
+    fn from(error: rusqlite::Error) -> AuthorError {
+        AuthorError::Registry(error.into())
+    }
+}
+
+impl AuthorError {
+    /// The refusal, when a rule refused the action.
+    pub fn refusal(&self) -> Option<AuthorRefusal> {
+        match self {
+            AuthorError::Refused(refusal) => Some(*refusal),
+            AuthorError::Registry(_) => None,
+        }
+    }
+}
+
+/// The sessions and subjects an action reads beyond every subject: those it
+/// names, and the sessions of the subjects it touches.
+fn involved(action: &AuthorAction) -> (Vec<String>, Vec<i64>) {
+    match action {
+        AuthorAction::Create {
+            origin: SubjectOrigin::Sessions(ids),
+            ..
+        } => (ids.clone(), Vec::new()),
+        AuthorAction::Create { .. } => (Vec::new(), Vec::new()),
+        AuthorAction::Rename { subject, .. }
+        | AuthorAction::Archive { subject, .. }
+        | AuthorAction::Reopen { subject } => (Vec::new(), vec![*subject]),
+        AuthorAction::Merge { source, target } => (Vec::new(), vec![*source, *target]),
+        AuthorAction::File { sessions, subject } => (sessions.clone(), vec![*subject]),
+        AuthorAction::Unfile { sessions } => (sessions.clone(), Vec::new()),
+    }
+}
+
+/// Stamps `reopened_at_ms` on `subject`'s latest confirmation, unless it
+/// was already reopened (D-58): the first reopen is the one the flip rate
+/// reads (AD-50).
+fn stamp_reopen(conn: &Connection, subject: i64, at_ms: i64) -> rusqlite::Result<()> {
+    conn.prepare_cached(
+        "UPDATE confirmation SET reopened_at_ms = ?2
+         WHERE id = (SELECT id FROM confirmation WHERE subject_id = ?1
+                     ORDER BY confirmed_at_ms DESC, id DESC LIMIT 1)
+           AND reopened_at_ms IS NULL",
+    )?
+    .execute(rusqlite::params![subject, at_ms])?;
+    Ok(())
+}
+
+/// Wakes a subject a session alive again counts under (D-77): `active`,
+/// source `rules`, at `at_ms`, and its latest confirmation stamped
+/// reopened when it was archived (D-58).
+pub(crate) fn apply_wake(conn: &Connection, wake: &Wake, at_ms: i64) -> rusqlite::Result<()> {
+    conn.prepare_cached(
+        "UPDATE subject SET status = ?2, status_src = ?3, status_at_ms = ?4 WHERE id = ?1",
+    )?
+    .execute(rusqlite::params![
+        wake.subject,
+        SubjectStatus::Active.code(),
+        Source::Rules.code(),
+        at_ms
+    ])?;
+    if wake.stamp_reopen {
+        stamp_reopen(conn, wake.subject, at_ms)?;
+    }
+    Ok(())
+}
+
+/// Keeps the latest excerpts only among `subject`'s sessions (FR-4, D-50):
+/// the core says which go.
+pub(crate) fn prune_excerpts(conn: &Connection, subject: i64) -> rusqlite::Result<()> {
+    let mut sessions = Vec::new();
+    let mut excerpts = Vec::new();
+    for id in read::session_ids_of_subject(conn, subject)? {
+        if let Some(excerpt) = read::excerpt_of(conn, &id)? {
+            excerpts.push(excerpt);
+        }
+        sessions.extend(read::session_record(conn, &id)?);
+    }
+    if excerpts.len() < 2 {
+        return Ok(());
+    }
+    for id in excerpts_to_clear(&sessions, &excerpts) {
+        conn.prepare_cached("DELETE FROM session_excerpt WHERE session_id = ?1")?
+            .execute([id])?;
+    }
+    Ok(())
+}
+
+/// Writes an accepted plan at `now_ms`, source `author`; returns the
+/// subject it created, if any.
+fn apply_plan(conn: &Connection, plan: &Plan, now_ms: i64) -> rusqlite::Result<Option<i64>> {
+    let author = Source::Author.code();
+    let created = match &plan.create {
+        Some(new) => {
+            conn.prepare_cached(
+                "INSERT INTO subject (project, name, status, status_src, status_at_ms, created_at_ms)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?5)",
+            )?
+            .execute(rusqlite::params![
+                new.project,
+                new.name,
+                SubjectStatus::Active.code(),
+                author,
+                now_ms
+            ])?;
+            Some(conn.last_insert_rowid())
+        }
+        None => None,
+    };
+    let resolve = |target: Target| match target {
+        Target::Existing(id) => Some(id),
+        Target::Created => created,
+    };
+    for change in &plan.changes {
+        conn.prepare_cached(
+            "UPDATE subject SET name = coalesce(?2, name),
+                 status = coalesce(?3, status),
+                 status_src = CASE WHEN ?3 IS NULL THEN status_src ELSE ?6 END,
+                 status_at_ms = CASE WHEN ?3 IS NULL THEN status_at_ms ELSE ?7 END,
+                 routine = coalesce(?4, routine),
+                 merged_into = coalesce(?5, merged_into)
+             WHERE id = ?1",
+        )?
+        .execute(rusqlite::params![
+            change.id,
+            change.name,
+            change.status.map(SubjectStatus::code),
+            change.routine.map(i64::from),
+            change.merged_into,
+            author,
+            now_ms
+        ])?;
+    }
+    for (session_id, target) in &plan.filings {
+        conn.prepare_cached(
+            "UPDATE session SET subject_id = ?2, subject_src = ?3, subject_at_ms = ?4
+             WHERE session_id = ?1",
+        )?
+        .execute(rusqlite::params![
+            session_id,
+            target.and_then(resolve),
+            author,
+            now_ms
+        ])?;
+    }
+    for session_id in &plan.clear_excerpts {
+        conn.prepare_cached("DELETE FROM session_excerpt WHERE session_id = ?1")?
+            .execute([session_id])?;
+    }
+    if let Some(subject) = plan.stamp_reopen {
+        stamp_reopen(conn, subject, now_ms)?;
+    }
+    if let Some(subject) = plan.prune.and_then(resolve) {
+        prune_excerpts(conn, subject)?;
+    }
+    Ok(created)
+}
+
 impl Writer {
+    /// Runs one author action at `now_ms` in one transaction, as every
+    /// write is, with `synchronous = FULL` (AD-39): the core plans it from
+    /// the registry's subjects and the sessions it involves, this writes it
+    /// with source `author`; a refusal writes nothing. Returns the subject
+    /// created, if any. An archive then truncates the WAL, so the cleared
+    /// text leaves the log (AD-44).
+    pub fn author(
+        &mut self,
+        action: &AuthorAction,
+        now_ms: i64,
+    ) -> Result<Option<i64>, AuthorError> {
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let subjects = read::subjects(&tx)?;
+        let (named, touched) = involved(action);
+        let mut ids: BTreeSet<String> = named.into_iter().collect();
+        for subject in touched {
+            ids.extend(read::session_ids_of_subject(&tx, subject)?);
+        }
+        let mut sessions = Vec::new();
+        for id in &ids {
+            sessions.extend(read::session_record(&tx, id)?);
+        }
+        let known_projects = read::known_projects(&tx)?;
+        let planned = plan(
+            action,
+            &AuthorContext {
+                subjects: &subjects,
+                sessions: &sessions,
+                known_projects: &known_projects,
+            },
+        )
+        .map_err(AuthorError::Refused)?;
+        let created = apply_plan(&tx, &planned, now_ms)?;
+        tx.commit()?;
+        if planned.checkpoint {
+            self.checkpoint()?;
+        }
+        Ok(created)
+    }
+
+    /// Creates a subject named `name` (D-95): from the selected sessions,
+    /// which give it their one project and are filed under it, or in one of
+    /// the projects the registry knows. Returns its id.
+    pub fn create_subject(
+        &mut self,
+        name: &str,
+        origin: SubjectOrigin,
+        now_ms: i64,
+    ) -> Result<i64, AuthorError> {
+        let action = AuthorAction::Create {
+            name: name.to_owned(),
+            origin,
+        };
+        Ok(self.author(&action, now_ms)?.unwrap_or_default())
+    }
+
+    /// Renames a subject that is not archived (D-57).
+    pub fn rename_subject(
+        &mut self,
+        subject: i64,
+        name: &str,
+        now_ms: i64,
+    ) -> Result<(), AuthorError> {
+        let action = AuthorAction::Rename {
+            subject,
+            name: name.to_owned(),
+        };
+        self.author(&action, now_ms).map(|_| ())
+    }
+
+    /// Moves the sessions of `source` to `target` and archives `source`
+    /// with `merged_into` (D-55).
+    pub fn merge_subjects(
+        &mut self,
+        source: i64,
+        target: i64,
+        now_ms: i64,
+    ) -> Result<(), AuthorError> {
+        self.author(&AuthorAction::Merge { source, target }, now_ms)
+            .map(|_| ())
+    }
+
+    /// Files one or several sessions under `subject` (D-56).
+    pub fn file_sessions(
+        &mut self,
+        sessions: &[String],
+        subject: i64,
+        now_ms: i64,
+    ) -> Result<(), AuthorError> {
+        let action = AuthorAction::File {
+            sessions: sessions.to_vec(),
+            subject,
+        };
+        self.author(&action, now_ms).map(|_| ())
+    }
+
+    /// Unfiles one or several sessions (D-56).
+    pub fn unfile_sessions(&mut self, sessions: &[String], now_ms: i64) -> Result<(), AuthorError> {
+        let action = AuthorAction::Unfile {
+            sessions: sessions.to_vec(),
+        };
+        self.author(&action, now_ms).map(|_| ())
+    }
+
+    /// Archives `subject`, `routine` when it could have run alone, and
+    /// clears the excerpts of its sessions from the file and its WAL (FR-4,
+    /// AD-44).
+    pub fn archive_subject(
+        &mut self,
+        subject: i64,
+        routine: bool,
+        now_ms: i64,
+    ) -> Result<(), AuthorError> {
+        self.author(&AuthorAction::Archive { subject, routine }, now_ms)
+            .map(|_| ())
+    }
+
+    /// Reopens an archived subject as `to_resume` and stamps its latest
+    /// confirmation reopened (AD-48, D-58).
+    pub fn reopen_subject(&mut self, subject: i64, now_ms: i64) -> Result<(), AuthorError> {
+        self.author(&AuthorAction::Reopen { subject }, now_ms)
+            .map(|_| ())
+    }
+
+    /// Every `subject` row, by id.
+    pub fn subjects(&self) -> Result<Vec<SubjectRecord>, RegistryError> {
+        Ok(read::subjects(&self.conn)?)
+    }
+
     /// Records `value` under `key`, replacing what was there.
     pub fn set_setting(
         &mut self,

@@ -28,6 +28,19 @@ pub const DONE_WINDOW_MS: i64 = 24 * 60 * 60 * 1000;
 /// refresh, and a fresh session must not flash as "interrupted".
 pub const UNLISTED_GRACE_MS: i64 = 30_000;
 
+/// The project of a session whose `cwd` lies in none of the floor's
+/// projects. Never filed by rule (AD-48, D-53).
+pub const OTHER_PROJECT: &str = "other";
+
+/// The project of a session whose `cwd` is unknown. Never filed by rule
+/// (AD-48, D-53).
+pub const UNKNOWN_PROJECT: &str = "unknown";
+
+/// The project names a new session never joins a subject under (AD-48): a
+/// folder bearing one of them, with no floor, is treated as that name
+/// (D-53).
+pub const NEVER_FILED_PROJECTS: [&str; 2] = [OTHER_PROJECT, UNKNOWN_PROJECT];
+
 /// Notification types that mean a decision blocks the session.
 pub const BLOCKING_NOTIFICATIONS: [&str; 2] = ["permission_prompt", "elicitation_dialog"];
 
@@ -461,7 +474,7 @@ pub fn derived_color(name: &str) -> ProjectColor {
 pub fn project_for(cwd: Option<&str>, projects: &[ProjectRule]) -> ProjectView {
     let Some(cwd) = cwd else {
         return ProjectView {
-            name: "unknown".into(),
+            name: UNKNOWN_PROJECT.into(),
             color: None,
         };
     };
@@ -482,7 +495,7 @@ pub fn project_for(cwd: Option<&str>, projects: &[ProjectRule]) -> ProjectView {
         .max_by_key(|p| p.path.len())
         .map_or(
             ProjectView {
-                name: "other".into(),
+                name: OTHER_PROJECT.into(),
                 color: None,
             },
             |p| ProjectView {

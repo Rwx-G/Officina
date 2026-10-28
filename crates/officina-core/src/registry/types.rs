@@ -433,6 +433,89 @@ impl SessionRecord {
                 Some(Ending::SessionEnd { reason: Some(reason) }) if reason == NON_INTERACTIVE_END_REASON
             )
     }
+
+    /// The subject the session counts under. Rules file every new session
+    /// at first sight (AD-48), before anyone can tell a non-interactive run
+    /// (AD-47); once the session reads non-interactive, a filing by rule no
+    /// longer counts, so rules never file one, while the author still may
+    /// (D-56).
+    pub fn filed_subject(&self) -> Option<i64> {
+        let filing = self.subject.as_ref()?;
+        let by_rule_on_a_run = filing.src == Source::Rules && self.is_non_interactive();
+        filing.value.filter(|_| !by_rule_on_a_run)
+    }
+
+    /// True once the session is known to be one the author drove: listed by
+    /// `claude agents`, or ended otherwise than a non-interactive run does.
+    /// Only such a session's excerpts replace its subject's older ones
+    /// (D-50), so a `claude -p` run filed at first sight never clears them.
+    pub fn is_established(&self) -> bool {
+        self.listed.is_some() || (self.is_ended() && !self.is_non_interactive())
+    }
+}
+
+/// One `subject` row (AD-40, AD-48).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SubjectRecord {
+    pub id: i64,
+    /// Which new sessions may join it at first sight (AD-48).
+    pub project: String,
+    pub name: String,
+    pub status: Sourced<SubjectStatus>,
+    pub created_at_ms: i64,
+    /// "Routine, could have run alone", set when archived (FR-13, P-10).
+    pub routine: bool,
+    /// The subject a merge moved its sessions to (D-55): archived, and left
+    /// out of the archived list.
+    pub merged_into: Option<i64>,
+}
+
+/// A subject as a board card names it (AD-54).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct SubjectRef {
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub id: i64,
+    pub name: String,
+}
+
+closed_enum! {
+    #[serde(rename_all = "snake_case")]
+    /// Why the registry refused an author action (D-54 to D-58, D-95):
+    /// nothing was written. Distinct from the writer's error, which says
+    /// the registry itself failed (D-57).
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+    #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+    pub enum AuthorRefusal {
+        /// The name is empty once trimmed.
+        NameEmpty,
+        /// The name is longer than the bound, once trimmed.
+        NameTooLong,
+        /// The name holds a control character or a hidden formatting one.
+        NameHasForbiddenCharacters,
+        /// A subject of the project that is not archived already has the
+        /// name, ignoring case.
+        NameTaken,
+        /// No subject has this id.
+        UnknownSubject,
+        /// The registry holds no session with this id.
+        UnknownSession,
+        /// No session or subject of the registry has this project.
+        UnknownProject,
+        /// The action names no session.
+        NoSession,
+        /// A subject is created from sessions of more than one project.
+        SessionsOfSeveralProjects,
+        /// The subject is archived: reopen it first (D-54).
+        Archived,
+        /// Only an archived subject is reopened (D-58).
+        NotArchived,
+        /// The subject was merged into another: its sessions are there
+        /// (D-55).
+        Merged,
+        /// A subject is merged into itself.
+        SameSubject,
+    }
 }
 
 /// One `session` row.
@@ -510,11 +593,16 @@ mod tests {
     /// Runs `check` once per enum of this file, giving it the enum's `ALL`,
     /// `code` and `from_code`; returns how many enums it ran on.
     fn each_enum(check: &dyn Fn(&dyn EnumUnderTest)) -> usize {
-        let enums: [&dyn EnumUnderTest; 12] = [
+        let enums: [&dyn EnumUnderTest; 13] = [
             &Closed(
                 RegistryState::ALL,
                 RegistryState::code,
                 RegistryState::from_code,
+            ),
+            &Closed(
+                AuthorRefusal::ALL,
+                AuthorRefusal::code,
+                AuthorRefusal::from_code,
             ),
             &Closed(SessionFact::ALL, SessionFact::code, SessionFact::from_code),
             &Closed(Source::ALL, Source::code, Source::from_code),

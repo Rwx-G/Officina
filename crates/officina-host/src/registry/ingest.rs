@@ -12,18 +12,20 @@ use std::path::Path;
 use officina_core::board::{ProjectRule, project_for};
 use officina_core::dates::dated_file_day;
 use officina_core::events::{EventLine, ParsedLine, parse_line};
+use officina_core::registry::confirm::wake;
+use officina_core::registry::filing::filing_at_creation;
 use officina_core::registry::fold::{candidates_needed, line_facts, link_for_line};
 use officina_core::registry::ingestion::{
     CHUNK_MAX_BYTES, CHUNK_MAX_LINES, ExcerptObservation, complete_once_read, excerpt_observation,
     in_triage_workdir, partial_tail_is_corrupt,
 };
 use officina_core::registry::retention::excerpt_expired;
-use officina_core::registry::types::EventFileRecord;
+use officina_core::registry::types::{EventFileRecord, SessionRecord, Source};
 use rusqlite::{Connection, TransactionBehavior, params};
 
 use super::read;
 use super::store::Writer;
-use super::write::{RegistryError, write_fact};
+use super::write::{RegistryError, apply_wake, prune_excerpts, write_fact};
 
 /// What a pass needs besides the registry.
 #[derive(Debug, Clone, Copy)]
@@ -82,8 +84,10 @@ fn read_from(path: &Path, offset: u64) -> std::io::Result<Vec<u8>> {
 /// Records the session of `session_id`, seen at `seen_ms` in `cwd`: the one
 /// function that creates a session record, whichever source sees it first
 /// (D-79), inside the caller's transaction. A new session's project comes
-/// from its `cwd` and the window's floor (D-53), and is never rewritten.
-/// Returns true when the session is new.
+/// from its `cwd` and the window's floor (D-53), and is never rewritten; it
+/// joins the single active subject of that project, source `rules`, in the
+/// same transaction (AD-43, AD-48, D-75). Returns true when the session is
+/// new.
 pub(crate) fn ensure_session(
     conn: &Connection,
     session_id: &str,
@@ -91,17 +95,25 @@ pub(crate) fn ensure_session(
     seen_ms: i64,
     projects: &[ProjectRule],
 ) -> rusqlite::Result<bool> {
-    let created =
-        conn.prepare_cached(
+    let project = project_for(cwd, projects).name;
+    let created = conn
+        .prepare_cached(
             "INSERT INTO session (session_id, project, first_seen_ms, last_seen_ms)
              VALUES (?1, ?2, ?3, ?3) ON CONFLICT (session_id) DO NOTHING",
         )?
-        .execute(params![
-            session_id,
-            project_for(cwd, projects).name,
-            seen_ms
-        ])? == 1;
-    if !created {
+        .execute(params![session_id, project, seen_ms])?
+        == 1;
+    if created {
+        if let Some(subject) =
+            filing_at_creation(&project, &read::active_subjects_of(conn, &project)?)
+        {
+            conn.prepare_cached(
+                "UPDATE session SET subject_id = ?2, subject_src = ?3, subject_at_ms = ?4
+                 WHERE session_id = ?1",
+            )?
+            .execute(params![session_id, subject, Source::Rules.code(), seen_ms])?;
+        }
+    } else {
         conn.prepare_cached(
             "UPDATE session SET first_seen_ms = min(first_seen_ms, ?2), last_seen_ms = max(last_seen_ms, ?2)
              WHERE session_id = ?1",
@@ -310,6 +322,14 @@ fn apply(
         return Ok(false);
     }
     ensure_session(conn, session_id, line.cwd.as_deref(), line.ts, ctx.projects)?;
+    // Only a filed session can wake its subject or crowd out another's
+    // excerpts; an unfiled one costs one lookup.
+    let filed = read::subject_id_of(conn, session_id)?.is_some();
+    let before = if filed && line.event == "UserPromptSubmit" {
+        read::session_record(conn, session_id)?.filter(SessionRecord::is_ended)
+    } else {
+        None
+    };
     if !ctx.no_excerpts && !excerpt_expired(line.ts, now_ms) {
         store_excerpt(conn, session_id, line)?;
     }
@@ -322,6 +342,23 @@ fn apply(
         && let Some(link) = link_for_line(line, &read::marks(conn, query)?)
     {
         write_fact(conn, &link)?;
+    }
+    let excerpts_moved = excerpt_observation(line).is_some() || line.event == "SessionEnd";
+    if filed && (before.is_some() || excerpts_moved) {
+        let Some(after) = read::session_record(conn, session_id)? else {
+            return Ok(true);
+        };
+        // D-77: a prompt newer than its end wakes the subject.
+        if let Some(before) = &before
+            && let Some(wake) = wake(before, &after, &read::subjects(conn)?)
+        {
+            apply_wake(conn, &wake, line.ts)?;
+        }
+        // D-50: new excerpts, or an end that shows the session was one the
+        // author drove, leave the subject the latest only.
+        if excerpts_moved && let Some(subject) = after.filed_subject() {
+            prune_excerpts(conn, subject)?;
+        }
     }
     Ok(true)
 }

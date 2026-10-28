@@ -4,10 +4,11 @@
 //! what changed in one transaction. Compiled only with the
 //! `window-authority` feature: only the window writes.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use officina_core::agents::AgentRecord;
 use officina_core::board::ProjectRule;
+use officina_core::registry::confirm::wake;
 use officina_core::registry::fold::{AgentsChanges, AgentsSnapshot, fold_agents};
 use officina_core::registry::types::SessionRecord;
 use rusqlite::{Connection, TransactionBehavior};
@@ -15,7 +16,7 @@ use rusqlite::{Connection, TransactionBehavior};
 use super::ingest::ensure_session;
 use super::read;
 use super::store::Writer;
-use super::write::{RegistryError, write_fact};
+use super::write::{RegistryError, apply_wake, prune_excerpts, write_fact};
 
 /// The records of `ids` the registry holds, with their successors, so the
 /// core can route a record to its chain head.
@@ -91,6 +92,37 @@ impl Writer {
                 "UPDATE session SET last_seen_ms = max(last_seen_ms, ?2) WHERE session_id = ?1",
             )?
             .execute(rusqlite::params![session_id, now_ms])?;
+        }
+        let written: BTreeSet<&str> = changes
+            .writes
+            .iter()
+            .map(|w| w.session_id.as_str())
+            .collect();
+        let subjects = if written.is_empty() {
+            Vec::new()
+        } else {
+            read::subjects(&tx)?
+        };
+        for session_id in written {
+            let Some(after) = read::session_record(&tx, session_id)? else {
+                continue;
+            };
+            // D-77: listed live again, or a background state no longer
+            // ended, wakes the subject.
+            if let Some(before) = known.get(session_id)
+                && let Some(wake) = wake(before, &after, &subjects)
+            {
+                apply_wake(&tx, &wake, now_ms)?;
+            }
+            // D-50: a session newly listed is one the author drives, so its
+            // excerpts now leave its subject the latest only.
+            let newly_listed = changes
+                .newly_listed
+                .iter()
+                .any(|n| n.session_id == session_id);
+            if newly_listed && let Some(subject) = after.filed_subject() {
+                prune_excerpts(&tx, subject)?;
+            }
         }
         tx.commit()?;
         *snapshot = Some(next);
