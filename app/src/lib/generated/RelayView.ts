@@ -50,7 +50,16 @@ issues: Array<ActionIssue>,
  * The last [`RECENT_ENTRIES`] entries of the two days read, newest
  * first.
  */
-recent: Array<RecentEntry>, journal_corrupt_lines: number, gate_errors_24h: number, 
+recent: Array<RecentEntry>, journal_corrupt_lines: number, 
+/**
+ * The gate errors of the last `gate_errors_window_ms`.
+ */
+gate_errors: number, 
+/**
+ * The window `gate_errors` covers: [`GATE_ERRORS_WINDOW_MS`], carried
+ * so the window says it without restating it.
+ */
+gate_errors_window_ms: number, 
 /**
  * The approved catalogue's credentials, by name.
  */

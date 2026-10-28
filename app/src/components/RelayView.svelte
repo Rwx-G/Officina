@@ -6,7 +6,7 @@
   // Every text is rendered as text.
   import { isPointerClick, type RelayStore } from "../lib/relay.svelte";
   import { ANOMALY_TEXT } from "../lib/relay-text";
-  import { clock } from "../lib/time";
+  import { clock, hours } from "../lib/time";
   import CatalogueTable from "./CatalogueTable.svelte";
   import PendingCatalogue from "./PendingCatalogue.svelte";
   import RecentActivity from "./RecentActivity.svelte";
@@ -148,8 +148,8 @@
         {relay.journal_corrupt_lines} unreadable journal {relay.journal_corrupt_lines === 1 ? "line" : "lines"} in the two
         days read.
       </p>
-      <p class:fault={relay.gate_errors_24h > 0} data-testid="gate-errors">
-        {relay.gate_errors_24h} gate {relay.gate_errors_24h === 1 ? "error" : "errors"} in the last 24 h.
+      <p class:fault={relay.gate_errors > 0} data-testid="gate-errors">
+        {relay.gate_errors} gate {relay.gate_errors === 1 ? "error" : "errors"} in the last {hours(relay.gate_errors_window_ms)}.
       </p>
     </section>
   {/if}

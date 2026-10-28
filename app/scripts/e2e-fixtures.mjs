@@ -579,7 +579,7 @@ program = "relative.exe"
     if (!kinds.has(kind)) throw new Error(`${name}: no ${kind} entry: ${run.stdout}`);
   }
   if (!states.has("abandoned") || !states.has("finished")) throw new Error(`${name}: runs ${[...states]}`);
-  if (!view.pending || view.issues.length === 0 || view.journal_corrupt_lines === 0 || view.gate_errors_24h === 0) {
+  if (!view.pending || view.issues.length === 0 || view.journal_corrupt_lines === 0 || view.gate_errors === 0) {
     throw new Error(`${name}: expected a pending change, issues and journal diagnostics: ${run.stdout}`);
   }
   writeFileSync(join(outDir, `${name}.json`), run.stdout);

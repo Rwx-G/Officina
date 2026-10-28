@@ -838,18 +838,19 @@ fn journal_check(home: &RelayHome, now_ms: i64) -> Check {
         }
     }
     let errors: u32 = causes.values().sum();
+    let window = format!("the last {}", ago(GATE_ERRORS_WINDOW_MS));
     if errors == 0 && corrupt == 0 {
         return check(
             Level::Ok,
             TITLE,
-            "no gate error in the last 24 h, no unreadable line",
+            format!("no gate error in {window}, no unreadable line"),
         );
     }
     let mut parts = Vec::new();
     if errors > 0 {
         let by_cause: Vec<String> = causes.iter().map(|(c, n)| format!("{c} x{n}")).collect();
         parts.push(format!(
-            "{errors} gate errors in the last 24 h ({}), the last: {}",
+            "{errors} gate errors in {window} ({}), the last: {}",
             by_cause.join(", "),
             last_detail.unwrap_or_default()
         ));

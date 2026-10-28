@@ -7,7 +7,9 @@ mod common;
 use std::path::{Path, PathBuf};
 
 use common::TestHome;
-use officina_core::relay::approvals::{FileKind, file_name, kept_output_name};
+use officina_core::relay::approvals::{
+    FileKind, KEPT_OUTPUT_RETENTION_MS, RETENTION_MS, file_name, kept_output_name,
+};
 use officina_core::relay::catalogue::{ApprovedCatalogue, load};
 use officina_core::relay::journal::{GateError, GateFault};
 use officina_core::relay::view::RecentEvent;
@@ -185,8 +187,6 @@ fn known_projects_are_read_back() {
 
 // ---- story 2.8: approval files and kept outputs (AD-33, D-170) ----
 
-const DAY: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
-
 /// Writes `name` in `dir` and dates it `age` ago.
 fn aged_file(dir: &Path, name: &str, age: std::time::Duration) -> PathBuf {
     std::fs::create_dir_all(dir).unwrap();
@@ -198,39 +198,53 @@ fn aged_file(dir: &Path, name: &str, age: std::time::Duration) -> PathBuf {
     path
 }
 
+/// A retention of `ms` milliseconds, as a file age.
+fn age(ms: i64) -> std::time::Duration {
+    std::time::Duration::from_millis(u64::try_from(ms).unwrap())
+}
+
 #[test]
-fn approval_files_older_than_24_h_are_pruned() {
+fn approval_files_older_than_their_retention_are_pruned() {
     let dir = tempfile::tempdir().unwrap();
     let home = RelayHome::new(dir.path(), None);
     let approvals = home.approvals_dir();
+    let past = age(RETENTION_MS * 2);
     let old: Vec<PathBuf> = FileKind::ALL
         .iter()
-        .map(|kind| aged_file(&approvals, &file_name("0123456789abcdef-1", *kind), DAY * 2))
+        .map(|kind| aged_file(&approvals, &file_name("0123456789abcdef-1", *kind), past))
         .collect();
     let fresh = aged_file(
         &approvals,
         &file_name("0123456789abcdef-2", FileKind::Request),
-        DAY / 2,
+        age(RETENTION_MS / 2),
     );
-    let foreign = aged_file(&approvals, "notes.txt", DAY * 2);
+    let foreign = aged_file(&approvals, "notes.txt", past);
     assert_eq!(prune(&home, std::time::SystemTime::now()), old.len());
     for path in &old {
         assert!(!path.exists(), "{}", path.display());
     }
-    assert!(fresh.exists(), "younger than 24 h");
+    assert!(fresh.exists(), "younger than the retention");
     assert!(foreign.exists(), "not an approval file");
 }
 
 #[test]
-fn kept_outputs_older_than_7_days_are_pruned() {
+fn kept_outputs_older_than_their_retention_are_pruned() {
     let dir = tempfile::tempdir().unwrap();
     let home = RelayHome::new(dir.path(), None);
     let outputs = home.outputs_dir();
-    let old = aged_file(&outputs, &kept_output_name("old-run"), DAY * 8);
-    let recent = aged_file(&outputs, &kept_output_name("recent-run"), DAY * 6);
+    let old = aged_file(
+        &outputs,
+        &kept_output_name("old-run"),
+        age(KEPT_OUTPUT_RETENTION_MS * 2),
+    );
+    let recent = aged_file(
+        &outputs,
+        &kept_output_name("recent-run"),
+        age(KEPT_OUTPUT_RETENTION_MS / 2),
+    );
     assert_eq!(prune(&home, std::time::SystemTime::now()), 1);
     assert!(!old.exists());
-    assert!(recent.exists(), "younger than 7 days");
+    assert!(recent.exists(), "younger than the retention");
 }
 
 #[test]
@@ -251,7 +265,7 @@ fn run_never_deletes_approval_files() {
             aged_file(
                 &home.approvals_dir(),
                 &file_name("0123456789abcdef-1", *kind),
-                DAY * 2,
+                age(RETENTION_MS * 2),
             )
         })
         .collect();
@@ -332,7 +346,7 @@ fn a_known_projects_write_error_is_reported() {
     assert_eq!(errors.len(), 1, "{errors:?}");
     assert_eq!(errors[0].cause, GateFault::KnownProjectsUnwritable);
     assert_eq!(errors[0].detail, failing);
-    assert_eq!(view.gate_errors_24h, 1);
+    assert_eq!(view.gate_errors, 1);
 
     std::fs::remove_dir(home.known_projects_file()).unwrap();
     assert_eq!(keeper.keep(&home, now), None, "the write succeeds again");

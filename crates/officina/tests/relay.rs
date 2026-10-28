@@ -75,7 +75,7 @@ fn prints_the_relay_view() {
         shown.recent[0].event,
         RecentEvent::CatalogueApproved(_)
     ));
-    assert_eq!((shown.journal_corrupt_lines, shown.gate_errors_24h), (0, 0));
+    assert_eq!((shown.journal_corrupt_lines, shown.gate_errors), (0, 0));
 
     std::fs::write(
         env.relay_home().stopped_file(),
