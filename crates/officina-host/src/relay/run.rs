@@ -592,7 +592,7 @@ pub fn system_env() -> SystemEnv {
         )]
     });
     #[cfg(not(windows))]
-    let found = vec![("PATH".to_owned(), PATH_OFF_WINDOWS.to_owned())];
+    let found = [("PATH".to_owned(), PATH_OFF_WINDOWS.to_owned())];
     SYSTEM_ENV
         .iter()
         .map(|name| {
