@@ -329,6 +329,37 @@ Windows 11.
   guarded project. The owner's 2.1.312 honours the field. Not verified on
   the workstation: a crash or timeout of the real hook under Claude Code.
 
+## E80. The taskbar overlay badge and the attention request (v0.4 gate 2)
+
+Story 4.1 AC 2, AD-178 gate 2, numbered after the ranges Epics 5 to 7
+reserve (E19 to E79). Run 1 on 2026-10-28 with the probe of story 4.1
+(`cargo run -p officina-app --example taskbar_probe`), which asks the owner
+at each step and writes its report; Windows 10.0.26200.9711, Tauri 2.12.5,
+100 % display scaling, light taskbar.
+
+| Badge (run 1 design) | Size | Number readable | Alert colour distinct from amber |
+|---|---|---|---|
+| amber, 3 x 5 font, one pixel per cell | 16 px | with effort | - |
+| alert colour, same font | 16 px | with effort | clearly |
+| amber | 24 px | with effort | - |
+| alert colour | 24 px | with effort | clearly |
+| amber | 32 px | not readable | - |
+| alert colour | 32 px | not readable | clearly |
+
+- The probe's colour question was worded "Is it clearly different from the
+  amber one you just rated?"; the owner answered "not different" about the
+  number's legibility, and corrected it: the alert colour was clearly
+  different at every size. The question now asks about the colour only.
+- Request while another window had focus (`UserAttentionType::Informational`):
+  the button flashed until he clicked it (back after 6 s). Request while the
+  probe had focus: nothing changed. This half passes, as documented.
+- Reading: Windows draws the overlay at the small icon's size, 16 px at
+  100 %, so the larger images are scaled down and blur; at 16 px, one-pixel
+  strokes are too thin. Outcome: epic-4-decisions.md D-523 (one size, 16 px
+  times the display scale; digits at twice the font's cell; a `!` mark on
+  the alert badge). Run 2 of the probe, on that design, is the owner's and
+  is recorded here when made.
+
 ## E7. Configuration directory
 
 - **Documented.** `CLAUDE_CONFIG_DIR` redirects settings, session history and

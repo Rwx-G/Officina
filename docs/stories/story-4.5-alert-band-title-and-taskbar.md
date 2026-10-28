@@ -55,7 +55,8 @@ so that I know when to look without a toast, a sound or a theme change, from the
 - The band's wording lives in `lib/alert.ts` (pure, tested through the component): the first alerted card in board order (columns in display order, so an alerted Needs you comes before an alerted approval-only wait of Working), what it waits on (`waiting_for`, else "a relay approval" for an approval-only wait, else "waiting for you"), and its cause, "high-priority project" or "waiting N min" from `scene.waiting_since_ms` at the store's 30 s tick. The words of a cause come from an exhaustive `Record<AlertCause, string>`, so a new cause fails `pnpm check`.
 - `taskbar::overlay_for` also shows the badge, in the alert colour, when `waiting_count` is 0 and a card keeps its last known alert (an alerted card whose badge became unknown sits in Working, which `waiting_count` does not count): D-494 says stale or unknown data never clears an alert, and an overlay that vanished would. The badge then carries the larger of the two counts. The title says "N waiting" only when N is above 0.
 - `WindowEvents` keeps the alerted keys of the last board it emitted; `alerts_to_announce` is the pure decision. Boards are emitted only on change (AD-5), so a key that stays alerted is never announced twice.
-- The overlay's colours are constants of `taskbar.rs`, tested against `app.css`'s light `:root` block; today's rim is `--color-text`. The size stays 16 px (today's dot) until gate 2 picks one, a one-constant change in `main.rs`.
+- The overlay's colours are constants of `taskbar.rs`, tested against `app.css`'s light `:root` block; today's rim is `--color-text`.
+- Gate 2's run 1 (research notes E80, D-523) redrew the badge: one size, the small icon's at the window's scale factor (`overlay_size`), digits at twice the font's cell, a small `+` beside the `9` above nine, and on the alert badge a bold `!` instead of the count, so the alert does not rest on colour alone. Tests: `taskbar.rs::tests::{the_overlay_size_follows_the_display_scale, digits_are_drawn_at_twice_the_font_cell, the_alert_badge_shows_a_mark_not_the_count}`.
 - No capability: the calls are the Rust `WebviewWindow` methods; `capabilities/default.json` is unchanged (the existing `every_declared_command_is_allowed` test still holds it against `build.rs`).
 - Adversarial pass: a waiting count of 0 with a kept alert (handled, above); a key that leaves and returns (announced again); a key kept alerted while unknown (not announced); markup in a session name (text); a fixture with both causes; the band leaving on a board without alerts; theme tokens compared before and after an alert.
 
@@ -70,7 +71,7 @@ so that I know when to look without a toast, a sound or a theme change, from the
 - AC 7: `taskbar.rs::tests::{the_title_counts_alerts, the_title_marks_a_last_known_alert}`.
 - AC 8: `taskbar.rs::tests::{a_new_alerted_key_is_announced, a_known_key_is_not_announced_again, a_key_that_leaves_and_returns_is_announced_again, the_first_board_with_alerts_is_announced, a_key_kept_alerted_while_unknown_is_not_announced}`; the flash on the real window is gate 2 and story 4.14 (owner).
 - AC 9: the diff: no dependency, no capability.
-- AC 10: open until story 4.1's gate 2 entry (owner).
+- AC 10: gate 2's run 1 is recorded (E80) and decided (D-523); the badge follows it; open until run 2 on the new design (owner).
 - AC 11: `CHANGELOG.md` Added; README "The scene (v0.4, in progress)", "The alert"; `readme.rs` green.
 
 ## File List
