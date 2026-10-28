@@ -1,6 +1,6 @@
 # Story 2.14: Relay hardening after the Epic 2 audits
 
-**Status:** Approved
+**Status:** review
 
 ## Story
 
@@ -24,15 +24,15 @@ so that a hijacked session cannot make an approved or checked action run differe
 
 ## Tasks
 
-- [ ] Host: git resolution from the registry; content-hashing fingerprint with limits (AC 1, 2)
-- [ ] Host: action environment from the registry `Path`; dropped caller variables (AC 3)
-- [ ] Core: gate deny kinds `officina_environment` and `relay_state_write`; file tools constant; vector cases (AC 4, 6)
-- [ ] Host and core: tree binding for every `human` action; `tree_changed` refusal; card wording (AC 5)
-- [ ] Window: decided-ids record, anomalies in the relay view and doctor (AC 7)
-- [ ] Host: handle-based canonicalisation before the gate (AC 8)
-- [ ] Core: `ForwardedPattern` issue, `forwarded_values` key, format bump (AC 9)
-- [ ] App: CSP (AC 10); README and readme test (AC 11)
-- [ ] Update `CHANGELOG.md` `[Unreleased]` (Security)
+- [x] Host: git resolution from the registry; content-hashing fingerprint with limits (AC 1, 2)
+- [x] Host: action environment from the registry `Path`; dropped caller variables (AC 3)
+- [x] Core: gate deny kinds `officina_environment` and `relay_state_write`; file tools constant; vector cases (AC 4, 6)
+- [x] Host and core: tree binding for every `human` action; `tree_changed` refusal; card wording (AC 5)
+- [x] Window: decided-ids record, anomalies in the relay view and doctor (AC 7)
+- [x] Host: handle-based canonicalisation before the gate (AC 8)
+- [x] Core: `ForwardedPattern` issue, `forwarded_values` key, format bump (AC 9)
+- [x] App: CSP (AC 10); README and readme test (AC 11)
+- [x] Update `CHANGELOG.md` `[Unreleased]` (Security)
 
 ## Dev Notes
 
@@ -52,10 +52,54 @@ so that a hijacked session cannot make an approved or checked action run differe
 
 ### Debug Log
 
+- **Order.** AC 1 and 2, then 3, then 4 and 6, 8, 5, 9, 7, 10, 11, then the adversarial pass, one commit each. Commit 3 broke a doctor unit test (`pre_tool_use_without_the_matcher_is_missing`: Write became a gated tool); it was found by the full run before the next commit and fixed in its own commit, history left as is.
+- **Decisions where the story is silent**, each the reading that fails closed or matches D-173:
+  - The fingerprint binds content only: `git ls-files -z --full-name --cached --others --exclude-standard -- :/` lists, Officina hashes each listed path and its bytes (`officina-tree 2`). `HEAD` and the diff are gone, so a commit of the same content no longer changes it, and the D-22 "no HEAD" marker and the by-size binding are gone with them. `TreeFingerprint` drops `untracked_by_size` (older lines still parse) and gains `files` (how many it binds, shown on the card) and `git` (the path that listed them, AC 1's journal record). A tracked file deleted from the work tree binds as missing; a submodule folder as "not a file".
+  - `git` comes from `HKLM` then `HKCU` `SOFTWARE\GitForWindows` `InstallPath`, 64-bit view, `cmd\git.exe`, only when that file exists; off Windows `/usr/bin/git`. Without it, only a folder with a `.git` entry up its tree refuses `git_unavailable`; any other folder is outside git, so a workstation without Git for Windows keeps its non-git projects. The `git` child also loses `XDG_CONFIG_HOME` (another global config could add ignore rules); `HOME` and `USERPROFILE` stay, the gate denies them next to `officina`.
+  - A third refusal beside the two of AC 2: `tree_unreadable`. A process holding a listed file with no sharing could change it through its own handle while every read fails; skipping it would bind nothing. `TREE_BINDING_REFUSALS` lists the binding's five refusals.
+  - Test seam: `git` resolution reads `OFFICINA_TEST_GIT` only with the `officina-host` feature `test-seams`, enabled by the `officina` crate's dev-dependencies alone. The CI step that searches the shipped exe's feature graph now refuses `test-seams` as well as `window-authority`; the release `officina.exe` built alone holds no `OFFICINA_TEST_GIT` string (checked).
+  - AC 3 uses `CreateEnvironmentBlock` with inheritance off, rather than reading and expanding the two `Path` values by hand: Windows' own environment for the user, machine `Path` then user `Path`, expanded without any variable of the caller's. `PATH`, `PATHEXT`, `ComSpec` and `WSLENV` (`argv::SYSTEM_ENV`) take its values or are removed, then the catalogue's `env` applies. If the block cannot be built, a `PATH` of the system and Windows folders only. `OpenProcessToken` is declared by hand like `CreateJobObjectW` (its windows-sys binding needs `Win32_Security`); new windows-sys features: `Win32_System_Registry`, `Win32_System_Environment`. Off Windows, a fixed system `PATH`.
+  - AC 4: `gate::OFFICINA_ENVIRONMENT_NAMES`; when a home variable and an environment variable are both reassigned, the home redirection is reported (deny kind order); a scanned interpreter naming one counts, as for the home names.
+  - AC 6: "under the Officina home" is the whole home, its `floor.toml` included. Once any source guards a project, a file write there is denied from every project; the gate line names the guarded project when the call lies in one, else none, and quotes the target path as its excerpt; the reason names no project and offers no action outside a guarded project. `gate::FILE_TOOLS` holds each tool with its `tool_input` field; `gated_tools_matcher` replaces `shell_tools_matcher`. Every workstation that merged the earlier matcher fails doctor until it pastes the new block, as D-171's did.
+  - AC 8 uses `std::fs::canonicalize`, which opens the path with `FILE_FLAG_BACKUP_SEMANTICS` and asks `GetFinalPathNameByHandleW`: no new `unsafe`. The folders are looked up as given first (D-16's order), then as resolved, so a floor that declares a project through an alias keeps working. A target not created yet resolves its deepest folder that opens and joins the rest; the pure side folds the device namespace's UNC spelling, `..`, `.`, repeated slashes and trailing dots and spaces.
+  - AC 5: every `human` (and `auto`) plan binds the tree. A mismatch refuses `check_not_satisfied` for an action with a dry run (D-170 unchanged, its remedy is a new dry run) and `tree_changed` otherwise. `ApprovalView` gains `binding` (`dry_run`, `request`, `not_git_tree`), `bound_files` and `files_unchanged`, moved from `DryRunView`; the window computes the current fingerprint for every pending request with a tree.
+  - AC 7: `relay/decisions.json` (`relay::record`): decided ids, the approved hash, the stop the window holds, acknowledged keys; decided ids and acknowledgements kept 7 days. Four kinds: a foreign approval file (approved or consumed), a run with an approval not decided, an approved catalogue the window did not approve, a stop flag gone while the window holds the relay stopped. No record, no anomaly: the window starts one when it opens (`authority::ensure_record`), taking the catalogue and the stop flag as it finds them. Each authority call records before it writes the file a forgery would imitate. Acknowledge is a pointer-only button in the Relay view, through the new command `acknowledge_anomaly` (capability, `build.rs` and handler kept in step by the existing test).
+  - AC 9: `catalogue::FORWARDED_PROBE_CHARS`; `admitted_forwarded_char` probes each character alone and around short fillers, then inserted at every place of the short values the pattern accepts, built from its literal prefix and suffix and the fillers. It catches `.+`, `\S+`, `[^/]+`, `lab-[a-z ]+`, `.+\.service`, `web[0-9]{2}( .*)?` and passes `[a-z0-9-]+\.service`; it is a probe, not a proof, which the README says. `forwarded_values` is skipped in the canonical form when absent, so only the format bump (3) moves every hash; the golden floor carries the key, and the hash test now also tries `null` for a string leaf, for an optional enum with one variant.
+  - AC 10: `style-src 'self'`; `devCsp` keeps `'unsafe-inline'` for Vite's dev server, which injects styles from script. `vite preview` serves the e2e build under the CSP read from `tauri.conf.json`, and `app/e2e/csp.spec.ts` listens for violations: it found the smallest font subsets inlined as `data:` URIs, which `font-src 'self'` refused in the window too, so `assetsInlineLimit: 0`.
+- **Adversarial pass**, the audits' chains replayed on the finished code, each now failing with a test:
+  - PATH-shimmed `git`: `tree.rs::tests::a_shim_first_on_path_is_not_used` (fingerprint, marker absent, positive control) and CLI `run.rs::a_path_shim_cannot_hide_an_edit_after_the_check` (check, edit, apply refused, the shim never ran); the gate denies the `PATH=` prefix (vector).
+  - Edit while waiting: `approvals.rs::an_edit_while_waiting_refuses_tree_changed`.
+  - Clean filter and restored stat: `tree.rs::tests::{a_clean_filter_does_not_hide_a_change, restored_size_and_mtime_still_change_the_fingerprint}`, each with a positive control on git itself.
+  - Write tool into the relay dir: `gate.rs::{write_into_the_relay_dir_is_denied, edit_of_the_journal_is_denied}`; through a junction: host `gate.rs::tests::junction_into_a_guarded_project_is_guarded`.
+  - Junction and 8.3 alias: host `gate.rs::tests::{short_name_resolves_to_the_guarded_project, junction_into_a_guarded_project_is_guarded}` (8.3 names exist on this volume: the test ran, it did not skip).
+  - Forged approved file: surfacing alone still let the waiting call run it once, so `officina run` now uses an approval only when the window's record names it, refusing `approval_not_given` and leaving the file: CLI `run.rs::a_forged_approval_file_does_not_run`, and in `every_refusal_code_exits_126_with_one_journal_line`. Without a record (a window not yet opened on this version) the file stands alone, as before.
+  - Found while testing, beyond the audits: a file locked against readers (`tree_unreadable`), and the font subsets the CSP refused.
+- **Known limits, recorded, not closed:** a floor's own project paths are compared as written, so a project declared through an 8.3 name or a `subst` drive is matched only through that alias (the README says to declare real paths; no doctor warning); a per-user Git for Windows install, its `HKCU` key and the user `Path` are the user's to write, hence a session's (persistently, visibly); the decision record is writable like every relay file (AD-25); a Bash command naming the relay through an alias is still matched as text; the Relay view's catalogue table does not show `forwarded_values` (the approval diff does). The `core-linux` CI job could not be run here: the `cfg(windows)` imports were reviewed by hand, and `SYSTEM_ENV` is now used on both platforms.
+
 ### Completion Notes
 
+- AC 1: host `crates/officina-host/src/relay/tree.rs::tests::{git_is_resolved_from_the_registry_not_path, a_shim_first_on_path_is_not_used}`, CLI `crates/officina/tests/run.rs::git_unavailable_refuses_actions_that_need_a_fingerprint`, doctor `crates/officina/tests/doctor_relay.rs::doctor_fails_a_git_tree_it_cannot_bind`; the `git` path in the journal: `crates/officina-host/tests/relay_tree.rs::same_tree_same_fingerprint`.
+- AC 2: `tree.rs::tests::{restored_size_and_mtime_still_change_the_fingerprint, a_clean_filter_does_not_hide_a_change, limits_refuse_tree_too_large}`, plus `a_locked_file_is_unreadable_not_skipped`, `a_deleted_tracked_file_is_bound_as_missing`, `without_git_only_a_work_tree_is_refused`.
+- AC 3: CLI `run.rs::{a_caller_path_shim_is_not_found_by_the_action, wslenv_from_the_caller_does_not_reach_wsl}`; host `relay/run.rs::tests::{system_env_is_the_registrys, wsl_command_removes_wslenv}`.
+- AC 4: `tests/vectors/gate.json` (one `officina_environment` case per name) with `crates/officina-core/tests/gate_vectors.rs::every_constant_appears_in_a_case` iterating `OFFICINA_ENVIRONMENT_NAMES`; core `gate.rs::tests::every_officina_environment_name_is_denied`.
+- AC 5: CLI `crates/officina/tests/approvals.rs::{a_human_action_without_check_is_bound_to_its_tree, an_edit_while_waiting_refuses_tree_changed}`, Vitest `components.test.ts > ApprovalCard states its binding`; core `approvals.rs::tests::a_request_states_its_binding`.
+- AC 6: CLI `crates/officina/tests/gate.rs::{write_into_the_relay_dir_is_denied, edit_of_the_journal_is_denied, write_elsewhere_gets_no_decision}`, `crates/officina-host/src/doctor.rs::tests::block_matcher_names_every_gated_tool`; vector cases per file tool and spelling.
+- AC 7: host `crates/officina-host/tests/authority.rs::{a_foreign_approval_file_is_an_anomaly, a_run_without_a_window_decision_is_an_anomaly}`, Playwright `app/e2e/relay.spec.ts > anomalies are listed`, CLI `doctor_relay.rs::an_anomaly_fails_doctor_until_acknowledged`, core `relay/record.rs::tests`.
+- AC 8: host `crates/officina-host/src/relay/gate.rs::tests::{short_name_resolves_to_the_guarded_project, junction_into_a_guarded_project_is_guarded, a_target_that_does_not_exist_resolves_its_folder}`; `perf.rs` green, now resolving a real folder: gate own cost 2.9 ms (budget 5 ms), in-process p95 3.0 ms, hook own cost 13.9 ms (budget 30 ms). With and without the resolution the figures moved within the workstation's noise (own cost 3.3 to 5.6 ms before it, 3.5 to 4.2 ms with it).
+- AC 9: core `crates/officina-core/src/relay/catalogue.rs::tests::{a_permissive_pattern_on_a_forwarded_value_is_an_issue, values_on_a_forwarded_value_is_fine, forwarded_values_accepted_keeps_the_action}`, probe strings iterated from `FORWARDED_PROBE_CHARS`; `every_issue_kind_has_a_case`; `catalogue_hash.rs` pins format 3.
+- AC 10: `app/e2e/csp.spec.ts` (the served header equals `tauri.conf.json`'s CSP, no violation on the board, a card and the Relay view), the whole Playwright suite under that CSP, and `app/src-tauri/src/main.rs::tests::csp_allows_no_inline_style_in_the_built_window`. No style attribute or element needs `'unsafe-inline'`.
+- AC 11: `crates/officina/tests/readme.rs::readme_states_the_binding_and_its_limits` (the binding sentence names `TREE_BINDING_REFUSALS` and its limits; the session and the pointer rule are stated), `readme_names_the_gate_tools_constant` extended to `FILE_TOOLS`.
+- Gates at the end: `cargo fmt --all -- --check`; `cargo clippy --workspace --all-targets --features officina-core/ts -- -D warnings` and the `core-linux` set on this host; `cargo test --workspace --features officina-core/ts` 594 passed, 0 failed, 6 ignored, the TypeScript drift test green; release `perf` 5 passed alone; `approvals_stress` passed; `cargo deny check` ok; the authority marker absent from `officina.exe` built alone and present in `officina-app.exe`; no `webpki-roots` in the graph; `pnpm build`, `check`, `lint`, `test` (34 passed); fixtures rebuilt from the real CLI and `pnpm e2e` 50 passed; `pnpm audit --prod` clean. No crate added.
+
 ## File List
+
+- `crates/officina-core/src/relay/{journal,run,gate,approvals,catalogue,classes,argv,view,record,mod}.rs`, `crates/officina-core/src/board.rs`, `crates/officina-core/tests/{gate_vectors,catalogue_hash}.rs`, `crates/officina-core/tests/data/relay/golden-floor{,-variant}.toml`, `tests/vectors/gate.json`
+- `crates/officina-host/Cargo.toml`, `crates/officina-host/src/platform/windows.rs`, `crates/officina-host/src/relay/{tree,run,gate,approvals,authority,doctor,home,view}.rs`, `crates/officina-host/src/{collector,doctor}.rs`, `crates/officina-host/tests/{relay_tree,authority}.rs`
+- `crates/officina/Cargo.toml`, `crates/officina/tests/{run,approvals,gate,doctor_relay,quota_doctor,readme,perf}.rs`
+- `app/src-tauri/{build.rs,tauri.conf.json,capabilities/default.json,src/main.rs}`, `app/vite.config.ts`, `app/src/components/{ApprovalCard,RelayView}.svelte`, `app/src/components/components.test.ts`, `app/src/lib/{ipc,relay-text,relay.svelte,relay.test}.ts`, `app/src/e2e-mock.ts`, `app/src/lib/generated/*.ts`, `app/e2e/{relay,csp}.spec.ts`, `app/e2e/fixtures.ts`, `app/scripts/e2e-fixtures.mjs`
+- `.github/workflows/ci.yml`, `README.md`, `CHANGELOG.md`
 
 ## Change Log
 
 - 2026-10-28 created from the Epic 2 security and penetration audits (D-173)
+- 2026-10-28 implemented: git from the registry and a content fingerprint with limits, the registry's environment for actions, the gate's environment and file-write rules, paths resolved by handle, every human action bound to its files, the window's decision record and anomalies, forwarded values refused unless accepted, the CSP without inline styles, the README; the adversarial pass added `approval_not_given` and `tree_unreadable`; status review
