@@ -52,7 +52,7 @@
     min-width: 0;
     height: 100%;
     padding: 0 10px;
-    border-radius: var(--radius-pill);
+    border-radius: var(--radius-control);
     background: var(--color-text);
     color: var(--color-bg);
     font-weight: 700;
@@ -70,7 +70,7 @@
     flex: none;
     width: 9px;
     height: 9px;
-    border-radius: 50%;
+    border-radius: var(--radius-round);
     box-shadow: 0 0 0 1.6px var(--color-bg);
   }
   .quiet .pill,

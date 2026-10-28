@@ -73,7 +73,7 @@
   .tag {
     font-size: 12px;
     padding: 0 8px;
-    border-radius: var(--radius-pill);
+    border-radius: var(--radius-control);
     background: var(--color-border);
   }
 </style>

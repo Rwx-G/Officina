@@ -349,3 +349,65 @@ describe("colour literals", () => {
     expect(offenders).toEqual([]);
   });
 });
+
+// ------------------------------------------------------------ radii
+
+/** The `--radius-*` tokens app.css declares. */
+const RADIUS_TOKENS = [...customProperties(LIGHT_BODY).keys()].filter((name) => name.startsWith("--radius-"));
+
+/** Every corner radius a component declares that is not made of the radius
+ *  tokens alone (D-539): a token, a `calc()` of tokens and lengths, or 0. */
+function radiusLiterals(source: string): string[] {
+  const ast = parse(source, { modern: true });
+  const found: string[] = [];
+  const seen = new WeakSet<object>();
+  const visit = (node: unknown): void => {
+    if (typeof node !== "object" || node === null || seen.has(node)) return;
+    seen.add(node);
+    const n = node as Record<string, unknown>;
+    if (n.type === "Declaration" && typeof n.property === "string" && /radius$/.test(n.property) && typeof n.value === "string") {
+      const value = n.value.trim();
+      const tokens = [...value.matchAll(/var\((--[\w-]+)\)/g)].map((m) => m[1]!);
+      // What is left once the tokens are taken out: nothing, or a `calc()`
+      // adding or taking whole pixels.
+      const rest = value.replace(/var\(--[\w-]+\)/g, "").replace(/\s+/g, "");
+      const ok =
+        value === "0" ||
+        (tokens.length > 0 && tokens.every((t) => RADIUS_TOKENS.includes(t)) && /^(calc\([-+]\d+px\))?$/.test(rest));
+      if (!ok) found.push(`${n.property}: ${value}`);
+    }
+    for (const value of Object.values(n)) visit(value);
+  };
+  visit(ast);
+  return found;
+}
+
+describe("radii", () => {
+  it("the detector takes tokens and refuses literals", () => {
+    const style = (body: string) => `<div class="a"></div><style>.a { ${body} }</style>`;
+    for (const clean of ["border-radius: var(--radius-control);", "border-radius: calc(var(--radius-surface) - 4px);", "border-top-left-radius: 0;"]) {
+      expect(radiusLiterals(style(clean)), clean).toEqual([]);
+    }
+    for (const literal of ["border-radius: 12px;", "border-radius: 50%;", "border-radius: var(--radius-card);", "border-top-left-radius: 2em;"]) {
+      expect(radiusLiterals(style(literal)), literal).toHaveLength(1);
+    }
+  });
+
+  it("no component rounds a corner with anything but the radius tokens", () => {
+    const components = readdirSync(SRC, { recursive: true, encoding: "utf8" }).filter((file) => file.endsWith(".svelte"));
+    const offenders = components.flatMap((file) =>
+      radiusLiterals(readFileSync(join(SRC, file), "utf8")).map((literal) => `${file}: ${literal}`),
+    );
+    expect(offenders).toEqual([]);
+  });
+
+  // The owner's item 1: sober corners for a productivity tool, around
+  // 4 px on controls; the surfaces stay in the same small range.
+  it("controls and surfaces keep small corners", () => {
+    const px = (name: string) => Number(/^(\d+)px$/.exec(resolve(themeTokens("light"), name))?.[1]);
+    expect(px("--radius-control")).toBeGreaterThanOrEqual(2);
+    expect(px("--radius-control")).toBeLessThanOrEqual(6);
+    expect(px("--radius-surface")).toBeGreaterThanOrEqual(px("--radius-control"));
+    expect(px("--radius-surface")).toBeLessThanOrEqual(8);
+  });
+});

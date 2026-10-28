@@ -62,7 +62,7 @@
     gap: 10px;
     min-width: 0;
     padding: 14px;
-    border-radius: 28px;
+    border-radius: var(--radius-surface);
     background: var(--color-column);
     border: 1px solid var(--color-border);
   }
@@ -80,7 +80,7 @@
     padding: 4px 14px;
     font-size: 14px;
     font-weight: 700;
-    border-radius: var(--radius-pill);
+    border-radius: var(--radius-control);
     background: var(--color-text);
     color: var(--color-bg);
   }
@@ -110,7 +110,7 @@
   .more {
     min-height: var(--target-min);
     border: 1px dashed var(--color-border);
-    border-radius: var(--radius-pill);
+    border-radius: var(--radius-control);
     background: transparent;
     cursor: pointer;
     font-weight: 600;

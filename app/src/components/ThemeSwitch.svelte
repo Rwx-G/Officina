@@ -48,7 +48,7 @@
   .theme {
     min-height: var(--target-min);
     padding: 0 18px;
-    border-radius: var(--radius-pill);
+    border-radius: var(--radius-control);
     border: 1px solid var(--color-text);
     background: var(--color-surface);
     font-weight: 600;

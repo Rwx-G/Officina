@@ -69,7 +69,7 @@
     margin: 0;
     padding: 0;
     border: 0;
-    border-radius: 12px;
+    border-radius: var(--radius-surface);
     background: transparent;
     cursor: pointer;
   }
@@ -87,7 +87,7 @@
     transform: translateX(-50%);
     max-width: 180px;
     padding: 3px 10px;
-    border-radius: var(--radius-pill);
+    border-radius: var(--radius-control);
     background: var(--color-text);
     color: var(--color-bg);
     font-size: 12px;

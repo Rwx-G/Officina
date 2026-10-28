@@ -205,7 +205,7 @@
   .banner {
     margin: 0 20px 12px;
     padding: 10px 16px;
-    border-radius: 16px;
+    border-radius: var(--radius-surface);
     background: var(--color-danger-surface);
     border: 1px solid var(--color-danger);
     color: var(--color-text);

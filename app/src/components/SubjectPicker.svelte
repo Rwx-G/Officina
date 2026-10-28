@@ -89,14 +89,14 @@
   input {
     min-height: 36px;
     padding: 0 12px;
-    border-radius: var(--radius-pill);
+    border-radius: var(--radius-control);
     border: 1px solid var(--color-border);
     font: inherit;
   }
   .option {
     min-height: 36px;
     padding: 0 14px;
-    border-radius: var(--radius-pill);
+    border-radius: var(--radius-control);
     border: 1px solid var(--color-text);
     background: var(--color-surface);
     font-weight: 600;

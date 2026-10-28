@@ -333,7 +333,7 @@
   .paused {
     margin-top: 6px;
     padding: 8px 12px;
-    border-radius: 12px;
+    border-radius: var(--radius-surface);
     border: 1px solid var(--color-border);
   }
   .paused p {
@@ -351,7 +351,7 @@
   .tool {
     min-height: 36px;
     padding: 0 14px;
-    border-radius: var(--radius-pill);
+    border-radius: var(--radius-control);
     border: 1px solid var(--color-text);
     background: var(--color-surface);
     font-weight: 600;

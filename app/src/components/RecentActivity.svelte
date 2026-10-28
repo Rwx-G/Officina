@@ -100,7 +100,7 @@
     display: inline-block;
     margin: 1px 4px 1px 0;
     padding: 1px 6px;
-    border-radius: 6px;
+    border-radius: var(--radius-control);
     border: 1px solid var(--color-border);
     background: var(--color-bg);
   }

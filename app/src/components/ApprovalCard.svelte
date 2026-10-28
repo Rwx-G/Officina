@@ -126,7 +126,7 @@
     padding: 12px 14px;
     background: var(--color-surface);
     border: 2px solid var(--color-attention);
-    border-radius: var(--radius-card);
+    border-radius: var(--radius-surface);
     min-width: 0;
   }
   .approval.invalid {
@@ -142,7 +142,7 @@
     font-size: 13px;
     font-weight: 600;
     padding: 1px 10px;
-    border-radius: var(--radius-pill);
+    border-radius: var(--radius-control);
     background: var(--color-bg);
     border: 1px solid var(--color-border);
     overflow-wrap: anywhere;
@@ -152,7 +152,7 @@
     font-size: 12px;
     font-weight: 700;
     padding: 1px 9px;
-    border-radius: var(--radius-pill);
+    border-radius: var(--radius-control);
     background: var(--color-attention);
     color: var(--color-attention-text);
   }
@@ -185,7 +185,7 @@
     font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
     font-size: 12.5px;
     padding: 1px 7px;
-    border-radius: 8px;
+    border-radius: var(--radius-surface);
     border: 1px solid var(--color-border);
     background: var(--color-bg);
     white-space: pre-wrap;
@@ -207,7 +207,7 @@
     max-height: 220px;
     overflow: auto;
     padding: 6px 8px;
-    border-radius: 8px;
+    border-radius: var(--radius-surface);
     background: var(--color-bg);
     font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
     font-size: 12px;
@@ -240,7 +240,7 @@
   .buttons button {
     flex: 1;
     min-height: var(--target-min);
-    border-radius: var(--radius-pill);
+    border-radius: var(--radius-control);
     font-weight: 700;
     cursor: pointer;
   }

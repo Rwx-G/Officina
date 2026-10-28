@@ -57,7 +57,7 @@
 <style>
   .block {
     padding: 12px 18px;
-    border-radius: 16px;
+    border-radius: var(--radius-surface);
     background: var(--color-surface);
     border: 1px solid var(--color-border);
   }

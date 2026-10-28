@@ -236,7 +236,7 @@
   .views {
     display: flex;
     border: 1px solid var(--color-text);
-    border-radius: var(--radius-pill);
+    border-radius: var(--radius-control);
     overflow: hidden;
   }
   .view {
@@ -264,7 +264,7 @@
     padding: 4px 12px;
     font-size: 13.5px;
     white-space: nowrap;
-    border-radius: var(--radius-pill);
+    border-radius: var(--radius-control);
     font-weight: 700;
   }
   .chip.pending {
@@ -340,7 +340,7 @@
   .tool {
     min-height: var(--target-min);
     padding: 0 18px;
-    border-radius: var(--radius-pill);
+    border-radius: var(--radius-control);
     border: 1px solid var(--color-text);
     background: var(--color-surface);
     font-weight: 600;

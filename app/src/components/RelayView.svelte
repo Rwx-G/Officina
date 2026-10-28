@@ -167,7 +167,7 @@
   .block {
     margin: 0 20px;
     padding: 12px 18px;
-    border-radius: 16px;
+    border-radius: var(--radius-surface);
     background: var(--color-surface);
     border: 1px solid var(--color-border);
   }
@@ -204,7 +204,7 @@
     margin-top: 6px;
     min-height: var(--target-min);
     padding: 0 18px;
-    border-radius: var(--radius-pill);
+    border-radius: var(--radius-control);
     border: 1px solid var(--color-text);
     background: var(--color-surface);
     font-weight: 600;

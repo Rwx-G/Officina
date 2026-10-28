@@ -73,7 +73,7 @@
   .halo,
   .beacon {
     position: absolute;
-    border-radius: 50%;
+    border-radius: var(--radius-round);
     opacity: var(--halo-rest);
     will-change: opacity;
     animation: halo-breathe var(--halo-half) ease-in-out var(--halo-delay) var(--halo-count) alternate;

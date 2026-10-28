@@ -107,7 +107,7 @@
     background: var(--color-surface);
     border: 1px solid var(--color-border);
     border-left: 6px solid var(--project);
-    border-radius: var(--radius-card);
+    border-radius: var(--radius-surface);
   }
   .row.needs_you {
     border-color: var(--color-attention);
@@ -126,7 +126,7 @@
     min-height: var(--target-min);
     padding: 8px 14px;
     border: 0;
-    border-radius: var(--radius-card);
+    border-radius: var(--radius-surface);
     background: transparent;
     text-align: left;
     cursor: pointer;
@@ -138,7 +138,7 @@
     min-width: 22px;
     padding: 1px 6px;
     border: 1px solid var(--color-border);
-    border-radius: 6px;
+    border-radius: var(--radius-control);
     font-weight: 700;
     text-align: center;
   }
@@ -152,7 +152,7 @@
   .dot {
     width: 10px;
     height: 10px;
-    border-radius: 50%;
+    border-radius: var(--radius-round);
     background: var(--project);
   }
   .name {
@@ -169,7 +169,7 @@
   }
   .pill {
     padding: 2px 10px;
-    border-radius: var(--radius-pill);
+    border-radius: var(--radius-control);
     background: var(--color-alert);
     color: var(--color-on-alert);
     font-weight: 700;
@@ -192,7 +192,7 @@
     margin-top: 4px;
     padding: 8px 14px;
     border: 1px solid var(--color-attention-border);
-    border-radius: var(--radius-card);
+    border-radius: var(--radius-surface);
     background: var(--color-attention);
     color: var(--color-attention-text);
     font-weight: 700;

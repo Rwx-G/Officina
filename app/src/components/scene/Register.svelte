@@ -42,7 +42,7 @@
     width: 100%;
     padding: 0 6px 6px 9px;
     border: 1.5px solid var(--color-attention-border);
-    border-radius: 14px;
+    border-radius: var(--radius-surface);
     background: var(--color-surface);
     color: var(--color-text);
     font-weight: 700;
@@ -70,7 +70,7 @@
     place-items: center;
     width: 15px;
     height: 15px;
-    border-radius: 50%;
+    border-radius: var(--radius-round);
     background: var(--color-attention);
     color: var(--color-attention-text);
     font-size: 10.5px;

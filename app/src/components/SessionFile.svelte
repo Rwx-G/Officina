@@ -216,7 +216,7 @@
   .action,
   .row {
     min-height: var(--target-min);
-    border-radius: var(--radius-pill);
+    border-radius: var(--radius-control);
     border: 1px solid var(--color-border);
     background: var(--color-surface);
     font-weight: 600;
@@ -254,12 +254,12 @@
     width: 10px;
     height: 10px;
     margin-right: 6px;
-    border-radius: 50%;
+    border-radius: var(--radius-round);
   }
   .priority {
     margin-left: 8px;
     padding: 1px 9px;
-    border-radius: var(--radius-pill);
+    border-radius: var(--radius-control);
     background: var(--color-alert);
     color: var(--color-on-alert);
     font-size: 12px;
@@ -269,7 +269,7 @@
     display: inline-block;
     margin-left: 6px;
     padding: 1px 10px;
-    border-radius: var(--radius-pill);
+    border-radius: var(--radius-control);
     background: var(--color-attention);
     color: var(--color-attention-text);
     font-size: 13px;
@@ -278,7 +278,7 @@
   .approval {
     margin: 0 0 10px;
     padding: 8px 12px;
-    border-radius: 14px;
+    border-radius: var(--radius-surface);
     border: 1px solid var(--color-attention-border);
   }
   .approval p {
@@ -308,7 +308,7 @@
   .outcome {
     margin-top: 10px;
     padding: 8px 12px;
-    border-radius: 14px;
+    border-radius: var(--radius-surface);
     background: var(--color-bg);
     font-size: 13px;
   }
@@ -345,7 +345,7 @@
     gap: 10px;
     width: 100%;
     padding: 6px 14px;
-    border-radius: 16px;
+    border-radius: var(--radius-surface);
     text-align: left;
   }
   .row-text {
@@ -363,7 +363,7 @@
     place-items: center;
     width: 24px;
     height: 24px;
-    border-radius: 50%;
+    border-radius: var(--radius-round);
     background: var(--color-attention);
     color: var(--color-attention-text);
     font-size: 12.5px;

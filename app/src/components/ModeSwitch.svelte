@@ -63,7 +63,7 @@
   .modes {
     display: flex;
     border: 1px solid var(--color-text);
-    border-radius: var(--radius-pill);
+    border-radius: var(--radius-control);
     overflow: hidden;
   }
   .unseen {

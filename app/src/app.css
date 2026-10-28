@@ -1,5 +1,6 @@
-/* "Synthese" orientation, validated on 2026-10-27: warm, light, rounded,
-   amber reserved for what waits on the author. This file is the only
+/* "Synthese" orientation, validated on 2026-10-27: warm and light, amber
+   reserved for what waits on the author; small, sober corners since the
+   owner's first use (story 4.15). This file is the only
    committed copy of the design tokens.
 
    Two themes with the same roles (AD-67): the light values in the first
@@ -106,8 +107,15 @@
   --hair-1: #2b1a11;
   --hair-2: #3a2216;
 
-  --radius-card: 24px;
+  /* The one radius family (D-539): every component rounds with these and
+     nothing else (tokens.test.ts). Controls (buttons, chips, toggles,
+     inputs, segmented controls) and surfaces (cards, columns, panels,
+     banners) keep small corners; the pill is for what a pill means, a
+     count badge; round is for dots and discs. */
+  --radius-control: 4px;
+  --radius-surface: 6px;
   --radius-pill: 999px;
+  --radius-round: 50%;
   --target-min: 44px;
   /* The header's quota gauges keep this width whatever their text (D-185);
      on the one-line header the compact ones keep theirs, narrower, so the

@@ -35,7 +35,7 @@
   .banner {
     margin: 0 20px 12px;
     padding: 10px 16px;
-    border-radius: 16px;
+    border-radius: var(--radius-surface);
     color: var(--color-text);
   }
   .stopped {

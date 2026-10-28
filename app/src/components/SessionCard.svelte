@@ -91,7 +91,7 @@
     background: var(--color-surface);
     border: var(--edge) solid var(--color-border);
     border-left: var(--stripe) solid var(--project);
-    border-radius: var(--radius-card);
+    border-radius: var(--radius-surface);
     padding: 4px;
   }
   .card.needs_you {
@@ -105,7 +105,7 @@
     position: absolute;
     inset: calc(-1 * var(--edge));
     left: calc(-1 * var(--stripe));
-    border-radius: var(--radius-card);
+    border-radius: var(--radius-surface);
     box-shadow:
       0 0 0 3px var(--color-attention),
       0 0 0 7px color-mix(in srgb, var(--color-attention) 35%, transparent);
@@ -129,7 +129,7 @@
     min-height: var(--target-min);
     padding: 12px 14px;
     border: 0;
-    border-radius: calc(var(--radius-card) - 4px);
+    border-radius: calc(var(--radius-surface) - 4px);
     background: transparent;
     text-align: left;
     cursor: pointer;
@@ -153,7 +153,7 @@
   .dot {
     width: 10px;
     height: 10px;
-    border-radius: 50%;
+    border-radius: var(--radius-round);
     background: var(--project);
   }
   kbd {
@@ -161,7 +161,7 @@
     font: inherit;
     font-size: 12px;
     padding: 0 7px;
-    border-radius: var(--radius-pill);
+    border-radius: var(--radius-control);
     border: 1px solid var(--color-border);
     color: var(--color-text-muted);
   }
@@ -170,7 +170,7 @@
     font-size: 12px;
     font-weight: 600;
     padding: 1px 9px;
-    border-radius: var(--radius-pill);
+    border-radius: var(--radius-control);
     background: var(--color-border);
   }
   kbd + .badge {
@@ -196,7 +196,7 @@
     display: inline-block;
     margin-top: 6px;
     padding: 2px 10px;
-    border-radius: var(--radius-pill);
+    border-radius: var(--radius-control);
     background: var(--color-attention);
     color: var(--color-attention-text);
     font-size: 13px;
@@ -231,7 +231,7 @@
   .outcome {
     margin: 0 14px 10px;
     padding: 8px 12px;
-    border-radius: 14px;
+    border-radius: var(--radius-surface);
     background: var(--color-bg);
     font-size: 13px;
   }

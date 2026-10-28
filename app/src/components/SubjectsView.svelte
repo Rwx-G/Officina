@@ -153,7 +153,7 @@
   }
   .block {
     padding: 12px 18px;
-    border-radius: 16px;
+    border-radius: var(--radius-surface);
     background: var(--color-surface);
     border: 1px solid var(--color-border);
   }
@@ -176,7 +176,7 @@
   }
   .banner {
     padding: 10px 16px;
-    border-radius: 16px;
+    border-radius: var(--radius-surface);
     background: var(--color-stopped-surface);
     border: 1px solid var(--color-stopped);
     font-weight: 600;
@@ -185,7 +185,7 @@
   .note {
     font-size: 13.5px;
     padding: 8px 16px;
-    border-radius: 16px;
+    border-radius: var(--radius-surface);
     border: 1px solid var(--color-border);
     background: var(--color-surface);
     overflow-wrap: anywhere;
@@ -208,14 +208,14 @@
   select {
     min-height: 36px;
     padding: 0 12px;
-    border-radius: var(--radius-pill);
+    border-radius: var(--radius-control);
     border: 1px solid var(--color-border);
     font: inherit;
   }
   .tool {
     min-height: 36px;
     padding: 0 14px;
-    border-radius: var(--radius-pill);
+    border-radius: var(--radius-control);
     border: 1px solid var(--color-text);
     background: var(--color-surface);
     font-weight: 600;

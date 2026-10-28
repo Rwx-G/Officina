@@ -68,7 +68,7 @@
   .gauge {
     width: var(--gauge-width);
     padding: 8px 14px;
-    border-radius: 16px;
+    border-radius: var(--radius-surface);
     background: var(--color-surface);
     border: 1px solid var(--color-border);
   }
@@ -83,14 +83,14 @@
   .track {
     height: 8px;
     margin: 6px 0 4px;
-    border-radius: var(--radius-pill);
+    border-radius: var(--radius-control);
     background: var(--color-border);
     overflow: hidden;
   }
   .fill {
     height: 100%;
     background: var(--color-working);
-    border-radius: var(--radius-pill);
+    border-radius: var(--radius-control);
   }
   .explain,
   .fresh {

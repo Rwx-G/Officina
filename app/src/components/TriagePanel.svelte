@@ -189,7 +189,7 @@
 <style>
   .panel {
     padding: 12px 18px;
-    border-radius: 16px;
+    border-radius: var(--radius-surface);
     background: var(--color-surface);
     border: 1px solid var(--color-border);
   }
@@ -220,7 +220,7 @@
     list-style: none;
   }
   li {
-    border-radius: 16px;
+    border-radius: var(--radius-surface);
   }
   li:focus-visible,
   li:focus {
@@ -230,7 +230,7 @@
   .tool {
     min-height: 36px;
     padding: 0 14px;
-    border-radius: var(--radius-pill);
+    border-radius: var(--radius-control);
     border: 1px solid var(--color-text);
     background: var(--color-surface);
     font-weight: 600;

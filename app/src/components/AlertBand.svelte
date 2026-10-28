@@ -30,7 +30,7 @@
     gap: 12px;
     margin: 0 20px 12px;
     padding: 8px 16px;
-    border-radius: 16px;
+    border-radius: var(--radius-surface);
     background: var(--color-attention);
     color: var(--color-attention-text);
     border-bottom: 3px solid var(--color-alert);
@@ -39,7 +39,7 @@
   .pill {
     flex: none;
     padding: 2px 10px;
-    border-radius: var(--radius-pill);
+    border-radius: var(--radius-control);
     background: var(--color-alert);
     color: var(--color-on-alert);
     font-weight: 700;

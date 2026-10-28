@@ -28,7 +28,7 @@
   button {
     min-height: var(--target-min);
     padding: 0 16px;
-    border-radius: var(--radius-pill);
+    border-radius: var(--radius-control);
     border: 1px solid var(--color-border);
     background: var(--color-surface);
     color: var(--color-text);

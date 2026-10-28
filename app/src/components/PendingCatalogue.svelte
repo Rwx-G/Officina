@@ -209,7 +209,7 @@
   .banner {
     margin: 0 20px 12px;
     color: var(--color-text);
-    border-radius: 16px;
+    border-radius: var(--radius-surface);
   }
   .pending {
     background: var(--color-surface);
@@ -233,7 +233,7 @@
   .refusal {
     margin: 6px 0;
     padding: 8px 12px;
-    border-radius: 12px;
+    border-radius: var(--radius-surface);
     background: var(--color-stopped-surface);
     border: 1px solid var(--color-stopped);
     font-weight: 600;
@@ -267,7 +267,7 @@
     display: inline-block;
     margin: 1px 4px 1px 0;
     padding: 1px 6px;
-    border-radius: 6px;
+    border-radius: var(--radius-control);
     border: 1px solid var(--color-border);
     background: var(--color-bg);
   }
@@ -275,7 +275,7 @@
     margin-top: 12px;
     min-height: var(--target-min);
     padding: 0 22px;
-    border-radius: var(--radius-pill);
+    border-radius: var(--radius-control);
     border: 1px solid var(--color-attention-border);
     background: var(--color-attention);
     color: var(--color-attention-text);
