@@ -164,6 +164,71 @@ fn an_unusable_floor_never_fails_the_hook() {
     }
 }
 
+/// A `Stop` whose answer is longer than an excerpt, with the excerpts the
+/// hook keeps.
+fn long_stop() -> (String, String) {
+    let answer = format!(
+        "{} and the build passes.",
+        "Checked every module".repeat(30)
+    );
+    let payload = serde_json::json!({
+        "hook_event_name": "Stop",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "cwd": "C:/work/repo-a",
+        "last_assistant_message": answer,
+    });
+    (payload.to_string(), answer)
+}
+
+#[test]
+fn stop_records_the_answer_head_and_tail() {
+    use officina_core::events::{EXCERPT_CHARS, excerpt, tail_excerpt};
+    let env = TestEnv::new();
+    let (payload, answer) = long_stop();
+    let out = env.run(&["hook"], payload.as_bytes());
+    assert!(out.status.success() && out.stdout.is_empty() && out.stderr.is_empty());
+    let lines = read_events(&env);
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0]["v"], 1);
+    assert_eq!(lines[0]["last_message"], excerpt(&answer, EXCERPT_CHARS));
+    assert_eq!(
+        lines[0]["last_message_tail"],
+        tail_excerpt(&answer, EXCERPT_CHARS).unwrap()
+    );
+    assert!(
+        lines[0]["last_message_tail"]
+            .as_str()
+            .unwrap()
+            .ends_with("and the build passes.")
+    );
+}
+
+#[test]
+fn no_excerpts_drops_the_tail_too() {
+    let (payload, _) = long_stop();
+    let env = TestEnv::new();
+    let mut cmd = env.officina(&["hook"]);
+    cmd.env("OFFICINA_NO_EXCERPTS", "1");
+    common::run_with(cmd, payload.as_bytes());
+    let floor = TestEnv::new();
+    std::fs::create_dir_all(floor.officina_home()).unwrap();
+    std::fs::write(
+        floor.officina_home().join("floor.toml"),
+        "schema = 1\nno_excerpts = true\n",
+    )
+    .unwrap();
+    floor.run(&["hook"], payload.as_bytes());
+    for env in [env, floor] {
+        let lines = read_events(&env);
+        assert_eq!(lines.len(), 1);
+        assert!(
+            lines[0].get("last_message").is_none() && lines[0].get("last_message_tail").is_none(),
+            "{}",
+            lines[0]
+        );
+    }
+}
+
 #[test]
 fn hook_spawns_no_claude_and_never_deletes() {
     let env = TestEnv::new();

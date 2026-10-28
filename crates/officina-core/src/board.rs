@@ -749,6 +749,7 @@ mod tests {
             message: None,
             prompt: None,
             last_message: None,
+            last_message_tail: None,
             claude_pid: None,
             truncated: false,
         }

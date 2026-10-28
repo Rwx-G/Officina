@@ -38,6 +38,13 @@ pub struct EventLine {
     pub prompt: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_message: Option<String>,
+    /// The end of `last_assistant_message` when [`last_message`] does not
+    /// hold it whole (AD-45): an optional field of version 1, which older
+    /// readers ignore.
+    ///
+    /// [`last_message`]: EventLine::last_message
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_message_tail: Option<String>,
     /// Id of the `claude` process, from the hook's `CLAUDE_PID` (E14): ties a
     /// session id that `/clear` replaced to the live card of its process.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -52,10 +59,12 @@ pub struct EventLine {
 pub const MAX_LINE_BYTES: usize = 4096;
 
 impl EventLine {
-    /// Serializes the line with its trailing newline, dropping the excerpts
-    /// when the result would exceed [`MAX_LINE_BYTES`]. The fixed fields are
-    /// short identifiers, so the line always fits once excerpts are gone,
-    /// except for a pathological `cwd`, which is then dropped as well.
+    /// Serializes the line with its trailing newline, dropping excerpts when
+    /// the result would exceed [`MAX_LINE_BYTES`]: the answer's tail first,
+    /// since the board shows the head (AD-45), then the other excerpts. The
+    /// fixed fields are short identifiers, so the line always fits once
+    /// excerpts are gone, except for a pathological `cwd`, which is then
+    /// dropped as well.
     pub fn to_bounded_line(&self) -> String {
         let render = |line: &EventLine| {
             let mut text = serde_json::to_string(line).unwrap_or_default();
@@ -67,6 +76,12 @@ impl EventLine {
             return full;
         }
         let mut reduced = self.clone();
+        reduced.last_message_tail = None;
+        reduced.truncated = true;
+        let without_tail = render(&reduced);
+        if without_tail.len() <= MAX_LINE_BYTES {
+            return without_tail;
+        }
         reduced.prompt = None;
         reduced.last_message = None;
         reduced.message = None;
@@ -90,6 +105,23 @@ pub fn excerpt(text: &str, max_chars: usize) -> String {
     } else {
         head
     }
+}
+
+/// The last `max_chars` characters of `text` on a character boundary, led
+/// by an ellipsis, when `text` is longer than `max_chars`; `None` when
+/// [`excerpt`] of the same length holds it whole (AD-45).
+///
+/// ```
+/// use officina_core::events::tail_excerpt;
+/// assert_eq!(tail_excerpt("abcdef", 3).as_deref(), Some("…def"));
+/// assert_eq!(tail_excerpt("abc", 3), None);
+/// ```
+pub fn tail_excerpt(text: &str, max_chars: usize) -> Option<String> {
+    let count = text.chars().count();
+    (count > max_chars).then(|| {
+        let tail: String = text.chars().skip(count - max_chars).collect();
+        format!("…{tail}")
+    })
 }
 
 fn text_field(payload: &serde_json::Value, key: &str) -> Option<String> {
@@ -137,6 +169,12 @@ pub fn reduce_payload(
         message: text_field(payload, "message").map(|t| excerpt(&t, EXCERPT_CHARS)),
         prompt: cut("prompt"),
         last_message: cut("last_assistant_message"),
+        last_message_tail: if with_excerpts {
+            text_field(payload, "last_assistant_message")
+                .and_then(|t| tail_excerpt(&t, EXCERPT_CHARS))
+        } else {
+            None
+        },
         claude_pid: None,
         truncated: false,
         event,
@@ -209,5 +247,83 @@ mod tests {
             .unwrap()
             .to_bounded_line();
         assert!(!small.contains("truncated"));
+    }
+
+    fn stop_with(message: &str) -> EventLine {
+        let payload = json!({
+            "hook_event_name": "Stop",
+            "session_id": "s",
+            "last_assistant_message": message,
+        });
+        reduce_payload(&payload, 5, true).unwrap()
+    }
+
+    #[test]
+    fn tail_is_the_last_280_characters_on_a_boundary() {
+        let message: String = "é𝄞a".repeat(EXCERPT_CHARS);
+        let line = stop_with(&message);
+        let tail = line.last_message_tail.unwrap();
+        assert!(tail.starts_with('…'));
+        let kept: String = tail.chars().skip(1).collect();
+        assert_eq!(kept.chars().count(), EXCERPT_CHARS);
+        assert!(message.ends_with(&kept));
+        assert_eq!(line.last_message, Some(excerpt(&message, EXCERPT_CHARS)));
+    }
+
+    #[test]
+    fn tail_is_absent_when_the_head_holds_the_message() {
+        let whole = "x".repeat(EXCERPT_CHARS);
+        let line = stop_with(&whole);
+        assert_eq!(line.last_message.as_deref(), Some(whole.as_str()));
+        assert_eq!(line.last_message_tail, None);
+        assert!(!line.to_bounded_line().contains("last_message_tail"));
+        let one_more = format!("{whole}y");
+        assert_eq!(
+            stop_with(&one_more).last_message_tail,
+            Some(format!("…{}y", "x".repeat(EXCERPT_CHARS - 1)))
+        );
+    }
+
+    #[test]
+    fn oversized_line_drops_the_tail_first() {
+        // Four bytes each: the four excerpts together exceed the bound,
+        // three of them do not.
+        let wide = "𝄞".repeat(EXCERPT_CHARS + 1);
+        let payload = json!({
+            "hook_event_name": "Stop",
+            "session_id": "s",
+            "prompt": wide, "message": wide, "last_assistant_message": wide,
+        });
+        let line = reduce_payload(&payload, 1, true).unwrap();
+        assert!(line.last_message_tail.is_some());
+        let text = line.to_bounded_line();
+        assert!(text.len() <= MAX_LINE_BYTES);
+        let back: EventLine = serde_json::from_str(text.trim_end()).unwrap();
+        assert!(back.truncated);
+        assert_eq!(back.last_message_tail, None);
+        assert_eq!(back.last_message, line.last_message);
+        assert_eq!(back.prompt, line.prompt);
+        assert_eq!(back.message, line.message);
+    }
+
+    #[test]
+    fn line_with_the_new_field_parses_as_version_1() {
+        let with_tail = r#"{"v":1,"ts":5,"event":"Stop","session_id":"s","last_message":"head…","last_message_tail":"…tail"}"#;
+        let line: EventLine = serde_json::from_str(with_tail).unwrap();
+        assert_eq!(line.v, EVENT_LINE_VERSION);
+        assert_eq!(line.last_message_tail.as_deref(), Some("…tail"));
+        let without: EventLine =
+            serde_json::from_str(r#"{"v":1,"ts":5,"event":"Stop","session_id":"s"}"#).unwrap();
+        assert_eq!(without.last_message_tail, None);
+        let no_excerpts = reduce_payload(
+            &json!({"hook_event_name": "Stop", "last_assistant_message": "y".repeat(400)}),
+            5,
+            false,
+        )
+        .unwrap();
+        assert_eq!(
+            (no_excerpts.last_message, no_excerpts.last_message_tail),
+            (None, None)
+        );
     }
 }
