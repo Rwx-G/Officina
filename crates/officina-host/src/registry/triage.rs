@@ -319,6 +319,9 @@ pub struct TriageWorker {
     jobs: Sender<TriageJob>,
     results: Receiver<CallResult>,
     busy: bool,
+    /// The thread is gone: a job could not be handed to it, or its result
+    /// channel closed. Nothing more will run.
+    gone: bool,
 }
 
 impl TriageWorker {
@@ -337,11 +340,16 @@ impl TriageWorker {
                     }
                 }
             })?;
-        Ok(TriageWorker {
+        Ok(TriageWorker::over(jobs, results))
+    }
+
+    fn over(jobs: Sender<TriageJob>, results: Receiver<CallResult>) -> TriageWorker {
+        TriageWorker {
             jobs,
             results,
             busy: false,
-        })
+            gone: false,
+        }
     }
 
     /// True when no call runs.
@@ -349,10 +357,21 @@ impl TriageWorker {
         !self.busy
     }
 
+    /// True once the thread is gone (quality audit H1): the window then
+    /// ends any dry run and refuses another, rather than wait on a call
+    /// that never comes back.
+    pub fn gone(&self) -> bool {
+        self.gone
+    }
+
     /// Hands `job` to the thread; false, and nothing sent, while a call
     /// runs or when the thread is gone.
     pub fn submit(&mut self, job: TriageJob) -> bool {
-        if self.busy || self.jobs.send(job).is_err() {
+        if self.busy || self.gone {
+            return false;
+        }
+        if self.jobs.send(job).is_err() {
+            self.gone = true;
             return false;
         }
         self.busy = true;
@@ -369,6 +388,7 @@ impl TriageWorker {
             Err(TryRecvError::Empty) => None,
             Err(TryRecvError::Disconnected) => {
                 self.busy = false;
+                self.gone = true;
                 None
             }
         }
@@ -384,6 +404,8 @@ pub enum DryRunRefusal {
         "no confirmation to evaluate on: the dry run uses the confirmations of a default proposal whose excerpts are still kept"
     )]
     NoCases,
+    #[error("the thread that makes the calls is gone: restart the window to run a dry run")]
+    NoWorker,
 }
 
 /// A dry run in progress: the cases left, the one out, what ran.
@@ -407,6 +429,8 @@ pub struct Triage {
     /// one spacing after the last one anyway (AD-52), and reading the
     /// registry's rows on every tick would cost the collector for nothing.
     proposals_after_ms: i64,
+    /// The `triage` thread is gone: nothing is queued or started.
+    worker_gone: bool,
 }
 
 /// One case to send: the purpose, its key and what is sent.
@@ -443,6 +467,9 @@ impl Triage {
         writer: &Writer,
         now_ms: i64,
     ) -> Result<Result<u32, DryRunRefusal>, RegistryError> {
+        if self.worker_gone {
+            return Ok(Err(DryRunRefusal::NoWorker));
+        }
         if self.dry_run.is_some() {
             return Ok(Err(DryRunRefusal::Running));
         }
@@ -471,6 +498,9 @@ impl Triage {
         writer: &mut Writer,
         now_ms: i64,
     ) -> Result<Option<NextCall>, RegistryError> {
+        if self.worker_gone {
+            return Ok(None);
+        }
         let Some(run) = &mut self.dry_run else {
             if now_ms < self.proposals_after_ms {
                 return Ok(None);
@@ -542,6 +572,20 @@ impl Triage {
         );
         if run.left.is_empty() {
             self.finish(writer, DryRunStop::Completed, now_ms)?;
+        }
+        Ok(())
+    }
+
+    /// The `triage` thread is gone, at `now_ms` (quality audit H1): a dry
+    /// run running ends with what ran recorded, its case out lost, and
+    /// nothing is queued or started again until the window restarts.
+    pub fn worker_gone(&mut self, writer: &mut Writer, now_ms: i64) -> Result<(), RegistryError> {
+        if self.worker_gone {
+            return Ok(());
+        }
+        self.worker_gone = true;
+        if self.dry_run.is_some() {
+            self.finish(writer, DryRunStop::WorkerGone, now_ms)?;
         }
         Ok(())
     }
@@ -780,4 +824,45 @@ fn insert_call(conn: &rusqlite::Connection, result: &CallResult) -> rusqlite::Re
         result.usage.cost_microusd
     ])?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Quality audit H1: a thread that is gone is seen as such, whether a
+    /// job cannot reach it or its results stop coming.
+    #[test]
+    fn a_gone_thread_is_seen_on_submit_and_on_results() {
+        let (jobs, inbox) = mpsc::channel::<TriageJob>();
+        let (outbox, results) = mpsc::channel::<CallResult>();
+        drop(inbox);
+        let mut worker = TriageWorker::over(jobs, results);
+        let job = TriageJob {
+            purpose: TriagePurpose::DryRun,
+            case_key: "confirmation:1".into(),
+            case: TriageCase::default(),
+            claude: None,
+            officina_home: PathBuf::from("home"),
+            config_dir: None,
+            no_excerpts: false,
+            base_env: Arc::new(Vec::new()),
+            limits: CallLimits::default(),
+        };
+        assert!(!worker.gone());
+        assert!(!worker.submit(job));
+        assert!(worker.gone());
+
+        let (jobs, _inbox) = mpsc::channel::<TriageJob>();
+        drop(outbox);
+        let mut worker = TriageWorker::over(jobs, results_closed());
+        assert!(worker.try_result().is_none());
+        assert!(worker.gone() && worker.idle());
+    }
+
+    fn results_closed() -> Receiver<CallResult> {
+        let (sender, receiver) = mpsc::channel();
+        drop(sender);
+        receiver
+    }
 }

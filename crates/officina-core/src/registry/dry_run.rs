@@ -169,6 +169,10 @@ closed_enum! {
         /// A call was refused before it started: the cause is listed with
         /// the refusals, and what ran is recorded.
         Refused,
+        /// The `triage` thread is gone (it could not start, or stopped):
+        /// what ran is recorded, and no dry run starts until the window
+        /// restarts.
+        WorkerGone,
     }
 }
 

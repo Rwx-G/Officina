@@ -140,6 +140,8 @@ export const DRY_RUN_STOP_TEXT: Record<DryRunStop, string> = {
   completed: "The last dry run ran every case.",
   budget_spent: "The last dry run stopped when the call budget was spent; what ran is recorded.",
   refused: "The last dry run stopped on a refused call; its cause is listed below.",
+  worker_gone:
+    "The last dry run stopped: the thread that makes the calls is gone. What ran is recorded; restart the window to run another.",
 };
 
 /** A cost in millionths of a dollar, as the evidence shows it. */

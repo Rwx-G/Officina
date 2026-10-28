@@ -485,6 +485,10 @@ project uses [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- A dry run no longer shows a progress bar that never moves when the
+  thread that makes the triage calls could not start or stopped (v0.3): it
+  ends with what ran recorded and says why, and **Evaluate the model** is
+  refused until the window restarts.
 - Turning the triage model on again sends once more each row it had
   refused (v0.3), on the same inputs: fixing the cause (an empty work
   folder, a native `claude.exe`) no longer leaves those rows on the

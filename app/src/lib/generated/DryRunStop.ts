@@ -3,4 +3,4 @@
 /**
  * How the last dry run of this window ended (D-67).
  */
-export type DryRunStop = "completed" | "budget_spent" | "refused";
+export type DryRunStop = "completed" | "budget_spent" | "refused" | "worker_gone";

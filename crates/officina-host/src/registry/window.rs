@@ -334,9 +334,11 @@ impl WindowRegistry {
         };
         match self.triage.start_dry_run(writer, now_ms) {
             Ok(Ok(cases)) => Ok(cases),
-            Ok(Err(refusal @ (DryRunRefusal::Running | DryRunRefusal::NoCases))) => {
-                Err(IpcError::new(IpcErrorCode::Refused, refusal.to_string()))
-            }
+            Ok(Err(
+                refusal @ (DryRunRefusal::Running
+                | DryRunRefusal::NoCases
+                | DryRunRefusal::NoWorker),
+            )) => Err(IpcError::new(IpcErrorCode::Refused, refusal.to_string())),
             Err(error) => Err(self.write_failed(&error)),
         }
     }
@@ -349,6 +351,14 @@ impl WindowRegistry {
             .flatten();
         self.triage = triage;
         next
+    }
+
+    /// The `triage` thread is gone, at `now_ms` (quality audit H1): see
+    /// `Triage::worker_gone`.
+    pub fn triage_worker_gone(&mut self, now_ms: i64) {
+        let mut triage = std::mem::take(&mut self.triage);
+        self.on_writer(|writer| triage.worker_gone(writer, now_ms));
+        self.triage = triage;
     }
 
     /// Records a call's result at `now_ms`, when the registry is writable.

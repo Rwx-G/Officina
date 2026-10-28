@@ -573,3 +573,48 @@ fn a_case_whose_input_expired_while_queued_is_not_sent() {
     );
     assert_eq!(latest(&home).unwrap().tally.cases, 1);
 }
+
+/// Quality audit H1: when the `triage` thread is gone with a case out, the
+/// dry run ends with what ran recorded instead of waiting forever, and no
+/// other dry run is accepted.
+#[test]
+fn a_gone_worker_ends_the_dry_run_and_refuses_another() {
+    let home = Home::new();
+    let mut writer = confirmed(
+        &home,
+        &[
+            ("first", Verdict::Finished, false),
+            ("second", Verdict::ToResume, false),
+        ],
+    );
+    let mut triage = Triage::default();
+    triage.start_dry_run(&writer, NOW).unwrap().unwrap();
+    let first = triage.next_call(&mut writer, NOW).unwrap().unwrap();
+    triage
+        .take_result(
+            &mut writer,
+            &result(
+                &first,
+                NOW,
+                TriageOutcome::Answer,
+                Some(ModelVerdict::Finished),
+            ),
+            NOW + 900,
+        )
+        .unwrap();
+    let at = NOW + CALL_SPACING_MS;
+    assert!(
+        triage.next_call(&mut writer, at).unwrap().is_some(),
+        "a case out"
+    );
+    assert!(triage.running());
+    triage.worker_gone(&mut writer, at + 1).unwrap();
+    assert!(!triage.running());
+    assert_eq!(triage.state().last_stop, Some(DryRunStop::WorkerGone));
+    assert_eq!(latest(&home).expect("what ran is recorded").tally.cases, 1);
+    assert_eq!(
+        triage.start_dry_run(&writer, at + 2).unwrap(),
+        Err(DryRunRefusal::NoWorker)
+    );
+    assert!(triage.next_call(&mut writer, at + DAY).unwrap().is_none());
+}

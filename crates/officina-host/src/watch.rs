@@ -653,8 +653,12 @@ fn run<E: Emit>(
         now_ms(),
     );
     hourly_pass(collector, &mut registry);
-    // No thread, no call: the board does not depend on it.
+    // No thread, no call: the board does not depend on it, and no dry run
+    // is accepted that would wait on it forever.
     let mut worker = TriageWorker::spawn().ok();
+    if worker.is_none() {
+        registry.triage_worker_gone(now_ms());
+    }
     let mut watched = WatchedPaths::new(collector);
     let mut plan = RefreshPlan::new(Instant::now);
     let mut presence: BTreeMap<String, bool> = BTreeMap::new();
@@ -840,9 +844,13 @@ fn pump_triage<E: Emit>(
         recorded = true;
     }
     if worker.idle()
+        && !worker.gone()
         && let Some(next) = registry.next_call(now_ms())
     {
         worker.submit(triage_job(collector, next));
+    }
+    if worker.gone() {
+        registry.triage_worker_gone(now_ms());
     }
     if recorded || registry.triage_state() != before {
         publish_both(collector, registry, outputs, false);
