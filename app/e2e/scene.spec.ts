@@ -12,7 +12,7 @@ import { SCREENSHOT_MAX_DIFF_RATIO, calls, loadBoard, loadRelay, openScene, scen
 import { fixturesOf } from "./fixture-index";
 import { beaconPair } from "../src/lib/alert";
 import { HALO_BREATHING_MS, HALO_CYCLE_MS } from "../src/lib/halo";
-import { MIN_SCALE, TARGET_CSS_MIN, stripRect } from "../src/lib/scene/geometry";
+import { MIN_SCALE, TARGET_CSS_MIN } from "../src/lib/scene/geometry";
 import { layoutScene, liveCards, nearestTarget, type Direction, type SceneLayout, type Target } from "../src/lib/scene/layout";
 import { STORAGE_KEY, emptyMemory, type SceneMemory } from "../src/lib/scene/memory";
 import { ZONE_WORDS } from "../src/lib/scene/text";
@@ -119,9 +119,9 @@ interface Box {
   h: number;
 }
 
-/** The targets' and the strip buttons' boxes relative to the scene
- *  element, in CSS px, read in one evaluation so no scroll falls between. */
-function boxes(page: Page): Promise<{ scene: Box; targets: { id: string; box: Box }[]; strip: Box[] }> {
+/** The targets' boxes relative to the scene element, in CSS px, read in
+ *  one evaluation so no scroll falls between. */
+function boxes(page: Page): Promise<{ scene: Box; targets: { id: string; box: Box }[] }> {
   return scene(page).evaluate((root) => {
     const origin = root.getBoundingClientRect();
     const rel = (el: Element) => {
@@ -131,7 +131,6 @@ function boxes(page: Page): Promise<{ scene: Box; targets: { id: string; box: Bo
     return {
       scene: { x: 0, y: 0, w: origin.width, h: origin.height },
       targets: Array.from(root.querySelectorAll("[data-target]")).map((el) => ({ id: el.getAttribute("data-target")!, box: rel(el) })),
-      strip: Array.from(document.querySelectorAll("[data-testid=scene-strip] button")).map(rel),
     };
   });
 }
@@ -139,23 +138,6 @@ function boxes(page: Page): Promise<{ scene: Box; targets: { id: string; box: Bo
 const meets = (a: Box, b: Box) => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
 /** A CSS box compared with a minimum, with D-104's rounding allowance. */
 const atLeast = (value: number, min: number) => value >= min - 0.01;
-
-/** The line under the scene sits in its corner of the canvas (`stripRect`
- *  at the scene's scale), inside the scene's box, over no target. */
-async function expectStripInCorner(page: Page): Promise<void> {
-  const scale = Number(await scene(page).getAttribute("data-scale"));
-  const room = stripRect(Number(await scene(page).getAttribute("data-columns")));
-  const { scene: box, targets, strip } = await boxes(page);
-  expect(strip.length).toBe(2);
-  for (const b of strip) {
-    expect(atLeast(b.h, TARGET_CSS_MIN), `strip button ${b.h} px high`).toBe(true);
-    expect(b.x).toBeGreaterThanOrEqual(room.x * scale - 0.5);
-    expect(b.x + b.w).toBeLessThanOrEqual((room.x + room.w) * scale + 0.5);
-    expect(b.y).toBeGreaterThanOrEqual(room.y * scale - 0.5);
-    expect(b.y + b.h).toBeLessThanOrEqual(Math.min((room.y + room.h) * scale, box.h) + 0.5);
-    for (const t of targets) expect(meets(b, t.box), `the strip meets ${t.id}`).toBe(false);
-  }
-}
 
 async function expectTargetsAtLeastMinimum(page: Page): Promise<void> {
   for (const { id, box } of (await boxes(page)).targets) {
@@ -428,9 +410,6 @@ test.describe("scene", () => {
       });
       expect(area.sw, "the sessions area scrolls sideways").toBeLessThanOrEqual(area.cw);
       expect(area.sh, "the sessions area scrolls down").toBeLessThanOrEqual(area.ch);
-      // The line under the scene takes no height of its own (D-525): it is
-      // inside the scene's box, over no target.
-      await expectStripInCorner(page);
       await expectTargetsAtLeastMinimum(page);
     });
   }
@@ -554,9 +533,6 @@ test.describe("acting from the scene", () => {
     // The register's group comes right after the queue's figures (D-103).
     const decision = layout!.targets.filter((t) => t.group === "decision");
     expect(decision.map((t) => t.kind)).toEqual([...decision.slice(0, -1).map(() => "figure"), "group"]);
-    // The line under the scene follows the scene element (AD-63).
-    await page.keyboard.press("Tab");
-    expect(await focusedTestId(page)).toBe("strip-to-resume");
   });
 
   test("a focused target shows the two-tone ring", async ({ page }) => {
@@ -914,14 +890,14 @@ test.describe("acting from the scene", () => {
     await expect(scene(page)).toBeFocused();
   });
 
-  test("an empty board has no target and the line under the scene says zero", async ({ page }) => {
+  test("an empty board has no target and the header's counts say zero", async ({ page }) => {
     const board = loadBoard("empty");
     expect(liveCards(board)).toEqual([]);
     await openScene(page, board);
     await expect(scene(page).locator("[data-target]")).toHaveCount(0);
-    await expect(page.getByTestId("strip-to-resume")).toHaveText("0 to resume");
-    await expect(page.getByTestId("strip-done")).toHaveText(`0 done in ${hours(board.done_window_ms)}`);
-    await expectStripInCorner(page);
+    await expect(page.getByTestId("ended-to-resume")).toHaveAccessibleName("0 to resume");
+    await expect(page.getByTestId("ended-done")).toHaveAccessibleName("0 done");
+    await expect(page.getByTestId("ended-done")).toHaveAttribute("title", new RegExp(`in the last ${hours(board.done_window_ms)}:`));
     // Escape with nothing open changes nothing.
     await scene(page).focus();
     await page.keyboard.press("Escape");
@@ -1019,43 +995,52 @@ test.describe("acting from the scene", () => {
           });
           expect(topmost, `${name} ${width} x ${height} ${id}`).toBe(true);
         }
-        await expectStripInCorner(page);
       }
     }
   });
 
-  test("the line under the scene counts To resume and Done and opens Board mode", async ({ page }) => {
+  // Story 4.15 (the owner's item 4, D-541): To resume and Done are counted
+  // in the header, not under the scene; each opens Board mode on its column.
+  test("the header counts To resume and Done and opens Board mode on the column", async ({ page }) => {
     const board = loadBoard("busy");
     expect(board.columns.to_resume.length).toBeGreaterThan(0);
     await openScene(page, board);
-    await expect(scene(page).getByTestId("scene-strip")).toHaveCount(0);
-    await expect(page.getByTestId("strip-to-resume")).toHaveText(`${board.columns.to_resume.length} to resume`);
-    await expect(page.getByTestId("strip-done")).toHaveText(`${board.columns.done.length} done in ${hours(board.done_window_ms)}`);
-    await expectStripInCorner(page);
-    await page.getByTestId("scene-strip").evaluate((root) => {
+    await expect(scene(page).getByTestId("ended-counts")).toHaveCount(0);
+    await expect(page.locator("header").getByTestId("ended-counts")).toBeVisible();
+    await expect(page.getByTestId("ended-to-resume")).toHaveAccessibleName(`${board.columns.to_resume.length} to resume`);
+    await expect(page.getByTestId("ended-done")).toHaveAccessibleName(`${board.columns.done.length} done`);
+    await page.getByTestId("ended-counts").evaluate((root) => {
       const records: MutationRecord[] = [];
       new MutationObserver((list) => records.push(...list)).observe(root, { subtree: true, childList: true, attributes: true, characterData: true });
-      (window as unknown as { __stripRecords: MutationRecord[] }).__stripRecords = records;
+      (window as unknown as { __countRecords: MutationRecord[] }).__countRecords = records;
     });
-    const stripRecords = () => page.evaluate(() => (window as unknown as { __stripRecords: MutationRecord[] }).__stripRecords.length);
-    // Another board with the same counts: the strip is not written.
+    const countRecords = () => page.evaluate(() => (window as unknown as { __countRecords: MutationRecord[] }).__countRecords.length);
+    // Another board with the same counts: the counts are not written.
     const renamed = structuredClone(board);
     renamed.columns.needs_you[0]!.name = "renamed-session";
     await push(page, renamed);
     await expect(page.getByTestId("scene-summary")).toContainText("renamed-session");
-    expect(await stripRecords()).toBe(0);
-    // One more Done: it is.
+    expect(await countRecords()).toBe(0);
+    // One more Done: they are, and the button keeps its box (D-517).
+    const before = await page.getByTestId("ended-done").boundingBox();
     const more = structuredClone(renamed);
     more.columns.done.push({ ...more.columns.done[0]!, key: `${more.columns.done[0]!.key}-again`, session_id: null });
     await push(page, more);
-    await expect(page.getByTestId("strip-done")).toHaveText(`${more.columns.done.length} done in ${hours(board.done_window_ms)}`);
-    expect(await stripRecords()).toBeGreaterThan(0);
-    await page.getByTestId("strip-done").click();
+    await expect(page.getByTestId("ended-done")).toHaveAccessibleName(`${more.columns.done.length} done`);
+    expect(await countRecords()).toBeGreaterThan(0);
+    expect(await page.getByTestId("ended-done").boundingBox()).toEqual(before);
+    await page.getByTestId("ended-done").click();
     await expect(page.getByTestId("column-done")).toBeVisible();
+    await expect(page.locator("#title-done")).toBeFocused();
     await page.keyboard.press("m");
     await sceneSettled(page);
-    await page.getByTestId("strip-to-resume").click();
+    await page.getByTestId("ended-to-resume").click();
     await expect(page.getByTestId("column-to_resume")).toBeVisible();
+    await expect(page.locator("#title-to_resume")).toBeFocused();
+    // From another view too.
+    await page.getByTestId("view-subjects").click();
+    await page.getByTestId("ended-done").click();
+    await expect(page.locator("#title-done")).toBeFocused();
   });
 
   test("session text renders as text in the scene and the file", async ({ page }) => {

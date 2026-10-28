@@ -4,6 +4,7 @@
   import type { RelayStore } from "../lib/relay.svelte";
   import type { Base, Mode, WindowView } from "../lib/view.svelte";
   import { RELAY_TOGGLE_TEXT } from "../lib/relay-text";
+  import EndedCounts, { type EndedColumn } from "./EndedCounts.svelte";
   import Gauge from "./Gauge.svelte";
   import ModeSwitch from "./ModeSwitch.svelte";
   import StableLabel from "./StableLabel.svelte";
@@ -21,8 +22,7 @@
     /** The view shown, local window state (AD-66). */
     view?: WindowView;
     onView?: (view: WindowView) => void;
-    /** The Sessions view's base; Scene lays the header out on one line,
-     *  Focus included, so `f` moves nothing in the header. */
+    /** The Sessions view's base. */
     base?: Base;
     /** Focus over the base (AD-66). */
     focus?: boolean;
@@ -31,9 +31,11 @@
     theme?: ThemeChoice;
     resolvedTheme?: Theme;
     onTheme?: () => void;
-    /** The Walking toggle, in Scene mode only (AD-66). */
+    /** The Walking toggle (AD-66), the scene's, shown in every view. */
     walking?: boolean;
     onWalking?: (walking: boolean) => void;
+    /** To resume and Done open Board mode on their column (D-541). */
+    onEnded?: (column: EndedColumn) => void;
   }
   let {
     store,
@@ -49,6 +51,7 @@
     onTheme,
     walking = true,
     onWalking,
+    onEnded,
   }: Props = $props();
 
   // Triage blocks no session: the chip is neutral, never amber, and the
@@ -73,13 +76,12 @@
   let board = $derived(store.board);
   let waiting = $derived(board?.waiting_count ?? 0);
   let contract = $derived(board?.contract);
-  // Scene mode keeps the sessions area tall enough for eight projects
-  // (D-525): one line, whatever view is shown, so switching views or
-  // modes leaves the brand, the switches and the buttons where they are.
-  let oneLine = $derived(base === "scene");
 </script>
 
-<header class="bar" class:one-line={oneLine}>
+<!-- One header, one layout, in every view and mode (story 4.15, D-540):
+     the brand, the switches, the gauges and the buttons keep the same boxes
+     whatever is shown below, on one line on the owner's screens (D-525). -->
+<header class="bar">
   <div class="brand">
     <img src={resolvedTheme === "dark" ? logoDark : logo} alt="" width="40" height="40" data-testid="header-logo" />
     <div>
@@ -116,7 +118,6 @@
         writtenAtMs={board.quota.written_at_ms}
         staleAfterMs={board.quota.stale_after_ms}
         nowMs={store.nowMs}
-        compact={oneLine}
       />
       <Gauge
         label="Week"
@@ -125,22 +126,25 @@
         writtenAtMs={board.quota.written_at_ms}
         staleAfterMs={board.quota.stale_after_ms}
         nowMs={store.nowMs}
-        compact={oneLine}
       />
     </div>
   {/if}
 
-  <!-- The right side holds the fixed buttons and the status line of chips
-       that come and go with the data: under the buttons, or beside them on
-       one line. A chip appearing moves no button, and nothing on the left
-       of it, gauges included (D-517). -->
+  <!-- The right side holds the fixed buttons and, before them, the status
+       line of chips that come and go with the data. A chip appearing moves
+       no button, and nothing on the left of it, gauges included (D-517). -->
   <div class="side">
     <div class="tools">
-      <!-- First of the right-aligned buttons: it grows the group to the
-           left, so the buttons after it keep their places (D-517). -->
-      {#if onWalking && base === "scene"}
-        <!-- Kept in Focus, unseen, so `f` moves no button (D-517). -->
-        <WalkingSwitch {walking} {onWalking} shown={view === "sessions" && !focus} />
+      {#if board && onEnded}
+        <EndedCounts
+          toResume={board.columns.to_resume.length}
+          done={board.columns.done.length}
+          doneWindowMs={board.done_window_ms}
+          onOpen={onEnded}
+        />
+      {/if}
+      {#if onWalking}
+        <WalkingSwitch {walking} {onWalking} />
       {/if}
       {#if relay?.inUse}
         <button
@@ -162,10 +166,10 @@
         data-testid="pin-toggle"
         aria-pressed={store.alwaysOnTop}
         onclick={() => store.toggleAlwaysOnTop()}
-        title="Keep the board above other windows"
+        title="Keep Officina above other windows"
       >
         <StableLabel
-          labels={{ pinned: "Pinned", unpinned: "Pin on top" }}
+          labels={{ pinned: "Pinned", unpinned: "Pin" }}
           current={store.alwaysOnTop ? "pinned" : "unpinned"}
         />
       </button>
@@ -209,14 +213,8 @@
     display: flex;
     flex-wrap: wrap;
     align-items: flex-start;
-    gap: 14px 20px;
-    padding: 14px 20px;
-  }
-  /* The same top and the same order as the Board header, so changing mode
-     leaves the brand, the switches, the gauges' corner and the buttons in
-     place; the tighter bottom is height given back to the scene. */
-  .one-line {
-    padding-bottom: 8px;
+    gap: 12px 12px;
+    padding: 14px 20px 8px;
   }
   .brand {
     display: flex;
@@ -241,7 +239,7 @@
   }
   .view {
     min-height: var(--target-min);
-    padding: 0 16px;
+    padding: 0 12px;
     border: none;
     background: var(--color-surface);
     font-weight: 600;
@@ -251,6 +249,7 @@
     background: var(--color-text);
     color: var(--color-bg);
   }
+  /* A count badge: the one pill of the header (D-539). */
   .pill {
     padding: 4px 14px;
     font-size: 13.5px;
@@ -261,7 +260,7 @@
     font-weight: 700;
   }
   .chip {
-    padding: 4px 12px;
+    padding: 4px 10px;
     font-size: 13.5px;
     white-space: nowrap;
     border-radius: var(--radius-control);
@@ -296,50 +295,38 @@
     gap: 10px;
   }
   /* Takes the free room of the line and never more: its smallest width is
-     its buttons', so it never wraps to a line of its own. */
+     its buttons', so it never wraps to a line of its own. The status sits
+     before the buttons and takes what the line leaves: its own width
+     counts for nothing (`contain`), so a chip wraps inside it rather than
+     pushing the buttons to another line. */
   .side {
     display: flex;
     flex: 1 1 0;
-    flex-direction: column;
-    align-items: stretch;
-    gap: 6px;
+    flex-direction: row-reverse;
+    align-items: flex-start;
+    gap: 8px;
   }
   .tools {
     display: flex;
+    flex: none;
     justify-content: flex-end;
     align-items: center;
-    gap: 8px;
+    gap: 6px;
   }
-  /* One chip line is kept even when empty, so the header's height does not
-     follow the chips either. */
   .status {
     display: flex;
+    flex: 1 1 0;
     flex-wrap: wrap;
     justify-content: flex-end;
     align-items: center;
-    gap: 6px 10px;
-    min-height: 30px;
-  }
-  /* On one line the status sits before the buttons and takes what the line
-     leaves: its own width counts for nothing (`contain`), so a chip wraps
-     inside it rather than pushing the buttons to another line. */
-  .one-line .side {
-    flex-direction: row-reverse;
-    align-items: flex-start;
-    gap: 10px;
-  }
-  .one-line .tools {
-    flex: none;
-  }
-  .one-line .status {
-    flex: 1 1 0;
+    gap: 6px 8px;
     min-width: 0;
     min-height: var(--target-min);
     contain: inline-size;
   }
   .tool {
     min-height: var(--target-min);
-    padding: 0 18px;
+    padding: 0 12px;
     border-radius: var(--radius-control);
     border: 1px solid var(--color-text);
     background: var(--color-surface);

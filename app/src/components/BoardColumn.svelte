@@ -28,7 +28,7 @@
 
 <section class="column {column}" data-testid="column-{column}" aria-labelledby="title-{column}">
   <header>
-    <h2 id="title-{column}">{title}</h2>
+    <h2 id="title-{column}" tabindex="-1">{title}</h2>
     <span class="count" data-testid="count-{column}">{cards.length + approvals.length}</span>
   </header>
   <p class="hint">{hint}</p>

@@ -28,7 +28,6 @@ import {
   priorityPillRect,
   projector,
   roomCorners,
-  stripRect,
   zoneGroupTarget,
   type Rect,
   type SharedZone,
@@ -144,23 +143,6 @@ describe("geometry", () => {
           expect(Math.min(t.rect.w, t.rect.h), t.id).toBeGreaterThanOrEqual(TARGET_MIN);
           expect(Math.min(t.rect.w, t.rect.h) * MIN_SCALE, t.id).toBeGreaterThanOrEqual(TARGET_CSS_MIN - 1e-9);
         }
-      });
-
-      it("the line under the scene lies below the floor's front-left edge and meets no target or plaque", () => {
-        const strip = stripRect(floor.columns);
-        const { w, h } = canvas(floor.columns);
-        expect(strip.x).toBeGreaterThanOrEqual(0);
-        expect(strip.y + strip.h).toBeLessThanOrEqual(h);
-        expect(strip.x + strip.w).toBeLessThanOrEqual(w);
-        // The edge, slab included, falls to the right: the strip's top
-        // right corner is its closest point to the floor.
-        const p = projector(floor.columns);
-        const left = p(0, FLOOR_DEPTH, -SLAB);
-        const front = p(floorWidth(floor.columns), FLOOR_DEPTH, -SLAB);
-        const edgeY = left.y + ((strip.x + strip.w - left.x) * (front.y - left.y)) / (front.x - left.x);
-        expect(strip.y).toBeGreaterThanOrEqual(edgeY);
-        const meets = [...targets, ...plaques(floor.columns)].filter((t) => intersects(t.rect, strip)).map((t) => t.id);
-        expect(meets).toEqual([]);
       });
 
       it("every target lies inside the canvas", () => {

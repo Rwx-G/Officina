@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, tick } from "svelte";
   import { BoardStore } from "./lib/board.svelte";
   import { RegistryStore } from "./lib/registry.svelte";
   import { RelayStore } from "./lib/relay.svelte";
@@ -21,6 +21,17 @@
   const registry = new RegistryStore();
   const windowView = new ViewStore();
   const DONE_VISIBLE = 5;
+
+  /** To resume or Done from the header (D-541): Board mode on that column,
+   *  its heading focused and brought into view. */
+  async function openEnded(column: "to_resume" | "done"): Promise<void> {
+    windowView.view = "sessions";
+    windowView.setBase("board");
+    await tick();
+    const heading = document.getElementById(`title-${column}`);
+    heading?.focus();
+    heading?.scrollIntoView({ block: "nearest" });
+  }
 
   // A workstation without the relay has no Relay view to show.
   let view = $derived<WindowView>(windowView.view === "relay" && !relay.inUse ? "sessions" : windowView.view);
@@ -89,6 +100,7 @@
     onTheme={() => windowView.cycleTheme()}
     walking={windowView.walking}
     onWalking={(next) => windowView.setWalking(next)}
+    onEnded={(column) => void openEnded(column)}
   />
   <AlertBand {board} nowMs={store.nowMs} />
 

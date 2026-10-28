@@ -7,7 +7,7 @@ import Gauge from "./Gauge.svelte";
 import { tick } from "svelte";
 import SessionCard from "./SessionCard.svelte";
 import SessionFile from "./SessionFile.svelte";
-import SceneStrip from "./scene/SceneStrip.svelte";
+import EndedCounts from "./EndedCounts.svelte";
 import StableLabel from "./StableLabel.svelte";
 import { OUTCOME_TEXT, outcomeText, type OutcomeKind } from "../lib/outcome";
 import { SIGN_WORDS, ZONE_WORDS } from "../lib/scene/text";
@@ -229,7 +229,7 @@ describe("Gauge", () => {
       writtenAtMs: NOW - 45 * 60_000,
     });
     expect(getByText("62 %")).toBeTruthy();
-    expect(getByText("stale, updated 45 min ago")).toBeTruthy();
+    expect(getByText(/^stale, updated 45 min ago/)).toBeTruthy();
   });
 
   it("never shows a percentage once the window has reset", () => {
@@ -239,13 +239,12 @@ describe("Gauge", () => {
       writtenAtMs: NOW - 5 * 60_000,
     });
     expect(getByText("--")).toBeTruthy();
-    expect(getByText("reset, no new data")).toBeTruthy();
+    expect(getByText(/^reset, no new data/)).toBeTruthy();
   });
 
-  it("on one header line it says the same, stale first, the whole line in its tooltip", () => {
+  it("says it on one line, stale first, the whole line in its tooltip", () => {
     const { getByText, getByRole } = render(Gauge, {
       ...base,
-      compact: true,
       window: { used_percentage: 62.4, resets_at: NOW / 1000 + 3600 },
       writtenAtMs: NOW - 45 * 60_000,
     });
@@ -834,26 +833,30 @@ describe("SessionFile", () => {
   });
 });
 
-describe("SceneStrip", () => {
-  it("SceneStrip words the Done window from the board", async () => {
+describe("EndedCounts", () => {
+  /** The words a count shows: its visible label, the room it keeps hidden. */
+  const shown = (button: HTMLElement) => button.querySelector(".label:not(.inactive)")?.textContent;
+
+  it("EndedCounts counts each column, words the Done window in its tooltip, and opens each column", async () => {
     for (const board of fixturesOf<Board>("board").map((f) => f.data)) {
-      const onBoard = vi.fn();
-      const { getByTestId } = render(SceneStrip, {
+      const onOpen = vi.fn();
+      const { getByTestId } = render(EndedCounts, {
         toResume: board.columns.to_resume.length,
         done: board.columns.done.length,
         doneWindowMs: board.done_window_ms,
-        onBoard,
+        onOpen,
       });
-      expect(getByTestId("strip-to-resume").textContent).toBe(`${board.columns.to_resume.length} to resume`);
-      expect(getByTestId("strip-done").textContent).toBe(`${board.columns.done.length} done in ${hours(board.done_window_ms)}`);
-      await fireEvent.click(getByTestId("strip-to-resume"));
-      await fireEvent.click(getByTestId("strip-done"));
-      expect(onBoard).toHaveBeenCalledTimes(2);
+      expect(shown(getByTestId("ended-to-resume"))).toBe(`${board.columns.to_resume.length} to resume`);
+      expect(shown(getByTestId("ended-done"))).toBe(`${board.columns.done.length} done`);
+      expect(getByTestId("ended-done").getAttribute("title")).toContain(`in the last ${hours(board.done_window_ms)}:`);
+      await fireEvent.click(getByTestId("ended-to-resume"));
+      await fireEvent.click(getByTestId("ended-done"));
+      expect(onOpen.mock.calls).toEqual([["to_resume"], ["done"]]);
       cleanup();
     }
     // Another window, another word: nothing is fixed at 24 h.
-    const { getByTestId } = render(SceneStrip, { toResume: 0, done: 1, doneWindowMs: 12 * 3_600_000, onBoard: () => {} });
-    expect(getByTestId("strip-done").textContent).toBe("1 done in 12 h");
+    const { getByTestId } = render(EndedCounts, { toResume: 0, done: 1, doneWindowMs: 12 * 3_600_000, onOpen: () => {} });
+    expect(getByTestId("ended-done").getAttribute("title")).toContain("in the last 12 h:");
   });
 });
 

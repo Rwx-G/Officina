@@ -184,13 +184,6 @@ describe("Scene", () => {
     }
   });
 
-  it("the line under the scene is outside the scene element, right after it", () => {
-    const { getByTestId } = renderScene(waitingBoard());
-    const scene = getByTestId("scene");
-    const strip = getByTestId("scene-strip");
-    expect(scene.contains(strip)).toBe(false);
-    expect(scene.compareDocumentPosition(strip) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-  });
 });
 
 describe("Scene with walking", () => {

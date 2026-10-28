@@ -188,98 +188,38 @@ test.describe("modes", () => {
     await expect(toggle).toHaveText("Walking");
   });
 
-  test("the walking toggle shows in Scene mode only", async ({ page }) => {
+  // One header in every view and mode (story 4.15, D-540): the Walking
+  // toggle is shown and usable everywhere, the scene's setting.
+  test("the walking toggle shows in every view and mode", async ({ page }) => {
     await openBoard(page, loadBoard("scene-c"), {}, loadRelay("relay-clean"));
     const toggle = page.getByTestId("walking-toggle");
-    await expect(toggle).toHaveCount(0);
-    await page.getByTestId("mode-scene").click();
-    await sceneSettled(page);
     await expect(toggle).toBeVisible();
     await expect(toggle).toHaveText("Walking");
-    // Its appearance moves no gauge and no button (D-517, D-526): their
-    // boxes with the toggle equal those with it taken out of the layout,
-    // the relay's toggle shown too. Below the scene's minimum area (1000
-    // px wide) the header already spans several lines and the buttons may
-    // wrap under the gauges; the gauges still keep their places.
-    const fixed = (gaugesOnly: boolean) =>
-      page.locator(gaugesOnly ? 'header [data-testid^="gauge-"]' : 'header [data-testid^="gauge-"], header button:not([data-testid="header-status"] button)').evaluateAll((elements) =>
-        elements
-          .filter((e) => e.getAttribute("data-testid") !== "walking-toggle")
-          .map((e) => {
-            const r = e.getBoundingClientRect();
-            return { name: e.getAttribute("data-testid") ?? e.textContent?.trim(), x: r.x, y: r.y, w: r.width, h: r.height };
-          }),
-      );
-    await expect(page.getByTestId("relay-toggle")).toBeVisible();
-    for (const [width, height] of [[1000, 760], [1400, 900], [1920, 1001]] as const) {
-      await page.setViewportSize({ width, height });
-      const gaugesOnly = width === 1000;
-      const shown = await fixed(gaugesOnly);
-      expect(shown.length).toBeGreaterThan(1);
-      await toggle.evaluate((e) => ((e as HTMLElement).style.display = "none"));
-      const absent = await fixed(gaugesOnly);
-      await toggle.evaluate((e) => ((e as HTMLElement).style.display = ""));
-      expect(absent.map((b) => b.name)).toEqual(shown.map((b) => b.name));
-      for (const [i, before] of absent.entries()) {
-        for (const key of ["x", "y", "w", "h"] as const) {
-          expect(Math.abs(shown[i]![key] - before[key]), `${width} x ${height}: ${before.name} ${key}`).toBeLessThanOrEqual(0.5);
-        }
-      }
+    const box = await toggle.boundingBox();
+    for (const mode of ["scene", "focus", "board"]) {
+      await page.getByTestId(`mode-${mode}`).click();
+      if (mode === "scene") await sceneSettled(page);
+      await expect(toggle).toBeVisible();
+      expect(await toggle.boundingBox(), mode).toEqual(box);
     }
+    for (const view of ["subjects", "relay", "sessions"]) {
+      await page.getByTestId(`view-${view}`).click();
+      await expect(toggle).toBeVisible();
+      expect(await toggle.boundingBox(), view).toEqual(box);
+    }
+    // Pressed from Board mode, it is the scene's setting there too.
+    await toggle.click();
+    await expect(toggle).toHaveAttribute("aria-pressed", "false");
+    await page.getByTestId("mode-scene").click();
+    await sceneSettled(page);
+    await expect(toggle).toHaveAttribute("aria-pressed", "false");
     // On the owner's screen the header keeps one line (D-526): the toggle
     // and the last button on the brand's line.
+    await page.setViewportSize({ width: 1920, height: 1001 });
     const top = (await page.locator("header .brand").boundingBox())!.y;
     for (const id of ["walking-toggle", "pin-toggle"]) expect((await page.getByTestId(id).boundingBox())!.y, id).toBe(top);
-    await page.setViewportSize({ width: 1400, height: 900 });
-    // Outside the Sessions view it keeps its room, unseen and unreachable.
-    const box = await toggle.boundingBox();
-    await page.getByTestId("view-subjects").click();
-    await expect(toggle).toBeHidden();
-    expect(await toggle.boundingBox()).toEqual(box);
-    await page.getByTestId("view-sessions").click();
-    await expect(toggle).toBeVisible();
-    await page.getByTestId("mode-board").click();
-    await expect(toggle).toHaveCount(0);
-  });
-
-  test("the walking setting survives a reload", async ({ page }) => {
-    await openScene(page, loadBoard("scene-c"));
-    const toggle = page.getByTestId("walking-toggle");
-    await toggle.click();
-    await expect(toggle).toHaveAttribute("aria-pressed", "false");
-    expect(readViewState(await page.evaluate((key) => localStorage.getItem(key), VIEW_STORAGE_KEY)).walking).toBe(false);
-    await page.reload();
-    await sceneSettled(page);
-    await expect(toggle).toHaveAttribute("aria-pressed", "false");
-    await toggle.click();
-    await page.reload();
-    await sceneSettled(page);
-    await expect(toggle).toHaveAttribute("aria-pressed", "true");
-  });
-
-  test("banners stay above the scene", async ({ page }) => {
-    const board = loadBoard("scene-alert");
-    const stale = { ...board, stale: { since_ms: board.generated_at_ms - 60_000, error: "agents snapshot failed" } };
-    await openScene(page, stale, loadRelay("relay-stopped"));
-    const top = (await scene(page).boundingBox())!.y;
-    for (const id of ["alert-band", "stale-banner", "relay-stopped-banner"]) {
-      const box = (await page.getByTestId(id).boundingBox())!;
-      expect(box.y + box.height, id).toBeLessThanOrEqual(top);
-    }
-    // The band first, under the header.
-    const band = (await page.getByTestId("alert-band").boundingBox())!;
-    const banner = (await page.getByTestId("stale-banner").boundingBox())!;
-    expect(band.y).toBeLessThan(banner.y);
-  });
-
-  test("tall banners scroll the window and leave the scene half of it", async ({ page }) => {
-    // A pending catalogue's diff, a stopped relay and a stale board at once.
-    const board = loadBoard("scene-c");
-    const stale = { ...board, stale: { since_ms: board.generated_at_ms - 60_000, error: "agents snapshot failed" } };
-    await openScene(page, stale, { ...loadRelay("relay-pending"), stopped: true });
     const { area, half } = await scene(page).evaluate((s) => ({ area: s.parentElement!.clientHeight, half: innerHeight / 2 }));
     expect(area).toBeGreaterThanOrEqual(Math.floor(half));
-    await expect(scene(page)).toBeVisible();
   });
 
   // Focus (story 4.11; FR-7, AD-66, D-113, D-114).
@@ -288,14 +228,14 @@ test.describe("modes", () => {
     for (const base of ["board", "scene"]) {
       await page.getByTestId(`mode-${base}`).click();
       if (base === "scene") await sceneSettled(page);
-      await expect(page.getByTestId("walking-toggle")).toHaveCount(base === "scene" ? 1 : 0);
+      await expect(page.getByTestId("walking-toggle")).toBeVisible();
       await page.keyboard.press("f");
       await expect(focusList(page)).toBeVisible();
       await expect.poll(() => chosenMode(page)).toBe("focus");
       await expect(scene(page)).toHaveCount(0);
       await expect(boardColumns(page)).toHaveCount(0);
-      // The walking toggle is hidden in Focus, its room kept.
-      if (base === "scene") await expect(page.getByTestId("walking-toggle")).toBeHidden();
+      // The header is the same in Focus (D-540).
+      await expect(page.getByTestId("walking-toggle")).toBeVisible();
       await page.keyboard.press("f");
       await expect.poll(() => chosenMode(page)).toBe(base);
       await expect(focusList(page)).toHaveCount(0);

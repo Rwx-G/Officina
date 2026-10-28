@@ -4,16 +4,16 @@
   // the store's clock (AD-64); the layout is derived from the board, and its
   // memory committed after each layout without re-running it (D-184). It
   // hosts the mover (AD-172), between the layout and layer 3.
-  // Beside the scene element, outside it (AD-177, D-111): the line under the
-  // scene, in the canvas's empty bottom-left corner, and the file panel,
-  // which this component opens, closes and returns focus from (AD-63).
+  // Beside the scene element, outside it (D-111): the file panel, which this
+  // component opens, closes and returns focus from (AD-63). The counts of
+  // ended sessions are in the header (D-541).
   import { onDestroy, tick } from "svelte";
   import type { BoardStore } from "../../lib/board.svelte";
   import { beaconPair } from "../../lib/alert";
   import type { Board } from "../../lib/generated/Board";
   import type { Card } from "../../lib/generated/Card";
   import type { ProjectColor } from "../../lib/generated/ProjectColor";
-  import { fitScale, stripRect } from "../../lib/scene/geometry";
+  import { fitScale } from "../../lib/scene/geometry";
   import { layoutScene, liveCards, type Target } from "../../lib/scene/layout";
   import * as memory from "../../lib/scene/memory";
   import { Mover } from "../../lib/scene/mover";
@@ -23,7 +23,6 @@
   import SceneHalos from "./SceneHalos.svelte";
   import SceneObjects from "./SceneObjects.svelte";
   import SceneOverlay from "./SceneOverlay.svelte";
-  import SceneStrip from "./SceneStrip.svelte";
   import SceneTargets from "./SceneTargets.svelte";
 
   interface Props {
@@ -67,7 +66,6 @@
   let height = $derived(Math.floor(layout.canvas.h * scale));
   // A whole-pixel offset keeps the snapped figures on device pixels.
   let left = $derived(Math.max(0, Math.floor((area.w - width) / 2)));
-  let strip = $derived(stripRect(layout.columns));
 
   /** Follows the size of the element holding the scene. */
   function fit(node: HTMLElement) {
@@ -162,8 +160,8 @@
 
 <svelte:window onkeydown={onKey} />
 
-<!-- The sessions area's scroller: below the minimum area it scrolls, the
-     line under the scene with it; the file panel stays at its right edge. -->
+<!-- The sessions area's scroller: below the minimum area it scrolls; the
+     file panel stays at its right edge. -->
 <div class="area" data-testid="scene-area">
   <!-- `data-scale` is written with the transform, in the same update (D-185);
        `data-moving` starts at "0" and is the mover's after that. -->
@@ -189,14 +187,6 @@
       <SceneOverlay {layout} {cards} />
       <SceneTargets {layout} onActivate={activate} bind:this={targetsLayer} />
     </div>
-  </div>
-  <div
-    class="strip"
-    style:left="{left + strip.x * scale}px"
-    style:top="{(strip.y + strip.h) * scale}px"
-    style:max-width="{strip.w * scale}px"
-  >
-    <SceneStrip toResume={board.columns.to_resume.length} done={board.columns.done.length} doneWindowMs={board.done_window_ms} {onBoard} />
   </div>
 </div>
 {#if form}
@@ -228,11 +218,6 @@
   .stack > :global(*) {
     position: absolute;
     inset: 0;
-  }
-  /* Its bottom edge on the room's: it grows upward, below the floor. */
-  .strip {
-    position: absolute;
-    transform: translateY(-100%);
   }
   /* Visually hidden, read by assistive technology (AD-63). */
   .summary {

@@ -47,7 +47,7 @@
 <style>
   .theme {
     min-height: var(--target-min);
-    padding: 0 18px;
+    padding: 0 12px;
     border-radius: var(--radius-control);
     border: 1px solid var(--color-text);
     background: var(--color-surface);

@@ -71,7 +71,7 @@
   }
   .mode {
     min-height: var(--target-min);
-    padding: 0 16px;
+    padding: 0 12px;
     border: none;
     background: var(--color-surface);
     font-weight: 600;

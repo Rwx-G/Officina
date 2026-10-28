@@ -68,8 +68,25 @@ const CASES: ToggleCase[] = [
   // The theme control (AD-67, D-517), in both header layouts.
   { name: "theme switch", selector: '[data-testid="theme-switch"]', scene: "board" },
   { name: "theme switch on one line", selector: '[data-testid="theme-switch"]', scene: "sceneMode" },
-  // Scene mode's Walking toggle (D-469, D-517): a fixed control.
+  // The Walking toggle (D-469, D-517): a fixed control in every mode.
   { name: "walking toggle", selector: '[data-testid="walking-toggle"]', scene: "sceneMode", pressed: true },
+  // To resume and Done in the header (D-541): a count that changes moves
+  // nothing beside it.
+  {
+    name: "ended counts",
+    selector: '[data-testid="ended-to-resume"], [data-testid="ended-done"]',
+    scene: "board",
+    act: (page) =>
+      page.evaluate(() => {
+        const board = window.__officinaBoard!;
+        const more = (cards: typeof board.columns.done) =>
+          [...cards, ...cards.map((c, i) => ({ ...c, key: `${c.key}-more-${i}`, session_id: null }))];
+        return window.__officinaPushBoard?.({
+          ...board,
+          columns: { ...board.columns, to_resume: more(board.columns.to_resume), done: more(board.columns.done) },
+        });
+      }),
+  },
   { name: "copy attach command", selector: '[data-testid="copy-attach"]', scene: "board" },
   { name: "Relay view stop toggle", selector: '[data-testid="relay-view-stop"]', scene: "relay" },
   { name: "triage verdict", selector: '[data-testid^="triage-verdict-"]', scene: "subjects" },
