@@ -1,7 +1,7 @@
 //! The collector thread of the window (AD-3 to AD-5, AD-35): stat polling,
 //! refresh plan, diff before emit, for the board and the relay view.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, RwLock};
@@ -17,7 +17,7 @@ use crate::collector::Collector;
 use crate::files::{atomic_write, event_file_for, now_ms, retention_pass};
 use crate::paths::Paths;
 use crate::relay::home::RelayHome;
-use crate::relay::view::read_view;
+use crate::relay::view::{credential_presence, read_view_with};
 
 /// How often the watched paths are stat'ed. A handful of `metadata` calls:
 /// cheap enough to run four times a second.
@@ -39,6 +39,10 @@ pub const RETENTION_EVERY: Duration = Duration::from_secs(3600);
 /// "abandoned" and old gate errors leave the 24 h count without a file
 /// change.
 pub const RELAY_POLL: Duration = POLL_VISIBLE;
+/// The approved credentials' presence is checked when the relay view is
+/// rebuilt for a floor or relay change, and at most this often otherwise:
+/// never on every tick (D-41).
+pub const CREDENTIAL_POLL: Duration = Duration::from_secs(60);
 
 /// Messages to the collector thread.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -149,6 +153,8 @@ struct Due {
     recompute: bool,
     /// Rebuild the relay view, and emit it if it changed.
     relay: bool,
+    /// Check the credentials' presence before rebuilding it (D-41).
+    credentials: bool,
 }
 
 /// The refresh plan of AD-4. Each trigger has its method, which records what
@@ -164,10 +170,12 @@ struct RefreshPlan<C> {
     contract_wanted: bool,
     recompute_wanted: bool,
     relay_wanted: bool,
+    credentials_wanted: bool,
     last_spawn: Option<Instant>,
     follow_up_at: Option<Instant>,
     last_retention: Instant,
     last_relay: Instant,
+    last_credentials: Instant,
 }
 
 impl<C: Fn() -> Instant> RefreshPlan<C> {
@@ -182,10 +190,12 @@ impl<C: Fn() -> Instant> RefreshPlan<C> {
             contract_wanted: true,
             recompute_wanted: true,
             relay_wanted: true,
+            credentials_wanted: true,
             last_spawn: None,
             follow_up_at: None,
             last_retention: now,
             last_relay: now,
+            last_credentials: now,
         }
     }
 
@@ -223,10 +233,17 @@ impl<C: Fn() -> Instant> RefreshPlan<C> {
         self.contract_wanted = true;
     }
 
-    /// The relay floor or today's journal changed: a new relay view, no
-    /// spawn.
+    /// Today's journal changed: a new relay view, no spawn; the
+    /// credentials wait for their poll (D-41).
     fn relay_changed(&mut self) {
         self.relay_wanted = true;
+    }
+
+    /// The relay floor changed: a new relay view, its credentials checked
+    /// again (D-41).
+    fn relay_floor_changed(&mut self) {
+        self.relay_wanted = true;
+        self.credentials_wanted = true;
     }
 
     /// The relay's own files changed, an approval request among them, or an
@@ -235,6 +252,7 @@ impl<C: Fn() -> Instant> RefreshPlan<C> {
     fn relay_files_changed(&mut self) {
         self.relay_wanted = true;
         self.recompute_wanted = true;
+        self.credentials_wanted = true;
     }
 
     /// The window's floor changed and was reloaded: its projects reach a new
@@ -244,6 +262,7 @@ impl<C: Fn() -> Instant> RefreshPlan<C> {
         self.recompute_wanted = true;
         self.agents_wanted = true;
         self.relay_wanted = true;
+        self.credentials_wanted = true;
     }
 
     /// What runs now.
@@ -283,6 +302,12 @@ impl<C: Fn() -> Instant> RefreshPlan<C> {
         {
             self.last_relay = now;
             due.relay = true;
+            if std::mem::take(&mut self.credentials_wanted)
+                || now.duration_since(self.last_credentials) >= CREDENTIAL_POLL
+            {
+                self.last_credentials = now;
+                due.credentials = true;
+            }
         }
         due
     }
@@ -351,7 +376,7 @@ impl WatchedPaths {
         let current = stamp(&self.relay_floor_file);
         if current != self.relay_floor {
             self.relay_floor = current;
-            plan.relay_changed();
+            plan.relay_floor_changed();
         }
         let current = stamp(&today_journal(&self.relay));
         if current != self.journal_file {
@@ -448,6 +473,7 @@ fn run(
     let mut plan = RefreshPlan::new(Instant::now);
     let mut last_bytes: Vec<u8> = Vec::new();
     let mut last_relay_bytes: Vec<u8> = Vec::new();
+    let mut presence: BTreeMap<String, bool> = BTreeMap::new();
 
     loop {
         match receiver.recv_timeout(TICK) {
@@ -485,8 +511,11 @@ fn run(
         }
         if due.relay {
             keep_known_projects(&collector.relay);
+            if due.credentials {
+                presence = credential_presence(&collector.relay, collector.credentials.0.as_ref());
+            }
             // A home that cannot be read keeps the last view.
-            if let Ok(view) = read_view(&collector.relay, now_ms()) {
+            if let Ok(view) = read_view_with(&collector.relay, now_ms(), Some(&presence)) {
                 publish_relay(
                     view,
                     &outputs.relay,
@@ -623,6 +652,7 @@ mod tests {
             Due {
                 contract: true,
                 relay: true,
+                credentials: true,
                 ..agents_and_board()
             }
         );
@@ -652,6 +682,51 @@ mod tests {
         );
     }
 
+    /// D-41: a floor or relay change checks the credentials with the view;
+    /// a journal append or the view's own poll does not, but the check comes
+    /// back once a minute.
+    #[test]
+    fn credentials_are_checked_on_relay_changes_and_at_most_once_a_minute() {
+        let (mut plan, now) = started();
+        advance(&now, TICK);
+        plan.relay_changed();
+        let due = plan.due();
+        assert!(due.relay && !due.credentials, "a journal append");
+        advance(&now, RELAY_POLL);
+        let due = plan.due();
+        assert!(
+            due.relay && !due.credentials,
+            "the view's poll, within the minute"
+        );
+        advance(&now, TICK);
+        plan.relay_files_changed();
+        assert!(plan.due().credentials, "a relay file change");
+        advance(&now, TICK);
+        plan.relay_floor_changed();
+        assert!(plan.due().credentials, "a relay floor change");
+        advance(&now, TICK);
+        plan.floor_changed();
+        assert!(plan.due().credentials, "a window floor change");
+
+        advance(&now, TICK);
+        plan.relay_changed();
+        assert!(!plan.due().credentials);
+        let mut checked_at = Vec::new();
+        for _ in 0..(4 * CREDENTIAL_POLL.as_secs() / RELAY_POLL.as_secs()) {
+            advance(&now, RELAY_POLL);
+            if plan.due().credentials {
+                checked_at.push(now.get());
+            }
+        }
+        assert!(!checked_at.is_empty(), "the minute's poll");
+        assert!(
+            checked_at
+                .windows(2)
+                .all(|pair| pair[1].duration_since(pair[0]) >= CREDENTIAL_POLL),
+            "at most once a minute"
+        );
+    }
+
     #[test]
     fn floor_change_rebuilds_everything() {
         let (mut plan, now) = started();
@@ -661,6 +736,7 @@ mod tests {
             plan.due(),
             Due {
                 relay: true,
+                credentials: true,
                 ..agents_and_board()
             }
         );

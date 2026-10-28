@@ -9,6 +9,8 @@
 //! passing a fixture would need a process-wide environment variable.
 
 mod common;
+#[path = "../../../tests/support/fake_store.rs"]
+mod fake_store;
 
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver};
@@ -19,9 +21,12 @@ use officina_core::relay::journal::{CatalogueApproved, JournalEntry};
 use officina_core::relay::view::{RecentEvent, RelayView};
 use officina_host::collector::{Collector, LoadedFloor, load_floor};
 use officina_host::paths::Paths;
+use officina_host::relay::credential::OwnedStore;
 use officina_host::relay::journal::append;
 use officina_host::watch::{CollectorMsg, WatchHandle, spawn};
 use officina_host::writers::{record_hook, record_quota};
+
+use fake_store::{FakeStore, MARKER_SECRET};
 
 const DAY_MS: i64 = 86_400_000;
 
@@ -40,12 +45,23 @@ fn watch(
     env: &common::TestEnv,
     floor: Option<PathBuf>,
 ) -> (WatchHandle, Receiver<Board>, Receiver<RelayView>) {
+    watch_with(env, floor, FakeStore::empty())
+}
+
+/// [`watch`] with `store` as the collector's credential store.
+fn watch_with(
+    env: &common::TestEnv,
+    floor: Option<PathBuf>,
+    store: FakeStore,
+) -> (WatchHandle, Receiver<Board>, Receiver<RelayView>) {
     let paths = paths_of(env, floor.clone());
     let loaded = match &floor {
         Some(path) => load_floor(Some(path)),
         None => LoadedFloor::default(),
     };
-    let collector = Collector::from_parts(paths, loaded, Some(PathBuf::from(common::FAKE_CLAUDE)));
+    let mut collector =
+        Collector::from_parts(paths, loaded, Some(PathBuf::from(common::FAKE_CLAUDE)));
+    collector.credentials = OwnedStore(Box::new(store));
     let (boards, board_rx) = mpsc::channel::<Board>();
     let (views, view_rx) = mpsc::channel::<RelayView>();
     let handle = spawn(
@@ -342,5 +358,112 @@ fn known_projects_follow_the_floor() {
     let (handle, _boards, views) = watch(&plain, None);
     until(&views, |_| true);
     assert!(!plain.relay_home().known_projects_file().exists());
+    stop(handle);
+}
+
+/// A relay floor approved in `env` with two credentials, `monitoring`
+/// (used by an action) and `spare`.
+fn credential_floor(env: &common::TestEnv) {
+    env.write_floor(
+        "schema = 2
+[[project]]
+name = \"lab\"
+path = \"C:/path/to/Lab\"
+actions = [\"health\"]
+[[action]]
+name = \"health\"
+kind = \"http\"
+class = \"free\"
+method = \"GET\"
+url = \"https://monitoring.example.com/health\"
+credential = \"monitoring\"
+[[credential]]
+name = \"monitoring\"
+hosts = [\"monitoring.example.com\"]
+header = \"Authorization\"
+scheme = \"Bearer\"
+[[credential]]
+name = \"spare\"
+hosts = [\"example.com\"]
+header = \"X-Api-Key\"
+scheme = \"Token\"
+",
+    );
+    env.approve();
+}
+
+fn presence(view: &RelayView) -> Vec<(String, Option<bool>)> {
+    view.credentials
+        .iter()
+        .map(|c| (c.name.clone(), c.present))
+        .collect()
+}
+
+/// Story 2.11 AC 12: the window's relay view says which approved
+/// credentials the store holds, never the secret.
+#[test]
+fn relay_view_carries_credential_presence() {
+    let env = common::TestEnv::new();
+    credential_floor(&env);
+    let store = FakeStore::with("monitoring", MARKER_SECRET);
+    let (handle, _boards, views) = watch_with(&env, None, store);
+    let view = until(&views, |v| {
+        v.credentials.iter().any(|c| c.present.is_some())
+    });
+    assert_eq!(
+        presence(&view),
+        [
+            ("monitoring".to_owned(), Some(true)),
+            ("spare".to_owned(), Some(false))
+        ]
+    );
+    assert_eq!(view.credentials[0].actions, ["health"]);
+    let bytes = serde_json::to_vec(&view).unwrap();
+    assert!(
+        !bytes
+            .windows(MARKER_SECRET.len())
+            .any(|w| w == MARKER_SECRET.as_bytes())
+    );
+    stop(handle);
+}
+
+/// D-41: a journal append rebuilds the view without asking the store; a
+/// relay change asks it again.
+#[test]
+fn credential_presence_is_polled_at_most_once_a_minute() {
+    let env = common::TestEnv::new();
+    credential_floor(&env);
+    let store = FakeStore::with("monitoring", MARKER_SECRET);
+    let (handle, _boards, views) = watch_with(&env, None, store.clone());
+    until(&views, |v| {
+        v.credentials.iter().any(|c| c.present.is_some())
+    });
+    let first = store.reads();
+    assert_eq!(first, 2, "one read per credential");
+    for i in 0..5 {
+        let hash = format!("0{i}");
+        append(
+            &env.relay_home(),
+            &[approved_line(&hash)],
+            officina_host::files::now_ms(),
+        )
+        .unwrap();
+        until(&views, |v| {
+            v.recent
+                .iter()
+                .any(|e| matches!(&e.event, RecentEvent::CatalogueApproved(a) if a.hash == hash))
+        });
+    }
+    assert_eq!(store.reads(), first, "journal appends asked the store");
+
+    write(&env.relay_home().relay_dir().join("note.txt"), "x");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while store.reads() == first {
+        assert!(
+            Instant::now() < deadline,
+            "a relay change did not ask the store"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
     stop(handle);
 }

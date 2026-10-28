@@ -19,6 +19,7 @@ use crate::claude;
 use crate::files::{atomic_write, read_recent_events};
 use crate::paths::{ENV_FLOOR, Paths, env_path, excerpts_disabled_by_env};
 use crate::relay::approvals::board_approvals;
+use crate::relay::credential::OwnedStore;
 use crate::relay::home::RelayHome;
 use crate::relay::tree;
 
@@ -110,6 +111,9 @@ pub struct Collector {
     pub claude: Option<PathBuf>,
     /// Where the relay's files are, and which floor it reads (AD-24, D-8).
     pub relay: RelayHome,
+    /// Where the window checks the presence of the approved credentials
+    /// (D-41): the Credential Manager; a fake in tests.
+    pub credentials: OwnedStore,
     agents: Option<Vec<AgentRecord>>,
     agents_raw: Option<Vec<serde_json::Value>>,
     stale: Option<Staleness>,
@@ -142,6 +146,7 @@ impl Collector {
         let applied = paths.clone().with_floor_config_dir(config_dir.as_deref());
         Collector {
             relay: RelayHome::new(paths.officina_home.clone(), None),
+            credentials: OwnedStore::system(),
             paths: applied,
             base_paths: paths,
             floor,
