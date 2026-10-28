@@ -66,21 +66,6 @@
     </div>
   {/if}
 
-  {#if waiting > 0}
-    <div class="pill" data-testid="waiting-pill" role="status">{waiting} waiting</div>
-  {/if}
-  {#if relay?.stopped}
-    <div class="chip stopped" data-testid="relay-stopped-chip" role="status">relay stopped</div>
-  {/if}
-  {#if relay?.pending}
-    <div class="chip pending" data-testid="catalogue-chip" role="status">catalogue change</div>
-  {/if}
-  {#if toSort > 0 && onView}
-    <button class="chip to-sort" data-testid="to-sort-chip" onclick={openTriage} title="Open the Triage panel">
-      {toSort} to sort
-    </button>
-  {/if}
-
   {#if board}
     <div class="gauges">
       <Gauge
@@ -102,52 +87,75 @@
     </div>
   {/if}
 
-  <div class="tools">
-    {#if contract?.held === true && contract.hook_missing.length === 0}
-      <span class="contract" data-testid="contract" title="Claude Code {contract.claude_version ?? ''}">contract held</span>
-    {:else if contract?.held === false}
-      <span class="contract broken" data-testid="contract">contract broken: {contract.missing.join(", ")}</span>
-    {/if}
-    {#if contract && contract.hook_missing.length > 0}
-      <span class="contract broken" data-testid="contract-hook" title="Claude Code {contract.claude_version ?? ''}"
-        >hook fields missing: {contract.hook_missing.join(", ")}</span
-      >
-    {/if}
-    {#if relay?.inUse}
+  <!-- The right side is a column: the fixed buttons, then the status line
+       of chips that come and go with the data. A chip appearing moves no
+       button, and nothing on the left of it, gauges included (D-517). -->
+  <div class="side">
+    <div class="tools">
+      {#if relay?.inUse}
+        <button
+          class="tool relay-toggle"
+          data-testid="relay-toggle"
+          aria-pressed={relay.stopped}
+          disabled={relay.switching}
+          onclick={() => relay.setStopped(!relay.stopped)}
+          title={relay.stopped
+            ? "Let officina run start approved actions again"
+            : "Refuse every officina run call until you resume"}
+        >
+          <StableLabel labels={RELAY_TOGGLE_TEXT} current={relay.stopped ? "stopped" : "running"} />
+        </button>
+      {/if}
+      <button class="tool" onclick={() => store.refresh()} title="Refresh now (r)">Refresh</button>
       <button
-        class="tool relay-toggle"
-        data-testid="relay-toggle"
-        aria-pressed={relay.stopped}
-        disabled={relay.switching}
-        onclick={() => relay.setStopped(!relay.stopped)}
-        title={relay.stopped
-          ? "Let officina run start approved actions again"
-          : "Refuse every officina run call until you resume"}
+        class="tool"
+        data-testid="pin-toggle"
+        aria-pressed={store.alwaysOnTop}
+        onclick={() => store.toggleAlwaysOnTop()}
+        title="Keep the board above other windows"
       >
-        <StableLabel labels={RELAY_TOGGLE_TEXT} current={relay.stopped ? "stopped" : "running"} />
+        <StableLabel
+          labels={{ pinned: "Pinned", unpinned: "Pin on top" }}
+          current={store.alwaysOnTop ? "pinned" : "unpinned"}
+        />
       </button>
-    {/if}
-    <button class="tool" onclick={() => store.refresh()} title="Refresh now (r)">Refresh</button>
-    <button
-      class="tool"
-      data-testid="pin-toggle"
-      aria-pressed={store.alwaysOnTop}
-      onclick={() => store.toggleAlwaysOnTop()}
-      title="Keep the board above other windows"
-    >
-      <StableLabel
-        labels={{ pinned: "Pinned", unpinned: "Pin on top" }}
-        current={store.alwaysOnTop ? "pinned" : "unpinned"}
-      />
-    </button>
+    </div>
+    <div class="status" data-testid="header-status">
+      {#if waiting > 0}
+        <div class="pill" data-testid="waiting-pill" role="status">{waiting} waiting</div>
+      {/if}
+      {#if relay?.stopped}
+        <div class="chip stopped" data-testid="relay-stopped-chip" role="status">relay stopped</div>
+      {/if}
+      {#if relay?.pending}
+        <div class="chip pending" data-testid="catalogue-chip" role="status">catalogue change</div>
+      {/if}
+      {#if toSort > 0 && onView}
+        <button class="chip to-sort" data-testid="to-sort-chip" onclick={openTriage} title="Open the Triage panel">
+          {toSort} to sort
+        </button>
+      {/if}
+      {#if contract?.held === true && contract.hook_missing.length === 0}
+        <span class="contract" data-testid="contract" title="Claude Code {contract.claude_version ?? ''}">contract held</span>
+      {:else if contract?.held === false}
+        <span class="contract broken" data-testid="contract">contract broken: {contract.missing.join(", ")}</span>
+      {/if}
+      {#if contract && contract.hook_missing.length > 0}
+        <span class="contract broken" data-testid="contract-hook" title="Claude Code {contract.claude_version ?? ''}"
+          >hook fields missing: {contract.hook_missing.join(", ")}</span
+        >
+      {/if}
+    </div>
   </div>
 </header>
 
 <style>
+  /* Items keep to the top of their line: a status line that grows taller
+     when its chips wrap moves nothing beside it (D-517). */
   .bar {
     display: flex;
     flex-wrap: wrap;
-    align-items: center;
+    align-items: flex-start;
     gap: 14px 20px;
     padding: 14px 20px;
   }
@@ -185,14 +193,18 @@
     color: var(--color-bg);
   }
   .pill {
-    padding: 6px 16px;
+    padding: 4px 14px;
+    font-size: 13.5px;
+    white-space: nowrap;
     border-radius: var(--radius-pill);
     background: var(--color-attention);
     color: var(--color-attention-text);
     font-weight: 700;
   }
   .chip {
-    padding: 6px 14px;
+    padding: 4px 12px;
+    font-size: 13.5px;
+    white-space: nowrap;
     border-radius: var(--radius-pill);
     font-weight: 700;
   }
@@ -222,11 +234,30 @@
     flex-wrap: wrap;
     gap: 10px;
   }
+  /* Takes the free room of the line and never more: its smallest width is
+     its buttons', so it never wraps to a line of its own. */
+  .side {
+    display: flex;
+    flex: 1 1 0;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 6px;
+  }
   .tools {
     display: flex;
+    justify-content: flex-end;
     align-items: center;
     gap: 8px;
-    margin-left: auto;
+  }
+  /* One chip line is kept even when empty, so the header's height does not
+     follow the chips either. */
+  .status {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    align-items: center;
+    gap: 6px 10px;
+    min-height: 30px;
   }
   .tool {
     min-height: var(--target-min);

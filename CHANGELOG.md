@@ -512,6 +512,10 @@ project uses [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- A header status chip (the waiting pill, relay stopped, catalogue change,
+  to sort, the contract) no longer moves the quota gauges or the buttons:
+  the chips sit on one status line under the right-hand buttons, kept even
+  when empty, so the header keeps its height as they come and go.
 - Toggling a control no longer moves the controls beside it. A button
   whose label follows its state (Stop relay and Resume relay in the header
   and the Relay view, Pin on top and Pinned, Copy attach command and

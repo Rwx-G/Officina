@@ -199,6 +199,64 @@ test.describe("controls keep their size whatever their state", () => {
     });
   }
 
+  // D-517: a status chip coming or going moves neither the gauges nor any
+  // header button. Every chip the header can show is shown at once, then
+  // none; the boxes of the gauges and the buttons outside the status slot
+  // are compared.
+  test("header status chips move neither the gauges nor the buttons", async ({ page }) => {
+    const board = loadBoard("busy");
+    const clean = loadRelay("relay-clean");
+    await openBoard(page, board, {}, clean);
+    const fixed = page.locator(
+      'header [data-testid^="gauge-"], header button:not([data-testid="header-status"] button)',
+    );
+    const boxes = () =>
+      fixed.evaluateAll((elements) =>
+        elements.map((e) => {
+          const r = e.getBoundingClientRect();
+          return { name: e.getAttribute("data-testid") ?? e.textContent?.trim(), x: r.x, y: r.y, w: r.width, h: r.height };
+        }),
+      );
+    await page.evaluate(
+      ([b, r]) =>
+        Promise.all([
+          window.__officinaPushBoard?.({
+            ...b,
+            waiting_count: 0,
+            columns: { ...b.columns, needs_you: [] },
+            contract: { ...b.contract, held: true, missing: [], hook_missing: [] },
+          }),
+          window.__officinaPushRelay?.({ ...r, stopped: false, pending: null }),
+        ]),
+      [board, clean] as const,
+    );
+    await expect(page.getByTestId("header-status").locator(":scope > *")).toHaveCount(1);
+    const quiet = await boxes();
+    expect(quiet.length).toBeGreaterThan(3);
+    const pending = loadRelay("relay-pending");
+    await page.evaluate(
+      ([b, r]) =>
+        Promise.all([
+          window.__officinaPushBoard?.({
+            ...b,
+            contract: { ...b.contract, held: false, missing: ["a field"], hook_missing: ["Stop.cwd"] },
+          }),
+          window.__officinaPushRelay?.({ ...r, stopped: true }),
+        ]),
+      [board, pending] as const,
+    );
+    for (const chip of ["waiting-pill", "relay-stopped-chip", "catalogue-chip", "contract", "contract-hook"]) {
+      await expect(page.getByTestId(chip)).toBeVisible();
+    }
+    const busy = await boxes();
+    expect(busy.map((b) => b.name)).toEqual(quiet.map((b) => b.name));
+    for (const [i, before] of quiet.entries()) {
+      for (const key of ["x", "y", "w", "h"] as const) {
+        expectClose(busy[i]![key], before[key], `${before.name} ${key}`);
+      }
+    }
+  });
+
   test("the scrollbar's room is kept in every view", async ({ page }) => {
     await SCENES.board(page);
     // Headless Chromium hides scrollbars, so the style is what can be seen.
