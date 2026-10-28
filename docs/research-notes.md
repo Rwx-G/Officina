@@ -374,6 +374,47 @@ it was written beside another build of the probe):
   Not run, as information only, not blocking: a dark taskbar, and 150 %
   scaling (D-520: not the owner's screen).
 
+## E81. What a real wait emits (v0.4 gate 4)
+
+Story 4.1 AC 4, AD-178 gate 4, D-499. Run by the owner on 2026-10-28, in a
+scratch folder whose `.claude/settings.local.json` sets
+`permissions.defaultMode` to `default` (the owner's own sessions run in
+`bypassPermissions`), Claude Code 2.1.312, an interactive session. The
+prompt asked Claude to ask a question through `AskUserQuestion`, then to
+create a file, which raises a `Write` permission dialog; the owner waited
+about 70 s at each dialog before answering.
+
+`slice0_probe wait <session id>`, each line's delay since the previous one:
+
+| Event | Delay |
+|---|---|
+| `SessionStart` (`startup`) | +0 ms |
+| `UserPromptSubmit` | +16015 ms |
+| `Notification` `permission_prompt` (the `AskUserQuestion` dialog) | +7997 ms |
+| `Notification` `permission_prompt` (the `Write` dialog, after the 70 s wait, the answer and Claude's next step) | +106265 ms |
+| `Stop` | +169000 ms |
+| `SessionEnd` (`prompt_input_exit`) | +5179 ms |
+
+`slice0_probe notifications` over the whole buffer: 2026-10-28,
+`permission_prompt`: 2.
+
+- A question through `AskUserQuestion` emits a blocking `Notification` of
+  type `permission_prompt`, not `elicitation_dialog`, seconds after the
+  prompt: a question has a known wait start, and escalates by time.
+- A permission dialog emits the same type: the type does not tell a
+  question from a permission.
+- No repeated notification and no `idle_prompt` arrived during a 70 s wait
+  at an open dialog.
+- The owner's real sessions, in `bypassPermissions`, emitted no
+  `Notification` at all over the buffer's day: they raise no dialog.
+- Outcome: story 4.3's vectors carry the question as observed
+  (`tests/vectors/scene.json`, "a question through AskUserQuestion carries
+  a permission_prompt notification ..."); the shape without a blocking
+  notification stays as the fallback for a wait whose start Officina did
+  not see, which a bypass session's agents `waiting` status alone would
+  give. Rule 3 is unchanged. Gate 4 is recorded after story 4.3 was built
+  (D-499's order not met, already in the Epic 4 report).
+
 ## E7. Configuration directory
 
 - **Documented.** `CLAUDE_CONFIG_DIR` redirects settings, session history and

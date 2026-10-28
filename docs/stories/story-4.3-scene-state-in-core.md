@@ -1,6 +1,6 @@
 # Story 4.3: The scene state in core: zones, alerts and escalation
 
-**Status:** In progress (code and tests done; AC 2's case for the question shape gate 4 records waits for the owner's gate 4 entry, story 4.1)
+**Status:** Review (gate 4 recorded in research notes E81 and its question shape added to the vectors)
 
 ## Story
 
@@ -23,7 +23,7 @@ so that the scene never classifies, missing data shows as unknown without ever c
 
 ## Tasks
 
-- [ ] Read story 4.1's gate 4 entry; add its question shape to the vectors (AC 2) (open: gate 4 is the owner's; both shapes are in the vectors meanwhile)
+- [x] Read story 4.1's gate 4 entry; add its question shape to the vectors (AC 2): research notes E81, a `permission_prompt` notification seconds after the prompt
 - [x] `crates/officina-core/src/board.rs`: fold `last_session_start_source` beside `saw_prompt`; `BoardInput.previous_scene` (AC 1, 2)
 - [x] `crates/officina-core/src/scene.rs`: types, `place`, the unknown carry-over, next escalation; call from `build_board` after classification (AC 1-3, 5, 6)
 - [x] `tests/vectors/scene.json` and `crates/officina-core/tests/scene_vectors.rs`; formatter ignore entries (AC 2-4, 6)
@@ -66,7 +66,7 @@ so that the scene never classifies, missing data shows as unknown without ever c
 ### Completion Notes
 
 - AC 1: `typescript_bindings.rs::committed_bindings_match_the_rust_types`; `scene.rs::tests::ended_cards_have_no_scene_state`.
-- AC 2: `tests/vectors/scene.json` replayed by `scene_vectors.rs::every_case_places_its_cards` (cases named after each rule of the AC). Open: the case for the question shape gate 4 records (owner).
+- AC 2: `tests/vectors/scene.json` replayed by `scene_vectors.rs::every_case_places_its_cards` (cases named after each rule of the AC), the question shape gate 4 recorded included: "a question through AskUserQuestion carries a permission_prompt notification seconds after the prompt, a known start (gate 4, E81)". The case without a blocking notification stays as the fallback for a wait whose start was not seen.
 - AC 3: vector cases "a stale board keeps an alerted card's alert", "an unknown badge keeps an alerted card's alert", "an unknown card past the threshold gains no alert", "fresh data in the lounge clears the alert", "a stale board makes every live card unknown, and a first board while stale has no alert"; `scene.rs::tests::alert_count_counts_unknown_cards_that_keep_their_alert`.
 - AC 4: `scene_vectors.rs::every_zone_and_cause_has_a_case`; no formatter runs on JSON (Debug Log).
 - AC 5: `scene.rs::tests::{board_order_is_unchanged_by_alerts, alert_count_counts_alerted_cards}`.
@@ -90,3 +90,4 @@ so that the scene never classifies, missing data shows as unknown without ever c
 - 2026-10-28 created with the scene v2 rework (D-460)
 - 2026-10-28 reworked after the plan challenge (D-494 to D-496, D-499): unknown keeps the last known alert through `previous_scene`; reception on a `startup` start only; approval-only waits while Working and never by time; gate 4 before this story starts
 - 2026-10-28 implemented: the scene state in core with its vector set, the escalation recompute in the collector, the last known alert kept on a stale board, zone intents in the scene fixtures. Status in progress until gate 4's question shape is recorded
+- 2026-10-28 gate 4 recorded (research notes E81): an `AskUserQuestion` question emits `permission_prompt`, a known start; its case joins the vectors, rule 3 unchanged. Status review

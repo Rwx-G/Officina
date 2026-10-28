@@ -1,6 +1,6 @@
 # Story 4.14: Documentation, README assets, workstation checks and QA closure
 
-**Status:** In progress (the owner's workstation runs, AC 5 to 10, and his review of the README assets are open; see Completion Notes)
+**Status:** In progress (the owner's workstation runs, AC 5, 6 and 8 to 10, and his review of the README assets are open; AC 7 passed; see Completion Notes)
 
 ## Story
 
@@ -65,7 +65,8 @@ so that v0.4 is understood without guessing, its CPU promise is a number, and no
 - AC 2: `pnpm exec playwright test --config playwright.readme.config.ts -g scene` wrote the three assets. **Open**: the owner's review of `docs/assets/scene.png`, `scene-dark.png` and `scene.gif`.
 - AC 3: review.
 - AC 4: Vitest `app/scripts/scene-replay.test.ts > the replay schedules one crossing change every 10 s`; the CI step "e2e fixtures from the real CLI" unchanged.
-- AC 5 to 10: **open (owner)**. Build the release window from `main`, quit any running Officina, then `node app/scripts/e2e-fixtures.mjs --home <new folder> scene-measure` and start `officina-app.exe` with the environment it prints; `node app/scripts/scene-replay.mjs --home <that folder>` drives the walks. Measure the `officina-app` process and its `msedgewebview2.exe` children, in % of the machine and of one core, over 10 minutes each: halos breathing, the two-minute rule, halos steady, the replay with walking on, the replay with walking off (AC 5; if the walking run reaches 1 % of the machine, `DEFAULT_WALKING` becomes `false` in the same change). Then the taskbar at 100 % and 150 % (AC 6), Windows switched between light and dark with the theme on Auto (AC 7), the look at 100 % and 150 %, light and dark, settled and walking (AC 8), the 2 s readability on five fixtures (AC 9), and the day Scene becomes the chosen mode (AC 10), each a research-notes entry.
+- AC 7: **pass** (owner, 2026-10-28): with the installed build open on Auto, he switched the Windows theme and the window followed by itself, no restart; D-118's fallback is not needed. The WebView2 runtime version was not noted.
+- AC 5, 6, 8 to 10: **open (owner)**. Build the release window from `main`, quit any running Officina, then `node app/scripts/e2e-fixtures.mjs --home <new folder> scene-measure` and start `officina-app.exe` with the environment it prints; `node app/scripts/scene-replay.mjs --home <that folder>` drives the walks. Measure the `officina-app` process and its `msedgewebview2.exe` children, in % of the machine and of one core, over 10 minutes each: halos breathing, the two-minute rule, halos steady, the replay with walking on, the replay with walking off (AC 5; if the walking run reaches 1 % of the machine, `DEFAULT_WALKING` becomes `false` in the same change). Then the taskbar at 100 % and 150 % (AC 6), the look at 100 % and 150 %, light and dark, settled and walking (AC 8), the 2 s readability on five fixtures (AC 9), and the day Scene becomes the chosen mode (AC 10), each a research-notes entry.
 - AC 11: `docs/qa/epic-4-report.md` "Slice 0 order": gate 2 before 4.5's close, gate 3 withdrawn, gate 1 not run and 4.12 not started; gate 4 did not precede 4.3 (recorded in story 4.3); gate 5's answers preceded 4.6, its counts open.
 - AC 12: the `windows` job's Playwright step runs `--repeat-each=3`; the local replay of it passed (783 passed, 6 skipped).
 - AC 13: `docs/qa/epic-4-report.md`, gate decision open; the per-AD traceability, the audits and the closure wait for the owner's entries.
@@ -88,3 +89,4 @@ so that v0.4 is understood without guessing, its CPU promise is a number, and no
 - 2026-10-28 renumbered 4.12 and reworked for the scene v2 (D-460): the walking runs and the replay, the taskbar on the real app, the WebView2 look during walks, Slice 0's order, FR-10 to FR-13 and AD-167 to AD-178 in the traceability
 - 2026-10-28 renumbered 4.14 after the plan challenge (D-497 to D-501, D-506): the former AC 11 (what a real wait emits) moved to story 4.1's gate 4; the CPU threshold in both units and the only walking measurement; Slice 0's order for gates 1, 2, 4 and 5; the challenge's outcomes in the report
 - 2026-10-28 started: README pass, the scene's README assets, the QA report written open; the workstation runs and the assets' review are the owner's
+- 2026-10-28 AC 7 passed: the window followed a Windows theme switch on Auto (owner)

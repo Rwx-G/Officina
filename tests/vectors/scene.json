@@ -36,6 +36,19 @@
       "expect_next_escalation_at_ms": 1793102760000
     },
     {
+      "name": "a question through AskUserQuestion carries a permission_prompt notification seconds after the prompt, a known start (gate 4, E81)",
+      "now_ms": 1793102400000,
+      "agents": [{"pid": 4100, "cwd": "C:/work/api", "kind": "interactive", "startedAt": 1793095200000, "sessionId": "00000000-0000-0000-0000-000000000001", "status": "waiting", "waitingFor": "input needed"}],
+      "events": [
+        {"v": 1, "ts": 1793101500000, "event": "SessionStart", "session_id": "00000000-0000-0000-0000-000000000001", "source": "startup"},
+        {"v": 1, "ts": 1793101516015, "event": "UserPromptSubmit", "session_id": "00000000-0000-0000-0000-000000000001"},
+        {"v": 1, "ts": 1793101524012, "event": "Notification", "session_id": "00000000-0000-0000-0000-000000000001", "notification_type": "permission_prompt"}
+      ],
+      "expect": [{"key": "pid:4100:1793095200000", "zone": "alert", "waiting_since_ms": 1793101524012, "alert": "waited", "approval": false}],
+      "expect_alert_count": 1,
+      "expect_next_escalation_at_ms": null
+    },
+    {
       "name": "a question with no blocking notification has no known start and never escalates by time",
       "now_ms": 1793102400000,
       "agents": [{"pid": 4100, "cwd": "C:/work/api", "kind": "interactive", "startedAt": 1793095200000, "sessionId": "00000000-0000-0000-0000-000000000001", "status": "waiting", "waitingFor": "input needed"}],
