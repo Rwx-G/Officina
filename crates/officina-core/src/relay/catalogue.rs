@@ -12,8 +12,8 @@ use serde::{Deserialize, Serialize};
 
 use super::params::{self, Param, ParamRule, PatternError};
 use crate::floor::{
-    Autonomy, FloorError, FloorFile, floor_dir_of, is_windows_absolute, parse_floor,
-    resolve_project_path,
+    Autonomy, FloorError, FloorFile, floor_dir_of, is_windows_absolute, join_project_path,
+    parse_floor, resolve_project_path,
 };
 use crate::quota::normalise_path;
 
@@ -638,17 +638,19 @@ pub fn action_from_value(value: &toml::Value) -> Result<Action, Vec<ActionIssue>
         );
     }
 
+    // An `after-check` action needs its check; a `human` action may name one,
+    // its dry run (D-170); a `free` action runs without any, so naming one
+    // would promise a binding it never has.
     match (raw.class, &raw.check) {
         (ActionClass::AfterCheck, None) => report(
             IssueKind::Check,
             "an `after-check` action names its check action in `check`".to_owned(),
         ),
-        (ActionClass::AfterCheck, Some(_)) => {}
+        (ActionClass::AfterCheck | ActionClass::Human, _) | (_, None) => {}
         (_, Some(_)) => report(
             IssueKind::Check,
-            "only an `after-check` action names a `check`".to_owned(),
+            "only an `after-check` or `human` action names a `check`".to_owned(),
         ),
-        (_, None) => {}
     }
 
     if !issues.is_empty() {
@@ -980,6 +982,43 @@ pub fn load(content: &str, floor_path: &str) -> Result<RelayFloor, FloorError> {
         canonical,
         hash,
     })
+}
+
+/// The validated action an approved canonical action stands for, so a
+/// command can be rebuilt from the approved snapshot alone (D-27): the
+/// canonical form keeps every field as the floor declares it, and goes
+/// through the same conversion and rules as a floor's action.
+pub fn action_from_canonical(
+    name: &str,
+    canonical: &CanonicalAction,
+) -> Result<Action, Vec<ActionIssue>> {
+    let mut fields = match serde_json::to_value(canonical) {
+        Ok(serde_json::Value::Object(fields)) => fields,
+        _ => serde_json::Map::new(),
+    };
+    fields.retain(|_, value| !value.is_null());
+    fields.insert("name".to_owned(), name.into());
+    let value = toml::Value::try_from(serde_json::Value::Object(fields)).map_err(|e| {
+        vec![ActionIssue {
+            name: name.to_owned(),
+            line: None,
+            kind: IssueKind::Malformed,
+            message: e.to_string(),
+        }]
+    })?;
+    action_from_value(&value)
+}
+
+/// Each project's folder as the floor declares it, by name: the floor's
+/// directory joined to a relative path, an absolute one as written (D-6).
+/// What `officina run` starts in, unlike the lowercased canonical path.
+pub fn project_dirs(floor: &FloorFile, floor_path: &str) -> BTreeMap<String, String> {
+    let floor_dir = floor_dir_of(floor_path);
+    floor
+        .projects
+        .iter()
+        .map(|p| (p.name.clone(), join_project_path(floor_dir, &p.path)))
+        .collect()
 }
 
 /// One changed field, as JSON so any field type renders.
@@ -1617,6 +1656,70 @@ mod tests {
             );
             assert!(!catalogue.actions.contains_key("apply"));
         }
+    }
+
+    /// Every action of a catalogue converts back from its canonical form to
+    /// the same canonical form, so a command rebuilt from the approved
+    /// snapshot is the one the floor's action builds.
+    #[test]
+    fn canonical_actions_convert_back_to_the_same_action() {
+        let human = apply("check").replace("\"after-check\"", "\"human\"");
+        let content = bare(&[
+            CHECK,
+            &human,
+            &probe_top(
+                "runner = \"wsl\"\ndistro = \"Debian\"\nenv = { MODE = \"x\" }\ntimeout_s = 30\n",
+            )
+            .replace("C:/path/to/tool.exe", "/usr/bin/tool")
+            .replace("\"probe\"", "\"remote\""),
+            VALID_PROBE,
+        ]);
+        let catalogue = canonical(&validated(&content), "C:/path/to/officina.toml");
+        assert!(
+            catalogue.actions.len() >= 4,
+            "{:?}",
+            catalogue.actions.keys()
+        );
+        for (name, action) in &catalogue.actions {
+            let back = action_from_canonical(name, action).unwrap();
+            assert_eq!(&CanonicalAction::from(&back), action, "{name}");
+        }
+    }
+
+    /// D-170: a `human` action may name its dry run, under the same target
+    /// rule as an `after-check` action.
+    #[test]
+    fn human_action_may_name_a_check() {
+        let human = apply("check").replace("\"after-check\"", "\"human\"");
+        let good = validated(&bare(&[CHECK, &human]));
+        assert!(good.issues.is_empty(), "{:#?}", good.issues);
+        assert_eq!(good.actions["apply"].check.as_deref(), Some("check"));
+        let canonical = canonical(&good, "C:/path/to/officina.toml");
+        assert_eq!(canonical.actions["apply"].check.as_deref(), Some("check"));
+        let without = validated(&bare(&[&human.replace("check = \"check\"\n", "")]));
+        assert!(without.issues.is_empty(), "a human action needs no check");
+
+        let other_params = validated(&bare(&[&CHECK.replace("host", "group"), &human]));
+        assert!(
+            other_params
+                .issues
+                .iter()
+                .any(|i| i.kind == IssueKind::Check)
+        );
+        assert!(!other_params.actions.contains_key("apply"));
+    }
+
+    #[test]
+    fn free_action_naming_a_check_is_an_issue() {
+        let free = apply("check").replace("\"after-check\"", "\"free\"");
+        let catalogue = validated(&bare(&[CHECK, &free]));
+        let issue = catalogue
+            .issues
+            .iter()
+            .find(|i| i.kind == IssueKind::Check)
+            .expect("an issue");
+        assert_eq!(issue.name, "apply");
+        assert!(!catalogue.actions.contains_key("apply"));
     }
 
     #[test]

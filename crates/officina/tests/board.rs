@@ -52,7 +52,8 @@ fn board_classifies_the_fake_sessions_and_joins_hook_events() {
 
     let (code, board) = board(&env);
     assert_eq!(code, Some(0));
-    assert_eq!(board["schema"], 1);
+    assert_eq!(board["schema"], officina_core::board::BOARD_SCHEMA);
+    assert_eq!(board["approvals"], serde_json::json!([]));
     assert_eq!(board["waiting_count"], 1);
     assert_eq!(
         keys(&board, "needs_you"),

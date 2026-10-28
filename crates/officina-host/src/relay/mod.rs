@@ -4,6 +4,7 @@
 //! with the `window-authority` feature, which `officina-app` enables and the
 //! `officina` binary does not: the exe a session can call cannot approve.
 
+pub mod approvals;
 #[cfg(feature = "window-authority")]
 pub mod authority;
 pub mod doctor;

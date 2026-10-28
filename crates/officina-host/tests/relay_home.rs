@@ -4,7 +4,9 @@
 
 use std::path::{Path, PathBuf};
 
+use officina_core::relay::approvals::{FileKind, file_name, kept_output_name};
 use officina_core::relay::catalogue::{ApprovedCatalogue, load};
+use officina_host::relay::approvals::prune;
 use officina_host::relay::home::{ApprovedState, RelayFloorError, RelayHome, load_relay_floor};
 
 const FLOOR: &str = "schema = 2\n\n[[project]]\nname = \"lab\"\npath = \"Lab\"\nactions = [\"probe\"]\n\n[[action]]\nname = \"probe\"\nclass = \"free\"\nprogram = \"C:/path/to/tool.exe\"\n";
@@ -175,4 +177,110 @@ fn known_projects_are_read_back() {
     .unwrap();
     let known = home.read_known_projects().unwrap();
     assert_eq!(known.project_paths, ["c:/work/lab"]);
+}
+
+// ---- story 2.8: approval files and kept outputs (AD-33, D-170) ----
+
+const DAY: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
+
+/// Writes `name` in `dir` and dates it `age` ago.
+fn aged_file(dir: &Path, name: &str, age: std::time::Duration) -> PathBuf {
+    std::fs::create_dir_all(dir).unwrap();
+    let path = dir.join(name);
+    std::fs::write(&path, b"{}").unwrap();
+    let file = std::fs::File::options().write(true).open(&path).unwrap();
+    file.set_modified(std::time::SystemTime::now() - age)
+        .unwrap();
+    path
+}
+
+#[test]
+fn approval_files_older_than_24_h_are_pruned() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = RelayHome::new(dir.path(), None);
+    let approvals = home.approvals_dir();
+    let old: Vec<PathBuf> = FileKind::ALL
+        .iter()
+        .map(|kind| aged_file(&approvals, &file_name("0123456789abcdef-1", *kind), DAY * 2))
+        .collect();
+    let fresh = aged_file(
+        &approvals,
+        &file_name("0123456789abcdef-2", FileKind::Request),
+        DAY / 2,
+    );
+    let foreign = aged_file(&approvals, "notes.txt", DAY * 2);
+    assert_eq!(prune(&home, std::time::SystemTime::now()), old.len());
+    for path in &old {
+        assert!(!path.exists(), "{}", path.display());
+    }
+    assert!(fresh.exists(), "younger than 24 h");
+    assert!(foreign.exists(), "not an approval file");
+}
+
+#[test]
+fn kept_outputs_older_than_7_days_are_pruned() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = RelayHome::new(dir.path(), None);
+    let outputs = home.outputs_dir();
+    let old = aged_file(&outputs, &kept_output_name("old-run"), DAY * 8);
+    let recent = aged_file(&outputs, &kept_output_name("recent-run"), DAY * 6);
+    assert_eq!(prune(&home, std::time::SystemTime::now()), 1);
+    assert!(!old.exists());
+    assert!(recent.exists(), "younger than 7 days");
+}
+
+#[test]
+fn run_never_deletes_approval_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = RelayHome::new(dir.path().join("officina"), None);
+    let lab = dir.path().join("Lab");
+    std::fs::create_dir_all(&lab).unwrap();
+    let floor = format!(
+        "schema = 2\n[[project]]\nname = \"lab\"\npath = \"{}\"\nactions = [\"restart\"]\n[[action]]\nname = \"restart\"\nclass = \"human\"\nprogram = \"C:/path/to/tool.exe\"\n",
+        lab.to_string_lossy().replace('\\', "/")
+    );
+    std::fs::create_dir_all(home.officina_home()).unwrap();
+    std::fs::write(home.default_floor(), &floor).unwrap();
+    let relay_floor = load(&floor, &home.default_floor().to_string_lossy()).unwrap();
+    let approved = ApprovedCatalogue {
+        approved_at_ms: 1_793_102_400_000,
+        hash: relay_floor.hash,
+        floor_file: Some(home.default_floor().to_string_lossy().into_owned()),
+        canonical: relay_floor.canonical,
+    };
+    write_approved(&home, &serde_json::to_vec(&approved).unwrap());
+    let old: Vec<PathBuf> = FileKind::ALL
+        .iter()
+        .map(|kind| {
+            aged_file(
+                &home.approvals_dir(),
+                &file_name("0123456789abcdef-1", *kind),
+                DAY * 2,
+            )
+        })
+        .collect();
+
+    let code = officina_host::relay::run::run(
+        &home,
+        &lab.to_string_lossy(),
+        "restart",
+        &std::collections::BTreeMap::new(),
+        None,
+        std::time::Duration::from_secs(1),
+    );
+    assert_eq!(code, 126, "no decision within the wait");
+    for path in &old {
+        assert!(path.exists(), "{}", path.display());
+    }
+    let requests = std::fs::read_dir(home.approvals_dir())
+        .unwrap()
+        .filter(|e| {
+            e.as_ref()
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .ends_with(".request.json")
+        })
+        .count();
+    assert_eq!(requests, 2, "the old request and the new one");
 }

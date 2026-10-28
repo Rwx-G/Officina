@@ -35,7 +35,7 @@ const FLOOR: &str = r#"schema = 2
 [[project]]
 name = "supervision"
 path = "{project}"
-actions = ["probe", "tool", "short", "capped", "verify", "apply", "approve-me"]
+actions = ["probe", "tool", "short", "capped", "verify", "apply", "approve-me", "apply-sensitive"]
 
 [[project]]
 name = "notes"
@@ -94,6 +94,16 @@ pattern = "lab-[a-z0-9-]{1,30}"
 [[action]]
 name = "approve-me"
 class = "human"
+program = "{tool}"
+args = ["{group}"]
+
+[action.params.group]
+pattern = "lab-[a-z0-9-]{1,30}"
+
+[[action]]
+name = "apply-sensitive"
+class = "human"
+check = "verify"
 program = "{tool}"
 args = ["{group}"]
 
@@ -221,6 +231,29 @@ fn code_of(reason: RefusalReason) -> String {
         .to_owned()
 }
 
+/// [`assert_refused`] after `launches_before` launches of earlier calls.
+fn assert_refused_after(
+    relay: &Relay,
+    out: &Output,
+    reason: RefusalReason,
+    launches_before: usize,
+) {
+    assert_eq!(out.status.code(), Some(126), "{:?}", stderr_lines(out));
+    let lines = stderr_lines(out);
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    assert!(lines[0].starts_with("officina: refused: "), "{lines:?}");
+    assert!(
+        lines[0].ends_with(&format!("({})", code_of(reason))),
+        "{lines:?}"
+    );
+    assert_eq!(
+        relay.launches().len(),
+        launches_before,
+        "the tool must not start"
+    );
+    assert_eq!(relay.refused().last().map(|r| r.reason), Some(reason));
+}
+
 /// Asserts a refusal: exit 126, one stderr line naming the code, the tool
 /// never started. Returns the reason the journal recorded last.
 fn assert_refused(relay: &Relay, out: &Output, reason: RefusalReason) {
@@ -292,15 +325,13 @@ fn checks_run_in_the_documented_order() {
         RefusalReason::OutsideProjects,
         RefusalReason::ActionNotAllowed,
         RefusalReason::InvalidValue,
-        RefusalReason::ClassNotAvailable,
     ];
     for (i, expected) in steps.iter().enumerate() {
         let (dir, args): (PathBuf, Vec<&str>) = match i {
             0 | 1 => (relay.outside(), everything_wrong.to_vec()),
             2 => (relay.outside(), everything_wrong.to_vec()),
             3 => (relay.notes(), everything_wrong.to_vec()),
-            4 => (relay.project(), vec!["approve-me", "group=-x"]),
-            _ => (relay.project(), vec!["approve-me", "group=lab-web"]),
+            _ => (relay.project(), vec!["approve-me", "group=-x"]),
         };
         let out = relay.run_in(&dir, &args);
         assert_refused(&relay, &out, *expected);
@@ -329,10 +360,75 @@ fn free_project_listing_the_action_is_served() {
     );
 }
 
+/// What a scenario does while its call waits for a decision: the author's
+/// part, given the request's id.
+type During = Box<dyn FnOnce(&Relay, &str)>;
+
+/// One refusal code's scenario: the relay, where the call runs, with what,
+/// the `PATH` it gets (`git` for a tree) and what happens while it waits.
+struct Scenario {
+    relay: Relay,
+    dir: PathBuf,
+    args: Vec<&'static str>,
+    path: Option<PathBuf>,
+    during: Option<During>,
+}
+
+/// The ids of the requests in the relay's approvals folder.
+fn request_ids(relay: &Relay) -> Vec<String> {
+    let Ok(entries) = std::fs::read_dir(relay.env.relay_home().approvals_dir()) else {
+        return Vec::new();
+    };
+    let mut ids: Vec<String> = entries
+        .flatten()
+        .filter_map(|e| {
+            e.file_name()
+                .to_string_lossy()
+                .strip_suffix(".request.json")
+                .map(str::to_owned)
+        })
+        .collect();
+    ids.sort();
+    ids
+}
+
+/// Runs `cmd`, and once its request appears, `during` with its id.
+fn run_waiting(relay: &Relay, cmd: Command, during: During) -> Output {
+    let mut cmd = cmd;
+    let child = cmd.spawn().unwrap();
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let id = loop {
+        if let Some(id) = request_ids(relay).pop() {
+            break id;
+        }
+        assert!(Instant::now() < deadline, "no request appeared");
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    during(relay, &id);
+    child.wait_with_output().unwrap()
+}
+
 /// What one refusal code needs: the floor it starts from, what is changed
 /// after approval, where it runs and with what. The `match` is exhaustive,
-/// so a new refusal code does not compile without its scenario.
-fn scenario(reason: RefusalReason) -> (Relay, PathBuf, Vec<&'static str>) {
+/// so a new refusal code does not compile without its scenario; `None`, with
+/// the reason printed, when this machine cannot play it (D-23).
+fn scenario(reason: RefusalReason) -> Option<Scenario> {
+    if reason == RefusalReason::CheckNotSatisfied {
+        let git = GitRelay::new("every_refusal_code (check_not_satisfied)")?;
+        checked(&git, "lab-web");
+        let during: During = Box::new(|relay: &Relay, id: &str| {
+            std::fs::write(relay.project().join("playbook.yml"), "- hosts: all\n").unwrap();
+            officina_host::relay::authority::decide_approval(&relay.env.relay_home(), id, true)
+                .unwrap();
+        });
+        return Some(Scenario {
+            dir: git.relay.project(),
+            args: vec!["apply-sensitive", "group=lab-web", "--wait", "30"],
+            path: Some(git.git_dir),
+            during: Some(during),
+            relay: git.relay,
+        });
+    }
     let relay = match reason {
         RefusalReason::NotApproved => {
             let relay = Relay {
@@ -347,6 +443,8 @@ fn scenario(reason: RefusalReason) -> (Relay, PathBuf, Vec<&'static str>) {
     let home = relay.env.relay_home();
     let project = relay.project();
     let probe = vec!["probe", "host=web01"];
+    let human = |wait: &'static str| vec!["approve-me", "group=lab-web", "--wait", wait];
+    let mut during: Option<During> = None;
     let (dir, args) = match reason {
         RefusalReason::Stopped => {
             std::fs::write(home.stopped_file(), b"{}").unwrap();
@@ -370,22 +468,57 @@ fn scenario(reason: RefusalReason) -> (Relay, PathBuf, Vec<&'static str>) {
         RefusalReason::MissingParameter => (project, vec!["probe"]),
         RefusalReason::UnknownParameter => (project, vec!["probe", "host=web01", "x=1"]),
         RefusalReason::InvalidValue => (project, vec!["probe", "host=web02"]),
-        RefusalReason::ClassNotAvailable => (project, vec!["approve-me", "group=lab-web"]),
         RefusalReason::CheckRequired => (project, vec!["apply", "group=lab-web"]),
+        RefusalReason::ApprovalRejected => {
+            during = Some(Box::new(|relay: &Relay, id: &str| {
+                officina_host::relay::authority::decide_approval(
+                    &relay.env.relay_home(),
+                    id,
+                    false,
+                )
+                .unwrap();
+            }));
+            (project, human("30"))
+        }
+        RefusalReason::ApprovalUnavailable => {
+            std::fs::create_dir_all(home.relay_dir()).unwrap();
+            std::fs::write(home.approvals_dir(), b"not a folder").unwrap();
+            (project, human("1"))
+        }
+        RefusalReason::ApprovalPending => (project, human("1")),
+        RefusalReason::CheckNotSatisfied => unreachable!("built above"),
     };
-    (relay, dir, args)
+    Some(Scenario {
+        relay,
+        dir,
+        args,
+        path: None,
+        during,
+    })
 }
 
 #[test]
 fn every_refusal_code_exits_126_with_one_journal_line() {
     for reason in RefusalReason::ALL {
-        let (relay, dir, args) = scenario(*reason);
-        let out = relay.run_in(&dir, &args);
-        assert_refused(&relay, &out, *reason);
+        let Some(scenario) = scenario(*reason) else {
+            continue;
+        };
+        let relay = &scenario.relay;
+        let started_before = relay.started().len();
+        let launches_before = relay.launches().len();
+        let mut cmd = relay.command(&scenario.dir, &scenario.args);
+        if let Some(path) = &scenario.path {
+            cmd.env("PATH", path);
+        }
+        let out = match scenario.during {
+            Some(during) => run_waiting(relay, cmd, during),
+            None => common::run_with(cmd, b""),
+        };
+        assert_refused_after(relay, &out, *reason, launches_before);
         let refused = relay.refused();
         assert_eq!(refused.len(), 1, "{reason:?}");
-        assert_eq!(refused[0].action, args[0]);
-        assert!(relay.started().is_empty(), "{reason:?}");
+        assert_eq!(refused[0].action, scenario.args[0]);
+        assert_eq!(relay.started().len(), started_before, "{reason:?}");
     }
 }
 
@@ -463,13 +596,6 @@ fn free_action_runs() {
         relay.launches()[0]["argv"],
         serde_json::json!(["--host", "web01"])
     );
-}
-
-#[test]
-fn after_check_and_human_are_not_available_yet() {
-    let relay = Relay::new();
-    let out = relay.run(&["approve-me", "group=lab-web"]);
-    assert_refused(&relay, &out, RefusalReason::ClassNotAvailable);
 }
 
 // ---- AC 6: exit codes ----
@@ -1055,22 +1181,18 @@ fn list_prints_the_projects_approved_actions() {
 }
 
 #[test]
-fn list_marks_unavailable_classes() {
+fn list_explains_human_actions_and_their_dry_run() {
     let relay = Relay::new();
     let text = list(&relay, &relay.project());
-    let line = |action: &str| {
-        text.lines()
-            .find(|l| l.contains(&format!("officina run {action} ")))
-            .unwrap()
-            .to_owned()
-    };
+    assert!(!text.contains("not available"), "{text}");
+    let approvals = text
+        .matches("runs once per approval the author gives in the Officina window")
+        .count();
+    assert_eq!(approvals, 2, "approve-me and apply-sensitive: {text}");
     assert!(
-        line("approve-me").ends_with("(class human, not available in this build)"),
+        text.contains("asks for approval only after its dry run `officina run verify` succeeded"),
         "{text}"
     );
-    for available in ["probe", "apply"] {
-        assert!(!line(available).contains("not available"), "{text}");
-    }
 }
 
 #[test]

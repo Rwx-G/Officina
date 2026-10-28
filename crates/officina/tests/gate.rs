@@ -547,7 +547,10 @@ fn reason_lists_approved_actions() {
         .lines()
         .find(|l| l.contains("officina run apply"))
         .unwrap();
-    assert!(apply.contains("not available"), "D-17: {reason}");
+    assert!(
+        !apply.contains("not available"),
+        "a human action runs in this build (D-20 gone): {reason}"
+    );
     assert!(
         !reason.contains("status"),
         "another project's action: {reason}"

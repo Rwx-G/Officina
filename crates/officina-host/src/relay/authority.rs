@@ -1,5 +1,6 @@
 //! What only the author may decide, from the window (AD-21): approving the
-//! catalogue, stopping and resuming the relay. Compiled only with the
+//! catalogue, approving or rejecting a `human` action's request, stopping
+//! and resuming the relay. Compiled only with the
 //! `window-authority` feature, so the `officina` binary a session can call
 //! holds none of it (P-5).
 
@@ -7,10 +8,12 @@ use std::io;
 use std::path::Path;
 
 use officina_core::relay::StopFlag;
+use officina_core::relay::approvals::{DecideRefusal, Decision, FileKind, decidable, file_name};
 use officina_core::relay::catalogue::{ApprovedCatalogue, KnownProjects};
-use officina_core::relay::journal::{CatalogueApproved, JournalEntry};
+use officina_core::relay::journal::{ApprovalEvent, CatalogueApproved, JournalEntry};
 use serde::Serialize;
 
+use super::approvals::{self, ContextSources};
 use super::home::{RelayFloorError, RelayHome, load_relay_floor};
 use super::journal::JournalLock;
 use crate::files::{atomic_write, now_ms};
@@ -36,6 +39,10 @@ pub enum AuthorityError {
     /// approval was written and its line could not be.
     #[error("{AUTHORITY_MARKER}: journal: {0}")]
     Journal(String),
+    /// The request cannot be decided: unknown, decided, expired or invalid
+    /// (AD-35, D-27).
+    #[error("{AUTHORITY_MARKER}: {0}")]
+    Decide(DecideRefusal),
 }
 
 fn write_json(path: &Path, value: &impl Serialize) -> Result<(), AuthorityError> {
@@ -97,6 +104,42 @@ pub fn approve_catalogue(
         .append(&[line], approved.approved_at_ms)
         .map_err(|e| AuthorityError::Journal(e.to_string()))?;
     Ok(approved)
+}
+
+/// Approves or rejects request `id` (FR-9, AD-33, AD-35): writes
+/// `<id>.approved.json` or `<id>.rejected.json` (`decided_at_ms`,
+/// `request_key`) atomically and journals `approval_given` or
+/// `approval_rejected`. Refused, writing nothing, for a request that is
+/// unknown, already decided, expired, or that does not rebuild from the
+/// approved catalogue, a request of another catalogue included (D-27).
+///
+/// The journal lock is held across the check, the decision and its line, so
+/// two clicks decide once.
+pub fn decide_approval(home: &RelayHome, id: &str, approve: bool) -> Result<(), AuthorityError> {
+    let journal = JournalLock::acquire(home).map_err(|e| AuthorityError::Journal(e.to_string()))?;
+    let files = approvals::read_files(home);
+    let sources = ContextSources::read(home);
+    let now = now_ms();
+    let request = decidable(&files, &sources.context(), id, now).map_err(AuthorityError::Decide)?;
+    let event = ApprovalEvent {
+        approval_id: id.to_owned(),
+        request_key: request.request_key.clone(),
+    };
+    let (kind, line) = if approve {
+        (FileKind::Approved, JournalEntry::ApprovalGiven(event))
+    } else {
+        (FileKind::Rejected, JournalEntry::ApprovalRejected(event))
+    };
+    write_json(
+        &home.approvals_dir().join(file_name(id, kind)),
+        &Decision {
+            decided_at_ms: now,
+            request_key: request.request_key.clone(),
+        },
+    )?;
+    journal
+        .append(&[line], now)
+        .map_err(|e| AuthorityError::Journal(e.to_string()))
 }
 
 /// Stops or resumes the relay (FR-11, AD-34, D-26): stopping writes

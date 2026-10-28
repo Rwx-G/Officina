@@ -197,13 +197,13 @@ fn no_command_writes_under_the_claude_config_dir() {
     env.run(&["board", "--json"], b"");
     env.run(&["doctor"], b"");
 
-    // A gate deny, the relay's own commands and doctor's relay checks, with
-    // a catalogue approved in this home.
+    // A gate deny, the relay's own commands, an approval request and
+    // doctor's relay checks, with a catalogue approved in this home.
     let lab = env.root.path().join("work").join("Lab");
     std::fs::create_dir_all(&lab).unwrap();
     let lab_path = lab.to_string_lossy().replace('\\', "/");
     env.write_floor(&format!(
-        "schema = 2\n[[project]]\nname = \"lab\"\npath = \"{lab_path}\"\nactions = [\"probe\"]\n[[action]]\nname = \"probe\"\nclass = \"free\"\nprogram = \"{{tool}}\"\n"
+        "schema = 2\n[[project]]\nname = \"lab\"\npath = \"{lab_path}\"\nactions = [\"probe\", \"restart\"]\n[[action]]\nname = \"probe\"\nclass = \"free\"\nprogram = \"{{tool}}\"\n[[action]]\nname = \"restart\"\nclass = \"human\"\nprogram = \"{{tool}}\"\n"
     ));
     env.approve();
     let payload = serde_json::json!({
@@ -222,6 +222,7 @@ fn no_command_writes_under_the_claude_config_dir() {
     for args in [
         &["run", "probe"][..],
         &["run", "--list"],
+        &["run", "restart", "--wait", "1"],
         &["relay", "--json"],
         &["doctor"],
     ] {

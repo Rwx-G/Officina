@@ -1,20 +1,31 @@
 //! Gathers every source into a [`Board`] (AD-2 to AD-5). The CLI calls it once;
 //! the window drives it from its collector thread (see [`crate::watch`]).
 
+use std::cell::RefCell;
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use officina_core::agents::{AgentRecord, parse_agents};
 use officina_core::board::{Board, BoardInput, ContractView, ProjectRule, Staleness, build_board};
 use officina_core::contract::check_agents;
 use officina_core::floor::{FloorFile, parse_floor, resolve_project_path};
 use officina_core::quota::{QuotaFile, parse_quota_file};
+use officina_core::relay::journal::TreeFingerprint;
 use serde::{Deserialize, Serialize};
 
 use crate::claude;
 use crate::files::{atomic_write, read_recent_events};
 use crate::paths::{ENV_FLOOR, Paths, env_path, excerpts_disabled_by_env};
+use crate::relay::approvals::board_approvals;
 use crate::relay::home::RelayHome;
+use crate::relay::tree;
+
+/// How long the window trusts a project's tree fingerprint before it runs
+/// `git` again for an approval card's dry run (D-170): boards are rebuilt on
+/// every hook event, and three `git` spawns each time would be wasted.
+pub const TREE_RECHECK: Duration = Duration::from_secs(10);
 
 /// Why the collector cannot start at all.
 #[derive(Debug, thiserror::Error)]
@@ -103,6 +114,9 @@ pub struct Collector {
     agents_raw: Option<Vec<serde_json::Value>>,
     stale: Option<Staleness>,
     contract: ContractView,
+    /// Tree fingerprints of the projects with a pending dry run, by folder,
+    /// with when they were taken (D-170).
+    trees: RefCell<BTreeMap<PathBuf, (Instant, Option<TreeFingerprint>)>>,
 }
 
 impl Collector {
@@ -136,6 +150,7 @@ impl Collector {
             agents_raw: None,
             stale: None,
             contract: ContractView::default(),
+            trees: RefCell::default(),
         }
     }
 
@@ -268,10 +283,25 @@ impl Collector {
             projects: self.floor.projects.clone(),
             contract: self.contract.clone(),
             no_excerpts: excerpts_disabled_by_env() || floor_file.is_some_and(|f| f.no_excerpts),
+            approvals: board_approvals(&self.relay, now_ms, &mut |dir| self.tree_of(dir)),
         };
         let mut board = build_board(&input, now_ms);
         board.diagnostics.floor_error.clone_from(&self.floor.error);
         board
+    }
+
+    /// The tree fingerprint of `dir`, taken again once [`TREE_RECHECK`] has
+    /// passed.
+    fn tree_of(&self, dir: &Path) -> Option<TreeFingerprint> {
+        let mut trees = self.trees.borrow_mut();
+        if let Some((at, found)) = trees.get(dir)
+            && at.elapsed() < TREE_RECHECK
+        {
+            return found.clone();
+        }
+        let found = tree::fingerprint(dir);
+        trees.insert(dir.to_path_buf(), (Instant::now(), found.clone()));
+        found
     }
 
     /// Looks up a card of the last board by key, for the focus action.

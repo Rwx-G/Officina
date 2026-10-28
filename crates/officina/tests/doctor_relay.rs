@@ -443,6 +443,32 @@ fn after_check_without_its_check_in_the_project_warns() {
     assert!(!report.has("relay check lab"), "lab lists verify");
 }
 
+/// Story 2.8's adversarial pass: a `human` action's dry run (D-170) obeys
+/// the same rule as an `after-check` action's check, and binds the tree the
+/// same way.
+#[test]
+fn a_human_dry_run_its_project_does_not_list_warns() {
+    let doctor = Doctor::new();
+    let human = format!(
+        "{FLOOR}{CHECKED}\n[[action]]\nname = \"restart\"\nclass = \"human\"\ncheck = \"verify\"\nprogram = \"{{tool}}\"\nargs = [\"{{group}}\"]\n\n[action.params.group]\npattern = \"lab-[a-z0-9-]{{1,30}}\"\n"
+    )
+    .replacen(
+        "autonomy = \"free\"\nactions = [\"probe\"]",
+        "autonomy = \"free\"\nactions = [\"probe\", \"restart\"]",
+        1,
+    );
+    doctor.write(&human);
+    let report = doctor.report(&[]);
+    let notes = report.line("relay check notes");
+    assert!(
+        notes
+            .detail
+            .contains("lists restart but not its check verify"),
+        "{notes:?}"
+    );
+    assert_eq!(report.line("relay tree notes").tag, "warn");
+}
+
 #[test]
 fn relay_floor_mismatch_warns() {
     let doctor = Doctor::new();

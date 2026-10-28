@@ -1,14 +1,14 @@
 //! Action classes (FR-8, AD-33): which classes this build can run, and the
-//! `after-check` rule. `free` and `after-check` run; `human` is refused with
-//! its own reason code until story 2.8 lands (D-20), a deliberate
-//! intermediate state, and marked unavailable wherever actions are offered
-//! (D-17).
+//! check rule an `after-check` action, and a `human` action naming its dry
+//! run (D-170), must meet. `free`, `after-check` and `human` run, the last
+//! once per approval (`relay::approvals`); `auto` is reserved for the
+//! orchestrator and marked unavailable wherever actions are offered (D-17).
 
 use std::collections::{BTreeMap, HashSet};
 use std::ops::RangeInclusive;
 
 use super::catalogue::ActionClass;
-use super::journal::{JournalEntry, JournalLine, RefusalReason, RunOutcome, TreeFingerprint};
+use super::journal::{JournalEntry, JournalLine, RunOutcome, RunStarted, TreeFingerprint};
 
 /// How long a successful check lets its `after-check` action run (AD-33).
 pub const CHECK_VALID_MS: i64 = 30 * 60 * 1000;
@@ -22,25 +22,13 @@ pub const WAIT_RANGE_S: RangeInclusive<u32> = 1..=540;
 /// ```
 /// use officina_core::relay::catalogue::ActionClass;
 /// use officina_core::relay::classes::is_available;
-/// assert!(is_available(ActionClass::AfterCheck));
+/// assert!(is_available(ActionClass::Human));
 /// assert!(!is_available(ActionClass::Auto));
 /// ```
 pub fn is_available(class: ActionClass) -> bool {
     match class {
-        ActionClass::Free | ActionClass::AfterCheck => true,
-        ActionClass::Human | ActionClass::Auto => false,
-    }
-}
-
-/// The class step of `officina run` (AD-29 step 6) as far as the catalogue
-/// alone decides it: a class this build does not run is refused with
-/// [`RefusalReason::ClassNotAvailable`] (D-20). An `after-check` action
-/// passes here and then needs [`check_satisfied`].
-pub fn decide(class: ActionClass) -> Result<(), RefusalReason> {
-    if is_available(class) {
-        Ok(())
-    } else {
-        Err(RefusalReason::ClassNotAvailable)
+        ActionClass::Free | ActionClass::AfterCheck | ActionClass::Human => true,
+        ActionClass::Auto => false,
     }
 }
 
@@ -68,6 +56,29 @@ pub fn check_satisfied(
     tree: Option<&TreeFingerprint>,
     now_ms: i64,
 ) -> bool {
+    satisfying_check(
+        lines,
+        project,
+        check_action,
+        params,
+        catalogue_hash,
+        tree,
+        now_ms,
+    )
+    .is_some()
+}
+
+/// The latest check run that satisfies [`check_satisfied`], whose run id a
+/// `human` action's request records (D-170).
+pub fn satisfying_check<'l>(
+    lines: &'l [JournalLine],
+    project: &str,
+    check_action: &str,
+    params: &BTreeMap<String, String>,
+    catalogue_hash: &str,
+    tree: Option<&TreeFingerprint>,
+    now_ms: i64,
+) -> Option<&'l RunStarted> {
     let succeeded: HashSet<&str> = lines
         .iter()
         .filter_map(|line| match &line.entry {
@@ -79,18 +90,24 @@ pub fn check_satisfied(
             _ => None,
         })
         .collect();
-    lines.iter().any(|line| match &line.entry {
-        JournalEntry::RunStarted(started) => {
-            started.project == project
-                && started.action == check_action
-                && started.params == *params
-                && started.catalogue_hash == catalogue_hash
-                && started.tree.as_ref() == tree
-                && (0..=CHECK_VALID_MS).contains(&(now_ms - line.ts))
-                && succeeded.contains(started.run_id.as_str())
-        }
-        _ => false,
-    })
+    lines
+        .iter()
+        .filter_map(|line| match &line.entry {
+            JournalEntry::RunStarted(started)
+                if started.project == project
+                    && started.action == check_action
+                    && started.params == *params
+                    && started.catalogue_hash == catalogue_hash
+                    && started.tree.as_ref() == tree
+                    && (0..=CHECK_VALID_MS).contains(&(now_ms - line.ts))
+                    && succeeded.contains(started.run_id.as_str()) =>
+            {
+                Some((line.ts, started))
+            }
+            _ => None,
+        })
+        .max_by_key(|(ts, _)| *ts)
+        .map(|(_, started)| started)
 }
 
 #[cfg(test)]
@@ -348,13 +365,37 @@ mod tests {
     }
 
     #[test]
-    fn free_and_after_check_run_human_and_auto_do_not() {
-        assert_eq!(decide(ActionClass::Free), Ok(()));
-        assert_eq!(decide(ActionClass::AfterCheck), Ok(()));
-        for class in [ActionClass::Human, ActionClass::Auto] {
-            assert_eq!(decide(class), Err(RefusalReason::ClassNotAvailable));
-            assert!(!is_available(class));
+    fn every_class_but_auto_runs() {
+        for class in [
+            ActionClass::Free,
+            ActionClass::AfterCheck,
+            ActionClass::Human,
+        ] {
+            assert!(is_available(class), "{class:?}");
         }
+        assert!(!is_available(ActionClass::Auto));
         assert_eq!(class_name(ActionClass::AfterCheck), "after-check");
+    }
+
+    #[test]
+    fn the_latest_satisfying_check_is_named() {
+        let lines = [
+            started(NOW - 20 * MIN, "early", "lab", "lab-web", HASH),
+            finished(NOW - 19 * MIN, "early", RunOutcome::Exited, Some(0)),
+            started(NOW - 5 * MIN, "late", "lab", "lab-web", HASH),
+            finished(NOW - 4 * MIN, "late", RunOutcome::Exited, Some(0)),
+            started(NOW - MIN, "failed", "lab", "lab-web", HASH),
+            finished(NOW - MIN, "failed", RunOutcome::Exited, Some(2)),
+        ];
+        let found = satisfying_check(
+            &lines,
+            "lab",
+            "verify",
+            &params("lab-web"),
+            HASH,
+            Some(&tree("a")),
+            NOW,
+        );
+        assert_eq!(found.map(|s| s.run_id.as_str()), Some("late"));
     }
 }

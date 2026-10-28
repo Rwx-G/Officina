@@ -2,14 +2,20 @@
 //! AD-24, AD-34, D-8, D-15, D-26). Built only with `window-authority`, like
 //! the window.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use officina_core::quota::normalise_path;
 use officina_core::relay::StopFlag;
-use officina_core::relay::journal::{CatalogueApproved, JournalEntry};
+use officina_core::relay::approvals::{
+    ApprovalRequest, DecideRefusal, Decision, FileKind, KeyInputs, PENDING_MS, file_name,
+    request_id, request_key,
+};
+use officina_core::relay::journal::{ApprovalEvent, CatalogueApproved, JournalEntry};
 use officina_host::files::now_ms;
+use officina_host::relay::approvals;
 use officina_host::relay::authority::{
-    AUTHORITY_MARKER, AuthorityError, approve_catalogue, set_relay_stopped,
+    AUTHORITY_MARKER, AuthorityError, approve_catalogue, decide_approval, set_relay_stopped,
 };
 use officina_host::relay::home::{ApprovedState, RelayHome, load_relay_floor};
 use officina_host::relay::journal::{JournalLock, read_recent};
@@ -342,4 +348,163 @@ fn a_locked_journal_stops_nothing() {
     assert!(error.to_string().starts_with(AUTHORITY_MARKER));
     assert!(!relay.relay_stopped());
     drop(held);
+}
+
+// ---- story 2.8: approving or rejecting a request (AD-33, AD-35, D-27) ----
+
+const HUMAN_FLOOR: &str = "schema = 2\n\n[[project]]\nname = \"lab\"\npath = \"Lab\"\nactions = [\"restart\"]\n\n[[action]]\nname = \"restart\"\nclass = \"human\"\nprogram = \"C:/path/to/tool.exe\"\nargs = [\"{service}\"]\n\n[action.params.service]\nvalues = [\"web01\", \"db01\"]\n";
+
+/// An approved relay with one `human` action.
+fn human_relay(home: &Home) -> RelayHome {
+    let relay = home.relay(None);
+    home.write(&relay.default_floor(), HUMAN_FLOOR);
+    approve_catalogue(&relay, &home.displayed(&relay.default_floor())).unwrap();
+    relay
+}
+
+/// Writes the request `officina run restart service=<service>` would write,
+/// created `ago` milliseconds ago, and returns its id and request.
+fn write_request(relay: &RelayHome, service: &str, ago: i64) -> (String, ApprovalRequest) {
+    let hash = relay.read_approved().approved().unwrap().hash.clone();
+    let params = BTreeMap::from([("service".to_owned(), service.to_owned())]);
+    let key = request_key(&KeyInputs {
+        project: "lab",
+        action: "restart",
+        params: &params,
+        catalogue_hash: &hash,
+        check_run_id: None,
+        tree: None,
+    });
+    let created_at_ms = now_ms() - ago;
+    let id = request_id(&key, created_at_ms);
+    let request = ApprovalRequest {
+        request_key: key,
+        created_at_ms,
+        project: "lab".to_owned(),
+        action: "restart".to_owned(),
+        params,
+        argv: vec!["C:/path/to/tool.exe".to_owned(), service.to_owned()],
+        catalogue_hash: hash,
+        session_id: None,
+        check_run_id: None,
+        tree: None,
+    };
+    approvals::create_request(relay, &id, &request).unwrap();
+    (id, request)
+}
+
+fn decision_lines(relay: &RelayHome) -> Vec<JournalEntry> {
+    let (lines, corrupt) = read_recent(relay, now_ms());
+    assert_eq!(corrupt, 0);
+    lines
+        .into_iter()
+        .map(|line| line.entry)
+        .filter(|entry| {
+            matches!(
+                entry,
+                JournalEntry::ApprovalGiven(_) | JournalEntry::ApprovalRejected(_)
+            )
+        })
+        .collect()
+}
+
+fn decision_file(relay: &RelayHome, id: &str, kind: FileKind) -> Option<Decision> {
+    let bytes = std::fs::read(relay.approvals_dir().join(file_name(id, kind))).ok()?;
+    Some(serde_json::from_slice(&bytes).unwrap())
+}
+
+#[test]
+fn decide_approves_a_pending_request() {
+    let home = Home::new();
+    let relay = human_relay(&home);
+    let (id, request) = write_request(&relay, "web01", 60_000);
+    decide_approval(&relay, &id, true).unwrap();
+    let approved = decision_file(&relay, &id, FileKind::Approved).expect("approved.json");
+    assert_eq!(approved.request_key, request.request_key);
+    assert!((now_ms() - approved.decided_at_ms).abs() < 60_000);
+    assert_eq!(
+        decision_lines(&relay),
+        [JournalEntry::ApprovalGiven(ApprovalEvent {
+            approval_id: id.clone(),
+            request_key: request.request_key.clone(),
+        })]
+    );
+
+    let (other, other_request) = write_request(&relay, "db01", 30_000);
+    decide_approval(&relay, &other, false).unwrap();
+    assert!(decision_file(&relay, &other, FileKind::Rejected).is_some());
+    assert!(decision_file(&relay, &other, FileKind::Approved).is_none());
+    assert_eq!(
+        decision_lines(&relay)[1],
+        JournalEntry::ApprovalRejected(ApprovalEvent {
+            approval_id: other,
+            request_key: other_request.request_key,
+        })
+    );
+}
+
+#[test]
+fn decide_refuses_unknown_decided_expired_and_stale_hash() {
+    let home = Home::new();
+    let relay = human_relay(&home);
+    let refused = |id: &str| match decide_approval(&relay, id, true) {
+        Err(AuthorityError::Decide(refusal)) => refusal,
+        other => panic!("{id}: {other:?}"),
+    };
+
+    assert!(matches!(
+        refused("0123456789abcdef-1"),
+        DecideRefusal::Unknown(_)
+    ));
+
+    let (decided, _) = write_request(&relay, "web01", 60_000);
+    decide_approval(&relay, &decided, false).unwrap();
+    assert!(matches!(refused(&decided), DecideRefusal::Decided(_)));
+
+    let (expired, _) = write_request(&relay, "db01", PENDING_MS + 60_000);
+    assert!(matches!(refused(&expired), DecideRefusal::Expired(_)));
+
+    let (stale, _) = write_request(&relay, "web01", 1_000);
+    home.write(
+        &relay.default_floor(),
+        &HUMAN_FLOOR.replace("\"web01\", \"db01\"", "\"web01\", \"db01\", \"cache01\""),
+    );
+    approve_catalogue(&relay, &home.displayed(&relay.default_floor())).unwrap();
+    let error = decide_approval(&relay, &stale, true).unwrap_err();
+    assert!(error.to_string().starts_with(AUTHORITY_MARKER));
+    assert!(
+        matches!(&error, AuthorityError::Decide(DecideRefusal::Invalid { why, .. }) if why.contains("another catalogue")),
+        "{error}"
+    );
+    assert_eq!(
+        decision_lines(&relay).len(),
+        1,
+        "only the one decision taken leaves a line"
+    );
+    for id in [&expired, &stale] {
+        assert!(decision_file(&relay, id, FileKind::Approved).is_none());
+    }
+}
+
+#[test]
+fn decide_refuses_a_forged_request() {
+    let home = Home::new();
+    let relay = human_relay(&home);
+    let (real, request) = write_request(&relay, "db01", 60_000);
+    // A harmless stored command under the key of another parameter set.
+    let mut forged = request;
+    forged
+        .params
+        .insert("service".to_owned(), "web01".to_owned());
+    forged.argv = vec!["C:/Windows/System32/whoami.exe".to_owned()];
+    forged.created_at_ms += 1;
+    let id = request_id(&forged.request_key, forged.created_at_ms);
+    approvals::create_request(&relay, &id, &forged).unwrap();
+    let error = decide_approval(&relay, &id, true).unwrap_err();
+    assert!(
+        matches!(&error, AuthorityError::Decide(DecideRefusal::Invalid { why, .. }) if why.contains("key")),
+        "{error}"
+    );
+    assert!(decision_file(&relay, &id, FileKind::Approved).is_none());
+    decide_approval(&relay, &real, true).unwrap();
 }

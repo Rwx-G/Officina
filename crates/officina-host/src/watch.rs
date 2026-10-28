@@ -46,7 +46,7 @@ pub enum CollectorMsg {
     Refresh,
     Visibility(bool),
     /// An authority command changed the relay's files: rebuild the relay
-    /// view now rather than at the next tick (AD-35).
+    /// view and the board now rather than at the next tick (AD-35).
     RelayChanged,
     Shutdown,
 }
@@ -223,10 +223,18 @@ impl<C: Fn() -> Instant> RefreshPlan<C> {
         self.contract_wanted = true;
     }
 
-    /// The relay's files, its floor or today's journal changed, or an
-    /// authority command says so: a new relay view, no spawn.
+    /// The relay floor or today's journal changed: a new relay view, no
+    /// spawn.
     fn relay_changed(&mut self) {
         self.relay_wanted = true;
+    }
+
+    /// The relay's own files changed, an approval request among them, or an
+    /// authority command says so: a new relay view and a new board, whose
+    /// Needs you lists the requests (AD-35); no spawn.
+    fn relay_files_changed(&mut self) {
+        self.relay_wanted = true;
+        self.recompute_wanted = true;
     }
 
     /// The window's floor changed and was reloaded: its projects reach a new
@@ -338,7 +346,7 @@ impl WatchedPaths {
             self.relay_tree = relay_tree;
             // The approved record names the relay floor (AD-24).
             self.relay_floor_file = self.relay.relay_floor(&self.relay.read_approved());
-            plan.relay_changed();
+            plan.relay_files_changed();
         }
         let current = stamp(&self.relay_floor_file);
         if current != self.relay_floor {
@@ -432,6 +440,7 @@ fn run(
     let retention = |collector: &Collector| {
         retention_pass(&collector.paths.events_dir(), now_ms());
         crate::focus::prune_focus_log(&collector.paths.state_dir(), now_ms());
+        crate::relay::approvals::prune(&collector.relay, SystemTime::now());
     };
     retention(collector);
     let mut watched = WatchedPaths::new(collector);
@@ -444,7 +453,7 @@ fn run(
             Ok(CollectorMsg::Shutdown) | Err(RecvTimeoutError::Disconnected) => return,
             Ok(CollectorMsg::Refresh) => plan.refresh_requested(),
             Ok(CollectorMsg::Visibility(visible)) => plan.visibility_changed(visible),
-            Ok(CollectorMsg::RelayChanged) => plan.relay_changed(),
+            Ok(CollectorMsg::RelayChanged) => plan.relay_files_changed(),
             Err(RecvTimeoutError::Timeout) => {}
         }
         if watched.poll(&mut plan) {

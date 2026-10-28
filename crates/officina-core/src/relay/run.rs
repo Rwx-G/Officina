@@ -1,12 +1,14 @@
-//! `officina run` as pure functions (AD-29, AD-33, D-20, D-21): the checks in
-//! their documented order, failing closed, and the text of
+//! `officina run` as pure functions (AD-29, AD-33, D-21, D-170): the checks
+//! in their documented order, failing closed, and the text of
 //! `officina run --list`. The host reads the stop flag, the files, the
-//! working directory and the system directory, then, for an `after-check`
-//! action, the journal and the tree for [`check_step`], and journals and
-//! spawns what [`plan`] returns.
+//! working directory and the system directory, then, for an action naming a
+//! check, the journal and the tree for [`check_step`]; for a `human` action
+//! it goes through `relay::approvals`; it journals and spawns what [`plan`]
+//! returns.
 
 use std::collections::BTreeMap;
 
+use super::approvals;
 use super::argv::{self, ArgvRefusal, Launch};
 use super::catalogue::{
     ActionClass, ApprovedCatalogue, CanonicalAction, CanonicalParam, CanonicalProject, RelayFloor,
@@ -86,11 +88,15 @@ pub struct RunPlan {
     pub catalogue_hash: String,
     pub timeout_s: u32,
     pub max_output_kib: u32,
-    /// For an `after-check` action, the check it needs (AD-33).
+    /// The check it needs: an `after-check` action's (AD-33), or a `human`
+    /// action's dry run (D-170).
     pub check: Option<String>,
-    /// True for an `after-check` action and for any action an `after-check`
-    /// action names as its check: their runs record the tree (D-22).
+    /// True for an action naming a check and for any action named as a
+    /// check: their runs record the tree (D-22).
     pub binds_tree: bool,
+    /// True for an action named as a check: its run keeps its output for the
+    /// approval card (D-170).
+    pub keeps_output: bool,
 }
 
 impl RunPlan {
@@ -103,11 +109,75 @@ impl RunPlan {
 }
 
 fn refuse<T>(reason: RefusalReason, detail: String, project: Option<&str>) -> Result<T, Refusal> {
-    Err(Refusal {
-        reason,
-        detail: one_line(&detail),
-        project: project.map(str::to_owned),
-    })
+    Err(Refusal::new(reason, &detail, project))
+}
+
+impl Refusal {
+    fn new(reason: RefusalReason, detail: &str, project: Option<&str>) -> Refusal {
+        Refusal {
+            reason,
+            detail: one_line(detail),
+            project: project.map(str::to_owned),
+        }
+    }
+
+    /// The relay is stopped: at the first step, or during a wait (AD-34).
+    pub fn stopped() -> Refusal {
+        Refusal::new(
+            RefusalReason::Stopped,
+            "the relay is stopped in the Officina window; the author resumes it there",
+            None,
+        )
+    }
+
+    /// The author rejected the request in the last 15 minutes (AD-33).
+    pub fn approval_rejected(project: &str) -> Refusal {
+        Refusal::new(
+            RefusalReason::ApprovalRejected,
+            "rejected in Officina; do not retry",
+            Some(project),
+        )
+    }
+
+    /// No decision within `--wait` (AD-33).
+    pub fn approval_pending(project: &str) -> Refusal {
+        Refusal::new(
+            RefusalReason::ApprovalPending,
+            "approval still pending; run the same command again to keep waiting",
+            Some(project),
+        )
+    }
+
+    /// The author approved another catalogue since the request was made: its
+    /// approval no longer applies (AD-24, AD-33).
+    pub fn catalogue_changed_since_request(project: &str) -> Refusal {
+        Refusal::new(
+            RefusalReason::CatalogueChanged,
+            "the catalogue changed since this approval was requested; run the same command again for a new request",
+            Some(project),
+        )
+    }
+
+    /// The request could not be written.
+    pub fn approval_unavailable(project: &str, why: &str) -> Refusal {
+        Refusal::new(
+            RefusalReason::ApprovalUnavailable,
+            &format!("the approval request cannot be written ({why})"),
+            Some(project),
+        )
+    }
+
+    /// The code changed since the dry run the approval was given for; the
+    /// approval stays for a later call on the same code (D-170).
+    pub fn check_not_satisfied(project: &str, check: &str) -> Refusal {
+        Refusal::new(
+            RefusalReason::CheckNotSatisfied,
+            &format!(
+                "the code changed since the `{check}` dry run this approval was given for; run `officina run {check}` again for a new request"
+            ),
+            Some(project),
+        )
+    }
 }
 
 /// `text` on one line: a refusal is one stderr line (AD-29), and a quoted
@@ -160,8 +230,9 @@ pub fn projects_at<'c>(
 /// 4. that project lists the action;
 /// 5. every declared parameter is given, none other, each value accepted
 ///    (AD-30, D-5);
-/// 6. the action's class runs in this build (D-20); an `after-check`
-///    action then needs [`check_step`], which reads the journal and the tree.
+/// 6. an action naming a check then needs [`check_step`], which reads the
+///    journal and the tree; a `human` action then needs the author's
+///    approval (`relay::approvals`).
 ///
 /// The launch is built from the current floor's validated action, which
 /// the equal hash proves is the approved one, with the project folder as
@@ -172,11 +243,7 @@ pub fn plan(
     params: &BTreeMap<String, String>,
 ) -> Result<RunPlan, Refusal> {
     if inputs.stopped {
-        return refuse(
-            RefusalReason::Stopped,
-            "the relay is stopped in the Officina window; the author resumes it there".to_owned(),
-            None,
-        );
+        return Err(Refusal::stopped());
     }
     let approved = match inputs.snapshot {
         SnapshotState::Missing => {
@@ -269,22 +336,12 @@ pub fn plan(
                 project: Some((*project).to_owned()),
             }
         })?;
-    if let Err(reason) = classes::decide(validated.class) {
-        return refuse(
-            reason,
-            format!(
-                "the action {action} is of class {}, which this build does not run yet",
-                classes::class_name(validated.class)
-            ),
-            Some(project),
-        );
-    }
-    let after_check = validated.class == ActionClass::AfterCheck;
+    let names_a_check = validated.check.is_some();
     let is_a_check = relay
         .catalogue
         .actions
         .values()
-        .any(|a| a.class == ActionClass::AfterCheck && a.check.as_deref() == Some(action));
+        .any(|a| a.check.as_deref() == Some(action));
     Ok(RunPlan {
         project: (*project).to_owned(),
         action: action.to_owned(),
@@ -293,27 +350,30 @@ pub fn plan(
         catalogue_hash: approved.hash.clone(),
         timeout_s: validated.timeout_s,
         max_output_kib: validated.max_output_kib,
-        check: validated.check.clone().filter(|_| after_check),
-        binds_tree: after_check || is_a_check,
+        check: validated.check.clone(),
+        binds_tree: names_a_check || is_a_check,
+        keeps_output: is_a_check,
     })
 }
 
-/// The `after-check` half of the class step (AD-29 step 6, AD-33): an
-/// `after-check` action runs only when [`classes::check_satisfied`] finds
-/// its check, run with the same `params` under the same catalogue on the
-/// same `tree`, in `lines`; otherwise it is refused with
-/// [`RefusalReason::CheckRequired`]. Any other plan passes.
+/// The check half of the class step (AD-29 step 6, AD-33, D-170): an action
+/// naming a check (an `after-check` action, or a `human` action's dry run)
+/// goes on only when [`classes::satisfying_check`] finds that check, run
+/// with the same `params` under the same catalogue on the same `tree`, in
+/// `lines`, and returns its run id; otherwise it is refused with
+/// [`RefusalReason::CheckRequired`]. A plan without a check passes with no
+/// run id.
 pub fn check_step(
     plan: &RunPlan,
     params: &BTreeMap<String, String>,
     lines: &[JournalLine],
     tree: Option<&TreeFingerprint>,
     now_ms: i64,
-) -> Result<(), Refusal> {
+) -> Result<Option<String>, Refusal> {
     let Some(check) = &plan.check else {
-        return Ok(());
+        return Ok(None);
     };
-    if classes::check_satisfied(
+    if let Some(found) = classes::satisfying_check(
         lines,
         &plan.project,
         check,
@@ -322,17 +382,21 @@ pub fn check_step(
         tree,
         now_ms,
     ) {
-        return Ok(());
+        return Ok(Some(found.run_id.clone()));
     }
-    refuse(
-        RefusalReason::CheckRequired,
+    let minutes = CHECK_VALID_MS / 60_000;
+    let detail = if plan.class == ActionClass::Human {
         format!(
-            "run `{check}` first: {} runs only after {check} succeeded with the same parameters on the same code in the last {} minutes",
-            plan.action,
-            CHECK_VALID_MS / 60_000
-        ),
-        Some(&plan.project),
-    )
+            "run `{check}` first: an approval of {} is requested only after its dry run {check} succeeded with the same parameters on the same code in the last {minutes} minutes",
+            plan.action
+        )
+    } else {
+        format!(
+            "run `{check}` first: {} runs only after {check} succeeded with the same parameters on the same code in the last {minutes} minutes",
+            plan.action
+        )
+    };
+    refuse(RefusalReason::CheckRequired, detail, Some(&plan.project))
 }
 
 fn action_lines(text: &mut String, name: &str, action: &CanonicalAction) {
@@ -351,11 +415,24 @@ fn action_lines(text: &mut String, name: &str, action: &CanonicalAction) {
     if !action.description.is_empty() {
         text.push_str(&format!("      {}\n", action.description));
     }
-    if let (ActionClass::AfterCheck, Some(check)) = (action.class, &action.check) {
-        text.push_str(&format!(
-            "      runs only after `officina run {check}` succeeded with the same parameters on the same code in the last {} minutes\n",
-            CHECK_VALID_MS / 60_000
-        ));
+    let minutes = CHECK_VALID_MS / 60_000;
+    match (action.class, &action.check) {
+        (ActionClass::AfterCheck, Some(check)) => text.push_str(&format!(
+            "      runs only after `officina run {check}` succeeded with the same parameters on the same code in the last {minutes} minutes\n"
+        )),
+        (ActionClass::Human, check) => {
+            if let Some(check) = check {
+                text.push_str(&format!(
+                    "      asks for approval only after its dry run `officina run {check}` succeeded with the same parameters on the same code in the last {minutes} minutes\n"
+                ));
+            }
+            text.push_str(&format!(
+                "      runs once per approval the author gives in the Officina window; the call waits for it up to --wait <s> (default {}, at most {})\n",
+                approvals::DEFAULT_WAIT_S,
+                classes::WAIT_RANGE_S.end()
+            ));
+        }
+        _ => {}
     }
     for (param, rule) in &action.params {
         match rule {
@@ -562,13 +639,16 @@ mod tests {
             reason(inputs(false, valid, floor, lab), "probe", &bad),
             RefusalReason::InvalidValue
         );
+        let human = plan(
+            &inputs(false, valid, floor, lab),
+            "apply",
+            &params(&[("group", "lab-web")]),
+        )
+        .unwrap();
         assert_eq!(
-            reason(
-                inputs(false, valid, floor, lab),
-                "apply",
-                &[("group", "lab-web")]
-            ),
-            RefusalReason::ClassNotAvailable
+            human.class,
+            ActionClass::Human,
+            "a human action plans (D-20 gone)"
         );
 
         let run = plan(
@@ -620,7 +700,7 @@ mod tests {
     }
 
     #[test]
-    fn list_states_what_blocks_and_marks_unavailable_classes() {
+    fn list_states_what_blocks_and_explains_human_actions() {
         let current = load(FLOOR, FLOOR_PATH).unwrap();
         let approved = approved_of(&current);
         let floor = FloorState::Valid {
@@ -642,8 +722,14 @@ mod tests {
         );
         assert!(
             text.contains(
-                "officina run apply group=<...>  (class human, not available in this build)"
+                "officina run apply group=<...>
+"
             ),
+            "{text}"
+        );
+        assert!(!text.contains("not available"), "{text}");
+        assert!(
+            text.contains("runs once per approval the author gives in the Officina window"),
             "{text}"
         );
         assert!(text.contains("Reads one host"), "{text}");
@@ -793,10 +879,14 @@ program = \"C:/path/to/tool.exe\"
                 }),
             ),
         ];
-        assert_eq!(check_step(&apply, &group, &lines, Some(&tree), now), Ok(()));
+        assert_eq!(
+            check_step(&apply, &group, &lines, Some(&tree), now),
+            Ok(Some("r1".to_owned())),
+            "the satisfying check's run id"
+        );
         assert_eq!(
             check_step(&verify, &group, &[], None, now),
-            Ok(()),
+            Ok(None),
             "a plan without a check passes"
         );
     }

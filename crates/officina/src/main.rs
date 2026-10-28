@@ -32,9 +32,11 @@ usage: officina <command>
   quota write [--tee]             record a statusline payload (stdin)
   relay --json                    print the relay's state once: approved
                                   catalogue, pending change, recent activity
-  run <action> [name=value ...]   run an approved relay action from its project
-                                  (exit: its own code, 126 refused, 124 timed
-                                  out, 127 not started)
+  run <action> [name=value ...] [--wait <s>]
+                                  run an approved relay action from its project;
+                                  a human action waits for the author's approval
+                                  up to <s> seconds (exit: its own code, 126
+                                  refused, 124 timed out, 127 not started)
   run --list                      list the actions this folder's project may run
   version                         print the version";
 
@@ -195,12 +197,17 @@ fn run_cmd(args: &[String]) -> ExitCode {
             let _ = out.flush();
             ExitCode::SUCCESS
         }
-        RunArgs::Action { action, params } => std::process::exit(relay_run::run(
+        RunArgs::Action {
+            action,
+            params,
+            wait_s,
+        } => std::process::exit(relay_run::run(
             &home,
             &cwd,
             &action,
             &params,
             relay_run::session_id_from_env(),
+            std::time::Duration::from_secs(u64::from(wait_s)),
         )),
     }
 }

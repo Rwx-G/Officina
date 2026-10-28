@@ -278,7 +278,7 @@ pub fn run(collector: &Collector, exe: &Path) -> Vec<Check> {
     checks.push(check_quota(collector, &user_settings, exe, now));
     checks.push(check_officina_home(&paths.officina_home));
     checks.push(check_floor(collector));
-    let system_dir = relay_doctor::system_dir();
+    let system_dir = crate::relay::home::system_dir();
     checks.extend(relay_doctor::checks(&RelayDoctor {
         home: &relay,
         doctor_floor: collector.floor.path.as_deref(),

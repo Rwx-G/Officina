@@ -12,9 +12,10 @@ use crate::agents::{AgentRecord, LifecycleState, LiveStatus, SessionKind};
 use crate::events::EventLine;
 use crate::floor::ProjectColor;
 use crate::quota::{QuotaFile, QuotaWindow};
+use crate::relay::approvals::ApprovalView;
 
-/// Version of the board JSON contract.
-pub const BOARD_SCHEMA: u32 = 1;
+/// Version of the board JSON contract. 2: approval requests (AD-35).
+pub const BOARD_SCHEMA: u32 = 2;
 
 /// Sessions that ended, failed or finished are listed for this long.
 pub const DONE_WINDOW_MS: i64 = 24 * 60 * 60 * 1000;
@@ -214,8 +215,13 @@ pub struct Board {
     pub generated_at_ms: i64,
     pub floor: Option<String>,
     pub stale: Option<Staleness>,
+    /// Needs you's session cards plus the valid approval requests (AD-35):
+    /// what the title, the taskbar overlay and the waiting pill count.
     pub waiting_count: u32,
     pub columns: Columns,
+    /// The pending approval requests Needs you lists first, oldest first
+    /// (AD-35).
+    pub approvals: Vec<ApprovalView>,
     pub quota: QuotaView,
     pub contract: ContractView,
     pub diagnostics: Diagnostics,
@@ -245,6 +251,8 @@ pub struct BoardInput {
     pub contract: ContractView,
     /// Drop prompt and assistant excerpts from cards.
     pub no_excerpts: bool,
+    /// The pending approval requests, from `relay::approvals::pending`.
+    pub approvals: Vec<ApprovalView>,
 }
 
 /// Events of one session, reduced to what a card shows.
@@ -680,13 +688,29 @@ pub fn build_board(input: &BoardInput, now_ms: i64) -> Board {
     unrecognized.sort();
     unrecognized.dedup();
 
+    let approvals: Vec<ApprovalView> = input
+        .approvals
+        .iter()
+        .map(|approval| ApprovalView {
+            session_name: approval.session_id.as_deref().and_then(|sid| {
+                columns
+                    .all()
+                    .find(|card| card.session_id.as_deref() == Some(sid))
+                    .map(|card| card.name.clone())
+            }),
+            ..approval.clone()
+        })
+        .collect();
+    let waiting = columns.needs_you.len() + approvals.iter().filter(|a| a.valid).count();
+
     Board {
         schema: BOARD_SCHEMA,
         generated_at_ms: now_ms,
         floor: input.floor_name.clone(),
         stale: input.stale.clone(),
-        waiting_count: u32::try_from(columns.needs_you.len()).unwrap_or(u32::MAX),
+        waiting_count: u32::try_from(waiting).unwrap_or(u32::MAX),
         columns,
+        approvals,
         quota: QuotaView {
             five_hour: input.quota.as_ref().and_then(|q| q.five_hour),
             seven_day: input.quota.as_ref().and_then(|q| q.seven_day),
@@ -912,6 +936,246 @@ mod tests {
             board.columns.your_turn[0].last_prompt.as_deref(),
             Some("after clear")
         );
+    }
+
+    mod approvals {
+        use super::*;
+        use crate::relay::approvals::{
+            ApprovalContext, ApprovalFiles, ApprovalRequest, Decision, DryRunInputs, KeyInputs,
+            PENDING_MS, pending, request_id, request_key,
+        };
+        use crate::relay::catalogue::{ApprovedCatalogue, load};
+        use crate::relay::journal::TreeFingerprint;
+
+        const NOW: i64 = 1_793_102_400_000;
+        const MIN: i64 = 60_000;
+        const FLOOR: &str = "schema = 2
+[[project]]
+name = \"lab\"
+path = \"C:/work/lab\"
+actions = [\"restart\", \"verify\", \"apply\"]
+[[action]]
+name = \"restart\"
+description = \"Restart one service\"
+class = \"human\"
+program = \"C:/path/to/tool.exe\"
+args = [\"{service}\"]
+[action.params.service]
+values = [\"web01\", \"db01\", \"cache01\"]
+[[action]]
+name = \"verify\"
+class = \"free\"
+program = \"C:/path/to/tool.exe\"
+args = [\"--check\", \"{service}\"]
+[action.params.service]
+values = [\"web01\"]
+[[action]]
+name = \"apply\"
+class = \"human\"
+check = \"verify\"
+program = \"C:/path/to/tool.exe\"
+args = [\"{service}\"]
+[action.params.service]
+values = [\"web01\"]
+";
+        const WAITING: &str = "[{\"pid\":1,\"sessionId\":\"s1\",\"kind\":\"interactive\",\"status\":\"waiting\",\"name\":\"deploy-lab\",\"startedAt\":1}]";
+
+        fn approved() -> ApprovedCatalogue {
+            let relay = load(FLOOR, "C:/path/to/officina.toml").unwrap();
+            ApprovedCatalogue {
+                approved_at_ms: NOW - 60 * MIN,
+                hash: relay.hash,
+                floor_file: None,
+                canonical: relay.canonical,
+            }
+        }
+
+        fn fingerprint(text: &str) -> TreeFingerprint {
+            TreeFingerprint {
+                sha256: crate::relay::sha256_hex(text.as_bytes()),
+                untracked_by_size: 0,
+            }
+        }
+
+        /// A request as `officina run` writes it, from session `sid`.
+        fn request(
+            approved: &ApprovedCatalogue,
+            action: &str,
+            service: &str,
+            created_at_ms: i64,
+            sid: Option<&str>,
+        ) -> (String, ApprovalRequest) {
+            let params = BTreeMap::from([("service".to_owned(), service.to_owned())]);
+            let dry_run = action == "apply";
+            let check_run_id = dry_run.then(|| "run-7".to_owned());
+            let tree = dry_run.then(|| fingerprint("a"));
+            let key = request_key(&KeyInputs {
+                project: "lab",
+                action,
+                params: &params,
+                catalogue_hash: &approved.hash,
+                check_run_id: check_run_id.as_deref(),
+                tree: tree.as_ref(),
+            });
+            (
+                request_id(&key, created_at_ms),
+                ApprovalRequest {
+                    request_key: key,
+                    created_at_ms,
+                    project: "lab".to_owned(),
+                    action: action.to_owned(),
+                    params,
+                    argv: vec!["C:/path/to/tool.exe".to_owned(), service.to_owned()],
+                    catalogue_hash: approved.hash.clone(),
+                    session_id: sid.map(str::to_owned),
+                    check_run_id,
+                    tree,
+                },
+            )
+        }
+
+        fn board_of(files: &ApprovalFiles, dry_runs: &DryRunInputs, agents: &str) -> Board {
+            let approved = approved();
+            let dirs = BTreeMap::new();
+            let ctx = ApprovalContext {
+                approved: Some(&approved),
+                project_dirs: &dirs,
+                system_dir: "C:/Windows/System32",
+            };
+            let input = BoardInput {
+                agents: Some(parse_agents(agents).unwrap()),
+                approvals: pending(files, &ctx, dry_runs, NOW),
+                ..Default::default()
+            };
+            build_board(&input, NOW)
+        }
+
+        fn files(requests: Vec<(String, ApprovalRequest)>) -> ApprovalFiles {
+            ApprovalFiles {
+                requests: requests.into_iter().collect(),
+                ..Default::default()
+            }
+        }
+
+        #[test]
+        fn approvals_count_as_waiting() {
+            let approved = approved();
+            let board = board_of(
+                &files(vec![
+                    request(&approved, "restart", "db01", NOW - 2 * MIN, None),
+                    request(&approved, "restart", "web01", NOW - 5 * MIN, None),
+                ]),
+                &DryRunInputs::default(),
+                WAITING,
+            );
+            assert_eq!(board.schema, BOARD_SCHEMA);
+            assert_eq!(board.approvals.len(), 2);
+            assert_eq!(board.waiting_count, 3, "one session card and two approvals");
+            assert_eq!(
+                board.approvals[0].argv[1], "web01",
+                "oldest first, the command rebuilt from the catalogue"
+            );
+            assert_eq!(
+                board.columns.needs_you.len(),
+                1,
+                "approvals are not session cards"
+            );
+        }
+
+        #[test]
+        fn invalid_requests_do_not_count() {
+            let approved = approved();
+            let (id, mut forged) = request(&approved, "restart", "db01", NOW - MIN, None);
+            forged
+                .params
+                .insert("service".to_owned(), "web01".to_owned());
+            let board = board_of(&files(vec![(id, forged)]), &DryRunInputs::default(), "[]");
+            assert_eq!(board.approvals.len(), 1);
+            assert!(!board.approvals[0].valid);
+            assert!(board.approvals[0].invalid_reason.is_some());
+            assert_eq!(board.waiting_count, 0);
+        }
+
+        #[test]
+        fn session_name_comes_from_the_cards() {
+            let approved = approved();
+            let board = board_of(
+                &files(vec![
+                    request(&approved, "restart", "web01", NOW - 2 * MIN, Some("s1")),
+                    request(&approved, "restart", "db01", NOW - MIN, Some("gone")),
+                    request(&approved, "restart", "cache01", NOW - MIN / 2, None),
+                ]),
+                &DryRunInputs::default(),
+                WAITING,
+            );
+            let names: Vec<Option<&str>> = board
+                .approvals
+                .iter()
+                .map(|a| a.session_name.as_deref())
+                .collect();
+            assert_eq!(names, [Some("deploy-lab"), None, None]);
+        }
+
+        #[test]
+        fn expired_and_decided_requests_are_not_listed() {
+            let approved = approved();
+            let live = request(&approved, "restart", "web01", NOW - MIN, None);
+            let expired = request(&approved, "restart", "db01", NOW - PENDING_MS - 1, None);
+            let (decided_id, decided) = request(&approved, "restart", "cache01", NOW - MIN, None);
+            let mut all = files(vec![
+                live.clone(),
+                expired,
+                (decided_id.clone(), decided.clone()),
+            ]);
+            all.rejected.insert(
+                decided_id,
+                Decision {
+                    decided_at_ms: NOW,
+                    request_key: decided.request_key,
+                },
+            );
+            let board = board_of(&all, &DryRunInputs::default(), "[]");
+            let ids: Vec<&str> = board.approvals.iter().map(|a| a.id.as_str()).collect();
+            assert_eq!(ids, [live.0.as_str()]);
+        }
+
+        #[test]
+        fn approval_view_carries_the_dry_run_output() {
+            let approved = approved();
+            let mut dry_runs = DryRunInputs::default();
+            dry_runs.outputs.insert(
+                "run-7".to_owned(),
+                Ok("TASK [restart] changed: [web01]\n".to_owned()),
+            );
+            dry_runs
+                .trees
+                .insert("lab".to_owned(), Some(fingerprint("a")));
+            let board = board_of(
+                &files(vec![request(&approved, "apply", "web01", NOW - MIN, None)]),
+                &dry_runs,
+                "[]",
+            );
+            let dry_run = board.approvals[0].dry_run.as_ref().expect("a dry run");
+            assert_eq!(dry_run.check, "verify");
+            assert_eq!(dry_run.run_id, "run-7");
+            assert_eq!(
+                dry_run.output.as_deref(),
+                Some("TASK [restart] changed: [web01]\n")
+            );
+            assert_eq!(dry_run.files_unchanged, Some(true));
+            let plain = board_of(
+                &files(vec![request(
+                    &approved,
+                    "restart",
+                    "web01",
+                    NOW - MIN,
+                    None,
+                )]),
+                &dry_runs,
+                "[]",
+            );
+            assert!(plain.approvals[0].dry_run.is_none(), "no check, no dry run");
+        }
     }
 
     #[test]

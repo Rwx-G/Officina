@@ -16,12 +16,13 @@
 //! no relay line at all.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 use officina_core::floor::{Autonomy, floor_dir_of, join_project_path};
 use officina_core::quota::normalise_path;
+use officina_core::relay::approvals::DEFAULT_WAIT_S;
 use officina_core::relay::argv::{WSL_ENV_PROGRAM, WSL_EXE, WSL_REMOVED_ENV, WSL_TIMEOUT_PROGRAM};
 use officina_core::relay::catalogue::{
     ActionClass, CanonicalAction, CanonicalCatalogue, CatalogueDiff, RelayFloor, Runner,
@@ -57,18 +58,6 @@ pub struct RelayDoctor<'a> {
     /// `None` off Windows or when it cannot be read.
     pub system_dir: Option<&'a Path>,
     pub now_ms: i64,
-}
-
-/// The system directory of this machine, for [`RelayDoctor::system_dir`].
-pub fn system_dir() -> Option<PathBuf> {
-    #[cfg(windows)]
-    {
-        crate::platform::windows::system_directory().ok()
-    }
-    #[cfg(not(windows))]
-    {
-        None
-    }
 }
 
 /// How one probe call ended.
@@ -668,8 +657,9 @@ fn timeout_checks(actions: &BTreeMap<String, CanonicalAction>) -> Vec<Check> {
         .collect()
 }
 
-/// An `after-check` action runs only after its check ran in the same
-/// project, so a project that lists it without its check can never run it.
+/// An action naming a check (an `after-check` action, or a `human` action's
+/// dry run, D-170) goes on only after that check ran in the same project, so
+/// a project that lists it without its check can never run it.
 fn check_listing_checks(catalogue: &CanonicalCatalogue) -> Vec<Check> {
     let mut checks = Vec::new();
     for (project_name, project) in &catalogue.projects {
@@ -677,7 +667,7 @@ fn check_listing_checks(catalogue: &CanonicalCatalogue) -> Vec<Check> {
             let Some(action) = catalogue.actions.get(action_name) else {
                 continue;
             };
-            if let (ActionClass::AfterCheck, Some(check_name)) = (action.class, &action.check)
+            if let Some(check_name) = &action.check
                 && !project.actions.contains(check_name)
             {
                 checks.push(check(
@@ -693,8 +683,8 @@ fn check_listing_checks(catalogue: &CanonicalCatalogue) -> Vec<Check> {
     checks
 }
 
-/// D-22: the projects with an `after-check` action, and whether their code
-/// binds through a git fingerprint.
+/// D-22, D-170: the projects with an action naming a check, and whether
+/// their code binds through a git fingerprint.
 fn tree_checks(catalogue: &CanonicalCatalogue, dirs: &BTreeMap<String, String>) -> Vec<Check> {
     catalogue
         .projects
@@ -704,7 +694,7 @@ fn tree_checks(catalogue: &CanonicalCatalogue, dirs: &BTreeMap<String, String>) 
                 catalogue
                     .actions
                     .get(a)
-                    .is_some_and(|action| action.class == ActionClass::AfterCheck)
+                    .is_some_and(|action| action.check.is_some())
             })
         })
         .map(|(name, project)| {
@@ -715,20 +705,20 @@ fn tree_checks(catalogue: &CanonicalCatalogue, dirs: &BTreeMap<String, String>) 
                     Level::Ok,
                     &title,
                     format!(
-                        "{dir} is a git work tree: after-check actions bind its code ({} files over 1 MiB by size only)",
+                        "{dir} is a git work tree: its actions naming a check bind its code ({} files over 1 MiB by size only)",
                         found.untracked_by_size
                     ),
                 ),
                 Some(_) => check(
                     Level::Ok,
                     &title,
-                    format!("{dir} is a git work tree: after-check actions bind its code"),
+                    format!("{dir} is a git work tree: its actions naming a check bind its code"),
                 ),
                 None => check(
                     Level::Warn,
                     &title,
                     format!(
-                        "{dir} is not in a git work tree, or git cannot run there: its after-check actions bind their parameters only, not the code their check ran on"
+                        "{dir} is not in a git work tree, or git cannot run there: its actions naming a check bind their parameters only, not the code their check ran on"
                     ),
                 ),
             }
@@ -801,11 +791,23 @@ fn paragraph_action(name: &str, action: &CanonicalAction) -> String {
     if !description.is_empty() {
         notes.push(format!("{description}."));
     }
-    if let (ActionClass::AfterCheck, Some(check)) = (action.class, &action.check) {
-        notes.push(format!(
-            "Runs only after `officina run {check}` succeeded with the same values on the same code in the last {} minutes.",
-            CHECK_VALID_MS / 60_000
-        ));
+    let minutes = CHECK_VALID_MS / 60_000;
+    match (action.class, &action.check) {
+        (ActionClass::AfterCheck, Some(check)) => notes.push(format!(
+            "Runs only after `officina run {check}` succeeded with the same values on the same code in the last {minutes} minutes."
+        )),
+        (ActionClass::Human, check) => {
+            if let Some(check) = check {
+                notes.push(format!(
+                    "Run its dry run `officina run {check}` with the same values first: the approval request is made only after it succeeded on the same code in the last {minutes} minutes."
+                ));
+            }
+            notes.push(format!(
+                "Runs once the author approves it in the Officina window; the call waits for that up to `--wait <s>` ({DEFAULT_WAIT_S} by default, at most {}), and a call that timed out is repeated as is to keep waiting.",
+                WAIT_RANGE_S.end()
+            ));
+        }
+        _ => {}
     }
     if !classes::is_available(action.class) {
         notes.push(format!(
@@ -906,7 +908,9 @@ fn paragraph_checks(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::relay::home::system_dir;
     use officina_core::relay::catalogue::load;
+    use std::path::PathBuf;
 
     const FLOOR_PATH: &str = "C:/path/to/officina.toml";
 

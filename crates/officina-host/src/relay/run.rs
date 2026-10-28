@@ -1,8 +1,11 @@
-//! `officina run` (AD-29 to AD-33): reads what the checks need, refuses or
-//! starts the approved argument vector with a timeout and an output budget,
-//! and journals the run. Check and `after-check` runs record the tree they
-//! start on, and an `after-check` action runs only after its check. It is the relay's authority over what runs and
-//! fails closed, unlike the gate (AD-28): every doubt is a refusal.
+//! `officina run` (AD-29 to AD-33, D-170): reads what the checks need,
+//! refuses or starts the approved argument vector with a timeout and an
+//! output budget, and journals the run. Runs of an action naming a check and
+//! of a check record the tree they start on, and a check keeps its output
+//! for the approval card; an `after-check` action runs only after its check;
+//! a `human` action waits for the author's approval, made after its dry run
+//! when it names one. It is the relay's authority over what runs and fails
+//! closed, unlike the gate (AD-28): every doubt is a refusal.
 //!
 //! Exit codes a shell already reads: the program's own, full Windows value
 //! included; 126 refused; 124 timed out; 127 not started; 64 usage. A
@@ -19,17 +22,25 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use officina_core::relay::StreamHash;
+use officina_core::relay::approvals::{
+    ApprovalRequest, DEFAULT_WAIT_S, FileKind, KEPT_OUTPUT_BYTES, KeyInputs, NextStep,
+    WAIT_TICK_MS, kept_output, next_step, request_id, request_key,
+};
 use officina_core::relay::argv::Launch;
+use officina_core::relay::catalogue::ActionClass;
+use officina_core::relay::classes::WAIT_RANGE_S;
 use officina_core::relay::journal::{
-    JournalEntry, Refused, RunFinished, RunOutcome, RunStarted, StreamSummary, TreeFingerprint,
+    ApprovalEvent, JournalEntry, Refused, RunFinished, RunOutcome, RunStarted, StreamSummary,
+    TreeFingerprint,
 };
 pub use officina_core::relay::run::{EXIT_NOT_STARTED, EXIT_REFUSED, EXIT_TIMEOUT};
 use officina_core::relay::run::{
     FloorState, Refusal, RunInputs, RunPlan, SnapshotState, check_step, list_text, plan,
 };
 
-use super::home::{ApprovedState, RelayHome, load_relay_floor};
-use super::{journal, tree};
+use super::home::{ApprovedState, RelayHome, load_relay_floor, system_dir};
+use super::journal::JournalLock;
+use super::{approvals, journal, tree};
 use crate::files::now_ms;
 
 /// The session that called, as Claude Code's Bash tool sets it (E13).
@@ -52,13 +63,18 @@ pub enum RunArgs {
     Action {
         action: String,
         params: BTreeMap<String, String>,
+        /// `--wait <s>`: how long a `human` action waits for the author's
+        /// decision (AD-33).
+        wait_s: u32,
     },
 }
 
 /// Parses the arguments after `run` by hand (AD-29): `--list` alone, or an
-/// action then `name=value` tokens split at the first `=`. A token without
-/// `=`, a duplicate name, a missing action or an unknown option is a usage
-/// error, which the caller reports with exit 64.
+/// action then `name=value` tokens split at the first `=`, and `--wait <s>`
+/// once, in [`WAIT_RANGE_S`] ([`DEFAULT_WAIT_S`] when absent). A token
+/// without `=`, a duplicate name, a missing action, an unknown option or a
+/// `--wait` out of range is a usage error, which the caller reports with
+/// exit 64.
 pub fn parse_args(args: &[String]) -> Result<RunArgs, String> {
     let Some((action, tokens)) = args.split_first() else {
         return Err("missing action".to_owned());
@@ -77,7 +93,26 @@ pub fn parse_args(args: &[String]) -> Result<RunArgs, String> {
         return Err("missing action: the first argument is a parameter".to_owned());
     }
     let mut params = BTreeMap::new();
-    for token in tokens {
+    let mut wait_s = None;
+    let mut tokens = tokens.iter();
+    while let Some(token) = tokens.next() {
+        if token == "--wait" {
+            let seconds = tokens
+                .next()
+                .and_then(|value| value.parse::<u32>().ok())
+                .filter(|seconds| WAIT_RANGE_S.contains(seconds))
+                .ok_or_else(|| {
+                    format!(
+                        "--wait takes seconds from {} to {}",
+                        WAIT_RANGE_S.start(),
+                        WAIT_RANGE_S.end()
+                    )
+                })?;
+            if wait_s.replace(seconds).is_some() {
+                return Err("--wait is given twice".to_owned());
+            }
+            continue;
+        }
         let Some((name, value)) = token.split_once('=') else {
             return Err(format!("{token:?} is not name=value"));
         };
@@ -88,27 +123,13 @@ pub fn parse_args(args: &[String]) -> Result<RunArgs, String> {
     Ok(RunArgs::Action {
         action: action.clone(),
         params,
+        wait_s: wait_s.unwrap_or(DEFAULT_WAIT_S),
     })
 }
 
 /// `CLAUDE_CODE_SESSION_ID`, absent outside Claude Code (AD-29).
 pub fn session_id_from_env() -> Option<String> {
     std::env::var(ENV_SESSION_ID).ok().filter(|v| !v.is_empty())
-}
-
-/// The directory `wsl.exe` is taken from (AD-30). Empty off Windows, where
-/// the `wsl` runner has nothing to start.
-fn system_dir() -> String {
-    #[cfg(windows)]
-    {
-        crate::platform::windows::system_directory()
-            .map(|dir| dir.to_string_lossy().into_owned())
-            .unwrap_or_default()
-    }
-    #[cfg(not(windows))]
-    {
-        String::new()
-    }
 }
 
 /// Reads what the checks need and hands it to `f`.
@@ -131,7 +152,10 @@ fn with_inputs<R>(home: &RelayHome, cwd: &str, f: impl FnOnce(&RunInputs<'_>) ->
         },
         Err(_) => FloorState::Unreadable(floor_error.as_deref().unwrap_or_default()),
     };
-    let system_dir = system_dir();
+    // Empty off Windows, where the `wsl` runner has nothing to start.
+    let system_dir = system_dir()
+        .map(|dir| dir.to_string_lossy().into_owned())
+        .unwrap_or_default();
     f(&RunInputs {
         stopped,
         snapshot,
@@ -150,15 +174,17 @@ pub fn list(home: &RelayHome, cwd: &str) -> String {
 /// exit code.
 ///
 /// After the checks of [`plan`], a run that binds the tree takes its
-/// fingerprint in the project folder (D-22), and an `after-check` action
-/// reads two days of journal for its check (AD-33), the last step before
-/// anything is journaled as started.
+/// fingerprint in the project folder (D-22), and an action naming a check
+/// reads two days of journal for it (AD-33, D-170). A `human` action then
+/// waits up to `wait` for the author's approval ([`approval`]), the last step
+/// before anything is journaled as started.
 pub fn run(
     home: &RelayHome,
     cwd: &str,
     action: &str,
     params: &BTreeMap<String, String>,
     session_id: Option<String>,
+    wait: Duration,
 ) -> i32 {
     let plan = match with_inputs(home, cwd, |inputs| plan(inputs, action, params)) {
         Ok(plan) => plan,
@@ -168,14 +194,211 @@ pub fn run(
         .binds_tree
         .then(|| tree::fingerprint(Path::new(&plan.launch.cwd)))
         .flatten();
+    let mut check_run_id = None;
     if plan.check.is_some() {
         let now = now_ms();
         let (lines, _) = journal::read_recent(home, now);
-        if let Err(refusal) = check_step(&plan, params, &lines, tree.as_ref(), now) {
-            return refuse(home, &refusal, action, params, session_id);
+        match check_step(&plan, params, &lines, tree.as_ref(), now) {
+            Ok(found) => check_run_id = found,
+            Err(refusal) => return refuse(home, &refusal, action, params, session_id),
         }
     }
-    execute(home, &plan, params, session_id, tree)
+    // `auto` never passes validation (v0.5); were it to, it would still wait
+    // for the author.
+    if matches!(plan.class, ActionClass::Human | ActionClass::Auto) {
+        let caller = Caller {
+            home,
+            cwd,
+            params,
+            session_id: &session_id,
+        };
+        let bound = Bound {
+            check_run_id: check_run_id.as_deref(),
+            tree: tree.as_ref(),
+        };
+        return match approval(&caller, &plan, bound, wait) {
+            Ok((approval_id, approved_plan)) => execute(
+                home,
+                &approved_plan,
+                params,
+                session_id,
+                tree,
+                Some(approval_id),
+            ),
+            Err(code) => code,
+        };
+    }
+    execute(home, &plan, params, session_id, tree, None)
+}
+
+/// Who called and from where, for the steps of a `human` action.
+struct Caller<'a> {
+    home: &'a RelayHome,
+    cwd: &'a str,
+    params: &'a BTreeMap<String, String>,
+    session_id: &'a Option<String>,
+}
+
+impl Caller<'_> {
+    fn refuse(&self, refusal: &Refusal, action: &str) -> i32 {
+        refuse(
+            self.home,
+            refusal,
+            action,
+            self.params,
+            self.session_id.clone(),
+        )
+    }
+}
+
+/// What a `human` action's request is bound to besides its parameters: the
+/// dry run it was made after and the tree that ran on (D-170).
+#[derive(Clone, Copy)]
+struct Bound<'a> {
+    check_run_id: Option<&'a str>,
+    tree: Option<&'a TreeFingerprint>,
+}
+
+/// AD-33 steps 1 to 4 for a `human` action: refused after a recent
+/// rejection; an approval for this request consumed and the plan returned
+/// with its id; otherwise the pending request reused, or a new one written
+/// and journaled, then waited for, a stat every [`WAIT_TICK_MS`] with the
+/// stop flag read each tick, until a decision or `wait`. Errors are exit
+/// codes, the refusal already printed and journaled.
+fn approval(
+    caller: &Caller<'_>,
+    plan: &RunPlan,
+    bound: Bound<'_>,
+    wait: Duration,
+) -> Result<(String, RunPlan), i32> {
+    let key = request_key(&KeyInputs {
+        project: &plan.project,
+        action: &plan.action,
+        params: caller.params,
+        catalogue_hash: &plan.catalogue_hash,
+        check_run_id: bound.check_run_id,
+        tree: bound.tree,
+    });
+    let deadline = Instant::now() + wait;
+    loop {
+        let files = approvals::read_files(caller.home);
+        let id = match next_step(&files, &key, now_ms()) {
+            NextStep::Rejected { .. } => {
+                return Err(caller.refuse(&Refusal::approval_rejected(&plan.project), &plan.action));
+            }
+            NextStep::Consume { id } => match consume(caller, plan, bound, &id) {
+                Consumed::Done(fresh) => return Ok((id, fresh)),
+                Consumed::Gone => continue,
+                Consumed::Refused(refusal) => return Err(caller.refuse(&refusal, &plan.action)),
+            },
+            NextStep::Wait { id } => id,
+            NextStep::Create => create(caller, plan, bound, &key)?,
+        };
+        loop {
+            if caller.home.relay_stopped() {
+                return Err(caller.refuse(&Refusal::stopped(), &plan.action));
+            }
+            match approvals::decision(caller.home, &id) {
+                Some(FileKind::Approved) => break,
+                Some(FileKind::Rejected) => {
+                    return Err(
+                        caller.refuse(&Refusal::approval_rejected(&plan.project), &plan.action)
+                    );
+                }
+                _ => {}
+            }
+            if Instant::now() >= deadline {
+                return Err(caller.refuse(&Refusal::approval_pending(&plan.project), &plan.action));
+            }
+            std::thread::sleep(Duration::from_millis(WAIT_TICK_MS));
+        }
+    }
+}
+
+/// How using an approval went.
+enum Consumed {
+    /// Used: the plan checked again just before.
+    Done(RunPlan),
+    /// Another call used it first.
+    Gone,
+    /// Refused before using it: the approval stays as it was.
+    Refused(Refusal),
+}
+
+/// Uses approval `id`, last before the spawn (AD-33): the checks of [`plan`]
+/// again, the approval made under the same catalogue, and for an action
+/// naming a check the tree still the dry run's (D-170); then the rename.
+/// Anything refused leaves the approval unconsumed.
+fn consume(caller: &Caller<'_>, planned: &RunPlan, bound: Bound<'_>, id: &str) -> Consumed {
+    let fresh = match with_inputs(caller.home, caller.cwd, |inputs| {
+        plan(inputs, &planned.action, caller.params)
+    }) {
+        Ok(fresh) => fresh,
+        Err(refusal) => return Consumed::Refused(refusal),
+    };
+    if fresh.catalogue_hash != planned.catalogue_hash {
+        return Consumed::Refused(Refusal::catalogue_changed_since_request(&fresh.project));
+    }
+    if let Some(check) = &fresh.check
+        && tree::fingerprint(Path::new(&fresh.launch.cwd)).as_ref() != bound.tree
+    {
+        return Consumed::Refused(Refusal::check_not_satisfied(&fresh.project, check));
+    }
+    match approvals::consume(caller.home, id) {
+        Ok(()) => Consumed::Done(fresh),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Consumed::Gone,
+        Err(e) => Consumed::Refused(Refusal::approval_unavailable(
+            &fresh.project,
+            &e.to_string(),
+        )),
+    }
+}
+
+/// Writes a new request and its `approval_requested` line under the journal
+/// lock, so a request and its line go together (PRD amendment 11), unless a
+/// concurrent call made the same request first. Returns its id.
+fn create(caller: &Caller<'_>, plan: &RunPlan, bound: Bound<'_>, key: &str) -> Result<String, i32> {
+    let lock = match JournalLock::acquire(caller.home) {
+        Ok(lock) => lock,
+        Err(e) => {
+            eprintln!("officina: refused: {e}, so no approval was requested (journal_unavailable)");
+            return Err(EXIT_REFUSED);
+        }
+    };
+    let now = now_ms();
+    // Every request is written under the lock: a call that waited for it
+    // while another made the same request reuses that one.
+    if let NextStep::Wait { id } = next_step(&approvals::read_files(caller.home), key, now) {
+        return Ok(id);
+    }
+    let id = request_id(key, now);
+    let request = ApprovalRequest {
+        request_key: key.to_owned(),
+        created_at_ms: now,
+        project: plan.project.clone(),
+        action: plan.action.clone(),
+        params: caller.params.clone(),
+        argv: plan.argv(),
+        catalogue_hash: plan.catalogue_hash.clone(),
+        session_id: caller.session_id.clone(),
+        check_run_id: bound.check_run_id.map(str::to_owned),
+        tree: bound.tree.cloned(),
+    };
+    if let Err(e) = approvals::create_request(caller.home, &id, &request) {
+        drop(lock);
+        return Err(caller.refuse(
+            &Refusal::approval_unavailable(&plan.project, &e.to_string()),
+            &plan.action,
+        ));
+    }
+    let line = JournalEntry::ApprovalRequested(ApprovalEvent {
+        approval_id: id.clone(),
+        request_key: key.to_owned(),
+    });
+    if lock.append(&[line], now).is_err() {
+        eprintln!("officina: the journal could not record approval request {id}");
+    }
+    Ok(id)
 }
 
 /// One stderr line and one `refused` line (PRD amendment 11). A journal
@@ -295,6 +518,8 @@ impl ProcessTree {
 struct Stream {
     bytes: u64,
     hash: StreamHash,
+    /// The first [`KEPT_OUTPUT_BYTES`] bytes, for a check run (D-170).
+    kept: Option<Vec<u8>>,
 }
 
 impl Stream {
@@ -319,13 +544,20 @@ struct Output {
 }
 
 impl Output {
-    fn start(child: &mut Child, budget_kib: u32) -> Output {
+    /// `keep`: also keep the first bytes of each stream (D-170).
+    fn start(child: &mut Child, budget_kib: u32, keep: bool) -> Output {
         let budget = Arc::new(AtomicU64::new(u64::from(budget_kib) * 1024));
         let dropped = Arc::new(AtomicU64::new(0));
         let stdout_at_line_start = Arc::new(AtomicBool::new(true));
         let (done_tx, done) = mpsc::channel();
-        let stdout = Arc::new(Mutex::new(Stream::default()));
-        let stderr = Arc::new(Mutex::new(Stream::default()));
+        let stream = || {
+            Arc::new(Mutex::new(Stream {
+                kept: keep.then(Vec::new),
+                ..Stream::default()
+            }))
+        };
+        let stdout = stream();
+        let stderr = stream();
         if let Some(pipe) = child.stdout.take() {
             let at_line_start = Arc::clone(&stdout_at_line_start);
             pump(
@@ -374,6 +606,19 @@ impl Output {
                 return;
             }
         }
+    }
+
+    /// What a check run keeps (D-170): stdout then stderr, capped, with the
+    /// cut marker; `None` when the run keeps nothing.
+    fn kept(&self) -> Option<Vec<u8>> {
+        let out = self.stdout.lock().ok()?;
+        let err = self.stderr.lock().ok()?;
+        Some(kept_output(
+            out.kept.as_deref()?,
+            err.kept.as_deref()?,
+            out.bytes,
+            err.bytes,
+        ))
     }
 
     fn summaries(&self) -> (StreamSummary, StreamSummary, u64) {
@@ -431,6 +676,10 @@ fn pump(
             if let Ok(mut stream) = stream.lock() {
                 stream.bytes += n as u64;
                 stream.hash.update(chunk);
+                if let Some(kept) = &mut stream.kept {
+                    let room = KEPT_OUTPUT_BYTES.saturating_sub(kept.len()).min(n);
+                    kept.extend_from_slice(&chunk[..room]);
+                }
             }
             let wanted = n as u64;
             let left = budget
@@ -478,14 +727,25 @@ fn journal_end(home: &RelayHome, line: JournalEntry) {
     }
 }
 
+/// Keeps a check run's output (D-170); a failure is said, the run stands.
+fn keep(home: &RelayHome, run_id: &str, output: &Output) {
+    if let Some(bytes) = output.kept()
+        && let Err(e) = approvals::keep_output(home, run_id, &bytes)
+    {
+        eprintln!("officina: this check's output could not be kept: {e}");
+    }
+}
+
 /// Journals `run_started`, starts the launch in its process tree, copies
-/// its output, waits for it against its deadline and journals the end.
+/// its output, waits for it against its deadline, keeps a check's output
+/// and journals the end.
 fn execute(
     home: &RelayHome,
     plan: &RunPlan,
     params: &BTreeMap<String, String>,
     session_id: Option<String>,
     tree: Option<TreeFingerprint>,
+    approval_id: Option<String>,
 ) -> i32 {
     let run_id = format!("{:x}-{:x}", now_ms(), std::process::id());
     let start = JournalEntry::RunStarted(RunStarted {
@@ -497,7 +757,7 @@ fn execute(
         params: params.clone(),
         argv: plan.argv(),
         catalogue_hash: plan.catalogue_hash.clone(),
-        approval_id: None,
+        approval_id,
         tree,
         timeout_s: Some(plan.timeout_s),
     });
@@ -527,7 +787,7 @@ fn execute(
         }
     };
     tree.started(&child);
-    let output = Output::start(&mut child, plan.max_output_kib);
+    let output = Output::start(&mut child, plan.max_output_kib, plan.keeps_output);
     let deadline = started + Duration::from_secs(u64::from(plan.timeout_s));
     loop {
         match child.try_wait() {
@@ -535,6 +795,7 @@ fn execute(
                 output.drain(OUTPUT_GRACE);
                 let (_, _, dropped) = output.summaries();
                 output.mark_cut(dropped);
+                keep(home, &run_id, &output);
                 // Windows always reports a code; elsewhere a signal has none.
                 let code = status.code().unwrap_or(1);
                 journal_end(
@@ -566,6 +827,7 @@ fn execute(
                 );
                 let (_, _, dropped) = output.summaries();
                 output.mark_cut(dropped);
+                keep(home, &run_id, &output);
                 eprintln!(
                     "officina: timeout: {} ran past its {} s; it and every process it started were stopped",
                     plan.action, plan.timeout_s
@@ -613,8 +875,20 @@ mod tests {
                     ("q".to_owned(), "a=b".to_owned()),
                     ("empty".to_owned(), String::new()),
                 ]),
+                wait_s: DEFAULT_WAIT_S,
             })
         );
+        let max = WAIT_RANGE_S.end().to_string();
+        assert_eq!(
+            parse_args(&args(&["apply", "--wait", &max, "group=lab-web"])),
+            Ok(RunArgs::Action {
+                action: "apply".to_owned(),
+                params: BTreeMap::from([("group".to_owned(), "lab-web".to_owned())]),
+                wait_s: *WAIT_RANGE_S.end(),
+            })
+        );
+        let past = (WAIT_RANGE_S.end() + 1).to_string();
+        let below = (WAIT_RANGE_S.start() - 1).to_string();
         for usage in [
             &[][..],
             &["check", "group"],
@@ -622,6 +896,11 @@ mod tests {
             &["group=lab-web"],
             &["--list", "extra"],
             &["--wait", "10"],
+            &["apply", "--wait"],
+            &["apply", "--wait", "x"],
+            &["apply", "--wait", &past],
+            &["apply", "--wait", &below],
+            &["apply", "--wait", "5", "--wait", "6"],
         ] {
             assert!(parse_args(&args(usage)).is_err(), "{usage:?}");
         }

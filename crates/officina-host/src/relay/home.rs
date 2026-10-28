@@ -6,6 +6,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use officina_core::floor::FloorError;
+use officina_core::relay::approvals::OUTPUTS_DIR;
 use officina_core::relay::catalogue::{
     self, ApprovedCatalogue, KnownProjects, RelayFloor, parse_known_projects,
 };
@@ -102,6 +103,12 @@ impl RelayHome {
         self.relay_dir().join("approvals")
     }
 
+    /// `relay/outputs/`: the kept output of check runs, one file per run id
+    /// (D-170).
+    pub fn outputs_dir(&self) -> PathBuf {
+        self.relay_dir().join(OUTPUTS_DIR)
+    }
+
     /// `relay/known-projects.json`: the last readable state (D-15).
     pub fn known_projects_file(&self) -> PathBuf {
         self.relay_dir().join("known-projects.json")
@@ -172,6 +179,20 @@ impl RelayHome {
 /// so a flag the process cannot read never lets an action run.
 pub fn is_stopped(lookup: Result<(), io::ErrorKind>) -> bool {
     !matches!(lookup, Err(io::ErrorKind::NotFound))
+}
+
+/// The Windows system directory, where `wsl.exe` is taken from (AD-30):
+/// `GetSystemDirectoryW`, never `PATH` or `%SystemRoot%`. `None` off Windows
+/// or when it cannot be read.
+pub fn system_dir() -> Option<PathBuf> {
+    #[cfg(windows)]
+    {
+        crate::platform::windows::system_directory().ok()
+    }
+    #[cfg(not(windows))]
+    {
+        None
+    }
 }
 
 /// Reads a floor for the relay: both phases, the canonical form and its

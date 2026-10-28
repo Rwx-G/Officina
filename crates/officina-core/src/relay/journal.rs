@@ -227,12 +227,20 @@ closed_enum! {
         UnknownParameter,
         /// A value breaks a rule of AD-30 or the parameter's own.
         InvalidValue,
-        /// The action's class does not run in this build (D-20).
-        ClassNotAvailable,
-        /// An `after-check` action without a successful run of its check,
-        /// with the same parameters on the same code, in the last 30
-        /// minutes (AD-33).
+        /// An `after-check` action, or a `human` action naming its dry run,
+        /// without a successful run of its check, with the same parameters
+        /// on the same code, in the last 30 minutes (AD-33, D-170).
         CheckRequired,
+        /// The author rejected this request in the window in the last 15
+        /// minutes (AD-33).
+        ApprovalRejected,
+        /// The approval request could not be written.
+        ApprovalUnavailable,
+        /// No decision came within `--wait` (AD-33).
+        ApprovalPending,
+        /// The code changed since the dry run the approval was given for: the
+        /// approval stays unconsumed (D-170).
+        CheckNotSatisfied,
     }
 }
 
