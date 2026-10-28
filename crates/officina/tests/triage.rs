@@ -344,6 +344,20 @@ fn cmd_or_bat_shim_is_refused_with_zero_launches() {
     }
 }
 
+/// D-65: a `claude` path naming no file starts nothing and spends no
+/// budget: refused, not failed.
+#[test]
+fn missing_claude_is_refused_with_zero_launches() {
+    let setup = Setup::new("triage");
+    let mut job = setup.job(case_naming("finished"), plain_base());
+    job.claude = Some(setup.root.path().join("gone").join("claude.exe"));
+    let done = setup.run(&job);
+    refused_with_zero_launches(&setup, &done, TriageRefusal::ClaudeNotFound);
+    job.claude = None;
+    let done = setup.run(&job);
+    refused_with_zero_launches(&setup, &done, TriageRefusal::ClaudeNotFound);
+}
+
 /// AD-51, D-65: with `no_excerpts`, nothing may be sent: refused.
 #[test]
 fn no_excerpts_is_refused_with_zero_launches() {

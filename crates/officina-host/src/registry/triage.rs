@@ -128,6 +128,10 @@ pub fn refusal(job: &TriageJob) -> Option<TriageRefusal> {
     if let Some(shim) = refusal_for_binary(&claude.to_string_lossy()) {
         return Some(shim);
     }
+    // Nothing to start: refused, so it spends no budget (D-65).
+    if !claude.is_file() {
+        return Some(TriageRefusal::ClaudeNotFound);
+    }
     if job.no_excerpts {
         return Some(TriageRefusal::NoExcerpts);
     }
