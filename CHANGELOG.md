@@ -242,6 +242,25 @@ project uses [Semantic Versioning](https://semver.org/).
   also shows the calls and their cost today and over 30 days, and each
   refusal with its cause. `officina doctor` reports the model's state, its
   calls and cost, and the refusal while `claude` resolves to a shim.
+- Measured error (v0.3, in progress): per proposal source (`state`,
+  `rules`, `model`), the Triage panel shows how many of its last 50
+  confirmed `finished` proposals you flipped, with the count it rests on,
+  how many of its last 50 proposals you flipped, and its `unsure` apart, or
+  says "no finished proposal yet". An auto-archive counts once 7 days old,
+  as flipped when its subject was reopened within them, by you or by one of
+  its sessions coming back. `officina subjects --json` prints the same
+  counts, the gates and the thresholds.
+- Auto-archive, off until you turn it on: offered only once Claude Code's
+  `state` has proposed `finished` at least 50 times with none of the last
+  50 flipped; while on, the window confirms `finished`, right after each
+  view, the rows of filed subjects whose background session Claude Code
+  reports done, without the routine mark; an unfiled session, an empty
+  subject or a model proposal is never archived this way. When the gate
+  breaks it turns itself off and says why. The subjects it archived over
+  the last 7 days are listed with **Reopen**.
+- Routine candidates: the subjects you archived as "routine, could have
+  run alone" (a merged one excepted) are listed in the Subjects view and in
+  `officina subjects --json`, as candidates for a later catalogue.
 
 ### Changed
 
