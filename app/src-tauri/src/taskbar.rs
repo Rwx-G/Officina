@@ -39,29 +39,52 @@ pub const ALERT_TEXT: [u8; 3] = [0xFF, 0xFF, 0xFF];
 /// The rim around the disc, today's dot's: the light `--color-text`.
 pub const RIM: [u8; 3] = [0x2A, 0x24, 0x1C];
 
-/// The small `+` beside a `9` above nine: 3 by 3 pixels, a row per byte.
+/// The small `+` beside a `9` above nine: 3 by 3 cells, a row per byte,
+/// centred on the digit's height, one cell after it.
 const PLUS: [u8; 3] = [0b010, 0b111, 0b010];
 
 /// The highest count the badge spells; above it, it reads `9+`.
 pub const MAX_SPELLED: u32 = 9;
 
-/// Glyphs 3 pixels wide and 5 high, one row per byte, bit 2 leftmost.
-const GLYPH_W: u32 = 3;
-const GLYPH_H: u32 = 5;
+/// Bold glyphs 5 cells wide and 7 high, one row per byte, the leftmost cell
+/// the highest of the five bits (the owner's choice on gate 2's run 2,
+/// D-523 as amended).
+const GLYPH_W: u32 = 5;
+const GLYPH_H: u32 = 7;
 
-fn glyph(c: char) -> [u8; 5] {
+fn glyph(c: char) -> [u8; 7] {
     match c {
-        '0' => [0b111, 0b101, 0b101, 0b101, 0b111],
-        '1' => [0b010, 0b110, 0b010, 0b010, 0b111],
-        '2' => [0b111, 0b001, 0b111, 0b100, 0b111],
-        '3' => [0b111, 0b001, 0b011, 0b001, 0b111],
-        '4' => [0b101, 0b101, 0b111, 0b001, 0b001],
-        '5' => [0b111, 0b100, 0b111, 0b001, 0b111],
-        '6' => [0b111, 0b100, 0b111, 0b101, 0b111],
-        '7' => [0b111, 0b001, 0b010, 0b010, 0b010],
-        '8' => [0b111, 0b101, 0b111, 0b101, 0b111],
-        '9' => [0b111, 0b101, 0b111, 0b001, 0b111],
-        _ => [0; 5],
+        '0' => [
+            0b01110, 0b11011, 0b11011, 0b11011, 0b11011, 0b11011, 0b01110,
+        ],
+        '1' => [
+            0b00110, 0b01110, 0b00110, 0b00110, 0b00110, 0b00110, 0b01111,
+        ],
+        '2' => [
+            0b01110, 0b11011, 0b00011, 0b00110, 0b01100, 0b11000, 0b11111,
+        ],
+        '3' => [
+            0b11110, 0b00011, 0b00011, 0b01110, 0b00011, 0b00011, 0b11110,
+        ],
+        '4' => [
+            0b00110, 0b01110, 0b11110, 0b10110, 0b11111, 0b00110, 0b00110,
+        ],
+        '5' => [
+            0b11111, 0b11000, 0b11110, 0b00011, 0b00011, 0b11011, 0b01110,
+        ],
+        '6' => [
+            0b01110, 0b11000, 0b11000, 0b11110, 0b11011, 0b11011, 0b01110,
+        ],
+        '7' => [
+            0b11111, 0b00011, 0b00110, 0b00110, 0b01100, 0b01100, 0b01100,
+        ],
+        '8' => [
+            0b01110, 0b11011, 0b11011, 0b01110, 0b11011, 0b11011, 0b01110,
+        ],
+        '9' => [
+            0b01110, 0b11011, 0b11011, 0b01111, 0b00011, 0b00110, 0b01100,
+        ],
+        _ => [0; 7],
     }
 }
 
@@ -141,9 +164,9 @@ fn disc(size: u32, body: [u8; 3]) -> Overlay {
 
 /// The badge at `size` pixels: with `alert`, a disc in the alert colour
 /// carrying a bold `!` (the count stays in the title and the band); else an
-/// amber disc carrying `count` up to [`MAX_SPELLED`], its digits at twice the
-/// font's cell at 16 px so they fill the disc, and above nine a small `+`
-/// at the `9`'s top right (gate 2, D-523).
+/// amber disc carrying `count` up to [`MAX_SPELLED`] in a bold 5 x 7 font,
+/// one pixel per cell at 16 px, and above nine a small `+` beside the `9`
+/// (gate 2, D-523 as amended).
 pub fn overlay_badge(count: u32, alert: bool, size: u32) -> Overlay {
     if alert {
         let mut image = disc(size, ALERT);
@@ -157,12 +180,12 @@ pub fn overlay_badge(count: u32, alert: bool, size: u32) -> Overlay {
     let mut image = disc(size, AMBER);
     let digit = char::from_digit(count.min(MAX_SPELLED), 10).unwrap_or('9');
     let plus = count > MAX_SPELLED;
-    // Twice the font's cell, or the largest cell below it whose text keeps
-    // its corners inside the rim (a 9+ at 20 or 24 px).
+    // One cell per pixel at 16 px, scaled with the size, or the largest
+    // cell below it whose text keeps its corners inside the rim.
     let center = (size as f32 - 1.0) / 2.0;
     let radius = size as f32 / 2.0 - 0.5 - rim(size) as f32;
     let layout = |cell: u32| {
-        let plus_cell = if plus { scaled(1, size).min(cell) } else { 0 };
+        let plus_cell = if plus { cell } else { 0 };
         let width = GLYPH_W * cell + if plus { 4 * plus_cell } else { 0 };
         let height = GLYPH_H * cell;
         let (x0, y0) = ((size - width.min(size)) / 2, (size - height.min(size)) / 2);
@@ -177,7 +200,7 @@ pub fn overlay_badge(count: u32, alert: bool, size: u32) -> Overlay {
         });
         (fits, x0, y0, plus_cell)
     };
-    let cell = (1..=scaled(2, size))
+    let cell = (1..=scaled(1, size))
         .rev()
         .find(|&c| layout(c).0)
         .unwrap_or(1);
@@ -189,7 +212,7 @@ pub fn overlay_badge(count: u32, alert: bool, size: u32) -> Overlay {
             &PLUS,
             3,
             x0 + GLYPH_W * cell + plus_cell,
-            y0,
+            y0 + 2 * plus_cell,
             plus_cell,
             AMBER_TEXT,
         );
@@ -302,13 +325,27 @@ mod tests {
         }
     }
 
-    /// D-523: at 16 px a digit fills the disc at twice the font's cell, and
-    /// every badge's ink stays inside the disc at every scale.
+    /// D-523 as amended: at 16 px each digit is its glyph, one pixel per
+    /// cell, every lit cell drawn; 9+ is the 9 and the whole `+`; every
+    /// badge's ink stays inside the rim at every scale.
     #[test]
-    fn digits_are_drawn_at_twice_the_font_cell() {
-        let image = overlay_badge(8, false, BASE_SIZE);
-        let (_, _, w, h) = bbox(&image, AMBER_TEXT);
-        assert_eq!((w, h), (2 * GLYPH_W, 2 * GLYPH_H));
+    fn digits_are_drawn_in_the_bold_font_inside_the_rim() {
+        let lit = |rows: &[u8]| rows.iter().map(|r| r.count_ones() as usize).sum::<usize>();
+        for count in 1..=MAX_SPELLED {
+            let image = overlay_badge(count, false, BASE_SIZE);
+            let digit = char::from_digit(count, 10).unwrap();
+            assert_eq!(count_of(&image, AMBER_TEXT), lit(&glyph(digit)), "{count}");
+            let (_, _, w, h) = bbox(&image, AMBER_TEXT);
+            assert!(w <= GLYPH_W && h == GLYPH_H, "{count}: {w} x {h}");
+        }
+        let nine_plus = overlay_badge(MAX_SPELLED + 1, false, BASE_SIZE);
+        assert_eq!(
+            count_of(&nine_plus, AMBER_TEXT),
+            lit(&glyph('9')) + lit(&PLUS),
+            "the + is drawn whole"
+        );
+        let (_, _, w, _) = bbox(&nine_plus, AMBER_TEXT);
+        assert_eq!(w, GLYPH_W + 1 + 3);
         for size in sizes() {
             for count in [1, MAX_SPELLED, MAX_SPELLED + 1] {
                 for alert in [false, true] {
