@@ -1,6 +1,6 @@
 # Story 2.13: Values the program reads, and approvals that name their action
 
-**Status:** Approved
+**Status:** review
 
 ## Story
 
@@ -41,10 +41,34 @@ so that I do not trust a closed argument vector to close what the program does w
 
 ### Debug Log
 
+- **Order.** Asked by the coordinator during story 2.11 and built right after it, on its commits.
+- **Decisions where the documents are silent**, each the reading that fails closed or matches the architecture:
+  - Notices are computed from the canonical form (`catalogue::notices`), not stored in `Catalogue`: the approved snapshot and the pending floor give theirs alike, and nothing the hash covers can carry them. `RelayView.notices` holds the current floor's, or the approved snapshot's when the floor cannot be read. Each `Notice` carries its kind's explanation, written once in Rust (`NoticeKind::explanation`) and shown as is by the banner, the Relay view, `relay --json` and doctor; `NoticeKind::program` names the program family for the README test.
+  - ssh: the first non-option item is the destination; an option of `SSH_OPTIONS_WITH_VALUE` (ssh(1)'s synopsis) takes the next item as its value, and `--` ends the options. Every placeholder after the destination is a notice, a placeholder inside a literal (`echo {x}`) included, since ssh joins the items into one command line. A placeholder in an option's value or as the destination is not.
+  - Ansible: the program's file name starts with `ansible` (`ansible`, `ansible-playbook`, any `ansible-*`); a placeholder in the item after one of `ANSIBLE_TEMPLATED_OPTIONS`, or in an item starting with `--extra-vars=` or `--args=`. HTTP actions have no notice.
+  - The banner lists the notices beside the issues, under "Values a program reads"; the Relay view lists them in its issues section, since notices exist with or without a pending change.
+  - Approval lines: `ApprovalEvent` gains `project`, `action` and `dry_run`, each skipped when absent; requests write `dry_run`, decisions do not. The decision lines take project and action from the request the window decided, which `decidable` has already rebuilt from the approved catalogue.
+  - README: the corrected bullet names `NoticeKind`, says ssh and Ansible in plain text (a code span `ssh` would trip `readme_lists_no_default_guarded_program`), and gives the advice; `readme_names_the_notice_kinds` checks that the old sentence is gone, that the paragraph naming the constant names each kind's program, and that no kind's tag is transcribed.
+- **Adversarial pass.** Tried: ssh with `-p 22`, `-o`, `-l {user}` before the destination, `--`, a destination placeholder, a placeholder inside a literal after the destination, `SSH.EXE` and `scp`; Ansible with `-e`, `--extra-vars`, `--extra-vars=...`, `-a`, `--args`, `--args=...`, `ANSIBLE.exe`, a WSL `ansible-playbook`, `--limit {group}` (no notice); a notice-bearing floor's hash against the canonical form; old approval lines without the new fields. No miss found beyond the AC tests. Known limit, recorded: a short option glued to its value (`-e{x}`, `-pPORT`) is not split, so `-e{x}` gives no notice and `-p22` is read as an option without a value; both fail towards fewer notices, which never block anything.
+
 ### Completion Notes
 
+- AC 1: core `crates/officina-core/src/relay/catalogue.rs::tests::{ssh_placeholder_after_the_destination_is_a_remote_command_value, ssh_placeholder_as_the_destination_is_no_notice, ansible_extra_vars_placeholder_is_a_templated_value, ansible_args_placeholder_is_a_templated_value, notices_keep_the_action}`, plus `every_notice_kind_has_a_case` (an exhaustive fixture per `NoticeKind`); no catalogue vector set exists, so none gained a section.
+- AC 2: `catalogue.rs::tests::notices_do_not_change_the_hash`; `crates/officina/tests/relay.rs::relay_json_lists_notices` checks the approved hash is unchanged.
+- AC 3: host `crates/officina-host/src/relay/doctor.rs::tests::each_notice_is_one_warning_line`, CLI `relay.rs::relay_json_lists_notices`, Playwright `app/e2e/relay.spec.ts > the banner lists catalogue notices`; core `view.rs::tests::notices_come_from_the_current_floor`.
+- AC 4: `crates/officina/tests/readme.rs::readme_names_the_notice_kinds`; the prose is for review.
+- AC 5: core `crates/officina-core/src/relay/journal.rs::tests::{approval_requested_names_its_action, older_approval_lines_still_parse}`, CLI `crates/officina/tests/approvals.rs::every_request_and_decision_leaves_exactly_one_line` (extended) and `a_request_with_a_dry_run_says_so`; host `authority.rs::decide_approves_a_pending_request` asserts the new fields.
+- Gates at the end of the story: `cargo fmt --all -- --check`; `cargo clippy --workspace --all-targets --features officina-core/ts -- -D warnings`; `cargo test --workspace --features officina-core/ts` 552 passed, 0 failed, 6 ignored; TypeScript bindings regenerated (`ApprovalEvent.ts`, `RelayView.ts`, `Notice.ts`, `NoticeKind.ts`) and the drift test green; `pnpm check`, `lint`, `test` (33 passed); fixtures rebuilt from the real CLI and `pnpm e2e` 47 passed. No dependency added; the hook path did not change.
+
 ## File List
+
+- `crates/officina-core/src/relay/{catalogue,view,journal}.rs`
+- `crates/officina-host/src/relay/{doctor,run,authority}.rs`, `crates/officina-host/tests/authority.rs`
+- `crates/officina/tests/{relay,approvals,readme}.rs`
+- `app/src/lib/generated/{ApprovalEvent,RelayView,Notice,NoticeKind}.ts`, `app/src/lib/relay.test.ts`, `app/src/components/{PendingCatalogue,RelayView}.svelte`, `app/e2e/relay.spec.ts`, `app/scripts/e2e-fixtures.mjs`
+- `README.md`, `CHANGELOG.md`
 
 ## Change Log
 
 - 2026-10-28 created from the Epic 8 story review (F1, F8): the README's "no shell ever reads it" was false for ssh and Ansible, and approval lines could not be attributed to actions (D-172)
+- 2026-10-28 implemented: notices for ssh remote commands and Ansible templating, derived from the canonical form, on the banner, the Relay view, `relay --json` and doctor; the README corrected; approval lines naming their project and action; status review
