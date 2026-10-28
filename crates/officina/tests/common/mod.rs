@@ -276,3 +276,57 @@ pub fn now_ms() -> i64 {
         .unwrap()
         .as_millis() as i64
 }
+
+/// Where a collector thread under test emits (AD-5): each board, relay view
+/// and registry view on its channel, every board through `on_board` first,
+/// on the collector thread. A receiver dropped by the test just stops
+/// receiving.
+pub struct Sink {
+    on_board: Box<dyn Fn(&officina_core::board::Board) + Send>,
+    boards: std::sync::mpsc::Sender<officina_core::board::Board>,
+    relays: std::sync::mpsc::Sender<officina_core::relay::view::RelayView>,
+    registries: std::sync::mpsc::Sender<officina_core::registry::view::RegistryView>,
+}
+
+/// What a [`Sink`] emits, as the test receives it.
+pub struct Emitted {
+    pub boards: std::sync::mpsc::Receiver<officina_core::board::Board>,
+    pub relays: std::sync::mpsc::Receiver<officina_core::relay::view::RelayView>,
+    pub registries: std::sync::mpsc::Receiver<officina_core::registry::view::RegistryView>,
+}
+
+/// A sink whose boards go through `on_board` before their channel.
+pub fn sink(on_board: impl Fn(&officina_core::board::Board) + Send + 'static) -> (Sink, Emitted) {
+    use std::sync::mpsc::channel;
+    let (boards, board_rx) = channel();
+    let (relays, relay_rx) = channel();
+    let (registries, registry_rx) = channel();
+    (
+        Sink {
+            on_board: Box::new(on_board),
+            boards,
+            relays,
+            registries,
+        },
+        Emitted {
+            boards: board_rx,
+            relays: relay_rx,
+            registries: registry_rx,
+        },
+    )
+}
+
+impl officina_host::watch::Emit for Sink {
+    fn board(&self, board: &officina_core::board::Board) {
+        (self.on_board)(board);
+        let _ = self.boards.send(board.clone());
+    }
+
+    fn relay(&self, view: &officina_core::relay::view::RelayView) {
+        let _ = self.relays.send(view.clone());
+    }
+
+    fn registry(&self, view: &officina_core::registry::view::RegistryView) {
+        let _ = self.registries.send(view.clone());
+    }
+}

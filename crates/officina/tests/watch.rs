@@ -4,7 +4,9 @@
 //! paths it names; the relay view rebuilt on the relay's files, the journal
 //! and `RelayChanged`, emitted on change only; the known-projects record
 //! kept current; the registry ingested before the first board, before each
-//! session list and before each board, and reported when it cannot be.
+//! session list and before each board, and reported when it cannot be; the
+//! registry view emitted on change, and the author's requests answered on
+//! the collector thread (story 3.5).
 //!
 //! The tests of stories 1.5 and 2.7 give the fake claude no fixture (it
 //! then lists no session). Story 3.2's run a copy of the fake configured by
@@ -15,13 +17,18 @@ mod common;
 mod fake_store;
 
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{self, Receiver};
+use std::sync::mpsc::Receiver;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use officina_core::board::Board;
+use officina_core::ipc::IpcErrorCode;
+use officina_core::registry::confirm::{AuthorAction, SubjectOrigin};
 use officina_core::registry::retention::EXCERPT_TTL_MS;
-use officina_core::registry::types::{Ending, RegistryState, SessionRecord, SettingKey, Source};
+use officina_core::registry::types::{
+    AuthorRefusal, Ending, RegistryState, SessionRecord, SettingKey, Source,
+};
+use officina_core::registry::view::RegistryView;
 use officina_core::relay::journal::{CatalogueApproved, JournalEntry};
 use officina_core::relay::view::{RecentEvent, RelayView};
 use officina_host::collector::{Collector, LoadedFloor, load_floor};
@@ -30,7 +37,10 @@ use officina_host::registry::ingest::IngestContext;
 use officina_host::registry::store::{open_reader, open_writer};
 use officina_host::relay::credential::OwnedStore;
 use officina_host::relay::journal::append;
-use officina_host::watch::{CollectorMsg, WatchHandle, spawn};
+use officina_host::watch::{
+    AUTHOR_HEADROOM, AUTHOR_WAIT, AuthorAnswer, AuthorCommand, AuthorReply, AuthorRequest,
+    CollectorMsg, WatchHandle, spawn,
+};
 use officina_host::writers::{record_hook, record_quota};
 
 use fake_store::{FakeStore, MARKER_SECRET};
@@ -68,19 +78,9 @@ fn watch_with(
     };
     let collector = Collector::from_parts(paths, loaded, Some(PathBuf::from(common::FAKE_CLAUDE)))
         .with_credential_store(OwnedStore(Box::new(store)));
-    let (boards, board_rx) = mpsc::channel::<Board>();
-    let (views, view_rx) = mpsc::channel::<RelayView>();
-    let handle = spawn(
-        collector,
-        move |b| {
-            let _ = boards.send(b.clone());
-        },
-        move |v| {
-            let _ = views.send(v.clone());
-        },
-    )
-    .unwrap();
-    (handle, board_rx, view_rx)
+    let (sink, emitted) = common::sink(|_| {});
+    let handle = spawn(collector, sink).unwrap();
+    (handle, emitted.boards, emitted.relays)
 }
 
 fn stop(handle: WatchHandle) {
@@ -489,27 +489,29 @@ fn listed_session(id: &str, now: i64) -> String {
 /// A collector thread on `env` whose `claude` is a copy of the fake,
 /// configured by its sidecar to list `env`'s agents fixture (D-86); every
 /// board goes through `on_board` on the collector thread, then arrives on
-/// the receiver. Returns the sidecar's path too, which a test may rewrite.
-fn watch_listing(
+/// its receiver, beside the relay and registry views. Returns the sidecar's
+/// path too, which a test may rewrite.
+fn watch_all(
     env: &common::TestEnv,
     on_board: impl Fn(&Board) + Send + 'static,
-) -> (WatchHandle, Receiver<Board>, PathBuf) {
+) -> (WatchHandle, common::Emitted, PathBuf) {
     let bin = env.root.path().join("bin");
     let sidecar = serde_json::json!({"fixture": env.fixture(), "log": env.fake_log()});
     let fake = common::fake_claude_in(&bin, &sidecar);
     let collector = Collector::from_parts(paths_of(env, None), LoadedFloor::default(), Some(fake))
         .with_credential_store(OwnedStore(Box::new(FakeStore::empty())));
-    let (boards, board_rx) = mpsc::channel::<Board>();
-    let handle = spawn(
-        collector,
-        move |b| {
-            on_board(b);
-            let _ = boards.send(b.clone());
-        },
-        |_| {},
-    )
-    .unwrap();
-    (handle, board_rx, bin.join("fake-claude.json"))
+    let (sink, emitted) = common::sink(on_board);
+    let handle = spawn(collector, sink).unwrap();
+    (handle, emitted, bin.join("fake-claude.json"))
+}
+
+/// [`watch_all`], its boards only.
+fn watch_listing(
+    env: &common::TestEnv,
+    on_board: impl Fn(&Board) + Send + 'static,
+) -> (WatchHandle, Receiver<Board>, PathBuf) {
+    let (handle, emitted, sidecar) = watch_all(env, on_board);
+    (handle, emitted.boards, sidecar)
 }
 
 fn registry_state(board: &Board) -> Option<RegistryState> {
@@ -799,7 +801,6 @@ fn a_session_first_seen_in_agents_gets_one_record() {
 /// event, and its card shows it.
 #[test]
 fn a_session_first_seen_in_agents_is_filed() {
-    use officina_core::registry::confirm::SubjectOrigin;
     let env = common::TestEnv::new();
     let now = officina_host::files::now_ms();
     hook_line(
@@ -1072,5 +1073,294 @@ fn corruption_while_running_makes_the_registry_unavailable_until_restart() {
         registered(&env).contains(&"s-after".to_owned()),
         "ingested again from the files"
     );
+    stop(handle);
+}
+
+/// Sends `command` to the collector as a window command does, with `wait`
+/// as its deadline, and returns the receiver of its answer.
+fn ask(handle: &WatchHandle, command: AuthorCommand, wait: Duration) -> Receiver<AuthorReply> {
+    let (request, answer) = AuthorRequest::new(command, wait);
+    handle.sender.send(CollectorMsg::Author(request)).unwrap();
+    answer
+}
+
+fn create(name: &str, origin: SubjectOrigin) -> AuthorCommand {
+    AuthorCommand::Act(AuthorAction::Create {
+        name: name.to_owned(),
+        origin,
+    })
+}
+
+/// The subjects' names the registry holds, read as another process would.
+fn subject_names(env: &common::TestEnv) -> Vec<String> {
+    open_reader(&env.officina_home(), &[])
+        .map(|r| r.subjects().unwrap().into_iter().map(|s| s.name).collect())
+        .unwrap_or_default()
+}
+
+/// The number of `claude` calls the fake has logged.
+fn claude_calls(env: &common::TestEnv) -> usize {
+    std::fs::read_to_string(env.fake_log())
+        .unwrap_or_default()
+        .lines()
+        .count()
+}
+
+/// Makes the fake hang `hang_ms` in its next calls, asks for a refresh and
+/// returns once that call has started, with the instant it was seen.
+fn hold_in_a_refresh(
+    env: &common::TestEnv,
+    handle: &WatchHandle,
+    sidecar: &Path,
+    hang_ms: u64,
+) -> Instant {
+    let mut config: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(sidecar).unwrap()).unwrap();
+    config["mode"] = "hang".into();
+    config["hang_ms"] = hang_ms.into();
+    std::fs::write(sidecar, config.to_string()).unwrap();
+    // Past the startup's spawns, so the refresh is not rate limited away.
+    std::thread::sleep(Duration::from_millis(1500));
+    let before = claude_calls(env);
+    handle.sender.send(CollectorMsg::Refresh).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while claude_calls(env) == before {
+        assert!(Instant::now() < deadline, "the refresh never started");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    Instant::now()
+}
+
+fn release(sidecar: &Path) {
+    let mut config: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(sidecar).unwrap()).unwrap();
+    config["mode"] = "ok".into();
+    std::fs::write(sidecar, config.to_string()).unwrap();
+}
+
+/// AD-38, D-92: a window command's author request is run by the collector
+/// thread on its one connection and answered there: an action with what it
+/// created, a refusal with its rule, the archived list.
+#[test]
+fn author_request_is_answered_by_the_collector_thread() {
+    let env = common::TestEnv::new();
+    let now = officina_host::files::now_ms();
+    env.write_agents(&listed_session("s-live", now));
+    let (handle, emitted, _) = watch_all(&env, |_| {});
+    until(&emitted.boards, |b| shows(b, "s-live"));
+    records_once(&env, |r| record(r, "s-live").is_some());
+
+    let answer = ask(
+        &handle,
+        create("rollout", SubjectOrigin::Sessions(vec!["s-live".into()])),
+        AUTHOR_WAIT,
+    );
+    let created = match answer.recv_timeout(AUTHOR_WAIT).unwrap() {
+        Ok(AuthorAnswer::Done {
+            created: Some(created),
+        }) => created,
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(subject_names(&env), ["rollout"]);
+    let filed = records_once(&env, |r| {
+        record(r, "s-live").is_some_and(|s| s.filed_subject().is_some())
+    });
+    assert_eq!(
+        record(&filed, "s-live").unwrap().filed_subject(),
+        Some(created)
+    );
+
+    let refused = ask(
+        &handle,
+        create("Rollout", SubjectOrigin::Project("api".into())),
+        AUTHOR_WAIT,
+    )
+    .recv_timeout(AUTHOR_WAIT)
+    .unwrap()
+    .unwrap_err();
+    assert_eq!(
+        (refused.code, refused.refusal),
+        (IpcErrorCode::AuthorRefused, Some(AuthorRefusal::NameTaken))
+    );
+    assert_eq!(subject_names(&env), ["rollout"], "nothing written");
+
+    let archive = AuthorCommand::Act(AuthorAction::Archive {
+        subject: created,
+        routine: true,
+    });
+    ask(&handle, archive, AUTHOR_WAIT)
+        .recv_timeout(AUTHOR_WAIT)
+        .unwrap()
+        .unwrap();
+    match ask(&handle, AuthorCommand::ListArchived, AUTHOR_WAIT)
+        .recv_timeout(AUTHOR_WAIT)
+        .unwrap()
+    {
+        Ok(AuthorAnswer::Archived(listed)) => {
+            assert_eq!(listed.len(), 1);
+            assert!(listed[0].routine);
+            assert_eq!(listed[0].sessions[0].session_id, "s-live");
+        }
+        other => panic!("{other:?}"),
+    }
+    stop(handle);
+}
+
+/// AD-38's trade-off: a request that arrives while `claude agents` runs is
+/// answered once the call has returned, on the same thread, and is not
+/// lost.
+#[test]
+fn author_request_waits_behind_a_running_refresh() {
+    const HANG_MS: u64 = 1500;
+    let env = common::TestEnv::new();
+    let now = officina_host::files::now_ms();
+    env.write_agents(&listed_session("s-live", now));
+    let (handle, emitted, sidecar) = watch_all(&env, |_| {});
+    until(&emitted.boards, |b| shows(b, "s-live"));
+    let started = hold_in_a_refresh(&env, &handle, &sidecar, HANG_MS);
+    let answer = ask(
+        &handle,
+        create("behind", SubjectOrigin::Project("api".into())),
+        AUTHOR_WAIT,
+    );
+    assert!(
+        answer.recv_timeout(Duration::from_millis(500)).is_err(),
+        "answered while claude agents ran"
+    );
+    let reply = answer.recv_timeout(AUTHOR_WAIT).unwrap();
+    assert!(
+        started.elapsed() >= Duration::from_millis(HANG_MS - 200),
+        "{:?}",
+        started.elapsed()
+    );
+    assert!(matches!(reply, Ok(AuthorAnswer::Done { created: Some(_) })));
+    assert_eq!(subject_names(&env), ["behind"]);
+    release(&sidecar);
+    stop(handle);
+}
+
+/// D-92: a request whose deadline passed while the collector was busy is
+/// dropped unrun, so the window, which has reported the timeout, never sees
+/// the action happen later.
+#[test]
+fn expired_author_request_is_dropped_unexecuted() {
+    let env = common::TestEnv::new();
+    let now = officina_host::files::now_ms();
+    env.write_agents(&listed_session("s-live", now));
+    let (handle, emitted, sidecar) = watch_all(&env, |_| {});
+    until(&emitted.boards, |b| shows(b, "s-live"));
+    hold_in_a_refresh(&env, &handle, &sidecar, 2000);
+    let answer = ask(
+        &handle,
+        create("late", SubjectOrigin::Project("api".into())),
+        AUTHOR_HEADROOM + Duration::from_millis(200),
+    );
+    assert!(
+        matches!(
+            answer.recv_timeout(Duration::from_secs(10)),
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected)
+        ),
+        "dropped without an answer"
+    );
+    release(&sidecar);
+    assert!(subject_names(&env).is_empty(), "never run");
+    // Positive control: the same request in time is run.
+    let reply = ask(
+        &handle,
+        create("late", SubjectOrigin::Project("api".into())),
+        AUTHOR_WAIT,
+    )
+    .recv_timeout(AUTHOR_WAIT)
+    .unwrap();
+    assert!(reply.is_ok(), "{reply:?}");
+    assert_eq!(subject_names(&env), ["late"]);
+    stop(handle);
+}
+
+fn unfiled_ids(view: &RegistryView) -> Vec<&str> {
+    view.unfiled
+        .iter()
+        .flat_map(|p| &p.sessions)
+        .map(|s| s.session_id.as_str())
+        .collect()
+}
+
+/// AD-5, AD-54: the registry view is emitted when its bytes change, never
+/// again when nothing did; the cache `get_registry` reads holds the last.
+#[test]
+fn registry_view_is_emitted_only_on_change() {
+    let env = common::TestEnv::new();
+    let now = officina_host::files::now_ms();
+    env.write_agents(&listed_session("s-live", now));
+    let (handle, emitted, _) = watch_all(&env, |_| {});
+    let first = until(&emitted.registries, |v| unfiled_ids(v).contains(&"s-live"));
+    assert_eq!(first.registry.state, RegistryState::Ready);
+    assert!(
+        first.unfiled[0].sessions[0].card.is_some(),
+        "joined to its board card"
+    );
+    let cached: Option<Vec<String>> = handle
+        .registry
+        .read()
+        .unwrap()
+        .as_ref()
+        .map(|v| unfiled_ids(v).into_iter().map(str::to_owned).collect());
+    assert_eq!(cached, Some(vec!["s-live".to_owned()]));
+    assert!(
+        emitted
+            .registries
+            .recv_timeout(Duration::from_millis(1600))
+            .is_err(),
+        "an unchanged registry view must not be emitted again"
+    );
+    hook_line(
+        &env,
+        serde_json::json!({"hook_event_name": "UserPromptSubmit", "session_id": "s-new", "cwd": "C:/work/api", "prompt": "x"}),
+        officina_host::files::now_ms(),
+    );
+    until(&emitted.registries, |v| unfiled_ids(v).contains(&"s-new"));
+    stop(handle);
+}
+
+/// AD-54: every author action emits a registry view, and the board's cards
+/// name the subject it filed them under.
+#[test]
+fn author_action_emits_a_new_view() {
+    let env = common::TestEnv::new();
+    let now = officina_host::files::now_ms();
+    env.write_agents(&listed_session("s-live", now));
+    let (handle, emitted, _) = watch_all(&env, |_| {});
+    until(&emitted.registries, |v| unfiled_ids(v).contains(&"s-live"));
+    let reply = ask(
+        &handle,
+        create("rollout", SubjectOrigin::Sessions(vec!["s-live".into()])),
+        AUTHOR_WAIT,
+    );
+    let view = emitted
+        .registries
+        .recv_timeout(AUTHOR_WAIT)
+        .expect("a view after the action");
+    assert_eq!(view.subjects[0].name, "rollout");
+    assert_eq!(view.subjects[0].sessions[0].session_id, "s-live");
+    assert!(reply.recv_timeout(AUTHOR_WAIT).unwrap().is_ok());
+    let board = until(&emitted.boards, |b| {
+        b.columns
+            .all()
+            .any(|c| c.subject.as_ref().is_some_and(|s| s.name == "rollout"))
+    });
+    assert!(shows(&board, "s-live"));
+
+    // A refused action changes nothing; its view is emitted all the same.
+    let refused = ask(
+        &handle,
+        create("rollout", SubjectOrigin::Project("api".into())),
+        AUTHOR_WAIT,
+    );
+    let again = emitted
+        .registries
+        .recv_timeout(AUTHOR_WAIT)
+        .expect("a view after the refused action");
+    assert_eq!(again.subjects.len(), 1);
+    assert!(refused.recv_timeout(AUTHOR_WAIT).unwrap().is_err());
     stop(handle);
 }

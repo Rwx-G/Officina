@@ -4,11 +4,15 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::path::PathBuf;
+use std::sync::mpsc::{RecvTimeoutError, Sender};
 use std::sync::{Arc, RwLock};
+use std::time::Duration;
 
 use officina_core::board::Board;
 use officina_core::focus::FocusOutcome;
-use officina_core::ipc::IpcError;
+use officina_core::ipc::{IpcError, IpcErrorCode};
+use officina_core::registry::confirm::{AuthorAction, SubjectOrigin};
+use officina_core::registry::view::{RegistryView, SubjectView};
 use officina_core::relay::view::RelayView;
 use officina_host::collector::Collector;
 use officina_host::files::now_ms;
@@ -18,17 +22,23 @@ use officina_host::focus::{
 use officina_host::paths::Paths;
 use officina_host::relay::authority::{self, AuthorityError};
 use officina_host::relay::home::RelayHome;
-use officina_host::watch::{CollectorMsg, spawn};
-use tauri::{Emitter, Manager, State, WindowEvent};
+use officina_host::watch::{
+    AUTHOR_WAIT, AuthorAnswer, AuthorCommand, AuthorRequest, CollectorMsg, Emit, spawn,
+};
+use tauri::{AppHandle, Emitter, Manager, State, WindowEvent};
 
 /// Event carrying each new board to the window.
 const BOARD_EVENT: &str = "board://updated";
 /// Event carrying each new relay view to the window (AD-35).
 const RELAY_EVENT: &str = "relay://updated";
+/// Event carrying each new registry view to the window (AD-54).
+const REGISTRY_EVENT: &str = "registry://updated";
 
 struct AppState {
     board: Arc<RwLock<Option<Board>>>,
     relay: Arc<RwLock<Option<RelayView>>>,
+    /// The last registry view, for `get_registry`'s first paint.
+    registry: Arc<RwLock<Option<RegistryView>>>,
     /// The relay home the collector reads, which the authority writes.
     relay_home: RelayHome,
     sender: std::sync::Mutex<std::sync::mpsc::Sender<CollectorMsg>>,
@@ -46,8 +56,79 @@ impl AppState {
     }
 
     /// A sender for a command that runs off the main thread.
-    fn collector(&self) -> Option<std::sync::mpsc::Sender<CollectorMsg>> {
+    fn collector(&self) -> Option<Sender<CollectorMsg>> {
         self.sender.lock().ok().map(|sender| sender.clone())
+    }
+}
+
+/// The window's events (AD-5): what the collector thread emits goes to the
+/// page, and each new board also sets the title and the taskbar overlay.
+struct WindowEvents(AppHandle);
+
+impl Emit for WindowEvents {
+    fn board(&self, board: &Board) {
+        let _ = self.0.emit(BOARD_EVENT, board);
+        if let Some(window) = self.0.get_webview_window("main") {
+            let _ = window.set_title(&window_title(board));
+            let overlay = (board.waiting_count > 0).then(waiting_dot);
+            let _ = window.set_overlay_icon(overlay);
+        }
+    }
+
+    fn relay(&self, view: &RelayView) {
+        let _ = self.0.emit(RELAY_EVENT, view);
+    }
+
+    fn registry(&self, view: &RegistryView) {
+        let _ = self.0.emit(REGISTRY_EVENT, view);
+    }
+}
+
+/// Sends `command` to the collector thread, the registry's only writer
+/// (AD-38), and waits at most `wait` for its answer. Past `wait`, or when
+/// the collector dropped the request unrun near its deadline (D-92), the
+/// window reports a timeout: the action did not run and will not.
+fn ask_collector(
+    sender: Option<Sender<CollectorMsg>>,
+    command: AuthorCommand,
+    wait: Duration,
+) -> Result<AuthorAnswer, IpcError> {
+    let not_run = || {
+        IpcError::new(
+            IpcErrorCode::Timeout,
+            format!(
+                "the registry did not answer within {} ms; nothing was changed",
+                wait.as_millis()
+            ),
+        )
+    };
+    let sender = sender.ok_or_else(|| IpcError::internal("the collector is not running"))?;
+    let (request, answer) = AuthorRequest::new(command, wait);
+    sender
+        .send(CollectorMsg::Author(request))
+        .map_err(|_| IpcError::internal("the collector has stopped"))?;
+    match answer.recv_timeout(wait) {
+        Ok(reply) => reply,
+        Err(RecvTimeoutError::Timeout | RecvTimeoutError::Disconnected) => Err(not_run()),
+    }
+}
+
+/// Runs an author request off the main thread (AD-3), waiting at most
+/// [`AUTHOR_WAIT`].
+async fn ask(state: State<'_, AppState>, command: AuthorCommand) -> Result<AuthorAnswer, IpcError> {
+    let sender = state.collector();
+    tauri::async_runtime::spawn_blocking(move || ask_collector(sender, command, AUTHOR_WAIT))
+        .await
+        .map_err(|e| IpcError::internal(e.to_string()))?
+}
+
+/// Runs one author action; the subject it created, if any.
+async fn act(state: State<'_, AppState>, action: AuthorAction) -> Result<Option<i64>, IpcError> {
+    match ask(state, AuthorCommand::Act(action)).await? {
+        AuthorAnswer::Done { created } => Ok(created),
+        AuthorAnswer::Archived(_) => {
+            Err(IpcError::internal("the collector answered another request"))
+        }
     }
 }
 
@@ -70,6 +151,99 @@ fn get_board(state: State<'_, AppState>) -> Option<Board> {
 #[tauri::command]
 fn get_relay(state: State<'_, AppState>) -> Option<RelayView> {
     state.relay.read().ok().and_then(|r| r.clone())
+}
+
+/// The last registry view, for the first paint, from the cache: never
+/// through the collector (D-92); later ones come as events.
+#[tauri::command]
+fn get_registry(state: State<'_, AppState>) -> Option<RegistryView> {
+    state.registry.read().ok().and_then(|r| r.clone())
+}
+
+/// The archived subjects the author may reopen, read on the collector's
+/// connection (AD-54).
+#[tauri::command]
+async fn list_archived(state: State<'_, AppState>) -> Result<Vec<SubjectView>, IpcError> {
+    match ask(state, AuthorCommand::ListArchived).await? {
+        AuthorAnswer::Archived(listed) => Ok(listed),
+        AuthorAnswer::Done { .. } => {
+            Err(IpcError::internal("the collector answered another request"))
+        }
+    }
+}
+
+/// Creates a subject named `name` (D-95): from the selected sessions,
+/// which give it their project and are filed under it, or in a project the
+/// registry knows. Returns its id.
+#[tauri::command]
+async fn create_subject(
+    state: State<'_, AppState>,
+    name: String,
+    origin: SubjectOrigin,
+) -> Result<i64, IpcError> {
+    act(state, AuthorAction::Create { name, origin })
+        .await?
+        .ok_or_else(|| IpcError::internal("no subject was created"))
+}
+
+#[tauri::command]
+async fn rename_subject(
+    state: State<'_, AppState>,
+    subject: i64,
+    name: String,
+) -> Result<(), IpcError> {
+    act(state, AuthorAction::Rename { subject, name })
+        .await
+        .map(|_| ())
+}
+
+/// Moves the sessions of `source` to `target` and archives `source`
+/// (D-55).
+#[tauri::command]
+async fn merge_subjects(
+    state: State<'_, AppState>,
+    source: i64,
+    target: i64,
+) -> Result<(), IpcError> {
+    act(state, AuthorAction::Merge { source, target })
+        .await
+        .map(|_| ())
+}
+
+/// Files `sessions` under `subject`, or unfiles them when it is null
+/// (D-56).
+#[tauri::command]
+async fn file_sessions(
+    state: State<'_, AppState>,
+    sessions: Vec<String>,
+    subject: Option<i64>,
+) -> Result<(), IpcError> {
+    let action = match subject {
+        Some(subject) => AuthorAction::File { sessions, subject },
+        None => AuthorAction::Unfile { sessions },
+    };
+    act(state, action).await.map(|_| ())
+}
+
+/// Archives `subject`, `routine` when it could have run alone (FR-13,
+/// P-10).
+#[tauri::command]
+async fn archive_subject(
+    state: State<'_, AppState>,
+    subject: i64,
+    routine: bool,
+) -> Result<(), IpcError> {
+    act(state, AuthorAction::Archive { subject, routine })
+        .await
+        .map(|_| ())
+}
+
+/// Reopens an archived subject as `to_resume` (AD-48, D-58).
+#[tauri::command]
+async fn reopen_subject(state: State<'_, AppState>, subject: i64) -> Result<(), IpcError> {
+    act(state, AuthorAction::Reopen { subject })
+        .await
+        .map(|_| ())
 }
 
 #[tauri::command]
@@ -230,25 +404,11 @@ fn main() {
             if let Err(e) = authority::ensure_record(&relay_home) {
                 eprintln!("officina: the decision record could not be started: {e}");
             }
-            let handle = app.handle().clone();
-            let relay_handle = app.handle().clone();
-            let watch = spawn(
-                collector,
-                move |board| {
-                    let _ = handle.emit(BOARD_EVENT, board);
-                    if let Some(window) = handle.get_webview_window("main") {
-                        let _ = window.set_title(&window_title(board));
-                        let overlay = (board.waiting_count > 0).then(waiting_dot);
-                        let _ = window.set_overlay_icon(overlay);
-                    }
-                },
-                move |view| {
-                    let _ = relay_handle.emit(RELAY_EVENT, view);
-                },
-            )?;
+            let watch = spawn(collector, WindowEvents(app.handle().clone()))?;
             app.manage(AppState {
                 board: watch.board,
                 relay: watch.relay,
+                registry: watch.registry,
                 relay_home,
                 sender: std::sync::Mutex::new(watch.sender),
                 paths: watch.paths,
@@ -278,7 +438,15 @@ fn main() {
             approve_catalogue,
             decide_approval,
             set_relay_stopped,
-            acknowledge_anomaly
+            acknowledge_anomaly,
+            get_registry,
+            list_archived,
+            create_subject,
+            rename_subject,
+            merge_subjects,
+            file_sessions,
+            archive_subject,
+            reopen_subject
         ])
         .run(tauri::generate_context!())
         .expect("failed to run the Officina window");
@@ -348,9 +516,56 @@ mod tests {
             "decide_approval",
             "set_relay_stopped",
             "acknowledge_anomaly",
+            "get_registry",
+            "list_archived",
+            "create_subject",
+            "rename_subject",
+            "merge_subjects",
+            "file_sessions",
+            "archive_subject",
+            "reopen_subject",
         ] {
             assert!(declared.contains(command), "{command}");
         }
+    }
+
+    /// AD-38, D-92: a command waits for the collector at most the time it
+    /// is given, then reports a timeout; the request it sent carries that
+    /// deadline, so the collector drops it unrun.
+    #[test]
+    fn author_reply_times_out() {
+        use officina_core::ipc::IpcErrorCode;
+        use officina_host::watch::{AuthorCommand, CollectorMsg};
+        use std::time::{Duration, Instant};
+
+        let (sender, collector) = std::sync::mpsc::channel();
+        let started = Instant::now();
+        let error = super::ask_collector(
+            Some(sender),
+            AuthorCommand::ListArchived,
+            Duration::from_millis(50),
+        )
+        .unwrap_err();
+        assert_eq!(error.code, IpcErrorCode::Timeout, "{error:?}");
+        let waited = started.elapsed();
+        assert!(
+            waited >= Duration::from_millis(50) && waited < Duration::from_secs(5),
+            "{waited:?}"
+        );
+        match collector.try_recv() {
+            Ok(CollectorMsg::Author(request)) => assert!(request.deadline <= Instant::now()),
+            other => panic!("{other:?}"),
+        }
+        // A collector that answers nothing and lets the request go is a
+        // timeout too, not a fault.
+        let (sender, collector) = std::sync::mpsc::channel();
+        drop(collector);
+        let gone = super::ask_collector(
+            Some(sender),
+            AuthorCommand::ListArchived,
+            Duration::from_millis(50),
+        );
+        assert_eq!(gone.unwrap_err().code, IpcErrorCode::Internal);
     }
 
     /// The directives of a CSP string, by name.

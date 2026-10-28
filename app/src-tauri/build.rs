@@ -12,6 +12,14 @@ const COMMANDS: &[&str] = &[
     "decide_approval",
     "set_relay_stopped",
     "acknowledge_anomaly",
+    "get_registry",
+    "list_archived",
+    "create_subject",
+    "rename_subject",
+    "merge_subjects",
+    "file_sessions",
+    "archive_subject",
+    "reopen_subject",
 ];
 
 fn main() {

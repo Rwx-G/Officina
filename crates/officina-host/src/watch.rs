@@ -1,7 +1,8 @@
 //! The collector thread of the window (AD-3 to AD-5, AD-35, AD-43, AD-44):
-//! stat polling, refresh plan, diff before emit, for the board and the
-//! relay view; the registry's only writer (AD-38), which ingests the event
-//! files before anything reads or deletes them.
+//! stat polling, refresh plan, diff before emit, for the board, the relay
+//! view and the registry view; the registry's only writer (AD-38), which
+//! ingests the event files before anything reads or deletes them, and runs
+//! the author's actions the window's commands send it (D-92).
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -11,7 +12,10 @@ use std::time::{Duration, Instant, SystemTime};
 
 use officina_core::board::Board;
 use officina_core::dates::event_file_name;
+use officina_core::ipc::IpcError;
+use officina_core::registry::confirm::AuthorAction;
 use officina_core::registry::retention::PASS_INTERVAL_MS;
+use officina_core::registry::view::{RegistryView, SubjectView};
 use officina_core::relay::view::RelayView;
 
 use crate::collector::Collector;
@@ -48,16 +52,88 @@ pub const RELAY_POLL: Duration = POLL_VISIBLE;
 /// rebuilt for a floor or relay change, and at most this often otherwise:
 /// never on every tick (D-41).
 pub const CREDENTIAL_POLL: Duration = Duration::from_secs(60);
+/// How long a window command waits for the collector's answer to an author
+/// request (AD-38): a running `claude agents` takes about 210 ms, 5 s at
+/// worst (E10).
+pub const AUTHOR_WAIT: Duration = Duration::from_secs(10);
+/// A request this close to its deadline is dropped unrun (D-92): the
+/// action, the views it emits and the reply must all land before the window
+/// stops waiting, so the window never reports a timeout for an action that
+/// happened.
+pub const AUTHOR_HEADROOM: Duration = Duration::from_secs(1);
+
+/// What an author request asks of the registry (AD-54).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AuthorCommand {
+    /// The archived subjects, read on the collector's connection, so the
+    /// window holds one connection.
+    ListArchived,
+    /// An action on subjects and sessions, written in one transaction.
+    Act(AuthorAction),
+}
+
+/// What the collector answers to an author request.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AuthorAnswer {
+    /// The action was written; `created` is the subject it created, if any.
+    Done {
+        created: Option<i64>,
+    },
+    Archived(Vec<SubjectView>),
+}
+
+/// The collector's answer, or why there is none to give.
+pub type AuthorReply = Result<AuthorAnswer, IpcError>;
+
+/// A window command's request to the registry's writer (AD-38, D-92): run
+/// on the collector thread, which answers on `reply`, or dropped unrun once
+/// `deadline` is too close.
+#[derive(Debug)]
+pub struct AuthorRequest {
+    pub command: AuthorCommand,
+    pub deadline: Instant,
+    pub reply: Sender<AuthorReply>,
+}
+
+impl AuthorRequest {
+    /// A request whose deadline is `wait` from now, and the receiver its
+    /// answer arrives on.
+    pub fn new(command: AuthorCommand, wait: Duration) -> (AuthorRequest, Receiver<AuthorReply>) {
+        let (reply, answer) = mpsc::channel();
+        let request = AuthorRequest {
+            command,
+            deadline: Instant::now() + wait,
+            reply,
+        };
+        (request, answer)
+    }
+
+    /// True when the collector must drop the request unrun (D-92).
+    fn expired(&self, now: Instant) -> bool {
+        now + AUTHOR_HEADROOM >= self.deadline
+    }
+}
 
 /// Messages to the collector thread.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug)]
 pub enum CollectorMsg {
     Refresh,
     Visibility(bool),
     /// An authority command changed the relay's files: rebuild the relay
     /// view and the board now rather than at the next tick (AD-35).
     RelayChanged,
+    /// A window command's request to the registry (AD-38).
+    Author(AuthorRequest),
     Shutdown,
+}
+
+/// Where the collector thread sends what changed (AD-5): each method is
+/// called from the collector thread with a value that differs from the last
+/// one it was given, and `registry` also right after each author action.
+pub trait Emit: Send + 'static {
+    fn board(&self, board: &Board);
+    fn relay(&self, view: &RelayView);
+    fn registry(&self, view: &RegistryView);
 }
 
 /// Handle on a running collector thread.
@@ -66,6 +142,9 @@ pub struct WatchHandle {
     pub board: Arc<RwLock<Option<Board>>>,
     /// The last relay view, for the window's first paint (`get_relay`).
     pub relay: Arc<RwLock<Option<RelayView>>>,
+    /// The last registry view, for the window's first paint
+    /// (`get_registry`), which never goes through the collector (D-92).
+    pub registry: Arc<RwLock<Option<RegistryView>>>,
     /// The collector's paths, updated when a reloaded floor moves the config
     /// dir, so the window's focus and attach commands follow it.
     pub paths: Arc<RwLock<Paths>>,
@@ -431,41 +510,46 @@ fn today_journal(relay: &RelayHome) -> PathBuf {
     relay.journal_dir().join(event_file_name(now_ms()))
 }
 
-/// The shared slots and callbacks of one collector thread.
-struct Outputs<B, R> {
+/// The shared slots of one collector thread, where it emits, and the bytes
+/// it last emitted.
+struct Outputs<E> {
     board: Arc<RwLock<Option<Board>>>,
-    emit_board: B,
     relay: Arc<RwLock<Option<RelayView>>>,
-    emit_relay: R,
+    registry: Arc<RwLock<Option<RegistryView>>>,
     paths: Arc<RwLock<Paths>>,
+    emit: E,
+    last_board: Vec<u8>,
+    last_relay: Vec<u8>,
+    last_registry: Vec<u8>,
 }
 
-/// Starts the collector thread. `emit` is called with each board that
-/// differs from the previous one, and `emit_relay` with each relay view
-/// that differs from the previous one, from the collector thread (AD-5).
-pub fn spawn(
-    mut collector: Collector,
-    emit: impl Fn(&Board) + Send + 'static,
-    emit_relay: impl Fn(&RelayView) + Send + 'static,
-) -> std::io::Result<WatchHandle> {
+/// Starts the collector thread. `emit` receives each board, relay view and
+/// registry view that differs from the previous one, from the collector
+/// thread (AD-5).
+pub fn spawn(mut collector: Collector, emit: impl Emit) -> std::io::Result<WatchHandle> {
     let (sender, receiver) = mpsc::channel();
     let board = Arc::new(RwLock::new(None));
     let relay = Arc::new(RwLock::new(None));
+    let registry = Arc::new(RwLock::new(None));
     let paths = Arc::new(RwLock::new(collector.paths().clone()));
-    let outputs = Outputs {
+    let mut outputs = Outputs {
         board: Arc::clone(&board),
-        emit_board: emit,
         relay: Arc::clone(&relay),
-        emit_relay,
+        registry: Arc::clone(&registry),
         paths: Arc::clone(&paths),
+        emit,
+        last_board: Vec::new(),
+        last_relay: Vec::new(),
+        last_registry: Vec::new(),
     };
     let thread = std::thread::Builder::new()
         .name("collector".into())
-        .spawn(move || run(&mut collector, &receiver, &outputs))?;
+        .spawn(move || run(&mut collector, &receiver, &mut outputs))?;
     Ok(WatchHandle {
         sender,
         board,
         relay,
+        registry,
         paths,
         thread,
     })
@@ -521,10 +605,10 @@ fn hourly_pass(collector: &mut Collector, registry: &mut WindowRegistry) {
     report_registry(collector, registry);
 }
 
-fn run(
+fn run<E: Emit>(
     collector: &mut Collector,
     receiver: &Receiver<CollectorMsg>,
-    outputs: &Outputs<impl Fn(&Board), impl Fn(&RelayView)>,
+    outputs: &mut Outputs<E>,
 ) {
     // At start, every incomplete file is ingested and the privacy bounds
     // applied before the first board is built (D-85).
@@ -536,8 +620,6 @@ fn run(
     hourly_pass(collector, &mut registry);
     let mut watched = WatchedPaths::new(collector);
     let mut plan = RefreshPlan::new(Instant::now);
-    let mut last_bytes: Vec<u8> = Vec::new();
-    let mut last_relay_bytes: Vec<u8> = Vec::new();
     let mut presence: BTreeMap<String, bool> = BTreeMap::new();
 
     loop {
@@ -546,6 +628,9 @@ fn run(
             Ok(CollectorMsg::Refresh) => plan.refresh_requested(),
             Ok(CollectorMsg::Visibility(visible)) => plan.visibility_changed(visible),
             Ok(CollectorMsg::RelayChanged) => plan.relay_files_changed(),
+            Ok(CollectorMsg::Author(request)) => {
+                answer_author(collector, &mut registry, request, outputs);
+            }
             Err(RecvTimeoutError::Timeout) => {}
         }
         if watched.poll(&mut plan) {
@@ -573,13 +658,9 @@ fn run(
         if due.retention {
             hourly_pass(collector, &mut registry);
         }
-        if due.recompute {
-            publish(
-                collector.board(now_ms()),
-                &outputs.board,
-                &outputs.emit_board,
-                &mut last_bytes,
-            );
+        // The hourly pass can clear excerpts the registry view shows.
+        if due.recompute || due.retention {
+            publish_both(collector, &mut registry, outputs, false);
         }
         if due.relay {
             collector.keep_known_projects(now_ms());
@@ -588,52 +669,96 @@ fn run(
             }
             // A home that cannot be read keeps the last view.
             if let Ok(view) = read_view_with(collector.relay(), now_ms(), Some(&presence)) {
-                publish_relay(
-                    view,
-                    &outputs.relay,
-                    &outputs.emit_relay,
-                    &mut last_relay_bytes,
-                );
+                publish_relay(view, outputs);
             }
         }
     }
 }
 
+/// Builds the board and the registry view, whose sessions join the board's
+/// live cards, and emits each that changed; the registry view also when
+/// `force`, after an author action (AD-54).
+fn publish_both<E: Emit>(
+    collector: &Collector,
+    registry: &mut WindowRegistry,
+    outputs: &mut Outputs<E>,
+    force: bool,
+) {
+    let board = collector.board(now_ms());
+    let view = registry.view(Some(&board), &collector.paths().events_dir(), now_ms());
+    publish(board, outputs);
+    publish_registry(view, outputs, force);
+}
+
+/// Runs one author request on the registry's writer (AD-38), unless its
+/// deadline is too close (D-92): an action is written, the cards' subjects
+/// refreshed, and the board and the registry view emitted before the reply.
+fn answer_author<E: Emit>(
+    collector: &mut Collector,
+    registry: &mut WindowRegistry,
+    request: AuthorRequest,
+    outputs: &mut Outputs<E>,
+) {
+    if request.expired(Instant::now()) {
+        return;
+    }
+    let reply = match request.command {
+        AuthorCommand::ListArchived => {
+            let board = outputs.board.read().ok().and_then(|slot| slot.clone());
+            registry
+                .archived(board.as_ref())
+                .map(AuthorAnswer::Archived)
+        }
+        AuthorCommand::Act(action) => {
+            let done = registry.act(&action, now_ms());
+            report_registry(collector, registry);
+            publish_both(collector, registry, outputs, true);
+            done.map(|created| AuthorAnswer::Done { created })
+        }
+    };
+    let _ = request.reply.send(reply);
+}
+
 /// Shares `board` with the window's commands, and emits it when it differs
 /// from the last one emitted, generation time aside (AD-5).
-fn publish(
-    board: Board,
-    shared: &Arc<RwLock<Option<Board>>>,
-    emit: &dyn Fn(&Board),
-    last_bytes: &mut Vec<u8>,
-) {
+fn publish<E: Emit>(board: Board, outputs: &mut Outputs<E>) {
     let mut comparable = board.clone();
     comparable.generated_at_ms = 0;
     let bytes = serde_json::to_vec(&comparable).unwrap_or_default();
-    if let Ok(mut slot) = shared.write() {
+    if let Ok(mut slot) = outputs.board.write() {
         *slot = Some(board.clone());
     }
-    if bytes != *last_bytes {
-        *last_bytes = bytes;
-        emit(&board);
+    if bytes != outputs.last_board {
+        outputs.last_board = bytes;
+        outputs.emit.board(&board);
     }
 }
 
 /// Shares `view` with the window's commands, and emits it when its bytes
 /// differ from the last one emitted (AD-5, AD-35).
-fn publish_relay(
-    view: RelayView,
-    shared: &Arc<RwLock<Option<RelayView>>>,
-    emit: &dyn Fn(&RelayView),
-    last_bytes: &mut Vec<u8>,
-) {
+fn publish_relay<E: Emit>(view: RelayView, outputs: &mut Outputs<E>) {
     let bytes = serde_json::to_vec(&view).unwrap_or_default();
-    if let Ok(mut slot) = shared.write() {
+    if let Ok(mut slot) = outputs.relay.write() {
         *slot = Some(view.clone());
     }
-    if bytes != *last_bytes {
-        *last_bytes = bytes;
-        emit(&view);
+    if bytes != outputs.last_relay {
+        outputs.last_relay = bytes;
+        outputs.emit.relay(&view);
+    }
+}
+
+/// Shares `view` with `get_registry`, and emits it when it differs from the
+/// last one emitted, generation time aside, or when `force` (AD-54).
+fn publish_registry<E: Emit>(view: RegistryView, outputs: &mut Outputs<E>, force: bool) {
+    let mut comparable = view.clone();
+    comparable.generated_at_ms = 0;
+    let bytes = serde_json::to_vec(&comparable).unwrap_or_default();
+    if let Ok(mut slot) = outputs.registry.write() {
+        *slot = Some(view.clone());
+    }
+    if force || bytes != outputs.last_registry {
+        outputs.last_registry = bytes;
+        outputs.emit.registry(&view);
     }
 }
 
@@ -766,6 +891,19 @@ mod tests {
                 ..agents_and_board()
             }
         );
+    }
+
+    /// D-92: a request within the headroom of its deadline is dropped, so
+    /// its action, views and reply fit before the window stops waiting.
+    #[test]
+    fn a_request_within_the_headroom_of_its_deadline_is_expired() {
+        let (request, _answer) = AuthorRequest::new(AuthorCommand::ListArchived, AUTHOR_WAIT);
+        let sent = request.deadline - AUTHOR_WAIT;
+        assert!(!request.expired(sent));
+        let last_chance = request.deadline - AUTHOR_HEADROOM - Duration::from_millis(1);
+        assert!(!request.expired(last_chance));
+        assert!(request.expired(request.deadline - AUTHOR_HEADROOM));
+        assert!(request.expired(request.deadline));
     }
 
     #[test]

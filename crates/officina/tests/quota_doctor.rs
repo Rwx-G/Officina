@@ -5,11 +5,9 @@ mod common;
 #[path = "../../../tests/support/stub_server.rs"]
 mod stub_server;
 
-use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use common::{TestEnv, fingerprint, now_ms, printed_hooks_block};
-use officina_core::board::Board;
 use officina_core::relay::gate::{gated_tools, gated_tools_matcher};
 use officina_core::relay::run::{EXIT_NOT_STARTED, EXIT_REFUSED};
 use officina_host::collector::{Collector, LoadedFloor};
@@ -187,16 +185,10 @@ fn no_command_writes_under_the_claude_config_dir() {
         &serde_json::json!({"fixture": env.fixture()}),
     );
     let collector = Collector::from_parts(paths, LoadedFloor::default(), Some(fake));
-    let (boards, received) = mpsc::channel::<Board>();
-    let watch = spawn(
-        collector,
-        move |board| {
-            let _ = boards.send(board.clone());
-        },
-        |_| {},
-    )
-    .unwrap();
-    received
+    let (sink, emitted) = common::sink(|_| {});
+    let watch = spawn(collector, sink).unwrap();
+    emitted
+        .boards
         .recv_timeout(Duration::from_secs(10))
         .expect("first board");
     let running_since = Instant::now();

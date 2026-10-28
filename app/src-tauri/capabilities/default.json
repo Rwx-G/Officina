@@ -15,6 +15,14 @@
     "allow-approve-catalogue",
     "allow-decide-approval",
     "allow-set-relay-stopped",
-    "allow-acknowledge-anomaly"
+    "allow-acknowledge-anomaly",
+    "allow-get-registry",
+    "allow-list-archived",
+    "allow-create-subject",
+    "allow-rename-subject",
+    "allow-merge-subjects",
+    "allow-file-sessions",
+    "allow-archive-subject",
+    "allow-reopen-subject"
   ]
 }
