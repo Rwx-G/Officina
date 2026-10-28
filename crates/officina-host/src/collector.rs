@@ -13,7 +13,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::claude;
 use crate::files::{atomic_write, read_recent_events};
-use crate::paths::{Paths, excerpts_disabled_by_env};
+use crate::paths::{ENV_FLOOR, Paths, env_path, excerpts_disabled_by_env};
+use crate::relay::home::RelayHome;
 
 /// Why the collector cannot start at all.
 #[derive(Debug, thiserror::Error)]
@@ -89,9 +90,15 @@ pub struct ContractRecord {
 /// The collector's state between two boards.
 #[derive(Debug)]
 pub struct Collector {
+    /// The paths in use: the environment's, with the floor's `config_dir`.
     pub paths: Paths,
+    /// The environment's paths, before the floor: a reloaded floor's
+    /// `config_dir` applies to these.
+    base_paths: Paths,
     pub floor: LoadedFloor,
     pub claude: Option<PathBuf>,
+    /// Where the relay's files are, and which floor it reads (AD-24, D-8).
+    pub relay: RelayHome,
     agents: Option<Vec<AgentRecord>>,
     agents_raw: Option<Vec<serde_json::Value>>,
     stale: Option<Staleness>,
@@ -103,20 +110,26 @@ impl Collector {
     pub fn new(floor_arg: Option<&Path>) -> Result<Collector, CollectorError> {
         let paths = Paths::from_env(floor_arg).ok_or(CollectorError::NoHome)?;
         let floor = load_floor(paths.floor_file.as_deref());
-        let config_dir = floor.file.as_ref().and_then(|f| f.config_dir.clone());
-        let paths = paths.with_floor_config_dir(config_dir.as_deref());
-        Ok(Collector::from_parts(
-            paths,
-            floor,
-            claude::resolve_claude(),
-        ))
+        let mut collector = Collector::from_parts(paths, floor, claude::resolve_claude());
+        collector.relay = RelayHome::new(
+            collector.base_paths.officina_home.clone(),
+            env_path(ENV_FLOOR),
+        );
+        Ok(collector)
     }
 
-    /// Builds a collector from already resolved parts. Used by tests, which
-    /// must not depend on the process environment.
+    /// Builds a collector from already resolved parts: `paths` as the
+    /// environment gives them, before the floor, whose `config_dir` is
+    /// applied here; the relay home is the Officina home with no
+    /// `OFFICINA_FLOOR`. Used by tests, which must not depend on the process
+    /// environment.
     pub fn from_parts(paths: Paths, floor: LoadedFloor, claude: Option<PathBuf>) -> Collector {
+        let config_dir = floor.file.as_ref().and_then(|f| f.config_dir.clone());
+        let applied = paths.clone().with_floor_config_dir(config_dir.as_deref());
         Collector {
-            paths,
+            relay: RelayHome::new(paths.officina_home.clone(), None),
+            paths: applied,
+            base_paths: paths,
             floor,
             claude,
             agents: None,
@@ -124,6 +137,35 @@ impl Collector {
             stale: None,
             contract: ContractView::default(),
         }
+    }
+
+    /// The floor file the window watches: the one configured, else
+    /// `floor.toml` in the Officina home, which may not exist yet.
+    pub fn watched_floor(&self) -> PathBuf {
+        self.base_paths
+            .floor_file
+            .clone()
+            .unwrap_or_else(|| self.base_paths.officina_home.join("floor.toml"))
+    }
+
+    /// Reads the floor again after it changed (AD-4, AD-35): its projects,
+    /// name and colours reach the next board, and its `config_dir` moves the
+    /// sessions dir and the quota file. The default floor (`floor.toml` in
+    /// the home) counts when it exists, as at startup: created later it is
+    /// picked up, deleted it leaves no floor; a floor named by `--floor` or
+    /// `OFFICINA_FLOOR` that disappears is an error on the board.
+    pub fn reload_floor(&mut self) {
+        let default = self.base_paths.officina_home.join("floor.toml");
+        let path = match &self.base_paths.floor_file {
+            Some(named) if *named != default => Some(named.clone()),
+            _ => Some(default).filter(|p| p.is_file()),
+        };
+        self.floor = load_floor(path.as_deref());
+        let config_dir = self.floor.file.as_ref().and_then(|f| f.config_dir.clone());
+        self.paths = self
+            .base_paths
+            .clone()
+            .with_floor_config_dir(config_dir.as_deref());
     }
 
     /// Runs `claude agents --json --all`. On failure the previous list is

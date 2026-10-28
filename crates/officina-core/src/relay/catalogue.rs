@@ -336,6 +336,28 @@ fn guarded_program_problem(entry: &str) -> Option<&'static str> {
     }
 }
 
+/// True when a floor asks something of the relay: an action (valid or not)
+/// or a guarded project. A floor without either, any schema 1 floor among
+/// them, has nothing to approve, and the window keeps no relay record for it.
+///
+/// ```
+/// let v0_1 = officina_core::floor::parse_floor(
+///     "schema = 1\n[[project]]\nname = \"api\"\npath = \"C:/work/api\"\n",
+/// ).unwrap();
+/// assert!(!officina_core::relay::catalogue::relay_in_use(&v0_1));
+/// let guarded = officina_core::floor::parse_floor(
+///     "schema = 2\n[[project]]\nname = \"api\"\npath = \"C:/work/api\"\n",
+/// ).unwrap();
+/// assert!(officina_core::relay::catalogue::relay_in_use(&guarded));
+/// ```
+pub fn relay_in_use(floor: &FloorFile) -> bool {
+    !floor.actions.is_empty()
+        || floor
+            .projects
+            .iter()
+            .any(|p| floor.autonomy_of(p) == Autonomy::Guarded)
+}
+
 /// The effective guarded programs of a floor: its list, or the default one,
 /// lowercase (program names are matched lowercase, AD-27), sorted and
 /// deduplicated, entries breaking D-3 left out. Cheap: the gate calls it on

@@ -7,10 +7,12 @@
     "core:default",
     "core:window:allow-set-always-on-top",
     "allow-get-board",
+    "allow-get-relay",
     "allow-refresh",
     "allow-focus",
     "allow-report-wrong-window",
     "allow-copy-attach-command",
-    "allow-approve-catalogue"
+    "allow-approve-catalogue",
+    "allow-set-relay-stopped"
   ]
 }

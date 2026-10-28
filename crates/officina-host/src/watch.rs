@@ -1,15 +1,23 @@
-//! The collector thread of the window (AD-3 to AD-5): stat polling, refresh
-//! plan, diff before emit.
+//! The collector thread of the window (AD-3 to AD-5, AD-35): stat polling,
+//! refresh plan, diff before emit, for the board and the relay view.
 
-use std::path::PathBuf;
+use std::collections::BTreeSet;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant, SystemTime};
 
 use officina_core::board::Board;
+use officina_core::dates::event_file_name;
+use officina_core::floor::parse_floor;
+use officina_core::relay::catalogue::{KNOWN_PROJECTS_SCHEMA, KnownProjects, relay_in_use};
+use officina_core::relay::view::RelayView;
 
 use crate::collector::Collector;
-use crate::files::{event_file_for, now_ms, retention_pass};
+use crate::files::{atomic_write, event_file_for, now_ms, retention_pass};
+use crate::paths::Paths;
+use crate::relay::home::RelayHome;
+use crate::relay::view::read_view;
 
 /// How often the watched paths are stat'ed. A handful of `metadata` calls:
 /// cheap enough to run four times a second.
@@ -27,12 +35,19 @@ pub const MIN_SPAWN_INTERVAL: Duration = Duration::from_millis(500);
 pub const FOLLOW_UP: Duration = Duration::from_secs(1);
 /// Retention pass interval.
 pub const RETENTION_EVERY: Duration = Duration::from_secs(3600);
+/// The relay view is rebuilt at least this often, so a run turns
+/// "abandoned" and old gate errors leave the 24 h count without a file
+/// change.
+pub const RELAY_POLL: Duration = POLL_VISIBLE;
 
 /// Messages to the collector thread.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CollectorMsg {
     Refresh,
     Visibility(bool),
+    /// An authority command changed the relay's files: rebuild the relay
+    /// view now rather than at the next tick (AD-35).
+    RelayChanged,
     Shutdown,
 }
 
@@ -40,6 +55,11 @@ pub enum CollectorMsg {
 pub struct WatchHandle {
     pub sender: Sender<CollectorMsg>,
     pub board: Arc<RwLock<Option<Board>>>,
+    /// The last relay view, for the window's first paint (`get_relay`).
+    pub relay: Arc<RwLock<Option<RelayView>>>,
+    /// The collector's paths, updated when a reloaded floor moves the config
+    /// dir, so the window's focus and attach commands follow it.
+    pub paths: Arc<RwLock<Paths>>,
     pub thread: std::thread::JoinHandle<()>,
 }
 
@@ -56,32 +76,64 @@ fn stamp(path: &std::path::Path) -> Stamp {
     })
 }
 
+/// Name, size and modification time of the files of `dir` that `keep`
+/// selects, and of the files one folder below when `nested`.
+fn dir_entries(
+    dir: &Path,
+    nested: bool,
+    keep: &dyn Fn(&str) -> bool,
+    out: &mut Vec<(String, u64, Option<SystemTime>)>,
+) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let Ok(meta) = entry.metadata() else {
+            continue;
+        };
+        if meta.is_dir() {
+            if nested {
+                let mut below = Vec::new();
+                dir_entries(&entry.path(), false, keep, &mut below);
+                out.extend(
+                    below
+                        .into_iter()
+                        .map(|(n, len, at)| (format!("{name}/{n}"), len, at)),
+                );
+            }
+        } else if keep(&name) {
+            out.push((name, meta.len(), meta.modified().ok()));
+        }
+    }
+}
+
+fn fingerprint_of(mut entries: Vec<(String, u64, Option<SystemTime>)>) -> u64 {
+    use std::hash::{Hash, Hasher};
+    entries.sort();
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    entries.hash(&mut hasher);
+    hasher.finish()
+}
+
 /// Fingerprint of the session files in the Claude sessions dir: name, size and
 /// modification time of each `*.json`, never their content. Claude Code
 /// rewrites a session's file on every state change (E10) while the directory
 /// itself only changes when a session appears or ends, so the directory's own
 /// date misses most transitions. Other files (the `.key` files) are not even
 /// stat'ed.
-fn sessions_fingerprint(dir: &std::path::Path) -> u64 {
-    use std::hash::{Hash, Hasher};
-    let mut entries: Vec<(String, u64, Option<SystemTime>)> = std::fs::read_dir(dir)
-        .map(|it| {
-            it.flatten()
-                .filter_map(|e| {
-                    let name = e.file_name().to_string_lossy().into_owned();
-                    if !name.ends_with(".json") {
-                        return None;
-                    }
-                    let meta = e.metadata().ok()?;
-                    Some((name, meta.len(), meta.modified().ok()))
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-    entries.sort();
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    entries.hash(&mut hasher);
-    hasher.finish()
+fn sessions_fingerprint(dir: &Path) -> u64 {
+    let mut entries = Vec::new();
+    dir_entries(dir, false, &|name| name.ends_with(".json"), &mut entries);
+    fingerprint_of(entries)
+}
+
+/// Fingerprint of the `relay/` tree (AD-35): name, size and modification
+/// time of every file in it and in its folders (`approvals/`).
+fn relay_fingerprint(dir: &Path) -> u64 {
+    let mut entries = Vec::new();
+    dir_entries(dir, true, &|_| true, &mut entries);
+    fingerprint_of(entries)
 }
 
 /// What the refresh plan asks the collector thread to do now.
@@ -95,6 +147,8 @@ struct Due {
     retention: bool,
     /// Rebuild the board, and emit it if it changed.
     recompute: bool,
+    /// Rebuild the relay view, and emit it if it changed.
+    relay: bool,
 }
 
 /// The refresh plan of AD-4. Each trigger has its method, which records what
@@ -109,14 +163,16 @@ struct RefreshPlan<C> {
     agents_wanted: bool,
     contract_wanted: bool,
     recompute_wanted: bool,
+    relay_wanted: bool,
     last_spawn: Option<Instant>,
     follow_up_at: Option<Instant>,
     last_retention: Instant,
+    last_relay: Instant,
 }
 
 impl<C: Fn() -> Instant> RefreshPlan<C> {
-    /// At startup the session list, the contract check and a first board are
-    /// due; the retention pass has just run.
+    /// At startup the session list, the contract check, a first board and a
+    /// first relay view are due; the retention pass has just run.
     fn new(clock: C) -> Self {
         let now = clock();
         RefreshPlan {
@@ -125,9 +181,11 @@ impl<C: Fn() -> Instant> RefreshPlan<C> {
             agents_wanted: true,
             contract_wanted: true,
             recompute_wanted: true,
+            relay_wanted: true,
             last_spawn: None,
             follow_up_at: None,
             last_retention: now,
+            last_relay: now,
         }
     }
 
@@ -165,6 +223,21 @@ impl<C: Fn() -> Instant> RefreshPlan<C> {
         self.contract_wanted = true;
     }
 
+    /// The relay's files, its floor or today's journal changed, or an
+    /// authority command says so: a new relay view, no spawn.
+    fn relay_changed(&mut self) {
+        self.relay_wanted = true;
+    }
+
+    /// The window's floor changed and was reloaded: its projects reach a new
+    /// board, its config dir may name other sessions, and the relay view may
+    /// read it too.
+    fn floor_changed(&mut self) {
+        self.recompute_wanted = true;
+        self.agents_wanted = true;
+        self.relay_wanted = true;
+    }
+
     /// What runs now.
     fn due(&mut self) -> Due {
         let now = (self.clock)();
@@ -197,21 +270,35 @@ impl<C: Fn() -> Instant> RefreshPlan<C> {
             due.retention = true;
         }
         due.recompute = std::mem::take(&mut self.recompute_wanted);
+        if std::mem::take(&mut self.relay_wanted)
+            || now.duration_since(self.last_relay) >= RELAY_POLL
+        {
+            self.last_relay = now;
+            due.relay = true;
+        }
         due
     }
 }
 
-/// The paths the collector stats each tick (AD-4) and what they looked like
-/// last time.
+/// The paths the collector stats each tick (AD-4, AD-35) and what they
+/// looked like last time. Built from the collector's paths, so a reloaded
+/// floor's config dir is followed by building it again.
 struct WatchedPaths {
     events_dir: PathBuf,
     sessions_dir: PathBuf,
     quota_file: PathBuf,
     claude: Option<PathBuf>,
+    floor_file: PathBuf,
+    relay: RelayHome,
+    relay_floor_file: PathBuf,
     event_file: Stamp,
     sessions: u64,
     quota: Stamp,
     claude_binary: Option<Stamp>,
+    floor: Stamp,
+    relay_tree: u64,
+    relay_floor: Stamp,
+    journal_file: Stamp,
 }
 
 impl WatchedPaths {
@@ -220,20 +307,54 @@ impl WatchedPaths {
         let sessions_dir = collector.paths.claude_sessions_dir();
         let quota_file = collector.paths.quota_file();
         let claude = collector.claude.clone();
+        let floor_file = collector.watched_floor();
+        let relay = collector.relay.clone();
+        let relay_floor_file = relay.relay_floor(&relay.read_approved());
         WatchedPaths {
             event_file: stamp(&event_file_for(&events_dir, now_ms())),
             sessions: sessions_fingerprint(&sessions_dir),
             quota: stamp(&quota_file),
             claude_binary: claude.as_deref().map(stamp),
+            floor: stamp(&floor_file),
+            relay_tree: relay_fingerprint(&relay.relay_dir()),
+            relay_floor: stamp(&relay_floor_file),
+            journal_file: stamp(&today_journal(&relay)),
             events_dir,
             sessions_dir,
             quota_file,
             claude,
+            floor_file,
+            relay,
+            relay_floor_file,
         }
     }
 
-    /// Stats every watched path and tells `plan` what changed.
-    fn poll(&mut self, plan: &mut RefreshPlan<impl Fn() -> Instant>) {
+    /// Stats every watched path and tells `plan` what changed. Returns true
+    /// when the window's floor changed: the caller reloads it and builds the
+    /// watched paths again.
+    fn poll(&mut self, plan: &mut RefreshPlan<impl Fn() -> Instant>) -> bool {
+        let relay_tree = relay_fingerprint(&self.relay.relay_dir());
+        if relay_tree != self.relay_tree {
+            self.relay_tree = relay_tree;
+            // The approved record names the relay floor (AD-24).
+            self.relay_floor_file = self.relay.relay_floor(&self.relay.read_approved());
+            plan.relay_changed();
+        }
+        let current = stamp(&self.relay_floor_file);
+        if current != self.relay_floor {
+            self.relay_floor = current;
+            plan.relay_changed();
+        }
+        let current = stamp(&today_journal(&self.relay));
+        if current != self.journal_file {
+            self.journal_file = current;
+            plan.relay_changed();
+        }
+        let current = stamp(&self.floor_file);
+        if current != self.floor {
+            self.floor = current;
+            return true;
+        }
         let current = stamp(&event_file_for(&self.events_dir, now_ms()));
         if current != self.event_file {
             self.event_file = current;
@@ -254,24 +375,51 @@ impl WatchedPaths {
             self.claude_binary = current;
             plan.claude_binary_changed();
         }
+        false
     }
 }
 
-/// Starts the collector thread. `emit` is called with each board that differs
-/// from the previous one, from the collector thread.
+/// Today's journal file (AD-32), the one appends go to.
+fn today_journal(relay: &RelayHome) -> PathBuf {
+    relay.journal_dir().join(event_file_name(now_ms()))
+}
+
+/// The shared slots and callbacks of one collector thread.
+struct Outputs<B, R> {
+    board: Arc<RwLock<Option<Board>>>,
+    emit_board: B,
+    relay: Arc<RwLock<Option<RelayView>>>,
+    emit_relay: R,
+    paths: Arc<RwLock<Paths>>,
+}
+
+/// Starts the collector thread. `emit` is called with each board that
+/// differs from the previous one, and `emit_relay` with each relay view
+/// that differs from the previous one, from the collector thread (AD-5).
 pub fn spawn(
     mut collector: Collector,
     emit: impl Fn(&Board) + Send + 'static,
+    emit_relay: impl Fn(&RelayView) + Send + 'static,
 ) -> std::io::Result<WatchHandle> {
     let (sender, receiver) = mpsc::channel();
     let board = Arc::new(RwLock::new(None));
-    let shared = Arc::clone(&board);
+    let relay = Arc::new(RwLock::new(None));
+    let paths = Arc::new(RwLock::new(collector.paths.clone()));
+    let outputs = Outputs {
+        board: Arc::clone(&board),
+        emit_board: emit,
+        relay: Arc::clone(&relay),
+        emit_relay,
+        paths: Arc::clone(&paths),
+    };
     let thread = std::thread::Builder::new()
         .name("collector".into())
-        .spawn(move || run(&mut collector, &receiver, &shared, &emit))?;
+        .spawn(move || run(&mut collector, &receiver, &outputs))?;
     Ok(WatchHandle {
         sender,
         board,
+        relay,
+        paths,
         thread,
     })
 }
@@ -279,8 +427,7 @@ pub fn spawn(
 fn run(
     collector: &mut Collector,
     receiver: &Receiver<CollectorMsg>,
-    shared: &Arc<RwLock<Option<Board>>>,
-    emit: &dyn Fn(&Board),
+    outputs: &Outputs<impl Fn(&Board), impl Fn(&RelayView)>,
 ) {
     let retention = |collector: &Collector| {
         retention_pass(&collector.paths.events_dir(), now_ms());
@@ -290,15 +437,24 @@ fn run(
     let mut watched = WatchedPaths::new(collector);
     let mut plan = RefreshPlan::new(Instant::now);
     let mut last_bytes: Vec<u8> = Vec::new();
+    let mut last_relay_bytes: Vec<u8> = Vec::new();
 
     loop {
         match receiver.recv_timeout(TICK) {
             Ok(CollectorMsg::Shutdown) | Err(RecvTimeoutError::Disconnected) => return,
             Ok(CollectorMsg::Refresh) => plan.refresh_requested(),
             Ok(CollectorMsg::Visibility(visible)) => plan.visibility_changed(visible),
+            Ok(CollectorMsg::RelayChanged) => plan.relay_changed(),
             Err(RecvTimeoutError::Timeout) => {}
         }
-        watched.poll(&mut plan);
+        if watched.poll(&mut plan) {
+            collector.reload_floor();
+            if let Ok(mut paths) = outputs.paths.write() {
+                paths.clone_from(&collector.paths);
+            }
+            watched = WatchedPaths::new(collector);
+            plan.floor_changed();
+        }
         let due = plan.due();
         if due.agents {
             collector.refresh_agents(now_ms());
@@ -310,7 +466,24 @@ fn run(
             retention(collector);
         }
         if due.recompute {
-            publish(collector.board(now_ms()), shared, emit, &mut last_bytes);
+            publish(
+                collector.board(now_ms()),
+                &outputs.board,
+                &outputs.emit_board,
+                &mut last_bytes,
+            );
+        }
+        if due.relay {
+            keep_known_projects(&collector.relay);
+            // A home that cannot be read keeps the last view.
+            if let Ok(view) = read_view(&collector.relay, now_ms()) {
+                publish_relay(
+                    view,
+                    &outputs.relay,
+                    &outputs.emit_relay,
+                    &mut last_relay_bytes,
+                );
+            }
         }
     }
 }
@@ -332,6 +505,71 @@ fn publish(
     if bytes != *last_bytes {
         *last_bytes = bytes;
         emit(&board);
+    }
+}
+
+/// Shares `view` with the window's commands, and emits it when its bytes
+/// differ from the last one emitted (AD-5, AD-35).
+fn publish_relay(
+    view: RelayView,
+    shared: &Arc<RwLock<Option<RelayView>>>,
+    emit: &dyn Fn(&RelayView),
+    last_bytes: &mut Vec<u8>,
+) {
+    let bytes = serde_json::to_vec(&view).unwrap_or_default();
+    if let Ok(mut slot) = shared.write() {
+        *slot = Some(view.clone());
+    }
+    if bytes != *last_bytes {
+        *last_bytes = bytes;
+        emit(&view);
+    }
+}
+
+/// Keeps `relay/known-projects.json`, the gate's last readable state (D-15),
+/// current: on every valid read of the relay floor (phase 1) or of the
+/// snapshot, the record holds the project paths of both and the approved
+/// hash, the recorded one when the snapshot cannot be read, and is written
+/// atomically when its content changes. Only while the relay is in use (a
+/// valid snapshot, a record already there, or a floor that declares an
+/// action or a guarded project): a record makes a broken floor guard every
+/// known project, which a workstation without the relay must not get.
+fn keep_known_projects(home: &RelayHome) {
+    let approved = home.read_approved();
+    let floor_path = home.relay_floor(&approved);
+    let floor = std::fs::read_to_string(&floor_path)
+        .ok()
+        .and_then(|content| parse_floor(&content).ok());
+    let snapshot = approved.approved();
+    let existing = home.read_known_projects();
+    let floor_in_use = floor.as_ref().is_some_and(relay_in_use);
+    if floor.is_none() && snapshot.is_none() {
+        return;
+    }
+    if snapshot.is_none() && existing.is_none() && !floor_in_use {
+        return;
+    }
+    let mut paths: BTreeSet<String> = floor
+        .as_ref()
+        .map(|f| KnownProjects::from_floor(f, &floor_path.to_string_lossy(), None).project_paths)
+        .unwrap_or_default()
+        .into_iter()
+        .collect();
+    if let Some(snapshot) = snapshot {
+        paths.extend(snapshot.canonical.projects.values().map(|p| p.path.clone()));
+    }
+    let record = KnownProjects {
+        schema: KNOWN_PROJECTS_SCHEMA,
+        approved_hash: snapshot
+            .map(|s| s.hash.clone())
+            .or_else(|| existing.as_ref().and_then(|k| k.approved_hash.clone())),
+        project_paths: paths.into_iter().collect(),
+    };
+    if existing.as_ref() == Some(&record) {
+        return;
+    }
+    if let Ok(bytes) = serde_json::to_vec_pretty(&record) {
+        let _ = atomic_write(&home.known_projects_file(), &bytes);
     }
 }
 
@@ -374,11 +612,60 @@ mod tests {
             plan.due(),
             Due {
                 contract: true,
+                relay: true,
                 ..agents_and_board()
             }
         );
         advance(&now, TICK);
         assert_eq!(plan.due(), Due::default());
+    }
+
+    #[test]
+    fn relay_changes_rebuild_the_relay_view_alone_and_time_does_too() {
+        let (mut plan, now) = started();
+        advance(&now, TICK);
+        plan.relay_changed();
+        assert_eq!(
+            plan.due(),
+            Due {
+                relay: true,
+                ..Due::default()
+            },
+            "no spawn, no board"
+        );
+        advance(&now, TICK);
+        assert_eq!(plan.due(), Due::default());
+        advance(&now, RELAY_POLL);
+        assert!(
+            plan.due().relay,
+            "abandoned runs show without a file change"
+        );
+    }
+
+    #[test]
+    fn floor_change_rebuilds_everything() {
+        let (mut plan, now) = started();
+        advance(&now, Duration::from_secs(2));
+        plan.floor_changed();
+        assert_eq!(
+            plan.due(),
+            Due {
+                relay: true,
+                ..agents_and_board()
+            }
+        );
+    }
+
+    #[test]
+    fn relay_tree_changes_change_its_fingerprint() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = relay_fingerprint(dir.path());
+        std::fs::write(dir.path().join("stopped"), "{}").unwrap();
+        let stopped = relay_fingerprint(dir.path());
+        assert_ne!(first, stopped);
+        std::fs::create_dir_all(dir.path().join("approvals")).unwrap();
+        std::fs::write(dir.path().join("approvals").join("a.request.json"), "{}").unwrap();
+        assert_ne!(stopped, relay_fingerprint(dir.path()), "approvals/ counts");
     }
 
     #[test]

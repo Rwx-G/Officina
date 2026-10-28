@@ -154,9 +154,13 @@ fn no_command_writes_under_the_claude_config_dir() {
         Some(PathBuf::from(common::FAKE_CLAUDE)),
     );
     let (boards, received) = mpsc::channel::<Board>();
-    let watch = spawn(collector, move |board| {
-        let _ = boards.send(board.clone());
-    })
+    let watch = spawn(
+        collector,
+        move |board| {
+            let _ = boards.send(board.clone());
+        },
+        |_| {},
+    )
     .unwrap();
     received
         .recv_timeout(Duration::from_secs(10))

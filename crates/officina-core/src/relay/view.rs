@@ -8,14 +8,13 @@ use serde::{Deserialize, Serialize};
 
 use super::catalogue::{
     ActionIssue, CANONICAL_FORMAT, CanonicalCatalogue, CatalogueDiff, RelayFloor, TIMEOUT_RANGE_S,
-    diff,
+    diff, relay_in_use,
 };
 use super::journal::{
     ApprovalEvent, CatalogueApproved, GateDenied, GateError, JournalEntry, JournalLine, Refused,
     RunFinished, RunStarted,
 };
 use super::run::SnapshotState;
-use crate::floor::Autonomy;
 
 /// Version of the relay view contract.
 pub const RELAY_VIEW_SCHEMA: u32 = 1;
@@ -28,12 +27,14 @@ pub const ABANDONED_GRACE_MS: i64 = 60_000;
 pub const GATE_ERRORS_WINDOW_MS: i64 = 24 * 60 * 60 * 1000;
 
 /// A catalogue change waiting for the author: the hash the Approve button
-/// sends (AD-24) and what changed since the approved snapshot.
+/// sends (AD-24), what changed since the approved snapshot, and the
+/// catalogue it would approve, so an added action shows what it runs.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct PendingChange {
     pub hash: String,
     pub diff: CatalogueDiff,
+    pub current: CanonicalCatalogue,
 }
 
 /// Where a run stands.
@@ -154,17 +155,6 @@ pub struct ViewInputs<'a> {
     pub now_ms: i64,
 }
 
-/// True when a catalogue asks something of the relay: an action to run or a
-/// guarded project. A floor without either (any schema 1 floor) has nothing
-/// to approve.
-fn relay_in_use(canonical: &CanonicalCatalogue) -> bool {
-    !canonical.actions.is_empty()
-        || canonical
-            .projects
-            .values()
-            .any(|p| p.autonomy == Autonomy::Guarded)
-}
-
 /// What a first approval compares with: nothing approved.
 fn nothing_approved() -> CanonicalCatalogue {
     CanonicalCatalogue {
@@ -178,18 +168,20 @@ fn nothing_approved() -> CanonicalCatalogue {
 
 /// The pending change (D-24): the current floor against the approved
 /// snapshot when their hashes differ; against nothing when no snapshot is
-/// readable, as long as the floor asks something of the relay or a broken
+/// readable, as long as the floor asks something of the relay
+/// ([`relay_in_use`]) or a broken
 /// snapshot needs a new approval.
 fn pending(snapshot: SnapshotState<'_>, current: &RelayFloor) -> Option<PendingChange> {
     let base = match snapshot {
         SnapshotState::Valid(approved) if approved.hash == current.hash => return None,
         SnapshotState::Valid(approved) => approved.canonical.clone(),
-        SnapshotState::Missing if !relay_in_use(&current.canonical) => return None,
+        SnapshotState::Missing if !relay_in_use(&current.floor) => return None,
         SnapshotState::Missing | SnapshotState::Unreadable(_) => nothing_approved(),
     };
     Some(PendingChange {
         hash: current.hash.clone(),
         diff: diff(&base, &current.canonical),
+        current: current.canonical.clone(),
     })
 }
 
@@ -471,6 +463,10 @@ mod tests {
         let pending = view.pending.unwrap();
         assert_eq!(pending.hash, current.hash);
         assert_eq!(pending.diff.actions.added, ["probe"]);
+        assert_eq!(
+            pending.current, current.canonical,
+            "an added action shows what it runs"
+        );
         assert_eq!(pending.diff.projects.added, ["lab"]);
         assert!(view.catalogue.is_none() && view.approved_hash.is_none());
 

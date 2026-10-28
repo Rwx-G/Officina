@@ -3,11 +3,13 @@
 /// called by the page, whatever script runs in it.
 const COMMANDS: &[&str] = &[
     "get_board",
+    "get_relay",
     "refresh",
     "focus",
     "report_wrong_window",
     "copy_attach_command",
     "approve_catalogue",
+    "set_relay_stopped",
 ];
 
 fn main() {

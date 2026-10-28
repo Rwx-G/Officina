@@ -8,11 +8,13 @@ use std::sync::{Arc, RwLock};
 
 use officina_core::board::Board;
 use officina_core::focus::FocusOutcome;
+use officina_core::relay::view::RelayView;
 use officina_host::collector::Collector;
 use officina_host::files::now_ms;
 use officina_host::focus::{
     FocusContext, attach_command, focus_card, log_outcome, log_wrong_window,
 };
+use officina_host::paths::Paths;
 use officina_host::relay::authority;
 use officina_host::relay::home::RelayHome;
 use officina_host::watch::{CollectorMsg, spawn};
@@ -20,11 +22,32 @@ use tauri::{Emitter, Manager, State, WindowEvent};
 
 /// Event carrying each new board to the window.
 const BOARD_EVENT: &str = "board://updated";
+/// Event carrying each new relay view to the window (AD-35).
+const RELAY_EVENT: &str = "relay://updated";
 
 struct AppState {
     board: Arc<RwLock<Option<Board>>>,
+    relay: Arc<RwLock<Option<RelayView>>>,
+    /// The relay home the collector reads, which the authority writes.
+    relay_home: RelayHome,
     sender: std::sync::Mutex<std::sync::mpsc::Sender<CollectorMsg>>,
-    focus: FocusContext,
+    /// The collector's current paths: a reloaded floor can move the config
+    /// dir that focus and attach pass to `claude`.
+    paths: Arc<RwLock<Paths>>,
+    claude: Option<PathBuf>,
+}
+
+impl AppState {
+    /// What focus and attach need, from the paths in use now.
+    fn focus_context(&self) -> Option<FocusContext> {
+        let paths = self.paths.read().ok()?;
+        Some(FocusContext::new(&paths, self.claude.clone()))
+    }
+
+    /// A sender for a command that runs off the main thread.
+    fn collector(&self) -> Option<std::sync::mpsc::Sender<CollectorMsg>> {
+        self.sender.lock().ok().map(|sender| sender.clone())
+    }
 }
 
 fn card_for(state: &AppState, key: &str) -> Option<officina_core::board::Card> {
@@ -42,6 +65,12 @@ fn get_board(state: State<'_, AppState>) -> Option<Board> {
     state.board.read().ok().and_then(|b| b.clone())
 }
 
+/// The last relay view, for the first paint; later ones come as events.
+#[tauri::command]
+fn get_relay(state: State<'_, AppState>) -> Option<RelayView> {
+    state.relay.read().ok().and_then(|r| r.clone())
+}
+
 #[tauri::command]
 fn refresh(state: State<'_, AppState>) {
     if let Ok(sender) = state.sender.lock() {
@@ -56,7 +85,11 @@ async fn focus(state: State<'_, AppState>, key: String) -> Result<FocusOutcome, 
             "this session is no longer on the board".into(),
         ));
     };
-    let ctx = state.focus.clone();
+    let Some(ctx) = state.focus_context() else {
+        return Ok(FocusOutcome::Failed(
+            "the window's state is unavailable".into(),
+        ));
+    };
     let outcome = tauri::async_runtime::spawn_blocking(move || {
         let outcome = focus_card(&card, &ctx);
         log_outcome(&ctx.state_dir, &card, &outcome, now_ms());
@@ -69,27 +102,57 @@ async fn focus(state: State<'_, AppState>, key: String) -> Result<FocusOutcome, 
 
 #[tauri::command]
 fn report_wrong_window(state: State<'_, AppState>, key: String) {
-    log_wrong_window(&state.focus.state_dir, &key, now_ms());
+    if let Some(ctx) = state.focus_context() {
+        log_wrong_window(&ctx.state_dir, &key, now_ms());
+    }
 }
 
 #[tauri::command]
 fn copy_attach_command(state: State<'_, AppState>, key: String) -> Option<String> {
-    card_for(&state, &key).and_then(|c| attach_command(&c, &state.focus))
+    let ctx = state.focus_context()?;
+    card_for(&state, &key).and_then(|c| attach_command(&c, &ctx))
+}
+
+/// Runs an authority call off the main thread (AD-3), then asks the
+/// collector for a relay view at once, whether the call succeeded or not
+/// (AD-35).
+async fn with_authority<T: Send + 'static>(
+    state: State<'_, AppState>,
+    call: impl FnOnce(&RelayHome) -> Result<T, String> + Send + 'static,
+) -> Result<T, String> {
+    let home = state.relay_home.clone();
+    let collector = state.collector();
+    tauri::async_runtime::spawn_blocking(move || {
+        let result = call(&home);
+        if let Some(sender) = collector {
+            let _ = sender.send(CollectorMsg::RelayChanged);
+        }
+        result
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Approves the relay's catalogue when `hash` is still the current one
 /// (AD-24, D-8). Returns the approved hash.
 #[tauri::command]
-async fn approve_catalogue(hash: String) -> Result<String, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let home = RelayHome::from_env()
-            .ok_or_else(|| "no Officina home: set OFFICINA_HOME or USERPROFILE".to_owned())?;
-        authority::approve_catalogue(&home, &hash)
+async fn approve_catalogue(state: State<'_, AppState>, hash: String) -> Result<String, String> {
+    with_authority(state, move |home| {
+        authority::approve_catalogue(home, &hash)
             .map(|approved| approved.hash)
             .map_err(|e| e.to_string())
     })
     .await
-    .map_err(|e| e.to_string())?
+}
+
+/// Stops or resumes the relay (FR-11, AD-34, D-26). Returns whether the
+/// state changed.
+#[tauri::command]
+async fn set_relay_stopped(state: State<'_, AppState>, stopped: bool) -> Result<bool, String> {
+    with_authority(state, move |home| {
+        authority::set_relay_stopped(home, stopped).map_err(|e| e.to_string())
+    })
+    .await
 }
 
 fn floor_arg() -> Option<PathBuf> {
@@ -137,20 +200,31 @@ fn main() {
         }))
         .setup(|app| {
             let collector = Collector::new(floor_arg().as_deref())?;
-            let focus = FocusContext::new(&collector.paths, collector.claude.clone());
+            let claude = collector.claude.clone();
+            let relay_home = collector.relay.clone();
             let handle = app.handle().clone();
-            let watch = spawn(collector, move |board| {
-                let _ = handle.emit(BOARD_EVENT, board);
-                if let Some(window) = handle.get_webview_window("main") {
-                    let _ = window.set_title(&window_title(board));
-                    let overlay = (board.waiting_count > 0).then(waiting_dot);
-                    let _ = window.set_overlay_icon(overlay);
-                }
-            })?;
+            let relay_handle = app.handle().clone();
+            let watch = spawn(
+                collector,
+                move |board| {
+                    let _ = handle.emit(BOARD_EVENT, board);
+                    if let Some(window) = handle.get_webview_window("main") {
+                        let _ = window.set_title(&window_title(board));
+                        let overlay = (board.waiting_count > 0).then(waiting_dot);
+                        let _ = window.set_overlay_icon(overlay);
+                    }
+                },
+                move |view| {
+                    let _ = relay_handle.emit(RELAY_EVENT, view);
+                },
+            )?;
             app.manage(AppState {
                 board: watch.board,
+                relay: watch.relay,
+                relay_home,
                 sender: std::sync::Mutex::new(watch.sender),
-                focus,
+                paths: watch.paths,
+                claude,
             });
             Ok(())
         })
@@ -168,12 +242,78 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             get_board,
+            get_relay,
             refresh,
             focus,
             report_wrong_window,
             copy_attach_command,
-            approve_catalogue
+            approve_catalogue,
+            set_relay_stopped
         ])
         .run(tauri::generate_context!())
         .expect("failed to run the Officina window");
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeSet;
+
+    /// The quoted names between `start` and the next `end` in `text`.
+    fn quoted_names(text: &str, start: &str, end: &str) -> BTreeSet<String> {
+        let from = text.find(start).expect(start) + start.len();
+        let list = &text[from..from + text[from..].find(end).expect(end)];
+        list.split('"')
+            .skip(1)
+            .step_by(2)
+            .map(str::to_owned)
+            .collect()
+    }
+
+    /// The words of `tauri::generate_handler![...]` in this file.
+    fn handled_commands() -> BTreeSet<String> {
+        let text = include_str!("main.rs");
+        let start = "generate_handler![";
+        let from = text.find(start).unwrap() + start.len();
+        let list = &text[from..from + text[from..].find(']').unwrap()];
+        list.split(',')
+            .map(|name| name.trim().to_owned())
+            .filter(|name| !name.is_empty())
+            .collect()
+    }
+
+    /// AD-19, AD-35: a command declared in `build.rs` but not allowed in the
+    /// capability file cannot be called by the page, and an allowed one that
+    /// is not declared or not handled is a typo. Each list is read from its
+    /// file, so a command added to one place only fails here.
+    #[test]
+    fn every_declared_command_is_allowed() {
+        let declared = quoted_names(
+            include_str!("../build.rs"),
+            "const COMMANDS: &[&str] = &[",
+            "];",
+        );
+        let capability: serde_json::Value =
+            serde_json::from_str(include_str!("../capabilities/default.json")).unwrap();
+        let allowed: BTreeSet<String> = capability["permissions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|p| p.as_str())
+            .filter_map(|p| p.strip_prefix("allow-"))
+            .map(|p| p.replace('-', "_"))
+            .collect();
+        assert!(!declared.is_empty());
+        assert_eq!(
+            allowed, declared,
+            "capabilities/default.json against build.rs"
+        );
+        assert_eq!(
+            handled_commands(),
+            declared,
+            "generate_handler! against build.rs"
+        );
+        for command in ["get_relay", "approve_catalogue", "set_relay_stopped"] {
+            assert!(declared.contains(command), "{command}");
+        }
+    }
 }
