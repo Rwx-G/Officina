@@ -1,6 +1,6 @@
 # Story 3.9: Contained triage call, runner and dry run (model disabled)
 
-**Status:** Approved
+**Status:** review
 
 ## Story
 
@@ -27,17 +27,17 @@ so that I can see how a model would have scored before deciding anything, and pa
 
 ## Tasks
 
-- [ ] `crates/officina-core/src/registry/triage_call.rs`: argv, schema, prompt, nonce check, environment on a given base, validation, `ModelOutputError` (AC 1, 2)
-- [ ] `prompt` and `model_output` sections of the vector set (AC 1, 2)
-- [ ] Job Object helpers in `platform/windows.rs` per D-64, child assignment; the `Win32_System_JobObjects` feature if story 2.5 has not added it (D-97) (AC 4)
-- [ ] `crates/officina-host/src/registry/triage.rs`: refusals and their non-requeue, spawn on a given base environment, deadline, cap with draining, worker thread, collector channel (AC 3, 4, 6)
-- [ ] Budget and counts from `triage_call` rows (AC 7)
-- [ ] Dry run selection, progress, `model_evaluation` with cost; `evaluate_triage_model` answering once queued (AC 8, 9)
-- [ ] Fake claude `triage` and invalid modes, through the sidecar (AC 5)
-- [ ] `TriageEvidence` component, view fields, `ipc.ts`, mock, `evidence` scenario from `registry_fixture` (AC 9)
-- [ ] `triage_call` retention; doctor lines; zero-write extension to `<home>/.claude.json` (AC 10-12)
-- [ ] `examples/triage_probe.rs`; run it; research notes (AC 13)
-- [ ] Update `CHANGELOG.md` and the README (AC 14)
+- [x] `crates/officina-core/src/registry/triage_call.rs`: argv, schema, prompt, nonce check, environment on a given base, validation, `ModelOutputError` (AC 1, 2)
+- [x] `prompt` and `model_output` sections of the vector set (AC 1, 2)
+- [x] Job Object helpers in `platform/windows.rs` per D-64, child assignment; the `Win32_System_JobObjects` feature if story 2.5 has not added it (D-97) (AC 4): story 2.5 had landed both; the runner assigns its child to a kill-on-close job of its own
+- [x] `crates/officina-host/src/registry/triage.rs`: refusals and their non-requeue, spawn on a given base environment, deadline, cap with draining, worker thread, collector channel (AC 3, 4, 6)
+- [x] Budget and counts from `triage_call` rows (AC 7)
+- [x] Dry run selection, progress, `model_evaluation` with cost; `evaluate_triage_model` answering once queued (AC 8, 9)
+- [x] Fake claude `triage` and invalid modes, through the sidecar (AC 5)
+- [x] `TriageEvidence` component, view fields, `ipc.ts`, mock, `evidence` scenario from `registry_fixture` (AC 9)
+- [x] `triage_call` retention; doctor lines; zero-write extension to `<home>/.claude.json` (AC 10-12)
+- [ ] `examples/triage_probe.rs`; run it; research notes (AC 13): the example is written; running it and recording E16's re-check are the owner's (a real call is never made by the developer)
+- [x] Update `CHANGELOG.md` and the README (AC 14)
 
 ## Dev Notes
 
@@ -65,11 +65,49 @@ so that I can see how a model would have scored before deciding anything, and pa
 
 ### Debug Log
 
+- **Decisions where the story is silent:**
+  - AC 1: core `registry::triage_call` also holds the budget, the counts, the D-87 rule (`queue_again`) and the failed proposal streak the pause of story 3.11 reads (`failed_proposal_streak`), since they read the same `triage_call` rows. The instruction names its fields and verdicts from `TriageCase` and `ModelVerdict::ALL` (a test holds the field list to the struct). The data line is `serde_json`'s, then every `<`, `>`, control, line separator and character of `relay::params::FORBIDDEN_FORMAT_RANGES` as a `\u` escape: no excerpt can write a marker, break the line or hide text, and the line still reads back as the case. The nonce check runs on that escaped line, ignoring case, so a nonce formed across an escape is refused too; the host draws again up to eight times. The schema adds `minLength: 1` to AD-51's, matching the validation.
+  - AC 1, environment: `triage_env(base, config_dir)` drops `TRIAGE_ENV_REMOVED`, every `OFFICINA_` name (both ignoring case, as Windows does), and the base's own `CLAUDE_CONFIG_DIR` and `NoDefaultCurrentDirectoryInExePath`, then sets the floor's config dir only when the floor names one: an inherited config dir never reaches the call. The host clears the child's environment and sets exactly that.
+  - AC 2: the input token count sums `input_tokens` and both cache counts (E16's 4.5k includes the cached system prompt); the cost is stored in millionths of a dollar. `ModelOutputError::ReportedError` (`is_error: true`) maps to `failed`, every other error to `invalid`; a non-zero exit is `failed`.
+  - AC 3, D-87: schema 1 (P-14: no released database holds it) gains `triage_call.case_key`, `input_hash` and `refusal` (with its `CHECK` list from `TriageRefusal::ALL`), so a refused case is not queued again across a restart and each refusal shows its cause; the pinned hash moved with it. A refusal ends a dry run, since its cause holds for every case; an explicit dry run never consults the non-requeue rule, which is the proposal queue's (story 3.11): pressing Evaluate after fixing a shim must run. `TriageRefusal` gains `claude_not_found` for a missing binary: nothing starts, so it is a refusal that spends no budget, not a failed call.
+  - AC 4: the job comes from story 2.5's `Job` (kill on close), assigned right after the spawn; the window never joins one. Stdout keeps 64 KiB and drains the rest; one byte past the cap is `invalid` (`too_large`) without reading the answer. After the child exits, its job is ended before the output is read, so a process it left cannot hold the pipes.
+  - AC 6: the collector creates the worker at start (no thread, no call: the board does not depend on it) and pumps it once per tick: results are recorded, then the next case starts when the thread is idle and the budget allows; a view is emitted when the dry run moved.
+  - AC 8: a dry run with no case is refused with a message, like one while another runs (`IpcErrorCode::Refused`); a dry run that ran no case records no evaluation, so the latest one is never hidden by an empty row. How the last dry run ended (completed, budget spent, refused) lives in the collector's memory and reaches the view as `model.last_stop`.
+  - AC 9: `TriageEvidence` closes the Triage panel; the progress replaces the Evaluate button while a run is out. The running and stop states are pushed views in Playwright, since a printed fixture has no running dry run.
+  - AC 13: `examples/triage_probe.rs` reads the session id from the call's own stdout and looks for a file of that name anywhere under the config dir; it compares the input tokens with E16's 4,500 within 20 %. Not run here: the owner runs it and records the result with the Claude Code version.
+- **Adversarial pass** (prompt injection in excerpts: forged markers, the nonce in capitals and across an escape, bidi and tag characters, line separators; oversized, malformed, schema-breaking and error answers; timeouts with a grandchild; budget exhaustion mid-run; a `.cmd` shim; a missing binary; `no_excerpts`; inputs expiring during a run): three real misses, each now tested. A `claude.cmd.` path escaped the shim check while Windows runs it as a batch file (`triage_call.rs::tests::every_spelling_of_a_shim_is_refused`, `tests/triage.rs::cmd_or_bat_shim_is_refused_with_zero_launches`); a path naming no file counted as a failed call that spent budget (`tests/triage.rs::missing_claude_is_refused_with_zero_launches`); a dry run sent a case whose copied input expired after it was queued (`registry_triage.rs::a_case_whose_input_expired_while_queued_is_not_sent`). A changed model answer between dry run and enable is story 3.11's: the enable gate reads the latest dry run, and a dry run's answers are never stored.
+
+### Checks
+
+Per commit: `cargo fmt`, clippy on the workspace with `--all-targets --features officina-core/ts` and on the host without `window-authority`, and the tests of the crates touched; `pnpm check`, `lint`, `test` and the evidence and triage specs for the frontend commits. The full gate runs once at the end of story 3.10 and is recorded there.
+
 ### Completion Notes
 
+- AC 1: `crates/officina-core/src/registry/triage_call.rs::tests::{argv_is_pinned, schema_is_pinned, prompt_is_pinned_for_a_fixed_nonce, input_holding_the_nonce_is_refused, environment_changes_are_derived_from_the_constant}`; the `prompt` section of `tests/vectors/triage.json`.
+- AC 2: the `model_output` section; `crates/officina-core/tests/triage_vectors.rs::every_value_has_a_case` iterates `ModelOutputError::ALL` and every answered `ModelVerdict`.
+- AC 3: `crates/officina/tests/triage.rs::{cmd_or_bat_shim_is_refused_with_zero_launches, no_excerpts_is_refused_with_zero_launches, non_empty_workdir_is_refused_with_zero_launches, missing_claude_is_refused_with_zero_launches}`; `crates/officina-host/tests/registry_triage.rs::{a_refused_row_is_not_queued_again_until_its_inputs_change, refusals_spend_no_budget_and_are_counted}`.
+- AC 4: `triage.rs::{argv_matches_the_golden_vector, excerpts_reach_the_child_on_stdin_only, removed_variables_do_not_reach_the_child, floor_config_dir_reaches_the_child, timeout_ends_the_child_and_its_tree, oversized_stdout_is_invalid_not_a_timeout, each_invalid_output_mode_is_an_outcome}`.
+- AC 5: `triage.rs::fake_triage_mode_answers_the_named_verdict` and the tests of AC 3 and 4.
+- AC 6: `crates/officina/tests/watch.rs::board_keeps_its_pace_while_a_triage_call_hangs`.
+- AC 7: `registry_triage.rs::{budget_holds_across_a_restart, counts_cover_today_and_30_days}`; core `triage_call.rs::tests::{budget_spaces_calls_and_caps_the_hour_and_the_day, counts_cover_today_the_window_and_refusals}`.
+- AC 8: `registry_triage.rs::{dry_run_selects_held_default_confirmations_newest_first, dry_run_records_one_evaluation_with_its_cost, dry_run_runs_while_disabled_or_paused, dry_run_failures_do_not_count_toward_the_pause, dry_run_stops_when_the_budget_is_spent, second_dry_run_is_refused_while_one_runs}`; `triage.rs::{dry_run_scores_model_and_default_through_the_fake_claude, dry_run_yields_no_proposal}`; core `dry_run.rs::tests`.
+- AC 9: `app/e2e/evidence.spec.ts > a dry run shows its cases, correct counts, false finished, unanswered and cost`, `> a running dry run shows its progress`, `> evaluate sends evaluate_triage_model`, `> call counts and refusals are shown`; `app/src-tauri/src/main.rs::tests::every_declared_command_is_allowed`.
+- AC 10: `crates/officina-host/tests/registry_retention.rs::triage_call_rows_are_kept_90_days`.
+- AC 11: `crates/officina-host/src/doctor.rs::tests::{cmd_shim_is_reported_as_refusing_triage, model_state_and_counts_are_reported}`.
+- AC 12: `crates/officina/tests/quota_doctor.rs::no_command_writes_under_the_claude_config_dir`, a triage call through the fake pointed at the fingerprinted config dir.
+- AC 13: open for the owner: `cargo run -p officina-host --features window-authority --example triage_probe`, then an E16 entry in `docs/research-notes.md` with the Claude Code version and the result.
+- AC 14: `CHANGELOG.md` `[Unreleased]`; README "The triage model, and its dry run".
+
 ## File List
+
+- `crates/officina-core/src/registry/{triage_call,dry_run,types,proposal,view,retention,mod}.rs`, `crates/officina-core/tests/triage_vectors.rs`, `tests/vectors/triage.json`
+- `crates/officina-host/src/registry/{triage,read,write,window,schema,retention,mod}.rs`, `crates/officina-host/src/{watch,collector,doctor}.rs`, `crates/officina-host/Cargo.toml`, `crates/officina-host/examples/{triage_probe,registry_fixture}.rs`, `crates/officina-host/tests/{registry_triage,registry_schema,registry_retention}.rs`
+- `crates/officina/src/bin/officina-fake-claude.rs`, `crates/officina/tests/{triage,watch,quota_doctor}.rs`
+- `app/src-tauri/{build.rs,capabilities/default.json,src/main.rs}`, `app/src/lib/generated/` (regenerated), `app/src/lib/{ipc.ts,registry.svelte.ts,registry-text.ts}`, `app/src/{e2e-mock.ts,e2e-globals.d.ts}`, `app/src/components/{TriageEvidence,TriagePanel}.svelte`, `app/src/components/components.test.ts`, `app/scripts/e2e-fixtures.mjs`, `app/e2e/{fixtures.ts,evidence.spec.ts}`
+- `README.md`, `CHANGELOG.md`, `docs/stories/story-3.9-triage-call-and-dry-run.md`, `docs/stories/sprint-status.yaml`
 
 ## Change Log
 
 - 2026-10-28 created
 - 2026-10-28 reworked after review: zero write is Officina's own, probe checks the transcript and the answer with a pass criterion (D-80, D-91); pause moved to story 3.11, dry runs run while disabled or paused (D-81); refusals not re-queued until inputs change (D-87); dry-run cost columns (D-88); evaluation set held under 30 days (D-85); base environment as an argument and fake claude sidecar (D-86); draining past the cap, job feature (D-97); answer once queued with progress (D-92)
+- 2026-10-28 implemented: the contained call in core and its vectors, the runner, the `triage` thread, the budget and counts, the dry run and its evidence in the panel, retention, doctor, zero write, the probe written; three adversarial tests added. Status review; AC 13 (the probe's real call) open for the owner

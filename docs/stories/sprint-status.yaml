@@ -52,6 +52,7 @@ version: v0.3
 # Reworked after review with the owner's final decisions (epic-3-decisions.md D-75 to D-97).
 # v0.2 stories 2.1 and 2.2 have merged (D-42, D-43); the other v0.2 seams are D-44.
 # 3.12 closes the PRD after a week of real use (owner rule, epic-2-decisions.md P-7, epic-3-decisions.md P-16).
+# 3.9 AC 13 is the owner's: run examples/triage_probe.rs (one real call) and record it in research-notes.md (E16).
 stories:
   - {id: "3.1", file: story-3.1-registry-store.md, slice: A, status: review}
   - {id: "3.2", file: story-3.2-ingestion-and-retention.md, slice: A, status: review}
@@ -61,7 +62,7 @@ stories:
   - {id: "3.6", file: story-3.6-verdicts-and-proposals.md, slice: A, status: review}
   - {id: "3.7", file: story-3.7-triage-panel.md, slice: A, status: review}
   - {id: "3.8", file: story-3.8-hook-fields-canary.md, slice: A, status: review}
-  - {id: "3.9", file: story-3.9-triage-call-and-dry-run.md, slice: B, status: approved}
+  - {id: "3.9", file: story-3.9-triage-call-and-dry-run.md, slice: B, status: review}
   - {id: "3.10", file: story-3.10-measured-error-and-auto-archive.md, slice: B, status: approved}
   - {id: "3.11", file: story-3.11-model-proposals.md, slice: B, status: approved}
   - {id: "3.12", file: story-3.12-docs-doctor-and-qa.md, slice: B, status: approved}
