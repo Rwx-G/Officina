@@ -156,7 +156,8 @@ fn doctor_with_a_guarded_project_requires_every_gated_tool() {
 
 /// FR-13, D-80: Officina writes nothing under the Claude config dir nor
 /// into `~/.claude.json`, whatever command runs, with the window's
-/// collector running beside them, ingesting into its registry.
+/// collector running beside them, ingesting into its registry, and a
+/// triage call made through the fake (story 3.9 AC 12).
 #[test]
 fn no_command_writes_under_the_claude_config_dir() {
     let env = TestEnv::new();
@@ -248,6 +249,38 @@ fn no_command_writes_under_the_claude_config_dir() {
             String::from_utf8_lossy(&out.stderr)
         );
     }
+
+    // A triage call through the fake, pointed at the same config dir as a
+    // floor's `config_dir` would point it (story 3.9 AC 12, D-80).
+    let triage_fake = common::fake_claude_in(
+        &env.root.path().join("bin-triage"),
+        &serde_json::json!({"mode": "triage"}),
+    );
+    let call = officina_host::registry::triage::run_call(
+        &officina_host::registry::triage::TriageJob {
+            purpose: officina_core::registry::types::TriagePurpose::DryRun,
+            case_key: "confirmation:1".into(),
+            case: officina_core::registry::triage_call::TriageCase {
+                last_prompt: Some("Ship it FAKE-VERDICT:finished".into()),
+                ..Default::default()
+            },
+            claude: Some(triage_fake),
+            officina_home: env.officina_home(),
+            config_dir: Some(config.clone()),
+            no_excerpts: false,
+            base_env: std::sync::Arc::new(vec![(
+                "SYSTEMROOT".to_owned(),
+                std::env::var("SYSTEMROOT").unwrap_or_default(),
+            )]),
+            limits: officina_host::registry::triage::CallLimits::default(),
+        },
+        &officina_host::files::now_ms,
+    );
+    assert_eq!(
+        call.outcome,
+        officina_core::registry::types::TriageOutcome::Answer,
+        "{call:?}"
+    );
 
     // Long enough for the collector to see the hook and quota writes, spawn
     // `claude` again and run its follow-up refresh.
