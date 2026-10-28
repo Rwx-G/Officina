@@ -6,7 +6,13 @@
 // and a call refused before it started.
 import { expect, test, type Page } from "@playwright/test";
 import { calls, loadBoard, loadRegistry, openBoard } from "./fixtures";
-import { DRY_RUN_STOP_TEXT, TRIAGE_REFUSAL_TEXT, usd } from "../src/lib/registry-text";
+import {
+  DRY_RUN_STOP_TEXT,
+  GATE_STATE_TEXT,
+  PROPOSAL_SOURCE_TEXT,
+  TRIAGE_REFUSAL_TEXT,
+  usd,
+} from "../src/lib/registry-text";
 import type { RegistryView } from "../src/lib/generated/RegistryView";
 
 async function openEvidence(page: Page, view: RegistryView = loadRegistry("evidence")): Promise<void> {
@@ -38,7 +44,7 @@ test.describe("Triage evidence", () => {
     // The model stays off: no toggle before story 3.11, and no row is a
     // model proposal.
     await expect(evidence.getByTestId("model-state")).toContainText("The model is off");
-    await expect(evidence.getByRole("checkbox")).toHaveCount(0);
+    await expect(evidence.getByTestId("model-toggle")).toHaveCount(0);
     expect(view.triage.every((row) => row.proposal.source !== "model")).toBe(true);
   });
 
@@ -89,5 +95,95 @@ test.describe("Triage evidence", () => {
       await expect(shown.nth(i)).toHaveAttribute("data-cause", refusal.cause);
       await expect(shown.nth(i)).toContainText(TRIAGE_REFUSAL_TEXT[refusal.cause]);
     }
+  });
+});
+
+// Story 3.10: the measured error and the auto-archive gate (FR-11, FR-12,
+// AD-50, AD-55) on the same `evidence` fixture: a nightly job's state
+// proposals confirmed, three of its runs auto-archived, the last reopened
+// since, the gate that then broke and turned the switch off.
+test.describe("Measured error and auto-archive", () => {
+  test("per source, flipped finished proposals with the count they rest on", async ({ page }) => {
+    const view = loadRegistry("evidence");
+    await openEvidence(page, view);
+    const shown = page.getByTestId("source-rate");
+    await expect(shown).toHaveCount(view.rates.length);
+    for (const rate of view.rates.filter((r) => r.finished !== null)) {
+      const line = page.locator(`[data-testid="source-rate"][data-source="${rate.source}"]`);
+      await expect(line).toContainText(PROPOSAL_SOURCE_TEXT[rate.source]);
+      await expect(line.getByTestId("rate-finished")).toHaveText(
+        `${rate.finished!.flipped} of its last ${rate.finished!.cases} finished proposals flipped`,
+      );
+      await expect(line.getByTestId("rate-all")).toHaveText(
+        `${rate.all.flipped} flipped among its last ${rate.all.cases} proposals`,
+      );
+    }
+    const state = view.rates.find((r) => r.source === "state")!;
+    expect(state.finished).toEqual({ cases: 50, flipped: 1 });
+  });
+
+  test("a source with no finished proposal says so", async ({ page }) => {
+    const view = loadRegistry("evidence");
+    const silent = view.rates.filter((r) => r.finished === null);
+    expect(silent.length).toBeGreaterThan(0);
+    await openEvidence(page, view);
+    for (const rate of silent) {
+      await expect(
+        page.locator(`[data-testid="source-rate"][data-source="${rate.source}"]`).getByTestId("rate-finished"),
+      ).toHaveText("no finished proposal yet");
+    }
+  });
+
+  test("the auto-archive toggle explains why it is disabled", async ({ page }) => {
+    const view = loadRegistry("evidence");
+    expect(view.gates.auto_archive.state).not.toBe("holds");
+    await openEvidence(page, view);
+    await expect(page.getByTestId("auto-archive")).toBeDisabled();
+    await expect(page.getByTestId("auto-archive")).not.toBeChecked();
+    const reason = page.getByTestId("auto-archive-reason");
+    await expect(reason).toContainText(GATE_STATE_TEXT[view.gates.auto_archive.state]);
+    // The fixture's switch was turned off by its broken gate: it says so.
+    expect(view.auto_archive.src).toBe("rules");
+    await expect(reason).toContainText(`It turned itself off: ${GATE_STATE_TEXT[view.auto_archive.reason!]}`);
+  });
+
+  test("the toggle sends set_auto_archive while the gate holds", async ({ page }) => {
+    const view = loadRegistry("evidence");
+    const holding: RegistryView = {
+      ...view,
+      gates: { ...view.gates, auto_archive: { ...view.gates.auto_archive, state: "holds" } },
+      auto_archive: { on: false, src: null, at_ms: null, reason: null },
+    };
+    await openEvidence(page, holding);
+    const toggle = page.getByTestId("auto-archive");
+    await expect(toggle).toBeEnabled();
+    await toggle.check();
+    await expect.poll(async () => (await calls(page)).filter((c) => c.cmd === "set_auto_archive").map((c) => c.args)).toEqual([
+      { on: true },
+    ]);
+    await expect(toggle).toBeChecked();
+    await toggle.uncheck();
+    await expect
+      .poll(async () => (await calls(page)).filter((c) => c.cmd === "set_auto_archive").length)
+      .toBe(2);
+    await expect(toggle).not.toBeChecked();
+  });
+
+  test("recent auto-archives can be reopened", async ({ page }) => {
+    const view = loadRegistry("evidence");
+    const archived = view.recent_auto_archives.find((a) => a.archived);
+    const reopened = view.recent_auto_archives.find((a) => a.reopened_at_ms !== null);
+    if (!archived || !reopened) throw new Error("the evidence fixture lacks recent auto-archives: rebuild it");
+    await openEvidence(page, view);
+    await expect(page.getByTestId("auto-archived")).toHaveCount(view.recent_auto_archives.length);
+    const row = page.locator(`[data-testid="auto-archived"][data-subject="${archived.subject.id}"]`);
+    await expect(row).toContainText(archived.subject.name);
+    await row.getByTestId("auto-archive-reopen").click();
+    await expect
+      .poll(async () => (await calls(page)).filter((c) => c.cmd === "reopen_subject").map((c) => c.args))
+      .toEqual([{ subject: archived.subject.id }]);
+    const again = page.locator(`[data-testid="auto-archived"][data-subject="${reopened.subject.id}"]`);
+    await expect(again.getByTestId("auto-archive-reopened")).toBeVisible();
+    await expect(again.getByTestId("auto-archive-reopen")).toHaveCount(0);
   });
 });

@@ -123,6 +123,11 @@ export function evaluateTriageModel(): Promise<number> {
   return invoke<number>("evaluate_triage_model");
 }
 
+/** Turns auto-archive on, refused unless its gate holds, or off (FR-12). */
+export function setAutoArchive(on: boolean): Promise<void> {
+  return invoke("set_auto_archive", { on });
+}
+
 export function getBoard(): Promise<Board | null> {
   return invoke<Board | null>("get_board");
 }

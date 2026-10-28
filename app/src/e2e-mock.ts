@@ -63,6 +63,8 @@ export function installE2eMock(): void {
           return confirmTriage((args as { items: ConfirmItem[] }).items);
         case "evaluate_triage_model":
           return evaluate();
+        case "set_auto_archive":
+          return setAutoArchive((args as { on: boolean }).on);
         default:
           if (AUTHOR_COMMANDS.includes(cmd)) return author(cmd);
           return null;
@@ -116,6 +118,27 @@ function evaluate(): Promise<number> {
     return Promise.reject(error);
   }
   return Promise.resolve(window.__officinaRegistry?.model.latest_dry_run?.tally.cases ?? 1);
+}
+
+/** Mirrors the collector's answer to `set_auto_archive` (FR-12): turning
+ *  it on is refused unless the view's gate holds; the next view shows the
+ *  switch. */
+async function setAutoArchive(on: boolean): Promise<void> {
+  const current = window.__officinaRegistry;
+  if (!current) return;
+  const gate = current.gates.auto_archive.state;
+  if (on && gate !== "holds") {
+    const error: IpcError = {
+      code: "refused",
+      message: `auto-archive cannot be turned on: its gate does not hold (${gate})`,
+      refusal: null,
+    };
+    return Promise.reject(error);
+  }
+  await window.__officinaPushRegistry?.({
+    ...current,
+    auto_archive: { on, src: "author", at_ms: current.generated_at_ms, reason: null },
+  });
 }
 
 /** Mirrors `authority::approve_catalogue`: approves only the hash the

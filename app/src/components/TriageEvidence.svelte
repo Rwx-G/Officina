@@ -1,10 +1,19 @@
 <script lang="ts">
-  // The Triage panel's evidence on the triage model (FR-10, AD-52, AD-55,
-  // journey 4): the model stays off; a dry run scores it on the author's
-  // own past confirmations, never proposing anything; the panel shows the
-  // latest one, the one running, the calls made and why any was refused.
+  // The Triage panel's evidence (FR-10 to FR-12, AD-50, AD-52, AD-55,
+  // journey 4): per proposal source, how often its finished was flipped;
+  // the auto-archive switch, offered only while its gate holds, and the
+  // subjects it archived lately; the triage model, which stays off, scored
+  // by a dry run on the author's own past confirmations without proposing
+  // anything, with the calls made and why any was refused.
   import type { RegistryStore } from "../lib/registry.svelte";
-  import { DRY_RUN_STOP_TEXT, TRIAGE_REFUSAL_TEXT, usd } from "../lib/registry-text";
+  import {
+    DRY_RUN_STOP_TEXT,
+    GATE_STATE_TEXT,
+    PROPOSAL_SOURCE_TEXT,
+    TRIAGE_REFUSAL_TEXT,
+    usd,
+  } from "../lib/registry-text";
+  import { subjectTarget } from "../lib/registry.svelte";
   import { clock } from "../lib/time";
   import type { CallCounts } from "../lib/generated/CallCounts";
 
@@ -19,6 +28,15 @@
   let running = $derived(model?.dry_run ?? null);
   let nowMs = $derived(view?.generated_at_ms ?? 0);
   let evaluating = $derived(store.inFlight["evaluate"] ?? false);
+  let rates = $derived(view?.rates ?? []);
+  let autoArchive = $derived(view?.auto_archive ?? null);
+  let gate = $derived(view?.gates.auto_archive ?? null);
+  let recent = $derived(view?.recent_auto_archives ?? []);
+  /** The switch can always be turned off; on, only while its gate holds. */
+  let toggleable = $derived(
+    (autoArchive?.on ?? false) || gate?.state === "holds",
+  );
+  let switching = $derived(store.inFlight["auto-archive"] ?? false);
 
   function counted(counts: CallCounts): string {
     const unanswered = counts.unanswered > 0 ? ` (${counts.unanswered} without an answer)` : "";
@@ -28,6 +46,72 @@
 
 {#if model}
   <section class="evidence" data-testid="triage-evidence" aria-labelledby="evidence-title">
+    <h3 id="rates-title">How often each source was wrong</h3>
+    <ul class="rates" aria-labelledby="rates-title">
+      {#each rates as rate (rate.source)}
+        <li data-testid="source-rate" data-source={rate.source}>
+          <span class="source">{PROPOSAL_SOURCE_TEXT[rate.source]}</span>:
+          {#if rate.finished}
+            <span data-testid="rate-finished"
+              >{rate.finished.flipped} of its last {rate.finished.cases} finished proposals flipped</span
+            >;
+          {:else}
+            <span data-testid="rate-finished">no finished proposal yet</span>;
+          {/if}
+          <span data-testid="rate-all">{rate.all.flipped} flipped among its last {rate.all.cases} proposals</span>{#if rate.unsure > 0}<span data-testid="rate-unsure">, {rate.unsure} unsure</span>{/if}.
+        </li>
+      {/each}
+    </ul>
+    {#if autoArchive && gate}
+      <div class="switch">
+        <label>
+          <input
+            type="checkbox"
+            data-testid="auto-archive"
+            checked={autoArchive.on}
+            disabled={!toggleable || switching}
+            onchange={(event) => store.setAutoArchive((event.currentTarget as HTMLInputElement).checked)}
+          />
+          Archive by itself what Claude Code reports done in a filed subject
+        </label>
+        <p class="muted" data-testid="auto-archive-reason">
+          {#if gate.state === "holds"}
+            Offered: none of its last {gate.cases} finished proposals was flipped.
+          {:else}
+            Not offered: {GATE_STATE_TEXT[gate.state]} ({gate.cases} of the {gate.needed} cases it needs).
+          {/if}
+          {#if !autoArchive.on && autoArchive.src === "rules" && autoArchive.reason}
+            It turned itself off: {GATE_STATE_TEXT[autoArchive.reason]}.
+          {/if}
+        </p>
+        {#if store.errors["auto-archive"]}
+          <p class="fault" role="alert" data-testid="auto-archive-error">{store.errors["auto-archive"]}</p>
+        {/if}
+      </div>
+    {/if}
+    {#if recent.length > 0}
+      <ul class="recent" data-testid="recent-auto-archives" aria-label="Archived by itself in the last 7 days">
+        {#each recent as archived (archived.subject.id)}
+          <li data-testid="auto-archived" data-subject={archived.subject.id}>
+            <span class="name">{archived.subject.name}</span>
+            <span class="muted">({archived.project}), archived {clock(archived.archived_at_ms, nowMs)}</span>
+            {#if archived.archived}
+              <button
+                class="tool"
+                data-testid="auto-archive-reopen"
+                disabled={store.inFlight[subjectTarget(archived.subject.id)] ?? false}
+                onclick={() => store.reopen(archived.subject.id)}>Reopen</button
+              >
+            {:else if archived.reopened_at_ms !== null}
+              <span class="muted" data-testid="auto-archive-reopened">reopened {clock(archived.reopened_at_ms, nowMs)}</span>
+            {/if}
+            {#if store.errors[subjectTarget(archived.subject.id)]}
+              <span class="fault" role="alert">{store.errors[subjectTarget(archived.subject.id)]}</span>
+            {/if}
+          </li>
+        {/each}
+      </ul>
+    {/if}
     <div class="head">
       <h3 id="evidence-title">Triage model</h3>
       {#if running}
@@ -135,10 +219,31 @@
     font-weight: 600;
     font-variant-numeric: tabular-nums;
   }
-  .refusals {
+  .refusals,
+  .rates,
+  .recent {
     margin: 4px 0 0;
     padding-left: 18px;
     font-size: 13px;
+  }
+  .rates {
+    margin-bottom: 10px;
+  }
+  .recent li {
+    margin: 2px 0;
+  }
+  .source,
+  .name {
+    font-weight: 600;
+  }
+  .switch {
+    margin: 8px 0;
+    font-size: 13.5px;
+  }
+  .switch label {
+    display: flex;
+    gap: 8px;
+    align-items: center;
   }
   .tool {
     min-height: 36px;

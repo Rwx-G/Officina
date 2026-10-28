@@ -6,6 +6,7 @@ import type { Column } from "./generated/Column";
 import type { ConfirmRefusal } from "./generated/ConfirmRefusal";
 import type { DryRunStop } from "./generated/DryRunStop";
 import type { EndHow } from "./generated/EndHow";
+import type { GateState } from "./generated/GateState";
 import type { ModelVerdict } from "./generated/ModelVerdict";
 import type { NotNeeded } from "./generated/NotNeeded";
 import type { ProposalSource } from "./generated/ProposalSource";
@@ -134,3 +135,15 @@ export const DRY_RUN_STOP_TEXT: Record<DryRunStop, string> = {
 export function usd(microusd: number | null): string {
   return microusd === null ? "unknown" : `USD ${(microusd / 1_000_000).toFixed(4)}`;
 }
+
+/** Why a gate does not hold, or that it does (AD-50, D-69). */
+export const GATE_STATE_TEXT: Record<GateState, string> = {
+  holds: "its evidence holds",
+  not_enough_cases: "not enough confirmed cases yet",
+  too_many_flips: "you flipped too many of its finished proposals",
+  no_dry_run: "no dry run yet",
+  dry_run_too_old: "the latest dry run is too old",
+  dry_run_too_small: "the latest dry run ran too few cases",
+  model_not_better: "the latest dry run did not beat the default",
+  worse_than_default: "the model was right less often than to resume would have been",
+};

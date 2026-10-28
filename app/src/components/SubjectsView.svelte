@@ -89,6 +89,24 @@
       </section>
     {/if}
 
+    {#if view.routine_candidates.length > 0}
+      <section class="block" data-testid="routine-candidates" aria-labelledby="routine-title">
+        <h2 id="routine-title">Routine candidates</h2>
+        <p class="muted">
+          Subjects you archived as routine, which could have run alone: candidates for a later catalogue of work
+          that runs by itself.
+        </p>
+        <ul class="routine">
+          {#each view.routine_candidates as candidate (candidate.subject.id)}
+            <li data-testid="routine-candidate" data-subject={candidate.subject.id}>
+              <span class="name">{candidate.subject.name}</span>
+              <span class="muted">({candidate.project}), archived {clock(candidate.archived_at_ms, nowMs)}</span>
+            </li>
+          {/each}
+        </ul>
+      </section>
+    {/if}
+
     <section class="block" aria-labelledby="subjects-title">
       <h2 id="subjects-title">Subjects</h2>
       {#if view.subjects.length === 0}
@@ -202,6 +220,14 @@
     background: var(--color-surface);
     font-weight: 600;
     cursor: pointer;
+  }
+  .routine {
+    margin: 4px 0 0;
+    padding-left: 18px;
+    font-size: 13.5px;
+  }
+  .routine .name {
+    font-weight: 600;
   }
   .fault {
     color: var(--color-stopped-text);

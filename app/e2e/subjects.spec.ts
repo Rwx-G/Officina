@@ -143,6 +143,23 @@ test.describe("Subjects view", () => {
     await expect.poll(() => authorCalls(page)).toEqual([{ cmd: "reopen_subject", args: { subject: archived.id } }]);
   });
 
+  // Story 3.10 AC 7 (FR-13, D-55): the fixture archived "release notes"
+  // with the routine box and merged "notes copy" away; only the first is a
+  // candidate.
+  test("routine subjects are listed as candidates", async ({ page }) => {
+    const view = loadRegistry("subjects");
+    const candidates = view.routine_candidates;
+    expect(candidates.map((c) => c.subject.name)).toEqual(["release notes"]);
+    await openSubjects(page, view);
+    const shown = page.getByTestId("routine-candidate");
+    await expect(shown).toHaveCount(candidates.length);
+    for (const [i, candidate] of candidates.entries()) {
+      await expect(shown.nth(i)).toHaveAttribute("data-subject", String(candidate.subject.id));
+      await expect(shown.nth(i)).toContainText(candidate.subject.name);
+      await expect(shown.nth(i)).toContainText(candidate.project);
+    }
+  });
+
   test("each action sends its command with the shown arguments", async ({ page }) => {
     const view = loadRegistry("subjects");
     await openSubjects(page, view);
