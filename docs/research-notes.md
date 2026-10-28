@@ -300,6 +300,35 @@ Windows 11.
   `--version`, the triage call) maintain their own state like any session.
   The zero-write tests run against the fake claude.
 
+## E18. When a hook fails
+
+- **Documented** (hooks reference, https://code.claude.com/docs/en/hooks,
+  and changelog 2.1.295, https://code.claude.com/docs/en/changelog, read
+  2026-10-28). On most events a hook that fails or times out does not
+  stop the action. On `PreToolUse` a timed-out hook "doesn't block the tool
+  call", and "don't count on a stalled hook to act as a gate".
+- A failure is any of these:
+  - the hook cannot start;
+  - it exits with a code other than 0 or 2, even after printing JSON that
+    allows the call;
+  - it reaches its `timeout` (default 600 s for a `command` hook), which
+    cancels it and discards its output;
+  - its JSON cannot be parsed or fails validation.
+- Exit 0 with no output is no decision: the normal permission flow applies.
+  Exit 2 blocks a `PreToolUse` call, even with `permissionDecision: "allow"`
+  in the JSON.
+- `"onFailure"`, on a `command` or `http` hook entry (the handler object,
+  next to `type` and `command`, not the matcher group), takes `"continue"`,
+  the default, or `"block"`. It requires Claude Code 2.1.295 or later. With
+  `"block"` a failure does what exit 2 does on that event, so on
+  `PreToolUse` it blocks the call; on `PermissionRequest` it denies. It has
+  no effect on `Stop`, `SubagentStop`, `TaskCompleted`, `TeammateIdle` or
+  background (`async`) hooks.
+- Consequence (D-452): the gate's entry carries `"onFailure": "block"`,
+  and the hook itself prints a deny, never exit 2, on its own fault in a
+  guarded project. The owner's 2.1.312 honours the field. Not verified on
+  the workstation: a crash or timeout of the real hook under Claude Code.
+
 ## E7. Configuration directory
 
 - **Documented.** `CLAUDE_CONFIG_DIR` redirects settings, session history and

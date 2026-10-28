@@ -25,7 +25,8 @@ version: v0.2
 #   2.4 AC 18, a raw ssh denied in an interactive bypassPermissions session;
 #   2.10 AC 10, the Delegation metric: a WSL ansible-playbook check then apply run by a session start to finish;
 #   2.11 AC 18, an HTTP action with a stored credential against a real https endpoint whose CA only the Windows store trusts;
-#   2.12 AC 6, a PowerShell call denied in an interactive session with the PowerShell tool on.
+#   2.12 AC 6, a PowerShell call denied in an interactive session with the PowerShell tool on;
+#   2.17 AC 7, the hooks block pasted again so the gate entry carries onFailure "block", and doctor ok.
 # Closed on use after those checks and a week of real use at work (P-7).
 stories:
   - {id: "2.1", file: story-2.1-relay-core.md, slice: A, status: review}
@@ -44,6 +45,7 @@ stories:
   - {id: "2.14", file: story-2.14-relay-hardening-after-the-audits.md, slice: A, status: review}
   - {id: "2.15", file: story-2.15-quality-debt-and-dependencies.md, slice: A, status: review}
   - {id: "2.16", file: story-2.16-close-v0.2.md, slice: A, status: review}
+  - {id: "2.17", file: story-2.17-gate-fails-closed.md, slice: A, status: in-progress}
 ---
 epic: 3
 version: v0.3

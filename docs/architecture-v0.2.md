@@ -137,6 +137,8 @@ In-process work (payload parse, two small reads, phase 1 parse, lexing) under 3 
 
 **Fail open:** an internal error or panic gives no decision and exit 0, like every hook path (AD-16). The gate is containment; `officina run` is the authority and fails closed. Gate errors are journaled as `gate_error` and shown in the Relay view and doctor.
 
+*Amendment, 2026-10-28 (story 2.17, D-452):* the gate fails closed where it guards. A panic while deciding falls back to locating the call alone: a call in a guarded project, or one the fallback cannot locate, is denied with a reason that says the gate failed; a call outside every guarded project still gets no decision. The hook still exits 0 and never 2. Failures the process cannot catch (it does not start, it outlives its `timeout`, it dies) are Claude Code's to handle: doctor prints the `PreToolUse` entry with `onFailure: "block"` (Claude Code 2.1.295 and later), fails on an installed entry without it, and fails on an older Claude Code.
+
 ### AD-29: `officina run`
 
 `officina run <action> [name=value ...] [--wait <s>]` and `officina run --list` (read-only: the project's approved actions and allowed values). Tokens split at the first `=`; a token without `=`, a duplicate or no action is a usage error.
