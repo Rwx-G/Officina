@@ -9,13 +9,15 @@ import SubjectPicker, { type PickerChoice } from "./SubjectPicker.svelte";
 import TriagePanel from "./TriagePanel.svelte";
 import TriageRow from "./TriageRow.svelte";
 import { BoardStore } from "../lib/board.svelte";
+import { HALO_BREATHING_MS, HALO_HALF_MS, haloMemo, haloTiming } from "../lib/halo";
 import * as ipc from "../lib/ipc";
 import { RegistryStore, refusalText } from "../lib/registry.svelte";
-import { AUTHOR_REFUSAL_TEXT, REASON_TEXT } from "../lib/registry-text";
+import { AUTHOR_REFUSAL_TEXT, LIVE_STATE_TEXT, REASON_TEXT } from "../lib/registry-text";
 import { RELAY_TOGGLE_TEXT } from "../lib/relay-text";
 import type { ApprovalView } from "../lib/generated/ApprovalView";
 import type { AuthorRefusal } from "../lib/generated/AuthorRefusal";
 import type { Card } from "../lib/generated/Card";
+import type { Column } from "../lib/generated/Column";
 import type { IpcError } from "../lib/generated/IpcError";
 import type { ReasonCode } from "../lib/generated/ReasonCode";
 import type { RegistryView } from "../lib/generated/RegistryView";
@@ -102,6 +104,75 @@ describe("SessionCard", () => {
       store: store(),
     });
     expect(getByTestId("badge").textContent).toBe("unknown");
+  });
+
+  describe("halo", () => {
+    afterEach(() => {
+      haloMemo.retain([]);
+      vi.restoreAllMocks();
+    });
+
+    function haloStyle(container: HTMLElement): { delay: string; count: string; half: string } {
+      const article = container.querySelector<HTMLElement>("[data-testid=card]")!;
+      return {
+        delay: article.style.getPropertyValue("--halo-delay"),
+        count: article.style.getPropertyValue("--halo-count"),
+        half: article.style.getPropertyValue("--halo-half"),
+      };
+    }
+
+    it("a Needs you card gets its halo timing once", async () => {
+      const now = vi.spyOn(Date, "now").mockReturnValue(NOW);
+      const waiting = card({ last_event_at_ms: NOW - 30_000 });
+      const s = store();
+      const { container, rerender } = render(SessionCard, { card: waiting, store: s });
+      const timing = haloTiming(NOW - 30_000, NOW);
+      expect(timing.iterations).toBeGreaterThan(0);
+      expect(haloStyle(container)).toEqual({
+        delay: `${timing.startMs - NOW}ms`,
+        count: String(timing.iterations),
+        half: `${HALO_HALF_MS}ms`,
+      });
+      const written = haloStyle(container);
+      const reads = now.mock.calls.length;
+      // A later board with the same wait: nothing rewritten, no clock read.
+      now.mockReturnValue(NOW + 25_000);
+      await rerender({ card: { ...waiting, waiting_for: "question" }, store: s });
+      expect(haloStyle(container)).toEqual(written);
+      expect(now).toHaveBeenCalledTimes(reads);
+    });
+
+    it("cards outside Needs you get no halo timing", () => {
+      vi.spyOn(Date, "now").mockReturnValue(NOW);
+      // Every column, from an exhaustive record over the generated union.
+      const others = (Object.keys(LIVE_STATE_TEXT) as Column[]).filter((column) => column !== "needs_you");
+      expect(others.length).toBeGreaterThan(0);
+      for (const column of others) {
+        const { container } = render(SessionCard, { card: card({ column, waiting_for: null }), store: store() });
+        expect(haloStyle(container), column).toEqual({ delay: "", count: "", half: "" });
+        cleanup();
+      }
+    });
+
+    it("a waiting card without times breathes from first sight", () => {
+      vi.spyOn(Date, "now").mockReturnValue(NOW);
+      const { container } = render(SessionCard, {
+        card: card({ last_event_at_ms: null, started_at_ms: null }),
+        store: store(),
+      });
+      const timing = haloTiming(NOW, NOW);
+      expect(haloStyle(container).count).toBe(String(timing.iterations));
+      expect(haloStyle(container).delay).toBe(`${timing.startMs - NOW}ms`);
+    });
+
+    it("a waiting card older than the breathing time is steady", () => {
+      vi.spyOn(Date, "now").mockReturnValue(NOW);
+      const { container } = render(SessionCard, {
+        card: card({ last_event_at_ms: null, started_at_ms: NOW - HALO_BREATHING_MS }),
+        store: store(),
+      });
+      expect(haloStyle(container).count).toBe("0");
+    });
   });
 });
 

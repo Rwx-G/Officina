@@ -3,6 +3,7 @@
 import type { Board } from "./generated/Board";
 import type { Card } from "./generated/Card";
 import type { FocusOutcome } from "./generated/FocusOutcome";
+import { haloMemo } from "./halo";
 import * as ipc from "./ipc";
 
 export const OUTCOME_VISIBLE_MS = 10_000;
@@ -54,11 +55,11 @@ export class BoardStore {
 
   async start(): Promise<() => void> {
     const unlisten = await ipc.onBoard((board) => {
-      this.board = board;
+      this.#show(board);
       this.nowMs = Date.now();
     });
     const initial = await ipc.getBoard();
-    if (initial && !this.board) this.board = initial;
+    if (initial && !this.board) this.#show(initial);
     const clock = setInterval(() => {
       this.nowMs = Date.now();
       this.dropExpiredOutcomes();
@@ -69,6 +70,13 @@ export class BoardStore {
       for (const timer of Object.values(this.#timers)) clearTimeout(timer);
       this.#timers = {};
     };
+  }
+
+  /** Shows `board`, and forgets the halo timings of the sessions it no
+   *  longer has waiting: one that waits again later breathes again. */
+  #show(board: Board): void {
+    haloMemo.retain(board.columns.needs_you.map((card) => card.key));
+    this.board = board;
   }
 
   /** Drops the outcomes shown longer than `OUTCOME_VISIBLE_MS`; leaves the

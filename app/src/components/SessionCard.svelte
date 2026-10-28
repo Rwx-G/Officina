@@ -2,6 +2,7 @@
   import type { Card } from "../lib/generated/Card";
   import type { BoardStore } from "../lib/board.svelte";
   import { projectColor } from "../lib/colors";
+  import { breathe } from "../lib/halo";
   import { ago, duration } from "../lib/time";
   import StableLabel from "./StableLabel.svelte";
 
@@ -36,6 +37,7 @@
     }
   });
   let since = $derived(card.last_event_at_ms ?? card.started_at_ms);
+  let halo = $derived(card.column === "needs_you" ? { key: card.key, enteredAt: since } : null);
 </script>
 
 <article
@@ -43,6 +45,7 @@
   data-testid="card"
   data-key={card.key}
   style:--project={projectColor(card.project.color)}
+  use:breathe={halo}
 >
   <button
     class="main"
@@ -100,21 +103,39 @@
 
 <style>
   .card {
+    --edge: 1px;
+    --stripe: 6px;
     position: relative;
     background: var(--color-surface);
-    border: 1px solid var(--color-border);
-    border-left: 6px solid var(--project);
+    border: var(--edge) solid var(--color-border);
+    border-left: var(--stripe) solid var(--project);
     border-radius: var(--radius-card);
     padding: 4px;
   }
   .card.needs_you {
     border-color: var(--color-attention-border);
     border-left-color: var(--project);
-    animation: halo-breath 2.4s ease-in-out infinite;
+  }
+  /* The ring around the card's border box, on its own layer: only its
+     opacity animates (AD-65), and only once `breathe` has set its count. */
+  .card.needs_you::after {
+    content: "";
+    position: absolute;
+    inset: calc(-1 * var(--edge));
+    left: calc(-1 * var(--stripe));
+    border-radius: var(--radius-card);
+    box-shadow:
+      0 0 0 3px var(--color-attention),
+      0 0 0 7px color-mix(in srgb, var(--color-attention) 35%, transparent);
+    opacity: var(--halo-rest);
+    will-change: opacity;
+    pointer-events: none;
+    animation: halo-breathe var(--halo-half) ease-in-out var(--halo-delay) var(--halo-count) alternate;
   }
   .card.your_turn {
-    border: 2px solid var(--color-attention);
-    border-left: 6px solid var(--project);
+    --edge: 2px;
+    border: var(--edge) solid var(--color-attention);
+    border-left: var(--stripe) solid var(--project);
   }
   .card.done,
   .card.to_resume {

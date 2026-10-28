@@ -56,7 +56,7 @@ Claude Code updates itself, so Officina checks, for each version it runs under, 
 
 | Column | Meaning |
 |---|---|
-| **Needs you** | A decision blocks the session: a permission prompt, a question, a dialog. Amber, numbered 1 to 9 for the keyboard. |
+| **Needs you** | A decision blocks the session: a permission prompt, a question, a dialog. Amber, numbered 1 to 9 for the keyboard. A new wait's amber ring breathes for two minutes, then stays steady; with reduced motion turned on in Windows, it is steady from the start. |
 | **Your turn** | An interactive session finished its turn and waits for your next message. Even when it asked you something in plain text, Claude Code reports it as idle, so it lands here, never in Done. |
 | **Working** | Claude is on it. A session whose state Officina cannot tell shows here with an `unknown` badge. |
 | **To resume** | Ended, stopped or interrupted in the last 24 hours. |

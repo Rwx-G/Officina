@@ -278,6 +278,12 @@ project uses [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- The Needs you halo (v0.4) breathes for two minutes from the start of the
+  wait, every halo in one phase shared with the clock, then stays steady; a
+  wait already older at first sight is steady at once. It animates opacity
+  only, so it costs no style work per frame, keeps its phase and its end
+  when the board is shown again, and stops under the system's reduced
+  motion setting.
 - The board contract (`officina board --json`, v0.4) is schema 4: it lists
   the floor's projects in file order (`floor_projects`, each with its colour
   and priority, as a card inside it carries them), carries the alert

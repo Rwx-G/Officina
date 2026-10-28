@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { BoardStore, COPIED_VISIBLE_MS, OUTCOME_VISIBLE_MS } from "./board.svelte";
 import { startAll } from "./lifecycle";
+import { haloMemo } from "./halo";
+import * as ipc from "./ipc";
+import { fixturesOf } from "../../e2e/fixture-index";
+import type { Board } from "./generated/Board";
 import type { Card } from "./generated/Card";
 
 const unlisten = vi.fn();
@@ -81,6 +85,68 @@ describe("BoardStore timers", () => {
     expect(store.copied).toBeNull();
     stop();
     vi.unstubAllGlobals();
+  });
+});
+
+describe("BoardStore halo timings", () => {
+  afterEach(() => {
+    haloMemo.retain([]);
+    vi.restoreAllMocks();
+  });
+
+  /** A real board (D-181) with at least two sessions waiting. */
+  function boardWithWaits(): Board {
+    const found = fixturesOf<Board>("board").find(({ data }) => data.columns.needs_you.length >= 2);
+    expect(found, "a fixture board with two Needs you cards").toBeDefined();
+    return found!.data;
+  }
+
+  it("a board drops the halo timings of sessions no longer waiting", async () => {
+    const board = boardWithWaits();
+    const [staying, leaving] = board.columns.needs_you;
+    let push: (board: Board) => void = () => {};
+    vi.mocked(ipc.onBoard).mockImplementationOnce(async (handler) => {
+      push = handler;
+      return unlisten;
+    });
+    vi.mocked(ipc.getBoard).mockResolvedValueOnce(board);
+    const now = vi.spyOn(Date, "now").mockReturnValue(board.generated_at_ms);
+    const store = new BoardStore();
+    const stop = await store.start();
+    const entered = (c: Card) => c.last_event_at_ms ?? c.started_at_ms;
+    const timings = [staying!, leaving!].map((c) => haloMemo.timing(c.key, entered(c)));
+
+    // The next board: one session answered, now Working.
+    const next: Board = {
+      ...board,
+      columns: {
+        ...board.columns,
+        needs_you: board.columns.needs_you.filter((c) => c.key !== leaving!.key),
+        working: [...board.columns.working, { ...leaving!, column: "working" }],
+      },
+    };
+    now.mockReturnValue(board.generated_at_ms + 60_000);
+    push(next);
+    const reads = now.mock.calls.length;
+    expect(haloMemo.timing(staying!.key, entered(staying!))).toEqual(timings[0]);
+    expect(now).toHaveBeenCalledTimes(reads);
+    // The one that left is a new wait if it comes back: seen anew.
+    haloMemo.timing(leaving!.key, entered(leaving!));
+    expect(now).toHaveBeenCalledTimes(reads + 1);
+    stop();
+  });
+
+  it("the first board keeps the timings of what it shows waiting only", async () => {
+    const board = boardWithWaits();
+    vi.mocked(ipc.getBoard).mockResolvedValueOnce(board);
+    const now = vi.spyOn(Date, "now").mockReturnValue(board.generated_at_ms);
+    haloMemo.timing("pid:999:999", null);
+    const store = new BoardStore();
+    const stop = await store.start();
+    const reads = now.mock.calls.length;
+    haloMemo.timing("pid:999:999", null);
+    expect(now).toHaveBeenCalledTimes(reads + 1);
+    stop();
   });
 });
 

@@ -30,6 +30,9 @@
   --radius-card: 24px;
   --radius-pill: 999px;
   --target-min: 44px;
+  /* The halo's opacity at rest: after breathing, and from the start under
+     reduced motion. */
+  --halo-rest: 0.8;
 
   font-family: "Plus Jakarta Sans", system-ui, sans-serif;
   font-size: 15px;
@@ -67,18 +70,23 @@ button {
   outline-offset: 2px;
 }
 
-@keyframes halo-breath {
-  0%,
-  100% {
-    box-shadow: 0 0 0 3px var(--color-attention);
+/* The attention halo breathes on opacity only, which the compositor runs
+   without a style recalculation (AD-65, FR-9); `lib/halo.ts` sets its
+   delay and count. It ends on `to`, the resting opacity. */
+@keyframes halo-breathe {
+  from {
+    opacity: 0.35;
   }
-  50% {
-    box-shadow: 0 0 0 7px rgb(245 183 49 / 0.35);
+  to {
+    opacity: var(--halo-rest);
   }
 }
 
+/* The universal selector alone matches no pseudo-element (D-180). */
 @media (prefers-reduced-motion: reduce) {
-  * {
+  *,
+  *::before,
+  *::after {
     animation: none !important;
     transition: none !important;
   }
