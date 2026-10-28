@@ -5,7 +5,9 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { PROJECT_COLORS } from "./lib/colors";
+import { PAINTS } from "./lib/scene/furniture";
 import { TARGET_CSS_MIN } from "./lib/scene/geometry";
+import { LOOKS } from "./lib/scene/rig";
 
 // Read from disk, relative to the app folder Vitest runs in: it replaces
 // imported CSS, `?raw` included, by nothing, and jsdom's module URLs are not
@@ -44,7 +46,34 @@ const LIGHT_PAIRS: [string, string, number][] = [
   ["--color-on-alert", "--color-alert", 4.5],
   // The alert colour as a border, a stripe and a tag on the background.
   ["--color-alert", "--color-bg", 3],
+  // The window's roles the scene draws with (the prototype's `pairs`).
+  ["--color-text", "--color-bg", 7],
+  ["--color-text-muted", "--color-bg", 4.5],
+  ["--color-text", "--color-surface", 7],
+  ["--color-text-muted", "--color-surface", 4.5],
+  ["--color-attention-text", "--color-attention", 7],
+  ["--color-attention-border", "--color-bg", 3],
+  ["--color-working", "--color-bg", 3],
+  ["--color-working", "--color-surface", 3],
+  // Plaque text: the page's background on an ink pill.
+  ["--color-bg", "--color-text", 7],
+  // The figures on what they stand or sit on (the prototype v2's
+  // `scenePairs` and build.mjs): tunic and trousers on the room floors,
+  // the rugs, the sofas and the alert room's floor.
+  ["--figure-tunic", "--scene-room", 3],
+  ["--figure-legs", "--scene-room", 3],
+  ["--figure-legs", "--scene-rug-2", 3],
+  ["--figure-tunic", "--scene-alert-floor", 3],
+  ["--figure-tunic", "--scene-sofa-t", 3],
+  ["--figure-tunic", "--scene-rug", 3],
 ];
+
+/** The tokens of a family `--name-0`, `--name-1`, ... in index order. */
+function family(tokens: Map<string, string>, name: string): string[] {
+  const out: string[] = [];
+  for (let i = 0; tokens.has(`--${name}-${i}`); i++) out.push(tokens.get(`--${name}-${i}`)!);
+  return out;
+}
 
 describe("tokens", () => {
   it("every role pair meets its contrast target in the light theme", () => {
@@ -55,6 +84,32 @@ describe("tokens", () => {
       expect(b, bg).toMatch(/^#[0-9a-f]{6}$/i);
       expect(contrast(a!, b!), `${fg} on ${bg}`).toBeGreaterThanOrEqual(target);
     }
+  });
+
+  it("every project colour meets 3:1 on the surface", () => {
+    const tokens = rootTokens(css);
+    for (const [colour, value] of Object.entries(PROJECT_COLORS)) {
+      const name = /^var\((--[\w-]+)\)$/.exec(value)![1]!;
+      expect(contrast(tokens.get(name)!, tokens.get("--color-surface")!), colour).toBeGreaterThanOrEqual(3);
+    }
+  });
+
+  it("the allowed looks are the skin and hair pairs at 3:1 or more", () => {
+    const tokens = rootTokens(css);
+    const skins = family(tokens, "skin");
+    const hairs = family(tokens, "hair");
+    expect(skins.length).toBeGreaterThan(0);
+    expect(hairs.length).toBeGreaterThan(0);
+    const pairs: [number, number][] = [];
+    skins.forEach((skin, s) => hairs.forEach((hair, h) => contrast(skin, hair) >= 3 && pairs.push([s, h])));
+    expect(LOOKS).toEqual(pairs);
+    // Every skin keeps at least one hair colour, so no skin is left out.
+    for (let s = 0; s < skins.length; s++) expect(pairs.some(([skin]) => skin === s), `skin ${s}`).toBe(true);
+  });
+
+  it("every paint the scene draws with is a token of app.css", () => {
+    const tokens = rootTokens(css);
+    for (const name of PAINTS) expect(tokens.has(`--${name}`), name).toBe(true);
   });
 
   it("every project colour has a token", () => {

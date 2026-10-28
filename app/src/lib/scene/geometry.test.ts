@@ -5,6 +5,7 @@ import {
   COLUMN_COUNTS,
   MAX_COLUMNS,
   MAX_OFFICES,
+  MAX_SCALE,
   MIN_SCALE,
   OFFICE_CELLS,
   SHARED_CELLS,
@@ -15,6 +16,7 @@ import {
   columnsFor,
   entranceSignRect,
   figureTarget,
+  fitScale,
   intersects,
   moreOfficesTarget,
   officeCells,
@@ -151,4 +153,26 @@ describe("geometry", () => {
       });
     });
   }
+});
+
+describe("scale", () => {
+  it("fits the canvas to the area, within MIN_SCALE and MAX_SCALE, never over the area", () => {
+    for (const columns of COLUMN_COUNTS) {
+      const size = canvas(columns);
+      // At the minimum area and below it, the minimum; far above, the maximum.
+      expect(fitScale({ w: size.w * MIN_SCALE, h: size.h * MIN_SCALE }, size)).toBe(MIN_SCALE);
+      expect(fitScale({ w: 100, h: 100 }, size)).toBe(MIN_SCALE);
+      expect(fitScale({ w: size.w * 10, h: size.h * 10 }, size)).toBe(MAX_SCALE);
+      // In between, the smaller ratio, and the scene fits the area.
+      const areas: [number, number][] = [[size.w * 1.2, size.h * 1.05], [size.w * 1.01, size.h * 1.3], [1890.5, 928]];
+      for (const [w, h] of areas) {
+        const s = fitScale({ w, h }, size);
+        if (s > MIN_SCALE && s < MAX_SCALE) {
+          expect(s).toBeLessThanOrEqual(Math.min(w / size.w, h / size.h));
+          expect(size.w * s).toBeLessThanOrEqual(w);
+          expect(size.h * s).toBeLessThanOrEqual(h);
+        }
+      }
+    }
+  });
 });

@@ -31,6 +31,67 @@
   --color-stopped-surface: #f6e3dc;
   --color-stopped-text: #8a2b14;
 
+  /* The scene's materials (prototype v2, light): what the floor, the
+     furniture and the figures are drawn with. */
+  --scene-ground: #efe5d2;
+  --scene-slab-l: #e2d6bf;
+  --scene-slab-r: #d3c1a1;
+  --scene-room: #fffdf8;
+  --scene-room-edge: #e2d6bf;
+  --scene-room-vacant: #f4ecdd;
+  --scene-alert-floor: #fbe6dd;
+  --scene-wall-l: #eadfcb;
+  --scene-wall-r: #f5ede0;
+  --scene-wall-top: #d6c5a6;
+  --scene-skirting: #e2d6bf;
+  --scene-window: #e4ecf0;
+  --scene-board: #ffffff;
+  --scene-part-t: #dccbad;
+  --scene-part-l: #ede3d1;
+  --scene-part-r: #e2d5bd;
+  --scene-wood-t: #ebddc3;
+  --scene-wood-l: #dccaa8;
+  --scene-wood-r: #cdb68f;
+  --scene-metal: #4a4136;
+  --scene-metal-2: #5c5244;
+  --scene-screen-off: #cfc2aa;
+  --scene-screen-line: #b9d0e2;
+  --scene-chair: #8e8270;
+  --scene-chair-2: #776b5a;
+  --scene-sofa-t: #a9bfb8;
+  --scene-sofa-l: #95ada5;
+  --scene-sofa-r: #839a93;
+  --scene-rug: #e3eaee;
+  --scene-rug-2: #efe3cc;
+  --scene-leaf: #8fa58a;
+  --scene-leaf-2: #7a9275;
+  --scene-leaf-3: #a9c09e;
+  --scene-pot: #c98a66;
+  --scene-pot-shade: #a9704f;
+  --scene-pot-rim: #d9a383;
+  --scene-soil: #5c4636;
+  --scene-ceramic: #ede6da;
+  --scene-ceramic-shade: #d3c8b6;
+  --scene-lamp: #fff1c9;
+  --scene-shadow: rgb(42 36 28 / 0.1);
+  --figure-tunic: #625849;
+  --figure-tunic-shade: #4e4538;
+  --figure-legs: #3e372e;
+  --figure-shoe: #211c17;
+  --figure-eye: #211a14;
+  --figure-rim: rgb(255 253 248 / 0);
+  /* People, the same in both themes. A look pairs a skin and a hair colour
+     at 3:1 or more, the back-of-head cue (D-478): tokens.test.ts computes
+     the pairs and holds lib/scene/rig.ts's LOOKS to them. */
+  --skin-0: #f2d3b5;
+  --skin-1: #e3b48e;
+  --skin-2: #c99068;
+  --skin-3: #a97350;
+  --skin-4: #8c5a3a;
+  --hair-0: #14100d;
+  --hair-1: #2b1a11;
+  --hair-2: #3a2216;
+
   --radius-card: 24px;
   --radius-pill: 999px;
   --target-min: 44px;

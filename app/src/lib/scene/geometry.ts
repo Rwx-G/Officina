@@ -153,6 +153,18 @@ export const MAX_SCALE = 1.5;
  *  rounding of the division, which is exact in real numbers. */
 export const TARGET_MIN = Math.ceil(TARGET_CSS_MIN / MIN_SCALE - 1e-9);
 
+/** Steps per unit the fitted scale is rounded down to, so the scene never
+ *  overflows its area by a rounding error. */
+export const SCALE_STEPS = 10_000;
+
+/** The scene's scale in a sessions area of `area` CSS px (AD-61): the
+ *  canvas fitted to the area, then held within `MIN_SCALE` and
+ *  `MAX_SCALE`; below the minimum area the area scrolls. */
+export function fitScale(area: { w: number; h: number }, size: { w: number; h: number }): number {
+  const fitted = Math.floor(Math.min(area.w / size.w, area.h / size.h) * SCALE_STEPS) / SCALE_STEPS;
+  return Math.min(MAX_SCALE, Math.max(MIN_SCALE, fitted));
+}
+
 // ------------------------------------------------------------ plaques
 
 /** A plaque: a pill whose bottom sits `lift` px above its anchor, capped
