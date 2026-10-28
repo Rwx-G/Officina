@@ -229,17 +229,15 @@ Run `officina doctor` after each floor edit. Once the floor uses the relay, it c
 - that each action's program resolves: a `native` program is an existing file; for a WSL action the system's own `wsl.exe` exists and, in the action's distro, `/usr/bin/env`, `/usr/bin/timeout` and the program are executable;
 - warnings: an action whose timeout, plus the longest wait of a `human` action, can outlive the Bash tool's 10-minute cap; an `after-check` action whose check its project does not list (it could never run); a project with `after-check` actions outside a git work tree (only the parameters bind); unreadable journal lines and gate errors of the last 24 hours.
 
-A missing `PreToolUse` registration while a project is guarded, a program that does not resolve and a relay floor that cannot be read are failures (exit 1); everything else warns. The gate runs inside `officina hook` as a `PreToolUse` hook on `Bash`; once the floor guards a project, doctor adds it to the block to paste:
+A missing `PreToolUse` registration while a project is guarded, a program that does not resolve and a relay floor that cannot be read are failures (exit 1); everything else warns. The gate runs inside `officina hook` as a `PreToolUse` hook whose matcher names every shell tool of `SHELL_TOOLS`, the constant in the relay's core: once the floor guards a project, doctor adds that registration to the block to paste, and names the tools a matcher you merged earlier leaves out.
 
-```json
-"PreToolUse": [{ "matcher": "Bash", "hooks": [{ "type": "command", "command": "\"C:/path/to/officina.exe\" hook", "timeout": 5 }] }]
-```
-
-For each guarded project, doctor also prints a paragraph to paste into that repository's `CLAUDE.md`, generated from the approved catalogue: use `officina run` for the listed actions, `officina run --list` to see them and their values, the Bash tool's longest timeout for relay calls, and read a refusal's reason before retrying. With nothing approved it says the catalogue awaits your approval and lists no action. Officina never writes it: paste it again after approving a change.
+For each guarded project, doctor also prints a paragraph to paste into that repository's `CLAUDE.md`, generated from the approved catalogue: use `officina run` for the listed actions, `officina run --list` to see them and their values, the Bash tool's longest timeout for relay calls, read a refusal's reason before retrying, and run commands with the tools the gate reads. With nothing approved it says the catalogue awaits your approval and lists no action. Officina never writes it: paste it again after approving a change.
 
 ### The gate
 
-In a guarded repository the gate reads each `Bash` command and refuses one that would start a guarded program, even through quotes, wrappers, `bash -c`, an interpreter one-liner or a command substitution, along with a command name built at run time, a PowerShell encoded command, a redirection of Officina's home, and any mention of an `OFFICINA_` setting or of Officina's own files. A refusal holds in every permission mode, bypass included: the session sees why, and the actions it may run instead.
+In a guarded repository the gate reads the command of every call to a shell tool it lexes (`SHELL_TOOLS` gives each tool its rule) and refuses one that would start a guarded program, even through quotes, wrappers, `bash -c`, an interpreter one-liner or a command substitution, along with a command name built at run time, a PowerShell encoded command, a redirection of Officina's home, and any mention of an `OFFICINA_` setting or of Officina's own files. A refusal holds in every permission mode, bypass included: the session sees why, and the actions it may run instead.
+
+A shell tool whose language Officina does not read is refused whole in a guarded project instead: that is the PowerShell tool, which Claude Code turns on by default on Windows for claude.ai accounts. Sessions there keep the Bash tool, and the `CLAUDE.md` paragraph doctor prints tells them to use it. Free projects and undeclared folders keep every tool.
 
 A repository counts as guarded when the current floor or the approved catalogue says so, so a session cannot lift containment by editing the floor, and when it is the session's root or the shell's current folder, so `cd ..` does not leave it. If the approved catalogue or the floor cannot be read, the gate gets stricter, not looser. Each refusal, and each such fault, is one journal line, with the first 280 characters of the command unless excerpts are off.
 
@@ -282,7 +280,7 @@ The first half of v0.2 is usable alone: declare a catalogue, approve it in the w
 |---|---|
 | `officina doctor` | check the setup, the relay included, and print what to paste; exit 1 when something required is missing |
 | `officina board --json` | print the board once (exit 3 when the session list could not be refreshed) |
-| `officina hook` | record one hook payload from stdin, or answer the relay gate for a `Bash` call (run by Claude Code) |
+| `officina hook` | record one hook payload from stdin, or answer the relay gate for a shell tool's call (run by Claude Code) |
 | `officina quota write [--tee]` | record the rate limits from a statusline payload (run by your statusline) |
 | `officina run <action> [name=value ...]` | run an approved relay action from its project (run by sessions) |
 | `officina run --list` | list the actions of the current folder's project |

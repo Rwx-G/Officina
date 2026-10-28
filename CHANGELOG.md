@@ -57,7 +57,7 @@ project uses [Semantic Versioning](https://semver.org/).
   the diff to it, the untracked files git does not ignore and the tracked
   files flagged to hide their edits (by content up to 1 MiB, by size beyond).
 - Relay gate in `officina hook`: in a guarded repository, Claude Code's
-  `PreToolUse` for `Bash` gets a deny that holds in every permission mode,
+  `PreToolUse` for a shell tool gets a deny that holds in every permission mode,
   bypass included, for a guarded program (remote shells and copies, Ansible,
   WSL and the Windows distro launchers), even through quotes, wrappers,
   `bash -c`, interpreter one-liners and command substitutions, for a command
@@ -65,7 +65,8 @@ project uses [Semantic Versioning](https://semver.org/).
   Officina's home, and any mention of an `OFFICINA_` setting or of
   Officina's own files; the reason lists the actions the session may run
   instead. Elsewhere it prints nothing. It costs a few milliseconds per
-  `Bash` call. Its limits as a text match are recorded in the architecture.
+  shell tool call. Its limits as a text match are recorded in the
+  architecture.
 - Stop and resume the relay from the window's header: while stopped,
   `officina run` refuses every action and a terracotta "relay stopped" chip
   and a board banner say so; the gate keeps guarding.
@@ -98,13 +99,14 @@ project uses [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
-- `officina hook` also answers `PreToolUse` for `Bash`, as the relay gate;
+- `officina hook` also answers `PreToolUse` for the shell tools, as the
+  relay gate;
   every other event is recorded as before, and `PreToolUse` payloads are
   never written to the event buffer.
-- `officina doctor` requires the `PreToolUse` hook, matcher `Bash` only,
-  once the relay guards a project, and prints it in the block to paste;
-  workstations without one keep the five v0.1 hooks and pay nothing per
-  `Bash` call. A program of the catalogue that does not resolve, or a relay
+- `officina doctor` requires the `PreToolUse` hook, its matcher naming the
+  shell tools only, once the relay guards a project, and prints it in the
+  block to paste; workstations without one keep the five v0.1 hooks and pay
+  nothing per shell tool call. A program of the catalogue that does not resolve, or a relay
   floor that cannot be read, also makes it exit 1.
 - Floor files accept schema 2, where a project without `autonomy` is
   guarded. A schema 1 floor still loads with every project `free`, and the
@@ -127,6 +129,13 @@ project uses [Semantic Versioning](https://semver.org/).
   `.bat` or `.cmd` program is refused. WSL actions start the system
   directory's `wsl.exe`, never one from `PATH`, with `--exec` and without
   `WSLENV`.
+- The relay gate covers every Claude Code tool that runs a shell command,
+  not only Bash: a Monitor command is read like a Bash one, and the
+  PowerShell tool, which Claude Code turns on by default on Windows, is
+  refused whole in a guarded project, where sessions keep the Bash tool.
+  The `PreToolUse` matcher `officina doctor` prints and requires names
+  every one of them, and doctor names the tools an earlier matcher leaves
+  out.
 - The gate gets stricter, never looser, when the approved catalogue or the
   floor cannot be read, and a repository stays guarded when either says so,
   so editing the floor or `cd ..` does not lift containment.

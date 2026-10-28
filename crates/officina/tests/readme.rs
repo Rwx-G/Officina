@@ -6,6 +6,7 @@ mod common;
 
 use common::TestEnv;
 use officina_core::relay::catalogue::DEFAULT_GUARDED_PROGRAMS;
+use officina_core::relay::gate::{SHELL_TOOLS, ToolRule};
 
 fn readme() -> String {
     std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../README.md")).unwrap()
@@ -96,5 +97,35 @@ fn readme_lists_no_default_guarded_program() {
             !key.starts_with("guarded_programs"),
             "README.md's example declares a guarded_programs list: {line}"
         );
+    }
+}
+
+/// D-171: the README points at the shell tool constant, transcribes no
+/// matcher built from it, and names each tool the gate refuses whole, as the
+/// constant says.
+#[test]
+fn readme_names_the_gate_tools_constant() {
+    let readme = readme();
+    assert!(
+        readme.contains("`SHELL_TOOLS`"),
+        "README.md does not name the constant"
+    );
+    for (a, _) in SHELL_TOOLS {
+        for (b, _) in SHELL_TOOLS {
+            if a != b {
+                assert!(
+                    !readme.contains(&format!("{a}|{b}")),
+                    "README.md transcribes the matcher ({a}|{b})"
+                );
+            }
+        }
+    }
+    for (tool, rule) in SHELL_TOOLS {
+        if *rule == ToolRule::DeniedInGuardedProject {
+            assert!(
+                readme.contains(&format!("{tool} tool")) && readme.contains("refused whole"),
+                "README.md does not say the {tool} tool is refused"
+            );
+        }
     }
 }
