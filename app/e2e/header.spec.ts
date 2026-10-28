@@ -46,7 +46,7 @@ function headerBoxes(page: Page): Promise<Record<string, { x: number; y: number;
     // from the top, as its header shows there.
     window.scrollTo(0, 0);
     const out: Record<string, { x: number; y: number; w: number; h: number }> = {};
-    const items = [header, ...header.querySelectorAll('[data-testid], button, [role="meter"]')];
+    const items = [header, ...Array.from(header.querySelectorAll('[data-testid], button, [role="meter"]'))];
     for (const [i, el] of items.entries()) {
       const r = el.getBoundingClientRect();
       const name = el === header ? "header" : `${el.getAttribute("data-testid") ?? el.textContent?.trim() ?? el.tagName}#${i}`;
