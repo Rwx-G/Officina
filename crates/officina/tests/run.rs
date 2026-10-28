@@ -1079,6 +1079,72 @@ fn native_launch_gets_cwd_env_and_null_stdin() {
     assert_eq!(logged["stdin_bytes"], 0, "stdin is null");
 }
 
+/// The `probe` launch run with the caller's `PATH`, `PATHEXT`, `ComSpec`
+/// and `WSLENV` pointing at a planted folder, the tool logging their values.
+fn launch_from_a_planted_environment(relay: &Relay, planted: &Path) -> serde_json::Value {
+    let mut cmd = relay.command(&relay.project(), &["probe", "host=web01"]);
+    cmd.env("PATH", planted)
+        .env("PATHEXT", ".SHIM")
+        .env("ComSpec", planted.join("cmd.exe"))
+        .env("WSLENV", "OFFICINA_PLANTED/p")
+        .env(
+            "FAKE_TOOL_LOG_VALUES",
+            "PATH,PATHEXT,ComSpec,WSLENV,PROBE_MODE",
+        );
+    let out = common::run_with(cmd, b"");
+    assert_eq!(out.status.code(), Some(0), "{:?}", stderr_lines(&out));
+    relay.launches().pop().unwrap()
+}
+
+/// AC 3 of story 2.14 (D-173): a `PATH` the caller planted a shim folder in
+/// does not reach the action; its `PATH`, `PATHEXT` and `ComSpec` are the
+/// ones Windows builds from the registry, and the catalogue's `env` applies.
+#[test]
+fn a_caller_path_shim_is_not_found_by_the_action() {
+    let relay = Relay::new();
+    let planted = relay.outside().join("shim");
+    std::fs::create_dir_all(&planted).unwrap();
+    let logged = launch_from_a_planted_environment(&relay, &planted);
+    let env = &logged["env"];
+    let path = env["PATH"].as_str().expect("the action has a PATH");
+    let planted_text = planted.to_string_lossy().to_lowercase();
+    assert!(
+        !path.to_lowercase().contains(&planted_text),
+        "the caller's shim folder reached the action: {path}"
+    );
+    let system = officina_host::relay::home::system_dir().unwrap();
+    assert!(
+        std::env::split_paths(path).any(|dir| dir
+            .to_string_lossy()
+            .eq_ignore_ascii_case(&system.to_string_lossy())),
+        "the system folder is on the registry's Path: {path}"
+    );
+    assert_ne!(env["PATHEXT"], ".SHIM");
+    let comspec = env["ComSpec"].as_str().unwrap_or_default().to_lowercase();
+    assert!(
+        !comspec.contains(&planted_text),
+        "the caller's ComSpec reached the action: {comspec}"
+    );
+    assert_eq!(
+        env["PROBE_MODE"], "read-only",
+        "the catalogue's env applies"
+    );
+}
+
+/// AC 3 of story 2.14 (D-173): `WSLENV` forwards Windows variables into
+/// Linux; the caller's never reaches a program that could start `wsl.exe`.
+#[test]
+fn wslenv_from_the_caller_does_not_reach_wsl() {
+    let relay = Relay::new();
+    let planted = relay.outside().join("shim");
+    std::fs::create_dir_all(&planted).unwrap();
+    let logged = launch_from_a_planted_environment(&relay, &planted);
+    assert_ne!(
+        logged["env"]["WSLENV"], "OFFICINA_PLANTED/p",
+        "the caller's WSLENV reached the action"
+    );
+}
+
 const WSL_FLOOR: &str = r#"schema = 2
 
 [[project]]

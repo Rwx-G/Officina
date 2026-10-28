@@ -147,6 +147,74 @@ pub fn system_directory() -> io::Result<PathBuf> {
     }
 }
 
+// windows-sys declares OpenProcessToken only with its `Win32_Security`
+// feature, for the type of the access mask; the one function is declared
+// here, as CreateJobObjectW is above.
+#[link(name = "advapi32")]
+unsafe extern "system" {
+    fn OpenProcessToken(process: HANDLE, access: u32, token: *mut HANDLE) -> i32;
+}
+
+/// The environment Windows builds from the registry for this process's
+/// user, as Explorer gives a new process (`CreateEnvironmentBlock`, not
+/// inheriting): the machine and user variables, `Path` the machine's then
+/// the user's, every value expanded. Nothing comes from this process's own
+/// environment, which a session sets (D-173).
+pub fn registry_environment() -> io::Result<Vec<(String, String)>> {
+    use windows_sys::Win32::System::Environment::{
+        CreateEnvironmentBlock, DestroyEnvironmentBlock,
+    };
+    const TOKEN_QUERY: u32 = 0x0008;
+    const TOKEN_DUPLICATE: u32 = 0x0002;
+    const TOKEN_IMPERSONATE: u32 = 0x0004;
+    let mut token: HANDLE = std::ptr::null_mut();
+    // SAFETY: GetCurrentProcess returns a pseudo-handle that needs no
+    // closing; `token` is a valid out pointer, set only on success.
+    let opened = unsafe {
+        OpenProcessToken(
+            GetCurrentProcess(),
+            TOKEN_QUERY | TOKEN_DUPLICATE | TOKEN_IMPERSONATE,
+            &mut token,
+        )
+    };
+    if opened == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let mut block: *mut std::ffi::c_void = std::ptr::null_mut();
+    // SAFETY: `token` is a valid token handle; `block` is a valid out
+    // pointer, set only on success; FALSE asks for no inherited variable.
+    let created = unsafe { CreateEnvironmentBlock(&mut block, token, 0) };
+    let error = io::Error::last_os_error();
+    // SAFETY: the handle came from OpenProcessToken and is closed once.
+    unsafe { CloseHandle(token) };
+    if created == 0 {
+        return Err(error);
+    }
+    let mut vars = Vec::new();
+    let mut entry = block.cast::<u16>().cast_const();
+    loop {
+        // SAFETY: the block is a run of NUL-terminated UTF-16 strings ended
+        // by an empty one; reading stops at each terminator, so every read
+        // lies inside it.
+        let len = (0..).take_while(|i| unsafe { *entry.add(*i) } != 0).count();
+        if len == 0 {
+            break;
+        }
+        // SAFETY: `len` units before the terminator were just read.
+        let text = String::from_utf16_lossy(unsafe { std::slice::from_raw_parts(entry, len) });
+        // Entries such as `=C:=C:\` are the per-drive folders, not variables.
+        if let Some((name, value)) = text.split_once('=').filter(|(name, _)| !name.is_empty()) {
+            vars.push((name.to_owned(), value.to_owned()));
+        }
+        // SAFETY: the next entry starts after this one's terminator.
+        entry = unsafe { entry.add(len + 1) };
+    }
+    // SAFETY: the block came from CreateEnvironmentBlock and is freed once;
+    // nothing reads it afterwards.
+    unsafe { DestroyEnvironmentBlock(block) };
+    Ok(vars)
+}
+
 /// A registry hive the relay reads (D-173).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Hive {

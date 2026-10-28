@@ -26,6 +26,11 @@ pub const WSL_TIMEOUT_MARGIN_S: u32 = 5;
 /// Removed from `wsl.exe`'s environment: it would forward Windows variables
 /// into Linux behind the catalogue's back (D-6).
 pub const WSL_REMOVED_ENV: &[&str] = &["WSLENV"];
+/// What decides which program a name starts, or what reaches WSL: every
+/// launch takes these from the environment Windows builds from the registry
+/// for the user, or goes without them, never from the caller's (D-173). The
+/// catalogue's `env` still applies after them.
+pub const SYSTEM_ENV: &[&str] = &["PATH", "PATHEXT", "ComSpec", "WSLENV"];
 
 /// A class of characters E13 verified to reach a Linux program intact
 /// through `wsl.exe --exec`.

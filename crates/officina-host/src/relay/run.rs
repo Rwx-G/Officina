@@ -26,7 +26,7 @@ use officina_core::relay::approvals::{
     ApprovalRequest, DEFAULT_WAIT_S, FileKind, HttpRequestView, KEPT_OUTPUT_BYTES, KeyInputs,
     NextStep, WAIT_TICK_MS, kept_output, next_step, request_id, request_key,
 };
-use officina_core::relay::argv::Launch;
+use officina_core::relay::argv::{Launch, SYSTEM_ENV};
 use officina_core::relay::catalogue::ActionClass;
 use officina_core::relay::classes::WAIT_RANGE_S;
 use officina_core::relay::http::HttpPlan;
@@ -557,18 +557,60 @@ fn refuse(
     EXIT_REFUSED
 }
 
+/// What each [`SYSTEM_ENV`] variable of a launch is: a value, or removed.
+pub type SystemEnv = Vec<(&'static str, Option<String>)>;
+
+/// The [`SYSTEM_ENV`] variables a launch gets (D-173): from the environment
+/// Windows builds from the registry for the user, a name it lacks removed;
+/// when it cannot be built, a `PATH` of the system and Windows folders only.
+/// Never the caller's. Off Windows (Linux is v1) nothing is set.
+pub fn system_env() -> SystemEnv {
+    #[cfg(windows)]
+    {
+        let found = crate::platform::windows::registry_environment().unwrap_or_else(|_| {
+            let system = system_dir().unwrap_or_default();
+            let windows = system.parent().map(Path::to_path_buf).unwrap_or_default();
+            vec![(
+                "PATH".to_owned(),
+                format!("{};{}", system.display(), windows.display()),
+            )]
+        });
+        SYSTEM_ENV
+            .iter()
+            .map(|name| {
+                let value = found
+                    .iter()
+                    .find(|(key, _)| key.eq_ignore_ascii_case(name))
+                    .map(|(_, value)| value.clone());
+                (*name, value)
+            })
+            .collect()
+    }
+    #[cfg(not(windows))]
+    {
+        Vec::new()
+    }
+}
+
 /// The command for a launch (AD-30): the program itself, its arguments as a
-/// vector, the project folder as working directory, the declared `env`
-/// added and `env_remove` removed, stdin null, no console window.
-pub fn command_for(launch: &Launch) -> Command {
+/// vector, the project folder as working directory, the [`SYSTEM_ENV`]
+/// variables of `system` (D-173), then the declared `env` added and
+/// `env_remove` removed, stdin null, no console window.
+pub fn command_for(launch: &Launch, system: &[(&str, Option<String>)]) -> Command {
     let mut command = Command::new(&launch.program);
     command
         .args(&launch.args)
         .current_dir(&launch.cwd)
-        .envs(&launch.env)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    for (name, value) in system {
+        match value {
+            Some(value) => command.env(name, value),
+            None => command.env_remove(name),
+        };
+    }
+    command.envs(&launch.env);
     for key in &launch.env_remove {
         command.env_remove(key);
     }
@@ -1059,7 +1101,7 @@ fn spawn(home: &RelayHome, plan: &RunPlan, launch: &Launch, run_id: &str) -> i32
     let run_id = run_id.to_owned();
     let tree = ProcessTree::new();
     let started = Instant::now();
-    let mut child = match command_for(launch).spawn() {
+    let mut child = match command_for(launch, &system_env()).spawn() {
         Ok(child) => child,
         Err(e) => {
             eprintln!("officina: could not start {}: {e}", launch.program);
@@ -1198,6 +1240,27 @@ mod tests {
         }
     }
 
+    /// AC 3 of story 2.14: the launch's `PATH` comes from the registry's
+    /// environment, whatever this process's says.
+    #[cfg(windows)]
+    #[test]
+    fn system_env_is_the_registrys() {
+        let system = system_env();
+        let names: Vec<&str> = system.iter().map(|(name, _)| *name).collect();
+        assert_eq!(names, SYSTEM_ENV);
+        let path = system
+            .iter()
+            .find(|(name, _)| *name == "PATH")
+            .and_then(|(_, value)| value.clone())
+            .expect("the registry's environment has a Path");
+        let system_dir = system_dir().unwrap().to_string_lossy().to_lowercase();
+        assert!(
+            std::env::split_paths(&path)
+                .any(|dir| dir.to_string_lossy().to_lowercase() == system_dir),
+            "{path}"
+        );
+    }
+
     #[test]
     fn wsl_command_removes_wslenv() {
         let launch = Launch {
@@ -1210,7 +1273,11 @@ mod tests {
                 .map(|k| (*k).to_owned())
                 .collect(),
         };
-        let command = command_for(&launch);
+        let system = vec![
+            ("PATH", Some(r"C:\Windows\System32".to_owned())),
+            ("WSLENV", None),
+        ];
+        let command = command_for(&launch, &system);
         let envs: Vec<(String, Option<String>)> = command
             .get_envs()
             .map(|(k, v)| {
@@ -1223,6 +1290,10 @@ mod tests {
         for removed in officina_core::relay::argv::WSL_REMOVED_ENV {
             assert!(envs.contains(&((*removed).to_owned(), None)), "{envs:?}");
         }
+        assert!(
+            envs.contains(&("PATH".to_owned(), Some(r"C:\Windows\System32".to_owned()))),
+            "the system PATH, not the caller's: {envs:?}"
+        );
         assert!(envs.contains(&("PROBE_MODE".to_owned(), Some("read-only".to_owned()))));
         assert_eq!(
             command.get_current_dir(),
