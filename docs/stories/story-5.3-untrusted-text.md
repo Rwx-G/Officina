@@ -29,7 +29,7 @@ so that the only ways from session text to a process are the ones the launch pat
 ## Dev Notes
 
 - Requirements: FR-3 (`Untrusted<T>` and `display()`), glossary "Untrusted text". Decisions: AD-74, AD-13 (bindings). Epic decisions: D-182 (Epic 4); D-130, D-153.
-- Seams (D-124): `Card` (v0.1) and `Card.last_message_tail` (4.1), `ApprovalView` (story 2.8), `RelayView`'s journal entries (2.6, 2.9), `RegistryView` and the model's reason (stories 3.4 and 3.11).
+- Seams (D-124, read through `main`, D-563): `Card` (v0.1) and `Card.last_message_tail` (D-182), `ApprovalView` (story 2.8), `RelayView`'s journal entries (2.6, 2.9), `RegistryView` and the model's reason (stories 3.4 and 3.11). v0.4 added no session text to a payload but, if story 4.12 ships, `SubagentView.agent_type`, a hook payload's text: it becomes `Untrusted<String>` with the others in whichever of the two stories merges second.
 - The wrapped mode exists so the MCP layer needs no list of which fields are untrusted (a second copy that would drift): every `Untrusted` field wraps itself when serialized inside `wrapped` (D-153). A thread-local is pure state, allowed in core by its `clippy.toml`.
 - Payloads that are stored or cached hold `Untrusted<String>`; `DisplayText` only lives inside a serialization (D-130, review F43). Later stories create their fields as `Untrusted` from the start (meeting texts 5.10, review reason 5.13, MCP outputs 5.15, proposal texts 5.17).
 - ts-rs: `#[cfg_attr(feature = "ts", ts(as = "String"))]` on each field, or one `impl TS for Untrusted<T>` delegating to `T`; pick the one that leaves `app/src/lib/generated/` byte-identical.
@@ -55,3 +55,4 @@ so that the only ways from session text to a process are the ones the launch pat
 
 - 2026-10-28 created
 - 2026-10-28 reworked after review: `last_message_tail` and the relay view's session-supplied texts are untrusted; the wrapped serialization mode for MCP outputs (F8); stored payloads hold `Untrusted<String>` (F43)
+- 2026-10-28 checked against the addendum and v0.3 and v0.4 as built: v0.4's one possible new session text, `SubagentView.agent_type`, joins the list if story 4.12 ships (D-563)
