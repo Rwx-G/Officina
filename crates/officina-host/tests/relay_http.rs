@@ -65,10 +65,12 @@ impl Relay {
         self.root.path().join("work").join("monitoring")
     }
 
-    /// `officina run health` with `store`, the response captured.
+    /// `officina run health` with `store`, the response captured; what
+    /// Officina says is not asserted here.
     fn run(&self, store: &FakeStore, wait: Duration) -> (i32, Vec<u8>) {
         let params = BTreeMap::new();
         let mut out = Vec::new();
+        let mut said = Vec::new();
         let code = run_with(
             &self.home,
             &self.project().to_string_lossy(),
@@ -80,6 +82,7 @@ impl Relay {
             },
             store,
             &mut out,
+            &mut said,
         );
         (code, out)
     }
