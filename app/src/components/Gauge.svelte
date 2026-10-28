@@ -107,6 +107,7 @@
     background: var(--color-text-muted);
   }
   .compact {
+    width: var(--gauge-width-compact);
     padding: 3px 12px;
   }
   .compact .top {
