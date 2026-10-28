@@ -10,6 +10,15 @@ README, not here.
 
 ## High
 
+- Story 2.15 AC 11, before the first published release: generate a
+  third-party notices file at release time (the Rust crates and npm
+  packages the binaries and the window ship, with their license texts, and
+  the bundled font's OFL) and put it in the portable zip and the NSIS
+  installer. The binaries carry MIT, BSD, ISC (ring, with its
+  OpenSSL-derived parts), MPL-2.0 and OFL-1.1 code whose terms want the
+  notice to travel with them; `cargo deny` checks that a license is
+  allowed, not that its notice ships. Not built until the owner asks for a
+  release.
 - Story 1.7: run the manual focus checklist (two editor windows, a subfolder
   session, a minimised window, another virtual desktop, Windows Terminal) and
   record the results in `docs/research-notes.md`.
