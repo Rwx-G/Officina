@@ -2,7 +2,8 @@
   import { onMount } from "svelte";
   import { BoardStore } from "./lib/board.svelte";
   import { RelayStore, type WindowView } from "./lib/relay.svelte";
-  import { clock } from "./lib/time";
+  import { startAll } from "./lib/lifecycle";
+  import { clock, hours } from "./lib/time";
   import Header from "./components/Header.svelte";
   import BoardColumn from "./components/BoardColumn.svelte";
   import RelayBanners from "./components/RelayBanners.svelte";
@@ -16,17 +17,17 @@
   // A workstation without the relay has no Relay view to show.
   let view = $derived<WindowView>(relay.inUse ? chosenView : "board");
 
-  onMount(() => {
-    const stops: (() => void)[] = [];
-    store.start().then((s) => stops.push(s));
-    relay.start().then((s) => stops.push(s));
-    return () => stops.forEach((s) => s());
-  });
+  onMount(() =>
+    startAll(
+      () => store.start(),
+      () => relay.start(),
+    ),
+  );
 
   let board = $derived(store.board);
   let columns = $derived(board?.columns);
   let diagnostics = $derived(board?.diagnostics);
-  let doneWindow = $derived(board ? `${Math.round(board.done_window_ms / 3_600_000)} h` : "");
+  let doneWindow = $derived(board ? hours(board.done_window_ms) : "");
 
   function onKey(event: KeyboardEvent): void {
     if (event.ctrlKey || event.altKey || event.metaKey) return;

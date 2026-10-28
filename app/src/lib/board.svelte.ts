@@ -1,5 +1,5 @@
 // Window state: the current board, a clock for relative times, and the
-// outcome of recent clicks, kept for 10 s per card (AD-20).
+// outcome of recent clicks, kept `OUTCOME_VISIBLE_MS` per card (AD-20).
 import type { Board } from "./generated/Board";
 import type { Card } from "./generated/Card";
 import type { FocusOutcome } from "./generated/FocusOutcome";
@@ -9,6 +9,11 @@ export const OUTCOME_VISIBLE_MS = 10_000;
 /** A second focus of the same card within this delay is ignored: a held key
  *  must not open one attach console per auto-repeat. */
 export const FOCUS_REPEAT_GUARD_MS = 1_500;
+/** How long a card says its attach command was copied. */
+export const COPIED_VISIBLE_MS = 2_000;
+/** How long past an outcome's visibility its expiry pass runs, so the pass
+ *  finds it expired whatever the timer's jitter. */
+const EXPIRY_SLACK_MS = 50;
 const CLOCK_TICK_MS = 30_000;
 
 export interface ShownOutcome {
@@ -34,6 +39,19 @@ export class BoardStore {
   needsYou = $derived(this.board?.columns.needs_you ?? []);
   approvals = $derived(this.board?.approvals ?? []);
 
+  /** The one-shot timers the store has pending, by what they are for: a
+   *  new one for the same purpose replaces the old, and the stop `start`
+   *  returns clears them all. Bookkeeping, never rendered: not state. */
+  #timers: Record<string, ReturnType<typeof setTimeout>> = {};
+
+  #later(purpose: string, delayMs: number, run: () => void): void {
+    clearTimeout(this.#timers[purpose]);
+    this.#timers[purpose] = setTimeout(() => {
+      delete this.#timers[purpose];
+      run();
+    }, delayMs);
+  }
+
   async start(): Promise<() => void> {
     const unlisten = await ipc.onBoard((board) => {
       this.board = board;
@@ -41,22 +59,24 @@ export class BoardStore {
     });
     const initial = await ipc.getBoard();
     if (initial && !this.board) this.board = initial;
-    const timer = setInterval(() => {
+    const clock = setInterval(() => {
       this.nowMs = Date.now();
       this.dropExpiredOutcomes();
     }, CLOCK_TICK_MS);
     return () => {
       unlisten();
-      clearInterval(timer);
+      clearInterval(clock);
+      for (const timer of Object.values(this.#timers)) clearTimeout(timer);
+      this.#timers = {};
     };
   }
 
+  /** Drops the outcomes shown longer than `OUTCOME_VISIBLE_MS`; leaves the
+   *  record as it is when none expired, so nothing derived from it reruns. */
   dropExpiredOutcomes(): void {
-    const fresh: Record<string, ShownOutcome> = {};
-    for (const [key, shown] of Object.entries(this.outcomes)) {
-      if (this.nowMs - shown.atMs < OUTCOME_VISIBLE_MS) fresh[key] = shown;
-    }
-    this.outcomes = fresh;
+    const entries = Object.entries(this.outcomes);
+    const fresh = entries.filter(([, shown]) => this.nowMs - shown.atMs < OUTCOME_VISIBLE_MS);
+    if (fresh.length < entries.length) this.outcomes = Object.fromEntries(fresh);
   }
 
   async focus(card: Card): Promise<void> {
@@ -71,10 +91,10 @@ export class BoardStore {
     }
     const atMs = Date.now();
     this.outcomes = { ...this.outcomes, [card.key]: { outcome, atMs } };
-    setTimeout(() => {
+    this.#later(`outcome:${card.key}`, OUTCOME_VISIBLE_MS + EXPIRY_SLACK_MS, () => {
       this.nowMs = Date.now();
       this.dropExpiredOutcomes();
-    }, OUTCOME_VISIBLE_MS + 50);
+    });
   }
 
   async wrongWindow(card: Card): Promise<void> {
@@ -88,9 +108,9 @@ export class BoardStore {
     if (!command) return;
     await navigator.clipboard.writeText(command);
     this.copied = card.key;
-    setTimeout(() => {
+    this.#later("copied", COPIED_VISIBLE_MS, () => {
       if (this.copied === card.key) this.copied = null;
-    }, 2000);
+    });
   }
 
   /** Approves or rejects request `id`, once at a time; a refusal is kept to
