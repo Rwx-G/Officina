@@ -622,6 +622,9 @@ impl<T: Clone + serde::Serialize> Published<T> {
 /// emits.
 struct Outputs<E> {
     board: Published<Board>,
+    /// The last board's `next_escalation_at_ms`: when the tick reaches it,
+    /// the board is rebuilt from the cached inputs, no spawn (AD-168).
+    next_escalation_at_ms: Option<i64>,
     relay: Published<RelayView>,
     registry: Published<RegistryView>,
     paths: Arc<RwLock<Paths>>,
@@ -639,6 +642,7 @@ pub fn spawn(mut collector: Collector, emit: impl Emit) -> std::io::Result<Watch
     let paths = Arc::new(RwLock::new(collector.paths().clone()));
     let mut outputs = Outputs {
         board: Published::new(&board),
+        next_escalation_at_ms: None,
         relay: Published::new(&relay),
         registry: Published::new(&registry),
         paths: Arc::clone(&paths),
@@ -779,8 +783,14 @@ fn run<E: Emit>(
         if due.retention {
             hourly_pass(collector, &mut registry);
         }
+        // A wait reaching the alert threshold is a state change the clock
+        // causes: the board is rebuilt from what the collector holds,
+        // with no `claude` spawn (AD-168, D-467).
+        let escalation = outputs
+            .next_escalation_at_ms
+            .is_some_and(|at| now_ms() >= at);
         // The hourly pass can clear excerpts the registry view shows.
-        if due.recompute || due.retention {
+        if due.recompute || due.retention || escalation {
             publish_both(collector, &mut registry, outputs, false);
         }
         if let Some(worker) = &mut worker {
@@ -941,6 +951,7 @@ fn pump_triage<E: Emit>(
 /// Shares `board` with the window's commands, and emits it when it differs
 /// from the last one emitted, generation time aside (AD-5).
 fn publish<E: Emit>(board: Board, outputs: &mut Outputs<E>) {
+    outputs.next_escalation_at_ms = board.next_escalation_at_ms;
     let mut comparable = board.clone();
     comparable.generated_at_ms = 0;
     if outputs.board.share(&board, &comparable, false) {
