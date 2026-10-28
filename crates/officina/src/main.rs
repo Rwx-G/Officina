@@ -18,7 +18,7 @@ use officina_host::collector::Collector;
 use officina_host::doctor::{self, Level};
 use officina_host::files::now_ms;
 use officina_host::paths::Paths;
-use officina_host::registry::commands::{read_registry, subjects_view};
+use officina_host::registry::commands::{ViewRead, read_registry, subjects_view};
 use officina_host::relay::gate::{self, GATE_EVENT, GateEnv};
 use officina_host::relay::home::RelayHome;
 use officina_host::relay::run::{self as relay_run, RunArgs};
@@ -122,6 +122,29 @@ fn quota_write(tee: bool) -> ExitCode {
 
 const EXIT_USAGE: u8 = 64;
 
+/// What was asked for could not be read as it is: a stale board (`board
+/// --json`), or a registry with nothing read (`subjects --json`, AD-53).
+const EXIT_UNREADABLE: u8 = 3;
+
+/// Prints `json`, a value already serialised, on stdout, or says why it
+/// could not be.
+fn print_json(json: serde_json::Result<String>) -> Result<(), ExitCode> {
+    let json = json.map_err(|e| {
+        eprintln!("officina: {e}");
+        ExitCode::FAILURE
+    })?;
+    println!("{json}");
+    Ok(())
+}
+
+/// Runs `command` with the `--floor` of `rest`, or answers a usage error.
+fn with_floor(rest: &[String], command: fn(Option<&PathBuf>) -> ExitCode) -> ExitCode {
+    match floor_arg(rest) {
+        Ok(floor) => command(floor.as_ref()),
+        Err(missing) => missing.usage_error(),
+    }
+}
+
 fn collector(floor: Option<&PathBuf>) -> Result<Collector, ExitCode> {
     Collector::new(floor.map(PathBuf::as_path)).map_err(|e| {
         eprintln!("officina: {e}");
@@ -138,22 +161,19 @@ fn board(floor: Option<&PathBuf>) -> ExitCode {
     // Read-only, with the window open or closed (D-82): `board --json`
     // reports the registry's state, shows each card's subject and deletes
     // nothing (AD-53).
-    let registry = read_registry(&mut collector);
-    drop(registry);
+    // Read for its effect on the collector (the cards' subjects and the
+    // registry's state); the reader itself is not needed after.
+    let _ = read_registry(&mut collector);
     collector.refresh_agents(now);
     // The running version's record (D-71): this command keeps its agents
     // fields current, and the board shows its missing hook fields.
     collector.refresh_contract(now);
     let board = collector.board(now);
-    match serde_json::to_string_pretty(&board) {
-        Ok(json) => println!("{json}"),
-        Err(e) => {
-            eprintln!("officina: {e}");
-            return ExitCode::FAILURE;
-        }
+    if let Err(code) = print_json(serde_json::to_string_pretty(&board)) {
+        return code;
     }
     if board.stale.is_some() {
-        ExitCode::from(3)
+        ExitCode::from(EXIT_UNREADABLE)
     } else {
         ExitCode::SUCCESS
     }
@@ -170,17 +190,12 @@ fn subjects_json(floor: Option<&PathBuf>) -> ExitCode {
         Err(code) => return code,
     };
     let (view, read) = subjects_view(&mut collector, now_ms());
-    match serde_json::to_string_pretty(&view) {
-        Ok(json) => println!("{json}"),
-        Err(e) => {
-            eprintln!("officina: {e}");
-            return ExitCode::FAILURE;
-        }
+    if let Err(code) = print_json(serde_json::to_string_pretty(&view)) {
+        return code;
     }
-    if read {
-        ExitCode::SUCCESS
-    } else {
-        ExitCode::from(3)
+    match read {
+        ViewRead::Read => ExitCode::SUCCESS,
+        ViewRead::NotRead => ExitCode::from(EXIT_UNREADABLE),
     }
 }
 
@@ -328,20 +343,11 @@ fn main() -> ExitCode {
         Some("quota") if rest.first().map(String::as_str) == Some("write") => {
             quota_write(rest.iter().any(|a| a == "--tee"))
         }
-        Some("board") if rest.iter().any(|a| a == "--json") => match floor_arg(rest) {
-            Ok(floor) => board(floor.as_ref()),
-            Err(missing) => missing.usage_error(),
-        },
-        Some("doctor") => match floor_arg(rest) {
-            Ok(floor) => doctor_cmd(floor.as_ref()),
-            Err(missing) => missing.usage_error(),
-        },
+        Some("board") if rest.iter().any(|a| a == "--json") => with_floor(rest, board),
+        Some("doctor") => with_floor(rest, doctor_cmd),
         Some("run") => run_cmd(rest),
         Some("relay") if rest == ["--json"] => relay_json(),
-        Some("subjects") if rest.iter().any(|a| a == "--json") => match floor_arg(rest) {
-            Ok(floor) => subjects_json(floor.as_ref()),
-            Err(missing) => missing.usage_error(),
-        },
+        Some("subjects") if rest.iter().any(|a| a == "--json") => with_floor(rest, subjects_json),
         Some("version" | "--version") => {
             println!("officina {}", env!("CARGO_PKG_VERSION"));
             ExitCode::SUCCESS

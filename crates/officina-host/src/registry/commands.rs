@@ -34,10 +34,17 @@ pub fn read_registry(collector: &mut Collector) -> Result<Reader, ReaderFailure>
     opened
 }
 
+/// Whether a view rests on the registry or says why nothing was read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ViewRead {
+    Read,
+    NotRead,
+}
+
 /// What `officina subjects --json` prints, and whether the registry was
 /// read: from the read-only registry and a fresh board, whose staleness
 /// does not make the registry unread (D-97).
-pub fn subjects_view(collector: &mut Collector, now_ms: i64) -> (RegistryView, bool) {
+pub fn subjects_view(collector: &mut Collector, now_ms: i64) -> (RegistryView, ViewRead) {
     let opened = read_registry(collector);
     collector.refresh_agents(now_ms);
     let board = collector.board(now_ms);
@@ -61,7 +68,7 @@ pub fn subjects_view(collector: &mut Collector, now_ms: i64) -> (RegistryView, b
                 no_excerpts: collector.no_excerpts(),
             };
             match reader.view(ctx, now_ms) {
-                Ok(view) => (view, true),
+                Ok(view) => (view, ViewRead::Read),
                 Err(error) => (
                     unread_view(
                         RegistryReport {
@@ -71,10 +78,10 @@ pub fn subjects_view(collector: &mut Collector, now_ms: i64) -> (RegistryView, b
                         },
                         now_ms,
                     ),
-                    false,
+                    ViewRead::NotRead,
                 ),
             }
         }
-        _ => (unread_view(report, now_ms), false),
+        _ => (unread_view(report, now_ms), ViewRead::NotRead),
     }
 }
