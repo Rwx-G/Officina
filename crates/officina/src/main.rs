@@ -56,11 +56,15 @@ fn read_stdin() -> Vec<u8> {
 }
 
 /// `officina hook`: exits 0 on every path, panics included (FR-3), so a broken
-/// Officina can never block or slow a session beyond its own runtime.
+/// Officina can never block or slow a session beyond its own runtime, except
+/// through the gate.
 ///
 /// stdin is parsed once (AD-26): `PreToolUse` goes to the gate, which prints
 /// a deny or nothing and is never appended to the event buffer (volume, and
 /// `tool_input` can carry secrets); every other event is recorded as in v0.1.
+/// The gate fails closed in a guarded project (D-452): its own panic prints
+/// a deny there, and its registration carries `onFailure: "block"`, so a
+/// hook that cannot start, times out or dies blocks the call too.
 fn hook() -> ExitCode {
     let _ = std::panic::catch_unwind(|| {
         let stdin = read_stdin();

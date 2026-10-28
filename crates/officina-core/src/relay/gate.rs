@@ -973,6 +973,31 @@ fn why(deny: &Deny) -> String {
     }
 }
 
+/// The reason a session is told when the gate itself failed on its call
+/// (D-452): the call lies in the guarded `project`, or, with `None`, the gate
+/// could not tell where it lies. Either way it is refused rather than let
+/// through; at most [`MAX_REASON_BYTES`], with the pointer to
+/// [`LIST_COMMAND`].
+///
+/// ```
+/// use officina_core::relay::gate::{LIST_COMMAND, fault_reason};
+/// let reason = fault_reason(Some("lab"));
+/// assert!(reason.contains("guarded project lab") && reason.contains(LIST_COMMAND));
+/// assert!(fault_reason(None).contains("could not tell"));
+/// ```
+pub fn fault_reason(project: Option<&str>) -> String {
+    let place = match project {
+        Some(project) => format!("in the guarded project {}", quoted(project)),
+        None => "and could not tell whether it lies in a guarded project".to_owned(),
+    };
+    cut(
+        format!(
+            "Officina's gate failed on this call {place}, so it refuses the call rather than let it through. The fault is in Officina's journal; the author can check the setup with `officina doctor`. Run `{LIST_COMMAND}` to see the actions you may use and their allowed values."
+        ),
+        MAX_REASON_BYTES,
+    )
+}
+
 fn quoted(text: &str) -> String {
     let mut chars = text.chars();
     let mut out: String = chars.by_ref().take(MAX_QUOTED_CHARS).collect();

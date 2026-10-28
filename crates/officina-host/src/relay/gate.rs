@@ -15,9 +15,10 @@
 //! roots ([`final_roots`]), so a floor that writes a root through an alias
 //! (a temp folder under an 8.3 user name) matches a folder given in full.
 //!
-//! It is containment, not the authority: an internal fault gives no
-//! decision (fail open, AD-28), while an input it cannot read makes it
-//! stricter (D-15). `officina run` fails closed on its own.
+//! It is containment, not the authority: an input it cannot read makes it
+//! stricter (D-15), and an internal fault refuses the call where the gate
+//! guards and only there (D-452, amending AD-28's fail open; see
+//! [`answer_with`]). `officina run` fails closed on its own.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -29,8 +30,9 @@ use officina_core::events::excerpt;
 use officina_core::floor::{parse_floor, requests_no_excerpts};
 use officina_core::quota::normalise_path;
 use officina_core::relay::gate::{
-    Deny, FloorInput, GateInputs, Offer, SnapshotInput, ToolRule, containment, decide_call,
-    decide_file_write, deny_reason, file_tool_field, normalise_cwd, protected_dirs, tool_rule,
+    Containment, Deny, FloorInput, GateInputs, Offer, SnapshotInput, ToolRule, containment,
+    decide_call, decide_file_write, deny_reason, fault_reason, file_tool_field, normalise_cwd,
+    protected_dirs, tool_rule,
 };
 use officina_core::relay::journal::{
     COMMAND_EXCERPT_CHARS, GateDenied, GateError, GateFault, JournalEntry,
@@ -246,10 +248,17 @@ fn is_default_home(home: &RelayHome) -> bool {
     })
 }
 
-/// Reads the gate's inputs and decides for `call` (AD-26 steps 2 to 5,
-/// D-14 to D-16, D-173). `project_dir` is `CLAUDE_PROJECT_DIR`. A file
-/// tool's write is decided from any project once the relay guards one.
-pub fn evaluate(home: &RelayHome, call: &ToolCall, project_dir: Option<&str>) -> Evaluation {
+/// What the gate's inputs say, whatever the call: the containment with its
+/// guarded roots resolved, each input it could not read, and whether the
+/// floor asks for no excerpts.
+struct Contained {
+    contained: Containment,
+    faults: Vec<(GateFault, String)>,
+    floor_no_excerpts: bool,
+}
+
+/// Reads the gate's inputs (AD-26 steps 2 and 3, D-14 to D-16, D-173).
+fn contain(home: &RelayHome) -> Contained {
     let approved = home.read_approved();
     let floor_path = home.relay_floor(&approved);
     let floor_path_text = floor_path.to_string_lossy();
@@ -320,14 +329,52 @@ pub fn evaluate(home: &RelayHome, call: &ToolCall, project_dir: Option<&str>) ->
         Ok(Ok(floor)) => floor.no_excerpts,
         _ => floor_text.as_deref().is_ok_and(requests_no_excerpts),
     };
-    // As given first, so D-16's order holds, then as resolved by handle.
+    Contained {
+        contained,
+        faults,
+        floor_no_excerpts,
+    }
+}
+
+/// The folders a call is looked up by: `CLAUDE_PROJECT_DIR` then the call's
+/// `cwd` as given first, so D-16's order holds, then as resolved by handle
+/// (D-173).
+fn call_dirs(call: &ToolCall, project_dir: Option<&str>) -> Vec<String> {
     let given: Vec<&str> = project_dir.into_iter().chain(call.cwd.as_deref()).collect();
     let resolved: Vec<String> = given.iter().filter_map(|dir| final_dir(dir)).collect();
-    let dirs: Vec<&str> = given
-        .iter()
-        .copied()
-        .chain(resolved.iter().map(String::as_str))
-        .collect();
+    given
+        .into_iter()
+        .map(str::to_owned)
+        .chain(resolved)
+        .collect()
+}
+
+/// The guarded project `call` lies in, if any: the lookup alone, without a
+/// decision, which the gate falls back to when deciding panicked (D-452).
+pub fn guarded_project_of(
+    home: &RelayHome,
+    call: &ToolCall,
+    project_dir: Option<&str>,
+) -> Option<String> {
+    let dirs = call_dirs(call, project_dir);
+    let dirs: Vec<&str> = dirs.iter().map(String::as_str).collect();
+    contain(home)
+        .contained
+        .guarded_project(&dirs)
+        .map(|project| project.name.clone())
+}
+
+/// Reads the gate's inputs and decides for `call` (AD-26 steps 2 to 5,
+/// D-14 to D-16, D-173). `project_dir` is `CLAUDE_PROJECT_DIR`. A file
+/// tool's write is decided from any project once the relay guards one.
+pub fn evaluate(home: &RelayHome, call: &ToolCall, project_dir: Option<&str>) -> Evaluation {
+    let Contained {
+        contained,
+        faults,
+        floor_no_excerpts,
+    } = contain(home);
+    let dirs = call_dirs(call, project_dir);
+    let dirs: Vec<&str> = dirs.iter().map(String::as_str).collect();
     if let Some(target) = &call.target {
         let project = contained.guarded_project(&dirs);
         let name = project.map(|p| p.name.clone()).unwrap_or_default();
@@ -405,21 +452,45 @@ fn panic_text(payload: &(dyn std::any::Any + Send)) -> String {
 /// Runs `decide` for `call`, journals what it concluded, and returns the
 /// deny JSON when there is one. `decide` reads no input it cannot turn into
 /// a stricter gate ([`evaluate`]), so its only internal fault is a panic,
-/// which gives no decision and a `gate_error` line (AD-28); the command
-/// excerpt is then left out, since the floor's `no_excerpts` is unknown. A
-/// journal that stays locked loses the lines, never the decision (AD-32).
+/// journaled as a `gate_error` line without the command excerpt, since the
+/// floor's `no_excerpts` is unknown. The gate then fails closed where it
+/// guards (D-452): `locate` ([`guarded_project_of`]) says where the call
+/// lies; in a guarded project, or when `locate` panics too and the gate
+/// cannot tell, the call is denied with [`fault_reason`]; outside every
+/// guarded project it gets no decision, as the gate has nothing to protect
+/// there. A journal that stays locked loses the lines, never the decision
+/// (AD-32).
 pub fn answer_with(
     home: &RelayHome,
     call: &ToolCall,
     env: &GateEnv,
     now_ms: i64,
     decide: impl FnOnce() -> Evaluation,
+    locate: impl FnOnce() -> Option<String>,
 ) -> Option<String> {
     let evaluation = match catch_unwind(AssertUnwindSafe(decide)) {
         Ok(evaluation) => evaluation,
         Err(payload) => {
-            journal_fault(home, call, GateFault::Panic, panic_text(&*payload), now_ms);
-            return None;
+            let detail = panic_text(&*payload);
+            return match catch_unwind(AssertUnwindSafe(locate)) {
+                Ok(None) => {
+                    journal_panic(home, call, None, detail, now_ms);
+                    None
+                }
+                Ok(Some(project)) => {
+                    let deny = deny_json(&fault_reason(Some(&project)));
+                    journal_panic(home, call, Some(project), detail, now_ms);
+                    Some(deny)
+                }
+                Err(again) => {
+                    let detail = format!(
+                        "{detail}; locating the call panicked too: {}",
+                        panic_text(&*again)
+                    );
+                    journal_panic(home, call, None, detail, now_ms);
+                    Some(deny_json(&fault_reason(None)))
+                }
+            };
         }
     };
     let command_excerpt = call
@@ -449,11 +520,17 @@ pub fn answer_with(
     evaluation.deny.map(|deny| deny_json(&deny.reason))
 }
 
-fn journal_fault(home: &RelayHome, call: &ToolCall, cause: GateFault, detail: String, now_ms: i64) {
+fn journal_panic(
+    home: &RelayHome,
+    call: &ToolCall,
+    project: Option<String>,
+    detail: String,
+    now_ms: i64,
+) {
     let line = JournalEntry::GateError(GateError {
-        project: None,
+        project,
         session_id: call.session_id.clone(),
-        cause,
+        cause: GateFault::Panic,
         detail,
         command_excerpt: None,
     });
@@ -469,9 +546,15 @@ pub fn answer(
     now_ms: i64,
 ) -> Option<String> {
     let call = ToolCall::from_payload(payload)?;
-    answer_with(home, &call, env, now_ms, || {
-        evaluate(home, &call, env.project_dir.as_deref())
-    })
+    let project_dir = env.project_dir.as_deref();
+    answer_with(
+        home,
+        &call,
+        env,
+        now_ms,
+        || evaluate(home, &call, project_dir),
+        || guarded_project_of(home, &call, project_dir),
+    )
 }
 
 #[cfg(test)]
@@ -717,8 +800,10 @@ mod tests {
         );
     }
 
+    /// Story 2.17 AC 4, D-452: a panic outside every guarded project gives
+    /// no decision; the gate has nothing to protect there.
     #[test]
-    fn panic_gives_no_decision_and_records_gate_error() {
+    fn panic_outside_guarded_projects_gives_no_decision() {
         let dir = tempfile::tempdir().unwrap();
         let home = RelayHome::new(dir.path(), None);
         let answer = answer_with(
@@ -727,14 +812,104 @@ mod tests {
             &GateEnv::default(),
             crate::files::now_ms(),
             || -> Evaluation { panic!("the gate broke") },
+            || None,
         );
         assert_eq!(answer, None);
         let errors = gate_errors(&home);
         assert_eq!(errors.len(), 1);
         assert_eq!(errors[0].cause, GateFault::Panic);
+        assert_eq!(errors[0].project, None);
         assert_eq!(errors[0].detail, "the gate broke");
         assert_eq!(errors[0].command_excerpt, None);
         assert_eq!(errors[0].session_id, call().session_id);
+    }
+
+    /// Story 2.17 AC 4, D-452: a panic on a call in a guarded project
+    /// denies it with the fault reason, and the line names the project.
+    #[test]
+    fn panic_in_a_guarded_project_denies() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = RelayHome::new(dir.path(), None);
+        let answer = answer_with(
+            &home,
+            &call(),
+            &GateEnv::default(),
+            crate::files::now_ms(),
+            || -> Evaluation { panic!("the lexer broke") },
+            || Some("lab".to_owned()),
+        );
+        assert_eq!(answer, Some(deny_json(&fault_reason(Some("lab")))));
+        let errors = gate_errors(&home);
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].cause, GateFault::Panic);
+        assert_eq!(errors[0].project.as_deref(), Some("lab"));
+        assert_eq!(errors[0].detail, "the lexer broke");
+        assert_eq!(errors[0].command_excerpt, None);
+    }
+
+    /// Story 2.17 AC 4, D-452: when locating the call panics too, the gate
+    /// cannot tell whether it guards the call, and denies it.
+    #[test]
+    fn panic_that_cannot_locate_the_call_denies() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = RelayHome::new(dir.path(), None);
+        let answer = answer_with(
+            &home,
+            &call(),
+            &GateEnv::default(),
+            crate::files::now_ms(),
+            || -> Evaluation { panic!("the gate broke") },
+            || -> Option<String> { panic!("and the lookup") },
+        );
+        assert_eq!(answer, Some(deny_json(&fault_reason(None))));
+        let errors = gate_errors(&home);
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].project, None);
+        assert_eq!(
+            errors[0].detail,
+            "the gate broke; locating the call panicked too: and the lookup"
+        );
+    }
+
+    /// Story 2.17 AC 4, D-452: the fallback lookup finds the guarded project
+    /// a shell or file tool call lies in, by `cwd` or `CLAUDE_PROJECT_DIR`,
+    /// and none for a free folder, as [`evaluate`] does.
+    #[cfg(windows)]
+    #[test]
+    fn the_fallback_lookup_finds_the_guarded_project() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("Lab");
+        let free = dir.path().join("Notes");
+        fs::create_dir_all(project.join("roles")).unwrap();
+        fs::create_dir_all(&free).unwrap();
+        let home = home_guarding(dir.path(), &project);
+        let inside = bash_in(&project.join("roles"));
+        assert_eq!(
+            guarded_project_of(&home, &inside, None).as_deref(),
+            Some("lab")
+        );
+        let write = ToolCall {
+            tool: "Write".to_owned(),
+            command: None,
+            target: Some(free.join("a.txt").to_string_lossy().into_owned()),
+            ..inside.clone()
+        };
+        assert_eq!(
+            guarded_project_of(&home, &write, None).as_deref(),
+            Some("lab")
+        );
+        assert_eq!(
+            guarded_project_of(&home, &bash_in(&free), Some(&project.to_string_lossy())).as_deref(),
+            Some("lab")
+        );
+        assert_eq!(guarded_project_of(&home, &bash_in(&free), None), None);
+        for call in [inside, bash_in(&free)] {
+            assert_eq!(
+                guarded_project_of(&home, &call, None),
+                evaluate(&home, &call, None).project,
+                "{call:?}"
+            );
+        }
     }
 
     #[test]
@@ -754,12 +929,15 @@ mod tests {
             }),
             ..Evaluation::default()
         };
-        let answer = answer_with(&home, &call(), &GateEnv::default(), 1, || deny);
+        let answer = answer_with(&home, &call(), &GateEnv::default(), 1, || deny, || None);
         assert_eq!(answer, Some(deny_json("no")));
-        let none = answer_with(&home, &call(), &GateEnv::default(), 1, || {
-            panic!("and the journal is gone too")
-        });
+        let panicked = || -> Evaluation { panic!("and the journal is gone too") };
+        let none = answer_with(&home, &call(), &GateEnv::default(), 1, panicked, || None);
         assert_eq!(none, None);
+        let refused = answer_with(&home, &call(), &GateEnv::default(), 1, panicked, || {
+            Some("lab".to_owned())
+        });
+        assert_eq!(refused, Some(deny_json(&fault_reason(Some("lab")))));
     }
 
     #[test]
