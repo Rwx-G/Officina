@@ -10,7 +10,10 @@ use officina_core::contract::check_agents;
 use officina_core::dates::{dated_file_day, day_start_ms, utc_date};
 use officina_core::floor::{Autonomy, parse_floor};
 use officina_core::quota::STALE_AFTER_MS;
-use officina_core::registry::types::RegistryState;
+use officina_core::registry::triage_call::{
+    COUNT_WINDOW_MS, CallCounts, count_calls, refusal_for_binary,
+};
+use officina_core::registry::types::{RegistryState, SettingKey};
 use officina_core::relay::gate::gated_tools;
 
 use crate::claude;
@@ -285,6 +288,12 @@ pub fn run(collector: &Collector, exe: &Path) -> Vec<Check> {
     checks.push(check_quota(collector, &user_settings, exe, now));
     checks.push(check_officina_home(&paths.officina_home));
     checks.extend(check_registry(
+        &paths.officina_home,
+        &onedrive_roots_from_env(),
+        now,
+    ));
+    checks.extend(check_triage(
+        collector.claude(),
         &paths.officina_home,
         &onedrive_roots_from_env(),
         now,
@@ -653,6 +662,92 @@ pub fn check_registry(officina_home: &Path, onedrive_roots: &[PathBuf], now: i64
     checks
 }
 
+/// Calls, tokens and cost, as doctor prints them.
+fn counted(counts: &CallCounts) -> String {
+    format!(
+        "{} calls ({} without an answer), {} refused, {} input and {} output tokens, USD {:.4}",
+        counts.calls,
+        counts.unanswered,
+        counts.refused,
+        counts.input_tokens,
+        counts.output_tokens,
+        counts.cost_microusd as f64 / 1_000_000.0
+    )
+}
+
+/// The triage model (AD-53): whether it proposes or is paused, the calls
+/// and their cost today and over the count window, the latest dry run, and
+/// the refusal every call meets while `claude` resolves to a `.cmd` or
+/// `.bat` shim (AD-51). Read-only; the registry is never created.
+pub fn check_triage(
+    claude: Option<&Path>,
+    officina_home: &Path,
+    onedrive_roots: &[PathBuf],
+    now: i64,
+) -> Vec<Check> {
+    let mut checks = Vec::new();
+    if let Some(shim) = claude.filter(|bin| refusal_for_binary(&bin.to_string_lossy()).is_some()) {
+        checks.push(check(
+            Level::Warn,
+            "triage call",
+            format!(
+                "claude resolves to {}, a shim only cmd.exe runs: every triage call is refused before it starts; install the native claude.exe or set OFFICINA_CLAUDE_BIN to it",
+                shim.display()
+            ),
+        ));
+    }
+    let Ok(reader) = registry_store::open_reader(officina_home, onedrive_roots) else {
+        checks.push(check(
+            Level::Ok,
+            "triage model",
+            "disabled; no registry to count its calls in",
+        ));
+        return checks;
+    };
+    let settings = reader.settings().unwrap_or_default();
+    let setting = |key: SettingKey| settings.iter().find(|row| row.key == key);
+    let enabled = setting(SettingKey::TriageModel).is_some_and(|row| row.value == "true");
+    let (level, state) = match setting(SettingKey::TriageModelPause) {
+        Some(pause) if enabled => (Level::Warn, format!("paused: {}", pause.value)),
+        _ if enabled => (Level::Ok, "enabled".to_owned()),
+        _ => (
+            Level::Ok,
+            "disabled: it proposes nothing; a dry run scores it on your past confirmations"
+                .to_owned(),
+        ),
+    };
+    let calls = reader
+        .triage_calls_since(now - COUNT_WINDOW_MS)
+        .map(|calls| count_calls(&calls, now));
+    let mut detail = state;
+    match calls {
+        Ok(view) => {
+            detail.push_str(&format!(
+                "; today {}; last 30 days {}",
+                counted(&view.today),
+                counted(&view.last_30_days)
+            ));
+            for refusal in &view.refusals {
+                detail.push_str(&format!(
+                    "; refused {} times for {}",
+                    refusal.count,
+                    refusal.cause.code()
+                ));
+            }
+        }
+        Err(e) => detail.push_str(&format!("; its calls cannot be read: {e}")),
+    }
+    if let Ok(Some(latest)) = reader.latest_evaluation() {
+        let (y, m, d) = utc_date(latest.at_ms);
+        detail.push_str(&format!(
+            "; latest dry run {y:04}-{m:02}-{d:02}: {} cases, model right {}, default right {}",
+            latest.tally.cases, latest.tally.model_correct, latest.tally.default_correct
+        ));
+    }
+    checks.push(check(level, "triage model", detail));
+    checks
+}
+
 /// The floor file, if any, loaded without error.
 fn check_floor(collector: &Collector) -> Check {
     match (&collector.floor().path, &collector.floor().error) {
@@ -725,6 +820,7 @@ mod tests {
                 ("officina home", Level::Ok, false),
                 ("registry location", Level::Ok, false),
                 ("registry", Level::Ok, false),
+                ("triage model", Level::Ok, false),
                 ("floor", Level::Ok, false),
             ]
         );
@@ -976,6 +1072,81 @@ mod tests {
             .iter()
             .find(|c| c.title == title)
             .unwrap_or_else(|| panic!("no {title} line in {checks:?}"))
+    }
+
+    /// Story 3.9 AC 11 (AD-51, AD-53): a `claude` that resolves to a
+    /// `.cmd` or `.bat` shim is reported as refusing every triage call; a
+    /// native one is not.
+    #[test]
+    fn cmd_shim_is_reported_as_refusing_triage() {
+        let dir = tempfile::tempdir().unwrap();
+        for shim in ["claude.cmd", "claude.Bat"] {
+            let checks = check_triage(Some(&dir.path().join(shim)), dir.path(), &[], NOW);
+            let line = registry_line(&checks, "triage call");
+            assert_eq!(line.level, Level::Warn, "{shim}");
+            assert!(line.detail.contains("refused"), "{}", line.detail);
+        }
+        let native = check_triage(Some(&dir.path().join("claude.exe")), dir.path(), &[], NOW);
+        assert!(native.iter().all(|c| c.title != "triage call"));
+        assert!(
+            !RegistryPaths::new(dir.path()).dir().exists(),
+            "never created"
+        );
+    }
+
+    /// Story 3.9 AC 11 (AD-52, AD-53): the model's state and its calls,
+    /// today and over 30 days, with their cost and the refusals' causes.
+    #[test]
+    fn model_state_and_counts_are_reported() {
+        let dir = tempfile::tempdir().unwrap();
+        let conn = registry_at(dir.path(), crate::registry::schema::SCHEMA_VERSION);
+        for (at, outcome, refusal, cost) in [
+            (NOW - 60_000, "answer", None, Some(1_100)),
+            (NOW - 120_000, "timeout", None, Some(0)),
+            (NOW - 180_000, "refused", Some("cmd_shim"), None),
+            (NOW - 10 * DAY, "answer", None, Some(2_000)),
+        ] {
+            conn.execute(
+                "INSERT INTO triage_call (purpose, started_at_ms, outcome, refusal, input_tokens, output_tokens, cost_microusd)
+                 VALUES ('dry_run', ?1, ?2, ?3, 4500, 380, ?4)",
+                rusqlite::params![at, outcome, refusal, cost],
+            )
+            .unwrap();
+        }
+        conn.execute(
+            "INSERT INTO model_evaluation (at_ms, cases, model_correct, default_correct, model_false_finished, unanswered)
+             VALUES (?1, 30, 21, 18, 2, 1)",
+            [NOW - DAY],
+        )
+        .unwrap();
+        let checks = check_triage(None, dir.path(), &[], NOW);
+        let line = registry_line(&checks, "triage model");
+        assert_eq!(line.level, Level::Ok);
+        for part in [
+            "disabled",
+            "today 2 calls (1 without an answer), 1 refused",
+            "USD 0.0011",
+            "last 30 days 3 calls",
+            "USD 0.0031",
+            "refused 1 times for cmd_shim",
+            "30 cases, model right 21, default right 18",
+        ] {
+            assert!(line.detail.contains(part), "{part}: {}", line.detail);
+        }
+        conn.execute(
+            "INSERT INTO setting (key, value, src, at_ms) VALUES ('triage_model', 'true', 'author', ?1),
+                 ('triage_model_pause', 'three failed calls in a row', 'rules', ?1)",
+            [NOW],
+        )
+        .unwrap();
+        let paused = check_triage(None, dir.path(), &[], NOW);
+        let line = registry_line(&paused, "triage model");
+        assert_eq!(line.level, Level::Warn);
+        assert!(
+            line.detail.starts_with("paused: three failed calls"),
+            "{}",
+            line.detail
+        );
     }
 
     #[test]
