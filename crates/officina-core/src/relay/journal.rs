@@ -394,7 +394,8 @@ closed_enum! {
     }
 }
 
-/// The gate denied a `Bash` command (AD-26).
+/// The gate denied a tool call: a shell command, or a file write under the
+/// Officina home (AD-26, D-171, D-173).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct GateDenied {

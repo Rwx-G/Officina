@@ -512,7 +512,7 @@ pub fn relay_in_use(floor: &FloorFile) -> bool {
 /// The effective guarded programs of a floor: its list, or the default one,
 /// lowercase (program names are matched lowercase, AD-27), sorted and
 /// deduplicated, entries breaking D-3 left out. Cheap: the gate calls it on
-/// every `Bash` call (phase 1, AD-28).
+/// every shell tool call (phase 1, AD-28).
 pub fn guarded_programs(floor: &FloorFile) -> Vec<String> {
     let mut list: Vec<String> = match &floor.guarded_programs {
         Some(entries) => entries

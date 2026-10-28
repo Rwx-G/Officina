@@ -105,7 +105,7 @@ impl Drop for JournalLock {
 
 /// Takes the lock, appends `entries` with one write and releases it. With
 /// nothing to write it takes no lock and touches no file: the gate calls it
-/// on every `Bash` call and locks only to record something (AD-28).
+/// on every gated tool call and locks only to record something (AD-28).
 pub fn append(home: &RelayHome, entries: &[JournalEntry], now_ms: i64) -> Result<(), JournalError> {
     if entries.is_empty() {
         return Ok(());

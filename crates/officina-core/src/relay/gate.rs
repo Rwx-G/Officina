@@ -1,5 +1,5 @@
 //! The gate's decision (AD-26 steps 2 to 5, D-12 to D-17, D-173): in a
-//! guarded repository, deny a `Bash` command that would start a guarded
+//! guarded repository, deny a shell tool's command that would start a guarded
 //! program, hide its program, redirect Officina's home or environment or
 //! touch Officina's own files; otherwise, and always outside a guarded
 //! repository, decide nothing. Once the relay guards a project, deny a file
@@ -688,7 +688,7 @@ struct Source {
     projects: Vec<ProjectRoot>,
 }
 
-/// What is guarded for one `Bash` call, from every source the gate could
+/// What is guarded for one tool call, from every source the gate could
 /// read (D-14, D-15): the floor's and the snapshot's projects are looked up
 /// separately and a call is guarded if either says so, the guarded programs
 /// are the union of both lists, and a source that cannot be read makes the
