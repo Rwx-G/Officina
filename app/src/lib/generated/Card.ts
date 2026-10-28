@@ -2,6 +2,7 @@
 import type { Badge } from "./Badge";
 import type { Column } from "./Column";
 import type { ProjectView } from "./ProjectView";
+import type { SceneState } from "./SceneState";
 import type { SessionKindView } from "./SessionKindView";
 import type { SubjectRef } from "./SubjectRef";
 
@@ -29,4 +30,9 @@ attach_available: boolean,
  * `None` when unfiled, or when the registry could not be read, which
  * `diagnostics.registry` says.
  */
-subject: SubjectRef | null, };
+subject: SubjectRef | null, 
+/**
+ * Where the scene places a live card (AD-167); `None` for To resume
+ * and Done, which the scene does not draw.
+ */
+scene: SceneState | null, };

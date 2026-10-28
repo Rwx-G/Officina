@@ -31,4 +31,14 @@ floor_projects: Array<ProjectView>,
  * The escalation threshold of the alert, from the floor (AD-168), so
  * no frontend constant repeats it.
  */
-alert_after_ms: number, };
+alert_after_ms: number, 
+/**
+ * Live cards in alert, a last known alert on unknown data included
+ * (AD-167, D-494): what the band, the title and the badge count.
+ */
+alert_count: number, 
+/**
+ * When a Needs you wait next reaches the threshold, for the collector
+ * to recompute then (AD-168).
+ */
+next_escalation_at_ms: number | null, };

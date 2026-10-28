@@ -15,6 +15,7 @@ use officina_core::contract::{
 use officina_core::floor::{FloorFile, ViewIssue, parse_floor, resolve_project_path};
 use officina_core::quota::{QuotaFile, parse_quota_file};
 use officina_core::registry::types::{RegistryReport, SubjectRef};
+use officina_core::scene::{SceneState, states_by_key};
 use serde::{Deserialize, Serialize};
 
 use crate::claude;
@@ -232,6 +233,10 @@ pub struct Collector {
     /// The environment a triage call's own is built from (AD-51, D-86):
     /// the window's, given at start; empty unless one is given.
     triage_base_env: std::sync::Arc<Vec<(String, String)>>,
+    /// The scene state of each card of the board built last, emitted or
+    /// not: the next board's previous states, so an unknown card keeps its
+    /// alert (D-494).
+    last_scene: RefCell<BTreeMap<String, SceneState>>,
 }
 
 impl Collector {
@@ -284,6 +289,7 @@ impl Collector {
             subjects: BTreeMap::new(),
             hook_sightings: HookSightings::default(),
             triage_base_env: std::sync::Arc::new(Vec::new()),
+            last_scene: RefCell::new(BTreeMap::new()),
         }
     }
 
@@ -535,8 +541,10 @@ impl Collector {
             registry: self.registry.clone(),
             subjects: self.subjects.clone(),
             alert_after_minutes: floor_file.map(FloorFile::alert_after_minutes),
+            previous_scene: self.last_scene.borrow().clone(),
         };
         let mut board = build_board(&input, now_ms);
+        *self.last_scene.borrow_mut() = states_by_key(&board.columns);
         board.diagnostics.floor_error.clone_from(&self.floor.error);
         board
     }

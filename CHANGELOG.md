@@ -284,6 +284,15 @@ project uses [Semantic Versioning](https://semver.org/).
   only, so it costs no style work per frame, keeps its phase and its end
   when the board is shown again, and stops under the system's reduced
   motion setting.
+- `officina board --json` (v0.4) carries each live card's place in the
+  scene (`scene`: its zone, when its wait began, its alert and whether it
+  waits on a relay request alone), the alert count and the time the next
+  wait reaches the threshold. A session is in alert when its project is
+  high priority or, for a known Needs you wait, when it has waited the
+  threshold; a relay request alone never escalates by time. The window
+  rebuilds the board when that time comes, without starting `claude`, and
+  a failed session list keeps the last known alerts instead of clearing
+  them.
 - The board contract (`officina board --json`, v0.4) is schema 4: it lists
   the floor's projects in file order (`floor_projects`, each with its colour
   and priority, as a card inside it carries them), carries the alert

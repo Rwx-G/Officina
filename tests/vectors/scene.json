@@ -1,0 +1,361 @@
+{
+  "schema": 1,
+  "_doc": "Hand-written cases of the scene state (AD-167, D-462 to D-465, D-494 to D-496), replayed through build_board by crates/officina-core/tests/scene_vectors.rs. Times are Unix ms; agents use the shapes of research notes E1, redacted. A case's floor gives projects and their priority, approvals are valid pending relay requests by session id, previous is the scene state of each card key on the board built before.",
+  "cases": [
+    {
+      "name": "a working session sits in its office",
+      "now_ms": 1793102400000,
+      "agents": [{"pid": 4100, "cwd": "C:/work/api", "kind": "interactive", "startedAt": 1793095200000, "sessionId": "00000000-0000-0000-0000-000000000001", "status": "busy"}],
+      "events": [{"v": 1, "ts": 1793102100000, "event": "UserPromptSubmit", "session_id": "00000000-0000-0000-0000-000000000001"}],
+      "expect": [{"key": "pid:4100:1793095200000", "zone": "office", "waiting_since_ms": null, "alert": null, "approval": false}],
+      "expect_alert_count": 0,
+      "expect_next_escalation_at_ms": null
+    },
+    {
+      "name": "a permission prompt queues at the decision office with its start, and escalates at the threshold",
+      "now_ms": 1793102400000,
+      "agents": [{"pid": 4100, "cwd": "C:/work/api", "kind": "interactive", "startedAt": 1793095200000, "sessionId": "00000000-0000-0000-0000-000000000001", "status": "waiting", "waitingFor": "permission prompt"}],
+      "events": [
+        {"v": 1, "ts": 1793102100000, "event": "UserPromptSubmit", "session_id": "00000000-0000-0000-0000-000000000001"},
+        {"v": 1, "ts": 1793102220000, "event": "Notification", "session_id": "00000000-0000-0000-0000-000000000001", "notification_type": "permission_prompt"}
+      ],
+      "expect": [{"key": "pid:4100:1793095200000", "zone": "decision", "waiting_since_ms": 1793102220000, "alert": null, "approval": false}],
+      "expect_alert_count": 0,
+      "expect_next_escalation_at_ms": 1793102820000
+    },
+    {
+      "name": "a question through a dialog has a known start",
+      "now_ms": 1793102400000,
+      "agents": [{"pid": 4100, "cwd": "C:/work/api", "kind": "interactive", "startedAt": 1793095200000, "sessionId": "00000000-0000-0000-0000-000000000001", "status": "waiting", "waitingFor": "input needed"}],
+      "events": [
+        {"v": 1, "ts": 1793102100000, "event": "UserPromptSubmit", "session_id": "00000000-0000-0000-0000-000000000001"},
+        {"v": 1, "ts": 1793102160000, "event": "Notification", "session_id": "00000000-0000-0000-0000-000000000001", "notification_type": "elicitation_dialog"}
+      ],
+      "expect": [{"key": "pid:4100:1793095200000", "zone": "decision", "waiting_since_ms": 1793102160000, "alert": null, "approval": false}],
+      "expect_alert_count": 0,
+      "expect_next_escalation_at_ms": 1793102760000
+    },
+    {
+      "name": "a question with no blocking notification has no known start and never escalates by time",
+      "now_ms": 1793102400000,
+      "agents": [{"pid": 4100, "cwd": "C:/work/api", "kind": "interactive", "startedAt": 1793095200000, "sessionId": "00000000-0000-0000-0000-000000000001", "status": "waiting", "waitingFor": "input needed"}],
+      "events": [{"v": 1, "ts": 1793095300000, "event": "UserPromptSubmit", "session_id": "00000000-0000-0000-0000-000000000001"}],
+      "expect": [{"key": "pid:4100:1793095200000", "zone": "decision", "waiting_since_ms": null, "alert": null, "approval": false}],
+      "expect_alert_count": 0,
+      "expect_next_escalation_at_ms": null
+    },
+    {
+      "name": "a notification answered by a later prompt gives no known start",
+      "now_ms": 1793102400000,
+      "agents": [{"pid": 4100, "cwd": "C:/work/api", "kind": "interactive", "startedAt": 1793095200000, "sessionId": "00000000-0000-0000-0000-000000000001", "status": "waiting", "waitingFor": "permission prompt"}],
+      "events": [
+        {"v": 1, "ts": 1793095400000, "event": "Notification", "session_id": "00000000-0000-0000-0000-000000000001", "notification_type": "permission_prompt"},
+        {"v": 1, "ts": 1793095500000, "event": "UserPromptSubmit", "session_id": "00000000-0000-0000-0000-000000000001"}
+      ],
+      "expect": [{"key": "pid:4100:1793095200000", "zone": "decision", "waiting_since_ms": null, "alert": null, "approval": false}],
+      "expect_alert_count": 0,
+      "expect_next_escalation_at_ms": null
+    },
+    {
+      "name": "a high-priority wait is in alert at once",
+      "now_ms": 1793102400000,
+      "floor": [{"name": "api", "path": "c:/work/api", "priority": "high"}],
+      "agents": [{"pid": 4100, "cwd": "C:/work/api", "kind": "interactive", "startedAt": 1793095200000, "sessionId": "00000000-0000-0000-0000-000000000001", "status": "waiting", "waitingFor": "permission prompt"}],
+      "events": [{"v": 1, "ts": 1793102390000, "event": "Notification", "session_id": "00000000-0000-0000-0000-000000000001", "notification_type": "permission_prompt"}],
+      "expect": [{"key": "pid:4100:1793095200000", "zone": "alert", "waiting_since_ms": 1793102390000, "alert": "priority", "approval": false}],
+      "expect_alert_count": 1,
+      "expect_next_escalation_at_ms": null
+    },
+    {
+      "name": "a wait one millisecond short of the threshold stays at the decision office",
+      "now_ms": 1793102400000,
+      "alert_after_minutes": 10,
+      "agents": [{"pid": 4100, "cwd": "C:/work/api", "kind": "interactive", "startedAt": 1793095200000, "sessionId": "00000000-0000-0000-0000-000000000001", "status": "waiting", "waitingFor": "permission prompt"}],
+      "events": [{"v": 1, "ts": 1793101800001, "event": "Notification", "session_id": "00000000-0000-0000-0000-000000000001", "notification_type": "permission_prompt"}],
+      "expect": [{"key": "pid:4100:1793095200000", "zone": "decision", "waiting_since_ms": 1793101800001, "alert": null, "approval": false}],
+      "expect_alert_count": 0,
+      "expect_next_escalation_at_ms": 1793102400001
+    },
+    {
+      "name": "a wait exactly at the threshold is in alert",
+      "now_ms": 1793102400000,
+      "alert_after_minutes": 10,
+      "agents": [{"pid": 4100, "cwd": "C:/work/api", "kind": "interactive", "startedAt": 1793095200000, "sessionId": "00000000-0000-0000-0000-000000000001", "status": "waiting", "waitingFor": "permission prompt"}],
+      "events": [{"v": 1, "ts": 1793101800000, "event": "Notification", "session_id": "00000000-0000-0000-0000-000000000001", "notification_type": "permission_prompt"}],
+      "expect": [{"key": "pid:4100:1793095200000", "zone": "alert", "waiting_since_ms": 1793101800000, "alert": "waited", "approval": false}],
+      "expect_alert_count": 1,
+      "expect_next_escalation_at_ms": null
+    },
+    {
+      "name": "the floor's threshold applies",
+      "now_ms": 1793102400000,
+      "alert_after_minutes": 2,
+      "agents": [{"pid": 4100, "cwd": "C:/work/api", "kind": "interactive", "startedAt": 1793095200000, "sessionId": "00000000-0000-0000-0000-000000000001", "status": "waiting", "waitingFor": "permission prompt"}],
+      "events": [{"v": 1, "ts": 1793102220000, "event": "Notification", "session_id": "00000000-0000-0000-0000-000000000001", "notification_type": "permission_prompt"}],
+      "expect": [{"key": "pid:4100:1793095200000", "zone": "alert", "waiting_since_ms": 1793102220000, "alert": "waited", "approval": false}],
+      "expect_alert_count": 1,
+      "expect_next_escalation_at_ms": null
+    },
+    {
+      "name": "a session started from the command line with no prompt yet is at reception",
+      "now_ms": 1793102400000,
+      "agents": [{"pid": 4100, "cwd": "C:/work/api", "kind": "interactive", "startedAt": 1793102300000, "sessionId": "00000000-0000-0000-0000-000000000001", "status": "idle"}],
+      "events": [{"v": 1, "ts": 1793102300500, "event": "SessionStart", "session_id": "00000000-0000-0000-0000-000000000001", "source": "startup"}],
+      "expect": [{"key": "pid:4100:1793102300000", "zone": "reception", "waiting_since_ms": null, "alert": null, "approval": false}],
+      "expect_alert_count": 0,
+      "expect_next_escalation_at_ms": null
+    },
+    {
+      "name": "without hook events nobody is at reception: Your turn is the lounge",
+      "now_ms": 1793102400000,
+      "agents": [{"pid": 4100, "cwd": "C:/work/api", "kind": "interactive", "startedAt": 1793102300000, "sessionId": "00000000-0000-0000-0000-000000000001", "status": "idle"}],
+      "events": [],
+      "expect": [{"key": "pid:4100:1793102300000", "zone": "lounge", "waiting_since_ms": null, "alert": null, "approval": false}],
+      "expect_alert_count": 0,
+      "expect_next_escalation_at_ms": null
+    },
+    {
+      "name": "a startup followed by a prompt and a stop is in the lounge",
+      "now_ms": 1793102400000,
+      "agents": [{"pid": 4100, "cwd": "C:/work/api", "kind": "interactive", "startedAt": 1793095200000, "sessionId": "00000000-0000-0000-0000-000000000001", "status": "idle"}],
+      "events": [
+        {"v": 1, "ts": 1793095200500, "event": "SessionStart", "session_id": "00000000-0000-0000-0000-000000000001", "source": "startup"},
+        {"v": 1, "ts": 1793095300000, "event": "UserPromptSubmit", "session_id": "00000000-0000-0000-0000-000000000001"},
+        {"v": 1, "ts": 1793095400000, "event": "Stop", "session_id": "00000000-0000-0000-0000-000000000001"}
+      ],
+      "expect": [{"key": "pid:4100:1793095200000", "zone": "lounge", "waiting_since_ms": null, "alert": null, "approval": false}],
+      "expect_alert_count": 0,
+      "expect_next_escalation_at_ms": null
+    },
+    {
+      "name": "a compact, resume, clear or fork start, or one without a source, never gives reception",
+      "now_ms": 1793102400000,
+      "agents": [
+        {"pid": 4101, "cwd": "C:/work/api", "kind": "interactive", "startedAt": 1793095200000, "sessionId": "00000000-0000-0000-0000-000000000001", "status": "idle"},
+        {"pid": 4102, "cwd": "C:/work/api", "kind": "interactive", "startedAt": 1793095200000, "sessionId": "00000000-0000-0000-0000-000000000002", "status": "idle"},
+        {"pid": 4103, "cwd": "C:/work/api", "kind": "interactive", "startedAt": 1793095200000, "sessionId": "00000000-0000-0000-0000-000000000003", "status": "idle"},
+        {"pid": 4104, "cwd": "C:/work/api", "kind": "interactive", "startedAt": 1793095200000, "sessionId": "00000000-0000-0000-0000-000000000004", "status": "idle"},
+        {"pid": 4105, "cwd": "C:/work/api", "kind": "interactive", "startedAt": 1793095200000, "sessionId": "00000000-0000-0000-0000-000000000005", "status": "idle"}
+      ],
+      "events": [
+        {"v": 1, "ts": 1793095300000, "event": "Stop", "session_id": "00000000-0000-0000-0000-000000000001"},
+        {"v": 1, "ts": 1793095400000, "event": "SessionStart", "session_id": "00000000-0000-0000-0000-000000000001", "source": "compact"},
+        {"v": 1, "ts": 1793095300000, "event": "Stop", "session_id": "00000000-0000-0000-0000-000000000002"},
+        {"v": 1, "ts": 1793095400000, "event": "SessionStart", "session_id": "00000000-0000-0000-0000-000000000002", "source": "resume"},
+        {"v": 1, "ts": 1793095300000, "event": "Stop", "session_id": "00000000-0000-0000-0000-000000000003"},
+        {"v": 1, "ts": 1793095400000, "event": "SessionStart", "session_id": "00000000-0000-0000-0000-000000000003", "source": "clear"},
+        {"v": 1, "ts": 1793095300000, "event": "Stop", "session_id": "00000000-0000-0000-0000-000000000004"},
+        {"v": 1, "ts": 1793095400000, "event": "SessionStart", "session_id": "00000000-0000-0000-0000-000000000004", "source": "fork"},
+        {"v": 1, "ts": 1793095300000, "event": "Stop", "session_id": "00000000-0000-0000-0000-000000000005"},
+        {"v": 1, "ts": 1793095400000, "event": "SessionStart", "session_id": "00000000-0000-0000-0000-000000000005"}
+      ],
+      "expect": [
+        {"key": "pid:4101:1793095200000", "zone": "lounge", "waiting_since_ms": null, "alert": null, "approval": false},
+        {"key": "pid:4102:1793095200000", "zone": "lounge", "waiting_since_ms": null, "alert": null, "approval": false},
+        {"key": "pid:4103:1793095200000", "zone": "lounge", "waiting_since_ms": null, "alert": null, "approval": false},
+        {"key": "pid:4104:1793095200000", "zone": "lounge", "waiting_since_ms": null, "alert": null, "approval": false},
+        {"key": "pid:4105:1793095200000", "zone": "lounge", "waiting_since_ms": null, "alert": null, "approval": false}
+      ],
+      "expect_alert_count": 0,
+      "expect_next_escalation_at_ms": null
+    },
+    {
+      "name": "a startup start then a compact start is in the lounge",
+      "now_ms": 1793102400000,
+      "agents": [{"pid": 4100, "cwd": "C:/work/api", "kind": "interactive", "startedAt": 1793095200000, "sessionId": "00000000-0000-0000-0000-000000000001", "status": "idle"}],
+      "events": [
+        {"v": 1, "ts": 1793095200500, "event": "SessionStart", "session_id": "00000000-0000-0000-0000-000000000001", "source": "startup"},
+        {"v": 1, "ts": 1793095300000, "event": "SessionStart", "session_id": "00000000-0000-0000-0000-000000000001", "source": "compact"}
+      ],
+      "expect": [{"key": "pid:4100:1793095200000", "zone": "lounge", "waiting_since_ms": null, "alert": null, "approval": false}],
+      "expect_alert_count": 0,
+      "expect_next_escalation_at_ms": null
+    },
+    {
+      "name": "an idle_prompt after a stop moves nobody: the lounge",
+      "now_ms": 1793102400000,
+      "agents": [{"pid": 4100, "cwd": "C:/work/api", "kind": "interactive", "startedAt": 1793095200000, "sessionId": "00000000-0000-0000-0000-000000000001", "status": "idle"}],
+      "events": [
+        {"v": 1, "ts": 1793095300000, "event": "UserPromptSubmit", "session_id": "00000000-0000-0000-0000-000000000001"},
+        {"v": 1, "ts": 1793095400000, "event": "Stop", "session_id": "00000000-0000-0000-0000-000000000001"},
+        {"v": 1, "ts": 1793095460000, "event": "Notification", "session_id": "00000000-0000-0000-0000-000000000001", "notification_type": "idle_prompt"}
+      ],
+      "expect": [{"key": "pid:4100:1793095200000", "zone": "lounge", "waiting_since_ms": null, "alert": null, "approval": false}],
+      "expect_alert_count": 0,
+      "expect_next_escalation_at_ms": null
+    },
+    {
+      "name": "a Working session whose relay request is pending queues with the approval mark and its request time",
+      "now_ms": 1793102400000,
+      "approvals": [{"session_id": "00000000-0000-0000-0000-000000000001", "requested_at_ms": 1793102340000}],
+      "agents": [{"pid": 4100, "cwd": "C:/work/api", "kind": "interactive", "startedAt": 1793095200000, "sessionId": "00000000-0000-0000-0000-000000000001", "status": "busy"}],
+      "events": [],
+      "expect": [{"key": "pid:4100:1793095200000", "zone": "decision", "waiting_since_ms": 1793102340000, "alert": null, "approval": true}],
+      "expect_alert_count": 0,
+      "expect_next_escalation_at_ms": null
+    },
+    {
+      "name": "the earliest of two pending requests gives the start",
+      "now_ms": 1793102400000,
+      "approvals": [
+        {"session_id": "00000000-0000-0000-0000-000000000001", "requested_at_ms": 1793102340000},
+        {"session_id": "00000000-0000-0000-0000-000000000001", "requested_at_ms": 1793102280000}
+      ],
+      "agents": [{"pid": 4100, "cwd": "C:/work/api", "kind": "interactive", "startedAt": 1793095200000, "sessionId": "00000000-0000-0000-0000-000000000001", "status": "busy"}],
+      "events": [],
+      "expect": [{"key": "pid:4100:1793095200000", "zone": "decision", "waiting_since_ms": 1793102280000, "alert": null, "approval": true}],
+      "expect_alert_count": 0,
+      "expect_next_escalation_at_ms": null
+    },
+    {
+      "name": "a request left pending after its run gave up does not hold a Your turn session",
+      "now_ms": 1793102400000,
+      "approvals": [{"session_id": "00000000-0000-0000-0000-000000000001", "requested_at_ms": 1793102000000}],
+      "agents": [{"pid": 4100, "cwd": "C:/work/api", "kind": "interactive", "startedAt": 1793095200000, "sessionId": "00000000-0000-0000-0000-000000000001", "status": "idle"}],
+      "events": [],
+      "expect": [{"key": "pid:4100:1793095200000", "zone": "lounge", "waiting_since_ms": null, "alert": null, "approval": false}],
+      "expect_alert_count": 0,
+      "expect_next_escalation_at_ms": null
+    },
+    {
+      "name": "an invalid request holds nobody",
+      "now_ms": 1793102400000,
+      "approvals": [{"session_id": "00000000-0000-0000-0000-000000000001", "requested_at_ms": 1793102340000, "valid": false}],
+      "agents": [{"pid": 4100, "cwd": "C:/work/api", "kind": "interactive", "startedAt": 1793095200000, "sessionId": "00000000-0000-0000-0000-000000000001", "status": "busy"}],
+      "events": [],
+      "expect": [{"key": "pid:4100:1793095200000", "zone": "office", "waiting_since_ms": null, "alert": null, "approval": false}],
+      "expect_alert_count": 0,
+      "expect_next_escalation_at_ms": null
+    },
+    {
+      "name": "an approval-only wait older than the threshold never escalates by time on a normal project",
+      "now_ms": 1793102400000,
+      "alert_after_minutes": 1,
+      "approvals": [{"session_id": "00000000-0000-0000-0000-000000000001", "requested_at_ms": 1793100000000}],
+      "agents": [{"pid": 4100, "cwd": "C:/work/api", "kind": "interactive", "startedAt": 1793095200000, "sessionId": "00000000-0000-0000-0000-000000000001", "status": "busy"}],
+      "events": [],
+      "expect": [{"key": "pid:4100:1793095200000", "zone": "decision", "waiting_since_ms": 1793100000000, "alert": null, "approval": true}],
+      "expect_alert_count": 0,
+      "expect_next_escalation_at_ms": null
+    },
+    {
+      "name": "an approval-only wait on a high-priority project is in alert",
+      "now_ms": 1793102400000,
+      "floor": [{"name": "api", "path": "c:/work/api", "priority": "high"}],
+      "approvals": [{"session_id": "00000000-0000-0000-0000-000000000001", "requested_at_ms": 1793102340000}],
+      "agents": [{"pid": 4100, "cwd": "C:/work/api", "kind": "interactive", "startedAt": 1793095200000, "sessionId": "00000000-0000-0000-0000-000000000001", "status": "busy"}],
+      "events": [],
+      "expect": [{"key": "pid:4100:1793095200000", "zone": "alert", "waiting_since_ms": 1793102340000, "alert": "priority", "approval": true}],
+      "expect_alert_count": 1,
+      "expect_next_escalation_at_ms": null
+    },
+    {
+      "name": "Needs you with a pending request keeps Needs you's start and rules",
+      "now_ms": 1793102400000,
+      "approvals": [{"session_id": "00000000-0000-0000-0000-000000000001", "requested_at_ms": 1793102000000}],
+      "agents": [{"pid": 4100, "cwd": "C:/work/api", "kind": "interactive", "startedAt": 1793095200000, "sessionId": "00000000-0000-0000-0000-000000000001", "status": "waiting", "waitingFor": "permission prompt"}],
+      "events": [{"v": 1, "ts": 1793102220000, "event": "Notification", "session_id": "00000000-0000-0000-0000-000000000001", "notification_type": "permission_prompt"}],
+      "expect": [{"key": "pid:4100:1793095200000", "zone": "decision", "waiting_since_ms": 1793102220000, "alert": null, "approval": false}],
+      "expect_alert_count": 0,
+      "expect_next_escalation_at_ms": 1793102820000
+    },
+    {
+      "name": "the earliest Needs you threshold is the next escalation; approval-only and unknown cards never set it",
+      "now_ms": 1793102400000,
+      "approvals": [{"session_id": "00000000-0000-0000-0000-000000000003", "requested_at_ms": 1793102000000}],
+      "agents": [
+        {"pid": 4101, "cwd": "C:/work/api", "kind": "interactive", "startedAt": 1793095200000, "sessionId": "00000000-0000-0000-0000-000000000001", "status": "waiting", "waitingFor": "permission prompt"},
+        {"pid": 4102, "cwd": "C:/work/api", "kind": "interactive", "startedAt": 1793095200000, "sessionId": "00000000-0000-0000-0000-000000000002", "status": "waiting", "waitingFor": "permission prompt"},
+        {"pid": 4103, "cwd": "C:/work/api", "kind": "interactive", "startedAt": 1793095200000, "sessionId": "00000000-0000-0000-0000-000000000003", "status": "busy"},
+        {"id": "bg04", "cwd": "C:/work/api", "kind": "background", "startedAt": 1793095200000, "sessionId": "00000000-0000-0000-0000-000000000004", "status": "idle"}
+      ],
+      "events": [
+        {"v": 1, "ts": 1793102300000, "event": "Notification", "session_id": "00000000-0000-0000-0000-000000000001", "notification_type": "permission_prompt"},
+        {"v": 1, "ts": 1793102100000, "event": "Notification", "session_id": "00000000-0000-0000-0000-000000000002", "notification_type": "permission_prompt"},
+        {"v": 1, "ts": 1793101000000, "event": "Notification", "session_id": "00000000-0000-0000-0000-000000000004", "notification_type": "permission_prompt"}
+      ],
+      "expect": [
+        {"key": "pid:4102:1793095200000", "zone": "decision", "waiting_since_ms": 1793102100000, "alert": null, "approval": false},
+        {"key": "pid:4101:1793095200000", "zone": "decision", "waiting_since_ms": 1793102300000, "alert": null, "approval": false},
+        {"key": "pid:4103:1793095200000", "zone": "decision", "waiting_since_ms": 1793102000000, "alert": null, "approval": true},
+        {"key": "bg:bg04", "zone": "unknown", "waiting_since_ms": null, "alert": null, "approval": false}
+      ],
+      "expect_alert_count": 0,
+      "expect_next_escalation_at_ms": 1793102700000
+    },
+    {
+      "name": "an unknown badge overrides a pending request",
+      "now_ms": 1793102400000,
+      "approvals": [{"session_id": "00000000-0000-0000-0000-000000000004", "requested_at_ms": 1793102000000}],
+      "agents": [{"id": "bg04", "cwd": "C:/work/api", "kind": "background", "startedAt": 1793095200000, "sessionId": "00000000-0000-0000-0000-000000000004", "status": "idle"}],
+      "events": [],
+      "expect": [{"key": "bg:bg04", "zone": "unknown", "waiting_since_ms": null, "alert": null, "approval": false}],
+      "expect_alert_count": 0,
+      "expect_next_escalation_at_ms": null
+    },
+    {
+      "name": "a stale board makes every live card unknown, and a first board while stale has no alert",
+      "now_ms": 1793102400000,
+      "stale": true,
+      "floor": [{"name": "api", "path": "c:/work/api", "priority": "high"}],
+      "agents": [
+        {"pid": 4101, "cwd": "C:/work/api", "kind": "interactive", "startedAt": 1793095200000, "sessionId": "00000000-0000-0000-0000-000000000001", "status": "waiting", "waitingFor": "permission prompt"},
+        {"pid": 4102, "cwd": "C:/work/api", "kind": "interactive", "startedAt": 1793095200000, "sessionId": "00000000-0000-0000-0000-000000000002", "status": "busy"},
+        {"pid": 4103, "cwd": "C:/work/api", "kind": "interactive", "startedAt": 1793095200000, "sessionId": "00000000-0000-0000-0000-000000000003", "status": "idle"}
+      ],
+      "events": [{"v": 1, "ts": 1793101000000, "event": "Notification", "session_id": "00000000-0000-0000-0000-000000000001", "notification_type": "permission_prompt"}],
+      "expect": [
+        {"key": "pid:4101:1793095200000", "zone": "unknown", "waiting_since_ms": null, "alert": null, "approval": false},
+        {"key": "pid:4103:1793095200000", "zone": "unknown", "waiting_since_ms": null, "alert": null, "approval": false},
+        {"key": "pid:4102:1793095200000", "zone": "unknown", "waiting_since_ms": null, "alert": null, "approval": false}
+      ],
+      "expect_alert_count": 0,
+      "expect_next_escalation_at_ms": null
+    },
+    {
+      "name": "a stale board keeps an alerted card's alert",
+      "now_ms": 1793102400000,
+      "stale": true,
+      "previous": {"pid:4101:1793095200000": {"zone": "alert", "waiting_since_ms": 1793101000000, "alert": "waited", "approval": false}},
+      "agents": [{"pid": 4101, "cwd": "C:/work/api", "kind": "interactive", "startedAt": 1793095200000, "sessionId": "00000000-0000-0000-0000-000000000001", "status": "waiting", "waitingFor": "permission prompt"}],
+      "events": [{"v": 1, "ts": 1793101000000, "event": "Notification", "session_id": "00000000-0000-0000-0000-000000000001", "notification_type": "permission_prompt"}],
+      "expect": [{"key": "pid:4101:1793095200000", "zone": "unknown", "waiting_since_ms": 1793101000000, "alert": "waited", "approval": false}],
+      "expect_alert_count": 1,
+      "expect_next_escalation_at_ms": null
+    },
+    {
+      "name": "an unknown badge keeps an alerted card's alert",
+      "now_ms": 1793102400000,
+      "previous": {"bg:bg04": {"zone": "alert", "waiting_since_ms": 1793101000000, "alert": "priority", "approval": false}},
+      "agents": [{"id": "bg04", "cwd": "C:/work/api", "kind": "background", "startedAt": 1793095200000, "sessionId": "00000000-0000-0000-0000-000000000004", "status": "idle"}],
+      "events": [],
+      "expect": [{"key": "bg:bg04", "zone": "unknown", "waiting_since_ms": 1793101000000, "alert": "priority", "approval": false}],
+      "expect_alert_count": 1,
+      "expect_next_escalation_at_ms": null
+    },
+    {
+      "name": "an unknown card past the threshold gains no alert",
+      "now_ms": 1793102400000,
+      "stale": true,
+      "previous": {"pid:4101:1793095200000": {"zone": "decision", "waiting_since_ms": 1793101000000, "alert": null, "approval": false}},
+      "agents": [{"pid": 4101, "cwd": "C:/work/api", "kind": "interactive", "startedAt": 1793095200000, "sessionId": "00000000-0000-0000-0000-000000000001", "status": "waiting", "waitingFor": "permission prompt"}],
+      "events": [{"v": 1, "ts": 1793101000000, "event": "Notification", "session_id": "00000000-0000-0000-0000-000000000001", "notification_type": "permission_prompt"}],
+      "expect": [{"key": "pid:4101:1793095200000", "zone": "unknown", "waiting_since_ms": 1793101000000, "alert": null, "approval": false}],
+      "expect_alert_count": 0,
+      "expect_next_escalation_at_ms": null
+    },
+    {
+      "name": "fresh data in the lounge clears the alert",
+      "now_ms": 1793102400000,
+      "previous": {"pid:4101:1793095200000": {"zone": "unknown", "waiting_since_ms": 1793101000000, "alert": "waited", "approval": false}},
+      "agents": [{"pid": 4101, "cwd": "C:/work/api", "kind": "interactive", "startedAt": 1793095200000, "sessionId": "00000000-0000-0000-0000-000000000001", "status": "idle"}],
+      "events": [
+        {"v": 1, "ts": 1793101000000, "event": "Notification", "session_id": "00000000-0000-0000-0000-000000000001", "notification_type": "permission_prompt"},
+        {"v": 1, "ts": 1793102000000, "event": "Stop", "session_id": "00000000-0000-0000-0000-000000000001"}
+      ],
+      "expect": [{"key": "pid:4101:1793095200000", "zone": "lounge", "waiting_since_ms": null, "alert": null, "approval": false}],
+      "expect_alert_count": 0,
+      "expect_next_escalation_at_ms": null
+    }
+  ]
+}

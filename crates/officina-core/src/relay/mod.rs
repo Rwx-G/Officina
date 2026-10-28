@@ -116,6 +116,7 @@ mod tests {
     use super::view::Tone;
     use crate::floor::{Autonomy, Priority};
     use crate::ipc::IpcErrorCode;
+    use crate::scene::{AlertCause, Zone};
 
     fn assert_codes<T: Serialize + Copy + Debug>(all: &[T], code: fn(T) -> &'static str) {
         for &variant in all {
@@ -130,10 +131,12 @@ mod tests {
     /// of this crate without a line here.
     #[test]
     fn code_equals_the_serde_name_for_every_variant() {
-        let checked: [fn(); 19] = [
+        let checked: [fn(); 21] = [
             || assert_codes(ActionClass::ALL, ActionClass::code),
             || assert_codes(Autonomy::ALL, Autonomy::code),
             || assert_codes(Priority::ALL, Priority::code),
+            || assert_codes(Zone::ALL, Zone::code),
+            || assert_codes(AlertCause::ALL, AlertCause::code),
             || assert_codes(ForwardedValues::ALL, ForwardedValues::code),
             || assert_codes(IssueKind::ALL, IssueKind::code),
             || assert_codes(NoticeKind::ALL, NoticeKind::code),
@@ -158,6 +161,7 @@ mod tests {
             include_str!("../floor.rs"),
             include_str!("../board.rs"),
             include_str!("../focus.rs"),
+            include_str!("../scene.rs"),
             include_str!("../ipc.rs"),
             include_str!("approvals.rs"),
             include_str!("argv.rs"),

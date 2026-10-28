@@ -37,6 +37,7 @@ function card(key: string): Card {
     started_at_ms: 0,
     attach_available: true,
     subject: null,
+    scene: null,
   };
 }
 

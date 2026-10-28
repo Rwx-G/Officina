@@ -57,6 +57,7 @@ function card(overrides: Partial<Card> = {}): Card {
     started_at_ms: NOW - 60 * 60_000,
     attach_available: false,
     subject: null,
+    scene: null,
     ...overrides,
   };
 }

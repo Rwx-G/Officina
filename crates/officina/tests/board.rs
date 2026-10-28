@@ -554,3 +554,50 @@ fn cards_print_the_answer_tail() {
             .ends_with("the end")
     );
 }
+
+/// Story 4.3 AC 9 (AD-167): the board prints each live card's scene state
+/// and the alert count; a permission prompt recorded through the real hook
+/// gives the wait its start, and a high-priority project puts it in alert.
+/// One board, so no previous state.
+#[test]
+fn board_prints_scene_states_and_the_alert_count() {
+    let env = TestEnv::new();
+    let now = now_ms();
+    sessions_in_and_out_of_a_project(&env, now);
+    let api = env.root.path().join("work").join("Api");
+    env.write_agents(
+        &serde_json::json!([
+            {"pid": 4100, "cwd": api.to_string_lossy().replace('\\', "/"), "kind": "interactive",
+             "startedAt": now - 60_000, "sessionId": "00000000-0000-0000-0000-000000000001",
+             "name": "api", "status": "waiting", "waitingFor": "permission prompt"},
+            {"pid": 4200, "cwd": "C:/work/elsewhere", "kind": "interactive", "startedAt": now - 50_000,
+             "sessionId": "00000000-0000-0000-0000-000000000002", "name": "elsewhere", "status": "busy"}
+        ])
+        .to_string(),
+    );
+    let prompt = serde_json::json!({
+        "hook_event_name": "Notification",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "notification_type": officina_core::board::BLOCKING_NOTIFICATIONS[0],
+        "message": "Claude needs your permission to use Bash",
+    });
+    assert!(
+        env.run(&["hook"], prompt.to_string().as_bytes())
+            .status
+            .success()
+    );
+    let floor = "schema = 1\n\n[[project]]\nname = \"api\"\npath = \"Api\"\npriority = \"high\"\n";
+    let board = board_with_floor(&env, "officina.toml", floor);
+    let waiting = &board["columns"]["needs_you"][0]["scene"];
+    assert_eq!(waiting["zone"], "alert");
+    assert_eq!(waiting["alert"], "priority");
+    assert!(
+        waiting["waiting_since_ms"]
+            .as_i64()
+            .is_some_and(|t| t >= now - 1_000)
+    );
+    assert_eq!(waiting["approval"], false);
+    assert_eq!(board["columns"]["working"][0]["scene"]["zone"], "office");
+    assert_eq!(board["alert_count"], 1);
+    assert!(board["next_escalation_at_ms"].is_null());
+}

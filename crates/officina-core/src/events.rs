@@ -20,6 +20,11 @@ pub const SESSION_END_REASONS: [&str; 5] =
 /// Documented values of `SessionStart.source` (research notes E2).
 pub const SESSION_START_SOURCES: [&str; 5] = ["startup", "resume", "clear", "compact", "fork"];
 
+/// The `SessionStart.source` of a session started from the command line,
+/// the only one that puts a session at the scene's reception (D-495): one
+/// of [`SESSION_START_SOURCES`], which a test asserts.
+pub const FRESH_START_SOURCE: &str = "startup";
+
 /// The events that describe a sub-agent of a session rather than the
 /// session itself (AD-176): their lines carry the sub-agent's id and type,
 /// never its texts or transcript paths, and the board and the registry do
@@ -281,6 +286,11 @@ pub fn reduce_payload(
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn the_fresh_start_source_is_a_documented_one() {
+        assert!(SESSION_START_SOURCES.contains(&FRESH_START_SOURCE));
+    }
 
     #[test]
     fn excerpt_respects_character_boundaries() {

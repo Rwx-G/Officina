@@ -232,6 +232,7 @@ mod tests {
             started_at_ms: None,
             attach_available: true,
             subject: None,
+            scene: None,
         }
     }
 

@@ -14,6 +14,7 @@ use crate::floor::{ALERT_AFTER_MINUTES_DEFAULT, Priority, ProjectColor};
 use crate::quota::{QuotaFile, QuotaWindow};
 use crate::registry::types::{RegistryReport, SubjectRef};
 use crate::relay::approvals::ApprovalView;
+use crate::scene::{SceneFacts, SceneState};
 
 /// Version of the board JSON contract. 2: approval requests (AD-35). 3:
 /// the registry's state (v0.3, AD-54); later v0.3 stories extend the board
@@ -139,6 +140,9 @@ pub struct Card {
     /// `None` when unfiled, or when the registry could not be read, which
     /// `diagnostics.registry` says.
     pub subject: Option<SubjectRef>,
+    /// Where the scene places a live card (AD-167); `None` for To resume
+    /// and Done, which the scene does not draw.
+    pub scene: Option<SceneState>,
 }
 
 /// Session kind as shown on a card.
@@ -270,6 +274,13 @@ pub struct Board {
     /// no frontend constant repeats it.
     #[cfg_attr(feature = "ts", ts(type = "number"))]
     pub alert_after_ms: i64,
+    /// Live cards in alert, a last known alert on unknown data included
+    /// (AD-167, D-494): what the band, the title and the badge count.
+    pub alert_count: u32,
+    /// When a Needs you wait next reaches the threshold, for the collector
+    /// to recompute then (AD-168).
+    #[cfg_attr(feature = "ts", ts(type = "number | null"))]
+    pub next_escalation_at_ms: Option<i64>,
 }
 
 /// A declared project, path already resolved and normalised.
@@ -318,6 +329,10 @@ pub struct BoardInput {
     /// The floor's `[alert] after_minutes`, already validated; `None`
     /// without a floor, which gives [`ALERT_AFTER_MINUTES_DEFAULT`].
     pub alert_after_minutes: Option<u32>,
+    /// The scene state of each card key on the board the caller built
+    /// last (D-494): an unknown card keeps its alert from it. Empty for a
+    /// first board.
+    pub previous_scene: BTreeMap<String, SceneState>,
 }
 
 /// Events of one session, reduced to what a card shows.
@@ -336,6 +351,10 @@ pub struct SessionEvents {
     pub end_reason: Option<String>,
     pub ended_at_ms: Option<i64>,
     pub saw_prompt: bool,
+    /// The latest `SessionStart`'s time and source (`None` when its line
+    /// carried none), for the scene's reception (D-495).
+    pub last_session_start_at_ms: Option<i64>,
+    pub last_session_start_source: Option<String>,
     /// Id of the `claude` process the hook ran under (E14), if recorded.
     pub claude_pid: Option<u32>,
     /// Time of the session's first event.
@@ -404,6 +423,10 @@ pub fn group_events(events: &[EventLine]) -> BTreeMap<String, SessionEvents> {
             "SessionEnd" => {
                 entry.end_reason = Some(event.reason.clone().unwrap_or_default());
                 entry.ended_at_ms = Some(event.ts);
+            }
+            "SessionStart" => {
+                entry.last_session_start_at_ms = Some(event.ts);
+                entry.last_session_start_source.clone_from(&event.source);
             }
             _ => {}
         }
@@ -628,6 +651,7 @@ fn new_card(
         started_at_ms: facts.started_at_ms,
         attach_available: facts.attach_available,
         subject,
+        scene: None,
     }
 }
 
@@ -711,6 +735,7 @@ pub fn build_board(input: &BoardInput, now_ms: i64) -> Board {
     let grouped = group_events(&input.events);
     let empty = SessionEvents::default();
     let mut columns = Columns::default();
+    let mut card_events: crate::scene::CardEvents = BTreeMap::new();
     let mut listed: HashSet<&str> = HashSet::new();
     let mut unrecognized: Vec<String> = Vec::new();
 
@@ -745,6 +770,7 @@ pub fn build_board(input: &BoardInput, now_ms: i64) -> Board {
         let Some(card) = listed_card(record, events, input) else {
             continue;
         };
+        card_events.insert(card.key.clone(), events);
         listed.extend(own);
         listed.extend(same_process);
         if on_board(&card, now_ms) {
@@ -762,6 +788,7 @@ pub fn build_board(input: &BoardInput, now_ms: i64) -> Board {
             if let Some(card) =
                 unlisted_card(sid, events, input, now_ms).filter(|c| on_board(c, now_ms))
             {
+                card_events.insert(card.key.clone(), events);
                 columns.get_mut(card.column).push(card);
             }
         }
@@ -787,6 +814,22 @@ pub fn build_board(input: &BoardInput, now_ms: i64) -> Board {
         })
         .collect();
     let waiting = columns.needs_you.len() + approvals.iter().filter(|a| a.valid).count();
+    let alert_after_ms = i64::from(
+        input
+            .alert_after_minutes
+            .unwrap_or(ALERT_AFTER_MINUTES_DEFAULT),
+    ) * 60_000;
+    crate::scene::place(
+        &mut columns,
+        &card_events,
+        &SceneFacts {
+            stale: input.stale.is_some(),
+            now_ms,
+            alert_after_ms,
+            approvals: &approvals,
+            previous: &input.previous_scene,
+        },
+    );
 
     Board {
         schema: BOARD_SCHEMA,
@@ -794,7 +837,6 @@ pub fn build_board(input: &BoardInput, now_ms: i64) -> Board {
         floor: input.floor_name.clone(),
         stale: input.stale.clone(),
         waiting_count: u32::try_from(waiting).unwrap_or(u32::MAX),
-        columns,
         approvals,
         quota: QuotaView {
             five_hour: input.quota.as_ref().and_then(|q| q.five_hour),
@@ -811,11 +853,10 @@ pub fn build_board(input: &BoardInput, now_ms: i64) -> Board {
         },
         done_window_ms: DONE_WINDOW_MS,
         floor_projects: input.projects.iter().map(ProjectRule::view).collect(),
-        alert_after_ms: i64::from(
-            input
-                .alert_after_minutes
-                .unwrap_or(ALERT_AFTER_MINUTES_DEFAULT),
-        ) * 60_000,
+        alert_after_ms,
+        alert_count: crate::scene::alert_count(&columns),
+        next_escalation_at_ms: crate::scene::next_escalation_at_ms(&columns, alert_after_ms),
+        columns,
     }
 }
 
