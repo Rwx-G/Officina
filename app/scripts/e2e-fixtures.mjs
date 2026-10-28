@@ -76,6 +76,14 @@ const scenarios = {
     events: [],
     quota: quotaPayload(Math.floor((now - 10 * MIN) / 1000), Math.floor((now + 3 * 24 * HOUR) / 1000)),
   },
+  // Story 3.2 AC 8: a registry file holding bytes that are no database; the
+  // board reads it read-only, reports it unavailable and keeps its sessions.
+  "registry-unavailable": {
+    agents: busyAgents,
+    events: busyEvents,
+    quota: null,
+    registry: "this is not a SQLite database\n".repeat(64),
+  },
 };
 
 mkdirSync(outDir, { recursive: true });
@@ -93,6 +101,10 @@ for (const [name, scenario] of Object.entries(scenarios)) {
     byDay.set(day, (byDay.get(day) ?? "") + JSON.stringify(event) + "\n");
   }
   for (const [day, content] of byDay) writeFileSync(join(officinaHome, "events", `${day}.jsonl`), content);
+  if (scenario.registry) {
+    mkdirSync(join(officinaHome, "registry"), { recursive: true });
+    writeFileSync(join(officinaHome, "registry", "registry.db"), scenario.registry);
+  }
 
   const env = {
     SYSTEMROOT: process.env.SYSTEMROOT ?? "",

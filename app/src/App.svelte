@@ -2,6 +2,7 @@
   import { onMount } from "svelte";
   import { BoardStore } from "./lib/board.svelte";
   import { RelayStore, type WindowView } from "./lib/relay.svelte";
+  import { REGISTRY_STATE_TEXT } from "./lib/registry-text";
   import { clock } from "./lib/time";
   import Header from "./components/Header.svelte";
   import BoardColumn from "./components/BoardColumn.svelte";
@@ -26,6 +27,7 @@
   let board = $derived(store.board);
   let columns = $derived(board?.columns);
   let diagnostics = $derived(board?.diagnostics);
+  let registryText = $derived(diagnostics?.registry ? REGISTRY_STATE_TEXT[diagnostics.registry.state] : null);
   let doneWindow = $derived(board ? `${Math.round(board.done_window_ms / 3_600_000)} h` : "");
 
   function onKey(event: KeyboardEvent): void {
@@ -59,6 +61,13 @@
   {/if}
   {#if diagnostics?.floor_error}
     <div class="banner" role="alert" data-testid="floor-error">Floor file ignored: {diagnostics.floor_error}</div>
+  {/if}
+  {#if registryText}
+    <div class="banner" role="alert" data-testid="registry-banner">
+      {registryText}
+      {#if diagnostics?.registry?.detail}({diagnostics.registry.detail}){/if}
+      The board keeps working from Claude Code's sessions.
+    </div>
   {/if}
   {#if diagnostics && (diagnostics.corrupt_event_lines > 0 || diagnostics.unrecognized_values.length > 0)}
     <div class="note" data-testid="diagnostics">

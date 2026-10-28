@@ -178,6 +178,30 @@ test.describe("degraded states", () => {
     await expect(page.getByTestId("contract")).toHaveText("contract broken: sessionId");
   });
 
+  test("an unavailable registry is reported and the board still shows sessions", async ({ page }) => {
+    const board = loadBoard("registry-unavailable");
+    expect(board.diagnostics.registry?.state).toBe("unavailable");
+    await openBoard(page, board);
+    const banner = page.getByTestId("registry-banner");
+    await expect(banner).toContainText("The registry is unavailable");
+    await expect(banner).toContainText(board.diagnostics.registry!.detail!);
+    await expect(banner).toContainText("The board keeps working");
+    for (const [column, cards] of Object.entries(board.columns)) {
+      await expect(page.getByTestId(`count-${column}`)).toHaveText(String(cards.length));
+    }
+    expect(board.columns.needs_you.length).toBeGreaterThan(0);
+  });
+
+  test("a ready or absent registry shows no banner", async ({ page }) => {
+    const board = loadBoard("busy");
+    expect(board.diagnostics.registry?.state).toBe("absent");
+    await openBoard(page, board);
+    await expect(page.getByTestId("registry-banner")).toHaveCount(0);
+    board.diagnostics.registry = { state: "ready", detail: null, exclude_from_sync: null };
+    await page.evaluate((b) => window.__officinaPushBoard!(b), board);
+    await expect(page.getByTestId("registry-banner")).toHaveCount(0);
+  });
+
   test("before the first board the window says it is asking", async ({ page }) => {
     await page.goto("/");
     await expect(page.getByTestId("loading")).toBeVisible();
