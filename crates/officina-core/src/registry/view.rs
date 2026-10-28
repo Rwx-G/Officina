@@ -1,6 +1,7 @@
 //! The registry as the Subjects view and `officina subjects --json` show it
-//! (FR-6, AD-53, AD-54, D-93, D-96): built here from the registry's records
-//! and a board, so the window and the command line print the same thing.
+//! (FR-6, FR-7, AD-53, AD-54, D-93, D-96): built here from the registry's
+//! records and a board, so the window and the command line print the same
+//! thing, the rows that need a verdict included.
 
 use std::collections::BTreeMap;
 
@@ -10,11 +11,13 @@ use crate::board::{Badge, Board, Card, Column, SessionKindView};
 
 use super::filing::excerpt_time;
 use super::fold::SUPERSESSION_WINDOW_MS;
+use super::proposal::{ModelInput, Proposal};
 use super::retention::EXCERPT_TTL_MS;
 use super::types::{
-    Ending, ExcerptRecord, RegistryReport, RestoreNotice, SessionRecord, Source, SubjectRecord,
-    SubjectStatus,
+    ConfirmationRecord, Ending, ExcerptRecord, RegistryReport, RestoreNotice, RowKind,
+    SessionRecord, Source, SubjectRecord, SubjectRef, SubjectStatus, Verdict,
 };
+use super::verdict::{Row, VerdictInput, rows};
 
 /// Version of the view's JSON contract. Stays 1 through Epic 3 (P-13).
 pub const REGISTRY_VIEW_SCHEMA: u32 = 1;
@@ -49,6 +52,10 @@ pub struct RegistryView {
     /// subjects, archived ones included: where a subject may be created
     /// (D-95).
     pub projects: Vec<String>,
+    /// What needs a verdict, the latest first (FR-7, AD-49, D-76).
+    pub triage: Vec<TriageRow>,
+    /// How many rows need a verdict: the window's "N to sort" chip.
+    pub to_sort: u32,
     /// The copy a damaged registry was restored from, for
     /// [`RESTORE_NOTICE_MS`] after the restore (D-93).
     pub restore_notice: Option<RestoreNotice>,
@@ -187,6 +194,37 @@ pub struct UnfiledProject {
     pub non_interactive: Vec<SessionView>,
 }
 
+/// One row that needs a verdict (AD-49, D-76): a subject whose sessions all
+/// ended, an empty subject, or an unfiled session, with its proposal, the
+/// excerpts and end it rests on, and for an unfiled row the subject to file
+/// it under.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct TriageRow {
+    /// `subject:<id>` or `session:<id>`, stable while the row stands.
+    pub key: String,
+    pub kind: RowKind,
+    pub project: String,
+    /// The subject, for a subject or empty-subject row.
+    pub subject: Option<SubjectRef>,
+    /// The anchor, for a subject row; the session, for an unfiled one.
+    pub session_id: Option<String>,
+    pub session_name: Option<String>,
+    pub proposal: Proposal,
+    /// What confirming as shown applies: none for `unsure`, which waits
+    /// for the author's choice (D-59).
+    pub verdict: Option<Verdict>,
+    /// The anchor's excerpts, when it still holds them.
+    pub excerpts: Option<ExcerptView>,
+    pub end: Option<EndView>,
+    /// For an unfiled row: the subject proposed, when the project has
+    /// exactly one open subject.
+    #[cfg_attr(feature = "ts", ts(type = "number | null"))]
+    pub proposed_subject: Option<i64>,
+    /// For an unfiled row: the project's open subjects.
+    pub choices: Vec<SubjectRef>,
+}
+
 /// What the view is built from.
 #[derive(Debug, Clone)]
 pub struct ViewInput<'a> {
@@ -196,6 +234,10 @@ pub struct ViewInput<'a> {
     pub subjects: &'a [SubjectRecord],
     pub sessions: &'a [SessionRecord],
     pub excerpts: &'a [ExcerptRecord],
+    /// The confirmations, which answer rows until reopened (D-58).
+    pub confirmations: &'a [ConfirmationRecord],
+    /// The triage model's part of the proposals (AD-52).
+    pub model: &'a ModelInput,
     /// The board the live cards come from, when there is one.
     pub board: Option<&'a Board>,
     pub restore_notice: Option<RestoreNotice>,
@@ -356,6 +398,40 @@ pub fn archived_subjects(
     listed
 }
 
+/// A row as the view shows it, its subject, session and excerpts joined.
+fn triage_row(
+    row: Row,
+    subjects: &BTreeMap<i64, &SubjectRecord>,
+    sessions: &BTreeMap<&str, &SessionRecord>,
+    excerpts: &BTreeMap<&str, &ExcerptRecord>,
+) -> TriageRow {
+    let reference = |id: i64| {
+        subjects.get(&id).map(|s| SubjectRef {
+            id,
+            name: s.name.clone(),
+        })
+    };
+    let session = row.session_id.as_deref().and_then(|id| sessions.get(id));
+    TriageRow {
+        kind: row.kind,
+        project: row.project,
+        subject: row.subject.and_then(reference),
+        session_name: session.and_then(|s| s.name.as_ref().map(|n| n.value.clone())),
+        end: session.and_then(|s| end_view(s)),
+        excerpts: row
+            .session_id
+            .as_deref()
+            .and_then(|id| excerpts.get(id))
+            .map(|e| excerpt_view(e)),
+        verdict: row.proposal.definite(),
+        proposal: row.proposal,
+        proposed_subject: row.proposed_subject,
+        choices: row.choices.into_iter().filter_map(reference).collect(),
+        session_id: row.session_id,
+        key: row.key,
+    }
+}
+
 /// The view with nothing read, saying why in `report` (D-47): what a
 /// command line prints, and the window shows, while the registry cannot be
 /// read.
@@ -376,6 +452,8 @@ pub fn unread_view(report: RegistryReport, now_ms: i64) -> RegistryView {
             subjects: &[],
             sessions: &[],
             excerpts: &[],
+            confirmations: &[],
+            model: &ModelInput::default(),
             board: None,
             restore_notice: None,
         },
@@ -392,7 +470,8 @@ pub fn unread_view(report: RegistryReport, now_ms: i64) -> RegistryView {
 ///     &ViewInput {
 ///         registry: RegistryReport { state: RegistryState::Absent, detail: None, exclude_from_sync: None },
 ///         ingestion: IngestionView::default(),
-///         subjects: &[], sessions: &[], excerpts: &[], board: None, restore_notice: None,
+///         subjects: &[], sessions: &[], excerpts: &[], confirmations: &[],
+///         model: &Default::default(), board: None, restore_notice: None,
 ///     },
 ///     1_000,
 /// );
@@ -446,6 +525,21 @@ pub fn build_view(input: &ViewInput, now_ms: i64) -> RegistryView {
             .then_with(|| b_at.cmp(a_at))
             .then_with(|| a.id.cmp(&b.id))
     });
+    let by_id: BTreeMap<i64, &SubjectRecord> = input.subjects.iter().map(|s| (s.id, s)).collect();
+    let by_session: BTreeMap<&str, &SessionRecord> = input
+        .sessions
+        .iter()
+        .map(|s| (s.session_id.as_str(), s))
+        .collect();
+    let triage: Vec<TriageRow> = rows(&VerdictInput {
+        subjects: input.subjects,
+        sessions: input.sessions,
+        confirmations: input.confirmations,
+        model: input.model,
+    })
+    .into_iter()
+    .map(|row| triage_row(row, &by_id, &by_session, &excerpts))
+    .collect();
     let unfiled = unfiled
         .into_values()
         .map(|mut project| {
@@ -463,6 +557,8 @@ pub fn build_view(input: &ViewInput, now_ms: i64) -> RegistryView {
         subjects: subjects.into_iter().map(|(_, s)| s).collect(),
         unfiled,
         projects: known_projects(input.subjects, input.sessions),
+        to_sort: u32::try_from(triage.len()).unwrap_or(u32::MAX),
+        triage,
         restore_notice: input
             .restore_notice
             .clone()
@@ -550,6 +646,8 @@ mod tests {
                 subjects,
                 sessions,
                 excerpts: &[],
+                confirmations: &[],
+                model: &ModelInput::default(),
                 board: None,
                 restore_notice: None,
             },
@@ -609,6 +707,8 @@ mod tests {
                     subjects: &subjects,
                     sessions: &sessions,
                     excerpts: &[],
+                    confirmations: &[],
+                    model: &ModelInput::default(),
                     board: None,
                     restore_notice: None,
                 }
@@ -683,6 +783,8 @@ mod tests {
                     subjects: &[],
                     sessions: &[],
                     excerpts: &[],
+                    confirmations: &[],
+                    model: &ModelInput::default(),
                     board: None,
                     restore_notice: Some(notice.clone()),
                 },
@@ -740,6 +842,8 @@ mod tests {
                 subjects: &subjects,
                 sessions: &sessions,
                 excerpts: &excerpts,
+                confirmations: &[],
+                model: &ModelInput::default(),
                 board: None,
                 restore_notice: None,
             },
@@ -797,5 +901,97 @@ mod tests {
         ];
         assert_eq!(view(&subjects, &sessions).projects, ["api", "old", "web"]);
         assert!(view(&[], &[]).projects.is_empty());
+    }
+
+    /// A session of `project` that saw a prompt at `at - 100` and ended at
+    /// `at` with a normal exit.
+    fn ended(id: &str, project: &str, subject: Option<i64>, at: i64) -> SessionRecord {
+        SessionRecord {
+            listed: sourced(at - 200, Source::Agents, at - 200),
+            last_prompt_at: sourced(at - 100, Source::Hook, at - 100),
+            last_stop_at: sourced(at - 50, Source::Hook, at - 50),
+            ended: sourced(
+                HookEnd {
+                    reason: Some("prompt_input_exit".to_owned()),
+                    claude_pid: None,
+                },
+                Source::Hook,
+                at,
+            ),
+            ..session(id, project, subject, at)
+        }
+    }
+
+    /// FR-7, AD-49: the view carries the rows and their count, recomputed
+    /// from what the registry holds: a session alive again takes its
+    /// subject's row away, a confirmation answers it.
+    #[test]
+    fn rows_and_their_count_follow_the_registry() {
+        let subjects = [subject(1, SubjectStatus::Active, NOW)];
+        let mut sessions = vec![
+            ended("filed", "api", Some(1), NOW - 1_000),
+            ended("loose", "api", None, NOW - 500),
+        ];
+        let excerpts = [ExcerptRecord {
+            session_id: "filed".into(),
+            prompt: Some("tighten the alert rules".into()),
+            prompt_at_ms: Some(NOW - 1_100),
+            ..ExcerptRecord::default()
+        }];
+        let build = |sessions: &[SessionRecord], confirmations: &[ConfirmationRecord]| {
+            build_view(
+                &ViewInput {
+                    registry: ready(),
+                    ingestion: IngestionView::default(),
+                    subjects: &subjects,
+                    sessions,
+                    excerpts: &excerpts,
+                    confirmations,
+                    model: &ModelInput::default(),
+                    board: None,
+                    restore_notice: None,
+                },
+                NOW,
+            )
+        };
+        let shown = build(&sessions, &[]);
+        let keys: Vec<&str> = shown.triage.iter().map(|r| r.key.as_str()).collect();
+        assert_eq!(keys, ["session:loose", "subject:1"], "the latest first");
+        assert_eq!(shown.to_sort, 2);
+        let loose = &shown.triage[0];
+        assert_eq!(loose.kind, RowKind::UnfiledSession);
+        assert_eq!(loose.proposed_subject, Some(1));
+        assert_eq!(
+            loose.choices,
+            [SubjectRef {
+                id: 1,
+                name: "subject 1".into()
+            }]
+        );
+        let filed = &shown.triage[1];
+        assert_eq!(filed.subject.as_ref().map(|s| s.id), Some(1));
+        assert_eq!(filed.session_id.as_deref(), Some("filed"));
+        assert_eq!(filed.verdict, Some(Verdict::ToResume));
+        assert_eq!(
+            filed.excerpts.as_ref().and_then(|e| e.prompt.as_deref()),
+            Some("tighten the alert rules")
+        );
+        assert_eq!(
+            filed.end.as_ref().map(|e| (e.how, e.at_ms)),
+            Some((EndHow::SessionEnd, NOW - 1_000))
+        );
+
+        let answered = ConfirmationRecord {
+            subject_id: 1,
+            session_id: Some("filed".into()),
+            confirmed_at_ms: NOW - 900,
+            reopened_at_ms: None,
+        };
+        assert_eq!(build(&sessions, &[answered]).to_sort, 1);
+        sessions[0].last_prompt_at = sourced(NOW - 10, Source::Hook, NOW - 10);
+        let alive = build(&sessions, &[]);
+        assert_eq!(alive.to_sort, 1, "a prompt after its end: alive again");
+        assert_eq!(alive.triage[0].key, "session:loose");
+        assert_eq!(unread_view(ready(), NOW).to_sort, 0);
     }
 }

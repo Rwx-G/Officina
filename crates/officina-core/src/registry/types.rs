@@ -470,6 +470,20 @@ pub struct SubjectRecord {
     pub merged_into: Option<i64>,
 }
 
+/// One `confirmation` row, as far as deciding what still needs a verdict
+/// reads it (AD-49, D-58).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConfirmationRecord {
+    pub subject_id: i64,
+    /// The session the row was anchored on; `None` for an empty subject
+    /// (D-76).
+    pub session_id: Option<String>,
+    pub confirmed_at_ms: i64,
+    /// Set when the subject was reopened after it (D-58): the confirmation
+    /// no longer answers anything.
+    pub reopened_at_ms: Option<i64>,
+}
+
 /// A subject as a board card names it (AD-54).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]

@@ -868,5 +868,337 @@
         "reopened": [[1, 1793102402000, 1793102404000]]
       }
     }
+  ],
+  "triage": [
+    {
+      "name": "a background state proposes from the state",
+      "steps": [
+        {"events": [
+          {"v": 1, "ts": 1793102400000, "event": "UserPromptSubmit", "session_id": "b1", "cwd": "C:/work/api", "prompt": "build the nightly report"},
+          {"v": 1, "ts": 1793102400000, "event": "UserPromptSubmit", "session_id": "b2", "cwd": "C:/work/web", "prompt": "upgrade the dependencies"},
+          {"v": 1, "ts": 1793102400000, "event": "UserPromptSubmit", "session_id": "b3", "cwd": "C:/work/docs", "prompt": "check the links"}
+        ]},
+        {"author": {"at_ms": 1793102401000, "action": {"kind": "create", "name": "nightly", "origin": {"sessions": ["b1"]}}}},
+        {"author": {"at_ms": 1793102401000, "action": {"kind": "create", "name": "deps", "origin": {"sessions": ["b2"]}}}},
+        {"author": {"at_ms": 1793102401000, "action": {"kind": "create", "name": "links", "origin": {"sessions": ["b3"]}}}},
+        {"agents": {"now_ms": 1793102410000, "records": [
+          {"pid": 4301, "id": "bg01", "sessionId": "b1", "kind": "background", "cwd": "C:/work/api", "name": "nightly", "status": "idle", "state": "done", "startedAt": 1793102340000},
+          {"pid": 4302, "id": "bg02", "sessionId": "b2", "kind": "background", "cwd": "C:/work/web", "name": "deps", "status": "idle", "state": "failed", "startedAt": 1793102340000},
+          {"pid": 4303, "id": "bg03", "sessionId": "b3", "kind": "background", "cwd": "C:/work/docs", "name": "links", "status": "idle", "state": "stopped", "startedAt": 1793102340000}
+        ]}}
+      ],
+      "expect": [
+        {"kind": "subject", "key": "subject:1", "subject": 1, "session": "b1", "proposal": ["finished", "state", "state_done"], "verdict": "finished", "proposed_subject": null, "choices": []},
+        {"kind": "subject", "key": "subject:2", "subject": 2, "session": "b2", "proposal": ["to_resume", "state", "state_failed"], "verdict": "to_resume", "proposed_subject": null, "choices": []},
+        {"kind": "subject", "key": "subject:3", "subject": 3, "session": "b3", "proposal": ["to_resume", "state", "state_stopped"], "verdict": "to_resume", "proposed_subject": null, "choices": []}
+      ]
+    },
+    {
+      "name": "a turn cut mid-way proposes to_resume by rule",
+      "steps": [
+        {"events": [
+          {"v": 1, "ts": 1793102400000, "event": "SessionStart", "session_id": "s1", "cwd": "C:/work/api", "source": "startup", "claude_pid": 4100},
+          {"v": 1, "ts": 1793102401000, "event": "UserPromptSubmit", "session_id": "s1", "cwd": "C:/work/api", "prompt": "migrate the schema", "claude_pid": 4100},
+          {"v": 1, "ts": 1793102403000, "event": "SessionEnd", "session_id": "s1", "cwd": "C:/work/api", "reason": "prompt_input_exit", "claude_pid": 4100}
+        ]},
+        {"author": {"at_ms": 1793102404000, "action": {"kind": "create", "name": "schema", "origin": {"sessions": ["s1"]}}}}
+      ],
+      "expect": [
+        {"kind": "subject", "key": "subject:1", "subject": 1, "session": "s1", "proposal": ["to_resume", "rules", "cut_mid_turn"], "verdict": "to_resume", "proposed_subject": null, "choices": []}
+      ]
+    },
+    {
+      "name": "prompt_input_exit after a Stop proposes nothing by itself",
+      "steps": [
+        {"events": [
+          {"v": 1, "ts": 1793102401000, "event": "UserPromptSubmit", "session_id": "s1", "cwd": "C:/work/api", "prompt": "fix the build"},
+          {"v": 1, "ts": 1793102402000, "event": "Stop", "session_id": "s1", "cwd": "C:/work/api", "last_message": "Fixed."},
+          {"v": 1, "ts": 1793102403000, "event": "SessionEnd", "session_id": "s1", "cwd": "C:/work/api", "reason": "prompt_input_exit"}
+        ]},
+        {"author": {"at_ms": 1793102404000, "action": {"kind": "create", "name": "build", "origin": {"sessions": ["s1"]}}}}
+      ],
+      "expect": [
+        {"kind": "subject", "key": "subject:1", "subject": 1, "session": "s1", "proposal": ["to_resume", "rules", "default_to_resume"], "verdict": "to_resume", "proposed_subject": null, "choices": []}
+      ]
+    },
+    {
+      "name": "the model answers where the default would, unsure included",
+      "model": {"enabled": true, "answers": {"s1": "finished", "s2": "unsure", "s3": "finished"}},
+      "steps": [
+        {"events": [
+          {"v": 1, "ts": 1793102401000, "event": "UserPromptSubmit", "session_id": "s1", "cwd": "C:/work/api", "prompt": "rename the handler"},
+          {"v": 1, "ts": 1793102402000, "event": "Stop", "session_id": "s1", "cwd": "C:/work/api", "last_message": "Renamed."},
+          {"v": 1, "ts": 1793102403000, "event": "SessionEnd", "session_id": "s1", "cwd": "C:/work/api", "reason": "prompt_input_exit"},
+          {"v": 1, "ts": 1793102401000, "event": "UserPromptSubmit", "session_id": "s2", "cwd": "C:/work/web", "prompt": "look at the layout"},
+          {"v": 1, "ts": 1793102402000, "event": "Stop", "session_id": "s2", "cwd": "C:/work/web", "last_message": "Two options."},
+          {"v": 1, "ts": 1793102404000, "event": "SessionEnd", "session_id": "s2", "cwd": "C:/work/web", "reason": "prompt_input_exit"},
+          {"v": 1, "ts": 1793102401000, "event": "UserPromptSubmit", "session_id": "s3", "cwd": "C:/work/docs", "prompt": "rewrite the guide"},
+          {"v": 1, "ts": 1793102405000, "event": "SessionEnd", "session_id": "s3", "cwd": "C:/work/docs", "reason": "logout"}
+        ]},
+        {"author": {"at_ms": 1793102406000, "action": {"kind": "create", "name": "handler", "origin": {"sessions": ["s1"]}}}},
+        {"author": {"at_ms": 1793102406000, "action": {"kind": "create", "name": "layout", "origin": {"sessions": ["s2"]}}}},
+        {"author": {"at_ms": 1793102406000, "action": {"kind": "create", "name": "guide", "origin": {"sessions": ["s3"]}}}}
+      ],
+      "expect": [
+        {"kind": "subject", "key": "subject:3", "subject": 3, "session": "s3", "proposal": ["to_resume", "rules", "cut_mid_turn"], "verdict": "to_resume", "proposed_subject": null, "choices": []},
+        {"kind": "subject", "key": "subject:2", "subject": 2, "session": "s2", "proposal": ["unsure", "model", "model"], "verdict": null, "proposed_subject": null, "choices": []},
+        {"kind": "subject", "key": "subject:1", "subject": 1, "session": "s1", "proposal": ["finished", "model", "model"], "verdict": "finished", "proposed_subject": null, "choices": []}
+      ]
+    },
+    {
+      "name": "a disabled model leaves the default",
+      "model": {"enabled": false, "answers": {"s1": "finished"}},
+      "steps": [
+        {"events": [
+          {"v": 1, "ts": 1793102401000, "event": "UserPromptSubmit", "session_id": "s1", "cwd": "C:/work/api", "prompt": "rename the handler"},
+          {"v": 1, "ts": 1793102402000, "event": "Stop", "session_id": "s1", "cwd": "C:/work/api", "last_message": "Renamed."},
+          {"v": 1, "ts": 1793102403000, "event": "SessionEnd", "session_id": "s1", "cwd": "C:/work/api", "reason": "prompt_input_exit"}
+        ]},
+        {"author": {"at_ms": 1793102404000, "action": {"kind": "create", "name": "handler", "origin": {"sessions": ["s1"]}}}}
+      ],
+      "expect": [
+        {"kind": "subject", "key": "subject:1", "subject": 1, "session": "s1", "proposal": ["to_resume", "rules", "default_to_resume"], "verdict": "to_resume", "proposed_subject": null, "choices": []}
+      ]
+    },
+    {
+      "name": "a subject with several ended sessions, a cleared one among them, needs one verdict",
+      "steps": [
+        {"events": [
+          {"v": 1, "ts": 1793102400000, "event": "SessionStart", "session_id": "s1", "cwd": "C:/work/api", "source": "startup", "claude_pid": 4100},
+          {"v": 1, "ts": 1793102401000, "event": "UserPromptSubmit", "session_id": "s1", "cwd": "C:/work/api", "prompt": "draft the rollout", "claude_pid": 4100},
+          {"v": 1, "ts": 1793102402000, "event": "Stop", "session_id": "s1", "cwd": "C:/work/api", "last_message": "Drafted.", "claude_pid": 4100},
+          {"v": 1, "ts": 1793102403000, "event": "SessionEnd", "session_id": "s1", "cwd": "C:/work/api", "reason": "clear", "claude_pid": 4100},
+          {"v": 1, "ts": 1793102403000, "event": "SessionStart", "session_id": "s2", "cwd": "C:/work/api", "source": "clear", "claude_pid": 4100},
+          {"v": 1, "ts": 1793102404000, "event": "UserPromptSubmit", "session_id": "s2", "cwd": "C:/work/api", "prompt": "apply it to staging", "claude_pid": 4100},
+          {"v": 1, "ts": 1793102405000, "event": "Stop", "session_id": "s2", "cwd": "C:/work/api", "last_message": "Applied.", "claude_pid": 4100},
+          {"v": 1, "ts": 1793102406000, "event": "SessionEnd", "session_id": "s2", "cwd": "C:/work/api", "reason": "prompt_input_exit", "claude_pid": 4100},
+          {"v": 1, "ts": 1793102410000, "event": "SessionStart", "session_id": "s3", "cwd": "C:/work/api", "source": "startup", "claude_pid": 4200},
+          {"v": 1, "ts": 1793102411000, "event": "UserPromptSubmit", "session_id": "s3", "cwd": "C:/work/api", "prompt": "check the alerts after the rollout", "claude_pid": 4200},
+          {"v": 1, "ts": 1793102412000, "event": "Stop", "session_id": "s3", "cwd": "C:/work/api", "last_message": "All quiet.", "claude_pid": 4200},
+          {"v": 1, "ts": 1793102413000, "event": "SessionEnd", "session_id": "s3", "cwd": "C:/work/api", "reason": "prompt_input_exit", "claude_pid": 4200}
+        ]},
+        {"author": {"at_ms": 1793102414000, "action": {"kind": "create", "name": "rollout", "origin": {"sessions": ["s1", "s2", "s3"]}}}}
+      ],
+      "expect": [
+        {"kind": "subject", "key": "subject:1", "subject": 1, "session": "s3", "proposal": ["to_resume", "rules", "default_to_resume"], "verdict": "to_resume", "proposed_subject": null, "choices": []}
+      ]
+    },
+    {
+      "name": "a latest session that saw no prompt leaves the anchor on the one before",
+      "steps": [
+        {"events": [
+          {"v": 1, "ts": 1793102401000, "event": "UserPromptSubmit", "session_id": "s1", "cwd": "C:/work/api", "prompt": "fix the build"},
+          {"v": 1, "ts": 1793102402000, "event": "Stop", "session_id": "s1", "cwd": "C:/work/api", "last_message": "Fixed."},
+          {"v": 1, "ts": 1793102403000, "event": "SessionEnd", "session_id": "s1", "cwd": "C:/work/api", "reason": "prompt_input_exit"},
+          {"v": 1, "ts": 1793102405000, "event": "SessionStart", "session_id": "s2", "cwd": "C:/work/api", "source": "startup"},
+          {"v": 1, "ts": 1793102406000, "event": "SessionEnd", "session_id": "s2", "cwd": "C:/work/api", "reason": "prompt_input_exit"}
+        ]},
+        {"author": {"at_ms": 1793102407000, "action": {"kind": "create", "name": "build", "origin": {"sessions": ["s1", "s2"]}}}}
+      ],
+      "expect": [
+        {"kind": "subject", "key": "subject:1", "subject": 1, "session": "s1", "proposal": ["to_resume", "rules", "default_to_resume"], "verdict": "to_resume", "proposed_subject": null, "choices": []}
+      ]
+    },
+    {
+      "name": "clear then exit anchors the row on the cleared session",
+      "steps": [
+        {"events": [
+          {"v": 1, "ts": 1793102400000, "event": "SessionStart", "session_id": "s1", "cwd": "C:/work/api", "source": "startup", "claude_pid": 4100},
+          {"v": 1, "ts": 1793102401000, "event": "UserPromptSubmit", "session_id": "s1", "cwd": "C:/work/api", "prompt": "draft the rollout", "claude_pid": 4100},
+          {"v": 1, "ts": 1793102402000, "event": "Stop", "session_id": "s1", "cwd": "C:/work/api", "last_message": "Drafted.", "claude_pid": 4100},
+          {"v": 1, "ts": 1793102403000, "event": "SessionEnd", "session_id": "s1", "cwd": "C:/work/api", "reason": "clear", "claude_pid": 4100},
+          {"v": 1, "ts": 1793102403000, "event": "SessionStart", "session_id": "s2", "cwd": "C:/work/api", "source": "clear", "claude_pid": 4100},
+          {"v": 1, "ts": 1793102404000, "event": "SessionEnd", "session_id": "s2", "cwd": "C:/work/api", "reason": "prompt_input_exit", "claude_pid": 4100}
+        ]},
+        {"author": {"at_ms": 1793102405000, "action": {"kind": "create", "name": "rollout", "origin": {"sessions": ["s1", "s2"]}}}}
+      ],
+      "expect": [
+        {"kind": "subject", "key": "subject:1", "subject": 1, "session": "s1", "proposal": ["to_resume", "rules", "default_to_resume"], "verdict": "to_resume", "proposed_subject": null, "choices": []}
+      ]
+    },
+    {
+      "name": "a clear successor filed elsewhere gives each subject its row",
+      "steps": [
+        {"events": [
+          {"v": 1, "ts": 1793102400000, "event": "SessionStart", "session_id": "s1", "cwd": "C:/work/api", "source": "startup", "claude_pid": 4100},
+          {"v": 1, "ts": 1793102401000, "event": "UserPromptSubmit", "session_id": "s1", "cwd": "C:/work/api", "prompt": "draft the rollout", "claude_pid": 4100},
+          {"v": 1, "ts": 1793102402000, "event": "Stop", "session_id": "s1", "cwd": "C:/work/api", "last_message": "Drafted.", "claude_pid": 4100},
+          {"v": 1, "ts": 1793102403000, "event": "SessionEnd", "session_id": "s1", "cwd": "C:/work/api", "reason": "clear", "claude_pid": 4100},
+          {"v": 1, "ts": 1793102403000, "event": "SessionStart", "session_id": "s2", "cwd": "C:/work/api", "source": "clear", "claude_pid": 4100},
+          {"v": 1, "ts": 1793102404000, "event": "UserPromptSubmit", "session_id": "s2", "cwd": "C:/work/api", "prompt": "now the login page", "claude_pid": 4100},
+          {"v": 1, "ts": 1793102405000, "event": "Stop", "session_id": "s2", "cwd": "C:/work/api", "last_message": "Done.", "claude_pid": 4100},
+          {"v": 1, "ts": 1793102406000, "event": "SessionEnd", "session_id": "s2", "cwd": "C:/work/api", "reason": "prompt_input_exit", "claude_pid": 4100}
+        ]},
+        {"author": {"at_ms": 1793102407000, "action": {"kind": "create", "name": "rollout", "origin": {"sessions": ["s1"]}}}},
+        {"author": {"at_ms": 1793102408000, "action": {"kind": "create", "name": "login page", "origin": {"sessions": ["s2"]}}}}
+      ],
+      "expect": [
+        {"kind": "subject", "key": "subject:2", "subject": 2, "session": "s2", "proposal": ["to_resume", "rules", "default_to_resume"], "verdict": "to_resume", "proposed_subject": null, "choices": []},
+        {"kind": "subject", "key": "subject:1", "subject": 1, "session": "s1", "proposal": ["to_resume", "rules", "default_to_resume"], "verdict": "to_resume", "proposed_subject": null, "choices": []}
+      ]
+    },
+    {
+      "name": "a clear successor left unfiled gives its own row and the subject keeps its row",
+      "steps": [
+        {"events": [
+          {"v": 1, "ts": 1793102400000, "event": "SessionStart", "session_id": "s1", "cwd": "C:/work/api", "source": "startup", "claude_pid": 4100},
+          {"v": 1, "ts": 1793102401000, "event": "UserPromptSubmit", "session_id": "s1", "cwd": "C:/work/api", "prompt": "draft the rollout", "claude_pid": 4100},
+          {"v": 1, "ts": 1793102402000, "event": "Stop", "session_id": "s1", "cwd": "C:/work/api", "last_message": "Drafted.", "claude_pid": 4100},
+          {"v": 1, "ts": 1793102403000, "event": "SessionEnd", "session_id": "s1", "cwd": "C:/work/api", "reason": "clear", "claude_pid": 4100},
+          {"v": 1, "ts": 1793102403000, "event": "SessionStart", "session_id": "s2", "cwd": "C:/work/api", "source": "clear", "claude_pid": 4100},
+          {"v": 1, "ts": 1793102404000, "event": "UserPromptSubmit", "session_id": "s2", "cwd": "C:/work/api", "prompt": "now the login page", "claude_pid": 4100},
+          {"v": 1, "ts": 1793102405000, "event": "Stop", "session_id": "s2", "cwd": "C:/work/api", "last_message": "Done.", "claude_pid": 4100},
+          {"v": 1, "ts": 1793102406000, "event": "SessionEnd", "session_id": "s2", "cwd": "C:/work/api", "reason": "prompt_input_exit", "claude_pid": 4100}
+        ]},
+        {"author": {"at_ms": 1793102407000, "action": {"kind": "create", "name": "rollout", "origin": {"sessions": ["s1"]}}}}
+      ],
+      "expect": [
+        {"kind": "unfiled_session", "key": "session:s2", "subject": null, "session": "s2", "proposal": ["to_resume", "rules", "default_to_resume"], "verdict": "to_resume", "proposed_subject": 1, "choices": [1]},
+        {"kind": "subject", "key": "subject:1", "subject": 1, "session": "s1", "proposal": ["to_resume", "rules", "default_to_resume"], "verdict": "to_resume", "proposed_subject": null, "choices": []}
+      ]
+    },
+    {
+      "name": "superseded unfiled sessions, non-interactive runs, sessions without a prompt and live ones give no row",
+      "steps": [
+        {"events": [
+          {"v": 1, "ts": 1793102400000, "event": "SessionStart", "session_id": "s1", "cwd": "C:/work/api", "source": "startup", "claude_pid": 4100},
+          {"v": 1, "ts": 1793102401000, "event": "UserPromptSubmit", "session_id": "s1", "cwd": "C:/work/api", "prompt": "draft the rollout", "claude_pid": 4100},
+          {"v": 1, "ts": 1793102402000, "event": "Stop", "session_id": "s1", "cwd": "C:/work/api", "last_message": "Drafted.", "claude_pid": 4100},
+          {"v": 1, "ts": 1793102403000, "event": "SessionEnd", "session_id": "s1", "cwd": "C:/work/api", "reason": "resume", "claude_pid": 4100},
+          {"v": 1, "ts": 1793102403000, "event": "SessionStart", "session_id": "s2", "cwd": "C:/work/api", "source": "resume", "claude_pid": 4100},
+          {"v": 1, "ts": 1793102404000, "event": "SessionEnd", "session_id": "s2", "cwd": "C:/work/api", "reason": "logout", "claude_pid": 4100},
+          {"v": 1, "ts": 1793102405000, "event": "SessionStart", "session_id": "p1", "cwd": "C:/work/api", "source": "startup"},
+          {"v": 1, "ts": 1793102405100, "event": "UserPromptSubmit", "session_id": "p1", "cwd": "C:/work/api", "prompt": "summarise the log"},
+          {"v": 1, "ts": 1793102405200, "event": "Stop", "session_id": "p1", "cwd": "C:/work/api", "last_message": "Summary."},
+          {"v": 1, "ts": 1793102405300, "event": "SessionEnd", "session_id": "p1", "cwd": "C:/work/api", "reason": "other"},
+          {"v": 1, "ts": 1793102406000, "event": "UserPromptSubmit", "session_id": "s4", "cwd": "C:/work/api", "prompt": "still working"}
+        ]}
+      ],
+      "expect": []
+    },
+    {
+      "name": "an unfiled session is proposed its project's only open subject, offered several, or none",
+      "steps": [
+        {"events": [
+          {"v": 1, "ts": 1793102401000, "event": "UserPromptSubmit", "session_id": "a1", "cwd": "C:/work/api", "prompt": "fix the build"},
+          {"v": 1, "ts": 1793102402000, "event": "Stop", "session_id": "a1", "cwd": "C:/work/api", "last_message": "Fixed."},
+          {"v": 1, "ts": 1793102403000, "event": "SessionEnd", "session_id": "a1", "cwd": "C:/work/api", "reason": "prompt_input_exit"},
+          {"v": 1, "ts": 1793102401000, "event": "UserPromptSubmit", "session_id": "w1", "cwd": "C:/work/web", "prompt": "tidy the styles"},
+          {"v": 1, "ts": 1793102402000, "event": "Stop", "session_id": "w1", "cwd": "C:/work/web", "last_message": "Tidied."},
+          {"v": 1, "ts": 1793102404000, "event": "SessionEnd", "session_id": "w1", "cwd": "C:/work/web", "reason": "prompt_input_exit"},
+          {"v": 1, "ts": 1793102401000, "event": "UserPromptSubmit", "session_id": "d1", "cwd": "C:/work/docs", "prompt": "proofread"},
+          {"v": 1, "ts": 1793102402000, "event": "Stop", "session_id": "d1", "cwd": "C:/work/docs", "last_message": "Proofread."},
+          {"v": 1, "ts": 1793102405000, "event": "SessionEnd", "session_id": "d1", "cwd": "C:/work/docs", "reason": "prompt_input_exit"}
+        ]},
+        {"author": {"at_ms": 1793102406000, "action": {"kind": "create", "name": "build", "origin": {"project": "api"}}}},
+        {"author": {"at_ms": 1793102406100, "action": {"kind": "archive", "subject": 1, "routine": false}}},
+        {"author": {"at_ms": 1793102406200, "action": {"kind": "reopen", "subject": 1}}},
+        {"author": {"at_ms": 1793102406300, "action": {"kind": "create", "name": "styles", "origin": {"project": "web"}}}},
+        {"author": {"at_ms": 1793102406400, "action": {"kind": "create", "name": "theme", "origin": {"project": "web"}}}}
+      ],
+      "expect": [
+        {"kind": "empty_subject", "key": "subject:3", "subject": 3, "session": null, "proposal": ["finished", "rules", "empty_subject"], "verdict": "finished", "proposed_subject": null, "choices": []},
+        {"kind": "empty_subject", "key": "subject:2", "subject": 2, "session": null, "proposal": ["finished", "rules", "empty_subject"], "verdict": "finished", "proposed_subject": null, "choices": []},
+        {"kind": "unfiled_session", "key": "session:d1", "subject": null, "session": "d1", "proposal": ["to_resume", "rules", "default_to_resume"], "verdict": "to_resume", "proposed_subject": null, "choices": []},
+        {"kind": "unfiled_session", "key": "session:w1", "subject": null, "session": "w1", "proposal": ["to_resume", "rules", "default_to_resume"], "verdict": "to_resume", "proposed_subject": null, "choices": [2, 3]},
+        {"kind": "unfiled_session", "key": "session:a1", "subject": null, "session": "a1", "proposal": ["to_resume", "rules", "default_to_resume"], "verdict": "to_resume", "proposed_subject": 1, "choices": [1]}
+      ]
+    },
+    {
+      "name": "subject whose only session never prompted",
+      "steps": [
+        {"events": [
+          {"v": 1, "ts": 1793102400000, "event": "SessionStart", "session_id": "s1", "cwd": "C:/work/api", "source": "startup"},
+          {"v": 1, "ts": 1793102401000, "event": "SessionEnd", "session_id": "s1", "cwd": "C:/work/api", "reason": "prompt_input_exit"}
+        ]},
+        {"author": {"at_ms": 1793102402000, "action": {"kind": "create", "name": "rollout", "origin": {"sessions": ["s1"]}}}}
+      ],
+      "expect": [
+        {"kind": "empty_subject", "key": "subject:1", "subject": 1, "session": null, "proposal": ["finished", "rules", "empty_subject"], "verdict": "finished", "proposed_subject": null, "choices": []}
+      ]
+    },
+    {
+      "name": "subject left with no session",
+      "steps": [
+        {"events": [
+          {"v": 1, "ts": 1793102400000, "event": "UserPromptSubmit", "session_id": "s1", "cwd": "C:/work/api", "prompt": "fix the build"}
+        ]},
+        {"author": {"at_ms": 1793102402000, "action": {"kind": "create", "name": "rollout", "origin": {"sessions": ["s1"]}}}},
+        {"author": {"at_ms": 1793102403000, "action": {"kind": "unfile", "sessions": ["s1"]}}}
+      ],
+      "expect": [
+        {"kind": "empty_subject", "key": "subject:1", "subject": 1, "session": null, "proposal": ["finished", "rules", "empty_subject"], "verdict": "finished", "proposed_subject": null, "choices": []}
+      ]
+    },
+    {
+      "name": "a live session keeps its subject off the list",
+      "steps": [
+        {"events": [
+          {"v": 1, "ts": 1793102401000, "event": "UserPromptSubmit", "session_id": "s1", "cwd": "C:/work/api", "prompt": "fix the build"},
+          {"v": 1, "ts": 1793102402000, "event": "Stop", "session_id": "s1", "cwd": "C:/work/api", "last_message": "Fixed."},
+          {"v": 1, "ts": 1793102403000, "event": "SessionEnd", "session_id": "s1", "cwd": "C:/work/api", "reason": "prompt_input_exit"},
+          {"v": 1, "ts": 1793102404000, "event": "UserPromptSubmit", "session_id": "s2", "cwd": "C:/work/api", "prompt": "and the tests"}
+        ]},
+        {"author": {"at_ms": 1793102405000, "action": {"kind": "create", "name": "build", "origin": {"sessions": ["s1", "s2"]}}}}
+      ],
+      "expect": []
+    },
+    {
+      "name": "a confirmation answers its row",
+      "steps": [
+        {"events": [
+          {"v": 1, "ts": 1793102401000, "event": "UserPromptSubmit", "session_id": "s1", "cwd": "C:/work/api", "prompt": "fix the build"},
+          {"v": 1, "ts": 1793102402000, "event": "Stop", "session_id": "s1", "cwd": "C:/work/api", "last_message": "Fixed."},
+          {"v": 1, "ts": 1793102403000, "event": "SessionEnd", "session_id": "s1", "cwd": "C:/work/api", "reason": "prompt_input_exit"}
+        ]},
+        {"author": {"at_ms": 1793102404000, "action": {"kind": "create", "name": "build", "origin": {"sessions": ["s1"]}}}},
+        {"confirmed": {"subject": 1, "at_ms": 1793102405000, "session": "s1"}}
+      ],
+      "expect": []
+    },
+    {
+      "name": "a session that lived and ended again after its verdict needs a new one",
+      "steps": [
+        {"events": [
+          {"v": 1, "ts": 1793102401000, "event": "UserPromptSubmit", "session_id": "s1", "cwd": "C:/work/api", "prompt": "fix the build"},
+          {"v": 1, "ts": 1793102402000, "event": "Stop", "session_id": "s1", "cwd": "C:/work/api", "last_message": "Fixed."},
+          {"v": 1, "ts": 1793102403000, "event": "SessionEnd", "session_id": "s1", "cwd": "C:/work/api", "reason": "prompt_input_exit"}
+        ]},
+        {"author": {"at_ms": 1793102404000, "action": {"kind": "create", "name": "build", "origin": {"sessions": ["s1"]}}}},
+        {"confirmed": {"subject": 1, "at_ms": 1793102405000, "session": "s1"}},
+        {"author": {"at_ms": 1793102406000, "action": {"kind": "archive", "subject": 1, "routine": false}}},
+        {"author": {"at_ms": 1793102407000, "action": {"kind": "reopen", "subject": 1}}},
+        {"events": [
+          {"v": 1, "ts": 1793102408000, "event": "UserPromptSubmit", "session_id": "s1", "cwd": "C:/work/api", "prompt": "the build broke again"},
+          {"v": 1, "ts": 1793102409000, "event": "Stop", "session_id": "s1", "cwd": "C:/work/api", "last_message": "Fixed again."},
+          {"v": 1, "ts": 1793102410000, "event": "SessionEnd", "session_id": "s1", "cwd": "C:/work/api", "reason": "prompt_input_exit"}
+        ]}
+      ],
+      "expect": [
+        {"kind": "subject", "key": "subject:1", "subject": 1, "session": "s1", "proposal": ["to_resume", "rules", "default_to_resume"], "verdict": "to_resume", "proposed_subject": null, "choices": []}
+      ]
+    },
+    {
+      "name": "a reopened confirmation does not count",
+      "steps": [
+        {"events": [
+          {"v": 1, "ts": 1793102401000, "event": "UserPromptSubmit", "session_id": "s2", "cwd": "C:/work/api", "prompt": "sketch the alert rules"},
+          {"v": 1, "ts": 1793102402000, "event": "Stop", "session_id": "s2", "cwd": "C:/work/api", "last_message": "Sketched."},
+          {"v": 1, "ts": 1793102403000, "event": "SessionEnd", "session_id": "s2", "cwd": "C:/work/api", "reason": "prompt_input_exit"},
+          {"v": 1, "ts": 1793102404000, "event": "UserPromptSubmit", "session_id": "s1", "cwd": "C:/work/api", "prompt": "tighten the alert rules"},
+          {"v": 1, "ts": 1793102405000, "event": "Stop", "session_id": "s1", "cwd": "C:/work/api", "last_message": "Tightened."},
+          {"v": 1, "ts": 1793102406000, "event": "SessionEnd", "session_id": "s1", "cwd": "C:/work/api", "reason": "prompt_input_exit"}
+        ]},
+        {"author": {"at_ms": 1793102407000, "action": {"kind": "create", "name": "sketch", "origin": {"sessions": ["s2"]}}}},
+        {"author": {"at_ms": 1793102407000, "action": {"kind": "create", "name": "alert rules", "origin": {"sessions": ["s1"]}}}},
+        {"confirmed": {"subject": 2, "at_ms": 1793102408000, "session": "s1"}},
+        {"author": {"at_ms": 1793102409000, "action": {"kind": "archive", "subject": 2, "routine": false}}},
+        {"author": {"at_ms": 1793102410000, "action": {"kind": "reopen", "subject": 2}}},
+        {"author": {"at_ms": 1793102411000, "action": {"kind": "merge", "source": 1, "target": 2}}}
+      ],
+      "expect": [
+        {"kind": "subject", "key": "subject:2", "subject": 2, "session": "s1", "proposal": ["to_resume", "rules", "default_to_resume"], "verdict": "to_resume", "proposed_subject": null, "choices": []}
+      ]
+    }
   ]
 }

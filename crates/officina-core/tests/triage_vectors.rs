@@ -1,9 +1,11 @@
 //! Replays the hand-written triage vector set (AD-57) through the core's
 //! rules, every section the set holds, and refuses a set that no longer
-//! covers every documented value. `officina-host` replays the same sections
-//! through the real writer (`tests/registry_ingest.rs` the `fold` section,
-//! `tests/registry_write.rs` the `filing` and `confirm` ones), so the SQL and
-//! these rules cannot drift apart.
+//! covers every documented value. `officina-host` replays the `fold`,
+//! `filing` and `confirm` sections through the real writer
+//! (`tests/registry_ingest.rs`, `tests/registry_write.rs`), so the SQL and
+//! these rules cannot drift apart; the `triage` section's rows are computed
+//! here from the state the steps build, as the view computes them from the
+//! registry it reads.
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
@@ -17,10 +19,13 @@ use officina_core::registry::fold::{
     pivot, replaces,
 };
 use officina_core::registry::ingestion::{ExcerptObservation, excerpt_observation};
+use officina_core::registry::proposal::ModelInput;
 use officina_core::registry::types::{
-    AuthorRefusal, Ending, ExcerptRecord, FactRow, FactValue, SessionFact, SessionRecord,
-    SessionRow, Source, Sourced, SubjectRecord, SubjectStatus,
+    AuthorRefusal, ConfirmationRecord, Ending, ExcerptRecord, FactRow, FactValue, ModelVerdict,
+    ProposalSource, ReasonCode, RowKind, SessionFact, SessionRecord, SessionRow, Source, Sourced,
+    SubjectRecord, SubjectStatus, Verdict,
 };
+use officina_core::registry::verdict::{VerdictInput, rows};
 use serde::Deserialize;
 
 const VECTORS: &str = include_str!("../../../tests/vectors/triage.json");
@@ -34,6 +39,34 @@ struct VectorSet {
     fold: Vec<FoldCase>,
     filing: Vec<SubjectCase>,
     confirm: Vec<SubjectCase>,
+    triage: Vec<TriageCase>,
+}
+
+/// A case of the `triage` section: state in, rows out (AD-49, D-76).
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TriageCase {
+    name: String,
+    /// The triage model's part, disabled when absent.
+    #[serde(default)]
+    model: ModelInput,
+    steps: Vec<Step>,
+    expect: Vec<ExpectedRow>,
+}
+
+/// A row as the `triage` section writes it: the proposal as verdict,
+/// source and reason code.
+#[derive(Deserialize, Debug, PartialEq)]
+#[serde(deny_unknown_fields)]
+struct ExpectedRow {
+    kind: RowKind,
+    key: String,
+    subject: Option<i64>,
+    session: Option<String>,
+    proposal: (ModelVerdict, ProposalSource, ReasonCode),
+    verdict: Option<Verdict>,
+    proposed_subject: Option<i64>,
+    choices: Vec<i64>,
 }
 
 #[derive(Deserialize)]
@@ -72,8 +105,14 @@ enum Step {
         #[serde(default)]
         refused: Option<AuthorRefusal>,
     },
-    /// A confirmation of `subject` at `at_ms`, as story 3.7 records one.
-    Confirmed { subject: i64, at_ms: i64 },
+    /// A confirmation of `subject` at `at_ms`, on the row's `session` when
+    /// it had one, as story 3.7 records one.
+    Confirmed {
+        subject: i64,
+        at_ms: i64,
+        #[serde(default)]
+        session: Option<String>,
+    },
 }
 
 #[derive(Deserialize, Debug, PartialEq)]
@@ -128,9 +167,10 @@ fn load() -> VectorSet {
     set
 }
 
-/// One confirmation, as far as reopening reads it.
+/// One confirmation, as far as reopening and the rows read it.
 struct Confirmation {
     subject: i64,
+    session: Option<String>,
     at_ms: i64,
     reopened_at_ms: Option<i64>,
 }
@@ -469,14 +509,56 @@ impl Registry {
                     *refused,
                     "{case}: {action:?}"
                 ),
-                Step::Confirmed { subject, at_ms } => self.confirmations.push(Confirmation {
+                Step::Confirmed {
+                    subject,
+                    at_ms,
+                    session,
+                } => self.confirmations.push(Confirmation {
                     subject: *subject,
+                    session: session.clone(),
                     at_ms: *at_ms,
                     reopened_at_ms: None,
                 }),
             }
         }
     }
+}
+
+/// The rows that need a verdict, in the `triage` section's terms.
+fn observed_rows(registry: &Registry, model: &ModelInput) -> Vec<ExpectedRow> {
+    let sessions: Vec<SessionRecord> = registry.records().into_values().collect();
+    let confirmations: Vec<ConfirmationRecord> = registry
+        .confirmations
+        .iter()
+        .map(|c| ConfirmationRecord {
+            subject_id: c.subject,
+            session_id: c.session.clone(),
+            confirmed_at_ms: c.at_ms,
+            reopened_at_ms: c.reopened_at_ms,
+        })
+        .collect();
+    rows(&VerdictInput {
+        subjects: &registry.subjects,
+        sessions: &sessions,
+        confirmations: &confirmations,
+        model,
+    })
+    .into_iter()
+    .map(|row| ExpectedRow {
+        kind: row.kind,
+        key: row.key,
+        subject: row.subject,
+        session: row.session_id,
+        proposal: (
+            row.proposal.verdict,
+            row.proposal.source,
+            row.proposal.reason,
+        ),
+        verdict: row.proposal.definite(),
+        proposed_subject: row.proposed_subject,
+        choices: row.choices,
+    })
+    .collect()
 }
 
 /// A stored fact as the vector set writes it: structured values as their
@@ -560,7 +642,12 @@ fn observed_subjects(registry: &Registry) -> ExpectedSubjects {
 #[test]
 fn every_case_matches() {
     let set = load();
-    assert!(!set.fold.is_empty() && !set.filing.is_empty() && !set.confirm.is_empty());
+    assert!(
+        !set.fold.is_empty()
+            && !set.filing.is_empty()
+            && !set.confirm.is_empty()
+            && !set.triage.is_empty()
+    );
     for case in &set.fold {
         let mut registry = Registry::default();
         registry.run(&case.steps, &case.name);
@@ -583,6 +670,16 @@ fn every_case_matches() {
             );
         }
     }
+    for case in &set.triage {
+        let mut registry = Registry::default();
+        registry.run(&case.steps, &case.name);
+        assert_eq!(
+            observed_rows(&registry, &case.model),
+            case.expect,
+            "triage case: {}",
+            case.name
+        );
+    }
 }
 
 /// The wire name serde gives an enum value.
@@ -602,12 +699,17 @@ fn every_value_has_a_case() {
     let mut states = BTreeSet::new();
     let mut refusals = HashSet::new();
     let mut statuses = HashSet::new();
-    let steps = set.fold.iter().flat_map(|case| &case.steps).chain(
-        set.filing
-            .iter()
-            .chain(&set.confirm)
-            .flat_map(|case| &case.steps),
-    );
+    let steps = set
+        .fold
+        .iter()
+        .flat_map(|case| &case.steps)
+        .chain(
+            set.filing
+                .iter()
+                .chain(&set.confirm)
+                .flat_map(|case| &case.steps),
+        )
+        .chain(set.triage.iter().flat_map(|case| &case.steps));
     for step in steps {
         match step {
             Step::Events(lines) => {
@@ -659,6 +761,39 @@ fn every_value_has_a_case() {
         assert!(
             refusals.contains(refusal),
             "no confirm case for refusal {refusal:?}"
+        );
+    }
+    let expected = || set.triage.iter().flat_map(|case| &case.expect);
+    let kinds: HashSet<RowKind> = expected().map(|r| r.kind).collect();
+    let reasons: HashSet<ReasonCode> = expected().map(|r| r.proposal.2).collect();
+    let sources: HashSet<ProposalSource> = expected().map(|r| r.proposal.1).collect();
+    let proposed: HashSet<ModelVerdict> = expected().map(|r| r.proposal.0).collect();
+    let verdicts: HashSet<Verdict> = expected().filter_map(|r| r.verdict).collect();
+    for kind in RowKind::ALL {
+        assert!(kinds.contains(kind), "no triage case for row kind {kind:?}");
+    }
+    for reason in ReasonCode::ALL {
+        assert!(
+            reasons.contains(reason),
+            "no triage case for reason {reason:?}"
+        );
+    }
+    for source in ProposalSource::ALL {
+        assert!(
+            sources.contains(source),
+            "no triage case for proposal source {source:?}"
+        );
+    }
+    for verdict in ModelVerdict::ALL {
+        assert!(
+            proposed.contains(verdict),
+            "no triage case proposing {verdict:?}"
+        );
+    }
+    for verdict in Verdict::ALL {
+        assert!(
+            verdicts.contains(verdict),
+            "no triage case whose verdict is {verdict:?}"
         );
     }
 }

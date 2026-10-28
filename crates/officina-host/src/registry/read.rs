@@ -10,10 +10,11 @@ use officina_core::dates::dated_file_day;
 use officina_core::registry::fold::pivot;
 #[cfg(feature = "window-authority")]
 use officina_core::registry::fold::{Mark, MarkQuery};
+use officina_core::registry::proposal::ModelInput;
 use officina_core::registry::types::{
-    EventFileRecord, ExcerptRecord, FactRow, FactValue, RegistryReport, RestoreNotice,
-    SessionRecord, SessionRow, SettingKey, Source, Sourced, SubjectRecord, SubjectRef,
-    SubjectStatus,
+    ConfirmationRecord, EventFileRecord, ExcerptRecord, FactRow, FactValue, RegistryReport,
+    RestoreNotice, SessionRecord, SessionRow, SettingKey, Source, Sourced, SubjectRecord,
+    SubjectRef, SubjectStatus,
 };
 #[cfg(feature = "window-authority")]
 use officina_core::registry::types::{HookEnd, HookStart, SessionFact};
@@ -262,6 +263,7 @@ pub(crate) fn view(
     let subjects = subjects(&snapshot)?;
     let sessions = session_records(&snapshot)?;
     let excerpts = excerpts(&snapshot)?;
+    let confirmations = confirmations(&snapshot)?;
     Ok(build_view(
         &ViewInput {
             registry: report,
@@ -269,6 +271,10 @@ pub(crate) fn view(
             subjects: &subjects,
             sessions: &sessions,
             excerpts: &excerpts,
+            confirmations: &confirmations,
+            // The model's proposals come with its runner (stories 3.9,
+            // 3.11): until then it is disabled.
+            model: &ModelInput::default(),
             board,
             restore_notice: restore_notice(&snapshot),
         },
@@ -455,6 +461,23 @@ pub(crate) fn excerpts(conn: &Connection) -> rusqlite::Result<Vec<ExcerptRecord>
             answer_head: row.get(3)?,
             answer_tail: row.get(4)?,
             answer_at_ms: row.get(5)?,
+        })
+    })?
+    .collect()
+}
+
+/// Every `confirmation` row, as far as deciding what needs a verdict reads
+/// it (AD-49), by id.
+pub(crate) fn confirmations(conn: &Connection) -> rusqlite::Result<Vec<ConfirmationRecord>> {
+    conn.prepare_cached(
+        "SELECT subject_id, session_id, confirmed_at_ms, reopened_at_ms FROM confirmation ORDER BY id",
+    )?
+    .query_map([], |row| {
+        Ok(ConfirmationRecord {
+            subject_id: row.get(0)?,
+            session_id: row.get(1)?,
+            confirmed_at_ms: row.get(2)?,
+            reopened_at_ms: row.get(3)?,
         })
     })?
     .collect()

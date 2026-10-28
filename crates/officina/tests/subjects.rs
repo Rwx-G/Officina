@@ -1,7 +1,8 @@
-//! `officina subjects --json` end to end (story 3.4 AC 8; FR-6 as amended,
-//! AD-53, D-47, D-82, D-97): the Subjects view from the read-only registry
-//! and a fresh board, with the window closed; exit 0 when the registry was
-//! read, 3 with the reason when it was not, 64 on usage, never 2.
+//! `officina subjects --json` end to end (story 3.4 AC 8, story 3.6 AC 5
+//! and 6; FR-6 and FR-7 as amended, AD-53, D-47, D-82, D-97): the Subjects
+//! view from the read-only registry and a fresh board, with the window
+//! closed, the rows that need a verdict included; exit 0 when the registry
+//! was read, 3 with the reason when it was not, 64 on usage, never 2.
 
 mod common;
 
@@ -221,4 +222,274 @@ fn subjects_json_changes_no_row() {
     let (code, _) = subjects(&env);
     assert_eq!(code, Some(0));
     assert_eq!(database(fingerprint(registry.dir())), before);
+}
+
+/// Appends event lines at their own times, as the hook writes them, so a
+/// test sets when a session prompted, stopped and ended.
+fn events(env: &TestEnv, lines: &[serde_json::Value]) {
+    use std::io::Write;
+    std::fs::create_dir_all(env.events_dir()).unwrap();
+    for line in lines {
+        let ts = line["ts"].as_i64().unwrap();
+        let file = env
+            .events_dir()
+            .join(officina_core::dates::event_file_name(ts));
+        let mut out = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(file)
+            .unwrap();
+        writeln!(out, "{line}").unwrap();
+    }
+}
+
+/// One event line of `session` in `C:/work/api`, `at` ms after `base`.
+fn line(
+    base: i64,
+    at: i64,
+    event: &str,
+    session: &str,
+    extra: serde_json::Value,
+) -> serde_json::Value {
+    let mut line = serde_json::json!({"v": 1, "ts": base + at, "event": event,
+        "session_id": session, "cwd": "C:/work/api", "claude_pid": 4100});
+    for (key, value) in extra.as_object().unwrap() {
+        line[key] = value.clone();
+    }
+    line
+}
+
+/// A session that prompted, answered and exited normally.
+fn finished_turn(base: i64, at: i64, session: &str) -> Vec<serde_json::Value> {
+    vec![
+        line(
+            base,
+            at,
+            "UserPromptSubmit",
+            session,
+            serde_json::json!({"prompt": "go"}),
+        ),
+        line(
+            base,
+            at + 1_000,
+            "Stop",
+            session,
+            serde_json::json!({"last_message": "Done."}),
+        ),
+        line(
+            base,
+            at + 2_000,
+            "SessionEnd",
+            session,
+            serde_json::json!({"reason": "prompt_input_exit"}),
+        ),
+    ]
+}
+
+fn rows(view: &serde_json::Value) -> &Vec<serde_json::Value> {
+    view["triage"].as_array().unwrap()
+}
+
+/// Story 3.6 AC 5: `subjects --json` prints every row with its proposal,
+/// the proposal's source and reason code, and their count.
+#[test]
+fn rows_carry_proposal_source_and_reason() {
+    let env = TestEnv::new();
+    let base = now_ms() - 3_600_000;
+    let mut lines = vec![
+        line(
+            base,
+            0,
+            "UserPromptSubmit",
+            "s-cut",
+            serde_json::json!({"prompt": "migrate"}),
+        ),
+        line(
+            base,
+            1_000,
+            "SessionEnd",
+            "s-cut",
+            serde_json::json!({"reason": "prompt_input_exit"}),
+        ),
+        line(
+            base,
+            5_000,
+            "UserPromptSubmit",
+            "s-bg",
+            serde_json::json!({"prompt": "nightly report"}),
+        ),
+    ];
+    lines.extend(finished_turn(base, 10_000, "s-loose"));
+    events(&env, &lines);
+    let now = now_ms();
+    let mut writer = window(&env, now);
+    let background = officina_core::agents::parse_agents(
+        &serde_json::json!([{"pid": 4300, "id": "bg01", "sessionId": "s-bg", "kind": "background",
+            "cwd": "C:/work/api", "name": "nightly", "status": "idle", "state": "done",
+            "startedAt": base}])
+        .to_string(),
+    )
+    .unwrap();
+    writer
+        .apply_agents(&mut None, &background, &[], now)
+        .unwrap();
+    let migration = writer
+        .create_subject(
+            "migration",
+            SubjectOrigin::Sessions(vec!["s-cut".into()]),
+            now,
+        )
+        .unwrap();
+    let nightly = writer
+        .create_subject("nightly", SubjectOrigin::Sessions(vec!["s-bg".into()]), now)
+        .unwrap();
+    let empty = writer
+        .create_subject("empty", SubjectOrigin::Project("api".into()), now)
+        .unwrap();
+    drop(writer);
+    env.write_agents("[]");
+
+    let (code, view) = subjects(&env);
+    assert_eq!(code, Some(0), "{view}");
+    let found: std::collections::BTreeMap<String, (String, String, String, String)> = rows(&view)
+        .iter()
+        .map(|row| {
+            let text = |v: &serde_json::Value| v.as_str().unwrap_or_default().to_owned();
+            (
+                text(&row["key"]),
+                (
+                    text(&row["kind"]),
+                    text(&row["proposal"]["verdict"]),
+                    text(&row["proposal"]["source"]),
+                    text(&row["proposal"]["reason"]),
+                ),
+            )
+        })
+        .collect();
+    let expect = |kind: &str, verdict: &str, source: &str, reason: &str| {
+        (
+            kind.to_owned(),
+            verdict.to_owned(),
+            source.to_owned(),
+            reason.to_owned(),
+        )
+    };
+    assert_eq!(
+        found,
+        [
+            (
+                format!("subject:{migration}"),
+                expect("subject", "to_resume", "rules", "cut_mid_turn")
+            ),
+            (
+                format!("subject:{nightly}"),
+                expect("subject", "finished", "state", "state_done")
+            ),
+            (
+                format!("subject:{empty}"),
+                expect("empty_subject", "finished", "rules", "empty_subject")
+            ),
+            (
+                "session:s-loose".to_owned(),
+                expect("unfiled_session", "to_resume", "rules", "default_to_resume")
+            ),
+        ]
+        .into_iter()
+        .collect()
+    );
+    assert_eq!(view["to_sort"], rows(&view).len());
+    let loose = rows(&view)
+        .iter()
+        .find(|r| r["key"] == "session:s-loose")
+        .unwrap();
+    assert_eq!(
+        loose["proposed_subject"],
+        serde_json::Value::Null,
+        "three open subjects"
+    );
+    assert_eq!(loose["choices"].as_array().unwrap().len(), 3);
+    assert_eq!(loose["excerpts"]["prompt"], "go");
+    assert_eq!(loose["verdict"], "to_resume");
+}
+
+/// PRD section 7 Attention, story 3.6 AC 6: a subject of several ended
+/// sessions, one of them cleared, needs exactly one verdict, on its latest
+/// session that saw a prompt.
+#[test]
+fn multi_session_subject_needs_one_verdict() {
+    let env = TestEnv::new();
+    let base = now_ms() - 3_600_000;
+    let mut lines = finished_turn(base, 0, "s-first");
+    lines.extend([
+        line(
+            base,
+            10_000,
+            "SessionStart",
+            "s-cleared",
+            serde_json::json!({"source": "startup"}),
+        ),
+        line(
+            base,
+            11_000,
+            "UserPromptSubmit",
+            "s-cleared",
+            serde_json::json!({"prompt": "apply it"}),
+        ),
+        line(
+            base,
+            12_000,
+            "Stop",
+            "s-cleared",
+            serde_json::json!({"last_message": "Applied."}),
+        ),
+        line(
+            base,
+            13_000,
+            "SessionEnd",
+            "s-cleared",
+            serde_json::json!({"reason": "clear"}),
+        ),
+        line(
+            base,
+            13_000,
+            "SessionStart",
+            "s-after",
+            serde_json::json!({"source": "clear"}),
+        ),
+        line(
+            base,
+            14_000,
+            "SessionEnd",
+            "s-after",
+            serde_json::json!({"reason": "prompt_input_exit"}),
+        ),
+    ]);
+    events(&env, &lines);
+    let now = now_ms();
+    let mut writer = window(&env, now);
+    let ids = ["s-first", "s-cleared", "s-after"]
+        .map(str::to_owned)
+        .to_vec();
+    let rollout = writer
+        .create_subject("rollout", SubjectOrigin::Sessions(ids), now)
+        .unwrap();
+    drop(writer);
+    env.write_agents("[]");
+
+    let (code, view) = subjects(&env);
+    assert_eq!(code, Some(0), "{view}");
+    let subject = &view["subjects"][0];
+    assert_eq!(subject["sessions"].as_array().unwrap().len(), 3);
+    assert!(
+        subject["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|s| s["session_id"] == "s-cleared" && s["superseded"] == true),
+        "{subject}"
+    );
+    assert_eq!(view["to_sort"], 1, "{view}");
+    let row = &rows(&view)[0];
+    assert_eq!(row["key"], format!("subject:{rollout}"));
+    assert_eq!(row["session_id"], "s-cleared");
 }

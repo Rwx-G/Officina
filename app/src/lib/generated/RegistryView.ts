@@ -4,6 +4,7 @@ import type { RegistryReport } from "./RegistryReport";
 import type { RestoreNotice } from "./RestoreNotice";
 import type { SubjectView } from "./SubjectView";
 import type { Thresholds } from "./Thresholds";
+import type { TriageRow } from "./TriageRow";
 import type { UnfiledProject } from "./UnfiledProject";
 
 /**
@@ -32,6 +33,14 @@ unfiled: Array<UnfiledProject>,
  * (D-95).
  */
 projects: Array<string>, 
+/**
+ * What needs a verdict, the latest first (FR-7, AD-49, D-76).
+ */
+triage: Array<TriageRow>, 
+/**
+ * How many rows need a verdict: the window's "N to sort" chip.
+ */
+to_sort: number, 
 /**
  * The copy a damaged registry was restored from, for
  * [`RESTORE_NOTICE_MS`] after the restore (D-93).
