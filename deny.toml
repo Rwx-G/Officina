@@ -10,6 +10,12 @@ version = 2
 # macro stacks, which we cannot replace; they are re-evaluated with each Tauri
 # upgrade.
 unmaintained = "workspace"
+# "Unsound" notices, stated rather than left to the tool's default (the
+# dependency audit's finding): checked on our direct dependencies too. The
+# one reported today (glib, RUSTSEC-2024-0429) comes in through Tauri's
+# Linux stack, which we cannot replace; re-evaluated with each Tauri
+# upgrade, like the unmaintained ones.
+unsound = "workspace"
 ignore = []
 
 [licenses]
@@ -40,7 +46,10 @@ wildcards = "allow"
 # (AD-36): a bundled root set never enters the graph, on any target. CI's
 # "No bundled roots" step checks the exe sessions call too, with a positive
 # control.
-deny = [{ crate = "webpki-roots", reason = "AD-36: trust comes from the platform store, never a bundled root set" }]
+deny = [
+  { crate = "webpki-roots", reason = "AD-36: trust comes from the platform store, never a bundled root set" },
+  { crate = "webpki-root-certs", reason = "AD-36: rustls-platform-verifier carries it for wasm32 only; on the shipped targets trust comes from the platform store" },
+]
 
 [sources]
 unknown-registry = "deny"

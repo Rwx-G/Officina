@@ -11,6 +11,9 @@ on:
   # on its own, the build jobs only on a change.
   schedule:
     - cron: "0 5 * * 1"
+  # A run by hand needs no push: GitHub stops the schedule after 60 days
+  # without activity in the repository.
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -42,7 +45,9 @@ jobs:
         with:
           node-version: 22
       - name: pnpm
-        run: npm install -g pnpm@11
+        # An exact version, bumped on purpose like the toolchain: a new
+        # pnpm can change what `pnpm audit` reports with no commit here.
+        run: npm install -g pnpm@11.5.3
       - name: Format
         run: cargo fmt --all -- --check
       - name: Frontend install
@@ -186,7 +191,9 @@ jobs:
       - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1
       - name: cargo deny
         run: |
-          cargo install cargo-deny --locked
+          # An exact version, bumped on purpose like the toolchain: a new
+          # cargo-deny can change what an advisory scope reports.
+          cargo install cargo-deny --locked --version 0.19.4
           cargo deny --locked check
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
@@ -197,5 +204,5 @@ jobs:
         # app/pnpm-workspace.yaml.
         working-directory: app
         run: |
-          npm install -g pnpm@11
+          npm install -g pnpm@11.5.3
           pnpm audit

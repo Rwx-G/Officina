@@ -9,5 +9,7 @@ auditConfig:
     # dependency: the advisory names 4.3.2 as patched, but no such version is
     # published (npm registry, 2026-10-28). The plugin merges its own options
     # with it, never input from a session. Drop this entry once a fixed
-    # version exists.
+    # version exists. Reviewed 2026-10-28: no fix published, and
+    # @sveltejs/vite-plugin-svelte 7.3.1, the newest, still depends on
+    # deepmerge ^4.3.1.
     - GHSA-gcqx-w48m-w2h4
