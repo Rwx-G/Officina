@@ -5,25 +5,28 @@
   // as text: arguments, descriptions and outputs come from files a session
   // can write.
   import type { ApprovalView } from "../lib/generated/ApprovalView";
-  import type { BoardStore } from "../lib/board.svelte";
   import { isPointerClick } from "../lib/relay.svelte";
   import { bindingText } from "../lib/relay-text";
   import { ago, duration } from "../lib/time";
 
   interface Props {
     approval: ApprovalView;
-    store: BoardStore;
+    /** A decision on this card is on its way. */
+    busy: boolean;
+    /** Why the last decision on this card failed, if it did. */
+    error?: string;
+    nowMs: number;
+    /** Decides this card, `true` to approve: called on a pointer click only. */
+    onDecide: (approve: boolean) => void;
   }
-  let { approval, store }: Props = $props();
+  let { approval, busy, error, nowMs, onDecide }: Props = $props();
 
-  let error = $derived(store.approvalErrors[approval.id]);
-  let busy = $derived(store.deciding[approval.id] === true);
   let dryRun = $derived(approval.dry_run);
   let binding = $derived(bindingText(approval));
 
   function decide(event: MouseEvent, approve: boolean): void {
     if (!isPointerClick(event)) return;
-    void store.decideApproval(approval.id, approve);
+    onDecide(approve);
   }
 
   /** Enter and Space never decide (D-28): the browser's click they would
@@ -84,8 +87,8 @@
 
   <div class="meta">
     <span data-testid="approval-session">{approval.session_name ?? "session unknown"}</span>
-    <span>asked {ago(approval.requested_at_ms, store.nowMs)}</span>
-    <span>expires in {duration(approval.expires_at_ms - store.nowMs)}</span>
+    <span>asked {ago(approval.requested_at_ms, nowMs)}</span>
+    <span>expires in {duration(approval.expires_at_ms - nowMs)}</span>
   </div>
 
   {#if approval.valid}

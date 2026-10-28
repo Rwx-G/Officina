@@ -34,7 +34,13 @@
   <p class="hint">{hint}</p>
   <div class="cards">
     {#each approvals as approval (approval.id)}
-      <ApprovalCard {approval} {store} />
+      <ApprovalCard
+        {approval}
+        busy={store.deciding[approval.id] === true}
+        error={store.approvalErrors[approval.id]}
+        nowMs={store.nowMs}
+        onDecide={(approve) => void store.decideApproval(approval.id, approve)}
+      />
     {/each}
     {#each visible as card, i (card.key)}
       <SessionCard {card} {store} index={numbered ? i : undefined} />

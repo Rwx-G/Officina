@@ -12,8 +12,6 @@ vi.mock("../lib/ipc", async (importOriginal) => ({
   decideApproval: vi.fn(async () => undefined),
 }));
 
-const ipc = await import("../lib/ipc");
-
 const NOW = 1_800_000_000_000;
 
 afterEach(cleanup);
@@ -116,6 +114,12 @@ describe("Gauge", () => {
   });
 });
 
+/** What a card gets besides its approval: its own state and decision. */
+const onDecide = vi.fn();
+function decision() {
+  return { busy: false, error: undefined, nowMs: NOW, onDecide };
+}
+
 function approval(overrides: Partial<ApprovalView> = {}): ApprovalView {
   return {
     id: "0123456789abcdef-1",
@@ -139,20 +143,20 @@ function approval(overrides: Partial<ApprovalView> = {}): ApprovalView {
 }
 
 describe("ApprovalCard", () => {
-  beforeEach(() => vi.mocked(ipc.decideApproval).mockClear());
+  beforeEach(() => onDecide.mockClear());
 
   it("renders one chip per argument", () => {
     const argv = ["C:/path/to/tool.exe", "--limit", "lab web", "playbooks/site.yml"];
     const { getAllByTestId, getByTestId, getByText } = render(ApprovalCard, {
       approval: approval({ argv }),
-      store: store(),
+      ...decision(),
     });
     expect(getAllByTestId("arg").map((chip) => chip.textContent)).toEqual(argv);
     expect(getByTestId("approval-session").textContent).toBe("deploy-lab");
     expect(getByText("asked 3 min ago")).toBeTruthy();
     expect(getByText("expires in 57 min")).toBeTruthy();
     cleanup();
-    const unknown = render(ApprovalCard, { approval: approval({ session_name: null }), store: store() });
+    const unknown = render(ApprovalCard, { approval: approval({ session_name: null }), ...decision() });
     expect(unknown.getByTestId("approval-session").textContent).toBe("session unknown");
   });
 
@@ -160,7 +164,7 @@ describe("ApprovalCard", () => {
     const argv = [`<img src=x onerror="window.__hit = 1">`, "\u202Egnp.exe", "a b"];
     const { container, getAllByTestId } = render(ApprovalCard, {
       approval: approval({ argv, description: "<b>bold</b>" }),
-      store: store(),
+      ...decision(),
     });
     expect(container.querySelector("img")).toBeNull();
     expect(container.querySelector("b")).toBeNull();
@@ -173,7 +177,7 @@ describe("ApprovalCard", () => {
     const url = `https://monitoring.example.com/api/<img src=x onerror="window.__hit = 1">`;
     const { container, getByTestId, queryByTestId } = render(ApprovalCard, {
       approval: approval({ argv: [], http: { method: "GET", url, credential: "monitoring" } }),
-      store: store(),
+      ...decision(),
     });
     expect(getByTestId("http-method").textContent).toBe("GET");
     expect(getByTestId("http-url").textContent).toBe(url);
@@ -183,15 +187,15 @@ describe("ApprovalCard", () => {
   });
 
   it("a pointer click calls decideApproval with the card id", async () => {
-    const { getByTestId } = render(ApprovalCard, { approval: approval(), store: store() });
+    const { getByTestId } = render(ApprovalCard, { approval: approval(), ...decision() });
     await fireEvent.click(getByTestId("approve"), { detail: 1 });
-    expect(ipc.decideApproval).toHaveBeenCalledWith("0123456789abcdef-1", true);
+    expect(onDecide).toHaveBeenCalledWith(true);
     await fireEvent.click(getByTestId("reject"), { detail: 1 });
-    expect(ipc.decideApproval).toHaveBeenLastCalledWith("0123456789abcdef-1", false);
+    expect(onDecide).toHaveBeenLastCalledWith(false);
   });
 
   it("Enter and Space on a focused Approve button do not decide", async () => {
-    const { getByTestId } = render(ApprovalCard, { approval: approval(), store: store() });
+    const { getByTestId } = render(ApprovalCard, { approval: approval(), ...decision() });
     for (const button of [getByTestId("approve"), getByTestId("reject")]) {
       button.focus();
       for (const key of ["Enter", " "]) {
@@ -202,13 +206,13 @@ describe("ApprovalCard", () => {
       // What a browser does for a key activation: a click with detail 0.
       await fireEvent.click(button, { detail: 0 });
     }
-    expect(ipc.decideApproval).not.toHaveBeenCalled();
+    expect(onDecide).not.toHaveBeenCalled();
   });
 
   it("an invalid request shows its reason and no button", () => {
     const { queryByTestId, getByTestId } = render(ApprovalCard, {
       approval: approval({ valid: false, invalid_reason: "its key does not match", argv: [] }),
-      store: store(),
+      ...decision(),
     });
     expect(getByTestId("invalid-reason").textContent).toContain("its key does not match");
     expect(queryByTestId("approve")).toBeNull();
@@ -220,13 +224,13 @@ describe("ApprovalCard", () => {
     const output = `TASK [restart] <script>window.__hit = 1</script>\nchanged: [web01]\n`;
     const { container, getByTestId, rerender } = render(ApprovalCard, {
       approval: approval({ dry_run: { check: "check", run_id: "r1", output, missing: null } }),
-      store: store(),
+      ...decision(),
     });
     expect(container.querySelector("script")).toBeNull();
     expect(getByTestId("dry-run-output").textContent).toBe(output);
     rerender({
       approval: approval({ dry_run: { check: "check", run_id: "r1", output: null, missing: "not kept" } }),
-      store: store(),
+      ...decision(),
     });
     expect(getByTestId("dry-run-missing").textContent).toBe("not kept");
   });
@@ -235,7 +239,7 @@ describe("ApprovalCard", () => {
   // unchanged": since the dry run, since the request, or not at all.
   it("ApprovalCard states its binding", () => {
     const line = (overrides: Partial<ApprovalView>): { text: string; changed: boolean } => {
-      const { getByTestId } = render(ApprovalCard, { approval: approval(overrides), store: store() });
+      const { getByTestId } = render(ApprovalCard, { approval: approval(overrides), ...decision() });
       const element = getByTestId("binding");
       const result = { text: element.firstChild?.textContent?.trim() ?? "", changed: element.classList.contains("changed") };
       cleanup();
@@ -260,13 +264,13 @@ describe("ApprovalCard", () => {
     expect(line({ binding: "not_git_tree" })).toEqual({ text: "no file binding: not a git tree", changed: false });
     const counted = render(ApprovalCard, {
       approval: approval({ binding: "request", bound_files: 12, files_unchanged: true }),
-      store: store(),
+      ...decision(),
     });
     expect(counted.getByTestId("bound-files").textContent?.trim()).toBe("(12 files)");
     cleanup();
     const invalid = render(ApprovalCard, {
       approval: approval({ valid: false, invalid_reason: "forged", argv: [], binding: null }),
-      store: store(),
+      ...decision(),
     });
     expect(invalid.queryByTestId("binding")).toBeNull();
   });
