@@ -56,3 +56,23 @@ stories:
   - {id: "3.10", file: story-3.10-measured-error-and-auto-archive.md, slice: B, status: approved}
   - {id: "3.11", file: story-3.11-model-proposals.md, slice: B, status: approved}
   - {id: "3.12", file: story-3.12-docs-doctor-and-qa.md, slice: B, status: approved}
+---
+epic: 4
+version: v0.4
+# approved: written and approved, implementation not started.
+# Slice 0 (FR-0) is the mock of architecture-v0.4.md, produced before the stories; the owner's review of it is recorded in 4.3 when available, and the owner's comparison of 4.4's baselines with it is the gate (R27).
+# Reworked after the story review (review-stories-epic4.md): new decisions D-180 to D-189; D-124 to D-179 belong to Epic 5.
+# Slice A (4.1-4.6: FR-1 to FR-3, FR-5 to FR-7, FR-9) is usable alone. Slice B (4.7, 4.8: FR-4, FR-8).
+# Implemented after v0.2 and v0.3; relay and registry stay nullable inputs and each seam has one owning story (epic-4-decisions.md D-98).
+# 4.2 and 4.3 depend on 4.1's fixtures only and can run side by side.
+# 4.9 closes the PRD with the workstation checks (owner rule, epic-2-decisions.md P-7, epic-4-decisions.md P-21).
+stories:
+  - {id: "4.1", file: story-4.1-floor-projects-and-scene-fixtures.md, slice: A, status: approved}
+  - {id: "4.2", file: story-4.2-halo-memo-and-board-halo.md, slice: A, status: approved}
+  - {id: "4.3", file: story-4.3-scene-layout.md, slice: A, status: approved}
+  - {id: "4.4", file: story-4.4-scene-drawn-and-scene-mode.md, slice: A, status: approved}
+  - {id: "4.5", file: story-4.5-scene-targets-keyboard-and-file.md, slice: A, status: approved}
+  - {id: "4.6", file: story-4.6-focus-mode-and-keys.md, slice: A, status: approved}
+  - {id: "4.7", file: story-4.7-instruments.md, slice: B, status: approved}
+  - {id: "4.8", file: story-4.8-dark-theme.md, slice: B, status: approved}
+  - {id: "4.9", file: story-4.9-docs-workstation-checks-and-qa.md, slice: B, status: approved}
