@@ -491,6 +491,11 @@ impl Writer {
         Ok(created)
     }
 
+    // The methods from here to the readers below are the tests' and the
+    // fixture tool's harness: each wraps `Writer::author` or a `read`
+    // query. The window reaches the same behaviour through `author` and
+    // `read::view` only (debt audit L8).
+
     /// Creates a subject named `name` (D-95): from the selected sessions,
     /// which give it their one project and are filed under it, or in one of
     /// the projects the registry knows. Returns its id.

@@ -21,7 +21,9 @@ use super::read::{self, Reader};
 use super::schema::{SCHEMA_VERSION, VersionState};
 
 /// Entries whose presence in an ancestor folder marks a sync client's root
-/// (AD-39). The only list of them: tests and doctor iterate it.
+/// (AD-39). The only list of them: [`classify`] iterates it, which
+/// doctor and the writer's open reach through [`locate`], and tests
+/// iterate it too.
 pub const SYNC_ROOT_MARKERS: &[&str] = &[".SynologyWorkingDirectory", ".dropbox"];
 
 /// The environment variables OneDrive sets to its folders (AD-39).

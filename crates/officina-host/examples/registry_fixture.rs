@@ -6,40 +6,8 @@
 //! `window-authority`, linked into neither shipped binary.
 //!
 //! Usage: `registry_fixture <officina home> <steps.json>`, where the file
-//! holds `{"now_ms": <ms>, "steps": [...]}` and each step is one of:
-//!
-//! - `"ingest"`: one ingestion pass over the home's event files;
-//! - `{"agents": [<claude agents records>]}`: one successful session list;
-//! - `{"author": <AuthorAction>}`: one author action, which must succeed;
-//! - `"copy"`: the daily copy, as the hourly pass takes it;
-//! - `"damage"`: the database overwritten with bytes that are no database,
-//!   then opened again, so the window's restore runs from the copy (D-93);
-//! - `{"hook_fields": "<claude version>"}`: one ingestion pass, whose hook
-//!   sightings are folded into that version's record of
-//!   `state/contract.json`, as the window folds them (AD-56); the record
-//!   must exist already (`officina board --json` starts it);
-//! - `{"at": <ms>}`: the steps after it run at that time instead of
-//!   `now_ms`;
-//! - `{"confirm": {"key", "verdict", "routine", "file_under"}}`: the author
-//!   confirms the row of that key with the proposal the view shows now,
-//!   which must be confirmed (AD-49);
-//! - `{"dry_run": ["finished" | "to_resume" | "unsure" | "timeout" |
-//!   "invalid", ...]}`: a dry run started and driven through the window's
-//!   triage state, each case answered in turn as the list says, one call
-//!   per spacing, no process started (AD-52);
-//! - `{"refused_call": "<refusal>"}`: one call refused for that cause, as
-//!   the runner records it (D-65);
-//! - `{"auto_archive": true | false}`: the author turns auto-archive on,
-//!   which must be accepted, or off (FR-12);
-//! - `"auto_archive_pass"`: one auto-archive pass, as the collector runs it
-//!   after a view build (D-70);
-//! - `{"triage_model": true | false}`: the author turns the triage model
-//!   on, which must be accepted, or off (FR-10 as amended);
-//! - `{"proposals": [{"answer": "finished" | "to_resume" | "unsure" |
-//!   "timeout" | "invalid" | "failed", "reason": "..."}, ...]}`: the rows
-//!   queued for the model taken in turn through the window's triage state,
-//!   each call ended as the list says (the reason, untrusted text, on an
-//!   answer), one call per spacing, no process started (AD-52).
+//! holds `{"now_ms": <ms>, "steps": [...]}` and each step is one variant of
+//! [`Step`], written in snake case, as documented on the variant.
 //!
 //! Exit 0, 1 when a step fails, 64 on usage.
 
@@ -69,22 +37,57 @@ struct Script {
     steps: Vec<Step>,
 }
 
+/// One step of a fixture script.
 #[derive(Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum Step {
+    /// `"ingest"`: one ingestion pass over the home's event files.
     Ingest,
+    /// `{"agents": [<claude agents records>]}`: one successful session
+    /// list.
     Agents(Vec<serde_json::Value>),
+    /// `{"author": <AuthorAction>}`: one author action, which must succeed.
     Author(AuthorAction),
+    /// `"copy"`: the daily copy, as the hourly pass takes it.
     Copy,
+    /// `"damage"`: the database overwritten with bytes that are no
+    /// database, then opened again, so the window's restore runs from the
+    /// copy (D-93).
     Damage,
+    /// `{"hook_fields": "<claude version>"}`: one ingestion pass, whose hook
+    /// sightings are folded into that version's record of
+    /// `state/contract.json`, as the window folds them (AD-56); the record
+    /// must exist already (`officina board --json` starts it).
     HookFields(String),
+    /// `{"at": <ms>}`: the steps after it run at that time instead of
+    /// `now_ms`.
     At(i64),
+    /// `{"confirm": {"key", "verdict", "routine", "file_under"}}`: the
+    /// author confirms the row of that key with the proposal the view shows
+    /// now, which must be confirmed (AD-49).
     Confirm(Confirmation),
+    /// `{"dry_run": [<answer>, ...]}`: a dry run started and driven through
+    /// the window's triage state, each case answered in turn as the list
+    /// says (an answer [`call_result`] reads), one call per spacing, no
+    /// process started (AD-52).
     DryRun(Vec<String>),
+    /// `{"refused_call": "<refusal>"}`: one call refused for that cause, as
+    /// the runner records it (D-65).
     RefusedCall(TriageRefusal),
+    /// `{"auto_archive": true | false}`: the author turns auto-archive on,
+    /// which must be accepted, or off (FR-12).
     AutoArchive(bool),
+    /// `"auto_archive_pass"`: one auto-archive pass, as the collector runs
+    /// it after a view build (D-70).
     AutoArchivePass,
+    /// `{"triage_model": true | false}`: the author turns the triage model
+    /// on, which must be accepted, or off (FR-10 as amended).
     TriageModel(bool),
+    /// `{"proposals": [{"answer": <answer>, "reason": "..."}, ...]}`: the
+    /// rows queued for the model taken in turn through the window's triage
+    /// state, each call ended as the list says (an answer [`call_result`]
+    /// reads; the reason, untrusted text, on an answer), one call per
+    /// spacing, no process started (AD-52).
     Proposals(Vec<ProposalAnswer>),
 }
 

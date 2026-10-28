@@ -95,8 +95,9 @@ Windows 11.
 - **Documented.** `--tools` restricts built-in tools (`""` disables all),
   `--strict-mcp-config` keeps only `--mcp-config` servers, `--setting-sources`
   selects `user`, `project`, `local`, `--settings` overrides given keys only.
-  Not exercised yet; needed from v0.3 (triage session) and v0.5
-  (orchestrator).
+  Verified for the triage call in E16 (`--tools ""`, `--strict-mcp-config`,
+  `--mcp-config`, `--setting-sources ""`); the orchestrator's use (v0.5) is
+  not exercised yet.
 
 ## E6. Long-lived token
 

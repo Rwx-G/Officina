@@ -95,7 +95,8 @@ fn listed(
     writer.apply_agents(snapshot, &records, &[], at).unwrap();
 }
 
-/// Inserts a confirmation of `subject` at `at_ms`, as story 3.7 will.
+/// Inserts a confirmation of `subject` at `at_ms` directly, without the
+/// confirmation path, so a test sets the history it needs.
 fn confirmed(home: &Home, subject: i64, at_ms: i64) {
     rusqlite::Connection::open(home.paths().database())
         .unwrap()
@@ -1223,8 +1224,8 @@ mod auto_archive {
             .find(|r| r.kind == RowKind::EmptySubject)
             .expect("the empty subject's row stays");
         assert_eq!(empty.proposal.verdict, ModelVerdict::Finished);
-        // A model `finished` on a filed subject's row: the model stays off
-        // until story 3.11, so the row is built as its queue will build it.
+        // A model `finished` on a filed subject's row, built by hand as the
+        // queue builds it: such a row is never auto-archivable (D-70).
         let model_row = Row {
             kind: RowKind::Subject,
             key: "subject:9".into(),

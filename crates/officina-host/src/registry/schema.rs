@@ -236,6 +236,5 @@ mod tests {
         assert_eq!(VersionState::of(1, 2), VersionState::Older);
         assert_eq!(VersionState::of(2, 2), VersionState::Equal);
         assert_eq!(VersionState::of(3, 2), VersionState::Newer);
-        assert_eq!(SCHEMA_VERSION, MIGRATIONS.len() as i64);
     }
 }

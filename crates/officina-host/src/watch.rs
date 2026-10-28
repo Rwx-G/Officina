@@ -55,8 +55,10 @@ pub const RELAY_POLL: Duration = POLL_VISIBLE;
 /// never on every tick (D-41).
 pub const CREDENTIAL_POLL: Duration = Duration::from_secs(60);
 /// How long a window command waits for the collector's answer to an author
-/// request (AD-38): a running `claude agents` takes about 210 ms, 5 s at
-/// worst (E10).
+/// request (AD-38): a running `claude agents` takes about 210 ms (E10) and
+/// is cut at [`crate::claude::AGENTS_TIMEOUT`]; twice that is a choice, so
+/// a request queued behind a call that runs to its deadline is still
+/// answered.
 pub const AUTHOR_WAIT: Duration = Duration::from_secs(10);
 /// A request this close to its deadline is dropped unrun (D-92): the
 /// action, the views it emits and the reply must all land before the window

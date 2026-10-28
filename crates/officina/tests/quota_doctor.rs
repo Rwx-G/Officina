@@ -464,5 +464,10 @@ fn doctor_reports_hook_fields_missing_and_not_observed() {
         line.contains(&format!("not observed yet: {}", not_observed.join(", "))),
         "{line}"
     );
+    // Exit 1 comes from the hooks this home never registered, not from the
+    // hook fields line, which only warns (`doctor_registry.rs`,
+    // `warnings_alone_exit_0`, holds that rule).
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(text.contains("[FAIL] hooks"), "{text}");
     assert_eq!(out.status.code(), Some(1));
 }

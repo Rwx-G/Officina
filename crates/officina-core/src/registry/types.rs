@@ -20,7 +20,11 @@ closed_enum! {
         Hook,
         /// Officina's own deterministic rules.
         Rules,
-        /// The triage model's answer (FR-10).
+        /// The triage model's answer (FR-10). Reserved: no fact, filing,
+        /// status or setting is written with it today, since a model answer
+        /// lives in `model_answer` and a confirmation keeps
+        /// `ProposalSource::Model`; the schema's `CHECK` lists accept it so
+        /// a later use needs no migration (P-14).
         Model,
         /// The author, in the window.
         Author,
@@ -121,7 +125,6 @@ closed_enum! {
     #[serde(rename_all = "snake_case")]
     /// The keys of the `setting` table (D-88).
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-    #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
     pub enum SettingKey {
         /// The copy a damaged registry was restored from, and when (D-93).
         RestoreNotice,
@@ -139,7 +142,6 @@ closed_enum! {
     #[serde(rename_all = "snake_case")]
     /// What a triage call was for (AD-52).
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-    #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
     pub enum TriagePurpose {
         Proposal,
         DryRun,

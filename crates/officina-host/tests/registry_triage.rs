@@ -429,7 +429,10 @@ fn counts_cover_today_and_30_days() {
         (calls.last_30_days.calls, calls.last_30_days.input_tokens),
         (3, 3 * 4_500)
     );
-    assert!(!view.model.enabled, "the model stays disabled (story 3.11)");
+    assert!(
+        !view.model.enabled,
+        "no setting written, so the model is off"
+    );
 }
 
 /// D-65: a refusal is one row, counted with its cause, that spends no
