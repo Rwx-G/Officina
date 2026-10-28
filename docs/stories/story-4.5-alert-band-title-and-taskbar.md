@@ -87,3 +87,4 @@ so that I know when to look without a toast, a sound or a theme change, from the
 - 2026-10-28 renumbered 4.5 and narrowed after the plan challenge (D-494, D-496, D-497): the band, the title and the taskbar ship right after story 4.3, needing core only; the alert tokens move here; the alert room and the beacon move to story 4.9; the last known alert on unknown data is marked in the band and the title; the approval-only wait raises no band by time
 - 2026-10-28 implemented: the alert band, the alert tokens, the taskbar badge's alert colour, the title's alert count and the flash on a new alert. Status in progress until gate 2 picks the badge's size
 - 2026-10-28 gate 2 passed on the D-523 badge (E80). Status review
+- 2026-10-28 the waiting badge's digits switch to the owner's bold 5 x 7 font, the `+` inside the rim (D-523 as amended after run 2); run 3 of the probe checks it
