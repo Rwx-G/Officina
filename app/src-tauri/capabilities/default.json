@@ -13,6 +13,7 @@
     "allow-report-wrong-window",
     "allow-copy-attach-command",
     "allow-approve-catalogue",
+    "allow-decide-approval",
     "allow-set-relay-stopped"
   ]
 }

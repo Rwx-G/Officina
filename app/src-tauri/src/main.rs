@@ -145,6 +145,21 @@ async fn approve_catalogue(state: State<'_, AppState>, hash: String) -> Result<S
     .await
 }
 
+/// Approves or rejects a `human` action's request (FR-9, AD-35); the
+/// authority refuses one that is unknown, decided, expired or does not
+/// rebuild from the approved catalogue (D-27).
+#[tauri::command]
+async fn decide_approval(
+    state: State<'_, AppState>,
+    id: String,
+    approve: bool,
+) -> Result<(), String> {
+    with_authority(state, move |home| {
+        authority::decide_approval(home, &id, approve).map_err(|e| e.to_string())
+    })
+    .await
+}
+
 /// Stops or resumes the relay (FR-11, AD-34, D-26). Returns whether the
 /// state changed.
 #[tauri::command]
@@ -248,6 +263,7 @@ fn main() {
             report_wrong_window,
             copy_attach_command,
             approve_catalogue,
+            decide_approval,
             set_relay_stopped
         ])
         .run(tauri::generate_context!())
@@ -312,8 +328,53 @@ mod tests {
             declared,
             "generate_handler! against build.rs"
         );
-        for command in ["get_relay", "approve_catalogue", "set_relay_stopped"] {
+        for command in [
+            "get_relay",
+            "approve_catalogue",
+            "decide_approval",
+            "set_relay_stopped",
+        ] {
             assert!(declared.contains(command), "{command}");
         }
+    }
+
+    /// AD-35: the title, and with it the taskbar overlay, count the valid
+    /// approval requests beside the sessions that wait.
+    #[test]
+    fn window_title_counts_approvals() {
+        use officina_core::agents::parse_agents;
+        use officina_core::board::{BoardInput, build_board};
+        use officina_core::relay::approvals::ApprovalView;
+
+        let approval = |id: &str, valid: bool| ApprovalView {
+            id: id.to_owned(),
+            project: "lab".to_owned(),
+            action: "restart".to_owned(),
+            description: String::new(),
+            argv: Vec::new(),
+            valid,
+            invalid_reason: (!valid).then(|| "forged".to_owned()),
+            session_id: None,
+            session_name: None,
+            requested_at_ms: 1,
+            expires_at_ms: 2,
+            dry_run: None,
+        };
+        let input = BoardInput {
+            agents: Some(
+                parse_agents(r#"[{"pid":1,"sessionId":"s","kind":"interactive","status":"waiting","startedAt":1}]"#)
+                    .unwrap(),
+            ),
+            approvals: vec![
+                approval("0123456789abcdef-1", true),
+                approval("0123456789abcdef-2", true),
+                approval("0123456789abcdef-3", false),
+            ],
+            ..Default::default()
+        };
+        let board = build_board(&input, 10);
+        assert_eq!(super::window_title(&board), "Officina (3 waiting)");
+        let none = build_board(&BoardInput::default(), 10);
+        assert_eq!(super::window_title(&none), "Officina");
     }
 }

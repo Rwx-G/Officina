@@ -9,6 +9,7 @@ const COMMANDS: &[&str] = &[
     "report_wrong_window",
     "copy_attach_command",
     "approve_catalogue",
+    "decide_approval",
     "set_relay_stopped",
 ];
 
