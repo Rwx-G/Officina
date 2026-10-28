@@ -1406,11 +1406,8 @@ mod tests {
             .ok()
             .filter(|out| out.status.success())
             .and_then(|out| {
-                let units: Vec<u16> = out
-                    .stdout
-                    .chunks_exact(2)
-                    .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
-                    .collect();
+                let (pairs, _) = out.stdout.as_chunks::<2>();
+                let units: Vec<u16> = pairs.iter().map(|pair| u16::from_le_bytes(*pair)).collect();
                 String::from_utf16_lossy(&units)
                     .lines()
                     .map(|l| {

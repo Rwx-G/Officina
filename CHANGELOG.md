@@ -161,6 +161,10 @@ project uses [Semantic Versioning](https://semver.org/).
   relay view gives each recent entry its tone (`ok`, `failed`, `refused`),
   computed by the rule `officina run` exits by; the window colours rows from
   it instead of judging exit codes and statuses itself.
+- Built with Rust 1.99.0 (was 1.94.0; `rust-version` follows) and linted
+  with ESLint 10. Every cargo command of CI and the release takes
+  `--locked`, the dependency audit also runs weekly and covers the
+  frontend's dev dependencies, and `cargo deny` bans `webpki-roots`.
 - The README's Privacy section says what reaches the network: the requests
   of the HTTP actions an approved catalogue declares, run with `officina
   run`, and nothing else; it said Officina opened no connection at all.

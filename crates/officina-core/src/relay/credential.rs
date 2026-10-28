@@ -61,9 +61,8 @@ pub fn decode_blob(blob: &[u8]) -> Result<String, BlobError> {
     if !blob.len().is_multiple_of(2) {
         return Err(BlobError::OddLength);
     }
-    let units = blob
-        .chunks_exact(2)
-        .map(|pair| u16::from_le_bytes([pair[0], pair[1]]));
+    let (pairs, _) = blob.as_chunks::<2>();
+    let units = pairs.iter().map(|pair| u16::from_le_bytes(*pair));
     let secret = char::decode_utf16(units)
         .collect::<Result<String, _>>()
         .map_err(|_| BlobError::LoneSurrogate)?;

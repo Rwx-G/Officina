@@ -200,7 +200,7 @@ fn pump(
             }
             let wanted = n as u64;
             let left = budget
-                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |b| {
+                .try_update(Ordering::SeqCst, Ordering::SeqCst, |b| {
                     Some(b.saturating_sub(wanted))
                 })
                 .unwrap_or(0);
