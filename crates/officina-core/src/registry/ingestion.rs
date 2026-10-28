@@ -4,7 +4,7 @@
 //! host reads the files and writes the rows.
 
 use crate::dates::{dated_file_day, day_start_ms, utc_date};
-use crate::events::EventLine;
+use crate::events::{EXCERPT_CHARS, EventLine, MAX_LINE_BYTES, excerpt, tail_excerpt};
 use crate::quota::normalise_path;
 
 /// A chunk, one transaction, holds at most this many lines (AD-43).
@@ -98,22 +98,55 @@ pub enum ExcerptObservation {
     Answer { head: String, tail: Option<String> },
 }
 
-/// The excerpt `line` carries, if any.
+/// The excerpt `line` carries, if any, held to the bounds the hook writes
+/// with ([`EXCERPT_CHARS`], AD-45): a line written by anything else cannot
+/// make the registry, the view or a triage call carry more. Text the hook
+/// wrote is unchanged.
+///
+/// ```
+/// use officina_core::events::{EXCERPT_CHARS, EventLine};
+/// use officina_core::registry::ingestion::{ExcerptObservation, excerpt_observation};
+/// let line: EventLine = serde_json::from_value(serde_json::json!({
+///     "v": 1, "ts": 5, "event": "UserPromptSubmit", "prompt": "x".repeat(10 * EXCERPT_CHARS),
+/// })).unwrap();
+/// let Some(ExcerptObservation::Prompt { text }) = excerpt_observation(&line) else { panic!() };
+/// assert_eq!(text.chars().count(), EXCERPT_CHARS + 1);
+/// ```
 pub fn excerpt_observation(line: &EventLine) -> Option<ExcerptObservation> {
     match line.event.as_str() {
         "UserPromptSubmit" => line
             .prompt
-            .clone()
-            .map(|text| ExcerptObservation::Prompt { text }),
+            .as_deref()
+            .map(|text| ExcerptObservation::Prompt {
+                text: excerpt(text, EXCERPT_CHARS),
+            }),
         "Stop" => line
             .last_message
-            .clone()
+            .as_deref()
             .map(|head| ExcerptObservation::Answer {
-                head,
-                tail: line.last_message_tail.clone(),
+                head: excerpt(head, EXCERPT_CHARS),
+                tail: line.last_message_tail.as_deref().map(|tail| {
+                    tail_excerpt(tail, EXCERPT_CHARS).unwrap_or_else(|| tail.to_owned())
+                }),
             }),
         _ => None,
     }
+}
+
+/// True when a raw line of an event file, its newline included, is longer
+/// than the hook ever writes ([`MAX_LINE_BYTES`], one byte allowed for a
+/// carriage return): it is counted corrupt and never parsed, so nothing else that
+/// writes to the events folder sets the size of a session id, a folder or
+/// a reason the registry stores.
+///
+/// ```
+/// use officina_core::events::MAX_LINE_BYTES;
+/// use officina_core::registry::ingestion::line_too_long;
+/// assert!(!line_too_long(MAX_LINE_BYTES + 1));
+/// assert!(line_too_long(MAX_LINE_BYTES + 2));
+/// ```
+pub fn line_too_long(raw_len: usize) -> bool {
+    raw_len > MAX_LINE_BYTES + 1
 }
 
 #[cfg(test)]

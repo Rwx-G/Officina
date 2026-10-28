@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::agents::is_cmd_shim;
 use crate::dates::{day_start_ms, utc_date};
+use crate::events::{EXCERPT_CHARS, excerpt, tail_excerpt};
 use crate::relay::params::is_forbidden_format;
 
 use super::confirm::ConfirmationInput;
@@ -203,11 +204,44 @@ impl From<&ConfirmationInput> for TriageCase {
     }
 }
 
+/// The most characters of `end`, a `SessionEnd.reason`, a prompt carries:
+/// Claude Code's reasons are single words (E2).
+pub const END_MAX_CHARS: usize = 32;
+
 impl TriageCase {
     /// The SHA-256 of the case's data line: a row whose call was refused is
     /// not queued again until this changes (D-87).
     pub fn input_hash(&self) -> String {
         crate::sha256_hex(data_line(self).as_bytes())
+    }
+
+    /// The case as a prompt carries it: the prompt and the answer's head
+    /// cut to the hook's own [`EXCERPT_CHARS`], the answer's end to its
+    /// last [`EXCERPT_CHARS`], `end` to [`END_MAX_CHARS`]. Whatever wrote
+    /// the event files or the registry, what reaches the model, and so
+    /// what one call costs, stays bounded. A case within the bounds, as
+    /// the hook writes them, is unchanged.
+    ///
+    /// ```
+    /// use officina_core::events::EXCERPT_CHARS;
+    /// use officina_core::registry::triage_call::TriageCase;
+    /// let long = "x".repeat(10 * EXCERPT_CHARS);
+    /// let case = TriageCase { last_prompt: Some(long), ..TriageCase::default() };
+    /// let sent = case.bounded().last_prompt.unwrap();
+    /// assert_eq!(sent.chars().count(), EXCERPT_CHARS + 1, "the cut is marked by an ellipsis");
+    /// ```
+    pub fn bounded(&self) -> TriageCase {
+        let head = |text: &Option<String>| text.as_deref().map(|t| excerpt(t, EXCERPT_CHARS));
+        TriageCase {
+            last_prompt: head(&self.last_prompt),
+            answer_start: head(&self.answer_start),
+            answer_end: self
+                .answer_end
+                .as_deref()
+                .map(|text| tail_excerpt(text, EXCERPT_CHARS).unwrap_or_else(|| text.to_owned())),
+            end: self.end.as_deref().map(|text| excerpt(text, END_MAX_CHARS)),
+            cut_mid_turn: self.cut_mid_turn,
+        }
     }
 }
 
@@ -250,10 +284,11 @@ fn escaped_in_data(c: char) -> bool {
     matches!(c, '<' | '>' | '\u{2028}' | '\u{2029}') || c.is_control() || is_forbidden_format(c)
 }
 
-/// The case as the one line of JSON the prompt carries: `serde_json`'s
-/// escaping, then every character [`escaped_in_data`] names as a `\u`
-/// escape, so the line holds no marker, no line break and no hidden
-/// character, and still reads back as the same JSON.
+/// The case, [`TriageCase::bounded`], as the one line of JSON the prompt
+/// carries: `serde_json`'s escaping, then every character
+/// [`escaped_in_data`] names as a `\u` escape, so the line holds no
+/// marker, no line break and no hidden character, and still reads back as
+/// the same JSON.
 ///
 /// ```
 /// use officina_core::registry::triage_call::{TriageCase, data_line};
@@ -263,7 +298,7 @@ fn escaped_in_data(c: char) -> bool {
 /// assert_eq!(serde_json::from_str::<TriageCase>(&line).unwrap(), case);
 /// ```
 pub fn data_line(case: &TriageCase) -> String {
-    let json = serde_json::to_string(case).unwrap_or_default();
+    let json = serde_json::to_string(&case.bounded()).unwrap_or_default();
     let mut line = String::with_capacity(json.len());
     for c in json.chars() {
         if escaped_in_data(c) {
@@ -663,6 +698,40 @@ mod tests {
     use super::*;
 
     const NONCE: &str = "0f1e2d3c4b5a6978";
+
+    /// Security audit M2: however long the texts that reach a case, the
+    /// prompt stays within what the bounds allow, each character at its
+    /// widest escape (a `\u` surrogate pair, 12 bytes).
+    #[test]
+    fn the_prompt_is_bounded_whatever_the_case_holds() {
+        let widest = '\u{E0001}';
+        let huge: String = std::iter::repeat_n(widest, 50_000).collect();
+        let case = TriageCase {
+            last_prompt: Some(huge.clone()),
+            answer_start: Some(huge.clone()),
+            answer_end: Some(huge.clone()),
+            end: Some(huge),
+            cut_mid_turn: true,
+        };
+        let sent = prompt(&case, NONCE).unwrap();
+        let texts = 3 * (EXCERPT_CHARS + 1) + END_MAX_CHARS + 1;
+        let field_names = 120;
+        let bound = instruction(NONCE).len()
+            + 2 * (DATA_MARKER.len() + NONCE_LEN + 5)
+            + field_names
+            + 12 * texts;
+        assert!(sent.len() <= bound, "{} > {bound}", sent.len());
+        assert_eq!(case.input_hash(), case.bounded().input_hash());
+        // A case within the hook's bounds is sent whole.
+        let hook_sized = TriageCase {
+            last_prompt: Some(excerpt(&"p".repeat(EXCERPT_CHARS * 2), EXCERPT_CHARS)),
+            answer_start: Some("done".into()),
+            answer_end: tail_excerpt(&"a".repeat(EXCERPT_CHARS * 2), EXCERPT_CHARS),
+            end: Some("prompt_input_exit".into()),
+            cut_mid_turn: false,
+        };
+        assert_eq!(hook_sized.bounded(), hook_sized);
+    }
 
     #[test]
     fn argv_is_pinned() {

@@ -133,6 +133,10 @@ struct PromptCase {
 struct PromptExpect {
     #[serde(default)]
     data_line: Option<String>,
+    /// What the line reads back as, when the case holds more than a
+    /// prompt carries (security audit M2); the case itself otherwise.
+    #[serde(default)]
+    sent: Option<TriageCase>,
     #[serde(default)]
     refused: bool,
 }
@@ -1160,8 +1164,8 @@ OFFICINA-DATA-{}>>>
             );
             assert_eq!(
                 serde_json::from_str::<TriageCase>(line).unwrap(),
-                case.case,
-                "prompt case {}: the line reads back as the case",
+                *case.expect.sent.as_ref().unwrap_or(&case.case),
+                "prompt case {}: the line reads back as the case sent",
                 case.name
             );
             assert_eq!(text.matches(&opening).count(), 1, "{}", case.name);

@@ -452,6 +452,11 @@ project uses [Semantic Versioning](https://semver.org/).
   recorded at the time it is read, and a line dated before its file's day
   at the start of that day (v0.3): no excerpt outlives the 30-day bound
   and newer observations still replace it.
+- Text reaching the registry and the triage model is held to the hook's
+  own bounds when it is read (v0.3), whatever wrote the event files: a line
+  longer than the hook writes is one corrupt line, an excerpt is stored cut
+  to 280 characters, and a triage call carries each text cut to its bound,
+  so what one call costs is bounded too.
 - A damaged registry is restored from the copy whose name carries the
   newest UTC day (v0.3), never from the newest modification time, which any
   process can set; a file of another name under `registry/backup/` is never

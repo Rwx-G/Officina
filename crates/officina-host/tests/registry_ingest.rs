@@ -498,6 +498,30 @@ fn a_future_dated_line_is_recorded_no_later_than_its_ingestion() {
     );
 }
 
+/// Security audit M2: a line longer than the hook writes is one corrupt
+/// line, and an excerpt longer than the hook cuts is stored cut.
+#[test]
+fn text_beyond_the_hooks_bounds_never_reaches_the_registry() {
+    use officina_core::events::{EXCERPT_CHARS, MAX_LINE_BYTES};
+    let home = Home::new();
+    let oversized = prompt("big", NOW - 9, CWD, &"x".repeat(MAX_LINE_BYTES));
+    let long = prompt("s1", NOW - 5, CWD, &"y".repeat(3 * EXCERPT_CHARS));
+    assert!(long.len() < MAX_LINE_BYTES, "the second line fits the hook's bound");
+    home.append(&day_file(NOW), &[oversized, long]);
+    let mut writer = home.writer(NOW);
+    let report = writer.ingest(&home.ctx(), NOW).unwrap();
+    assert_eq!(report.corrupt_lines, 1);
+    let sessions: Vec<String> = writer
+        .sessions()
+        .unwrap()
+        .into_iter()
+        .map(|s| s.session_id)
+        .collect();
+    assert_eq!(sessions, ["s1"]);
+    let stored = excerpt(&home, "s1").unwrap().prompt.unwrap();
+    assert_eq!(stored.chars().count(), EXCERPT_CHARS + 1);
+}
+
 #[test]
 fn excerpts_keep_the_prompt_and_the_answer_head_and_tail() {
     let home = Home::new();
