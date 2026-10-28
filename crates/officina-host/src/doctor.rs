@@ -608,7 +608,7 @@ mod tests {
             None,
             Some(""),
             Some("*"),
-            Some("Write"),
+            Some("Read"),
             Some("Bashful"),
             Some("bash"),
         ] {
@@ -622,8 +622,8 @@ mod tests {
         let reversed: Vec<&str> = names.iter().rev().copied().collect();
         for present in [
             gated_tools_matcher(),
-            format!("Write|{}", reversed.join("|")),
-            format!("Edit | {}", names.join(" | ")),
+            format!("Read|{}", reversed.join("|")),
+            format!("Glob | {}", names.join(" | ")),
         ] {
             assert!(
                 missing_hook_events(&with_matcher(Some(&present)), &gate).is_empty(),
