@@ -836,6 +836,67 @@ const evidenceChecks = (printed) => {
   ];
 };
 
+// The model (story 3.11, D-72): sessions confirmed from their default
+// proposal, a dry run the model wins on them, the model turned on, then the
+// rows that fall to the default sent to it in turn (answered by the fixture
+// tool, no process started): the latest answered with a reason that is
+// markup, the others left pending. The paused scenario then ends the next
+// three calls without an answer, which pauses the model.
+const modelCases = [...Array(32).keys()].map((i) => ({ n: 700 + i, verdict: i < 20 ? "finished" : "to_resume" }));
+const modelPending = [
+  ["Bump the chart library", 740],
+  ["Rotate the logs", 741],
+  ["Draft the release notes", 742],
+  ["Add CSV export to the invoice list", 743],
+];
+const modelEvents = [
+  ...modelCases.flatMap(({ n }, i) => {
+    const at = now - 30 * HOUR + i * 10 * MIN;
+    return [
+      prompted(n, "billing-api", at, `Task ${i} of the sprint`),
+      stopped(n, "billing-api", at + 5 * MIN, "Done, with tests."),
+      ended(n, "billing-api", at + 6 * MIN, "prompt_input_exit"),
+    ];
+  }),
+  ...modelPending.flatMap(([task, n], i) => {
+    const at = now - 3 * HOUR + i * 20 * MIN;
+    return [
+      prompted(n, "web-portal", at, task),
+      stopped(n, "web-portal", at + 5 * MIN, "Done."),
+      ended(n, "web-portal", at + 6 * MIN, "prompt_input_exit"),
+    ];
+  }),
+].map((e) => ({ v: 1, ...e }));
+const modelSteps = [
+  { at: now - 4 * HOUR },
+  "ingest",
+  ...modelCases.map(({ n, verdict }, i) => ({
+    confirm: { key: `session:${sid(n)}`, verdict, file_under: { new: { name: `sprint task ${i}` } } },
+  })),
+  { at: now - 2 * HOUR },
+  { dry_run: modelCases.map(({ verdict }) => verdict).reverse() },
+  { at: now - 50 * MIN },
+  { triage_model: true },
+  { at: now - 40 * MIN },
+  { proposals: [{ answer: "finished", reason: hostile }] },
+];
+const modelChecks = (printed) => {
+  const rows = printed.triage;
+  return [
+    [printed.model.enabled === true && printed.gates.model_enable.state === "holds", "the model on, its gate holding"],
+    [rows.some((r) => r.proposal.source === "model" && r.model_reason === hostile), "a model proposal with its markup reason"],
+  ];
+};
+const modelOpenChecks = (printed) => [
+  ...modelChecks(printed),
+  [printed.model.paused_at_ms === null && printed.triage.some((r) => r.model_pending), "rows pending for the model"],
+];
+const modelPausedChecks = (printed) => [
+  ...modelChecks(printed),
+  [printed.model.paused_at_ms !== null && printed.triage.every((r) => !r.model_pending), "the model paused, nothing pending"],
+  [printed.triage.filter((r) => r.model_call !== null).length === 3, "three rows whose call gave no answer"],
+];
+
 // Subject ids follow creation order in a fresh registry: an author's
 // `create`, and a confirmation filing a session under a new subject. Steps
 // name a subject as `SUBJECT(<name>)`, resolved here to its id.
@@ -864,6 +925,17 @@ const registryScenarios = {
   "subjects-restored": { steps: [...subjectsSteps, "copy", "damage"], checks: subjectsChecks },
   triage: { steps: triageSteps, events: triageEvents, agents: triageAgents, checks: triageChecks },
   evidence: { steps: evidenceSteps, events: evidenceEvents, agents: [], checks: evidenceChecks },
+  model: { steps: modelSteps, events: modelEvents, agents: [], checks: modelOpenChecks },
+  "model-paused": {
+    steps: [
+      ...modelSteps,
+      { at: now - 30 * MIN },
+      { proposals: [{ answer: "timeout" }, { answer: "invalid" }, { answer: "failed" }] },
+    ],
+    events: modelEvents,
+    agents: [],
+    checks: modelPausedChecks,
+  },
 };
 
 function officinaJson(args, env) {

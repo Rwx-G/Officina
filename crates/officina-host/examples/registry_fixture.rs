@@ -32,7 +32,14 @@
 //! - `{"auto_archive": true | false}`: the author turns auto-archive on,
 //!   which must be accepted, or off (FR-12);
 //! - `"auto_archive_pass"`: one auto-archive pass, as the collector runs it
-//!   after a view build (D-70).
+//!   after a view build (D-70);
+//! - `{"triage_model": true | false}`: the author turns the triage model
+//!   on, which must be accepted, or off (FR-10 as amended);
+//! - `{"proposals": [{"answer": "finished" | "to_resume" | "unsure" |
+//!   "timeout" | "invalid" | "failed", "reason": "..."}, ...]}`: the rows
+//!   queued for the model taken in turn through the window's triage state,
+//!   each call ended as the list says (the reason, untrusted text, on an
+//!   answer), one call per spacing, no process started (AD-52).
 //!
 //! Exit 0, 1 when a step fails, 64 on usage.
 
@@ -77,6 +84,18 @@ enum Step {
     RefusedCall(TriageRefusal),
     AutoArchive(bool),
     AutoArchivePass,
+    TriageModel(bool),
+    Proposals(Vec<ProposalAnswer>),
+}
+
+/// How one proposal call ends: an answer with its reason, or an outcome
+/// without one.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProposalAnswer {
+    answer: String,
+    #[serde(default)]
+    reason: Option<String>,
 }
 
 /// A row the author confirms, as the window sends it, the proposal aside:
@@ -92,16 +111,20 @@ struct Confirmation {
     file_under: Option<FileUnder>,
 }
 
-/// One call's result for a dry run case, answered `answer` at `at_ms`.
-fn dry_run_result(
+/// One call's result for a case of `purpose`, answered `answer` with
+/// `reason` at `at_ms`.
+fn call_result(
+    purpose: TriagePurpose,
     case_key: String,
     case: &TriageCase,
     answer: &str,
+    reason: &str,
     at_ms: i64,
 ) -> Result<CallResult, String> {
     let (outcome, verdict) = match answer {
         "timeout" => (TriageOutcome::Timeout, None),
         "invalid" => (TriageOutcome::Invalid, None),
+        "failed" => (TriageOutcome::Failed, None),
         verdict => (
             TriageOutcome::Answer,
             Some(
@@ -111,7 +134,7 @@ fn dry_run_result(
         ),
     };
     Ok(CallResult {
-        purpose: TriagePurpose::DryRun,
+        purpose,
         case_key,
         input_hash: case.input_hash(),
         started_at_ms: at_ms,
@@ -120,7 +143,7 @@ fn dry_run_result(
         refusal: None,
         answer: verdict.map(|verdict| CallAnswer {
             verdict,
-            reason: "fixture".into(),
+            reason: reason.to_owned(),
         }),
         usage: CallUsage {
             input_tokens: Some(4_500),
@@ -222,8 +245,15 @@ fn run(home: &Path, script: Script) -> Result<(), String> {
                         .next_call(&mut writer, at)
                         .map_err(|e| failed(e.to_string()))?
                         .ok_or_else(|| failed("the dry run has fewer cases than answers".into()))?;
-                    let result = dry_run_result(next.case_key.clone(), &next.case, answer, at)
-                        .map_err(failed)?;
+                    let result = call_result(
+                        TriagePurpose::DryRun,
+                        next.case_key.clone(),
+                        &next.case,
+                        answer,
+                        "fixture",
+                        at,
+                    )
+                    .map_err(failed)?;
                     triage
                         .take_result(&mut writer, &result, at + 2_400)
                         .map_err(|e| failed(e.to_string()))?;
@@ -264,6 +294,36 @@ fn run(home: &Path, script: Script) -> Result<(), String> {
                     "auto-archived {:?}, turned off: {:?}",
                     run.archived, run.turned_off
                 );
+            }
+            Step::TriageModel(on) => {
+                writer
+                    .set_triage_model(on, now_ms)
+                    .map_err(|e| failed(e.to_string()))?
+                    .map_err(|refusal| failed(refusal.to_string()))?;
+            }
+            Step::Proposals(answers) => {
+                let mut triage = Triage::default();
+                let mut at = now_ms;
+                for answer in &answers {
+                    let next = triage
+                        .next_call(&mut writer, at)
+                        .map_err(|e| failed(e.to_string()))?
+                        .filter(|next| next.purpose == TriagePurpose::Proposal)
+                        .ok_or_else(|| failed("fewer rows queued than answers".into()))?;
+                    let result = call_result(
+                        TriagePurpose::Proposal,
+                        next.case_key.clone(),
+                        &next.case,
+                        &answer.answer,
+                        answer.reason.as_deref().unwrap_or("fixture"),
+                        at,
+                    )
+                    .map_err(failed)?;
+                    triage
+                        .take_result(&mut writer, &result, at + 2_400)
+                        .map_err(|e| failed(e.to_string()))?;
+                    at += CALL_SPACING_MS;
+                }
             }
             Step::Damage => {
                 drop(writer);
