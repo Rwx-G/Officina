@@ -32,7 +32,7 @@ stories:
   - {id: "2.6", file: story-2.6-after-check-and-relay-view.md, slice: A, status: review}
   - {id: "2.7", file: story-2.7-window-catalogue-approval.md, slice: A, status: review}
   - {id: "2.8", file: story-2.8-approvals-and-class-human.md, slice: B, status: review}
-  - {id: "2.9", file: story-2.9-relay-view.md, slice: B, status: approved}
+  - {id: "2.9", file: story-2.9-relay-view.md, slice: B, status: review}
   - {id: "2.10", file: story-2.10-doctor-relay-and-docs.md, slice: A, status: review}
   - {id: "2.11", file: story-2.11-http-actions.md, slice: B, status: approved}
   - {id: "2.12", file: story-2.12-every-shell-tool-in-the-gate.md, slice: A, status: review}
