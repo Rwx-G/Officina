@@ -38,6 +38,15 @@
   );
   let switching = $derived(store.inFlight["auto-archive"] ?? false);
 
+  /** The box shows what the registry holds, never the click: it goes back
+   *  at once, and the next view moves it when the change was accepted. */
+  function toggle(event: Event): void {
+    const input = event.currentTarget as HTMLInputElement;
+    const wanted = input.checked;
+    input.checked = autoArchive?.on ?? false;
+    void store.setAutoArchive(wanted);
+  }
+
   function counted(counts: CallCounts): string {
     const unanswered = counts.unanswered > 0 ? ` (${counts.unanswered} without an answer)` : "";
     return `${counts.calls} ${counts.calls === 1 ? "call" : "calls"}${unanswered}, ${usd(counts.cost_microusd)}`;
@@ -70,7 +79,7 @@
             data-testid="auto-archive"
             checked={autoArchive.on}
             disabled={!toggleable || switching}
-            onchange={(event) => store.setAutoArchive((event.currentTarget as HTMLInputElement).checked)}
+            onchange={toggle}
           />
           Archive by itself what Claude Code reports done in a filed subject
         </label>

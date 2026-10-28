@@ -157,16 +157,33 @@ test.describe("Measured error and auto-archive", () => {
     await openEvidence(page, holding);
     const toggle = page.getByTestId("auto-archive");
     await expect(toggle).toBeEnabled();
-    await toggle.check();
+    await toggle.click();
     await expect.poll(async () => (await calls(page)).filter((c) => c.cmd === "set_auto_archive").map((c) => c.args)).toEqual([
       { on: true },
     ]);
     await expect(toggle).toBeChecked();
-    await toggle.uncheck();
+    await toggle.click();
     await expect
       .poll(async () => (await calls(page)).filter((c) => c.cmd === "set_auto_archive").length)
       .toBe(2);
     await expect(toggle).not.toBeChecked();
+  });
+
+  test("a refused toggle stays as the registry holds it and says why", async ({ page }) => {
+    const view = loadRegistry("evidence");
+    const holding: RegistryView = {
+      ...view,
+      gates: { ...view.gates, auto_archive: { ...view.gates.auto_archive, state: "holds" } },
+      auto_archive: { on: false, src: null, at_ms: null, reason: null },
+    };
+    await openEvidence(page, holding);
+    // The gate broke in the backend after the window showed it holding.
+    await page.evaluate((broken) => {
+      window.__officinaRegistry = broken;
+    }, view);
+    await page.getByTestId("auto-archive").click();
+    await expect(page.getByTestId("auto-archive-error")).toContainText("its gate does not hold");
+    await expect(page.getByTestId("auto-archive")).not.toBeChecked();
   });
 
   test("recent auto-archives can be reopened", async ({ page }) => {
