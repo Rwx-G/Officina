@@ -31,7 +31,7 @@ so that a dependency bump or a lint sweep starts in one gesture, and nothing I d
 - Dependencies: stories 5.7 (commands and cards) and 5.8 (view and store).
 - v0.4 as built (D-563, D-564): no colour is added (the card reuses the board card's surface and the chips the approval card's), so the dark theme holds by construction and the attention check runs in both themes; `Gauge.svelte` keeps its Board width (D-533's compact width belongs to the one-line header); `SubjectPicker.svelte` is reused as story 3.5 built it.
 - The card is core's (AD-78): the frontend renders it and never recomputes a prompt, a hash or a vector. Edits go back to core, which issues a new card.
-- Launch is not keyboard-reachable by design (FR-13 as amended); Start in the orchestrator's room is (story 5.18). Do not add `tabindex` tricks to make Launch reachable.
+- Launch is not keyboard-reachable by design (FR-13 as amended); Start in the orchestrator's file is (story 5.18) and in the Orchestrator view (story 5.16). Do not add `tabindex` tricks to make Launch reachable.
 - Quota gauges reuse `Gauge.svelte` with the card's windows.
 - The mock answers `launch_work_order` with each outcome by scenario, so the Playwright cases need no real spawn; the real path is covered by the injection battery (5.7).
 
@@ -53,3 +53,4 @@ so that a dependency bump or a lint sweep starts in one gesture, and nothing I d
 - 2026-10-28 created
 - 2026-10-28 reworked after review: the attention-token check moves to a Playwright computed-style case (F22)
 - 2026-10-28 checked against the addendum and v0.3 and v0.4 as built: Launch keeps its box through `StableLabel` with a stable-size case, the attention check in both themes, no new colour (D-564)
+- 2026-10-28 after the rework's adversarial pass: Start's places named as rewritten (rework F7)

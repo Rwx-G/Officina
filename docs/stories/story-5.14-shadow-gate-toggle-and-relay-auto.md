@@ -39,7 +39,7 @@ so that `auto` approves what I would have approved, I can see how weak that evid
 - Requirements: FR-7 as amended (amendment 4), FR-9, J3, journey 3, PRD section 7 Auto fail-closed and Auto rows. Decisions: AD-21 as amended (`record_review_approval` is authority code), AD-86, AD-88, AD-92, AD-93. Risks: R40. Epic decisions: D-27, D-28 (Epic 2); D-69 (Epic 3); P-24, P-26, D-124, D-130, D-141 to D-143, D-147, D-151, D-157, D-162.
 - Seams (D-124, read through `main`, D-563): `crates/officina-host/src/relay/authority.rs` (2.8), `RelayView.svelte` and `RelayView` (2.6, 2.9; schema per P-26), `ApprovalCard.svelte` (2.8, 5.12), the review worker (5.13).
 - The scene reads `pending` approvals only (story 5.12 AC 4, D-571): a live review's `reviewing` request leaves its session in its office, so turning live mode on here changes nothing in the scene; `scene.json`'s cases from 5.12 already hold it.
-- Turning approval on is the decision that lets a review run a playbook, so it follows D-28's pointer-only rule; Start in the orchestrator's room and Send in the meeting do not (they run nothing in a repository).
+- Turning approval on is the decision that lets a review run a playbook, so it follows D-28's pointer-only rule; Start (the Orchestrator view, the empty chair's file) and Send in the meeting do not (they run nothing in a repository).
 - The 3/n bound and the 5 % threshold travel in the payload (AD-5); the frontend computes nothing.
 - The Auto metric's "week before Slice B ships" reads the journal lines v0.2 already writes (`by` absent means author, D-142); 5.19 records both weeks.
 
@@ -63,3 +63,4 @@ so that `auto` approves what I would have approved, I can see how weak that evid
 - 2026-10-28 created
 - 2026-10-28 reworked after review: a tree change before consumption runs nothing (F6); the cap checked again before a review approval (F15); gate cases are shadow rows only (F16); `relay --json` never prints a reason (F17); one decision per request (F26); `officina run` never prints the reason (F36); `AutoMode` and the rule row's decision (F41); stored reason as `Untrusted<String>` (F43)
 - 2026-10-28 checked against the addendum and v0.3 and v0.4 as built: the toggles, the rule offer and the reviewing card keep their boxes with stable-size cases, both themes (D-564); the scene's reading of `reviewing` is story 5.12's (D-571); seams cited by file (D-563)
+- 2026-10-28 after the rework's adversarial pass: Start's places named as rewritten (rework F7)
