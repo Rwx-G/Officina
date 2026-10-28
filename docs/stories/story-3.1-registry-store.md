@@ -1,6 +1,6 @@
 # Story 3.1: Registry store: schema 1, migrations, integrity, copies and location
 
-**Status:** Approved
+**Status:** review
 
 ## Story
 
@@ -27,16 +27,16 @@ so that nothing I decide is lost to a restart, a crash or a sync client, and eve
 
 ## Tasks
 
-- [ ] Add `rusqlite` and the `windows-sys` feature to `crates/officina-host/Cargo.toml`; `cargo deny check`; CI step "registry dependencies" (AC 1)
-- [ ] Hoist `closed_enum!` (with `#[macro_export]`) and `sha256_hex` to the core crate root with re-exports (AC 2)
-- [ ] `crates/officina-core/src/registry/{mod,types}.rs`: enums of D-45, records, `Sourced<T>` (AC 3)
-- [ ] `crates/officina-host/src/registry/{mod,schema,store,read}.rs`: migration 1 with D-88, runner, pinned hashes, pragmas, reader type, version states, location probes, integrity, quarantine, restore notice, copies (AC 4-11)
-- [ ] `GetDriveTypeW` in `crates/officina-host/src/platform/windows.rs` with a `// SAFETY:` comment (AC 6)
-- [ ] `window-authority` gating of `write`, `ingest` and the writing half of `store`; the registry marker; second extraction and negative check in the CI step (AC 12)
-- [ ] `examples/registry_crash_helper.rs` with mode `hold`, `required-features = ["window-authority"]` (AC 8)
-- [ ] Doctor registry checks (AC 13)
-- [ ] Tests: `registry_schema.rs`, `registry_store.rs`, `doctor_registry.rs`, unit tests (AC 3-13)
-- [ ] Update `CHANGELOG.md` `[Unreleased]` and the README (AC 14)
+- [x] Add `rusqlite` and the `windows-sys` feature to `crates/officina-host/Cargo.toml`; `cargo deny check`; CI step "registry dependencies" (AC 1)
+- [x] Hoist `closed_enum!` (with `#[macro_export]`) and `sha256_hex` to the core crate root with re-exports (AC 2)
+- [x] `crates/officina-core/src/registry/{mod,types}.rs`: enums of D-45, records, `Sourced<T>` (AC 3)
+- [x] `crates/officina-host/src/registry/{mod,schema,store,read}.rs`: migration 1 with D-88, runner, pinned hashes, pragmas, reader type, version states, location probes, integrity, quarantine, restore notice, copies (AC 4-11)
+- [x] `GetDriveTypeW` in `crates/officina-host/src/platform/windows.rs` with a `// SAFETY:` comment (AC 6)
+- [x] `window-authority` gating of `write`, `ingest` and the writing half of `store`; the registry marker; second extraction and negative check in the CI step (AC 12)
+- [x] `examples/registry_crash_helper.rs` with mode `hold`, `required-features = ["window-authority"]` (AC 8)
+- [x] Doctor registry checks (AC 13)
+- [x] Tests: `registry_schema.rs`, `registry_store.rs`, `doctor_registry.rs`, unit tests (AC 3-13)
+- [x] Update `CHANGELOG.md` `[Unreleased]` and the README (AC 14)
 
 ## Dev Notes
 
@@ -65,11 +65,48 @@ so that nothing I decide is lost to a restart, a crash or a sync client, and eve
 
 ### Debug Log
 
+- **Probed before designing** (rusqlite 0.41.0 bundled, on the workstation): a `VACUUM INTO` copy is written in rollback mode (header bytes 18 and 19 at 1), so a read-only open of a copy creates no file beside it; a read-only open of a cleanly closed WAL registry creates `-wal` and `-shm` and leaves them (D-82); on-disk damage under a running connection stays invisible while its page cache holds the pages, and shows as `SQLITE_CORRUPT` once another connection commits (story 3.2's runtime test relies on this).
+- **Decisions where the story is silent:**
+  - AC 2: the macro also generates `from_code()`, the inverse of `code()`, which the registry needs to read its text columns; `wire` is `#[doc(hidden)] pub` so the exported macro expands in other crates.
+  - AC 3: `ReasonCode` is `state_done`, `state_failed`, `state_stopped`, `cut_mid_turn`, `default_to_resume`, `empty_subject`, `model`; `SettingKey` is `restore_notice`, `triage_model`, `triage_model_pause`, `auto_archive`; `TriagePurpose` `proposal`, `dry_run`; `TriageOutcome` `answer`, `refused`, `failed`, `timeout`, `invalid`. Stories 3.6 to 3.11 may change them under P-14. Records: `Sourced<T>`, `EventFileRecord`, `RestoreNotice`.
+  - AC 4: schema 1 adds `event_file.rewrites` (D-84, story 3.2) so migration 1 is written once; `call_id` columns carry no foreign key, since `triage_call` rows expire after 90 days (AD-44) and a confirmation keeps its call id as history.
+  - AC 5: the pre-migration copy is `backup/pre-v<target version>-<UTC date>.db`: the date lets story 3.2's retention read its age from the name (D-94). The runner (`schema::migrate`), `open_writer_with` and `open_reader_expecting` take the migration list or the expected version as an argument, so the older-version cases are tested with two entries.
+  - AC 6: the Cloud Files attributes checked are `PINNED`, `UNPINNED`, `RECALL_ON_OPEN` and `RECALL_ON_DATA_ACCESS`, on the folder and each ancestor; `onedrive_roots_from_env()` reads `OneDrive`, `OneDriveCommercial` and `OneDriveConsumer`; `DRIVE_REMOTE` is declared next to `GetDriveTypeW`, since windows-sys puts it under a feature the addendum does not list.
+  - AC 7: `Writer::pragma` and `Reader::pragma` read a setting back by name; `read_only_connection` is the one place readers open, and the test proves it refuses writes.
+  - AC 9: the reader-state enum is the host's `ReaderState` (with `ready`), declared with the exported macro (D-42); the window's newer-version outcome is `WriterOpen::ReadOnly` holding a `Reader`, so nothing can ingest or delete by construction.
+  - AC 10: restore candidates are every `.db` under `backup/` (daily and pre-migration copies), newest modification first; a copy is placed through `registry.db.restore`, renamed once complete. A quarantine that fails removes the folder it created when empty, so doctor reports no empty quarantine.
+  - AC 11: pruning validates each daily copy (`quick_check`, read-only) and deletes every daily copy beyond the two newest valid ones, damaged ones included.
+  - AC 13: doctor levels: absent ok, older and newer warn, unreadable fail; no copy warns; a quarantine warns; a restore warns for the 7 days the view shows it (D-93), then is reported ok.
+- **Adversarial pass** (concurrent readers during writes, a newer version, a corrupt file, a synced home, a kill mid-transaction): two real misses, each now a test and fixed in its own commit. A kill between the quarantine's moves left `registry.db-wal` without its database, which SQLite would replay into a new database (`a_log_left_without_its_database_is_set_aside`); a kill after the quarantine and before the copy took its place made the next start begin empty (`an_interrupted_restore_is_finished_at_the_next_open`). With no database file, the window now sets aside any `-wal` and `-shm`, and finishes the restore when a quarantine exists; a first start restores nothing (`a_first_start_restores_nothing`). A kill inside a migration needs no helper: its transaction never commits, which `failed_migration_leaves_the_version_unchanged` proves for a failure.
+- **Mutation check:** `deleted_text_reaches_neither_the_file_nor_the_copy` stayed green with `secure_delete` off in its first form (the replaced cell was the page's only one, which SQLite reuses); rewritten with rows after the marker and a longer replacement, it fails with `secure_delete` off and passes with it on.
+- **Per-commit gates:** fmt; clippy on core (`ts`) and on the host with and without `window-authority`; the tests of the crates touched. The full CI replay runs at the end of story 3.2.
+
 ### Completion Notes
 
+- AC 1: `crates/officina-host/Cargo.toml` (`rusqlite` 0.41.0 `bundled`, `cache`; windows-sys `Win32_Storage_FileSystem`); `cargo deny check` ok; CI `windows` step "Registry dependencies" (rusqlite as positive control).
+- AC 2: `crates/officina-core/src/lib.rs` (`#[macro_export] closed_enum!`, `sha256_hex`), re-exported by `relay`; the relay tests unchanged and green; doc tests `lib.rs - sha256_hex` and `lib.rs - closed_enum`.
+- AC 3: `crates/officina-core/src/registry/types.rs::tests::{every_variant_round_trips_its_text, unknown_text_is_refused}`, iterating every enum of the file (a count of the file's `closed_enum!` blocks fails on an unlisted one).
+- AC 4: `crates/officina-host/tests/registry_schema.rs::{every_table_is_strict, check_lists_match_the_core_enums, columns_without_check_are_the_ones_d_88_names}`.
+- AC 5: `registry_schema.rs::{migration_hashes_are_pinned, failed_migration_leaves_the_version_unchanged, migrating_a_database_with_data_copies_it_first, every_past_version_has_a_fixture}`.
+- AC 6: `crates/officina-host/src/registry/store.rs::tests::{unc_path_is_network, remote_drive_type_is_network, each_sync_marker_in_an_ancestor_is_synced, onedrive_environment_path_is_synced, cloud_files_attribute_is_synced, local_folder_is_local, temp_dir_drive_is_not_remote}`; `crates/officina-host/tests/registry_store.rs::{planted_marker_opens_and_names_the_folder, network_location_is_not_opened}`.
+- AC 7: `registry_store.rs::{writer_sets_every_pragma, reader_is_read_only_and_query_only, reader_reads_beside_the_writer}`; the `compile_fail` doc test on `registry::read::Reader`, with its compiling twin.
+- AC 8: `registry_store.rs::{reader_reads_a_cleanly_closed_registry, reader_reads_after_the_writer_was_killed, reader_leaves_the_database_file_unchanged, reader_never_blocks_the_writer}`; `crates/officina-host/examples/registry_crash_helper.rs` mode `hold`.
+- AC 9: `registry_store.rs::{absent_registry_is_created_by_the_writer_only, older_version_is_copied_then_migrated, newer_version_opens_read_only_for_the_writer, reader_reports_each_state}`.
+- AC 10: `registry_store.rs::{damaged_page_is_quarantined_and_the_newest_valid_copy_restored, damaged_newest_copy_falls_back_to_the_next, not_a_database_is_quarantined, no_valid_copy_starts_empty_and_says_so, restore_writes_the_notice, held_file_leaves_the_registry_unavailable}`.
+- AC 11: `registry_store.rs::{daily_copy_is_due_by_the_date_in_its_name, interrupted_copy_leaves_no_dated_file, a_damaged_copy_never_pushes_out_a_valid_one, deleted_text_reaches_neither_the_file_nor_the_copy}`.
+- AC 12: `registry::write` and the writing half of `store` under `window-authority`; `REGISTRY_MARKER` in `RegistryError`; the CI step "officina holds no authority" extracts it and fails when `officina.exe` holds it; `cargo build -p officina` alone compiles, its feature graph holds neither feature, and its exe holds no marker.
+- AC 13: `crates/officina-host/src/doctor.rs::tests::{registry_in_a_synced_folder_warns_and_names_it, newer_registry_warns, failed_quick_check_fails, copies_quarantine_and_restore_are_reported}`; `crates/officina/tests/doctor_registry.rs::{unc_officina_home_fails_the_registry_location, absent_registry_is_reported_not_created, doctor_leaves_the_database_file_unchanged}`.
+- AC 14: `CHANGELOG.md` `[Unreleased]` Added; README "Subjects and triage (v0.3, in progress)"; `readme.rs` green.
+
 ## File List
+
+- `crates/officina-core/src/{lib,wire,dates}.rs`, `crates/officina-core/src/relay/mod.rs`, `crates/officina-core/src/registry/{mod,types,retention}.rs`
+- `crates/officina-host/Cargo.toml`, `Cargo.lock`, `crates/officina-host/src/{lib,doctor}.rs`, `crates/officina-host/src/platform/windows.rs`, `crates/officina-host/src/registry/{mod,schema,store,read,write}.rs`, `crates/officina-host/examples/registry_crash_helper.rs`, `crates/officina-host/tests/common/{mod,registry}.rs`, `crates/officina-host/tests/{registry_schema,registry_store}.rs`
+- `crates/officina/tests/doctor_registry.rs`
+- `.github/workflows/ci.yml`, `README.md`, `CHANGELOG.md`, `docs/stories/story-3.1-registry-store.md`, `docs/stories/sprint-status.yaml`
 
 ## Change Log
 
 - 2026-10-28 created
 - 2026-10-28 reworked after review: D-82 replaces the reader gate (readers may create `-wal`/`-shm`, tested with the window closed); schema 1 additions and the listed `CHECK` columns (D-88); marker negative check only, positive control moved to 3.2 (D-83); copies by UTC date, temp-then-rename, two newest valid kept (D-94); restore notice (D-93); quarantine move failure (D-97); ruled-out crates step and UNC doctor test automated (D-91); `#[macro_export]`; `compile_fail` proof for the reader type
+- 2026-10-28 implemented: the registry store (schema 1, migrations, location, readers, the window's writer with its integrity check, quarantine, restore and daily copies), doctor's registry lines, the CI checks, the README section; two adversarial fixes (a log left without its database, an interrupted restore). Status review
