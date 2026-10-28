@@ -20,26 +20,30 @@ stories:
 ---
 epic: 2
 version: v0.2
-# approved: written and approved, implementation not started.
-# Slice A (2.1-2.7, 2.10, stop included) is usable alone; 2.10 depends on 2.1-2.7 only and can run right after 2.7.
-# HTTP actions (AD-36) close the PRD as story 2.11 (owner rule, epic-2-decisions.md P-7).
+# Closed on code (docs/qa/epic-2-report.md, story 2.16): every story implemented, its acceptance criteria proved by named tests, the audits answered or recorded in docs/backlog.md.
+# review: code and automated tests in place. in-progress: an owner's manual check is open (Epic 1's convention):
+#   2.4 AC 18, a raw ssh denied in an interactive bypassPermissions session;
+#   2.10 AC 10, the Delegation metric: a WSL ansible-playbook check then apply run by a session start to finish;
+#   2.11 AC 18, an HTTP action with a stored credential against a real https endpoint whose CA only the Windows store trusts;
+#   2.12 AC 6, a PowerShell call denied in an interactive session with the PowerShell tool on.
+# Closed on use after those checks and a week of real use at work (P-7).
 stories:
   - {id: "2.1", file: story-2.1-relay-core.md, slice: A, status: review}
   - {id: "2.2", file: story-2.2-catalogue-approval-core.md, slice: A, status: review}
   - {id: "2.3", file: story-2.3-command-lexer-and-gate.md, slice: A, status: review}
-  - {id: "2.4", file: story-2.4-gate-in-the-hook.md, slice: A, status: review}
+  - {id: "2.4", file: story-2.4-gate-in-the-hook.md, slice: A, status: in-progress}
   - {id: "2.5", file: story-2.5-officina-run.md, slice: A, status: review}
   - {id: "2.6", file: story-2.6-after-check-and-relay-view.md, slice: A, status: review}
   - {id: "2.7", file: story-2.7-window-catalogue-approval.md, slice: A, status: review}
   - {id: "2.8", file: story-2.8-approvals-and-class-human.md, slice: B, status: review}
   - {id: "2.9", file: story-2.9-relay-view.md, slice: B, status: review}
-  - {id: "2.10", file: story-2.10-doctor-relay-and-docs.md, slice: A, status: review}
-  - {id: "2.11", file: story-2.11-http-actions.md, slice: B, status: review}
-  - {id: "2.12", file: story-2.12-every-shell-tool-in-the-gate.md, slice: A, status: review}
+  - {id: "2.10", file: story-2.10-doctor-relay-and-docs.md, slice: A, status: in-progress}
+  - {id: "2.11", file: story-2.11-http-actions.md, slice: B, status: in-progress}
+  - {id: "2.12", file: story-2.12-every-shell-tool-in-the-gate.md, slice: A, status: in-progress}
   - {id: "2.13", file: story-2.13-values-the-program-reads.md, slice: A, status: review}
   - {id: "2.14", file: story-2.14-relay-hardening-after-the-audits.md, slice: A, status: review}
   - {id: "2.15", file: story-2.15-quality-debt-and-dependencies.md, slice: A, status: review}
-  - {id: "2.16", file: story-2.16-close-v0.2.md, slice: A, status: approved}
+  - {id: "2.16", file: story-2.16-close-v0.2.md, slice: A, status: review}
 ---
 epic: 3
 version: v0.3

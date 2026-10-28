@@ -15,8 +15,8 @@ use std::time::{Duration, SystemTime};
 
 use officina_core::relay::approvals::{
     ApprovalContext, ApprovalFiles, ApprovalRequest, ApprovalView, DryRunInputs, FileKind,
-    KEPT_OUTPUT_RETENTION_MS, RETENTION_MS, file_name, is_live, kept_output_name, parse_file_name,
-    pending,
+    KEPT_OUTPUT_RETENTION_MS, RETENTION_MS, file_name, is_live, is_run_id, kept_output_name,
+    parse_file_name, pending,
 };
 use officina_core::relay::catalogue::project_dirs;
 use officina_core::relay::journal::TreeFingerprint;
@@ -120,8 +120,15 @@ pub fn keep_output(home: &RelayHome, run_id: &str, bytes: &[u8]) -> io::Result<(
 }
 
 /// The kept output of check run `run_id`, or why it cannot be read; `None`
-/// when none is kept.
+/// when none is kept. `run_id` comes from a request file: a name that is no
+/// run id ([`is_run_id`]), an absolute or a network path say, reads nothing
+/// (D-175).
 pub fn read_output(home: &RelayHome, run_id: &str) -> Option<Result<String, String>> {
+    if !is_run_id(run_id) {
+        return Some(Err(
+            "the request names no valid dry run, so no output is shown".to_owned(),
+        ));
+    }
     match fs::read(home.outputs_dir().join(kept_output_name(run_id))) {
         Ok(bytes) => Some(Ok(String::from_utf8_lossy(&bytes).into_owned())),
         Err(e) if e.kind() == io::ErrorKind::NotFound => None,

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ago, duration, runDuration, weekElapsedPercent } from "./time";
+import { ago, duration, hours, runDuration, weekElapsedPercent } from "./time";
 
 const MIN = 60_000;
 
@@ -15,6 +15,14 @@ describe("duration", () => {
 
   it("never shows a negative duration", () => {
     expect(duration(-5 * MIN)).toBe("now");
+  });
+});
+
+describe("hours", () => {
+  it("says a window in whole hours", () => {
+    expect(hours(24 * 60 * MIN)).toBe("24 h");
+    expect(hours(90 * MIN)).toBe("2 h");
+    expect(hours(-MIN)).toBe("0 h");
   });
 });
 

@@ -2,20 +2,28 @@
 //! git work tree held when a check, an `after-check` action or a `human`
 //! action's request ran, so the run that follows cannot apply other code.
 //!
-//! `git` only lists the files: tracked and unignored ones, from the whole
-//! work tree, whichever folder of it the project is. Officina then reads
-//! every listed file and hashes its bytes itself, so neither `git`'s stat
-//! cache (a content change whose size and modification time are put back)
-//! nor a filter the repository configures (clean, smudge, textconv) can hide
-//! a change. The fingerprint is SHA-256, through core's [`StreamHash`], over
-//! each path, sorted, and the hash of its content, within [`TreeLimits`].
+//! `git` only lists the files: the tracked ones, those of submodules
+//! included, and the untracked ones it does not ignore, from the whole work
+//! tree, whichever folder of it the project is. Officina then reads every
+//! listed file and hashes its bytes itself, so neither `git`'s stat cache
+//! (a content change whose size and modification time are put back) nor a
+//! filter the repository configures (clean, smudge, textconv) can hide a
+//! change. The fingerprint is SHA-256, through core's [`StreamHash`], over
+//! each path, sorted, and the hash of its content, within [`TreeLimits`],
+//! then the content of the ignore files that decided what was left out
+//! (`info/exclude` and the global excludes file), so a file added with the
+//! rule that ignores it changes the fingerprint (D-175).
 //!
 //! `git` is the one Git for Windows' installer records in the registry
-//! ([`resolve_git`]), never the caller's `PATH`, and runs with the caller's
-//! `GIT_*` variables removed and fsmonitor and the untracked cache off.
-//! Known limits of this guardrail (PRD section 1): files `git` ignores are
-//! not bound, and the repository's own ignore rules decide which those are;
-//! programs and collections outside the work tree are not bound.
+//! ([`resolve_git`]), never the caller's `PATH`, and runs with the
+//! registry's environment, never the caller's, without `GIT_*` variables
+//! ([`git_env`]), and with fsmonitor and the untracked cache off. A
+//! folder under a `.git` that `git` cannot read as a work tree (a broken
+//! configuration, `core.bare`, a `.git` file pointing nowhere) is refused,
+//! never taken for a folder outside git (D-175). Known limits of this
+//! guardrail (PRD section 1): files `git` ignores by a `.gitignore` are not
+//! bound, nor untracked files inside a submodule; programs and collections
+//! outside the work tree are not bound.
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -23,6 +31,8 @@ use std::process::{Command, Stdio};
 
 use officina_core::relay::StreamHash;
 use officina_core::relay::journal::TreeFingerprint;
+
+use super::environment::{launch_env, start_from, value_of};
 
 /// Where Git for Windows records its install folder, under `HKLM`, then
 /// `HKCU` (D-173).
@@ -46,18 +56,14 @@ pub const GIT_GLOBAL_ARGS: &[&str] = &[
     "-c",
     "core.untrackedCache=false",
 ];
-/// The listing of the files a fingerprint binds: tracked and unignored ones,
-/// NUL-separated, paths from the top of the work tree, from anywhere in it.
-pub const LS_FILES_ARGS: &[&str] = &[
-    "ls-files",
-    "-z",
-    "--full-name",
-    "--cached",
-    "--others",
-    "--exclude-standard",
-    "--",
-    ":/",
-];
+/// The listing of the tracked files a fingerprint binds, those of active
+/// submodules included, NUL-separated, run at the top of the work tree.
+/// `git` recurses into submodules for tracked files only.
+pub const TRACKED_ARGS: &[&str] = &["ls-files", "-z", "--cached", "--recurse-submodules"];
+/// The listing of the untracked files a fingerprint binds: those `git` does
+/// not ignore, NUL-separated, run at the top of the work tree after the
+/// global excludes file is named ([`fingerprint_within`]).
+pub const UNTRACKED_ARGS: &[&str] = &["ls-files", "-z", "--others", "--exclude-standard"];
 /// Variables removed from `git`'s environment besides `GIT_*`: another
 /// global configuration could add ignore rules.
 pub const GIT_REMOVED_ENV: &[&str] = &["XDG_CONFIG_HOME"];
@@ -129,9 +135,29 @@ fn resolve_installed_git() -> Option<PathBuf> {
     Some(PathBuf::from(GIT_OFF_WINDOWS)).filter(|path| path.is_file())
 }
 
-/// Runs `git <args>` in `dir`; its exit code and stdout, or the reason it
-/// could not start.
-fn git(program: &Path, dir: &Path, args: &[&str]) -> Result<(Option<i32>, Vec<u8>), String> {
+/// The environment `git` runs with (D-175): the registry's, as an action
+/// gets it ([`launch_env`]), never the caller's, without the `GIT_*` and
+/// [`GIT_REMOVED_ENV`] variables a user may have set there, which would add
+/// configuration or move the repository.
+pub fn git_env() -> Vec<(String, String)> {
+    let mut env = launch_env();
+    env.retain(|(name, _)| {
+        !name.to_ascii_uppercase().starts_with("GIT_")
+            && !GIT_REMOVED_ENV
+                .iter()
+                .any(|removed| removed.eq_ignore_ascii_case(name))
+    });
+    env
+}
+
+/// Runs `git <args>` in `dir` with `env` ([`git_env`]); its exit code and
+/// stdout, or the reason it could not start.
+fn git(
+    program: &Path,
+    dir: &Path,
+    args: &[&str],
+    env: &[(String, String)],
+) -> Result<(Option<i32>, Vec<u8>), String> {
     let mut command = Command::new(program);
     command
         .args(GIT_GLOBAL_ARGS)
@@ -140,23 +166,8 @@ fn git(program: &Path, dir: &Path, args: &[&str]) -> Result<(Option<i32>, Vec<u8
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
-    for (key, _) in std::env::vars_os() {
-        if key
-            .to_str()
-            .is_some_and(|k| k.to_ascii_uppercase().starts_with("GIT_"))
-        {
-            command.env_remove(key);
-        }
-    }
-    for key in GIT_REMOVED_ENV {
-        command.env_remove(key);
-    }
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        command.creation_flags(CREATE_NO_WINDOW);
-    }
+    start_from(&mut command, env);
+    crate::process::hide_console(&mut command);
     let output = command.output().map_err(|e| e.to_string())?;
     Ok((output.status.code(), output.stdout))
 }
@@ -197,32 +208,79 @@ pub fn fingerprint_with(program: &Path, dir: &Path) -> TreeResult {
 }
 
 /// [`fingerprint`] with `program` as `git` and `limits`. A `git` that
-/// cannot start is [`TreeError::GitUnavailable`]; one that says the folder
-/// is no work tree, or fails in it, gives `Ok(None)`.
+/// cannot start is [`TreeError::GitUnavailable`]. A folder `git` says lies
+/// in no work tree, or in which it fails, is outside one (`Ok(None)`) only
+/// when no `.git` lies above it ([`looks_like_a_work_tree`]); otherwise the
+/// session could switch the binding off by breaking the repository, and
+/// that is [`TreeError::Unreadable`] (D-175).
 pub fn fingerprint_within(program: &Path, dir: &Path, limits: &TreeLimits) -> TreeResult {
     if !dir.is_dir() {
         return Ok(None);
     }
     let unavailable =
         |e: String| TreeError::GitUnavailable(format!("{} cannot start: {e}", program.display()));
+    let unreadable = |what: &str, code: Option<i32>| {
+        TreeError::Unreadable(format!(
+            "{} {what} in {} (exit {}), though a .git lies above it",
+            program.display(),
+            dir.display(),
+            code.map_or_else(|| "none".to_owned(), |c| c.to_string())
+        ))
+    };
+    let env = git_env();
     let (code, out) = git(
         program,
         dir,
         &["rev-parse", "--is-inside-work-tree", "--show-cdup"],
+        &env,
     )
     .map_err(unavailable)?;
     let text = String::from_utf8_lossy(&out);
     let mut lines = text.lines();
     if code != Some(0) || lines.next() != Some("true") {
-        return Ok(None);
+        return if looks_like_a_work_tree(dir) {
+            Err(unreadable("finds no work tree to read", code))
+        } else {
+            Ok(None)
+        };
     }
     // The way up to the top of the work tree, relative (empty at the top),
     // so it joins `dir` whatever path style `git` prints.
     let top = dir.join(lines.next().unwrap_or_default());
-    let (code, listing) = git(program, dir, LS_FILES_ARGS).map_err(unavailable)?;
-    if code != Some(0) {
-        return Ok(None);
+    let global_excludes = global_excludes_file(program, &top, &env).map_err(unavailable)?;
+    let named = global_excludes.as_ref().map(|path| {
+        format!(
+            "core.excludesFile={}",
+            path.to_string_lossy().replace('\\', "/")
+        )
+    });
+    let mut untracked_args: Vec<&str> = Vec::new();
+    if let Some(named) = &named {
+        untracked_args.extend(["-c", named.as_str()]);
     }
+    untracked_args.extend(UNTRACKED_ARGS);
+    let mut listing = Vec::new();
+    for args in [TRACKED_ARGS, untracked_args.as_slice()] {
+        let (code, out) = git(program, &top, args, &env).map_err(unavailable)?;
+        if code != Some(0) {
+            return Err(unreadable("cannot list the files", code));
+        }
+        listing.extend(out);
+        listing.push(0);
+    }
+    let (code, out) = git(
+        program,
+        &top,
+        &["rev-parse", "--git-path", "info/exclude"],
+        &env,
+    )
+    .map_err(unavailable)?;
+    let info_exclude = String::from_utf8_lossy(&out).trim().to_owned();
+    if code != Some(0) || info_exclude.is_empty() {
+        return Err(unreadable("cannot name its info/exclude file", code));
+    }
+    let mut ignore_inputs = vec![("info-exclude", top.join(info_exclude))];
+    ignore_inputs.extend(global_excludes.map(|path| ("global-excludes", path)));
     let mut paths: Vec<&[u8]> = listing
         .split(|b| *b == 0)
         .filter(|path| !path.is_empty())
@@ -260,20 +318,71 @@ pub fn fingerprint_within(program: &Path, dir: &Path, limits: &TreeLimits) -> Tr
     }
 
     let mut hash = StreamHash::new();
-    hash.update(b"officina-tree 2\n");
+    hash.update(b"officina-tree 3\n");
     for (name, path) in &files {
         field(&mut hash, "file", name);
-        match content_hash(path, limits.file_bytes)? {
-            Content::Hashed(sha256) => field(&mut hash, "content", sha256.as_bytes()),
-            Content::Missing => field(&mut hash, "missing", b""),
-            Content::NotAFile => field(&mut hash, "not-a-file", b""),
-        }
+        hash_content(&mut hash, path, limits.file_bytes)?;
+    }
+    // By role, not by path: the work tree's place on disk is no part of
+    // what it holds. Configuration, not tree content: read within the
+    // default limit for one file, whatever limits the tree's files get.
+    for (role, path) in &ignore_inputs {
+        field(&mut hash, "ignore-input", role.as_bytes());
+        hash_content(&mut hash, path, TREE_LIMITS.file_bytes)?;
     }
     Ok(Some(TreeFingerprint {
         sha256: hash.hex(),
         files: u32::try_from(files.len()).unwrap_or(u32::MAX),
         git: Some(program.to_string_lossy().into_owned()),
     }))
+}
+
+/// Hashes what `path` holds: its content's hash, or that it is missing or
+/// not a file.
+fn hash_content(hash: &mut StreamHash, path: &Path, limit: u64) -> Result<(), TreeError> {
+    match content_hash(path, limit)? {
+        Content::Hashed(sha256) => field(hash, "content", sha256.as_bytes()),
+        Content::Missing => field(hash, "missing", b""),
+        Content::NotAFile => field(hash, "not-a-file", b""),
+    }
+    Ok(())
+}
+
+/// The global excludes file `git` reads in `top` with `env`:
+/// `core.excludesFile` when set, else where `git` looks by default,
+/// `.config/git/ignore` under the home it uses (`HOME`, then on Windows
+/// `HOMEDRIVE` and `HOMEPATH`, then `USERPROFILE`; `XDG_CONFIG_HOME` is not
+/// in its environment); `None` without a home, where `git` reads none. The
+/// listing names it to `git` explicitly, so the file hashed is the file
+/// that decided. Errors only when `git` cannot start.
+fn global_excludes_file(
+    program: &Path,
+    top: &Path,
+    env: &[(String, String)],
+) -> Result<Option<PathBuf>, String> {
+    let (code, out) = git(
+        program,
+        top,
+        &["config", "--path", "--get", "core.excludesFile"],
+        env,
+    )?;
+    let configured = String::from_utf8_lossy(&out).trim().to_owned();
+    if code == Some(0) && !configured.is_empty() {
+        return Ok(Some(top.join(configured)));
+    }
+    let windows_home = || {
+        let home = format!(
+            "{}{}",
+            value_of(env, "HOMEDRIVE")?,
+            value_of(env, "HOMEPATH")?
+        );
+        Some(PathBuf::from(home)).filter(|home| home.is_dir())
+    };
+    let home = value_of(env, "HOME")
+        .map(PathBuf::from)
+        .or_else(|| cfg!(windows).then(windows_home).flatten())
+        .or_else(|| value_of(env, "USERPROFILE").map(PathBuf::from));
+    Ok(home.map(|home| home.join(".config").join("git").join("ignore")))
 }
 
 fn too_big(path: &Path, limit: u64) -> TreeError {
@@ -571,6 +680,127 @@ mod tests {
             fingerprint_with(&absent, &plain),
             Err(TreeError::GitUnavailable(why)) if why.contains("cannot start")
         ));
+    }
+
+    /// Story 2.16 AC 6 (D-175): a session that breaks the repository so
+    /// that `git` cannot read it (an invalid configuration line,
+    /// `core.bare`, a `.git` file pointing nowhere) gets a refusal, not a
+    /// folder outside git; a folder with no `.git` above it stays outside.
+    #[test]
+    fn a_work_tree_git_cannot_read_is_refused_not_unbound() {
+        let Some(git) = git_on_path("a_work_tree_git_cannot_read_is_refused_not_unbound") else {
+            return;
+        };
+        let plain = tempfile::tempdir().unwrap();
+        assert_eq!(fingerprint_with(&git, plain.path()), Ok(None));
+        type Break = fn(&Repo);
+        let breaks: [(&str, Break); 3] = [
+            ("an invalid config line", |repo| {
+                let config = repo.root.join(".git").join("config");
+                let mut text = std::fs::read_to_string(&config).unwrap();
+                text.push_str("[core\n");
+                std::fs::write(config, text).unwrap();
+            }),
+            ("core.bare", |repo| {
+                git_ok(&repo.git, &repo.root, &["config", "core.bare", "true"]);
+            }),
+            ("a .git file pointing nowhere", |repo| {
+                let moved = repo.root.parent().unwrap().join("moved-git");
+                std::fs::rename(repo.root.join(".git"), moved).unwrap();
+                std::fs::write(repo.root.join(".git"), "gitdir: C:/path/to/nowhere\n").unwrap();
+            }),
+        ];
+        for (name, break_it) in breaks {
+            let repo = Repo::new(git.clone());
+            assert!(fingerprint_with(&repo.git, &repo.root).unwrap().is_some());
+            break_it(&repo);
+            assert!(
+                matches!(
+                    fingerprint_with(&repo.git, &repo.root),
+                    Err(TreeError::Unreadable(why)) if why.contains(".git lies above")
+                ),
+                "{name}: {:?}",
+                fingerprint_with(&repo.git, &repo.root)
+            );
+        }
+    }
+
+    /// Story 2.16 AC 6 (D-175): an edit inside a submodule changes the
+    /// fingerprint, its tracked files listed and hashed like the others.
+    #[test]
+    fn an_edit_inside_a_submodule_changes_the_fingerprint() {
+        let Some(git) = git_on_path("an_edit_inside_a_submodule_changes_the_fingerprint") else {
+            return;
+        };
+        let repo = Repo::new(git.clone());
+        let roles = Repo::new(git);
+        std::fs::write(roles.root.join("main.yml"), b"- name: one\n").unwrap();
+        git_ok(&roles.git, &roles.root, &["add", "main.yml"]);
+        git_ok(&roles.git, &roles.root, &["commit", "-q", "-m", "role"]);
+        let source = roles.root.to_string_lossy().replace('\\', "/");
+        git_ok(
+            &repo.git,
+            &repo.root,
+            &[
+                "-c",
+                "protocol.file.allow=always",
+                "submodule",
+                "add",
+                "-q",
+                &source,
+                "roles/web",
+            ],
+        );
+        git_ok(&repo.git, &repo.root, &["commit", "-q", "-m", "submodule"]);
+        let before = repo.fingerprint();
+        assert!(
+            before.files >= 4,
+            "the playbook, .gitmodules and the submodule's two files: {before:?}"
+        );
+        std::fs::write(
+            repo.root.join("roles").join("web").join("main.yml"),
+            b"- name: two\n",
+        )
+        .unwrap();
+        assert_ne!(before, repo.fingerprint());
+    }
+
+    /// Story 2.16 AC 6 (D-175): a file added together with the rule that
+    /// ignores it, in `info/exclude` or in the global excludes file,
+    /// changes the fingerprint, though the listing is the same.
+    #[test]
+    fn a_file_added_with_its_ignore_rule_changes_the_fingerprint() {
+        let Some(git) = git_on_path("a_file_added_with_its_ignore_rule_changes_the_fingerprint")
+        else {
+            return;
+        };
+        let repo = Repo::new(git);
+        let group_vars = repo.root.join("group_vars").join("all");
+        std::fs::create_dir_all(&group_vars).unwrap();
+        let before = repo.fingerprint();
+        std::fs::write(group_vars.join("zz.yml"), b"ansible_become: true\n").unwrap();
+        let exclude = repo.root.join(".git").join("info").join("exclude");
+        let mut rules = std::fs::read_to_string(&exclude).unwrap_or_default();
+        rules.push_str("\ngroup_vars/all/zz.yml\n");
+        std::fs::write(&exclude, rules).unwrap();
+        let after = repo.fingerprint();
+        assert_eq!(after.files, before.files, "the new file is ignored");
+        assert_ne!(after, before);
+
+        let global = repo.root.parent().unwrap().join("global-ignore");
+        std::fs::write(&global, b"*.tmp\n").unwrap();
+        let global_text = global.to_string_lossy().replace('\\', "/");
+        git_ok(
+            &repo.git,
+            &repo.root,
+            &["config", "core.excludesFile", &global_text],
+        );
+        let configured = repo.fingerprint();
+        std::fs::write(group_vars.join("yy.yml"), b"ansible_become: true\n").unwrap();
+        std::fs::write(&global, b"*.tmp\ngroup_vars/all/yy.yml\n").unwrap();
+        let hidden = repo.fingerprint();
+        assert_eq!(hidden.files, configured.files, "the new file is ignored");
+        assert_ne!(hidden, configured);
     }
 
     /// The `InstallPath` Git for Windows records, read by `reg.exe` rather

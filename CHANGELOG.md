@@ -70,9 +70,9 @@ project uses [Semantic Versioning](https://semver.org/).
   project with the same parameters, under the same approved catalogue and on
   the same code, in the last 30 minutes, the journal of the day before
   included; otherwise `officina run` refuses with `check_required` and names
-  the check. In a git work tree the code is bound by a fingerprint of `HEAD`,
-  the diff to it, the untracked files git does not ignore and the tracked
-  files flagged to hide their edits (by content up to 1 MiB, by size beyond).
+  the check. In a git work tree the code is bound by the tree fingerprint
+  (see Security): the content of the tracked and unignored files, read and
+  hashed by Officina.
 - Relay gate in `officina hook`: in a guarded repository, Claude Code's
   `PreToolUse` for a shell tool gets a deny that holds in every permission mode,
   bypass included, for a guarded program (remote shells and copies, Ansible,
@@ -83,7 +83,8 @@ project uses [Semantic Versioning](https://semver.org/).
   Officina's own files; the reason lists the actions the session may run
   instead. Elsewhere it prints nothing. It costs a few milliseconds per
   shell tool call. Its limits as a text match are recorded in the
-  architecture.
+  architecture, and a test checks its lexer against Git Bash's own parse of
+  every command of its vector set and of variants built from its constants.
 - Stop and resume the relay from the window's header: while stopped,
   `officina run` refuses every action and a terracotta "relay stopped" chip
   and a board banner say so; the gate keeps guarding.
@@ -103,11 +104,12 @@ project uses [Semantic Versioning](https://semver.org/).
   and whether it differs from the floor doctor reads, the catalogue's issues
   with their lines, the approval state, the projects with their actions and
   the guarded programs in effect, whether each action's program resolves (a
-  WSL action's tools and program probed inside its distro), and warnings for
-  a timeout that can outlive the Bash tool's cap, an action naming a check
-  its project does not list, a project with actions naming a check outside
-  a git work tree, unreadable journal lines and gate errors of the last 24
-  hours. For each guarded project it prints the `CLAUDE.md`
+  WSL action's tools and program probed inside its distro), whether each
+  project's files bind, the decisions the window did not make, and warnings
+  for a timeout that can outlive the Bash tool's cap, an action naming a
+  check its project does not list, a project with actions that bind files
+  outside a git work tree, unreadable journal lines and gate errors of the
+  last 24 hours. For each guarded project it prints the `CLAUDE.md`
   paragraph to paste, generated from the approved catalogue.
 - HTTP read actions (`kind = "http"`, `GET` or `HEAD`) on a URL template
   whose placeholders fill a whole path segment or query value,
@@ -174,18 +176,20 @@ project uses [Semantic Versioning](https://semver.org/).
   every other event is recorded as before, and `PreToolUse` payloads are
   never written to the event buffer.
 - `officina doctor` requires the `PreToolUse` hook, its matcher naming the
-  shell tools only, once the relay guards a project, and prints it in the
-  block to paste; workstations without one keep the five v0.1 hooks and pay
-  nothing per shell tool call. A program of the catalogue that does not resolve, or a relay
-  floor that cannot be read, also makes it exit 1.
+  shell tools and the file tools the gate decides, once the relay guards a
+  project, and prints it in the block to paste; workstations without one
+  keep the five v0.1 hooks and pay nothing per tool call. A program of the
+  catalogue that does not resolve, files that cannot be bound, an
+  unacknowledged anomaly or a relay floor that cannot be read also makes it
+  exit 1.
 - Floor files accept schema 2, where a project without `autonomy` is
   guarded. A schema 1 floor still loads with every project `free`, and the
   relay's keys in it are an error naming `schema = 2`.
 - Approval journal lines name their project and action, and a request says
   whether its action has a dry run; lines written before still read.
-- The canonical catalogue is format 2: it covers credentials and HTTP
-  actions, so a catalogue approved before shows as changed once and is
-  approved again.
+- The canonical catalogue is format 3: it covers credentials, HTTP actions
+  and `forwarded_values`, so a catalogue approved before shows as changed
+  once and is approved again.
 - The board contract (`officina board --json`) is schema 2: it carries the
   pending approval requests, and `waiting_count` counts the approvable ones
   beside the sessions that wait.
@@ -225,7 +229,8 @@ project uses [Semantic Versioning](https://semver.org/).
   boundary.
 - `officina.exe`, which sessions call, contains no code that approves a
   catalogue or stops the relay; only the window does. CI builds the shipped
-  binary alone and searches it, with a positive control on the window.
+  binary alone and searches it, with a positive control on the window, and
+  the release workflow searches the very files it packages.
 - `officina run` fails closed: anything unreadable, unapproved or changed is
   a refusal. It never starts a shell: a parameter value fills exactly one
   argument, and a value starting with `-`, holding a control, bidirectional
@@ -263,38 +268,58 @@ project uses [Semantic Versioning](https://semver.org/).
   over plain `http` is refused. `officina.exe` bundles no root certificate
   set; CI checks that `webpki-roots` stays out of its graph.
 - The tree fingerprint runs `git` with external diff tools, textconv
-  drivers, fsmonitor and the caller's `GIT_` variables out of the way, so a
-  repository's configuration runs nothing inside a relay run.
+  drivers, fsmonitor and `GIT_` variables out of the way, in the
+  environment Windows builds from the registry rather than the caller's,
+  so neither a repository's configuration nor a session's variables run
+  anything or move a rule inside a relay run.
 - The tree fingerprint no longer trusts the caller's `PATH` or git's stat
   cache: `git` is the one Git for Windows records in the registry, only
-  lists the tracked and unignored files, and Officina hashes each file's
-  bytes itself, so a shim on `PATH`, a restored modification time or a
-  clean filter cannot hide a change. A tree past 64 MiB per file, 20,000
-  files or 512 MiB, an unreadable file, and a git work tree without that
-  `git` refuse (`tree_too_large`, `tree_unreadable`, `git_unavailable`);
-  the journal names the `git` that listed the files.
+  lists the tracked files, a submodule's included, and the unignored ones,
+  and Officina hashes each file's bytes itself, with the content of the
+  repository's `info/exclude` and the global excludes file, so a shim on
+  `PATH`, a restored modification time, a clean filter, an edit inside a
+  submodule or a file added with the rule that ignores it cannot hide a
+  change. A tree past 64 MiB per file, 20,000 files or 512 MiB, an
+  unreadable file, a folder under a `.git` that `git` cannot read as a
+  work tree (a broken configuration, `core.bare`), and a git work tree
+  without that `git` refuse (`tree_too_large`, `tree_unreadable`,
+  `git_unavailable`); the journal names the `git` that listed the files.
 - Every `human` action in a git work tree is bound to its files, dry run or
   not: an edit while its call waits for the author makes the run refuse
   `tree_changed` and leaves the approval unused. The card says what the
   files are bound to, or "no file binding: not a git tree".
-- `officina run` gives actions the `PATH`, `PATHEXT` and `ComSpec` Windows
-  builds from the registry, never the caller's, and no caller `WSLENV`; the
-  gate also denies an `officina` call with those variables or a `GIT_`
-  one reassigned.
+- `officina run` starts actions with the environment Windows builds from
+  the registry for the user, `ComSpec` the system's `cmd.exe` and `PATHEXT`
+  the machine's, then the action's `env`: nothing of the caller's
+  environment reaches the program, so a variable a session sets for one
+  call (`PATH`, `PYTHONPATH`, `NODE_OPTIONS`, `KUBECONFIG`) cannot change
+  what an approved action loads, and WSL actions get no `WSLENV`. The gate
+  also denies an `officina` call with `PATH`, a `GIT_` variable or another
+  variable of `OFFICINA_ENVIRONMENT_NAMES` reassigned.
 - Once a project is guarded, the file tools (Write, Edit and the others of
   `FILE_TOOLS`) cannot write under Officina's home from any project, and the
   hook resolves the session's folders, a file tool's target and the
   guarded projects' own paths by handle, so an 8.3 name, a junction, a
   link or a `subst` drive cannot lead around the gate, on either side.
-- The window records its own decisions and lists, in the Relay view, an
-  approval file, a run, an approved catalogue or a missing stop flag it
-  cannot account for; `officina doctor` fails until the author acknowledges
-  each, and `officina run` leaves an approval the record does not name
-  unused (`approval_not_given`).
+- The window records its own decisions (each request's verdict and request
+  key, the catalogue it approved, whether it holds the relay stopped) and
+  lists, in the Relay view, an approval file, a run, an approved catalogue
+  or a missing stop flag it cannot account for, and the record itself gone
+  or unreadable; `officina doctor` fails until the author acknowledges
+  each. `officina run` obeys the record: it leaves unused an approval the
+  record does not hold as approved for that request (`approval_not_given`),
+  runs only the catalogue the record names (`catalogue_unconfirmed`), stays
+  stopped while the record holds it stopped, and refuses everything while
+  the record is missing or unreadable (`decision_record_unreadable`), until
+  the author's acknowledgement starts a new one.
 - A `pattern` that lets a value forwarded to a remote shell or a template
   hold whitespace, shell or template characters drops the action with the
   issue `forwarded_pattern`, unless it sets `forwarded_values = "accepted"`;
-  the catalogue format moves to 3, so the catalogue is approved once again.
+  the probe also tries values as short and as long as the pattern accepts,
+  so a pattern that needs a long value (`.{5,}`) is caught.
+  `forwarded_values` is part of the canonical catalogue (see Changed).
+- A request file's dry-run id names a kept output only when it is a run
+  id, so a forged request cannot make the window read another file.
 - The window's Content Security Policy allows no inline style; Vite inlines
   no asset as a `data:` URI, which the font policy refused.
 

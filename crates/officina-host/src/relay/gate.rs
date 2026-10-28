@@ -29,8 +29,8 @@ use officina_core::events::excerpt;
 use officina_core::floor::{parse_floor, requests_no_excerpts};
 use officina_core::quota::normalise_path;
 use officina_core::relay::gate::{
-    Deny, FloorInput, Offer, SnapshotInput, ToolRule, containment, decide_call, decide_file_write,
-    deny_reason, file_tool_field, normalise_cwd, protected_dirs, tool_rule,
+    Deny, FloorInput, GateInputs, Offer, SnapshotInput, ToolRule, containment, decide_call,
+    decide_file_write, deny_reason, file_tool_field, normalise_cwd, protected_dirs, tool_rule,
 };
 use officina_core::relay::journal::{
     COMMAND_EXCERPT_CHARS, GateDenied, GateError, GateFault, JournalEntry,
@@ -39,7 +39,7 @@ use officina_core::relay::{HOME_DIR_NAME, sha256_hex};
 
 use serde::{Deserialize, Serialize};
 
-use super::home::{ApprovedState, RelayHome};
+use super::home::{ApprovedState, KnownProjectsState, RelayHome};
 use super::journal;
 use crate::files::atomic_write;
 use crate::paths::{excerpts_disabled_by_env, user_home};
@@ -274,12 +274,12 @@ pub fn evaluate(home: &RelayHome, call: &ToolCall, project_dir: Option<&str>) ->
     let complete =
         matches!(snapshot, SnapshotInput::Valid(_)) && matches!(floor, FloorInput::Valid { .. });
     let known = if complete {
-        None
+        KnownProjectsState::Missing
     } else {
         home.read_known_projects()
     };
 
-    let mut contained = containment(floor, snapshot, known.as_ref());
+    let mut contained = containment(floor, snapshot, known.valid());
     let finals = final_roots(home, &contained.guarded_roots());
     contained.add_final_roots(&finals);
     let detail_of = |fault: GateFault| -> String {
@@ -297,8 +297,14 @@ pub fn evaluate(home: &RelayHome, call: &ToolCall, project_dir: Option<&str>) ->
                 home.known_projects_file().display()
             ),
             (GateFault::KnownProjectsUnreadable, _, _) => format!(
-                "the floor and the approved catalogue failed and {} cannot be read: nothing is guarded",
-                home.known_projects_file().display()
+                "the floor and the approved catalogue failed and {} {}: nothing is guarded",
+                home.known_projects_file().display(),
+                match &known {
+                    KnownProjectsState::Unreadable(why) => format!("cannot be read ({why})"),
+                    KnownProjectsState::Missing | KnownProjectsState::Valid(_) => {
+                        "is missing".to_owned()
+                    }
+                }
             ),
             (other, _, _) => format!("{other:?}"),
         }
@@ -357,14 +363,12 @@ pub fn evaluate(home: &RelayHome, call: &ToolCall, project_dir: Option<&str>) ->
         &home.officina_home().to_string_lossy(),
         is_default_home(home),
     );
-    let deny = decide_call(
-        &call.tool,
-        call.command.as_deref(),
-        &contained.guarded_programs,
-        &protected,
-        true,
-    )
-    .map(|deny| GateDeny {
+    let inputs = GateInputs {
+        guarded_programs: &contained.guarded_programs,
+        protected_dirs: &protected,
+        cwd_guarded: true,
+    };
+    let deny = decide_call(&call.tool, call.command.as_deref(), &inputs).map(|deny| GateDeny {
         reason: deny_reason(&deny, &project.name, contained.offer_for(&project.name)),
         project: project.name.clone(),
         deny,

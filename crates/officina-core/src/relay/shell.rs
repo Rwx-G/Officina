@@ -1109,6 +1109,12 @@ impl<'a, 'o> Level<'a, 'o> {
                     self.end_command();
                     self.read_heredocs()?;
                     self.end_line()?;
+                    // A line break ends a command as `;` does: the next word
+                    // is in command position, a reserved word included, so a
+                    // `{ ...; }` or `function` on the next line is read as
+                    // one (found by the differential test against Git Bash).
+                    self.at_start = true;
+                    self.expect = Expect::Command;
                 }
                 b'#' => self.skip_comment(),
                 b';' => self.semicolon(),

@@ -70,7 +70,18 @@ pub fn read_view_with(
     credential_presence: Option<&BTreeMap<String, bool>>,
 ) -> Result<RelayView, HomeUnreadable> {
     check_home(home)?;
-    let stop = read_stop(home);
+    let flag = read_stop(home);
+    // Stopped while the window's record holds it stopped, flag or not, as
+    // `officina run` reads it (D-175), so the author can resume it.
+    let stop = match (
+        flag,
+        home.read_record().valid().and_then(|r| r.stopped_since_ms),
+    ) {
+        (StopState::Running, Some(since)) => StopState::Stopped {
+            since_ms: Some(since),
+        },
+        (flag, _) => flag,
+    };
     let approved = home.read_approved();
     let floor_path = home.relay_floor(&approved);
     let floor_text = floor_path.display().to_string();
@@ -93,6 +104,7 @@ pub fn read_view_with(
     // author must be offered a new approval whatever the floor holds.
     let recorded = home
         .read_known_projects()
+        .valid()
         .is_some_and(|known| known.approved_hash.is_some());
     let gone = format!(
         "{} is gone while {} records an approval",
@@ -110,7 +122,7 @@ pub fn read_view_with(
         home,
         &lines,
         approved.approved().map(|a| a.hash.as_str()),
-        !matches!(stop, StopState::Running),
+        !matches!(flag, StopState::Running),
     );
     Ok(build(&ViewInputs {
         stop,
@@ -127,22 +139,20 @@ pub fn read_view_with(
 
 /// The decisions the window did not make (D-173), judged on the window's
 /// record, the approval files, `lines` of journal, the approved hash and
-/// whether the relay is stopped.
+/// whether the relay is stopped; a broken record is the one anomaly
+/// (D-175).
 pub fn read_anomalies(
     home: &RelayHome,
     lines: &[officina_core::relay::journal::JournalLine],
     approved_hash: Option<&str>,
     stopped: bool,
 ) -> Vec<Anomaly> {
-    let record = home.read_record();
-    if record.is_none() {
-        return Vec::new();
-    }
     anomalies(&AnomalyInputs {
-        record: record.as_ref(),
+        record: &home.read_record(),
         files: &read_files(home),
         lines,
         approved_hash,
+        approved_exists: !matches!(home.read_approved(), ApprovedState::Missing),
         stopped,
     })
 }

@@ -40,9 +40,9 @@ use officina_core::relay::run::{
     FloorState, Refusal, RunInputs, RunPlan, SnapshotState, check_step, list_text, plan,
 };
 
-pub use args::{RunArgs, parse_args};
+pub use args::{RunArgs, UsageError, parse_args};
 pub use officina_core::relay::run::{EXIT_NOT_STARTED, EXIT_REFUSED, EXIT_TIMEOUT};
-pub use spawn::{PATH_OFF_WINDOWS, SystemEnv, command_for, system_env};
+pub use spawn::command_for;
 
 use super::credential::{CredentialStore, Secret, SystemCredentialStore};
 use super::home::{ApprovedState, RelayHome, load_relay_floor, system_dir};
@@ -54,9 +54,6 @@ use request::{Bound, approval};
 
 /// The session that called, as Claude Code's Bash tool sets it (E13).
 pub const ENV_SESSION_ID: &str = "CLAUDE_CODE_SESSION_ID";
-
-/// How often a running action is polled against its deadline (AD-3).
-pub const WAIT_TICK: Duration = Duration::from_millis(50);
 
 /// How long the output pipes may stay open once the program has exited: a
 /// process it left running holds them, and is ended with the job when
@@ -71,6 +68,7 @@ pub fn session_id_from_env() -> Option<String> {
 /// Reads what the checks need and hands it to `f`.
 fn with_inputs<R>(home: &RelayHome, cwd: &str, f: impl FnOnce(&RunInputs<'_>) -> R) -> R {
     let stopped = home.relay_stopped();
+    let record = home.read_record();
     let approved = home.read_approved();
     let floor_path = home.relay_floor(&approved);
     let floor_text = floor_path.to_string_lossy();
@@ -95,6 +93,7 @@ fn with_inputs<R>(home: &RelayHome, cwd: &str, f: impl FnOnce(&RunInputs<'_>) ->
     f(&RunInputs {
         stopped,
         snapshot,
+        record: &record,
         floor,
         cwd,
         system_dir: &system_dir,
@@ -288,7 +287,7 @@ fn execute(
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> i32 {
-    let run_id = format!("{:x}-{:x}", now_ms(), std::process::id());
+    let run_id = officina_core::relay::approvals::run_id(now_ms(), std::process::id());
     let start = start_line(
         &run_id,
         plan,

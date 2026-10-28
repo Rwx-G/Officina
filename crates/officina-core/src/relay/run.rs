@@ -17,6 +17,7 @@ use super::classes::{self, CHECK_VALID_MS};
 use super::gate::{LIST_COMMAND, normalise_cwd};
 use super::http::{self, HttpPlan};
 use super::journal::{JournalLine, RefusalReason, TreeFingerprint};
+use super::record::{DecisionRecord, RecordState};
 use crate::floor::{floor_dir_of, join_project_path};
 
 /// Exit code of a refusal (AD-29): a shell's "found but not executable".
@@ -72,6 +73,8 @@ pub struct RunInputs<'a> {
     /// `relay/stopped` (AD-34).
     pub stopped: bool,
     pub snapshot: SnapshotState<'a>,
+    /// The window's record of its decisions (D-173, D-175).
+    pub record: &'a RecordState,
     pub floor: FloorState<'a>,
     /// The process's working directory.
     pub cwd: &'a str,
@@ -206,14 +209,27 @@ impl Refusal {
     }
 
     /// An approval file for request `id` that the window's record of its
-    /// decisions does not name: another process wrote it (D-173).
+    /// decisions does not name, names as rejected, or names for another
+    /// request key: another process wrote it (D-173, D-175).
     pub fn approval_not_given(project: &str, id: &str) -> Refusal {
         Refusal::new(
             RefusalReason::ApprovalNotGiven,
             &format!(
-                "the approval {id} was not given in the Officina window, so it is not used; the author decides the request there"
+                "the approval {id} was not given for this request in the Officina window, so it is not used; the author decides the request there"
             ),
             Some(project),
+        )
+    }
+
+    /// The window's record is missing or unreadable (`why`) while the relay
+    /// holds decisions: nothing it approved can be confirmed (D-175).
+    pub fn decision_record_unreadable(why: &str) -> Refusal {
+        Refusal::new(
+            RefusalReason::DecisionRecordUnreadable,
+            &format!(
+                "the Officina window's record of its decisions cannot vouch for the approved catalogue: {why}; the author acknowledges it in the Relay view"
+            ),
+            None,
         )
     }
 
@@ -268,12 +284,12 @@ impl Refusal {
         )
     }
 
-    /// A file of the work tree cannot be read (D-173).
+    /// The work tree, or a file of it, cannot be read (D-173, D-175).
     pub fn tree_unreadable(project: &str, why: &str) -> Refusal {
         Refusal::new(
             RefusalReason::TreeUnreadable,
             &format!(
-                "a file of the project's work tree cannot be read, so its content cannot be bound: {why}"
+                "the project's work tree, or a file of it, cannot be read, so its files cannot be bound: {why}"
             ),
             Some(project),
         )
@@ -342,11 +358,27 @@ pub fn projects_at<'c>(
         .collect()
 }
 
+/// True while the relay is stopped: the stop flag is there, or the window's
+/// record holds it stopped, so a flag deleted behind the window's back
+/// stops nothing (AD-34, D-175).
+pub fn is_stopped(flag: bool, record: &RecordState) -> bool {
+    flag || record.valid().is_some_and(DecisionRecord::holds_stopped)
+}
+
+/// True when the window's record names another catalogue than `hash` as
+/// the one it approved (D-175).
+fn unconfirmed(record: &RecordState, hash: &str) -> bool {
+    record
+        .valid()
+        .is_some_and(|record| record.approved_hash.as_deref() != Some(hash))
+}
+
 /// The checks of `officina run <action> name=value ...` in AD-29's order,
 /// failing closed; the first that fails is the refusal:
 ///
-/// 1. the relay is not stopped (AD-34);
-/// 2. a catalogue is approved, the floor reads, and its hash equals the
+/// 1. the relay is not stopped ([`is_stopped`]);
+/// 2. a catalogue is approved, the window's record reads and names it as
+///    the one it approved (D-175), the floor reads, and its hash equals the
 ///    approved one;
 /// 3. the working directory lies in an approved project, `free` or
 ///    `guarded` (D-21);
@@ -365,7 +397,7 @@ pub fn plan(
     action: &str,
     params: &BTreeMap<String, String>,
 ) -> Result<RunPlan, Refusal> {
-    if inputs.stopped {
+    if is_stopped(inputs.stopped, inputs.record) {
         return Err(Refusal::stopped());
     }
     let approved = match inputs.snapshot {
@@ -388,6 +420,17 @@ pub fn plan(
         }
         SnapshotState::Valid(approved) => approved,
     };
+    if let Some(why) = inputs.record.broken(true) {
+        return Err(Refusal::decision_record_unreadable(&why));
+    }
+    if unconfirmed(inputs.record, &approved.hash) {
+        return refuse(
+            RefusalReason::CatalogueUnconfirmed,
+            "the approved catalogue is not the one the Officina window approved, so nothing of it runs; the author approves the catalogue again in the window"
+                .to_owned(),
+            None,
+        );
+    }
     let (relay, floor_path) = match inputs.floor {
         FloorState::Unreadable(why) => {
             return refuse(
@@ -590,8 +633,15 @@ pub fn list_text(inputs: &RunInputs<'_>) -> String {
         SnapshotState::Valid(approved) => approved,
     };
     let mut text = String::new();
-    if inputs.stopped {
+    if is_stopped(inputs.stopped, inputs.record) {
         text.push_str("The relay is stopped in the Officina window: `officina run` refuses every action until the author resumes it.\n");
+    }
+    if let Some(why) = inputs.record.broken(true) {
+        text.push_str(&format!(
+            "The Officina window's record of its decisions cannot vouch for the approved catalogue ({why}): `officina run` refuses every action until the author acknowledges it in the Relay view.\n"
+        ));
+    } else if unconfirmed(inputs.record, &approved.hash) {
+        text.push_str("The approved catalogue is not the one the Officina window approved: `officina run` refuses every action until the author approves the catalogue again there.\n");
     }
     match inputs.floor {
         FloorState::Unreadable(why) => text.push_str(&format!(
@@ -640,6 +690,19 @@ mod tests {
         ApprovedCatalogue::approving(relay, FLOOR_PATH, 1)
     }
 
+    /// The window's record confirming `snapshot`'s catalogue, as the window
+    /// writes it when the author approves; leaked, as a test's inputs
+    /// borrow it.
+    fn confirming(snapshot: SnapshotState<'_>) -> &'static RecordState {
+        let hash = match snapshot {
+            SnapshotState::Valid(approved) => Some(approved.hash.clone()),
+            SnapshotState::Missing | SnapshotState::Unreadable(_) => None,
+        };
+        Box::leak(Box::new(RecordState::Valid(DecisionRecord::start(
+            1, hash, None,
+        ))))
+    }
+
     fn inputs<'a>(
         stopped: bool,
         snapshot: SnapshotState<'a>,
@@ -649,6 +712,7 @@ mod tests {
         RunInputs {
             stopped,
             snapshot,
+            record: confirming(snapshot),
             floor,
             cwd,
             system_dir: r"C:\Windows\System32",
@@ -704,6 +768,34 @@ mod tests {
             ),
             RefusalReason::ApprovedUnreadable
         );
+        // D-175: the window's record vouches for the catalogue and holds
+        // the stop, whatever the stop flag says.
+        let unconfirmed_floor = FloorState::Unreadable("gone");
+        let other_catalogue =
+            RecordState::Valid(DecisionRecord::start(1, Some("0".repeat(64)), None));
+        let held_stopped = RecordState::Valid(DecisionRecord::start(
+            1,
+            Some(approved.hash.clone()),
+            Some(1),
+        ));
+        for (record, expected) in [
+            (&held_stopped, RefusalReason::Stopped),
+            (
+                &RecordState::Missing,
+                RefusalReason::DecisionRecordUnreadable,
+            ),
+            (
+                &RecordState::Unreadable("corrupt".into()),
+                RefusalReason::DecisionRecordUnreadable,
+            ),
+            (&other_catalogue, RefusalReason::CatalogueUnconfirmed),
+        ] {
+            let with_record = RunInputs {
+                record,
+                ..inputs(false, valid, unconfirmed_floor, "C:/x")
+            };
+            assert_eq!(reason(with_record, "apply", &bad), expected, "{record:?}");
+        }
         assert_eq!(
             reason(
                 inputs(false, valid, FloorState::Unreadable("gone"), "C:/x"),

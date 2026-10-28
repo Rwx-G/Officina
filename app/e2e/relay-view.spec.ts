@@ -138,10 +138,10 @@ test.describe("Relay view", () => {
   test("journal and gate diagnostics are surfaced", async ({ page }) => {
     const relay = loadRelay("relay-activity");
     expect(relay.journal_corrupt_lines).toBeGreaterThan(0);
-    expect(relay.gate_errors_24h).toBeGreaterThan(0);
+    expect(relay.gate_errors).toBeGreaterThan(0);
     await openRelayView(page, relay);
     await expect(page.getByTestId("journal-corrupt")).toContainText(`${relay.journal_corrupt_lines} unreadable journal`);
-    await expect(page.getByTestId("gate-errors")).toContainText(`${relay.gate_errors_24h} gate error`);
+    await expect(page.getByTestId("gate-errors")).toContainText(`${relay.gate_errors} gate error`);
     await expect(page.locator('[data-testid="recent-entry"][data-kind="gate_error"]').first()).toContainText(
       "gate error",
     );

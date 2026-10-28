@@ -19,6 +19,11 @@ export function duration(ms: number): string {
   return `${Math.floor(safe / DAY)} d`;
 }
 
+/** A window the backend sends in milliseconds, in whole hours: "24 h". */
+export function hours(ms: number): string {
+  return `${Math.round(Math.max(0, ms) / HOUR)} h`;
+}
+
 /** A run's length: "350 ms", "4.2 s", then as `duration` from a minute on. */
 export function runDuration(ms: number): string {
   const safe = Math.max(0, ms);

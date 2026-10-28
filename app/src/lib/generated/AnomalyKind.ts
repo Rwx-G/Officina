@@ -3,4 +3,4 @@
 /**
  * A decision the window did not make (D-173).
  */
-export type AnomalyKind = "foreign_approval" | "run_without_decision" | "foreign_catalogue" | "stop_flag_removed";
+export type AnomalyKind = "foreign_approval" | "run_without_decision" | "foreign_catalogue" | "stop_flag_removed" | "record_broken";

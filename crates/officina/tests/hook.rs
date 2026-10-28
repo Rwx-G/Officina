@@ -254,6 +254,14 @@ fn unknown_subcommand_exits_64_never_2() {
         assert_eq!(out.status.code(), Some(64), "{args:?}");
         assert!(String::from_utf8_lossy(&out.stderr).contains("usage: officina"));
     }
+    for args in [&["doctor", "--floor"][..], &["board", "--json", "--floor"]] {
+        let out = env.run(args, b"");
+        assert_eq!(out.status.code(), Some(64), "{args:?}");
+        assert!(
+            String::from_utf8_lossy(&out.stderr).starts_with("officina: --floor takes a path"),
+            "{args:?}"
+        );
+    }
     // Extra arguments after `hook` are ignored: whatever Claude Code passes,
     // the hook exits 0 and never 2 (which would block the session).
     let out = env.run(

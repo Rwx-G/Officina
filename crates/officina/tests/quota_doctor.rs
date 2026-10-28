@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 use common::{TestEnv, fingerprint, now_ms, printed_hooks_block};
 use officina_core::board::Board;
 use officina_core::relay::gate::{gated_tools, gated_tools_matcher};
+use officina_core::relay::run::{EXIT_NOT_STARTED, EXIT_REFUSED};
 use officina_host::collector::{Collector, LoadedFloor};
 use officina_host::paths::Paths;
 use officina_host::watch::{CollectorMsg, spawn};
@@ -230,18 +231,30 @@ fn no_command_writes_under_the_claude_config_dir() {
     powershell["tool_name"] = "PowerShell".into();
     let deny = env.run(&["hook"], powershell.to_string().as_bytes());
     assert!(String::from_utf8_lossy(&deny.stdout).contains("\"deny\""));
-    for args in [
-        &["run", "probe"][..],
-        &["run", "health"],
-        &["run", "--list"],
-        &["run", "restart", "--wait", "1"],
-        &["relay", "--json"],
-        &["doctor"],
+    // Each command did what it does, by its documented exit code: so the
+    // fingerprint below compares a config dir every one of them went
+    // through, not one a failing command left alone. Off Windows the floor
+    // names the tool by a Windows path (Linux is v1): the run is checked,
+    // journaled and not started.
+    let probe = if cfg!(windows) { 0 } else { EXIT_NOT_STARTED };
+    for (args, code) in [
+        (&["run", "probe"][..], probe),
+        (&["run", "health"], 0),
+        (&["run", "--list"], 0),
+        (&["run", "restart", "--wait", "1"], EXIT_REFUSED),
+        (&["relay", "--json"], 0),
+        // The hooks block is not merged in this config dir: doctor fails.
+        (&["doctor"], 1),
     ] {
         let mut cmd = env.officina(args);
         cmd.current_dir(&lab);
         let out = common::run_with(cmd, b"");
-        assert!(out.status.code().is_some(), "{args:?}");
+        assert_eq!(
+            out.status.code(),
+            Some(code),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
     }
 
     // Long enough for the collector to see the hook and quota writes, spawn

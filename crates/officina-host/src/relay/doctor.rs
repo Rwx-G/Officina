@@ -34,6 +34,7 @@ use officina_core::relay::credential::{cmdkey_line, target};
 use officina_core::relay::gate::{LIST_COMMAND, SHELL_TOOLS, ToolRule};
 use officina_core::relay::http::MAX_HTTP_TIMEOUT_S;
 use officina_core::relay::journal::{JournalEntry, RefusalReason};
+use officina_core::relay::record::RecordState;
 use officina_core::relay::run::{BASH_TOOL_MAX_TIMEOUT_MS, one_line};
 use officina_core::relay::view::GATE_ERRORS_WINDOW_MS;
 
@@ -42,6 +43,7 @@ use super::home::{ApprovedState, RelayHome, load_relay_floor};
 use super::tree::TreeError;
 use super::{journal, tree};
 use crate::doctor::{Check, Level, check};
+use crate::process::{Waited, hide_console, wait_until};
 
 /// The program the WSL probe runs inside the distro, by absolute path like
 /// the tools it probes (D-6): `test -x <path>` exits 0 when the path is an
@@ -102,12 +104,7 @@ pub fn wsl_probe_command(wsl: &Path, distro: Option<&str>, path: &str) -> Comman
     for key in WSL_REMOVED_ENV {
         command.env_remove(key);
     }
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        command.creation_flags(CREATE_NO_WINDOW);
-    }
+    hide_console(&mut command);
     command
 }
 
@@ -118,22 +115,15 @@ pub fn run_with_deadline(command: &mut Command, timeout: Duration) -> ProbeRun {
         Ok(child) => child,
         Err(e) => return ProbeRun::NotStarted(e.to_string()),
     };
-    let deadline = Instant::now() + timeout;
-    loop {
-        match child.try_wait() {
-            Ok(Some(status)) => return ProbeRun::Exited(status.code()),
-            Ok(None) if Instant::now() >= deadline => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return ProbeRun::TimedOut;
-            }
-            Ok(None) => std::thread::sleep(Duration::from_millis(50)),
-            Err(e) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return ProbeRun::NotStarted(e.to_string());
-            }
-        }
+    let waited = wait_until(&mut child, Instant::now() + timeout);
+    if !matches!(waited, Waited::Exited(_)) {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+    match waited {
+        Waited::Exited(status) => ProbeRun::Exited(status.code()),
+        Waited::Deadline => ProbeRun::TimedOut,
+        Waited::Lost(e) => ProbeRun::NotStarted(e.to_string()),
     }
 }
 
@@ -211,7 +201,10 @@ fn checks_with(
 ) -> Vec<Check> {
     let home = inputs.home;
     let approved = home.read_approved();
+    // Only a valid record counts: an unreadable one holds no project to
+    // guard, and the gate reports it as a fault when it matters.
     let record = home.read_known_projects();
+    let record = record.valid();
     let floor_path = home.relay_floor(&approved);
     let load = if floor_path.exists() {
         match load_relay_floor(&floor_path) {
@@ -848,18 +841,19 @@ fn journal_check(home: &RelayHome, now_ms: i64) -> Check {
         }
     }
     let errors: u32 = causes.values().sum();
+    let window = format!("the last {}", ago(GATE_ERRORS_WINDOW_MS));
     if errors == 0 && corrupt == 0 {
         return check(
             Level::Ok,
             TITLE,
-            "no gate error in the last 24 h, no unreadable line",
+            format!("no gate error in {window}, no unreadable line"),
         );
     }
     let mut parts = Vec::new();
     if errors > 0 {
         let by_cause: Vec<String> = causes.iter().map(|(c, n)| format!("{c} x{n}")).collect();
         parts.push(format!(
-            "{errors} gate errors in the last 24 h ({}), the last: {}",
+            "{errors} gate errors in {window} ({}), the last: {}",
             by_cause.join(", "),
             last_detail.unwrap_or_default()
         ));
@@ -881,11 +875,11 @@ fn journal_check(home: &RelayHome, now_ms: i64) -> Check {
 }
 
 /// D-173: a decision the window did not make fails doctor until the author
-/// acknowledges it in the Relay view; no line before the window started
-/// its record.
+/// acknowledges it in the Relay view, and so does a broken record (D-175);
+/// no line before the window started its record, while the relay holds
+/// nothing.
 fn anomaly_check(home: &RelayHome, approved: &ApprovedState, now_ms: i64) -> Option<Check> {
     const TITLE: &str = "relay anomalies";
-    home.read_record()?;
     let (lines, _) = journal::read_recent(home, now_ms);
     let found = super::view::read_anomalies(
         home,
@@ -893,6 +887,9 @@ fn anomaly_check(home: &RelayHome, approved: &ApprovedState, now_ms: i64) -> Opt
         approved.approved().map(|a| a.hash.as_str()),
         home.relay_stopped(),
     );
+    if found.is_empty() && matches!(home.read_record(), RecordState::Missing) {
+        return None;
+    }
     let open: Vec<&str> = found
         .iter()
         .filter(|anomaly| !anomaly.acknowledged)

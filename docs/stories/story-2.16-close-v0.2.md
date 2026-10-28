@@ -1,6 +1,6 @@
 # Story 2.16: Close v0.2
 
-**Status:** Approved
+**Status:** review
 
 ## Story
 
@@ -19,12 +19,12 @@ so that v0.2 closes on code with documentation, tracking and tests that say what
 
 ## Tasks
 
-- [ ] Report leftovers: fix or record each (AC 1)
-- [ ] CHANGELOG coherence and its readme test (AC 2)
-- [ ] Sprint status header and statuses (AC 3)
-- [ ] Lexer differential test, corpus generator, CI step (AC 4)
-- [ ] URL and credential vector cases, fixes (AC 5)
-- [ ] Delta audit findings (AC 6)
+- [x] Report leftovers: fix or record each (AC 1)
+- [x] CHANGELOG coherence and its readme test (AC 2)
+- [x] Sprint status header and statuses (AC 3)
+- [x] Lexer differential test, corpus generator, CI step (AC 4)
+- [x] URL and credential vector cases, fixes (AC 5)
+- [x] Delta audit findings (AC 6)
 
 ## Dev Notes
 
@@ -36,10 +36,54 @@ so that v0.2 closes on code with documentation, tracking and tests that say what
 
 ### Debug Log
 
+- **Branch and base.** `fix/close-v0-2`, from `main` at dd6f564, in its own worktree; Epic 3 moved `main` on meanwhile (stories 3.1 and 3.2), so the merge meets it in `CHANGELOG.md`, `README.md`, `ci.yml`, `sprint-status.yaml`, the e2e fixtures script, `App.svelte`, `main.rs`, a few CLI tests and `relay/mod.rs` (where `closed_enum!` moved to the crate root).
+- **Order.** AC 1's refactors first (typed errors, gate inputs, process helper), then AC 6 on arrival of the delta audit and the coordinator's decisions (environment, record, tree, probe, Lows), then the rest of AC 1, AC 5, AC 4, AC 2, AC 3. Fmt, clippy and the tests of what each commit touched before it; the full gate at the end.
+- **Decisions where the story or the decisions are silent:**
+  - AC 1, typed errors: `UsageError` for `parse_args` and `BraceError` for `ArgTemplate::parse` (thiserror, already a dependency), messages unchanged; `floor_arg` gets a one-variant `FloorWithoutPath`, since the binary has no thiserror, and now says what is missing before the usage.
+  - AC 1, gate inputs: `GateInputs { guarded_programs, protected_dirs, cwd_guarded }` for `decide` and `decide_call`; `Deny::new` gave way to `Deny::of` and `Deny::matching`; `containment` keeps its rules and calls `snapshot_source`, `offers_of`, `floor_source` and `known_source`.
+  - AC 1, processes: `officina_host::process::{hide_console, wait_until, POLL_TICK}` (the flag from windows-sys, no literal); the four copies and the three deadline loops use it.
+  - AC 1, known projects: `KnownProjectsState { Missing, Unreadable, Valid }`; the gate, doctor, the view and the keeper keep their semantics (only a valid record counts) and the gate's `known_projects_unreadable` line now says "is missing" or "cannot be read (why)". The working directory: an unreadable one is quoted with its cause in the `outside_projects` refusal (one stderr line still), tested in process in `main.rs`, since Windows does not remove a process's working directory.
+  - AC 1, frontend: `startAll` (`lib/lifecycle.ts`) ends a start that resolves after unmount; the board store keeps its one-shot timers by purpose and its stop clears them; `COPIED_VISIBLE_MS`, an expiry slack, `hours()` for the two windows the backend sends.
+  - AC 1, debt: story 2.4's note and AC 14 marked, five doc comments say shell or file tool call, the perf step renamed and the README says the in-process bound is a workstation check, the zero-write test asserts each documented exit code.
+  - AC 4: `bash --pretty-print` instead of `declare -f f`: it prints the same canonical form and runs nothing, not even the definition, whereas defining `f() { <command>; }` runs the script's top level, and a corpus command holding a stray `}` closes the function and runs there; `extdebug`'s skip does not cover a `for` list, which bash expands before the DEBUG trap. The gate then decides both texts with the default list: a deny of bash's canonical form against no decision on the text as written is a miss. 1,973 commands (gate.json's lexed cases, each also with a continuation in its first word and behind a here-document, and variants built from `DEFAULT_GUARDED_PROGRAMS`, `HOME_REDIRECTION_NAMES` and `OFFICINA_ENVIRONMENT_NAMES`), eight Git Bash processes at a time, about 14 s. `the_parse_runs_nothing` proves the promise with marker files and a positive control.
+  - AC 4, the real miss: after a line break the lexer did not put the next word in command position, so `function` and `{` on a later line were read as words: `echo ok` then `function deploy { ssh host01; }` then `deploy` was not denied, and `{ ssh host01; }` was denied for the wrong reason (`dynamic`). The line break now ends a command as `;` does. Three `gate.json` cases; the vectors fail without the fix (checked). Before the fix the differential reported 2 misses, after it none.
+  - AC 5: no real miss. The template keeps scheme, host and port literal, a value is percent-encoded byte by byte, a dot segment is refused, `@`, `\`, `//`, `%2F` and a whole URL stay inside their segment or value, an IDN host, a trailing dot, an IPv6 zone and every `\` or `%` in the authority are refused, the binding is exact (case folded, port ignored, no subdomain or suffix, another IPv6 spelling or a Unicode entry binds nothing). The vector cases gain `bound_to`/`bound`, and `a_value_never_changes_the_scheme_authority_or_shape` checks every filled case.
+  - AC 6, environment: `relay::environment` holds `launch_env` (the registry block, `ComSpec` the system `cmd.exe`, `PATHEXT` the machine's) and `start_from` (cleared, then the base); the `git` of the fingerprint runs on it too, without `GIT_*`, since the global excludes file now counts and a caller's `HOME` would otherwise choose it. WSL keeps D-6's removal of `WSLENV`, stricter than "from the block". The fake tool's `FAKE_TOOL_*` settings reach a launch through the `test-seams` feature only (never in `officina.exe`, checked by CI and now by the release).
+  - AC 6, record: schema 2, `decided` maps each id to `{verdict, request_key, at_ms}`; `RecordState { Missing, Unreadable, Valid }`; a record missing once the relay holds an approved catalogue or a decision file, or unreadable, is the anomaly `record_broken` and refuses everything (`decision_record_unreadable`, checked in `plan`, so for every action, and again before a claim); `catalogue_unconfirmed` when the record names another catalogue; stopped when the flag or the record says so, in `plan` and in the wait; the window approves or decides nothing while the record is broken, stopping still works, and acknowledging `record:decisions.json` starts a new record from the state found. The window starts a record silently only before the relay holds anything. Approving reads the record before writing, so the first approval does not make its own record look missing. The Relay view shows the relay stopped while the record holds it so, so the author can resume.
+  - AC 6, tree: a `.git` above the folder and a `git` that fails or says "not a work tree" refuse `tree_unreadable` (the folder inside `.git` itself included); tracked files listed with `--recurse-submodules`, untracked ones with the global excludes file named explicitly to `git`; `info/exclude` and that file hashed by role, not path; format `officina-tree 3`. The untracked files inside a submodule stay unbound (a recorded limit).
+  - AC 6, probe: padded shapes from `PROBE_PADS` and the literal edges, at the shortest, one more and the longest pad count the pattern accepts within `VALUE_LENGTH`, each probe character inserted and substituted at every position; release cost about 15 ms for a closed pattern accepting 256 characters.
+  - AC 6, Lows: `check_run_id` checked against `is_run_id` before it names a file; user `ComSpec` and `PATHEXT` fixed with the environment; the release workflow repeats CI's artifact checks; the other five are in `docs/backlog.md` (Low) with their reasons, the MCP gap also in the README.
+- **Mutation checks:** the environment test against a launch without `env_clear` (red, `PYTHONPATH` reached the action); the new gate vectors against the lexer without the line-break reset (red, two `none` and one `dynamic`); the forwarded-pattern test without the padded shapes (red on `.{5,}`); the CHANGELOG test against "format 2" (red); the timer test fails against the old untracked `setTimeout` by construction (four timers pending, not three).
+
 ### Completion Notes
 
+- AC 1, quality Medium (six): typed errors, fac6d82 (`args::tests::each_usage_error_names_its_cause`, `catalogue::tests::braces_delimit_one_placeholder`, `hook.rs::unknown_subcommand_exits_64_never_2`); gate inputs, 9f8d2b9 (refactor, core gate tests and `gate.json` unchanged and green); `CREATE_NO_WINDOW` and the deadline loops, dc2765a (`process::tests::{an_exit_before_the_deadline_is_its_status, a_child_running_at_the_deadline_is_left_running}`); `gate_errors_24h`, 5f7d899 (`view::tests::gate_errors_are_counted_over_their_window`, Vitest `time.test.ts > hours`, retention test ages from the constants); `read_known_projects` and `read_stdin` and the working directory, bcb0f7e and 49cbcc7 (`relay_home.rs::an_unreadable_known_projects_record_is_not_missing`, `gate.rs::nothing_readable_gives_no_decision`, `main.rs::tests::an_unreadable_working_directory_says_why`); frontend timers, ee7a47e (Vitest `board.test.ts`, four cases).
+- AC 1, debt Low (five): story 2.4's backlog note and AC 14, a0d5dfb; the `Bash` doc comments, 2ddf178; the perf step title and the README, a35a03d; the zero-write test, 849c243 and 69091da, the code a `run` gives off Windows (`quota_doctor.rs::no_command_writes_under_the_claude_config_dir`). None recorded in the backlog.
+- AC 2: d0d9fb0, `readme.rs::changelog_states_the_current_catalogue_format`; the entries changed by AC 6 were updated in their own commits.
+- AC 3: `docs/stories/sprint-status.yaml` (this commit): the Epic 2 header names the four open checks by story, 2.4, 2.10, 2.11 and 2.12 `in-progress`, 2.16 `review`; the YAML parses.
+- AC 4: 00ad5ba (`crates/officina/tests/lexer_differential.rs`, the CI step "The gate's lexer against Git Bash's own parse"), the miss fixed in 405fcb2 with three `gate.json` cases.
+- AC 5: 1df6eb1, 27 cases in `tests/vectors/url.json`, `url_vectors.rs::{every_case_matches, every_rule_has_a_case, a_value_never_changes_the_scheme_authority_or_shape}`; no miss to fix.
+- AC 6, `_bmad-output/planning-artifacts/qa/epic-2-security-delta.md` (1 High, 6 Medium, 7 Low), each finding and its outcome:
+  - High, actions inherit the caller's environment: fixed, b540d7f (`run.rs::a_caller_variable_never_reaches_the_action`, `environment::tests`).
+  - Medium, the record binds ids only: fixed, d755041 (`consume::tests::an_approval_the_record_does_not_give_is_refused_unconsumed`, `record::tests::an_approval_against_its_recorded_decision_is_an_anomaly`, `run.rs::a_rejected_request_rewritten_as_approved_does_not_run`).
+  - Medium, a missing or invalid record fails open and is laundered: fixed, d755041 (`run.rs::a_broken_record_refuses_until_the_author_acknowledges_it`, `record::tests::a_missing_record_is_broken_once_the_relay_holds_decisions`).
+  - Medium, `run` obeys the record for approvals only: fixed, d755041 (`run.rs::{a_catalogue_the_window_did_not_approve_is_not_run, a_stop_flag_deleted_behind_the_window_still_stops}`, the two new codes in `every_refusal_code_exits_126_with_one_journal_line`).
+  - Medium, a failing `git` removes the binding: fixed, 1a76a7b (`tree::tests::a_work_tree_git_cannot_read_is_refused_not_unbound`).
+  - Medium, submodules and ignore rules outside the fingerprint: fixed, 1a76a7b (`tree::tests::{an_edit_inside_a_submodule_changes_the_fingerprint, a_file_added_with_its_ignore_rule_changes_the_fingerprint}`).
+  - Medium, the forwarded probe misses `.{5,}`: fixed, c906f84 (`catalogue::tests::a_permissive_pattern_on_a_forwarded_value_is_an_issue`, seven new broad and two closed patterns).
+  - Low, gate stall on a slow share: backlog (Low). Low, Bash writes to relay files from a free project: backlog (Low). Low, hard links and loopback UNC: backlog (Low). Low, hashing cost in the window: backlog (Low). Low, unvalidated `check_run_id`: fixed, dbd9689 (`relay_home.rs::a_dry_run_id_that_is_no_run_id_reads_nothing`). Low, user `ComSpec` and `PATHEXT`: fixed, b540d7f (`environment::tests::launch_env_is_the_registrys`). Low, MCP write tools: README limit and backlog (Low).
+  - Info, release does not repeat CI's artifact checks: fixed, 084f073.
+- Documentation: README (environment, record, binding, probe, MCP limit, tests), CHANGELOG, AD-33 amendment (cf8654f), backlog (335aab8).
+
 ## File List
+
+- `crates/officina-core/src/relay/{approvals,argv,catalogue,gate,journal,mod,record,run,shell,view}.rs`, `crates/officina-core/tests/{gate_vectors,url_vectors}.rs`
+- `crates/officina-host/Cargo.toml`, `crates/officina-host/src/{claude,lib,process}.rs`, `crates/officina-host/src/relay/{approvals,authority,doctor,environment,gate,home,journal,known_projects,mod,tree,view}.rs`, `crates/officina-host/src/relay/run/{args,consume,fixture,mod,request,spawn}.rs`, `crates/officina-host/tests/{authority,common/mod,relay_home,relay_tree}.rs`
+- `crates/officina/src/main.rs`, `crates/officina/tests/{gate,hook,lexer_differential,quota_doctor,readme,relay,run,watch}.rs`
+- `app/src/{App.svelte,components/RelayView.svelte}`, `app/src/lib/{board.svelte,board.test,lifecycle,relay-text,relay.test,time,time.test}.ts`, `app/src/lib/generated/{AnomalyKind,GateDenied,RefusalReason,RelayView}.ts`, `app/e2e/relay-view.spec.ts`, `app/scripts/e2e-fixtures.mjs`
+- `tests/vectors/{gate,url}.json`, `.github/workflows/{ci,release}.yml`, `README.md`, `CHANGELOG.md`, `docs/{architecture-v0.2,backlog}.md`, `docs/stories/{story-2.4-gate-in-the-hook,story-2.16-close-v0.2}.md`, `docs/stories/sprint-status.yaml`
 
 ## Change Log
 
 - 2026-10-28 created from the Epic 2 QA report's open items (D-175)
+- 2026-10-28 implemented: the eleven report leftovers fixed, the delta audit's High and Medium fixed and its Lows fixed or recorded, the CHANGELOG made coherent, the sprint status corrected, the lexer checked against Git Bash (one real miss fixed), the URL builder and credential binding held by vectors. Gates at the end, on 1.99.0 with `--locked`: fmt; clippy clean; `cargo test --workspace --features officina-core/ts` 632 passed, 0 failed, 8 ignored (TypeScript drift green); `perf.rs` alone in release 5 passed (gate own cost 3.2 ms, in-process p95 2.6 ms, hook own cost 10.8 ms); `approvals_stress` passed; `lexer_differential` 2 passed (1,973 commands, 0 misses); the authority marker absent from `officina.exe`, present in `officina-app.exe`, no `window-authority` or `test-seams` in its graph; no `webpki-roots`, `rustls` found; `cargo deny check` ok; `pnpm check`, `lint`, `test` 40 passed; fixtures rebuilt from the CLI, Playwright 50 passed; `pnpm audit` 0 unignored; the `core-linux` job in a container (`rust:1-bookworm`): fmt, clippy clean, 524 passed, 0 failed, 6 ignored. Status review

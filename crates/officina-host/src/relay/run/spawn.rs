@@ -5,58 +5,22 @@ use std::io::Write;
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
-use officina_core::relay::argv::{Launch, SYSTEM_ENV};
+use officina_core::relay::argv::Launch;
 use officina_core::relay::journal::RunOutcome;
 use officina_core::relay::run::{EXIT_NOT_STARTED, EXIT_TIMEOUT, RunPlan};
 
+use super::OUTPUT_GRACE;
 use super::journaling::{end_run, process_finished};
 use super::output::{Output, no_streams};
-use super::{OUTPUT_GRACE, WAIT_TICK};
+use crate::process::{Waited, hide_console, wait_until};
+use crate::relay::environment::{launch_env, start_from};
 use crate::relay::home::RelayHome;
 
-/// What each [`SYSTEM_ENV`] variable of a launch is: a value, or removed.
-pub type SystemEnv = Vec<(&'static str, Option<String>)>;
-
-/// The `PATH` a launch gets off Windows (Linux is v1): the system folders
-/// only an administrator writes.
-pub const PATH_OFF_WINDOWS: &str = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
-
-/// The [`SYSTEM_ENV`] variables a launch gets (D-173): from the environment
-/// Windows builds from the registry for the user, a name it lacks removed;
-/// when it cannot be built, a `PATH` of the system and Windows folders only.
-/// Off Windows, [`PATH_OFF_WINDOWS`] and nothing else. Never the caller's.
-pub fn system_env() -> SystemEnv {
-    #[cfg(windows)]
-    let found = crate::platform::windows::registry_environment().unwrap_or_else(|_| {
-        let system = crate::relay::home::system_dir().unwrap_or_default();
-        let windows = system
-            .parent()
-            .map(std::path::Path::to_path_buf)
-            .unwrap_or_default();
-        vec![(
-            "PATH".to_owned(),
-            format!("{};{}", system.display(), windows.display()),
-        )]
-    });
-    #[cfg(not(windows))]
-    let found = [("PATH".to_owned(), PATH_OFF_WINDOWS.to_owned())];
-    SYSTEM_ENV
-        .iter()
-        .map(|name| {
-            let value = found
-                .iter()
-                .find(|(key, _)| key.eq_ignore_ascii_case(name))
-                .map(|(_, value)| value.clone());
-            (*name, value)
-        })
-        .collect()
-}
-
 /// The command for a launch (AD-30): the program itself, its arguments as a
-/// vector, the project folder as working directory, the [`SYSTEM_ENV`]
-/// variables of `system` (D-173), then the declared `env` added and
-/// `env_remove` removed, stdin null, no console window.
-pub fn command_for(launch: &Launch, system: &[(&str, Option<String>)]) -> Command {
+/// vector, the project folder as working directory, an environment cleared
+/// then built from `base` ([`launch_env`], D-175), the declared `env` added
+/// and `env_remove` removed, stdin null, no console window.
+pub fn command_for(launch: &Launch, base: &[(String, String)]) -> Command {
     let mut command = Command::new(&launch.program);
     command
         .args(&launch.args)
@@ -64,22 +28,12 @@ pub fn command_for(launch: &Launch, system: &[(&str, Option<String>)]) -> Comman
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    for (name, value) in system {
-        match value {
-            Some(value) => command.env(name, value),
-            None => command.env_remove(name),
-        };
-    }
+    start_from(&mut command, base);
     command.envs(&launch.env);
     for key in &launch.env_remove {
         command.env_remove(key);
     }
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        command.creation_flags(CREATE_NO_WINDOW);
-    }
+    hide_console(&mut command);
     command
 }
 
@@ -159,7 +113,7 @@ pub(super) fn spawn(
 ) -> i32 {
     let tree = ProcessTree::new();
     let started = Instant::now();
-    let mut child = match command_for(launch, &system_env()).spawn() {
+    let mut child = match command_for(launch, &launch_env()).spawn() {
         Ok(child) => child,
         Err(e) => {
             let _ = writeln!(err, "officina: could not start {}: {e}", launch.program);
@@ -191,33 +145,30 @@ pub(super) fn spawn(
         end_run(home, err, run_id, line, output.kept());
     };
     let deadline = started + Duration::from_secs(u64::from(plan.timeout_s));
-    loop {
-        match child.try_wait() {
-            Ok(Some(status)) => {
-                output.drain(OUTPUT_GRACE);
-                // Windows always reports a code; elsewhere a signal has none.
-                let code = status.code().unwrap_or(1);
-                end(err, RunOutcome::Exited, Some(i64::from(code)), None);
-                tree.exit_with(code);
-                return code;
-            }
-            Ok(None) if Instant::now() < deadline => std::thread::sleep(WAIT_TICK),
-            Ok(None) => {
-                end(err, RunOutcome::Timeout, None, None);
-                let _ = writeln!(
-                    err,
-                    "officina: timeout: {} ran past its {} s; it and every process it started were stopped",
-                    plan.action, plan.timeout_s
-                );
-                tree.end(&mut child, EXIT_TIMEOUT);
-                return EXIT_TIMEOUT;
-            }
-            Err(e) => {
-                end(err, RunOutcome::Exited, None, Some(e.to_string()));
-                let _ = writeln!(err, "officina: lost track of {}: {e}", plan.action);
-                tree.end(&mut child, 1);
-                return 1;
-            }
+    match wait_until(&mut child, deadline) {
+        Waited::Exited(status) => {
+            output.drain(OUTPUT_GRACE);
+            // Windows always reports a code; elsewhere a signal has none.
+            let code = status.code().unwrap_or(1);
+            end(err, RunOutcome::Exited, Some(i64::from(code)), None);
+            tree.exit_with(code);
+            code
+        }
+        Waited::Deadline => {
+            end(err, RunOutcome::Timeout, None, None);
+            let _ = writeln!(
+                err,
+                "officina: timeout: {} ran past its {} s; it and every process it started were stopped",
+                plan.action, plan.timeout_s
+            );
+            tree.end(&mut child, EXIT_TIMEOUT);
+            EXIT_TIMEOUT
+        }
+        Waited::Lost(e) => {
+            end(err, RunOutcome::Exited, None, Some(e.to_string()));
+            let _ = writeln!(err, "officina: lost track of {}: {e}", plan.action);
+            tree.end(&mut child, 1);
+            1
         }
     }
 }
@@ -226,30 +177,6 @@ pub(super) fn spawn(
 mod tests {
     use super::*;
     use std::collections::BTreeMap;
-
-    /// AC 3 of story 2.14: the launch's `PATH` comes from the registry's
-    /// environment, whatever this process's says.
-    #[cfg(windows)]
-    #[test]
-    fn system_env_is_the_registrys() {
-        let system = system_env();
-        let names: Vec<&str> = system.iter().map(|(name, _)| *name).collect();
-        assert_eq!(names, SYSTEM_ENV);
-        let path = system
-            .iter()
-            .find(|(name, _)| *name == "PATH")
-            .and_then(|(_, value)| value.clone())
-            .expect("the registry's environment has a Path");
-        let system_dir = crate::relay::home::system_dir()
-            .unwrap()
-            .to_string_lossy()
-            .to_lowercase();
-        assert!(
-            std::env::split_paths(&path)
-                .any(|dir| dir.to_string_lossy().to_lowercase() == system_dir),
-            "{path}"
-        );
-    }
 
     #[test]
     fn wsl_command_removes_wslenv() {
@@ -263,11 +190,11 @@ mod tests {
                 .map(|k| (*k).to_owned())
                 .collect(),
         };
-        let system = vec![
-            ("PATH", Some(r"C:\Windows\System32".to_owned())),
-            ("WSLENV", None),
+        let base = vec![
+            ("PATH".to_owned(), r"C:\Windows\System32".to_owned()),
+            ("WSLENV".to_owned(), "USERPROFILE/p".to_owned()),
         ];
-        let command = command_for(&launch, &system);
+        let command = command_for(&launch, &base);
         let envs: Vec<(String, Option<String>)> = command
             .get_envs()
             .map(|(k, v)| {
@@ -277,12 +204,22 @@ mod tests {
                 )
             })
             .collect();
+        // A cleared environment lists only what it sets: a removed name is
+        // simply absent.
         for removed in officina_core::relay::argv::WSL_REMOVED_ENV {
-            assert!(envs.contains(&((*removed).to_owned(), None)), "{envs:?}");
+            assert!(
+                !envs.iter().any(|(name, _)| name == removed),
+                "{removed} reaches wsl.exe: {envs:?}"
+            );
         }
         assert!(
             envs.contains(&("PATH".to_owned(), Some(r"C:\Windows\System32".to_owned()))),
-            "the system PATH, not the caller's: {envs:?}"
+            "the base PATH, not the caller's: {envs:?}"
+        );
+        assert!(
+            envs.iter()
+                .all(|(name, _)| name == "PATH" || name == "PROBE_MODE"),
+            "only the base and the catalogue's env: {envs:?}"
         );
         assert!(envs.contains(&("PROBE_MODE".to_owned(), Some("read-only".to_owned()))));
         assert_eq!(

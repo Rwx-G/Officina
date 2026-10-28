@@ -597,6 +597,33 @@ pub fn kept_output_name(run_id: &str) -> String {
     format!("{run_id}.txt")
 }
 
+/// The id `officina run` gives a run: its start time and its process id,
+/// in lowercase hex, joined by `-`.
+pub fn run_id(started_ms: i64, process_id: u32) -> String {
+    format!("{started_ms:x}-{process_id:x}")
+}
+
+/// True for an id [`run_id`] can give: what a run id read from a request
+/// file, which any process can write, must be before it names a kept
+/// output, so it can never lead out of the outputs folder (D-175).
+///
+/// ```
+/// use officina_core::relay::approvals::{is_run_id, run_id};
+/// assert!(is_run_id(&run_id(1_793_102_400_000, 4242)));
+/// assert!(!is_run_id("C:/path/to/notes"));
+/// assert!(!is_run_id(r"\\192.0.2.10\x\y"));
+/// ```
+pub fn is_run_id(text: &str) -> bool {
+    let hex = |part: &str| {
+        (1..=16).contains(&part.len())
+            && part
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    };
+    text.split_once('-')
+        .is_some_and(|(time, process)| hex(time) && hex(process))
+}
+
 /// What a check run keeps (D-170): its stdout then its stderr, at most
 /// [`KEPT_OUTPUT_BYTES`]; past it, a last line says how many bytes were
 /// dropped. `stdout` and `stderr` are what was captured, the totals what

@@ -10,7 +10,7 @@ use officina_core::relay::approvals::OUTPUTS_DIR;
 use officina_core::relay::catalogue::{
     self, ApprovedCatalogue, KnownProjects, RelayFloor, parse_known_projects,
 };
-use officina_core::relay::record::{DECISION_RECORD_FILE, DecisionRecord, parse_record};
+use officina_core::relay::record::{DECISION_RECORD_FILE, RecordState, parse_record};
 use officina_core::relay::{JOURNAL_DIR, RELAY_DIR};
 
 use crate::paths::{ENV_FLOOR, env_path, officina_home_from_env};
@@ -41,6 +41,26 @@ impl ApprovedState {
         match self {
             ApprovedState::Valid(approved) => Some(approved),
             ApprovedState::Missing | ApprovedState::Unreadable(_) => None,
+        }
+    }
+}
+
+/// What `relay/known-projects.json` holds (D-15).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum KnownProjectsState {
+    /// Never written: the relay was never in use.
+    Missing,
+    /// It exists and cannot be read, or is corrupt or of another schema.
+    Unreadable(String),
+    Valid(KnownProjects),
+}
+
+impl KnownProjectsState {
+    /// The record, when it is valid.
+    pub fn valid(&self) -> Option<&KnownProjects> {
+        match self {
+            KnownProjectsState::Valid(known) => Some(known),
+            KnownProjectsState::Missing | KnownProjectsState::Unreadable(_) => None,
         }
     }
 }
@@ -127,9 +147,16 @@ impl RelayHome {
         self.relay_dir().join(DECISION_RECORD_FILE)
     }
 
-    /// Reads `relay/decisions.json`, if present and of this schema.
-    pub fn read_record(&self) -> Option<DecisionRecord> {
-        parse_record(&fs::read(self.decisions_file()).ok()?)
+    /// Reads `relay/decisions.json` into one of its three states.
+    pub fn read_record(&self) -> RecordState {
+        match fs::read(self.decisions_file()) {
+            Ok(bytes) => match parse_record(&bytes) {
+                Ok(record) => RecordState::Valid(record),
+                Err(why) => RecordState::Unreadable(why),
+            },
+            Err(e) if e.kind() == io::ErrorKind::NotFound => RecordState::Missing,
+            Err(e) => RecordState::Unreadable(e.to_string()),
+        }
     }
 
     /// `journal/`: one file per UTC day (AD-32).
@@ -176,9 +203,19 @@ impl RelayHome {
         }
     }
 
-    /// Reads `relay/known-projects.json`, if present and of this schema.
-    pub fn read_known_projects(&self) -> Option<KnownProjects> {
-        parse_known_projects(&fs::read_to_string(self.known_projects_file()).ok()?)
+    /// Reads `relay/known-projects.json` into one of its three states, so a
+    /// caller can say whether a broken floor falls back on nothing because
+    /// the record was never written or because it cannot be read.
+    pub fn read_known_projects(&self) -> KnownProjectsState {
+        let text = match fs::read_to_string(self.known_projects_file()) {
+            Ok(text) => text,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return KnownProjectsState::Missing,
+            Err(e) => return KnownProjectsState::Unreadable(e.to_string()),
+        };
+        match parse_known_projects(&text) {
+            Some(known) => KnownProjectsState::Valid(known),
+            None => KnownProjectsState::Unreadable("corrupt, or of another schema".to_owned()),
+        }
     }
 
     /// True when the relay is stopped (AD-34): `relay/stopped` exists, or

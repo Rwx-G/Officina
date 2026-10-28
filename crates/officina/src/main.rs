@@ -45,6 +45,10 @@ usage: officina <command>
                                   read-only (exit 3 when it cannot be read)
   version                         print the version";
 
+/// Everything Claude Code wrote on stdin. A read error is not reported: the
+/// hook and the quota writer must exit 0 whatever happens (FR-3), and the
+/// bytes read so far are parsed as any payload would be, so a broken pipe
+/// records nothing rather than block or fail a session.
 fn read_stdin() -> Vec<u8> {
     let mut buf = Vec::new();
     let _ = std::io::stdin().read_to_end(&mut buf);
@@ -220,10 +224,7 @@ fn run_cmd(args: &[String]) -> ExitCode {
         );
         std::process::exit(relay_run::EXIT_REFUSED);
     };
-    // An unreadable working directory lies in no project: refused.
-    let cwd = std::env::current_dir()
-        .map(|dir| dir.to_string_lossy().into_owned())
-        .unwrap_or_default();
+    let cwd = working_dir(std::env::current_dir());
     match parsed {
         RunArgs::List => {
             let mut out = std::io::stdout().lock();
@@ -243,6 +244,16 @@ fn run_cmd(args: &[String]) -> ExitCode {
             relay_run::session_id_from_env(),
             std::time::Duration::from_secs(u64::from(wait_s)),
         )),
+    }
+}
+
+/// The working directory `officina run` checks, as text. One that cannot
+/// be read lies in no project, so the run is refused `outside_projects`,
+/// and the text the refusal quotes as the folder says why.
+fn working_dir(found: std::io::Result<PathBuf>) -> String {
+    match found {
+        Ok(dir) => dir.to_string_lossy().into_owned(),
+        Err(e) => format!("(unreadable working directory: {e})"),
     }
 }
 
@@ -272,11 +283,25 @@ fn relay_json() -> ExitCode {
     }
 }
 
+/// `--floor` given as the last argument, without its path: a usage error.
+struct FloorWithoutPath;
+
 /// Extracts `--floor <path>` from the remaining arguments.
-fn floor_arg(args: &[String]) -> Result<Option<PathBuf>, ()> {
+fn floor_arg(args: &[String]) -> Result<Option<PathBuf>, FloorWithoutPath> {
     match args.iter().position(|a| a == "--floor") {
         None => Ok(None),
-        Some(i) => args.get(i + 1).map(|p| Some(PathBuf::from(p))).ok_or(()),
+        Some(i) => args
+            .get(i + 1)
+            .map(|p| Some(PathBuf::from(p)))
+            .ok_or(FloorWithoutPath),
+    }
+}
+
+impl FloorWithoutPath {
+    /// Says what is missing, then the usage, and exits 64.
+    fn usage_error(self) -> ExitCode {
+        eprintln!("officina: --floor takes a path");
+        usage_error()
     }
 }
 
@@ -302,11 +327,11 @@ fn main() -> ExitCode {
         }
         Some("board") if rest.iter().any(|a| a == "--json") => match floor_arg(rest) {
             Ok(floor) => board(floor.as_ref()),
-            Err(()) => usage_error(),
+            Err(missing) => missing.usage_error(),
         },
         Some("doctor") => match floor_arg(rest) {
             Ok(floor) => doctor_cmd(floor.as_ref()),
-            Err(()) => usage_error(),
+            Err(missing) => missing.usage_error(),
         },
         Some("run") => run_cmd(rest),
         Some("relay") if rest == ["--json"] => relay_json(),
@@ -323,5 +348,28 @@ fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
         _ => usage_error(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Story 2.16 AC 1: a working directory that cannot be read is quoted
+    /// with its cause, so the `outside_projects` refusal says why; it
+    /// cannot be produced end to end on Windows, which does not remove a
+    /// process's working directory.
+    #[test]
+    fn an_unreadable_working_directory_says_why() {
+        let gone = std::io::Error::new(std::io::ErrorKind::NotFound, "the folder was removed");
+        let text = working_dir(Err(gone));
+        assert!(
+            text.contains("unreadable working directory: the folder was removed"),
+            "{text}"
+        );
+        assert_eq!(
+            working_dir(Ok(PathBuf::from("C:/path/to/Lab"))),
+            "C:/path/to/Lab"
+        );
     }
 }

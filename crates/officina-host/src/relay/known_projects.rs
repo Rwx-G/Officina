@@ -29,6 +29,7 @@ pub fn keep(home: &RelayHome) -> io::Result<()> {
         .and_then(|content| parse_floor(&content).ok());
     let snapshot = approved.approved();
     let existing = home.read_known_projects();
+    let existing = existing.valid();
     let floor_in_use = floor.as_ref().is_some_and(relay_in_use);
     if floor.is_none() && snapshot.is_none() {
         return Ok(());
@@ -49,10 +50,10 @@ pub fn keep(home: &RelayHome) -> io::Result<()> {
         schema: KNOWN_PROJECTS_SCHEMA,
         approved_hash: snapshot
             .map(|s| s.hash.clone())
-            .or_else(|| existing.as_ref().and_then(|k| k.approved_hash.clone())),
+            .or_else(|| existing.and_then(|k| k.approved_hash.clone())),
         project_paths: paths.into_iter().collect(),
     };
-    if existing.as_ref() == Some(&record) {
+    if existing == Some(&record) {
         return Ok(());
     }
     let bytes = serde_json::to_vec_pretty(&record).map_err(io::Error::other)?;

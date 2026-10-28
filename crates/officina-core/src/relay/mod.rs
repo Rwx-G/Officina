@@ -111,7 +111,7 @@ mod tests {
     use super::http::HttpMethod;
     use super::journal::{GateFault, JournalKind, RefusalReason, RunOutcome};
     use super::params::ValueRefusal;
-    use super::record::AnomalyKind;
+    use super::record::{AnomalyKind, Verdict};
     use super::url::UrlIssue;
     use super::view::Tone;
     use crate::floor::Autonomy;
@@ -130,7 +130,7 @@ mod tests {
     /// of this crate without a line here.
     #[test]
     fn code_equals_the_serde_name_for_every_variant() {
-        let checked: [fn(); 17] = [
+        let checked: [fn(); 18] = [
             || assert_codes(ActionClass::ALL, ActionClass::code),
             || assert_codes(Autonomy::ALL, Autonomy::code),
             || assert_codes(ForwardedValues::ALL, ForwardedValues::code),
@@ -145,6 +145,7 @@ mod tests {
             || assert_codes(RunOutcome::ALL, RunOutcome::code),
             || assert_codes(ValueRefusal::ALL, ValueRefusal::code),
             || assert_codes(AnomalyKind::ALL, AnomalyKind::code),
+            || assert_codes(Verdict::ALL, Verdict::code),
             || assert_codes(UrlIssue::ALL, UrlIssue::code),
             || assert_codes(Tone::ALL, Tone::code),
             || assert_codes(IpcErrorCode::ALL, IpcErrorCode::code),

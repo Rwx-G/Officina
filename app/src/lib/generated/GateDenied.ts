@@ -2,7 +2,8 @@
 import type { DenyKind } from "./DenyKind";
 
 /**
- * The gate denied a `Bash` command (AD-26).
+ * The gate denied a tool call: a shell command, or a file write under the
+ * Officina home (AD-26, D-171, D-173).
  */
 export type GateDenied = { project: string, session_id: string | null, deny: DenyKind, matched?: string | null, 
 /**

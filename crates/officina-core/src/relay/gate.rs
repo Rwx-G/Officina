@@ -1,5 +1,5 @@
 //! The gate's decision (AD-26 steps 2 to 5, D-12 to D-17, D-173): in a
-//! guarded repository, deny a `Bash` command that would start a guarded
+//! guarded repository, deny a shell tool's command that would start a guarded
 //! program, hide its program, redirect Officina's home or environment or
 //! touch Officina's own files; otherwise, and always outside a guarded
 //! repository, decide nothing. Once the relay guards a project, deny a file
@@ -191,10 +191,7 @@ pub fn decide_file_write(target: &str, home: &str, relay_guards: bool) -> Option
     let home = home.trim_end_matches('/');
     let inside = !home.is_empty()
         && (target == home || target.starts_with(home) && target[home.len()..].starts_with('/'));
-    inside.then_some(Deny {
-        kind: DenyKind::RelayStateWrite,
-        matched: None,
-    })
+    inside.then(|| Deny::of(DenyKind::RelayStateWrite))
 }
 
 /// A file path folded for [`decide_file_write`]: [`normalise_cwd`]'s form,
@@ -236,29 +233,39 @@ fn file_path_text(path: &str) -> String {
     format!("{root}{}", segments.join("/"))
 }
 
+/// What the gate decides a shell command against (AD-26 steps 3 to 5),
+/// field by field so that the two lists cannot change places unnoticed.
+#[derive(Debug, Clone, Copy)]
+pub struct GateInputs<'a> {
+    /// The effective list: folded entries, a trailing `*` a prefix, an entry
+    /// ending in `.exe` matched on the written form (D-11).
+    pub guarded_programs: &'a [String],
+    /// From [`protected_dirs`].
+    pub protected_dirs: &'a [String],
+    /// Whether the call's folder lies in a guarded project: outside one the
+    /// gate decides nothing.
+    pub cwd_guarded: bool,
+}
+
 /// The gate's decision for one tool call (AD-26, D-171): the rule of `tool`
 /// applied to its `command`. A tool that runs no shell command, and a lexed
 /// tool's call without a command, get no decision.
 ///
 /// ```
-/// use officina_core::relay::gate::{DenyKind, decide_call};
+/// use officina_core::relay::gate::{DenyKind, GateInputs, decide_call};
 /// let list = vec!["ssh".to_owned()];
-/// assert_eq!(decide_call("Read", Some("ssh host01"), &list, &[], true), None);
-/// let deny = decide_call("PowerShell", Some("Get-ChildItem"), &list, &[], true).unwrap();
+/// let guarded = GateInputs { guarded_programs: &list, protected_dirs: &[], cwd_guarded: true };
+/// assert_eq!(decide_call("Read", Some("ssh host01"), &guarded), None);
+/// let deny = decide_call("PowerShell", Some("Get-ChildItem"), &guarded).unwrap();
 /// assert_eq!(deny.kind, DenyKind::PowershellInGuardedProject);
-/// assert_eq!(decide_call("PowerShell", Some("Get-ChildItem"), &list, &[], false), None);
+/// let free = GateInputs { cwd_guarded: false, ..guarded };
+/// assert_eq!(decide_call("PowerShell", Some("Get-ChildItem"), &free), None);
 /// ```
-pub fn decide_call(
-    tool: &str,
-    command: Option<&str>,
-    guarded_programs: &[String],
-    protected_dirs: &[String],
-    cwd_guarded: bool,
-) -> Option<Deny> {
+pub fn decide_call(tool: &str, command: Option<&str>, inputs: &GateInputs<'_>) -> Option<Deny> {
     match tool_rule(tool)? {
-        ToolRule::Lexed => decide(command?, guarded_programs, protected_dirs, cwd_guarded),
-        ToolRule::DeniedInGuardedProject if cwd_guarded => {
-            Deny::new(DenyKind::PowershellInGuardedProject, None)
+        ToolRule::Lexed => decide(command?, inputs),
+        ToolRule::DeniedInGuardedProject if inputs.cwd_guarded => {
+            Some(Deny::of(DenyKind::PowershellInGuardedProject))
         }
         ToolRule::DeniedInGuardedProject => None,
     }
@@ -273,64 +280,75 @@ pub struct Deny {
 }
 
 impl Deny {
-    fn new(kind: DenyKind, matched: Option<String>) -> Option<Deny> {
-        Some(Deny { kind, matched })
+    /// A deny of `kind` that names nothing.
+    fn of(kind: DenyKind) -> Deny {
+        Deny {
+            kind,
+            matched: None,
+        }
+    }
+
+    /// A deny of `kind` naming what matched: a program or a variable.
+    fn matching(kind: DenyKind, matched: String) -> Deny {
+        Deny {
+            kind,
+            matched: Some(matched),
+        }
     }
 }
 
-/// The gate's decision for one `Bash` command (AD-26 steps 3 to 5): `None`
+/// The gate's decision for one shell command (AD-26 steps 3 to 5): `None`
 /// is no decision. Outside a guarded repository it is always `None`, before
-/// any work. `guarded_programs` is the effective list (folded entries, a
-/// trailing `*` a prefix, an entry ending in `.exe` matched on the written
-/// form, D-11); `protected_dirs` comes from [`protected_dirs`].
+/// any work.
 ///
 /// ```
-/// use officina_core::relay::gate::{DenyKind, decide};
+/// use officina_core::relay::gate::{DenyKind, GateInputs, decide};
 /// let list = vec!["ssh".to_owned()];
-/// let deny = decide("cd lab && \"ss\"h host01", &list, &[], true).unwrap();
+/// let guarded = GateInputs { guarded_programs: &list, protected_dirs: &[], cwd_guarded: true };
+/// let deny = decide("cd lab && \"ss\"h host01", &guarded).unwrap();
 /// assert_eq!(deny.kind, DenyKind::GuardedProgram);
 /// assert_eq!(deny.matched.as_deref(), Some("ssh"));
-/// assert_eq!(decide("ssh host01", &list, &[], false), None);
-/// assert_eq!(decide("officina run check group=lab-web | head", &list, &[], true), None);
+/// let free = GateInputs { cwd_guarded: false, ..guarded };
+/// assert_eq!(decide("ssh host01", &free), None);
+/// assert_eq!(decide("officina run check group=lab-web | head", &guarded), None);
 /// ```
-pub fn decide(
-    command: &str,
-    guarded_programs: &[String],
-    protected_dirs: &[String],
-    cwd_guarded: bool,
-) -> Option<Deny> {
-    if !cwd_guarded {
+pub fn decide(command: &str, inputs: &GateInputs<'_>) -> Option<Deny> {
+    if !inputs.cwd_guarded {
         return None;
     }
     let Ok(lexed) = shell::lex(command) else {
-        return Deny::new(DenyKind::Unparsable, None);
+        return Some(Deny::of(DenyKind::Unparsable));
     };
     // Folded once here, not once per program the line starts.
-    let folded: Vec<String> = guarded_programs.iter().map(|e| shell::fold(e)).collect();
+    let folded: Vec<String> = inputs
+        .guarded_programs
+        .iter()
+        .map(|e| shell::fold(e))
+        .collect();
     if let Some(matched) = lexed
         .programs
         .iter()
         .find_map(|program| guarded_match(program, &folded))
     {
-        return Deny::new(DenyKind::GuardedProgram, Some(matched));
+        return Some(Deny::matching(DenyKind::GuardedProgram, matched));
     }
     if lexed.encoded_command {
-        return Deny::new(DenyKind::EncodedCommand, None);
+        return Some(Deny::of(DenyKind::EncodedCommand));
     }
     if !lexed.dynamic.is_empty() {
-        return Deny::new(DenyKind::Dynamic, None);
+        return Some(Deny::of(DenyKind::Dynamic));
     }
     if let Some(deny) = reassigned(&lexed) {
         return Some(deny);
     }
     let prefix = shell::fold(OFFICINA_VARIABLE_PREFIX);
     if shell::fold(command).contains(&prefix) || shell::fold(&lexed.values).contains(&prefix) {
-        return Deny::new(DenyKind::OfficinaVariable, None);
+        return Some(Deny::of(DenyKind::OfficinaVariable));
     }
-    if names_protected_dir(command, protected_dirs)
-        || names_protected_dir(&lexed.values, protected_dirs)
+    if names_protected_dir(command, inputs.protected_dirs)
+        || names_protected_dir(&lexed.values, inputs.protected_dirs)
     {
-        return Deny::new(DenyKind::ProtectedDir, None);
+        return Some(Deny::of(DenyKind::ProtectedDir));
     }
     None
 }
@@ -372,8 +390,10 @@ fn assigned(lexed: &Lexed, names: &[&str], kind: DenyKind) -> Option<Deny> {
     let listed = |name: &str| names.iter().any(|entry| shell::name_matches(entry, name));
     for assignment in &lexed.assignments {
         match assignment {
-            Assignment::Name(name) if listed(name) => return Deny::new(kind, Some(name.clone())),
-            Assignment::Computed => return Deny::new(kind, None),
+            Assignment::Name(name) if listed(name) => {
+                return Some(Deny::matching(kind, name.clone()));
+            }
+            Assignment::Computed => return Some(Deny::of(kind)),
             Assignment::Name(_) => {}
         }
     }
@@ -381,7 +401,7 @@ fn assigned(lexed: &Lexed, names: &[&str], kind: DenyKind) -> Option<Deny> {
         .programs
         .iter()
         .find(|p| p.origin == Origin::Scanned && listed(&p.written))
-        .and_then(|p| Deny::new(kind, Some(p.written.clone())))
+        .map(|p| Deny::matching(kind, p.written.clone()))
 }
 
 /// D-12 and D-173: in a command calling `officina`, a home or floor
@@ -668,7 +688,7 @@ struct Source {
     projects: Vec<ProjectRoot>,
 }
 
-/// What is guarded for one `Bash` call, from every source the gate could
+/// What is guarded for one tool call, from every source the gate could
 /// read (D-14, D-15): the floor's and the snapshot's projects are looked up
 /// separately and a call is guarded if either says so, the guarded programs
 /// are the union of both lists, and a source that cannot be read makes the
@@ -735,50 +755,12 @@ pub fn containment(
     let mut floor_actions = BTreeMap::new();
 
     if let SnapshotInput::Valid(canonical) = snapshot {
-        sources.push(Source {
-            projects: canonical
-                .projects
-                .iter()
-                .map(|(name, project)| ProjectRoot {
-                    name: name.clone(),
-                    path: project.path.clone(),
-                    autonomy: project.autonomy,
-                })
-                .collect(),
-        });
+        sources.push(snapshot_source(canonical));
         lists.extend(canonical.guarded_programs.iter().cloned());
-        for (name, project) in &canonical.projects {
-            let offered = project
-                .actions
-                .iter()
-                .filter_map(|action| {
-                    let canonical_action = canonical.actions.get(action)?;
-                    Some(OfferedAction {
-                        name: action.clone(),
-                        params: canonical_action.params.keys().cloned().collect(),
-                    })
-                })
-                .collect();
-            approved_offers.insert(name.clone(), offered);
-        }
+        approved_offers = offers_of(canonical);
     }
     if let FloorInput::Valid { floor, path } = floor {
-        let floor_dir = floor_dir_of(path);
-        sources.push(Source {
-            projects: floor
-                .projects
-                .iter()
-                .map(|project| ProjectRoot {
-                    name: project.name.clone(),
-                    path: resolve_project_path(floor_dir, &project.path),
-                    autonomy: if snapshot_broken {
-                        Autonomy::Guarded
-                    } else {
-                        floor.autonomy_of(project)
-                    },
-                })
-                .collect(),
-        });
+        sources.push(floor_source(floor, path, snapshot_broken));
         lists.extend(floor_guarded_programs(floor));
         for project in &floor.projects {
             floor_actions
@@ -788,17 +770,7 @@ pub fn containment(
     }
     if floor_failed.is_some() {
         match known {
-            Some(known) => sources.push(Source {
-                projects: known
-                    .project_paths
-                    .iter()
-                    .map(|path| ProjectRoot {
-                        name: path.clone(),
-                        path: path.clone(),
-                        autonomy: Autonomy::Guarded,
-                    })
-                    .collect(),
-            }),
+            Some(known) => sources.push(known_source(known)),
             None if snapshot_broken => faults.push(GateFault::KnownProjectsUnreadable),
             None => {}
         }
@@ -814,6 +786,81 @@ pub fn containment(
         faults,
         approved_offers,
         floor_actions,
+    }
+}
+
+/// The approved snapshot's projects, each with its approved autonomy.
+fn snapshot_source(canonical: &CanonicalCatalogue) -> Source {
+    Source {
+        projects: canonical
+            .projects
+            .iter()
+            .map(|(name, project)| ProjectRoot {
+                name: name.clone(),
+                path: project.path.clone(),
+                autonomy: project.autonomy,
+            })
+            .collect(),
+    }
+}
+
+/// The actions the deny reason offers for each project of the approved
+/// snapshot (D-17), with their parameter names.
+fn offers_of(canonical: &CanonicalCatalogue) -> BTreeMap<String, Vec<OfferedAction>> {
+    canonical
+        .projects
+        .iter()
+        .map(|(name, project)| {
+            let offered = project
+                .actions
+                .iter()
+                .filter_map(|action| {
+                    let canonical_action = canonical.actions.get(action)?;
+                    Some(OfferedAction {
+                        name: action.clone(),
+                        params: canonical_action.params.keys().cloned().collect(),
+                    })
+                })
+                .collect();
+            (name.clone(), offered)
+        })
+        .collect()
+}
+
+/// The floor's projects, their paths resolved against the floor's folder;
+/// every one guarded while the snapshot is broken (D-14).
+fn floor_source(floor: &FloorFile, path: &str, snapshot_broken: bool) -> Source {
+    let floor_dir = floor_dir_of(path);
+    Source {
+        projects: floor
+            .projects
+            .iter()
+            .map(|project| ProjectRoot {
+                name: project.name.clone(),
+                path: resolve_project_path(floor_dir, &project.path),
+                autonomy: if snapshot_broken {
+                    Autonomy::Guarded
+                } else {
+                    floor.autonomy_of(project)
+                },
+            })
+            .collect(),
+    }
+}
+
+/// Every path of the known-projects record, guarded (D-15): what a failed
+/// floor falls back to.
+fn known_source(known: &KnownProjects) -> Source {
+    Source {
+        projects: known
+            .project_paths
+            .iter()
+            .map(|path| ProjectRoot {
+                name: path.clone(),
+                path: path.clone(),
+                autonomy: Autonomy::Guarded,
+            })
+            .collect(),
     }
 }
 
@@ -1015,6 +1062,16 @@ mod tests {
         Deny {
             kind,
             matched: matched.map(str::to_owned),
+        }
+    }
+
+    /// `list` in a guarded project, or outside one, with no protected
+    /// directory.
+    fn inputs(list: &[String], cwd_guarded: bool) -> GateInputs<'_> {
+        GateInputs {
+            guarded_programs: list,
+            protected_dirs: &[],
+            cwd_guarded,
         }
     }
 
@@ -1387,13 +1444,13 @@ mod tests {
                 format!("{variable}=C:/shim officina run probe host=web01"),
                 format!("export {variable}=C:/shim; officina run --list"),
             ] {
-                let deny = decide(&command, &list, &[], true).unwrap();
+                let deny = decide(&command, &inputs(&list, true)).unwrap();
                 assert_eq!(deny.kind, DenyKind::OfficinaEnvironment, "{command}");
                 assert_eq!(deny.matched.as_deref(), Some(variable.as_str()));
-                assert_eq!(decide(&command, &list, &[], false), None);
+                assert_eq!(decide(&command, &inputs(&list, false)), None);
             }
             let other = format!("{variable}=C:/shim make test");
-            assert_eq!(decide(&other, &list, &[], true), None, "{other}");
+            assert_eq!(decide(&other, &inputs(&list, true)), None, "{other}");
         }
         let reason = deny_reason(
             &deny(DenyKind::OfficinaEnvironment, Some("PATH")),
@@ -1430,19 +1487,20 @@ mod tests {
                 gated_tools_matcher().split('|').any(|name| name == *tool),
                 "{tool} is in the matcher"
             );
-            let guarded = decide_call(tool, Some("ssh host01"), &list, &[], true).map(|d| d.kind);
-            let free = decide_call(tool, Some("ssh host01"), &list, &[], false);
+            let guarded =
+                decide_call(tool, Some("ssh host01"), &inputs(&list, true)).map(|d| d.kind);
+            let free = decide_call(tool, Some("ssh host01"), &inputs(&list, false));
             assert_eq!(free, None, "{tool}: never outside a guarded project");
             match rule {
                 ToolRule::Lexed => {
                     assert_eq!(guarded, Some(DenyKind::GuardedProgram), "{tool}");
                     assert_eq!(
-                        decide_call(tool, Some("ls -la"), &list, &[], true),
+                        decide_call(tool, Some("ls -la"), &inputs(&list, true)),
                         None,
                         "{tool}: lexed like Bash"
                     );
                     assert_eq!(
-                        decide_call(tool, None, &list, &[], true),
+                        decide_call(tool, None, &inputs(&list, true)),
                         None,
                         "{tool}: no command, no decision"
                     );
@@ -1454,7 +1512,7 @@ mod tests {
                         "{tool}"
                     );
                     assert_eq!(
-                        decide_call(tool, None, &list, &[], true).map(|d| d.kind),
+                        decide_call(tool, None, &inputs(&list, true)).map(|d| d.kind),
                         Some(DenyKind::PowershellInGuardedProject),
                         "{tool}: refused whole"
                     );
@@ -1464,7 +1522,7 @@ mod tests {
         for other in ["Read", "Write", "Edit", "bash", "powershell", ""] {
             assert_eq!(tool_rule(other), None, "{other}");
             assert_eq!(
-                decide_call(other, Some("ssh host01"), &list, &[], true),
+                decide_call(other, Some("ssh host01"), &inputs(&list, true)),
                 None
             );
         }

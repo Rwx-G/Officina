@@ -581,6 +581,18 @@ fn nothing_readable_gives_no_decision() {
             GateFault::KnownProjectsUnreadable
         ]
     );
+    // Story 2.16 AC 1: the line says the record exists and does not read,
+    // not that it is missing.
+    let detail = &gate_errors(&env)[2].detail;
+    assert!(detail.contains("cannot be read ("), "{detail}");
+    std::fs::remove_file(env.relay_home().known_projects_file()).unwrap();
+    not_decided(
+        &env,
+        &bash("ssh host01", r"C:\path\to\Supervision"),
+        Some(GUARDED_ROOT),
+    );
+    let detail = &gate_errors(&env)[5].detail;
+    assert!(detail.contains("is missing"), "{detail}");
 }
 
 /// Every action of the floor these tests approve is valid on every OS: an

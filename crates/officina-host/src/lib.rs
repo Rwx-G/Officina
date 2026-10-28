@@ -8,6 +8,7 @@ pub mod files;
 pub mod focus;
 pub mod paths;
 pub mod platform;
+pub mod process;
 pub mod registry;
 pub mod relay;
 #[cfg(feature = "window-authority")]

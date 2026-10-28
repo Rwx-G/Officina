@@ -286,6 +286,14 @@ closed_enum! {
         NotApproved,
         /// `relay/approved.json` cannot be read: fail closed.
         ApprovedUnreadable,
+        /// The window's record of its decisions is missing or cannot be
+        /// read while a catalogue is approved: nothing approved can be
+        /// confirmed until the author acknowledges it in the Relay view
+        /// (D-175).
+        DecisionRecordUnreadable,
+        /// The approved catalogue is not the one the window's record says
+        /// it approved: written by another process, it is not run (D-175).
+        CatalogueUnconfirmed,
         /// The relay floor cannot be read or fails phase 1.
         FloorUnreadable,
         /// The floor's catalogue differs from the approved one.
@@ -306,8 +314,9 @@ closed_enum! {
         /// The work tree holds a file, or more files or bytes, than the
         /// fingerprint reads (D-173).
         TreeTooLarge,
-        /// A file of the work tree cannot be read, so its content cannot be
-        /// bound (D-173).
+        /// The work tree cannot be read by `git` though a `.git` lies above
+        /// it, or a file of it cannot be read, so its files cannot be bound
+        /// (D-173, D-175).
         TreeUnreadable,
         /// An `after-check` action, or a `human` action naming its dry run,
         /// without a successful run of its check, with the same parameters
@@ -385,7 +394,8 @@ closed_enum! {
     }
 }
 
-/// The gate denied a `Bash` command (AD-26).
+/// The gate denied a tool call: a shell command, or a file write under the
+/// Officina home (AD-26, D-171, D-173).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct GateDenied {

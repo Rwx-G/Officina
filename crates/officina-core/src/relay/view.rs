@@ -173,7 +173,11 @@ pub struct RelayView {
     /// first.
     pub recent: Vec<RecentEntry>,
     pub journal_corrupt_lines: u32,
-    pub gate_errors_24h: u32,
+    /// The gate errors of the last `gate_errors_window_ms`.
+    pub gate_errors: u32,
+    /// The window `gate_errors` covers: [`GATE_ERRORS_WINDOW_MS`], carried
+    /// so the window says it without restating it.
+    pub gate_errors_window_ms: i64,
     /// The approved catalogue's credentials, by name.
     pub credentials: Vec<CredentialView>,
     /// What the programs do with some values (D-172): the current floor's
@@ -392,7 +396,7 @@ pub fn build(inputs: &ViewInputs<'_>) -> RelayView {
         }
     };
     let since = inputs.now_ms - GATE_ERRORS_WINDOW_MS;
-    let gate_errors_24h = inputs
+    let gate_errors = inputs
         .lines
         .iter()
         .filter(|line| matches!(line.entry, JournalEntry::GateError(_)) && line.ts >= since)
@@ -411,7 +415,8 @@ pub fn build(inputs: &ViewInputs<'_>) -> RelayView {
         issues,
         recent: recent(inputs.lines, inputs.now_ms),
         journal_corrupt_lines: inputs.journal_corrupt_lines,
-        gate_errors_24h: u32::try_from(gate_errors_24h).unwrap_or(u32::MAX),
+        gate_errors: u32::try_from(gate_errors).unwrap_or(u32::MAX),
+        gate_errors_window_ms: GATE_ERRORS_WINDOW_MS,
         credentials: credentials(approved, inputs.credential_presence),
         notices: match inputs.floor {
             FloorRead::Valid(current) => notices(&current.canonical),
@@ -737,7 +742,7 @@ mod tests {
         assert_eq!(view.recent.len(), RECENT_ENTRIES);
         assert!(matches!(view.recent[0].event, RecentEvent::GateDenied(_)));
         let RecentEvent::Refused(oldest) = &view.recent[RECENT_ENTRIES - 1].event else {
-            panic!();
+            panic!("the oldest kept entry is the refusal a11");
         };
         assert_eq!(oldest.action, "a11");
     }
@@ -748,6 +753,9 @@ mod tests {
         for kind in JournalKind::ALL {
             let entry = match kind {
                 JournalKind::RunStarted => started(NOW, "r", Some(5)).entry,
+                // An end line is no entry of its own: it joins its start
+                // line's run, which `runs_are_paired_and_abandoned_past_their_timeout`
+                // checks.
                 JournalKind::RunFinished => continue,
                 JournalKind::Refused => JournalEntry::Refused(Refused {
                     project: None,
@@ -1010,7 +1018,7 @@ credential = "monitoring"
     }
 
     #[test]
-    fn gate_errors_are_counted_over_24_hours() {
+    fn gate_errors_are_counted_over_their_window() {
         let lines = [
             gate_error(NOW - GATE_ERRORS_WINDOW_MS - 1),
             gate_error(NOW - GATE_ERRORS_WINDOW_MS),
@@ -1019,7 +1027,8 @@ credential = "monitoring"
         let mut read = inputs(SnapshotState::Missing, FloorRead::Missing, &lines);
         read.journal_corrupt_lines = 3;
         let view = build(&read);
-        assert_eq!(view.gate_errors_24h, 2);
+        assert_eq!(view.gate_errors, 2);
+        assert_eq!(view.gate_errors_window_ms, GATE_ERRORS_WINDOW_MS);
         assert_eq!(view.journal_corrupt_lines, 3);
     }
 }

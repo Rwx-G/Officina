@@ -9,6 +9,7 @@ pub mod approvals;
 pub mod authority;
 pub mod credential;
 pub mod doctor;
+pub mod environment;
 pub mod gate;
 pub mod home;
 pub mod http;

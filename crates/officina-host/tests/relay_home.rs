@@ -7,13 +7,17 @@ mod common;
 use std::path::{Path, PathBuf};
 
 use common::TestHome;
-use officina_core::relay::approvals::{FileKind, file_name, kept_output_name};
+use officina_core::relay::approvals::{
+    FileKind, KEPT_OUTPUT_RETENTION_MS, RETENTION_MS, file_name, kept_output_name,
+};
 use officina_core::relay::catalogue::{ApprovedCatalogue, load};
 use officina_core::relay::journal::{GateError, GateFault};
 use officina_core::relay::view::RecentEvent;
 use officina_host::files::now_ms;
 use officina_host::relay::approvals::prune;
-use officina_host::relay::home::{ApprovedState, RelayFloorError, RelayHome, load_relay_floor};
+use officina_host::relay::home::{
+    ApprovedState, KnownProjectsState, RelayFloorError, RelayHome, load_relay_floor,
+};
 use officina_host::relay::known_projects::KnownProjectsKeeper;
 use officina_host::relay::view::read_view;
 
@@ -172,20 +176,43 @@ fn relay_floor_loads_or_says_why_not() {
 fn known_projects_are_read_back() {
     let dir = tempfile::tempdir().unwrap();
     let home = RelayHome::new(dir.path(), None);
-    assert_eq!(home.read_known_projects(), None);
+    assert_eq!(home.read_known_projects(), KnownProjectsState::Missing);
     std::fs::create_dir_all(home.relay_dir()).unwrap();
     std::fs::write(
         home.known_projects_file(),
         r#"{"schema":1,"approved_hash":null,"project_paths":["c:/work/lab"]}"#,
     )
     .unwrap();
-    let known = home.read_known_projects().unwrap();
+    let known = home.read_known_projects().valid().cloned().unwrap();
     assert_eq!(known.project_paths, ["c:/work/lab"]);
 }
 
-// ---- story 2.8: approval files and kept outputs (AD-33, D-170) ----
+/// Story 2.16 AC 1: a record that exists but does not read is told apart
+/// from one never written, so the gate's fault says which.
+#[test]
+fn an_unreadable_known_projects_record_is_not_missing() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = RelayHome::new(dir.path(), None);
+    std::fs::create_dir_all(home.relay_dir()).unwrap();
+    for content in ["{}", "not json", r#"{"schema":99,"project_paths":[]}"#] {
+        std::fs::write(home.known_projects_file(), content).unwrap();
+        assert!(
+            matches!(
+                home.read_known_projects(),
+                KnownProjectsState::Unreadable(_)
+            ),
+            "{content}"
+        );
+    }
+    std::fs::remove_file(home.known_projects_file()).unwrap();
+    std::fs::create_dir_all(home.known_projects_file()).unwrap();
+    assert!(matches!(
+        home.read_known_projects(),
+        KnownProjectsState::Unreadable(_)
+    ));
+}
 
-const DAY: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
+// ---- story 2.8: approval files and kept outputs (AD-33, D-170) ----
 
 /// Writes `name` in `dir` and dates it `age` ago.
 fn aged_file(dir: &Path, name: &str, age: std::time::Duration) -> PathBuf {
@@ -198,39 +225,53 @@ fn aged_file(dir: &Path, name: &str, age: std::time::Duration) -> PathBuf {
     path
 }
 
+/// A retention of `ms` milliseconds, as a file age.
+fn age(ms: i64) -> std::time::Duration {
+    std::time::Duration::from_millis(u64::try_from(ms).unwrap())
+}
+
 #[test]
-fn approval_files_older_than_24_h_are_pruned() {
+fn approval_files_older_than_their_retention_are_pruned() {
     let dir = tempfile::tempdir().unwrap();
     let home = RelayHome::new(dir.path(), None);
     let approvals = home.approvals_dir();
+    let past = age(RETENTION_MS * 2);
     let old: Vec<PathBuf> = FileKind::ALL
         .iter()
-        .map(|kind| aged_file(&approvals, &file_name("0123456789abcdef-1", *kind), DAY * 2))
+        .map(|kind| aged_file(&approvals, &file_name("0123456789abcdef-1", *kind), past))
         .collect();
     let fresh = aged_file(
         &approvals,
         &file_name("0123456789abcdef-2", FileKind::Request),
-        DAY / 2,
+        age(RETENTION_MS / 2),
     );
-    let foreign = aged_file(&approvals, "notes.txt", DAY * 2);
+    let foreign = aged_file(&approvals, "notes.txt", past);
     assert_eq!(prune(&home, std::time::SystemTime::now()), old.len());
     for path in &old {
         assert!(!path.exists(), "{}", path.display());
     }
-    assert!(fresh.exists(), "younger than 24 h");
+    assert!(fresh.exists(), "younger than the retention");
     assert!(foreign.exists(), "not an approval file");
 }
 
 #[test]
-fn kept_outputs_older_than_7_days_are_pruned() {
+fn kept_outputs_older_than_their_retention_are_pruned() {
     let dir = tempfile::tempdir().unwrap();
     let home = RelayHome::new(dir.path(), None);
     let outputs = home.outputs_dir();
-    let old = aged_file(&outputs, &kept_output_name("old-run"), DAY * 8);
-    let recent = aged_file(&outputs, &kept_output_name("recent-run"), DAY * 6);
+    let old = aged_file(
+        &outputs,
+        &kept_output_name("old-run"),
+        age(KEPT_OUTPUT_RETENTION_MS * 2),
+    );
+    let recent = aged_file(
+        &outputs,
+        &kept_output_name("recent-run"),
+        age(KEPT_OUTPUT_RETENTION_MS / 2),
+    );
     assert_eq!(prune(&home, std::time::SystemTime::now()), 1);
     assert!(!old.exists());
-    assert!(recent.exists(), "younger than 7 days");
+    assert!(recent.exists(), "younger than the retention");
 }
 
 #[test]
@@ -251,7 +292,7 @@ fn run_never_deletes_approval_files() {
             aged_file(
                 &home.approvals_dir(),
                 &file_name("0123456789abcdef-1", *kind),
-                DAY * 2,
+                age(RETENTION_MS * 2),
             )
         })
         .collect();
@@ -279,6 +320,27 @@ fn run_never_deletes_approval_files() {
         })
         .count();
     assert_eq!(requests, 2, "the old request and the new one");
+}
+
+/// Story 2.16 AC 6 (D-175): a request file names its dry run's id, and any
+/// process can write it; an id that is no run id, an absolute path to
+/// another `.txt` file say, reads nothing, while a run's own id still
+/// reads its kept output.
+#[test]
+fn a_dry_run_id_that_is_no_run_id_reads_nothing() {
+    use officina_host::relay::approvals::{keep_output, read_output};
+    let test = TestHome::new();
+    let home = test.relay(None);
+    let elsewhere = test.root.join("notes");
+    test.write(&elsewhere.with_extension("txt"), "not a dry run's output");
+    let named = elsewhere.to_string_lossy().into_owned();
+    match read_output(&home, &named) {
+        Some(Err(why)) => assert!(why.contains("no valid dry run"), "{why}"),
+        other => panic!("{other:?}"),
+    }
+    let run = officina_core::relay::approvals::run_id(now_ms(), std::process::id());
+    keep_output(&home, &run, b"PLAY [lab]").unwrap();
+    assert_eq!(read_output(&home, &run), Some(Ok("PLAY [lab]".to_owned())));
 }
 
 /// Story 2.15 AC 6 (D-15): a known-projects record the window cannot write
@@ -311,9 +373,9 @@ fn a_known_projects_write_error_is_reported() {
     assert_eq!(errors.len(), 1, "{errors:?}");
     assert_eq!(errors[0].cause, GateFault::KnownProjectsUnwritable);
     assert_eq!(errors[0].detail, failing);
-    assert_eq!(view.gate_errors_24h, 1);
+    assert_eq!(view.gate_errors, 1);
 
     std::fs::remove_dir(home.known_projects_file()).unwrap();
     assert_eq!(keeper.keep(&home, now), None, "the write succeeds again");
-    assert!(home.read_known_projects().is_some());
+    assert!(home.read_known_projects().valid().is_some());
 }

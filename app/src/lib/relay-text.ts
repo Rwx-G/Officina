@@ -17,6 +17,8 @@ export const REFUSAL_TEXT: Record<RefusalReason, string> = {
   stopped: "the relay is stopped",
   not_approved: "no catalogue approved",
   approved_unreadable: "approved catalogue unreadable",
+  decision_record_unreadable: "the window's record cannot vouch",
+  catalogue_unconfirmed: "catalogue not approved in the window",
   floor_unreadable: "relay floor unreadable",
   catalogue_changed: "catalogue changed, approval pending",
   outside_projects: "outside every project",
@@ -26,7 +28,7 @@ export const REFUSAL_TEXT: Record<RefusalReason, string> = {
   invalid_value: "invalid value",
   git_unavailable: "no git to bind the files",
   tree_too_large: "work tree too large to bind",
-  tree_unreadable: "a file could not be read",
+  tree_unreadable: "work tree could not be read",
   check_required: "its check has not run",
   approval_rejected: "rejected in Officina",
   approval_unavailable: "request could not be written",
@@ -76,6 +78,7 @@ export const ANOMALY_TEXT: Record<AnomalyKind, string> = {
   run_without_decision: "run without an approval given here",
   foreign_catalogue: "catalogue not approved here",
   stop_flag_removed: "relay resumed outside the window",
+  record_broken: "the window's record is missing or unreadable",
 };
 
 /** What a request's files are compared with before its run (D-173). */

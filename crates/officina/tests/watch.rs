@@ -335,7 +335,7 @@ fn known_projects_follow_the_floor() {
     );
     let deadline = Instant::now() + Duration::from_secs(10);
     let known = loop {
-        let known = home.read_known_projects().unwrap();
+        let known = home.read_known_projects().valid().cloned().unwrap();
         if known.project_paths.len() == 2 || Instant::now() > deadline {
             break known;
         }
@@ -353,7 +353,12 @@ fn known_projects_follow_the_floor() {
     handle.sender.send(CollectorMsg::RelayChanged).unwrap();
     until(&views, |v| v.snapshot_error.is_some());
     assert_eq!(
-        home.read_known_projects().unwrap().approved_hash.as_deref(),
+        home.read_known_projects()
+            .valid()
+            .cloned()
+            .unwrap()
+            .approved_hash
+            .as_deref(),
         Some(hash.as_str())
     );
     stop(handle);
