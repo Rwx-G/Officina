@@ -54,6 +54,9 @@
       {#if card.badge}<span class="badge" data-testid="badge">{BADGE_TEXT[card.badge]}</span>{/if}
     </div>
     <div class="name">{card.name}</div>
+    {#if card.subject}
+      <div class="subject" data-testid="card-subject" title="Subject">{card.subject.name}</div>
+    {/if}
     {#if card.waiting_for}
       <div class="waiting" data-testid="waiting-for">{card.waiting_for}</div>
     {/if}
@@ -171,6 +174,16 @@
     font-size: 16px;
     font-weight: 700;
     overflow-wrap: anywhere;
+  }
+  .subject {
+    margin-top: 2px;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--color-text-muted);
+    overflow-wrap: anywhere;
+  }
+  .subject::before {
+    content: "# ";
   }
   .waiting {
     display: inline-block;

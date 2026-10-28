@@ -233,3 +233,25 @@ test.describe("live updates and safety", () => {
     expect(await page.evaluate(() => (window as unknown as { __pwned?: number }).__pwned)).toBeUndefined();
   });
 });
+
+test.describe("subjects on the board", () => {
+  // Story 3.5 AC 8: a card names the subject its session is filed under,
+  // from the registry the real `officina board --json` read.
+  test("cards show their subject", async ({ page }) => {
+    const board = loadBoard("subjects-board");
+    const filed = Object.values(board.columns)
+      .flat()
+      .filter((card) => card.subject !== null);
+    expect(filed.length).toBeGreaterThan(0);
+    await openBoard(page, board);
+    for (const card of filed) {
+      await expect(page.locator(`[data-key="${card.key}"]`).getByTestId("card-subject")).toHaveText(card.subject!.name);
+    }
+    const unfiled = Object.values(board.columns)
+      .flat()
+      .filter((card) => card.subject === null);
+    for (const card of unfiled) {
+      await expect(page.locator(`[data-key="${card.key}"]`).getByTestId("card-subject")).toHaveCount(0);
+    }
+  });
+});

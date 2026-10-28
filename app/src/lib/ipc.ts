@@ -6,7 +6,10 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { Board } from "./generated/Board";
 import type { FocusOutcome } from "./generated/FocusOutcome";
 import type { IpcError } from "./generated/IpcError";
+import type { RegistryView } from "./generated/RegistryView";
 import type { RelayView } from "./generated/RelayView";
+import type { SubjectOrigin } from "./generated/SubjectOrigin";
+import type { SubjectView } from "./generated/SubjectView";
 
 export const BOARD_EVENT = "board://updated";
 
@@ -56,6 +59,53 @@ export function acknowledgeAnomaly(key: string): Promise<void> {
 /** Stops or resumes the relay (AD-34). True when the state changed. */
 export function setRelayStopped(stopped: boolean): Promise<boolean> {
   return invoke<boolean>("set_relay_stopped", { stopped });
+}
+
+export const REGISTRY_EVENT = "registry://updated";
+
+/** The last registry view, for the first paint; later ones come as events. */
+export function getRegistry(): Promise<RegistryView | null> {
+  return invoke<RegistryView | null>("get_registry");
+}
+
+export function onRegistry(handler: (view: RegistryView) => void): Promise<UnlistenFn> {
+  return listen<RegistryView>(REGISTRY_EVENT, (event) => handler(event.payload));
+}
+
+/** The archived subjects the author may reopen (AD-54). */
+export function listArchived(): Promise<SubjectView[]> {
+  return invoke<SubjectView[]>("list_archived");
+}
+
+/** Creates a subject (D-95): from selected sessions, which give it their
+ *  project and are filed under it, or in a project the registry knows.
+ *  Returns its id. */
+export function createSubject(name: string, origin: SubjectOrigin): Promise<number> {
+  return invoke<number>("create_subject", { name, origin });
+}
+
+export function renameSubject(subject: number, name: string): Promise<void> {
+  return invoke("rename_subject", { subject, name });
+}
+
+/** Moves `source`'s sessions to `target` and archives `source` (D-55). */
+export function mergeSubjects(source: number, target: number): Promise<void> {
+  return invoke("merge_subjects", { source, target });
+}
+
+/** Files `sessions` under `subject`, or unfiles them with `null` (D-56). */
+export function fileSessions(sessions: string[], subject: number | null): Promise<void> {
+  return invoke("file_sessions", { sessions, subject });
+}
+
+/** Archives `subject`; `routine` when it could have run alone (FR-13). */
+export function archiveSubject(subject: number, routine: boolean): Promise<void> {
+  return invoke("archive_subject", { subject, routine });
+}
+
+/** Reopens an archived subject as `to_resume` (AD-48). */
+export function reopenSubject(subject: number): Promise<void> {
+  return invoke("reopen_subject", { subject });
 }
 
 export function getBoard(): Promise<Board | null> {

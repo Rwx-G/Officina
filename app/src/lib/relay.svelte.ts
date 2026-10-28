@@ -4,9 +4,9 @@ import type { FieldChange } from "./generated/FieldChange";
 import type { RelayView } from "./generated/RelayView";
 import * as ipc from "./ipc";
 
-/** The window's views (story 2.9): local window state, never part of the
- *  Rust contract. */
-export type WindowView = "board" | "relay";
+/** The window's views (stories 2.9 and 3.5): local window state, never
+ *  part of the Rust contract. */
+export type WindowView = "board" | "subjects" | "relay";
 
 /** An approval the backend refused, kept to explain the banner. */
 export interface RefusedApproval {

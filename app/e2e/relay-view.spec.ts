@@ -45,9 +45,10 @@ test.describe("view toggle", () => {
     await expect(page.getByTestId("relay-state")).toContainText("Stopped since");
   });
 
-  test("a workstation without the relay has no view switch", async ({ page }) => {
+  test("a workstation without the relay has no Relay view", async ({ page }) => {
     await openBoard(page, loadBoard("busy"));
-    await expect(page.getByTestId("view-switch")).toHaveCount(0);
+    await expect(page.getByTestId("view-switch")).toBeVisible();
+    await expect(page.getByTestId("view-relay")).toHaveCount(0);
   });
 });
 

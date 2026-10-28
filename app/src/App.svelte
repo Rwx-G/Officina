@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { BoardStore } from "./lib/board.svelte";
+  import { RegistryStore } from "./lib/registry.svelte";
   import { RelayStore, type WindowView } from "./lib/relay.svelte";
   import { startAll } from "./lib/lifecycle";
   import { REGISTRY_STATE_TEXT } from "./lib/registry-text";
@@ -9,19 +10,22 @@
   import BoardColumn from "./components/BoardColumn.svelte";
   import RelayBanners from "./components/RelayBanners.svelte";
   import RelayView from "./components/RelayView.svelte";
+  import SubjectsView from "./components/SubjectsView.svelte";
 
   const store = new BoardStore();
   const relay = new RelayStore();
+  const registry = new RegistryStore();
   const DONE_VISIBLE = 5;
 
   let chosenView = $state<WindowView>("board");
   // A workstation without the relay has no Relay view to show.
-  let view = $derived<WindowView>(relay.inUse ? chosenView : "board");
+  let view = $derived<WindowView>(chosenView === "relay" && !relay.inUse ? "board" : chosenView);
 
   onMount(() =>
     startAll(
       () => store.start(),
       () => relay.start(),
+      () => registry.start(),
     ),
   );
 
@@ -39,6 +43,8 @@
       void store.refresh();
       return;
     }
+    // Digits focus Needs you cards in the Board view only (AD-55).
+    if (view !== "board") return;
     const n = Number(event.key);
     if (Number.isInteger(n) && n >= 1 && n <= 9) {
       const card = store.needsYou[n - 1];
@@ -53,6 +59,8 @@
 
 {#if view === "relay"}
   <RelayView store={relay} nowMs={store.nowMs} />
+{:else if view === "subjects"}
+  <SubjectsView store={registry} nowMs={store.nowMs} />
 {:else}
   {#if board?.stale}
     <div class="banner" role="alert" data-testid="stale-banner">

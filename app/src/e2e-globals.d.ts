@@ -1,8 +1,11 @@
 // Globals the e2e build exposes to Playwright (see src/e2e-mock.ts). Shared by
 // the app and the e2e tests, which type-check under different tsconfigs.
 import type { Board } from "./lib/generated/Board";
+import type { AuthorRefusal } from "./lib/generated/AuthorRefusal";
 import type { FocusOutcome } from "./lib/generated/FocusOutcome";
+import type { RegistryView } from "./lib/generated/RegistryView";
 import type { RelayView } from "./lib/generated/RelayView";
+import type { SubjectView } from "./lib/generated/SubjectView";
 
 declare global {
   interface Window {
@@ -15,6 +18,14 @@ declare global {
     /** The view the backend shows after a successful `approve_catalogue`. */
     __officinaRelayApproved?: RelayView;
     __officinaPushRelay?: (view: RelayView) => Promise<void>;
+    /** The registry view `get_registry` answers (story 3.5). */
+    __officinaRegistry?: RegistryView | null;
+    /** What `list_archived` answers. */
+    __officinaArchived?: SubjectView[];
+    /** Author commands the backend refuses, with the rule that refuses. */
+    __officinaRefuse?: Record<string, AuthorRefusal>;
+    /** Sets the registry view and emits `registry://updated`. */
+    __officinaPushRegistry?: (view: RegistryView) => Promise<void>;
   }
 }
 

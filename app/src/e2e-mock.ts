@@ -5,7 +5,20 @@ import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 import { emit } from "@tauri-apps/api/event";
 import type { Board } from "./lib/generated/Board";
 import type { IpcError } from "./lib/generated/IpcError";
+import type { RegistryView } from "./lib/generated/RegistryView";
 import type { RelayView } from "./lib/generated/RelayView";
+
+/** The author's commands on subjects (story 3.5): each is recorded, then
+ *  refused when the test says so, else accepted with nothing changed; a test
+ *  shows the outcome by pushing the next registry view. */
+const AUTHOR_COMMANDS = [
+  "create_subject",
+  "rename_subject",
+  "merge_subjects",
+  "file_sessions",
+  "archive_subject",
+  "reopen_subject",
+];
 
 export function installE2eMock(): void {
   window.__officinaCalls = [];
@@ -40,7 +53,12 @@ export function installE2eMock(): void {
           return setStopped((args as { stopped: boolean }).stopped);
         case "acknowledge_anomaly":
           return acknowledge((args as { key: string }).key);
+        case "get_registry":
+          return window.__officinaRegistry ?? null;
+        case "list_archived":
+          return window.__officinaArchived ?? [];
         default:
+          if (AUTHOR_COMMANDS.includes(cmd)) return author(cmd);
           return null;
       }
     },
@@ -54,6 +72,21 @@ export function installE2eMock(): void {
     window.__officinaRelay = view;
     await emit("relay://updated", view);
   };
+  window.__officinaPushRegistry = async (view: RegistryView) => {
+    window.__officinaRegistry = view;
+    await emit("registry://updated", view);
+  };
+}
+
+/** Mirrors the collector's answer to an author request: a refusal names
+ *  its rule and writes nothing; an accepted `create_subject` answers an id. */
+function author(cmd: string): Promise<number | null> {
+  const refusal = window.__officinaRefuse?.[cmd];
+  if (refusal) {
+    const error: IpcError = { code: "author_refused", message: `refused: ${refusal}`, refusal };
+    return Promise.reject(error);
+  }
+  return Promise.resolve(cmd === "create_subject" ? 1 : null);
 }
 
 /** Mirrors `authority::approve_catalogue`: approves only the hash the

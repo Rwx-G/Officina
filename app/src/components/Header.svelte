@@ -7,7 +7,7 @@
   interface Props {
     store: BoardStore;
     relay?: RelayStore;
-    /** The view shown, local window state (story 2.9). */
+    /** The view shown, local window state (stories 2.9 and 3.5). */
     view?: WindowView;
     onView?: (view: WindowView) => void;
   }
@@ -15,8 +15,12 @@
 
   const VIEWS: { id: WindowView; label: string }[] = [
     { id: "board", label: "Board" },
+    { id: "subjects", label: "Subjects" },
     { id: "relay", label: "Relay" },
   ];
+
+  // The Relay position only where the relay is in use (story 2.9).
+  let views = $derived(VIEWS.filter((option) => option.id !== "relay" || relay?.inUse));
 
   let board = $derived(store.board);
   let waiting = $derived(board?.waiting_count ?? 0);
@@ -32,9 +36,9 @@
     </div>
   </div>
 
-  {#if relay?.inUse && onView}
+  {#if onView}
     <div class="views" role="group" aria-label="View" data-testid="view-switch">
-      {#each VIEWS as option (option.id)}
+      {#each views as option (option.id)}
         <button
           class="view"
           data-testid="view-{option.id}"

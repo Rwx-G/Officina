@@ -3,9 +3,15 @@ import { cleanup, fireEvent, render } from "@testing-library/svelte";
 import ApprovalCard from "./ApprovalCard.svelte";
 import Gauge from "./Gauge.svelte";
 import SessionCard from "./SessionCard.svelte";
+import SubjectPicker, { type PickerChoice } from "./SubjectPicker.svelte";
 import { BoardStore } from "../lib/board.svelte";
+import { refusalText } from "../lib/registry.svelte";
+import { AUTHOR_REFUSAL_TEXT } from "../lib/registry-text";
 import type { ApprovalView } from "../lib/generated/ApprovalView";
+import type { AuthorRefusal } from "../lib/generated/AuthorRefusal";
 import type { Card } from "../lib/generated/Card";
+import type { IpcError } from "../lib/generated/IpcError";
+import type { SubjectView } from "../lib/generated/SubjectView";
 
 vi.mock("../lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../lib/ipc")>()),
@@ -274,5 +280,90 @@ describe("ApprovalCard", () => {
       ...decision(),
     });
     expect(invalid.queryByTestId("binding")).toBeNull();
+  });
+});
+
+function subject(id: number, project: string, name: string): SubjectView {
+  return {
+    id,
+    project,
+    name,
+    status: "active",
+    status_src: "author",
+    status_at_ms: NOW,
+    routine: false,
+    sessions: [],
+    excerpts: null,
+  };
+}
+
+describe("SubjectPicker", () => {
+  it("lists the project's open subjects first and accepts a new name", async () => {
+    const picks: PickerChoice[] = [];
+    const subjects = [
+      subject(1, "web-portal", "token refresh"),
+      subject(2, "billing-api", "invoice export"),
+      subject(3, "docs-site", "release notes"),
+      subject(4, "billing-api", "flaky retry"),
+    ];
+    const { getAllByTestId, getByTestId } = render(SubjectPicker, {
+      subjects,
+      project: "billing-api",
+      label: "File under",
+      onPick: (choice: PickerChoice) => picks.push(choice),
+    });
+    const order = getAllByTestId("pick-subject").map((b) => Number(b.getAttribute("data-subject")));
+    expect(order).toEqual([2, 4, 1, 3]);
+
+    await fireEvent.click(getAllByTestId("pick-subject")[1]!);
+    expect(picks).toEqual([{ subject: 4 }]);
+
+    const create = getByTestId("picker-create") as HTMLButtonElement;
+    expect(create.disabled).toBe(true);
+    await fireEvent.input(getByTestId("picker-new-name"), { target: { value: "  csv export " } });
+    expect(create.disabled).toBe(false);
+    await fireEvent.click(create);
+    expect(picks).toEqual([{ subject: 4 }, { name: "  csv export " }]);
+  });
+
+  it("renders subject names as text", () => {
+    const hostile = `<img src=x onerror="alert(1)">`;
+    const { container, getByText } = render(SubjectPicker, {
+      subjects: [subject(1, "docs-site", hostile)],
+      project: null,
+      label: "File under",
+      onPick: () => undefined,
+    });
+    expect(container.querySelector("img")).toBeNull();
+    expect(getByText(hostile)).toBeTruthy();
+  });
+});
+
+describe("SessionCard subject", () => {
+  it("SessionCard renders its subject as text", () => {
+    const hostile = `<img src=x onerror="alert(1)"><b>rollout</b>`;
+    const { container, getByTestId } = render(SessionCard, {
+      card: card({ subject: { id: 7, name: hostile } }),
+      store: store(),
+    });
+    expect(getByTestId("card-subject").textContent).toBe(hostile);
+    expect(container.querySelector("img")).toBeNull();
+    expect(container.querySelector("b")).toBeNull();
+  });
+
+  it("shows no subject line on a session filed nowhere", () => {
+    const { queryByTestId } = render(SessionCard, { card: card(), store: store() });
+    expect(queryByTestId("card-subject")).toBeNull();
+  });
+});
+
+describe("refusalText", () => {
+  it("words the rule that refused an author action, and passes other errors through", () => {
+    for (const refusal of Object.keys(AUTHOR_REFUSAL_TEXT) as AuthorRefusal[]) {
+      const error: IpcError = { code: "author_refused", message: `refused: ${refusal}`, refusal };
+      expect(refusalText(error)).toBe(AUTHOR_REFUSAL_TEXT[refusal]);
+    }
+    expect(refusalText({ code: "timeout", message: "too slow", refusal: null })).toBe("too slow");
+    expect(refusalText(new Error("boom"))).toBe("Error: boom");
   });
 });
