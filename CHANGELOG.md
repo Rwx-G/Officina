@@ -242,6 +242,22 @@ project uses [Semantic Versioning](https://semver.org/).
   also shows the calls and their cost today and over 30 days, and each
   refusal with its cause. `officina doctor` reports the model's state, its
   calls and cost, and the refusal while `claude` resolves to a shim.
+- Model proposals (v0.3, in progress): the triage model can be turned on
+  (`set_triage_model`) only while the latest dry run is under 7 days old,
+  ran at least 30 cases and beat the default, and while it can be called
+  (no shim, no `no_excerpts`); the switch says why when it is disabled.
+  Turned on, each row falling to the default is sent, one case per call
+  within the shared budget, and shows "model pending", then the model's
+  proposal with its reason as plain text under a "model" label. The reason
+  stays in `model_answer`, which is deleted when its row is confirmed, its
+  subject archived, its excerpts expired or `no_excerpts` set; a
+  confirmation keeps the model's reason code and call id only. A call that
+  gives no answer leaves the default with why; a refused row waits for new
+  inputs. Three failed calls in a row pause the model until it is turned on
+  again or `claude` changes; the panel and `officina doctor` say since when.
+  After each confirmation of one of its proposals, a model right less often
+  than `to_resume` over 20 to 50 of them turns itself off, and only a newer
+  winning dry run lets it on again. Auto-archive never takes its proposals.
 - Measured error (v0.3, in progress): per proposal source (`state`,
   `rules`, `model`), the Triage panel shows how many of its last 50
   confirmed `finished` proposals you flipped, with the count it rests on,
