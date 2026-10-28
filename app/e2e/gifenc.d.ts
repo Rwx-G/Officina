@@ -3,7 +3,14 @@
 declare module "gifenc" {
   type Palette = number[][];
   interface Encoder {
-    writeFrame(index: Uint8Array, width: number, height: number, opts: { palette: Palette; delay: number }): void;
+    /** `palette` is required on the first frame, which makes it global;
+     *  `dispose: 1` keeps the frame for the next to draw over. */
+    writeFrame(
+      index: Uint8Array,
+      width: number,
+      height: number,
+      opts: { palette?: Palette; delay: number; transparent?: boolean; transparentIndex?: number; dispose?: number },
+    ): void;
     finish(): void;
     bytes(): Uint8Array;
   }
