@@ -13,6 +13,9 @@ use officina_host::registry::store::open_writer;
 fn doctor_text(env: &TestEnv, home: Option<&str>) -> String {
     env.write_agents("[]");
     let mut cmd = env.officina(&["doctor"]);
+    // Off Windows a UNC home is a relative path, which doctor's home check
+    // would create in its working folder: that folder is the test's.
+    cmd.current_dir(env.root.path());
     if let Some(home) = home {
         cmd.env("OFFICINA_HOME", home);
     }
