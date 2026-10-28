@@ -382,6 +382,17 @@ Each session is recorded once, under its session id, whichever sees it first: `c
 
 A session is ended by its end (`SessionEnd`), which always wins over `interrupted`, or by `interrupted`; a background session by its state `done`, `failed` or `stopped` (a `done` one is idle, ended for triage). Listed again by `claude agents`, or sent a prompt newer than its end, it is no longer ended. `claude --resume <id>` keeps the session id, so a resumed conversation continues its own record. `/clear` and `/resume` within one `claude` process link the session they end to the one they start (within a minute, same process); when `claude agents` still names the ended one, what it reports goes to the new one. A run never seen in `claude agents` that ended with `other` (as `claude -p` does) is recorded as non-interactive.
 
+### Subjects
+
+A subject is a named piece of work (a change, an incident, a migration) that owns sessions across days. It belongs to a project and is `active`, `to_resume` or `archived`.
+
+- **Filing.** A new session id joins its project's subject only when that project has exactly one `active` subject; with none or several it stays unfiled. Nothing else files it: a session `/clear` or `/resume` started follows the same rule, a conversation resumed with `claude --resume <id>` keeps its id and its subject, and no subject is ever created for you. Sessions outside the floor's projects (`other`) or without a folder (`unknown`) are never filed, and neither is a run never seen in `claude agents` that ended with `other`.
+- **Your actions.** You create a subject (from selected sessions, which give it their project, or in a project the registry knows), rename it, merge one into another (its sessions move, and it is archived), file and unfile sessions, archive it (with a "routine, could have run alone" box) and reopen it as `to_resume`. Names are trimmed, 1 to 80 characters, without control or hidden formatting characters, and unique, ignoring case, among the project's subjects that are not archived. Filing into an archived subject is refused until you reopen it. Each action records that you did it, and when.
+- **Waking up.** Filing a live session into a `to_resume` subject makes it `active`. A session of a `to_resume` or `archived` subject that comes alive again (listed by `claude agents` again, or sent a new prompt) makes its subject `active`; an archived one counts as reopened.
+- **Excerpts.** A subject keeps the latest prompt and answer of its sessions only: once a later session of it records excerpts, the older ones are cleared, and archiving clears them all, from the database and its log.
+
+`officina subjects --json` prints the subjects that are not archived with their sessions (and their live board card), the latest excerpts, the unfiled sessions per project (non-interactive runs counted, the ten most recent listed), and how many event bytes wait for the window: it reads the registry read-only, works with the window closed, and exits 3 with the reason when the registry cannot be read. On the board, each card names its subject.
+
 ## Command line
 
 | Command | Purpose |
@@ -393,6 +404,7 @@ A session is ended by its end (`SessionEnd`), which always wins over `interrupte
 | `officina run <action> [name=value ...]` | run an approved relay action from its project (run by sessions) |
 | `officina run --list` | list the actions of the current folder's project |
 | `officina relay --json` | print the relay's state once: catalogue, pending change, recent activity |
+| `officina subjects --json` | print the registry's subjects and sessions once, read-only (exit 3 when it cannot be read) |
 | `officina version` | print the version |
 
 ## Roadmap

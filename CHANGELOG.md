@@ -151,6 +151,21 @@ project uses [Semantic Versioning](https://semver.org/).
   is no longer ended. `/clear` and `/resume` in the same process link the
   session to its successor, and a run never seen in `claude agents` that
   ended with `other` is recorded as non-interactive.
+- Subjects (v0.3, in progress): a new session joins its project's subject
+  when that project has exactly one active subject, whichever source sees
+  it first; otherwise it stays unfiled, and no rule creates a subject. The
+  window's writer creates, renames, merges, archives (with the routine box)
+  and reopens subjects and files or unfiles sessions, each refusal with its
+  reason and each change recorded as the author's with its time. A session
+  alive again wakes its `to_resume` or archived subject. A subject keeps
+  only its latest excerpts, and archiving clears them from the database
+  and its log.
+- `officina subjects --json`: the registry's subjects and sessions, joined
+  to the live board, the unfiled sessions per project and the ingestion's
+  lag, read-only and with the window closed; exit 3 with the reason when
+  the registry cannot be read.
+- Board cards carry their subject (`subject`, in the board contract's
+  schema 3), from the registry, read-only for `officina board --json`.
 
 ### Changed
 
