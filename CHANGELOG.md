@@ -133,156 +133,147 @@ project uses [Semantic Versioning](https://semver.org/).
   colours, a moved config dir (sessions, quota, attach) and the relay's
   state, which it also rebuilds when the relay's files or today's journal
   change.
-- Registry (v0.3, in progress): a local SQLite database at
+- Registry (v0.3): a local SQLite database at
   `~/.officina/registry/registry.db` that only the window writes and every
-  command line reads read-only. It is never opened on a network folder; in
-  a folder a sync client manages it opens and `officina doctor` names the
-  folder to exclude. At each open the window checks its integrity: a
-  damaged database is set aside under `registry/quarantine/` and replaced
-  by the newest valid daily copy (`registry/backup/`, two kept), and a
-  database written by an older version is copied, then migrated.
-  `officina doctor` reports its location, version, integrity, copies,
-  quarantine and last restore, and never creates it.
-- Session records (v0.3, in progress): the window records each session
-  once, whichever of `claude agents` and the hook sees it first, with each
-  fact's latest value, its source (`agents`, `hook`, `rules`) and its time.
-  A refresh of `claude agents` writes only what changed and never stores
-  `waitingFor`. A session gone from `claude agents` without a `SessionEnd`,
-  also while the window was closed, is `interrupted`; a `SessionEnd`
-  always wins over it, and a session listed again or sent a newer prompt
-  is no longer ended. `/clear` and `/resume` in the same process link the
-  session to its successor, and a run never seen in `claude agents` that
-  ended with `other` is recorded as non-interactive.
-- Subjects (v0.3, in progress): a new session joins its project's subject
-  when that project has exactly one active subject, whichever source sees
-  it first; otherwise it stays unfiled, and no rule creates a subject. The
-  window's writer creates, renames, merges, archives (with the routine box)
-  and reopens subjects and files or unfiles sessions, each refusal with its
+  command line reads read-only, with the window open or closed. It is never
+  opened on a network folder; in a folder a sync client manages it opens
+  and `officina doctor` names the folder to exclude. At each open the
+  window checks its integrity: a damaged database is set aside under
+  `registry/quarantine/` and replaced by the newest valid daily copy
+  (`registry/backup/`, two kept), and a database written by an older
+  version is copied, then migrated. `officina doctor` prints the registry,
+  the canary's hook fields and the triage model as one section in a stable
+  order, and never creates the registry.
+- Session records (v0.3): the window records each session once, whichever
+  of `claude agents` and the hook sees it first, with each fact's latest
+  value, its source (`agents`, `hook`, `rules`) and its time. A refresh of
+  `claude agents` writes only what changed and never stores `waitingFor`. A
+  session gone from `claude agents` without a `SessionEnd`, also while the
+  window was closed, is `interrupted`; a `SessionEnd` always wins over it,
+  and a session listed again or sent a newer prompt is no longer ended.
+  `/clear` and `/resume` in the same process link the session to its
+  successor, and a run never seen in `claude agents` that ended with
+  `other` is recorded as non-interactive.
+- Subjects (v0.3): a new session joins its project's subject when that
+  project has exactly one active subject, whichever source sees it first;
+  otherwise it stays unfiled, and no rule creates a subject. The window's
+  writer creates, renames, merges, archives (with the routine box) and
+  reopens subjects and files or unfiles sessions, each refusal with its
   reason and each change recorded as the author's with its time. A session
   alive again wakes its `to_resume` or archived subject. A subject keeps
-  only its latest excerpts, and archiving clears them from the database
-  and its log.
-- `officina subjects --json`: the registry's subjects and sessions, joined
-  to the live board, the unfiled sessions per project and the ingestion's
-  lag, read-only and with the window closed; exit 3 with the reason when
-  the registry cannot be read.
-- Board cards carry their subject (`subject`, in the board contract's
-  schema 3), from the registry, read-only for `officina board --json`; the
-  window shows it on each card.
-- Subjects view in the window (v0.3, in progress), beside Board and
-  Relay: the active then `to_resume` subjects with their sessions' live
-  state, and for a subject with no live session its last prompt and the
-  end of its last answer; the unfiled sessions by project, non-interactive
-  runs counted and collapsed; the archived subjects on demand. Create a
-  subject (from selected sessions, which give it their project, or in a
-  project the registry knows), rename, file, unfile, merge, archive with
-  the "routine, could have run alone" box and reopen, each in one gesture;
-  a refused action says which rule refused it and changes nothing. Notes
-  name the folder to exclude from a sync client, the copy a damaged
-  registry was restored from (for 7 days), or why the registry cannot be
-  read. Digit keys focus cards in the Board view only.
-- What needs a verdict (v0.3, in progress): one row per `active` subject
-  whose sessions have all ended, never one per session, anchored on its
-  latest session that saw a prompt; one per ended, unfiled, interactive
-  session that saw a prompt and was not replaced by `/clear` or
-  `/resume`, with the subject to file it under when its project has only
-  one open; and "empty subject: archive?" for an `active` subject none of
-  whose sessions saw a prompt. Each row carries one proposal, `finished`,
-  `to_resume` or `unsure`, with its source (`state`, `rules` or `model`)
-  and a reason code, computed again on every view and never stored.
-  `officina subjects --json` prints the rows and their count.
-- Triage panel (v0.3, in progress), at the head of the Subjects view: each
-  row shows its proposal with its source, its reason in words and the
-  excerpts it rests on; an unfiled row proposes its project's only open
-  subject, lets you pick another or name a new one, and is filed in the
-  same gesture; an empty subject asks to be archived. Arrows move between
-  rows, `f` and `t` set the verdict, `Enter` confirms the row in focus and
-  waits for the view that removes it, and a held key repeats nothing; an
-  `unsure` proposal waits for `f` or `t`. **Confirm all** takes a pointer
-  click only, says how many rows it confirms and how many it leaves out
-  (without a verdict, without a subject, being confirmed). Confirming
-  `finished` archives the subject, with the routine box, and clears its
-  excerpts; `to_resume` sets the status. A row whose proposal changed
-  since it was shown is refused with the reason and stays. A neutral "N
-  to sort" chip in the header opens the panel; it never turns amber, and
-  rows to sort count neither in the window title nor in the taskbar
-  overlay.
-- Each confirmation records the proposal it answered (verdict, source,
-  reason code, call id) and keeps a copy of the excerpts it was decided
-  on, which expires when those excerpts were due to, under the same
+  only its latest excerpts, and archiving clears them from the database and
+  its log.
+- Subjects view in the window (v0.3), beside Board and Relay: the active
+  then `to_resume` subjects with their sessions' live state, and for a
+  subject with no live session its last prompt and the end of its last
+  answer; the unfiled sessions by project, non-interactive runs counted and
+  collapsed; the archived subjects on demand. Create a subject (from
+  selected sessions, which give it their project, or in a project the
+  registry knows), rename, file, unfile, merge, archive with the "routine,
+  could have run alone" box and reopen, each in one gesture; a refused
+  action says which rule refused it and changes nothing. Notes name the
+  folder to exclude from a sync client, the copy a damaged registry was
+  restored from (for 7 days), or why the registry cannot be read. Digit
+  keys focus cards in the Board view only. Board cards carry their subject
+  (`subject`, in the board contract's schema 3).
+- `officina subjects --json` (v0.3): the Subjects view printed once,
+  read-only and with the window closed: subjects and sessions joined to the
+  live board, the unfiled sessions per project, the rows that need a
+  verdict, the measured error, the gates, the model's state and the
+  ingestion's lag; exit 3 with the reason when the registry cannot be read.
+- What needs a verdict (v0.3): one row per `active` subject whose sessions
+  have all ended, never one per session, anchored on its latest session
+  that saw a prompt; one per ended, unfiled, interactive session that saw a
+  prompt and was not replaced by `/clear` or `/resume`, with the subject to
+  file it under when its project has only one open; and "empty subject:
+  archive?" for an `active` subject none of whose sessions saw a prompt.
+  Each row carries one proposal, `finished`, `to_resume` or `unsure`, with
+  its source (`state`, `rules` or `model`) and a reason code, computed again
+  on every view and never stored.
+- Triage panel (v0.3), at the head of the Subjects view: each row shows its
+  proposal with its source, its reason in words and the excerpts it rests
+  on; an unfiled row proposes its project's only open subject, lets you
+  pick another or name a new one, and is filed in the same gesture; an
+  empty subject asks to be archived. Arrows move between rows, `f` and `t`
+  set the verdict, `Enter` confirms the row in focus and waits for the view
+  that removes it, and a held key repeats nothing; an `unsure` proposal
+  waits for `f` or `t`. **Confirm all** takes a pointer click only, says how
+  many rows it confirms and how many it leaves out (without a verdict,
+  without a subject, being confirmed). Confirming `finished` archives the
+  subject, with the routine box, and clears its excerpts; `to_resume` sets
+  the status. A row whose proposal changed since it was shown is refused
+  with the reason and stays. A neutral "N to sort" chip in the header opens
+  the panel; it never turns amber, and rows to sort count neither in the
+  window title nor in the taskbar overlay.
+- Confirmations (v0.3): each records the proposal it answered (verdict,
+  source, reason code, call id) and keeps a copy of the excerpts it was
+  decided on, which expires when those excerpts were due to, under the same
   30-day bound; a batch is one transaction, answered per item.
-- Hook fields in the contract canary (v0.3, in progress): the hook notes,
-  in an optional `absent` field of event line version 1, the fields of
-  `HOOK_FIELDS` its payload lacked; the window records them per Claude
-  Code version in `state/contract.json` (`hook_missing`, and
-  `hook_not_observed` for the events not seen yet), counting only lines
-  after the version's first sighting. The header's contract chip names a
-  missing field (`hook_missing` in the board's contract view), and
-  `officina doctor` prints both lists.
-- Triage model, off (v0.3, in progress): a contained `claude -p` call,
-  never made unless you ask for a dry run. It runs with the light model,
-  no tool, no MCP server, no settings and no session persistence, from an
-  empty folder, without the variables a session or Officina sets, with the
-  floor's config dir; the excerpts go on stdin only, as one line of escaped
-  JSON between markers carrying a random nonce, and the answer is read from
-  the schema-constrained field alone: a verdict and a reason of at most 200
-  characters, or the call counts as invalid, failed or timed out, never as
-  a proposal. A `.cmd` or `.bat` `claude`, `no_excerpts` or a work folder
+- Measured error (v0.3): per proposal source (`state`, `rules`, `model`),
+  the Triage panel shows how many of its last 50 confirmed `finished`
+  proposals you flipped, with the count it rests on, how many of its last
+  50 proposals you flipped, and its `unsure` apart, or says "no finished
+  proposal yet". An auto-archive counts once 7 days old, as flipped when its
+  subject was reopened within them, by you or by one of its sessions coming
+  back.
+- Auto-archive (v0.3), off until you turn it on: offered only once Claude
+  Code's `state` has proposed `finished` at least 50 times with none of the
+  last 50 flipped; while on, the window confirms `finished`, right after
+  each view, the rows of filed subjects whose background session Claude
+  Code reports done, without the routine mark; an unfiled session, an empty
+  subject or a model proposal is never archived this way. When the gate
+  breaks it turns itself off and says why. The subjects it archived over
+  the last 7 days are listed with **Reopen**.
+- Routine candidates (v0.3): the subjects you archived as "routine, could
+  have run alone" (a merged one excepted) are listed in the Subjects view
+  and in `officina subjects --json`, as candidates for a later catalogue.
+- Triage model (v0.3), off by default: a contained `claude -p` call to the
+  light model, with no tool, no MCP server, no settings and no session
+  persistence, from an empty folder, without the variables a session or
+  Officina sets, with the floor's config dir; the excerpts go on stdin
+  only, and the answer is read from the schema-constrained field alone (see
+  Security). A `.cmd` or `.bat` `claude`, `no_excerpts` or a work folder
   that is not empty refuses the call before anything starts, spending
   nothing. Calls run one at a time on their own thread, killed with what
   they started after 60 s, at most one every 5 s, 60 an hour and 300 a UTC
   day, counted from the registry so the budget holds across restarts; each
-  is kept 90 days.
-- Dry run: **Evaluate the model** in the Triage panel sends the disabled
-  model your confirmations of a default proposal whose excerpts are still
-  kept, newest first, at most 50, one case per call, and shows how many it
-  got right beside the default, how often it said finished when you said
-  to resume, how many cases got no answer, and what it cost; its progress
-  shows while it runs, and nothing it answers becomes a proposal. The panel
-  also shows the calls and their cost today and over 30 days, and each
-  refusal with its cause. `officina doctor` reports the model's state, its
-  calls and cost, and the refusal while `claude` resolves to a shim.
-- Model proposals (v0.3, in progress): the triage model can be turned on
-  (`set_triage_model`) only while the latest dry run is under 7 days old,
-  ran at least 30 cases and beat the default, and while it can be called
-  (no shim, no `no_excerpts`); the switch says why when it is disabled.
-  Turned on, each row falling to the default is sent, one case per call
-  within the shared budget, and shows "model pending", then the model's
-  proposal with its reason as plain text under a "model" label. The reason
-  stays in `model_answer`, which is deleted when its row is confirmed, its
-  subject archived, its excerpts expired or `no_excerpts` set; a
-  confirmation keeps the model's reason code and call id only. A call that
-  gives no answer leaves the default with why; a refused row waits for new
-  inputs. Three failed calls in a row pause the model until it is turned on
-  again or `claude` changes; the panel and `officina doctor` say since when.
-  After each confirmation of one of its proposals, a model right less often
-  than `to_resume` over 20 to 50 of them turns itself off, and only a newer
-  winning dry run lets it on again. Auto-archive never takes its proposals.
-- Measured error (v0.3, in progress): per proposal source (`state`,
-  `rules`, `model`), the Triage panel shows how many of its last 50
-  confirmed `finished` proposals you flipped, with the count it rests on,
-  how many of its last 50 proposals you flipped, and its `unsure` apart, or
-  says "no finished proposal yet". An auto-archive counts once 7 days old,
-  as flipped when its subject was reopened within them, by you or by one of
-  its sessions coming back. `officina subjects --json` prints the same
-  counts, the gates and the thresholds.
-- Auto-archive, off until you turn it on: offered only once Claude Code's
-  `state` has proposed `finished` at least 50 times with none of the last
-  50 flipped; while on, the window confirms `finished`, right after each
-  view, the rows of filed subjects whose background session Claude Code
-  reports done, without the routine mark; an unfiled session, an empty
-  subject or a model proposal is never archived this way. When the gate
-  breaks it turns itself off and says why. The subjects it archived over
-  the last 7 days are listed with **Reopen**.
-- Routine candidates: the subjects you archived as "routine, could have
-  run alone" (a merged one excepted) are listed in the Subjects view and in
-  `officina subjects --json`, as candidates for a later catalogue.
+  is kept 90 days. The panel and `officina doctor` show the calls, tokens
+  and cost today and over 30 days, and each refusal with its cause; doctor
+  warns while `claude` resolves to a shim.
+- Dry run (v0.3): **Evaluate the model** in the Triage panel sends the model
+  your confirmations of a default proposal whose excerpts are still kept,
+  newest first, at most 50, one case per call, and shows how many it got
+  right beside the default, how often it said finished when you said to
+  resume, how many cases got no answer, and what it cost; its progress
+  shows while it runs, and nothing it answers becomes a proposal. It runs
+  while the model is off or paused.
+- Model proposals (v0.3): the model can be turned on (`set_triage_model`)
+  only while the latest dry run is under 7 days old, ran at least 30 cases
+  and beat the default, and while it can be called (no shim, no
+  `no_excerpts`); the switch says why when it is disabled. Turned on, each
+  row falling to the default is sent, one case per call within the shared
+  budget, and shows "model pending", then the model's proposal with its
+  reason as plain text under a "model" label. A call that gives no answer
+  leaves the default with why; a refused row waits for new inputs. Three
+  failed calls in a row pause the model until it is turned on again or
+  `claude` changes; the panel and `officina doctor` say since when. After
+  each confirmation of one of its proposals, a model right less often than
+  `to_resume` over 20 to 50 of them turns itself off, and only a newer
+  winning dry run lets it on again.
+- Hook fields in the contract canary (v0.3): the hook notes, in an optional
+  `absent` field of event line version 1, the fields of `HOOK_FIELDS` its
+  payload lacked; the window records them per Claude Code version in
+  `state/contract.json` (`hook_missing`, and `hook_not_observed` for the
+  events not seen yet), counting only lines after the version's first
+  sighting. The header's contract chip names a missing field
+  (`hook_missing` in the board's contract view), and `officina doctor`
+  prints both lists, in its registry section, as a warning.
 
 ### Changed
 
-- `officina board --json` reads the `claude` version (v0.3, in progress),
-  so it keeps the running version's contract record current and shows its
-  missing hook fields.
+- `officina board --json` reads the `claude` version (v0.3), so it keeps
+  the running version's contract record current and shows its missing hook
+  fields.
 - `officina hook` also answers `PreToolUse` for the shell tools, as the
   relay gate;
   every other event is recorded as before, and `PreToolUse` payloads are
@@ -305,18 +296,18 @@ project uses [Semantic Versioning](https://semver.org/).
 - The board contract (`officina board --json`) is schema 2: it carries the
   pending approval requests, and `waiting_count` counts the approvable ones
   beside the sessions that wait.
-- Event files are deleted only once the registry has ingested them and both
-  kept daily copies hold them complete, by the window's start and hourly
-  pass; `officina board --json` no longer deletes anything, and reads the
-  registry read-only to report its state. With the window closed or the
+- Event files (v0.3) are deleted only once the registry has ingested them
+  and both kept daily copies hold them complete, by the window's start and
+  hourly pass; `officina board --json` no longer deletes anything, and reads
+  the registry read-only to report its state. With the window closed or the
   registry unavailable, event files are kept and nothing expires.
-- The window ingests every event file into the registry before its first
-  board and whenever a hook writes, keeps each session's latest prompt and
-  the head and tail of its latest answer for 28 days less an hour from the
-  event, and clears them at once when `no_excerpts` is turned on. The board
-  contract is schema 3: `diagnostics.registry` says when the registry
+- The window (v0.3) ingests every event file into the registry before its
+  first board and whenever a hook writes, keeps each session's latest prompt
+  and the head and tail of its latest answer for 28 days less an hour from
+  the event, and clears them at once when `no_excerpts` is turned on. The
+  board contract is schema 3: `diagnostics.registry` says when the registry
   cannot be used, and the Board view shows why in a banner.
-- The hook also records the last 280 characters of a long answer
+- The hook (v0.3) also records the last 280 characters of a long answer
   (`last_message_tail`, an optional field of event line version 1).
 - The window deletes approval files older than 24 hours, kept check
   outputs older than 7 days and journal files older than 90 days on its
@@ -434,6 +425,28 @@ project uses [Semantic Versioning](https://semver.org/).
   id, so a forged request cannot make the window read another file.
 - The window's Content Security Policy allows no inline style; Vite inlines
   no asset as a `data:` URI, which the font policy refused.
+- The registry's writer, like the relay's authority, exists only in the
+  window (v0.3): CI searches `officina.exe` for the writer's marker and
+  finds none, with a positive control on the window. Every command line
+  opens the registry read-only and never creates it.
+- The triage model's text never gains any power (v0.3): the excerpts reach
+  the call on stdin only, as one line of escaped JSON between markers
+  carrying a random nonce, presented as data never to follow, one case per
+  call so an excerpt cannot steer another row; a subject's name is never
+  sent. Only the schema-constrained answer is read, a verdict and a reason
+  of 1 to 200 characters without control, bidirectional or invisible
+  formatting characters; anything else is a failed, invalid or timed-out
+  call. The reason is untrusted text: rules never read it, the window
+  renders it as text, it lives only in `model_answer` (deleted with the
+  excerpts it answered and on confirmation) and a confirmation keeps the
+  model's reason code and call id only. A model proposal is only ever a
+  proposal: the author confirms it, auto-archive never takes it, and the
+  model pauses after three failed calls and turns itself off when it does
+  worse than the default.
+- Officina itself writes nothing under the Claude config dir nor into
+  `~/.claude.json` (v0.3): the zero-write fingerprint now covers the
+  registry's commands and the window's own model call; the `claude`
+  processes it starts keep their own state.
 
 ### Fixed
 
