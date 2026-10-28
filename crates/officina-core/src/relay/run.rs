@@ -28,6 +28,18 @@ pub const EXIT_NOT_STARTED: i32 = 127;
 /// Exit code of a usage error.
 pub const EXIT_USAGE: i32 = 64;
 
+/// The refusals of the file binding (D-170, D-173): no `git` to list a work
+/// tree, a tree past the fingerprint's limits, a file it cannot read, and
+/// the files changed since the dry run or the request. Each leaves an
+/// approval unconsumed; the README names this constant beside the binding.
+pub const TREE_BINDING_REFUSALS: &[RefusalReason] = &[
+    RefusalReason::GitUnavailable,
+    RefusalReason::TreeTooLarge,
+    RefusalReason::TreeUnreadable,
+    RefusalReason::CheckNotSatisfied,
+    RefusalReason::TreeChanged,
+];
+
 /// The longest timeout Claude Code's Bash tool accepts (AD-31): a relay call
 /// still running then is killed by Claude Code, and its run reads abandoned.
 /// The `CLAUDE.md` paragraph doctor prints tells sessions to pass it.
@@ -785,6 +797,23 @@ mod tests {
             free.project, "notes",
             "a free project listing the action is served (D-21)"
         );
+    }
+
+    /// The binding's constructors give exactly the reasons the constant
+    /// lists, each once.
+    #[test]
+    fn tree_binding_refusals_are_the_bindings() {
+        let made = [
+            Refusal::git_unavailable("lab", "no git").reason,
+            Refusal::tree_too_large("lab", "big").reason,
+            Refusal::tree_unreadable("lab", "locked").reason,
+            Refusal::check_not_satisfied("lab", "verify").reason,
+            Refusal::tree_changed("lab").reason,
+        ];
+        assert_eq!(made, TREE_BINDING_REFUSALS);
+        for reason in TREE_BINDING_REFUSALS {
+            assert!(RefusalReason::ALL.contains(reason));
+        }
     }
 
     #[test]

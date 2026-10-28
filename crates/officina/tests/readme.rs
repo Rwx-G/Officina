@@ -6,7 +6,8 @@ mod common;
 
 use common::TestEnv;
 use officina_core::relay::catalogue::{DEFAULT_GUARDED_PROGRAMS, NoticeKind};
-use officina_core::relay::gate::{SHELL_TOOLS, ToolRule};
+use officina_core::relay::gate::{FILE_TOOLS, SHELL_TOOLS, ToolRule, gated_tools};
+use officina_core::relay::run::TREE_BINDING_REFUSALS;
 
 fn readme() -> String {
     std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../README.md")).unwrap()
@@ -100,18 +101,22 @@ fn readme_lists_no_default_guarded_program() {
     }
 }
 
-/// D-171: the README points at the shell tool constant, transcribes no
-/// matcher built from it, and names each tool the gate refuses whole, as the
-/// constant says.
+/// D-171, D-173: the README points at the shell and file tool constants,
+/// transcribes no matcher built from them, and names each tool the gate
+/// refuses whole, as the constant says.
 #[test]
 fn readme_names_the_gate_tools_constant() {
     let readme = readme();
-    assert!(
-        readme.contains("`SHELL_TOOLS`"),
-        "README.md does not name the constant"
-    );
-    for (a, _) in SHELL_TOOLS {
-        for (b, _) in SHELL_TOOLS {
+    for constant in ["`SHELL_TOOLS`", "`FILE_TOOLS`"] {
+        assert!(
+            readme.contains(constant),
+            "README.md does not name {constant}"
+        );
+    }
+    assert!(!FILE_TOOLS.is_empty());
+    let tools = gated_tools();
+    for a in &tools {
+        for b in &tools {
             if a != b {
                 assert!(
                     !readme.contains(&format!("{a}|{b}")),
@@ -157,4 +162,36 @@ fn readme_names_the_notice_kinds() {
             "the README transcribes the kind {tag}"
         );
     }
+}
+
+/// Story 2.14 AC 11 (D-173): the sentence on the file binding names the
+/// constant of its refusals and its limits, and the card's session and its
+/// pointer-only rule are stated for what they are.
+#[test]
+fn readme_states_the_binding_and_its_limits() {
+    let text = readme();
+    let binding = text
+        .lines()
+        .find(|line| line.contains("`TREE_BINDING_REFUSALS`"))
+        .expect("the README names TREE_BINDING_REFUSALS beside the binding");
+    for limit in ["files git ignores", "outside the work tree"] {
+        assert!(
+            binding.contains(limit),
+            "the binding does not state {limit:?}"
+        );
+    }
+    assert!(
+        TREE_BINDING_REFUSALS.iter().any(
+            |reason| !binding.contains(serde_json::to_value(reason).unwrap().as_str().unwrap())
+        ),
+        "the binding sentence transcribes the refusal codes instead of naming the constant"
+    );
+    assert!(
+        text.contains("advisory, not proof of which session asked"),
+        "the README does not say the card's session is advisory"
+    );
+    assert!(
+        text.contains("guards against a stray key, not against code running inside the window"),
+        "the README does not say what the pointer-only rule guards against"
+    );
 }

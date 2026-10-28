@@ -206,6 +206,37 @@ project uses [Semantic Versioning](https://semver.org/).
 - The tree fingerprint runs `git` with external diff tools, textconv
   drivers, fsmonitor and the caller's `GIT_` variables out of the way, so a
   repository's configuration runs nothing inside a relay run.
+- The tree fingerprint no longer trusts the caller's `PATH` or git's stat
+  cache: `git` is the one Git for Windows records in the registry, only
+  lists the tracked and unignored files, and Officina hashes each file's
+  bytes itself, so a shim on `PATH`, a restored modification time or a
+  clean filter cannot hide a change. A tree past 64 MiB per file, 20,000
+  files or 512 MiB, an unreadable file, and a git work tree without that
+  `git` refuse (`tree_too_large`, `tree_unreadable`, `git_unavailable`);
+  the journal names the `git` that listed the files.
+- Every `human` action in a git work tree is bound to its files, dry run or
+  not: an edit while its call waits for the author makes the run refuse
+  `tree_changed` and leaves the approval unused. The card says what the
+  files are bound to, or "no file binding: not a git tree".
+- `officina run` gives actions the `PATH`, `PATHEXT` and `ComSpec` Windows
+  builds from the registry, never the caller's, and no caller `WSLENV`; the
+  gate also denies an `officina` call with those variables or a `GIT_`
+  one reassigned.
+- Once a project is guarded, the file tools (Write, Edit and the others of
+  `FILE_TOOLS`) cannot write under Officina's home from any project, and the
+  hook resolves the session's folders and a file tool's target by handle,
+  so an 8.3 name, a junction, a link or a `subst` drive cannot lead around
+  the gate.
+- The window records its own decisions and lists, in the Relay view, an
+  approval file, a run, an approved catalogue or a missing stop flag it
+  cannot account for; `officina doctor` fails until the author acknowledges
+  each.
+- A `pattern` that lets a value forwarded to a remote shell or a template
+  hold whitespace, shell or template characters drops the action with the
+  issue `forwarded_pattern`, unless it sets `forwarded_values = "accepted"`;
+  the catalogue format moves to 3, so the catalogue is approved once again.
+- The window's Content Security Policy allows no inline style; Vite inlines
+  no asset as a `data:` URI, which the font policy refused.
 
 ### Fixed
 
