@@ -10,7 +10,7 @@ use std::path::Path;
 use officina_core::board::Board;
 use officina_core::registry::confirm::{
     AuthorAction, AuthorContext, ConfirmItem, ConfirmPlan, ItemAnswer, ItemOutcome, Plan,
-    SubjectOrigin, Target, TriageContext, Wake, confirm_item, plan,
+    SubjectOrigin, Target, Wake, confirm_item, plan,
 };
 use officina_core::registry::dry_run::DryRunState;
 use officina_core::registry::filing::excerpts_to_clear;
@@ -22,16 +22,15 @@ use officina_core::registry::rates::{
 pub use officina_core::registry::types::AuthorRefusal;
 use officina_core::registry::types::{
     EventFileRecord, ExcerptRecord, FactValue, ProposalSource, RegistryReport, RegistryState,
-    SessionRecord, SessionRow, SettingKey, Source, SubjectRecord, SubjectStatus, TriageRefusal,
-    Verdict,
+    SessionRecord, SessionRow, SettingKey, Source, SubjectRecord, SubjectStatus, Verdict,
 };
-use officina_core::registry::verdict::{VerdictInput, auto_archivable, rows};
+use officina_core::registry::verdict::auto_archivable;
 use officina_core::registry::view::{AutoArchiveSetting, RegistryView};
 use rusqlite::config::DbConfig;
 use rusqlite::types::Value;
 use rusqlite::{Connection, ErrorCode, TransactionBehavior};
 
-use super::read::{self, SettingRow};
+use super::read::{self, SettingRow, VerdictSnapshot};
 use super::store::Writer;
 
 /// Text every registry writer error carries. CI searches the release
@@ -321,31 +320,18 @@ fn apply_decision(
 }
 
 /// Confirms one item inside the caller's transaction: the core plans it
-/// from the registry as it stands after the items before it, so a row
-/// confirmed earlier in the batch is gone for a later item with its key.
-/// Returns the outcome and whether excerpts were cleared.
+/// from `snapshot`, the registry as it stands after the items before it,
+/// so a row confirmed earlier in the batch is gone for a later item with
+/// its key. Returns the outcome and whether excerpts were cleared.
 fn confirm_one(
     conn: &Connection,
     item: &ConfirmItem,
     auto: bool,
-    unavailable: Option<TriageRefusal>,
+    snapshot: &VerdictSnapshot,
+    known_projects: &[String],
     now_ms: i64,
 ) -> rusqlite::Result<(ItemOutcome, bool)> {
-    let subjects = read::subjects(conn)?;
-    let sessions = read::session_records(conn)?;
-    let confirmations = read::confirmations(conn)?;
-    let excerpts = read::excerpts(conn)?;
-    let known_projects = read::known_projects(conn)?;
-    let model = read::model_facts(conn, unavailable)?.input(&sessions, &excerpts);
-    let context = TriageContext {
-        subjects: &subjects,
-        sessions: &sessions,
-        confirmations: &confirmations,
-        excerpts: &excerpts,
-        model: &model,
-        known_projects: &known_projects,
-    };
-    let planned = match confirm_item(item, &context) {
+    let planned = match confirm_item(item, &snapshot.context(known_projects)) {
         Ok(planned) => planned,
         Err(refused) => return Ok((refused, false)),
     };
@@ -405,8 +391,18 @@ impl Writer {
         let mut answers = Vec::with_capacity(items.len());
         let mut cleared = false;
         let mut model_confirmed = false;
+        // Read once, and again only after an item that wrote: a refused
+        // item changes nothing, while a written one can move a later
+        // item's proposal, which D-63 must see.
+        let mut snapshot = VerdictSnapshot::load(&tx, unavailable)?;
+        let mut known_projects = read::known_projects(&tx)?;
         for (index, item) in items.iter().enumerate() {
-            let (outcome, cleared_now) = confirm_one(&tx, item, auto, unavailable, now_ms)?;
+            let (outcome, cleared_now) =
+                confirm_one(&tx, item, auto, &snapshot, &known_projects, now_ms)?;
+            if outcome.wrote() {
+                snapshot = VerdictSnapshot::load(&tx, unavailable)?;
+                known_projects = read::known_projects(&tx)?;
+            }
             cleared |= cleared_now;
             model_confirmed |= item.shown.source == ProposalSource::Model
                 && matches!(outcome, ItemOutcome::Confirmed { .. });
@@ -728,28 +724,19 @@ impl Writer {
                 turned_off: Some(gate.state),
             });
         }
-        let subjects = read::subjects(&self.conn)?;
-        let sessions = read::session_records(&self.conn)?;
-        let confirmations = read::confirmations(&self.conn)?;
-        let excerpts = read::excerpts(&self.conn)?;
-        let model =
-            read::model_facts(&self.conn, self.model_env.unavailable)?.input(&sessions, &excerpts);
-        let items: Vec<ConfirmItem> = rows(&VerdictInput {
-            subjects: &subjects,
-            sessions: &sessions,
-            confirmations: &confirmations,
-            model: &model,
-        })
-        .into_iter()
-        .filter(auto_archivable)
-        .map(|row| ConfirmItem {
-            key: row.key,
-            shown: row.proposal,
-            verdict: Verdict::Finished,
-            routine: false,
-            file_under: None,
-        })
-        .collect();
+        let items: Vec<ConfirmItem> =
+            VerdictSnapshot::load(&self.conn, self.model_env.unavailable)?
+                .rows()
+                .into_iter()
+                .filter(auto_archivable)
+                .map(|row| ConfirmItem {
+                    key: row.key,
+                    shown: row.proposal,
+                    verdict: Verdict::Finished,
+                    routine: false,
+                    file_under: None,
+                })
+                .collect();
         if items.is_empty() {
             return Ok(AutoArchiveRun::default());
         }

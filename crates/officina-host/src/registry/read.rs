@@ -7,6 +7,7 @@ use std::path::Path;
 
 use officina_core::board::Board;
 use officina_core::dates::dated_file_day;
+use officina_core::registry::confirm::TriageContext;
 use officina_core::registry::dry_run::{DryRunState, Evaluation, Tally};
 use officina_core::registry::fold::pivot;
 #[cfg(feature = "window-authority")]
@@ -14,7 +15,7 @@ use officina_core::registry::fold::{Mark, MarkQuery};
 use officina_core::registry::model::{
     LastCall, ModelFacts, ModelPause, ModelSetting, StoredAnswer,
 };
-use officina_core::registry::proposal::Proposal;
+use officina_core::registry::proposal::{ModelInput, Proposal};
 use officina_core::registry::rates::VerdictRecord;
 use officina_core::registry::triage_call::{COUNT_WINDOW_MS, CallRecord};
 use officina_core::registry::types::ModelVerdict;
@@ -25,6 +26,7 @@ use officina_core::registry::types::{
 };
 #[cfg(feature = "window-authority")]
 use officina_core::registry::types::{HookEnd, HookStart, SessionFact};
+use officina_core::registry::verdict::{Row, VerdictInput, rows};
 use officina_core::registry::view::{
     AutoArchiveSetting, EvidenceInput, IngestionView, RegistryView, SubjectView, ViewInput,
     archived_subjects, build_view,
@@ -35,6 +37,71 @@ use rusqlite::OptionalExtension;
 use rusqlite::types::ValueRef;
 
 use super::store::{self, Location};
+
+/// What every rule over the rows reads, loaded once from one connection
+/// (quality audit H2): the view, a confirmation, auto-archive and the
+/// model's queue each build their rows from this, so the proposal shown
+/// and the proposal checked come from the same inputs (AD-49).
+#[derive(Debug, Clone)]
+pub struct VerdictSnapshot {
+    pub subjects: Vec<SubjectRecord>,
+    pub sessions: Vec<SessionRecord>,
+    pub confirmations: Vec<ConfirmationRecord>,
+    pub excerpts: Vec<ExcerptRecord>,
+    /// The model's facts, with `unavailable` as the caller knows it: it
+    /// decides whether stored answers serve, so a confirmation and the
+    /// queue pass the window's, and a read that only needs the settings
+    /// passes `None`.
+    pub facts: ModelFacts,
+    /// The model's part of the proposals, from `facts`.
+    pub model: ModelInput,
+}
+
+impl VerdictSnapshot {
+    /// Loads the snapshot from `conn`.
+    pub fn load(
+        conn: &Connection,
+        unavailable: Option<TriageRefusal>,
+    ) -> rusqlite::Result<VerdictSnapshot> {
+        let subjects = subjects(conn)?;
+        let sessions = session_records(conn)?;
+        let confirmations = confirmations(conn)?;
+        let excerpts = excerpts(conn)?;
+        let facts = model_facts(conn, unavailable)?;
+        let model = facts.input(&sessions, &excerpts);
+        Ok(VerdictSnapshot {
+            subjects,
+            sessions,
+            confirmations,
+            excerpts,
+            facts,
+            model,
+        })
+    }
+
+    /// The rows that need a verdict now (AD-49, D-76).
+    pub fn rows(&self) -> Vec<Row> {
+        rows(&VerdictInput {
+            subjects: &self.subjects,
+            sessions: &self.sessions,
+            confirmations: &self.confirmations,
+            model: &self.model,
+        })
+    }
+
+    /// What a confirmation is planned against, with the projects the
+    /// registry knows.
+    pub fn context<'a>(&'a self, known_projects: &'a [String]) -> TriageContext<'a> {
+        TriageContext {
+            subjects: &self.subjects,
+            sessions: &self.sessions,
+            confirmations: &self.confirmations,
+            excerpts: &self.excerpts,
+            model: &self.model,
+            known_projects,
+        }
+    }
+}
 
 /// One `setting` row.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -296,10 +363,7 @@ pub(crate) fn view(
     // the same commit while the window writes beside a command line (WAL);
     // it is never written in, and ends when dropped.
     let snapshot = conn.unchecked_transaction()?;
-    let subjects = subjects(&snapshot)?;
-    let sessions = session_records(&snapshot)?;
-    let excerpts = excerpts(&snapshot)?;
-    let confirmations = confirmations(&snapshot)?;
+    let read = VerdictSnapshot::load(&snapshot, ctx.unavailable)?;
     let evidence = EvidenceInput {
         calls: triage_calls_since(&snapshot, now_ms - COUNT_WINDOW_MS)?,
         latest_evaluation: latest_evaluation(&snapshot)?,
@@ -311,11 +375,11 @@ pub(crate) fn view(
         &ViewInput {
             registry: ctx.report,
             ingestion: ingestion_view(&snapshot, ctx.events_dir)?,
-            subjects: &subjects,
-            sessions: &sessions,
-            excerpts: &excerpts,
-            confirmations: &confirmations,
-            model: &model_facts(&snapshot, ctx.unavailable)?,
+            subjects: &read.subjects,
+            sessions: &read.sessions,
+            excerpts: &read.excerpts,
+            confirmations: &read.confirmations,
+            model: &read.facts,
             board: ctx.board,
             restore_notice: restore_notice(&snapshot),
             evidence: &evidence,

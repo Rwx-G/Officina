@@ -450,6 +450,25 @@ pub enum ItemOutcome {
     FilingRefused { refusal: AuthorRefusal },
 }
 
+impl ItemOutcome {
+    /// True when the item wrote to the registry: a later item of the same
+    /// batch must then be planned against the registry as it is now.
+    ///
+    /// ```
+    /// use officina_core::registry::confirm::ItemOutcome;
+    /// use officina_core::registry::types::ConfirmRefusal;
+    /// use officina_core::registry::types::Verdict;
+    /// assert!(ItemOutcome::Confirmed { subject: 1, verdict: Verdict::Finished }.wrote());
+    /// assert!(!ItemOutcome::Refused { refusal: ConfirmRefusal::ALL[0] }.wrote());
+    /// ```
+    pub fn wrote(&self) -> bool {
+        match self {
+            ItemOutcome::Confirmed { .. } | ItemOutcome::VerdictNotNeeded { .. } => true,
+            ItemOutcome::Refused { .. } | ItemOutcome::FilingRefused { .. } => false,
+        }
+    }
+}
+
 /// One item's key and what became of it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]

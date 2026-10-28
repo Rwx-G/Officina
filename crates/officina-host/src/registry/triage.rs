@@ -27,10 +27,9 @@ use officina_core::registry::triage_call::{
 };
 use officina_core::registry::types::{SettingKey, Source};
 use officina_core::registry::types::{TriageOutcome, TriagePurpose, TriageRefusal};
-use officina_core::registry::verdict::{VerdictInput, rows};
 use rusqlite::TransactionBehavior;
 
-use super::read;
+use super::read::{self, VerdictSnapshot};
 use super::store::Writer;
 use super::write::{RegistryError, write_setting};
 use crate::process::{RunError, RunLimits, hide_console, run_contained};
@@ -708,25 +707,20 @@ impl Writer {
         if !facts.queues() || self.budget(now_ms)? != Budget::Open {
             return Ok(None);
         }
-        let subjects = read::subjects(&self.conn)?;
-        let sessions = read::session_records(&self.conn)?;
-        let confirmations = read::confirmations(&self.conn)?;
-        let excerpts = read::excerpts(&self.conn)?;
-        let model = facts.input(&sessions, &excerpts);
-        let found = rows(&VerdictInput {
-            subjects: &subjects,
-            sessions: &sessions,
-            confirmations: &confirmations,
-            model: &model,
-        });
-        Ok(queue(&found, &facts, &sessions, &excerpts)
-            .into_iter()
-            .next()
-            .map(|queued| NextCall {
-                purpose: TriagePurpose::Proposal,
-                case_key: queued.case_key,
-                case: queued.case,
-            }))
+        let snapshot = VerdictSnapshot::load(&self.conn, self.model_env.unavailable)?;
+        Ok(queue(
+            &snapshot.rows(),
+            &facts,
+            &snapshot.sessions,
+            &snapshot.excerpts,
+        )
+        .into_iter()
+        .next()
+        .map(|queued| NextCall {
+            purpose: TriagePurpose::Proposal,
+            case_key: queued.case_key,
+            case: queued.case,
+        }))
     }
 
     /// Records a proposal call's result at `now_ms` in one transaction
@@ -753,20 +747,15 @@ impl Writer {
             && result.outcome == TriageOutcome::Answer
             && case_key(session_id) == result.case_key
         {
-            let subjects = read::subjects(&tx)?;
-            let sessions = read::session_records(&tx)?;
-            let confirmations = read::confirmations(&tx)?;
-            let excerpts = read::excerpts(&tx)?;
-            let facts = read::model_facts(&tx, unavailable)?;
-            let model = facts.input(&sessions, &excerpts);
-            let found = rows(&VerdictInput {
-                subjects: &subjects,
-                sessions: &sessions,
-                confirmations: &confirmations,
-                model: &model,
-            });
-            if facts.serves()
-                && answer_still_wanted(&found, session_id, &result.input_hash, &sessions, &excerpts)
+            let snapshot = VerdictSnapshot::load(&tx, unavailable)?;
+            if snapshot.facts.serves()
+                && answer_still_wanted(
+                    &snapshot.rows(),
+                    session_id,
+                    &result.input_hash,
+                    &snapshot.sessions,
+                    &snapshot.excerpts,
+                )
             {
                 tx.prepare_cached(
                     "INSERT INTO model_answer (session_id, verdict, reason, call_id, at_ms)
