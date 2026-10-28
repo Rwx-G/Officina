@@ -77,26 +77,29 @@ stories:
 epic: 4
 version: v0.4
 # approved: written and approved, implementation not started.
-# Reworked 2026-10-28 after the owner approved the interactive scene prototype v2 (epic-4-decisions.md D-460 to D-485; architecture-v0.4.md AD-167 to AD-178). Stories renumbered (D-460's map); the old 4.7 (instruments) is withdrawn (D-472).
-# Slice 0 (4.1) runs the three gates of architecture-v0.4.md AD-178 (D-479): gate 1 (sub-agent signals) before 4.9 starts; gate 3 (walking CPU) before 4.6 merges; gate 2 (taskbar) before 4.8 closes.
-# Slice A (4.2-4.8, 4.10: FR-1 to FR-7, FR-9 to FR-11, FR-13) is usable alone. Slice B (4.9, 4.11: FR-12, FR-8).
-# 4.9 (sub-agents) is implemented only if gate 1 passes; otherwise it stays approved and unimplemented and 4.12 records FR-12 as not shipped by its own rule (D-476).
-# Order (D-485): 4.2; then 4.3 and 4.4 side by side; 4.5 needs 4.2 and 4.3; 4.6 needs 4.4 and 4.5; 4.7 needs 4.6; 4.8 needs 4.3, 4.4 and 4.6; 4.10 needs 4.6 and 4.7; 4.11 needs 4.6 and 4.8.
-# Implemented after v0.2 and v0.3; each seam has one owning story (epic-4-decisions.md D-98, story numbers read through D-460's map).
-# 4.12 closes the PRD with the workstation checks (owner rule, epic-2-decisions.md P-7, epic-4-decisions.md P-21).
+# Reworked 2026-10-28 after the owner approved the interactive scene prototype v2 (epic-4-decisions.md D-460 to D-485; architecture-v0.4.md AD-167 to AD-178), then after the owner decided a requirement challenge of that plan (D-494 to D-514). Stories renumbered twice (D-460's map, then D-498's); the old instruments story is withdrawn (D-472).
+# Slice 0 (4.1) runs four gates of architecture-v0.4.md AD-178 (D-479 as amended): gate 4 (what a real wait emits) before 4.3 starts; gate 5 (project count, window size and scaling) and the owner's answers before 4.6 merges; gate 2 (taskbar) before 4.5 closes; gate 1 (sub-agent signals) before 4.12 starts. Gate 3 is withdrawn (D-500): AD-71's walking run in 4.14 decides walking's default.
+# Slice A (4.2-4.11: FR-1 to FR-7, FR-9 to FR-11, FR-13) is usable alone; the alert (4.5) is usable before any drawing, the placed scene (4.7, 4.8) before walking (4.10). Slice B (4.12, 4.13: FR-12, FR-8).
+# 4.12 (sub-agents) is implemented only if gate 1 passes; otherwise it stays approved and unimplemented and 4.14 records FR-12 as not shipped by its own rule (D-476).
+# 4.6 carries both floor outcomes (D-506): growth by columns, or four fixed offices; gate 5 and the owner's answers choose before it merges.
+# Order (D-497): 4.2; then 4.3 and 4.4 side by side; 4.5 needs 4.3; 4.6 needs 4.2 and 4.3; 4.7 needs 4.4, 4.5 and 4.6; 4.8 and 4.9 need 4.7 (4.9 also 4.4 and 4.5); 4.10 needs 4.6 and 4.7; 4.11 needs 4.8 and 4.10; 4.12 needs 4.3, 4.7 and 4.10; 4.13 needs 4.5, 4.7 and 4.9.
+# Implemented after v0.2 and v0.3; each seam has one owning story (epic-4-decisions.md D-98, story numbers read through D-460's and D-498's maps).
+# 4.14 closes the PRD with the workstation checks (owner rule, epic-2-decisions.md P-7, epic-4-decisions.md P-21).
 stories:
   - {id: "4.1", file: story-4.1-workstation-checks.md, slice: "0", status: approved}
   - {id: "4.2", file: story-4.2-floor-keys-payloads-and-scene-fixtures.md, slice: A, status: approved}
   - {id: "4.3", file: story-4.3-scene-state-in-core.md, slice: A, status: approved}
   - {id: "4.4", file: story-4.4-halo-memo-and-board-halo.md, slice: A, status: approved}
-  - {id: "4.5", file: story-4.5-scene-geometry-places-and-layout.md, slice: A, status: approved}
-  - {id: "4.6", file: story-4.6-scene-drawn-walking-and-scene-mode.md, slice: A, status: approved}
-  - {id: "4.7", file: story-4.7-scene-targets-keyboard-file-and-strip.md, slice: A, status: approved}
-  - {id: "4.8", file: story-4.8-alert-band-beacon-and-taskbar.md, slice: A, status: approved}
-  - {id: "4.9", file: story-4.9-subagents.md, slice: B, status: approved}
-  - {id: "4.10", file: story-4.10-focus-mode-and-keys.md, slice: A, status: approved}
-  - {id: "4.11", file: story-4.11-dark-theme.md, slice: B, status: approved}
-  - {id: "4.12", file: story-4.12-docs-workstation-checks-and-qa.md, slice: B, status: approved}
+  - {id: "4.5", file: story-4.5-alert-band-title-and-taskbar.md, slice: A, status: approved}
+  - {id: "4.6", file: story-4.6-scene-geometry-spots-and-layout.md, slice: A, status: approved}
+  - {id: "4.7", file: story-4.7-scene-drawn-in-place-and-scene-mode.md, slice: A, status: approved}
+  - {id: "4.8", file: story-4.8-scene-targets-keyboard-file-and-strip.md, slice: A, status: approved}
+  - {id: "4.9", file: story-4.9-alert-room-and-beacon.md, slice: A, status: approved}
+  - {id: "4.10", file: story-4.10-walking.md, slice: A, status: approved}
+  - {id: "4.11", file: story-4.11-focus-mode-and-keys.md, slice: A, status: approved}
+  - {id: "4.12", file: story-4.12-subagents.md, slice: B, status: approved}
+  - {id: "4.13", file: story-4.13-dark-theme.md, slice: B, status: approved}
+  - {id: "4.14", file: story-4.14-docs-workstation-checks-and-qa.md, slice: B, status: approved}
 ---
 epic: 5
 version: v0.5
