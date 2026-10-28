@@ -157,6 +157,9 @@ project uses [Semantic Versioning](https://semver.org/).
 - The window deletes approval files older than 24 hours, kept check
   outputs older than 7 days and journal files older than 90 days on its
   startup and hourly pass; `officina run` and the gate never delete.
+- The README's Privacy section says what reaches the network: the requests
+  of the HTTP actions an approved catalogue declares, run with `officina
+  run`, and nothing else; it said Officina opened no connection at all.
 
 ### Security
 

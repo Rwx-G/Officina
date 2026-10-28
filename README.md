@@ -123,7 +123,7 @@ Everything stays on your machine, under `~/.officina`:
 - **Relay journal** (`journal/`, once you use the relay): one line per run start and end, refusal, gate refusal or fault, approval, stop and resume, with the session id, the action, its parameters and argument vector, the first 280 characters of a refused command unless excerpts are off, and never a program's output.
 - **Relay requests and dry runs** (`relay/approvals/`, `relay/outputs/`): each `human` action's request with its parameters and command, kept 24 hours, and the output of each check run, at most 256 KiB, kept 7 days so an approval card can show it.
 
-Officina opens no network connection and no TCP port. It does not read transcripts.
+Officina opens no TCP port and does not read transcripts. Its only network connections are the requests of the HTTP actions an approved catalogue declares, each to the URL it declares, when a session runs one with `officina run`; the hook, the board, `officina relay --json` and the window open none.
 
 ## Floor file (optional)
 

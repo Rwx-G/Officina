@@ -195,3 +195,62 @@ fn readme_states_the_binding_and_its_limits() {
         "the README does not say what the pointer-only rule guards against"
     );
 }
+
+/// Story 2.15 AC 8: the Privacy section scopes the network to the HTTP
+/// actions, and the code agrees: no source file but the HTTP sender names a
+/// network API.
+#[test]
+fn readme_scopes_the_network_to_http_actions() {
+    let text = readme();
+    let privacy: String = text
+        .split("\n## ")
+        .find(|section| section.starts_with("Privacy"))
+        .expect("the README has a Privacy section")
+        .to_owned();
+    assert!(
+        !privacy.contains("opens no network connection"),
+        "the Privacy section says Officina opens no connection at all"
+    );
+    let sentence = privacy
+        .lines()
+        .find(|line| line.contains("network"))
+        .expect("the Privacy section says what reaches the network");
+    assert!(sentence.contains("HTTP actions"), "{sentence}");
+
+    fn sources(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+        for entry in std::fs::read_dir(dir).unwrap().flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                sources(&path, out);
+            } else if path.extension().is_some_and(|ext| ext == "rs") {
+                out.push(path);
+            }
+        }
+    }
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut files = Vec::new();
+    for dir in [
+        "crates/officina-core/src",
+        "crates/officina-host/src",
+        "crates/officina/src",
+        "app/src-tauri/src",
+    ] {
+        sources(&root.join(dir), &mut files);
+    }
+    let openers: Vec<String> = files
+        .iter()
+        .filter(|path| {
+            let code = std::fs::read_to_string(path).unwrap();
+            ["ureq::", "TcpStream", "UdpSocket", "TcpListener"]
+                .iter()
+                .any(|api| code.contains(api))
+        })
+        .map(|path| {
+            path.strip_prefix(&root)
+                .unwrap()
+                .to_string_lossy()
+                .replace('\\', "/")
+        })
+        .collect();
+    assert_eq!(openers, ["crates/officina-host/src/relay/http.rs"]);
+}
