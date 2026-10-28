@@ -40,7 +40,7 @@ use officina_core::relay::run::{
     FloorState, Refusal, RunInputs, RunPlan, SnapshotState, check_step, list_text, plan,
 };
 
-pub use args::{RunArgs, parse_args};
+pub use args::{RunArgs, UsageError, parse_args};
 pub use officina_core::relay::run::{EXIT_NOT_STARTED, EXIT_REFUSED, EXIT_TIMEOUT};
 pub use spawn::{PATH_OFF_WINDOWS, SystemEnv, command_for, system_env};
 

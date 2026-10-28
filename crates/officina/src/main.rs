@@ -238,11 +238,25 @@ fn relay_json() -> ExitCode {
     }
 }
 
+/// `--floor` given as the last argument, without its path: a usage error.
+struct FloorWithoutPath;
+
 /// Extracts `--floor <path>` from the remaining arguments.
-fn floor_arg(args: &[String]) -> Result<Option<PathBuf>, ()> {
+fn floor_arg(args: &[String]) -> Result<Option<PathBuf>, FloorWithoutPath> {
     match args.iter().position(|a| a == "--floor") {
         None => Ok(None),
-        Some(i) => args.get(i + 1).map(|p| Some(PathBuf::from(p))).ok_or(()),
+        Some(i) => args
+            .get(i + 1)
+            .map(|p| Some(PathBuf::from(p)))
+            .ok_or(FloorWithoutPath),
+    }
+}
+
+impl FloorWithoutPath {
+    /// Says what is missing, then the usage, and exits 64.
+    fn usage_error(self) -> ExitCode {
+        eprintln!("officina: --floor takes a path");
+        usage_error()
     }
 }
 
@@ -268,11 +282,11 @@ fn main() -> ExitCode {
         }
         Some("board") if rest.iter().any(|a| a == "--json") => match floor_arg(rest) {
             Ok(floor) => board(floor.as_ref()),
-            Err(()) => usage_error(),
+            Err(missing) => missing.usage_error(),
         },
         Some("doctor") => match floor_arg(rest) {
             Ok(floor) => doctor_cmd(floor.as_ref()),
-            Err(()) => usage_error(),
+            Err(missing) => missing.usage_error(),
         },
         Some("run") => run_cmd(rest),
         Some("relay") if rest == ["--json"] => relay_json(),

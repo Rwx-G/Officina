@@ -246,38 +246,56 @@ pub enum ArgTemplate {
     },
 }
 
+/// Why an `args` item is not one argument (D-2), with the item as written.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum BraceError {
+    #[error("`}}` closes no placeholder in {0:?}")]
+    StrayClose(String),
+    #[error("unbalanced `{{` in {0:?}")]
+    Unclosed(String),
+    #[error("`{{` inside a placeholder in {0:?}")]
+    Nested(String),
+    #[error("a second placeholder in {0:?}: one argument holds at most one")]
+    SecondPlaceholder(String),
+    #[error("unbalanced brace in {0:?}")]
+    Unbalanced(String),
+}
+
 impl ArgTemplate {
     /// Parses one `args` item. Braces delimit placeholders only (D-2).
     ///
     /// ```
-    /// use officina_core::relay::catalogue::ArgTemplate;
+    /// use officina_core::relay::catalogue::{ArgTemplate, BraceError};
     /// assert_eq!(
     ///     ArgTemplate::parse("--limit={group}").unwrap().param(),
     ///     Some("group"),
     /// );
-    /// assert!(ArgTemplate::parse("{a}{b}").is_err());
+    /// assert_eq!(
+    ///     ArgTemplate::parse("{a}{b}"),
+    ///     Err(BraceError::SecondPlaceholder("{a}{b}".to_owned())),
+    /// );
     /// ```
-    pub fn parse(item: &str) -> Result<ArgTemplate, String> {
+    pub fn parse(item: &str) -> Result<ArgTemplate, BraceError> {
         let Some(open) = item.find(['{', '}']) else {
             return Ok(ArgTemplate::Literal(item.to_owned()));
         };
         if item[open..].starts_with('}') {
-            return Err(format!("`}}` closes no placeholder in {item:?}"));
+            return Err(BraceError::StrayClose(item.to_owned()));
         }
         let inner = &item[open + 1..];
         let Some(close) = inner.find(['{', '}']) else {
-            return Err(format!("unbalanced `{{` in {item:?}"));
+            return Err(BraceError::Unclosed(item.to_owned()));
         };
         if inner[close..].starts_with('{') {
-            return Err(format!("`{{` inside a placeholder in {item:?}"));
+            return Err(BraceError::Nested(item.to_owned()));
         }
         let suffix = &inner[close + 1..];
         if let Some(next) = suffix.find(['{', '}']) {
             let rest = &suffix[next..];
             return Err(if rest.starts_with('{') && rest.contains('}') {
-                format!("a second placeholder in {item:?}: one argument holds at most one")
+                BraceError::SecondPlaceholder(item.to_owned())
             } else {
-                format!("unbalanced brace in {item:?}")
+                BraceError::Unbalanced(item.to_owned())
             });
         }
         Ok(ArgTemplate::Placeholder {
@@ -985,7 +1003,7 @@ fn arg_templates(report: &mut Report<'_>, items: &[String]) -> Vec<ArgTemplate> 
     for item in items {
         match ArgTemplate::parse(item) {
             Ok(template) => args.push(template),
-            Err(message) => report.add(IssueKind::Braces, message),
+            Err(error) => report.add(IssueKind::Braces, error.to_string()),
         }
     }
     args
@@ -2992,18 +3010,28 @@ mod tests {
     #[test]
     fn braces_delimit_one_placeholder() {
         dropped(IssueKind::Braces);
-        for broken in [
-            "{a",
-            "a}",
-            "}a{",
-            "{a}}",
-            "{{a}}",
-            "{a}{b}",
-            "x{a}y{b}z",
-            "{a}b}",
-        ] {
-            assert!(ArgTemplate::parse(broken).is_err(), "{broken}");
+        type Cause = fn(String) -> BraceError;
+        let cases: [(&str, Cause); 8] = [
+            ("{a", BraceError::Unclosed),
+            ("a}", BraceError::StrayClose),
+            ("}a{", BraceError::StrayClose),
+            ("{a}}", BraceError::Unbalanced),
+            ("{{a}}", BraceError::Nested),
+            ("{a}{b}", BraceError::SecondPlaceholder),
+            ("x{a}y{b}z", BraceError::SecondPlaceholder),
+            ("{a}b}", BraceError::Unbalanced),
+        ];
+        for (broken, cause) in cases {
+            assert_eq!(
+                ArgTemplate::parse(broken),
+                Err(cause(broken.to_owned())),
+                "{broken}"
+            );
         }
+        assert_eq!(
+            BraceError::StrayClose("a}".to_owned()).to_string(),
+            "`}` closes no placeholder in \"a}\""
+        );
         assert_eq!(
             ArgTemplate::parse("--limit={group}:x").unwrap(),
             ArgTemplate::Placeholder {
