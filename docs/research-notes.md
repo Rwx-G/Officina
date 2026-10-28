@@ -205,6 +205,21 @@ Windows 11.
 - **Verified.** `CLAUDE_CODE_SESSION_ID` is set in the environment of the
   commands a session runs through its Bash tool, so `officina run` can record
   which session called it.
+- **Verified (2026-10-28, WSL 2.7.14, Debian, Claude Code 2.1.312 on the
+  workstation; story 2.10, D-6).** Through `officina run`, a `wsl` action of
+  a project whose folder holds accented and mixed-case letters and spaces
+  (`C:/path/to/Équipe Réseau/Projet Mixte`) receives that folder as given in
+  `--cd`, and the Linux program starts in
+  `/mnt/c/path/to/Équipe Réseau/Projet Mixte`; a value with accented letters
+  and a space (`Fichier été.txt`) reaches it as one argument. In the same
+  distro `wsl.exe -d <distro> --exec /usr/bin/test -x <path>` exits 0 for an
+  executable, 1 for a missing path or a file that is not executable, and
+  `wsl.exe` itself exits -1 when the distro does not exist: doctor's probe
+  reads these three cases.
+- **Not run yet (story 2.10 AC 10).** A WSL `ansible-playbook` check and
+  apply on a lab group through `officina run`, and PRD journey 2 run start to
+  finish without the author pasting anything, need the author's lab and
+  work sessions; listed in `docs/backlog.md`.
 
 ## E14. The claude process id in hooks
 

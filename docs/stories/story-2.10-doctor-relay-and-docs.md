@@ -1,6 +1,6 @@
 # Story 2.10: Doctor for the relay, CLAUDE.md paragraph, documentation finalised
 
-**Status:** Approved
+**Status:** Review
 
 ## Story
 
@@ -23,12 +23,12 @@ so that I can wire the relay without guessing, and the repository explains v0.2 
 
 ## Tasks
 
-- [ ] `crates/officina-host/src/relay/doctor.rs`: catalogue, program resolution, WSL probe, warnings, levels, CLAUDE.md paragraph (AC 1-5)
-- [ ] Wire the relay checks into `doctor::run` and the `officina doctor` output (AC 1-5, 9)
-- [ ] `crates/officina/tests/doctor_relay.rs`; extend the zero-write test (AC 1-6)
-- [ ] `crates/officina/tests/readme.rs`; README relay section made coherent (AC 7)
-- [ ] CHANGELOG consolidation (AC 8)
-- [ ] Workstation runs, research notes (AC 10)
+- [x] `crates/officina-host/src/relay/doctor.rs`: catalogue, program resolution, WSL probe, warnings, levels, CLAUDE.md paragraph (AC 1-5)
+- [x] Wire the relay checks into `doctor::run` and the `officina doctor` output (AC 1-5, 9)
+- [x] `crates/officina/tests/doctor_relay.rs`; extend the zero-write test (AC 1-6)
+- [x] `crates/officina/tests/readme.rs`; README relay section made coherent (AC 7)
+- [x] CHANGELOG consolidation (AC 8)
+- [ ] Workstation runs, research notes (AC 10): the `--cd` part is recorded; the WSL `ansible-playbook` check and apply on a lab group and PRD journey 2 are open, the owner's to run (backlog, High)
 
 ## Dev Notes
 
@@ -50,12 +50,49 @@ so that I can wire the relay without guessing, and the repository explains v0.2 
 
 ### Debug Log
 
+- **Decisions where the documents are silent**, each the reading that fails closed or matches the architecture:
+  - The relay checks live in `officina-host::relay::doctor` and run after the v0.1 checks of `doctor::run`, only while the relay is in use: an approved snapshot in any state, a known-projects record, or a relay floor that declares an action or a guarded project (`catalogue::relay_in_use`, the rule of story 2.7). A v0.1 workstation gets no relay line.
+  - Output order: relay floor, relative `OFFICINA_FLOOR`, floor mismatch, catalogue, issues, approval, projects, programs and WSL tools, timeouts, after-check listing, tree binding, journal, then one `CLAUDE.md` paragraph per guarded project. Story 2.11 (AC 9, D-31) inserts its Credential Manager check right after the program checks, as a failure for a missing credential.
+  - The checks read the current relay floor's valid catalogue (what the window would approve, and what runs once approved); the paragraph reads the approved snapshot (D-33). A relay floor that is missing or fails phase 1 while the relay is in use fails, like the board's floor check: `officina run` refuses everything and the gate guards every known project until it reads.
+  - Programs are checked for every valid action. A `native` program must be a file (`Path::is_file`). WSL actions are grouped by distro; per distro `/usr/bin/env`, `/usr/bin/timeout` and each program are probed with `wsl.exe [-d <distro>] --exec /usr/bin/test -x <path>`, stdio null, `CREATE_NO_WINDOW`, `WSLENV` removed as `officina run` removes it, a 20 s deadline per call (a distro's cold start). Exit 0 is executable, 1 missing or not executable; anything else (`wsl.exe` exits -1 for an unknown distro, verified), a timeout or a failed start fails the probe, and the distro's remaining paths take that failure without another call. A probe that cannot answer fails the action: doctor cannot say it resolves.
+  - The WSL probe's process runner is injected (`probe_wsl_with`): the host crate's unit tests cannot reach the CLI crate's fake tool, so they record the commands and choose the exit codes; `wsl_probe_on_an_installed_distro` runs the real probe on the workstation's first distro and skips with a reason elsewhere.
+  - Timeout warning (D-32, P-6): a run whose `timeout_s`, plus the longest `--wait` (core `classes::WAIT_RANGE_S`) for a `human` action, reaches the Bash tool's cap (core `run::BASH_TOOL_MAX_TIMEOUT_MS`) warns; reaching it counts, since Officina's own start adds to the run. Both maxima are core constants, as the AC asks; story 2.8 reads the wait range from the same constant.
+  - Floor mismatch (D-30): doctor's floor is `--floor`, `OFFICINA_FLOOR` or the home's `floor.toml` (AD-7), the default when it has none; it is compared absolute and normalised with the relay floor.
+  - Gate errors are counted over the last 24 h by cause, with the last one's detail; unreadable lines are counted over the two files read (today and yesterday, UTC), which the line says.
+  - The `CLAUDE.md` paragraph goes to the check's paste block. It is printed for every project the floor or the snapshot guards; it lists the snapshot's actions for the project with their parameters, an `after-check` action's check and a class not available in this build; with no approved entry for the project it says the catalogue awaits approval and lists none. The Bash timeout in it comes from the core constant.
+  - The catalogue line prints the guarded programs in effect, so the README can point at doctor instead of transcribing the default list.
+  - `doctor_relay.rs` is Windows only, like `run.rs`: the resolution check needs a `native` program that exists, and the fake tool is one only on Windows.
+  - CHANGELOG: `[0.1.0]` is story 1.13's cut, so the v0.1 entries stay first and untouched in `[Unreleased]`; the v0.2 entries follow as one set under Added, Changed and Security. The lexer speed-up entry is folded into the gate entry (it never shipped on its own).
+  - README: the default guarded list is described by families and pointed at (`DEFAULT_GUARDED_PROGRAMS`, printed by doctor); the gate's limits point at AD-27 and the vector set. `readme_lists_no_default_guarded_program` checks inline code spans (an entry, or its stem for a `*` entry, as a whole span) and refuses a `guarded_programs` line in any fenced example; the runner is written `runner = "wsl"` or "WSL action" so the runner and the program are not confused.
+- **Interrupted once by the coordinator** for a CI failure on main, in its own commit: `perf.rs::gate_overhead_over_empty_process` reads its bound from `OFFICINA_GATE_OWN_COST_BUDGET_MS` (default 5 ms, D-19's workstation figure), which `ci.yml` sets to 15 on the hosted runner; D-19 says so.
+- **Adversarial pass.** Tried: a program that is a folder, a WSL action with no `wsl.exe` and with no system directory, an unknown distro, a probe that times out, each D-6 tool missing in turn, a relative `--floor` and a relative `OFFICINA_FLOOR`, doctor and the relay on different floors, a snapshot gone with the record naming a hash, a broken relay floor, a description written over several lines, a pending change that adds an action (not in the paragraph until approved), git leaving the index untouched in a repository with a tracked edit and an untracked file, and a v0.1 floor. Two real misses became tests: a relative `OFFICINA_FLOOR` resolves per process (story 2.2's open item: `doctor_relay.rs::a_relative_floor_override_warns`), and a multi-line description broke the pasted list (`relay/doctor.rs::tests::a_multiline_description_stays_on_its_line`). Mutations that read a `test -x` exit 1 as executable, and that built the paragraph from the floor instead of the snapshot, each turned tests red.
+- **Workstation run (AC 10).** Through `officina run`, a WSL action of a project whose folder holds accented and mixed-case letters and spaces started in that folder, and a value with accents and a space arrived as one argument; doctor's probe read the real Debian distro. Recorded in `docs/research-notes.md` (E13) with the WSL and Claude Code versions. Not run: the `ansible-playbook` check and apply on a lab group and PRD journey 2, which need the author's lab and work sessions; listed in `docs/backlog.md` (High).
+
 ### Completion Notes
 
+- AC 1: `crates/officina/tests/doctor_relay.rs::{issues_are_reported_with_lines, pending_change_is_reported, guarded_projects_are_listed}`, plus `a_workstation_without_the_relay_gets_no_relay_line`.
+- AC 2: host `crates/officina-host/src/relay/doctor.rs::tests::{wsl_probe_reports_each_missing_tool, wsl_probe_uses_exec_and_the_distro}`, plus `a_failed_probe_stops_probing_the_distro`, `without_wsl_exe_every_wsl_action_fails`, `probe_runs_report_exit_codes_and_deadlines`, `wsl_probe_on_an_installed_distro`; CLI `doctor_relay.rs::missing_native_program_fails`.
+- AC 3: `doctor_relay.rs::{long_timeout_warns, after_check_without_tree_binding_warns, relay_floor_mismatch_warns, gate_errors_are_reported}`, plus `after_check_without_its_check_in_the_project_warns` (story 2.6's known limit) and `a_relative_floor_override_warns`; host `tests::timeouts_reaching_the_bash_cap_warn`.
+- AC 4: `doctor_relay.rs::{missing_gate_with_a_guarded_project_exits_1, warnings_alone_exit_0}`.
+- AC 5: `doctor_relay.rs::{claude_md_paragraph_lists_the_projects_actions, paragraph_follows_the_catalogue, paragraph_without_approval_lists_nothing}` (the expected calls are read from the approved snapshot); host `tests::{paragraph_without_the_project_approved_lists_no_action, a_multiline_description_stays_on_its_line}`.
+- AC 6: `crates/officina/tests/quota_doctor.rs::no_command_writes_under_the_claude_config_dir` (doctor now also runs on an approved relay) and `doctor_relay.rs::doctor_writes_nothing_in_project_folders` (a git work tree with a tracked edit and an untracked file, `git` on doctor's `PATH`, the tree check asserted to have run).
+- AC 7: `crates/officina/tests/readme.rs::{readme_mentions_every_subcommand, readme_lists_no_default_guarded_program}`, both red on the README before the rewrite (`officina version` missing, a `wsl` code span); the prose is for review.
+- AC 8: `CHANGELOG.md` `[Unreleased]`, for review.
+- AC 9: the place for story 2.11's credential check is after the program checks (Debug Log).
+- AC 10: partly; see Debug Log and `docs/backlog.md`.
+- Gates at the end of the story: `cargo fmt --all -- --check`; `cargo clippy --workspace --all-targets --features officina-core/ts -- -D warnings` and the Linux job's crate set; `cargo test --workspace --features officina-core/ts` 414 passed, 0 failed, 5 ignored; `cargo deny check` ok. No board type, hook path or app file changed (no TypeScript regeneration, no perf or frontend gate affected).
+
 ## File List
+
+- `crates/officina-core/src/relay/{classes,run}.rs` (`WAIT_RANGE_S`, `BASH_TOOL_MAX_TIMEOUT_MS`)
+- `crates/officina-host/src/relay/{doctor,home,mod}.rs`, `crates/officina-host/src/doctor.rs`
+- `crates/officina/tests/{doctor_relay,readme,quota_doctor}.rs`, `crates/officina/tests/common/mod.rs`
+- `README.md`, `CHANGELOG.md`
+- `docs/research-notes.md`, `docs/backlog.md`
 
 ## Change Log
 
 - 2026-10-27 created
 - 2026-10-27 doctor part references the Credential Manager check of story 2.11
 - 2026-10-27 reworked after review: documentation incremental with an automated README test (D-34), dependencies limited to stories 2.1 to 2.7, decisions D-30 to D-33, `--cd` workstation check
+- 2026-10-28 implemented: doctor's relay checks and the `CLAUDE.md` paragraph, the README relay section and its test, the v0.2 changelog set, the `--cd` workstation run; adversarial pass (relative `OFFICINA_FLOOR`, multi-line descriptions); status Review, AC 10 partly open (lab group and journey 2)
