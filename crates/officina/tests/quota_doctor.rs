@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 use common::{TestEnv, fingerprint, now_ms, printed_hooks_block};
 use officina_core::board::Board;
 use officina_core::relay::gate::{gated_tools, gated_tools_matcher};
-use officina_core::relay::run::EXIT_REFUSED;
+use officina_core::relay::run::{EXIT_NOT_STARTED, EXIT_REFUSED};
 use officina_host::collector::{Collector, LoadedFloor};
 use officina_host::paths::Paths;
 use officina_host::watch::{CollectorMsg, spawn};
@@ -226,9 +226,12 @@ fn no_command_writes_under_the_claude_config_dir() {
     assert!(String::from_utf8_lossy(&deny.stdout).contains("\"deny\""));
     // Each command did what it does, by its documented exit code: so the
     // fingerprint below compares a config dir every one of them went
-    // through, not one a failing command left alone.
+    // through, not one a failing command left alone. Off Windows the floor
+    // names the tool by a Windows path (Linux is v1): the run is checked,
+    // journaled and not started.
+    let probe = if cfg!(windows) { 0 } else { EXIT_NOT_STARTED };
     for (args, code) in [
-        (&["run", "probe"][..], 0),
+        (&["run", "probe"][..], probe),
         (&["run", "health"], 0),
         (&["run", "--list"], 0),
         (&["run", "restart", "--wait", "1"], EXIT_REFUSED),
