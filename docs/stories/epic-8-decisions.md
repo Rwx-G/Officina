@@ -250,3 +250,7 @@ What the PRD, the addendum and the code leave open or state twice for v0.8, sett
   - a targets action whose class is not `free` is an issue, since it runs inside the resolution with no check of its own; `TargetsFailure::Cut` means the targets run's stdout reached that action's `max_output_kib`, so a large inventory fails closed by a stated rule (F27).
 
   (8.3, 8.5, 8.8)
+
+## The owner's answers of 2026-10-28
+
+- **D-624.** PRD section 8 question 7 answered (the owner, 2026-10-28, answering the security officer's question): the company already has service accounts for this kind of use, read-only diagnostic access over SSH. So v0.8 does not need the framing's diagnostic accounts to be requested from scratch: the author points the read actions his workers use at such a service account in the catalogue (`args`, `env`, AD-22), with no Officina change, as PRD section 4's "Identity" paragraph already allows. Until the work catalogue names one, worker reads still run under the author's own SSH identity, bounded by the catalogue (unchanged). Recorded by kind only: the company, its hosts, the accounts' names and their key arrangements never enter the repository (`officina-project.md`, *No employer content*). Story 8.16's QA report records question 7 as answered by this decision; whether each read action the owner lists for workers uses the service account is his catalogue's to say, and doctor's identity line (D-421) shows which identity an action runs under. Number from the v0.6 rework's range (`epic-6-decisions.md` D-600 to D-629). (8.15, 8.16)
