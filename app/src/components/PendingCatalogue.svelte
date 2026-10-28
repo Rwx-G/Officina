@@ -3,7 +3,8 @@
   // field and the Approve button, shown as the Board view's banner and in
   // the Relay view. Catalogue text comes from a floor a session may have
   // edited: it is rendered as text only.
-  import { fieldLines, isPointerClick, shown, type RelayStore } from "../lib/relay.svelte";
+  import { isPointerClick } from "../lib/pointer";
+  import { fieldLines, shown, type RelayStore } from "../lib/relay.svelte";
   import type { CanonicalAction } from "../lib/generated/CanonicalAction";
   import type { CanonicalParam } from "../lib/generated/CanonicalParam";
   import type { FieldChange } from "../lib/generated/FieldChange";

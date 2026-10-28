@@ -5,7 +5,7 @@
   // as text: arguments, descriptions and outputs come from files a session
   // can write.
   import type { ApprovalView } from "../lib/generated/ApprovalView";
-  import { isPointerClick } from "../lib/relay.svelte";
+  import { isPointerClick } from "../lib/pointer";
   import { bindingText } from "../lib/relay-text";
   import { ago, duration } from "../lib/time";
 

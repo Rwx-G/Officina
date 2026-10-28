@@ -4,7 +4,8 @@
   // recent activity and the journal's own diagnostics. Approvals of `human`
   // actions are not here: they are decided on their cards in Needs you.
   // Every text is rendered as text.
-  import { isPointerClick, type RelayStore } from "../lib/relay.svelte";
+  import { isPointerClick } from "../lib/pointer";
+  import type { RelayStore } from "../lib/relay.svelte";
   import { ANOMALY_TEXT } from "../lib/relay-text";
   import { clock, hours } from "../lib/time";
   import CatalogueTable from "./CatalogueTable.svelte";

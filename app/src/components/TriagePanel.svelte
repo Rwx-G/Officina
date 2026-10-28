@@ -10,7 +10,7 @@
   import { tick } from "svelte";
   import type { TriageRow as Row } from "../lib/generated/TriageRow";
   import type { LeftOut, RegistryStore } from "../lib/registry.svelte";
-  import { isPointerClick } from "../lib/relay.svelte";
+  import { isPointerClick } from "../lib/pointer";
   import TriageEvidence from "./TriageEvidence.svelte";
   import TriageRow from "./TriageRow.svelte";
 
@@ -86,29 +86,24 @@
     if (event.ctrlKey || event.altKey || event.metaKey) return;
     const target = event.target as HTMLElement;
     if (["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName)) return;
-    const handled = ["ArrowDown", "ArrowUp", "f", "t", "Enter"];
-    if (!handled.includes(event.key)) return;
+    // The keys the panel takes, each with what it does: one map, so a
+    // key is handled exactly when it has an action.
+    const actions: Record<string, () => void> = {
+      ArrowDown: () => void focusRow(Math.min(index + 1, rows.length - 1)),
+      ArrowUp: () => void focusRow(Math.max(index - 1, 0)),
+      f: () => store.setVerdict(row.key, "finished"),
+      t: () => store.setVerdict(row.key, "to_resume"),
+      Enter: () => {
+        if (!store.confirming[row.key]) void store.confirm([row]);
+      },
+    };
+    const action = Object.hasOwn(actions, event.key) ? actions[event.key] : undefined;
+    if (action === undefined) return;
     // Enter on a button inside the row is that button's own.
     if (event.key === "Enter" && target !== event.currentTarget) return;
     event.preventDefault();
     if (event.repeat) return;
-    switch (event.key) {
-      case "ArrowDown":
-        void focusRow(Math.min(index + 1, rows.length - 1));
-        break;
-      case "ArrowUp":
-        void focusRow(Math.max(index - 1, 0));
-        break;
-      case "f":
-        store.setVerdict(row.key, "finished");
-        break;
-      case "t":
-        store.setVerdict(row.key, "to_resume");
-        break;
-      case "Enter":
-        if (!store.confirming[row.key]) void store.confirm([row]);
-        break;
-    }
+    action();
   }
 
   function confirmAll(event: MouseEvent): void {

@@ -15,12 +15,6 @@ export interface RefusedApproval {
   message: string;
 }
 
-/** True for a click made with a pointer. Enter and Space on a focused button
- *  also fire `click`, with `detail` 0: no key approves (AD-35, D-28). */
-export function isPointerClick(event: MouseEvent): boolean {
-  return event.detail > 0;
-}
-
 /** True when the relay asks something of the author or holds something: a
  *  workstation without it shows no relay control at all. */
 export function relayInUse(relay: RelayView | null): boolean {

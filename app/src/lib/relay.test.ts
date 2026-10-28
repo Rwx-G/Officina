@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render } from "@testing-library/svelte";
-import { fieldLines, isPointerClick, relayInUse, RelayStore, shown } from "./relay.svelte";
+import { isPointerClick } from "./pointer";
+import { fieldLines, relayInUse, RelayStore, shown } from "./relay.svelte";
 import RelayBanners from "../components/RelayBanners.svelte";
 import type { RelayView } from "./generated/RelayView";
 import type { CanonicalCatalogue } from "./generated/CanonicalCatalogue";
