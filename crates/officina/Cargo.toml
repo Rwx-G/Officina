@@ -19,6 +19,12 @@ path = "src/bin/officina-fake-claude.rs"
 test = false
 doc = false
 
+[[bin]]
+name = "officina-fake-tool"
+path = "src/bin/officina-fake-tool.rs"
+test = false
+doc = false
+
 [dependencies]
 officina-host.workspace = true
 serde_json.workspace = true

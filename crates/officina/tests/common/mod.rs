@@ -4,12 +4,15 @@
 
 #![allow(dead_code)] // each test file uses a different subset of the helpers
 
+pub mod fake_output;
+
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
 pub const OFFICINA: &str = env!("CARGO_BIN_EXE_officina");
 pub const FAKE_CLAUDE: &str = env!("CARGO_BIN_EXE_officina-fake-claude");
+pub const FAKE_TOOL: &str = env!("CARGO_BIN_EXE_officina-fake-tool");
 
 pub struct TestEnv {
     pub root: tempfile::TempDir,
@@ -127,6 +130,37 @@ pub fn read_events(env: &TestEnv) -> Vec<serde_json::Value> {
         }
     }
     lines
+}
+
+/// The launches `officina-fake-tool` logged in `log`, one JSON value each;
+/// empty when it never ran.
+pub fn read_tool_log(log: &Path) -> Vec<serde_json::Value> {
+    std::fs::read_to_string(log)
+        .unwrap_or_default()
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect()
+}
+
+/// Bytes the fake tool's heartbeat grandchild wrote so far.
+pub fn heartbeat_len(file: &Path) -> u64 {
+    std::fs::metadata(file).map(|m| m.len()).unwrap_or(0)
+}
+
+/// True when the heartbeat in `file` no longer grows: unchanged over half a
+/// second, five beats.
+pub fn heartbeat_stopped(file: &Path) -> bool {
+    let before = heartbeat_len(file);
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    heartbeat_len(file) == before
+}
+
+/// Ends a heartbeat grandchild that nothing else ended (see the fake tool).
+pub fn stop_heartbeat(file: &Path) {
+    let mut stop = file.as_os_str().to_owned();
+    stop.push(".stop");
+    let _ = std::fs::write(PathBuf::from(stop), b"");
 }
 
 pub fn now_ms() -> i64 {
