@@ -13,6 +13,7 @@ pub mod gate;
 pub mod home;
 pub mod http;
 pub mod journal;
+pub mod known_projects;
 pub mod run;
 pub mod tree;
 pub mod view;

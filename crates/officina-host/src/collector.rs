@@ -18,8 +18,9 @@ use crate::claude;
 use crate::files::{atomic_write, read_recent_events};
 use crate::paths::{ENV_FLOOR, Paths, env_path, excerpts_disabled_by_env};
 use crate::relay::approvals::board_approvals;
-use crate::relay::credential::OwnedStore;
+use crate::relay::credential::{CredentialStore, OwnedStore};
 use crate::relay::home::RelayHome;
+use crate::relay::known_projects::KnownProjectsKeeper;
 use crate::relay::tree::{self, TreeResult};
 
 /// How long the window trusts a project's tree fingerprint before it runs
@@ -98,41 +99,60 @@ pub struct ContractRecord {
     pub not_observed: Vec<String>,
 }
 
-/// The collector's state between two boards.
+/// Tree fingerprints of the projects with a pending dry run, by folder,
+/// with when they were taken (D-170), each taken again once
+/// [`TREE_RECHECK`] has passed. Interior: a board is built from `&self`.
+#[derive(Debug, Default)]
+struct TreeCache(RefCell<BTreeMap<PathBuf, (Instant, TreeResult)>>);
+
+impl TreeCache {
+    fn fingerprint(&self, dir: &Path) -> TreeResult {
+        let mut trees = self.0.borrow_mut();
+        if let Some((at, found)) = trees.get(dir)
+            && at.elapsed() < TREE_RECHECK
+        {
+            return found.clone();
+        }
+        let found = tree::fingerprint(dir);
+        trees.insert(dir.to_path_buf(), (Instant::now(), found.clone()));
+        found
+    }
+}
+
+/// The collector's state between two boards: every field private, so what
+/// it reads and writes goes through its methods.
 #[derive(Debug)]
 pub struct Collector {
     /// The paths in use: the environment's, with the floor's `config_dir`.
-    pub paths: Paths,
+    paths: Paths,
     /// The environment's paths, before the floor: a reloaded floor's
     /// `config_dir` applies to these.
     base_paths: Paths,
-    pub floor: LoadedFloor,
-    pub claude: Option<PathBuf>,
-    /// Where the relay's files are, and which floor it reads (AD-24, D-8).
-    pub relay: RelayHome,
-    /// Where the window checks the presence of the approved credentials
-    /// (D-41): the Credential Manager; a fake in tests.
-    pub credentials: OwnedStore,
+    floor: LoadedFloor,
+    claude: Option<PathBuf>,
+    relay: RelayHome,
+    credentials: OwnedStore,
     agents: Option<Vec<AgentRecord>>,
     agents_raw: Option<Vec<serde_json::Value>>,
     stale: Option<Staleness>,
     contract: ContractView,
-    /// Tree fingerprints of the projects with a pending dry run, by folder,
-    /// with when they were taken (D-170).
-    trees: RefCell<BTreeMap<PathBuf, (Instant, TreeResult)>>,
+    trees: TreeCache,
+    known_projects: KnownProjectsKeeper,
 }
 
 impl Collector {
-    /// Resolves paths, the floor and the `claude` binary.
+    /// Resolves paths, the floor and the `claude` binary; the relay reads
+    /// the floor `OFFICINA_FLOOR` names, if any.
     pub fn new(floor_arg: Option<&Path>) -> Result<Collector, CollectorError> {
         let paths = Paths::from_env(floor_arg).ok_or(CollectorError::NoHome)?;
         let floor = load_floor(paths.floor_file.as_deref());
-        let mut collector = Collector::from_parts(paths, floor, claude::resolve_claude());
-        collector.relay = RelayHome::new(
-            collector.base_paths.officina_home.clone(),
-            env_path(ENV_FLOOR),
-        );
-        Ok(collector)
+        let relay = RelayHome::new(paths.officina_home.clone(), env_path(ENV_FLOOR));
+        Ok(Collector::assemble(
+            paths,
+            floor,
+            claude::resolve_claude(),
+            relay,
+        ))
     }
 
     /// Builds a collector from already resolved parts: `paths` as the
@@ -141,10 +161,20 @@ impl Collector {
     /// `OFFICINA_FLOOR`. Used by tests, which must not depend on the process
     /// environment.
     pub fn from_parts(paths: Paths, floor: LoadedFloor, claude: Option<PathBuf>) -> Collector {
+        let relay = RelayHome::new(paths.officina_home.clone(), None);
+        Collector::assemble(paths, floor, claude, relay)
+    }
+
+    fn assemble(
+        paths: Paths,
+        floor: LoadedFloor,
+        claude: Option<PathBuf>,
+        relay: RelayHome,
+    ) -> Collector {
         let config_dir = floor.file.as_ref().and_then(|f| f.config_dir.clone());
         let applied = paths.clone().with_floor_config_dir(config_dir.as_deref());
         Collector {
-            relay: RelayHome::new(paths.officina_home.clone(), None),
+            relay,
             credentials: OwnedStore::system(),
             paths: applied,
             base_paths: paths,
@@ -154,8 +184,48 @@ impl Collector {
             agents_raw: None,
             stale: None,
             contract: ContractView::default(),
-            trees: RefCell::default(),
+            trees: TreeCache::default(),
+            known_projects: KnownProjectsKeeper::default(),
         }
+    }
+
+    /// The collector checking credentials in `store` (D-41): the
+    /// Credential Manager by default, a fake in tests.
+    pub fn with_credential_store(mut self, store: OwnedStore) -> Collector {
+        self.credentials = store;
+        self
+    }
+
+    /// The paths in use: the environment's, with the floor's `config_dir`.
+    pub fn paths(&self) -> &Paths {
+        &self.paths
+    }
+
+    /// The floor file as last loaded.
+    pub fn floor(&self) -> &LoadedFloor {
+        &self.floor
+    }
+
+    /// The `claude` binary, when one was found.
+    pub fn claude(&self) -> Option<&Path> {
+        self.claude.as_deref()
+    }
+
+    /// Where the relay's files are, and which floor it reads (AD-24, D-8).
+    pub fn relay(&self) -> &RelayHome {
+        &self.relay
+    }
+
+    /// Where the window checks the presence of the approved credentials
+    /// (D-41).
+    pub fn credential_store(&self) -> &dyn CredentialStore {
+        self.credentials.0.as_ref()
+    }
+
+    /// Keeps `relay/known-projects.json` current (D-15); a write that fails
+    /// is journaled once as a gate error, and returned while it stands.
+    pub fn keep_known_projects(&mut self, now_ms: i64) -> Option<&str> {
+        self.known_projects.keep(&self.relay, now_ms)
     }
 
     /// The floor file the window watches: the one configured, else
@@ -287,25 +357,11 @@ impl Collector {
             projects: self.floor.projects.clone(),
             contract: self.contract.clone(),
             no_excerpts: excerpts_disabled_by_env() || floor_file.is_some_and(|f| f.no_excerpts),
-            approvals: board_approvals(&self.relay, now_ms, &mut |dir| self.tree_of(dir)),
+            approvals: board_approvals(&self.relay, now_ms, &mut |dir| self.trees.fingerprint(dir)),
         };
         let mut board = build_board(&input, now_ms);
         board.diagnostics.floor_error.clone_from(&self.floor.error);
         board
-    }
-
-    /// The tree fingerprint of `dir`, taken again once [`TREE_RECHECK`] has
-    /// passed.
-    fn tree_of(&self, dir: &Path) -> TreeResult {
-        let mut trees = self.trees.borrow_mut();
-        if let Some((at, found)) = trees.get(dir)
-            && at.elapsed() < TREE_RECHECK
-        {
-            return found.clone();
-        }
-        let found = tree::fingerprint(dir);
-        trees.insert(dir.to_path_buf(), (Instant::now(), found.clone()));
-        found
     }
 
     /// Looks up a card of the last board by key, for the focus action.

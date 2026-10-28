@@ -9,8 +9,13 @@ use std::path::{Path, PathBuf};
 use common::TestHome;
 use officina_core::relay::approvals::{FileKind, file_name, kept_output_name};
 use officina_core::relay::catalogue::{ApprovedCatalogue, load};
+use officina_core::relay::journal::{GateError, GateFault};
+use officina_core::relay::view::RecentEvent;
+use officina_host::files::now_ms;
 use officina_host::relay::approvals::prune;
 use officina_host::relay::home::{ApprovedState, RelayFloorError, RelayHome, load_relay_floor};
+use officina_host::relay::known_projects::KnownProjectsKeeper;
+use officina_host::relay::view::read_view;
 
 const FLOOR: &str = "schema = 2\n\n[[project]]\nname = \"lab\"\npath = \"Lab\"\nactions = [\"probe\"]\n\n[[action]]\nname = \"probe\"\nclass = \"free\"\nprogram = \"C:/path/to/tool.exe\"\n";
 
@@ -274,4 +279,41 @@ fn run_never_deletes_approval_files() {
         })
         .count();
     assert_eq!(requests, 2, "the old request and the new one");
+}
+
+/// Story 2.15 AC 6 (D-15): a known-projects record the window cannot write
+/// is journaled as a gate error, once and not once per pass, which the
+/// relay view lists; a write that succeeds again ends it.
+#[test]
+fn a_known_projects_write_error_is_reported() {
+    let test = TestHome::new();
+    let home = test.relay(None);
+    test.write(&home.default_floor(), FLOOR);
+    std::fs::create_dir_all(home.known_projects_file()).unwrap();
+    let mut keeper = KnownProjectsKeeper::default();
+    let now = now_ms();
+    let failing = keeper
+        .keep(&home, now)
+        .map(str::to_owned)
+        .expect("a folder where the record goes fails the write");
+    assert!(failing.contains("known-projects.json"), "{failing}");
+    assert_eq!(keeper.keep(&home, now), Some(failing.as_str()));
+
+    let view = read_view(&home, now).unwrap();
+    let errors: Vec<&GateError> = view
+        .recent
+        .iter()
+        .filter_map(|entry| match &entry.event {
+            RecentEvent::GateError(error) => Some(error),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert_eq!(errors[0].cause, GateFault::KnownProjectsUnwritable);
+    assert_eq!(errors[0].detail, failing);
+    assert_eq!(view.gate_errors_24h, 1);
+
+    std::fs::remove_dir(home.known_projects_file()).unwrap();
+    assert_eq!(keeper.keep(&home, now), None, "the write succeeds again");
+    assert!(home.read_known_projects().is_some());
 }

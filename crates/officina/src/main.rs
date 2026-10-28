@@ -126,7 +126,7 @@ fn board(floor: Option<&PathBuf>) -> ExitCode {
         Err(code) => return code,
     };
     let now = now_ms();
-    officina_host::files::retention_pass(&collector.paths.events_dir(), now);
+    officina_host::files::retention_pass(&collector.paths().events_dir(), now);
     collector.refresh_agents(now);
     let board = collector.board(now);
     match serde_json::to_string_pretty(&board) {

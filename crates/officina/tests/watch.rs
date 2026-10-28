@@ -59,9 +59,8 @@ fn watch_with(
         Some(path) => load_floor(Some(path)),
         None => LoadedFloor::default(),
     };
-    let mut collector =
-        Collector::from_parts(paths, loaded, Some(PathBuf::from(common::FAKE_CLAUDE)));
-    collector.credentials = OwnedStore(Box::new(store));
+    let collector = Collector::from_parts(paths, loaded, Some(PathBuf::from(common::FAKE_CLAUDE)))
+        .with_credential_store(OwnedStore(Box::new(store)));
     let (boards, board_rx) = mpsc::channel::<Board>();
     let (views, view_rx) = mpsc::channel::<RelayView>();
     let handle = spawn(

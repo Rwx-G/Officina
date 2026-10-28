@@ -269,7 +269,7 @@ fn read_json(path: &Path) -> Option<serde_json::Value> {
 /// Runs every check. `exe` is the path of the running `officina` binary.
 pub fn run(collector: &Collector, exe: &Path) -> Vec<Check> {
     let now = now_ms();
-    let paths = &collector.paths;
+    let paths = collector.paths();
     let user_settings = paths.claude_config_dir.join("settings.json");
     let relay = RelayHome::new(paths.officina_home.clone(), env_path(ENV_FLOOR));
     let required = registrations(gate_required(&relay));
@@ -282,7 +282,7 @@ pub fn run(collector: &Collector, exe: &Path) -> Vec<Check> {
     let system_dir = crate::relay::home::system_dir();
     checks.extend(relay_doctor::checks(&RelayDoctor {
         home: &relay,
-        doctor_floor: collector.floor.path.as_deref(),
+        doctor_floor: collector.floor().path.as_deref(),
         system_dir: system_dir.as_deref(),
         now_ms: now,
     }));
@@ -291,14 +291,14 @@ pub fn run(collector: &Collector, exe: &Path) -> Vec<Check> {
 
 /// `claude --version`, then `claude agents --json` against the contract.
 fn check_claude(collector: &Collector) -> Vec<Check> {
-    let Some(bin) = &collector.claude else {
+    let Some(bin) = collector.claude() else {
         return vec![check(
             Level::Fail,
             "claude",
             claude::ClaudeError::NotFound.to_string(),
         )];
     };
-    let config_dir = collector.paths.claude_config_override.as_deref();
+    let config_dir = collector.paths().claude_config_override.as_deref();
     let version = match claude::version(bin, config_dir) {
         Ok(v) => check(Level::Ok, "claude", format!("{v} at {}", bin.display())),
         Err(e) => check(Level::Fail, "claude", e.to_string()),
@@ -414,7 +414,7 @@ fn check_quota(collector: &Collector, user_settings: &Path, exe: &Path, now: i64
         detail: format!(
             "{} for account {}. Wire one personal statusline (user settings or .claude/settings.local.json, never a committed file):",
             if found.is_some() { "stale" } else { "no data" },
-            collector.paths.account_key()
+            collector.paths().account_key()
         ),
         paste: Some(statusline_snippet(exe, existing.as_deref())),
     }
@@ -438,7 +438,7 @@ fn check_officina_home(home: &Path) -> Check {
 
 /// The floor file, if any, loaded without error.
 fn check_floor(collector: &Collector) -> Check {
-    match (&collector.floor.path, &collector.floor.error) {
+    match (&collector.floor().path, &collector.floor().error) {
         (None, _) => check(
             Level::Ok,
             "floor",
@@ -450,7 +450,7 @@ fn check_floor(collector: &Collector) -> Check {
             format!(
                 "{} ({} projects)",
                 p.display(),
-                collector.floor.projects.len()
+                collector.floor().projects.len()
             ),
         ),
         (Some(_), Some(e)) => check(Level::Fail, "floor", e.clone()),

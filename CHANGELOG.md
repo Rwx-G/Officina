@@ -244,6 +244,10 @@ project uses [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- The window says when it cannot write `relay/known-projects.json`, the
+  record a broken floor falls back to: one `known_projects_unwritable` gate
+  error in the journal, listed in the Relay view and counted by
+  `officina doctor`, where the failure used to pass silently.
 - A `claude` call that timed out now ends with every process it started
   (a Windows job object), instead of leaving them running and holding the
   board's reader threads.

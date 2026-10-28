@@ -225,8 +225,8 @@ fn main() {
         }))
         .setup(|app| {
             let collector = Collector::new(floor_arg().as_deref())?;
-            let claude = collector.claude.clone();
-            let relay_home = collector.relay.clone();
+            let claude = collector.claude().map(std::path::Path::to_path_buf);
+            let relay_home = collector.relay().clone();
             // From now on, a decision the window did not make shows (D-173).
             if let Err(e) = authority::ensure_record(&relay_home) {
                 eprintln!("officina: the decision record could not be started: {e}");

@@ -332,9 +332,10 @@ pub struct Refused {
 
 closed_enum! {
     #[serde(rename_all = "snake_case")]
-    /// Why the gate journals a `gate_error` (AD-28, D-15): an input it could
-    /// not read, which made it stricter, or an internal fault, which made it
-    /// decide nothing. Also the journal's `cause` vocabulary.
+    /// Why a `gate_error` is journaled (AD-28, D-15): an input the gate
+    /// could not read, which made it stricter, an internal fault, which made
+    /// it decide nothing, or a gate input the window could not write. Also
+    /// the journal's `cause` vocabulary.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
     #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
     pub enum GateFault {
@@ -352,6 +353,9 @@ closed_enum! {
         /// The floor and the snapshot both failed and the known-projects
         /// record cannot be read either: nothing is guarded.
         KnownProjectsUnreadable,
+        /// The window could not write the known-projects record: what a
+        /// broken floor falls back to (D-15) stays as it was.
+        KnownProjectsUnwritable,
         /// A panic inside the gate: no decision (AD-28).
         Panic,
     }

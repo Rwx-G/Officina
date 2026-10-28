@@ -1,7 +1,7 @@
 //! The collector thread of the window (AD-3 to AD-5, AD-35): stat polling,
 //! refresh plan, diff before emit, for the board and the relay view.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, RwLock};
@@ -9,12 +9,10 @@ use std::time::{Duration, Instant, SystemTime};
 
 use officina_core::board::Board;
 use officina_core::dates::event_file_name;
-use officina_core::floor::parse_floor;
-use officina_core::relay::catalogue::{KNOWN_PROJECTS_SCHEMA, KnownProjects, relay_in_use};
 use officina_core::relay::view::RelayView;
 
 use crate::collector::Collector;
-use crate::files::{atomic_write, event_file_for, now_ms, retention_pass};
+use crate::files::{event_file_for, now_ms, retention_pass};
 use crate::paths::Paths;
 use crate::relay::home::RelayHome;
 use crate::relay::view::{credential_presence, read_view_with};
@@ -336,12 +334,12 @@ struct WatchedPaths {
 
 impl WatchedPaths {
     fn new(collector: &Collector) -> WatchedPaths {
-        let events_dir = collector.paths.events_dir();
-        let sessions_dir = collector.paths.claude_sessions_dir();
-        let quota_file = collector.paths.quota_file();
-        let claude = collector.claude.clone();
+        let events_dir = collector.paths().events_dir();
+        let sessions_dir = collector.paths().claude_sessions_dir();
+        let quota_file = collector.paths().quota_file();
+        let claude = collector.claude().map(Path::to_path_buf);
         let floor_file = collector.watched_floor();
-        let relay = collector.relay.clone();
+        let relay = collector.relay().clone();
         let relay_floor_file = relay.relay_floor(&relay.read_approved());
         WatchedPaths {
             event_file: stamp(&event_file_for(&events_dir, now_ms())),
@@ -437,7 +435,7 @@ pub fn spawn(
     let (sender, receiver) = mpsc::channel();
     let board = Arc::new(RwLock::new(None));
     let relay = Arc::new(RwLock::new(None));
-    let paths = Arc::new(RwLock::new(collector.paths.clone()));
+    let paths = Arc::new(RwLock::new(collector.paths().clone()));
     let outputs = Outputs {
         board: Arc::clone(&board),
         emit_board: emit,
@@ -463,10 +461,10 @@ fn run(
     outputs: &Outputs<impl Fn(&Board), impl Fn(&RelayView)>,
 ) {
     let retention = |collector: &Collector| {
-        retention_pass(&collector.paths.events_dir(), now_ms());
-        crate::focus::prune_focus_log(&collector.paths.state_dir(), now_ms());
-        crate::relay::approvals::prune(&collector.relay, SystemTime::now());
-        crate::relay::journal::prune(&collector.relay, now_ms());
+        retention_pass(&collector.paths().events_dir(), now_ms());
+        crate::focus::prune_focus_log(&collector.paths().state_dir(), now_ms());
+        crate::relay::approvals::prune(collector.relay(), SystemTime::now());
+        crate::relay::journal::prune(collector.relay(), now_ms());
     };
     retention(collector);
     let mut watched = WatchedPaths::new(collector);
@@ -486,7 +484,7 @@ fn run(
         if watched.poll(&mut plan) {
             collector.reload_floor();
             if let Ok(mut paths) = outputs.paths.write() {
-                paths.clone_from(&collector.paths);
+                paths.clone_from(collector.paths());
             }
             watched = WatchedPaths::new(collector);
             plan.floor_changed();
@@ -510,12 +508,12 @@ fn run(
             );
         }
         if due.relay {
-            keep_known_projects(&collector.relay);
+            collector.keep_known_projects(now_ms());
             if due.credentials {
-                presence = credential_presence(&collector.relay, collector.credentials.0.as_ref());
+                presence = credential_presence(collector.relay(), collector.credential_store());
             }
             // A home that cannot be read keeps the last view.
-            if let Ok(view) = read_view_with(&collector.relay, now_ms(), Some(&presence)) {
+            if let Ok(view) = read_view_with(collector.relay(), now_ms(), Some(&presence)) {
                 publish_relay(
                     view,
                     &outputs.relay,
@@ -562,53 +560,6 @@ fn publish_relay(
     if bytes != *last_bytes {
         *last_bytes = bytes;
         emit(&view);
-    }
-}
-
-/// Keeps `relay/known-projects.json`, the gate's last readable state (D-15),
-/// current: on every valid read of the relay floor (phase 1) or of the
-/// snapshot, the record holds the project paths of both and the approved
-/// hash, the recorded one when the snapshot cannot be read, and is written
-/// atomically when its content changes. Only while the relay is in use (a
-/// valid snapshot, a record already there, or a floor that declares an
-/// action or a guarded project): a record makes a broken floor guard every
-/// known project, which a workstation without the relay must not get.
-fn keep_known_projects(home: &RelayHome) {
-    let approved = home.read_approved();
-    let floor_path = home.relay_floor(&approved);
-    let floor = std::fs::read_to_string(&floor_path)
-        .ok()
-        .and_then(|content| parse_floor(&content).ok());
-    let snapshot = approved.approved();
-    let existing = home.read_known_projects();
-    let floor_in_use = floor.as_ref().is_some_and(relay_in_use);
-    if floor.is_none() && snapshot.is_none() {
-        return;
-    }
-    if snapshot.is_none() && existing.is_none() && !floor_in_use {
-        return;
-    }
-    let mut paths: BTreeSet<String> = floor
-        .as_ref()
-        .map(|f| KnownProjects::from_floor(f, &floor_path.to_string_lossy(), None).project_paths)
-        .unwrap_or_default()
-        .into_iter()
-        .collect();
-    if let Some(snapshot) = snapshot {
-        paths.extend(snapshot.canonical.projects.values().map(|p| p.path.clone()));
-    }
-    let record = KnownProjects {
-        schema: KNOWN_PROJECTS_SCHEMA,
-        approved_hash: snapshot
-            .map(|s| s.hash.clone())
-            .or_else(|| existing.as_ref().and_then(|k| k.approved_hash.clone())),
-        project_paths: paths.into_iter().collect(),
-    };
-    if existing.as_ref() == Some(&record) {
-        return;
-    }
-    if let Ok(bytes) = serde_json::to_vec_pretty(&record) {
-        let _ = atomic_write(&home.known_projects_file(), &bytes);
     }
 }
 
