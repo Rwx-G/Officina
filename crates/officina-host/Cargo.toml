@@ -66,6 +66,10 @@ required-features = ["window-authority"]
 name = "registry_retention"
 required-features = ["window-authority"]
 
+[[test]]
+name = "registry_crash"
+required-features = ["window-authority"]
+
 # Approves, stops or resumes the relay of a fixture home through the
 # authority, for the e2e fixtures (D-25); never part of a shipped binary.
 [[example]]
