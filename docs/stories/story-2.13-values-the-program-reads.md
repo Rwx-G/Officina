@@ -18,11 +18,11 @@ so that I do not trust a closed argument vector to close what the program does w
 
 ## Tasks
 
-- [ ] Core: notice type, the two detection rules, notices beside issues in phase 2, out of the canonical form (AC 1, 2)
-- [ ] Host and window: notices in the relay view, banner, `relay --json`, doctor warnings (AC 3)
-- [ ] README correction and readme test (AC 4)
-- [ ] Journal: approval event fields, writers in `run` and `authority` (AC 5)
-- [ ] Update `CHANGELOG.md` `[Unreleased]` (Security for AC 1-4, Changed for AC 5)
+- [x] Core: notice type, the two detection rules, notices beside issues in phase 2, out of the canonical form (AC 1, 2)
+- [x] Host and window: notices in the relay view, banner, `relay --json`, doctor warnings (AC 3)
+- [x] README correction and readme test (AC 4)
+- [x] Journal: approval event fields, writers in `run` and `authority` (AC 5)
+- [x] Update `CHANGELOG.md` `[Unreleased]` (Security for AC 1-4, Changed for AC 5)
 
 ## Dev Notes
 

@@ -31,16 +31,16 @@ so that sessions can read those endpoints through the relay, journaled, without 
 
 ## Tasks
 
-- [ ] Verify the exact `ureq` version, feature names and crypto provider against the crate's documentation before writing `Cargo.toml` (see Dev Notes) (AC 5, 14)
-- [ ] Core: HTTP action and `[[credential]]` schema and issues, `relay::url` (template parse, encode), `relay::http` (request plan, header binding), `relay::credential` (blob decode), journal HTTP fields, canonical and diff, approval rebuild for HTTP, view (AC 1-4, 6, 9, 11, 12)
-- [ ] `tests/vectors/url.json` and `crates/officina-core/tests/url_vectors.rs`; re-pin the golden hash (AC 2, 3)
-- [ ] Host: `CredentialStore` trait, Windows `CredReadW` implementation in `platform/windows.rs`, `Secret`; `relay::http` executor on `ureq`; `run` dispatch for `kind = "http"` with the credential read before the approval is consumed (AC 4-10)
-- [ ] `RelayView.credentials`, collector presence check with its rate limit, window rendering, fixture scenario through the `approve_fixture` example (D-25); regenerate TypeScript (AC 12)
-- [ ] Doctor credential check and `cmdkey` line (AC 13)
-- [ ] Dependencies, `cargo deny`, CI "no bundled roots" step (AC 14)
-- [ ] Stub server test support, `crates/officina/tests/http.rs`, `crates/officina-host/tests/relay_http.rs`; extend refusal, zero-write and perf runs (AC 5-10, 15, 16)
-- [ ] README relay section and `CHANGELOG.md` `[Unreleased]` (AC 17)
-- [ ] Manual check (AC 18)
+- [x] Verify the exact `ureq` version, feature names and crypto provider against the crate's documentation before writing `Cargo.toml` (see Dev Notes) (AC 5, 14)
+- [x] Core: HTTP action and `[[credential]]` schema and issues, `relay::url` (template parse, encode), `relay::http` (request plan, header binding), `relay::credential` (blob decode), journal HTTP fields, canonical and diff, approval rebuild for HTTP, view (AC 1-4, 6, 9, 11, 12)
+- [x] `tests/vectors/url.json` and `crates/officina-core/tests/url_vectors.rs`; re-pin the golden hash (AC 2, 3)
+- [x] Host: `CredentialStore` trait, Windows `CredReadW` implementation in `platform/windows.rs`, `Secret`; `relay::http` executor on `ureq`; `run` dispatch for `kind = "http"` with the credential read before the approval is consumed (AC 4-10)
+- [x] `RelayView.credentials`, collector presence check with its rate limit, window rendering, fixture scenario through the `approve_fixture` example (D-25); regenerate TypeScript (AC 12)
+- [x] Doctor credential check and `cmdkey` line (AC 13)
+- [x] Dependencies, `cargo deny`, CI "no bundled roots" step (AC 14)
+- [x] Stub server test support, `crates/officina/tests/http.rs`, `crates/officina-host/tests/relay_http.rs`; extend refusal, zero-write and perf runs (AC 5-10, 15, 16)
+- [x] README relay section and `CHANGELOG.md` `[Unreleased]` (AC 17)
+- [ ] Manual check (AC 18): open, the owner's to run (backlog, High)
 
 ## Dev Notes
 
