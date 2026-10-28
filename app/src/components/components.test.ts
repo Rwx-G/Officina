@@ -34,6 +34,7 @@ function card(overrides: Partial<Card> = {}): Card {
     last_event_at_ms: NOW - 4 * 60_000,
     started_at_ms: NOW - 60 * 60_000,
     attach_available: false,
+    subject: null,
     ...overrides,
   };
 }

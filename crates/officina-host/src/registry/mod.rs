@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 
 #[cfg(feature = "window-authority")]
 pub mod agents;
+pub mod commands;
 #[cfg(feature = "window-authority")]
 pub mod ingest;
 pub mod read;

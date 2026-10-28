@@ -1,4 +1,5 @@
-//! `officina board --json` end to end (story 1.5, FR-1, FR-14).
+//! `officina board --json` end to end (story 1.5, FR-1, FR-14; story 3.4
+//! AC 9: cards carry their subject).
 
 mod common;
 
@@ -380,6 +381,102 @@ fn board_json_reports_the_registry_state_with_the_window_closed() {
     assert_eq!(state(&unavailable), RegistryState::Unavailable.code());
     assert!(
         unavailable["diagnostics"]["registry"]["detail"]
+            .as_str()
+            .is_some()
+    );
+}
+
+/// AD-54: `board --json` fills each card's subject from the read-only
+/// registry, by the card's session id, with the window closed.
+#[test]
+fn cards_carry_their_subject() {
+    use officina_core::registry::confirm::SubjectOrigin;
+    use officina_host::registry::ingest::IngestContext;
+    let env = TestEnv::new();
+    let now = now_ms();
+    env.write_agents(&agents_fixture(now));
+    for session in [
+        "00000000-0000-0000-0000-000000000001",
+        "00000000-0000-0000-0000-000000000002",
+    ] {
+        let payload = serde_json::json!({"hook_event_name": "UserPromptSubmit",
+            "session_id": session, "cwd": "C:/work/repo-a", "prompt": "x"});
+        env.run(&["hook"], payload.to_string().as_bytes());
+    }
+    let mut writer = officina_host::registry::store::open_writer(&env.officina_home(), &[], now)
+        .writer()
+        .unwrap();
+    let (events, home) = (env.events_dir(), env.officina_home());
+    writer
+        .ingest(
+            &IngestContext {
+                events_dir: &events,
+                officina_home: &home,
+                projects: &[],
+                no_excerpts: false,
+            },
+            now,
+        )
+        .unwrap();
+    let id = writer
+        .create_subject(
+            "permissions",
+            SubjectOrigin::Sessions(vec!["00000000-0000-0000-0000-000000000001".into()]),
+            now,
+        )
+        .unwrap();
+    drop(writer);
+
+    let (code, board) = board(&env);
+    assert_eq!(code, Some(0));
+    let card = |key: &str| {
+        board["columns"]
+            .as_object()
+            .unwrap()
+            .values()
+            .flat_map(|cards| cards.as_array().unwrap())
+            .find(|card| card["key"].as_str().unwrap().starts_with(key))
+            .unwrap()
+            .clone()
+    };
+    assert_eq!(
+        card("pid:4100")["subject"],
+        serde_json::json!({"id": id, "name": "permissions"})
+    );
+    assert!(card("pid:4200")["subject"].is_null(), "unfiled");
+    assert!(
+        card("bg:bg01")["subject"].is_null(),
+        "unknown to the registry"
+    );
+    assert_eq!(board["schema"], officina_core::board::BOARD_SCHEMA);
+}
+
+/// D-47: with a registry that cannot be read, every card's subject is null
+/// and `diagnostics.registry` says why.
+#[test]
+fn unreadable_registry_leaves_subjects_null_with_the_reason() {
+    use officina_core::registry::types::RegistryState;
+    let env = TestEnv::new();
+    env.write_agents(&agents_fixture(now_ms()));
+    let registry = officina_host::registry::RegistryPaths::new(&env.officina_home());
+    std::fs::create_dir_all(registry.dir()).unwrap();
+    std::fs::write(registry.database(), "not a database, ".repeat(300)).unwrap();
+    let (code, board) = board(&env);
+    assert_eq!(code, Some(0));
+    let cards: Vec<&serde_json::Value> = board["columns"]
+        .as_object()
+        .unwrap()
+        .values()
+        .flat_map(|cards| cards.as_array().unwrap())
+        .collect();
+    assert!(!cards.is_empty());
+    assert!(cards.iter().all(|card| card["subject"].is_null()));
+    assert_eq!(
+        board["diagnostics"]["registry"]["state"],
+        RegistryState::Unavailable.code()
+    );
+    assert!(
+        board["diagnostics"]["registry"]["detail"]
             .as_str()
             .is_some()
     );

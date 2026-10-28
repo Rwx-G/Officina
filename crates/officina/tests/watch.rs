@@ -789,6 +789,61 @@ fn a_session_first_seen_in_agents_gets_one_record() {
     stop(handle);
 }
 
+/// AD-48, D-79: a session first seen in `claude agents` joins the single
+/// active subject of its project at creation, like one first seen in an
+/// event, and its card shows it.
+#[test]
+fn a_session_first_seen_in_agents_is_filed() {
+    use officina_core::registry::confirm::SubjectOrigin;
+    let env = common::TestEnv::new();
+    let now = officina_host::files::now_ms();
+    hook_line(
+        &env,
+        serde_json::json!({"hook_event_name": "SessionStart", "session_id": "s-known", "cwd": "C:/work/api"}),
+        now - 60_000,
+    );
+    let subject = {
+        let events = env.events_dir();
+        let home = env.officina_home();
+        let mut writer = open_writer(&home, &[], now).writer().unwrap();
+        writer
+            .ingest(
+                &IngestContext {
+                    events_dir: &events,
+                    officina_home: &home,
+                    projects: &[],
+                    no_excerpts: false,
+                },
+                now,
+            )
+            .unwrap();
+        writer
+            .create_subject("rollout", SubjectOrigin::Project("api".into()), now)
+            .unwrap()
+    };
+    env.write_agents(&listed_session("s-agents", now));
+    let (handle, rx, _) = watch_listing(&env, |_| {});
+    let board = until(&rx, |b| {
+        b.columns
+            .all()
+            .any(|c| c.session_id.as_deref() == Some("s-agents") && c.subject.is_some())
+    });
+    let card = board
+        .columns
+        .all()
+        .find(|c| c.session_id.as_deref() == Some("s-agents"))
+        .unwrap();
+    assert_eq!(card.subject.as_ref().map(|s| s.id), Some(subject));
+    let records = records_once(&env, |r| record(r, "s-agents").is_some());
+    let filing = record(&records, "s-agents")
+        .unwrap()
+        .subject
+        .clone()
+        .unwrap();
+    assert_eq!((filing.value, filing.src), (Some(subject), Source::Rules));
+    stop(handle);
+}
+
 /// D-51: the snapshot is seeded from the registry at start, so a session
 /// that died while the window was closed is `interrupted` at the first
 /// refresh.

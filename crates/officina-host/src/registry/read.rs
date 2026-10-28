@@ -2,12 +2,14 @@
 //! and the queries it shares with the window's writer, each turning rows
 //! into core records.
 
+use std::collections::BTreeMap;
+
 use officina_core::registry::fold::pivot;
 #[cfg(feature = "window-authority")]
 use officina_core::registry::fold::{Mark, MarkQuery};
 use officina_core::registry::types::{
     EventFileRecord, ExcerptRecord, FactRow, FactValue, RestoreNotice, SessionRecord, SessionRow,
-    SettingKey, Source, Sourced, SubjectRecord, SubjectStatus,
+    SettingKey, Source, Sourced, SubjectRecord, SubjectRef, SubjectStatus,
 };
 #[cfg(feature = "window-authority")]
 use officina_core::registry::types::{HookEnd, HookStart, SessionFact};
@@ -117,6 +119,12 @@ impl Reader {
     pub fn subjects(&self) -> rusqlite::Result<Vec<SubjectRecord>> {
         subjects(&self.conn)
     }
+
+    /// The subject of each filed session, by session id: what a board card
+    /// shows (AD-54).
+    pub fn card_subjects(&self) -> rusqlite::Result<BTreeMap<String, SubjectRef>> {
+        card_subjects(&self.conn)
+    }
 }
 
 const SUBJECT_COLUMNS: &str =
@@ -150,6 +158,24 @@ pub(crate) fn subjects(conn: &Connection) -> rusqlite::Result<Vec<SubjectRecord>
         "SELECT {SUBJECT_COLUMNS} FROM subject ORDER BY id"
     ))?
     .query_map([], subject_row)?
+    .collect()
+}
+
+/// The subject of each filed session, by session id.
+pub(crate) fn card_subjects(conn: &Connection) -> rusqlite::Result<BTreeMap<String, SubjectRef>> {
+    conn.prepare_cached(
+        "SELECT session.session_id, subject.id, subject.name
+         FROM session JOIN subject ON subject.id = session.subject_id",
+    )?
+    .query_map([], |row| {
+        Ok((
+            row.get(0)?,
+            SubjectRef {
+                id: row.get(1)?,
+                name: row.get(2)?,
+            },
+        ))
+    })?
     .collect()
 }
 

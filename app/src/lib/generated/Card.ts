@@ -3,6 +3,7 @@ import type { Badge } from "./Badge";
 import type { Column } from "./Column";
 import type { ProjectView } from "./ProjectView";
 import type { SessionKindView } from "./SessionKindView";
+import type { SubjectRef } from "./SubjectRef";
 
 /**
  * One session on the board.
@@ -15,4 +16,11 @@ background_id: string | null, pid: number | null, cwd: string | null, waiting_fo
 /**
  * True when a click can open `claude attach` for this card.
  */
-attach_available: boolean, };
+attach_available: boolean, 
+/**
+ * The subject the card's session is filed under, by its session id
+ * (AD-54): for a live card, the id `claude agents` reports (E14).
+ * `None` when unfiled, or when the registry could not be read, which
+ * `diagnostics.registry` says.
+ */
+subject: SubjectRef | null, };

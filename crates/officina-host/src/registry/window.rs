@@ -4,15 +4,16 @@
 //! could not be opened and one found damaged while the window runs
 //! (unavailable until the next start) do neither, and the board says why.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use officina_core::agents::AgentRecord;
 use officina_core::board::ProjectRule;
 use officina_core::registry::fold::{AgentsChanges, AgentsSnapshot};
-use officina_core::registry::types::{RegistryReport, RegistryState};
+use officina_core::registry::types::{RegistryReport, RegistryState, SubjectRef};
 
 use super::ingest::{IngestContext, IngestReport};
-use super::read::Reader;
+use super::read::{self, Reader};
 use super::retention::PassReport;
 use super::store::{Integrity, Writer, WriterOpen, open_writer};
 use super::write::RegistryError;
@@ -75,6 +76,15 @@ impl WindowRegistry {
             Slot::Writable(writer) => Some(writer),
             _ => None,
         }
+    }
+
+    /// The subject of each filed session, by session id, while the
+    /// registry is writable; empty otherwise, and the board says why
+    /// (AD-54, D-47).
+    pub fn card_subjects(&self) -> BTreeMap<String, SubjectRef> {
+        self.writer()
+            .and_then(|writer| read::card_subjects(&writer.conn).ok())
+            .unwrap_or_default()
     }
 
     /// What the board says of the registry (`Diagnostics.registry`).

@@ -488,7 +488,15 @@ fn ingest(collector: &mut Collector, registry: &mut WindowRegistry) {
     let events = collector.paths().events_dir();
     let ctx = ingest_context(collector, &events);
     registry.ingest(&ctx, now_ms());
+    report_registry(collector, registry);
+}
+
+/// Hands the registry's state and the subject of each filed session to the
+/// collector: the next board reports one and shows the other on its cards
+/// (AD-54).
+fn report_registry(collector: &mut Collector, registry: &WindowRegistry) {
     collector.set_registry(registry.report());
+    collector.set_subjects(registry.card_subjects());
 }
 
 /// Folds the session list the collector just received into the window's
@@ -496,7 +504,7 @@ fn ingest(collector: &mut Collector, registry: &mut WindowRegistry) {
 fn apply_agents(collector: &mut Collector, registry: &mut WindowRegistry, now_ms: i64) {
     let records = collector.agents().unwrap_or_default();
     registry.apply_agents(records, &collector.floor().projects, now_ms);
-    collector.set_registry(registry.report());
+    report_registry(collector, registry);
 }
 
 /// The hourly pass, also run at start before the first board (AD-44,
@@ -510,7 +518,7 @@ fn hourly_pass(collector: &mut Collector, registry: &mut WindowRegistry) {
     crate::focus::prune_focus_log(&collector.paths().state_dir(), now_ms());
     crate::relay::approvals::prune(collector.relay(), SystemTime::now());
     crate::relay::journal::prune(collector.relay(), now_ms());
-    collector.set_registry(registry.report());
+    report_registry(collector, registry);
 }
 
 fn run(

@@ -12,7 +12,7 @@ use officina_core::board::{Board, BoardInput, ContractView, ProjectRule, Stalene
 use officina_core::contract::check_agents;
 use officina_core::floor::{FloorFile, parse_floor, resolve_project_path};
 use officina_core::quota::{QuotaFile, parse_quota_file};
-use officina_core::registry::types::RegistryReport;
+use officina_core::registry::types::{RegistryReport, SubjectRef};
 use serde::{Deserialize, Serialize};
 
 use crate::claude;
@@ -142,6 +142,8 @@ pub struct Collector {
     /// The registry's state as its holder last reported it: the window's
     /// collector thread, or `board --json`'s read-only reader.
     registry: Option<RegistryReport>,
+    /// The subject of each filed session, from the same holder (AD-54).
+    subjects: BTreeMap<String, SubjectRef>,
 }
 
 impl Collector {
@@ -191,6 +193,7 @@ impl Collector {
             trees: TreeCache::default(),
             known_projects: KnownProjectsKeeper::default(),
             registry: None,
+            subjects: BTreeMap::new(),
         }
     }
 
@@ -198,6 +201,13 @@ impl Collector {
     /// (`Diagnostics.registry`, D-47).
     pub fn set_registry(&mut self, report: RegistryReport) {
         self.registry = Some(report);
+    }
+
+    /// Records the subject of each filed session, which the next board's
+    /// cards show (`Card.subject`, AD-54); empty when the registry could
+    /// not be read.
+    pub fn set_subjects(&mut self, subjects: BTreeMap<String, SubjectRef>) {
+        self.subjects = subjects;
     }
 
     /// True when no prompt or answer text may be kept: the environment or
@@ -383,6 +393,7 @@ impl Collector {
             no_excerpts: self.no_excerpts(),
             approvals: board_approvals(&self.relay, now_ms, &mut |dir| self.trees.fingerprint(dir)),
             registry: self.registry.clone(),
+            subjects: self.subjects.clone(),
         };
         let mut board = build_board(&input, now_ms);
         board.diagnostics.floor_error.clone_from(&self.floor.error);

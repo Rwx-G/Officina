@@ -17,7 +17,7 @@ use officina_host::collector::Collector;
 use officina_host::doctor::{self, Level};
 use officina_host::files::now_ms;
 use officina_host::paths::Paths;
-use officina_host::registry::store as registry_store;
+use officina_host::registry::commands::read_registry;
 use officina_host::relay::gate::{self, GATE_EVENT, GateEnv};
 use officina_host::relay::home::RelayHome;
 use officina_host::relay::run::{self as relay_run, RunArgs};
@@ -128,12 +128,9 @@ fn board(floor: Option<&PathBuf>) -> ExitCode {
     };
     let now = now_ms();
     // Read-only, with the window open or closed (D-82): `board --json`
-    // reports the registry's state and deletes nothing (AD-53).
-    let registry = registry_store::open_reader(
-        &collector.paths().officina_home,
-        &registry_store::onedrive_roots_from_env(),
-    );
-    collector.set_registry(registry_store::reader_report(&registry));
+    // reports the registry's state, shows each card's subject and deletes
+    // nothing (AD-53).
+    let registry = read_registry(&mut collector);
     drop(registry);
     collector.refresh_agents(now);
     let board = collector.board(now);

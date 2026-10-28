@@ -12,7 +12,7 @@ use crate::agents::{AgentRecord, LifecycleState, LiveStatus, SessionKind};
 use crate::events::EventLine;
 use crate::floor::ProjectColor;
 use crate::quota::{QuotaFile, QuotaWindow};
-use crate::registry::types::RegistryReport;
+use crate::registry::types::{RegistryReport, SubjectRef};
 use crate::relay::approvals::ApprovalView;
 
 /// Version of the board JSON contract. 2: approval requests (AD-35). 3:
@@ -126,6 +126,11 @@ pub struct Card {
     pub started_at_ms: Option<i64>,
     /// True when a click can open `claude attach` for this card.
     pub attach_available: bool,
+    /// The subject the card's session is filed under, by its session id
+    /// (AD-54): for a live card, the id `claude agents` reports (E14).
+    /// `None` when unfiled, or when the registry could not be read, which
+    /// `diagnostics.registry` says.
+    pub subject: Option<SubjectRef>,
 }
 
 /// Session kind as shown on a card.
@@ -274,6 +279,9 @@ pub struct BoardInput {
     pub approvals: Vec<ApprovalView>,
     /// The registry's state as the caller found it.
     pub registry: Option<RegistryReport>,
+    /// The subject of each filed session, by session id, from the registry
+    /// (AD-54); empty when it could not be read.
+    pub subjects: BTreeMap<String, SubjectRef>,
 }
 
 /// Events of one session, reduced to what a card shows.
@@ -547,6 +555,11 @@ fn new_card(
             text.clone()
         }
     };
+    let subject = facts
+        .session_id
+        .as_ref()
+        .and_then(|sid| input.subjects.get(sid))
+        .cloned();
     Card {
         key: facts.key,
         column: placement.column,
@@ -564,6 +577,7 @@ fn new_card(
         last_event_at_ms: facts.last_event_at_ms,
         started_at_ms: facts.started_at_ms,
         attach_available: facts.attach_available,
+        subject,
     }
 }
 
@@ -807,6 +821,63 @@ mod tests {
             build_board(&BoardInput::default(), 10).diagnostics.registry,
             None
         );
+    }
+
+    /// AD-54: a card carries the subject its session id is filed under,
+    /// the live card by the id `claude agents` reports, the unlisted card
+    /// by its own; a session the map does not hold has none.
+    #[test]
+    fn cards_carry_their_subject_by_session_id() {
+        let mut gone_prompt = event(10, "gone", "UserPromptSubmit");
+        gone_prompt.prompt = Some("deploy".into());
+        let mut gone_end = event(20, "gone", "SessionEnd");
+        gone_end.reason = Some("prompt_input_exit".into());
+        let rollout = SubjectRef {
+            id: 3,
+            name: "alert-rules rollout".into(),
+        };
+        let input = BoardInput {
+            agents: Some(
+                parse_agents(
+                    r#"[{"pid":1,"sessionId":"live","kind":"interactive","status":"idle","startedAt":1},
+                        {"pid":2,"sessionId":"loose","kind":"interactive","status":"busy","startedAt":1}]"#,
+                )
+                .unwrap(),
+            ),
+            events: vec![gone_prompt, gone_end],
+            subjects: BTreeMap::from([
+                ("live".to_owned(), rollout.clone()),
+                (
+                    "gone".to_owned(),
+                    SubjectRef {
+                        id: 4,
+                        name: "certificate renewal".into(),
+                    },
+                ),
+            ]),
+            ..Default::default()
+        };
+        let board = build_board(&input, UNLISTED_GRACE_MS + 100);
+        let subject_of = |sid: &str| {
+            board
+                .columns
+                .all()
+                .find(|c| c.session_id.as_deref() == Some(sid))
+                .unwrap()
+                .subject
+                .clone()
+        };
+        assert_eq!(subject_of("live"), Some(rollout));
+        assert_eq!(subject_of("gone").map(|s| s.id), Some(4));
+        assert_eq!(subject_of("loose"), None);
+        let without = build_board(
+            &BoardInput {
+                subjects: BTreeMap::new(),
+                ..input
+            },
+            UNLISTED_GRACE_MS + 100,
+        );
+        assert!(without.columns.all().all(|c| c.subject.is_none()));
     }
 
     #[test]

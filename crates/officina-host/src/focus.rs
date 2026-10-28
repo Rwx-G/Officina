@@ -229,6 +229,7 @@ mod tests {
             last_event_at_ms: None,
             started_at_ms: None,
             attach_available: true,
+            subject: None,
         }
     }
 
