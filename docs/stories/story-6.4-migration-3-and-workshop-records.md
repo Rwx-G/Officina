@@ -33,7 +33,7 @@ so that no later story needs to reshape a table my registry already has, and not
 - Requirements: FR-10 (records), FR-12 (run folder 30 days), FR-14 (kept containers, later), FR-15 (battery validity), PRD section 7 (metrics read the journal, not these tables). Decisions: AD-25, AD-32, AD-39, AD-44, AD-117, AD-119, AD-124. Risks: R47, R48, R49. Epic decisions: D-13 (Epic 2); D-85 (Epic 3); D-130, D-133, D-134 (Epic 5); P-53, D-200, D-212, D-213, D-228, D-232, D-233, D-242.
 - Settled before this story starts, since the migration freezes here (review F4, F24): the battery's `vector_sha256` and `programs_sha256`, the image's `programs_sha256` (so `not_from_base` covers replaced programs and reserved `ENV` with no new `BuildOutcome` variant, D-233), and the relative migration number.
 - Seams (D-200): `registry::schema::MIGRATIONS` (3.1, 5.6), the hourly pass (3.2, D-134), `host/relay/home.rs` and D-13's protected directories (2.3).
-- Waits for: the gate 7 and 0 entries.
+- Waits for: the gate 7 and 0 entries; story 6.2 merged (`CredentialKind::ALL`, with `login`, feeds the `credential_kind` CHECK).
 - Why the enums land here: migration 3's `CHECK` lists are read from their `ALL`, and the pinned hash freezes them; a story that later needs a variant writes migration 4 (D-133). Each enum's later story adds transitions, parsing and display, not values.
 - `workshop_inventory` replaces AD-119's inventory columns on `workshop_image` because `officina-workshop:local` serves every project without a Dockerfile, and each project's hooks give that image a different inventory (D-212).
 - Run folders are not in registry copies, hence their own derived TTL (AD-124).
@@ -56,3 +56,4 @@ so that no later story needs to reshape a table my registry already has, and not
 - 2026-10-28 created
 - 2026-10-28 reworked after review: battery `vector_sha256` and `programs_sha256`, image `programs_sha256` (F4); migration number, backup name and tests from `MIGRATIONS.len()` (F24); the retyped nullable-list test dropped, the pinned hash holds the shape (derived, not transcribed); doctor warns on a home in a sync root (F44)
 - 2026-10-29 research-note entries named by subject, no number reserved (D-600)
+- 2026-10-29 waits for story 6.2, whose `CredentialKind` (now with `login`, D-603) the migration's CHECK reads
