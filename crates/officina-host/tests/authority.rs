@@ -4,8 +4,11 @@
 use std::path::{Path, PathBuf};
 
 use officina_core::quota::normalise_path;
+use officina_core::relay::journal::{CatalogueApproved, JournalEntry};
+use officina_host::files::now_ms;
 use officina_host::relay::authority::{AUTHORITY_MARKER, AuthorityError, approve_catalogue};
 use officina_host::relay::home::{ApprovedState, RelayHome, load_relay_floor};
+use officina_host::relay::journal::{JournalLock, read_recent};
 
 const FLOOR: &str = "schema = 2\n\n[[project]]\nname = \"lab\"\npath = \"Lab\"\nactions = [\"probe\"]\n\n[[project]]\nname = \"notes\"\npath = \"Notes\"\nautonomy = \"free\"\n\n[[action]]\nname = \"probe\"\nclass = \"free\"\nprogram = \"C:/path/to/tool.exe\"\nargs = [\"{host}\"]\n\n[action.params.host]\nvalues = [\"web01\"]\n";
 
@@ -168,6 +171,70 @@ fn approval_records_known_projects() {
         [format!("{floor_dir}/lab"), format!("{floor_dir}/notes")],
         "every declared project, free ones included"
     );
+}
+
+fn approvals_journaled(relay: &RelayHome) -> Vec<CatalogueApproved> {
+    let (lines, corrupt) = read_recent(relay, now_ms());
+    assert_eq!(corrupt, 0);
+    lines
+        .into_iter()
+        .map(|line| match line.entry {
+            JournalEntry::CatalogueApproved(approved) => approved,
+            other => panic!("unexpected line {other:?}"),
+        })
+        .collect()
+}
+
+#[test]
+fn approval_is_journaled_once_with_previous_hash() {
+    let home = Home::new();
+    let relay = home.relay(None);
+    home.write(&relay.default_floor(), FLOOR);
+    let first = approve_catalogue(&relay, &home.displayed(&relay.default_floor())).unwrap();
+    assert_eq!(
+        approvals_journaled(&relay),
+        [CatalogueApproved {
+            hash: first.hash.clone(),
+            previous_hash: None
+        }]
+    );
+
+    home.write(
+        &relay.default_floor(),
+        &FLOOR.replace("values = [\"web01\"]", "values = [\"web01\", \"db01\"]"),
+    );
+    let second = approve_catalogue(&relay, &home.displayed(&relay.default_floor())).unwrap();
+    let journaled = approvals_journaled(&relay);
+    assert_eq!(journaled.len(), 2, "one line per approval");
+    assert_eq!(
+        journaled[1],
+        CatalogueApproved {
+            hash: second.hash,
+            previous_hash: Some(first.hash)
+        }
+    );
+
+    let refused = approve_catalogue(&relay, "stale");
+    assert!(refused.is_err());
+    assert_eq!(
+        approvals_journaled(&relay).len(),
+        2,
+        "a refused approval writes no line"
+    );
+}
+
+#[test]
+fn a_locked_journal_approves_nothing() {
+    let home = Home::new();
+    let relay = home.relay(None);
+    home.write(&relay.default_floor(), FLOOR);
+    let held = JournalLock::acquire(&relay).unwrap();
+    let error = approve_catalogue(&relay, &home.displayed(&relay.default_floor())).unwrap_err();
+    assert!(matches!(error, AuthorityError::Journal(_)), "{error}");
+    assert!(error.to_string().starts_with(AUTHORITY_MARKER));
+    assert_eq!(relay.read_approved(), ApprovedState::Missing);
+    assert!(!relay.known_projects_file().exists());
+    drop(held);
 }
 
 #[test]

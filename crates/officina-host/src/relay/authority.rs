@@ -5,9 +5,11 @@
 use std::path::Path;
 
 use officina_core::relay::catalogue::{ApprovedCatalogue, KnownProjects};
+use officina_core::relay::journal::{CatalogueApproved, JournalEntry};
 use serde::Serialize;
 
 use super::home::{RelayFloorError, RelayHome, load_relay_floor};
+use super::journal::JournalLock;
 use crate::files::{atomic_write, now_ms};
 
 /// Text every authority error carries. CI searches the release binaries for
@@ -27,6 +29,10 @@ pub enum AuthorityError {
     CatalogueChanged { displayed: String, current: String },
     #[error("{AUTHORITY_MARKER}: cannot write {path}: {error}")]
     Write { path: String, error: String },
+    /// The journal could not be locked (nothing was approved), or the
+    /// approval was written and its line could not be.
+    #[error("{AUTHORITY_MARKER}: journal: {0}")]
+    Journal(String),
 }
 
 fn write_json(path: &Path, value: &impl Serialize) -> Result<(), AuthorityError> {
@@ -49,11 +55,17 @@ fn write_json(path: &Path, value: &impl Serialize) -> Result<(), AuthorityError>
 /// write then fails, that record names a hash with no `approved.json`
 /// behind it, which the gate reads as a broken snapshot and guards every
 /// project: a failure can only tighten the gate.
+///
+/// The journal lock is taken before anything is read and held until the
+/// `catalogue_approved` line (AD-32) is written, so an approval and its line
+/// go together: a journal that stays locked approves nothing.
 pub fn approve_catalogue(
     home: &RelayHome,
     displayed_hash: &str,
 ) -> Result<ApprovedCatalogue, AuthorityError> {
-    let floor_path = home.relay_floor(&home.read_approved());
+    let journal = JournalLock::acquire(home).map_err(|e| AuthorityError::Journal(e.to_string()))?;
+    let previous = home.read_approved();
+    let floor_path = home.relay_floor(&previous);
     let current = load_relay_floor(&floor_path).map_err(AuthorityError::Floor)?;
     if current.hash != displayed_hash {
         return Err(AuthorityError::CatalogueChanged {
@@ -74,5 +86,12 @@ pub fn approve_catalogue(
         canonical: current.canonical,
     };
     write_json(&home.approved_file(), &approved)?;
+    let line = JournalEntry::CatalogueApproved(CatalogueApproved {
+        hash: approved.hash.clone(),
+        previous_hash: previous.approved().map(|p| p.hash.clone()),
+    });
+    journal
+        .append(&[line], approved.approved_at_ms)
+        .map_err(|e| AuthorityError::Journal(e.to_string()))?;
     Ok(approved)
 }
