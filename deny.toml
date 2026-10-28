@@ -36,6 +36,11 @@ confidence-threshold = 0.8
 [bans]
 multiple-versions = "warn"
 wildcards = "allow"
+# HTTP actions trust the platform store through rustls' platform verifier
+# (AD-36): a bundled root set never enters the graph, on any target. CI's
+# "No bundled roots" step checks the exe sessions call too, with a positive
+# control.
+deny = [{ crate = "webpki-roots", reason = "AD-36: trust comes from the platform store, never a bundled root set" }]
 
 [sources]
 unknown-registry = "deny"
