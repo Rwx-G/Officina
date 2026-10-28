@@ -537,7 +537,17 @@ impl Triage {
         if run.out.is_some() {
             return Ok(None);
         }
+        // An input that expired while its case waited is never sent (D-85).
+        while run
+            .left
+            .front()
+            .is_some_and(|case| case.expires_at_ms <= now_ms)
+        {
+            run.left.pop_front();
+            run.total -= 1;
+        }
         let Some(case) = run.left.front().cloned() else {
+            self.finish(writer, DryRunStop::Completed, now_ms)?;
             return Ok(None);
         };
         match writer.budget(now_ms)? {

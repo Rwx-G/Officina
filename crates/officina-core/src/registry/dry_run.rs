@@ -33,6 +33,9 @@ pub struct DryRunCase {
     pub confirmation_id: i64,
     pub verdict: Verdict,
     pub case: TriageCase,
+    /// When the input it copies is due to go (D-85): a case still queued
+    /// then is never sent.
+    pub expires_at_ms: i64,
 }
 
 impl DryRunCase {
@@ -65,10 +68,12 @@ pub fn dry_run_cases(confirmations: &[EvaluableConfirmation], now_ms: i64) -> Ve
     held.into_iter()
         .take(DRY_RUN_MAX_CASES)
         .filter_map(|c| {
+            let input = c.input.as_ref()?;
             Some(DryRunCase {
                 confirmation_id: c.id,
                 verdict: c.verdict,
-                case: TriageCase::from(c.input.as_ref()?),
+                case: TriageCase::from(input),
+                expires_at_ms: input.expires_at_ms,
             })
         })
         .collect()

@@ -517,3 +517,59 @@ fn a_refused_row_is_not_queued_again_until_its_inputs_change() {
         "another row"
     );
 }
+
+/// D-85: a case whose input expires while it waits in a running dry run is
+/// never sent; the run ends with what it sent.
+#[test]
+fn a_case_whose_input_expired_while_queued_is_not_sent() {
+    use officina_core::registry::retention::EXCERPT_TTL_MS;
+    let home = Home::new();
+    let mut writer = confirmed(
+        &home,
+        &[
+            ("old", Verdict::ToResume, false),
+            ("new", Verdict::ToResume, false),
+        ],
+    );
+    // Both inputs expire from their session's first excerpt, ten seconds
+    // apart; the run reaches the older case after its expiry.
+    let start = NOW - DAY;
+    let older_expiry = start + EXCERPT_TTL_MS;
+    let mut triage = Triage::default();
+    assert_eq!(
+        triage.start_dry_run(&writer, older_expiry - 1).unwrap(),
+        Ok(2)
+    );
+    let first = triage
+        .next_call(&mut writer, older_expiry - 1)
+        .unwrap()
+        .unwrap();
+    assert_eq!(first.case.last_prompt.as_deref(), Some("work of new"));
+    triage
+        .take_result(
+            &mut writer,
+            &result(
+                &first,
+                older_expiry - 1,
+                TriageOutcome::Answer,
+                Some(ModelVerdict::ToResume),
+            ),
+            older_expiry,
+        )
+        .unwrap();
+    assert_eq!(triage.state().running.map(|p| p.total), Some(2));
+    assert_eq!(
+        triage
+            .next_call(&mut writer, older_expiry + CALL_SPACING_MS)
+            .unwrap(),
+        None
+    );
+    assert!(!triage.running());
+    assert_eq!(triage.state().last_stop, Some(DryRunStop::Completed));
+    assert_eq!(
+        writer.triage_calls_since(0).unwrap().len(),
+        1,
+        "the expired case was not sent"
+    );
+    assert_eq!(latest(&home).unwrap().tally.cases, 1);
+}
