@@ -22,6 +22,11 @@ pub const HOOK_FIELDS: &[(&str, &[&str])] = &[
         "Notification",
         &["session_id", "cwd", "notification_type", "message"],
     ),
+    // From the hooks reference (AD-176), not yet from a research note:
+    // Slice 0's gate 1 records them observed on the workstation, and the
+    // canary reports a field a version leaves out meanwhile.
+    ("SubagentStart", &["session_id", "agent_id", "agent_type"]),
+    ("SubagentStop", &["session_id", "agent_id", "agent_type"]),
 ];
 
 /// The [`HOOK_FIELDS`] entry of `event`; none for an event it does not name.

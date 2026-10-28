@@ -1021,3 +1021,23 @@ fn a_v0_2_contract_file_still_loads() {
         serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
     assert_eq!(written["versions"][VERSION]["first_seen_at"], FIRST_SEEN);
 }
+
+/// AD-176, D-518: a sub-agent's line creates no session record, even when
+/// its session id is one the registry has never seen, and leaves a known
+/// session's record as it was.
+#[test]
+fn subagent_lines_touch_no_session_record() {
+    let home = Home::new();
+    let mut lines = vec![line("UserPromptSubmit", "lead", NOW - 2_000, CWD)];
+    for event in officina_core::events::SUBAGENT_EVENTS {
+        lines.push(line(event, "lead", NOW - 1_000, "C:/work/elsewhere"));
+        lines.push(line(event, "agent-own-id", NOW - 1_000, CWD));
+    }
+    home.append(&day_file(NOW), &lines);
+    let mut writer = home.writer(NOW);
+    writer.ingest(&home.ctx(), NOW).unwrap();
+    let sessions = open_reader(&home.home, &[]).unwrap().sessions().unwrap();
+    let ids: Vec<&str> = sessions.iter().map(|s| s.session_id.as_str()).collect();
+    assert_eq!(ids, ["lead"]);
+    assert_eq!(project_of(&home, "lead"), "api");
+}

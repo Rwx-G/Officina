@@ -20,6 +20,20 @@ pub const SESSION_END_REASONS: [&str; 5] =
 /// Documented values of `SessionStart.source` (research notes E2).
 pub const SESSION_START_SOURCES: [&str; 5] = ["startup", "resume", "clear", "compact", "fork"];
 
+/// The events that describe a sub-agent of a session rather than the
+/// session itself (AD-176): their lines carry the sub-agent's id and type,
+/// never its texts or transcript paths, and the board and the registry do
+/// not fold them into the session's own state.
+pub const SUBAGENT_EVENTS: [&str; 2] = ["SubagentStart", "SubagentStop"];
+
+/// `agent_id` and `agent_type` are cut to this many characters (AD-176).
+pub const AGENT_FIELD_CHARS: usize = 64;
+
+/// True for a line of [`SUBAGENT_EVENTS`].
+pub fn is_subagent_event(event: &str) -> bool {
+    SUBAGENT_EVENTS.contains(&event)
+}
+
 /// One line of the event buffer.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EventLine {
@@ -54,6 +68,14 @@ pub struct EventLine {
     /// session id that `/clear` replaced to the live card of its process.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub claude_pid: Option<u32>,
+    /// The sub-agent of a [`SUBAGENT_EVENTS`] line, cut to
+    /// [`AGENT_FIELD_CHARS`] (AD-176): an optional field of version 1,
+    /// which older readers ignore.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_id: Option<String>,
+    /// The sub-agent's type, as [`agent_id`](EventLine::agent_id).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_type: Option<String>,
     /// The fields of the event's [`HOOK_FIELDS`] entry the payload lacked
     /// (AD-45, AD-56): an optional field of version 1, omitted when none
     /// is missing, which older readers ignore.
@@ -208,6 +230,17 @@ pub fn reduce_payload(
     with_excerpts: bool,
 ) -> Option<EventLine> {
     let event = text_field(payload, "hook_event_name")?;
+    // A sub-agent's answer and transcripts are its own, never the session's
+    // (AD-176): only its id and type are kept.
+    let subagent = is_subagent_event(&event);
+    let with_excerpts = with_excerpts && !subagent;
+    let agent_field = |key: &str| {
+        if subagent {
+            text_field(payload, key).map(|t| t.chars().take(AGENT_FIELD_CHARS).collect())
+        } else {
+            None
+        }
+    };
     let cut = |key: &str| {
         if with_excerpts {
             text_field(payload, key).map(|t| excerpt(&t, EXCERPT_CHARS))
@@ -236,6 +269,8 @@ pub fn reduce_payload(
             None
         },
         claude_pid: None,
+        agent_id: agent_field("agent_id"),
+        agent_type: agent_field("agent_type"),
         absent: absent_hook_fields(&event, payload),
         truncated: false,
         event,
@@ -404,7 +439,7 @@ mod tests {
             assert!(line.absent.is_empty(), "{event}");
             assert!(!line.to_bounded_line().contains("absent"), "{event}");
         }
-        let other = reduce_payload(&json!({"hook_event_name": "SubagentStop"}), 5, true).unwrap();
+        let other = reduce_payload(&json!({"hook_event_name": "PreCompact"}), 5, true).unwrap();
         assert!(
             other.absent.is_empty(),
             "an event with no entry lists nothing"
@@ -415,6 +450,58 @@ mod tests {
             old.absent.is_empty(),
             "a line written before reads as complete"
         );
+    }
+
+    /// AD-176: a sub-agent line keeps the sub-agent's id and type, each cut
+    /// to `AGENT_FIELD_CHARS` on a character boundary.
+    #[test]
+    fn subagent_fields_are_kept_and_capped() {
+        let long: String = "é".repeat(AGENT_FIELD_CHARS + 5);
+        for event in SUBAGENT_EVENTS {
+            let payload = json!({
+                "hook_event_name": event,
+                "session_id": "lead",
+                "agent_id": long,
+                "agent_type": "Explore",
+            });
+            let line = reduce_payload(&payload, 5, true).unwrap();
+            let id = line.agent_id.as_deref().unwrap();
+            assert_eq!(id.chars().count(), AGENT_FIELD_CHARS, "{event}");
+            assert!(long.starts_with(id), "{event}");
+            assert_eq!(line.agent_type.as_deref(), Some("Explore"), "{event}");
+            assert_eq!(line.session_id.as_deref(), Some("lead"), "{event}");
+            let back: EventLine = serde_json::from_str(line.to_bounded_line().trim_end()).unwrap();
+            assert_eq!(back, line, "{event}");
+        }
+        let other = reduce_payload(
+            &json!({"hook_event_name": "Stop", "agent_id": "a", "agent_type": "t"}),
+            5,
+            true,
+        )
+        .unwrap();
+        assert_eq!((other.agent_id, other.agent_type), (None, None));
+    }
+
+    /// AD-176: a sub-agent's answer and its transcript paths never reach
+    /// the buffer, whatever the excerpt setting.
+    #[test]
+    fn subagent_texts_and_paths_are_never_kept() {
+        for event in SUBAGENT_EVENTS {
+            let payload = json!({
+                "hook_event_name": event,
+                "session_id": "lead",
+                "agent_id": "a1",
+                "agent_type": "Explore",
+                "last_assistant_message": "secret answer",
+                "prompt": "secret prompt",
+                "agent_transcript_path": "/path/to/subagents/agent.jsonl",
+                "transcript_path": "/path/to/session.jsonl",
+            });
+            let text = reduce_payload(&payload, 5, true).unwrap().to_bounded_line();
+            for kept_out in ["secret", "transcript", "/path/to"] {
+                assert!(!text.contains(kept_out), "{event}: {text}");
+            }
+        }
     }
 
     #[test]

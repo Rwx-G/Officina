@@ -32,13 +32,18 @@ use crate::relay::home::RelayHome;
 use crate::writers::hook_keeps_excerpts;
 
 /// Hook events the hook records in the event buffer (framing principle 5).
-/// Any other event the hook receives is the gate's or ignored.
-pub const BUFFERED_EVENTS: [&str; 5] = [
+/// Any other event the hook receives is the gate's or ignored. The
+/// sub-agent events (`officina_core::events::SUBAGENT_EVENTS`) are recorded
+/// from v0.4's Slice 0 so that gate 1 reads real payloads (AD-178, D-518);
+/// the board and the registry do not fold them.
+pub const BUFFERED_EVENTS: [&str; 7] = [
     "SessionStart",
     "SessionEnd",
     "UserPromptSubmit",
     "Stop",
     "Notification",
+    "SubagentStart",
+    "SubagentStop",
 ];
 
 /// One hook registration doctor requires: an event and, for a tool event,
@@ -1099,6 +1104,19 @@ mod tests {
             assert!(
                 BUFFERED_EVENTS.contains(event),
                 "{event} is not a buffered event"
+            );
+        }
+    }
+
+    /// AD-178 gate 1, D-518: the sub-agent events are buffered, so the
+    /// hooks block registers them and their payloads reach the buffer.
+    #[test]
+    fn subagent_events_are_buffered() {
+        for event in officina_core::events::SUBAGENT_EVENTS {
+            assert!(BUFFERED_EVENTS.contains(&event), "{event}");
+            assert!(
+                registrations(false).iter().any(|r| r.event == event),
+                "{event}"
             );
         }
     }

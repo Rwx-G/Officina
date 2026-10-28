@@ -320,6 +320,11 @@ pub fn group_events(events: &[EventLine]) -> BTreeMap<String, SessionEvents> {
         let Some(sid) = &event.session_id else {
             continue;
         };
+        // A sub-agent's start or stop is not the session's own activity
+        // (AD-176): it would reorder Needs you and move a waiting lead.
+        if crate::events::is_subagent_event(&event.event) {
+            continue;
+        }
         let entry = grouped.entry(sid.clone()).or_default();
         entry.last_event_at_ms = later(entry.last_event_at_ms, event.ts);
         entry.first_event_at_ms = Some(
@@ -790,6 +795,8 @@ mod tests {
             last_message: None,
             last_message_tail: None,
             claude_pid: None,
+            agent_id: None,
+            agent_type: None,
             absent: Vec::new(),
             truncated: false,
         }
@@ -1445,6 +1452,24 @@ values = [\"web01\"]
             );
             assert!(plain.approvals[0].dry_run.is_none(), "no check, no dry run");
         }
+    }
+
+    /// AD-176: a sub-agent's start or stop is not its lead's activity, so
+    /// a lead's state, its activity time and Needs you's order ignore it.
+    #[test]
+    fn subagent_lines_leave_the_session_state_unchanged() {
+        let mut blocking = event(10, "s", "Notification");
+        blocking.notification_type = Some(BLOCKING_NOTIFICATIONS[0].into());
+        let base = vec![event(5, "s", "UserPromptSubmit"), blocking];
+        let mut with = base.clone();
+        for (offset, name) in crate::events::SUBAGENT_EVENTS.iter().enumerate() {
+            let mut line = event(20 + offset as i64, "s", name);
+            line.agent_id = Some("a1".into());
+            with.push(line);
+        }
+        assert_eq!(group_events(&with), group_events(&base));
+        let only_subagents: Vec<EventLine> = with[2..].to_vec();
+        assert!(group_events(&only_subagents).is_empty());
     }
 
     #[test]

@@ -792,6 +792,8 @@ mod tests {
             last_message: None,
             last_message_tail: None,
             claude_pid: Some(PID),
+            agent_id: None,
+            agent_type: None,
             absent: Vec::new(),
             truncated: false,
         }

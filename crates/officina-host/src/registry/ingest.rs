@@ -12,6 +12,7 @@ use std::path::Path;
 use officina_core::board::{ProjectRule, project_for};
 use officina_core::contract::HookSightings;
 use officina_core::dates::dated_file_day;
+use officina_core::events::is_subagent_event;
 use officina_core::events::{EventLine, ParsedLine, parse_line};
 use officina_core::registry::confirm::wake;
 use officina_core::registry::filing::filing_at_creation;
@@ -405,6 +406,12 @@ fn apply(
     let Some(session_id) = line.session_id.as_deref().filter(|id| !id.is_empty()) else {
         return Ok(false);
     };
+    // A sub-agent's line describes no fact of its session (AD-176), and
+    // whose session its id names is what Slice 0's gate 1 checks: it never
+    // creates or touches a session record.
+    if is_subagent_event(&line.event) {
+        return Ok(false);
+    }
     let home = ctx.officina_home.to_string_lossy();
     if line
         .cwd

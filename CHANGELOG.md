@@ -323,6 +323,13 @@ project uses [Semantic Versioning](https://semver.org/).
 - The README's Privacy section says what reaches the network: the requests
   of the HTTP actions an approved catalogue declares, run with `officina
   run`, and nothing else; it said Officina opened no connection at all.
+- `officina doctor` (v0.4) prints `SubagentStart` and `SubagentStop` in the
+  hooks block and reports them missing until the block is pasted again. The
+  hook records them with the sub-agent's `agent_id` and `agent_type` (cut
+  to 64 characters, optional fields of event line version 1), never its
+  answer or transcript paths; the board and the registry ignore these lines
+  until the scene shows sub-agents, so v0.4's Slice 0 can check on real
+  sessions which session each one names.
 
 ### Security
 

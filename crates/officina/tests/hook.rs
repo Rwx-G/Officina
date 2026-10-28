@@ -18,8 +18,36 @@ fn payload(event: &str) -> String {
         "reason": "prompt_input_exit",
         "notification_type": "permission_prompt",
         "message": "Claude needs your permission to use Bash",
+        "agent_id": "agent-0001",
+        "agent_type": "Explore",
     })
     .to_string()
+}
+
+/// AD-176, D-518: a sub-agent's start and stop are appended with the
+/// sub-agent's id and type and the lead's session id, and nothing of its
+/// answer or transcripts; other events carry no sub-agent field.
+#[test]
+fn a_subagent_start_and_stop_are_appended() {
+    let env = TestEnv::new();
+    for event in officina_core::events::SUBAGENT_EVENTS
+        .into_iter()
+        .chain(["Stop"])
+    {
+        let out = env.run(&["hook"], payload(event).as_bytes());
+        assert!(out.status.success(), "{event}");
+    }
+    let lines = read_events(&env);
+    for line in &lines[..2] {
+        assert_eq!(line["agent_id"], "agent-0001", "{line}");
+        assert_eq!(line["agent_type"], "Explore", "{line}");
+        assert_eq!(line["session_id"], "00000000-0000-0000-0000-000000000001");
+        for kept_out in ["last_message", "prompt", "transcript_path"] {
+            assert!(line.get(kept_out).is_none(), "{kept_out} in {line}");
+        }
+    }
+    assert!(lines[2].get("agent_id").is_none(), "{}", lines[2]);
+    assert_eq!(lines[2]["last_message"], "Done.");
 }
 
 #[test]

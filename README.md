@@ -90,10 +90,14 @@ Officina finds `claude` through `OFFICINA_CLAUDE_BIN`, then the absolute folders
     "SessionEnd":       [{ "hooks": [{ "type": "command", "command": "\"C:/path/to/officina.exe\" hook", "timeout": 5 }] }],
     "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": "\"C:/path/to/officina.exe\" hook", "timeout": 5 }] }],
     "Stop":             [{ "hooks": [{ "type": "command", "command": "\"C:/path/to/officina.exe\" hook", "timeout": 5 }] }],
-    "Notification":     [{ "hooks": [{ "type": "command", "command": "\"C:/path/to/officina.exe\" hook", "timeout": 5 }] }]
+    "Notification":     [{ "hooks": [{ "type": "command", "command": "\"C:/path/to/officina.exe\" hook", "timeout": 5 }] }],
+    "SubagentStart":    [{ "hooks": [{ "type": "command", "command": "\"C:/path/to/officina.exe\" hook", "timeout": 5 }] }],
+    "SubagentStop":     [{ "hooks": [{ "type": "command", "command": "\"C:/path/to/officina.exe\" hook", "timeout": 5 }] }]
   }
 }
 ```
+
+The two sub-agent events are recorded so that v0.4 can check, on real sessions, that Claude Code names the session that spawned each sub-agent before the scene draws any (their lines keep the sub-agent's id and type, never its answer or transcripts). If you pasted the block before they appeared, paste it again: doctor reports them missing until you do.
 
 Hooks from user settings run alongside each project's own hooks. The hook appends one line to a local file and exits: no network, no server, no port. It always exits 0, so a broken Officina can never block a session, except through the relay's gate below. Measured p95: about 20 ms, process start included.
 
