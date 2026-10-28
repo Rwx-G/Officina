@@ -66,6 +66,9 @@ so that I enjoy the movement and follow who went where, while nothing moves once
 - Header (D-517, D-526): the toggle is the first of the right-aligned buttons. At 1400 x 900 and 1920 x 1001, the relay's toggle shown, its appearance moves no gauge and no button and the header keeps one line. At 1000 x 760, below the scene's minimum area, the header already spans several lines and, with the relay's toggle shown, the toggle's room wraps the buttons under the gauges (the gauges keep their places). Recorded in D-531; `modes.spec.ts` asserts the gauges only at that width.
 - AC 10 is proved on story 4.8's real targets (merged before recording): the target's button is at the destination from the first stepped frame while the figure is still near its old place, and a click there reaches no figure.
 
+- After the replay on main (with story 4.13's theme control), the one-line header's status slot fell to 30 px at 1920 px with the relay in use and eight projects with the alert band scrolled by 13 px; D-533 narrows the compact gauges, and `scene.spec.ts > eight projects fit a maximised Full HD window with the alert band` passes again.
+- In the first run of `scene.spec.ts`, `stable-size.spec.ts` and `modes.spec.ts` with `--repeat-each=3` after the replay, `scene.spec.ts > a changed board places the figure at its new place at once` failed once, its detail not kept; 40 runs of it alone and 1,017 runs of the four scene specs under load (`--retries=0`) passed. Recorded, not reproduced.
+
 ### Completion Notes
 
 AC to test:
