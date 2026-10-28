@@ -1,6 +1,6 @@
 # Story 3.2: Ingestion before retention, the answer's tail in the hook
 
-**Status:** Approved
+**Status:** review
 
 ## Story
 
@@ -28,18 +28,18 @@ so that a closed weekend loses nothing and the Subjects view can show how the la
 
 ## Tasks
 
-- [ ] `events.rs`: `last_message_tail`, bounded line order (AC 1)
-- [ ] `crates/officina-host/src/registry/ingest.rs`: passes over every incomplete file, offsets, grace, rewrite detection, chunks, session creation function, excerpts, exclusion, `no_excerpts` (AC 2-5)
-- [ ] `crates/officina-core/src/registry/retention.rs` and the host hourly pass: ingestion first, copies, event files per D-48, excerpts, `no_excerpts` purge, unconditional checkpoint, copy lifetimes (AC 6, 7)
-- [ ] `watch.rs` and `collector.rs`: writer open, start sequence, tick order, one hourly pass, runtime corruption (AC 7, 8)
-- [ ] `Diagnostics.registry`, `BOARD_SCHEMA` bump, regenerate TypeScript, Board banner (AC 8)
-- [ ] CI step: positive control of the registry marker (AC 9)
-- [ ] `main.rs`: remove the retention call from `board --json`; read-only registry state (AC 10)
-- [ ] Crash helper mode `ingest` with its stall point, `registry_crash.rs`, CI release step (AC 11)
-- [ ] Fake claude sidecar, harness helper, `fake_claude.rs` (AC 12)
-- [ ] Doctor waiting and rewritten files (AC 13)
-- [ ] Fixture `registry-unavailable` in `app/scripts/e2e-fixtures.mjs`; Playwright case (AC 8)
-- [ ] Update `CHANGELOG.md` and the README (AC 15)
+- [x] `events.rs`: `last_message_tail`, bounded line order (AC 1)
+- [x] `crates/officina-host/src/registry/ingest.rs`: passes over every incomplete file, offsets, grace, rewrite detection, chunks, session creation function, excerpts, exclusion, `no_excerpts` (AC 2-5)
+- [x] `crates/officina-core/src/registry/retention.rs` and the host hourly pass: ingestion first, copies, event files per D-48, excerpts, `no_excerpts` purge, unconditional checkpoint, copy lifetimes (AC 6, 7)
+- [x] `watch.rs` and `collector.rs`: writer open, start sequence, tick order, one hourly pass, runtime corruption (AC 7, 8)
+- [x] `Diagnostics.registry`, `BOARD_SCHEMA` bump, regenerate TypeScript, Board banner (AC 8)
+- [x] CI step: positive control of the registry marker (AC 9)
+- [x] `main.rs`: remove the retention call from `board --json`; read-only registry state (AC 10)
+- [x] Crash helper mode `ingest` with its stall point, `registry_crash.rs`, CI release step (AC 11)
+- [x] Fake claude sidecar, harness helper, `fake_claude.rs` (AC 12)
+- [x] Doctor waiting and rewritten files (AC 13)
+- [x] Fixture `registry-unavailable` in `app/scripts/e2e-fixtures.mjs`; Playwright case (AC 8)
+- [x] Update `CHANGELOG.md` and the README (AC 15)
 
 ## Dev Notes
 
@@ -68,11 +68,50 @@ so that a closed weekend loses nothing and the Subjects view can show how the la
 
 ### Debug Log
 
+- **Decisions where the story is silent:**
+  - AC 1: `tail_excerpt` keeps the last 280 characters led by an ellipsis, and is absent when the message holds 280 characters or fewer; over the bound the tail goes first and `truncated` is set, then the other excerpts, then `cwd`, as before.
+  - AC 2: the line parser moves to core (`events::parse_line`), so the board's reader and the ingestion apply one set of rules (blank and other-version lines are not corrupt). A file is complete when it is fully read (no unfinished line left, or one counted corrupt) and `now` is at least its day's end plus `COMPLETE_GRACE_MS`; the rules are pure functions in `officina-core::registry::ingestion`.
+  - AC 3: the stall seam is `Writer::ingest_observed`, called after each line inside a chunk's transaction.
+  - AC 4: `ensure_session` is the one creation function (D-79), inside the chunk's transaction; a session's `first_seen_ms` and `last_seen_ms` widen with each line. An excerpt whose event is already past the TTL is never stored, so a replay or a late start cannot store expired text. A line with no or an empty session id records nothing.
+  - AC 6: copies, quarantined databases and pre-migration copies are kept by `retention::kept`: the newest two that are not past `COPY_LIFETIME_MS` from the start of the UTC day in their name. An event file is deleted only when the live registry also holds it complete, beside both kept valid copies (D-48). Clearing excerpts nulls the expired columns and deletes the emptied rows; `no_excerpts` deletes every `session_excerpt` row and nulls the text of `confirmation_input`, whose rows otherwise go at `expires_at_ms` (D-85). A copy that fails (a full disk) is reported in the pass and does not stop the retention, which relies on the copies already kept.
+  - AC 7, AC 8: the window's registry is `registry::window::WindowRegistry` (writable, read-only for a newer version, unavailable, network). `watch` compiles with `window-authority` only. Ingestion runs when today's file grows and before every `claude agents` call (D-78), and the hourly pass is one function (registry part, then focus log, approvals and journal). The registry's state reaches the board through `Collector::set_registry`. The reader-state enum moves to core as `RegistryState`, beside `RegistryReport`, since the board needs it; the host's copy goes, so one list remains. A registry found damaged while running is abandoned without SQLite's checkpoint-on-close (`SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE`), so the next start sets it aside exactly as found.
+  - AC 8 (UI): `REGISTRY_STATE_TEXT` maps every state; `ready` and `absent` show no banner, since the window creates the registry before its first board and only `board --json` can say `absent` (this also keeps the README screenshots clean).
+  - AC 11: the random kill window is an eighth of a measured uninterrupted pass, over 200 000 lines, so the twenty kills spread over the pass (each printed with the bytes ingested so far); the seed is printed and `OFFICINA_CRASH_SEED` replays it. A second ignored test shows the comparison sees a lost line. The CI step builds the helper first: a test target alone builds no example.
+  - AC 12: an environment variable set but empty counts as set (the fake's children turn the log off that way).
+  - AC 13: the waiting count is every dated file in `events/`, whatever the registry's state; the threshold is `doctor::WAITING_EVENT_FILES`.
+- **Runtime corruption, how the test reaches it:** a running connection serves cached pages, so on-disk damage stays invisible until its cache is invalidated (probed in story 3.1). The test commits through a second writer, then damages the file, then appends an event; the collector's next transaction re-reads the file and meets `SQLITE_CORRUPT`. In real use the same happens whenever SQLite's cache no longer covers a page.
+- **Adversarial pass** (concurrent readers during writes, a newer version, a corrupt file, a synced home, a kill mid-transaction, event files growing while ingested): one real miss, now a test and fixed in its own commit: an entry named like an event file that cannot be read (a folder, or a file deleted between the listing and the read, as a v0.2 `board --json` still installed would do) made the whole pass fail, so every later file waited (`an_unreadable_entry_does_not_stop_the_pass`); with it, a line with an empty session id no longer creates a session (`a_line_without_a_session_id_records_nothing`), and retention removes files only. Checked and holding without a change: a reader in a transaction makes the hourly checkpoint wait its busy timeout and report `checkpointed: false`, never an error; a line being written while it is read stays unread until its newline lands (`partial_tail_stays_unread_until_it_is_completed`); a kill mid-transaction (the crash test).
+- **Mutation checks:** ingesting after the session list and the board turns `each_tick_ingests_before_the_agents_snapshot` and `today_growth_is_ingested_before_the_recompute` red; the first random-kill window let no run commit a chunk, which the printed progress showed, and was resized.
+- **Full gate at the end of the story** (every job of `.github/workflows/ci.yml`, run locally with `--locked`): `cargo fmt --check`; frontend install and build; clippy `--workspace --all-targets --features officina-core/ts` clean; `cargo test --workspace --features officina-core/ts` 728 passed, 0 failed, 8 ignored (TypeScript drift green); `perf.rs` alone in release 5 passed (hook own cost 9.3 ms, budget 30 ms; gate own cost 3.0 ms, budget 5 ms; in-process p95 3.2 ms); `approvals_stress` passed; the crash step 2 passed (helper built first); "officina holds no authority" verbatim: both markers absent from `officina.exe`, present in `officina-app.exe`; "No bundled roots" ok; "Registry dependencies" ok; `pnpm check`, `lint`, `test` 35 passed; fixtures rebuilt from the real CLI (13), Playwright 52 passed; `cargo deny --locked check` ok; `pnpm audit` 1 low, ignored with its reason (unchanged). The `core-linux` job replayed in a `rust:1-bookworm` container on the committed tree with Rust 1.99.0: fmt, clippy clean, 625 passed, 0 failed, 8 ignored.
+
 ### Completion Notes
 
+- AC 1: `crates/officina-core/src/events.rs::tests::{tail_is_the_last_280_characters_on_a_boundary, tail_is_absent_when_the_head_holds_the_message, oversized_line_drops_the_tail_first, line_with_the_new_field_parses_as_version_1}`; `crates/officina/tests/hook.rs::{stop_records_the_answer_head_and_tail, no_excerpts_drops_the_tail_too}`; `perf.rs::hook_latency_p95` green.
+- AC 2: `crates/officina-host/tests/registry_ingest.rs::{files_are_ingested_oldest_first, every_pass_covers_every_incomplete_file, offset_stops_at_the_last_newline, partial_tail_stays_unread_until_it_is_completed, partial_tail_before_yesterday_is_one_corrupt_line, yesterday_completes_after_the_grace_in_a_growth_pass, corrupt_lines_are_counted_per_file, a_file_shorter_than_its_offset_is_reingested_and_reported}`.
+- AC 3: `registry_ingest.rs::{chunk_boundary_commits_each_chunk, replayed_chunk_changes_nothing, later_observation_wins_whatever_the_order}`.
+- AC 4: `registry_ingest.rs::{first_line_creates_the_session_with_its_project, project_is_not_rewritten_by_a_floor_change, excerpts_keep_the_prompt_and_the_answer_head_and_tail, no_excerpts_drops_excerpts_at_ingestion}`.
+- AC 5: `registry_ingest.rs::triage_workdir_lines_are_skipped` (backslash, forward-slash and mixed-case forms).
+- AC 6: `crates/officina-core/src/registry/retention.rs::tests::{ttl_copy_lifetime_and_pass_interval_stay_within_30_days, event_file_is_deletable_only_when_every_kept_copy_holds_it_complete}`; `crates/officina-host/tests/registry_retention.rs::{four_utc_days_are_ingested_before_any_deletion, deletion_waits_for_both_copies, a_damaged_copy_does_not_count, unavailable_registry_deletes_nothing, read_only_registry_deletes_nothing, excerpts_expire_from_their_event_time, no_excerpts_turned_on_clears_stored_excerpts, expired_text_leaves_the_wal, hourly_pass_truncates_the_wal, copies_quarantine_and_pre_migration_copies_kept_two_for_2_days}`.
+- AC 7: `crates/officina/tests/watch.rs::{start_ingests_and_purges_before_the_first_board, each_tick_ingests_before_the_agents_snapshot, today_growth_is_ingested_before_the_recompute}`; `registry_retention.rs::hourly_pass_ingests_then_copies_then_retains`; host unit `watch::tests::ingestion_comes_with_every_session_list_and_every_event`.
+- AC 8: `watch.rs::{unavailable_registry_keeps_the_board_and_deletes_nothing, corruption_while_running_makes_the_registry_unavailable_until_restart}`; `crates/officina-core/src/board.rs::tests::registry_state_reaches_the_diagnostics`; `typescript_bindings.rs::committed_bindings_match_the_rust_types`; Playwright `app/e2e/board.spec.ts > an unavailable registry is reported and the board still shows sessions` on the `registry-unavailable` fixture of `app/scripts/e2e-fixtures.mjs`; `BOARD_SCHEMA` 3.
+- AC 9: CI step "officina holds no authority": the registry marker must be in `officina-app.exe` (verified on fresh release builds).
+- AC 10: `crates/officina/tests/board.rs::{board_json_deletes_no_event_file, board_json_reports_the_registry_state_with_the_window_closed}`; `files::retention_pass` and `files.rs::tests::retention_removes_only_expired_event_files` removed, replaced by the gated tests of AC 6.
+- AC 11: `crates/officina-host/tests/registry_crash.rs::killed_mid_transaction_and_at_random_loses_no_event` (ignored), with `a_missing_event_is_seen_by_the_comparison`; helper mode `ingest`; CI step "A killed writer loses no event".
+- AC 12: `crates/officina/tests/fake_claude.rs::{sidecar_configures_a_copied_fake, environment_wins_over_the_sidecar}`; `common::fake_claude_in`; the story's collector tests run a copied fake with an agents fixture; no test calls `std::env::set_var`.
+- AC 13: `crates/officina-host/src/doctor.rs::tests::{more_than_seven_waiting_event_files_warn, rewritten_event_files_are_reported}`.
+- AC 14: `crates/officina/tests/quota_doctor.rs::no_command_writes_under_the_claude_config_dir`: its collector ingests (the test asserts the session in the registry) and `~/.claude.json` joins the fingerprint (D-80).
+- AC 15: `CHANGELOG.md` `[Unreleased]` Changed; README Privacy and "Subjects and triage" (what it keeps, and for how long); `readme.rs` green.
+
 ## File List
+
+- `crates/officina-core/src/{events,board}.rs`, `crates/officina-core/src/registry/{mod,ingestion,retention,types}.rs`
+- `crates/officina-host/Cargo.toml`, `crates/officina-host/src/{lib,files,collector,watch,doctor}.rs`, `crates/officina-host/src/registry/{mod,read,write,store,ingest,retention,window}.rs`, `crates/officina-host/examples/registry_crash_helper.rs`, `crates/officina-host/tests/common/registry.rs`, `crates/officina-host/tests/{registry_store,registry_ingest,registry_retention,registry_crash}.rs`
+- `crates/officina/src/main.rs`, `crates/officina/src/bin/officina-fake-claude.rs`, `crates/officina/tests/common/mod.rs`, `crates/officina/tests/{hook,board,watch,fake_claude,quota_doctor,doctor_registry}.rs`
+- `app/src/App.svelte`, `app/src/lib/registry-text.ts`, `app/src/lib/generated/{Diagnostics,RegistryReport,RegistryState}.ts`, `app/scripts/e2e-fixtures.mjs`, `app/e2e/{fixtures,board.spec}.ts`
+- `.github/workflows/ci.yml`, `README.md`, `CHANGELOG.md`, `docs/stories/story-3.2-ingestion-and-retention.md`, `docs/stories/sprint-status.yaml`
 
 ## Change Log
 
 - 2026-10-28 created
 - 2026-10-28 reworked after review: every pass covers every incomplete file, rewritten files re-ingested and reported (D-84); tick order ingests first (D-78); single session creation function (D-79); purge at start, `no_excerpts` clears stored excerpts, derived TTL (D-85); hourly checkpoint and runtime corruption ACs (D-91); registry marker positive control (D-83); crash test that can fail (D-89); fake claude sidecar (D-86); normalised workdir exclusion (D-97); readers with the window closed (D-82); fixture script path
+- 2026-10-28 implemented: the answer's tail in the hook, ingestion of every incomplete event file before any deletion, the hourly pass (copy, retention, purge, WAL truncated), the window's collector as the registry's writer, `diagnostics.registry` with the board banner, `board --json` read-only, the crash test, the fake claude's sidecar, doctor's waiting and rewritten files; one adversarial fix (an unreadable event file stopped the pass). Full gate green. Status review

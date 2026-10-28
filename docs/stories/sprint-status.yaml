@@ -50,7 +50,7 @@ version: v0.3
 # 3.12 closes the PRD after a week of real use (owner rule, epic-2-decisions.md P-7, epic-3-decisions.md P-16).
 stories:
   - {id: "3.1", file: story-3.1-registry-store.md, slice: A, status: review}
-  - {id: "3.2", file: story-3.2-ingestion-and-retention.md, slice: A, status: approved}
+  - {id: "3.2", file: story-3.2-ingestion-and-retention.md, slice: A, status: review}
   - {id: "3.3", file: story-3.3-session-records.md, slice: A, status: approved}
   - {id: "3.4", file: story-3.4-subjects-and-filing.md, slice: A, status: approved}
   - {id: "3.5", file: story-3.5-subjects-view.md, slice: A, status: approved}
