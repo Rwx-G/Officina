@@ -113,3 +113,9 @@ windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_UI_Wi
 
 [dev-dependencies]
 tempfile = "3.27.0"
+
+# The Slice 0 counters of v0.4 (story 4.1, AD-178 gates 1, 4 and 5), run by
+# the owner by hand on the real home, read-only; never part of a shipped
+# binary.
+[[example]]
+name = "slice0_probe"
