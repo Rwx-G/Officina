@@ -262,7 +262,9 @@ project uses [Semantic Versioning](https://semver.org/).
 - A `pattern` that lets a value forwarded to a remote shell or a template
   hold whitespace, shell or template characters drops the action with the
   issue `forwarded_pattern`, unless it sets `forwarded_values = "accepted"`;
-  the catalogue format moves to 3, so the catalogue is approved once again.
+  the probe also tries values as short and as long as the pattern accepts,
+  so a pattern that needs a long value (`.{5,}`) is caught. The catalogue
+  format moves to 3, so the catalogue is approved once again.
 - The window's Content Security Policy allows no inline style; Vite inlines
   no asset as a `data:` URI, which the font policy refused.
 

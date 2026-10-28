@@ -2179,11 +2179,88 @@ fn literal_edges(source: &str) -> (String, String) {
     (prefix, run)
 }
 
+/// What a padded probe repeats to reach a pattern's lengths: a letter, a
+/// digit and a capital, one of which most value classes take.
+const PROBE_PADS: &[char] = &['a', '0', 'A'];
+
+/// A run of one pad character between a pattern's literal edges, at the
+/// shortest and the longest lengths the pattern accepts within
+/// [`params::VALUE_LENGTH`] (D-175).
+struct PaddedShape<'e> {
+    prefix: &'e str,
+    suffix: &'e str,
+    pad: char,
+    /// Pad counts to probe at: the shortest accepted, one more, and the
+    /// longest accepted.
+    counts: Vec<usize>,
+}
+
+impl PaddedShape<'_> {
+    /// True when `pattern` accepts `c` in place of a pad character, or
+    /// inserted beside one, at any position of a run of each count.
+    fn admits(&self, pattern: &Pattern, c: char) -> bool {
+        let (prefix, suffix) = (self.prefix, self.suffix);
+        self.counts.iter().any(|&count| {
+            // ASCII pads: any byte index is a character boundary.
+            let run = self.pad.to_string().repeat(count);
+            (0..=count).any(|i| {
+                let inserted = format!("{prefix}{}{c}{}{suffix}", &run[..i], &run[i..]);
+                let replaced = i < count
+                    && pattern.matches(&format!(
+                        "{prefix}{}{c}{}{suffix}",
+                        &run[..i],
+                        &run[i + 1..]
+                    ));
+                replaced || pattern.matches(&inserted)
+            })
+        })
+    }
+}
+
+/// The padded shapes of `pattern` (D-175): for each pad character and each
+/// way of wrapping it in the literal edges, the pad counts the pattern
+/// accepts, so a pattern that needs a long value (`.{5,}`, `\S{6,}`) is
+/// probed at a length it takes. A shape the pattern never accepts is left
+/// out.
+fn padded_shapes<'e>(pattern: &Pattern, prefix: &'e str, suffix: &'e str) -> Vec<PaddedShape<'e>> {
+    let mut edges = vec![("", ""), (prefix, ""), ("", suffix), (prefix, suffix)];
+    edges.sort_unstable();
+    edges.dedup();
+    let longest = *params::VALUE_LENGTH.end();
+    let mut shapes = Vec::new();
+    for (prefix, suffix) in edges {
+        for &pad in PROBE_PADS {
+            let pad_text = pad.to_string();
+            let accepted: Vec<usize> = (0..=longest)
+                .filter(|&count| {
+                    pattern.matches(&format!("{prefix}{}{suffix}", pad_text.repeat(count)))
+                })
+                .collect();
+            let (Some(&shortest), Some(&longest_accepted)) = (accepted.first(), accepted.last())
+            else {
+                continue;
+            };
+            let mut counts = vec![shortest, shortest + 1, longest_accepted];
+            counts.sort_unstable();
+            counts.dedup();
+            shapes.push(PaddedShape {
+                prefix,
+                suffix,
+                pad,
+                counts,
+            });
+        }
+    }
+    shapes
+}
+
 /// A character of [`FORWARDED_PROBE_CHARS`] that `pattern` admits in a
 /// value, found by probing: each character alone and around the fillers,
 /// then inserted at every place of each short value the pattern accepts,
-/// those values built from its literal edges and the fillers. A probe, not a
-/// proof: a `values` list is the only closed form.
+/// those values built from its literal edges and the fillers, then at
+/// every position of a run of pad characters as short and as long as the
+/// pattern accepts ([`padded_shapes`], D-175). A probe, not a proof: a
+/// `values` list is the only closed form.
 pub fn admitted_forwarded_char(pattern: &Pattern) -> Option<char> {
     let (prefix, suffix) = literal_edges(pattern.source());
     let accepted: Vec<String> = PROBE_FILLERS
@@ -2198,7 +2275,8 @@ pub fn admitted_forwarded_char(pattern: &Pattern) -> Option<char> {
         })
         .filter(|value| pattern.matches(value))
         .collect();
-    FORWARDED_PROBE_CHARS.chars().find(|c| {
+    let shapes = padded_shapes(pattern, &prefix, &suffix);
+    FORWARDED_PROBE_CHARS.chars().find(|&c| {
         let around = PROBE_FILLERS
             .iter()
             .any(|f| pattern.matches(&format!("{f}{c}")) || pattern.matches(&format!("{c}{f}")));
@@ -2210,6 +2288,7 @@ pub fn admitted_forwarded_char(pattern: &Pattern) -> Option<char> {
                     .chain(std::iter::once(value.len()))
                     .any(|i| pattern.matches(&format!("{}{c}{}", &value[..i], &value[i..])))
             })
+            || shapes.iter().any(|shape| shape.admits(pattern, c))
     })
 }
 
@@ -2471,6 +2550,15 @@ mod tests {
             "lab-[a-z ]+",
             ".+\\.service",
             "web[0-9]{2}( .*)?",
+            // Story 2.16 AC 6 (D-175): patterns that need a value longer
+            // than the fillers, found by the padded probe.
+            ".{5,}",
+            "\\S{6,}",
+            "[a-z]{4}(;[a-z]+)?",
+            "[a-z.@-]{5,}(;[a-z ]+)?",
+            "[0-9]{8}( .*)?",
+            "lab-[a-z]{6,}(;.*)?",
+            ".{200,}",
         ] {
             let compiled = params::compile_pattern(broad).unwrap();
             assert!(admitted_forwarded_char(&compiled).is_some(), "{broad}");
@@ -2479,6 +2567,8 @@ mod tests {
             "[a-z0-9-]+\\.service",
             "lab-[a-z0-9-]{1,30}",
             "[A-Za-z0-9_.:/=,-]+",
+            "[a-z]{200,256}",
+            "[0-9]{8}",
         ] {
             let compiled = params::compile_pattern(closed).unwrap();
             assert_eq!(admitted_forwarded_char(&compiled), None, "{closed}");
