@@ -76,6 +76,19 @@ README, not here.
   check the input tokens do not move; if they do, refuse a call while a
   `CLAUDE.md` or `.claude/` sits in those folders, with a vector case.
 
+## Owner requested
+
+- French UI (owner request, 2026-10-28; after v0.4, not a v0.4 story):
+  the window's strings move to a typed dictionary in the frontend, one
+  module per language (`en`, `fr`), a missing key failing the typecheck,
+  with no new dependency. The language follows the Windows locale, with a
+  setting that overrides it and is kept like the theme. The CLI and
+  `officina doctor` stay English, since their output is pasted into
+  settings files and issues. Playwright runs pinned to one language, so
+  its cases keep matching text; a Vitest case checks every key exists in
+  both. Slot to confirm with the owner; plan it before v0.5's UI grows,
+  since every new string adds to the extraction.
+
 ## Recurring, at each PRD close
 
 The dependency checks no advisory database raises (Epic 3 dependency
