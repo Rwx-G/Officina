@@ -191,6 +191,26 @@ project uses [Semantic Versioning](https://semver.org/).
   `to_resume` or `unsure`, with its source (`state`, `rules` or `model`)
   and a reason code, computed again on every view and never stored.
   `officina subjects --json` prints the rows and their count.
+- Triage panel (v0.3, in progress), at the head of the Subjects view: each
+  row shows its proposal with its source, its reason in words and the
+  excerpts it rests on; an unfiled row proposes its project's only open
+  subject, lets you pick another or name a new one, and is filed in the
+  same gesture; an empty subject asks to be archived. Arrows move between
+  rows, `f` and `t` set the verdict, `Enter` confirms the row in focus and
+  waits for the view that removes it, and a held key repeats nothing; an
+  `unsure` proposal waits for `f` or `t`. **Confirm all** takes a pointer
+  click only, says how many rows it confirms and how many it leaves out
+  (without a verdict, without a subject, being confirmed). Confirming
+  `finished` archives the subject, with the routine box, and clears its
+  excerpts; `to_resume` sets the status. A row whose proposal changed
+  since it was shown is refused with the reason and stays. A neutral "N
+  to sort" chip in the header opens the panel; it never turns amber, and
+  rows to sort count neither in the window title nor in the taskbar
+  overlay.
+- Each confirmation records the proposal it answered (verdict, source,
+  reason code, call id) and keeps a copy of the excerpts it was decided
+  on, which expires when those excerpts were due to, under the same
+  30-day bound; a batch is one transaction, answered per item.
 
 ### Changed
 

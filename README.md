@@ -407,7 +407,17 @@ Each row carries one proposal, and says where it came from:
 - `rules`: a session that ended inside a turn (its last prompt came after its last answer) proposes `to_resume`; with nothing else to go on, the default is `to_resume` too. A normal exit after the answer proposes nothing by itself.
 - `model`: the triage model's answer, `finished`, `to_resume` or `unsure`, when it is enabled (a later version), in place of the default only.
 
-Proposals are worked out again from the session's facts every time the view is built, and each gives its reason as a code, never as prose. `officina subjects --json` prints the rows and how many there are; the window's panel to confirm them comes next.
+Proposals are worked out again from the session's facts every time the view is built, and each gives its reason as a code, never as prose. `officina subjects --json` prints the rows and how many there are.
+
+### The Triage panel
+
+The rows that need a verdict head the Subjects view, in the Triage panel; a neutral **N to sort** chip in the header opens it. Rows to sort block no session, so the chip never turns amber and they count neither in the window title nor in the taskbar overlay. Each row shows its proposal, where it came from and why, in words, with the prompt and the end of the answer it rests on. An unfiled row shows the subject it will be filed under, its project's only open subject when there is one, and lets you pick another or name a new one: confirming it files the session and gives the verdict in the same gesture, unless another session of that subject saw a later prompt or one of them still runs, in which case the session is filed and the subject's own row decides. An empty subject asks "empty subject: archive?".
+
+- **Keys.** The arrows move between rows; `f` sets `finished`, `t` sets `to_resume`; `Enter` confirms the row in focus, and only that row. A key held down repeats nothing. After `Enter`, the row stays until the registry's next view removes it, and the focus then moves to the row taking its place. An `unsure` proposal has no verdict until you press `f` or `t`.
+- **Confirm all shown** confirms every row at once, on a pointer click only (no key triggers it). Its label says how many rows it takes, and leaves out, counted apart, the rows without a verdict, those without a subject to file under and those being confirmed.
+- **Finished** archives the subject, with the "routine, could have run alone" box, and clears its excerpts; **To resume** sets it `to_resume`.
+
+A batch is written in one transaction and each row is answered on its own. A row whose proposal changed since the window showed it is refused, says so and stays, as is a filing a subject rule refuses: you decide on what was shown. Each confirmation records the proposal it answered (verdict, source, reason code) and **keeps the prompt and answer it was decided on, under the same bound as the excerpts**: the copy expires when the excerpts it copied were due to, so none of it outlives 30 days.
 
 `officina subjects --json` prints the subjects that are not archived with their sessions (and their live board card), the latest excerpts, the unfiled sessions per project (non-interactive runs counted, the ten most recent listed), and how many event bytes wait for the window: it reads the registry read-only, works with the window closed, and exits 3 with the reason when the registry cannot be read. On the board, each card names its subject.
 
