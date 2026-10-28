@@ -1,0 +1,66 @@
+# Story 4.12: Documentation, README assets, workstation checks and QA closure
+
+**Status:** Approved
+
+## Story
+
+As the author installing v0.4 on a workstation, and as a future reader of the repository,
+I want the README and changelog to explain the scene in one piece with its pictures, the facts no automated test can measure measured on the workstation, walking included, and the epic closed with evidence,
+so that v0.4 is understood without guessing, its CPU promise is a number, and nothing of the PRD is left deferred.
+
+## Acceptance Criteria
+
+1. README (D-121): the sections the stories added become one "The scene" section: the three modes and the header controls (mode, walking, theme), `m`, `f` and digits, the zones and what puts an employee in each, walking, walking off and reduced motion, numbers, the register and the groups, the file and its actions, the line under the scene and where the gauges and relay state are, the halo's two-minute rule, the alert (the two floor keys, the band, the beacon, the taskbar badge and flash, no toast), sub-agents (or that they are not shown, if gate 1 failed), the theme control, the offices remembered on this machine, and Board as the default until the adoption condition holds; the scene screenshot sits beside the board's; the roadmap's v0.4 row is current. It transcribes no list owned by code. Proof: review; `crates/officina/tests/readme.rs` stays green.
+2. README assets (AD-72 as amended, AD-17): `app/e2e/readme-assets.spec.ts` gains `docs/assets/scene.png` and `scene-dark.png` from a settled `scene-c`, and `scene.gif`: a session at reception gets its first prompt and walks to its desk, another walks to the decision office and its halo breathes, the author opens its file and brings it to front, and it walks back. Proof: `pnpm readme-assets` run on the workstation, the assets committed and reviewed.
+3. `CHANGELOG.md` `[Unreleased]` holds one coherent v0.4 set under Added and Changed. Proof: review.
+4. Measurement home and replay (D-120, AD-71 as amended): `app/scripts/e2e-fixtures.mjs --home <dir> <scenario>` writes that scenario's Officina home and user profile under `<dir>`, prints the environment for `officina-app.exe`, and refuses a directory that exists and is not empty; `scene-measure` is `scene-c` without two Working sessions, its waits dated at the run; `app/scripts/scene-replay.mjs --home <dir>` rewrites that home's event files and agents sidecar so one state change happens every 10 s for 10 minutes, each crossing at least one corridor, and prints what it did. Proof: the CI step "e2e fixtures from the real CLI" (without the options, unchanged); a Vitest case `app/scripts/scene-replay.test.ts > the replay schedules one crossing change every 10 s` on a temporary home.
+5. Idle and walking CPU (FR-9, AD-71 as amended, D-120, D-480): on the workstation, the real `officina-app.exe` started with the printed environment, Scene mode, 10 minutes per run: halos breathing throughout, the real two-minute rule, halos steady, the replay with walking on, the replay with walking off; the `officina-app` process and its `msedgewebview2.exe` children summed, in % of the machine and % of one core, with the core count and refresh rate; recorded in a research-notes entry. If the two-minute halo run reaches 1 % of the machine, `HALO_BREATHING_MS` becomes 0 in the same change; if the walking run does, `DEFAULT_WALKING` becomes `false` in the same change (D-480); tests and the README follow. Proof: the entry; in a fallback case, `halo.test.ts` or `modes.spec.ts` with the new constant.
+6. Taskbar on the real app (FR-11, AD-174): with the real window behind another one, a waiting session shows the badge with its count; a high-priority permission prompt turns it to the alert colour and flashes the button until the window is focused; at 100 % and 150 % scaling. Proof: the research-notes entry.
+7. Live theme (AD-67 gate, D-118): with the theme on Auto, switching Windows between light and dark updates the running window without a restart; recorded with the WebView2 runtime version; on failure D-118's fallback ships with `core:window:allow-theme` and its Playwright case. Proof: the entry; in the fallback case, `themes.spec.ts > a theme-changed event from the window re-themes Auto`.
+8. WebView2 look (AD-70 manual list, R103): `scene-measure`'s scene in the real window at 100 % and 150 % scaling, light and dark, settled and during the replay's walks, compared by eye with the baselines and the prototype v2: no flicker of a walking figure against furniture, no blurred edges after a walk. Proof: the entry.
+9. Readability (PRD section 7): on five fixtures with someone waiting, the Needs you count and the oldest waiting name are read in under 2 s in Scene mode, as on the board. Proof: the entry.
+10. Adoption (PRD section 7, D-123, D-481): the day the owner starts choosing Scene is recorded; the default stays Board. Proof: the entry.
+11. What a real wait emits (D-108, R101): during a real permission prompt and a real question in an interactive session, which hook events arrive after the first `Notification` while the session still waits, and whether `waiting_since_ms` is known for each (a question without a blocking notification never escalates by time); with the Claude Code version. Findings that change the alert or the halo go to `docs/backlog.md`. Proof: the entry.
+12. Slice 0 order (D-479): the report checks that gate 1 preceded 4.9's start, gate 3 preceded 4.6's merge and gate 2 preceded 4.8's close. Proof: the report's evidence table.
+13. Stability: CI runs Playwright with `--repeat-each=3` (D-91), the walk and screenshot cases included. Proof: the CI `windows` job.
+14. QA closure (D-122): `docs/qa/epic-4-report.md` with the gate decision, the evidence table (AC 5 to 11 numbers included, and the three Slice 0 entries), the audits (accessibility against FR-6, untrusted text in the scene, the band and the file, performance against FR-9 with walking), the traceability table from FR-0 to FR-13 and from AD-59 to AD-72 and AD-167 to AD-178 to the ACs that prove them, every departure of P-20 and D-461 with its decision, those from the PRD marked as such, FR-12's outcome (shipped or not shipped by its own rule), and open findings moved to `docs/backlog.md`. Proof: review of the report; no FR or AD row without a proving AC or a recorded rule that withholds it.
+
+## Tasks
+
+- [ ] README "The scene" made coherent; roadmap (AC 1)
+- [ ] `readme-assets.spec.ts` cases; `pnpm readme-assets`; commit the assets (AC 2)
+- [ ] CHANGELOG consolidation (AC 3)
+- [ ] `e2e-fixtures.mjs` `--home`, `scene-measure`; `scene-replay.mjs` and its test; the Vitest include gains `scripts/*.test.ts` (AC 4)
+- [ ] Workstation runs and research-notes entries (AC 5-11); the fallbacks if a check fails (AC 5, 7)
+- [ ] Audits, `docs/qa/epic-4-report.md`, backlog (AC 12, 14)
+
+## Dev Notes
+
+- Requirements: FR-0 (via the baselines and Slice 0), FR-8 (live switching), FR-9, FR-11, PRD section 7. Decisions: AD-17, AD-67 (gate), AD-70 (manual list), AD-71 as amended, AD-72, AD-174, AD-178. Epic decisions: P-20, P-21, D-101, D-108, D-118, D-120 to D-123, D-461, D-479 to D-481.
+- Dependencies: stories 4.1 to 4.11 (4.9 only if gate 1 passed). The workstation checks run on a build of `main` with all of them merged.
+- The replay rewrites only the temporary home the script created; it never touches the real Officina home or the Claude config dir. It writes event lines the way `officina hook` does and the fake claude's sidecar the way the fixture script does.
+- Quit a running Officina first (single instance). Start the window within a minute of the script, so the two-minute rule is what the halo run measures.
+- FR-9's threshold applies to the machine figure; the per-core figure travels between machines; the refresh rate is recorded because animation cost scales with it (R26).
+- Cutting `[0.4.0]` and bumping the workspace version belong to the v0.4 release; not in this story.
+- No employer content in the README, the research notes or the report.
+
+## Testing
+
+- Playwright: `app/e2e/readme-assets.spec.ts` (by hand), the full suite with `--repeat-each=3` in CI.
+- Vitest: `app/scripts/scene-replay.test.ts`.
+- CLI integration: `crates/officina/tests/readme.rs`.
+- Manual: research-notes entries (AC 5 to 11), the QA report (AC 14).
+
+## Dev Agent Record
+
+### Debug Log
+
+### Completion Notes
+
+## File List
+
+## Change Log
+
+- 2026-10-28 created as story 4.9
+- 2026-10-28 reworked after review (F29 to F32, F35)
+- 2026-10-28 renumbered 4.12 and reworked for the scene v2 (D-460): the walking runs and the replay, the taskbar on the real app, the WebView2 look during walks, Slice 0's order, FR-10 to FR-13 and AD-167 to AD-178 in the traceability
