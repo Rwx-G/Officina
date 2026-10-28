@@ -3,4 +3,4 @@
 /**
  * What kind of failure a window command met.
  */
-export type IpcErrorCode = "catalogue_changed" | "floor_unreadable" | "write_failed" | "journal_unavailable" | "refused" | "author_refused" | "registry_unavailable" | "timeout" | "internal";
+export type IpcErrorCode = "catalogue_changed" | "floor_unreadable" | "write_failed" | "journal_unavailable" | "refused" | "author_refused" | "registry_unavailable" | "read_failed" | "timeout" | "internal";

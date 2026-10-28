@@ -20,7 +20,7 @@ use officina_core::registry::view::{RegistryView, SubjectView, unread_view};
 use super::ingest::{IngestContext, IngestReport};
 use super::read::{self, Reader};
 use super::retention::PassReport;
-use super::store::{Integrity, Writer, WriterOpen, open_writer};
+use super::store::{Writer, WriterOpen, open_writer};
 use super::triage::{CallResult, DryRunRefusal, NextCall, Triage};
 use super::write::{AuthorError, RegistryError};
 
@@ -38,9 +38,6 @@ enum Slot {
 #[derive(Debug)]
 pub struct WindowRegistry {
     slot: Slot,
-    /// How the database came to be readable at open, when it was opened
-    /// writable.
-    integrity: Option<Integrity>,
     /// The last error that did not make the registry unavailable (a disk
     /// full, a busy file), cleared by the next success.
     last_error: Option<String>,
@@ -62,15 +59,17 @@ impl WindowRegistry {
 
     /// The window's registry from what an open found.
     pub fn from_open(opened: WriterOpen) -> WindowRegistry {
-        let (slot, integrity) = match opened {
-            WriterOpen::Writable { writer, integrity } => (Slot::Writable(writer), Some(integrity)),
-            WriterOpen::ReadOnly { reader } => (Slot::ReadOnly(reader), None),
-            WriterOpen::Network => (Slot::Network, None),
-            WriterOpen::Unavailable { error } => (Slot::Unavailable(error.to_string()), None),
+        // How the database came to be readable is recorded by the open
+        // itself (a restore writes its notice, D-93); the window keeps the
+        // slot only.
+        let slot = match opened {
+            WriterOpen::Writable { writer, .. } => Slot::Writable(writer),
+            WriterOpen::ReadOnly { reader } => Slot::ReadOnly(reader),
+            WriterOpen::Network => Slot::Network,
+            WriterOpen::Unavailable { error } => Slot::Unavailable(error.to_string()),
         };
         WindowRegistry {
             slot,
-            integrity,
             last_error: None,
             agents: None,
             triage: Triage::default(),
@@ -88,11 +87,6 @@ impl WindowRegistry {
         self.model_env = env;
     }
 
-    /// How the database came to be readable at open.
-    pub fn integrity(&self) -> Option<&Integrity> {
-        self.integrity.as_ref()
-    }
-
     /// The writer, while the registry is writable.
     pub fn writer(&self) -> Option<&Writer> {
         match &self.slot {
@@ -103,10 +97,10 @@ impl WindowRegistry {
 
     /// The subject of each filed session, by session id, while the
     /// registry is writable; empty otherwise, and the board says why
-    /// (AD-54, D-47).
-    pub fn card_subjects(&self) -> BTreeMap<String, SubjectRef> {
-        self.writer()
-            .and_then(|writer| read::card_subjects(&writer.conn).ok())
+    /// (AD-54, D-47): a read that fails is taken as
+    /// [`WindowRegistry::failed`] says, so the report names it.
+    pub fn card_subjects(&mut self) -> BTreeMap<String, SubjectRef> {
+        self.on_writer(|writer| Ok(read::card_subjects(&writer.conn)?))
             .unwrap_or_default()
     }
 
@@ -183,35 +177,50 @@ impl WindowRegistry {
         )
     }
 
-    /// Runs one author action at `now_ms` on the window's one connection
-    /// (AD-38): the subject it created, if any; a refusal names its rule
-    /// and writes nothing (D-57).
-    pub fn act(&mut self, action: &AuthorAction, now_ms: i64) -> Result<Option<i64>, IpcError> {
+    /// Runs one author command on the writer (quality audit M3): refused
+    /// when the registry cannot be written; a success clears the last
+    /// error; a failure is taken as [`WindowRegistry::failed`] says and
+    /// told as [`WindowRegistry::access_failed`] words it. `step` answers
+    /// a refusal of its own as the inner error.
+    fn with_writer<T>(
+        &mut self,
+        step: impl FnOnce(&mut Writer) -> Result<Result<T, IpcError>, RegistryError>,
+    ) -> Result<T, IpcError> {
         let Slot::Writable(writer) = &mut self.slot else {
             return Err(self.not_writable());
         };
-        match writer.author(action, now_ms) {
-            Ok(created) => {
+        match step(writer) {
+            Ok(answer) => {
                 self.last_error = None;
-                Ok(created)
+                answer
             }
-            Err(AuthorError::Refused(refusal)) => Err(IpcError::refused_action(refusal)),
-            Err(AuthorError::Registry(error)) => Err(self.write_failed(&error)),
+            Err(error) => Err(self.access_failed(&error, IpcErrorCode::WriteFailed)),
         }
     }
 
-    /// What the window is told when a write failed: the registry is
-    /// unavailable when the database is damaged (and stays so until the
-    /// next start, AD-42), else the write failed.
-    fn write_failed(&mut self, error: &RegistryError) -> IpcError {
+    /// What the window is told when the registry failed it: unavailable
+    /// when the database is damaged (and so until the next start, AD-42),
+    /// else `code`, the registry staying usable.
+    fn access_failed(&mut self, error: &RegistryError, code: IpcErrorCode) -> IpcError {
         let code = if error.is_corruption() {
             IpcErrorCode::RegistryUnavailable
         } else {
-            IpcErrorCode::WriteFailed
+            code
         };
         let failure = IpcError::new(code, error.to_string());
         self.failed(error);
         failure
+    }
+
+    /// Runs one author action at `now_ms` on the window's one connection
+    /// (AD-38): the subject it created, if any; a refusal names its rule
+    /// and writes nothing (D-57).
+    pub fn act(&mut self, action: &AuthorAction, now_ms: i64) -> Result<Option<i64>, IpcError> {
+        self.with_writer(|writer| match writer.author(action, now_ms) {
+            Ok(created) => Ok(Ok(created)),
+            Err(AuthorError::Refused(refusal)) => Ok(Err(IpcError::refused_action(refusal))),
+            Err(AuthorError::Registry(error)) => Err(error),
+        })
     }
 
     /// Confirms triage rows at `now_ms` on the window's one connection
@@ -222,16 +231,7 @@ impl WindowRegistry {
         items: &[ConfirmItem],
         now_ms: i64,
     ) -> Result<Vec<ItemAnswer>, IpcError> {
-        let Slot::Writable(writer) = &mut self.slot else {
-            return Err(self.not_writable());
-        };
-        match writer.confirm_triage(items, now_ms) {
-            Ok(answers) => {
-                self.last_error = None;
-                Ok(answers)
-            }
-            Err(error) => Err(self.write_failed(&error)),
-        }
+        self.with_writer(|writer| Ok(Ok(writer.confirm_triage(items, now_ms)?)))
     }
 
     /// The archived subjects the author may reopen (AD-54), with the live
@@ -243,11 +243,15 @@ impl WindowRegistry {
             Slot::ReadOnly(reader) => reader.archived(board),
             Slot::Unavailable(_) | Slot::Network => return Err(self.not_writable()),
         };
-        read.map_err(|error| {
-            let failure = IpcError::new(IpcErrorCode::RegistryUnavailable, error.to_string());
-            self.failed(&RegistryError::from(error));
-            failure
-        })
+        match read {
+            Ok(listed) => {
+                self.last_error = None;
+                Ok(listed)
+            }
+            Err(error) => {
+                Err(self.access_failed(&RegistryError::from(error), IpcErrorCode::ReadFailed))
+            }
+        }
     }
 
     /// The Subjects view (AD-54), with the live cards of `board`, the lag
@@ -281,36 +285,30 @@ impl WindowRegistry {
     /// Turns auto-archive on or off at `now_ms` (FR-12): refused, with the
     /// gate's state, unless its gate holds to turn it on.
     pub fn set_auto_archive(&mut self, on: bool, now_ms: i64) -> Result<(), IpcError> {
-        let Slot::Writable(writer) = &mut self.slot else {
-            return Err(self.not_writable());
-        };
-        match writer.set_auto_archive(on, now_ms) {
-            Ok(Ok(())) => Ok(()),
-            Ok(Err(state)) => Err(IpcError::new(
-                IpcErrorCode::Refused,
-                format!(
-                    "auto-archive cannot be turned on: its gate does not hold ({})",
-                    state.code()
-                ),
-            )),
-            Err(error) => Err(self.write_failed(&error)),
-        }
+        self.with_writer(|writer| {
+            Ok(writer.set_auto_archive(on, now_ms)?.map_err(|state| {
+                IpcError::new(
+                    IpcErrorCode::Refused,
+                    format!(
+                        "auto-archive cannot be turned on: its gate does not hold ({})",
+                        state.code()
+                    ),
+                )
+            }))
+        })
     }
 
     /// Turns the triage model on or off at `now_ms` (FR-10 as amended,
     /// D-69, D-81): refused while it cannot be called or its enable gate
     /// does not hold, with why; turning it on lifts a pause.
     pub fn set_triage_model(&mut self, on: bool, now_ms: i64) -> Result<(), IpcError> {
-        let Slot::Writable(writer) = &mut self.slot else {
-            return Err(self.not_writable());
-        };
-        match writer.set_triage_model(on, now_ms) {
-            Ok(Ok(())) => Ok(()),
-            Ok(Err(refusal @ (EnableRefusal::Unavailable(_) | EnableRefusal::Gate(_)))) => {
-                Err(IpcError::new(IpcErrorCode::Refused, refusal.to_string()))
-            }
-            Err(error) => Err(self.write_failed(&error)),
-        }
+        self.with_writer(|writer| {
+            Ok(writer
+                .set_triage_model(on, now_ms)?
+                .map_err(|refusal: EnableRefusal| {
+                    IpcError::new(IpcErrorCode::Refused, refusal.to_string())
+                }))
+        })
     }
 
     /// One auto-archive pass at `now_ms`, when the registry is writable:
@@ -329,18 +327,16 @@ impl WindowRegistry {
     /// with how many cases it holds; refused while one runs, with no case,
     /// or when the registry cannot be written.
     pub fn evaluate(&mut self, now_ms: i64) -> Result<u32, IpcError> {
-        let Slot::Writable(writer) = &mut self.slot else {
-            return Err(self.not_writable());
-        };
-        match self.triage.start_dry_run(writer, now_ms) {
-            Ok(Ok(cases)) => Ok(cases),
-            Ok(Err(
-                refusal @ (DryRunRefusal::Running
-                | DryRunRefusal::NoCases
-                | DryRunRefusal::NoWorker),
-            )) => Err(IpcError::new(IpcErrorCode::Refused, refusal.to_string())),
-            Err(error) => Err(self.write_failed(&error)),
-        }
+        let mut triage = std::mem::take(&mut self.triage);
+        let queued = self.with_writer(|writer| {
+            Ok(triage
+                .start_dry_run(writer, now_ms)?
+                .map_err(|refusal: DryRunRefusal| {
+                    IpcError::new(IpcErrorCode::Refused, refusal.to_string())
+                }))
+        });
+        self.triage = triage;
+        queued
     }
 
     /// The next triage call to start at `now_ms`, when one may (AD-52).

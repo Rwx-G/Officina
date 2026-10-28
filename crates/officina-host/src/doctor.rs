@@ -749,7 +749,17 @@ pub fn check_triage(
         ));
         return checks;
     };
-    let facts = reader.model_facts(None).unwrap_or_default();
+    let facts = match reader.model_facts(None) {
+        Ok(facts) => facts,
+        Err(error) => {
+            checks.push(check(
+                Level::Fail,
+                "triage model",
+                format!("cannot be read: {error}"),
+            ));
+            return checks;
+        }
+    };
     let (level, state) = if facts.on() && facts.paused() {
         let since = facts.pause.as_ref().map_or(0, |p| p.at_ms);
         let (y, m, d) = utc_date(since);

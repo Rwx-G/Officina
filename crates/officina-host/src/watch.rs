@@ -650,9 +650,11 @@ fn ingest(collector: &mut Collector, registry: &mut WindowRegistry) {
 /// Hands the registry's state and the subject of each filed session to the
 /// collector: the next board reports one and shows the other on its cards
 /// (AD-54).
-fn report_registry(collector: &mut Collector, registry: &WindowRegistry) {
+fn report_registry(collector: &mut Collector, registry: &mut WindowRegistry) {
+    // The subjects first: a read that fails there shows in the report.
+    let subjects = registry.card_subjects();
     collector.set_registry(registry.report());
-    collector.set_subjects(registry.card_subjects());
+    collector.set_subjects(subjects);
 }
 
 /// Folds the session list the collector just received into the window's
@@ -799,6 +801,10 @@ fn answer_author<E: Emit>(
     if request.expired(Instant::now()) {
         return;
     }
+    // One time for the whole request, so what it writes and the views it
+    // publishes agree.
+    let now = now_ms();
+    let writes = !matches!(request.command, AuthorCommand::ListArchived);
     let reply = match request.command {
         AuthorCommand::ListArchived => {
             let board = outputs.board.read().ok().and_then(|slot| slot.clone());
@@ -806,34 +812,26 @@ fn answer_author<E: Emit>(
                 .archived(board.as_ref())
                 .map(AuthorAnswer::Archived)
         }
-        AuthorCommand::Act(action) => {
-            let done = registry.act(&action, now_ms());
-            report_registry(collector, registry);
-            publish_both(collector, registry, outputs, true);
-            done.map(|created| AuthorAnswer::Done { created })
-        }
-        AuthorCommand::Confirm(items) => {
-            let answered = registry.confirm(&items, now_ms());
-            report_registry(collector, registry);
-            publish_both(collector, registry, outputs, true);
-            answered.map(AuthorAnswer::Confirmed)
-        }
-        AuthorCommand::SetAutoArchive(on) => {
-            let done = registry.set_auto_archive(on, now_ms());
-            publish_both(collector, registry, outputs, true);
-            done.map(|()| AuthorAnswer::Done { created: None })
-        }
-        AuthorCommand::SetTriageModel(on) => {
-            let done = registry.set_triage_model(on, now_ms());
-            publish_both(collector, registry, outputs, true);
-            done.map(|()| AuthorAnswer::Done { created: None })
-        }
-        AuthorCommand::Evaluate => {
-            let queued = registry.evaluate(now_ms());
-            publish_both(collector, registry, outputs, true);
-            queued.map(|cases| AuthorAnswer::Evaluating { cases })
-        }
+        AuthorCommand::Act(action) => registry
+            .act(&action, now)
+            .map(|created| AuthorAnswer::Done { created }),
+        AuthorCommand::Confirm(items) => registry.confirm(&items, now).map(AuthorAnswer::Confirmed),
+        AuthorCommand::SetAutoArchive(on) => registry
+            .set_auto_archive(on, now)
+            .map(|()| AuthorAnswer::Done { created: None }),
+        AuthorCommand::SetTriageModel(on) => registry
+            .set_triage_model(on, now)
+            .map(|()| AuthorAnswer::Done { created: None }),
+        AuthorCommand::Evaluate => registry
+            .evaluate(now)
+            .map(|cases| AuthorAnswer::Evaluating { cases }),
     };
+    // Every command reports the registry's state, a failure included
+    // (quality audit M3); those that write publish the views at once.
+    report_registry(collector, registry);
+    if writes {
+        publish_both(collector, registry, outputs, true);
+    }
     let _ = request.reply.send(reply);
 }
 

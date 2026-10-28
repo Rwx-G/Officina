@@ -433,3 +433,26 @@ fn triage_call_rows_are_kept_90_days() {
         .unwrap();
     assert!(writer.triage_calls_since(0).unwrap().is_empty());
 }
+
+/// Quality audit M2: a read of the cards' subjects that fails is reported,
+/// never shown as a ready registry with no subject.
+#[test]
+fn a_failed_read_of_the_cards_subjects_is_reported() {
+    let home = Home::new();
+    let mut registry = WindowRegistry::open(&home.home, &[], NOW);
+    assert!(registry.card_subjects().is_empty());
+    assert_eq!(registry.report().detail, None);
+    rusqlite::Connection::open(home.paths().database())
+        .unwrap()
+        .execute_batch("ALTER TABLE session RENAME TO session_moved;")
+        .unwrap();
+    assert!(registry.card_subjects().is_empty());
+    let report = registry.report();
+    assert!(
+        report
+            .detail
+            .as_deref()
+            .is_some_and(|d| d.contains("session")),
+        "{report:?}"
+    );
+}

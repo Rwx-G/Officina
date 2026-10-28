@@ -30,6 +30,9 @@ closed_enum! {
         /// The registry cannot be written now: read only, unavailable or on
         /// a network folder (AD-41, AD-42).
         RegistryUnavailable,
+        /// The registry could not be read now, a busy file say, without
+        /// being damaged: it stays usable, and a retry may succeed.
+        ReadFailed,
         /// The collector did not answer in time; a request it had not
         /// started is dropped, never run later (D-92).
         Timeout,

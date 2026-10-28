@@ -369,7 +369,7 @@ pub(crate) fn view(
         latest_evaluation: latest_evaluation(&snapshot)?,
         dry_run: ctx.dry_run,
         verdicts: verdict_records(&snapshot)?,
-        auto_archive: auto_archive_setting(&snapshot),
+        auto_archive: auto_archive_setting(&snapshot)?,
     };
     Ok(build_view(
         &ViewInput {
@@ -949,11 +949,13 @@ pub(crate) fn verdict_records(conn: &Connection) -> rusqlite::Result<Vec<Verdict
 }
 
 /// The auto-archive setting, with who set it and when, when one is
-/// recorded and readable (D-69).
-pub(crate) fn auto_archive_setting(conn: &Connection) -> Option<(AutoArchiveSetting, Source, i64)> {
-    settings(conn)
-        .ok()?
-        .into_iter()
-        .find(|row| row.key == SettingKey::AutoArchive)
-        .and_then(|row| Some((serde_json::from_str(&row.value).ok()?, row.src, row.at_ms)))
+/// recorded in a form this build reads (D-69); a failed read is an error,
+/// never "off" (quality audit M2).
+pub(crate) fn auto_archive_setting(
+    conn: &Connection,
+) -> rusqlite::Result<Option<(AutoArchiveSetting, Source, i64)>> {
+    Ok(
+        setting_of::<AutoArchiveSetting>(conn, SettingKey::AutoArchive)?
+            .map(|setting| (setting.value, setting.src, setting.at_ms)),
+    )
 }

@@ -31,7 +31,7 @@ use rusqlite::TransactionBehavior;
 
 use super::read::{self, VerdictSnapshot};
 use super::store::Writer;
-use super::write::{RegistryError, write_setting};
+use super::write::{RegistryError, setting_json, write_setting};
 use crate::process::{RunError, RunLimits, hide_console, run_contained};
 
 /// How long the output pipes may stay open once the child exited and its
@@ -680,11 +680,10 @@ impl Writer {
         if current.is_none() || pause.value.stamp == current {
             return Ok(false);
         }
-        let lifted = serde_json::to_string(&ModelPause {
+        let lifted = setting_json(&ModelPause {
             paused: false,
             stamp: pause.value.stamp,
-        })
-        .unwrap_or_default();
+        });
         write_setting(
             &self.conn,
             SettingKey::TriageModelPause,
@@ -774,11 +773,10 @@ impl Writer {
         let facts = read::model_facts(&tx, unavailable)?;
         let since = facts.since_ms();
         if !facts.paused() && pause_due(&read::triage_calls_since(&tx, since)?, since) {
-            let paused = serde_json::to_string(&ModelPause {
+            let paused = setting_json(&ModelPause {
                 paused: true,
                 stamp,
-            })
-            .unwrap_or_default();
+            });
             write_setting(
                 &tx,
                 SettingKey::TriageModelPause,

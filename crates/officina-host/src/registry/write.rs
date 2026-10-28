@@ -670,8 +670,8 @@ pub struct AutoArchiveRun {
 
 impl Writer {
     /// The auto-archive setting, when one is recorded.
-    pub fn auto_archive_setting(&self) -> Option<AutoArchiveSetting> {
-        read::auto_archive_setting(&self.conn).map(|(setting, _, _)| setting)
+    pub fn auto_archive_setting(&self) -> Result<Option<AutoArchiveSetting>, RegistryError> {
+        Ok(read::auto_archive_setting(&self.conn)?.map(|(setting, _, _)| setting))
     }
 
     /// The auto-archive gate at `now_ms` (AD-50).
@@ -696,8 +696,7 @@ impl Writer {
                 return Ok(Err(gate.state));
             }
         }
-        let value =
-            serde_json::to_string(&AutoArchiveSetting { on, reason: None }).unwrap_or_default();
+        let value = setting_json(&AutoArchiveSetting { on, reason: None });
         self.set_setting(SettingKey::AutoArchive, &value, Source::Author, now_ms)?;
         Ok(Ok(()))
     }
@@ -708,16 +707,15 @@ impl Writer {
     /// `rules` and the gate's state; otherwise every row [`auto_archivable`]
     /// takes is confirmed `finished`, `auto`, without the routine mark.
     pub fn auto_archive(&mut self, now_ms: i64) -> Result<AutoArchiveRun, RegistryError> {
-        if !self.auto_archive_setting().is_some_and(|s| s.on) {
+        if !self.auto_archive_setting()?.is_some_and(|s| s.on) {
             return Ok(AutoArchiveRun::default());
         }
         let gate = self.auto_archive_gate(now_ms)?;
         if gate.state != GateState::Holds {
-            let value = serde_json::to_string(&AutoArchiveSetting {
+            let value = setting_json(&AutoArchiveSetting {
                 on: false,
                 reason: Some(gate.state),
-            })
-            .unwrap_or_default();
+            });
             self.set_setting(SettingKey::AutoArchive, &value, Source::Rules, now_ms)?;
             return Ok(AutoArchiveRun {
                 archived: Vec::new(),
@@ -754,6 +752,13 @@ impl Writer {
     }
 }
 
+/// The JSON of a setting's value. A setting is a small struct of plain
+/// fields, which always serialises; an empty value would read back as
+/// absent, so a failure is a bug, never a quiet default (quality audit M2).
+pub(crate) fn setting_json<T: serde::Serialize>(value: &T) -> String {
+    serde_json::to_string(value).expect("a setting value always serialises")
+}
+
 /// Records `value` under `key` on `conn`, replacing what was there.
 pub(crate) fn write_setting(
     conn: &Connection,
@@ -779,11 +784,10 @@ fn self_disable_if_worse(conn: &Connection, now_ms: i64) -> rusqlite::Result<()>
     let on = read::model_facts(conn, None)?.on();
     let gate = model_self_disable_gate(&read::verdict_records(conn)?, now_ms);
     if on && gate.state == GateState::WorseThanDefault {
-        let value = serde_json::to_string(&ModelSetting {
+        let value = setting_json(&ModelSetting {
             on: false,
             reason: Some(gate.state),
-        })
-        .unwrap_or_default();
+        });
         write_setting(conn, SettingKey::TriageModel, &value, Source::Rules, now_ms)?;
     }
     Ok(())
@@ -816,11 +820,10 @@ impl Writer {
                 return Ok(Err(EnableRefusal::Gate(gate.state)));
             }
             if let Some(pause) = facts.pause.filter(|p| p.value.paused) {
-                let lifted = serde_json::to_string(&ModelPause {
+                let lifted = setting_json(&ModelPause {
                     paused: false,
                     stamp: pause.value.stamp,
-                })
-                .unwrap_or_default();
+                });
                 write_setting(
                     &tx,
                     SettingKey::TriageModelPause,
@@ -830,7 +833,7 @@ impl Writer {
                 )?;
             }
         }
-        let value = serde_json::to_string(&ModelSetting { on, reason: None }).unwrap_or_default();
+        let value = setting_json(&ModelSetting { on, reason: None });
         write_setting(&tx, SettingKey::TriageModel, &value, Source::Author, now_ms)?;
         tx.commit()?;
         Ok(Ok(()))
