@@ -651,6 +651,29 @@ pub fn queue_again(last: Option<(TriageOutcome, Option<&str>)>, input_hash: &str
     !matches!(last, Some((TriageOutcome::Refused, Some(hash))) if hash == input_hash)
 }
 
+/// How many proposal calls failed in a row, the latest last (AD-50, D-65,
+/// D-81): the pause of story 3.11 reads it. Refusals spent nothing and dry
+/// runs propose nothing, so neither counts nor breaks the streak; an
+/// answer ends it.
+///
+/// ```
+/// use officina_core::registry::triage_call::failed_proposal_streak;
+/// assert_eq!(failed_proposal_streak(&[]), 0);
+/// ```
+pub fn failed_proposal_streak(calls: &[CallRecord]) -> u32 {
+    let mut ordered: Vec<&CallRecord> = calls
+        .iter()
+        .filter(|c| c.purpose == TriagePurpose::Proposal && c.spawned())
+        .collect();
+    ordered.sort_by_key(|c| c.started_at_ms);
+    let failed = ordered
+        .iter()
+        .rev()
+        .take_while(|c| c.outcome != TriageOutcome::Answer)
+        .count();
+    u32::try_from(failed).unwrap_or(u32::MAX)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -946,6 +969,28 @@ OFFICINA-DATA-0f1e2d3c4b5a6978>>>\n";
                 last_at_ms: NOW - 3_000
             }]
         );
+    }
+
+    #[test]
+    fn only_failed_proposal_calls_make_a_streak() {
+        let proposal = |at, outcome| CallRecord {
+            purpose: TriagePurpose::Proposal,
+            ..call(at, outcome)
+        };
+        let calls = [
+            proposal(NOW - 50, TriageOutcome::Answer),
+            proposal(NOW - 40, TriageOutcome::Failed),
+            call(NOW - 35, TriageOutcome::Timeout),
+            proposal(NOW - 30, TriageOutcome::Refused),
+            proposal(NOW - 20, TriageOutcome::Invalid),
+            call(NOW - 10, TriageOutcome::Answer),
+        ];
+        assert_eq!(failed_proposal_streak(&calls), 2);
+        assert_eq!(failed_proposal_streak(&calls[..1]), 0);
+        let dry_runs_only: Vec<CallRecord> = (0..5)
+            .map(|i| call(NOW - i, TriageOutcome::Timeout))
+            .collect();
+        assert_eq!(failed_proposal_streak(&dry_runs_only), 0);
     }
 
     #[test]
