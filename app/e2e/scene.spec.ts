@@ -832,6 +832,40 @@ test.describe("acting from the scene", () => {
     await expect(targetById(page, register.id)).toBeFocused();
   });
 
+  test("a list whose group empties closes, focus on the scene", async ({ page }) => {
+    const board = loadBoard("scene-overflow");
+    await openScene(page, board);
+    const register = groupTarget(layouts(board)[0]!, (kind) => kind === "decision");
+    await targetById(page, register.id).click();
+    await expect(rowOf(page, register.keys[0]!)).toBeFocused();
+    // A board arrives while the list is open: one row fewer, the list stays.
+    const fewer = structuredClone(board);
+    fewer.columns.needs_you = fewer.columns.needs_you.filter((c) => c.key !== register.keys.at(-1));
+    await push(page, fewer);
+    await expectList(page, register.keys.slice(0, -1));
+    // The queue now holds everyone: no group, no list.
+    const emptied = structuredClone(board);
+    emptied.columns.needs_you = emptied.columns.needs_you.filter((c) => !register.keys.includes(c.key));
+    await push(page, emptied);
+    await expect(sessionFile(page)).toHaveCount(0);
+    await expect(targetById(page, register.id)).toHaveCount(0);
+    await expect(scene(page)).toBeFocused();
+  });
+
+  test("an empty board has no target and the line under the scene says zero", async ({ page }) => {
+    const board = loadBoard("empty");
+    expect(liveCards(board)).toEqual([]);
+    await openScene(page, board);
+    await expect(scene(page).locator("[data-target]")).toHaveCount(0);
+    await expect(page.getByTestId("strip-to-resume")).toHaveText("0 to resume");
+    await expect(page.getByTestId("strip-done")).toHaveText(`0 done in ${hours(board.done_window_ms)}`);
+    await expectStripInCorner(page);
+    // Escape with nothing open changes nothing.
+    await scene(page).focus();
+    await page.keyboard.press("Escape");
+    await expect(scene(page)).toBeFocused();
+  });
+
   test("list rows are 44 px or more", async ({ page }) => {
     const board = loadBoard("scene-overflow");
     await openScene(page, board);
