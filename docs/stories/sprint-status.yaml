@@ -90,7 +90,7 @@ stories:
   - {id: "4.1", file: story-4.1-workstation-checks.md, slice: "0", status: in-progress}
   - {id: "4.2", file: story-4.2-floor-keys-payloads-and-scene-fixtures.md, slice: A, status: review}
   - {id: "4.3", file: story-4.3-scene-state-in-core.md, slice: A, status: approved}
-  - {id: "4.4", file: story-4.4-halo-memo-and-board-halo.md, slice: A, status: approved}
+  - {id: "4.4", file: story-4.4-halo-memo-and-board-halo.md, slice: A, status: review}
   - {id: "4.5", file: story-4.5-alert-band-title-and-taskbar.md, slice: A, status: approved}
   - {id: "4.6", file: story-4.6-scene-geometry-spots-and-layout.md, slice: A, status: approved}
   - {id: "4.7", file: story-4.7-scene-drawn-in-place-and-scene-mode.md, slice: A, status: approved}
