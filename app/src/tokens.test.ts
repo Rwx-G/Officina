@@ -5,6 +5,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { PROJECT_COLORS } from "./lib/colors";
+import { TARGET_CSS_MIN } from "./lib/scene/geometry";
 
 // Read from disk, relative to the app folder Vitest runs in: it replaces
 // imported CSS, `?raw` included, by nothing, and jsdom's module URLs are not
@@ -65,5 +66,9 @@ describe("tokens", () => {
       expect(name, colour).toBeDefined();
       expect(tokens.get(name!), `${colour}: ${name}`).toMatch(/^#[0-9a-f]{6}$/i);
     }
+  });
+
+  it("TARGET_CSS_MIN equals app.css's --target-min", () => {
+    expect(rootTokens(css).get("--target-min")).toBe(`${TARGET_CSS_MIN}px`);
   });
 });
