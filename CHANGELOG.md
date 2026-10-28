@@ -219,6 +219,29 @@ project uses [Semantic Versioning](https://semver.org/).
   after the version's first sighting. The header's contract chip names a
   missing field (`hook_missing` in the board's contract view), and
   `officina doctor` prints both lists.
+- Triage model, off (v0.3, in progress): a contained `claude -p` call,
+  never made unless you ask for a dry run. It runs with the light model,
+  no tool, no MCP server, no settings and no session persistence, from an
+  empty folder, without the variables a session or Officina sets, with the
+  floor's config dir; the excerpts go on stdin only, as one line of escaped
+  JSON between markers carrying a random nonce, and the answer is read from
+  the schema-constrained field alone: a verdict and a reason of at most 200
+  characters, or the call counts as invalid, failed or timed out, never as
+  a proposal. A `.cmd` or `.bat` `claude`, `no_excerpts` or a work folder
+  that is not empty refuses the call before anything starts, spending
+  nothing. Calls run one at a time on their own thread, killed with what
+  they started after 60 s, at most one every 5 s, 60 an hour and 300 a UTC
+  day, counted from the registry so the budget holds across restarts; each
+  is kept 90 days.
+- Dry run: **Evaluate the model** in the Triage panel sends the disabled
+  model your confirmations of a default proposal whose excerpts are still
+  kept, newest first, at most 50, one case per call, and shows how many it
+  got right beside the default, how often it said finished when you said
+  to resume, how many cases got no answer, and what it cost; its progress
+  shows while it runs, and nothing it answers becomes a proposal. The panel
+  also shows the calls and their cost today and over 30 days, and each
+  refusal with its cause. `officina doctor` reports the model's state, its
+  calls and cost, and the refusal while `claude` resolves to a shim.
 
 ### Changed
 
