@@ -160,6 +160,63 @@ closed_enum! {
     }
 }
 
+closed_enum! {
+    #[serde(rename_all = "snake_case")]
+    /// What opening the registry found (AD-41's table, D-47): in every
+    /// state but `ready`, nothing is read.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+    #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+    pub enum RegistryState {
+        /// The version this build reads: read, and written by the window.
+        Ready,
+        /// No registry yet; only the window creates one.
+        Absent,
+        /// Written by an older Officina: the window migrates it.
+        Older,
+        /// Written by a newer Officina: the window reads it and writes
+        /// nothing, a command line does not read it.
+        Newer,
+        /// Cannot be opened or read, or found damaged while the window runs.
+        Unavailable,
+        /// On a network folder: never opened.
+        Network,
+    }
+}
+
+/// The registry's state as the board reports it (`Diagnostics.registry`,
+/// AD-54, D-47).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct RegistryReport {
+    pub state: RegistryState,
+    /// The error behind the state, when one is.
+    pub detail: Option<String>,
+    /// The folder to exclude from a sync client, when the registry sits in
+    /// one (AD-39).
+    pub exclude_from_sync: Option<String>,
+}
+
+/// One `session` row.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionRow {
+    pub session_id: String,
+    /// Recorded at first sight, never rewritten by a floor change (D-53).
+    pub project: String,
+    pub first_seen_ms: i64,
+    pub last_seen_ms: i64,
+}
+
+/// One `session_excerpt` row (AD-40, FR-4).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExcerptRecord {
+    pub session_id: String,
+    pub prompt: Option<String>,
+    pub prompt_at_ms: Option<i64>,
+    pub answer_head: Option<String>,
+    pub answer_tail: Option<String>,
+    pub answer_at_ms: Option<i64>,
+}
+
 /// A value with where it came from and when (AD-40).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
@@ -211,7 +268,12 @@ mod tests {
     /// Runs `check` once per enum of this file, giving it the enum's `ALL`,
     /// `code` and `from_code`; returns how many enums it ran on.
     fn each_enum(check: &dyn Fn(&dyn EnumUnderTest)) -> usize {
-        let enums: [&dyn EnumUnderTest; 10] = [
+        let enums: [&dyn EnumUnderTest; 11] = [
+            &Closed(
+                RegistryState::ALL,
+                RegistryState::code,
+                RegistryState::from_code,
+            ),
             &Closed(Source::ALL, Source::code, Source::from_code),
             &Closed(
                 ProposalSource::ALL,

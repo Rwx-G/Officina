@@ -10,6 +10,7 @@ use officina_core::contract::check_agents;
 use officina_core::dates::{day_start_ms, utc_date};
 use officina_core::floor::{Autonomy, parse_floor};
 use officina_core::quota::STALE_AFTER_MS;
+use officina_core::registry::types::RegistryState;
 use officina_core::relay::gate::gated_tools;
 
 use crate::claude;
@@ -18,8 +19,7 @@ use crate::files::{now_ms, read_recent_events};
 use crate::paths::{ENV_FLOOR, env_path};
 use crate::registry::RegistryPaths;
 use crate::registry::store::{
-    self as registry_store, Location, ReaderState, daily_copies, onedrive_roots_from_env,
-    quarantined,
+    self as registry_store, Location, daily_copies, onedrive_roots_from_env, quarantined,
 };
 use crate::relay::doctor::{self as relay_doctor, RelayDoctor};
 use crate::relay::gate::GATE_EVENT;
@@ -487,25 +487,25 @@ pub fn check_registry(officina_home: &Path, onedrive_roots: &[PathBuf], now: i64
         Err(failure) => {
             let detail = failure.detail.as_deref().unwrap_or_default();
             match failure.state {
-                ReaderState::Absent => check(
+                RegistryState::Absent => check(
                     Level::Ok,
                     "registry",
                     "absent: the window creates it when it starts",
                 ),
-                ReaderState::Older => check(
+                RegistryState::Older => check(
                     Level::Warn,
                     "registry",
                     "written by an older Officina: the window copies it, then migrates it, when it starts",
                 ),
-                ReaderState::Newer => check(
+                RegistryState::Newer => check(
                     Level::Warn,
                     "registry",
                     "written by a newer Officina: the window opens it read-only, ingests nothing and deletes nothing",
                 ),
-                ReaderState::Unavailable => {
+                RegistryState::Unavailable => {
                     check(Level::Fail, "registry", format!("cannot be read: {detail}"))
                 }
-                ReaderState::Ready | ReaderState::Network => {
+                RegistryState::Ready | RegistryState::Network => {
                     check(Level::Fail, "registry", format!("not read: {detail}"))
                 }
             }

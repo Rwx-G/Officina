@@ -10,11 +10,11 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 use common::registry::{DAY, Home, NOW, damage_page, example, file_contains};
-use officina_core::registry::types::{RestoreNotice, SettingKey, Source};
+use officina_core::registry::types::{RegistryState, RestoreNotice, SettingKey, Source};
 use officina_host::registry::schema::{MIGRATIONS, SCHEMA_VERSION};
 use officina_host::registry::store::{
-    Integrity, Location, READER_PRAGMAS, ReaderState, SYNC_ROOT_MARKERS, WRITER_PRAGMAS,
-    WriterOpen, daily_copies, daily_copy_name, open_reader, open_reader_expecting, open_writer,
+    Integrity, Location, READER_PRAGMAS, SYNC_ROOT_MARKERS, WRITER_PRAGMAS, WriterOpen,
+    daily_copies, daily_copy_name, open_reader, open_reader_expecting, open_writer,
     open_writer_with, quarantined, read_only_connection,
 };
 
@@ -68,7 +68,7 @@ fn network_location_is_not_opened() {
     assert!(matches!(open_writer(&unc, &[], NOW), WriterOpen::Network));
     assert_eq!(
         open_reader(&unc, &[]).unwrap_err().state,
-        ReaderState::Network
+        RegistryState::Network
     );
 }
 
@@ -220,7 +220,7 @@ fn absent_registry_is_created_by_the_writer_only() {
     let home = Home::new();
     assert_eq!(
         open_reader(&home.home, &[]).unwrap_err().state,
-        ReaderState::Absent
+        RegistryState::Absent
     );
     assert!(!home.paths().dir().exists(), "a reader creates nothing");
     match open_writer(&home.home, &[], NOW) {
@@ -240,7 +240,7 @@ fn older_version_is_copied_then_migrated() {
     let next = [MIGRATIONS[0], "CREATE TABLE added (x INTEGER) STRICT;"];
     assert_eq!(
         open_reader_expecting(&home.home, &[], 2).unwrap_err().state,
-        ReaderState::Older
+        RegistryState::Older
     );
     match open_writer_with(&home.home, &[], &next, NOW) {
         WriterOpen::Writable {
@@ -286,28 +286,30 @@ fn newer_version_opens_read_only_for_the_writer() {
 /// D-47: each state a reader can find, built by an exhaustive match.
 #[test]
 fn reader_reports_each_state() {
-    for state in ReaderState::ALL {
+    for state in RegistryState::ALL {
         let home = Home::new();
         let mut at = home.home.clone();
         let mut expected_version = SCHEMA_VERSION;
         match state {
-            ReaderState::Ready => fill(&home),
-            ReaderState::Absent => {}
-            ReaderState::Older => {
+            RegistryState::Ready => fill(&home),
+            RegistryState::Absent => {}
+            RegistryState::Older => {
                 fill(&home);
                 expected_version = SCHEMA_VERSION + 1;
             }
-            ReaderState::Newer => written_by_a_newer_officina(&home),
-            ReaderState::Unavailable => {
+            RegistryState::Newer => written_by_a_newer_officina(&home),
+            RegistryState::Unavailable => {
                 std::fs::create_dir_all(home.paths().dir()).unwrap();
                 std::fs::write(home.paths().database(), "not a database, ".repeat(400)).unwrap();
             }
-            ReaderState::Network => at = PathBuf::from(r"\\localhost\officina-missing-share\home"),
+            RegistryState::Network => {
+                at = PathBuf::from(r"\\localhost\officina-missing-share\home")
+            }
         }
         let found = match open_reader_expecting(&at, &[], expected_version) {
-            Ok(_) => ReaderState::Ready,
+            Ok(_) => RegistryState::Ready,
             Err(failure) => {
-                assert_ne!(failure.state, ReaderState::Ready);
+                assert_ne!(failure.state, RegistryState::Ready);
                 failure.state
             }
         };

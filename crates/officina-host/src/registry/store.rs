@@ -13,8 +13,8 @@ use std::path::{Path, PathBuf};
 
 use officina_core::dates::{parse_utc_day, utc_day_text};
 use officina_core::quota::normalise_path;
+use officina_core::registry::types::{RegistryReport, RegistryState};
 use rusqlite::{Connection, OpenFlags};
-use serde::Serialize;
 
 use super::RegistryPaths;
 use super::read::{self, Reader};
@@ -203,38 +203,17 @@ pub fn read_only_connection(db: &Path) -> rusqlite::Result<Connection> {
     Ok(conn)
 }
 
-officina_core::closed_enum! {
-    #[serde(rename_all = "snake_case")]
-    /// What a reader found (AD-41's table, D-47). In every state but
-    /// `ready`, nothing is read.
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-    pub enum ReaderState {
-        /// The version this build reads: read.
-        Ready,
-        /// No registry yet; a reader never creates one.
-        Absent,
-        /// Written by an older Officina: the window migrates it.
-        Older,
-        /// Written by a newer Officina.
-        Newer,
-        /// Cannot be opened or read.
-        Unavailable,
-        /// On a network folder: never opened.
-        Network,
-    }
-}
-
 /// Why a reader read nothing.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReaderFailure {
-    /// Never [`ReaderState::Ready`].
-    pub state: ReaderState,
+    /// Never [`RegistryState::Ready`].
+    pub state: RegistryState,
     /// The error met, when the state comes from one.
     pub detail: Option<String>,
 }
 
 impl ReaderFailure {
-    fn new(state: ReaderState) -> ReaderFailure {
+    fn new(state: RegistryState) -> ReaderFailure {
         ReaderFailure {
             state,
             detail: None,
@@ -243,9 +222,36 @@ impl ReaderFailure {
 
     fn unavailable(error: impl ToString) -> ReaderFailure {
         ReaderFailure {
-            state: ReaderState::Unavailable,
+            state: RegistryState::Unavailable,
             detail: Some(error.to_string()),
         }
+    }
+}
+
+impl Location {
+    /// The folder to exclude from a sync client, when there is one.
+    pub fn exclude(&self) -> Option<&Path> {
+        match self {
+            Location::Synced { exclude } => Some(exclude),
+            Location::Local | Location::Network => None,
+        }
+    }
+}
+
+/// What the board says of a reader's outcome (D-47): `board --json` reads
+/// the registry this way, the window's closed or not.
+pub fn reader_report(opened: &Result<Reader, ReaderFailure>) -> RegistryReport {
+    match opened {
+        Ok(reader) => RegistryReport {
+            state: RegistryState::Ready,
+            detail: None,
+            exclude_from_sync: reader.location().exclude().map(|p| p.display().to_string()),
+        },
+        Err(failure) => RegistryReport {
+            state: failure.state,
+            detail: failure.detail.clone(),
+            exclude_from_sync: None,
+        },
     }
 }
 
@@ -268,12 +274,12 @@ pub fn open_reader_expecting(
     let paths = RegistryPaths::new(officina_home);
     let location = classify(paths.dir(), onedrive_roots, &SystemProbe);
     if location == Location::Network {
-        return Err(ReaderFailure::new(ReaderState::Network));
+        return Err(ReaderFailure::new(RegistryState::Network));
     }
     let db = paths.database();
     match fs::metadata(&db) {
         Err(e) if e.kind() == io::ErrorKind::NotFound => {
-            return Err(ReaderFailure::new(ReaderState::Absent));
+            return Err(ReaderFailure::new(RegistryState::Absent));
         }
         Err(e) => return Err(ReaderFailure::unavailable(e)),
         Ok(meta) if !meta.is_file() => {
@@ -287,9 +293,9 @@ pub fn open_reader_expecting(
     let conn = read_only_connection(&db).map_err(ReaderFailure::unavailable)?;
     let version = read::user_version(&conn).map_err(ReaderFailure::unavailable)?;
     match VersionState::of(version, expected) {
-        VersionState::Absent => Err(ReaderFailure::new(ReaderState::Absent)),
-        VersionState::Older => Err(ReaderFailure::new(ReaderState::Older)),
-        VersionState::Newer => Err(ReaderFailure::new(ReaderState::Newer)),
+        VersionState::Absent => Err(ReaderFailure::new(RegistryState::Absent)),
+        VersionState::Older => Err(ReaderFailure::new(RegistryState::Older)),
+        VersionState::Newer => Err(ReaderFailure::new(RegistryState::Newer)),
         VersionState::Equal => Ok(Reader::new(conn, location)),
     }
 }
