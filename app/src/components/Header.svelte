@@ -1,12 +1,14 @@
 <script lang="ts">
   import type { BoardStore } from "../lib/board.svelte";
+  import type { RelayStore } from "../lib/relay.svelte";
   import Gauge from "./Gauge.svelte";
   import logo from "../assets/logo.svg";
 
   interface Props {
     store: BoardStore;
+    relay?: RelayStore;
   }
-  let { store }: Props = $props();
+  let { store, relay }: Props = $props();
 
   let board = $derived(store.board);
   let waiting = $derived(board?.waiting_count ?? 0);
@@ -24,6 +26,12 @@
 
   {#if waiting > 0}
     <div class="pill" data-testid="waiting-pill" role="status">{waiting} waiting</div>
+  {/if}
+  {#if relay?.stopped}
+    <div class="chip stopped" data-testid="relay-stopped-chip" role="status">relay stopped</div>
+  {/if}
+  {#if relay?.pending}
+    <div class="chip pending" data-testid="catalogue-chip" role="status">catalogue change</div>
   {/if}
 
   {#if board}
@@ -52,6 +60,20 @@
       <span class="contract" data-testid="contract" title="Claude Code {contract.claude_version ?? ''}">contract held</span>
     {:else if contract?.held === false}
       <span class="contract broken" data-testid="contract">contract broken: {contract.missing.join(", ")}</span>
+    {/if}
+    {#if relay?.inUse}
+      <button
+        class="tool relay-toggle"
+        data-testid="relay-toggle"
+        aria-pressed={relay.stopped}
+        disabled={relay.switching}
+        onclick={() => relay.setStopped(!relay.stopped)}
+        title={relay.stopped
+          ? "Let officina run start approved actions again"
+          : "Refuse every officina run call until you resume"}
+      >
+        {relay.stopped ? "Resume relay" : "Stop relay"}
+      </button>
     {/if}
     <button class="tool" onclick={() => store.refresh()} title="Refresh now (r)">Refresh</button>
     <button
@@ -94,6 +116,24 @@
     background: var(--color-attention);
     color: var(--color-attention-text);
     font-weight: 700;
+  }
+  .chip {
+    padding: 6px 14px;
+    border-radius: var(--radius-pill);
+    font-weight: 700;
+  }
+  .chip.pending {
+    background: var(--color-attention);
+    color: var(--color-attention-text);
+  }
+  .chip.stopped {
+    background: var(--color-stopped);
+    color: var(--color-surface);
+  }
+  .tool.relay-toggle[aria-pressed="true"] {
+    border-color: var(--color-stopped);
+    background: var(--color-stopped-surface);
+    color: var(--color-stopped-text);
   }
   .gauges {
     display: flex;

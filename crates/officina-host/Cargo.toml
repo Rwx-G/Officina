@@ -27,6 +27,12 @@ window-authority = []
 name = "authority"
 required-features = ["window-authority"]
 
+# Approves, stops or resumes the relay of a fixture home through the
+# authority, for the e2e fixtures (D-25); never part of a shipped binary.
+[[example]]
+name = "approve_fixture"
+required-features = ["window-authority"]
+
 [target."cfg(windows)".dependencies]
 windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_System_Diagnostics_ToolHelp", "Win32_System_Threading", "Win32_System_JobObjects", "Win32_System_SystemInformation"] }
 

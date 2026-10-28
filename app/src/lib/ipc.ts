@@ -5,8 +5,29 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { Board } from "./generated/Board";
 import type { FocusOutcome } from "./generated/FocusOutcome";
+import type { RelayView } from "./generated/RelayView";
 
 export const BOARD_EVENT = "board://updated";
+export const RELAY_EVENT = "relay://updated";
+
+export function getRelay(): Promise<RelayView | null> {
+  return invoke<RelayView | null>("get_relay");
+}
+
+export function onRelay(handler: (relay: RelayView) => void): Promise<UnlistenFn> {
+  return listen<RelayView>(RELAY_EVENT, (event) => handler(event.payload));
+}
+
+/** Approves the catalogue whose hash the window displayed (AD-24); the
+ *  backend refuses when the floor changed since. Returns the approved hash. */
+export function approveCatalogue(hash: string): Promise<string> {
+  return invoke<string>("approve_catalogue", { hash });
+}
+
+/** Stops or resumes the relay (AD-34). True when the state changed. */
+export function setRelayStopped(stopped: boolean): Promise<boolean> {
+  return invoke<boolean>("set_relay_stopped", { stopped });
+}
 
 export function getBoard(): Promise<Board | null> {
   return invoke<Board | null>("get_board");

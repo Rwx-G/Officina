@@ -82,6 +82,20 @@ project uses [Semantic Versioning](https://semver.org/).
 - `officina run --list`: the actions of the current folder's project with
   what each parameter accepts, and whether the relay is stopped or a
   catalogue change awaits approval.
+- Catalogue approval in the window: an amber "catalogue change" chip and a
+  banner with the change per action and per field (what an added action
+  runs, a changed parameter by name), the projects and guarded programs that
+  changed and the actions the floor skips with their lines; **Approve this
+  catalogue** approves exactly what is shown, on a pointer click only, and
+  says so when the floor changed again in between.
+- Stop and resume the relay from the window's header: while stopped,
+  `officina run` refuses every action and a terracotta "relay stopped" chip
+  and a board banner say so; the gate keeps guarding. Each change is one
+  journal line.
+- The window follows floor edits without a restart: project names and
+  colours, a moved config dir (sessions, quota, attach) and the relay view,
+  which it also rebuilds when the relay's files or today's journal change;
+  it keeps `relay/known-projects.json` current while the relay is in use.
 - `officina relay --json`: the relay's state once, read only and the same
   contract the window reads: the stop flag, the approved catalogue, a
   pending change with its diff per action and field, the floor's catalogue

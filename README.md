@@ -180,6 +180,10 @@ pattern = "lab-[a-z0-9-]{1,30}"      # anchored: the whole value must match
 
 The relay runs only a catalogue you approved in the window. Approval records a hash of the catalogue's meaning (projects, actions, parameters, guarded programs), not of its text: comments, key order, colours or an invalid action do not change it, any change of meaning does. Only `officina-app.exe` contains the code that approves; `officina.exe`, which sessions can call, does not, and CI checks the shipped binary for it.
 
+When the floor's catalogue differs from the approved one (yours or a session's edit), the header shows an amber "catalogue change" chip and the board a banner with the change: each action added (with the program and arguments it would run), removed or changed field by field, the projects and guarded programs that changed, and the actions the floor skips as invalid, with their lines. **Approve this catalogue** approves exactly what the banner shows, and only on a mouse click: no key approves. If the floor changed again in between, nothing is approved and the banner shows the new change. The window approves the relay's floor (`OFFICINA_FLOOR`, else the approved one, else `~/.officina/floor.toml`), whose path the banner names, even when it shows another floor's board.
+
+**Stop relay**, in the header, makes `officina run` refuse every action until you press **Resume relay**; a terracotta "relay stopped" chip and a banner say so meanwhile. Stopping does not touch the gate, which keeps guarding your projects. Each stop and resume is one journal line.
+
 In a guarded repository the gate reads each `Bash` command and refuses one that would start a guarded program, even through quotes, wrappers, `bash -c`, an interpreter one-liner or a command substitution, along with a command name built at run time, a PowerShell encoded command, a redirection of Officina's home, and any mention of an `OFFICINA_` setting or of Officina's own files. It is a guardrail, not a boundary: a text match cannot catch a guarded program hidden in a script file (`bash deploy.sh`, `make apply`), called by another tool (`git` over SSH, a Python import), renamed, aliased from an earlier command, or reached by a `cd` from a free repository into a guarded one. Those stay the author's to watch; the limits are listed in the architecture (AD-27).
 
 The gate runs inside `officina hook` as a `PreToolUse` hook on `Bash`. Once the floor guards a project, `officina doctor` adds it to the block to paste:
@@ -227,7 +231,7 @@ args = ["-i", "inventory/lab", "--limit", "{group}", "playbooks/{playbook}"]
 
 `officina relay --json` prints the relay's state once, without writing anything: whether it is stopped, the approved catalogue, a pending change with its diff, the floor's catalogue issues with their lines, and the last 50 journal entries with each run's start and end paired. A run with no end line 60 s past its timeout reads "abandoned" (its `officina run` was killed). The window reads the same contract.
 
-Today the catalogue is parsed, validated and hashed, the gate refuses guarded commands and `officina run` runs `free` and `after-check` actions; `human` actions and the approval banner in the window arrive with the rest of v0.2.
+Today the catalogue is approved and the relay stopped from the window, the gate refuses guarded commands and `officina run` runs `free` and `after-check` actions; `human` actions and the Relay view arrive with the rest of v0.2.
 
 ## Command line
 

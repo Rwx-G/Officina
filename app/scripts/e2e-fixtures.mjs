@@ -112,3 +112,129 @@ for (const [name, scenario] of Object.entries(scenarios)) {
   rmSync(tmp, { recursive: true, force: true });
   console.log(`fixture ${name}: exit ${run.status}`);
 }
+
+// Relay views (stories 2.6 and 2.7, D-25): `officina relay --json` on a home
+// whose floor is hand-written and redacted, approved, stopped and resumed
+// through the `approve_fixture` example, which calls the window's own
+// authority functions: no hash is ever computed here, and no command line
+// path of `officina` approves.
+const relayFloor = `schema = 2
+
+[[project]]
+name = "infra-scripts"
+path = "C:/work/infra-scripts"
+actions = ["check", "apply"]
+
+[[project]]
+name = "docs-site"
+path = "C:/work/docs-site"
+autonomy = "free"
+actions = ["linkcheck"]
+
+[[action]]
+name = "check"
+description = "Dry run of a playbook on one lab group"
+class = "free"
+runner = "wsl"
+distro = "Debian"
+program = "/home/user01/venv/bin/ansible-playbook"
+env = { ANSIBLE_CONFIG = "/home/user01/ansible.cfg" }
+args = ["--check", "--diff", "-i", "inventory/lab", "--limit", "{group}", "playbooks/{playbook}"]
+
+[action.params.group]
+pattern = "lab-[a-z0-9-]{1,30}"
+
+[action.params.playbook]
+values = ["alerting.yml", "node-exporter.yml"]
+
+[[action]]
+name = "apply"
+description = "Apply a playbook checked in the last 30 minutes"
+class = "after-check"
+check = "check"
+runner = "wsl"
+distro = "Debian"
+program = "/home/user01/venv/bin/ansible-playbook"
+env = { ANSIBLE_CONFIG = "/home/user01/ansible.cfg" }
+args = ["-i", "inventory/lab", "--limit", "{group}", "playbooks/{playbook}"]
+
+[action.params.group]
+pattern = "lab-[a-z0-9-]{1,30}"
+
+[action.params.playbook]
+values = ["alerting.yml", "node-exporter.yml"]
+
+[[action]]
+name = "linkcheck"
+description = "Check the links of the published docs"
+class = "free"
+program = "C:/path/to/linkcheck.exe"
+args = ["--site", "{site}"]
+
+[action.params.site]
+values = ["docs"]
+`;
+
+// A session's edit: one more playbook value, an action that starts cmd.exe
+// with markup in its description, the docs action dropped, and an invalid
+// action whose name is markup.
+const pendingFloor = relayFloor
+  .replaceAll(`values = ["alerting.yml", "node-exporter.yml"]`, `values = ["alerting.yml", "backup.yml", "node-exporter.yml"]`)
+  .replace(`actions = ["check", "apply"]`, `actions = ["check", "apply", "restart"]`)
+  .replace(`actions = ["linkcheck"]`, `actions = []`)
+  .replace(/\[\[action\]\]\nname = "linkcheck"[\s\S]*$/, "") +
+  `[[action]]
+name = "restart"
+description = '<img src=x onerror="window.__officinaXss = 1">Restart <b>one</b> service'
+class = "free"
+program = "C:/Windows/System32/cmd.exe"
+args = ["/c", "sc", "stop", "{service}"]
+
+[action.params.service]
+values = ["web01"]
+
+[[action]]
+name = "<b>bad</b>"
+class = "free"
+program = "relative.exe"
+`;
+
+// The floor edited again after the window displayed the pending change.
+const againFloor = pendingFloor.replace(
+  `check = "check"\n`,
+  `check = "check"\ntimeout_s = 600\n`,
+);
+
+const relayScenarios = {
+  "relay-clean": [["floor", relayFloor], ["approve"]],
+  "relay-pending": [["floor", relayFloor], ["approve"], ["floor", pendingFloor]],
+  "relay-pending-again": [["floor", relayFloor], ["approve"], ["floor", againFloor]],
+  "relay-pending-approved": [["floor", relayFloor], ["approve"], ["floor", pendingFloor], ["approve"]],
+  "relay-stopped": [["floor", relayFloor], ["approve"], ["stop"]],
+};
+
+function approveFixture(officinaHome, verb) {
+  execFileSync(
+    "cargo",
+    ["run", "--quiet", "-p", "officina-host", "--example", "approve_fixture", "--features", "window-authority", "--", officinaHome, verb],
+    { cwd: root, stdio: ["ignore", "ignore", "inherit"] },
+  );
+}
+
+for (const [name, steps] of Object.entries(relayScenarios)) {
+  const tmp = mkdtempSync(join(tmpdir(), `officina-fixture-${name}-`));
+  const home = join(tmp, "home");
+  const officinaHome = join(tmp, "officina");
+  mkdirSync(home, { recursive: true });
+  mkdirSync(officinaHome, { recursive: true });
+  for (const [step, floor] of steps) {
+    if (step === "floor") writeFileSync(join(officinaHome, "floor.toml"), floor);
+    else approveFixture(officinaHome, step);
+  }
+  const env = { SYSTEMROOT: process.env.SYSTEMROOT ?? "", USERPROFILE: home, HOME: home, OFFICINA_HOME: officinaHome };
+  const run = spawnSync(officina, ["relay", "--json"], { env, encoding: "utf8" });
+  if (run.status !== 0) throw new Error(`${name}: officina relay exited ${run.status}: ${run.stderr}`);
+  writeFileSync(join(outDir, `${name}.json`), run.stdout);
+  rmSync(tmp, { recursive: true, force: true });
+  console.log(`fixture ${name}: exit ${run.status}`);
+}

@@ -20,6 +20,11 @@
   --color-project-blue: #4c6fbf;
   --color-project-terracotta: #c0603c;
   --color-project-none: #9a8e7a;
+  /* A stopped relay (AD-35): terracotta, never amber, which marks what
+     waits on the author. */
+  --color-stopped: var(--color-project-terracotta);
+  --color-stopped-surface: #f6e3dc;
+  --color-stopped-text: #8a2b14;
 
   --radius-card: 24px;
   --radius-pill: 999px;

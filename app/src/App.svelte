@@ -1,17 +1,21 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { BoardStore } from "./lib/board.svelte";
+  import { RelayStore } from "./lib/relay.svelte";
   import { clock } from "./lib/time";
   import Header from "./components/Header.svelte";
   import BoardColumn from "./components/BoardColumn.svelte";
+  import RelayBanners from "./components/RelayBanners.svelte";
 
   const store = new BoardStore();
+  const relay = new RelayStore();
   const DONE_VISIBLE = 5;
 
   onMount(() => {
-    let stop: (() => void) | undefined;
-    store.start().then((s) => (stop = s));
-    return () => stop?.();
+    const stops: (() => void)[] = [];
+    store.start().then((s) => stops.push(s));
+    relay.start().then((s) => stops.push(s));
+    return () => stops.forEach((s) => s());
   });
 
   let board = $derived(store.board);
@@ -37,7 +41,7 @@
 
 <svelte:window onkeydown={onKey} />
 
-<Header {store} />
+<Header {store} {relay} />
 
 {#if board?.stale}
   <div class="banner" role="alert" data-testid="stale-banner">
@@ -56,6 +60,8 @@
     {/if}
   </div>
 {/if}
+
+<RelayBanners store={relay} nowMs={store.nowMs} />
 
 {#if !board}
   <main class="loading" data-testid="loading">Asking Claude Code for its sessions...</main>
