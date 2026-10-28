@@ -5,8 +5,8 @@
   interface Props {
     walking: boolean;
     onWalking: (walking: boolean) => void;
-    /** Kept in the header outside the Sessions view, so switching views
-     *  slides nothing, but neither seen nor reachable there. */
+    /** Kept in the header outside the Sessions view and in Focus, so
+     *  switching slides nothing, but neither seen nor reachable there. */
     shown: boolean;
   }
   let { walking, onWalking, shown }: Props = $props();

@@ -77,6 +77,12 @@ test.describe("alert band", () => {
       await page.getByTestId(`view-${view}`).click();
       await expect(band(page)).toBeVisible();
     }
+    // Focus mode (story 4.11 AC 6): the band stays, above the list.
+    await page.getByTestId("mode-focus").click();
+    await expect(page.getByTestId("focus-list")).toBeVisible();
+    await expect(band(page)).toBeVisible();
+    const focusBand = (await band(page).boundingBox())!;
+    expect(focusBand.y + focusBand.height).toBeLessThanOrEqual((await page.getByTestId("focus-list").boundingBox())!.y);
   });
 
   test("the band counts the other alerted sessions", async ({ page }) => {

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   BASES,
   DEFAULT_BASE,
+  DEFAULT_FOCUS,
   DEFAULT_WALKING,
   VIEW_STORAGE_KEY,
   ViewStore,
@@ -109,6 +110,40 @@ describe("view state", () => {
     // An unchanged setting writes nothing.
     const quiet = memoryStorage();
     new ViewStore(() => quiet).setWalking(DEFAULT_WALKING);
+    expect(quiet.items.has(VIEW_STORAGE_KEY)).toBe(false);
+  });
+
+  it("a stored view without focus reads as not focused", () => {
+    expect(DEFAULT_FOCUS).toBe(false);
+    for (const base of BASES) expect(readViewState(JSON.stringify({ v: 1, base })).focus).toBe(false);
+    for (const focus of ["yes", 1, null, {}]) expect(readViewState(JSON.stringify({ v: 1, base: OTHER, focus })), String(focus)).toEqual({ ...defaultViewState(), base: OTHER });
+    expect(readViewState(JSON.stringify({ v: 1, focus: true })).focus).toBe(true);
+  });
+
+  it("f turns Focus on over the base and off back to it; m leaves Focus for the other base", () => {
+    const storage = memoryStorage();
+    const store = new ViewStore(() => storage);
+    for (const base of BASES) {
+      store.setMode(base);
+      store.toggleFocus();
+      expect([store.mode, store.base, store.focus]).toEqual(["focus", base, true]);
+      expect(new ViewStore(() => storage).mode).toBe("focus");
+      store.toggleFocus();
+      expect(store.mode).toBe(base);
+      expect(new ViewStore(() => storage).mode).toBe(base);
+    }
+    store.setMode("focus");
+    const hidden = store.base;
+    store.toggleBase();
+    expect([store.mode, store.focus]).toEqual([BASES.find((base) => base !== hidden), false]);
+    // Choosing a base from Focus leaves Focus; choosing Focus again writes nothing.
+    store.setMode("focus");
+    store.setMode(hidden);
+    expect(store.mode).toBe(hidden);
+    store.setMode("focus");
+    const quiet = memoryStorage();
+    const unchanged = new ViewStore(() => quiet);
+    unchanged.setMode(unchanged.mode);
     expect(quiet.items.has(VIEW_STORAGE_KEY)).toBe(false);
   });
 

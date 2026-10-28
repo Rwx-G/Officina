@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render } from "@testing-library/svelte";
 import AlertBand from "./AlertBand.svelte";
+import FocusList from "./FocusList.svelte";
 import ApprovalCard from "./ApprovalCard.svelte";
 import Gauge from "./Gauge.svelte";
 import { tick } from "svelte";
@@ -852,5 +853,31 @@ describe("SceneStrip", () => {
     // Another window, another word: nothing is fixed at 24 h.
     const { getByTestId } = render(SceneStrip, { toResume: 0, done: 1, doneWindowMs: 12 * 3_600_000, onBoard: () => {} });
     expect(getByTestId("strip-done").textContent).toBe("1 done in 12 h");
+  });
+});
+
+describe("FocusList", () => {
+  it("FocusList renders session text as text", () => {
+    const hostile = `<img src=x onerror="alert(1)"><b>x</b>`;
+    const base = fixturesOf<Board>("board")[0]!.data;
+    const waiting = card({
+      name: hostile,
+      waiting_for: hostile,
+      project: { name: hostile, color: "blue", priority: "high" },
+      scene: { zone: "unknown", waiting_since_ms: NOW - 12 * 60_000, alert: "priority", approval: false },
+    });
+    const turn = card({ key: "pid:2:2", column: "your_turn", name: hostile, waiting_for: null });
+    const board: Board = {
+      ...base,
+      columns: { needs_you: [waiting], your_turn: [turn], working: [], to_resume: [], done: [] },
+      approvals: [],
+    };
+    const { container, getAllByTestId, getByTestId } = render(FocusList, { board, store: store(), onApprovals: () => {} });
+    expect(container.querySelector("img")).toBeNull();
+    expect(container.querySelector("b")).toBeNull();
+    expect(getAllByTestId("focus-row").map((row) => row.querySelector(".name")?.textContent)).toEqual([hostile, hostile]);
+    expect(getByTestId("focus-waiting-for").textContent).toBe(hostile);
+    // The alert's cause, last known on unknown data (D-494).
+    expect(getByTestId("focus-alert").textContent).toContain(`${CAUSE_TEXT.priority}, last known`);
   });
 });

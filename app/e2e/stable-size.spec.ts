@@ -61,9 +61,9 @@ const CASES: ToggleCase[] = [
     name: "mode switch",
     selector: '[data-testid="mode-switch"] [role="radio"]',
     scene: "board",
-    // Choosing the other mode releases the chosen one. Scene mode lays the
-    // header on one line, which must move neither radio (D-517, D-525).
-    act: (page) => page.locator('[data-testid="mode-switch"] [aria-checked="false"]').click(),
+    // Choosing Scene releases Board. Scene mode lays the header on one
+    // line, which must move no radio (D-517, D-525).
+    act: (page) => page.getByTestId("mode-scene").click(),
   },
   // The theme control (AD-67, D-517), in both header layouts.
   { name: "theme switch", selector: '[data-testid="theme-switch"]', scene: "board" },

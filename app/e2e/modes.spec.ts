@@ -3,10 +3,37 @@
 // defaults, and the banners above the sessions area.
 import { expect, test, type Page } from "@playwright/test";
 import { calls, loadBoard, loadRelay, openBoard, openScene, sceneSettled } from "./fixtures";
-import { DEFAULT_WALKING, VIEW_STORAGE_KEY, readViewState } from "../src/lib/view.svelte";
+import { DEFAULT_WALKING, VIEW_STORAGE_KEY, defaultViewState, readViewState, serialiseViewState } from "../src/lib/view.svelte";
+import { FOCUS_REPEAT_GUARD_MS } from "../src/lib/board.svelte";
+import type { Board } from "../src/lib/generated/Board";
+import type { Card } from "../src/lib/generated/Card";
 
 const scene = (page: Page) => page.getByTestId("scene");
 const boardColumns = (page: Page) => page.getByTestId("column-needs_you");
+const focusList = (page: Page) => page.getByTestId("focus-list");
+const focusRows = (page: Page) => page.getByTestId("focus-row");
+
+/** The mode the switch shows as chosen. */
+async function chosenMode(page: Page): Promise<string | null> {
+  return page.getByTestId("mode-switch").locator('[aria-checked="true"]').getAttribute("data-mode");
+}
+
+/** The focus calls the backend received, by card key. */
+async function focusCalls(page: Page): Promise<string[]> {
+  return (await calls(page)).filter((c) => c.cmd === "focus").map((c) => (c.args as { key: string }).key);
+}
+
+/** Opens the window in Focus mode over Board, as a stored choice. */
+async function openFocus(page: Page, board: Board): Promise<void> {
+  await page.addInitScript(
+    ([key, value]) => localStorage.setItem(key, value),
+    [VIEW_STORAGE_KEY, serialiseViewState({ ...defaultViewState(), focus: true })] as const,
+  );
+  await page.clock.install({ time: board.generated_at_ms });
+  await page.addInitScript((b) => (window.__officinaBoard = b), board);
+  await page.goto("/");
+  await expect(focusList(page)).toBeVisible();
+}
 
 /** Opens the window with `raw` stored as the view state. */
 async function openStored(page: Page, raw: string): Promise<void> {
@@ -21,10 +48,10 @@ test.describe("modes", () => {
     await expect(page.getByTestId("view-sessions")).toHaveAttribute("aria-pressed", "true");
   });
 
-  test("the mode switch offers Board and Scene, Board by default", async ({ page }) => {
+  test("the mode switch offers Board, Scene and Focus", async ({ page }) => {
     await openBoard(page, loadBoard("scene-c"));
     const group = page.getByRole("radiogroup", { name: "Mode" });
-    await expect(group.getByRole("radio")).toHaveText(["Board", "Scene"]);
+    await expect(group.getByRole("radio")).toHaveText(["Board", "Scene", "Focus"]);
     await expect(group.getByRole("radio", { name: "Board" })).toHaveAttribute("aria-checked", "true");
     await expect(group.getByRole("radio", { name: "Scene" })).toHaveAttribute("aria-checked", "false");
     await expect(boardColumns(page)).toBeVisible();
@@ -37,6 +64,13 @@ test.describe("modes", () => {
     // One tab stop; the arrows move the choice.
     await expect(group.getByRole("radio", { name: "Board" })).toHaveAttribute("tabindex", "-1");
     await group.getByRole("radio", { name: "Scene" }).press("ArrowLeft");
+    await expect(boardColumns(page)).toBeVisible();
+    await expect(group.getByRole("radio", { name: "Board" })).toBeFocused();
+    // Focus, by click; the arrows wrap from it to Board.
+    await group.getByRole("radio", { name: "Focus" }).click();
+    await expect(focusList(page)).toBeVisible();
+    await expect(boardColumns(page)).toHaveCount(0);
+    await group.getByRole("radio", { name: "Focus" }).press("ArrowRight");
     await expect(boardColumns(page)).toBeVisible();
     await expect(group.getByRole("radio", { name: "Board" })).toBeFocused();
   });
@@ -85,13 +119,26 @@ test.describe("modes", () => {
     await sceneSettled(page);
   });
 
-  test("digits act on Needs you in both modes", async ({ page }) => {
+  test("keys 1 to 9 act on the nth waiting session in Board, Scene and Focus", async ({ page }) => {
     const board = loadBoard("scene-c");
-    await openScene(page, board);
-    await page.keyboard.press("1");
-    expect((await calls(page)).filter((c) => c.cmd === "focus")).toEqual([
-      { cmd: "focus", args: { key: board.columns.needs_you[0]!.key } },
-    ]);
+    const waiting = board.columns.needs_you;
+    expect(waiting.length).toBeGreaterThan(1);
+    expect(waiting.length).toBeLessThan(9);
+    await openBoard(page, board);
+    const expected: string[] = [];
+    for (const mode of ["board", "scene", "focus"]) {
+      await page.getByTestId(`mode-${mode}`).click();
+      if (mode === "scene") await sceneSettled(page);
+      for (const [n, card] of waiting.entries()) {
+        await page.keyboard.press(String(n + 1));
+        expected.push(card.key);
+      }
+      // A digit past the last waiting session does nothing.
+      await page.keyboard.press(String(waiting.length + 1));
+      await expect.poll(() => focusCalls(page), mode).toEqual(expected);
+      // The same key acts again only after the repeat guard.
+      await page.clock.runFor(FOCUS_REPEAT_GUARD_MS + 1);
+    }
   });
 
   test("the mode survives a reload", async ({ page }) => {
@@ -233,5 +280,218 @@ test.describe("modes", () => {
     const { area, half } = await scene(page).evaluate((s) => ({ area: s.parentElement!.clientHeight, half: innerHeight / 2 }));
     expect(area).toBeGreaterThanOrEqual(Math.floor(half));
     await expect(scene(page)).toBeVisible();
+  });
+
+  // Focus (story 4.11; FR-7, AD-66, D-113, D-114).
+  test("f turns Focus on and off back to the previous mode", async ({ page }) => {
+    await openBoard(page, loadBoard("scene-c"));
+    for (const base of ["board", "scene"]) {
+      await page.getByTestId(`mode-${base}`).click();
+      if (base === "scene") await sceneSettled(page);
+      await expect(page.getByTestId("walking-toggle")).toHaveCount(base === "scene" ? 1 : 0);
+      await page.keyboard.press("f");
+      await expect(focusList(page)).toBeVisible();
+      await expect.poll(() => chosenMode(page)).toBe("focus");
+      await expect(scene(page)).toHaveCount(0);
+      await expect(boardColumns(page)).toHaveCount(0);
+      // The walking toggle is hidden in Focus, its room kept.
+      if (base === "scene") await expect(page.getByTestId("walking-toggle")).toBeHidden();
+      await page.keyboard.press("f");
+      await expect.poll(() => chosenMode(page)).toBe(base);
+      await expect(focusList(page)).toHaveCount(0);
+      if (base === "scene") {
+        await sceneSettled(page);
+        await expect(page.getByTestId("walking-toggle")).toBeVisible();
+      } else {
+        await expect(boardColumns(page)).toBeVisible();
+      }
+    }
+    // A held key switches once.
+    await page.keyboard.down("f");
+    for (let i = 0; i < 4; i++) await page.evaluate(() => window.dispatchEvent(new KeyboardEvent("keydown", { key: "f", repeat: true })));
+    await page.keyboard.up("f");
+    await expect(focusList(page)).toBeVisible();
+  });
+
+  test("m from Focus switches the base and leaves Focus", async ({ page }) => {
+    await openBoard(page, loadBoard("scene-c"));
+    await page.keyboard.press("f");
+    await page.keyboard.press("m");
+    await expect.poll(() => chosenMode(page)).toBe("scene");
+    await sceneSettled(page);
+    await page.keyboard.press("f");
+    await page.keyboard.press("m");
+    await expect.poll(() => chosenMode(page)).toBe("board");
+    await expect(boardColumns(page)).toBeVisible();
+  });
+
+  test("Focus survives a reload", async ({ page }) => {
+    await openScene(page, loadBoard("scene-c"));
+    await page.keyboard.press("f");
+    await expect(focusList(page)).toBeVisible();
+    expect(readViewState(await page.evaluate((key) => localStorage.getItem(key), VIEW_STORAGE_KEY))).toMatchObject({ base: "scene", focus: true });
+    await page.reload();
+    await expect(focusList(page)).toBeVisible();
+    await expect.poll(() => chosenMode(page)).toBe("focus");
+    // Back to the base it hid.
+    await page.keyboard.press("f");
+    await sceneSettled(page);
+  });
+
+  test("Focus lists Needs you then Your turn, with Working as a count", async ({ page }) => {
+    const board = loadBoard("scene-c");
+    await openFocus(page, board);
+    const { needs_you, your_turn, working } = board.columns;
+    await expect(focusRows(page)).toHaveCount(needs_you.length + your_turn.length);
+    const keys = await focusRows(page).evaluateAll((rows) => rows.map((row) => row.getAttribute("data-key")));
+    expect(keys).toEqual([...needs_you, ...your_turn].map((c) => c.key));
+    // Needs you rows are numbered as the board numbers them.
+    const numbers = await page.getByTestId("focus-needs-you").locator("kbd").allTextContents();
+    expect(numbers).toEqual(needs_you.slice(0, 9).map((_, i) => String(i + 1)));
+    await expect(page.getByTestId("focus-your-turn").locator("kbd")).toHaveCount(0);
+    await expect(page.getByTestId("focus-working")).toHaveText(`${working.length} sessions working`);
+    for (const card of working) await expect(page.locator(`[data-testid="focus-row"][data-key="${card.key}"]`)).toHaveCount(0);
+  });
+
+  test("a Focus row brings its session to front", async ({ page }) => {
+    const board = loadBoard("scene-c");
+    const target = board.columns.your_turn[0]!;
+    await openFocus(page, board);
+    const row = page.locator(`[data-testid="focus-row"][data-key="${target.key}"]`);
+    await row.getByRole("button").click();
+    await expect.poll(() => focusCalls(page)).toEqual([target.key]);
+    // Its outcome shows in the row, as on the board card.
+    await expect(row.getByTestId("focus-outcome")).toBeVisible();
+  });
+
+  test("Focus shows the approvals waiting and opens them on the board", async ({ page }) => {
+    const board = loadBoard("approvals");
+    expect(board.approvals.length).toBeGreaterThan(1);
+    await openFocus(page, board);
+    const row = page.getByTestId("focus-approvals");
+    await expect(row).toHaveText(`${board.approvals.length} approvals waiting`);
+    // First, above the sessions.
+    expect((await row.boundingBox())!.y).toBeLessThan((await focusRows(page).first().boundingBox())!.y);
+    await row.click();
+    await expect.poll(() => chosenMode(page)).toBe("board");
+    await expect(page.getByTestId("approval-card")).toHaveCount(board.approvals.length);
+  });
+
+  test("Focus marks alerted sessions, a last known one included", async ({ page }) => {
+    const board = loadBoard("scene-alert");
+    const waitingCards = (b: Board): Card[] => [...b.columns.needs_you, ...b.columns.your_turn];
+    const [first, ...others] = waitingCards(board).filter((c) => c.scene?.alert);
+    expect(first).toBeDefined();
+    // The first one's data is unknown: its alert is the last known (D-494).
+    const unknown = structuredClone(board);
+    const changed = waitingCards(unknown).find((c) => c.key === first!.key)!;
+    changed.scene!.zone = "unknown";
+    changed.badge = "unknown";
+    await openFocus(page, unknown);
+    const pill = (c: Card) => page.locator(`[data-testid="focus-row"][data-key="${c.key}"]`).getByTestId("focus-alert");
+    await expect(pill(first!)).toContainText("Alert");
+    await expect(pill(first!)).toContainText("last known");
+    for (const other of others) {
+      await expect(pill(other)).toBeVisible();
+      await expect(pill(other)).not.toContainText("last known");
+    }
+    // A session out of alert has no pill.
+    for (const c of waitingCards(board).filter((c) => !c.scene?.alert)) await expect(pill(c)).toHaveCount(0);
+  });
+
+  test("Focus runs no animation", async ({ page }) => {
+    await openFocus(page, loadBoard("scene-alert"));
+    await expect(scene(page)).toHaveCount(0);
+    expect(await page.evaluate(() => document.getAnimations().length)).toBe(0);
+    await page.clock.runFor(5_000);
+    expect(await page.evaluate(() => document.getAnimations().length)).toBe(0);
+  });
+
+  test("Focus rows are 44 px or more", async ({ page }) => {
+    await openFocus(page, loadBoard("approvals"));
+    const targets = page.locator('[data-testid="focus-row"] > button, [data-testid="focus-approvals"]');
+    expect(await targets.count()).toBeGreaterThan(1);
+    for (const height of await targets.evaluateAll((elements) => elements.map((e) => e.getBoundingClientRect().height))) {
+      expect(height).toBeGreaterThanOrEqual(44);
+    }
+  });
+
+  test("m, f and digits do nothing outside the Sessions view", async ({ page }) => {
+    await openBoard(page, loadBoard("scene-c"), {}, loadRelay("relay-clean"));
+    for (const view of ["subjects", "relay"]) {
+      await page.getByTestId(`view-${view}`).click();
+      for (const key of ["m", "f", "1", "2"]) await page.keyboard.press(key);
+    }
+    expect(await focusCalls(page)).toEqual([]);
+    await page.getByTestId("view-sessions").click();
+    await expect.poll(() => chosenMode(page)).toBe("board");
+    await expect(boardColumns(page)).toBeVisible();
+  });
+
+  test("a mode change closes the session file", async ({ page }) => {
+    const board = loadBoard("scene-c");
+    const key = board.columns.needs_you[0]!.key;
+    await openScene(page, board);
+    const figure = scene(page).locator(`[data-layer="targets"] [data-key=${JSON.stringify(key)}]`);
+    for (const leave of ["m", "f"]) {
+      await figure.click();
+      await expect(page.getByTestId("session-file")).toBeVisible();
+      await page.keyboard.press(leave);
+      await expect(page.getByTestId("session-file")).toHaveCount(0);
+      await page.keyboard.press(leave);
+      await sceneSettled(page);
+      await expect(page.getByTestId("session-file")).toHaveCount(0);
+    }
+  });
+
+  test("leaving Scene mid-walk leaves no frame loop running", async ({ page }) => {
+    const board = loadBoard("scene-b");
+    await openScene(page, board);
+    // Count the frame callbacks the page asked for and has neither run nor
+    // cancelled, over the installed clock's own.
+    await page.evaluate(() => {
+      const pending = new Set<number>();
+      const request = window.requestAnimationFrame.bind(window);
+      const cancel = window.cancelAnimationFrame.bind(window);
+      window.requestAnimationFrame = (callback) => {
+        const id: number = request((time) => {
+          pending.delete(id);
+          callback(time);
+        });
+        pending.add(id);
+        return id;
+      };
+      window.cancelAnimationFrame = (id) => {
+        pending.delete(id);
+        cancel(id);
+      };
+      (window as unknown as { __pendingFrames: () => number }).__pendingFrames = () => pending.size;
+    });
+    const pendingFrames = () => page.evaluate(() => (window as unknown as { __pendingFrames: () => number }).__pendingFrames());
+    // A Working session starts waiting: its figure walks to the decision office.
+    const next = structuredClone(board);
+    const card = next.columns.working.splice(0, 1)[0]!;
+    next.columns.needs_you.push({
+      ...card,
+      column: "needs_you",
+      waiting_for: "permission prompt",
+      scene: { ...card.scene!, zone: "decision", waiting_since_ms: board.generated_at_ms, alert: null, approval: false },
+    });
+    next.waiting_count = next.columns.needs_you.length;
+    await page.evaluate((b) => window.__officinaPushBoard!(b), next);
+    await page.clock.runFor(160);
+    await expect(scene(page)).toHaveAttribute("data-moving", "1");
+    expect(await pendingFrames()).toBeGreaterThan(0);
+    for (const leave of ["f", "m"]) {
+      await page.keyboard.press(leave);
+      await expect(scene(page)).toHaveCount(0);
+      expect(await pendingFrames(), leave).toBe(0);
+      await page.clock.runFor(160);
+      expect(await pendingFrames(), leave).toBe(0);
+      // Back to Scene: everyone placed at once (D-469), nothing walking.
+      await page.keyboard.press(leave);
+      await expect(scene(page)).toHaveAttribute("data-moving", "0");
+      expect(await pendingFrames(), leave).toBe(0);
+    }
   });
 });

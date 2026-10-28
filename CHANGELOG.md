@@ -26,6 +26,12 @@ project uses [Semantic Versioning](https://semver.org/).
   reduced motion place everyone at once; nothing runs once everyone has
   arrived. A "Walking" toggle in the header, in Scene mode, kept for the
   next start, turns it off: employees then glide to their places.
+- Focus mode (v0.4, in progress): a third mode of the Sessions view, and
+  `f`, hide the board and the scene and list only what waits for you: the
+  approvals waiting (opened in Board mode), the Needs you sessions,
+  numbered for the digit keys and marked when in alert, the Your turn
+  sessions, and the Working count. `f` again brings back the mode you had;
+  the choice is kept for the next start. Nothing in Focus moves.
 - Acting from the scene (v0.4, in progress): every employee is a button
   with its name on hover and keyboard focus. It opens the session's file,
   a side panel that resizes nothing: project and priority, number, place,
@@ -342,7 +348,8 @@ project uses [Semantic Versioning](https://semver.org/).
   Only that key is printed, never another key of a settings file, and a
   file doctor cannot read gets no block, only the reason. Still read-only.
 - The window's first view is named **Sessions** (it was Board): Board is now
-  its default mode, beside Scene. Digit keys act in both modes. The quota
+  its default mode, beside Scene and Focus. Digit keys act in every mode;
+  `m`, `f` and the digits act in the Sessions view only. The quota
   gauges keep one width whatever their text, the end of a line too long for
   it in a tooltip, so their 30-second tick never moves the header.
 - The Needs you halo (v0.4) breathes for two minutes from the start of the

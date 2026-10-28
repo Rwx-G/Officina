@@ -2,7 +2,7 @@
   import type { BoardStore } from "../lib/board.svelte";
   import type { RegistryStore } from "../lib/registry.svelte";
   import type { RelayStore } from "../lib/relay.svelte";
-  import type { Base, WindowView } from "../lib/view.svelte";
+  import type { Base, Mode, WindowView } from "../lib/view.svelte";
   import { RELAY_TOGGLE_TEXT } from "../lib/relay-text";
   import Gauge from "./Gauge.svelte";
   import ModeSwitch from "./ModeSwitch.svelte";
@@ -21,9 +21,12 @@
     /** The view shown, local window state (AD-66). */
     view?: WindowView;
     onView?: (view: WindowView) => void;
-    /** The Sessions view's mode; Scene lays the header out on one line. */
+    /** The Sessions view's base; Scene lays the header out on one line,
+     *  Focus included, so `f` moves nothing in the header. */
     base?: Base;
-    onBase?: (base: Base) => void;
+    /** Focus over the base (AD-66). */
+    focus?: boolean;
+    onMode?: (mode: Mode) => void;
     /** The theme control (AD-67); the logo follows the resolved theme. */
     theme?: ThemeChoice;
     resolvedTheme?: Theme;
@@ -39,7 +42,8 @@
     view = "sessions",
     onView,
     base = "board",
-    onBase,
+    focus = false,
+    onMode,
     theme = "auto",
     resolvedTheme = "light",
     onTheme,
@@ -99,8 +103,8 @@
     </div>
   {/if}
 
-  {#if onBase}
-    <ModeSwitch {base} {onBase} shown={view === "sessions"} />
+  {#if onMode}
+    <ModeSwitch mode={focus ? "focus" : base} {onMode} shown={view === "sessions"} />
   {/if}
 
   {#if board}
@@ -135,7 +139,8 @@
       <!-- First of the right-aligned buttons: it grows the group to the
            left, so the buttons after it keep their places (D-517). -->
       {#if onWalking && base === "scene"}
-        <WalkingSwitch {walking} {onWalking} shown={view === "sessions"} />
+        <!-- Kept in Focus, unseen, so `f` moves no button (D-517). -->
+        <WalkingSwitch {walking} {onWalking} shown={view === "sessions" && !focus} />
       {/if}
       {#if relay?.inUse}
         <button

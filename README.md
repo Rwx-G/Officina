@@ -485,9 +485,11 @@ A call is refused before anything starts, and spends nothing, when `claude` reso
 
 v0.4 draws the board's sessions as the employees of a small company. The parts that already ship:
 
-### Board and Scene
+### Board, Scene and Focus
 
-The window's first view is now called **Sessions**; it has two modes, **Board** and **Scene**, chosen in the header's mode switch or with `m` (a held key switches once). **Board** stays the default until you have chosen Scene for ten working days; the mode you choose is kept for the next start. Digit keys 1 to 9 open the Needs you sessions in both modes. The alert band and the banners stay above the sessions area in both. In Scene mode the header keeps to one line, so the scene keeps its height.
+The window's first view is now called **Sessions**; it has three modes, **Board**, **Scene** and **Focus**, chosen in the header's mode switch. `m` switches between Board and Scene, `f` turns Focus on and, pressed again, brings back the mode you had (a held key switches once); `m` from Focus leaves it for the other of Board and Scene. **Board** stays the default until you have chosen Scene for ten working days; the mode you choose is kept for the next start, Focus included. Digit keys 1 to 9 open the Needs you sessions in every mode. `m`, `f` and the digits act in the Sessions view only: in the Subjects view, `f` still sets a triage verdict. The alert band and the banners stay above the sessions area in every mode. In Scene mode the header keeps to one line, so the scene keeps its height.
+
+**Focus** hides the board and the scene and lists only what waits for you: first "N approvals waiting" when there are some, which opens them in Board mode; then the Needs you sessions, numbered as on the board and marked "Alert" with the cause for one in alert ("last known" while its data is unknown); then the Your turn sessions; then how many sessions are working. A row brings its session to front as a board card does, with the outcome in the row. Nothing in Focus moves: no scene, no halo, no animation.
 
 **Scene** draws the floor of a small company, furnished, scaled to fit the window, every live session an employee at its place:
 

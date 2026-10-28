@@ -10,6 +10,7 @@
   import Header from "./components/Header.svelte";
   import AlertBand from "./components/AlertBand.svelte";
   import BoardColumn from "./components/BoardColumn.svelte";
+  import FocusList from "./components/FocusList.svelte";
   import RelayBanners from "./components/RelayBanners.svelte";
   import RelayView from "./components/RelayView.svelte";
   import SubjectsView from "./components/SubjectsView.svelte";
@@ -23,7 +24,7 @@
 
   // A workstation without the relay has no Relay view to show.
   let view = $derived<WindowView>(windowView.view === "relay" && !relay.inUse ? "sessions" : windowView.view);
-  let scene = $derived(view === "sessions" && windowView.base === "scene");
+  let scene = $derived(view === "sessions" && windowView.mode === "scene");
 
   onMount(() =>
     startAll(
@@ -47,11 +48,16 @@
       void store.refresh();
       return;
     }
-    // `m` and digits act in the Sessions view only (AD-55, AD-66).
+    // `m`, `f` and digits act in the Sessions view only (AD-55, AD-66):
+    // the Subjects view's triage keeps its own `f`.
     if (view !== "sessions") return;
+    // A held key switches once, not once per auto-repeat.
     if (event.key === "m") {
-      // A held key switches once, not once per auto-repeat.
       if (!event.repeat) windowView.toggleBase();
+      return;
+    }
+    if (event.key === "f") {
+      if (!event.repeat) windowView.toggleFocus();
       return;
     }
     // Digits focus Needs you sessions in every mode (AD-55 as amended).
@@ -76,7 +82,8 @@
     {view}
     onView={(next) => (windowView.view = next)}
     base={windowView.base}
-    onBase={(next) => windowView.setBase(next)}
+    focus={windowView.focus}
+    onMode={(next) => windowView.setMode(next)}
     theme={windowView.theme}
     resolvedTheme={windowView.resolvedTheme}
     onTheme={() => windowView.cycleTheme()}
@@ -119,6 +126,8 @@
 
     {#if !board}
       <main class="loading" data-testid="loading">Asking Claude Code for its sessions...</main>
+    {:else if windowView.mode === "focus"}
+      <FocusList {board} {store} onApprovals={() => windowView.setMode("board")} />
     {:else if scene}
       <main class="sessions-area" data-testid="sessions-area">
         <Scene {board} {store} onBoard={() => windowView.setBase("board")} walking={windowView.walking} />

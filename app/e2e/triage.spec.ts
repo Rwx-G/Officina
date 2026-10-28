@@ -171,6 +171,21 @@ test.describe("Triage panel", () => {
     ]);
   });
 
+  // Story 4.11 AC 4: `f` belongs to triage in the Subjects view; the
+  // Sessions view's Focus key does not take it.
+  test("f in the Subjects view still sets the triage verdict", async ({ page }) => {
+    const view = loadRegistry("triage");
+    await openTriage(page, view);
+    const first = view.triage[0]!;
+    await holder(page, first).focus();
+    await page.keyboard.press("t");
+    await page.keyboard.press("f");
+    await expect(rowOf(page, first).getByTestId("triage-verdict-finished")).toHaveAttribute("aria-pressed", "true");
+    await page.getByTestId("view-sessions").click();
+    await expect(page.getByTestId("mode-board")).toHaveAttribute("aria-checked", "true");
+    await expect(page.getByTestId("focus-list")).toHaveCount(0);
+  });
+
   test("a held Enter confirms once", async ({ page }) => {
     const view = loadRegistry("triage");
     const row = view.triage[0]!;
