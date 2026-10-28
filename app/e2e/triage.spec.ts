@@ -244,6 +244,21 @@ test.describe("Triage panel", () => {
     expect(sent[0]!.map((item) => item.key)).toEqual(view.triage.filter((r) => r.key !== left.key).map((r) => r.key));
   });
 
+  // AD-55, D-28: no key confirms all; a pointer click does (positive
+  // control on the same page).
+  test("Enter and Space on confirm all confirm nothing", async ({ page }) => {
+    await openTriage(page);
+    const all = page.getByTestId("confirm-all");
+    await all.focus();
+    await page.keyboard.press("Enter");
+    await page.keyboard.press(" ");
+    await page.keyboard.down("Enter");
+    await page.keyboard.up("Enter");
+    expect(await confirmed(page)).toEqual([]);
+    await all.click();
+    await expect.poll(async () => (await confirmed(page)).length).toBe(1);
+  });
+
   test("its label counts the rows and the ones left out", async ({ page }) => {
     const base = loadRegistry("triage");
     const unsure = base.triage.find((r) => r.kind !== "unfiled_session")!;
