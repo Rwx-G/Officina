@@ -121,6 +121,7 @@ Everything stays on your machine, under `~/.officina`:
 - **Quota**: the two rate-limit windows, nothing else.
 - **Focus statistics**: outcome codes and a hash of the card, never a window title or a path.
 - **Relay journal** (`journal/`, once you use the relay): one line per run start and end, refusal, gate refusal or fault, approval, stop and resume, with the session id, the action, its parameters and argument vector, the first 280 characters of a refused command unless excerpts are off, and never a program's output.
+- **Relay requests and dry runs** (`relay/approvals/`, `relay/outputs/`): each `human` action's request with its parameters and command, kept 24 hours, and the output of each check run, at most 256 KiB, kept 7 days so an approval card can show it.
 
 Officina opens no network connection and no TCP port. It does not read transcripts.
 
@@ -212,6 +213,21 @@ pattern = "lab-[a-z0-9-]{1,30}"
 - A parameter declares `values` or a `pattern`, never both. Whatever it declares, a value is refused when it starts with `-`, holds a control, bidirectional or invisible formatting character, or has a `.` or `..` path segment; on the `native` runner also when it starts with `/` or `@`.
 - An invalid action is skipped and reported with its line; it never invalidates the floor, so the board keeps working.
 
+The three classes: a `free` action runs; an `after-check` action runs only after its `check` succeeded (see below); a `human` action runs once per approval you give in the window, and may name a `check` too, its dry run, which must succeed first and whose output the approval card shows:
+
+```toml
+[[action]]
+name = "apply-shared"
+description = "Apply a playbook to a shared group, after its dry run and your click"
+class = "human"
+check = "check"                      # optional: its dry run, a free action with the same parameters
+runner = "wsl"
+program = "/home/user01/venv/bin/ansible-playbook"
+args = ["-i", "inventory/lab", "--limit", "{group}", "playbooks/{playbook}"]
+```
+
+A dry run is only as harmless as the program makes it. For Ansible, `--check` does not stop a task that sets `check_mode: false`, nor one that delegates (`delegate_to`, `local_action`, `run_once`): a check action is harmless only if no task it reaches does either.
+
 ### Approving it in the window
 
 The relay runs only a catalogue you approved in the window. Approval records a hash of the catalogue's meaning (projects, actions, parameters, guarded programs), not of its text: comments, key order, colours or an invalid action do not change it, any change of meaning does. Only `officina-app.exe` contains the code that approves; `officina.exe`, which sessions can call, does not, and CI checks the shipped binary for it.
@@ -227,7 +243,7 @@ Run `officina doctor` after each floor edit. Once the floor uses the relay, it c
 - the relay floor, and whether it differs from the floor doctor itself reads: the window approves the relay's floor, so a window started with another `--floor` shows one floor's board and approves another;
 - the catalogue's issues with their lines, the approval state (approved, change pending, nothing approved yet), the projects with their actions, and the guarded programs in effect;
 - that each action's program resolves: a `native` program is an existing file; for a WSL action the system's own `wsl.exe` exists and, in the action's distro, `/usr/bin/env`, `/usr/bin/timeout` and the program are executable;
-- warnings: an action whose timeout, plus the longest wait of a `human` action, can outlive the Bash tool's 10-minute cap; an `after-check` action whose check its project does not list (it could never run); a project with `after-check` actions outside a git work tree (only the parameters bind); unreadable journal lines and gate errors of the last 24 hours.
+- warnings: an action whose timeout, plus the longest wait of a `human` action, can outlive the Bash tool's 10-minute cap; an action naming a check its project does not list (it could never run); a project with actions naming a check outside a git work tree (only the parameters bind); unreadable journal lines and gate errors of the last 24 hours.
 
 A missing `PreToolUse` registration while a project is guarded, a program that does not resolve and a relay floor that cannot be read are failures (exit 1); everything else warns. The gate runs inside `officina hook` as a `PreToolUse` hook whose matcher names every shell tool of `SHELL_TOOLS`, the constant in the relay's core: once the floor guards a project, doctor adds that registration to the block to paste, and names the tools a matcher you merged earlier leaves out.
 
@@ -266,13 +282,17 @@ A program can exit 126 or 124 itself: the stderr line and the journal tell them 
 
 An `after-check` action names a `free` action with the same parameters as its `check`, and runs only after that check succeeded in the same project with the same parameters, under the same approved catalogue, on the same code, in the last 30 minutes; otherwise it is refused with `check_required` and the check to run first.
 
+A `human` action asks you first. Its call writes a request and waits for your decision, 110 seconds by default (`--wait <s>`, at most 540): approved, it runs at once; rejected, it is refused, and the same request stays refused for 15 minutes; with no decision in time, the call is refused with "approval still pending; run the same command again to keep waiting", and calling again waits on the same request. An approval runs once, within 15 minutes; a request expires after 60. A `human` action naming a check makes a request only after that check succeeded, and the request is bound to that dry run and the code it ran on: just before running, `officina run` compares the code again, and if it changed it refuses `check_not_satisfied` and leaves your approval unused.
+
 "The same code" means the same git fingerprint of the project's work tree: `HEAD`, the diff to it, the untracked files git does not ignore and the tracked files flagged `assume-unchanged` or `skip-worktree` (whose edits the diff hides), by content up to 1 MiB and by size beyond. Files your `.gitignore` excludes (vault files, local inventories, retry files) are not bound, so a check that writes such a file does not invalidate itself, and an edit to one does not stop the apply. Outside a git work tree only the parameters bind, and doctor says so. `git` is the one on the session's `PATH`, run with external diff tools, textconv drivers and fsmonitor turned off.
+
+Requests show first in **Needs you**, oldest first, with an amber border: the project, the action and its description, the exact command as one chip per argument, the session that asked (or "session unknown"), the request's age and when it expires, and **Approve** and **Reject**. The command shown is rebuilt from the approved catalogue, never read from the request file, which any program running as you could write; a request that does not rebuild (forged, made under another catalogue, or naming an action no longer approved) is listed as not approvable, with the reason, and has no button. A request with a dry run shows its output under the command, and the line "tracked and unignored files unchanged since the dry run" while the project's fingerprint still matches it. No key approves or rejects: only a mouse click or a pen tap does, and keys 1 to 9 still go to session cards only. The title, the taskbar dot and the waiting pill count the requests that can be approved. Each request and each decision is one journal line; the window deletes approval files after 24 hours and kept dry-run outputs after 7 days, and `officina run` never deletes either.
 
 `officina relay --json` prints the relay's state once, without writing anything: whether it is stopped, the approved catalogue, a pending change with its diff, the floor's catalogue issues with their lines, and the last 50 journal entries with each run's start and end paired. A run with no end line 60 s past its timeout reads "abandoned" (its `officina run` was killed). The window reads the same contract.
 
 ### What works today
 
-The first half of v0.2 is usable alone: declare a catalogue, approve it in the window, let sessions run its `free` and `after-check` actions with `officina run`, contained by the gate, journaled, stoppable from the window, and checked by `officina doctor`, which prints each guarded project's `CLAUDE.md` paragraph. `human` actions are refused as not available in this build yet; approvals in Needs you, the Relay view and HTTP actions arrive with the rest of v0.2.
+Usable today: declare a catalogue, approve it in the window, let sessions run its `free` and `after-check` actions with `officina run` and its `human` actions after your click in Needs you, contained by the gate, journaled, stoppable from the window, and checked by `officina doctor`, which prints each guarded project's `CLAUDE.md` paragraph. The Relay view and HTTP actions arrive with the rest of v0.2.
 
 ## Command line
 

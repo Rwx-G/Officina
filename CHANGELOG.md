@@ -44,11 +44,28 @@ project uses [Semantic Versioning](https://semver.org/).
   approved one, the project, the action and every parameter; the program
   starts as an argument vector with its timeout and an output budget, and it
   and every process it starts end together. Exit codes are the program's
-  own, or 126 refused, 124 timed out, 127 not started, 64 usage. `human`
-  actions are refused as not available yet.
+  own, or 126 refused, 124 timed out, 127 not started, 64 usage.
 - `officina run --list`: the actions of the current folder's project with
-  what each parameter accepts, the check an `after-check` action waits for,
-  and whether the relay is stopped or a catalogue change awaits approval.
+  what each parameter accepts, the check an action waits for, how a `human`
+  action waits for its approval, and whether the relay is stopped or a
+  catalogue change awaits approval.
+- `human` actions: `officina run` writes a request and waits for the
+  author's decision in the window (`--wait <s>`, 110 by default, at most
+  540); approved, the action runs at once, once; rejected, the same request
+  is refused for 15 minutes; with no decision in time the call says to run
+  the same command again, which waits on the same request. Approvals are
+  used within 15 minutes, requests expire after 60. Each request and each
+  decision is one journal line, and the run that uses an approval carries
+  its id.
+- Approval cards in Needs you, first and oldest first: the project, the
+  action, the exact command as one chip per argument, the session that
+  asked, the age and expiry, and Approve and Reject on a pointer click only.
+  The title, the taskbar dot and the waiting pill count them.
+- Dry runs: a `human` action may name a `check`; its request is made only
+  after that check succeeded on the same code, records the check run and
+  the tree, and its card shows the check's kept output with "tracked and
+  unignored files unchanged since the dry run" while the fingerprint
+  matches. Every check run keeps its output (256 KiB at most) for 7 days.
 - `after-check` actions: one runs only after its check succeeded in the same
   project with the same parameters, under the same approved catalogue and on
   the same code, in the last 30 minutes, the journal of the day before
@@ -87,10 +104,10 @@ project uses [Semantic Versioning](https://semver.org/).
   with their lines, the approval state, the projects with their actions and
   the guarded programs in effect, whether each action's program resolves (a
   WSL action's tools and program probed inside its distro), and warnings for
-  a timeout that can outlive the Bash tool's cap, an `after-check` action
-  whose check its project does not list, a project with `after-check`
-  actions outside a git work tree, unreadable journal lines and gate errors
-  of the last 24 hours. For each guarded project it prints the `CLAUDE.md`
+  a timeout that can outlive the Bash tool's cap, an action naming a check
+  its project does not list, a project with actions naming a check outside
+  a git work tree, unreadable journal lines and gate errors of the last 24
+  hours. For each guarded project it prints the `CLAUDE.md`
   paragraph to paste, generated from the approved catalogue.
 - The window follows floor edits without a restart: project names and
   colours, a moved config dir (sessions, quota, attach) and the relay's
@@ -111,6 +128,11 @@ project uses [Semantic Versioning](https://semver.org/).
 - Floor files accept schema 2, where a project without `autonomy` is
   guarded. A schema 1 floor still loads with every project `free`, and the
   relay's keys in it are an error naming `schema = 2`.
+- The board contract (`officina board --json`) is schema 2: it carries the
+  pending approval requests, and `waiting_count` counts the approvable ones
+  beside the sessions that wait.
+- The window deletes approval files older than 24 hours and kept check
+  outputs older than 7 days on its hourly pass.
 
 ### Security
 
@@ -136,6 +158,11 @@ project uses [Semantic Versioning](https://semver.org/).
   The `PreToolUse` matcher `officina doctor` prints and requires names
   every one of them, and doctor names the tools an earlier matcher leaves
   out.
+- An approval card never shows a request file's own command: it rebuilds the
+  command from the approved catalogue, and a request that does not rebuild
+  (forged, of another catalogue, or of an action no longer approved) cannot
+  be approved. No key approves or rejects. An approval is used once, even by
+  two calls at the same instant.
 - The gate gets stricter, never looser, when the approved catalogue or the
   floor cannot be read, and a repository stays guarded when either says so,
   so editing the floor or `cd ..` does not lift containment.
