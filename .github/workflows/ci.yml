@@ -55,12 +55,14 @@ jobs:
         run: cargo clippy --locked --workspace --all-targets --features officina-core/ts -- -D warnings
       - name: Test (includes the TypeScript bindings drift check)
         run: cargo test --locked --workspace --features officina-core/ts
-      - name: Hook latency and concurrent appends
-        # Hosted runners start any process several times slower than a
-        # workstation; the test still gates Officina's own cost at 30 ms.
-        # They also run the gate's reads and lexing about twice slower, so
-        # its own cost (D-19: under 5 ms on the workstation) gets a looser
-        # bound that still catches an order-of-magnitude regression.
+      - name: Hook and gate latency, concurrent appends
+        # Every #[ignore]d test of perf.rs. Hosted runners start any process
+        # several times slower than a workstation; the test still gates
+        # Officina's own cost at 30 ms. They also run the gate's reads and
+        # lexing about twice slower, so its own cost (D-19: under 5 ms on
+        # the workstation) gets a looser bound that still catches an
+        # order-of-magnitude regression. The gate's in-process p95 bound is
+        # a workstation check (OFFICINA_PERF_WORKSTATION=1), not set here.
         env:
           OFFICINA_HOOK_P95_BUDGET_MS: "150"
           OFFICINA_GATE_OWN_COST_BUDGET_MS: "15"

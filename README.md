@@ -393,12 +393,12 @@ Tests:
 
 ```bash
 cargo test --workspace --features officina-core/ts      # unit, CLI end to end, vector set, TS bindings drift
-cargo test --release -p officina --test perf -- --ignored   # hook latency, concurrent appends
+cargo test --release -p officina --test perf -- --ignored   # hook and gate latency, concurrent appends
 cd app && pnpm check && pnpm lint && pnpm test           # types, lint, component tests
 pnpm e2e:fixtures && pnpm e2e                            # Playwright on boards produced by the real CLI
 ```
 
-The CI workflow in `.github/workflows/ci.yml` is the authoritative list of gates.
+The gate's in-process p95 bound is a workstation check: `perf` asserts it only with `OFFICINA_PERF_WORKSTATION=1`, which CI's hosted runners do not set. The CI workflow in `.github/workflows/ci.yml` is the authoritative list of gates.
 
 If the repository lives in a synchronised folder (OneDrive, Synology Drive, Dropbox), exclude `target/` and `app/node_modules/` from the sync, or set `CARGO_TARGET_DIR` outside it: the sync client locks build files and slows every build.
 
