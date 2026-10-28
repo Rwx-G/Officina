@@ -53,7 +53,7 @@ What the PRD, the addendum and the spine leave open or state twice, settled by t
 - **D-16.** A call is guarded if the project of `CLAUDE_PROJECT_DIR` or the project of the payload `cwd` is guarded (E15: `cwd` follows `cd`, `CLAUDE_PROJECT_DIR` stays the project root). The payload field set and the deny JSON shape are E15's. (2.4)
 - **D-17.** The deny reason lists the project's actions from the approved snapshot; without one it lists the action names of the floor's project entry and says the catalogue awaits approval. An action whose class is not available in the current build is marked so, in the deny reason and in `run --list`. (2.4, 2.5)
 - **D-18.** `PreToolUse` with matcher `Bash` is a required hook only when the relay floor has at least one guarded project; only then does doctor's printed block include it. The buffered v0.1 events are their own constant, separate from the (event, matcher) registrations. (2.4)
-- **D-19.** Gate performance is gated relative to an empty process, like the hook: own cost (gate p95 minus empty-process p95) under 5 ms on every machine. The absolute in-process bound (3 ms p95, AD-28) is asserted only on the workstation, opted in by an environment variable, and printed elsewhere. (2.4)
+- **D-19.** Gate performance is gated relative to an empty process, like the hook: own cost (gate p95 minus empty-process p95) under 5 ms on the workstation; CI asserts a looser bound set in `ci.yml`, since a hosted runner measured about twice the workstation's cost (2026-10-28). The absolute in-process bound (3 ms p95, AD-28) is asserted only on the workstation, opted in by an environment variable, and printed elsewhere. (2.4)
 
 ## Run
 

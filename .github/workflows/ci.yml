@@ -52,8 +52,12 @@ jobs:
       - name: Hook latency and concurrent appends
         # Hosted runners start any process several times slower than a
         # workstation; the test still gates Officina's own cost at 30 ms.
+        # They also run the gate's reads and lexing about twice slower, so
+        # its own cost (D-19: under 5 ms on the workstation) gets a looser
+        # bound that still catches an order-of-magnitude regression.
         env:
           OFFICINA_HOOK_P95_BUDGET_MS: "150"
+          OFFICINA_GATE_OWN_COST_BUDGET_MS: "15"
         run: cargo test --release -p officina --test perf -- --ignored --nocapture
       - name: officina holds no authority
         # AD-21, P-5, D-9. The exe a session can call is built alone, as the
