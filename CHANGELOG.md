@@ -330,6 +330,11 @@ project uses [Semantic Versioning](https://semver.org/).
   answer or transcript paths; the board and the registry ignore these lines
   until the scene shows sub-agents, so v0.4's Slice 0 can check on real
   sessions which session each one names.
+- The taskbar overlay (v0.4) carries the waiting count on its amber disc,
+  "9+" above nine, drawn in code at today's 16 px until the taskbar check
+  picks the legible size; `cargo run -p officina-app --example
+  taskbar_probe` shows each count and size and the attention request for
+  that check.
 
 ### Security
 

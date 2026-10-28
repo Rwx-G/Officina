@@ -3,6 +3,8 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod taskbar;
+
 use std::path::PathBuf;
 use std::sync::mpsc::{RecvTimeoutError, Sender};
 use std::sync::{Arc, RwLock};
@@ -70,7 +72,7 @@ impl Emit for WindowEvents {
         let _ = self.0.emit(BOARD_EVENT, board);
         if let Some(window) = self.0.get_webview_window("main") {
             let _ = window.set_title(&window_title(board));
-            let overlay = (board.waiting_count > 0).then(waiting_dot);
+            let overlay = (board.waiting_count > 0).then(|| overlay_image(board.waiting_count));
             let _ = window.set_overlay_icon(overlay);
         }
     }
@@ -396,26 +398,14 @@ fn floor_arg() -> Option<PathBuf> {
     args.get(i + 1).map(PathBuf::from)
 }
 
-/// The taskbar overlay: an amber dot with a dark rim, drawn in code so no
-/// asset can drift from the palette. Visible with the window behind an editor.
-fn waiting_dot() -> tauri::image::Image<'static> {
-    const SIZE: u32 = 16;
-    let mut rgba = Vec::with_capacity((SIZE * SIZE * 4) as usize);
-    let center = (SIZE as f32 - 1.0) / 2.0;
-    for y in 0..SIZE {
-        for x in 0..SIZE {
-            let d = ((x as f32 - center).powi(2) + (y as f32 - center).powi(2)).sqrt();
-            let pixel: [u8; 4] = if d <= 5.5 {
-                [0xF5, 0xB7, 0x31, 0xFF]
-            } else if d <= 7.5 {
-                [0x2A, 0x24, 0x1C, 0xFF]
-            } else {
-                [0, 0, 0, 0]
-            };
-            rgba.extend_from_slice(&pixel);
-        }
-    }
-    tauri::image::Image::new_owned(rgba, SIZE, SIZE)
+/// The badge's size until AD-178's gate 2 picks the legible one: today's
+/// dot's.
+const OVERLAY_SIZE: u32 = taskbar::OVERLAY_SIZES[0];
+
+/// The taskbar overlay for `waiting` (AD-174): the badge with the count.
+fn overlay_image(waiting: u32) -> tauri::image::Image<'static> {
+    let badge = taskbar::overlay_badge(waiting, false, OVERLAY_SIZE);
+    tauri::image::Image::new_owned(badge.rgba, badge.size, badge.size)
 }
 
 fn window_title(board: &Board) -> String {
