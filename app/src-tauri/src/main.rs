@@ -354,6 +354,38 @@ mod tests {
         }
     }
 
+    /// The directives of a CSP string, by name.
+    fn directives(csp: &str) -> std::collections::BTreeMap<&str, Vec<&str>> {
+        csp.split(';')
+            .filter_map(|directive| {
+                let mut words = directive.split_whitespace();
+                Some((words.next()?, words.collect()))
+            })
+            .collect()
+    }
+
+    /// Story 2.14 AC 10: the built window allows no inline style (the
+    /// Playwright suite runs under this very string and sees no violation);
+    /// only Vite's dev server, which injects styles from script, keeps it.
+    #[test]
+    fn csp_allows_no_inline_style_in_the_built_window() {
+        let config: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        let security = &config["app"]["security"];
+        let built = directives(security["csp"].as_str().unwrap());
+        assert_eq!(built["style-src"], ["'self'"]);
+        assert_eq!(built["default-src"], ["'self'"]);
+        assert!(
+            built
+                .values()
+                .flatten()
+                .all(|source| !source.contains("unsafe")),
+            "{built:?}"
+        );
+        let dev = directives(security["devCsp"].as_str().unwrap());
+        assert_eq!(dev["style-src"], ["'self'", "'unsafe-inline'"]);
+    }
+
     /// AD-35: the title, and with it the taskbar overlay, count the valid
     /// approval requests beside the sessions that wait.
     #[test]
