@@ -206,13 +206,11 @@ fn stderr(out: &Output) -> String {
 
 /// A refusal: exit 126, one stderr line ending with the code.
 fn assert_refused(out: &Output, reason: RefusalReason) {
-    let code = serde_json::to_value(reason).unwrap();
     let text = stderr(out);
     assert_eq!(out.status.code(), Some(126), "{text}");
     assert_eq!(text.lines().count(), 1, "{text}");
     assert!(
-        text.trim_end()
-            .ends_with(&format!("({})", code.as_str().unwrap())),
+        text.trim_end().ends_with(&format!("({})", reason.code())),
         "{text}"
     );
 }

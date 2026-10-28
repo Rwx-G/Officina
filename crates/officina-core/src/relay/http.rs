@@ -17,10 +17,10 @@ use super::url::UrlRefusal;
 pub const MAX_HTTP_TIMEOUT_S: u32 = 60;
 
 closed_enum! {
+    #[serde(rename_all = "UPPERCASE")]
     /// The methods an HTTP action may send: reads only (AD-36).
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
     #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
-    #[serde(rename_all = "UPPERCASE")]
     pub enum HttpMethod {
         Get,
         Head,

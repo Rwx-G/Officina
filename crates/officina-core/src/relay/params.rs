@@ -42,10 +42,10 @@ pub const FORBIDDEN_FORMAT_RANGES: [RangeInclusive<char>; 10] = [
 ];
 
 closed_enum! {
+    #[serde(rename_all = "snake_case")]
     /// Why a value was refused. Each variant is a rule of AD-30 or D-5, or a
     /// parameter's own constraint.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-    #[serde(rename_all = "snake_case")]
     pub enum ValueRefusal {
         /// No character at all.
         Empty,

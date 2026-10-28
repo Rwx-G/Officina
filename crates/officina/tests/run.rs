@@ -224,14 +224,6 @@ fn stderr_lines(out: &Output) -> Vec<String> {
         .collect()
 }
 
-fn code_of(reason: RefusalReason) -> String {
-    serde_json::to_value(reason)
-        .unwrap()
-        .as_str()
-        .unwrap()
-        .to_owned()
-}
-
 /// [`assert_refused`] after `launches_before` launches of earlier calls.
 fn assert_refused_after(
     relay: &Relay,
@@ -244,7 +236,7 @@ fn assert_refused_after(
     assert_eq!(lines.len(), 1, "{lines:?}");
     assert!(lines[0].starts_with("officina: refused: "), "{lines:?}");
     assert!(
-        lines[0].ends_with(&format!("({})", code_of(reason))),
+        lines[0].ends_with(&format!("({})", reason.code())),
         "{lines:?}"
     );
     assert_eq!(
@@ -263,7 +255,7 @@ fn assert_refused(relay: &Relay, out: &Output, reason: RefusalReason) {
     assert_eq!(lines.len(), 1, "{lines:?}");
     assert!(lines[0].starts_with("officina: refused: "), "{lines:?}");
     assert!(
-        lines[0].ends_with(&format!("({})", code_of(reason))),
+        lines[0].ends_with(&format!("({})", reason.code())),
         "{lines:?}"
     );
     assert!(relay.launches().is_empty(), "the tool must not start");

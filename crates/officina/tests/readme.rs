@@ -156,10 +156,10 @@ fn readme_names_the_notice_kinds() {
             "the paragraph does not say that {} reads a value",
             kind.program()
         );
-        let tag = serde_json::to_value(kind).unwrap();
         assert!(
-            !text.contains(tag.as_str().unwrap()),
-            "the README transcribes the kind {tag}"
+            !text.contains(kind.code()),
+            "the README transcribes the kind {}",
+            kind.code()
         );
     }
 }
@@ -181,9 +181,9 @@ fn readme_states_the_binding_and_its_limits() {
         );
     }
     assert!(
-        TREE_BINDING_REFUSALS.iter().any(
-            |reason| !binding.contains(serde_json::to_value(reason).unwrap().as_str().unwrap())
-        ),
+        TREE_BINDING_REFUSALS
+            .iter()
+            .any(|reason| !binding.contains(reason.code())),
         "the binding sentence transcribes the refusal codes instead of naming the constant"
     );
     assert!(

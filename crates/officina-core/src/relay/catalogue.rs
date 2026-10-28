@@ -73,10 +73,10 @@ pub const KNOWN_PROJECTS_SCHEMA: u32 = 1;
 pub const UNNAMED: &str = "(unnamed)";
 
 closed_enum! {
+    #[serde(rename_all = "lowercase")]
     /// Where an action runs (AD-22, AD-30).
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
     #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
-    #[serde(rename_all = "lowercase")]
     pub enum Runner {
         /// The program itself, a Windows absolute path.
         #[default]
@@ -86,24 +86,26 @@ closed_enum! {
     }
 }
 
-/// How an action is allowed (FR-8).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
-#[serde(rename_all = "kebab-case")]
-pub enum ActionClass {
-    Free,
-    AfterCheck,
-    Human,
-    /// Reserved for the orchestrator (v0.5): always an issue.
-    Auto,
+closed_enum! {
+    #[serde(rename_all = "kebab-case")]
+    /// How an action is allowed (FR-8).
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+    #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+    pub enum ActionClass {
+        Free,
+        AfterCheck,
+        Human,
+        /// Reserved for the orchestrator (v0.5): always an issue.
+        Auto,
+    }
 }
 
 closed_enum! {
+    #[serde(rename_all = "snake_case")]
     /// One rule of AD-23 or of D-1 to D-5. Every variant has a failing
     /// fixture in this module's tests.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
     #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
-    #[serde(rename_all = "snake_case")]
     pub enum IssueKind {
         /// The table does not convert: unknown key, wrong type, missing key,
         /// or a `kind` other than `http`.
@@ -306,11 +308,11 @@ pub struct Action {
 }
 
 closed_enum! {
+    #[serde(rename_all = "snake_case")]
     /// The author's word that a parameter a program forwards to a remote
     /// shell or a template may hold whatever its `pattern` admits (D-173).
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
     #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
-    #[serde(rename_all = "snake_case")]
     pub enum ForwardedValues {
         Accepted,
     }
@@ -1780,12 +1782,12 @@ impl KnownProjects {
 }
 
 closed_enum! {
+    #[serde(rename_all = "snake_case")]
     /// What a program does with a value that a closed argument vector does
     /// not close (D-172): a notice, not an issue, since a `values` list
     /// keeps such a parameter safe.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
     #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
-    #[serde(rename_all = "snake_case")]
     pub enum NoticeKind {
         /// An ssh action's placeholder after the destination: ssh joins
         /// those arguments into one command the remote shell parses.
@@ -3417,9 +3419,8 @@ mod tests {
         assert_eq!(relay.hash, hash(&relay.canonical));
         let serialized = serde_json::to_string(&relay.canonical).unwrap();
         for kind in NoticeKind::ALL {
-            let tag = serde_json::to_value(kind).unwrap();
             assert!(
-                !serialized.contains(tag.as_str().unwrap()),
+                !serialized.contains(kind.code()),
                 "the canonical form carries a notice"
             );
         }

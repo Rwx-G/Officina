@@ -86,10 +86,10 @@ pub enum JournalEntry {
 }
 
 closed_enum! {
+    #[serde(rename_all = "snake_case")]
     /// Every `kind` this version writes, so a reader can tell a line of a
     /// later version (unknown kind, skipped) from a broken one (counted).
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-    #[serde(rename_all = "snake_case")]
     pub enum JournalKind {
         RunStarted,
         RunFinished,
@@ -182,10 +182,10 @@ pub struct RunStarted {
 }
 
 closed_enum! {
+    #[serde(rename_all = "snake_case")]
     /// How a run ended (AD-32).
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
     #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
-    #[serde(rename_all = "snake_case")]
     pub enum RunOutcome {
         /// The program exited by itself; `exit_code` holds its code.
         Exited,
@@ -250,11 +250,11 @@ fn is_zero(value: &u64) -> bool {
 }
 
 closed_enum! {
+    #[serde(rename_all = "snake_case")]
     /// Why `officina run` refused (AD-29), in the order its checks run. The
     /// stderr line and the journal's `refused` line carry the code.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
     #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
-    #[serde(rename_all = "snake_case")]
     pub enum RefusalReason {
         /// The author stopped the relay in the window (AD-34).
         Stopped,
@@ -331,12 +331,12 @@ pub struct Refused {
 }
 
 closed_enum! {
+    #[serde(rename_all = "snake_case")]
     /// Why the gate journals a `gate_error` (AD-28, D-15): an input it could
     /// not read, which made it stricter, or an internal fault, which made it
     /// decide nothing. Also the journal's `cause` vocabulary.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
     #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
-    #[serde(rename_all = "snake_case")]
     pub enum GateFault {
         /// `relay/approved.json` cannot be read or parsed.
         ApprovedUnreadable,

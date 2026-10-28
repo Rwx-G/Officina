@@ -44,15 +44,17 @@ impl ProjectColor {
     pub const ALL: [ProjectColor; 3] = [Self::Green, Self::Blue, Self::Terracotta];
 }
 
-/// What the relay's gate does in a project (FR-1).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
-#[serde(rename_all = "lowercase")]
-pub enum Autonomy {
-    /// Officina does not interfere.
-    Free,
-    /// Guarded programs are denied; the session uses `officina run`.
-    Guarded,
+closed_enum! {
+    #[serde(rename_all = "lowercase")]
+    /// What the relay's gate does in a project (FR-1).
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+    #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+    pub enum Autonomy {
+        /// Officina does not interfere.
+        Free,
+        /// Guarded programs are denied; the session uses `officina run`.
+        Guarded,
+    }
 }
 
 /// One declared project.

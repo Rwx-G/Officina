@@ -3,28 +3,6 @@
 //! and the argument vectors built from them. Pure: the host reads the files
 //! and runs the programs.
 
-/// Declares a fieldless enum together with an `ALL` constant listing every
-/// variant, so coverage tests can iterate a list that cannot miss one.
-/// Defined before the submodules so they see it by textual scope.
-macro_rules! closed_enum {
-    (
-        $(#[$meta:meta])*
-        pub enum $name:ident {
-            $( $(#[$variant_meta:meta])* $variant:ident, )+
-        }
-    ) => {
-        $(#[$meta])*
-        pub enum $name {
-            $( $(#[$variant_meta])* $variant, )+
-        }
-
-        impl $name {
-            /// Every variant, generated with the enum so it cannot miss one.
-            pub const ALL: &[$name] = &[$($name::$variant),+];
-        }
-    };
-}
-
 pub mod approvals;
 pub mod argv;
 pub mod catalogue;
@@ -120,4 +98,87 @@ fn hex(digest: &[u8]) -> String {
 /// ```
 pub fn sha256_hex(bytes: &[u8]) -> String {
     hex(&Sha256::digest(bytes))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fmt::Debug;
+
+    use serde::Serialize;
+
+    use super::catalogue::{ActionClass, ForwardedValues, IssueKind, NoticeKind, Runner};
+    use super::gate::DenyKind;
+    use super::http::HttpMethod;
+    use super::journal::{GateFault, JournalKind, RefusalReason, RunOutcome};
+    use super::params::ValueRefusal;
+    use super::record::AnomalyKind;
+    use super::url::UrlIssue;
+    use crate::floor::Autonomy;
+
+    fn assert_codes<T: Serialize + Copy + Debug>(all: &[T], code: fn(T) -> &'static str) {
+        for &variant in all {
+            let wire = serde_json::to_value(variant).unwrap();
+            assert_eq!(wire.as_str(), Some(code(variant)), "{variant:?}");
+        }
+    }
+
+    /// `code()` is spelled at compile time from the `rename_all` literal
+    /// serde reads; this replays serde on every variant of every enum built
+    /// with it. The count below fails when an enum gains `code()` in a file
+    /// of this crate without a line here.
+    #[test]
+    fn code_equals_the_serde_name_for_every_variant() {
+        let checked: [fn(); 15] = [
+            || assert_codes(ActionClass::ALL, ActionClass::code),
+            || assert_codes(Autonomy::ALL, Autonomy::code),
+            || assert_codes(ForwardedValues::ALL, ForwardedValues::code),
+            || assert_codes(IssueKind::ALL, IssueKind::code),
+            || assert_codes(NoticeKind::ALL, NoticeKind::code),
+            || assert_codes(Runner::ALL, Runner::code),
+            || assert_codes(DenyKind::ALL, DenyKind::code),
+            || assert_codes(HttpMethod::ALL, HttpMethod::code),
+            || assert_codes(GateFault::ALL, GateFault::code),
+            || assert_codes(JournalKind::ALL, JournalKind::code),
+            || assert_codes(RefusalReason::ALL, RefusalReason::code),
+            || assert_codes(RunOutcome::ALL, RunOutcome::code),
+            || assert_codes(ValueRefusal::ALL, ValueRefusal::code),
+            || assert_codes(AnomalyKind::ALL, AnomalyKind::code),
+            || assert_codes(UrlIssue::ALL, UrlIssue::code),
+        ];
+        for check in checked {
+            check();
+        }
+        let sources = [
+            include_str!("../floor.rs"),
+            include_str!("../board.rs"),
+            include_str!("../focus.rs"),
+            include_str!("approvals.rs"),
+            include_str!("argv.rs"),
+            include_str!("catalogue.rs"),
+            include_str!("classes.rs"),
+            include_str!("credential.rs"),
+            include_str!("gate.rs"),
+            include_str!("http.rs"),
+            include_str!("journal.rs"),
+            include_str!("params.rs"),
+            include_str!("record.rs"),
+            include_str!("run.rs"),
+            include_str!("shell.rs"),
+            include_str!("url.rs"),
+            include_str!("view.rs"),
+        ];
+        let with_code: usize = sources
+            .iter()
+            .map(|source| {
+                let lines: Vec<&str> = source.lines().map(str::trim).collect();
+                lines
+                    .windows(2)
+                    .filter(|pair| {
+                        pair[0] == "closed_enum! {" && pair[1].starts_with("#[serde(rename_all")
+                    })
+                    .count()
+            })
+            .sum();
+        assert_eq!(checked.len(), with_code);
+    }
 }

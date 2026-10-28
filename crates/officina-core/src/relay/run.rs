@@ -538,7 +538,7 @@ fn action_lines(text: &mut String, name: &str, action: &CanonicalAction) {
     if !classes::is_available(action.class) {
         text.push_str(&format!(
             "  (class {}, not available in this build)",
-            classes::class_name(action.class)
+            action.class.code()
         ));
     }
     text.push('\n');
@@ -617,10 +617,7 @@ pub fn list_text(inputs: &RunInputs<'_>) -> String {
         return text;
     }
     for (name, project) in projects {
-        let autonomy = serde_json::to_value(project.autonomy)
-            .ok()
-            .and_then(|v| v.as_str().map(str::to_owned))
-            .unwrap_or_default();
+        let autonomy = project.autonomy.code();
         text.push_str(&format!("Project {name} ({autonomy}), approved actions:\n"));
         let actions: Vec<(&String, &CanonicalAction)> = project
             .actions

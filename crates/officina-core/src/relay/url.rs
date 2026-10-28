@@ -15,10 +15,10 @@ use super::catalogue::is_valid_param_name;
 use super::params::{ValueRefusal, ValueTarget, check_value_for};
 
 closed_enum! {
+    #[serde(rename_all = "snake_case")]
     /// Why a URL template is refused, in the order the checks run: the first
     /// that applies is reported. Every variant has a case in the vector set.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-    #[serde(rename_all = "snake_case")]
     pub enum UrlIssue {
         /// No `scheme://`.
         Malformed,

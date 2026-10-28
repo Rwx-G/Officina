@@ -32,14 +32,6 @@ pub fn is_available(class: ActionClass) -> bool {
     }
 }
 
-/// The class as the floor writes it, for messages.
-pub fn class_name(class: ActionClass) -> String {
-    serde_json::to_value(class)
-        .ok()
-        .and_then(|v| v.as_str().map(str::to_owned))
-        .unwrap_or_default()
-}
-
 /// The `after-check` rule (AD-33, P-3): true only when the journal holds a
 /// `run_started` of `check_action` in `project`, with exactly `params`,
 /// under `catalogue_hash` and on the same `tree` (both absent outside git),
@@ -381,7 +373,7 @@ mod tests {
             assert!(is_available(class), "{class:?}");
         }
         assert!(!is_available(ActionClass::Auto));
-        assert_eq!(class_name(ActionClass::AfterCheck), "after-check");
+        assert_eq!(ActionClass::AfterCheck.code(), "after-check");
     }
 
     #[test]

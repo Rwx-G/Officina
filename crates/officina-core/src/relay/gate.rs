@@ -61,12 +61,12 @@ pub const LIST_COMMAND: &str = "officina run --list";
 pub const MAX_QUOTED_CHARS: usize = 64;
 
 closed_enum! {
+    #[serde(rename_all = "snake_case")]
     /// Why the gate denied a command. Also the `expect` vocabulary of
     /// `tests/vectors/gate.json` and the journal's (story 2.4). When several
     /// apply, the first in this order is reported.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
     #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
-    #[serde(rename_all = "snake_case")]
     pub enum DenyKind {
         /// The lexer cannot read the command.
         Unparsable,

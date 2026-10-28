@@ -553,11 +553,11 @@ fn refuse(
     params: &BTreeMap<String, String>,
     session_id: Option<String>,
 ) -> i32 {
-    let code = serde_json::to_value(refusal.reason)
-        .ok()
-        .and_then(|v| v.as_str().map(str::to_owned))
-        .unwrap_or_default();
-    eprintln!("officina: refused: {} ({code})", refusal.detail);
+    eprintln!(
+        "officina: refused: {} ({})",
+        refusal.detail,
+        refusal.reason.code()
+    );
     let line = JournalEntry::Refused(Refused {
         project: refusal.project.clone(),
         session_id,

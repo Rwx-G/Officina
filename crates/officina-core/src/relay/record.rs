@@ -80,10 +80,10 @@ pub fn parse_record(content: &[u8]) -> Option<DecisionRecord> {
 }
 
 closed_enum! {
+    #[serde(rename_all = "snake_case")]
     /// A decision the window did not make (D-173).
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
     #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
-    #[serde(rename_all = "snake_case")]
     pub enum AnomalyKind {
         /// An approval file, used or not, for a request the window did not
         /// decide.

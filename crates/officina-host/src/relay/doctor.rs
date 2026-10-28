@@ -356,14 +356,15 @@ fn catalogue_checks(relay: &RelayFloor) -> Vec<Check> {
         let at = issue
             .line
             .map_or_else(String::new, |line| format!("line {line}, "));
-        let kind = serde_json::to_value(issue.kind)
-            .ok()
-            .and_then(|v| v.as_str().map(str::to_owned))
-            .unwrap_or_default();
         check(
             Level::Warn,
             "relay issue",
-            format!("{at}{}: {} ({kind})", issue.name, issue.message),
+            format!(
+                "{at}{}: {} ({})",
+                issue.name,
+                issue.message,
+                issue.kind.code()
+            ),
         )
     }));
     checks
@@ -494,13 +495,6 @@ fn project_dirs(relay: &RelayFloor, floor_path: &Path) -> BTreeMap<String, Strin
         .collect()
 }
 
-fn autonomy_name(autonomy: Autonomy) -> &'static str {
-    match autonomy {
-        Autonomy::Free => "free",
-        Autonomy::Guarded => "guarded",
-    }
-}
-
 /// The guarded projects, and the free ones `officina run` serves (D-21),
 /// with their valid actions.
 fn project_checks(catalogue: &CanonicalCatalogue, dirs: &BTreeMap<String, String>) -> Vec<Check> {
@@ -518,7 +512,7 @@ fn project_checks(catalogue: &CanonicalCatalogue, dirs: &BTreeMap<String, String
             check(
                 Level::Ok,
                 &format!("relay project {name}"),
-                format!("{}, {actions} ({dir})", autonomy_name(project.autonomy)),
+                format!("{}, {actions} ({dir})", project.autonomy.code()),
             )
         })
         .collect()
@@ -785,14 +779,6 @@ fn check_listing_checks(catalogue: &CanonicalCatalogue) -> Vec<Check> {
     checks
 }
 
-/// The code `officina run` refuses with, as the journal writes it.
-fn refusal_code(reason: RefusalReason) -> String {
-    serde_json::to_value(reason)
-        .ok()
-        .and_then(|v| v.as_str().map(str::to_owned))
-        .unwrap_or_default()
-}
-
 /// D-22, D-170, D-173: the projects with an action that binds its files (one
 /// naming a check, or a `human` action), and whether those files bind: the
 /// fingerprint, with the `git` Git for Windows records in the registry. A
@@ -818,7 +804,7 @@ fn tree_checks(catalogue: &CanonicalCatalogue, dirs: &BTreeMap<String, String>) 
                     &title,
                     format!(
                         "{dir} lies in a git work tree whose files cannot be bound ({why}): its actions naming a check and its human actions refuse {}",
-                        refusal_code(reason)
+                        reason.code()
                     ),
                 )
             };
@@ -853,15 +839,11 @@ fn journal_check(home: &RelayHome, now_ms: i64) -> Check {
     const TITLE: &str = "relay journal";
     let (lines, corrupt) = journal::read_recent(home, now_ms);
     let since = now_ms - GATE_ERRORS_WINDOW_MS;
-    let mut causes: BTreeMap<String, u32> = BTreeMap::new();
+    let mut causes: BTreeMap<&str, u32> = BTreeMap::new();
     let mut last_detail = None;
     for line in lines.iter().filter(|line| line.ts >= since) {
         if let JournalEntry::GateError(error) = &line.entry {
-            let cause = serde_json::to_value(error.cause)
-                .ok()
-                .and_then(|v| v.as_str().map(str::to_owned))
-                .unwrap_or_default();
-            *causes.entry(cause).or_default() += 1;
+            *causes.entry(error.cause.code()).or_default() += 1;
             last_detail = Some(error.detail.clone());
         }
     }
@@ -969,7 +951,7 @@ fn paragraph_action(name: &str, action: &CanonicalAction) -> String {
     if !classes::is_available(action.class) {
         notes.push(format!(
             "Not available in this build (class {}).",
-            classes::class_name(action.class)
+            action.class.code()
         ));
     }
     if notes.is_empty() {
