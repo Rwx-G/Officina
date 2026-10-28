@@ -321,12 +321,92 @@ pub fn key_paste(
     }
 }
 
-/// One file's part of a paste: the sentence, then the block under it.
-fn paste_section((instruction, block): (String, Option<String>)) -> String {
+/// A block doctor prints and also writes under the Officina home (D-534):
+/// a terminal can cut a long line, a command's path included, when it is
+/// copied, and the file keeps every line whole.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PasteFile {
+    pub path: PathBuf,
+    pub text: String,
+}
+
+/// The file under `dir` holding the block for `key` of `target`'s settings.
+pub fn paste_file_path(dir: &Path, target: &str, key: &str) -> PathBuf {
+    dir.join(format!("{target}-{key}.json"))
+}
+
+/// How a project folder's blocks are named: `project-`, its folder name
+/// with letters, digits, `.`, `_` and `-` kept, then the start of its whole
+/// path's hash, so two folders of one name never share a file.
+pub fn project_target(folder: &Path) -> String {
+    let name: String = folder
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default()
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-') {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let hash = officina_core::sha256_hex(folder.to_string_lossy().as_bytes());
+    format!("project-{name}-{}", &hash[..8])
+}
+
+/// One file's part of a paste, the sentence then the block under it, and
+/// the file at `path` that holds the same block.
+fn saved_section(
+    (instruction, block): (String, Option<String>),
+    path: PathBuf,
+) -> (String, Option<PasteFile>) {
     match block {
-        Some(block) => format!("{instruction}:\n{block}"),
-        None => format!("{instruction}."),
+        Some(block) => (
+            format!(
+                "{instruction} (also in {}, its lines whole):\n{block}",
+                path.display()
+            ),
+            Some(PasteFile { path, text: block }),
+        ),
+        None => (format!("{instruction}."), None),
     }
+}
+
+/// Writes this run's blocks into `dir`, the `.json` files an earlier run
+/// left there removed first, so the folder never holds a block doctor no
+/// longer prints. `dir` is under the Officina home, never under a Claude
+/// Code configuration. A warning when that fails: the printed blocks still
+/// hold everything.
+pub fn write_paste_files(dir: &Path, files: &[PasteFile]) -> Option<Check> {
+    let written = (|| -> std::io::Result<()> {
+        if let Ok(entries) = fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                if entry.path().extension().is_some_and(|x| x == "json") {
+                    fs::remove_file(entry.path())?;
+                }
+            }
+        }
+        if files.is_empty() {
+            return Ok(());
+        }
+        fs::create_dir_all(dir)?;
+        for file in files {
+            fs::write(&file.path, format!("{}\n", file.text))?;
+        }
+        Ok(())
+    })();
+    written.err().map(|e| {
+        check(
+            Level::Warn,
+            "paste files",
+            format!(
+                "cannot write the blocks to {}: {e}; copy them from this output",
+                dir.display()
+            ),
+        )
+    })
 }
 
 /// What of `registrations` the hooks in `settings` leave out: an event none
@@ -500,12 +580,17 @@ pub fn run(collector: &Collector, exe: &Path) -> Vec<Check> {
     let gate = gate_required(&relay);
     let required = registrations(gate);
     let (mut checks, version) = check_claude(collector);
-    checks.push(check_hooks(&user_settings, exe, &required));
+    let doctor_dir = paths.doctor_dir();
+    let (hooks, hooks_file) = check_hooks(&user_settings, exe, &required, &doctor_dir);
+    checks.push(hooks);
     if let Some(version) = version.as_deref().filter(|_| gate) {
         checks.push(check_gate_failure_mode(version));
     }
     checks.extend(check_hook_activity(&paths.events_dir(), now));
-    checks.push(check_quota(collector, &user_settings, exe, now));
+    let (quota, quota_files) = check_quota(collector, &user_settings, exe, now, &doctor_dir);
+    checks.push(quota);
+    let files: Vec<PasteFile> = hooks_file.into_iter().chain(quota_files).collect();
+    checks.extend(write_paste_files(&doctor_dir, &files));
     checks.push(check_officina_home(&paths.officina_home));
     let onedrive_roots = onedrive_roots_from_env();
     let mut registry = check_registry(&paths.officina_home, &onedrive_roots, now);
@@ -656,17 +741,24 @@ fn check_agents_output(bin: &Path, config_dir: Option<&Path>) -> Check {
 }
 
 /// Every required registration in the user settings, else the file's whole
-/// `hooks` key with them merged in, to paste over it (D-530).
-fn check_hooks(user_settings: &Path, exe: &Path, required: &[Registration]) -> Check {
+/// `hooks` key with them merged in, to paste over it (D-530), and the file
+/// under `doctor_dir` that holds it (D-534).
+fn check_hooks(
+    user_settings: &Path,
+    exe: &Path,
+    required: &[Registration],
+    doctor_dir: &Path,
+) -> (Check, Option<PasteFile>) {
     let settings = SettingsFile::read(user_settings);
     let current = settings.get("hooks");
     let missing = missing_hook_events(&serde_json::json!({ "hooks": current }), required);
     if missing.is_empty() {
-        return check(
+        let ok = check(
             Level::Ok,
             "hooks",
             format!("registered in {}", user_settings.display()),
         );
+        return (ok, None);
     }
     let (instruction, paste) = match merged_hooks(current, exe, required) {
         Ok(hooks) => key_paste(user_settings, &settings, "hooks", &hooks),
@@ -683,12 +775,18 @@ fn check_hooks(user_settings: &Path, exe: &Path, required: &[Registration]) -> C
     } else {
         ""
     };
-    let never_edits = if paste.is_some() {
-        "; Officina never edits the file:"
-    } else {
-        "."
+    let file = paste.as_ref().map(|block| PasteFile {
+        path: paste_file_path(doctor_dir, "user", "hooks"),
+        text: block.clone(),
+    });
+    let never_edits = match &file {
+        Some(file) => format!(
+            "; Officina never edits the file. The block is also in {}, its lines whole:",
+            file.path.display()
+        ),
+        None => ".".to_owned(),
     };
-    Check {
+    let line = Check {
         level: Level::Fail,
         title: "hooks".into(),
         detail: format!(
@@ -697,7 +795,8 @@ fn check_hooks(user_settings: &Path, exe: &Path, required: &[Registration]) -> C
             user_settings.display()
         ),
         paste,
-    }
+    };
+    (line, file)
 }
 
 /// Whether the installed Claude Code, which printed `version`, honours the
@@ -843,14 +942,21 @@ fn recent_session_folders(events_dir: &Path, now: i64) -> Vec<PathBuf> {
 /// `quota write` is in place: the cause is then a project's own statusline,
 /// which wins in sessions opened in its folder, so the folders of the
 /// sessions the hook saw are checked for one, and each gets its value for
-/// its `settings.local.json`.
-fn check_quota(collector: &Collector, user_settings: &Path, exe: &Path, now: i64) -> Check {
+/// its `settings.local.json`. Each block is also in a file under
+/// `doctor_dir` (D-534).
+fn check_quota(
+    collector: &Collector,
+    user_settings: &Path,
+    exe: &Path,
+    now: i64,
+    doctor_dir: &Path,
+) -> (Check, Vec<PasteFile>) {
     let found = collector.read_quota();
     if let Some(q) = found
         .as_ref()
         .filter(|q| now - q.written_at * 1000 <= STALE_AFTER_MS)
     {
-        return check(
+        let ok = check(
             Level::Ok,
             "quota",
             format!(
@@ -859,6 +965,7 @@ fn check_quota(collector: &Collector, user_settings: &Path, exe: &Path, now: i64
                 (now / 1000 - q.written_at) / 60
             ),
         );
+        return (ok, Vec::new());
     }
     let state = format!(
         "{} for account {}",
@@ -875,26 +982,33 @@ fn check_quota(collector: &Collector, user_settings: &Path, exe: &Path, now: i64
         now,
     ));
     let user_section = || {
-        paste_section(key_paste(
-            user_settings,
-            &user,
-            "statusLine",
-            &statusline_value(exe, user.get("statusLine")),
-        ))
+        saved_section(
+            key_paste(
+                user_settings,
+                &user,
+                "statusLine",
+                &statusline_value(exe, user.get("statusLine")),
+            ),
+            paste_file_path(doctor_dir, "user", "statusLine"),
+        )
     };
-    let per_folder = overrides
+    let (folder_texts, folder_files): (Vec<String>, Vec<Option<PasteFile>>) = overrides
         .iter()
         .map(|o| {
             let local = o.local_settings();
-            paste_section(key_paste(
-                &local,
-                &SettingsFile::read(&local),
-                "statusLine",
-                &statusline_value(exe, Some(&o.status_line)),
-            ))
+            saved_section(
+                key_paste(
+                    &local,
+                    &SettingsFile::read(&local),
+                    "statusLine",
+                    &statusline_value(exe, Some(&o.status_line)),
+                ),
+                paste_file_path(doctor_dir, &project_target(&o.folder), "statusLine"),
+            )
         })
-        .collect::<Vec<_>>()
-        .join("\n");
+        .unzip();
+    let per_folder = folder_texts.join("\n");
+    let mut files: Vec<PasteFile> = Vec::new();
     let folders = overrides
         .iter()
         .map(|o| o.file.display().to_string())
@@ -908,31 +1022,44 @@ fn check_quota(collector: &Collector, user_settings: &Path, exe: &Path, now: i64
             ),
             None,
         ),
-        (true, false) => (
-            format!(
-                "{state}. The user statusline already runs officina quota write, but these project settings set their own statusline, which wins in sessions opened there: {folders}. Wire it in each folder's .claude/settings.local.json, never a committed file (Officina never edits them):"
-            ),
-            Some(per_folder),
-        ),
-        (false, true) => (
-            format!(
-                "{state}. Wire officina quota write into the user statusline (Officina never edits the file):"
-            ),
-            Some(user_section()),
-        ),
-        (false, false) => (
-            format!(
-                "{state}. Wire officina quota write into the user statusline and, in the folders whose project settings set their own ({folders}), into their .claude/settings.local.json, never a committed file (Officina never edits them):"
-            ),
-            Some(format!("{}\n{per_folder}", user_section())),
-        ),
+        (true, false) => {
+            files.extend(folder_files.into_iter().flatten());
+            (
+                format!(
+                    "{state}. The user statusline already runs officina quota write, but these project settings set their own statusline, which wins in sessions opened there: {folders}. Wire it in each folder's .claude/settings.local.json, never a committed file (Officina never edits them):"
+                ),
+                Some(per_folder),
+            )
+        }
+        (false, true) => {
+            let (text, file) = user_section();
+            files.extend(file);
+            (
+                format!(
+                    "{state}. Wire officina quota write into the user statusline (Officina never edits the file):"
+                ),
+                Some(text),
+            )
+        }
+        (false, false) => {
+            let (text, file) = user_section();
+            files.extend(file);
+            files.extend(folder_files.into_iter().flatten());
+            (
+                format!(
+                    "{state}. Wire officina quota write into the user statusline and, in the folders whose project settings set their own ({folders}), into their .claude/settings.local.json, never a committed file (Officina never edits them):"
+                ),
+                Some(format!("{text}\n{per_folder}")),
+            )
+        }
     };
-    Check {
+    let line = Check {
         level: Level::Warn,
         title: "quota".into(),
         detail,
         paste,
-    }
+    };
+    (line, files)
 }
 
 /// The Officina home exists and takes a write.
@@ -1434,7 +1561,7 @@ mod tests {
             serde_json::json!({"model": "opus", "hooks": foreign_hooks()}).to_string(),
         )
         .unwrap();
-        let line = check_hooks(&file, &exe, &required);
+        let line = check_hooks(&file, &exe, &required, Path::new("doctor")).0;
         assert_eq!(line.level, Level::Fail);
         assert!(
             line.detail.contains(&format!(
@@ -1445,7 +1572,7 @@ mod tests {
             line.detail
         );
         apply_paste(&file, &line.paste.unwrap());
-        let line = check_hooks(&file, &exe, &required);
+        let line = check_hooks(&file, &exe, &required, Path::new("doctor")).0;
         assert_eq!((line.level, line.paste), (Level::Ok, None));
         let SettingsFile::Object(settings) = SettingsFile::read(&file) else {
             panic!("the pasted file is an object");
@@ -1513,8 +1640,8 @@ mod tests {
         .unwrap();
         let exe = PathBuf::from("/opt/officina");
         let collector = Collector::from_parts(paths.clone(), LoadedFloor::default(), None);
-        let hooks = check_hooks(&user, &exe, &registrations(true));
-        let quota = check_quota(&collector, &user, &exe, now_ms());
+        let hooks = check_hooks(&user, &exe, &registrations(true), Path::new("doctor")).0;
+        let quota = check_quota(&collector, &user, &exe, now_ms(), Path::new("doctor")).0;
         for line in [&hooks, &quota] {
             let text = format!(
                 "{}\n{}",
@@ -1551,7 +1678,7 @@ mod tests {
             "{\"hooks\": {\"Stop\": {}}}",
         ] {
             fs::write(&file, text).unwrap();
-            let line = check_hooks(&file, &exe, &registrations(false));
+            let line = check_hooks(&file, &exe, &registrations(false), Path::new("doctor")).0;
             assert_eq!((line.level, &line.paste), (Level::Fail, &None), "{text}");
             assert!(
                 line.detail.contains("no block is printed"),
@@ -1928,11 +2055,16 @@ mod tests {
         )
         .unwrap();
         let exe = PathBuf::from("/opt/officina");
-        let line = check_hooks(&settings_file, &exe, &gate);
+        let line = check_hooks(&settings_file, &exe, &gate, Path::new("doctor")).0;
         assert_eq!(line.level, Level::Fail, "{line:?}");
         assert!(line.detail.contains(&fail_closed), "{line:?}");
         apply_paste(&settings_file, &line.paste.unwrap());
-        assert_eq!(check_hooks(&settings_file, &exe, &gate).level, Level::Ok);
+        assert_eq!(
+            check_hooks(&settings_file, &exe, &gate, Path::new("doctor"))
+                .0
+                .level,
+            Level::Ok
+        );
     }
 
     /// Story 2.17 AC 3, D-452: a Claude Code older than the first version
@@ -2459,7 +2591,7 @@ mod tests {
         );
         session_folder(&paths, dir.path(), "plain", &[]);
         let collector = Collector::from_parts(paths.clone(), LoadedFloor::default(), None);
-        let line = check_quota(&collector, &user, &exe, now_ms());
+        let line = check_quota(&collector, &user, &exe, now_ms(), Path::new("doctor")).0;
         assert_eq!(line.level, Level::Warn);
         assert!(
             line.detail.contains("already runs officina quota write"),
@@ -2509,7 +2641,7 @@ mod tests {
             ..paths
         };
         let collector = Collector::from_parts(paths, LoadedFloor::default(), None);
-        let line = check_quota(&collector, &user, &exe, now_ms());
+        let line = check_quota(&collector, &user, &exe, now_ms(), Path::new("doctor")).0;
         assert!(line.paste.is_none(), "{line:?}");
         assert!(
             line.detail.contains("no folder of a recent session"),
@@ -2551,5 +2683,139 @@ mod tests {
         ] {
             assert!(!runs_officina_quota_write(other), "{other}");
         }
+    }
+
+    /// Every file under `dir` with its bytes, sorted.
+    fn files_under(dir: &Path) -> Vec<(PathBuf, Vec<u8>)> {
+        let mut out = Vec::new();
+        let mut stack = vec![dir.to_path_buf()];
+        while let Some(next) = stack.pop() {
+            for entry in fs::read_dir(&next).into_iter().flatten().flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    stack.push(path);
+                } else {
+                    let bytes = fs::read(&path).unwrap();
+                    out.push((path, bytes));
+                }
+            }
+        }
+        out.sort();
+        out
+    }
+
+    /// D-534: each block doctor prints is also written, whole, to a file
+    /// under the Officina home that its line names: the hooks key as
+    /// printed, the user statusline, and a project's complete
+    /// `settings.local.json` when it has none. Nothing is written under
+    /// the Claude config dir or in the project folder.
+    #[test]
+    fn each_block_is_written_whole_to_the_file_its_line_names() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths {
+            officina_home: dir.path().join("officina"),
+            claude_config_dir: dir.path().join("config"),
+            claude_config_override: None,
+            floor_file: None,
+        };
+        fs::create_dir_all(&paths.claude_config_dir).unwrap();
+        let user = paths.claude_config_dir.join("settings.json");
+        fs::write(
+            &user,
+            serde_json::json!({"statusLine": {"type": "command", "command": "python s.py"}, "hooks": foreign_hooks()})
+                .to_string(),
+        )
+        .unwrap();
+        let repo = session_folder(
+            &paths,
+            dir.path(),
+            "repo",
+            &[("settings.json", "python p.py")],
+        );
+        let config_before = files_under(&paths.claude_config_dir);
+        let repo_before = files_under(&repo);
+        let exe = PathBuf::from("C:/Program Files/Officina/officina.exe");
+        let collector = Collector::from_parts(paths.clone(), LoadedFloor::default(), None);
+        let checks = run(&collector, &exe);
+        let line = |title: &str| checks.iter().find(|c| c.title == title).unwrap();
+        let doctor_dir = paths.doctor_dir();
+
+        let hooks_file = paste_file_path(&doctor_dir, "user", "hooks");
+        let hooks = line("hooks");
+        assert!(
+            hooks.detail.contains(&hooks_file.display().to_string()),
+            "{}",
+            hooks.detail
+        );
+        assert_eq!(
+            fs::read_to_string(&hooks_file).unwrap(),
+            format!("{}\n", hooks.paste.as_deref().unwrap())
+        );
+
+        let quota = line("quota");
+        let paste = quota.paste.as_deref().unwrap();
+        let user_file = paste_file_path(&doctor_dir, "user", "statusLine");
+        let repo_file = paste_file_path(&doctor_dir, &project_target(&repo), "statusLine");
+        for file in [&user_file, &repo_file] {
+            assert!(paste.contains(&file.display().to_string()), "{paste}");
+        }
+        let user_block = fs::read_to_string(&user_file).unwrap();
+        assert!(user_block.starts_with("\"statusLine\": {"), "{user_block}");
+        assert!(paste.contains(user_block.trim_end()), "{paste}");
+        let whole: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&repo_file).unwrap()).unwrap();
+        assert_eq!(
+            whole.as_object().unwrap().keys().collect::<Vec<_>>(),
+            ["statusLine"]
+        );
+        assert!(
+            whole["statusLine"]["command"]
+                .as_str()
+                .unwrap()
+                .ends_with("| python p.py")
+        );
+
+        assert_eq!(files_under(&paths.claude_config_dir), config_before);
+        assert_eq!(files_under(&repo), repo_before);
+
+        // A run that prints no block leaves no file behind; other files stay.
+        fs::write(doctor_dir.join("notes.txt"), "mine").unwrap();
+        assert_eq!(write_paste_files(&doctor_dir, &[]), None);
+        let left: Vec<PathBuf> = files_under(&doctor_dir)
+            .into_iter()
+            .map(|(p, _)| p)
+            .collect();
+        assert_eq!(left, [doctor_dir.join("notes.txt")]);
+    }
+
+    /// D-534: two project folders of one name never share a file, and a
+    /// folder name is kept to characters every file system takes.
+    #[test]
+    fn project_files_are_named_after_the_folder_and_its_path() {
+        let a = project_target(Path::new("C:/work/a/repo"));
+        let b = project_target(Path::new("C:/work/b/repo"));
+        assert_ne!(a, b);
+        for target in [&a, &b] {
+            assert!(target.starts_with("project-repo-"), "{target}");
+        }
+        let odd = project_target(Path::new("C:/work/my repo: v2*"));
+        assert!(odd.starts_with("project-my_repo__v2_-"), "{odd}");
+    }
+
+    /// D-534: a folder doctor cannot write warns, and the run goes on.
+    #[test]
+    fn an_unwritable_paste_folder_warns() {
+        let dir = tempfile::tempdir().unwrap();
+        let blocker = dir.path().join("doctor");
+        fs::write(&blocker, "a file where the folder goes").unwrap();
+        let file = PasteFile {
+            path: paste_file_path(&blocker, "user", "hooks"),
+            text: "\"hooks\": {}".to_owned(),
+        };
+        let warning = write_paste_files(&blocker, &[file]).unwrap();
+        assert_eq!(
+            (warning.title.as_str(), warning.level),
+            ("paste files", Level::Warn)
+        );
     }
 }

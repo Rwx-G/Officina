@@ -153,6 +153,11 @@ fn doctor_prints_the_whole_hooks_key_merged() {
         !text.contains(SECRET) && !text.contains("\"env\""),
         "{text}"
     );
+    // D-534: the same block, its lines whole, in the file the line names.
+    let saved = env.officina_home().join("doctor").join("user-hooks.json");
+    assert!(text.contains(&saved.display().to_string()), "{text}");
+    let saved_text = std::fs::read_to_string(&saved).unwrap();
+    assert!(text.contains(saved_text.trim_end()), "{saved_text}");
     let merged = printed_hooks_block(&out.stdout)["hooks"].clone();
     for (event, groups) in foreign.as_object().unwrap() {
         assert_eq!(merged[event][0], groups[0], "{event}");

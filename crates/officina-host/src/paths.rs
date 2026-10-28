@@ -101,6 +101,12 @@ impl Paths {
         self.officina_home.join("quota")
     }
 
+    /// Directory where `officina doctor` writes the blocks it prints, so
+    /// they can be pasted whole (D-534).
+    pub fn doctor_dir(&self) -> PathBuf {
+        self.officina_home.join("doctor")
+    }
+
     /// Directory of the state files (contract results, focus outcomes).
     pub fn state_dir(&self) -> PathBuf {
         self.officina_home.join("state")

@@ -347,6 +347,10 @@ project uses [Semantic Versioning](https://semver.org/).
   `.claude/settings.local.json` (the whole file when it does not exist).
   Only that key is printed, never another key of a settings file, and a
   file doctor cannot read gets no block, only the reason. Still read-only.
+  Each block is also written, its lines whole, to a file under the
+  Officina home's `doctor/` folder that its line names, since a terminal
+  can cut a long line when it is copied; each run replaces those files,
+  and no Claude Code configuration file is written.
 - The window's first view is named **Sessions** (it was Board): Board is now
   its default mode, beside Scene and Focus. Digit keys act in every mode;
   `m`, `f` and the digits act in the Sessions view only. The quota
