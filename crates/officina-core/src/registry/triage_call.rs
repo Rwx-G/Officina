@@ -640,23 +640,8 @@ pub fn count_calls(calls: &[CallRecord], now_ms: i64) -> CallsView {
     view
 }
 
-/// True when a case may be queued again (D-87): its last call was not a
-/// refusal on the same inputs. `last` is that call's outcome and the input
-/// hash it was made on.
-///
-/// ```
-/// use officina_core::registry::triage_call::queue_again;
-/// use officina_core::registry::types::TriageOutcome;
-/// assert!(!queue_again(Some((TriageOutcome::Refused, Some("h"))), "h"));
-/// assert!(queue_again(Some((TriageOutcome::Refused, Some("h"))), "other"));
-/// assert!(queue_again(None, "h"));
-/// ```
-pub fn queue_again(last: Option<(TriageOutcome, Option<&str>)>, input_hash: &str) -> bool {
-    !matches!(last, Some((TriageOutcome::Refused, Some(hash))) if hash == input_hash)
-}
-
 /// How many proposal calls failed in a row, the latest last (AD-50, D-65,
-/// D-81): the pause of story 3.11 reads it. Refusals spent nothing and dry
+/// D-81): [`super::model::pause_due`] reads it. Refusals spent nothing and dry
 /// runs propose nothing, so neither counts nor breaks the streak; an
 /// answer ends it.
 ///

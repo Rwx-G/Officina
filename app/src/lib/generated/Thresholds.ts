@@ -3,4 +3,4 @@
 /**
  * Numbers the view is built with (AD-5).
  */
-export type Thresholds = { restore_notice_ms: number, excerpt_ttl_ms: number, non_interactive_listed: number, supersession_window_ms: number, dry_run_max_cases: number, call_spacing_ms: number, calls_per_hour: number, calls_per_day: number, count_window_ms: number, rate_window: number, auto_count_after_ms: number, auto_archive_min_cases: number, auto_archive_flip_percent: number, model_gate_max_age_ms: number, model_gate_min_cases: number, self_disable_min_cases: number, };
+export type Thresholds = { restore_notice_ms: number, excerpt_ttl_ms: number, non_interactive_listed: number, supersession_window_ms: number, dry_run_max_cases: number, call_spacing_ms: number, calls_per_hour: number, calls_per_day: number, count_window_ms: number, rate_window: number, auto_count_after_ms: number, auto_archive_min_cases: number, auto_archive_flip_percent: number, model_gate_max_age_ms: number, model_gate_min_cases: number, self_disable_min_cases: number, pause_after_failed_calls: number, };

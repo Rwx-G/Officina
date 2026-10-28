@@ -14,6 +14,7 @@ use officina_core::board::Board;
 use officina_core::dates::event_file_name;
 use officina_core::ipc::IpcError;
 use officina_core::registry::confirm::{AuthorAction, ConfirmItem, ItemAnswer};
+use officina_core::registry::model::{ModelEnv, unavailable};
 use officina_core::registry::retention::PASS_INTERVAL_MS;
 use officina_core::registry::view::{RegistryView, SubjectView};
 use officina_core::relay::view::RelayView;
@@ -23,7 +24,7 @@ use crate::files::{event_file_for, now_ms};
 use crate::paths::Paths;
 use crate::registry::ingest::IngestContext;
 use crate::registry::store::onedrive_roots_from_env;
-use crate::registry::triage::{CallLimits, NextCall, TriageJob, TriageWorker};
+use crate::registry::triage::{CallLimits, NextCall, TriageJob, TriageWorker, binary_stamp};
 use crate::registry::window::WindowRegistry;
 use crate::relay::home::RelayHome;
 use crate::relay::view::{credential_presence, read_view_with};
@@ -77,6 +78,9 @@ pub enum AuthorCommand {
     Evaluate,
     /// Auto-archive turned on, under its gate, or off (FR-12).
     SetAutoArchive(bool),
+    /// The triage model turned on, under its gate and while it can be
+    /// called, or off (FR-10 as amended).
+    SetTriageModel(bool),
 }
 
 /// What the collector answers to an author request.
@@ -645,6 +649,7 @@ fn run<E: Emit>(
     let mut presence: BTreeMap<String, bool> = BTreeMap::new();
 
     loop {
+        registry.set_model_env(model_env(collector));
         match receiver.recv_timeout(TICK) {
             Ok(CollectorMsg::Shutdown) | Err(RecvTimeoutError::Disconnected) => return,
             Ok(CollectorMsg::Refresh) => plan.refresh_requested(),
@@ -759,6 +764,11 @@ fn answer_author<E: Emit>(
             publish_both(collector, registry, outputs, true);
             done.map(|()| AuthorAnswer::Done { created: None })
         }
+        AuthorCommand::SetTriageModel(on) => {
+            let done = registry.set_triage_model(on, now_ms());
+            publish_both(collector, registry, outputs, true);
+            done.map(|()| AuthorAnswer::Done { created: None })
+        }
         AuthorCommand::Evaluate => {
             let queued = registry.evaluate(now_ms());
             publish_both(collector, registry, outputs, true);
@@ -766,6 +776,18 @@ fn answer_author<E: Emit>(
         }
     };
     let _ = request.reply.send(reply);
+}
+
+/// Whether the triage model can be called, and the `claude` binary's
+/// stamp, from what the collector knows now (AD-51, D-66): the floor's
+/// `no_excerpts` can change with a floor edit and `claude` with an update.
+fn model_env(collector: &Collector) -> ModelEnv {
+    let claude = collector.claude();
+    let path = claude.map(|path| path.to_string_lossy().into_owned());
+    ModelEnv {
+        unavailable: unavailable(path.as_deref(), collector.no_excerpts()),
+        claude_stamp: claude.and_then(binary_stamp),
+    }
 }
 
 /// The triage call of `next`, with what the collector knows of the window:

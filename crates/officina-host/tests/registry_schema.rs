@@ -22,7 +22,7 @@ use rusqlite::Connection;
 
 /// The SHA-256 of each shipped migration, in order (AD-41). A shipped
 /// entry never changes; a new entry fails here until its hash is pinned.
-const PINNED: [&str; 1] = ["f970665d6ecaa94df27efabc22f9cecca2b0365219fc1ac9b0899503eccfed0a"];
+const PINNED: [&str; 1] = ["bd13f2dd8c256dad763a965aa411f772077a3b50cbd0aacfbeb1fbe418eefe7b"];
 
 /// A database at the current version, schema only.
 fn fresh() -> Connection {

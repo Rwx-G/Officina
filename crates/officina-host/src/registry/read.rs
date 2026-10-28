@@ -11,9 +11,13 @@ use officina_core::registry::dry_run::{DryRunState, Evaluation, Tally};
 use officina_core::registry::fold::pivot;
 #[cfg(feature = "window-authority")]
 use officina_core::registry::fold::{Mark, MarkQuery};
-use officina_core::registry::proposal::{ModelInput, Proposal};
+use officina_core::registry::model::{
+    LastCall, ModelFacts, ModelPause, ModelSetting, StoredAnswer,
+};
+use officina_core::registry::proposal::Proposal;
 use officina_core::registry::rates::VerdictRecord;
 use officina_core::registry::triage_call::{COUNT_WINDOW_MS, CallRecord};
+use officina_core::registry::types::ModelVerdict;
 use officina_core::registry::types::{
     ConfirmationRecord, EventFileRecord, ExcerptRecord, FactRow, FactValue, RegistryReport,
     RestoreNotice, SessionRecord, SessionRow, SettingKey, Source, Sourced, SubjectRecord,
@@ -145,13 +149,14 @@ impl Reader {
     }
 
     /// The registry as the Subjects view shows it (AD-53, AD-54), with the
-    /// lag behind the event files of `events_dir` and the live cards of
-    /// `board`.
+    /// lag behind the event files of `events_dir`, the live cards of
+    /// `board`, and why the model cannot be called, when it cannot.
     pub fn view(
         &self,
         report: RegistryReport,
         board: Option<&Board>,
         events_dir: &Path,
+        unavailable: Option<TriageRefusal>,
         now_ms: i64,
     ) -> rusqlite::Result<RegistryView> {
         view(
@@ -160,8 +165,15 @@ impl Reader {
             board,
             events_dir,
             DryRunState::default(),
+            unavailable,
             now_ms,
         )
+    }
+
+    /// The triage model's setting, pause, stored answers and last calls
+    /// (AD-52), with why it cannot be called, when it cannot.
+    pub fn model_facts(&self, unavailable: Option<TriageRefusal>) -> rusqlite::Result<ModelFacts> {
+        model_facts(&self.conn, unavailable)
     }
 
     /// The `triage_call` rows started since `from_ms` (AD-52).
@@ -276,13 +288,14 @@ pub(crate) fn ingestion_view(
 }
 
 /// The registry as the Subjects view shows it, with what the window's
-/// collector knows of dry runs.
+/// collector knows of dry runs and of the model's availability.
 pub(crate) fn view(
     conn: &Connection,
     report: RegistryReport,
     board: Option<&Board>,
     events_dir: &Path,
     dry_run: DryRunState,
+    unavailable: Option<TriageRefusal>,
     now_ms: i64,
 ) -> rusqlite::Result<RegistryView> {
     // One read transaction, so the subjects, sessions and excerpts come from
@@ -308,7 +321,7 @@ pub(crate) fn view(
             sessions: &sessions,
             excerpts: &excerpts,
             confirmations: &confirmations,
-            model: &model_input(),
+            model: &model_facts(&snapshot, unavailable)?,
             board,
             restore_notice: restore_notice(&snapshot),
             evidence: &evidence,
@@ -317,12 +330,77 @@ pub(crate) fn view(
     ))
 }
 
-/// The triage model's part of the proposals, the same for the view and
-/// for the writer that checks a confirmation against them (AD-49). Its
-/// runner and its answers come with stories 3.9 and 3.11: until then it is
-/// disabled.
-pub(crate) fn model_input() -> ModelInput {
-    ModelInput::default()
+/// A setting's value, with who set it and when, when it is recorded and
+/// reads as `T`: a value this build cannot read counts as absent.
+fn setting_of<T: serde::de::DeserializeOwned>(
+    conn: &Connection,
+    key: SettingKey,
+) -> rusqlite::Result<Option<Sourced<T>>> {
+    Ok(settings(conn)?
+        .into_iter()
+        .find(|row| row.key == key)
+        .and_then(|row| {
+            Some(Sourced {
+                value: serde_json::from_str(&row.value).ok()?,
+                src: row.src,
+                at_ms: row.at_ms,
+            })
+        }))
+}
+
+/// The triage model as the registry holds it (AD-52, D-66, D-69, D-87),
+/// the same for the view and for the writer that checks a confirmation
+/// against the proposals it shows (AD-49): its setting and pause, every
+/// stored answer with the input hash of the call that gave it, and the
+/// last proposal call of each case.
+pub(crate) fn model_facts(
+    conn: &Connection,
+    unavailable: Option<TriageRefusal>,
+) -> rusqlite::Result<ModelFacts> {
+    let answers = conn
+        .prepare_cached(
+            "SELECT m.session_id, m.verdict, m.reason, m.call_id, m.at_ms, t.input_hash
+             FROM model_answer m LEFT JOIN triage_call t ON t.id = m.call_id
+             ORDER BY m.session_id",
+        )?
+        .query_map([], |row| {
+            Ok(StoredAnswer {
+                session_id: row.get(0)?,
+                verdict: code_of(row, 1, ModelVerdict::from_code)?,
+                reason: row.get(2)?,
+                call_id: row.get(3)?,
+                at_ms: row.get(4)?,
+                input_hash: row.get(5)?,
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    // SQLite takes a bare column's value from the row `max` picked, so each
+    // case comes with its latest call.
+    let last_calls = conn
+        .prepare_cached(
+            "SELECT case_key, outcome, refusal, input_hash, started_at_ms, max(id)
+             FROM triage_call WHERE purpose = ?1 AND case_key IS NOT NULL GROUP BY case_key",
+        )?
+        .query_map([TriagePurpose::Proposal.code()], |row| {
+            let refusal: Option<String> = row.get(2)?;
+            Ok((
+                row.get::<_, String>(0)?,
+                LastCall {
+                    outcome: code_of(row, 1, TriageOutcome::from_code)?,
+                    refusal: refusal.as_deref().and_then(TriageRefusal::from_code),
+                    input_hash: row.get(3)?,
+                    started_at_ms: row.get(4)?,
+                },
+            ))
+        })?
+        .collect::<rusqlite::Result<BTreeMap<_, _>>>()?;
+    Ok(ModelFacts {
+        setting: setting_of::<ModelSetting>(conn, SettingKey::TriageModel)?,
+        pause: setting_of::<ModelPause>(conn, SettingKey::TriageModelPause)?,
+        unavailable,
+        answers,
+        last_calls,
+    })
 }
 
 /// The archived subjects the author may reopen, from one read
@@ -724,7 +802,7 @@ pub(crate) fn evaluable_confirmations(
 ) -> rusqlite::Result<Vec<officina_core::registry::dry_run::EvaluableConfirmation>> {
     use officina_core::registry::confirm::ConfirmationInput;
     use officina_core::registry::dry_run::EvaluableConfirmation;
-    use officina_core::registry::types::{ModelVerdict, ProposalSource, ReasonCode};
+    use officina_core::registry::types::{ProposalSource, ReasonCode};
     conn.prepare_cached(
         "SELECT c.id, c.confirmed_at_ms, c.proposed_verdict, c.proposed_source, c.proposed_reason,
              c.call_id, c.verdict, i.confirmation_id, i.prompt, i.answer_head, i.answer_tail,
@@ -762,18 +840,23 @@ pub(crate) fn evaluable_confirmations(
 }
 
 #[cfg(feature = "window-authority")]
-/// The outcome and input hash of the latest call about `case_key`, when
-/// there is one (D-87).
+/// The latest call about `case_key`, when there is one (D-87).
 pub(crate) fn last_call_for(
     conn: &Connection,
     case_key: &str,
-) -> rusqlite::Result<Option<(TriageOutcome, Option<String>)>> {
+) -> rusqlite::Result<Option<LastCall>> {
     conn.prepare_cached(
-        "SELECT outcome, input_hash FROM triage_call WHERE case_key = ?1
+        "SELECT outcome, refusal, input_hash, started_at_ms FROM triage_call WHERE case_key = ?1
          ORDER BY started_at_ms DESC, id DESC LIMIT 1",
     )?
     .query_map([case_key], |row| {
-        Ok((code_of(row, 0, TriageOutcome::from_code)?, row.get(1)?))
+        let refusal: Option<String> = row.get(1)?;
+        Ok(LastCall {
+            outcome: code_of(row, 0, TriageOutcome::from_code)?,
+            refusal: refusal.as_deref().and_then(TriageRefusal::from_code),
+            input_hash: row.get(2)?,
+            started_at_ms: row.get(3)?,
+        })
     })?
     .next()
     .transpose()
@@ -781,7 +864,7 @@ pub(crate) fn last_call_for(
 
 /// Every confirmation as the rates read it (AD-50), by id.
 pub(crate) fn verdict_records(conn: &Connection) -> rusqlite::Result<Vec<VerdictRecord>> {
-    use officina_core::registry::types::{ModelVerdict, ProposalSource, ReasonCode};
+    use officina_core::registry::types::{ProposalSource, ReasonCode};
     conn.prepare_cached(
         "SELECT id, subject_id, proposed_verdict, proposed_source, proposed_reason, call_id,
              verdict, auto, confirmed_at_ms, reopened_at_ms

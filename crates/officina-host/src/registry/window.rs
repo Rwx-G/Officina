@@ -13,6 +13,7 @@ use officina_core::ipc::{IpcError, IpcErrorCode};
 use officina_core::registry::confirm::{AuthorAction, ConfirmItem, ItemAnswer};
 use officina_core::registry::dry_run::DryRunState;
 use officina_core::registry::fold::{AgentsChanges, AgentsSnapshot};
+use officina_core::registry::model::{EnableRefusal, ModelEnv};
 use officina_core::registry::types::{RegistryReport, RegistryState, SubjectRef};
 use officina_core::registry::view::{RegistryView, SubjectView, unread_view};
 
@@ -48,6 +49,9 @@ pub struct WindowRegistry {
     agents: Option<AgentsSnapshot>,
     /// The dry run running, and how the last one ended (AD-52).
     triage: Triage,
+    /// Whether the model can be called, and the `claude` binary's stamp,
+    /// as the collector last saw them (AD-51, D-66).
+    model_env: ModelEnv,
 }
 
 impl WindowRegistry {
@@ -70,7 +74,18 @@ impl WindowRegistry {
             last_error: None,
             agents: None,
             triage: Triage::default(),
+            model_env: ModelEnv::default(),
         }
+    }
+
+    /// Records whether the triage model can be called and the `claude`
+    /// binary's stamp, which every view, confirmation and call then reads
+    /// (AD-51, D-66).
+    pub fn set_model_env(&mut self, env: ModelEnv) {
+        if let Slot::Writable(writer) = &mut self.slot {
+            writer.set_model_env(env.clone());
+        }
+        self.model_env = env;
     }
 
     /// How the database came to be readable at open.
@@ -248,9 +263,16 @@ impl WindowRegistry {
                 board,
                 events_dir,
                 dry_run,
+                self.model_env.unavailable,
                 now_ms,
             ),
-            Slot::ReadOnly(reader) => reader.view(report.clone(), board, events_dir, now_ms),
+            Slot::ReadOnly(reader) => reader.view(
+                report.clone(),
+                board,
+                events_dir,
+                self.model_env.unavailable,
+                now_ms,
+            ),
             Slot::Unavailable(_) | Slot::Network => return unread_view(report, now_ms),
         };
         match read {
@@ -277,6 +299,22 @@ impl WindowRegistry {
                     state.code()
                 ),
             )),
+            Err(error) => Err(self.write_failed(&error)),
+        }
+    }
+
+    /// Turns the triage model on or off at `now_ms` (FR-10 as amended,
+    /// D-69, D-81): refused while it cannot be called or its enable gate
+    /// does not hold, with why; turning it on lifts a pause.
+    pub fn set_triage_model(&mut self, on: bool, now_ms: i64) -> Result<(), IpcError> {
+        let Slot::Writable(writer) = &mut self.slot else {
+            return Err(self.not_writable());
+        };
+        match writer.set_triage_model(on, now_ms) {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(refusal @ (EnableRefusal::Unavailable(_) | EnableRefusal::Gate(_)))) => {
+                Err(IpcError::new(IpcErrorCode::Refused, refusal.to_string()))
+            }
             Err(error) => Err(self.write_failed(&error)),
         }
     }

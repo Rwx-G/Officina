@@ -15,11 +15,15 @@ use officina_core::registry::confirm::{
 use officina_core::registry::dry_run::DryRunState;
 use officina_core::registry::filing::excerpts_to_clear;
 use officina_core::registry::fold::FactWrite;
-use officina_core::registry::rates::{Gate, GateState, auto_archive_gate};
+use officina_core::registry::model::{EnableRefusal, ModelPause, ModelSetting};
+use officina_core::registry::rates::{
+    Gate, GateState, auto_archive_gate, model_enable_gate, model_self_disable_gate,
+};
 pub use officina_core::registry::types::AuthorRefusal;
 use officina_core::registry::types::{
-    EventFileRecord, ExcerptRecord, FactValue, RegistryReport, RegistryState, SessionRecord,
-    SessionRow, SettingKey, Source, SubjectRecord, SubjectStatus, Verdict,
+    EventFileRecord, ExcerptRecord, FactValue, ProposalSource, RegistryReport, RegistryState,
+    SessionRecord, SessionRow, SettingKey, Source, SubjectRecord, SubjectStatus, TriageRefusal,
+    Verdict,
 };
 use officina_core::registry::verdict::{VerdictInput, auto_archivable, rows};
 use officina_core::registry::view::{AutoArchiveSetting, RegistryView};
@@ -247,8 +251,9 @@ fn apply_plan(conn: &Connection, plan: &Plan, now_ms: i64) -> rusqlite::Result<O
 
 /// Writes the verdict of a confirmation plan on `subject` at `now_ms`,
 /// source `author`: the subject's status and routine box, its excerpts
-/// cleared on `finished`, and the confirmation with the input it keeps
-/// (AD-49, D-85, D-88).
+/// cleared on `finished`, the model's answer about the row deleted (D-68),
+/// and the confirmation with the input it keeps, the model's call id but
+/// never its text (AD-49, D-85, D-88).
 fn apply_decision(
     conn: &Connection,
     planned: &ConfirmPlan,
@@ -273,6 +278,10 @@ fn apply_decision(
     ])?;
     for session_id in &decision.clear_excerpts {
         conn.prepare_cached("DELETE FROM session_excerpt WHERE session_id = ?1")?
+            .execute([session_id])?;
+    }
+    if let Some(session_id) = &decision.session_id {
+        conn.prepare_cached("DELETE FROM model_answer WHERE session_id = ?1")?
             .execute([session_id])?;
     }
     conn.prepare_cached(
@@ -319,6 +328,7 @@ fn confirm_one(
     conn: &Connection,
     item: &ConfirmItem,
     auto: bool,
+    unavailable: Option<TriageRefusal>,
     now_ms: i64,
 ) -> rusqlite::Result<(ItemOutcome, bool)> {
     let subjects = read::subjects(conn)?;
@@ -326,7 +336,7 @@ fn confirm_one(
     let confirmations = read::confirmations(conn)?;
     let excerpts = read::excerpts(conn)?;
     let known_projects = read::known_projects(conn)?;
-    let model = read::model_input();
+    let model = read::model_facts(conn, unavailable)?.input(&sessions, &excerpts);
     let context = TriageContext {
         subjects: &subjects,
         sessions: &sessions,
@@ -388,19 +398,26 @@ impl Writer {
         now_ms: i64,
         observe: &mut dyn FnMut(usize),
     ) -> Result<Vec<ItemAnswer>, RegistryError> {
+        let unavailable = self.model_env.unavailable;
         let tx = self
             .conn
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         let mut answers = Vec::with_capacity(items.len());
         let mut cleared = false;
+        let mut model_confirmed = false;
         for (index, item) in items.iter().enumerate() {
-            let (outcome, cleared_now) = confirm_one(&tx, item, auto, now_ms)?;
+            let (outcome, cleared_now) = confirm_one(&tx, item, auto, unavailable, now_ms)?;
             cleared |= cleared_now;
+            model_confirmed |= item.shown.source == ProposalSource::Model
+                && matches!(outcome, ItemOutcome::Confirmed { .. });
             answers.push(ItemAnswer {
                 key: item.key.clone(),
                 outcome,
             });
             observe(index);
+        }
+        if model_confirmed {
+            self_disable_if_worse(&tx, now_ms)?;
         }
         tx.commit()?;
         if cleared {
@@ -432,6 +449,7 @@ impl Writer {
             board,
             events_dir,
             DryRunState::default(),
+            self.model_env.unavailable,
             now_ms,
         )?)
     }
@@ -574,13 +592,7 @@ impl Writer {
         src: Source,
         now_ms: i64,
     ) -> Result<(), RegistryError> {
-        self.conn
-            .prepare_cached(
-                "INSERT INTO setting (key, value, src, at_ms) VALUES (?1, ?2, ?3, ?4)
-                 ON CONFLICT (key) DO UPDATE SET value = excluded.value, src = excluded.src, at_ms = excluded.at_ms",
-            )?
-            .execute(rusqlite::params![key.code(), value, src.code(), now_ms])?;
-        Ok(())
+        Ok(write_setting(&self.conn, key, value, src, now_ms)?)
     }
 
     /// Every `setting` row.
@@ -719,7 +731,9 @@ impl Writer {
         let subjects = read::subjects(&self.conn)?;
         let sessions = read::session_records(&self.conn)?;
         let confirmations = read::confirmations(&self.conn)?;
-        let model = read::model_input();
+        let excerpts = read::excerpts(&self.conn)?;
+        let model =
+            read::model_facts(&self.conn, self.model_env.unavailable)?.input(&sessions, &excerpts);
         let items: Vec<ConfirmItem> = rows(&VerdictInput {
             subjects: &subjects,
             sessions: &sessions,
@@ -750,6 +764,89 @@ impl Writer {
                 .collect(),
             turned_off: None,
         })
+    }
+}
+
+/// Records `value` under `key` on `conn`, replacing what was there.
+pub(crate) fn write_setting(
+    conn: &Connection,
+    key: SettingKey,
+    value: &str,
+    src: Source,
+    now_ms: i64,
+) -> rusqlite::Result<()> {
+    conn.prepare_cached(
+        "INSERT INTO setting (key, value, src, at_ms) VALUES (?1, ?2, ?3, ?4)
+         ON CONFLICT (key) DO UPDATE SET value = excluded.value, src = excluded.src, at_ms = excluded.at_ms",
+    )?
+    .execute(rusqlite::params![key.code(), value, src.code(), now_ms])?;
+    Ok(())
+}
+
+/// Turns the model off with source `rules` and its reason when, after a
+/// confirmation of one of its proposals, it was right less often than the
+/// default over its recent confirmed proposals (FR-10 as amended, AD-50,
+/// D-69): checked on the counts the panel shows, inside the confirmation's
+/// transaction, so the panel and the switch never disagree.
+fn self_disable_if_worse(conn: &Connection, now_ms: i64) -> rusqlite::Result<()> {
+    let on = read::model_facts(conn, None)?.on();
+    let gate = model_self_disable_gate(&read::verdict_records(conn)?, now_ms);
+    if on && gate.state == GateState::WorseThanDefault {
+        let value = serde_json::to_string(&ModelSetting {
+            on: false,
+            reason: Some(gate.state),
+        })
+        .unwrap_or_default();
+        write_setting(conn, SettingKey::TriageModel, &value, Source::Rules, now_ms)?;
+    }
+    Ok(())
+}
+
+impl Writer {
+    /// Turns the triage model on or off at `now_ms`, source `author` (FR-10
+    /// as amended, AD-50, D-69, D-81): turning it on is refused while it
+    /// cannot be called or its enable gate does not hold, and lifts a
+    /// pause; turning it off always succeeds.
+    pub fn set_triage_model(
+        &mut self,
+        on: bool,
+        now_ms: i64,
+    ) -> Result<Result<(), EnableRefusal>, RegistryError> {
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if on {
+            if let Some(cause) = self.model_env.unavailable {
+                return Ok(Err(EnableRefusal::Unavailable(cause)));
+            }
+            let facts = read::model_facts(&tx, None)?;
+            let gate = model_enable_gate(
+                read::latest_evaluation(&tx)?.as_ref(),
+                facts.self_disabled_at(),
+                now_ms,
+            );
+            if gate.state != GateState::Holds {
+                return Ok(Err(EnableRefusal::Gate(gate.state)));
+            }
+            if let Some(pause) = facts.pause.filter(|p| p.value.paused) {
+                let lifted = serde_json::to_string(&ModelPause {
+                    paused: false,
+                    stamp: pause.value.stamp,
+                })
+                .unwrap_or_default();
+                write_setting(
+                    &tx,
+                    SettingKey::TriageModelPause,
+                    &lifted,
+                    Source::Author,
+                    now_ms,
+                )?;
+            }
+        }
+        let value = serde_json::to_string(&ModelSetting { on, reason: None }).unwrap_or_default();
+        write_setting(&tx, SettingKey::TriageModel, &value, Source::Author, now_ms)?;
+        tx.commit()?;
+        Ok(Ok(()))
     }
 }
 

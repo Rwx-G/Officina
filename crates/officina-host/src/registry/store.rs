@@ -415,6 +415,11 @@ mod writing {
         pub(in crate::registry) conn: Connection,
         paths: RegistryPaths,
         location: Location,
+        /// Whether the triage model can be called and the `claude` binary's
+        /// stamp, which the window sets (AD-51, D-66); the default, for a
+        /// writer the window does not drive, is an available model with no
+        /// stamp, and the runner still refuses before anything starts.
+        pub(in crate::registry) model_env: officina_core::registry::model::ModelEnv,
     }
 
     /// What the window's open found (AD-41, AD-42).
@@ -609,6 +614,7 @@ mod writing {
                         conn,
                         paths: self.paths,
                         location: self.location,
+                        model_env: officina_core::registry::model::ModelEnv::default(),
                     };
                     if let Integrity::Restored { notice, .. } = &integrity
                         && let Err(error) = writer.record_restore(notice, self.now_ms)
@@ -786,6 +792,17 @@ mod writing {
         /// The registry's files.
         pub fn paths(&self) -> &RegistryPaths {
             &self.paths
+        }
+
+        /// Records whether the triage model can be called and the `claude`
+        /// binary's stamp, as the window sees them now (AD-51, D-66).
+        pub fn set_model_env(&mut self, env: officina_core::registry::model::ModelEnv) {
+            self.model_env = env;
+        }
+
+        /// What [`Writer::set_model_env`] last recorded.
+        pub fn model_env(&self) -> &officina_core::registry::model::ModelEnv {
+            &self.model_env
         }
 
         fn record_restore(

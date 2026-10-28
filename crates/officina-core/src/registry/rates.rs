@@ -197,6 +197,9 @@ closed_enum! {
         /// The latest dry run did not score more correct verdicts than the
         /// default.
         ModelNotBetter,
+        /// The model turned itself off after the latest dry run: a newer
+        /// one must win before it is turned on again (D-69).
+        NeedsNewerDryRun,
         /// Over its recent confirmed proposals, the model was right less
         /// often than `to_resume` would have been.
         WorseThanDefault,
@@ -214,7 +217,7 @@ pub struct Gate {
     pub needed: u32,
 }
 
-/// The three gates (AD-50); story 3.11 wires the model's.
+/// The three gates (AD-50).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct Gates {
@@ -244,14 +247,22 @@ pub fn auto_archive_gate(records: &[VerdictRecord], now_ms: i64) -> Gate {
     }
 }
 
-/// The model enable gate (FR-10 as amended by amendment 8, AD-50): the
-/// latest dry run under [`MODEL_GATE_MAX_AGE_MS`] old, on at least
+/// The model enable gate (FR-10 as amended by amendment 8, AD-50, D-69):
+/// the latest dry run under [`MODEL_GATE_MAX_AGE_MS`] old, on at least
 /// [`MODEL_GATE_MIN_CASES`] cases, scoring more correct verdicts than the
-/// default.
-pub fn model_enable_gate(latest: Option<&Evaluation>, now_ms: i64) -> Gate {
+/// default, and newer than the model's last self-disable, when it turned
+/// itself off at `self_disabled_at`.
+pub fn model_enable_gate(
+    latest: Option<&Evaluation>,
+    self_disabled_at: Option<i64>,
+    now_ms: i64,
+) -> Gate {
     let cases = latest.map_or(0, |e| e.tally.cases);
     let state = match latest {
         None => GateState::NoDryRun,
+        Some(e) if self_disabled_at.is_some_and(|off| e.at_ms <= off) => {
+            GateState::NeedsNewerDryRun
+        }
         Some(e) if now_ms - e.at_ms >= MODEL_GATE_MAX_AGE_MS => GateState::DryRunTooOld,
         Some(e) if e.tally.cases < MODEL_GATE_MIN_CASES => GateState::DryRunTooSmall,
         Some(e) if e.tally.model_correct <= e.tally.default_correct => GateState::ModelNotBetter,
@@ -292,11 +303,17 @@ pub fn model_self_disable_gate(records: &[VerdictRecord], now_ms: i64) -> Gate {
     }
 }
 
-/// The three gates at `now_ms`.
-pub fn gates(records: &[VerdictRecord], latest: Option<&Evaluation>, now_ms: i64) -> Gates {
+/// The three gates at `now_ms`; `self_disabled_at` is when the model last
+/// turned itself off, if it did.
+pub fn gates(
+    records: &[VerdictRecord],
+    latest: Option<&Evaluation>,
+    self_disabled_at: Option<i64>,
+    now_ms: i64,
+) -> Gates {
     Gates {
         auto_archive: auto_archive_gate(records, now_ms),
-        model_enable: model_enable_gate(latest, now_ms),
+        model_enable: model_enable_gate(latest, self_disabled_at, now_ms),
         model_self_disable: model_self_disable_gate(records, now_ms),
     }
 }
@@ -598,7 +615,7 @@ mod tests {
                 ..Tally::default()
             },
         };
-        let state = |e: Option<&Evaluation>| model_enable_gate(e, NOW).state;
+        let state = |e: Option<&Evaluation>| model_enable_gate(e, None, NOW).state;
         assert_eq!(state(None), GateState::NoDryRun);
         assert_eq!(
             state(Some(&evaluation(NOW - MODEL_GATE_MAX_AGE_MS, 40, 30, 20))),
@@ -613,6 +630,16 @@ mod tests {
             GateState::ModelNotBetter
         );
         assert_eq!(state(Some(&evaluation(NOW, 40, 21, 20))), GateState::Holds);
+        // D-69: after a self-disable, the winning dry run must be newer.
+        let winning = evaluation(NOW - 1_000, 40, 21, 20);
+        assert_eq!(
+            model_enable_gate(Some(&winning), Some(NOW - 1_000), NOW).state,
+            GateState::NeedsNewerDryRun
+        );
+        assert_eq!(
+            model_enable_gate(Some(&winning), Some(NOW - 2_000), NOW).state,
+            GateState::Holds
+        );
 
         // Self-disable: right less often than `to_resume` would have been,
         // judged from 20 cases on.

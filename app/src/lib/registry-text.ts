@@ -146,4 +146,5 @@ export const GATE_STATE_TEXT: Record<GateState, string> = {
   dry_run_too_small: "the latest dry run ran too few cases",
   model_not_better: "the latest dry run did not beat the default",
   worse_than_default: "the model was right less often than to resume would have been",
+  needs_newer_dry_run: "the model turned itself off after the latest dry run: run a new one",
 };

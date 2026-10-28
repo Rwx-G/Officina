@@ -381,6 +381,9 @@ function triageRow(overrides: Partial<Row> = {}): Row {
     end: null,
     proposed_subject: null,
     choices: [],
+    model_pending: false,
+    model_reason: null,
+    model_call: null,
     ...overrides,
   };
 }
@@ -399,6 +402,12 @@ function registryWith(rows: Row[]): RegistryStore {
     restore_notice: null,
     model: {
       enabled: false,
+      src: null,
+      at_ms: null,
+      reason: null,
+      unavailable: null,
+      paused_at_ms: null,
+      pending: 0,
       latest_dry_run: null,
       dry_run: null,
       last_stop: null,
@@ -434,6 +443,7 @@ function registryWith(rows: Row[]): RegistryStore {
       model_gate_max_age_ms: 1,
       model_gate_min_cases: 30,
       self_disable_min_cases: 20,
+      pause_after_failed_calls: 3,
     },
   };
   const store = new RegistryStore();

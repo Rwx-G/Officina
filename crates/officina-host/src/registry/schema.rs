@@ -19,7 +19,11 @@
 /// doctor and the view can report it; `triage_call` keeps the case a call
 /// was about and the hash of its inputs, so a refused case is not queued
 /// again until its inputs change across a restart (D-87), and why a call
-/// was refused, which the view and doctor show (D-65).
+/// was refused, which the view and doctor show (D-65). Two triggers delete a
+/// session's `model_answer` row whenever its excerpts are deleted or their
+/// text changes (D-68): archive, expiry, `no_excerpts` and a newer excerpt
+/// all take the model's untrusted text with them, whichever path clears
+/// them.
 const V1: &str = "\
 CREATE TABLE event_file (
     name TEXT PRIMARY KEY,
@@ -140,6 +144,18 @@ CREATE INDEX unfiled_session_by_project ON session (project) WHERE subject_id IS
 CREATE INDEX subject_by_project_and_status ON subject (project, status);
 CREATE INDEX confirmation_by_source ON confirmation (proposed_source, confirmed_at_ms);
 CREATE INDEX confirmation_by_subject ON confirmation (subject_id);
+
+CREATE TRIGGER model_answer_leaves_with_its_excerpts AFTER DELETE ON session_excerpt
+BEGIN
+    DELETE FROM model_answer WHERE session_id = old.session_id;
+END;
+
+CREATE TRIGGER model_answer_leaves_with_changed_excerpts AFTER UPDATE ON session_excerpt
+WHEN old.prompt IS NOT new.prompt OR old.answer_head IS NOT new.answer_head
+    OR old.answer_tail IS NOT new.answer_tail
+BEGIN
+    DELETE FROM model_answer WHERE session_id = old.session_id;
+END;
 ";
 
 /// Every migration, in order: entry `i` moves version `i` to `i + 1`.

@@ -3,17 +3,45 @@ import type { CallsView } from "./CallsView";
 import type { DryRunProgress } from "./DryRunProgress";
 import type { DryRunStop } from "./DryRunStop";
 import type { Evaluation } from "./Evaluation";
+import type { GateState } from "./GateState";
+import type { Source } from "./Source";
+import type { TriageRefusal } from "./TriageRefusal";
 
 /**
- * The triage model as the Triage panel's evidence shows it (FR-10, AD-52,
- * D-67, D-92): whether it proposes, the latest dry run, the one running
- * and how the last one ended, and the calls made.
+ * The triage model as the Triage panel's evidence shows it (FR-10, AD-50,
+ * AD-52, D-67, D-69, D-81, D-92): whether it proposes, who switched it and
+ * why, whether it is paused or cannot be called, the latest dry run, the
+ * one running and how the last one ended, and the calls made.
  */
 export type ModelView = { 
 /**
- * Whether the model's answers take the default's place (FR-8).
+ * Whether the model is on (FR-8); its answers take the default's place
+ * while it is also available.
  */
-enabled: boolean, latest_dry_run: Evaluation | null, 
+enabled: boolean, 
+/**
+ * Who switched it last: the author, or `rules` when it turned itself
+ * off.
+ */
+src: Source | null, at_ms: number | null, 
+/**
+ * The gate state that turned it off, when rules did (D-69).
+ */
+reason: GateState | null, 
+/**
+ * Why it cannot be called: it cannot be turned on, and proposes
+ * nothing (FR-10 as amended).
+ */
+unavailable: TriageRefusal | null, 
+/**
+ * Since when failed calls keep it paused (D-81): nothing is queued
+ * until it is turned on again or `claude` changes.
+ */
+paused_at_ms: number | null, 
+/**
+ * Rows queued for it now.
+ */
+pending: number, latest_dry_run: Evaluation | null, 
 /**
  * The dry run running now, with its progress.
  */

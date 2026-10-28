@@ -1294,3 +1294,690 @@ mod auto_archive {
         );
     }
 }
+
+/// Story 3.11: the triage model's proposals through the window's writer
+/// (FR-10 as amended, AD-40, AD-50, AD-52, D-66, D-68, D-69, D-81, D-87):
+/// the enable gate, the queue, the pause, self-disable, and the untrusted
+/// reason kept in `model_answer` alone. No process is started: each call's
+/// result is built here, as the runner returns it.
+mod model {
+    use super::*;
+    use officina_core::registry::confirm::FileUnder;
+    use officina_core::registry::dry_run::Tally;
+    use officina_core::registry::model::{BinaryStamp, EnableRefusal, ModelEnv};
+    use officina_core::registry::rates::GateState;
+    use officina_core::registry::triage_call::{CALL_SPACING_MS, CallAnswer, CallUsage};
+    use officina_core::registry::types::{SettingKey, TriageOutcome, TriagePurpose, TriageRefusal};
+    use officina_core::registry::view::{RegistryView, TriageRow};
+    use officina_host::registry::triage::{CallResult, Triage};
+
+    const MINUTE: i64 = 60_000;
+
+    fn view(writer: &Writer, home: &Home, at: i64) -> RegistryView {
+        writer.view(None, &home.events, at).unwrap()
+    }
+
+    /// A finished dry run at `at` on 30 cases, the model `margin` cases
+    /// ahead of the default (zero: level).
+    fn dry_run(writer: &mut Writer, at: i64, margin: u32) {
+        writer
+            .record_evaluation(
+                &Tally {
+                    cases: 30,
+                    model_correct: 15 + margin,
+                    default_correct: 15,
+                    ..Tally::default()
+                },
+                at,
+            )
+            .unwrap();
+    }
+
+    /// Sessions of `CWD`, each prompted, answered and ended a day before
+    /// `NOW`, ingested: each is an unfiled row falling to the default.
+    fn finished(home: &Home, writer: &mut Writer, ids: &[&str]) {
+        let lines: Vec<String> = ids
+            .iter()
+            .enumerate()
+            .flat_map(|(i, id)| {
+                finished_session(id, NOW - DAY + 10 * i as i64, &format!("task {id}"))
+            })
+            .collect();
+        home.append(&day_file(NOW - DAY), &lines);
+        writer.ingest(&home.ctx(), NOW - DAY + MINUTE).unwrap();
+    }
+
+    /// A writer whose model is on since `NOW - 10 min`, after a winning
+    /// dry run, with `ids` finished.
+    fn enabled(ids: &[&str]) -> (Home, Writer) {
+        let home = Home::new();
+        let mut writer = home.writer(NOW - DAY);
+        finished(&home, &mut writer, ids);
+        dry_run(&mut writer, NOW - 20 * MINUTE, 5);
+        writer
+            .set_triage_model(true, NOW - 10 * MINUTE)
+            .unwrap()
+            .unwrap();
+        (home, writer)
+    }
+
+    /// The next queued call at `at`, ended as `outcome` says (with
+    /// `verdict` and `reason` on an answer); its case key, or `None` when
+    /// nothing was queued.
+    fn answer_next(
+        triage: &mut Triage,
+        writer: &mut Writer,
+        at: i64,
+        outcome: TriageOutcome,
+        verdict: ModelVerdict,
+        reason: &str,
+    ) -> Option<String> {
+        let next = triage.next_call(writer, at).unwrap()?;
+        assert_eq!(next.purpose, TriagePurpose::Proposal);
+        let result = CallResult {
+            purpose: next.purpose,
+            case_key: next.case_key.clone(),
+            input_hash: next.case.input_hash(),
+            started_at_ms: at,
+            duration_ms: 2_000,
+            outcome,
+            refusal: (outcome == TriageOutcome::Refused).then_some(TriageRefusal::WorkdirNotEmpty),
+            answer: (outcome == TriageOutcome::Answer).then(|| CallAnswer {
+                verdict,
+                reason: reason.to_owned(),
+            }),
+            usage: CallUsage::default(),
+            detail: None,
+        };
+        triage.take_result(writer, &result, at + 2_000).unwrap();
+        Some(next.case_key)
+    }
+
+    /// Ends the next queued call at `at` as `outcome`, without an answer.
+    fn fail_next(triage: &mut Triage, writer: &mut Writer, at: i64, outcome: TriageOutcome) {
+        answer_next(triage, writer, at, outcome, ModelVerdict::ToResume, "").unwrap();
+    }
+
+    /// Answers every queued row `verdict`, one call per spacing from
+    /// `NOW`; returns the time after the last.
+    fn answer_all(
+        triage: &mut Triage,
+        writer: &mut Writer,
+        verdict: ModelVerdict,
+        reason: &str,
+    ) -> i64 {
+        let mut at = NOW;
+        while answer_next(triage, writer, at, TriageOutcome::Answer, verdict, reason).is_some() {
+            at += CALL_SPACING_MS;
+        }
+        at
+    }
+
+    fn setting(writer: &Writer, key: SettingKey) -> Option<(serde_json::Value, Source)> {
+        writer
+            .settings()
+            .unwrap()
+            .into_iter()
+            .find(|row| row.key == key)
+            .map(|row| (serde_json::from_str(&row.value).unwrap(), row.src))
+    }
+
+    fn paused(writer: &Writer) -> bool {
+        setting(writer, SettingKey::TriageModelPause).is_some_and(|(v, _)| v["paused"] == true)
+    }
+
+    /// Confirms `row` as shown with `verdict`, filing an unfiled row under
+    /// a new subject named `name`.
+    fn confirm_shown(writer: &mut Writer, row: &TriageRow, verdict: Verdict, name: &str, at: i64) {
+        let answers = writer
+            .confirm_triage(
+                &[ConfirmItem {
+                    key: row.key.clone(),
+                    shown: row.proposal,
+                    verdict,
+                    routine: false,
+                    file_under: Some(FileUnder::New { name: name.into() }),
+                }],
+                at,
+            )
+            .unwrap();
+        assert!(
+            matches!(answers[0].outcome, ItemOutcome::Confirmed { .. }),
+            "{answers:?}"
+        );
+    }
+
+    /// AC 1 (AD-50, D-69): the model turns on only on a dry run under 7
+    /// days old, on 30 cases, that beat the default; turning it off always
+    /// works.
+    #[test]
+    fn enabling_the_model_requires_a_recent_winning_dry_run() {
+        let home = Home::new();
+        let mut writer = home.writer(NOW - DAY);
+        let turn_on = |writer: &mut Writer| writer.set_triage_model(true, NOW).unwrap();
+        assert_eq!(
+            turn_on(&mut writer),
+            Err(EnableRefusal::Gate(GateState::NoDryRun))
+        );
+        dry_run(&mut writer, NOW - 8 * DAY, 5);
+        assert_eq!(
+            turn_on(&mut writer),
+            Err(EnableRefusal::Gate(GateState::DryRunTooOld))
+        );
+        dry_run(&mut writer, NOW - DAY, 0);
+        assert_eq!(
+            turn_on(&mut writer),
+            Err(EnableRefusal::Gate(GateState::ModelNotBetter))
+        );
+        assert!(
+            setting(&writer, SettingKey::TriageModel).is_none(),
+            "nothing written"
+        );
+        dry_run(&mut writer, NOW - MINUTE, 1);
+        assert_eq!(turn_on(&mut writer), Ok(()));
+        assert_eq!(
+            setting(&writer, SettingKey::TriageModel),
+            Some((
+                serde_json::json!({"on": true, "reason": null}),
+                Source::Author
+            ))
+        );
+        let shown = view(&writer, &home, NOW).model;
+        assert!(shown.enabled);
+        assert_eq!(shown.src, Some(Source::Author));
+        assert_eq!(writer.set_triage_model(false, NOW + 1).unwrap(), Ok(()));
+        assert!(!view(&writer, &home, NOW + 1).model.enabled);
+    }
+
+    /// AC 1 (FR-10 as amended): while the model cannot be called, it is not
+    /// turned on, whatever the gate, and the view says why.
+    #[test]
+    fn enabling_is_refused_while_unavailable() {
+        let home = Home::new();
+        let mut writer = home.writer(NOW - DAY);
+        dry_run(&mut writer, NOW - MINUTE, 5);
+        for cause in TriageRefusal::ALL {
+            writer.set_model_env(ModelEnv {
+                unavailable: Some(*cause),
+                claude_stamp: None,
+            });
+            assert_eq!(
+                writer.set_triage_model(true, NOW).unwrap(),
+                Err(EnableRefusal::Unavailable(*cause))
+            );
+            assert_eq!(view(&writer, &home, NOW).model.unavailable, Some(*cause));
+        }
+        assert!(setting(&writer, SettingKey::TriageModel).is_none());
+        assert_eq!(writer.set_triage_model(false, NOW).unwrap(), Ok(()));
+    }
+
+    /// AC 2 (AD-52): an enabled model is sent the default rows one case per
+    /// call; the row shows "model pending", then the answer serves.
+    #[test]
+    fn a_default_row_is_pending_then_answered() {
+        let (home, mut writer) = enabled(&["s1", "s2"]);
+        let before = view(&writer, &home, NOW);
+        assert_eq!(before.model.pending, 2);
+        assert!(before.triage.iter().all(|r| r.model_pending));
+        let mut triage = Triage::default();
+        let key = answer_next(
+            &mut triage,
+            &mut writer,
+            NOW,
+            TriageOutcome::Answer,
+            ModelVerdict::Finished,
+            "Shipped with tests.",
+        )
+        .unwrap();
+        let after = view(&writer, &home, NOW + 5_000);
+        let row = after
+            .triage
+            .iter()
+            .find(|r| r.key == key)
+            .expect("the answered row");
+        assert_eq!(
+            (row.proposal.source, row.proposal.verdict, row.model_pending),
+            (ProposalSource::Model, ModelVerdict::Finished, false)
+        );
+        assert_eq!(row.model_reason.as_deref(), Some("Shipped with tests."));
+        assert_eq!(after.model.pending, 1);
+    }
+
+    /// AC 5 (D-81): three failed proposal calls in a row pause the model,
+    /// with the binary's stamp; an answer breaks the streak; while paused
+    /// nothing is queued and the view says since when.
+    #[test]
+    fn three_failed_proposal_calls_pause_the_model() {
+        let (home, mut writer) = enabled(&["s1", "s2", "s3", "s4", "s5", "s6"]);
+        let stamp = BinaryStamp {
+            path: "C:/bin/claude.exe".into(),
+            size: 1,
+            modified_ms: 1,
+        };
+        writer.set_model_env(ModelEnv {
+            unavailable: None,
+            claude_stamp: Some(stamp.clone()),
+        });
+        let mut triage = Triage::default();
+        let mut at = NOW;
+        for outcome in [
+            TriageOutcome::Failed,
+            TriageOutcome::Timeout,
+            TriageOutcome::Answer,
+            TriageOutcome::Failed,
+            TriageOutcome::Timeout,
+        ] {
+            answer_next(
+                &mut triage,
+                &mut writer,
+                at,
+                outcome,
+                ModelVerdict::ToResume,
+                "No.",
+            )
+            .unwrap();
+            at += CALL_SPACING_MS;
+            assert!(!paused(&writer), "an answer broke the streak");
+        }
+        fail_next(&mut triage, &mut writer, at, TriageOutcome::Invalid);
+        let (pause, src) = setting(&writer, SettingKey::TriageModelPause).unwrap();
+        assert_eq!(src, Source::Rules);
+        assert_eq!(pause["paused"], true);
+        assert_eq!(pause["stamp"], serde_json::to_value(&stamp).unwrap());
+        let shown = view(&writer, &home, at + CALL_SPACING_MS);
+        assert!(shown.model.paused_at_ms.is_some());
+        assert!(shown.triage.iter().all(|r| !r.model_pending));
+        assert!(
+            triage
+                .next_call(&mut writer, at + MINUTE)
+                .unwrap()
+                .is_none(),
+            "nothing is queued while paused"
+        );
+    }
+
+    /// AC 5 (D-81): turning the model on again lifts the pause, and the
+    /// cases that failed are sent again.
+    #[test]
+    fn re_enabling_lifts_the_pause() {
+        let (home, mut writer) = enabled(&["s1", "s2", "s3"]);
+        let mut triage = Triage::default();
+        let mut at = NOW;
+        for _ in 0..3 {
+            fail_next(&mut triage, &mut writer, at, TriageOutcome::Timeout);
+            at += CALL_SPACING_MS;
+        }
+        assert!(paused(&writer));
+        assert_eq!(view(&writer, &home, at).model.pending, 0);
+        writer.set_triage_model(true, at).unwrap().unwrap();
+        assert!(!paused(&writer));
+        assert_eq!(
+            setting(&writer, SettingKey::TriageModelPause).unwrap().1,
+            Source::Author
+        );
+        let shown = view(&writer, &home, at + 1);
+        assert_eq!(shown.model.paused_at_ms, None);
+        assert_eq!(shown.model.pending, 3, "the failed cases are queued again");
+        assert!(
+            answer_next(
+                &mut triage,
+                &mut writer,
+                at + CALL_SPACING_MS,
+                TriageOutcome::Answer,
+                ModelVerdict::Finished,
+                "Done."
+            )
+            .is_some()
+        );
+        assert!(!paused(&writer), "the streak counts from the lift");
+    }
+
+    /// AC 5 (D-66): a different `claude` binary at the next check lifts the
+    /// pause, source `rules`.
+    #[test]
+    fn a_binary_change_lifts_the_pause() {
+        let (_home, mut writer) = enabled(&["s1", "s2", "s3", "s4"]);
+        let stamp = |size| BinaryStamp {
+            path: "C:/bin/claude.exe".into(),
+            size,
+            modified_ms: 1,
+        };
+        writer.set_model_env(ModelEnv {
+            unavailable: None,
+            claude_stamp: Some(stamp(1)),
+        });
+        let mut triage = Triage::default();
+        let mut at = NOW;
+        for _ in 0..3 {
+            fail_next(&mut triage, &mut writer, at, TriageOutcome::Failed);
+            at += CALL_SPACING_MS;
+        }
+        assert!(paused(&writer));
+        assert!(
+            triage.next_call(&mut writer, at).unwrap().is_none(),
+            "the same binary"
+        );
+        writer.set_model_env(ModelEnv {
+            unavailable: None,
+            claude_stamp: Some(stamp(2)),
+        });
+        assert!(
+            triage
+                .next_call(&mut writer, at + CALL_SPACING_MS)
+                .unwrap()
+                .is_some()
+        );
+        assert!(!paused(&writer));
+        assert_eq!(
+            setting(&writer, SettingKey::TriageModelPause).unwrap().1,
+            Source::Rules
+        );
+    }
+
+    /// AC 5 (D-65, D-81): a refusal neither counts toward the pause nor
+    /// breaks the streak, and a dry run's failures never count.
+    #[test]
+    fn refusals_and_dry_run_failures_do_not_count_toward_the_pause() {
+        let (_home, mut writer) = enabled(&["s1", "s2", "s3", "s4"]);
+        let mut triage = Triage::default();
+        let mut at = NOW;
+        for outcome in [
+            TriageOutcome::Failed,
+            TriageOutcome::Refused,
+            TriageOutcome::Timeout,
+        ] {
+            fail_next(&mut triage, &mut writer, at, outcome);
+            at += CALL_SPACING_MS;
+        }
+        for _ in 0..3 {
+            writer
+                .record_call(&CallResult {
+                    purpose: TriagePurpose::DryRun,
+                    case_key: "confirmation:1".into(),
+                    input_hash: "h".into(),
+                    started_at_ms: at,
+                    duration_ms: 1,
+                    outcome: TriageOutcome::Invalid,
+                    refusal: None,
+                    answer: None,
+                    usage: CallUsage::default(),
+                    detail: None,
+                })
+                .unwrap();
+            at += 1;
+        }
+        assert!(!paused(&writer), "two failed proposal calls only");
+        at += CALL_SPACING_MS;
+        fail_next(&mut triage, &mut writer, at, TriageOutcome::Invalid);
+        assert!(paused(&writer), "the refusal did not break the streak");
+    }
+
+    fn read_only(home: &Home) -> rusqlite::Connection {
+        rusqlite::Connection::open_with_flags(
+            home.paths().database(),
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )
+        .unwrap()
+    }
+
+    /// Every text value in every table of the registry at `home`, with its
+    /// table.
+    fn every_text(home: &Home) -> Vec<(String, String)> {
+        let conn = read_only(home);
+        let tables: Vec<String> = conn
+            .prepare("SELECT name FROM sqlite_master WHERE type = 'table'")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        let mut found = Vec::new();
+        for table in tables {
+            let mut statement = conn.prepare(&format!("SELECT * FROM \"{table}\"")).unwrap();
+            let columns = statement.column_count();
+            let mut rows = statement.query([]).unwrap();
+            while let Some(row) = rows.next().unwrap() {
+                for i in 0..columns {
+                    if let rusqlite::types::ValueRef::Text(text) = row.get_ref(i).unwrap() {
+                        found.push((table.clone(), String::from_utf8_lossy(text).into_owned()));
+                    }
+                }
+            }
+        }
+        found
+    }
+
+    /// AC 3 (AD-40, P-11, D-68): the model's reason lives in `model_answer`
+    /// alone; a confirmation of its proposal stores the model code and the
+    /// call id, never the text, and the answer goes with the row.
+    #[test]
+    fn model_text_never_leaves_model_answer() {
+        const MARKER: &str = "MARKER-3f1c model reason";
+        let (home, mut writer) = enabled(&["s1"]);
+        let mut triage = Triage::default();
+        answer_next(
+            &mut triage,
+            &mut writer,
+            NOW,
+            TriageOutcome::Answer,
+            ModelVerdict::Finished,
+            MARKER,
+        )
+        .unwrap();
+        let holders: Vec<String> = every_text(&home)
+            .into_iter()
+            .filter(|(_, text)| text.contains(MARKER))
+            .map(|(table, _)| table)
+            .collect();
+        assert_eq!(holders, ["model_answer"], "positive control");
+        let row = view(&writer, &home, NOW + 5_000).triage.remove(0);
+        assert_eq!(row.model_reason.as_deref(), Some(MARKER));
+        confirm_shown(&mut writer, &row, Verdict::Finished, "export", NOW + 6_000);
+        assert!(
+            every_text(&home)
+                .iter()
+                .all(|(_, text)| !text.contains(MARKER)),
+            "the reason left with its row"
+        );
+        let (source, reason, call_id): (String, String, Option<i64>) = read_only(&home)
+            .query_row(
+                "SELECT proposed_source, proposed_reason, call_id FROM confirmation",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!((source.as_str(), reason.as_str()), ("model", "model"));
+        assert!(call_id.is_some());
+        assert_eq!(call_id, row.proposal.call_id);
+    }
+
+    fn answer_count(home: &Home, session: &str) -> i64 {
+        read_only(home)
+            .query_row(
+                "SELECT count(*) FROM model_answer WHERE session_id = ?1",
+                [session],
+                |r| r.get(0),
+            )
+            .unwrap()
+    }
+
+    /// AC 3 (D-68, D-85): an answer is deleted when its row is confirmed,
+    /// when its subject is archived, when its excerpts expire, and when
+    /// `no_excerpts` clears them.
+    #[test]
+    fn confirmation_archive_ttl_and_no_excerpts_delete_model_answers() {
+        let ids = ["c", "a", "t"];
+        let (home, mut writer) = enabled(&ids);
+        let at = answer_all(
+            &mut Triage::default(),
+            &mut writer,
+            ModelVerdict::ToResume,
+            "Not yet.",
+        );
+        for id in ids {
+            assert_eq!(answer_count(&home, id), 1, "{id} answered");
+        }
+        // Confirmed `to_resume`, which clears no excerpt: its answer goes.
+        let row = view(&writer, &home, at)
+            .triage
+            .into_iter()
+            .find(|r| r.session_id.as_deref() == Some("c"))
+            .unwrap();
+        confirm_shown(&mut writer, &row, Verdict::ToResume, "c", at);
+        assert_eq!(answer_count(&home, "c"), 0, "confirmed");
+        // Archived with its subject.
+        let subject = writer
+            .create_subject("a", SubjectOrigin::Sessions(vec!["a".into()]), at)
+            .unwrap();
+        writer.archive_subject(subject, false, at).unwrap();
+        assert_eq!(answer_count(&home, "a"), 0, "archived");
+        assert_eq!(answer_count(&home, "t"), 1);
+        // Expired: its excerpts are a day old at `NOW`.
+        writer
+            .hourly_pass(&home.ctx(), NOW - DAY + EXCERPT_TTL_MS + 3_600_000)
+            .unwrap();
+        assert_eq!(answer_count(&home, "t"), 0, "expired");
+        // `no_excerpts`: a fresh answer, then the pass with it on.
+        let (home, mut writer) = enabled(&["n"]);
+        answer_all(
+            &mut Triage::default(),
+            &mut writer,
+            ModelVerdict::Finished,
+            "Done.",
+        );
+        assert_eq!(answer_count(&home, "n"), 1);
+        let ctx = IngestContext {
+            no_excerpts: true,
+            ..home.ctx()
+        };
+        writer.hourly_pass(&ctx, NOW + MINUTE).unwrap();
+        assert_eq!(answer_count(&home, "n"), 0, "no_excerpts");
+    }
+
+    /// AC 6 (FR-10 as amended, AD-50, D-69): once 20 confirmed model
+    /// proposals show it right less often than the default, the model
+    /// turns itself off, source `rules`, with its reason; turning it on
+    /// again needs a newer winning dry run.
+    #[test]
+    fn model_disables_itself_when_worse_than_the_default() {
+        let ids: Vec<String> = (0..20).map(|i| format!("m{i:02}")).collect();
+        let names: Vec<&str> = ids.iter().map(String::as_str).collect();
+        let (home, mut writer) = enabled(&names);
+        let at = answer_all(
+            &mut Triage::default(),
+            &mut writer,
+            ModelVerdict::Finished,
+            "Done.",
+        );
+        let rows = view(&writer, &home, at).triage;
+        assert_eq!(rows.len(), 20);
+        for (i, row) in rows.iter().enumerate() {
+            assert_eq!(row.proposal.source, ProposalSource::Model);
+            assert!(
+                view(&writer, &home, at).model.enabled,
+                "still on after {i} flips"
+            );
+            confirm_shown(
+                &mut writer,
+                row,
+                Verdict::ToResume,
+                &format!("subject {i}"),
+                at + i as i64,
+            );
+        }
+        let (value, src) = setting(&writer, SettingKey::TriageModel).unwrap();
+        assert_eq!(src, Source::Rules);
+        assert_eq!(
+            value,
+            serde_json::json!({"on": false, "reason": "worse_than_default"})
+        );
+        let shown = view(&writer, &home, at + 100).model;
+        assert_eq!(
+            (shown.enabled, shown.reason),
+            (false, Some(GateState::WorseThanDefault))
+        );
+        assert_eq!(
+            writer.set_triage_model(true, at + 200).unwrap(),
+            Err(EnableRefusal::Gate(GateState::NeedsNewerDryRun))
+        );
+        dry_run(&mut writer, at + 300, 3);
+        assert_eq!(writer.set_triage_model(true, at + 400).unwrap(), Ok(()));
+    }
+
+    /// AC 6 (FR-10 as amended): with `no_excerpts` the model is
+    /// unavailable: its answers serve no more, nothing is queued, and it
+    /// cannot be turned on.
+    #[test]
+    fn no_excerpts_makes_the_model_unavailable() {
+        let (home, mut writer) = enabled(&["s1", "s2"]);
+        let mut triage = Triage::default();
+        answer_next(
+            &mut triage,
+            &mut writer,
+            NOW,
+            TriageOutcome::Answer,
+            ModelVerdict::Finished,
+            "Done.",
+        )
+        .unwrap();
+        writer.set_model_env(ModelEnv {
+            unavailable: Some(TriageRefusal::NoExcerpts),
+            claude_stamp: None,
+        });
+        let shown = view(&writer, &home, NOW + MINUTE);
+        assert_eq!(shown.model.unavailable, Some(TriageRefusal::NoExcerpts));
+        assert!(
+            shown
+                .triage
+                .iter()
+                .all(|r| r.proposal.source != ProposalSource::Model && !r.model_pending)
+        );
+        assert!(
+            triage
+                .next_call(&mut writer, NOW + MINUTE)
+                .unwrap()
+                .is_none()
+        );
+        writer
+            .set_triage_model(false, NOW + MINUTE)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            writer.set_triage_model(true, NOW + 2 * MINUTE).unwrap(),
+            Err(EnableRefusal::Unavailable(TriageRefusal::NoExcerpts))
+        );
+    }
+
+    /// AD-52, D-68: an answer that comes back after the author confirmed
+    /// its row is recorded as a call and never stored.
+    #[test]
+    fn an_answer_for_a_row_confirmed_meanwhile_is_dropped() {
+        let (home, mut writer) = enabled(&["s1"]);
+        let mut triage = Triage::default();
+        let next = triage.next_call(&mut writer, NOW).unwrap().unwrap();
+        let row = view(&writer, &home, NOW).triage.remove(0);
+        confirm_shown(&mut writer, &row, Verdict::ToResume, "x", NOW + 1_000);
+        let late = CallResult {
+            purpose: TriagePurpose::Proposal,
+            case_key: next.case_key.clone(),
+            input_hash: next.case.input_hash(),
+            started_at_ms: NOW,
+            duration_ms: 3_000,
+            outcome: TriageOutcome::Answer,
+            refusal: None,
+            answer: Some(CallAnswer {
+                verdict: ModelVerdict::Finished,
+                reason: "Done.".into(),
+            }),
+            usage: CallUsage::default(),
+            detail: None,
+        };
+        triage.take_result(&mut writer, &late, NOW + 3_000).unwrap();
+        assert_eq!(answer_count(&home, "s1"), 0);
+        assert_eq!(
+            writer.triage_calls_since(0).unwrap().len(),
+            1,
+            "the call is counted"
+        );
+    }
+}

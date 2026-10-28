@@ -1,9 +1,9 @@
-//! The triage call on the host (AD-51, AD-52, D-64, D-65, D-67, D-86,
+//! The triage call on the host (AD-51, AD-52, D-64 to D-68, D-81, D-86,
 //! D-87, D-97): the refusals checked before anything starts, the contained
 //! `claude -p` child core describes, the `triage` worker thread that runs
-//! one call at a time, and the dry run the collector drives from the
-//! registry. Compiled only with the `window-authority` feature: only the
-//! window spends model calls.
+//! one call at a time, the dry run and the proposal queue the collector
+//! drives from the registry, and the pause. Compiled only with the
+//! `window-authority` feature: only the window spends model calls.
 
 use std::collections::VecDeque;
 use std::hash::{BuildHasher, Hasher};
@@ -18,17 +18,21 @@ use officina_core::registry::dry_run::{
     DryRunCase, DryRunProgress, DryRunState, DryRunStop, Tally, dry_run_cases,
 };
 use officina_core::registry::ingestion::TRIAGE_DIR;
+use officina_core::registry::model::{
+    BinaryStamp, ModelPause, answer_still_wanted, case_key, may_send, pause_due, queue,
+};
 use officina_core::registry::triage_call::{
     Budget, CALL_TIMEOUT_MS, CallAnswer, CallRecord, CallUsage, ModelOutputError, STDOUT_CAP_BYTES,
-    TriageCase, WORKDIR_NAME, argv, budget, prompt, queue_again, read_output, refusal_for_binary,
-    triage_env,
+    TriageCase, WORKDIR_NAME, argv, budget, prompt, read_output, refusal_for_binary, triage_env,
 };
+use officina_core::registry::types::{SettingKey, Source};
 use officina_core::registry::types::{TriageOutcome, TriagePurpose, TriageRefusal};
+use officina_core::registry::verdict::{VerdictInput, rows};
 use rusqlite::TransactionBehavior;
 
 use super::read;
 use super::store::Writer;
-use super::write::RegistryError;
+use super::write::{RegistryError, write_setting};
 use crate::process::{Waited, hide_console, wait_until};
 
 /// How long the output pipes may stay open once the child exited and its
@@ -139,6 +143,23 @@ pub fn refusal(job: &TriageJob) -> Option<TriageRefusal> {
     let _ = std::fs::create_dir_all(&dir);
     let occupied = std::fs::read_dir(&dir).is_ok_and(|mut entries| entries.next().is_some());
     occupied.then_some(TriageRefusal::WorkdirNotEmpty)
+}
+
+/// The `claude` binary's stamp (D-66): its path, size and modification
+/// time; `None` when it cannot be read.
+pub fn binary_stamp(claude: &Path) -> Option<BinaryStamp> {
+    let meta = std::fs::metadata(claude).ok()?;
+    let modified_ms = meta
+        .modified()
+        .ok()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()
+        .and_then(|d| i64::try_from(d.as_millis()).ok())?;
+    Some(BinaryStamp {
+        path: claude.to_string_lossy().into_owned(),
+        size: meta.len(),
+        modified_ms,
+    })
 }
 
 /// Sixteen hex digits from std's randomly keyed hasher (AD-51): no
@@ -525,14 +546,15 @@ impl Triage {
     /// The next call to make at `now_ms`, if one may start (AD-52): none
     /// while a call is out, while the last call is too recent, or with
     /// nothing queued; a spent budget ends the dry run and records what
-    /// ran (D-67).
+    /// ran (D-67). A dry run the author asked for goes first; otherwise the
+    /// next row queued for the model (story 3.11).
     pub fn next_call(
         &mut self,
         writer: &mut Writer,
         now_ms: i64,
     ) -> Result<Option<NextCall>, RegistryError> {
         let Some(run) = &mut self.dry_run else {
-            return Ok(None);
+            return writer.next_proposal(now_ms);
         };
         if run.out.is_some() {
             return Ok(None);
@@ -578,6 +600,9 @@ impl Triage {
         result: &CallResult,
         now_ms: i64,
     ) -> Result<(), RegistryError> {
+        if result.purpose == TriagePurpose::Proposal {
+            return writer.record_proposal(result, now_ms);
+        }
         writer.record_call(result)?;
         let Some(run) = &mut self.dry_run else {
             return Ok(());
@@ -623,23 +648,7 @@ impl Writer {
         let tx = self
             .conn
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        tx.prepare_cached(
-            "INSERT INTO triage_call (purpose, case_key, input_hash, started_at_ms, duration_ms,
-                 outcome, refusal, input_tokens, output_tokens, cost_microusd)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
-        )?
-        .execute(rusqlite::params![
-            result.purpose.code(),
-            result.case_key,
-            result.input_hash,
-            result.started_at_ms,
-            result.duration_ms,
-            result.outcome.code(),
-            result.refusal.map(TriageRefusal::code),
-            result.usage.input_tokens,
-            result.usage.output_tokens,
-            result.usage.cost_microusd
-        ])?;
+        insert_call(&tx, result)?;
         let id = tx.last_insert_rowid();
         tx.commit()?;
         Ok(id)
@@ -681,14 +690,166 @@ impl Writer {
         Ok(read::triage_calls_since(&self.conn, from_ms)?)
     }
 
-    /// True when `case` may be queued under `case_key` (D-87): its last
-    /// call was not refused on the same inputs.
+    /// True when `case` may be queued under `case_key` (D-81, D-87): its
+    /// last call was not refused, nor answered, on the same inputs, and
+    /// did not fail on them since the model was last turned on or lifted.
     pub fn may_queue(&self, case_key: &str, case: &TriageCase) -> Result<bool, RegistryError> {
         let last = read::last_call_for(&self.conn, case_key)?;
-        Ok(queue_again(
-            last.as_ref()
-                .map(|(outcome, hash)| (*outcome, hash.as_deref())),
-            &case.input_hash(),
-        ))
+        let since = read::model_facts(&self.conn, None)?.since_ms();
+        Ok(may_send(last.as_ref(), &case.input_hash(), since))
     }
+
+    /// Lifts the pause when the `claude` binary changed since it paused
+    /// (D-66), source `rules`; true when it did.
+    fn lift_pause_on_a_new_binary(&mut self, now_ms: i64) -> Result<bool, RegistryError> {
+        let facts = read::model_facts(&self.conn, None)?;
+        let Some(pause) = facts.pause.filter(|p| p.value.paused) else {
+            return Ok(false);
+        };
+        let current = self.model_env.claude_stamp.clone();
+        if current.is_none() || pause.value.stamp == current {
+            return Ok(false);
+        }
+        let lifted = serde_json::to_string(&ModelPause {
+            paused: false,
+            stamp: pause.value.stamp,
+        })
+        .unwrap_or_default();
+        write_setting(
+            &self.conn,
+            SettingKey::TriageModelPause,
+            &lifted,
+            Source::Rules,
+            now_ms,
+        )?;
+        Ok(true)
+    }
+
+    /// The next row queued for the model at `now_ms`, when one may be sent
+    /// (AD-52, D-81, D-87): the model on, available and not paused (a pause
+    /// lifted first when `claude` changed), the budget open, and a row
+    /// falling to the default whose case was not answered, refused, or
+    /// failed since the last enable on the same inputs. One case per call.
+    pub fn next_proposal(&mut self, now_ms: i64) -> Result<Option<NextCall>, RegistryError> {
+        self.lift_pause_on_a_new_binary(now_ms)?;
+        let facts = read::model_facts(&self.conn, self.model_env.unavailable)?;
+        if !facts.queues() || self.budget(now_ms)? != Budget::Open {
+            return Ok(None);
+        }
+        let subjects = read::subjects(&self.conn)?;
+        let sessions = read::session_records(&self.conn)?;
+        let confirmations = read::confirmations(&self.conn)?;
+        let excerpts = read::excerpts(&self.conn)?;
+        let model = facts.input(&sessions, &excerpts);
+        let found = rows(&VerdictInput {
+            subjects: &subjects,
+            sessions: &sessions,
+            confirmations: &confirmations,
+            model: &model,
+        });
+        Ok(queue(&found, &facts, &sessions, &excerpts)
+            .into_iter()
+            .next()
+            .map(|queued| NextCall {
+                purpose: TriagePurpose::Proposal,
+                case_key: queued.case_key,
+                case: queued.case,
+            }))
+    }
+
+    /// Records a proposal call's result at `now_ms` in one transaction
+    /// (AD-52, D-65, D-68, D-81): its `triage_call` row; its answer in
+    /// `model_answer` only while a row still offers the default's place for
+    /// that session on the very case sent (an answer for a row confirmed,
+    /// settled or changed meanwhile is dropped); then the pause, when three
+    /// proposal calls in a row failed since the model was last turned on or
+    /// lifted, with the binary's stamp.
+    pub fn record_proposal(
+        &mut self,
+        result: &CallResult,
+        now_ms: i64,
+    ) -> Result<(), RegistryError> {
+        let unavailable = self.model_env.unavailable;
+        let stamp = self.model_env.claude_stamp.clone();
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        insert_call(&tx, result)?;
+        let call_id = tx.last_insert_rowid();
+        let session_id = result.case_key.strip_prefix("session:");
+        if let (Some(answer), Some(session_id)) = (&result.answer, session_id)
+            && result.outcome == TriageOutcome::Answer
+            && case_key(session_id) == result.case_key
+        {
+            let subjects = read::subjects(&tx)?;
+            let sessions = read::session_records(&tx)?;
+            let confirmations = read::confirmations(&tx)?;
+            let excerpts = read::excerpts(&tx)?;
+            let facts = read::model_facts(&tx, unavailable)?;
+            let model = facts.input(&sessions, &excerpts);
+            let found = rows(&VerdictInput {
+                subjects: &subjects,
+                sessions: &sessions,
+                confirmations: &confirmations,
+                model: &model,
+            });
+            if facts.serves()
+                && answer_still_wanted(&found, session_id, &result.input_hash, &sessions, &excerpts)
+            {
+                tx.prepare_cached(
+                    "INSERT INTO model_answer (session_id, verdict, reason, call_id, at_ms)
+                     VALUES (?1, ?2, ?3, ?4, ?5)
+                     ON CONFLICT (session_id) DO UPDATE SET verdict = excluded.verdict,
+                         reason = excluded.reason, call_id = excluded.call_id, at_ms = excluded.at_ms",
+                )?
+                .execute(rusqlite::params![
+                    session_id,
+                    answer.verdict.code(),
+                    answer.reason,
+                    call_id,
+                    now_ms
+                ])?;
+            }
+        }
+        let facts = read::model_facts(&tx, unavailable)?;
+        let since = facts.since_ms();
+        if !facts.paused() && pause_due(&read::triage_calls_since(&tx, since)?, since) {
+            let paused = serde_json::to_string(&ModelPause {
+                paused: true,
+                stamp,
+            })
+            .unwrap_or_default();
+            write_setting(
+                &tx,
+                SettingKey::TriageModelPause,
+                &paused,
+                Source::Rules,
+                now_ms,
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+}
+
+/// Inserts one call's `triage_call` row.
+fn insert_call(conn: &rusqlite::Connection, result: &CallResult) -> rusqlite::Result<()> {
+    conn.prepare_cached(
+        "INSERT INTO triage_call (purpose, case_key, input_hash, started_at_ms, duration_ms,
+             outcome, refusal, input_tokens, output_tokens, cost_microusd)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+    )?
+    .execute(rusqlite::params![
+        result.purpose.code(),
+        result.case_key,
+        result.input_hash,
+        result.started_at_ms,
+        result.duration_ms,
+        result.outcome.code(),
+        result.refusal.map(TriageRefusal::code),
+        result.usage.input_tokens,
+        result.usage.output_tokens,
+        result.usage.cost_microusd
+    ])?;
+    Ok(())
 }

@@ -2,6 +2,7 @@
 //! D-97): `board --json` fills its cards' subjects, `subjects --json` prints
 //! the Subjects view, with the window open or closed. Neither writes.
 
+use officina_core::registry::model::unavailable;
 use officina_core::registry::types::{RegistryReport, RegistryState};
 use officina_core::registry::view::{RegistryView, unread_view};
 
@@ -47,7 +48,11 @@ pub fn subjects_view(collector: &mut Collector, now_ms: i64) -> (RegistryView, b
     match &opened {
         Ok(reader) if report.state == RegistryState::Ready => {
             let events = collector.paths().events_dir();
-            match reader.view(report.clone(), Some(&board), &events, now_ms) {
+            let claude = collector
+                .claude()
+                .map(|path| path.to_string_lossy().into_owned());
+            let model = unavailable(claude.as_deref(), collector.no_excerpts());
+            match reader.view(report.clone(), Some(&board), &events, model, now_ms) {
                 Ok(view) => (view, true),
                 Err(error) => (
                     unread_view(

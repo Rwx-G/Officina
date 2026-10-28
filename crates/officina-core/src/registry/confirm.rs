@@ -866,8 +866,8 @@ mod tests {
     }
 
     /// AD-49, D-63: the author decides on what was shown; a proposal that
-    /// moved since, a call id included, is refused, and so is a row that
-    /// no longer needs a verdict.
+    /// moved since is refused, and so is a row that no longer needs a
+    /// verdict.
     #[test]
     fn changed_proposal_is_refused() {
         let subjects = [subject(1, "rollout", SubjectStatus::Active)];
@@ -900,7 +900,17 @@ mod tests {
             ),
             refused(ConfirmRefusal::RowGone)
         );
+    }
 
+    /// Story 3.11 AC 4 (D-63, D-88): an item answering a model proposal
+    /// carries the call that answered; a newer answer for the same row
+    /// makes it refused as changed, and the call id the author saw is the
+    /// one the confirmation copies.
+    #[test]
+    fn model_item_is_refused_when_the_answer_changed() {
+        let subjects = [subject(1, "rollout", SubjectStatus::Active)];
+        let sessions = [session("a", Some(1), 100, Some(200))];
+        let refused = |refusal| Err(ItemOutcome::Refused { refusal });
         let answered = ModelInput {
             enabled: true,
             answers: [(

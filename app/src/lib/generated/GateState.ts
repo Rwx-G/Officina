@@ -3,4 +3,4 @@
 /**
  * Where a gate stands, and why (AD-50, D-69).
  */
-export type GateState = "holds" | "not_enough_cases" | "too_many_flips" | "no_dry_run" | "dry_run_too_old" | "dry_run_too_small" | "model_not_better" | "worse_than_default";
+export type GateState = "holds" | "not_enough_cases" | "too_many_flips" | "no_dry_run" | "dry_run_too_old" | "dry_run_too_small" | "model_not_better" | "needs_newer_dry_run" | "worse_than_default";

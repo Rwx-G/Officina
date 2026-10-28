@@ -24,6 +24,10 @@ use officina_core::registry::fold::{
     pivot, replaces,
 };
 use officina_core::registry::ingestion::{ExcerptObservation, excerpt_observation};
+use officina_core::registry::model::{
+    LastCall, ModelFacts, ModelPause, ModelSetting, RowModel, StoredAnswer, case_key, case_of,
+    row_model,
+};
 use officina_core::registry::proposal::ModelInput;
 use officina_core::registry::proposal::Proposal;
 use officina_core::registry::rates::{GateState, SourceRate, VerdictRecord, gates, rates};
@@ -34,7 +38,8 @@ use officina_core::registry::triage_call::{
 use officina_core::registry::types::{
     AuthorRefusal, ConfirmRefusal, ConfirmationRecord, Ending, ExcerptRecord, FactRow, FactValue,
     ModelVerdict, NotNeeded, ProposalSource, ReasonCode, RowKind, SessionFact, SessionRecord,
-    SessionRow, Source, Sourced, SubjectRecord, SubjectStatus, Verdict,
+    SessionRow, Source, Sourced, SubjectRecord, SubjectStatus, TriageOutcome, TriageRefusal,
+    Verdict,
 };
 use officina_core::registry::verdict::{VerdictInput, rows};
 use serde::Deserialize;
@@ -65,6 +70,9 @@ struct RatesCase {
     now_ms: i64,
     confirmations: Vec<RatedConfirmation>,
     latest_dry_run: Option<DryRunSummary>,
+    /// When the model last turned itself off (D-69).
+    #[serde(default)]
+    self_disabled_at: Option<i64>,
     expect: RatesExpect,
 }
 
@@ -152,16 +160,65 @@ struct OutputExpect {
     #[serde(default)]
     usage: Option<CallUsage>,
 }
-/// A case of the `triage` section: state in, rows out (AD-49, D-76).
+/// A case of the `triage` section: state in, rows out (AD-49, D-76, and
+/// AD-52 for the model's part).
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RowsCase {
     name: String,
-    /// The triage model's part, disabled when absent.
+    /// The triage model, off when absent.
     #[serde(default)]
-    model: ModelInput,
+    model: ModelCase,
     steps: Vec<Step>,
     expect: Vec<ExpectedRow>,
+}
+
+/// The triage model as a `triage` case writes it (AD-52, D-81, D-87): on
+/// since `on_at`, paused, unavailable; the stored answers and the last
+/// proposal call by session, each on the session's current case unless
+/// `stale`.
+#[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+struct ModelCase {
+    #[serde(default)]
+    on: bool,
+    #[serde(default)]
+    on_at: i64,
+    #[serde(default)]
+    paused: bool,
+    #[serde(default)]
+    unavailable: Option<TriageRefusal>,
+    #[serde(default)]
+    answers: BTreeMap<String, AnswerCase>,
+    #[serde(default)]
+    calls: BTreeMap<String, CallCase>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AnswerCase {
+    verdict: ModelVerdict,
+    call_id: i64,
+    #[serde(default)]
+    stale: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CallCase {
+    outcome: TriageOutcome,
+    at: i64,
+    #[serde(default)]
+    stale: bool,
+}
+
+/// What a row shows of the model, beside its proposal.
+#[derive(Deserialize, Debug, PartialEq, Clone, Copy)]
+#[serde(rename_all = "snake_case")]
+enum ExpectedModel {
+    Pending,
+    Answered,
+    NoAnswer(TriageOutcome),
 }
 
 /// A row as the `triage` section writes it: the proposal as verdict,
@@ -180,6 +237,9 @@ struct ExpectedRow {
     verdict: Option<Verdict>,
     proposed_subject: Option<i64>,
     choices: Vec<i64>,
+    /// What the row shows of the model; nothing when absent.
+    #[serde(default)]
+    model: Option<ExpectedModel>,
 }
 
 #[derive(Deserialize)]
@@ -748,18 +808,103 @@ impl Registry {
     }
 }
 
+/// The model's facts a `triage` case describes, its hashes taken from the
+/// registry's sessions as they stand.
+fn model_facts(
+    case: &ModelCase,
+    sessions: &[SessionRecord],
+    excerpts: &[ExcerptRecord],
+) -> ModelFacts {
+    let hash = |session: &str, stale: bool| {
+        if stale {
+            return Some("a case that changed since".to_owned());
+        }
+        let record = sessions.iter().find(|s| s.session_id == session)?;
+        let excerpt = excerpts.iter().find(|e| e.session_id == session);
+        case_of(record, excerpt).map(|c| c.input_hash())
+    };
+    let mut last_calls: BTreeMap<String, LastCall> = case
+        .answers
+        .iter()
+        .map(|(session, answer)| {
+            (
+                case_key(session),
+                LastCall {
+                    outcome: TriageOutcome::Answer,
+                    refusal: None,
+                    input_hash: hash(session, answer.stale),
+                    started_at_ms: case.on_at,
+                },
+            )
+        })
+        .collect();
+    for (session, call) in &case.calls {
+        last_calls.insert(
+            case_key(session),
+            LastCall {
+                outcome: call.outcome,
+                refusal: (call.outcome == TriageOutcome::Refused)
+                    .then_some(TriageRefusal::WorkdirNotEmpty),
+                input_hash: hash(session, call.stale),
+                started_at_ms: call.at,
+            },
+        );
+    }
+    ModelFacts {
+        setting: case.on.then_some(Sourced {
+            value: ModelSetting {
+                on: true,
+                reason: None,
+            },
+            src: Source::Author,
+            at_ms: case.on_at,
+        }),
+        pause: case.paused.then_some(Sourced {
+            value: ModelPause {
+                paused: true,
+                stamp: None,
+            },
+            src: Source::Rules,
+            at_ms: case.on_at,
+        }),
+        unavailable: case.unavailable,
+        answers: case
+            .answers
+            .iter()
+            .map(|(session, answer)| StoredAnswer {
+                session_id: session.clone(),
+                verdict: answer.verdict,
+                reason: format!("the model's reason for {session}"),
+                call_id: Some(answer.call_id),
+                input_hash: hash(session, answer.stale),
+                at_ms: case.on_at,
+            })
+            .collect(),
+        last_calls,
+    }
+}
+
 /// The rows that need a verdict, in the `triage` section's terms.
-fn observed_rows(registry: &Registry, model: &ModelInput) -> Vec<ExpectedRow> {
+fn observed_rows(registry: &Registry, case: &ModelCase) -> Vec<ExpectedRow> {
     let sessions: Vec<SessionRecord> = registry.records().into_values().collect();
+    let excerpts: Vec<ExcerptRecord> = registry.excerpts.values().cloned().collect();
     let confirmations = registry.confirmation_records();
+    let facts = model_facts(case, &sessions, &excerpts);
+    let model = facts.input(&sessions, &excerpts);
     rows(&VerdictInput {
         subjects: &registry.subjects,
         sessions: &sessions,
         confirmations: &confirmations,
-        model,
+        model: &model,
     })
     .into_iter()
     .map(|row| ExpectedRow {
+        model: match row_model(&row, &facts, &sessions, &excerpts) {
+            RowModel::None => None,
+            RowModel::Pending => Some(ExpectedModel::Pending),
+            RowModel::Answered { .. } => Some(ExpectedModel::Answered),
+            RowModel::NoAnswer { outcome, .. } => Some(ExpectedModel::NoAnswer(outcome)),
+        },
         kind: row.kind,
         key: row.key,
         subject: row.subject,
@@ -968,7 +1113,12 @@ fn replay_rates(case: &RatesCase) {
         "rates case: {}",
         case.name
     );
-    let found = gates(&records, latest.as_ref(), case.now_ms);
+    let found = gates(
+        &records,
+        latest.as_ref(),
+        case.self_disabled_at,
+        case.now_ms,
+    );
     assert_eq!(
         GatesExpect {
             auto_archive: found.auto_archive.state,
@@ -1187,6 +1337,28 @@ fn every_value_has_a_case() {
     let sources: HashSet<ProposalSource> = expected().map(|r| r.proposal.1).collect();
     let proposed: HashSet<ModelVerdict> = expected().map(|r| r.proposal.0).collect();
     let verdicts: HashSet<Verdict> = expected().filter_map(|r| r.verdict).collect();
+    // Every provenance a case expects (D-45): the facts' sources, who filed
+    // each session and set each subject's status, and a stored model
+    // answer as a `model` row.
+    let mut provenances: HashSet<Source> = set
+        .fold
+        .iter()
+        .flat_map(|case| &case.expect)
+        .flat_map(|session| session.facts.values().map(|(_, src)| *src))
+        .collect();
+    for case in set.filing.iter().chain(&set.confirm) {
+        provenances.extend(case.expect.sessions.values().filter_map(|f| f.src));
+        provenances.extend(case.expect.subjects.iter().map(|s| s.status_src));
+    }
+    if set.triage.iter().any(|case| !case.model.answers.is_empty()) {
+        provenances.insert(Source::Model);
+    }
+    for source in Source::ALL {
+        assert!(
+            provenances.contains(source),
+            "no case expecting a {source:?} provenance"
+        );
+    }
     let gate_states: HashSet<GateState> = set
         .rates
         .iter()

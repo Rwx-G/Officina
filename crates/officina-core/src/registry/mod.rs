@@ -8,6 +8,7 @@ pub mod dry_run;
 pub mod filing;
 pub mod fold;
 pub mod ingestion;
+pub mod model;
 pub mod proposal;
 pub mod rates;
 pub mod retention;

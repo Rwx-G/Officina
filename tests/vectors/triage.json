@@ -1103,7 +1103,7 @@
     },
     {
       "name": "the model answers where the default would, unsure included",
-      "model": {"enabled": true, "answers": {"s1": {"verdict": "finished", "call_id": 11}, "s2": {"verdict": "unsure", "call_id": 12}, "s3": {"verdict": "finished", "call_id": 13}}},
+      "model": {"on": true, "on_at": 1793102300000, "answers": {"s1": {"verdict": "finished", "call_id": 11}, "s2": {"verdict": "unsure", "call_id": 12}, "s3": {"verdict": "finished", "call_id": 13}}},
       "steps": [
         {"events": [
           {"v": 1, "ts": 1793102401000, "event": "UserPromptSubmit", "session_id": "s1", "cwd": "C:/work/api", "prompt": "rename the handler"},
@@ -1121,13 +1121,13 @@
       ],
       "expect": [
         {"kind": "subject", "key": "subject:3", "subject": 3, "session": "s3", "proposal": ["to_resume", "rules", "cut_mid_turn"], "verdict": "to_resume", "proposed_subject": null, "choices": []},
-        {"kind": "subject", "key": "subject:2", "subject": 2, "session": "s2", "proposal": ["unsure", "model", "model"], "call_id": 12, "verdict": null, "proposed_subject": null, "choices": []},
-        {"kind": "subject", "key": "subject:1", "subject": 1, "session": "s1", "proposal": ["finished", "model", "model"], "call_id": 11, "verdict": "finished", "proposed_subject": null, "choices": []}
+        {"kind": "subject", "key": "subject:2", "subject": 2, "session": "s2", "proposal": ["unsure", "model", "model"], "call_id": 12, "verdict": null, "proposed_subject": null, "choices": [], "model": "answered"},
+        {"kind": "subject", "key": "subject:1", "subject": 1, "session": "s1", "proposal": ["finished", "model", "model"], "call_id": 11, "verdict": "finished", "proposed_subject": null, "choices": [], "model": "answered"}
       ]
     },
     {
       "name": "a disabled model leaves the default",
-      "model": {"enabled": false, "answers": {"s1": {"verdict": "finished", "call_id": 11}}},
+      "model": {"on": false, "answers": {"s1": {"verdict": "finished", "call_id": 11}}},
       "steps": [
         {"events": [
           {"v": 1, "ts": 1793102401000, "event": "UserPromptSubmit", "session_id": "s1", "cwd": "C:/work/api", "prompt": "rename the handler"},
@@ -1138,6 +1138,114 @@
       ],
       "expect": [
         {"kind": "subject", "key": "subject:1", "subject": 1, "session": "s1", "proposal": ["to_resume", "rules", "default_to_resume"], "verdict": "to_resume", "proposed_subject": null, "choices": []}
+      ]
+    },
+    {
+      "name": "rows falling to the default are queued for the model while it is on",
+      "model": {"on": true, "on_at": 1793102300000},
+      "steps": [
+        {"events": [
+          {"v": 1, "ts": 1793102401000, "event": "UserPromptSubmit", "session_id": "s1", "cwd": "C:/work/api", "prompt": "rename the handler"},
+          {"v": 1, "ts": 1793102402000, "event": "Stop", "session_id": "s1", "cwd": "C:/work/api", "last_message": "Renamed."},
+          {"v": 1, "ts": 1793102403000, "event": "SessionEnd", "session_id": "s1", "cwd": "C:/work/api", "reason": "prompt_input_exit"},
+          {"v": 1, "ts": 1793102404000, "event": "UserPromptSubmit", "session_id": "s2", "cwd": "C:/work/api", "prompt": "bump the client"},
+          {"v": 1, "ts": 1793102405000, "event": "Stop", "session_id": "s2", "cwd": "C:/work/api", "last_message": "Bumped."},
+          {"v": 1, "ts": 1793102406000, "event": "SessionEnd", "session_id": "s2", "cwd": "C:/work/api", "reason": "prompt_input_exit"}
+        ]}
+      ],
+      "expect": [
+        {"kind": "unfiled_session", "key": "session:s2", "subject": null, "session": "s2", "proposal": ["to_resume", "rules", "default_to_resume"], "verdict": "to_resume", "proposed_subject": null, "choices": [], "model": "pending"},
+        {"kind": "unfiled_session", "key": "session:s1", "subject": null, "session": "s1", "proposal": ["to_resume", "rules", "default_to_resume"], "verdict": "to_resume", "proposed_subject": null, "choices": [], "model": "pending"}
+      ]
+    },
+    {
+      "name": "a paused model queues nothing, and a call that gave no answer shows on its row",
+      "model": {"on": true, "on_at": 1793102300000, "paused": true, "calls": {"s1": {"outcome": "timeout", "at": 1793102500000}}},
+      "steps": [
+        {"events": [
+          {"v": 1, "ts": 1793102401000, "event": "UserPromptSubmit", "session_id": "s1", "cwd": "C:/work/api", "prompt": "rename the handler"},
+          {"v": 1, "ts": 1793102402000, "event": "Stop", "session_id": "s1", "cwd": "C:/work/api", "last_message": "Renamed."},
+          {"v": 1, "ts": 1793102403000, "event": "SessionEnd", "session_id": "s1", "cwd": "C:/work/api", "reason": "prompt_input_exit"},
+          {"v": 1, "ts": 1793102404000, "event": "UserPromptSubmit", "session_id": "s2", "cwd": "C:/work/api", "prompt": "bump the client"},
+          {"v": 1, "ts": 1793102405000, "event": "Stop", "session_id": "s2", "cwd": "C:/work/api", "last_message": "Bumped."},
+          {"v": 1, "ts": 1793102406000, "event": "SessionEnd", "session_id": "s2", "cwd": "C:/work/api", "reason": "prompt_input_exit"}
+        ]}
+      ],
+      "expect": [
+        {"kind": "unfiled_session", "key": "session:s2", "subject": null, "session": "s2", "proposal": ["to_resume", "rules", "default_to_resume"], "verdict": "to_resume", "proposed_subject": null, "choices": []},
+        {"kind": "unfiled_session", "key": "session:s1", "subject": null, "session": "s1", "proposal": ["to_resume", "rules", "default_to_resume"], "verdict": "to_resume", "proposed_subject": null, "choices": [], "model": {"no_answer": "timeout"}}
+      ]
+    },
+    {
+      "name": "a refused case waits for new inputs",
+      "model": {"on": true, "on_at": 1793102300000, "calls": {"s1": {"outcome": "refused", "at": 1793102500000}, "s2": {"outcome": "refused", "at": 1793102500000, "stale": true}}},
+      "steps": [
+        {"events": [
+          {"v": 1, "ts": 1793102401000, "event": "UserPromptSubmit", "session_id": "s1", "cwd": "C:/work/api", "prompt": "rename the handler"},
+          {"v": 1, "ts": 1793102402000, "event": "Stop", "session_id": "s1", "cwd": "C:/work/api", "last_message": "Renamed."},
+          {"v": 1, "ts": 1793102403000, "event": "SessionEnd", "session_id": "s1", "cwd": "C:/work/api", "reason": "prompt_input_exit"},
+          {"v": 1, "ts": 1793102404000, "event": "UserPromptSubmit", "session_id": "s2", "cwd": "C:/work/api", "prompt": "bump the client"},
+          {"v": 1, "ts": 1793102405000, "event": "Stop", "session_id": "s2", "cwd": "C:/work/api", "last_message": "Bumped."},
+          {"v": 1, "ts": 1793102406000, "event": "SessionEnd", "session_id": "s2", "cwd": "C:/work/api", "reason": "prompt_input_exit"}
+        ]}
+      ],
+      "expect": [
+        {"kind": "unfiled_session", "key": "session:s2", "subject": null, "session": "s2", "proposal": ["to_resume", "rules", "default_to_resume"], "verdict": "to_resume", "proposed_subject": null, "choices": [], "model": "pending"},
+        {"kind": "unfiled_session", "key": "session:s1", "subject": null, "session": "s1", "proposal": ["to_resume", "rules", "default_to_resume"], "verdict": "to_resume", "proposed_subject": null, "choices": [], "model": {"no_answer": "refused"}}
+      ]
+    },
+    {
+      "name": "a failed case is sent again once the model is turned on again, not before",
+      "model": {"on": true, "on_at": 1793102600000, "calls": {"s1": {"outcome": "invalid", "at": 1793102500000}, "s2": {"outcome": "failed", "at": 1793102700000}}},
+      "steps": [
+        {"events": [
+          {"v": 1, "ts": 1793102401000, "event": "UserPromptSubmit", "session_id": "s1", "cwd": "C:/work/api", "prompt": "rename the handler"},
+          {"v": 1, "ts": 1793102402000, "event": "Stop", "session_id": "s1", "cwd": "C:/work/api", "last_message": "Renamed."},
+          {"v": 1, "ts": 1793102403000, "event": "SessionEnd", "session_id": "s1", "cwd": "C:/work/api", "reason": "prompt_input_exit"},
+          {"v": 1, "ts": 1793102404000, "event": "UserPromptSubmit", "session_id": "s2", "cwd": "C:/work/api", "prompt": "bump the client"},
+          {"v": 1, "ts": 1793102405000, "event": "Stop", "session_id": "s2", "cwd": "C:/work/api", "last_message": "Bumped."},
+          {"v": 1, "ts": 1793102406000, "event": "SessionEnd", "session_id": "s2", "cwd": "C:/work/api", "reason": "prompt_input_exit"}
+        ]}
+      ],
+      "expect": [
+        {"kind": "unfiled_session", "key": "session:s2", "subject": null, "session": "s2", "proposal": ["to_resume", "rules", "default_to_resume"], "verdict": "to_resume", "proposed_subject": null, "choices": [], "model": {"no_answer": "failed"}},
+        {"kind": "unfiled_session", "key": "session:s1", "subject": null, "session": "s1", "proposal": ["to_resume", "rules", "default_to_resume"], "verdict": "to_resume", "proposed_subject": null, "choices": [], "model": "pending"}
+      ]
+    },
+    {
+      "name": "an answer on a case that changed since serves no more, and the row is queued again",
+      "model": {"on": true, "on_at": 1793102300000, "answers": {"s1": {"verdict": "finished", "call_id": 21, "stale": true}, "s2": {"verdict": "finished", "call_id": 22}}},
+      "steps": [
+        {"events": [
+          {"v": 1, "ts": 1793102401000, "event": "UserPromptSubmit", "session_id": "s1", "cwd": "C:/work/api", "prompt": "rename the handler"},
+          {"v": 1, "ts": 1793102402000, "event": "Stop", "session_id": "s1", "cwd": "C:/work/api", "last_message": "Renamed."},
+          {"v": 1, "ts": 1793102403000, "event": "SessionEnd", "session_id": "s1", "cwd": "C:/work/api", "reason": "prompt_input_exit"},
+          {"v": 1, "ts": 1793102404000, "event": "UserPromptSubmit", "session_id": "s2", "cwd": "C:/work/api", "prompt": "bump the client"},
+          {"v": 1, "ts": 1793102405000, "event": "Stop", "session_id": "s2", "cwd": "C:/work/api", "last_message": "Bumped."},
+          {"v": 1, "ts": 1793102406000, "event": "SessionEnd", "session_id": "s2", "cwd": "C:/work/api", "reason": "prompt_input_exit"}
+        ]}
+      ],
+      "expect": [
+        {"kind": "unfiled_session", "key": "session:s2", "subject": null, "session": "s2", "proposal": ["finished", "model", "model"], "call_id": 22, "verdict": "finished", "proposed_subject": null, "choices": [], "model": "answered"},
+        {"kind": "unfiled_session", "key": "session:s1", "subject": null, "session": "s1", "proposal": ["to_resume", "rules", "default_to_resume"], "verdict": "to_resume", "proposed_subject": null, "choices": [], "model": "pending"}
+      ]
+    },
+    {
+      "name": "an unavailable model serves no answer and queues nothing",
+      "model": {"on": true, "on_at": 1793102300000, "unavailable": "cmd_shim", "answers": {"s2": {"verdict": "finished", "call_id": 22}}},
+      "steps": [
+        {"events": [
+          {"v": 1, "ts": 1793102401000, "event": "UserPromptSubmit", "session_id": "s1", "cwd": "C:/work/api", "prompt": "rename the handler"},
+          {"v": 1, "ts": 1793102402000, "event": "Stop", "session_id": "s1", "cwd": "C:/work/api", "last_message": "Renamed."},
+          {"v": 1, "ts": 1793102403000, "event": "SessionEnd", "session_id": "s1", "cwd": "C:/work/api", "reason": "prompt_input_exit"},
+          {"v": 1, "ts": 1793102404000, "event": "UserPromptSubmit", "session_id": "s2", "cwd": "C:/work/api", "prompt": "bump the client"},
+          {"v": 1, "ts": 1793102405000, "event": "Stop", "session_id": "s2", "cwd": "C:/work/api", "last_message": "Bumped."},
+          {"v": 1, "ts": 1793102406000, "event": "SessionEnd", "session_id": "s2", "cwd": "C:/work/api", "reason": "prompt_input_exit"}
+        ]}
+      ],
+      "expect": [
+        {"kind": "unfiled_session", "key": "session:s2", "subject": null, "session": "s2", "proposal": ["to_resume", "rules", "default_to_resume"], "verdict": "to_resume", "proposed_subject": null, "choices": []},
+        {"kind": "unfiled_session", "key": "session:s1", "subject": null, "session": "s1", "proposal": ["to_resume", "rules", "default_to_resume"], "verdict": "to_resume", "proposed_subject": null, "choices": []}
       ]
     },
     {
@@ -1555,6 +1663,18 @@
     {"name": "a recent winning dry run on 30 cases opens it", "now_ms": 1793102400000,
      "confirmations": [],
      "latest_dry_run": {"at_ms": 1793016000000, "cases": 30, "model_correct": 16, "default_correct": 15},
+     "expect": {"rates": [{"source": "state", "finished": null, "all": {"cases": 0, "flipped": 0}, "unsure": 0}, {"source": "rules", "finished": null, "all": {"cases": 0, "flipped": 0}, "unsure": 0}, {"source": "model", "finished": null, "all": {"cases": 0, "flipped": 0}, "unsure": 0}],
+                "gates": {"auto_archive": "not_enough_cases", "model_enable": "holds", "model_self_disable": "holds"}}},
+    {"name": "after the model turned itself off, the dry run that opened the gate no longer does", "now_ms": 1793102400000,
+     "confirmations": [],
+     "latest_dry_run": {"at_ms": 1793016000000, "cases": 30, "model_correct": 16, "default_correct": 15},
+     "self_disabled_at": 1793059200000,
+     "expect": {"rates": [{"source": "state", "finished": null, "all": {"cases": 0, "flipped": 0}, "unsure": 0}, {"source": "rules", "finished": null, "all": {"cases": 0, "flipped": 0}, "unsure": 0}, {"source": "model", "finished": null, "all": {"cases": 0, "flipped": 0}, "unsure": 0}],
+                "gates": {"auto_archive": "not_enough_cases", "model_enable": "needs_newer_dry_run", "model_self_disable": "holds"}}},
+    {"name": "a winning dry run newer than the self-disable opens the gate again", "now_ms": 1793102400000,
+     "confirmations": [],
+     "latest_dry_run": {"at_ms": 1793016000000, "cases": 30, "model_correct": 16, "default_correct": 15},
+     "self_disabled_at": 1792929600000,
      "expect": {"rates": [{"source": "state", "finished": null, "all": {"cases": 0, "flipped": 0}, "unsure": 0}, {"source": "rules", "finished": null, "all": {"cases": 0, "flipped": 0}, "unsure": 0}, {"source": "model", "finished": null, "all": {"cases": 0, "flipped": 0}, "unsure": 0}],
                 "gates": {"auto_archive": "not_enough_cases", "model_enable": "holds", "model_self_disable": "holds"}}},
     {"name": "a model right less often than to_resume over 20 cases disables itself", "now_ms": 1793102400000,

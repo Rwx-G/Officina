@@ -142,7 +142,7 @@ fn pending_bytes_count_a_rewritten_file_whole() {
     };
     let view = open_reader(&home.home, &[])
         .unwrap()
-        .view(ready, None, &home.events, NOW)
+        .view(ready, None, &home.events, None, NOW)
         .unwrap();
     assert_eq!(view.ingestion.pending_bytes, rewritten.len() as u64);
     assert_eq!(view.ingestion.incomplete_files, 1);

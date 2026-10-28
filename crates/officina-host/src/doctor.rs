@@ -10,10 +10,11 @@ use officina_core::contract::check_agents;
 use officina_core::dates::{dated_file_day, day_start_ms, utc_date};
 use officina_core::floor::{Autonomy, parse_floor};
 use officina_core::quota::STALE_AFTER_MS;
+use officina_core::registry::model::PAUSE_AFTER_FAILED_CALLS;
 use officina_core::registry::triage_call::{
     COUNT_WINDOW_MS, CallCounts, count_calls, refusal_for_binary,
 };
-use officina_core::registry::types::{RegistryState, SettingKey};
+use officina_core::registry::types::RegistryState;
 use officina_core::relay::gate::gated_tools;
 
 use crate::claude;
@@ -704,17 +705,35 @@ pub fn check_triage(
         ));
         return checks;
     };
-    let settings = reader.settings().unwrap_or_default();
-    let setting = |key: SettingKey| settings.iter().find(|row| row.key == key);
-    let enabled = setting(SettingKey::TriageModel).is_some_and(|row| row.value == "true");
-    let (level, state) = match setting(SettingKey::TriageModelPause) {
-        Some(pause) if enabled => (Level::Warn, format!("paused: {}", pause.value)),
-        _ if enabled => (Level::Ok, "enabled".to_owned()),
-        _ => (
+    let facts = reader.model_facts(None).unwrap_or_default();
+    let (level, state) = if facts.on() && facts.paused() {
+        let since = facts.pause.as_ref().map_or(0, |p| p.at_ms);
+        let (y, m, d) = utc_date(since);
+        (
+            Level::Warn,
+            format!(
+                "paused since {y:04}-{m:02}-{d:02}: its last {PAUSE_AFTER_FAILED_CALLS} proposal calls failed in a row; turn it on again in the Triage panel to lift the pause, or a new claude lifts it"
+            ),
+        )
+    } else if facts.on() {
+        (
+            Level::Ok,
+            "enabled: it proposes a verdict where no rule settled one".to_owned(),
+        )
+    } else if let Some(reason) = facts.setting.as_ref().and_then(|s| s.value.reason) {
+        (
+            Level::Ok,
+            format!(
+                "disabled: it turned itself off ({}); a newer winning dry run is needed to turn it on again",
+                reason.code()
+            ),
+        )
+    } else {
+        (
             Level::Ok,
             "disabled: it proposes nothing; a dry run scores it on your past confirmations"
                 .to_owned(),
-        ),
+        )
     };
     let calls = reader
         .triage_calls_since(now - COUNT_WINDOW_MS)
@@ -1134,16 +1153,39 @@ mod tests {
             assert!(line.detail.contains(part), "{part}: {}", line.detail);
         }
         conn.execute(
-            "INSERT INTO setting (key, value, src, at_ms) VALUES ('triage_model', 'true', 'author', ?1),
-                 ('triage_model_pause', 'three failed calls in a row', 'rules', ?1)",
+            "INSERT INTO setting (key, value, src, at_ms) VALUES ('triage_model', '{\"on\":true}', 'author', ?1)",
+            [NOW],
+        )
+        .unwrap();
+        let on = check_triage(None, dir.path(), &[], NOW);
+        let line = registry_line(&on, "triage model");
+        assert_eq!(line.level, Level::Ok);
+        assert!(line.detail.starts_with("enabled"), "{}", line.detail);
+        conn.execute(
+            "INSERT INTO setting (key, value, src, at_ms) VALUES ('triage_model_pause', '{\"paused\":true}', 'rules', ?1)",
             [NOW],
         )
         .unwrap();
         let paused = check_triage(None, dir.path(), &[], NOW);
         let line = registry_line(&paused, "triage model");
-        assert_eq!(line.level, Level::Warn);
+        assert_eq!(line.level, Level::Warn, "a paused model warns");
         assert!(
-            line.detail.starts_with("paused: three failed calls"),
+            line.detail.starts_with("paused since") && line.detail.contains("turn it on again"),
+            "{}",
+            line.detail
+        );
+        conn.execute(
+            "UPDATE setting SET value = '{\"on\":false,\"reason\":\"worse_than_default\"}', src = 'rules'
+             WHERE key = 'triage_model'",
+            [],
+        )
+        .unwrap();
+        let off = check_triage(None, dir.path(), &[], NOW);
+        let line = registry_line(&off, "triage model");
+        assert_eq!(line.level, Level::Ok);
+        assert!(
+            line.detail
+                .contains("turned itself off (worse_than_default)"),
             "{}",
             line.detail
         );

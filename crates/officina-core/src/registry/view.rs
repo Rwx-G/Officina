@@ -12,7 +12,8 @@ use crate::board::{Badge, Board, Card, Column, SessionKindView};
 use super::dry_run::{DRY_RUN_MAX_CASES, DryRunProgress, DryRunState, DryRunStop, Evaluation};
 use super::filing::excerpt_time;
 use super::fold::SUPERSESSION_WINDOW_MS;
-use super::proposal::{ModelInput, Proposal};
+use super::model::{ModelFacts, PAUSE_AFTER_FAILED_CALLS, RowModel, row_model};
+use super::proposal::Proposal;
 use super::rates::{
     AUTO_ARCHIVE_FLIP_PERCENT, AUTO_ARCHIVE_MIN_CASES, AUTO_COUNT_AFTER_MS, GateState, Gates,
     MODEL_GATE_MAX_AGE_MS, MODEL_GATE_MIN_CASES, RATE_WINDOW, SELF_DISABLE_MIN_CASES, SourceRate,
@@ -25,7 +26,8 @@ use super::triage_call::{
 };
 use super::types::{
     ConfirmationRecord, Ending, ExcerptRecord, RegistryReport, RestoreNotice, RowKind,
-    SessionRecord, Source, SubjectRecord, SubjectRef, SubjectStatus, Verdict,
+    SessionRecord, Source, SubjectRecord, SubjectRef, SubjectStatus, TriageOutcome, TriageRefusal,
+    Verdict,
 };
 use super::verdict::{Row, VerdictInput, rows};
 
@@ -136,14 +138,32 @@ pub struct RoutineCandidate {
     pub archived_at_ms: i64,
 }
 
-/// The triage model as the Triage panel's evidence shows it (FR-10, AD-52,
-/// D-67, D-92): whether it proposes, the latest dry run, the one running
-/// and how the last one ended, and the calls made.
+/// The triage model as the Triage panel's evidence shows it (FR-10, AD-50,
+/// AD-52, D-67, D-69, D-81, D-92): whether it proposes, who switched it and
+/// why, whether it is paused or cannot be called, the latest dry run, the
+/// one running and how the last one ended, and the calls made.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct ModelView {
-    /// Whether the model's answers take the default's place (FR-8).
+    /// Whether the model is on (FR-8); its answers take the default's place
+    /// while it is also available.
     pub enabled: bool,
+    /// Who switched it last: the author, or `rules` when it turned itself
+    /// off.
+    pub src: Option<Source>,
+    #[cfg_attr(feature = "ts", ts(type = "number | null"))]
+    pub at_ms: Option<i64>,
+    /// The gate state that turned it off, when rules did (D-69).
+    pub reason: Option<GateState>,
+    /// Why it cannot be called: it cannot be turned on, and proposes
+    /// nothing (FR-10 as amended).
+    pub unavailable: Option<TriageRefusal>,
+    /// Since when failed calls keep it paused (D-81): nothing is queued
+    /// until it is turned on again or `claude` changes.
+    #[cfg_attr(feature = "ts", ts(type = "number | null"))]
+    pub paused_at_ms: Option<i64>,
+    /// Rows queued for it now.
+    pub pending: u32,
     pub latest_dry_run: Option<Evaluation>,
     /// The dry run running now, with its progress.
     pub dry_run: Option<DryRunProgress>,
@@ -209,6 +229,7 @@ pub struct Thresholds {
     pub model_gate_max_age_ms: i64,
     pub model_gate_min_cases: u32,
     pub self_disable_min_cases: u32,
+    pub pause_after_failed_calls: u32,
 }
 
 /// One subject that is not archived.
@@ -343,6 +364,26 @@ pub struct TriageRow {
     pub proposed_subject: Option<i64>,
     /// For an unfiled row: the project's open subjects.
     pub choices: Vec<SubjectRef>,
+    /// Queued for the triage model: the row keeps the default until the
+    /// answer comes (AD-52).
+    pub model_pending: bool,
+    /// The model's reason for its proposal: untrusted text, rendered as
+    /// text under a "model" label, never read by a rule (AD-40).
+    pub model_reason: Option<String>,
+    /// The model's last call on the row's inputs gave no answer: the
+    /// default stays, with why (AD-52).
+    pub model_call: Option<ModelCall>,
+}
+
+/// A model call that gave a row no answer (AD-51, D-87).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct ModelCall {
+    pub outcome: TriageOutcome,
+    /// Why it was refused, for a `refused` call.
+    pub refusal: Option<TriageRefusal>,
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub at_ms: i64,
 }
 
 /// What the view is built from.
@@ -356,8 +397,9 @@ pub struct ViewInput<'a> {
     pub excerpts: &'a [ExcerptRecord],
     /// The confirmations, which answer rows until reopened (D-58).
     pub confirmations: &'a [ConfirmationRecord],
-    /// The triage model's part of the proposals (AD-52).
-    pub model: &'a ModelInput,
+    /// The triage model: its setting, pause, availability, stored answers
+    /// and last calls (AD-52).
+    pub model: &'a ModelFacts,
     /// The board the live cards come from, when there is one.
     pub board: Option<&'a Board>,
     pub restore_notice: Option<RestoreNotice>,
@@ -519,13 +561,33 @@ pub fn archived_subjects(
     listed
 }
 
-/// A row as the view shows it, its subject, session and excerpts joined.
+/// A row as the view shows it, its subject, session and excerpts joined,
+/// with what it shows of the model.
 fn triage_row(
     row: Row,
+    model: RowModel,
     subjects: &BTreeMap<i64, &SubjectRecord>,
     sessions: &BTreeMap<&str, &SessionRecord>,
     excerpts: &BTreeMap<&str, &ExcerptRecord>,
 ) -> TriageRow {
+    let (model_pending, model_reason, model_call) = match model {
+        RowModel::None => (false, None, None),
+        RowModel::Pending => (true, None, None),
+        RowModel::Answered { reason } => (false, Some(reason), None),
+        RowModel::NoAnswer {
+            outcome,
+            refusal,
+            at_ms,
+        } => (
+            false,
+            None,
+            Some(ModelCall {
+                outcome,
+                refusal,
+                at_ms,
+            }),
+        ),
+    };
     let reference = |id: i64| {
         subjects.get(&id).map(|s| SubjectRef {
             id,
@@ -550,6 +612,9 @@ fn triage_row(
         choices: row.choices.into_iter().filter_map(reference).collect(),
         session_id: row.session_id,
         key: row.key,
+        model_pending,
+        model_reason,
+        model_call,
     }
 }
 
@@ -574,7 +639,7 @@ pub fn unread_view(report: RegistryReport, now_ms: i64) -> RegistryView {
             sessions: &[],
             excerpts: &[],
             confirmations: &[],
-            model: &ModelInput::default(),
+            model: &ModelFacts::default(),
             board: None,
             restore_notice: None,
             evidence: &EvidenceInput::default(),
@@ -710,15 +775,22 @@ pub fn build_view(input: &ViewInput, now_ms: i64) -> RegistryView {
         .iter()
         .map(|s| (s.session_id.as_str(), s))
         .collect();
+    let model_input = input.model.input(input.sessions, input.excerpts);
     let triage: Vec<TriageRow> = rows(&VerdictInput {
         subjects: input.subjects,
         sessions: input.sessions,
         confirmations: input.confirmations,
-        model: input.model,
+        model: &model_input,
     })
     .into_iter()
-    .map(|row| triage_row(row, &by_id, &by_session, &excerpts))
+    .map(|row| {
+        let model = row_model(&row, input.model, input.sessions, input.excerpts);
+        triage_row(row, model, &by_id, &by_session, &excerpts)
+    })
     .collect();
+    let setting = input.model.setting.as_ref();
+    let pending =
+        u32::try_from(triage.iter().filter(|r| r.model_pending).count()).unwrap_or(u32::MAX);
     let unfiled = unfiled
         .into_values()
         .map(|mut project| {
@@ -743,7 +815,18 @@ pub fn build_view(input: &ViewInput, now_ms: i64) -> RegistryView {
             .clone()
             .filter(|notice| now_ms - notice.restored_at_ms < RESTORE_NOTICE_MS),
         model: ModelView {
-            enabled: input.model.enabled,
+            enabled: input.model.on(),
+            src: setting.map(|s| s.src),
+            at_ms: setting.map(|s| s.at_ms),
+            reason: setting.and_then(|s| s.value.reason),
+            unavailable: input.model.unavailable,
+            paused_at_ms: input
+                .model
+                .pause
+                .as_ref()
+                .filter(|p| p.value.paused)
+                .map(|p| p.at_ms),
+            pending,
             latest_dry_run: input.evidence.latest_evaluation,
             dry_run: input.evidence.dry_run.running,
             last_stop: input.evidence.dry_run.last_stop,
@@ -753,6 +836,7 @@ pub fn build_view(input: &ViewInput, now_ms: i64) -> RegistryView {
         gates: gates(
             &input.evidence.verdicts,
             input.evidence.latest_evaluation.as_ref(),
+            input.model.self_disabled_at(),
             now_ms,
         ),
         auto_archive: input
@@ -784,6 +868,7 @@ pub fn build_view(input: &ViewInput, now_ms: i64) -> RegistryView {
             model_gate_max_age_ms: MODEL_GATE_MAX_AGE_MS,
             model_gate_min_cases: MODEL_GATE_MIN_CASES,
             self_disable_min_cases: SELF_DISABLE_MIN_CASES,
+            pause_after_failed_calls: PAUSE_AFTER_FAILED_CALLS,
         },
     }
 }
@@ -863,7 +948,7 @@ mod tests {
                 sessions,
                 excerpts: &[],
                 confirmations: &[],
-                model: &ModelInput::default(),
+                model: &ModelFacts::default(),
                 board: None,
                 restore_notice: None,
                 evidence: &EvidenceInput::default(),
@@ -925,7 +1010,7 @@ mod tests {
                     sessions: &sessions,
                     excerpts: &[],
                     confirmations: &[],
-                    model: &ModelInput::default(),
+                    model: &ModelFacts::default(),
                     board: None,
                     restore_notice: None,
                     evidence: &EvidenceInput::default(),
@@ -1002,7 +1087,7 @@ mod tests {
                     sessions: &[],
                     excerpts: &[],
                     confirmations: &[],
-                    model: &ModelInput::default(),
+                    model: &ModelFacts::default(),
                     board: None,
                     restore_notice: Some(notice.clone()),
                     evidence: &EvidenceInput::default(),
@@ -1062,7 +1147,7 @@ mod tests {
                 sessions: &sessions,
                 excerpts: &excerpts,
                 confirmations: &[],
-                model: &ModelInput::default(),
+                model: &ModelFacts::default(),
                 board: None,
                 restore_notice: None,
                 evidence: &EvidenceInput::default(),
@@ -1167,7 +1252,7 @@ mod tests {
                     sessions,
                     excerpts: &excerpts,
                     confirmations,
-                    model: &ModelInput::default(),
+                    model: &ModelFacts::default(),
                     board: None,
                     restore_notice: None,
                     evidence: &EvidenceInput::default(),

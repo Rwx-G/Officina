@@ -2,6 +2,6 @@
 import type { Gate } from "./Gate";
 
 /**
- * The three gates (AD-50); story 3.11 wires the model's.
+ * The three gates (AD-50).
  */
 export type Gates = { auto_archive: Gate, model_enable: Gate, model_self_disable: Gate, };
