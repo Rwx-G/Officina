@@ -29,7 +29,7 @@ use officina_core::relay::catalogue::{
     ActionClass, CanonicalAction, CanonicalCatalogue, CatalogueDiff, RelayFloor, Runner,
     SectionDiff, diff, notices, relay_in_use,
 };
-use officina_core::relay::classes::{self, CHECK_VALID_MS, WAIT_RANGE_S};
+use officina_core::relay::classes::{CHECK_VALID_MS, WAIT_RANGE_S};
 use officina_core::relay::credential::{cmdkey_line, target};
 use officina_core::relay::gate::{LIST_COMMAND, SHELL_TOOLS, ToolRule};
 use officina_core::relay::http::MAX_HTTP_TIMEOUT_S;
@@ -947,12 +947,6 @@ fn paragraph_action(name: &str, action: &CanonicalAction) -> String {
             ));
         }
         _ => {}
-    }
-    if !classes::is_available(action.class) {
-        notes.push(format!(
-            "Not available in this build (class {}).",
-            action.class.code()
-        ));
     }
     if notes.is_empty() {
         format!("- `{call}`\n")

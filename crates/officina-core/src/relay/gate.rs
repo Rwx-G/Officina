@@ -17,7 +17,6 @@ use super::catalogue::{
     CanonicalCatalogue, DEFAULT_GUARDED_PROGRAMS, KnownProjects,
     guarded_programs as floor_guarded_programs,
 };
-use super::classes;
 use super::journal::GateFault;
 use super::shell::{self, Assignment, Lexed, Origin, Program};
 use super::{HOME_DIR_NAME, JOURNAL_DIR, RELAY_DIR};
@@ -572,8 +571,6 @@ pub struct OfferedAction {
     pub name: String,
     /// Parameter names, in order.
     pub params: Vec<String>,
-    /// False when the action's class is not available in this build.
-    pub available: bool,
 }
 
 /// What the reason can offer (D-17).
@@ -591,8 +588,8 @@ pub enum Offer<'a> {
 
 /// The reason Claude Code shows the session (AD-26, D-17): what was denied
 /// and where, the pointer to [`LIST_COMMAND`], then the actions to use
-/// instead as `officina run <name> <param>=<...>`, unavailable classes
-/// marked; at most [`MAX_REASON_BYTES`], cut on a character boundary.
+/// instead as `officina run <name> <param>=<...>`; at most
+/// [`MAX_REASON_BYTES`], cut on a character boundary.
 ///
 /// A file write (D-173) is refused from any project: its reason names no
 /// project and offers no action when `project` is empty.
@@ -623,9 +620,6 @@ pub fn deny_reason(deny: &Deny, project: &str, offer: Offer<'_>) -> String {
                     text.push(' ');
                     text.push_str(param);
                     text.push_str("=<...>");
-                }
-                if !action.available {
-                    text.push_str("  (class not available in this build)");
                 }
             }
         }
@@ -762,7 +756,6 @@ pub fn containment(
                     Some(OfferedAction {
                         name: action.clone(),
                         params: canonical_action.params.keys().cloned().collect(),
-                        available: classes::is_available(canonical_action.class),
                     })
                 })
                 .collect();
@@ -1025,19 +1018,18 @@ mod tests {
         }
     }
 
-    fn action(name: &str, params: &[&str], available: bool) -> OfferedAction {
+    fn action(name: &str, params: &[&str]) -> OfferedAction {
         OfferedAction {
             name: name.to_owned(),
             params: params.iter().map(|p| (*p).to_owned()).collect(),
-            available,
         }
     }
 
     #[test]
     fn reason_lists_actions_and_the_list_command() {
         let actions = [
-            action("check", &["group", "playbook"], true),
-            action("status", &["host"], true),
+            action("check", &["group", "playbook"]),
+            action("status", &["host"]),
         ];
         let reason = deny_reason(
             &deny(DenyKind::GuardedProgram, Some("ansible-playbook")),
@@ -1071,33 +1063,9 @@ mod tests {
     }
 
     #[test]
-    fn reason_marks_unavailable_classes() {
-        let actions = [
-            action("check", &["group"], true),
-            action("apply-sensitive", &["playbook"], false),
-        ];
-        let reason = deny_reason(
-            &deny(DenyKind::GuardedProgram, Some("ssh")),
-            "lab",
-            Offer::Approved(&actions),
-        );
-        let lines: Vec<&str> = reason.lines().collect();
-        let check = lines.iter().find(|l| l.contains("run check")).unwrap();
-        let sensitive = lines
-            .iter()
-            .find(|l| l.contains("run apply-sensitive"))
-            .unwrap();
-        assert!(!check.contains("not available"), "{reason}");
-        assert!(
-            sensitive.contains("not available in this build"),
-            "{reason}"
-        );
-    }
-
-    #[test]
     fn reason_is_cut_at_2_kib_on_a_char_boundary() {
         let actions: Vec<OfferedAction> = (0..200)
-            .map(|i| action(&format!("action-{i}"), &["parameter"], i % 2 == 0))
+            .map(|i| action(&format!("action-{i}"), &["parameter"]))
             .collect();
         let project = "é".repeat(500);
         for shift in 0..4 {
@@ -1111,9 +1079,8 @@ mod tests {
             assert!(reason.len() > MAX_REASON_BYTES - 4, "{}", reason.len());
             assert!(reason.contains(LIST_COMMAND));
         }
-        let multibyte: Vec<OfferedAction> = (0..400)
-            .map(|i| action(&format!("é{i}"), &[], true))
-            .collect();
+        let multibyte: Vec<OfferedAction> =
+            (0..400).map(|i| action(&format!("é{i}"), &[])).collect();
         let reason = deny_reason(
             &deny(DenyKind::Dynamic, None),
             "p",
@@ -1247,7 +1214,7 @@ mod tests {
         );
         assert!(c.faults.is_empty());
         assert!(
-            matches!(c.offer_for("lab"), Offer::Approved(actions) if actions[0].name == "probe" && actions[0].params == ["host"] && actions[0].available)
+            matches!(c.offer_for("lab"), Offer::Approved(actions) if actions[0].name == "probe" && actions[0].params == ["host"])
         );
         assert!(matches!(c.offer_for("inner"), Offer::AwaitingApproval([])));
     }

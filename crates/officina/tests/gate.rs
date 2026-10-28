@@ -639,13 +639,9 @@ fn reason_lists_approved_actions() {
         reason.contains("officina run check group=<...> playbook=<...>"),
         "{reason}"
     );
-    let apply = reason
-        .lines()
-        .find(|l| l.contains("officina run apply"))
-        .unwrap();
     assert!(
-        !apply.contains("not available"),
-        "a human action runs in this build (D-20 gone): {reason}"
+        reason.lines().any(|l| l.contains("officina run apply")),
+        "{reason}"
     );
     assert!(
         !reason.contains("status"),

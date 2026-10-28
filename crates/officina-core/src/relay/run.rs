@@ -535,12 +535,6 @@ fn action_lines(text: &mut String, name: &str, action: &CanonicalAction) {
     for param in action.params.keys() {
         text.push_str(&format!(" {param}=<...>"));
     }
-    if !classes::is_available(action.class) {
-        text.push_str(&format!(
-            "  (class {}, not available in this build)",
-            action.class.code()
-        ));
-    }
     text.push('\n');
     if !action.description.is_empty() {
         text.push_str(&format!("      {}\n", action.description));
@@ -580,7 +574,7 @@ fn action_lines(text: &mut String, name: &str, action: &CanonicalAction) {
 
 /// The text of `officina run --list` (D-21): the approved actions of the
 /// project the working directory lies in, with their parameters and what
-/// each accepts, unavailable classes marked (D-17); a stopped relay, a
+/// each accepts (D-17); a stopped relay, a
 /// pending catalogue change or an unreadable file stated first. It always
 /// exits 0, whatever it says.
 pub fn list_text(inputs: &RunInputs<'_>) -> String {
@@ -864,7 +858,6 @@ mod tests {
             ),
             "{text}"
         );
-        assert!(!text.contains("not available"), "{text}");
         assert!(
             text.contains("runs once per approval the author gives in the Officina window"),
             "{text}"

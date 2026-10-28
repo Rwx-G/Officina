@@ -1212,7 +1212,6 @@ fn list_prints_the_projects_approved_actions() {
 fn list_explains_human_actions_and_their_dry_run() {
     let relay = Relay::new();
     let text = list(&relay, &relay.project());
-    assert!(!text.contains("not available"), "{text}");
     let approvals = text
         .matches("runs once per approval the author gives in the Officina window")
         .count();
