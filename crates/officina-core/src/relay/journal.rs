@@ -18,6 +18,25 @@ pub const JOURNAL_LINE_VERSION: u32 = 1;
 /// event buffer keeps prompts.
 pub const COMMAND_EXCERPT_CHARS: usize = crate::events::EXCERPT_CHARS;
 
+/// How many days of journal files the window keeps (AD-32, PRD amendment
+/// 10). `officina run` and the gate never delete.
+pub const JOURNAL_RETENTION_DAYS: i64 = 90;
+
+/// True when a journal file name is a day older than
+/// [`JOURNAL_RETENTION_DAYS`] and may be deleted by the window's hourly
+/// pass. The lock file and any name that is not a day file never are.
+///
+/// ```
+/// use officina_core::relay::journal::is_expired_journal_file;
+/// let now = 1_793_102_400_000; // 2026-10-27
+/// assert!(is_expired_journal_file("2026-07-28.jsonl", now));
+/// assert!(!is_expired_journal_file("2026-07-29.jsonl", now));
+/// assert!(!is_expired_journal_file(".lock", now));
+/// ```
+pub fn is_expired_journal_file(name: &str, now_ms: i64) -> bool {
+    crate::dates::is_dated_file_older_than(name, now_ms, JOURNAL_RETENTION_DAYS)
+}
+
 /// One journal line: the version, the time it was written and its entry.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct JournalLine {

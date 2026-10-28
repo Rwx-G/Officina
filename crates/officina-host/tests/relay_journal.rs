@@ -5,9 +5,13 @@ use std::fs::{self, OpenOptions};
 use std::time::{Duration, Instant};
 
 use officina_core::dates::event_file_name;
-use officina_core::relay::journal::{CatalogueApproved, JournalEntry, JournalKind, JournalLine};
+use officina_core::relay::journal::{
+    CatalogueApproved, JOURNAL_RETENTION_DAYS, JournalEntry, JournalKind, JournalLine,
+};
 use officina_host::relay::home::RelayHome;
-use officina_host::relay::journal::{JournalError, JournalLock, LOCK_TIMEOUT, append, read_recent};
+use officina_host::relay::journal::{
+    JournalError, JournalLock, LOCK_TIMEOUT, append, prune, read_recent,
+};
 
 const DAY: i64 = 86_400_000;
 const NOW: i64 = 1_793_102_400_000;
@@ -133,6 +137,72 @@ fn reader_spans_two_days_and_counts_corrupt() {
         read_recent(&RelayHome::new(dir.path().join("none"), None), NOW),
         (Vec::new(), 0)
     );
+}
+
+/// A day file of the journal dated `ts`, written directly.
+fn seed_day(home: &RelayHome, ts: i64) -> std::path::PathBuf {
+    fs::create_dir_all(home.journal_dir()).unwrap();
+    let path = day_file(home, ts);
+    fs::write(&path, JournalLine::new(ts, approved("seeded")).to_line()).unwrap();
+    path
+}
+
+#[test]
+fn retention_keeps_90_days() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = RelayHome::new(dir.path(), None);
+    let kept: Vec<_> = [0, 1, 89, JOURNAL_RETENTION_DAYS]
+        .iter()
+        .map(|days| seed_day(&home, NOW - days * DAY))
+        .collect();
+    let gone: Vec<_> = [JOURNAL_RETENTION_DAYS + 1, 400]
+        .iter()
+        .map(|days| seed_day(&home, NOW - days * DAY))
+        .collect();
+
+    assert_eq!(prune(&home, NOW), gone.len());
+    for path in &kept {
+        assert!(path.exists(), "{} must stay", path.display());
+    }
+    for path in &gone {
+        assert!(!path.exists(), "{} must go", path.display());
+    }
+    assert_eq!(prune(&home, NOW), 0, "a second pass finds nothing");
+    assert_eq!(
+        prune(&RelayHome::new(dir.path().join("none"), None), NOW),
+        0
+    );
+}
+
+#[test]
+fn retention_leaves_the_lock_and_other_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = RelayHome::new(dir.path(), None);
+    let held = hold_lock(&home);
+    let old = NOW - 2 * JOURNAL_RETENTION_DAYS * DAY;
+    let old_name = event_file_name(old);
+    let others = [
+        "notes.txt".to_owned(),
+        "2026-13-01.jsonl".to_owned(),
+        format!("{old_name}.bak"),
+        old_name.replace(".jsonl", ".json"),
+    ];
+    for name in &others {
+        fs::write(home.journal_dir().join(name), b"x").unwrap();
+    }
+    // A folder named like an old day file is not a day file.
+    let folder = home.journal_dir().join(&old_name);
+    fs::create_dir_all(&folder).unwrap();
+
+    assert_eq!(prune(&home, NOW), 0);
+    assert!(home.journal_lock_file().exists());
+    for name in &others {
+        assert!(home.journal_dir().join(name).exists(), "{name}");
+    }
+    assert!(folder.is_dir());
+    // The lock still works after the pass.
+    held.unlock().unwrap();
+    append(&home, &[approved("after")], NOW).unwrap();
 }
 
 #[test]

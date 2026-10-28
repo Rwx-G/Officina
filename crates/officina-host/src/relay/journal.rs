@@ -4,14 +4,17 @@
 //! lock on `journal/.lock` with `File::try_lock`, retried every
 //! [`LOCK_RETRY`] up to [`LOCK_TIMEOUT`], writes its lines with one
 //! `append_line`, then releases it. A separate lock file means readers never
-//! meet a locked range, and lines of any length never interleave.
+//! meet a locked range, and lines of any length never interleave. The
+//! window alone deletes old day files ([`prune`]).
 
 use std::fs::{self, File, OpenOptions};
 use std::io;
 use std::time::{Duration, Instant};
 
 use officina_core::dates::{event_file_name, event_files_to_read};
-use officina_core::relay::journal::{JournalEntry, JournalLine, ParsedLine, parse_line};
+use officina_core::relay::journal::{
+    JournalEntry, JournalLine, ParsedLine, is_expired_journal_file, parse_line,
+};
 
 use super::home::RelayHome;
 use crate::files::append_line;
@@ -109,6 +112,24 @@ pub fn append(home: &RelayHome, entries: &[JournalEntry], now_ms: i64) -> Result
     }
     JournalLock::acquire(home)?.append(entries, now_ms)?;
     Ok(())
+}
+
+/// The window's retention pass over the journal (AD-32): deletes the day
+/// files older than [`JOURNAL_RETENTION_DAYS`] days, never the lock file or
+/// a name that is not a day file. Returns how many files went. Only the
+/// window calls it: `officina run` and the gate never delete.
+///
+/// [`JOURNAL_RETENTION_DAYS`]: officina_core::relay::journal::JOURNAL_RETENTION_DAYS
+pub fn prune(home: &RelayHome, now_ms: i64) -> usize {
+    let Ok(entries) = fs::read_dir(home.journal_dir()) else {
+        return 0;
+    };
+    entries
+        .flatten()
+        .filter(|entry| is_expired_journal_file(&entry.file_name().to_string_lossy(), now_ms))
+        .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_file()))
+        .filter(|entry| fs::remove_file(entry.path()).is_ok())
+        .count()
 }
 
 /// The journal lines of the last two UTC days, in file order, plus the

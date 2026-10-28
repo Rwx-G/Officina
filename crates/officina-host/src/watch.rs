@@ -441,6 +441,7 @@ fn run(
         retention_pass(&collector.paths.events_dir(), now_ms());
         crate::focus::prune_focus_log(&collector.paths.state_dir(), now_ms());
         crate::relay::approvals::prune(&collector.relay, SystemTime::now());
+        crate::relay::journal::prune(&collector.relay, now_ms());
     };
     retention(collector);
     let mut watched = WatchedPaths::new(collector);

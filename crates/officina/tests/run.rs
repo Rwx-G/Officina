@@ -21,8 +21,8 @@ use officina_core::relay::argv::{
 };
 use officina_core::relay::classes::CHECK_VALID_MS;
 use officina_core::relay::journal::{
-    JournalEntry, RefusalReason, Refused, RunFinished, RunOutcome, RunStarted, StreamSummary,
-    TreeFingerprint,
+    JOURNAL_RETENTION_DAYS, JournalEntry, RefusalReason, Refused, RunFinished, RunOutcome,
+    RunStarted, StreamSummary, TreeFingerprint, is_expired_journal_file,
 };
 use officina_core::relay::sha256_hex;
 use officina_host::relay::journal::JournalLock;
@@ -1103,6 +1103,34 @@ fn run_leaves_one_start_and_one_finish_line() {
     assert_eq!(finished[0].outcome, RunOutcome::Exited);
     assert_eq!(finished[0].exit_code, Some(0));
     assert!(relay.refused().is_empty());
+}
+
+/// AD-32: only the window prunes the journal. A day file far past the
+/// retention survives runs, refusals and listings.
+#[test]
+fn run_never_deletes_journal_files() {
+    let relay = Relay::new();
+    let home = relay.env.relay_home();
+    let day = 24 * 60 * 60 * 1000;
+    let old = common::now_ms() - 2 * JOURNAL_RETENTION_DAYS * day;
+    let old_file = home
+        .journal_dir()
+        .join(officina_core::dates::event_file_name(old));
+    std::fs::write(
+        &old_file,
+        b"{\"v\":1,\"ts\":1,\"kind\":\"relay_stopped\"}\n",
+    )
+    .unwrap();
+    assert!(is_expired_journal_file(
+        &old_file.file_name().unwrap().to_string_lossy(),
+        common::now_ms()
+    ));
+
+    assert_eq!(relay.run(&["probe", "host=web01"]).status.code(), Some(0));
+    assert_eq!(relay.run(&["probe", "host=nope"]).status.code(), Some(126));
+    assert_eq!(relay.run(&["--list"]).status.code(), Some(0));
+    assert!(old_file.exists(), "officina run deleted a journal file");
+    assert!(home.journal_lock_file().exists());
 }
 
 #[test]

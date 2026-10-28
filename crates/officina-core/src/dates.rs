@@ -40,24 +40,44 @@ pub fn event_files_to_read(now_ms: i64) -> [String; 2] {
     ]
 }
 
+/// The UTC day a `YYYY-MM-DD.jsonl` file name stands for; `None` for any
+/// other name.
+fn dated_file_day(name: &str) -> Option<(i64, u32, u32)> {
+    let stem = name.strip_suffix(".jsonl")?;
+    let parts: Vec<&str> = stem.split('-').collect();
+    let [y, m, d] = parts.as_slice() else {
+        return None;
+    };
+    let (Ok(y), Ok(m), Ok(d)) = (y.parse::<i64>(), m.parse::<u32>(), d.parse::<u32>()) else {
+        return None;
+    };
+    if y.to_string().len() != 4 || m == 0 || m > 12 || d == 0 || d > 31 {
+        return None;
+    }
+    Some((y, m, d))
+}
+
+/// True when a `YYYY-MM-DD.jsonl` file is dated before the UTC day `days`
+/// days back from `now_ms`, so it holds no line of the last `days` days.
+/// Names that are not dated files are never eligible, so a stray file in
+/// the directory is left alone.
+///
+/// ```
+/// use officina_core::dates::is_dated_file_older_than;
+/// let now = 1_793_102_400_000; // 2026-10-27
+/// assert!(is_dated_file_older_than("2026-10-25.jsonl", now, 1));
+/// assert!(!is_dated_file_older_than("2026-10-26.jsonl", now, 1));
+/// assert!(!is_dated_file_older_than(".lock", now, 1));
+/// ```
+pub fn is_dated_file_older_than(name: &str, now_ms: i64, days: i64) -> bool {
+    dated_file_day(name).is_some_and(|day| day < utc_date(now_ms - days * MS_PER_DAY))
+}
+
 /// True when an event file name is older than yesterday (UTC) and may be
 /// deleted by the retention pass. Names that are not event files are never
 /// eligible, so a stray file in the directory is left alone.
 pub fn is_expired_event_file(name: &str, now_ms: i64) -> bool {
-    let Some(stem) = name.strip_suffix(".jsonl") else {
-        return false;
-    };
-    let parts: Vec<&str> = stem.split('-').collect();
-    let [y, m, d] = parts.as_slice() else {
-        return false;
-    };
-    let (Ok(y), Ok(m), Ok(d)) = (y.parse::<i64>(), m.parse::<u32>(), d.parse::<u32>()) else {
-        return false;
-    };
-    if y.to_string().len() != 4 || m == 0 || m > 12 || d == 0 || d > 31 {
-        return false;
-    }
-    (y, m, d) < utc_date(now_ms - MS_PER_DAY)
+    is_dated_file_older_than(name, now_ms, 1)
 }
 
 #[cfg(test)]
