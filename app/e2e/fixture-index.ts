@@ -7,7 +7,12 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-export const FIXTURE_DIR = join(dirname(fileURLToPath(import.meta.url)), ".fixtures");
+/** `e2e/.fixtures`. Under Vitest's jsdom environment a module's URL is not
+ *  a file URL, so the folder is then found from the app folder the runner
+ *  starts in, as Playwright's is. */
+export const FIXTURE_DIR = import.meta.url.startsWith("file:")
+  ? join(dirname(fileURLToPath(import.meta.url)), ".fixtures")
+  : join(process.cwd(), "e2e", ".fixtures");
 
 export type FixtureKind = "board" | "relay" | "registry";
 
