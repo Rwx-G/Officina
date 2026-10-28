@@ -587,6 +587,8 @@ project uses [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- `officina doctor` no longer prints a statusline that tees Officina's
+  `quota write` into itself when the existing statusline already runs it.
 - The Triage panel's Confirm all button keeps its width: what it leaves out
   is a line beside it ("Left out: ..."), which the button names as its
   description, instead of part of its label.

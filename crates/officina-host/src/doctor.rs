@@ -170,11 +170,15 @@ pub fn hooks_block(exe: &Path, registrations: &[Registration]) -> String {
     serde_json::to_string_pretty(&serde_json::json!({ "hooks": hooks })).unwrap_or_default()
 }
 
-/// The statusline wiring to paste (AD-16): `--tee` keeps the existing line.
+/// The statusline wiring to paste (AD-16): `--tee` keeps an existing line,
+/// unless that line already runs Officina's `quota write`, which a tee into
+/// it would run twice.
 pub fn statusline_snippet(exe: &Path, existing_command: Option<&str>) -> String {
     let command = match existing_command {
-        Some(existing) => format!("{} quota write --tee | {existing}", quoted_exe(exe)),
-        None => format!("{} quota write", quoted_exe(exe)),
+        Some(existing) if !runs_officina_quota_write(existing) => {
+            format!("{} quota write --tee | {existing}", quoted_exe(exe))
+        }
+        _ => format!("{} quota write", quoted_exe(exe)),
     };
     serde_json::to_string_pretty(&serde_json::json!({
         "statusLine": { "type": "command", "command": command }
@@ -296,6 +300,24 @@ fn runs_officina_hook(command: &str) -> bool {
     subcommand == "hook"
         && (file_name.eq_ignore_ascii_case("officina")
             || file_name.eq_ignore_ascii_case("officina.exe"))
+}
+
+/// True when a stage of the pipeline `command` runs `officina quota write`
+/// (the `officina` binary, then `quota`, then `write`), whatever its options.
+pub fn runs_officina_quota_write(command: &str) -> bool {
+    command.split('|').any(|stage| {
+        let Some(words) = command_words(stage) else {
+            return false;
+        };
+        let [program, quota, write, ..] = words.as_slice() else {
+            return false;
+        };
+        let file_name = program.rsplit(['/', '\\']).next().unwrap_or_default();
+        (file_name.eq_ignore_ascii_case("officina")
+            || file_name.eq_ignore_ascii_case("officina.exe"))
+            && quota == "quota"
+            && write == "write"
+    })
 }
 
 /// Splits a command line into words as a POSIX shell does for plain words:
@@ -1785,5 +1807,41 @@ mod tests {
         let with = statusline_snippet(&exe, Some("python statusline.py"));
         assert!(with.contains("\\\"/opt/officina\\\" quota write --tee | python statusline.py"));
         assert!(statusline_snippet(&exe, None).contains("quota write\""));
+    }
+
+    /// An existing statusline that already runs Officina's `quota write` is
+    /// not wrapped: the snippet is the plain command, never a tee into it.
+    #[test]
+    fn statusline_snippet_never_tees_into_officina_itself() {
+        let exe = PathBuf::from("C:/Program Files/Officina/officina.exe");
+        for existing in [
+            "\"C:/Program Files/Officina/officina.exe\" quota write",
+            "\"C:/Program Files/Officina/officina.exe\" quota write --tee | python s.py",
+            "/opt/officina quota write",
+        ] {
+            let snippet = statusline_snippet(&exe, Some(existing));
+            assert!(!snippet.contains("--tee"), "{existing}: {snippet}");
+            assert!(snippet.contains("quota write"), "{existing}");
+        }
+    }
+
+    #[test]
+    fn officina_quota_write_is_recognised_in_a_pipeline() {
+        for runs in [
+            "\"C:/x/officina.exe\" quota write",
+            "officina quota write --tee | python s.py",
+            "python s.py | /opt/OFFICINA quota write",
+        ] {
+            assert!(runs_officina_quota_write(runs), "{runs}");
+        }
+        for other in [
+            "python statusline.py",
+            "officina quota",
+            "officina-app quota write",
+            "\"unterminated quota write",
+            "officina doctor | quota write",
+        ] {
+            assert!(!runs_officina_quota_write(other), "{other}");
+        }
     }
 }
