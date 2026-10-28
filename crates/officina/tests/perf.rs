@@ -163,31 +163,48 @@ fn gate_payload(command: &str) -> serde_json::Value {
 }
 
 /// D-19: the gate's own cost through the real binary, its p95 over
-/// [`GATE_RUNS`] runs minus an empty process's, under 5 ms on any machine.
+/// [`GATE_RUNS`] runs minus a baseline's, under 5 ms on any machine.
+///
+/// The baseline is the same binary, `officina hook`, on the same payload
+/// with another tool than `Bash`: the gate answers it at its first step,
+/// before reading any file (AD-26). Both runs then pay the same process
+/// start, image load, stdin read and payload parse, and the difference is
+/// the gate's own work: the floor, snapshot and known-projects reads, phase
+/// 1, the lexer and the decision. A smaller program as baseline would charge
+/// the gate with loading and scanning `officina.exe` itself, which a hosted
+/// runner's antivirus makes tens of milliseconds and the gate cannot change.
 #[test]
 #[ignore = "timing test, run in release by CI"]
 fn gate_overhead_over_empty_process() {
     let _serial = serial();
     let env = gate_env();
-    let payload = gate_payload(&big_command()).to_string().into_bytes();
-    let first = env.run(&["hook"], &payload);
-    assert!(
-        first.status.success() && first.stdout.is_empty(),
-        "the command is let through"
-    );
+    let command = big_command();
+    let payload = gate_payload(&command).to_string().into_bytes();
+    let mut other_tool = gate_payload(&command);
+    other_tool["tool_name"] = "Read".into();
+    let other_tool = other_tool.to_string().into_bytes();
+    assert_eq!(payload.len(), other_tool.len(), "the same bytes to read");
+    for input in [&payload, &other_tool] {
+        let first = env.run(&["hook"], input);
+        assert!(
+            first.status.success() && first.stdout.is_empty(),
+            "the command is let through"
+        );
+    }
     let (gate, baseline) = timed_pairs(
         GATE_RUNS,
         || assert!(env.run(&["hook"], &payload).status.success()),
-        || {
-            let out = std::process::Command::new(common::FAKE_TOOL)
-                .output()
-                .unwrap();
-            assert!(out.status.success());
-        },
+        || assert!(env.run(&["hook"], &other_tool).status.success()),
+    );
+    assert!(
+        env.journal_after_approvals().is_empty(),
+        "neither run journals"
     );
     let (gate, baseline) = (p95(gate), p95(baseline));
     let own_cost = gate.saturating_sub(baseline);
-    println!("gate p95 {gate:?}, empty process p95 {baseline:?}, own cost {own_cost:?}");
+    println!(
+        "gate p95 {gate:?}, same binary without the gate p95 {baseline:?}, own cost {own_cost:?}"
+    );
     assert!(own_cost < Duration::from_millis(5), "own cost {own_cost:?}");
 }
 
