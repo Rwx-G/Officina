@@ -595,3 +595,65 @@ fn deleted_text_reaches_neither_the_file_nor_the_copy() {
     }
     assert_eq!(std::fs::metadata(paths.wal()).unwrap().len(), 0);
 }
+
+/// Adversarial pass: a kill between the quarantine's moves leaves the
+/// database's log without it. A new database must not start beside that
+/// log, which SQLite would replay into it: the log is set aside too.
+#[test]
+fn a_log_left_without_its_database_is_set_aside() {
+    let home = Home::new();
+    killed_writer(&home);
+    let paths = home.paths();
+    let interrupted = paths.quarantine_dir().join((NOW - 1).to_string());
+    std::fs::create_dir_all(&interrupted).unwrap();
+    std::fs::rename(paths.database(), interrupted.join("registry.db")).unwrap();
+    assert!(paths.wal().exists());
+    let quarantined_dir = started_empty(open_writer(&home.home, &[], NOW));
+    assert!(
+        quarantined_dir.join("registry.db-wal").is_file(),
+        "the log is kept, set aside"
+    );
+    assert!(!paths.wal().exists() || std::fs::metadata(paths.wal()).unwrap().len() == 0);
+    let reader = open_reader(&home.home, &[]).unwrap();
+    assert!(
+        reader.settings().unwrap().is_empty(),
+        "nothing replayed from the old log"
+    );
+    assert_eq!(reader.quick_check().unwrap(), ["ok"]);
+}
+
+/// Adversarial pass: a kill after the damaged database was set aside and
+/// before the copy took its place leaves no database; the next open
+/// finishes the restore rather than starting empty.
+#[test]
+fn an_interrupted_restore_is_finished_at_the_next_open() {
+    let home = Home::new();
+    let copy = with_copy(&home, NOW - DAY);
+    let paths = home.paths();
+    let set_aside = paths.quarantine_dir().join((NOW - 1).to_string());
+    std::fs::create_dir_all(&set_aside).unwrap();
+    std::fs::rename(paths.database(), set_aside.join("registry.db")).unwrap();
+    std::fs::write(
+        paths.database().with_extension("db.restore"),
+        b"half a copy",
+    )
+    .unwrap();
+    let (quarantined_dir, notice) = restored(open_writer(&home.home, &[], NOW));
+    assert_eq!(quarantined_dir, set_aside);
+    assert_eq!(notice.copy, copy.file_name().unwrap().to_string_lossy());
+    assert!(!paths.database().with_extension("db.restore").exists());
+    assert_eq!(sorted(setting_keys(&home)), every_key());
+}
+
+/// A first start, with no quarantine, creates the registry and restores
+/// nothing, whatever copies lie around.
+#[test]
+fn a_first_start_restores_nothing() {
+    let home = Home::new();
+    with_copy(&home, NOW - DAY);
+    std::fs::remove_file(home.paths().database()).unwrap();
+    match open_writer(&home.home, &[], NOW) {
+        WriterOpen::Writable { integrity, .. } => assert_eq!(integrity, Integrity::Created),
+        other => panic!("{other:?}"),
+    }
+}

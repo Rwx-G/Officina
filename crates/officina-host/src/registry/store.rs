@@ -483,6 +483,9 @@ mod writing {
             migrations,
             now_ms,
         };
+        if !opening.paths.database().exists() {
+            return opening.open_missing();
+        }
         match open_connection(&opening.paths.database()) {
             Ok(conn) => opening.settle(conn, None),
             Err(error) if error.is_corruption() => opening.recover(),
@@ -627,10 +630,42 @@ mod writing {
         /// a database: it is set aside, then replaced by the newest copy
         /// that passes, else by a new database (AD-42).
         fn recover(self) -> WriterOpen {
-            let quarantined = match self.quarantine() {
-                Ok(dir) => dir,
-                Err(error) => return WriterOpen::Unavailable { error },
-            };
+            match self.quarantine() {
+                Ok(Some(quarantined)) => self.restore(quarantined),
+                Ok(None) => self.open_missing(),
+                Err(error) => WriterOpen::Unavailable { error },
+            }
+        }
+
+        /// No database file. A log left without it (a kill between the
+        /// quarantine's moves) is set aside first, since SQLite would replay
+        /// it into a new database. After a quarantine, the database is
+        /// missing because a restore did not finish: it is finished.
+        /// Otherwise this is a first start, and the database is created.
+        fn open_missing(self) -> WriterOpen {
+            let unfinished = self.paths.database().with_extension("db.restore");
+            if unfinished.exists()
+                && let Err(error) = fs::remove_file(&unfinished)
+            {
+                return WriterOpen::Unavailable {
+                    error: RegistryError::io(&unfinished, error),
+                };
+            }
+            if let Err(error) = self.quarantine() {
+                return WriterOpen::Unavailable { error };
+            }
+            match super::quarantined(&self.paths).pop() {
+                Some(newest) => self.restore(newest),
+                None => match open_connection(&self.paths.database()) {
+                    Ok(conn) => self.settle(conn, None),
+                    Err(error) => WriterOpen::Unavailable { error },
+                },
+            }
+        }
+
+        /// Puts the newest copy that passes its check in place of the
+        /// database set aside in `quarantined`, else starts a new one.
+        fn restore(self, quarantined: PathBuf) -> WriterOpen {
             let db = self.paths.database();
             for candidate in restore_candidates(&self.paths) {
                 if !copy_is_valid(&candidate) {
@@ -663,16 +698,22 @@ mod writing {
             }
         }
 
-        /// Moves the database, its `-wal` and its `-shm` to
-        /// `registry/quarantine/<now_ms>/`. A move that fails puts back what
-        /// was moved and leaves the registry unavailable until the next
-        /// start: nothing is deleted (D-97).
-        fn quarantine(&self) -> Result<PathBuf, RegistryError> {
+        /// Moves the database, its `-wal` and its `-shm`, those that exist,
+        /// to `registry/quarantine/<now_ms>/`; `None` when none does. A move
+        /// that fails puts back what was moved and leaves the registry
+        /// unavailable until the next start: nothing is deleted (D-97).
+        fn quarantine(&self) -> Result<Option<PathBuf>, RegistryError> {
+            let files: Vec<PathBuf> = [self.paths.database(), self.paths.wal(), self.paths.shm()]
+                .into_iter()
+                .filter(|f| f.exists())
+                .collect();
+            if files.is_empty() {
+                return Ok(None);
+            }
             let dir = self.paths.quarantine_dir().join(self.now_ms.to_string());
             fs::create_dir_all(&dir).map_err(|e| RegistryError::io(&dir, e))?;
-            let files = [self.paths.database(), self.paths.wal(), self.paths.shm()];
             let mut moved: Vec<(PathBuf, PathBuf)> = Vec::new();
-            for file in files.into_iter().filter(|f| f.exists()) {
+            for file in files {
                 let Some(name) = file.file_name() else {
                     continue;
                 };
@@ -691,7 +732,7 @@ mod writing {
                 }
                 moved.push((file, to));
             }
-            Ok(dir)
+            Ok(Some(dir))
         }
     }
 
