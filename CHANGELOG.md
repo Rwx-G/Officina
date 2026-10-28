@@ -211,9 +211,20 @@ project uses [Semantic Versioning](https://semver.org/).
   reason code, call id) and keeps a copy of the excerpts it was decided
   on, which expires when those excerpts were due to, under the same
   30-day bound; a batch is one transaction, answered per item.
+- Hook fields in the contract canary (v0.3, in progress): the hook notes,
+  in an optional `absent` field of event line version 1, the fields of
+  `HOOK_FIELDS` its payload lacked; the window records them per Claude
+  Code version in `state/contract.json` (`hook_missing`, and
+  `hook_not_observed` for the events not seen yet), counting only lines
+  after the version's first sighting. The header's contract chip names a
+  missing field (`hook_missing` in the board's contract view), and
+  `officina doctor` prints both lists.
 
 ### Changed
 
+- `officina board --json` reads the `claude` version (v0.3, in progress),
+  so it keeps the running version's contract record current and shows its
+  missing hook fields.
 - `officina hook` also answers `PreToolUse` for the shell tools, as the
   relay gate;
   every other event is recorded as before, and `PreToolUse` payloads are

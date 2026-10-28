@@ -50,6 +50,8 @@ Officina hosts nothing and owns no session process. It only reads documented Cla
 
 Missing data is shown as **unknown**, never as finished. Officina never writes to your Claude Code configuration: `officina doctor` prints what to paste, you paste it.
 
+Claude Code updates itself, so Officina checks, for each version it runs under, that what it reads is still there: the `claude agents` fields, against each session list, and the hook payload fields it reads, listed per event in `HOOK_FIELDS` (`crates/officina-core/src/contract.rs`). The hook notes on each event line the fields of that list its payload lacked; the window records them under the running version, counting only lines from the time it first saw that version, so an upgrade does not inherit the gaps of the one before. A missing field shows in the header's contract chip and in `officina doctor`, which also lists the events no line of this version has carried yet.
+
 ### The columns
 
 | Column | Meaning |
