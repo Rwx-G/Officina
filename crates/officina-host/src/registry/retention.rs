@@ -8,7 +8,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use officina_core::dates::{dated_file_day, parse_utc_day, utc_date};
-use officina_core::registry::retention::{COPIES_KEPT, event_file_deletable, excerpt_cutoff, kept};
+use officina_core::registry::retention::{
+    COPIES_KEPT, TRIAGE_CALL_TTL_MS, event_file_deletable, excerpt_cutoff, kept,
+};
 
 use super::ingest::{IngestContext, IngestReport};
 use super::store::{Writer, copy_is_valid, daily_copies, quarantined, read_only_connection};
@@ -29,6 +31,8 @@ pub struct PassReport {
     pub deleted_copies: Vec<PathBuf>,
     /// Sessions whose excerpts were cleared.
     pub cleared_excerpts: usize,
+    /// `triage_call` rows past their 90 days (AD-44).
+    pub deleted_calls: usize,
     /// False when a reader kept the WAL from being truncated.
     pub checkpointed: bool,
 }
@@ -94,6 +98,7 @@ impl Writer {
         report.deleted_copies = self.retire_copies(now_ms)?;
         report.deleted_event_files = self.retire_event_files(ctx.events_dir, now_ms)?;
         report.cleared_excerpts = self.clear_excerpts(ctx.no_excerpts, now_ms)?;
+        report.deleted_calls = self.retire_triage_calls(now_ms)?;
         report.checkpointed = self.checkpoint()?;
         Ok(report)
     }
@@ -190,6 +195,15 @@ impl Writer {
     /// the event (D-50), and every excerpt when `no_excerpts` is on (D-85),
     /// in `session_excerpt` and in `confirmation_input`; returns how many
     /// sessions lost one.
+    /// Deletes the `triage_call` rows started [`TRIAGE_CALL_TTL_MS`] or
+    /// more before `now_ms` (AD-44).
+    fn retire_triage_calls(&self, now_ms: i64) -> Result<usize, RegistryError> {
+        Ok(self.conn.execute(
+            "DELETE FROM triage_call WHERE started_at_ms <= ?1",
+            [now_ms - TRIAGE_CALL_TTL_MS],
+        )?)
+    }
+
     fn clear_excerpts(&mut self, no_excerpts: bool, now_ms: i64) -> Result<usize, RegistryError> {
         let tx = self.conn.transaction()?;
         let cleared = if no_excerpts {

@@ -30,6 +30,10 @@ pub const EXCERPT_TTL_MS: i64 = PRIVACY_BOUND_MS - COPY_LIFETIME_MS - PASS_INTER
 /// and pre-migration copies are kept.
 pub const COPIES_KEPT: usize = 2;
 
+/// How long a `triage_call` row is kept (AD-44): the counts read 30 days,
+/// the rest is history.
+pub const TRIAGE_CALL_TTL_MS: i64 = 90 * DAY_MS;
+
 /// True when an excerpt recorded for an event at `event_ms` has expired at
 /// `now_ms` (D-50: counted from the event, never from ingestion).
 pub fn excerpt_expired(event_ms: i64, now_ms: i64) -> bool {

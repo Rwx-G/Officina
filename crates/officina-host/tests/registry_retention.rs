@@ -391,3 +391,45 @@ fn hourly_pass_ingests_then_copies_then_retains() {
     // holding the two oldest files complete, and they go in this pass.
     assert_eq!(report.deleted_event_files, files[..2]);
 }
+
+/// Story 3.9 AC 10 (AD-44): a `triage_call` row is kept 90 days from its
+/// start, then the hourly pass deletes it.
+#[test]
+fn triage_call_rows_are_kept_90_days() {
+    use officina_core::registry::retention::TRIAGE_CALL_TTL_MS;
+    use officina_core::registry::triage_call::{CallUsage, TriageCase};
+    use officina_core::registry::types::{TriageOutcome, TriagePurpose};
+    use officina_host::registry::triage::CallResult;
+
+    let home = Home::new();
+    let mut writer = home.writer(NOW);
+    let call = |started_at_ms| CallResult {
+        purpose: TriagePurpose::DryRun,
+        case_key: "confirmation:1".into(),
+        input_hash: TriageCase::default().input_hash(),
+        started_at_ms,
+        duration_ms: 1_000,
+        outcome: TriageOutcome::Answer,
+        refusal: None,
+        answer: None,
+        usage: CallUsage::default(),
+        detail: None,
+    };
+    let kept = NOW - TRIAGE_CALL_TTL_MS + 1;
+    let gone = NOW - TRIAGE_CALL_TTL_MS;
+    writer.record_call(&call(kept)).unwrap();
+    writer.record_call(&call(gone)).unwrap();
+    let report = writer.hourly_pass(&home.ctx(), NOW).unwrap();
+    assert_eq!(report.deleted_calls, 1);
+    let left: Vec<i64> = writer
+        .triage_calls_since(0)
+        .unwrap()
+        .into_iter()
+        .map(|c| c.started_at_ms)
+        .collect();
+    assert_eq!(left, [kept]);
+    writer
+        .hourly_pass(&home.ctx(), kept + TRIAGE_CALL_TTL_MS)
+        .unwrap();
+    assert!(writer.triage_calls_since(0).unwrap().is_empty());
+}
