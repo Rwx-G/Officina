@@ -31,6 +31,7 @@ pub mod classes;
 pub mod gate;
 pub mod journal;
 pub mod params;
+pub mod run;
 pub mod shell;
 
 use sha2::{Digest, Sha256};
@@ -43,6 +44,44 @@ pub const RELAY_DIR: &str = "relay";
 /// The journal's directory under the Officina home (AD-25, AD-32).
 pub const JOURNAL_DIR: &str = "journal";
 
+/// SHA-256 over bytes that arrive in pieces, as `officina run` hashes an
+/// output stream (AD-31).
+///
+/// ```
+/// use officina_core::relay::{StreamHash, sha256_hex};
+/// let mut hash = StreamHash::new();
+/// hash.update(b"ab");
+/// hash.update(b"c");
+/// assert_eq!(hash.hex(), sha256_hex(b"abc"));
+/// ```
+#[derive(Debug, Clone, Default)]
+pub struct StreamHash(Sha256);
+
+impl StreamHash {
+    pub fn new() -> StreamHash {
+        StreamHash(Sha256::new())
+    }
+
+    pub fn update(&mut self, bytes: &[u8]) {
+        self.0.update(bytes);
+    }
+
+    /// The hash of every byte so far, lowercase hex. The stream can go on.
+    pub fn hex(&self) -> String {
+        hex(&self.0.clone().finalize())
+    }
+}
+
+fn hex(digest: &[u8]) -> String {
+    use std::fmt::Write;
+    digest
+        .iter()
+        .fold(String::with_capacity(64), |mut hex, byte| {
+            let _ = write!(hex, "{byte:02x}");
+            hex
+        })
+}
+
 /// SHA-256 of `bytes`, lowercase hex.
 ///
 /// ```
@@ -52,11 +91,5 @@ pub const JOURNAL_DIR: &str = "journal";
 /// );
 /// ```
 pub fn sha256_hex(bytes: &[u8]) -> String {
-    use std::fmt::Write;
-    Sha256::digest(bytes)
-        .iter()
-        .fold(String::with_capacity(64), |mut hex, byte| {
-            let _ = write!(hex, "{byte:02x}");
-            hex
-        })
+    hex(&Sha256::digest(bytes))
 }
