@@ -74,6 +74,85 @@ closed_enum! {
         OfficinaVariable,
         /// The text names Officina's relay or journal directory (D-13).
         ProtectedDir,
+        /// A PowerShell tool call in a guarded project: Officina reads Bash
+        /// commands only (D-171).
+        PowershellInGuardedProject,
+    }
+}
+
+closed_enum! {
+    /// How the gate treats the calls of one shell tool (D-171).
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum ToolRule {
+        /// Its `tool_input.command` is lexed and decided by [`decide`]; a
+        /// call without one gets no decision.
+        Lexed,
+        /// Refused whole in a guarded project: its language is one Officina
+        /// does not read, and the session keeps a lexed tool for commands.
+        DeniedInGuardedProject,
+    }
+}
+
+/// Every Claude Code tool that runs a shell command, each with its rule
+/// (D-171); any other tool gets no decision. A tool whose language Officina
+/// cannot read is refused whole in a guarded project rather than let
+/// through: Claude Code turns the PowerShell tool on by default on Windows.
+/// Doctor builds the `PreToolUse` matcher from this list.
+pub const SHELL_TOOLS: &[(&str, ToolRule)] = &[
+    ("Bash", ToolRule::Lexed),
+    ("PowerShell", ToolRule::DeniedInGuardedProject),
+    ("Monitor", ToolRule::Lexed),
+];
+
+/// The rule of `tool`, named exactly as Claude Code names it; `None` for a
+/// tool that runs no shell command.
+pub fn tool_rule(tool: &str) -> Option<ToolRule> {
+    SHELL_TOOLS
+        .iter()
+        .find(|(name, _)| *name == tool)
+        .map(|(_, rule)| *rule)
+}
+
+/// The `PreToolUse` matcher naming every tool of [`SHELL_TOOLS`].
+///
+/// ```
+/// use officina_core::relay::gate::{SHELL_TOOLS, shell_tools_matcher};
+/// let matcher = shell_tools_matcher();
+/// assert_eq!(matcher.split('|').count(), SHELL_TOOLS.len());
+/// ```
+pub fn shell_tools_matcher() -> String {
+    SHELL_TOOLS
+        .iter()
+        .map(|(name, _)| *name)
+        .collect::<Vec<_>>()
+        .join("|")
+}
+
+/// The gate's decision for one tool call (AD-26, D-171): the rule of `tool`
+/// applied to its `command`. A tool that runs no shell command, and a lexed
+/// tool's call without a command, get no decision.
+///
+/// ```
+/// use officina_core::relay::gate::{DenyKind, decide_call};
+/// let list = vec!["ssh".to_owned()];
+/// assert_eq!(decide_call("Read", Some("ssh host01"), &list, &[], true), None);
+/// let deny = decide_call("PowerShell", Some("Get-ChildItem"), &list, &[], true).unwrap();
+/// assert_eq!(deny.kind, DenyKind::PowershellInGuardedProject);
+/// assert_eq!(decide_call("PowerShell", Some("Get-ChildItem"), &list, &[], false), None);
+/// ```
+pub fn decide_call(
+    tool: &str,
+    command: Option<&str>,
+    guarded_programs: &[String],
+    protected_dirs: &[String],
+    cwd_guarded: bool,
+) -> Option<Deny> {
+    match tool_rule(tool)? {
+        ToolRule::Lexed => decide(command?, guarded_programs, protected_dirs, cwd_guarded),
+        ToolRule::DeniedInGuardedProject if cwd_guarded => {
+            Deny::new(DenyKind::PowershellInGuardedProject, None)
+        }
+        ToolRule::DeniedInGuardedProject => None,
     }
 }
 
@@ -664,6 +743,9 @@ fn why(deny: &Deny) -> String {
         DenyKind::ProtectedDir => {
             "the command names Officina's relay or journal directory, which only the Officina window writes".to_owned()
         }
+        DenyKind::PowershellInGuardedProject => {
+            "Officina reads Bash commands only, so the PowerShell tool is refused in a guarded project; run the command with the Bash tool".to_owned()
+        }
     }
 }
 
@@ -1092,5 +1174,65 @@ mod tests {
         }
         assert!(names_protected_dir("cat ~/.officina/relay/x", &default));
         assert!(!names_protected_dir("cat x.officina/relay", &default));
+    }
+
+    /// D-171: every shell tool has a rule, applied by `decide_call`; the
+    /// match is exhaustive, so a new rule does not compile without a case.
+    #[test]
+    fn every_shell_tool_has_a_rule() {
+        let list = vec!["ssh".to_owned()];
+        assert!(!SHELL_TOOLS.is_empty());
+        for (tool, rule) in SHELL_TOOLS {
+            assert_eq!(tool_rule(tool), Some(*rule), "{tool}");
+            assert!(
+                shell_tools_matcher().split('|').any(|name| name == *tool),
+                "{tool} is in the matcher"
+            );
+            let guarded = decide_call(tool, Some("ssh host01"), &list, &[], true).map(|d| d.kind);
+            let free = decide_call(tool, Some("ssh host01"), &list, &[], false);
+            assert_eq!(free, None, "{tool}: never outside a guarded project");
+            match rule {
+                ToolRule::Lexed => {
+                    assert_eq!(guarded, Some(DenyKind::GuardedProgram), "{tool}");
+                    assert_eq!(
+                        decide_call(tool, Some("ls -la"), &list, &[], true),
+                        None,
+                        "{tool}: lexed like Bash"
+                    );
+                    assert_eq!(
+                        decide_call(tool, None, &list, &[], true),
+                        None,
+                        "{tool}: no command, no decision"
+                    );
+                }
+                ToolRule::DeniedInGuardedProject => {
+                    assert_eq!(
+                        guarded,
+                        Some(DenyKind::PowershellInGuardedProject),
+                        "{tool}"
+                    );
+                    assert_eq!(
+                        decide_call(tool, None, &list, &[], true).map(|d| d.kind),
+                        Some(DenyKind::PowershellInGuardedProject),
+                        "{tool}: refused whole"
+                    );
+                }
+            }
+        }
+        for other in ["Read", "Write", "Edit", "bash", "powershell", ""] {
+            assert_eq!(tool_rule(other), None, "{other}");
+            assert_eq!(
+                decide_call(other, Some("ssh host01"), &list, &[], true),
+                None
+            );
+        }
+        let reason = deny_reason(
+            &deny(DenyKind::PowershellInGuardedProject, None),
+            "lab",
+            Offer::Approved(&[]),
+        );
+        assert!(reason.contains("lab"), "{reason}");
+        assert!(reason.contains("Bash"), "{reason}");
+        assert!(reason.contains(LIST_COMMAND), "{reason}");
     }
 }

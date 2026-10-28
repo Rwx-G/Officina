@@ -28,7 +28,7 @@ use officina_core::relay::catalogue::{
     SectionDiff, diff, relay_in_use,
 };
 use officina_core::relay::classes::{self, CHECK_VALID_MS, WAIT_RANGE_S};
-use officina_core::relay::gate::LIST_COMMAND;
+use officina_core::relay::gate::{LIST_COMMAND, SHELL_TOOLS, ToolRule};
 use officina_core::relay::journal::JournalEntry;
 use officina_core::relay::run::{BASH_TOOL_MAX_TIMEOUT_MS, one_line};
 use officina_core::relay::view::GATE_ERRORS_WINDOW_MS;
@@ -849,7 +849,29 @@ pub fn claude_md_paragraph(project: &str, approved: Option<&CanonicalCatalogue>)
     text.push_str(&format!(
         "\n`{LIST_COMMAND}` shows the actions and the values each parameter accepts. Give every `officina run` call a Bash timeout of {BASH_TOOL_MAX_TIMEOUT_MS} ms. A refused call prints `officina: refused: <why>` on stderr and runs nothing: read the reason before retrying, and do not retry the same call until what the reason names has changed.\n"
     ));
+    text.push_str(&tools_sentence());
     text
+}
+
+/// Which tools to run commands with in a guarded repository, from
+/// `SHELL_TOOLS` (D-171): the ones the gate reads, and the ones it refuses.
+fn tools_sentence() -> String {
+    let with = |wanted: ToolRule| -> Vec<&str> {
+        SHELL_TOOLS
+            .iter()
+            .filter(|(_, rule)| *rule == wanted)
+            .map(|(name, _)| *name)
+            .collect()
+    };
+    let refused = with(ToolRule::DeniedInGuardedProject);
+    if refused.is_empty() {
+        return String::new();
+    }
+    format!(
+        "Run commands in this repository with the {} tool: Officina refuses the {} tool here.\n",
+        with(ToolRule::Lexed).join(" or "),
+        refused.join(" or ")
+    )
 }
 
 /// One paragraph per project the floor or the approved snapshot guards,

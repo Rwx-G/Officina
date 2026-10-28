@@ -1,8 +1,9 @@
-//! The gate in the hook (AD-26, AD-28, D-13 to D-17): reads a `PreToolUse`
-//! payload, the relay floor (phase 1 only), the approved snapshot and, when
-//! one of them fails, the known-projects record; decides; journals each deny
-//! and each fault; and returns the JSON Claude Code honours in every mode
-//! (E12, E15). It spawns nothing and compiles no pattern.
+//! The gate in the hook (AD-26, AD-28, D-13 to D-17, D-171): reads a
+//! `PreToolUse` payload of a shell tool, the relay floor (phase 1 only), the
+//! approved snapshot and, when one of them fails, the known-projects record;
+//! decides by the tool's rule; journals each deny and each fault; and returns
+//! the JSON Claude Code honours in every mode (E12, E15). It spawns nothing
+//! and compiles no pattern.
 //!
 //! It is containment, not the authority: an internal fault gives no
 //! decision (fail open, AD-28), while an input it cannot read makes it
@@ -17,7 +18,8 @@ use officina_core::floor::{parse_floor, requests_no_excerpts};
 use officina_core::quota::normalise_path;
 use officina_core::relay::HOME_DIR_NAME;
 use officina_core::relay::gate::{
-    Deny, FloorInput, SnapshotInput, containment, decide, deny_reason, protected_dirs,
+    Deny, FloorInput, SnapshotInput, ToolRule, containment, decide_call, deny_reason,
+    protected_dirs, tool_rule,
 };
 use officina_core::relay::journal::{
     COMMAND_EXCERPT_CHARS, GateDenied, GateError, GateFault, JournalEntry,
@@ -26,10 +28,6 @@ use officina_core::relay::journal::{
 use super::home::{ApprovedState, RelayHome};
 use super::journal;
 use crate::paths::{excerpts_disabled_by_env, user_home};
-
-/// The only tool the gate answers for (AD-26 step 1). Registering the hook
-/// for more would put a process start on every file edit (E9).
-pub const GATE_TOOL: &str = "Bash";
 
 /// The hook event the gate answers (AD-26).
 pub const GATE_EVENT: &str = "PreToolUse";
@@ -59,27 +57,35 @@ impl GateEnv {
     }
 }
 
-/// A `Bash` call as the payload carries it (E15).
+/// A shell tool's call as the payload carries it (E15, D-171).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct BashCall {
-    pub command: String,
+pub struct ShellCall {
+    /// The tool, one of `SHELL_TOOLS`.
+    pub tool: String,
+    /// `tool_input.command`; a lexed tool's call always has one.
+    pub command: Option<String>,
     /// The shell's working directory, which follows `cd` (E15).
     pub cwd: Option<String>,
     pub session_id: Option<String>,
 }
 
-impl BashCall {
-    /// The call, when the payload is a `Bash` call with a command (AD-26
-    /// step 1); anything else gets no decision.
-    pub fn from_payload(payload: &serde_json::Value) -> Option<BashCall> {
+impl ShellCall {
+    /// The call, when the payload is a shell tool's (AD-26 step 1, D-171):
+    /// a lexed tool's needs a command, a tool refused whole does not.
+    /// Anything else gets no decision.
+    pub fn from_payload(payload: &serde_json::Value) -> Option<ShellCall> {
         let text = |value: Option<&serde_json::Value>| {
             value.and_then(serde_json::Value::as_str).map(str::to_owned)
         };
-        if payload.get("tool_name").and_then(serde_json::Value::as_str) != Some(GATE_TOOL) {
-            return None;
+        let tool = text(payload.get("tool_name"))?;
+        let command = text(payload.get("tool_input").and_then(|i| i.get("command")));
+        match tool_rule(&tool)? {
+            ToolRule::Lexed if command.is_none() => return None,
+            ToolRule::Lexed | ToolRule::DeniedInGuardedProject => {}
         }
-        Some(BashCall {
-            command: text(payload.get("tool_input").and_then(|i| i.get("command")))?,
+        Some(ShellCall {
+            tool,
+            command,
             cwd: text(payload.get("cwd")),
             session_id: text(payload.get("session_id")),
         })
@@ -117,7 +123,7 @@ fn is_default_home(home: &RelayHome) -> bool {
 
 /// Reads the gate's inputs and decides for `call` (AD-26 steps 2 to 5,
 /// D-14 to D-16). `project_dir` is `CLAUDE_PROJECT_DIR`.
-pub fn evaluate(home: &RelayHome, call: &BashCall, project_dir: Option<&str>) -> Evaluation {
+pub fn evaluate(home: &RelayHome, call: &ShellCall, project_dir: Option<&str>) -> Evaluation {
     let approved = home.read_approved();
     let floor_path = home.relay_floor(&approved);
     let floor_path_text = floor_path.to_string_lossy();
@@ -192,12 +198,18 @@ pub fn evaluate(home: &RelayHome, call: &BashCall, project_dir: Option<&str>) ->
         &home.officina_home().to_string_lossy(),
         is_default_home(home),
     );
-    let deny =
-        decide(&call.command, &contained.guarded_programs, &protected, true).map(|deny| GateDeny {
-            reason: deny_reason(&deny, &project.name, contained.offer_for(&project.name)),
-            project: project.name.clone(),
-            deny,
-        });
+    let deny = decide_call(
+        &call.tool,
+        call.command.as_deref(),
+        &contained.guarded_programs,
+        &protected,
+        true,
+    )
+    .map(|deny| GateDeny {
+        reason: deny_reason(&deny, &project.name, contained.offer_for(&project.name)),
+        project: project.name.clone(),
+        deny,
+    });
     Evaluation {
         deny,
         project: Some(project.name.clone()),
@@ -234,7 +246,7 @@ fn panic_text(payload: &(dyn std::any::Any + Send)) -> String {
 /// stays locked loses the lines, never the decision (AD-32).
 pub fn answer_with(
     home: &RelayHome,
-    call: &BashCall,
+    call: &ShellCall,
     env: &GateEnv,
     now_ms: i64,
     decide: impl FnOnce() -> io::Result<Evaluation>,
@@ -250,8 +262,11 @@ pub fn answer_with(
             return None;
         }
     };
-    let command_excerpt = (!env.excerpts_off && !evaluation.floor_no_excerpts)
-        .then(|| excerpt(&call.command, COMMAND_EXCERPT_CHARS));
+    let command_excerpt = call
+        .command
+        .as_deref()
+        .filter(|_| !env.excerpts_off && !evaluation.floor_no_excerpts)
+        .map(|command| excerpt(command, COMMAND_EXCERPT_CHARS));
     let mut lines = Vec::new();
     if let Some(deny) = &evaluation.deny {
         lines.push(JournalEntry::GateDenied(GateDenied {
@@ -275,7 +290,13 @@ pub fn answer_with(
     evaluation.deny.map(|deny| deny_json(&deny.reason))
 }
 
-fn journal_fault(home: &RelayHome, call: &BashCall, cause: GateFault, detail: String, now_ms: i64) {
+fn journal_fault(
+    home: &RelayHome,
+    call: &ShellCall,
+    cause: GateFault,
+    detail: String,
+    now_ms: i64,
+) {
     let line = JournalEntry::GateError(GateError {
         project: None,
         session_id: call.session_id.clone(),
@@ -287,14 +308,14 @@ fn journal_fault(home: &RelayHome, call: &BashCall, cause: GateFault, detail: St
 }
 
 /// The gate for one `PreToolUse` payload: `None` is no decision, which
-/// prints nothing. Not a `Bash` call with a command: no decision, no line.
+/// prints nothing. Not a shell tool's call: no decision, no line.
 pub fn answer(
     home: &RelayHome,
     payload: &serde_json::Value,
     env: &GateEnv,
     now_ms: i64,
 ) -> Option<String> {
-    let call = BashCall::from_payload(payload)?;
+    let call = ShellCall::from_payload(payload)?;
     answer_with(home, &call, env, now_ms, || {
         Ok(evaluate(home, &call, env.project_dir.as_deref()))
     })
@@ -305,9 +326,10 @@ mod tests {
     use super::*;
     use officina_core::relay::journal::JournalLine;
 
-    fn call() -> BashCall {
-        BashCall {
-            command: "ssh host01".to_owned(),
+    fn call() -> ShellCall {
+        ShellCall {
+            tool: "Bash".to_owned(),
+            command: Some("ssh host01".to_owned()),
             cwd: Some(r"C:\path\to\Lab".to_owned()),
             session_id: Some("00000000-0000-0000-0000-000000000001".to_owned()),
         }
@@ -393,17 +415,27 @@ mod tests {
     }
 
     #[test]
-    fn only_bash_calls_with_a_command_are_gated() {
-        let bash = serde_json::json!({"tool_name": "Bash", "tool_input": {"command": "ls"}, "cwd": "C:/x"});
-        assert_eq!(BashCall::from_payload(&bash).unwrap().command, "ls");
+    fn only_shell_tool_calls_are_gated() {
+        use officina_core::relay::gate::SHELL_TOOLS;
+        for (tool, rule) in SHELL_TOOLS {
+            let with = serde_json::json!({"tool_name": tool, "tool_input": {"command": "ls"}, "cwd": "C:/x"});
+            let call = ShellCall::from_payload(&with).unwrap();
+            assert_eq!(call.command.as_deref(), Some("ls"), "{tool}");
+            let without =
+                serde_json::json!({"tool_name": tool, "tool_input": {"url": "wss://example.com"}});
+            let gated = ShellCall::from_payload(&without).is_some();
+            match rule {
+                ToolRule::Lexed => assert!(!gated, "{tool}: no command, no decision"),
+                ToolRule::DeniedInGuardedProject => assert!(gated, "{tool}: refused whole"),
+            }
+        }
         for other in [
             serde_json::json!({"tool_name": "Read", "tool_input": {"file_path": "x"}}),
-            serde_json::json!({"tool_name": "Bash", "tool_input": {}}),
             serde_json::json!({"tool_name": "Bash", "tool_input": {"command": 7}}),
             serde_json::json!({"tool_name": "bash", "tool_input": {"command": "ls"}}),
             serde_json::json!({"tool_input": {"command": "ls"}}),
         ] {
-            assert_eq!(BashCall::from_payload(&other), None, "{other}");
+            assert_eq!(ShellCall::from_payload(&other), None, "{other}");
         }
     }
 }

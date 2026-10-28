@@ -172,6 +172,7 @@ fn fixtures_carry_the_verified_field_set() {
     for name in [
         "bash-guarded-program.json",
         "bash-officina-run.json",
+        "powershell-guarded-program.json",
         "read-file.json",
     ] {
         let payload = fixture(name);
@@ -744,4 +745,142 @@ fn hostile_payloads_never_break_the_hook() {
         None,
     );
     assert!(read_events(&env).is_empty());
+}
+
+// ---- story 2.12: every shell tool in the gate (D-171) ----
+
+/// The guarded-program fixture sent through another tool.
+fn through(tool: &str, command: Option<&str>, cwd: &str) -> serde_json::Value {
+    let mut payload = fixture("bash-guarded-program.json");
+    payload["tool_name"] = tool.into();
+    payload["cwd"] = cwd.into();
+    payload["tool_input"] = match command {
+        Some(command) => serde_json::json!({"command": command, "description": "x"}),
+        None => serde_json::json!({"url": "wss://example.com/events", "description": "x"}),
+    };
+    payload
+}
+
+#[test]
+fn monitor_command_is_decided_like_bash() {
+    let env = approved_env();
+    let guarded = r"C:\path\to\Supervision";
+    let reason = denied(
+        &env,
+        &through(
+            "Monitor",
+            Some("ssh host01 tail -f /var/log/syslog"),
+            guarded,
+        ),
+        Some(GUARDED_ROOT),
+    );
+    assert!(reason.contains("`ssh`"), "{reason}");
+    not_decided(
+        &env,
+        &through("Monitor", Some("tail -f build.log"), guarded),
+        Some(GUARDED_ROOT),
+    );
+    let journaled = gate_denied(&env);
+    assert_eq!(journaled.len(), 1);
+    assert_eq!(journaled[0].deny, DenyKind::GuardedProgram);
+}
+
+#[test]
+fn monitor_websocket_gets_no_decision() {
+    let env = approved_env();
+    not_decided(
+        &env,
+        &through("Monitor", None, r"C:\path\to\Supervision"),
+        Some(GUARDED_ROOT),
+    );
+    assert!(gate_denied(&env).is_empty() && gate_errors(&env).is_empty());
+}
+
+#[test]
+fn powershell_in_a_guarded_project_is_denied() {
+    let env = approved_env();
+    let reason = denied(
+        &env,
+        &fixture("powershell-guarded-program.json"),
+        Some(GUARDED_ROOT),
+    );
+    assert!(reason.contains("supervision"), "{reason}");
+    assert!(reason.contains("Bash commands only"), "{reason}");
+    assert!(reason.contains("Bash tool"), "{reason}");
+    assert!(reason.contains(LIST_COMMAND), "{reason}");
+    // Any PowerShell call, even one with nothing guarded in it, from the
+    // shell's folder alone (D-16).
+    let harmless = through(
+        "PowerShell",
+        Some("Get-ChildItem"),
+        r"C:\path\to\Supervision\roles",
+    );
+    denied(&env, &harmless, None);
+    let free_root = through(
+        "PowerShell",
+        Some("Get-ChildItem"),
+        r"C:\path\to\Supervision",
+    );
+    denied(&env, &free_root, Some(FREE_ROOT));
+}
+
+#[test]
+fn powershell_in_a_free_project_gets_no_decision() {
+    let env = approved_env();
+    let free = through("PowerShell", Some("ssh host01"), r"C:\path\to\Notes");
+    not_decided(&env, &free, Some(FREE_ROOT));
+    let elsewhere = through("PowerShell", Some("ssh host01"), r"C:\path\to\Elsewhere");
+    not_decided(&env, &elsewhere, Some("C:/path/to/Elsewhere"));
+    assert!(gate_denied(&env).is_empty());
+}
+
+#[test]
+fn powershell_under_a_broken_snapshot_is_denied() {
+    let env = approved_env();
+    std::fs::write(env.relay_home().approved_file(), b"{ not json").unwrap();
+    let in_free = through("PowerShell", Some("Get-ChildItem"), r"C:\path\to\Notes");
+    denied(&env, &in_free, Some(FREE_ROOT));
+    assert_eq!(causes(&env), [GateFault::ApprovedUnreadable]);
+    assert_eq!(
+        gate_denied(&env)[0].deny,
+        DenyKind::PowershellInGuardedProject
+    );
+}
+
+#[test]
+fn powershell_deny_is_journaled_once() {
+    let env = approved_env();
+    let payload = fixture("powershell-guarded-program.json");
+    denied(&env, &payload, Some(GUARDED_ROOT));
+    let journaled = gate_denied(&env);
+    assert_eq!(journaled.len(), 1);
+    let line = &journaled[0];
+    assert_eq!(line.project, "supervision");
+    assert_eq!(line.deny, DenyKind::PowershellInGuardedProject);
+    assert_eq!(
+        serde_json::to_value(line.deny).unwrap(),
+        "powershell_in_guarded_project"
+    );
+    assert_eq!(line.matched, None);
+    assert_eq!(
+        line.command_excerpt.as_deref(),
+        payload["tool_input"]["command"].as_str()
+    );
+
+    let long = format!("Get-Content {}", "x".repeat(COMMAND_EXCERPT_CHARS * 2));
+    denied(
+        &env,
+        &through("PowerShell", Some(&long), r"C:\path\to\Supervision"),
+        Some(GUARDED_ROOT),
+    );
+    let excerpt = gate_denied(&env)[1].command_excerpt.clone().unwrap();
+    assert!(
+        excerpt.chars().count() <= COMMAND_EXCERPT_CHARS + 3,
+        "{excerpt}"
+    );
+
+    env.write_floor(&FLOOR.replace("schema = 2\n", "schema = 2\nno_excerpts = true\n"));
+    env.approve();
+    denied(&env, &payload, Some(GUARDED_ROOT));
+    assert_eq!(gate_denied(&env)[2].command_excerpt, None);
 }

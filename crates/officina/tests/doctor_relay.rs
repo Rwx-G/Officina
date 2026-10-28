@@ -15,6 +15,7 @@ use common::{TestEnv, fingerprint, git, git_dir_or_skip, now_ms, printed_hooks_b
 use officina_core::floor::Autonomy;
 use officina_core::relay::catalogue::CanonicalCatalogue;
 use officina_core::relay::classes::WAIT_RANGE_S;
+use officina_core::relay::gate::{SHELL_TOOLS, ToolRule};
 use officina_core::relay::journal::{GateError, GateFault, JournalEntry};
 use officina_core::relay::run::BASH_TOOL_MAX_TIMEOUT_MS;
 use officina_host::relay::journal::append;
@@ -650,6 +651,14 @@ fn claude_md_paragraph_lists_the_projects_actions() {
         paragraph.contains("read the reason before retrying"),
         "{paragraph}"
     );
+    for (tool, rule) in SHELL_TOOLS {
+        if *rule == ToolRule::DeniedInGuardedProject {
+            assert!(
+                paragraph.contains(&format!("Officina refuses the {tool} tool here")),
+                "D-171: {paragraph}"
+            );
+        }
+    }
     assert!(!report.has("CLAUDE.md notes"), "notes is free");
     assert_paragraphs_follow_the_snapshot(&doctor);
 }

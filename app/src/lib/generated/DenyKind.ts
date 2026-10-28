@@ -5,4 +5,4 @@
  * `tests/vectors/gate.json` and the journal's (story 2.4). When several
  * apply, the first in this order is reported.
  */
-export type DenyKind = "unparsable" | "guarded_program" | "encoded_command" | "dynamic" | "home_redirection" | "officina_variable" | "protected_dir";
+export type DenyKind = "unparsable" | "guarded_program" | "encoded_command" | "dynamic" | "home_redirection" | "officina_variable" | "protected_dir" | "powershell_in_guarded_project";

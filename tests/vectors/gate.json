@@ -7,6 +7,13 @@
     {"name": "free: an unparsable command gets no decision", "command": "echo 'unterminated", "cwd_guarded": false, "expect": "none"},
     {"name": "free: bash.exe gets no decision", "command": "bash.exe -c 'ls'", "cwd_guarded": false, "expect": "none"},
 
+    {"name": "D-171: the PowerShell tool is refused whole in a guarded project", "tool": "PowerShell", "command": "Get-ChildItem", "cwd_guarded": true, "expect": "powershell_in_guarded_project"},
+    {"name": "D-171: the PowerShell tool reaching ssh is refused too", "tool": "PowerShell", "command": "ssh host01 uptime", "cwd_guarded": true, "expect": "powershell_in_guarded_project"},
+    {"name": "D-171: the PowerShell tool outside a guarded project gets no decision", "tool": "PowerShell", "command": "ssh host01 uptime", "cwd_guarded": false, "expect": "none"},
+    {"name": "D-171: a Monitor command is lexed like Bash", "tool": "Monitor", "command": "ssh host01 tail -f /var/log/syslog", "cwd_guarded": true, "expect": "guarded_program", "matched": "ssh"},
+    {"name": "D-171: an ordinary Monitor command gets no decision", "tool": "Monitor", "command": "tail -f build.log", "cwd_guarded": true, "expect": "none"},
+    {"name": "D-171: a tool that runs no shell command gets no decision", "tool": "Read", "command": "ssh host01", "cwd_guarded": true, "expect": "none"},
+
     {"name": "default list: ansible* as a prefix", "command": "ansible-playbook -i inventory/lab playbooks/site.yml", "cwd_guarded": true, "expect": "guarded_program", "matched": "ansible-playbook"},
     {"name": "default list: ssh", "command": "ssh host01 uptime", "cwd_guarded": true, "expect": "guarded_program", "matched": "ssh"},
     {"name": "default list: scp", "command": "scp notes.txt host01:/tmp/", "cwd_guarded": true, "expect": "guarded_program", "matched": "scp"},

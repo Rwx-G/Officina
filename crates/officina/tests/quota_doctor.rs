@@ -9,6 +9,7 @@ use std::time::{Duration, Instant};
 
 use common::{TestEnv, fingerprint, now_ms, printed_hooks_block};
 use officina_core::board::Board;
+use officina_core::relay::gate::{SHELL_TOOLS, shell_tools_matcher};
 use officina_host::collector::{Collector, LoadedFloor};
 use officina_host::paths::Paths;
 use officina_host::watch::{CollectorMsg, spawn};
@@ -111,9 +112,44 @@ fn doctor_with_a_guarded_project_requires_pre_tool_use() {
         "{text}"
     );
     let block = printed_hooks_block(&out.stdout);
-    assert_eq!(block["hooks"]["PreToolUse"][0]["matcher"], "Bash");
+    assert_eq!(
+        block["hooks"]["PreToolUse"][0]["matcher"],
+        shell_tools_matcher()
+    );
 
     std::fs::write(&settings, block.to_string()).unwrap();
+    let text = String::from_utf8_lossy(&env.run(&["doctor"], b"").stdout).to_string();
+    assert!(text.contains("[ok  ] hooks"), "{text}");
+}
+
+/// D-171: a `PreToolUse` registration merged before story 2.12, naming one
+/// shell tool, is reported with the tools it leaves out; pasting the block
+/// doctor prints then covers every one.
+#[test]
+fn doctor_with_a_guarded_project_requires_every_shell_tool() {
+    let env = TestEnv::new();
+    env.write_agents("[]");
+    env.write_floor("schema = 2\n[[project]]\nname = \"lab\"\npath = \"Lab\"\n");
+    let full = printed_hooks_block(&env.run(&["doctor"], b"").stdout);
+    let names: Vec<&str> = SHELL_TOOLS.iter().map(|(name, _)| *name).collect();
+    let (first, others) = names.split_first().unwrap();
+    let mut partial = full.clone();
+    partial["hooks"]["PreToolUse"][0]["matcher"] = (*first).into();
+    let settings = env.claude_config().join("settings.json");
+    std::fs::write(&settings, partial.to_string()).unwrap();
+
+    let out = env.run(&["doctor"], b"");
+    let text = String::from_utf8_lossy(&out.stdout).to_string();
+    assert_eq!(out.status.code(), Some(1), "{text}");
+    assert!(
+        text.contains(&format!(
+            "[FAIL] hooks: not registered for PreToolUse ({})",
+            others.join(", ")
+        )),
+        "{text}"
+    );
+    let printed = printed_hooks_block(&out.stdout);
+    std::fs::write(&settings, printed.to_string()).unwrap();
     let text = String::from_utf8_lossy(&env.run(&["doctor"], b"").stdout).to_string();
     assert!(text.contains("[ok  ] hooks"), "{text}");
 }
@@ -178,6 +214,10 @@ fn no_command_writes_under_the_claude_config_dir() {
         "session_id": "s",
     });
     let deny = env.run(&["hook"], payload.to_string().as_bytes());
+    assert!(String::from_utf8_lossy(&deny.stdout).contains("\"deny\""));
+    let mut powershell = payload.clone();
+    powershell["tool_name"] = "PowerShell".into();
+    let deny = env.run(&["hook"], powershell.to_string().as_bytes());
     assert!(String::from_utf8_lossy(&deny.stdout).contains("\"deny\""));
     for args in [
         &["run", "probe"][..],

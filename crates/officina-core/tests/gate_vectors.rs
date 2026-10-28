@@ -1,14 +1,15 @@
-//! Replays the hand-written gate vector set (AD-26, AD-27, D-10 to D-13)
-//! through `gate::decide`, refuses a set that no longer exercises every
-//! lexer constant, default guarded program, home-redirection name and deny
-//! kind, and holds the honest limits to "no decision".
+//! Replays the hand-written gate vector set (AD-26, AD-27, D-10 to D-13,
+//! D-171) through `gate::decide_call`, refuses a set that no longer
+//! exercises every lexer constant, shell tool, default guarded program,
+//! home-redirection name and deny kind, and holds the honest limits to "no
+//! decision".
 
 use std::collections::HashSet;
 
 use officina_core::floor::parse_floor;
 use officina_core::relay::catalogue::{DEFAULT_GUARDED_PROGRAMS, guarded_programs};
 use officina_core::relay::gate::{
-    DenyKind, HOME_REDIRECTION_NAMES, decide, guarded_match, protected_dirs,
+    DenyKind, HOME_REDIRECTION_NAMES, SHELL_TOOLS, decide_call, guarded_match, protected_dirs,
 };
 use officina_core::relay::shell::{
     self, Builtin, CMD_COMMAND_SWITCHES, CMD_DELAYED_EXPANSION_SWITCH, COMMAND_QUERY_OPTIONS,
@@ -35,6 +36,9 @@ struct VectorSet {
 #[serde(deny_unknown_fields)]
 struct Case {
     name: String,
+    /// The tool that runs the command; the Bash tool when absent (D-171).
+    #[serde(default)]
+    tool: Option<String>,
     command: String,
     /// The effective list; the default one when absent.
     #[serde(default)]
@@ -56,6 +60,10 @@ impl Case {
             serde_json::from_value(serde_json::Value::String(self.expect.clone()))
                 .unwrap_or_else(|e| panic!("case {}: expect {:?}: {e}", self.name, self.expect))
         })
+    }
+
+    fn tool(&self) -> &str {
+        self.tool.as_deref().unwrap_or("Bash")
     }
 
     fn uses_default_list(&self) -> bool {
@@ -88,7 +96,13 @@ fn every_case_matches() {
             case.name
         );
         let list = case.guarded_programs.as_ref().unwrap_or(&default);
-        let decision = decide(&case.command, list, &dirs, case.cwd_guarded);
+        let decision = decide_call(
+            case.tool(),
+            Some(&case.command),
+            list,
+            &dirs,
+            case.cwd_guarded,
+        );
         let kind = decision.as_ref().map(|d| d.kind);
         let matched_ok = case
             .matched
@@ -219,6 +233,12 @@ fn every_constant_appears_in_a_case() {
         missing.join("\n")
     );
 
+    for (tool, _) in SHELL_TOOLS {
+        assert!(
+            set.cases.iter().any(|c| c.tool() == *tool),
+            "no case runs through the {tool} tool"
+        );
+    }
     let expected: Vec<(&Case, Option<DenyKind>)> =
         set.cases.iter().map(|c| (c, c.expected())).collect();
     for kind in DenyKind::ALL {

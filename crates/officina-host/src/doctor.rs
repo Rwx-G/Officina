@@ -9,13 +9,14 @@ use std::path::Path;
 use officina_core::contract::check_agents;
 use officina_core::floor::{Autonomy, parse_floor};
 use officina_core::quota::STALE_AFTER_MS;
+use officina_core::relay::gate::SHELL_TOOLS;
 
 use crate::claude;
 use crate::collector::Collector;
 use crate::files::{now_ms, read_recent_events};
 use crate::paths::{ENV_FLOOR, env_path};
 use crate::relay::doctor::{self as relay_doctor, RelayDoctor};
-use crate::relay::gate::{GATE_EVENT, GATE_TOOL};
+use crate::relay::gate::GATE_EVENT;
 use crate::relay::home::RelayHome;
 
 /// Hook events the hook records in the event buffer (framing principle 5).
@@ -29,31 +30,34 @@ pub const BUFFERED_EVENTS: [&str; 5] = [
 ];
 
 /// One hook registration doctor requires: an event and, for a tool event,
-/// the tool its matcher must name.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// the tools its matcher must name (none for an event without tools).
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Registration {
     pub event: &'static str,
-    pub matcher: Option<&'static str>,
+    pub tools: Vec<&'static str>,
 }
 
-/// The gate's registration (AD-26, D-18): `PreToolUse` for `Bash` only, so
-/// no other tool call pays for a process start (E9).
-pub const GATE_REGISTRATION: Registration = Registration {
-    event: GATE_EVENT,
-    matcher: Some(GATE_TOOL),
-};
+/// The gate's registration (AD-26, D-18 as amended by D-171): `PreToolUse`
+/// for every shell tool of `SHELL_TOOLS` and no other, so no other tool call
+/// pays for a process start (E9).
+pub fn gate_registration() -> Registration {
+    Registration {
+        event: GATE_EVENT,
+        tools: SHELL_TOOLS.iter().map(|(name, _)| *name).collect(),
+    }
+}
 
 /// The registrations doctor requires: every buffered event, plus the gate's
 /// when the relay guards a project (D-18), so workstations without one pay
-/// nothing on each `Bash` call.
+/// nothing on each shell tool call.
 pub fn registrations(gate: bool) -> Vec<Registration> {
     BUFFERED_EVENTS
         .into_iter()
         .map(|event| Registration {
             event,
-            matcher: None,
+            tools: Vec::new(),
         })
-        .chain(gate.then_some(GATE_REGISTRATION))
+        .chain(gate.then(gate_registration))
         .collect()
 }
 
@@ -116,7 +120,7 @@ pub fn quoted_exe(exe: &Path) -> String {
 }
 
 /// The hooks block to paste into user settings (AD-16), one entry per
-/// registration, with its matcher when it has one.
+/// registration, with a matcher naming its tools when it has some.
 pub fn hooks_block(exe: &Path, registrations: &[Registration]) -> String {
     let command = format!("{} hook", quoted_exe(exe));
     let mut hooks = serde_json::Map::new();
@@ -124,8 +128,8 @@ pub fn hooks_block(exe: &Path, registrations: &[Registration]) -> String {
         let mut group = serde_json::json!({
             "hooks": [{ "type": "command", "command": command, "timeout": 5 }]
         });
-        if let Some(matcher) = registration.matcher {
-            group["matcher"] = matcher.into();
+        if !registration.tools.is_empty() {
+            group["matcher"] = registration.tools.join("|").into();
         }
         hooks.insert(
             registration.event.to_owned(),
@@ -147,38 +151,57 @@ pub fn statusline_snippet(exe: &Path, existing_command: Option<&str>) -> String 
     .unwrap_or_default()
 }
 
-/// Events of `registrations` whose hooks in `settings` do not run
-/// `officina hook`: a command whose first word is the `officina` binary and
-/// whose second is `hook`, in a matcher group that names the registration's
-/// tool when it has one. Other hooks in the same file are ignored (E2: hooks
-/// merge).
+/// What of `registrations` the hooks in `settings` leave out: an event none
+/// of whose matcher groups runs `officina hook` (a command whose first word
+/// is the `officina` binary and whose second is `hook`), or, for an event
+/// with tools, the tools no such group's matcher names, written
+/// `Event (Tool, Tool)` when only some are left out. Other hooks in the same
+/// file are ignored (E2: hooks merge).
 pub fn missing_hook_events(
     settings: &serde_json::Value,
     registrations: &[Registration],
-) -> Vec<&'static str> {
+) -> Vec<String> {
     registrations
         .iter()
-        .filter(|registration| {
-            let mut commands = settings
+        .filter_map(|registration| {
+            let ours: Vec<&serde_json::Value> = settings
                 .get("hooks")
                 .and_then(|h| h.get(registration.event))
                 .and_then(|m| m.as_array())
                 .into_iter()
                 .flatten()
                 .filter(|group| {
-                    registration.matcher.is_none_or(|tool| {
+                    group
+                        .get("hooks")
+                        .and_then(|h| h.as_array())
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|h| h.get("command").and_then(|c| c.as_str()))
+                        .any(runs_officina_hook)
+                })
+                .collect();
+            if registration.tools.is_empty() {
+                return ours.is_empty().then(|| registration.event.to_owned());
+            }
+            let left_out: Vec<&str> = registration
+                .tools
+                .iter()
+                .copied()
+                .filter(|tool| {
+                    !ours.iter().any(|group| {
                         group
                             .get("matcher")
                             .and_then(|m| m.as_str())
                             .is_some_and(|matcher| matcher_names(matcher, tool))
                     })
                 })
-                .filter_map(|m| m.get("hooks").and_then(|h| h.as_array()))
-                .flatten()
-                .filter_map(|h| h.get("command").and_then(|c| c.as_str()));
-            !commands.any(runs_officina_hook)
+                .collect();
+            match left_out.len() {
+                0 => None,
+                n if n == registration.tools.len() => Some(registration.event.to_owned()),
+                _ => Some(format!("{} ({})", registration.event, left_out.join(", "))),
+            }
         })
-        .map(|registration| registration.event)
         .collect()
 }
 
@@ -444,6 +467,7 @@ mod tests {
     use crate::collector::LoadedFloor;
     use crate::files::{append_line, event_file_for};
     use crate::paths::Paths;
+    use officina_core::relay::gate::shell_tools_matcher;
     use std::path::PathBuf;
 
     fn summary(checks: &[Check]) -> Vec<(&str, Level, bool)> {
@@ -563,7 +587,7 @@ mod tests {
             let pre_tool_use = &block["hooks"][GATE_EVENT];
             assert_eq!(!pre_tool_use.is_null(), expected, "{floor:?}");
             if expected {
-                assert_eq!(pre_tool_use[0]["matcher"], GATE_TOOL);
+                assert_eq!(pre_tool_use[0]["matcher"], shell_tools_matcher());
             }
         }
     }
@@ -578,7 +602,7 @@ mod tests {
             }
             serde_json::json!({"hooks": {GATE_EVENT: [group]}})
         };
-        let gate = [GATE_REGISTRATION];
+        let gate = [gate_registration()];
         for missing in [
             None,
             Some(""),
@@ -593,17 +617,58 @@ mod tests {
                 "{missing:?}"
             );
         }
-        for present in ["Bash", "Write|Bash", "Edit | Bash"] {
+        let names: Vec<&str> = SHELL_TOOLS.iter().map(|(name, _)| *name).collect();
+        let reversed: Vec<&str> = names.iter().rev().copied().collect();
+        for present in [
+            shell_tools_matcher(),
+            format!("Write|{}", reversed.join("|")),
+            format!("Edit | {}", names.join(" | ")),
+        ] {
             assert!(
-                missing_hook_events(&with_matcher(Some(present)), &gate).is_empty(),
+                missing_hook_events(&with_matcher(Some(&present)), &gate).is_empty(),
                 "{present}"
             );
         }
         let other_hook_beside = serde_json::json!({"hooks": {GATE_EVENT: [
-            {"matcher": "Bash", "hooks": [{"type": "command", "command": "python guard.py"}]},
-            {"matcher": "Bash", "hooks": [{"type": "command", "command": "officina hook"}]}
+            {"matcher": shell_tools_matcher(), "hooks": [{"type": "command", "command": "python guard.py"}]},
+            {"matcher": shell_tools_matcher(), "hooks": [{"type": "command", "command": "officina hook"}]}
         ]}});
         assert!(missing_hook_events(&other_hook_beside, &gate).is_empty());
+    }
+
+    /// D-171: the printed matcher names every tool of the constant, each
+    /// once, and the printed block counts as registered.
+    #[test]
+    fn block_matcher_names_every_shell_tool() {
+        let required = registrations(true);
+        let block: serde_json::Value =
+            serde_json::from_str(&hooks_block(&PathBuf::from("/opt/officina"), &required)).unwrap();
+        let matcher = block["hooks"][GATE_EVENT][0]["matcher"].as_str().unwrap();
+        let mut named: Vec<&str> = matcher.split('|').collect();
+        let mut expected: Vec<&str> = SHELL_TOOLS.iter().map(|(name, _)| *name).collect();
+        named.sort_unstable();
+        expected.sort_unstable();
+        assert_eq!(named, expected);
+        assert!(missing_hook_events(&block, &required).is_empty());
+    }
+
+    /// D-171: a matcher a v0.2 workstation merged earlier, naming one shell
+    /// tool, leaves the others out, and doctor names them; two groups that
+    /// share the tools between them cover them all.
+    #[test]
+    fn a_matcher_naming_bash_only_is_missing_powershell_and_monitor() {
+        let gate = [gate_registration()];
+        let group = |matcher: &str| serde_json::json!({"matcher": matcher, "hooks": [{"type": "command", "command": "officina.exe hook"}]});
+        let names: Vec<&str> = SHELL_TOOLS.iter().map(|(name, _)| *name).collect();
+        let (first, others) = names.split_first().unwrap();
+        let only_first = serde_json::json!({"hooks": {GATE_EVENT: [group(first)]}});
+        assert_eq!(
+            missing_hook_events(&only_first, &gate),
+            [format!("{GATE_EVENT} ({})", others.join(", "))]
+        );
+        let split =
+            serde_json::json!({"hooks": {GATE_EVENT: [group(first), group(&others.join("|"))]}});
+        assert!(missing_hook_events(&split, &gate).is_empty());
     }
 
     #[test]
