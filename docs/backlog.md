@@ -24,6 +24,13 @@ README, not here.
   the guarded project and check that the call is refused with the gate's
   reason pointing at the Bash tool; record the Claude Code version in
   `docs/research-notes.md`.
+- Story 2.11 AC 18: store a credential with the `cmdkey` line `officina
+  doctor` prints (it prompts for the secret), then run an HTTP action with
+  that credential against a real internal `https` endpoint whose CA is
+  trusted only through the Windows store; check that the request succeeds
+  (the platform verifier accepts the enterprise CA) and that the journal
+  shows the run without the secret; record it in `docs/research-notes.md`
+  with Windows, `ureq` and endpoint details redacted.
 - Story 2.10 AC 10: with a guarded repository whose catalogue declares a WSL
   `ansible-playbook` check (`--check --diff`) and its `after-check` apply on
   a lab group, approved in the window and with doctor's `CLAUDE.md`
