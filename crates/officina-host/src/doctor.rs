@@ -1,6 +1,7 @@
 //! `officina doctor` (FR-11): reads, compares and reports. It never writes
-//! under the Claude config dir; what the author must change is printed for
-//! them to paste.
+//! under the Claude config dir nor in a project folder; what the author must
+//! change is printed for them to paste. The relay's checks (FR-14) are
+//! [`crate::relay::doctor`], after the v0.1 ones.
 
 use std::fs;
 use std::path::Path;
@@ -13,6 +14,7 @@ use crate::claude;
 use crate::collector::Collector;
 use crate::files::{now_ms, read_recent_events};
 use crate::paths::{ENV_FLOOR, env_path};
+use crate::relay::doctor::{self as relay_doctor, RelayDoctor};
 use crate::relay::gate::{GATE_EVENT, GATE_TOOL};
 use crate::relay::home::RelayHome;
 
@@ -97,7 +99,7 @@ pub struct Check {
     pub paste: Option<String>,
 }
 
-fn check(level: Level, title: &str, detail: impl Into<String>) -> Check {
+pub(crate) fn check(level: Level, title: &str, detail: impl Into<String>) -> Check {
     Check {
         level,
         title: title.to_owned(),
@@ -253,6 +255,13 @@ pub fn run(collector: &Collector, exe: &Path) -> Vec<Check> {
     checks.push(check_quota(collector, &user_settings, exe, now));
     checks.push(check_officina_home(&paths.officina_home));
     checks.push(check_floor(collector));
+    let system_dir = relay_doctor::system_dir();
+    checks.extend(relay_doctor::checks(&RelayDoctor {
+        home: &relay,
+        doctor_floor: collector.floor.path.as_deref(),
+        system_dir: system_dir.as_deref(),
+        now_ms: now,
+    }));
     checks
 }
 

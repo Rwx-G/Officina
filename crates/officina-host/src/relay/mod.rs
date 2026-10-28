@@ -6,6 +6,7 @@
 
 #[cfg(feature = "window-authority")]
 pub mod authority;
+pub mod doctor;
 pub mod gate;
 pub mod home;
 pub mod journal;

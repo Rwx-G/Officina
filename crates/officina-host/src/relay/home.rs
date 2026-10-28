@@ -76,6 +76,12 @@ impl RelayHome {
         &self.officina_home
     }
 
+    /// `OFFICINA_FLOOR` as given, the first step of the relay floor
+    /// resolution.
+    pub fn floor_override(&self) -> Option<&Path> {
+        self.floor_override.as_deref()
+    }
+
     /// `relay/`, where the window and `officina run` keep their files.
     pub fn relay_dir(&self) -> PathBuf {
         self.officina_home.join(RELAY_DIR)

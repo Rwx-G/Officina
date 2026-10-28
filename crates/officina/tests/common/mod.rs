@@ -199,6 +199,17 @@ pub fn git(git_dir: &Path, dir: &Path, args: &[&str]) {
     );
 }
 
+/// The hooks block `officina doctor` printed, parsed.
+pub fn printed_hooks_block(doctor_stdout: &[u8]) -> serde_json::Value {
+    let text = String::from_utf8_lossy(doctor_stdout).to_string();
+    let block_start = text.find("{\n  \"hooks\"").unwrap();
+    serde_json::Deserializer::from_str(&text[block_start..])
+        .into_iter()
+        .next()
+        .unwrap()
+        .unwrap()
+}
+
 pub fn run_with(mut cmd: Command, stdin: &[u8]) -> Output {
     let mut child = cmd.spawn().unwrap();
     child.stdin.take().unwrap().write_all(stdin).unwrap();

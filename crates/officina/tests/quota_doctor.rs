@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
-use common::{TestEnv, fingerprint, now_ms};
+use common::{TestEnv, fingerprint, now_ms, printed_hooks_block};
 use officina_core::board::Board;
 use officina_host::collector::{Collector, LoadedFloor};
 use officina_host::paths::Paths;
@@ -61,17 +61,6 @@ fn doctor_fails_without_hooks_and_prints_the_block_to_paste() {
     assert!(text.contains("hook\""));
     assert!(text.contains("[warn] quota"));
     assert!(text.contains("quota write"));
-}
-
-/// The hooks block doctor printed, parsed.
-fn printed_hooks_block(doctor_stdout: &[u8]) -> serde_json::Value {
-    let text = String::from_utf8_lossy(doctor_stdout).to_string();
-    let block_start = text.find("{\n  \"hooks\"").unwrap();
-    serde_json::Deserializer::from_str(&text[block_start..])
-        .into_iter()
-        .next()
-        .unwrap()
-        .unwrap()
 }
 
 #[test]
@@ -172,8 +161,8 @@ fn no_command_writes_under_the_claude_config_dir() {
     env.run(&["board", "--json"], b"");
     env.run(&["doctor"], b"");
 
-    // A gate deny and the relay's own commands, with a catalogue approved
-    // in this home.
+    // A gate deny, the relay's own commands and doctor's relay checks, with
+    // a catalogue approved in this home.
     let lab = env.root.path().join("work").join("Lab");
     std::fs::create_dir_all(&lab).unwrap();
     let lab_path = lab.to_string_lossy().replace('\\', "/");
@@ -194,6 +183,7 @@ fn no_command_writes_under_the_claude_config_dir() {
         &["run", "probe"][..],
         &["run", "--list"],
         &["relay", "--json"],
+        &["doctor"],
     ] {
         let mut cmd = env.officina(args);
         cmd.current_dir(&lab);

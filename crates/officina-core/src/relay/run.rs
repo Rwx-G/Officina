@@ -25,6 +25,11 @@ pub const EXIT_NOT_STARTED: i32 = 127;
 /// Exit code of a usage error.
 pub const EXIT_USAGE: i32 = 64;
 
+/// The longest timeout Claude Code's Bash tool accepts (AD-31): a relay call
+/// still running then is killed by Claude Code, and its run reads abandoned.
+/// The `CLAUDE.md` paragraph doctor prints tells sessions to pass it.
+pub const BASH_TOOL_MAX_TIMEOUT_MS: u64 = 600_000;
+
 /// `relay/approved.json` as `officina run` reads it.
 #[derive(Debug, Clone, Copy)]
 pub enum SnapshotState<'a> {

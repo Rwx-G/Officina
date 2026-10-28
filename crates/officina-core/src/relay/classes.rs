@@ -5,12 +5,17 @@
 //! (D-17).
 
 use std::collections::{BTreeMap, HashSet};
+use std::ops::RangeInclusive;
 
 use super::catalogue::ActionClass;
 use super::journal::{JournalEntry, JournalLine, RefusalReason, RunOutcome, TreeFingerprint};
 
 /// How long a successful check lets its `after-check` action run (AD-33).
 pub const CHECK_VALID_MS: i64 = 30 * 60 * 1000;
+
+/// Accepted `officina run --wait <s>` for a `human` action (AD-33): how long
+/// a call waits for the author's decision before it gives up.
+pub const WAIT_RANGE_S: RangeInclusive<u32> = 1..=540;
 
 /// True when this build runs actions of `class`.
 ///
