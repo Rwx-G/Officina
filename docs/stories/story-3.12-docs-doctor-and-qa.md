@@ -1,6 +1,6 @@
 # Story 3.12: Doctor coherence, documentation, workstation checks and QA closure
 
-**Status:** Approved
+**Status:** in-progress
 
 ## Story
 
@@ -20,13 +20,13 @@ so that v0.3 is set up without guessing, the epic closes with evidence, and noth
 
 ## Tasks
 
-- [ ] Doctor registry section ordering and level rules; `doctor_registry.rs` cases (AC 1)
-- [ ] README "Subjects and triage" made coherent; `readme.rs` cases (AC 2)
-- [ ] CHANGELOG consolidation (AC 3)
-- [ ] Workstation checks and research notes (AC 4)
-- [ ] A week of real use, research notes with the counts (AC 5)
-- [ ] `--repeat-each=3` in the CI Playwright step; release tests; zero-write coverage (AC 6)
-- [ ] Audits, `docs/qa/epic-3-report.md`, backlog (AC 7)
+- [x] Doctor registry section ordering and level rules; `doctor_registry.rs` cases (AC 1)
+- [x] README "Subjects and triage" made coherent; `readme.rs` cases (AC 2)
+- [x] CHANGELOG consolidation (AC 3)
+- [ ] Workstation checks and research notes (AC 4): the owner's
+- [ ] A week of real use, research notes with the counts (AC 5): the owner's
+- [x] `--repeat-each=3` in the CI Playwright step; release tests; zero-write coverage (AC 6)
+- [ ] Audits, `docs/qa/epic-3-report.md`, backlog (AC 7): run after this part by the coordinator
 
 ## Dev Notes
 
@@ -48,11 +48,36 @@ so that v0.3 is set up without guessing, the epic closes with evidence, and noth
 
 ### Debug Log
 
+- **Scope of this pass:** the code and documentation parts, AC 1, 2, 3 and 6. AC 4 and AC 5 are the owner's (workstation checks, a week of real use) and AC 7 (audits and the QA report) runs after this pass; their tasks stay open and the story stays `in-progress`.
+- **Decisions where the story is silent:**
+  - AC 1: `doctor::REGISTRY_SECTION` names the section's titles in their order; `run` gathers the registry's checks, the hook fields and the triage model's lines and sorts them by it, so the section reads the same whichever check emits a line. The hook fields line moved from the `claude` group into the section; `check_claude` returns the version it read for it. A missing hook field now warns rather than fails, as the AC lists it with the warnings (story 3.8 had it fail): the board keeps working and the registry records the session without the field. An unreadable registry (`registry: cannot be read`) still fails, like a failed `quick_check`.
+  - AC 1, tests: one home holds every registry warning at once (a planted sync marker, a quarantine, a recent restore, eight waiting event files, a rewritten one, a missing hook field, a paused model) beside a doctor otherwise clean (hooks merged, a hook line, the quota written), so `warnings_alone_exit_0` proves the exit rule rather than another check's; the newer-version warning is the same home with `user_version` raised in the file's header. The damaged database fails on `quick_check` itself or on SQLite's corruption error, both under `registry integrity`.
+  - AC 2: the README's privacy facts of the registry are gathered in "Privacy in the registry" (excerpts, confirmation copies, model answers, triage calls, `no_excerpts`, the bounds applied while the window runs and at its start but not while it is closed, and the zero write), which the top-level Privacy section links; `officina subjects --json` moved under the Subjects view; the registry part says what doctor's section holds, what fails and what warns. `readme_names_no_sync_marker` iterates `SYNC_ROOT_MARKERS`, with a positive control on the exclusion sentence.
+  - AC 3: the v0.3 entries of `[Unreleased]` are one set, each tagged "(v0.3)", in the order of the README; the triage containment and the registry writer's absence from `officina.exe` moved to Security, beside the zero write.
+  - AC 6: the zero-write fingerprint now runs the window's own model call (a winning dry run seeded, the model on, a pending row sent through the fake with the fingerprinted config dir), beside the dry run's call and every command. The release tests (`perf.rs`, `registry_crash.rs`) ran in the full gate below.
+
+### Full gate at the end of stories 3.11 and 3.12 (code and docs parts)
+
+Every job of `.github/workflows/ci.yml`, run locally with `--locked`, on a0e5ade: `cargo fmt --check`; frontend install (frozen lockfile) and build; clippy `--workspace --all-targets --features officina-core/ts` clean, in the `core-linux` feature set, and on the host without `window-authority`; `cargo test --workspace --features officina-core/ts` 970 passed, 0 failed, 11 ignored (TypeScript drift green); `perf.rs` alone in release 5 passed (hook own cost 12.8 ms, budget 150 ms; gate own cost 3.0 ms, budget 15 ms; in-process p95 2.8 ms); the lexer differential 2 passed; `approvals_stress` passed; the crash step 3 passed (helper built first); "officina holds no authority": both markers absent from `officina.exe`, present in `officina-app.exe`; "Registry dependencies" ok; "No bundled roots" ok; `pnpm check`, `lint`, `test` 47 passed; fixtures rebuilt from the real CLI (`model` and `model-paused` new); Playwright with `--repeat-each=3`, as CI now runs it, 303 passed (101 cases); `cargo deny --locked check` ok; `pnpm audit` 1 low, ignored with its reason (unchanged). The `core-linux` job replayed in a `rust:1-bookworm` container with Rust 1.99.0: fmt, clippy clean, 858 passed, 0 failed, 9 ignored. Node 25.4 locally against CI's 22.
+
 ### Completion Notes
 
+- AC 1: `crates/officina/tests/doctor_registry.rs::{registry_section_lists_each_check_once, warnings_alone_exit_0, a_failed_quick_check_exits_1, unc_officina_home_fails_the_registry_location}`; `crates/officina-host/src/doctor.rs::tests::{run_reports_every_check_in_order, model_state_and_counts_are_reported}`; `crates/officina/tests/quota_doctor.rs::doctor_reports_hook_fields_missing_and_not_observed` (now a warning).
+- AC 2: `crates/officina/tests/readme.rs::{readme_mentions_every_subcommand, readme_names_no_sync_marker}`; the prose reviewed by hand.
+- AC 3: `CHANGELOG.md` `[Unreleased]`; review.
+- AC 4: open, the owner's: the VS Code close reason, the `/clear` and `/resume` ids and gaps, `claude --resume <id>` and `claude -c`, WebView2 against Playwright Chromium, each with the Claude Code version, in `docs/research-notes.md`.
+- AC 5: open, the owner's: a week of real use on a build holding story 3.11, with the counts the AC names, in `docs/research-notes.md`.
+- AC 6: `.github/workflows/ci.yml` (Playwright `--repeat-each=3`); the release tests in the gate above; `crates/officina/tests/quota_doctor.rs::no_command_writes_under_the_claude_config_dir`, which covers every command, the window's own model call and a dry run's call, on the config dir and `<home>/.claude.json`.
+- AC 7: open: the audits and `docs/qa/epic-3-report.md` follow this pass.
+
 ## File List
+
+- `crates/officina-host/src/doctor.rs`, `crates/officina/tests/{doctor_registry,quota_doctor,readme}.rs`
+- `.github/workflows/ci.yml`
+- `README.md`, `CHANGELOG.md`, `docs/stories/story-3.12-docs-doctor-and-qa.md`, `docs/stories/sprint-status.yaml`
 
 ## Change Log
 
 - 2026-10-28 created
 - 2026-10-28 reworked after review: UNC doctor case automated, Playwright `--repeat-each=3` in CI (D-91); resume and clear ids recorded on the workstation (D-75); counts of the week of real use named; README privacy states the closed-window and zero-write facts (D-80, D-85); P-17 departures listed in the QA report
+- 2026-10-28 code and documentation parts implemented (AC 1, 2, 3, 6): doctor's registry section in one stable order with missing hook fields as a warning, the README's Subjects and triage made one piece with its privacy gathered, the v0.3 changelog consolidated, Playwright three times over in CI, the window's model call in the zero-write fingerprint; full gate green. AC 4 and 5 (the owner's) and AC 7 (audits, QA report) open; status in-progress

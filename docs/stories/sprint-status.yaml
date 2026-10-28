@@ -65,7 +65,7 @@ stories:
   - {id: "3.9", file: story-3.9-triage-call-and-dry-run.md, slice: B, status: review}
   - {id: "3.10", file: story-3.10-measured-error-and-auto-archive.md, slice: B, status: review}
   - {id: "3.11", file: story-3.11-model-proposals.md, slice: B, status: review}
-  - {id: "3.12", file: story-3.12-docs-doctor-and-qa.md, slice: B, status: approved}
+  - {id: "3.12", file: story-3.12-docs-doctor-and-qa.md, slice: B, status: in-progress}
 ---
 epic: 4
 version: v0.4
