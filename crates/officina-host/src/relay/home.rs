@@ -10,7 +10,7 @@ use officina_core::relay::approvals::OUTPUTS_DIR;
 use officina_core::relay::catalogue::{
     self, ApprovedCatalogue, KnownProjects, RelayFloor, parse_known_projects,
 };
-use officina_core::relay::record::{DECISION_RECORD_FILE, DecisionRecord, parse_record};
+use officina_core::relay::record::{DECISION_RECORD_FILE, RecordState, parse_record};
 use officina_core::relay::{JOURNAL_DIR, RELAY_DIR};
 
 use crate::paths::{ENV_FLOOR, env_path, officina_home_from_env};
@@ -127,9 +127,16 @@ impl RelayHome {
         self.relay_dir().join(DECISION_RECORD_FILE)
     }
 
-    /// Reads `relay/decisions.json`, if present and of this schema.
-    pub fn read_record(&self) -> Option<DecisionRecord> {
-        parse_record(&fs::read(self.decisions_file()).ok()?)
+    /// Reads `relay/decisions.json` into one of its three states.
+    pub fn read_record(&self) -> RecordState {
+        match fs::read(self.decisions_file()) {
+            Ok(bytes) => match parse_record(&bytes) {
+                Ok(record) => RecordState::Valid(record),
+                Err(why) => RecordState::Unreadable(why),
+            },
+            Err(e) if e.kind() == io::ErrorKind::NotFound => RecordState::Missing,
+            Err(e) => RecordState::Unreadable(e.to_string()),
+        }
     }
 
     /// `journal/`: one file per UTC day (AD-32).

@@ -68,6 +68,7 @@ pub fn session_id_from_env() -> Option<String> {
 /// Reads what the checks need and hands it to `f`.
 fn with_inputs<R>(home: &RelayHome, cwd: &str, f: impl FnOnce(&RunInputs<'_>) -> R) -> R {
     let stopped = home.relay_stopped();
+    let record = home.read_record();
     let approved = home.read_approved();
     let floor_path = home.relay_floor(&approved);
     let floor_text = floor_path.to_string_lossy();
@@ -92,6 +93,7 @@ fn with_inputs<R>(home: &RelayHome, cwd: &str, f: impl FnOnce(&RunInputs<'_>) ->
     f(&RunInputs {
         stopped,
         snapshot,
+        record: &record,
         floor,
         cwd,
         system_dir: &system_dir,

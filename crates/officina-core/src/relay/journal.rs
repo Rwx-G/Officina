@@ -286,6 +286,14 @@ closed_enum! {
         NotApproved,
         /// `relay/approved.json` cannot be read: fail closed.
         ApprovedUnreadable,
+        /// The window's record of its decisions is missing or cannot be
+        /// read while a catalogue is approved: nothing approved can be
+        /// confirmed until the author acknowledges it in the Relay view
+        /// (D-175).
+        DecisionRecordUnreadable,
+        /// The approved catalogue is not the one the window's record says
+        /// it approved: written by another process, it is not run (D-175).
+        CatalogueUnconfirmed,
         /// The relay floor cannot be read or fails phase 1.
         FloorUnreadable,
         /// The floor's catalogue differs from the approved one.

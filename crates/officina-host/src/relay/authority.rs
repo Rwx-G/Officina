@@ -14,11 +14,14 @@ use officina_core::relay::StopFlag;
 use officina_core::relay::approvals::{DecideRefusal, Decision, FileKind, decidable, file_name};
 use officina_core::relay::catalogue::{ApprovedCatalogue, KnownProjects};
 use officina_core::relay::journal::{ApprovalEvent, CatalogueApproved, JournalEntry};
-use officina_core::relay::record::DecisionRecord;
+use officina_core::relay::record::{
+    DecisionRecord, RecordState, RecordedDecision, Verdict, holds_decisions, record_anomaly_key,
+};
+use officina_core::relay::run::is_stopped;
 use serde::Serialize;
 
 use super::approvals::{self, ContextSources};
-use super::home::{RelayFloorError, RelayHome, load_relay_floor};
+use super::home::{ApprovedState, RelayFloorError, RelayHome, load_relay_floor};
 use super::journal::JournalLock;
 use crate::files::{atomic_write, now_ms};
 
@@ -47,6 +50,13 @@ pub enum AuthorityError {
     /// (AD-35, D-27).
     #[error("{AUTHORITY_MARKER}: {0}")]
     Decide(DecideRefusal),
+    /// The window's record of its decisions is missing or unreadable while
+    /// the relay holds decisions: nothing is decided until the author
+    /// acknowledges it in the Relay view (D-175).
+    #[error(
+        "{AUTHORITY_MARKER}: the window's record of its decisions cannot vouch for the relay ({0}); acknowledge it in the Relay view first"
+    )]
+    RecordBroken(String),
 }
 
 impl AuthorityError {
@@ -58,7 +68,7 @@ impl AuthorityError {
             AuthorityError::CatalogueChanged { .. } => IpcErrorCode::CatalogueChanged,
             AuthorityError::Write { .. } => IpcErrorCode::WriteFailed,
             AuthorityError::Journal(_) => IpcErrorCode::JournalUnavailable,
-            AuthorityError::Decide(_) => IpcErrorCode::Refused,
+            AuthorityError::Decide(_) | AuthorityError::RecordBroken(_) => IpcErrorCode::Refused,
         };
         IpcError {
             code,
@@ -76,23 +86,44 @@ fn write_json(path: &Path, value: &impl Serialize) -> Result<(), AuthorityError>
     atomic_write(path, &bytes).map_err(|e| failed(e.to_string()))
 }
 
-/// The window's record as it stands, or a new one taking the approved
-/// catalogue and the stop flag as they are: what the window finds when it
-/// first runs (D-173).
-fn current_record(home: &RelayHome, now: i64) -> DecisionRecord {
-    home.read_record().unwrap_or_else(|| {
-        let stopped = super::view::read_stop(home);
-        DecisionRecord::start(
-            now,
-            home.read_approved().approved().map(|a| a.hash.clone()),
-            match stopped {
-                officina_core::relay::view::StopState::Stopped { since_ms } => {
-                    Some(since_ms.unwrap_or(now))
-                }
-                officina_core::relay::view::StopState::Running => None,
-            },
-        )
-    })
+/// A new record taking the approved catalogue and the stop flag as they
+/// are: what the window starts the first time it opens, before the relay
+/// holds anything, and when the author acknowledges a broken record
+/// (D-173, D-175).
+fn record_from_found_state(home: &RelayHome, now: i64) -> DecisionRecord {
+    DecisionRecord::start(
+        now,
+        home.read_approved().approved().map(|a| a.hash.clone()),
+        match super::view::read_stop(home) {
+            officina_core::relay::view::StopState::Stopped { since_ms } => {
+                Some(since_ms.unwrap_or(now))
+            }
+            officina_core::relay::view::StopState::Running => None,
+        },
+    )
+}
+
+/// Whether the relay holds what the record vouches for: an approved
+/// catalogue or a decision file (D-175).
+fn relay_holds_decisions(home: &RelayHome) -> bool {
+    holds_decisions(
+        !matches!(home.read_approved(), ApprovedState::Missing),
+        &approvals::read_files(home),
+    )
+}
+
+/// The window's record as it stands; a new one from the found state only
+/// while the relay holds nothing for it to vouch for. A record missing or
+/// unreadable once the relay holds decisions is never replaced silently
+/// (D-175): that waits for the author's acknowledgement.
+fn current_record(home: &RelayHome, now: i64) -> Result<DecisionRecord, AuthorityError> {
+    match home.read_record() {
+        RecordState::Valid(record) => Ok(record),
+        broken => match broken.broken(relay_holds_decisions(home)) {
+            None => Ok(record_from_found_state(home, now)),
+            Some(why) => Err(AuthorityError::RecordBroken(why)),
+        },
+    }
 }
 
 /// Applies `change` to the window's record and writes it back, pruned.
@@ -102,16 +133,28 @@ fn update_record(
     now: i64,
     change: impl FnOnce(&mut DecisionRecord),
 ) -> Result<(), AuthorityError> {
-    let mut record = current_record(home, now);
+    let mut record = current_record(home, now)?;
     change(&mut record);
+    save_record(home, record, now)
+}
+
+/// Writes `record` back, pruned at `now`.
+fn save_record(
+    home: &RelayHome,
+    mut record: DecisionRecord,
+    now: i64,
+) -> Result<(), AuthorityError> {
     record.prune(now);
     write_json(&home.decisions_file(), &record)
 }
 
-/// Starts the window's record when there is none (D-173): what the window
-/// does as it opens, so later decisions are judged from then.
+/// Starts the window's record when there is none and the relay holds
+/// nothing yet (D-173): what the window does as it opens, so later
+/// decisions are judged from then. A record missing once the relay holds
+/// decisions is left as it is: the Relay view lists it for the author to
+/// acknowledge (D-175).
 pub fn ensure_record(home: &RelayHome) -> Result<(), AuthorityError> {
-    if home.read_record().is_some() {
+    if !matches!(home.read_record(), RecordState::Missing) || relay_holds_decisions(home) {
         return Ok(());
     }
     let _journal =
@@ -120,11 +163,17 @@ pub fn ensure_record(home: &RelayHome) -> Result<(), AuthorityError> {
 }
 
 /// Acknowledges the anomaly `key` (D-173): the Relay view keeps listing it
-/// as acknowledged, and doctor no longer fails on it.
+/// as acknowledged, and doctor no longer fails on it. Acknowledging a
+/// broken record ([`record_anomaly_key`]) starts a new one from the
+/// approved catalogue and the stop flag as they are (D-175).
 pub fn acknowledge_anomaly(home: &RelayHome, key: &str) -> Result<(), AuthorityError> {
     let _journal =
         JournalLock::acquire(home).map_err(|e| AuthorityError::Journal(e.to_string()))?;
     let now = now_ms();
+    if key == record_anomaly_key() && home.read_record().valid().is_none() {
+        let record = record_from_found_state(home, now);
+        return write_json(&home.decisions_file(), &record);
+    }
     update_record(home, now, |record| {
         record.acknowledged.insert(key.to_owned(), now);
     })
@@ -144,12 +193,18 @@ pub fn acknowledge_anomaly(home: &RelayHome, key: &str) -> Result<(), AuthorityE
 ///
 /// The journal lock is taken before anything is read and held until the
 /// `catalogue_approved` line (AD-32) is written, so an approval and its line
-/// go together: a journal that stays locked approves nothing.
+/// go together: a journal that stays locked approves nothing. A window's
+/// record missing or unreadable once the relay holds decisions approves
+/// nothing either, until the author acknowledges it (D-175).
 pub fn approve_catalogue(
     home: &RelayHome,
     displayed_hash: &str,
 ) -> Result<ApprovedCatalogue, AuthorityError> {
     let journal = JournalLock::acquire(home).map_err(|e| AuthorityError::Journal(e.to_string()))?;
+    // Read before anything is written: nothing is written while the record
+    // cannot take the approval, and the first approval's own file must not
+    // make the record it starts look missing (D-175).
+    let mut record = current_record(home, now_ms())?;
     let previous = home.read_approved();
     let floor_path = home.relay_floor(&previous);
     let current = load_relay_floor(&floor_path).map_err(AuthorityError::Floor)?;
@@ -167,9 +222,8 @@ pub fn approve_catalogue(
     write_json(&home.known_projects_file(), &known)?;
     let approved = ApprovedCatalogue::approving(&current, &floor_path.to_string_lossy(), now_ms());
     write_json(&home.approved_file(), &approved)?;
-    update_record(home, approved.approved_at_ms, |record| {
-        record.approved_hash = Some(approved.hash.clone());
-    })?;
+    record.approved_hash = Some(approved.hash.clone());
+    save_record(home, record, approved.approved_at_ms)?;
     let line = JournalEntry::CatalogueApproved(CatalogueApproved {
         hash: approved.hash.clone(),
         previous_hash: previous.approved().map(|p| p.hash.clone()),
@@ -202,15 +256,30 @@ pub fn decide_approval(home: &RelayHome, id: &str, approve: bool) -> Result<(), 
         action: Some(request.action.clone()),
         dry_run: None,
     };
-    let (kind, line) = if approve {
-        (FileKind::Approved, JournalEntry::ApprovalGiven(event))
+    let (kind, verdict, line) = if approve {
+        (
+            FileKind::Approved,
+            Verdict::Approved,
+            JournalEntry::ApprovalGiven(event),
+        )
     } else {
-        (FileKind::Rejected, JournalEntry::ApprovalRejected(event))
+        (
+            FileKind::Rejected,
+            Verdict::Rejected,
+            JournalEntry::ApprovalRejected(event),
+        )
     };
-    // Recorded first: a decision file the record does not name is what an
-    // anomaly is (D-173).
+    // Recorded first, with its verdict and request key: a decision file the
+    // record does not hold that way is what an anomaly is (D-173, D-175).
     update_record(home, now, |record| {
-        record.decided.insert(id.to_owned(), now);
+        record.decided.insert(
+            id.to_owned(),
+            RecordedDecision {
+                verdict,
+                request_key: request.request_key.clone(),
+                at_ms: now,
+            },
+        );
     })?;
     write_json(
         &home.approvals_dir().join(file_name(id, kind)),
@@ -226,24 +295,33 @@ pub fn decide_approval(home: &RelayHome, id: &str, approve: bool) -> Result<(), 
 
 /// Stops or resumes the relay (FR-11, AD-34, D-26): stopping writes
 /// `relay/stopped` (`{"since_ms":...}`) atomically and journals
-/// `relay_stopped`; resuming deletes it and journals `relay_resumed`. A call
-/// that changes nothing (stopping a stopped relay) writes and journals
-/// nothing. Returns whether the state changed.
+/// `relay_stopped`; resuming deletes it and journals `relay_resumed`. The
+/// relay is stopped while the flag is there or the window's record holds
+/// it stopped, as `officina run` reads it (D-175), so resuming also ends a
+/// stop whose flag another process deleted. A call that changes nothing
+/// (stopping a stopped relay) writes and journals nothing. Returns whether
+/// the state changed.
 ///
 /// The journal lock is held across the check, the change and its line, so
 /// two calls at once journal one change.
 pub fn set_relay_stopped(home: &RelayHome, stopped: bool) -> Result<bool, AuthorityError> {
     let journal = JournalLock::acquire(home).map_err(|e| AuthorityError::Journal(e.to_string()))?;
     let flag = home.stopped_file();
-    if home.relay_stopped() == stopped {
+    if is_stopped(home.relay_stopped(), &home.read_record()) == stopped {
         return Ok(false);
     }
     let now = now_ms();
     // Recorded first both ways: a record saying stopped while the flag is
-    // gone is the anomaly, never the other way round (D-173).
-    update_record(home, now, |record| {
+    // gone is the anomaly, never the other way round (D-173). A broken
+    // record never keeps the author from stopping: the flag alone stops,
+    // and `officina run` refuses everything until the record is started
+    // again anyway (D-175).
+    match update_record(home, now, |record| {
         record.stopped_since_ms = stopped.then_some(now);
-    })?;
+    }) {
+        Ok(()) | Err(AuthorityError::RecordBroken(_)) => {}
+        Err(e) => return Err(e),
+    }
     let line = if stopped {
         write_json(&flag, &StopFlag { since_ms: now })?;
         JournalEntry::RelayStopped

@@ -242,11 +242,17 @@ project uses [Semantic Versioning](https://semver.org/).
   hook resolves the session's folders, a file tool's target and the
   guarded projects' own paths by handle, so an 8.3 name, a junction, a
   link or a `subst` drive cannot lead around the gate, on either side.
-- The window records its own decisions and lists, in the Relay view, an
-  approval file, a run, an approved catalogue or a missing stop flag it
-  cannot account for; `officina doctor` fails until the author acknowledges
-  each, and `officina run` leaves an approval the record does not name
-  unused (`approval_not_given`).
+- The window records its own decisions (each request's verdict and request
+  key, the catalogue it approved, whether it holds the relay stopped) and
+  lists, in the Relay view, an approval file, a run, an approved catalogue
+  or a missing stop flag it cannot account for, and the record itself gone
+  or unreadable; `officina doctor` fails until the author acknowledges
+  each. `officina run` obeys the record: it leaves unused an approval the
+  record does not hold as approved for that request (`approval_not_given`),
+  runs only the catalogue the record names (`catalogue_unconfirmed`), stays
+  stopped while the record holds it stopped, and refuses everything while
+  the record is missing or unreadable (`decision_record_unreadable`), until
+  the author's acknowledgement starts a new one.
 - A `pattern` that lets a value forwarded to a remote shell or a template
   hold whitespace, shell or template characters drops the action with the
   issue `forwarded_pattern`, unless it sets `forwarded_values = "accepted"`;

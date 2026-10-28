@@ -355,6 +355,14 @@ fn scenario(reason: RefusalReason) -> Option<Scenario> {
             std::fs::write(home.approved_file(), b"{ not json").unwrap();
             (project, probe)
         }
+        RefusalReason::DecisionRecordUnreadable => {
+            std::fs::write(home.decisions_file(), b"{ not json").unwrap();
+            (project, probe)
+        }
+        RefusalReason::CatalogueUnconfirmed => {
+            forge_catalogue(&relay, &FLOOR.replace("timeout_s = 1", "timeout_s = 2"));
+            (project, probe)
+        }
         RefusalReason::FloorUnreadable => {
             std::fs::write(relay.env.floor_file(), b"schema = [[[").unwrap();
             (project, probe)
@@ -1637,6 +1645,140 @@ fn a_forged_approval_file_does_not_run() {
     );
     assert_eq!(anomalies.len(), 1, "{anomalies:#?}");
     assert!(anomalies[0].detail.contains(&id));
+}
+
+/// What a process writing relay files would do to run another catalogue:
+/// write `floor` as the relay floor and approve it in `relay/approved.json`
+/// by hand, behind the window's back.
+fn forge_catalogue(relay: &Relay, floor: &str) {
+    relay.write(floor);
+    let home = relay.env.relay_home();
+    let floor_path = home.relay_floor(&home.read_approved());
+    let current = officina_host::relay::home::load_relay_floor(&floor_path).unwrap();
+    let forged = officina_core::relay::catalogue::ApprovedCatalogue::approving(
+        &current,
+        &floor_path.to_string_lossy(),
+        common::now_ms(),
+    );
+    std::fs::write(home.approved_file(), serde_json::to_vec(&forged).unwrap()).unwrap();
+}
+
+/// Story 2.16 AC 6 (D-175), the delta audit's forged catalogue: a process
+/// rewrites the floor and `relay/approved.json` together. `officina run`
+/// refuses `catalogue_unconfirmed`, nothing starts, and `--list` says why.
+#[test]
+fn a_catalogue_the_window_did_not_approve_is_not_run() {
+    let relay = Relay::new();
+    forge_catalogue(&relay, &FLOOR.replace("timeout_s = 1", "timeout_s = 2"));
+    let out = relay.run(&["probe", "host=web01"]);
+    assert_refused(&relay, &out, RefusalReason::CatalogueUnconfirmed);
+    assert!(relay.launches().is_empty());
+    let listed = list(&relay, &relay.project());
+    assert!(
+        listed.contains("not the one the Officina window approved"),
+        "{listed}"
+    );
+}
+
+/// Story 2.16 AC 6 (D-175): the author stops the relay and a process
+/// deletes the stop flag; the window's record still holds it stopped.
+#[test]
+fn a_stop_flag_deleted_behind_the_window_still_stops() {
+    let relay = Relay::new();
+    let home = relay.env.relay_home();
+    assert!(officina_host::relay::authority::set_relay_stopped(&home, true).unwrap());
+    std::fs::remove_file(home.stopped_file()).unwrap();
+    assert_refused(
+        &relay,
+        &relay.run(&["probe", "host=web01"]),
+        RefusalReason::Stopped,
+    );
+    assert!(officina_host::relay::authority::set_relay_stopped(&home, false).unwrap());
+    assert_eq!(relay.run(&["probe", "host=web01"]).status.code(), Some(0));
+}
+
+/// Story 2.16 AC 6 (D-175): with the window's record deleted or broken,
+/// every action is refused `decision_record_unreadable`, the Relay view
+/// lists the one anomaly, and acknowledging it starts a new record from
+/// the state the window finds, after which actions run again.
+#[test]
+fn a_broken_record_refuses_until_the_author_acknowledges_it() {
+    for (name, damage) in [
+        ("deleted", None),
+        ("corrupt", Some(&b"{ not json"[..])),
+        ("another schema", Some(&br#"{"schema":1,"since_ms":1}"#[..])),
+    ] {
+        let relay = Relay::new();
+        let home = relay.env.relay_home();
+        match damage {
+            Some(bytes) => std::fs::write(home.decisions_file(), bytes).unwrap(),
+            None => std::fs::remove_file(home.decisions_file()).unwrap(),
+        }
+        assert_refused(
+            &relay,
+            &relay.run(&["probe", "host=web01"]),
+            RefusalReason::DecisionRecordUnreadable,
+        );
+        let (lines, _) = officina_host::relay::journal::read_recent(&home, common::now_ms());
+        let anomalies = officina_host::relay::view::read_anomalies(
+            &home,
+            &lines,
+            home.read_approved().approved().map(|a| a.hash.as_str()),
+            home.relay_stopped(),
+        );
+        let keys: Vec<&str> = anomalies.iter().map(|a| a.key.as_str()).collect();
+        assert_eq!(
+            keys,
+            [officina_core::relay::record::record_anomaly_key()],
+            "{name}"
+        );
+        assert!(
+            officina_host::relay::authority::ensure_record(&home).is_ok()
+                && officina_host::relay::authority::approve_catalogue(
+                    &home,
+                    &home.read_approved().approved().unwrap().hash
+                )
+                .is_err(),
+            "{name}: the window neither restarts the record nor decides on its own"
+        );
+        officina_host::relay::authority::acknowledge_anomaly(
+            &home,
+            &officina_core::relay::record::record_anomaly_key(),
+        )
+        .unwrap();
+        assert_eq!(
+            relay.run(&["probe", "host=web01"]).status.code(),
+            Some(0),
+            "{name}"
+        );
+    }
+}
+
+/// Story 2.16 AC 6 (D-175), the delta audit's reused rejection: the author
+/// rejects a request; a process deletes the rejection and writes an
+/// approval for the same request. The record holds the request as
+/// rejected: the next call refuses `approval_not_given` and runs nothing.
+#[test]
+fn a_rejected_request_rewritten_as_approved_does_not_run() {
+    use officina_core::relay::approvals::{FileKind, file_name};
+    let relay = Relay::new();
+    let args = ["approve-me", "group=lab-web", "--wait", "30"];
+    let out = run_waiting(
+        &relay,
+        relay.command(&relay.project(), &args),
+        Box::new(|relay: &Relay, id: &str| {
+            officina_host::relay::authority::decide_approval(&relay.env.relay_home(), id, false)
+                .unwrap();
+        }),
+    );
+    assert_refused(&relay, &out, RefusalReason::ApprovalRejected);
+    let id = request_ids(&relay).pop().unwrap();
+    let dir = relay.env.relay_home().approvals_dir();
+    std::fs::remove_file(dir.join(file_name(&id, FileKind::Rejected))).unwrap();
+    forge_approval(&relay, &id);
+    let again = relay.run(&args);
+    assert_refused(&relay, &again, RefusalReason::ApprovalNotGiven);
+    assert!(relay.launches().is_empty());
 }
 
 /// Adversarial pass of story 2.14, the audits' first chain: a session puts

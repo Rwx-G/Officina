@@ -34,6 +34,7 @@ use officina_core::relay::credential::{cmdkey_line, target};
 use officina_core::relay::gate::{LIST_COMMAND, SHELL_TOOLS, ToolRule};
 use officina_core::relay::http::MAX_HTTP_TIMEOUT_S;
 use officina_core::relay::journal::{JournalEntry, RefusalReason};
+use officina_core::relay::record::RecordState;
 use officina_core::relay::run::{BASH_TOOL_MAX_TIMEOUT_MS, one_line};
 use officina_core::relay::view::GATE_ERRORS_WINDOW_MS;
 
@@ -870,11 +871,11 @@ fn journal_check(home: &RelayHome, now_ms: i64) -> Check {
 }
 
 /// D-173: a decision the window did not make fails doctor until the author
-/// acknowledges it in the Relay view; no line before the window started
-/// its record.
+/// acknowledges it in the Relay view, and so does a broken record (D-175);
+/// no line before the window started its record, while the relay holds
+/// nothing.
 fn anomaly_check(home: &RelayHome, approved: &ApprovedState, now_ms: i64) -> Option<Check> {
     const TITLE: &str = "relay anomalies";
-    home.read_record()?;
     let (lines, _) = journal::read_recent(home, now_ms);
     let found = super::view::read_anomalies(
         home,
@@ -882,6 +883,9 @@ fn anomaly_check(home: &RelayHome, approved: &ApprovedState, now_ms: i64) -> Opt
         approved.approved().map(|a| a.hash.as_str()),
         home.relay_stopped(),
     );
+    if found.is_empty() && matches!(home.read_record(), RecordState::Missing) {
+        return None;
+    }
     let open: Vec<&str> = found
         .iter()
         .filter(|anomaly| !anomaly.acknowledged)

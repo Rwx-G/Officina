@@ -10,6 +10,7 @@ pub mod git_support;
 use std::path::{Path, PathBuf};
 
 use officina_core::relay::catalogue::ApprovedCatalogue;
+use officina_core::relay::record::DecisionRecord;
 use officina_host::files::now_ms;
 use officina_host::relay::home::{RelayHome, load_relay_floor};
 
@@ -39,7 +40,7 @@ impl TestHome {
     }
 
     /// Records the approval of `home`'s relay floor in
-    /// `relay/approved.json`, as the window does.
+    /// `relay/approved.json` and in the window's record, as the window does.
     pub fn approve_by_hand(&self, home: &RelayHome) -> ApprovedCatalogue {
         let floor = home.relay_floor(&home.read_approved());
         let relay = load_relay_floor(&floor).unwrap();
@@ -47,6 +48,11 @@ impl TestHome {
         self.write(
             &home.approved_file(),
             &serde_json::to_string(&approved).unwrap(),
+        );
+        let record = DecisionRecord::start(now_ms(), Some(approved.hash.clone()), None);
+        self.write(
+            &home.decisions_file(),
+            &serde_json::to_string(&record).unwrap(),
         );
         approved
     }

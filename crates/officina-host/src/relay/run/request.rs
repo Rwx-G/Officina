@@ -10,7 +10,7 @@ use officina_core::relay::approvals::{
     request_id, request_key,
 };
 use officina_core::relay::journal::{ApprovalEvent, JournalEntry, TreeFingerprint};
-use officina_core::relay::run::{EXIT_REFUSED, Refusal, RunPlan};
+use officina_core::relay::run::{EXIT_REFUSED, Refusal, RunPlan, is_stopped};
 
 use super::Context;
 use super::consume::{Consumed, consume};
@@ -64,7 +64,7 @@ pub(super) fn approval(
             NextStep::Rejected { .. } => {
                 return Err(ctx.refuse(err, &Refusal::approval_rejected(&plan.project)));
             }
-            NextStep::Consume { id } => match consume(ctx, plan, bound, &id) {
+            NextStep::Consume { id } => match consume(ctx, plan, bound, &id, &key) {
                 Consumed::Done(fresh, secret) => {
                     return Ok(Approved {
                         id,
@@ -79,7 +79,7 @@ pub(super) fn approval(
             NextStep::Create => create(ctx, err, plan, bound, &key)?,
         };
         loop {
-            if ctx.home.relay_stopped() {
+            if is_stopped(ctx.home.relay_stopped(), &ctx.home.read_record()) {
                 return Err(ctx.refuse(err, &Refusal::stopped()));
             }
             match approvals::decision(ctx.home, &id) {

@@ -1,12 +1,13 @@
 //! The relay home the unit tests of `officina run` share: one guarded
-//! project with one `human` action, approved as `relay/approved.json`
-//! records it.
+//! project with one `human` action, approved as `relay/approved.json` and
+//! the window's record keep it.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use officina_core::relay::catalogue::{ApprovedCatalogue, load};
 use officina_core::relay::journal::JournalEntry;
+use officina_core::relay::record::{DecisionRecord, RecordState, RecordedDecision, Verdict};
 use officina_core::relay::run::{RunPlan, plan};
 
 use super::{Context, with_inputs};
@@ -45,12 +46,35 @@ impl Fixture {
         let approved =
             ApprovedCatalogue::approving(&relay, &floor_path.to_string_lossy(), now_ms());
         std::fs::write(home.approved_file(), serde_json::to_vec(&approved).unwrap()).unwrap();
+        let record = DecisionRecord::start(now_ms(), Some(approved.hash.clone()), None);
+        std::fs::write(home.decisions_file(), serde_json::to_vec(&record).unwrap()).unwrap();
         Fixture {
             _dir: dir,
             home,
             project,
             params: BTreeMap::from([("service".to_owned(), "web01".to_owned())]),
         }
+    }
+
+    /// Records in the window's record that request `id`, of key `key`, was
+    /// decided with `verdict`.
+    pub fn record(&self, id: &str, verdict: Verdict, key: &str) {
+        let RecordState::Valid(mut record) = self.home.read_record() else {
+            panic!("the fixture's record reads");
+        };
+        record.decided.insert(
+            id.to_owned(),
+            RecordedDecision {
+                verdict,
+                request_key: key.to_owned(),
+                at_ms: now_ms(),
+            },
+        );
+        std::fs::write(
+            self.home.decisions_file(),
+            serde_json::to_vec(&record).unwrap(),
+        )
+        .unwrap();
     }
 
     pub fn cwd(&self) -> String {
