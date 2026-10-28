@@ -11,6 +11,7 @@ use officina_core::agents::AgentRecord;
 use officina_core::board::{Board, ProjectRule};
 use officina_core::ipc::{IpcError, IpcErrorCode};
 use officina_core::registry::confirm::{AuthorAction, ConfirmItem, ItemAnswer};
+use officina_core::registry::dry_run::DryRunState;
 use officina_core::registry::fold::{AgentsChanges, AgentsSnapshot};
 use officina_core::registry::types::{RegistryReport, RegistryState, SubjectRef};
 use officina_core::registry::view::{RegistryView, SubjectView, unread_view};
@@ -19,6 +20,7 @@ use super::ingest::{IngestContext, IngestReport};
 use super::read::{self, Reader};
 use super::retention::PassReport;
 use super::store::{Integrity, Writer, WriterOpen, open_writer};
+use super::triage::{CallResult, DryRunRefusal, NextCall, Triage};
 use super::write::{AuthorError, RegistryError};
 
 #[derive(Debug)]
@@ -44,6 +46,8 @@ pub struct WindowRegistry {
     /// The previous `claude agents` snapshot, in memory only (AD-46);
     /// seeded from the registry at the first refresh (D-51).
     agents: Option<AgentsSnapshot>,
+    /// The dry run running, and how the last one ended (AD-52).
+    triage: Triage,
 }
 
 impl WindowRegistry {
@@ -65,6 +69,7 @@ impl WindowRegistry {
             integrity,
             last_error: None,
             agents: None,
+            triage: Triage::default(),
         }
     }
 
@@ -230,15 +235,21 @@ impl WindowRegistry {
         })
     }
 
-    /// The Subjects view (AD-54), with the live cards of `board` and the
-    /// lag behind the event files of `events_dir`; with nothing read, the
-    /// view says why (D-47).
+    /// The Subjects view (AD-54), with the live cards of `board`, the lag
+    /// behind the event files of `events_dir` and the dry run running; with
+    /// nothing read, the view says why (D-47).
     pub fn view(&mut self, board: Option<&Board>, events_dir: &Path, now_ms: i64) -> RegistryView {
         let report = self.report();
+        let dry_run = self.triage.state();
         let read = match &self.slot {
-            Slot::Writable(writer) => {
-                read::view(&writer.conn, report.clone(), board, events_dir, now_ms)
-            }
+            Slot::Writable(writer) => read::view(
+                &writer.conn,
+                report.clone(),
+                board,
+                events_dir,
+                dry_run,
+                now_ms,
+            ),
             Slot::ReadOnly(reader) => reader.view(report.clone(), board, events_dir, now_ms),
             Slot::Unavailable(_) | Slot::Network => return unread_view(report, now_ms),
         };
@@ -249,6 +260,44 @@ impl WindowRegistry {
                 unread_view(self.report(), now_ms)
             }
         }
+    }
+
+    /// What the view shows of dry runs.
+    pub fn triage_state(&self) -> DryRunState {
+        self.triage.state()
+    }
+
+    /// Queues a dry run at `now_ms` (AD-52, D-92): answered once queued,
+    /// with how many cases it holds; refused while one runs, with no case,
+    /// or when the registry cannot be written.
+    pub fn evaluate(&mut self, now_ms: i64) -> Result<u32, IpcError> {
+        let Slot::Writable(writer) = &mut self.slot else {
+            return Err(self.not_writable());
+        };
+        match self.triage.start_dry_run(writer, now_ms) {
+            Ok(Ok(cases)) => Ok(cases),
+            Ok(Err(refusal @ (DryRunRefusal::Running | DryRunRefusal::NoCases))) => {
+                Err(IpcError::new(IpcErrorCode::Refused, refusal.to_string()))
+            }
+            Err(error) => Err(self.write_failed(&error)),
+        }
+    }
+
+    /// The next triage call to start at `now_ms`, when one may (AD-52).
+    pub fn next_call(&mut self, now_ms: i64) -> Option<NextCall> {
+        let mut triage = std::mem::take(&mut self.triage);
+        let next = self
+            .on_writer(|writer| triage.next_call(writer, now_ms))
+            .flatten();
+        self.triage = triage;
+        next
+    }
+
+    /// Records a call's result at `now_ms`, when the registry is writable.
+    pub fn take_call_result(&mut self, result: &CallResult, now_ms: i64) {
+        let mut triage = std::mem::take(&mut self.triage);
+        self.on_writer(|writer| triage.take_result(writer, result, now_ms));
+        self.triage = triage;
     }
 
     /// One ingestion pass, when the registry is writable.

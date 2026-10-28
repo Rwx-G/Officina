@@ -12,6 +12,7 @@ use officina_core::registry::confirm::{
     AuthorAction, AuthorContext, ConfirmItem, ConfirmPlan, ItemAnswer, ItemOutcome, Plan,
     SubjectOrigin, Target, TriageContext, Wake, confirm_item, plan,
 };
+use officina_core::registry::dry_run::DryRunState;
 use officina_core::registry::filing::excerpts_to_clear;
 use officina_core::registry::fold::FactWrite;
 pub use officina_core::registry::types::AuthorRefusal;
@@ -408,7 +409,14 @@ impl Writer {
                 .exclude()
                 .map(|path| path.display().to_string()),
         };
-        Ok(read::view(&self.conn, report, board, events_dir, now_ms)?)
+        Ok(read::view(
+            &self.conn,
+            report,
+            board,
+            events_dir,
+            DryRunState::default(),
+            now_ms,
+        )?)
     }
     /// Runs one author action at `now_ms` in one transaction, as every
     /// write is, with `synchronous = FULL` (AD-39): the core plans it from

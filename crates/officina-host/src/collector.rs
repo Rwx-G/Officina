@@ -224,6 +224,9 @@ pub struct Collector {
     /// What the ingested event lines said about the hook payloads, kept
     /// until the running version and its record are known (AD-56).
     hook_sightings: HookSightings,
+    /// The environment a triage call's own is built from (AD-51, D-86):
+    /// the window's, given at start; empty unless one is given.
+    triage_base_env: std::sync::Arc<Vec<(String, String)>>,
 }
 
 impl Collector {
@@ -275,7 +278,20 @@ impl Collector {
             registry: None,
             subjects: BTreeMap::new(),
             hook_sightings: HookSightings::default(),
+            triage_base_env: std::sync::Arc::new(Vec::new()),
         }
+    }
+
+    /// The collector building each triage call's environment from `base`
+    /// (D-86): the window passes its own, a test one of its making.
+    pub fn with_triage_base_env(mut self, base: Vec<(String, String)>) -> Collector {
+        self.triage_base_env = std::sync::Arc::new(base);
+        self
+    }
+
+    /// The environment a triage call's own is built from.
+    pub fn triage_base_env(&self) -> &std::sync::Arc<Vec<(String, String)>> {
+        &self.triage_base_env
     }
 
     /// Records the registry's state, which the next board reports

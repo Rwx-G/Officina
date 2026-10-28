@@ -1534,3 +1534,116 @@ fn a_missing_hook_field_reaches_the_board() {
     );
     stop(handle);
 }
+
+/// A confirmation the dry run can take: a session of `env` that saw a
+/// prompt, an answer and an end a day ago, confirmed `to_resume` from its
+/// default proposal through the window's writer, before the window starts.
+fn seed_a_dry_run_case(env: &common::TestEnv) {
+    let now = officina_host::files::now_ms();
+    ended_session(env, "s-done", now - DAY_MS);
+    let events = env.events_dir();
+    let home = env.officina_home();
+    let ctx = IngestContext {
+        events_dir: &events,
+        officina_home: &home,
+        projects: &[],
+        no_excerpts: false,
+    };
+    let mut writer = open_writer(&home, &[], now).writer().unwrap();
+    writer.ingest(&ctx, now).unwrap();
+    let view = writer.view(None, &events, now).unwrap();
+    let row = view
+        .triage
+        .iter()
+        .find(|r| r.key == "session:s-done")
+        .unwrap();
+    writer
+        .confirm_triage(
+            &[ConfirmItem {
+                key: row.key.clone(),
+                shown: row.proposal,
+                verdict: Verdict::ToResume,
+                routine: false,
+                file_under: Some(FileUnder::New {
+                    name: "done work".into(),
+                }),
+            }],
+            now,
+        )
+        .unwrap();
+}
+
+/// Story 3.9 AC 6 (AD-52, spine AD-3 as amended): a dry run's call runs on
+/// the `triage` thread; while it hangs, hook events still reach the board
+/// at its usual pace, and `evaluate_triage_model` answered once queued.
+#[test]
+fn board_keeps_its_pace_while_a_triage_call_hangs() {
+    let env = common::TestEnv::new();
+    let now = officina_host::files::now_ms();
+    env.write_agents(&listed_session("s-live", now));
+    seed_a_dry_run_case(&env);
+    let bin = env.root.path().join("bin");
+    let triage_log = env.root.path().join("triage.log");
+    let sidecar = serde_json::json!({"fixture": env.fixture(), "log": env.fake_log(),
+        "mode": "triage-hang", "hang_ms": 15_000, "triage_log": triage_log});
+    let fake = common::fake_claude_in(&bin, &sidecar);
+    let base = vec![(
+        "SYSTEMROOT".to_owned(),
+        std::env::var("SYSTEMROOT").unwrap_or_default(),
+    )];
+    let collector = Collector::from_parts(paths_of(&env, None), LoadedFloor::default(), Some(fake))
+        .with_credential_store(OwnedStore(Box::new(FakeStore::empty())))
+        .with_triage_base_env(base);
+    let (sink, emitted) = common::sink(|_| {});
+    let handle = spawn(collector, sink).unwrap();
+    until(&emitted.boards, |b| shows(b, "s-live"));
+
+    let asked = Instant::now();
+    match ask(&handle, AuthorCommand::Evaluate, AUTHOR_WAIT)
+        .recv_timeout(AUTHOR_WAIT)
+        .unwrap()
+    {
+        Ok(AuthorAnswer::Evaluating { cases }) => assert_eq!(cases, 1),
+        other => panic!("{other:?}"),
+    }
+    assert!(
+        asked.elapsed() < Duration::from_secs(5),
+        "answered once queued"
+    );
+    let running = until(&emitted.registries, |v| v.model.dry_run.is_some());
+    assert_eq!(
+        running.model.dry_run.map(|p| (p.done, p.total)),
+        Some((0, 1))
+    );
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !triage_log.exists() {
+        assert!(Instant::now() < deadline, "the call never started");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+
+    // The call hangs; each hook event still shows within the board's pace.
+    for i in 0..3 {
+        let session = format!("s-new-{i}");
+        let at = officina_host::files::now_ms();
+        hook_line(
+            &env,
+            serde_json::json!({"hook_event_name": "UserPromptSubmit", "session_id": session, "cwd": "C:/work/api", "prompt": "x"}),
+            at - 2_000,
+        );
+        let written = Instant::now();
+        hook_line(
+            &env,
+            serde_json::json!({"hook_event_name": "SessionEnd", "session_id": session, "cwd": "C:/work/api", "reason": "prompt_input_exit"}),
+            at - 1_000,
+        );
+        until(&emitted.boards, |b| shows(b, &session));
+        assert!(
+            written.elapsed() < Duration::from_secs(2),
+            "a board waited on the call: {:?}",
+            written.elapsed()
+        );
+    }
+    let still = handle.registry.read().unwrap().clone().unwrap();
+    assert!(still.model.dry_run.is_some(), "the call is still out");
+    stop(handle);
+}

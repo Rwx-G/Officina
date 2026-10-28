@@ -11,7 +11,7 @@ use std::path::Path;
 use common::registry::{Home, NOW, writable};
 use officina_core::registry::types::{
     ModelVerdict, ProposalSource, ReasonCode, SettingKey, Source, SubjectStatus, TriageOutcome,
-    TriagePurpose, Verdict,
+    TriagePurpose, TriageRefusal, Verdict,
 };
 use officina_host::registry::schema::{MIGRATIONS, SCHEMA_VERSION, migrate};
 use officina_host::registry::store::{
@@ -22,7 +22,7 @@ use rusqlite::Connection;
 
 /// The SHA-256 of each shipped migration, in order (AD-41). A shipped
 /// entry never changes; a new entry fails here until its hash is pinned.
-const PINNED: [&str; 1] = ["5dbc947a1e68c76dce049a886eb1a80b65d7fa509f1ea6bc019eb707669387a7"];
+const PINNED: [&str; 1] = ["f970665d6ecaa94df27efabc22f9cecca2b0365219fc1ac9b0899503eccfed0a"];
 
 /// A database at the current version, schema only.
 fn fresh() -> Connection {
@@ -137,6 +137,10 @@ fn expected_checks() -> BTreeMap<&'static str, BTreeSet<String>> {
             "triage_call.outcome",
             codes(TriageOutcome::ALL, TriageOutcome::code),
         ),
+        (
+            "triage_call.refusal",
+            codes(TriageRefusal::ALL, TriageRefusal::code),
+        ),
         ("setting.key", codes(SettingKey::ALL, SettingKey::code)),
         ("subject.routine", flag.clone()),
         ("confirmation.auto", flag.clone()),
@@ -232,6 +236,8 @@ fn columns_without_check_are_the_ones_d_88_names() {
         "session_excerpt.session_id",
         "confirmation.session_id",
         "model_answer.session_id",
+        "triage_call.case_key",
+        "triage_call.input_hash",
     ];
     let named_by_d_88 = [
         "session_fact.fact",

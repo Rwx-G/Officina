@@ -16,7 +16,10 @@
 ///
 /// Beyond AD-40's table, `event_file.rewrites` counts the times a file was
 /// found shorter than its offset and read again from its start (D-84), so
-/// doctor and the view can report it.
+/// doctor and the view can report it; `triage_call` keeps the case a call
+/// was about and the hash of its inputs, so a refused case is not queued
+/// again until its inputs change across a restart (D-87), and why a call
+/// was refused, which the view and doctor show (D-65).
 const V1: &str = "\
 CREATE TABLE event_file (
     name TEXT PRIMARY KEY,
@@ -69,9 +72,12 @@ CREATE TABLE session_excerpt (
 CREATE TABLE triage_call (
     id INTEGER PRIMARY KEY,
     purpose TEXT NOT NULL CHECK (purpose IN ('proposal', 'dry_run')),
+    case_key TEXT,
+    input_hash TEXT,
     started_at_ms INTEGER NOT NULL,
     duration_ms INTEGER,
     outcome TEXT NOT NULL CHECK (outcome IN ('answer', 'refused', 'failed', 'timeout', 'invalid')),
+    refusal TEXT CHECK (refusal IN ('claude_not_found', 'cmd_shim', 'no_excerpts', 'workdir_not_empty')),
     input_tokens INTEGER,
     output_tokens INTEGER,
     cost_microusd INTEGER

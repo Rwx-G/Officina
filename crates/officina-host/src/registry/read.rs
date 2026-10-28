@@ -7,19 +7,22 @@ use std::path::Path;
 
 use officina_core::board::Board;
 use officina_core::dates::dated_file_day;
+use officina_core::registry::dry_run::{DryRunState, Evaluation, Tally};
 use officina_core::registry::fold::pivot;
 #[cfg(feature = "window-authority")]
 use officina_core::registry::fold::{Mark, MarkQuery};
 use officina_core::registry::proposal::ModelInput;
+use officina_core::registry::triage_call::{COUNT_WINDOW_MS, CallRecord};
 use officina_core::registry::types::{
     ConfirmationRecord, EventFileRecord, ExcerptRecord, FactRow, FactValue, RegistryReport,
     RestoreNotice, SessionRecord, SessionRow, SettingKey, Source, Sourced, SubjectRecord,
-    SubjectRef, SubjectStatus,
+    SubjectRef, SubjectStatus, TriageOutcome, TriagePurpose, TriageRefusal,
 };
 #[cfg(feature = "window-authority")]
 use officina_core::registry::types::{HookEnd, HookStart, SessionFact};
 use officina_core::registry::view::{
-    IngestionView, RegistryView, SubjectView, ViewInput, archived_subjects, build_view,
+    EvidenceInput, IngestionView, RegistryView, SubjectView, ViewInput, archived_subjects,
+    build_view,
 };
 use rusqlite::Connection;
 #[cfg(feature = "window-authority")]
@@ -150,7 +153,24 @@ impl Reader {
         events_dir: &Path,
         now_ms: i64,
     ) -> rusqlite::Result<RegistryView> {
-        view(&self.conn, report, board, events_dir, now_ms)
+        view(
+            &self.conn,
+            report,
+            board,
+            events_dir,
+            DryRunState::default(),
+            now_ms,
+        )
+    }
+
+    /// The `triage_call` rows started since `from_ms` (AD-52).
+    pub fn triage_calls_since(&self, from_ms: i64) -> rusqlite::Result<Vec<CallRecord>> {
+        triage_calls_since(&self.conn, from_ms)
+    }
+
+    /// The latest finished dry run, when there is one.
+    pub fn latest_evaluation(&self) -> rusqlite::Result<Option<Evaluation>> {
+        latest_evaluation(&self.conn)
     }
 
     /// The archived subjects the author may reopen, with the live cards of
@@ -254,12 +274,14 @@ pub(crate) fn ingestion_view(
     Ok(view)
 }
 
-/// The registry as the Subjects view shows it.
+/// The registry as the Subjects view shows it, with what the window's
+/// collector knows of dry runs.
 pub(crate) fn view(
     conn: &Connection,
     report: RegistryReport,
     board: Option<&Board>,
     events_dir: &Path,
+    dry_run: DryRunState,
     now_ms: i64,
 ) -> rusqlite::Result<RegistryView> {
     // One read transaction, so the subjects, sessions and excerpts come from
@@ -270,6 +292,11 @@ pub(crate) fn view(
     let sessions = session_records(&snapshot)?;
     let excerpts = excerpts(&snapshot)?;
     let confirmations = confirmations(&snapshot)?;
+    let evidence = EvidenceInput {
+        calls: triage_calls_since(&snapshot, now_ms - COUNT_WINDOW_MS)?,
+        latest_evaluation: latest_evaluation(&snapshot)?,
+        dry_run,
+    };
     Ok(build_view(
         &ViewInput {
             registry: report,
@@ -281,6 +308,7 @@ pub(crate) fn view(
             model: &model_input(),
             board,
             restore_notice: restore_notice(&snapshot),
+            evidence: &evidence,
         },
         now_ms,
     ))
@@ -619,4 +647,132 @@ pub(crate) fn known_projects(conn: &Connection) -> rusqlite::Result<Vec<String>>
     conn.prepare_cached("SELECT project FROM session UNION SELECT project FROM subject ORDER BY 1")?
         .query_map([], |row| row.get(0))?
         .collect()
+}
+
+/// A text column holding a closed enum's code, read back; an unknown code
+/// is a type error, as for the columns whose `CHECK` lists every value.
+fn code_of<T>(
+    row: &rusqlite::Row<'_>,
+    index: usize,
+    from_code: fn(&str) -> Option<T>,
+) -> rusqlite::Result<T> {
+    let text: String = row.get(index)?;
+    from_code(&text).ok_or_else(|| {
+        rusqlite::Error::InvalidColumnType(index, text.clone(), rusqlite::types::Type::Text)
+    })
+}
+
+/// The `triage_call` rows started at or after `from_ms`, oldest first
+/// (AD-52): the budget and the counts read them.
+pub(crate) fn triage_calls_since(
+    conn: &Connection,
+    from_ms: i64,
+) -> rusqlite::Result<Vec<CallRecord>> {
+    conn.prepare_cached(
+        "SELECT purpose, started_at_ms, outcome, refusal, input_tokens, output_tokens, cost_microusd
+         FROM triage_call WHERE started_at_ms >= ?1 ORDER BY started_at_ms, id",
+    )?
+    .query_map([from_ms], |row| {
+        let refusal: Option<String> = row.get(3)?;
+        Ok(CallRecord {
+            purpose: code_of(row, 0, TriagePurpose::from_code)?,
+            started_at_ms: row.get(1)?,
+            outcome: code_of(row, 2, TriageOutcome::from_code)?,
+            refusal: refusal.as_deref().and_then(TriageRefusal::from_code),
+            input_tokens: row.get(4)?,
+            output_tokens: row.get(5)?,
+            cost_microusd: row.get(6)?,
+        })
+    })?
+    .collect()
+}
+
+/// The latest `model_evaluation` row: the last finished dry run.
+pub(crate) fn latest_evaluation(conn: &Connection) -> rusqlite::Result<Option<Evaluation>> {
+    conn.prepare_cached(
+        "SELECT at_ms, cases, model_correct, default_correct, model_false_finished, unanswered,
+             input_tokens, output_tokens, cost_microusd
+         FROM model_evaluation ORDER BY at_ms DESC, id DESC LIMIT 1",
+    )?
+    .query_map([], |row| {
+        Ok(Evaluation {
+            at_ms: row.get(0)?,
+            tally: Tally {
+                cases: row.get(1)?,
+                model_correct: row.get(2)?,
+                default_correct: row.get(3)?,
+                model_false_finished: row.get(4)?,
+                unanswered: row.get(5)?,
+                input_tokens: row.get(6)?,
+                output_tokens: row.get(7)?,
+                cost_microusd: row.get(8)?,
+            },
+        })
+    })?
+    .next()
+    .transpose()
+}
+
+#[cfg(feature = "window-authority")]
+/// Every confirmation as the dry run reads it (AD-52, D-85): the proposal
+/// it answered, the author's verdict, and its input while it holds one.
+pub(crate) fn evaluable_confirmations(
+    conn: &Connection,
+) -> rusqlite::Result<Vec<officina_core::registry::dry_run::EvaluableConfirmation>> {
+    use officina_core::registry::confirm::ConfirmationInput;
+    use officina_core::registry::dry_run::EvaluableConfirmation;
+    use officina_core::registry::proposal::Proposal;
+    use officina_core::registry::types::{ModelVerdict, ProposalSource, ReasonCode, Verdict};
+    conn.prepare_cached(
+        "SELECT c.id, c.confirmed_at_ms, c.proposed_verdict, c.proposed_source, c.proposed_reason,
+             c.call_id, c.verdict, i.confirmation_id, i.prompt, i.answer_head, i.answer_tail,
+             i.end_reason, i.cut_mid_turn, i.expires_at_ms
+         FROM confirmation c LEFT JOIN confirmation_input i ON i.confirmation_id = c.id
+         ORDER BY c.id",
+    )?
+    .query_map([], |row| {
+        let held: Option<i64> = row.get(7)?;
+        let input = match held {
+            Some(_) => Some(ConfirmationInput {
+                prompt: row.get(8)?,
+                answer_head: row.get(9)?,
+                answer_tail: row.get(10)?,
+                end_reason: row.get(11)?,
+                cut_mid_turn: row.get::<_, i64>(12)? == 1,
+                expires_at_ms: row.get(13)?,
+            }),
+            None => None,
+        };
+        Ok(EvaluableConfirmation {
+            id: row.get(0)?,
+            confirmed_at_ms: row.get(1)?,
+            proposal: Proposal {
+                verdict: code_of(row, 2, ModelVerdict::from_code)?,
+                source: code_of(row, 3, ProposalSource::from_code)?,
+                reason: code_of(row, 4, ReasonCode::from_code)?,
+                call_id: row.get(5)?,
+            },
+            verdict: code_of(row, 6, Verdict::from_code)?,
+            input,
+        })
+    })?
+    .collect()
+}
+
+#[cfg(feature = "window-authority")]
+/// The outcome and input hash of the latest call about `case_key`, when
+/// there is one (D-87).
+pub(crate) fn last_call_for(
+    conn: &Connection,
+    case_key: &str,
+) -> rusqlite::Result<Option<(TriageOutcome, Option<String>)>> {
+    conn.prepare_cached(
+        "SELECT outcome, input_hash FROM triage_call WHERE case_key = ?1
+         ORDER BY started_at_ms DESC, id DESC LIMIT 1",
+    )?
+    .query_map([case_key], |row| {
+        Ok((code_of(row, 0, TriageOutcome::from_code)?, row.get(1)?))
+    })?
+    .next()
+    .transpose()
 }

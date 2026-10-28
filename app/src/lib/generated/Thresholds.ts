@@ -3,4 +3,4 @@
 /**
  * Numbers the view is built with (AD-5).
  */
-export type Thresholds = { restore_notice_ms: number, excerpt_ttl_ms: number, non_interactive_listed: number, supersession_window_ms: number, };
+export type Thresholds = { restore_notice_ms: number, excerpt_ttl_ms: number, non_interactive_listed: number, supersession_window_ms: number, dry_run_max_cases: number, call_spacing_ms: number, calls_per_hour: number, calls_per_day: number, count_window_ms: number, };

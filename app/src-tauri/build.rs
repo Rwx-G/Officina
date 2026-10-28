@@ -21,6 +21,7 @@ const COMMANDS: &[&str] = &[
     "archive_subject",
     "reopen_subject",
     "confirm_triage",
+    "evaluate_triage_model",
 ];
 
 fn main() {

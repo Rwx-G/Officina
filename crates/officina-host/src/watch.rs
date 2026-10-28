@@ -23,6 +23,7 @@ use crate::files::{event_file_for, now_ms};
 use crate::paths::Paths;
 use crate::registry::ingest::IngestContext;
 use crate::registry::store::onedrive_roots_from_env;
+use crate::registry::triage::{CallLimits, NextCall, TriageJob, TriageWorker};
 use crate::registry::window::WindowRegistry;
 use crate::relay::home::RelayHome;
 use crate::relay::view::{credential_presence, read_view_with};
@@ -72,6 +73,8 @@ pub enum AuthorCommand {
     Act(AuthorAction),
     /// Triage rows confirmed in one transaction, answered per item (AD-49).
     Confirm(Vec<ConfirmItem>),
+    /// A dry run of the triage model, answered once queued (AD-52, D-92).
+    Evaluate,
 }
 
 /// What the collector answers to an author request.
@@ -84,6 +87,11 @@ pub enum AuthorAnswer {
     Archived(Vec<SubjectView>),
     /// What became of each confirmed item, in the order sent.
     Confirmed(Vec<ItemAnswer>),
+    /// A dry run is queued, with this many cases; its progress shows in the
+    /// registry view.
+    Evaluating {
+        cases: u32,
+    },
 }
 
 /// The collector's answer, or why there is none to give.
@@ -628,6 +636,8 @@ fn run<E: Emit>(
         now_ms(),
     );
     hourly_pass(collector, &mut registry);
+    // No thread, no call: the board does not depend on it.
+    let mut worker = TriageWorker::spawn().ok();
     let mut watched = WatchedPaths::new(collector);
     let mut plan = RefreshPlan::new(Instant::now);
     let mut presence: BTreeMap<String, bool> = BTreeMap::new();
@@ -671,6 +681,9 @@ fn run<E: Emit>(
         // The hourly pass can clear excerpts the registry view shows.
         if due.recompute || due.retention {
             publish_both(collector, &mut registry, outputs, false);
+        }
+        if let Some(worker) = &mut worker {
+            pump_triage(collector, &mut registry, worker, outputs);
         }
         if due.relay {
             collector.keep_known_projects(now_ms());
@@ -731,8 +744,56 @@ fn answer_author<E: Emit>(
             publish_both(collector, registry, outputs, true);
             answered.map(AuthorAnswer::Confirmed)
         }
+        AuthorCommand::Evaluate => {
+            let queued = registry.evaluate(now_ms());
+            publish_both(collector, registry, outputs, true);
+            queued.map(|cases| AuthorAnswer::Evaluating { cases })
+        }
     };
     let _ = request.reply.send(reply);
+}
+
+/// The triage call of `next`, with what the collector knows of the window:
+/// its `claude`, home, floor config dir, `no_excerpts` and base
+/// environment (AD-51, D-86).
+fn triage_job(collector: &Collector, next: NextCall) -> TriageJob {
+    TriageJob {
+        purpose: next.purpose,
+        case_key: next.case_key,
+        case: next.case,
+        claude: collector.claude().map(Path::to_path_buf),
+        officina_home: collector.paths().officina_home.clone(),
+        config_dir: collector.paths().claude_config_override.clone(),
+        no_excerpts: collector.no_excerpts(),
+        base_env: std::sync::Arc::clone(collector.triage_base_env()),
+        limits: CallLimits::default(),
+    }
+}
+
+/// One tick of triage (AD-52): the results back from the `triage` thread
+/// are recorded, then the next call starts when the thread is idle and the
+/// budget allows; never a wait, so the board keeps its pace while a call
+/// runs. The registry view is emitted when the dry run moved.
+fn pump_triage<E: Emit>(
+    collector: &Collector,
+    registry: &mut WindowRegistry,
+    worker: &mut TriageWorker,
+    outputs: &mut Outputs<E>,
+) {
+    let before = registry.triage_state();
+    let mut recorded = false;
+    while let Some(result) = worker.try_result() {
+        registry.take_call_result(&result, now_ms());
+        recorded = true;
+    }
+    if worker.idle()
+        && let Some(next) = registry.next_call(now_ms())
+    {
+        worker.submit(triage_job(collector, next));
+    }
+    if recorded || registry.triage_state() != before {
+        publish_both(collector, registry, outputs, false);
+    }
 }
 
 /// Shares `board` with the window's commands, and emits it when it differs

@@ -9,10 +9,15 @@ use serde::{Deserialize, Serialize};
 
 use crate::board::{Badge, Board, Card, Column, SessionKindView};
 
+use super::dry_run::{DRY_RUN_MAX_CASES, DryRunProgress, DryRunState, DryRunStop, Evaluation};
 use super::filing::excerpt_time;
 use super::fold::SUPERSESSION_WINDOW_MS;
 use super::proposal::{ModelInput, Proposal};
 use super::retention::EXCERPT_TTL_MS;
+use super::triage_call::{
+    CALL_SPACING_MS, CALLS_PER_DAY, CALLS_PER_HOUR, COUNT_WINDOW_MS, CallRecord, CallsView,
+    count_calls,
+};
 use super::types::{
     ConfirmationRecord, Ending, ExcerptRecord, RegistryReport, RestoreNotice, RowKind,
     SessionRecord, Source, SubjectRecord, SubjectRef, SubjectStatus, Verdict,
@@ -59,7 +64,35 @@ pub struct RegistryView {
     /// The copy a damaged registry was restored from, for
     /// [`RESTORE_NOTICE_MS`] after the restore (D-93).
     pub restore_notice: Option<RestoreNotice>,
+    /// The triage model's state and evidence (FR-10, AD-52).
+    pub model: ModelView,
     pub thresholds: Thresholds,
+}
+
+/// The triage model as the Triage panel's evidence shows it (FR-10, AD-52,
+/// D-67, D-92): whether it proposes, the latest dry run, the one running
+/// and how the last one ended, and the calls made.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct ModelView {
+    /// Whether the model's answers take the default's place (FR-8).
+    pub enabled: bool,
+    pub latest_dry_run: Option<Evaluation>,
+    /// The dry run running now, with its progress.
+    pub dry_run: Option<DryRunProgress>,
+    /// How the last dry run since the window started ended.
+    pub last_stop: Option<DryRunStop>,
+    pub calls: CallsView,
+}
+
+/// What the evidence is built from, beside the registry's records: the
+/// `triage_call` rows of the count window, the latest `model_evaluation`,
+/// and what the window's collector knows of dry runs.
+#[derive(Debug, Clone, Default)]
+pub struct EvidenceInput {
+    pub calls: Vec<CallRecord>,
+    pub latest_evaluation: Option<Evaluation>,
+    pub dry_run: DryRunState,
 }
 
 /// How far the registry lags behind the event files (AD-53, D-84).
@@ -89,6 +122,13 @@ pub struct Thresholds {
     pub non_interactive_listed: u32,
     #[cfg_attr(feature = "ts", ts(type = "number"))]
     pub supersession_window_ms: i64,
+    pub dry_run_max_cases: u32,
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub call_spacing_ms: i64,
+    pub calls_per_hour: u32,
+    pub calls_per_day: u32,
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub count_window_ms: i64,
 }
 
 /// One subject that is not archived.
@@ -241,6 +281,7 @@ pub struct ViewInput<'a> {
     /// The board the live cards come from, when there is one.
     pub board: Option<&'a Board>,
     pub restore_notice: Option<RestoreNotice>,
+    pub evidence: &'a EvidenceInput,
 }
 
 fn end_view(record: &SessionRecord) -> Option<EndView> {
@@ -456,6 +497,7 @@ pub fn unread_view(report: RegistryReport, now_ms: i64) -> RegistryView {
             model: &ModelInput::default(),
             board: None,
             restore_notice: None,
+            evidence: &EvidenceInput::default(),
         },
         now_ms,
     )
@@ -472,6 +514,7 @@ pub fn unread_view(report: RegistryReport, now_ms: i64) -> RegistryView {
 ///         ingestion: IngestionView::default(),
 ///         subjects: &[], sessions: &[], excerpts: &[], confirmations: &[],
 ///         model: &Default::default(), board: None, restore_notice: None,
+///         evidence: &Default::default(),
 ///     },
 ///     1_000,
 /// );
@@ -563,11 +606,23 @@ pub fn build_view(input: &ViewInput, now_ms: i64) -> RegistryView {
             .restore_notice
             .clone()
             .filter(|notice| now_ms - notice.restored_at_ms < RESTORE_NOTICE_MS),
+        model: ModelView {
+            enabled: input.model.enabled,
+            latest_dry_run: input.evidence.latest_evaluation,
+            dry_run: input.evidence.dry_run.running,
+            last_stop: input.evidence.dry_run.last_stop,
+            calls: count_calls(&input.evidence.calls, now_ms),
+        },
         thresholds: Thresholds {
             restore_notice_ms: RESTORE_NOTICE_MS,
             excerpt_ttl_ms: EXCERPT_TTL_MS,
             non_interactive_listed: u32::try_from(NON_INTERACTIVE_LISTED).unwrap_or(u32::MAX),
             supersession_window_ms: SUPERSESSION_WINDOW_MS,
+            dry_run_max_cases: u32::try_from(DRY_RUN_MAX_CASES).unwrap_or(u32::MAX),
+            call_spacing_ms: CALL_SPACING_MS,
+            calls_per_hour: u32::try_from(CALLS_PER_HOUR).unwrap_or(u32::MAX),
+            calls_per_day: u32::try_from(CALLS_PER_DAY).unwrap_or(u32::MAX),
+            count_window_ms: COUNT_WINDOW_MS,
         },
     }
 }
@@ -650,6 +705,7 @@ mod tests {
                 model: &ModelInput::default(),
                 board: None,
                 restore_notice: None,
+                evidence: &EvidenceInput::default(),
             },
             NOW,
         )
@@ -711,6 +767,7 @@ mod tests {
                     model: &ModelInput::default(),
                     board: None,
                     restore_notice: None,
+                    evidence: &EvidenceInput::default(),
                 }
             },
             NOW,
@@ -787,6 +844,7 @@ mod tests {
                     model: &ModelInput::default(),
                     board: None,
                     restore_notice: Some(notice.clone()),
+                    evidence: &EvidenceInput::default(),
                 },
                 now,
             )
@@ -846,6 +904,7 @@ mod tests {
                 model: &ModelInput::default(),
                 board: None,
                 restore_notice: None,
+                evidence: &EvidenceInput::default(),
             },
             NOW,
         );
@@ -950,6 +1009,7 @@ mod tests {
                     model: &ModelInput::default(),
                     board: None,
                     restore_notice: None,
+                    evidence: &EvidenceInput::default(),
                 },
                 NOW,
             )

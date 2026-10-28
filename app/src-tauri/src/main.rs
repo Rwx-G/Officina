@@ -126,7 +126,9 @@ async fn ask(state: State<'_, AppState>, command: AuthorCommand) -> Result<Autho
 async fn act(state: State<'_, AppState>, action: AuthorAction) -> Result<Option<i64>, IpcError> {
     match ask(state, AuthorCommand::Act(action)).await? {
         AuthorAnswer::Done { created } => Ok(created),
-        AuthorAnswer::Archived(_) | AuthorAnswer::Confirmed(_) => {
+        AuthorAnswer::Archived(_)
+        | AuthorAnswer::Confirmed(_)
+        | AuthorAnswer::Evaluating { .. } => {
             Err(IpcError::internal("the collector answered another request"))
         }
     }
@@ -166,7 +168,9 @@ fn get_registry(state: State<'_, AppState>) -> Option<RegistryView> {
 async fn list_archived(state: State<'_, AppState>) -> Result<Vec<SubjectView>, IpcError> {
     match ask(state, AuthorCommand::ListArchived).await? {
         AuthorAnswer::Archived(listed) => Ok(listed),
-        AuthorAnswer::Done { .. } | AuthorAnswer::Confirmed(_) => {
+        AuthorAnswer::Done { .. }
+        | AuthorAnswer::Confirmed(_)
+        | AuthorAnswer::Evaluating { .. } => {
             Err(IpcError::internal("the collector answered another request"))
         }
     }
@@ -256,7 +260,21 @@ async fn confirm_triage(
 ) -> Result<Vec<ItemAnswer>, IpcError> {
     match ask(state, AuthorCommand::Confirm(items)).await? {
         AuthorAnswer::Confirmed(answers) => Ok(answers),
-        AuthorAnswer::Done { .. } | AuthorAnswer::Archived(_) => {
+        AuthorAnswer::Done { .. } | AuthorAnswer::Archived(_) | AuthorAnswer::Evaluating { .. } => {
+            Err(IpcError::internal("the collector answered another request"))
+        }
+    }
+}
+
+/// Queues a dry run of the triage model on the author's past
+/// confirmations (AD-52, D-92): answered once queued, with how many cases
+/// it holds; its progress and its result come in the registry view, never
+/// as a proposal.
+#[tauri::command]
+async fn evaluate_triage_model(state: State<'_, AppState>) -> Result<u32, IpcError> {
+    match ask(state, AuthorCommand::Evaluate).await? {
+        AuthorAnswer::Evaluating { cases } => Ok(cases),
+        AuthorAnswer::Done { .. } | AuthorAnswer::Archived(_) | AuthorAnswer::Confirmed(_) => {
             Err(IpcError::internal("the collector answered another request"))
         }
     }
@@ -413,7 +431,15 @@ fn main() {
             }
         }))
         .setup(|app| {
-            let collector = Collector::new(floor_arg().as_deref())?;
+            // A triage call's environment is built from the window's own
+            // (AD-51, D-86), minus what core removes.
+            let collector = Collector::new(floor_arg().as_deref())?.with_triage_base_env(
+                std::env::vars_os()
+                    .filter_map(|(name, value)| {
+                        Some((name.into_string().ok()?, value.into_string().ok()?))
+                    })
+                    .collect(),
+            );
             let claude = collector.claude().map(std::path::Path::to_path_buf);
             let relay_home = collector.relay().clone();
             // From now on, a decision the window did not make shows (D-173).
@@ -463,7 +489,8 @@ fn main() {
             file_sessions,
             archive_subject,
             reopen_subject,
-            confirm_triage
+            confirm_triage,
+            evaluate_triage_model
         ])
         .run(tauri::generate_context!())
         .expect("failed to run the Officina window");

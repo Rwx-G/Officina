@@ -20,6 +20,8 @@ pub mod retention;
 pub mod schema;
 pub mod store;
 #[cfg(feature = "window-authority")]
+pub mod triage;
+#[cfg(feature = "window-authority")]
 pub mod window;
 #[cfg(feature = "window-authority")]
 pub mod write;
