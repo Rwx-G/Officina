@@ -120,6 +120,7 @@ Everything stays on your machine, under `~/.officina`:
 - **Hook events**: the first 280 characters of each prompt and answer, plus the event type, session id and folder, in daily files deleted after at most 48 hours. Set `OFFICINA_NO_EXCERPTS=1` (or `no_excerpts = true` in the floor file) to keep no prompt or answer text at all. The hook finds the floor file at `~/.officina/floor.toml` or through `OFFICINA_FLOOR`; one passed only with `--floor` does not reach it.
 - **Quota**: the two rate-limit windows, nothing else.
 - **Focus statistics**: outcome codes and a hash of the card, never a window title or a path.
+- **Relay journal** (`journal/`, once you use the relay): one line per run start and end, refusal, gate refusal or fault, approval, stop and resume, with the session id, the action, its parameters and argument vector, the first 280 characters of a refused command unless excerpts are off, and never a program's output.
 
 Officina opens no network connection and no TCP port. It does not read transcripts.
 
@@ -144,17 +145,33 @@ Sessions outside every declared project go to `other`; none is hidden. A v0.1 fl
 
 ## Relay (v0.2, in progress)
 
-In a guarded repository, sessions run the actions of a closed catalogue through Officina instead of calling guarded programs (remote shells, Ansible, WSL) themselves. The floor file declares the catalogue:
+The relay lets a session run your routine actions itself, repository by repository, instead of asking you to run a command and paste the result: a dry run of a playbook on a lab group, a service status, a known change applied after its check. You declare the actions in the floor file and approve them in the window; sessions call them with `officina run`; a gate in the hook refuses the raw commands they replace; every run is journaled.
+
+### What it is, and what it is not
+
+A session runs as you. It could, in principle, edit Officina's files or call your tools directly. The relay is a guardrail against mistakes and injected instructions, and a record of what was done on your behalf; it is **not a security boundary**. The boundary comes with the isolated workshop (v0.6), where the worker does not hold your identity.
+
+### Free and guarded repositories
+
+Each project of the floor file is `free` or `guarded`:
+
+- **free**: Officina only shows it, as in v0.1. A free project that lists actions can still run them through `officina run`.
+- **guarded**, the default for a schema 2 project: the gate refuses a session's direct calls to the programs that reach other machines (remote shells and copies, Ansible, WSL and the Windows distro launchers), and the session runs the actions you approved instead.
+
+Folders outside every declared project are never touched, and a v0.1 floor (`schema = 1`) keeps every project free. The default list of guarded programs lives in the code (`DEFAULT_GUARDED_PROGRAMS`); `officina doctor` prints the list in effect. A floor can replace it with its own `guarded_programs`, a list of program names where a trailing `*` matches a prefix.
+
+### Declaring the catalogue
+
+The floor file declares the actions, and each project the actions it may use:
 
 ```toml
 schema = 2
-# guarded_programs = ["ssh", "ansible*"]   # optional, replaces the default list
 
 [[project]]
-name = "supervision"
-path = "Supervision"
+name = "infra"
+path = "Infra"
 autonomy = "guarded"
-actions = ["check"]
+actions = ["check", "apply"]
 
 [[action]]
 name = "check"
@@ -168,15 +185,34 @@ args = ["--check", "--diff", "-i", "inventory/lab", "--limit", "{group}", "playb
 # timeout_s = 540, max_output_kib = 64 when not set
 
 [action.params.playbook]
-values = ["alerting.yml", "node-exporter.yml"]
+values = ["site.yml", "monitoring.yml"]
 
 [action.params.group]
 pattern = "lab-[a-z0-9-]{1,30}"      # anchored: the whole value must match
+
+[[action]]
+name = "apply"
+description = "Apply a playbook on one lab group, after its check"
+class = "after-check"
+check = "check"                      # a free action with the same parameters
+runner = "wsl"
+distro = "Ubuntu"
+program = "/home/user01/venv/bin/ansible-playbook"
+env = { ANSIBLE_CONFIG = "/home/user01/ansible.cfg" }
+args = ["-i", "inventory/lab", "--limit", "{group}", "playbooks/{playbook}"]
+
+[action.params.playbook]
+values = ["site.yml", "monitoring.yml"]
+
+[action.params.group]
+pattern = "lab-[a-z0-9-]{1,30}"
 ```
 
 - An `args` item holds at most one `{placeholder}`, with an optional literal prefix and suffix, and always becomes exactly one argument: no shell ever reads it.
 - A parameter declares `values` or a `pattern`, never both. Whatever it declares, a value is refused when it starts with `-`, holds a control, bidirectional or invisible formatting character, or has a `.` or `..` path segment; on the `native` runner also when it starts with `/` or `@`.
 - An invalid action is skipped and reported with its line; it never invalidates the floor, so the board keeps working.
+
+### Approving it in the window
 
 The relay runs only a catalogue you approved in the window. Approval records a hash of the catalogue's meaning (projects, actions, parameters, guarded programs), not of its text: comments, key order, colours or an invalid action do not change it, any change of meaning does. Only `officina-app.exe` contains the code that approves; `officina.exe`, which sessions can call, does not, and CI checks the shipped binary for it.
 
@@ -184,24 +220,41 @@ When the floor's catalogue differs from the approved one (yours or a session's e
 
 **Stop relay**, in the header, makes `officina run` refuse every action until you press **Resume relay**; a terracotta "relay stopped" chip and a banner say so meanwhile. Stopping does not touch the gate, which keeps guarding your projects. Each stop and resume is one journal line.
 
-In a guarded repository the gate reads each `Bash` command and refuses one that would start a guarded program, even through quotes, wrappers, `bash -c`, an interpreter one-liner or a command substitution, along with a command name built at run time, a PowerShell encoded command, a redirection of Officina's home, and any mention of an `OFFICINA_` setting or of Officina's own files. It is a guardrail, not a boundary: a text match cannot catch a guarded program hidden in a script file (`bash deploy.sh`, `make apply`), called by another tool (`git` over SSH, a Python import), renamed, aliased from an earlier command, or reached by a `cd` from a free repository into a guarded one. Those stay the author's to watch; the limits are listed in the architecture (AD-27).
+### Setting it up with `officina doctor`
 
-The gate runs inside `officina hook` as a `PreToolUse` hook on `Bash`. Once the floor guards a project, `officina doctor` adds it to the block to paste:
+Run `officina doctor` after each floor edit. Once the floor uses the relay, it checks it end to end:
+
+- the relay floor, and whether it differs from the floor doctor itself reads: the window approves the relay's floor, so a window started with another `--floor` shows one floor's board and approves another;
+- the catalogue's issues with their lines, the approval state (approved, change pending, nothing approved yet), the projects with their actions, and the guarded programs in effect;
+- that each action's program resolves: a `native` program is an existing file; for a WSL action the system's own `wsl.exe` exists and, in the action's distro, `/usr/bin/env`, `/usr/bin/timeout` and the program are executable;
+- warnings: an action whose timeout, plus the longest wait of a `human` action, can outlive the Bash tool's 10-minute cap; an `after-check` action whose check its project does not list (it could never run); a project with `after-check` actions outside a git work tree (only the parameters bind); unreadable journal lines and gate errors of the last 24 hours.
+
+A missing `PreToolUse` registration while a project is guarded, a program that does not resolve and a relay floor that cannot be read are failures (exit 1); everything else warns. The gate runs inside `officina hook` as a `PreToolUse` hook on `Bash`; once the floor guards a project, doctor adds it to the block to paste:
 
 ```json
 "PreToolUse": [{ "matcher": "Bash", "hooks": [{ "type": "command", "command": "\"C:/path/to/officina.exe\" hook", "timeout": 5 }] }]
 ```
 
-A refusal holds in every permission mode, bypass included: the session sees why, and the actions it may run instead. A repository counts as guarded when the current floor or the approved catalogue says so, so a session cannot lift containment by editing the floor, and when it is the session's root or the shell's current folder, so `cd ..` does not leave it. If the approved catalogue or the floor cannot be read, the gate gets stricter, not looser. Each refusal, and each such fault, is one line in `~/.officina/journal/YYYY-MM-DD.jsonl`, with the first 280 characters of the command unless excerpts are off.
+For each guarded project, doctor also prints a paragraph to paste into that repository's `CLAUDE.md`, generated from the approved catalogue: use `officina run` for the listed actions, `officina run --list` to see them and their values, the Bash tool's longest timeout for relay calls, and read a refusal's reason before retrying. With nothing approved it says the catalogue awaits your approval and lists no action. Officina never writes it: paste it again after approving a change.
+
+### The gate
+
+In a guarded repository the gate reads each `Bash` command and refuses one that would start a guarded program, even through quotes, wrappers, `bash -c`, an interpreter one-liner or a command substitution, along with a command name built at run time, a PowerShell encoded command, a redirection of Officina's home, and any mention of an `OFFICINA_` setting or of Officina's own files. A refusal holds in every permission mode, bypass included: the session sees why, and the actions it may run instead.
+
+A repository counts as guarded when the current floor or the approved catalogue says so, so a session cannot lift containment by editing the floor, and when it is the session's root or the shell's current folder, so `cd ..` does not leave it. If the approved catalogue or the floor cannot be read, the gate gets stricter, not looser. Each refusal, and each such fault, is one journal line, with the first 280 characters of the command unless excerpts are off.
+
+The gate is a text match, so it has limits: a guarded program hidden in a script file, started by another tool, renamed, or aliased by an earlier command escapes it. The architecture lists what it cannot catch ([AD-27](docs/architecture-v0.2.md)), and the gate's vector set (`tests/vectors/gate.json`) keeps each such case marked as a limit, so an improvement shows up as a changed case.
+
+### Running actions
 
 Sessions run the approved actions themselves, from anywhere inside the project's folder:
 
 ```bash
 officina run --list                                   # this project's actions and what each parameter accepts
-officina run check group=lab-web playbook=alerting.yml
+officina run check group=lab-web playbook=site.yml
 ```
 
-`officina run` checks, in this order, that the relay is not stopped, that the floor still holds the approved catalogue, that the folder is in an approved project (free or guarded), that the project lists the action, and that every parameter is declared, given once and accepted. It then starts the program as an argument vector, never through a shell, in the project's folder, with the action's `env`; a `wsl` action goes through the system's own `wsl.exe` with `--exec`. Output streams through as it arrives, up to `max_output_kib`, after which a last line says how much was dropped. At `timeout_s` the program and every process it started are stopped, and they also stop if `officina run` itself is killed. Each run leaves a start line and an end line in the journal (exit code, duration, byte counts and SHA-256 of each stream, never the output); each refusal leaves one line.
+`officina run` checks, in this order, that the relay is not stopped, that the floor still holds the approved catalogue, that the folder is in an approved project (free or guarded), that the project lists the action, and that every parameter is declared, given once and accepted. It then starts the program as an argument vector, never through a shell, in the project's folder, with the action's `env`; a WSL action goes through the system's own `wsl.exe` with `--exec`. Output streams through as it arrives, up to `max_output_kib`, after which a last line says how much was dropped. At `timeout_s` the program and every process it started are stopped, and they also stop if `officina run` itself is killed. Each run leaves a start line and an end line in the journal (exit code, duration, byte counts and SHA-256 of each stream, never the output); each refusal leaves one line.
 
 | Exit code | Meaning |
 |---|---|
@@ -213,37 +266,28 @@ officina run check group=lab-web playbook=alerting.yml
 
 A program can exit 126 or 124 itself: the stderr line and the journal tell them apart.
 
-An `after-check` action names a `free` action with the same parameters as its `check`, and runs only after that check succeeded with the same parameters, under the same approved catalogue, on the same code, in the last 30 minutes; otherwise it is refused with `check_required` and the check to run first:
+An `after-check` action names a `free` action with the same parameters as its `check`, and runs only after that check succeeded in the same project with the same parameters, under the same approved catalogue, on the same code, in the last 30 minutes; otherwise it is refused with `check_required` and the check to run first.
 
-```toml
-[[action]]
-name = "apply"
-class = "after-check"
-check = "check"                      # a free action with the same parameters
-runner = "wsl"
-program = "/home/user01/venv/bin/ansible-playbook"
-args = ["-i", "inventory/lab", "--limit", "{group}", "playbooks/{playbook}"]
-```
-
-"The same code" means the same git fingerprint of the project's work tree: `HEAD`, the diff to it, the untracked files git does not ignore and the tracked files flagged `assume-unchanged` or `skip-worktree` (whose edits the diff hides), by content up to 1 MiB and by size beyond. Files your `.gitignore` excludes (vault files, local inventories, retry files) are not bound, so a check that writes such a file does not invalidate itself, and an edit to one does not stop the apply. Outside a git work tree only the parameters bind. `git` is the one on the session's `PATH`, run with external diff tools, textconv drivers and fsmonitor turned off.
-
-`human` actions are refused as not available in this build yet.
+"The same code" means the same git fingerprint of the project's work tree: `HEAD`, the diff to it, the untracked files git does not ignore and the tracked files flagged `assume-unchanged` or `skip-worktree` (whose edits the diff hides), by content up to 1 MiB and by size beyond. Files your `.gitignore` excludes (vault files, local inventories, retry files) are not bound, so a check that writes such a file does not invalidate itself, and an edit to one does not stop the apply. Outside a git work tree only the parameters bind, and doctor says so. `git` is the one on the session's `PATH`, run with external diff tools, textconv drivers and fsmonitor turned off.
 
 `officina relay --json` prints the relay's state once, without writing anything: whether it is stopped, the approved catalogue, a pending change with its diff, the floor's catalogue issues with their lines, and the last 50 journal entries with each run's start and end paired. A run with no end line 60 s past its timeout reads "abandoned" (its `officina run` was killed). The window reads the same contract.
 
-Today the catalogue is approved and the relay stopped from the window, the gate refuses guarded commands and `officina run` runs `free` and `after-check` actions; `human` actions and the Relay view arrive with the rest of v0.2.
+### What works today
+
+The first half of v0.2 is usable alone: declare a catalogue, approve it in the window, let sessions run its `free` and `after-check` actions with `officina run`, contained by the gate, journaled, stoppable from the window, and checked by `officina doctor`, which prints each guarded project's `CLAUDE.md` paragraph. `human` actions are refused as not available in this build yet; approvals in Needs you, the Relay view and HTTP actions arrive with the rest of v0.2.
 
 ## Command line
 
 | Command | Purpose |
 |---|---|
-| `officina doctor` | check the setup, print what to paste; exit 1 when something required is missing |
+| `officina doctor` | check the setup, the relay included, and print what to paste; exit 1 when something required is missing |
 | `officina board --json` | print the board once (exit 3 when the session list could not be refreshed) |
 | `officina hook` | record one hook payload from stdin, or answer the relay gate for a `Bash` call (run by Claude Code) |
 | `officina quota write [--tee]` | record the rate limits from a statusline payload (run by your statusline) |
 | `officina run <action> [name=value ...]` | run an approved relay action from its project (run by sessions) |
 | `officina run --list` | list the actions of the current folder's project |
 | `officina relay --json` | print the relay's state once: catalogue, pending change, recent activity |
+| `officina version` | print the version |
 
 ## Roadmap
 
@@ -252,7 +296,7 @@ Each minor version is one PRD and is useful alone.
 | Version | Goal |
 |---|---|
 | **v0.1 The board** | this release: who needs you, quotas, one click to the right session |
-| v0.2 The relay | a closed catalogue of read-only probes, so sessions stop asking you to run commands and paste results |
+| v0.2 The relay | in progress: a closed catalogue of actions sessions run on their own, gated and journaled, so they stop asking you to run commands and paste results |
 | v0.3 The registry and triage | subjects that survive restarts, finished sessions sorted into history or to resume |
 | v0.4 The scene | the isometric workshop: rooms, focus mode, the attention halo |
 | v0.5 The orchestrator | a restricted session that sees every subject and proposes work orders, launched in one gesture |
@@ -260,7 +304,7 @@ Each minor version is one PRD and is useful alone.
 | v0.7 The governor | spends the perishable 5-hour margin on routine tasks, never your weekly quota or your attention |
 | v1 | installer, update, Linux build, documentation |
 
-Design documents: [PRD v0.1](docs/prd/prd-v0.1.md), [architecture](docs/architecture-spine.md), [research notes](docs/research-notes.md), [stories](docs/stories/).
+Design documents: [PRD v0.1](docs/prd/prd-v0.1.md), [PRD v0.2](docs/prd/prd-v0.2.md), [architecture](docs/architecture-spine.md) and its [v0.2 addendum](docs/architecture-v0.2.md), [research notes](docs/research-notes.md), [stories](docs/stories/).
 
 ## Building from source
 
