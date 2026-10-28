@@ -7,16 +7,19 @@
 use std::collections::BTreeSet;
 use std::path::Path;
 
+use officina_core::board::Board;
 use officina_core::registry::confirm::{
-    AuthorAction, AuthorContext, Plan, SubjectOrigin, Target, Wake, plan,
+    AuthorAction, AuthorContext, ConfirmItem, ConfirmPlan, ItemAnswer, ItemOutcome, Plan,
+    SubjectOrigin, Target, TriageContext, Wake, confirm_item, plan,
 };
 use officina_core::registry::filing::excerpts_to_clear;
 use officina_core::registry::fold::FactWrite;
 pub use officina_core::registry::types::AuthorRefusal;
 use officina_core::registry::types::{
-    EventFileRecord, ExcerptRecord, FactValue, SessionRecord, SessionRow, SettingKey, Source,
-    SubjectRecord, SubjectStatus,
+    EventFileRecord, ExcerptRecord, FactValue, RegistryReport, RegistryState, SessionRecord,
+    SessionRow, SettingKey, Source, SubjectRecord, SubjectStatus,
 };
+use officina_core::registry::view::RegistryView;
 use rusqlite::config::DbConfig;
 use rusqlite::types::Value;
 use rusqlite::{Connection, ErrorCode, TransactionBehavior};
@@ -239,7 +242,174 @@ fn apply_plan(conn: &Connection, plan: &Plan, now_ms: i64) -> rusqlite::Result<O
     Ok(created)
 }
 
+/// Writes the verdict of a confirmation plan on `subject` at `now_ms`,
+/// source `author`: the subject's status and routine box, its excerpts
+/// cleared on `finished`, and the confirmation with the input it keeps
+/// (AD-49, D-85, D-88).
+fn apply_decision(
+    conn: &Connection,
+    planned: &ConfirmPlan,
+    subject: i64,
+    now_ms: i64,
+) -> rusqlite::Result<()> {
+    let Ok(decision) = &planned.decision else {
+        return Ok(());
+    };
+    conn.prepare_cached(
+        "UPDATE subject SET status = ?2, status_src = ?3, status_at_ms = ?4,
+             routine = coalesce(?5, routine)
+         WHERE id = ?1",
+    )?
+    .execute(rusqlite::params![
+        subject,
+        decision.status.code(),
+        Source::Author.code(),
+        now_ms,
+        decision.routine.map(i64::from)
+    ])?;
+    for session_id in &decision.clear_excerpts {
+        conn.prepare_cached("DELETE FROM session_excerpt WHERE session_id = ?1")?
+            .execute([session_id])?;
+    }
+    conn.prepare_cached(
+        "INSERT INTO confirmation (subject_id, session_id, proposed_verdict, proposed_source,
+             proposed_reason, call_id, verdict, auto, confirmed_at_ms)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0, ?8)",
+    )?
+    .execute(rusqlite::params![
+        subject,
+        decision.session_id,
+        decision.proposal.verdict.code(),
+        decision.proposal.source.code(),
+        decision.proposal.reason.code(),
+        decision.proposal.call_id,
+        decision.verdict.code(),
+        now_ms
+    ])?;
+    if let Some(input) = &decision.input {
+        let confirmation = conn.last_insert_rowid();
+        conn.prepare_cached(
+            "INSERT INTO confirmation_input (confirmation_id, prompt, answer_head, answer_tail,
+                 end_reason, cut_mid_turn, expires_at_ms)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        )?
+        .execute(rusqlite::params![
+            confirmation,
+            input.prompt,
+            input.answer_head,
+            input.answer_tail,
+            input.end_reason,
+            i64::from(input.cut_mid_turn),
+            input.expires_at_ms
+        ])?;
+    }
+    Ok(())
+}
+
+/// Confirms one item inside the caller's transaction: the core plans it
+/// from the registry as it stands after the items before it, so a row
+/// confirmed earlier in the batch is gone for a later item with its key.
+/// Returns the outcome and whether excerpts were cleared.
+fn confirm_one(
+    conn: &Connection,
+    item: &ConfirmItem,
+    now_ms: i64,
+) -> rusqlite::Result<(ItemOutcome, bool)> {
+    let subjects = read::subjects(conn)?;
+    let sessions = read::session_records(conn)?;
+    let confirmations = read::confirmations(conn)?;
+    let excerpts = read::excerpts(conn)?;
+    let known_projects = read::known_projects(conn)?;
+    let model = read::model_input();
+    let context = TriageContext {
+        subjects: &subjects,
+        sessions: &sessions,
+        confirmations: &confirmations,
+        excerpts: &excerpts,
+        model: &model,
+        known_projects: &known_projects,
+    };
+    let planned = match confirm_item(item, &context) {
+        Ok(planned) => planned,
+        Err(refused) => return Ok((refused, false)),
+    };
+    let created = match &planned.filing {
+        Some(filing) => apply_plan(conn, filing, now_ms)?,
+        None => None,
+    };
+    let subject = match planned.subject {
+        Target::Existing(id) => id,
+        Target::Created => created.unwrap_or_default(),
+    };
+    apply_decision(conn, &planned, subject, now_ms)?;
+    Ok((planned.outcome(subject), planned.checkpoint()))
+}
+
 impl Writer {
+    /// Confirms triage rows at `now_ms` in one transaction, committed
+    /// `FULL` (AD-39, AD-49), and answers per item: each is checked against
+    /// the proposal computed now and refused when it moved (D-63), an
+    /// unfiled row is filed first (D-60). A `finished` verdict clears the
+    /// subject's excerpts, and the WAL is then truncated so the cleared
+    /// text leaves the log (AD-44); the confirmation keeps its own copy
+    /// until those excerpts were due to expire (D-85).
+    pub fn confirm_triage(
+        &mut self,
+        items: &[ConfirmItem],
+        now_ms: i64,
+    ) -> Result<Vec<ItemAnswer>, RegistryError> {
+        self.confirm_triage_observed(items, now_ms, &mut |_| {})
+    }
+
+    /// [`Writer::confirm_triage`], calling `observe` with each item's index
+    /// once it is applied, before the commit: the crash helper stalls there
+    /// (D-89).
+    pub fn confirm_triage_observed(
+        &mut self,
+        items: &[ConfirmItem],
+        now_ms: i64,
+        observe: &mut dyn FnMut(usize),
+    ) -> Result<Vec<ItemAnswer>, RegistryError> {
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let mut answers = Vec::with_capacity(items.len());
+        let mut cleared = false;
+        for (index, item) in items.iter().enumerate() {
+            let (outcome, cleared_now) = confirm_one(&tx, item, now_ms)?;
+            cleared |= cleared_now;
+            answers.push(ItemAnswer {
+                key: item.key.clone(),
+                outcome,
+            });
+            observe(index);
+        }
+        tx.commit()?;
+        if cleared {
+            self.checkpoint()?;
+        }
+        Ok(answers)
+    }
+
+    /// The registry as the Subjects view shows it, read on the writer's own
+    /// connection, with the live cards of `board` and the lag behind the
+    /// event files of `events_dir` (AD-54).
+    pub fn view(
+        &self,
+        board: Option<&Board>,
+        events_dir: &Path,
+        now_ms: i64,
+    ) -> Result<RegistryView, RegistryError> {
+        let report = RegistryReport {
+            state: RegistryState::Ready,
+            detail: None,
+            exclude_from_sync: self
+                .location()
+                .exclude()
+                .map(|path| path.display().to_string()),
+        };
+        Ok(read::view(&self.conn, report, board, events_dir, now_ms)?)
+    }
     /// Runs one author action at `now_ms` in one transaction, as every
     /// write is, with `synchronous = FULL` (AD-39): the core plans it from
     /// the registry's subjects and the sessions it involves, this writes it

@@ -272,14 +272,20 @@ pub(crate) fn view(
             sessions: &sessions,
             excerpts: &excerpts,
             confirmations: &confirmations,
-            // The model's proposals come with its runner (stories 3.9,
-            // 3.11): until then it is disabled.
-            model: &ModelInput::default(),
+            model: &model_input(),
             board,
             restore_notice: restore_notice(&snapshot),
         },
         now_ms,
     ))
+}
+
+/// The triage model's part of the proposals, the same for the view and
+/// for the writer that checks a confirmation against them (AD-49). Its
+/// runner and its answers come with stories 3.9 and 3.11: until then it is
+/// disabled.
+pub(crate) fn model_input() -> ModelInput {
+    ModelInput::default()
 }
 
 /// The archived subjects the author may reopen, from one read

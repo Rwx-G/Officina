@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use officina_core::agents::AgentRecord;
 use officina_core::board::{Board, ProjectRule};
 use officina_core::ipc::{IpcError, IpcErrorCode};
-use officina_core::registry::confirm::AuthorAction;
+use officina_core::registry::confirm::{AuthorAction, ConfirmItem, ItemAnswer};
 use officina_core::registry::fold::{AgentsChanges, AgentsSnapshot};
 use officina_core::registry::types::{RegistryReport, RegistryState, SubjectRef};
 use officina_core::registry::view::{RegistryView, SubjectView, unread_view};
@@ -176,16 +176,41 @@ impl WindowRegistry {
                 Ok(created)
             }
             Err(AuthorError::Refused(refusal)) => Err(IpcError::refused_action(refusal)),
-            Err(AuthorError::Registry(error)) => {
-                let code = if error.is_corruption() {
-                    IpcErrorCode::RegistryUnavailable
-                } else {
-                    IpcErrorCode::WriteFailed
-                };
-                let failure = IpcError::new(code, error.to_string());
-                self.failed(&error);
-                Err(failure)
+            Err(AuthorError::Registry(error)) => Err(self.write_failed(&error)),
+        }
+    }
+
+    /// What the window is told when a write failed: the registry is
+    /// unavailable when the database is damaged (and stays so until the
+    /// next start, AD-42), else the write failed.
+    fn write_failed(&mut self, error: &RegistryError) -> IpcError {
+        let code = if error.is_corruption() {
+            IpcErrorCode::RegistryUnavailable
+        } else {
+            IpcErrorCode::WriteFailed
+        };
+        let failure = IpcError::new(code, error.to_string());
+        self.failed(error);
+        failure
+    }
+
+    /// Confirms triage rows at `now_ms` on the window's one connection
+    /// (AD-38, AD-49), answered per item; the registry failing writes
+    /// nothing and says why, as an author action does.
+    pub fn confirm(
+        &mut self,
+        items: &[ConfirmItem],
+        now_ms: i64,
+    ) -> Result<Vec<ItemAnswer>, IpcError> {
+        let Slot::Writable(writer) = &mut self.slot else {
+            return Err(self.not_writable());
+        };
+        match writer.confirm_triage(items, now_ms) {
+            Ok(answers) => {
+                self.last_error = None;
+                Ok(answers)
             }
+            Err(error) => Err(self.write_failed(&error)),
         }
     }
 

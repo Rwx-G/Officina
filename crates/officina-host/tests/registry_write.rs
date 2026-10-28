@@ -8,12 +8,17 @@ mod common;
 
 use std::collections::BTreeMap;
 
-use common::registry::{DAY, Home, NOW, day_file, file_contains, line, prompt};
+use common::registry::{DAY, Home, NOW, answer, day_file, file_contains, line, prompt};
 use officina_core::agents::parse_agents;
 use officina_core::board::ProjectRule;
-use officina_core::registry::confirm::{AuthorAction, SubjectOrigin};
+use officina_core::registry::confirm::{
+    AuthorAction, ConfirmItem, ConfirmationInput, ItemAnswer, ItemOutcome, SubjectOrigin,
+};
+use officina_core::registry::proposal::Proposal;
+use officina_core::registry::retention::EXCERPT_TTL_MS;
 use officina_core::registry::types::{
-    AuthorRefusal, SessionRecord, Source, SubjectRecord, SubjectStatus,
+    AuthorRefusal, ConfirmRefusal, ModelVerdict, ProposalSource, ReasonCode, SessionRecord, Source,
+    SubjectRecord, SubjectStatus, Verdict,
 };
 use officina_host::registry::ingest::IngestContext;
 use officina_host::registry::store::{Writer, open_reader};
@@ -134,6 +139,60 @@ struct ExpectedSubjects {
     excerpts: Vec<String>,
     #[serde(default)]
     reopened: Vec<(i64, i64, i64)>,
+    #[serde(default)]
+    confirmations: Option<Vec<ExpectedConfirmation>>,
+}
+
+/// A `confirmation` row and its `confirmation_input`, as the `confirm`
+/// section writes them.
+#[derive(Deserialize, Debug, PartialEq)]
+struct ExpectedConfirmation {
+    subject: i64,
+    session: Option<String>,
+    proposed: (String, String, String),
+    call_id: Option<i64>,
+    verdict: String,
+    input: Option<ConfirmationInput>,
+}
+
+/// Every confirmation the registry holds, by id, with its input.
+fn confirmations(home: &Home) -> Vec<ExpectedConfirmation> {
+    let conn = rusqlite::Connection::open(home.paths().database()).unwrap();
+    let mut statement = conn
+        .prepare(
+            "SELECT c.subject_id, c.session_id, c.proposed_verdict, c.proposed_source,
+                    c.proposed_reason, c.call_id, c.verdict, i.confirmation_id, i.prompt,
+                    i.answer_head, i.answer_tail, i.end_reason, i.cut_mid_turn, i.expires_at_ms
+             FROM confirmation c LEFT JOIN confirmation_input i ON i.confirmation_id = c.id
+             ORDER BY c.id",
+        )
+        .unwrap();
+    statement
+        .query_map([], |row| {
+            let input = row
+                .get::<_, Option<i64>>(7)?
+                .map(|_| -> rusqlite::Result<_> {
+                    Ok(ConfirmationInput {
+                        prompt: row.get(8)?,
+                        answer_head: row.get(9)?,
+                        answer_tail: row.get(10)?,
+                        end_reason: row.get(11)?,
+                        cut_mid_turn: row.get::<_, i64>(12)? == 1,
+                        expires_at_ms: row.get(13)?,
+                    })
+                });
+            Ok(ExpectedConfirmation {
+                subject: row.get(0)?,
+                session: row.get(1)?,
+                proposed: (row.get(2)?, row.get(3)?, row.get(4)?),
+                call_id: row.get(5)?,
+                verdict: row.get(6)?,
+                input: input.transpose()?,
+            })
+        })
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap()
 }
 
 #[derive(Deserialize, Debug, PartialEq)]
@@ -154,8 +213,9 @@ struct ExpectedSubject {
     merged_into: Option<i64>,
 }
 
-fn observed(home: &Home) -> ExpectedSubjects {
+fn observed(home: &Home, expected: &ExpectedSubjects) -> ExpectedSubjects {
     ExpectedSubjects {
+        confirmations: expected.confirmations.as_ref().map(|_| confirmations(home)),
         sessions: sessions(home)
             .into_values()
             .map(|record| {
@@ -231,13 +291,22 @@ fn subject_vectors_hold_through_the_writer() {
                         confirmation["subject"].as_i64().unwrap(),
                         confirmation["at_ms"].as_i64().unwrap(),
                     );
+                } else if let Some(confirm) = step.get("confirm") {
+                    let items: Vec<ConfirmItem> =
+                        serde_json::from_value(confirm["items"].clone()).unwrap();
+                    let answers: Vec<ItemAnswer> =
+                        serde_json::from_value(confirm["answers"].clone()).unwrap();
+                    let answered = writer
+                        .confirm_triage(&items, confirm["at_ms"].as_i64().unwrap())
+                        .unwrap();
+                    assert_eq!(answered, answers, "{section} case {}", case.name);
                 } else {
                     assert_eq!(step, "restart", "{}", case.name);
                     snapshot = None;
                 }
             }
             assert_eq!(
-                observed(&home),
+                observed(&home, &case.expect),
                 case.expect,
                 "{section} case: {}",
                 case.name
@@ -677,5 +746,236 @@ fn alive_again_reactivates_and_stamps_the_reopen() {
     assert_eq!(
         (woken.value, woken.src, woken.at_ms),
         (SubjectStatus::Active, Source::Rules, NOW + 30)
+    );
+}
+
+/// The default proposal: `to_resume`, by rule.
+fn default_to_resume() -> Proposal {
+    Proposal {
+        verdict: ModelVerdict::ToResume,
+        source: ProposalSource::Rules,
+        reason: ReasonCode::DefaultToResume,
+        call_id: None,
+    }
+}
+
+fn confirm(key: &str, shown: Proposal, verdict: Verdict) -> ConfirmItem {
+    ConfirmItem {
+        key: key.to_owned(),
+        shown,
+        verdict,
+        routine: false,
+        file_under: None,
+    }
+}
+
+/// A session of `CWD` prompted with `text`, its turn closed, then ended.
+fn finished_session(session: &str, at: i64, text: &str) -> [String; 3] {
+    [
+        prompt(session, at, CWD, text),
+        answer(session, at + 1, CWD, "Done.", None),
+        line("SessionEnd", session, at + 2, CWD),
+    ]
+}
+
+/// How many `confirmation` rows another connection sees committed.
+fn committed_confirmations(home: &Home) -> i64 {
+    rusqlite::Connection::open_with_flags(
+        home.paths().database(),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .unwrap()
+    .query_row("SELECT count(*) FROM confirmation", [], |row| row.get(0))
+    .unwrap()
+}
+
+/// AD-49, AD-39: a batch is one transaction, answered per item: while the
+/// writer is between two items, another connection sees nothing of the
+/// first; once it commits, each item has its own outcome, a refused one
+/// wrote nothing and a key given twice is confirmed once.
+#[test]
+fn batch_is_one_transaction_answered_per_item() {
+    let lines: Vec<String> = [
+        finished_session("s1", NOW - 90, "first"),
+        finished_session("s2", NOW - 80, "second"),
+    ]
+    .concat();
+    let (home, mut writer) = ingested(&lines);
+    writer
+        .create_subject("first", SubjectOrigin::Sessions(ids(&["s1"])), NOW)
+        .unwrap();
+    writer
+        .create_subject("second", SubjectOrigin::Sessions(ids(&["s2"])), NOW)
+        .unwrap();
+    assert_eq!(writer.pragma("synchronous").as_deref(), Some("2"), "FULL");
+    let moved = Proposal {
+        verdict: ModelVerdict::Finished,
+        ..default_to_resume()
+    };
+    let items = [
+        confirm("subject:1", default_to_resume(), Verdict::Finished),
+        confirm("subject:2", moved, Verdict::Finished),
+        confirm("subject:1", default_to_resume(), Verdict::Finished),
+        confirm("subject:2", default_to_resume(), Verdict::ToResume),
+    ];
+    let mut seen_between = Vec::new();
+    let answers = writer
+        .confirm_triage_observed(&items, NOW + 1, &mut |index| {
+            seen_between.push((index, committed_confirmations(&home)));
+        })
+        .unwrap();
+    assert_eq!(
+        seen_between,
+        [(0, 0), (1, 0), (2, 0), (3, 0)],
+        "nothing is committed before the batch ends"
+    );
+    assert_eq!(
+        answers
+            .iter()
+            .map(|a| a.outcome.clone())
+            .collect::<Vec<_>>(),
+        [
+            ItemOutcome::Confirmed {
+                subject: 1,
+                verdict: Verdict::Finished
+            },
+            ItemOutcome::Refused {
+                refusal: ConfirmRefusal::ProposalChanged
+            },
+            ItemOutcome::Refused {
+                refusal: ConfirmRefusal::RowGone
+            },
+            ItemOutcome::Confirmed {
+                subject: 2,
+                verdict: Verdict::ToResume
+            },
+        ]
+    );
+    assert_eq!(answers[1].key, "subject:2");
+    assert_eq!(committed_confirmations(&home), 2);
+    let statuses: Vec<SubjectStatus> = subjects(&home).iter().map(|s| s.status.value).collect();
+    assert_eq!(statuses, [SubjectStatus::Archived, SubjectStatus::ToResume]);
+}
+
+/// AD-49, D-85, FR-4: on `finished`, the session's excerpt row is gone and
+/// the only copy of its text is the confirmation's input, expiring when the
+/// excerpt was due to; once it expires and the pass truncates the WAL, the
+/// text is in neither the database nor its WAL.
+#[test]
+fn finished_leaves_one_expiring_copy_then_none() {
+    let marker = "MARKER-CONFIRMED-PROMPT-3c9a";
+    let prompted_at = NOW - 90;
+    let (home, mut writer) = ingested(&finished_session("s1", prompted_at, marker));
+    writer
+        .create_subject("rollout", SubjectOrigin::Sessions(ids(&["s1"])), NOW)
+        .unwrap();
+    let db = home.paths().database();
+    let wal = home.paths().wal();
+    let answers = writer
+        .confirm_triage(
+            &[confirm("subject:1", default_to_resume(), Verdict::Finished)],
+            NOW + 1,
+        )
+        .unwrap();
+    assert!(matches!(answers[0].outcome, ItemOutcome::Confirmed { .. }));
+    assert!(excerpt_holders(&home).is_empty(), "the excerpt row is gone");
+    let kept = confirmations(&home);
+    let input = kept[0].input.as_ref().expect("the confirmation's copy");
+    assert_eq!(input.prompt.as_deref(), Some(marker));
+    assert_eq!(input.expires_at_ms, prompted_at + EXCERPT_TTL_MS);
+    assert!(
+        file_contains(&db, marker) || file_contains(&wal, marker),
+        "the one copy is still held"
+    );
+
+    let mut pass_at = |now: i64| writer.hourly_pass(&home.ctx(), now).unwrap();
+    pass_at(input.expires_at_ms - 1);
+    assert_eq!(
+        confirmations(&home)[0]
+            .input
+            .as_ref()
+            .map(|i| i.prompt.clone()),
+        Some(Some(marker.to_owned())),
+        "kept until it expires"
+    );
+    let report = pass_at(input.expires_at_ms);
+    assert!(report.checkpointed);
+    assert_eq!(confirmations(&home)[0].input, None, "the copy expired");
+    assert_eq!(confirmations(&home).len(), 1, "the confirmation stays");
+    assert!(!file_contains(&db, marker), "in the database");
+    assert!(!file_contains(&wal, marker), "in the WAL");
+}
+
+/// P-11, D-63, D-88: a confirmation copies the proposal it answered, its
+/// verdict, source, reason code and call id, never prose, beside the
+/// verdict the author chose, and its input keeps the facts the decision
+/// rested on.
+#[test]
+fn confirmation_copies_the_proposal_it_answered() {
+    let (home, mut writer) = ingested(&[
+        prompt("b1", NOW - 90, CWD, "write the weekly report"),
+        answer("b1", NOW - 80, CWD, "Report written.", None),
+    ]);
+    let records = parse_agents(
+        &serde_json::json!([{"pid": 4300, "id": "bg01", "sessionId": "b1", "kind": "background",
+            "cwd": CWD, "name": "report", "status": "idle", "state": "done", "startedAt": NOW - DAY}])
+        .to_string(),
+    )
+    .unwrap();
+    writer
+        .apply_agents(&mut None, &records, &[], NOW - 70)
+        .unwrap();
+    writer
+        .create_subject("report", SubjectOrigin::Sessions(ids(&["b1"])), NOW)
+        .unwrap();
+    let state_done = Proposal {
+        verdict: ModelVerdict::Finished,
+        source: ProposalSource::State,
+        reason: ReasonCode::StateDone,
+        call_id: None,
+    };
+    let row = writer
+        .view(None, &home.events, NOW + 1)
+        .unwrap()
+        .triage
+        .remove(0);
+    assert_eq!((row.key.as_str(), row.proposal), ("subject:1", state_done));
+    writer
+        .confirm_triage(
+            &[confirm("subject:1", row.proposal, Verdict::ToResume)],
+            NOW + 2,
+        )
+        .unwrap();
+    assert_eq!(
+        confirmations(&home),
+        [ExpectedConfirmation {
+            subject: 1,
+            session: Some("b1".into()),
+            proposed: ("finished".into(), "state".into(), "state_done".into()),
+            call_id: None,
+            verdict: "to_resume".into(),
+            input: Some(ConfirmationInput {
+                prompt: Some("write the weekly report".into()),
+                answer_head: Some("Report written.".into()),
+                answer_tail: None,
+                end_reason: Some("done".into()),
+                cut_mid_turn: false,
+                expires_at_ms: NOW - 90 + EXCERPT_TTL_MS,
+            }),
+        }]
+    );
+    let conn = rusqlite::Connection::open(home.paths().database()).unwrap();
+    let (auto, at): (i64, i64) = conn
+        .query_row(
+            "SELECT auto, confirmed_at_ms FROM confirmation",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!((auto, at), (0, NOW + 2), "the author's, at its time");
+    assert_eq!(
+        subject(&home, 1).status.value,
+        SubjectStatus::ToResume,
+        "the verdict chosen, not the one proposed"
     );
 }
