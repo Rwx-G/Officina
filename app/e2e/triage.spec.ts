@@ -64,6 +64,19 @@ function withUnsure(view: RegistryView, row: TriageRow): RegistryView {
   };
 }
 
+/** The view with `row` made a `finished` model proposal, its verdict set
+ *  as the view sets it. */
+function withModelFinished(view: RegistryView, row: TriageRow): RegistryView {
+  return {
+    ...view,
+    triage: view.triage.map((r) =>
+      r.key === row.key
+        ? { ...r, proposal: { verdict: "finished", source: "model", reason: "model", call_id: 11 }, verdict: "finished" }
+        : r,
+    ),
+  };
+}
+
 test.describe("Triage panel", () => {
   test("each row shows its proposal, source, reason and excerpts", async ({ page }) => {
     const view = loadRegistry("triage");
@@ -245,6 +258,35 @@ test.describe("Triage panel", () => {
     await expect(all).toHaveText(
       `Confirm all ${total - 3} shown; left out: 1 without a verdict, 1 without a subject, 1 being confirmed`,
     );
+  });
+
+  test("confirm all leaves out a model's finished, which Enter confirms on its row", async ({ page }) => {
+    const base = loadRegistry("triage");
+    const row = base.triage.find((r) => r.kind !== "unfiled_session")!;
+    const view = withModelFinished(base, row);
+    await openTriage(page, view);
+    const all = page.getByTestId("confirm-all");
+    const total = view.triage.length;
+    await expect(all).toHaveText(
+      `Confirm all ${total - 2} shown; left out: 1 without a subject, 1 the model calls finished, to confirm one by one`,
+    );
+    await all.click();
+    await expect.poll(async () => (await confirmed(page)).length).toBe(1);
+    const batch = (await confirmed(page))[0]!.map((item) => item.key);
+    expect(batch).not.toContain(row.key);
+    expect(batch).toHaveLength(total - 2);
+    await holder(page, row).focus();
+    await page.keyboard.press("Enter");
+    await expect.poll(async () => (await confirmed(page)).length).toBe(2);
+    expect((await confirmed(page))[1]).toEqual([
+      {
+        key: row.key,
+        shown: { verdict: "finished", source: "model", reason: "model", call_id: 11 },
+        verdict: "finished",
+        routine: false,
+        file_under: null,
+      },
+    ]);
   });
 
   test("the to-sort chip is neutral and opens the panel", async ({ page }) => {

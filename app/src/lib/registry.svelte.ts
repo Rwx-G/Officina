@@ -15,9 +15,14 @@ import type { Verdict } from "./generated/Verdict";
 import * as ipc from "./ipc";
 import { AUTHOR_REFUSAL_TEXT, CONFIRM_REFUSAL_TEXT, NOT_NEEDED_TEXT } from "./registry-text";
 
-/** Why Confirm all leaves a row out (AD-55, D-59): no verdict yet, no
+/** Why a row cannot be confirmed at all (AD-55, D-59): no verdict yet, no
  *  subject to file it under, or already being confirmed. */
-export type LeftOut = "unsure" | "no_subject" | "in_flight";
+export type Unsendable = "unsure" | "no_subject" | "in_flight";
+
+/** Why Confirm all leaves a row out: it cannot be confirmed, or its
+ *  `finished` comes from the model and is confirmed one by one, so one
+ *  click never archives on text a session read (security audit L2). */
+export type LeftOut = Unsendable | "model_finished";
 
 /** Keeps the entries of `record` whose key is in `keys`. */
 function only<T>(record: Record<string, T>, keys: string[]): Record<string, T> {
@@ -232,12 +237,23 @@ export class RegistryStore {
     return this.filings[row.key] ?? (proposed === null ? null : { subject: { id: proposed } });
   }
 
-  /** Why Confirm all leaves `row` out, or `null` when it takes it. */
-  leftOut(row: TriageRow): LeftOut | null {
+  /** Why `row` cannot be confirmed, or `null` when it can. */
+  unsendable(row: TriageRow): Unsendable | null {
     if (this.confirming[row.key]) return "in_flight";
     if (this.verdictOf(row) === null) return "unsure";
     if (row.kind === "unfiled_session" && this.fileUnderOf(row) === null) return "no_subject";
     return null;
+  }
+
+  /** Why Confirm all leaves `row` out, or `null` when it takes it: a row
+   *  that cannot be confirmed, and a row whose `finished` is the model's
+   *  proposal rather than the author's `f`. */
+  leftOut(row: TriageRow): LeftOut | null {
+    const unsendable = this.unsendable(row);
+    if (unsendable !== null) return unsendable;
+    const modelFinished =
+      this.verdicts[row.key] === undefined && row.proposal.source === "model" && row.verdict === "finished";
+    return modelFinished ? "model_finished" : null;
   }
 
   setVerdict(key: string, verdict: Verdict): void {
@@ -255,7 +271,7 @@ export class RegistryStore {
   /** The item confirming `row` as shown, or `null` when it cannot be sent. */
   item(row: TriageRow): ConfirmItem | null {
     const verdict = this.verdictOf(row);
-    if (this.leftOut(row) !== null || verdict === null) return null;
+    if (this.unsendable(row) !== null || verdict === null) return null;
     return {
       key: row.key,
       shown: row.proposal,

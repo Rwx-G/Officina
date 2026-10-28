@@ -463,6 +463,10 @@ project uses [Semantic Versioning](https://semver.org/).
   that maps the `haiku` alias or a default model to another one, an IDE's
   or a session's variables, and the Bedrock and Vertex switches no longer
   reach it.
+- **Confirm all** leaves out the rows the triage model proposed
+  `finished` (v0.3), counted apart: each is confirmed on its own row, so
+  one click never archives a subject, and clears its excerpts, on text a
+  session read.
 - A damaged registry is restored from the copy whose name carries the
   newest UTC day (v0.3), never from the newest modification time, which any
   process can set; a file of another name under `registry/backup/` is never

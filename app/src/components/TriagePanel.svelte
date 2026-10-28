@@ -4,7 +4,8 @@
   // and `t` set the focused row's verdict, `Enter` confirms that row only;
   // a held key repeats nothing. Confirm all shown takes a pointer click only
   // (D-28) and leaves out, counted apart, the rows without a verdict, those
-  // without a subject and those being confirmed. The evidence on the triage
+  // without a subject, those being confirmed and those the model proposed
+  // `finished`, which are confirmed one by one. The evidence on the triage
   // model closes the panel.
   import { tick } from "svelte";
   import type { TriageRow as Row } from "../lib/generated/TriageRow";
@@ -29,7 +30,7 @@
 
   let taken = $derived(rows.filter((row) => store.leftOut(row) === null));
   let leftOut = $derived.by(() => {
-    const counts: Record<LeftOut, number> = { unsure: 0, no_subject: 0, in_flight: 0 };
+    const counts: Record<LeftOut, number> = { unsure: 0, no_subject: 0, in_flight: 0, model_finished: 0 };
     for (const row of rows) {
       const why = store.leftOut(row);
       if (why !== null) counts[why] += 1;
@@ -41,6 +42,7 @@
       leftOut.unsure > 0 ? `${leftOut.unsure} without a verdict` : null,
       leftOut.no_subject > 0 ? `${leftOut.no_subject} without a subject` : null,
       leftOut.in_flight > 0 ? `${leftOut.in_flight} being confirmed` : null,
+      leftOut.model_finished > 0 ? `${leftOut.model_finished} the model calls finished, to confirm one by one` : null,
     ]
       .filter((part) => part !== null)
       .join(", "),
