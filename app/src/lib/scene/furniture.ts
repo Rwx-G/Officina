@@ -626,9 +626,9 @@ export function floorShapes(columns: number): FloorShape[] {
   const fx = floorWidth(columns);
   const fy = FLOOR_DEPTH;
   const out: FloorShape[] = [];
-  const [sx] = at(p, fx / 2, fy / 2);
-  const [, sy] = at(p, fx, fy);
-  out.push({ kind: "ellipse", cx: r1(sx), cy: r1(sy + 10), rx: r1((fx + fy) * HW * 0.3), ry: 10, fill: paint("scene-shadow"), opacity: 0.5 });
+  // No shadow under the floor (D-544): the prototype's ellipse sat under
+  // the slab's middle, lit from nowhere the furniture is, and the slab's
+  // two shaded sides already set the floor on the page.
   out.push(polygon([at(p, 0, fy), at(p, fx, fy), at(p, fx, fy, -SLAB), at(p, 0, fy, -SLAB)], paint("scene-slab-l")));
   out.push(polygon([at(p, fx, 0), at(p, fx, fy), at(p, fx, fy, -SLAB), at(p, fx, 0, -SLAB)], paint("scene-slab-r")));
   out.push(polygon([at(p, 0, 0), at(p, fx, 0), at(p, fx, fy), at(p, 0, fy)], paint("scene-ground")));
