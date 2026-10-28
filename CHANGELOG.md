@@ -45,3 +45,9 @@ project uses [Semantic Versioning](https://semver.org/).
   Officina's home, and any mention of an `OFFICINA_` setting or of Officina's
   own files. Outside a guarded repository it decides nothing. The documented
   limits of a text match are recorded in the architecture.
+
+### Changed
+
+- The gate's command lexer reads a 64 KiB command in about 1 ms (it took
+  about 4 ms): fewer allocations per word and each command analysed as soon
+  as it ends.

@@ -19,6 +19,9 @@
 //! silent pass (D-10). Facts about the Bash the sessions run (Git for
 //! Windows) that shaped a rule are recorded in story 2.3's Debug Log.
 
+use std::borrow::Cow;
+use std::ops::Range;
+
 /// Longest command the lexer reads (AD-27). Longer input is an error, so the
 /// gate denies it in a guarded repository.
 pub const MAX_INPUT_BYTES: usize = 256 * 1024;
@@ -591,8 +594,13 @@ pub fn lex(command: &str) -> Result<Lexed, LexError> {
 }
 
 /// Case folding for names: upper then lower, so the letters Windows folds to
-/// ASCII (`ſ` to `S`, the dotless `ı` to `I`) compare equal to it.
+/// ASCII (`ſ` to `S`, the dotless `ı` to `I`) compare equal to it. On ASCII
+/// text both steps together are ASCII lowercasing, done in one pass: the
+/// gate folds every program it meets (AD-28 budget).
 pub fn fold(text: &str) -> String {
+    if text.is_ascii() {
+        return text.to_ascii_lowercase();
+    }
     text.to_uppercase().to_lowercase()
 }
 
@@ -604,12 +612,14 @@ pub fn written_name(word: &str) -> String {
     let segment = word.rsplit(['/', '\\']).next().unwrap_or(word);
     let mut name = fold(segment);
     loop {
+        // Both trims keep a prefix, so the name is cut in place.
         let trimmed = name.trim_end_matches(['.', ' ']);
         let trimmed = trimmed.strip_suffix("::$data").unwrap_or(trimmed);
         if trimmed.len() == name.len() || trimmed.is_empty() {
             return name;
         }
-        name = trimmed.to_owned();
+        let len = trimmed.len();
+        name.truncate(len);
     }
 }
 
@@ -617,11 +627,12 @@ pub fn written_name(word: &str) -> String {
 /// folded, `.exe` stripped. `/usr/bin/ssh`, `C:\Windows\System32\OpenSSH\ssh.exe`
 /// and `SSH.EXE` all give `ssh`.
 pub fn program_name(word: &str) -> String {
-    let name = written_name(word);
-    match name.strip_suffix(".exe") {
-        Some(stem) => stem.to_owned(),
-        None => name,
+    let mut name = written_name(word);
+    if let Some(stem) = name.strip_suffix(".exe") {
+        let len = stem.len();
+        name.truncate(len);
     }
+    name
 }
 
 /// True when the directory part of a word has a `windows` segment
@@ -636,6 +647,16 @@ pub fn under_windows_dir(word: &str) -> bool {
 /// True when `name` matches a list entry; a trailing `*` makes the entry a
 /// prefix. Both sides are folded.
 pub fn name_matches(entry: &str, name: &str) -> bool {
+    if entry.is_ascii() && name.is_ascii() {
+        // Folding ASCII is lowercasing: compare in place, no allocation.
+        return match entry.strip_suffix('*') {
+            Some(prefix) => name
+                .as_bytes()
+                .get(..prefix.len())
+                .is_some_and(|head| head.eq_ignore_ascii_case(prefix.as_bytes())),
+            None => name.eq_ignore_ascii_case(entry),
+        };
+    }
     let entry = fold(entry);
     let name = fold(name);
     match entry.strip_suffix('*') {
@@ -712,8 +733,10 @@ struct Word {
     /// Quotes removed, escapes applied, ANSI-C decoded; each expansion or
     /// substitution is one NUL; unquoted glob characters kept.
     text: String,
-    /// The source, for messages.
-    raw: String,
+    /// Where the word's source lies in the level's input, for the dynamic
+    /// report ([`Level::raw`]); a range, not a copy, since the report needs
+    /// it only for the rare dynamic word.
+    raw: Range<usize>,
     /// Length of the prefix of `text` built from unquoted characters only.
     plain_len: usize,
     /// Start of the first non-literal part of `text`.
@@ -805,6 +828,15 @@ struct WordBuf {
 }
 
 impl WordBuf {
+    /// A buffer sized for a usual word, so most words cost one allocation:
+    /// a 64 KiB command holds thousands (AD-28 budget).
+    fn sized() -> WordBuf {
+        WordBuf {
+            bytes: Vec::with_capacity(32),
+            ..WordBuf::default()
+        }
+    }
+
     fn plain(&mut self, byte: u8) {
         let at_plain = self.plain_len == self.bytes.len();
         self.bytes.push(byte);
@@ -841,8 +873,7 @@ impl WordBuf {
         self.non_literal(&[0], true);
     }
 
-    fn finish(self, raw: &[u8]) -> Word {
-        let raw = String::from_utf8_lossy(raw).into_owned();
+    fn finish(self, raw: Range<usize>) -> Word {
         match String::from_utf8(self.bytes) {
             Ok(text) => Word {
                 text,
@@ -925,6 +956,8 @@ struct Level<'a, 'o> {
     pending: Vec<Pending>,
     bodies: Vec<Body>,
     line: Vec<Command>,
+    /// The first analysis error of the line, returned when the line ends.
+    failed: Option<LexError>,
 }
 
 impl<'a, 'o> Level<'a, 'o> {
@@ -950,6 +983,7 @@ impl<'a, 'o> Level<'a, 'o> {
             pending: Vec::new(),
             bodies: Vec::new(),
             line: Vec::new(),
+            failed: None,
         }
     }
 
@@ -962,6 +996,11 @@ impl<'a, 'o> Level<'a, 'o> {
 
     fn peek_raw(&self) -> Option<u8> {
         self.b.get(self.pos).copied()
+    }
+
+    /// A word of this level as written, for the dynamic report.
+    fn raw(&self, word: &Word) -> Cow<'a, str> {
+        String::from_utf8_lossy(self.b.get(word.raw.clone()).unwrap_or_default())
     }
 
     /// The next byte after any line continuations, which bash removes
@@ -1110,7 +1149,7 @@ impl<'a, 'o> Level<'a, 'o> {
                 }
                 b'<' | b'>' if !self.procsub_ahead() => self.redirection(None)?,
                 _ => {
-                    let word = self.read_word(WordBuf::default(), self.pos)?;
+                    let word = self.read_word(WordBuf::sized(), self.pos)?;
                     if self.fd_prefix(&word) {
                         self.redirection(Some(word.text))?;
                     } else {
@@ -1373,11 +1412,25 @@ impl<'a, 'o> Level<'a, 'o> {
         }
     }
 
+    /// Ends the command being read. With no here-document waiting in the
+    /// line, nothing later can change it, so it is analysed and dropped at
+    /// once: a long line never holds all its commands in memory (AD-28
+    /// budget). Otherwise it waits for the bodies with the rest of the line.
+    /// An analysis error is held and returned by [`Level::end_line`], where
+    /// the analysis used to run.
     fn end_command(&mut self) {
         self.coproc = 0;
-        if !self.command.words.is_empty() || !self.command.redirs.is_empty() {
-            let command = std::mem::take(&mut self.command);
+        if self.command.words.is_empty() && self.command.redirs.is_empty() {
+            return;
+        }
+        let command = std::mem::take(&mut self.command);
+        if !self.line.is_empty() || !self.pending.is_empty() {
             self.line.push(command);
+        } else if !self.in_latent_root()
+            && self.failed.is_none()
+            && let Err(e) = self.analyse(&command)
+        {
+            self.failed = Some(e);
         }
     }
 
@@ -1387,6 +1440,9 @@ impl<'a, 'o> Level<'a, 'o> {
         self.end_command();
         self.pending.clear();
         let line = std::mem::take(&mut self.line);
+        if let Some(e) = self.failed.take() {
+            return Err(e);
+        }
         if self.in_latent_root() {
             return Ok(());
         }
@@ -1469,7 +1525,7 @@ impl<'a, 'o> Level<'a, 'o> {
             return Ok(());
         }
         let start = self.pos;
-        let target = self.read_word(WordBuf::default(), start)?;
+        let target = self.read_word(WordBuf::sized(), start)?;
         if self.pos == start {
             return Err(LexError::MissingRedirectionTarget);
         }
@@ -1646,7 +1702,7 @@ impl<'a, 'o> Level<'a, 'o> {
                 }
             }
         }
-        let word = word.finish(bytes);
+        let word = word.finish(0..0);
         Ok(Body {
             text: word.text,
             computed: word.computed,
@@ -1702,7 +1758,7 @@ impl<'a, 'o> Level<'a, 'o> {
                 }
             }
         }
-        let word = w.finish(&self.b[start..self.pos]);
+        let word = w.finish(start..self.pos);
         if !word.text.is_empty() || word.quoted {
             self.value(&word.text);
         }
@@ -2118,7 +2174,7 @@ impl<'a, 'o> Level<'a, 'o> {
                 Some(b';' | b'&' | b'|' | b'<' | b'>') if !self.procsub_ahead() => self.bump(),
                 Some(_) => {
                     let start = self.pos;
-                    let element = self.read_word(WordBuf::default(), start)?;
+                    let element = self.read_word(WordBuf::sized(), start)?;
                     if self.pos == start {
                         self.bump();
                     }
@@ -2134,7 +2190,10 @@ impl<'a, 'o> Level<'a, 'o> {
     // ---- analysis ----
 
     fn analyse(&mut self, command: &Command) -> Result<(), LexError> {
-        let mut work: Vec<&[Word]> = vec![&command.words];
+        // Most commands queue no further work (`find -exec` does): the list
+        // allocates only when something is pushed.
+        let mut work: Vec<&[Word]> = Vec::new();
+        self.analyse_words(&command.words, &command.redirs, &mut work)?;
         while let Some(words) = work.pop() {
             self.analyse_words(words, &command.redirs, &mut work)?;
         }
@@ -2210,7 +2269,7 @@ impl<'a, 'o> Level<'a, 'o> {
             self.program(&word.text, Origin::Command);
         }
         if dynamic {
-            self.dynamic(&word.raw);
+            self.dynamic(&self.raw(word));
         }
         dynamic
     }
@@ -2276,7 +2335,7 @@ impl<'a, 'o> Level<'a, 'o> {
         if wrapper.kind == WrapperKind::Watch && !watch_exec && i < words.len() {
             let operands = &words[i..];
             if operands.iter().any(|w| w.computed) {
-                self.dynamic(&operands[0].raw);
+                self.dynamic(&self.raw(&operands[0]));
             }
             let text = join_values(operands);
             self.lex_nested(&text)?;
@@ -2289,7 +2348,7 @@ impl<'a, 'o> Level<'a, 'o> {
             && !replace.is_empty()
             && let Some(templated) = words[i..].iter().find(|w| w.text.contains(&replace))
         {
-            self.dynamic(&templated.raw);
+            self.dynamic(&self.raw(templated));
         }
         Ok(i)
     }
@@ -2350,7 +2409,7 @@ impl<'a, 'o> Level<'a, 'o> {
                     let (value, used) = from_next(attached);
                     let computed = attached.is_none() && next.is_some_and(|w| w.computed);
                     if computed {
-                        self.dynamic(next.map_or("", |w| w.raw.as_str()));
+                        self.dynamic(&next.map_or(Cow::Borrowed(""), |w| self.raw(w)));
                     }
                     if let Some(value) = value {
                         self.lex_nested(&value)?;
@@ -2437,13 +2496,13 @@ impl<'a, 'o> Level<'a, 'o> {
             let computed = word.computed_from(value_start);
             if base == COMMAND_BINDING_PROGRAM {
                 if computed {
-                    self.dynamic(&word.raw);
+                    self.dynamic(&self.raw(word));
                 } else if !value.is_empty() {
                     self.program(&value, Origin::Command);
                 }
             } else if base == COMMAND_BINDING_ALIAS {
                 if computed {
-                    self.dynamic(&word.raw);
+                    self.dynamic(&self.raw(word));
                 } else {
                     self.lex_nested(&value)?;
                 }
@@ -2495,7 +2554,7 @@ impl<'a, 'o> Level<'a, 'o> {
                     _ => args,
                 };
                 if let Some(computed) = args.iter().find(|a| a.computed) {
-                    self.dynamic(&computed.raw);
+                    self.dynamic(&self.raw(computed));
                 }
                 if !args.is_empty() {
                     self.lex_nested(&join_values(args))?;
@@ -2505,7 +2564,7 @@ impl<'a, 'o> Level<'a, 'o> {
                 for arg in args {
                     if let Some((_, value)) = arg.text.split_once('=') {
                         if arg.computed {
-                            self.dynamic(&arg.raw);
+                            self.dynamic(&self.raw(arg));
                         }
                         self.lex_nested(value)?;
                     }
@@ -2514,7 +2573,7 @@ impl<'a, 'o> Level<'a, 'o> {
             Builtin::Trap => {
                 if let Some(action) = args.iter().find(|a| !a.text.starts_with('-')) {
                     if action.computed {
-                        self.dynamic(&action.raw);
+                        self.dynamic(&self.raw(action));
                     }
                     self.lex_nested(&action.text)?;
                 }
@@ -2538,7 +2597,7 @@ impl<'a, 'o> Level<'a, 'o> {
                 let operand = args.iter().find(|a| a.text != "--");
                 self.script_operand(
                     operand,
-                    args.first().map_or("", |a| a.raw.as_str()),
+                    &args.first().map_or(Cow::Borrowed(""), |a| self.raw(a)),
                     redirs,
                     true,
                 )?;
@@ -2601,7 +2660,7 @@ impl<'a, 'o> Level<'a, 'o> {
     ) -> Result<(), LexError> {
         match operand {
             Some(op) if op.process_substitution => {
-                self.dynamic(&op.raw);
+                self.dynamic(&self.raw(op));
                 Ok(())
             }
             Some(op) => match STDIN_PATHS.iter().copied().find(|p| *p == op.text) {
@@ -2727,10 +2786,10 @@ impl<'a, 'o> Level<'a, 'o> {
         let operands = args.get(i..).unwrap_or_default();
         if command {
             match operands.first() {
-                None => self.dynamic(&program.raw),
+                None => self.dynamic(&self.raw(program)),
                 Some(text) => {
                     if text.computed {
-                        self.dynamic(&text.raw);
+                        self.dynamic(&self.raw(text));
                     }
                     self.lex_nested(&text.text)?;
                 }
@@ -2738,8 +2797,8 @@ impl<'a, 'o> Level<'a, 'o> {
             return Ok(());
         }
         match operands.first() {
-            Some(op) if !stdin => self.script_operand(Some(op), &program.raw, redirs, true),
-            _ => self.stdin_program(&program.raw, redirs, true),
+            Some(op) if !stdin => self.script_operand(Some(op), &self.raw(program), redirs, true),
+            _ => self.stdin_program(&self.raw(program), redirs, true),
         }
     }
 
@@ -2789,8 +2848,8 @@ impl<'a, 'o> Level<'a, 'o> {
             break;
         }
         match args.get(i) {
-            Some(op) => self.script_operand(Some(op), &program.raw, redirs, false),
-            None => self.stdin_program(&program.raw, redirs, false),
+            Some(op) => self.script_operand(Some(op), &self.raw(program), redirs, false),
+            None => self.stdin_program(&self.raw(program), redirs, false),
         }
     }
 
@@ -2826,10 +2885,10 @@ impl<'a, 'o> Level<'a, 'o> {
         self.value(&text);
         self.scan(&text);
         if count(&text, '%') >= 2 || delayed && count(&text, '!') >= 2 {
-            self.dynamic(&program.raw);
+            self.dynamic(&self.raw(program));
         }
         if !command {
-            self.stdin_program(&program.raw, redirs, false)?;
+            self.stdin_program(&self.raw(program), redirs, false)?;
         }
         Ok(())
     }
@@ -2852,7 +2911,7 @@ impl<'a, 'o> Level<'a, 'o> {
         let switch =
             |a: &Word| a.text.len() > 1 && (a.text.starts_with('-') || a.text.starts_with('/'));
         if args.iter().any(|a| a.text == "-") || args.iter().all(switch) {
-            self.stdin_program(&program.raw, redirs, false)?;
+            self.stdin_program(&self.raw(program), redirs, false)?;
         }
         Ok(())
     }
@@ -2867,7 +2926,7 @@ impl<'a, 'o> Level<'a, 'o> {
         self.value(&text);
         self.scan(&text);
         if launcher.cmd_parsed && count(&text, '%') >= 2 {
-            self.dynamic(&program.raw);
+            self.dynamic(&self.raw(program));
         }
     }
 

@@ -107,10 +107,12 @@ pub fn decide(
     let Ok(lexed) = shell::lex(command) else {
         return Deny::new(DenyKind::Unparsable, None);
     };
+    // Folded once here, not once per program the line starts.
+    let folded: Vec<String> = guarded_programs.iter().map(|e| shell::fold(e)).collect();
     if let Some(matched) = lexed
         .programs
         .iter()
-        .find_map(|program| guarded_match(program, guarded_programs))
+        .find_map(|program| guarded_match(program, &folded))
     {
         return Deny::new(DenyKind::GuardedProgram, Some(matched));
     }
@@ -145,13 +147,19 @@ pub fn decide(
 pub fn guarded_match(program: &Program, guarded_programs: &[String]) -> Option<String> {
     let name = shell::program_name(&program.written);
     guarded_programs.iter().find_map(|entry| {
-        let entry = shell::fold(entry);
+        // An entry already folded (as `decide` passes them) is used as is.
+        let folded = entry.is_ascii() && !entry.bytes().any(|b| b.is_ascii_uppercase());
+        let entry = if folded {
+            std::borrow::Cow::Borrowed(entry.as_str())
+        } else {
+            std::borrow::Cow::Owned(shell::fold(entry))
+        };
         if let Some(stem) = entry.strip_suffix(".exe") {
             let written = shell::written_name(&program.written) == entry;
             let system = name == stem
                 && program.origin == Origin::Command
                 && shell::under_windows_dir(&program.written);
-            (written || system).then_some(entry)
+            (written || system).then(|| entry.into_owned())
         } else {
             shell::name_matches(&entry, &name).then(|| name.clone())
         }
@@ -159,10 +167,12 @@ pub fn guarded_match(program: &Program, guarded_programs: &[String]) -> Option<S
 }
 
 fn home_redirection(lexed: &Lexed) -> Option<Deny> {
-    let officina = lexed
-        .programs
-        .iter()
-        .any(|p| shell::program_name(&p.written) == OFFICINA_PROGRAM);
+    // The name is derived only for words that can hold it: folding every
+    // program of a long line would cost the gate its budget (AD-28).
+    let officina = lexed.programs.iter().any(|p| {
+        p.written.len() >= OFFICINA_PROGRAM.len()
+            && shell::program_name(&p.written) == OFFICINA_PROGRAM
+    });
     if !officina {
         return None;
     }
@@ -260,31 +270,32 @@ fn contains_bounded(haystack: &str, needle: &str, check_start: bool) -> bool {
 }
 
 /// Text folded for path comparison: case folded, `\` as `/`, runs of `/`
-/// collapsed, `/./` segments dropped.
+/// collapsed, `/./` segments dropped. Works on bytes: `/`, `\` and `.` are
+/// ASCII, never part of a multi-byte character, so dropping them keeps the
+/// text valid UTF-8.
 fn path_text(text: &str) -> String {
-    let folded: Vec<char> = shell::fold(text)
-        .chars()
-        .map(|c| if c == '\\' { '/' } else { c })
-        .collect();
-    let mut out = String::with_capacity(folded.len());
+    let folded = shell::fold(text).into_bytes();
+    let slash = |byte: Option<&u8>| matches!(byte, Some(b'/' | b'\\'));
+    let mut out = Vec::with_capacity(folded.len());
     let mut i = 0;
-    while i < folded.len() {
-        let c = folded[i];
+    while let Some(&byte) = folded.get(i) {
         i += 1;
-        if c != '/' {
-            out.push(c);
+        if byte != b'/' && byte != b'\\' {
+            out.push(byte);
             continue;
         }
         loop {
-            match (folded.get(i), folded.get(i + 1)) {
-                (Some('/'), _) => i += 1,
-                (Some('.'), Some('/')) => i += 2,
-                _ => break,
+            if slash(folded.get(i)) {
+                i += 1;
+            } else if folded.get(i) == Some(&b'.') && slash(folded.get(i + 1)) {
+                i += 2;
+            } else {
+                break;
             }
         }
-        out.push('/');
+        out.push(b'/');
     }
-    out
+    String::from_utf8(out).unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned())
 }
 
 /// One form for every spelling of a working directory (AD-26 step 2):
