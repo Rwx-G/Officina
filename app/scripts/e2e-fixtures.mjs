@@ -4,7 +4,7 @@
 //
 // Usage: node scripts/e2e-fixtures.mjs   (after `cargo build -p officina`)
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -341,6 +341,148 @@ values = ["web01", "db01"]
   const board = JSON.parse(run.stdout);
   if (board.approvals.length !== 3 || board.approvals.filter((a) => a.valid).length !== 2) {
     throw new Error(`${name}: expected two valid requests and a forged one: ${JSON.stringify(board.approvals)}`);
+  }
+  writeFileSync(join(outDir, `${name}.json`), run.stdout);
+  rmSync(tmp, { recursive: true, force: true });
+  console.log(`fixture ${name}: exit ${run.status}`);
+}
+
+// Relay activity (story 2.9, D-25): a catalogue approved through
+// `approve_fixture`; real runs and refusals through `officina run` with the
+// fake tool; a gate deny and a gate error through `officina hook`; then, as
+// v0.1 seeds events, a seeded journal adds a run whose end line never came
+// (abandoned) and an unreadable line; last, a floor edit leaves a pending
+// change with an issue. Printed by `officina relay --json`.
+{
+  const name = "relay-activity";
+  const tmp = mkdtempSync(join(tmpdir(), `officina-fixture-${name}-`));
+  const home = join(tmp, "home");
+  const officinaHome = join(tmp, "officina");
+  const project = join(tmp, "work", "infra-scripts");
+  mkdirSync(home, { recursive: true });
+  mkdirSync(officinaHome, { recursive: true });
+  mkdirSync(project, { recursive: true });
+  const fakeTool = join(targetDir, "debug", `officina-fake-tool${exe}`).replaceAll("\\", "/");
+  const floorFile = join(officinaHome, "floor.toml");
+  const floor = `schema = 2
+
+[[project]]
+name = "infra-scripts"
+path = "${project.replaceAll("\\", "/")}"
+actions = ["check", "apply", "probe"]
+
+[[action]]
+name = "check"
+description = "Dry run of a playbook on one lab group"
+class = "free"
+program = "${fakeTool}"
+env = { FAKE_TOOL_MODE = "echo" }
+args = ["--check", "{group}"]
+
+[action.params.group]
+pattern = "lab-[a-z0-9-]{1,30}"
+
+[[action]]
+name = "apply"
+description = "Apply a playbook checked in the last 30 minutes"
+class = "after-check"
+check = "check"
+program = "${fakeTool}"
+env = { FAKE_TOOL_MODE = "echo" }
+args = ["--apply", "{group}"]
+
+[action.params.group]
+pattern = "lab-[a-z0-9-]{1,30}"
+
+[[action]]
+name = "probe"
+description = "Read one host's health"
+class = "free"
+program = "${fakeTool}"
+env = { FAKE_TOOL_MODE = "exit:3" }
+args = ["--host", "{host}"]
+
+[action.params.host]
+values = ["web01", "db01"]
+`;
+  writeFileSync(floorFile, floor);
+  approveFixture(officinaHome, "approve");
+  const base = { SYSTEMROOT: process.env.SYSTEMROOT ?? "", USERPROFILE: home, HOME: home, OFFICINA_HOME: officinaHome };
+  const relayRun = (args, expected) => {
+    const run = spawnSync(officina, ["run", ...args], {
+      env: { ...base, CLAUDE_CODE_SESSION_ID: sid(1) },
+      cwd: project,
+      encoding: "utf8",
+    });
+    if (run.status !== expected) throw new Error(`${name}: run ${args.join(" ")} exited ${run.status}: ${run.stderr}`);
+  };
+  relayRun(["check", "group=lab-web"], 0);
+  relayRun(["apply", "group=lab-web"], 0);
+  relayRun(["probe", "host=db01"], 3);
+  relayRun(["apply", "group=lab-db"], 126);
+  relayRun(["probe", "host=<b>web02</b>"], 126);
+
+  const hook = (command) => {
+    const payload = {
+      cwd: project,
+      hook_event_name: "PreToolUse",
+      session_id: sid(1),
+      tool_name: "Bash",
+      tool_input: { command, description: "fixture" },
+    };
+    const run = spawnSync(officina, ["hook"], { env: base, input: JSON.stringify(payload), encoding: "utf8" });
+    if (run.status !== 0) throw new Error(`${name}: officina hook exited ${run.status}: ${run.stderr}`);
+    return run.stdout;
+  };
+  const denied = hook(`ssh host01 'echo <img src=x onerror="window.__officinaXss = 1">'`);
+  if (!denied.includes("deny")) throw new Error(`${name}: the gate did not deny: ${denied}`);
+  // A floor that fails phase 1 while a catalogue is approved: the gate falls
+  // back to the snapshot and journals a gate error. The unknown key goes
+  // first: after a table header it would belong to that table.
+  writeFileSync(floorFile, `not_a_floor_key = 1\n${floor}`);
+  hook("ls");
+  writeFileSync(floorFile, floor);
+
+  const approvedHash = JSON.parse(readFileSync(join(officinaHome, "relay", "approved.json"), "utf8")).hash;
+  const abandonedAt = Date.now() - 20 * MIN;
+  const abandoned = {
+    v: 1,
+    ts: abandonedAt,
+    kind: "run_started",
+    run_id: "00000000000000000000000000abcdef",
+    project: "infra-scripts",
+    session_id: sid(3),
+    action: "probe",
+    class: "free",
+    params: { host: "web01" },
+    argv: [fakeTool, "--host", "web01"],
+    catalogue_hash: approvedHash,
+    timeout_s: 60,
+  };
+  appendFileSync(join(officinaHome, "journal", `${utcDay(abandonedAt)}.jsonl`), JSON.stringify(abandoned) + "\n");
+  appendFileSync(join(officinaHome, "journal", `${utcDay(Date.now())}.jsonl`), "an unreadable line\n");
+
+  writeFileSync(
+    floorFile,
+    floor.replace(`values = ["web01", "db01"]`, `values = ["web01", "db01", "web02"]`) +
+      `
+[[action]]
+name = "<i>broken</i>"
+class = "free"
+program = "relative.exe"
+`,
+  );
+  const run = spawnSync(officina, ["relay", "--json"], { env: base, encoding: "utf8" });
+  if (run.status !== 0) throw new Error(`${name}: officina relay exited ${run.status}: ${run.stderr}`);
+  const view = JSON.parse(run.stdout);
+  const kinds = new Set(view.recent.map((entry) => entry.event.kind));
+  const states = new Set(view.recent.filter((e) => e.event.kind === "run").map((e) => e.event.state));
+  for (const kind of ["run", "refused", "gate_denied", "gate_error"]) {
+    if (!kinds.has(kind)) throw new Error(`${name}: no ${kind} entry: ${run.stdout}`);
+  }
+  if (!states.has("abandoned") || !states.has("finished")) throw new Error(`${name}: runs ${[...states]}`);
+  if (!view.pending || view.issues.length === 0 || view.journal_corrupt_lines === 0 || view.gate_errors_24h === 0) {
+    throw new Error(`${name}: expected a pending change, issues and journal diagnostics: ${run.stdout}`);
   }
   writeFileSync(join(outDir, `${name}.json`), run.stdout);
   rmSync(tmp, { recursive: true, force: true });

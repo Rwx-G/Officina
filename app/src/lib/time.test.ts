@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ago, duration, weekElapsedPercent } from "./time";
+import { ago, duration, runDuration, weekElapsedPercent } from "./time";
 
 const MIN = 60_000;
 
@@ -15,6 +15,15 @@ describe("duration", () => {
 
   it("never shows a negative duration", () => {
     expect(duration(-5 * MIN)).toBe("now");
+  });
+});
+
+describe("runDuration", () => {
+  it("shows milliseconds, then seconds, then the board's units", () => {
+    expect(runDuration(350)).toBe("350 ms");
+    expect(runDuration(4_200)).toBe("4.2 s");
+    expect(runDuration(2 * MIN)).toBe("2 min");
+    expect(runDuration(-1)).toBe("0 ms");
   });
 });
 

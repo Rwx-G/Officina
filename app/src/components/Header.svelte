@@ -1,14 +1,22 @@
 <script lang="ts">
   import type { BoardStore } from "../lib/board.svelte";
-  import type { RelayStore } from "../lib/relay.svelte";
+  import type { RelayStore, WindowView } from "../lib/relay.svelte";
   import Gauge from "./Gauge.svelte";
   import logo from "../assets/logo.svg";
 
   interface Props {
     store: BoardStore;
     relay?: RelayStore;
+    /** The view shown, local window state (story 2.9). */
+    view?: WindowView;
+    onView?: (view: WindowView) => void;
   }
-  let { store, relay }: Props = $props();
+  let { store, relay, view = "board", onView }: Props = $props();
+
+  const VIEWS: { id: WindowView; label: string }[] = [
+    { id: "board", label: "Board" },
+    { id: "relay", label: "Relay" },
+  ];
 
   let board = $derived(store.board);
   let waiting = $derived(board?.waiting_count ?? 0);
@@ -23,6 +31,21 @@
       <div class="floor">{board?.floor ?? "this workstation"}</div>
     </div>
   </div>
+
+  {#if relay?.inUse && onView}
+    <div class="views" role="group" aria-label="View" data-testid="view-switch">
+      {#each VIEWS as option (option.id)}
+        <button
+          class="view"
+          data-testid="view-{option.id}"
+          aria-pressed={view === option.id}
+          onclick={() => onView(option.id)}
+        >
+          {option.label}
+        </button>
+      {/each}
+    </div>
+  {/if}
 
   {#if waiting > 0}
     <div class="pill" data-testid="waiting-pill" role="status">{waiting} waiting</div>
@@ -109,6 +132,24 @@
   .floor {
     font-size: 13px;
     color: var(--color-text-muted);
+  }
+  .views {
+    display: flex;
+    border: 1px solid var(--color-text);
+    border-radius: var(--radius-pill);
+    overflow: hidden;
+  }
+  .view {
+    min-height: var(--target-min);
+    padding: 0 16px;
+    border: none;
+    background: var(--color-surface);
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .view[aria-pressed="true"] {
+    background: var(--color-text);
+    color: var(--color-bg);
   }
   .pill {
     padding: 6px 16px;

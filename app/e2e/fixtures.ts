@@ -15,7 +15,8 @@ export type RelayScenario =
   | "relay-pending"
   | "relay-pending-again"
   | "relay-pending-approved"
-  | "relay-stopped";
+  | "relay-stopped"
+  | "relay-activity";
 
 export function loadBoard(scenario: Scenario): Board {
   return JSON.parse(readFileSync(join(dir, `${scenario}.json`), "utf8")) as Board;

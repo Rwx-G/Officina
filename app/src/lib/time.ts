@@ -19,6 +19,14 @@ export function duration(ms: number): string {
   return `${Math.floor(safe / DAY)} d`;
 }
 
+/** A run's length: "350 ms", "4.2 s", then as `duration` from a minute on. */
+export function runDuration(ms: number): string {
+  const safe = Math.max(0, ms);
+  if (safe < 1000) return `${Math.round(safe)} ms`;
+  if (safe < MINUTE) return `${(safe / 1000).toFixed(1)} s`;
+  return duration(safe);
+}
+
 /** "3 min ago", or "just now". */
 export function ago(atMs: number, nowMs: number): string {
   const text = duration(nowMs - atMs);
