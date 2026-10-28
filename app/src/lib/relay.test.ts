@@ -69,6 +69,7 @@ function view(overrides: Partial<RelayView> = {}): RelayView {
     journal_corrupt_lines: 0,
     gate_errors_24h: 0,
     credentials: [],
+    notices: [],
     ...overrides,
   };
 }

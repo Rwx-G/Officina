@@ -309,6 +309,31 @@ fn relay_json_never_reads_credentials() {
     assert_eq!(http["method"], "GET");
 }
 
+/// Story 2.13 AC 3 (D-172): the notices of the floor, each with its line of
+/// explanation, outside the hash.
+#[test]
+fn relay_json_lists_notices() {
+    let env = approved_env();
+    let approved_hash = view(&env).approved_hash;
+    env.write_floor(&format!(
+        "{FLOOR}\n[[action]]\nname = \"status\"\nclass = \"free\"\nprogram = \"C:/Windows/System32/OpenSSH/ssh.exe\"\nargs = [\"web01\", \"systemctl\", \"status\", \"{{unit}}\"]\n[action.params.unit]\nvalues = [\"nginx.service\"]\n"
+    ));
+    let raw: serde_json::Value = serde_json::from_slice(&relay_json(&env).stdout).unwrap();
+    let notices = raw["notices"].as_array().unwrap();
+    assert_eq!(notices.len(), 1, "{notices:?}");
+    assert_eq!(notices[0]["kind"], "remote_command_value");
+    assert_eq!(notices[0]["action"], "status");
+    assert_eq!(notices[0]["param"], "unit");
+    assert_eq!(notices[0]["item"], 3);
+    assert!(
+        notices[0]["explanation"]
+            .as_str()
+            .unwrap()
+            .contains("remote shell")
+    );
+    assert_eq!(view(&env).approved_hash, approved_hash);
+}
+
 #[test]
 fn usage_error_exits_64() {
     let env = approved_env();

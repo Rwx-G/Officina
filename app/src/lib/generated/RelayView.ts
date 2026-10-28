@@ -2,6 +2,7 @@
 import type { ActionIssue } from "./ActionIssue";
 import type { CanonicalCatalogue } from "./CanonicalCatalogue";
 import type { CredentialView } from "./CredentialView";
+import type { Notice } from "./Notice";
 import type { PendingChange } from "./PendingChange";
 import type { RecentEntry } from "./RecentEntry";
 
@@ -52,4 +53,9 @@ recent: Array<RecentEntry>, journal_corrupt_lines: number, gate_errors_24h: numb
 /**
  * The approved catalogue's credentials, by name.
  */
-credentials: Array<CredentialView>, };
+credentials: Array<CredentialView>, 
+/**
+ * What the programs do with some values (D-172): the current floor's
+ * notices, or the approved snapshot's when the floor cannot be read.
+ */
+notices: Array<Notice>, };

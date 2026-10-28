@@ -1735,6 +1735,156 @@ impl KnownProjects {
     }
 }
 
+closed_enum! {
+    /// What a program does with a value that a closed argument vector does
+    /// not close (D-172): a notice, not an issue, since a `values` list
+    /// keeps such a parameter safe.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+    #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+    #[serde(rename_all = "snake_case")]
+    pub enum NoticeKind {
+        /// An ssh action's placeholder after the destination: ssh joins
+        /// those arguments into one command the remote shell parses.
+        RemoteCommandValue,
+        /// An Ansible action's placeholder in extra vars or module
+        /// arguments, which Ansible templates.
+        TemplatedValue,
+    }
+}
+
+impl NoticeKind {
+    /// The program family that reads the value.
+    pub fn program(self) -> &'static str {
+        match self {
+            NoticeKind::RemoteCommandValue => "ssh",
+            NoticeKind::TemplatedValue => "Ansible",
+        }
+    }
+
+    /// One line for the author, the same on the banner, in
+    /// `officina relay --json` and in doctor.
+    pub fn explanation(self) -> &'static str {
+        match self {
+            NoticeKind::RemoteCommandValue => {
+                "ssh hands this value to the remote shell, which reads it: a pattern admitting spaces or shell characters lets a session run any command on that host; prefer a `values` list"
+            }
+            NoticeKind::TemplatedValue => {
+                "Ansible templates this value: a pattern admitting `{` or `%` lets a session run code on the control node; prefer a `values` list"
+            }
+        }
+    }
+}
+
+/// One notice of the catalogue (D-172), derived from its canonical form: it
+/// never changes the hash and never drops the action.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct Notice {
+    pub action: String,
+    pub kind: NoticeKind,
+    pub param: String,
+    /// 0-based index of the `args` item holding the placeholder.
+    pub item: u32,
+    /// [`NoticeKind::explanation`].
+    pub explanation: String,
+}
+
+/// ssh options that take a value, so the next item is not the destination
+/// (OpenSSH's `ssh(1)` synopsis).
+pub const SSH_OPTIONS_WITH_VALUE: &[&str] = &[
+    "-B", "-b", "-c", "-D", "-E", "-e", "-F", "-I", "-i", "-J", "-L", "-l", "-m", "-O", "-o", "-P",
+    "-p", "-Q", "-R", "-S", "-W", "-w",
+];
+
+/// The Ansible options whose value Ansible templates: the next item holds
+/// it, or the item itself after `=` for a long option.
+pub const ANSIBLE_TEMPLATED_OPTIONS: &[&str] = &["-e", "--extra-vars", "-a", "--args"];
+
+/// A program's file name: the last segment, lowercase, `.exe` stripped.
+fn program_name(program: &str) -> String {
+    let last = program.rsplit(['/', '\\']).next().unwrap_or(program);
+    let lower = last.to_ascii_lowercase();
+    lower.strip_suffix(".exe").unwrap_or(&lower).to_owned()
+}
+
+/// The notices of one canonical action (D-172).
+fn action_notices(name: &str, action: &CanonicalAction) -> Vec<Notice> {
+    if action.http.is_some() {
+        return Vec::new();
+    }
+    let program = program_name(&action.program);
+    let items: Vec<Option<String>> = action
+        .args
+        .iter()
+        .map(|item| {
+            ArgTemplate::parse(item)
+                .ok()
+                .and_then(|t| t.param().map(str::to_owned))
+        })
+        .collect();
+    let notice = |kind: NoticeKind, index: usize, param: &str| Notice {
+        action: name.to_owned(),
+        kind,
+        param: param.to_owned(),
+        item: u32::try_from(index).unwrap_or(u32::MAX),
+        explanation: kind.explanation().to_owned(),
+    };
+    let mut notices = Vec::new();
+    if program == "ssh" {
+        let mut destination = None;
+        let mut index = 0;
+        while index < action.args.len() {
+            let item = &action.args[index];
+            if item == "--" {
+                destination = Some(index + 1);
+                break;
+            }
+            if item.starts_with('-') {
+                if SSH_OPTIONS_WITH_VALUE.contains(&item.as_str()) {
+                    index += 1;
+                }
+                index += 1;
+                continue;
+            }
+            destination = Some(index);
+            break;
+        }
+        if let Some(destination) = destination {
+            for (index, param) in items.iter().enumerate().skip(destination + 1) {
+                if let Some(param) = param {
+                    notices.push(notice(NoticeKind::RemoteCommandValue, index, param));
+                }
+            }
+        }
+    } else if program.starts_with("ansible") {
+        for (index, param) in items.iter().enumerate() {
+            let Some(param) = param else { continue };
+            let item = &action.args[index];
+            let after_option =
+                index > 0 && ANSIBLE_TEMPLATED_OPTIONS.contains(&action.args[index - 1].as_str());
+            let inline = ANSIBLE_TEMPLATED_OPTIONS
+                .iter()
+                .filter(|option| option.starts_with("--"))
+                .any(|option| item.starts_with(&format!("{option}=")));
+            if after_option || inline {
+                notices.push(notice(NoticeKind::TemplatedValue, index, param));
+            }
+        }
+    }
+    notices
+}
+
+/// Every notice of a catalogue (D-172), by action then item. Derived from
+/// the canonical form, so an approved snapshot and a pending floor give
+/// theirs alike, and the hash never covers them.
+pub fn notices(catalogue: &CanonicalCatalogue) -> Vec<Notice> {
+    catalogue
+        .actions
+        .iter()
+        .flat_map(|(name, action)| action_notices(name, action))
+        .collect()
+}
+
 /// Parses `relay/known-projects.json`, refusing other schema versions.
 pub fn parse_known_projects(content: &str) -> Option<KnownProjects> {
     serde_json::from_str::<KnownProjects>(content)
@@ -2853,6 +3003,155 @@ mod tests {
         let d = diff(&canonical, &moved);
         assert_eq!(d.floor_path.unwrap().after, "d:/other/officina.toml");
         assert_eq!(d.format.unwrap().before, CANONICAL_FORMAT);
+    }
+
+    /// A floor whose one action runs `program` with `args`, its parameters
+    /// `host` and `extra` taking a closed value each.
+    fn notice_floor(program: &str, args: &str) -> String {
+        floor_with(&[&format!(
+            "name = \"probe\"\nclass = \"free\"\nprogram = \"{program}\"\nargs = {args}\n[action.params.host]\nvalues = [\"web01\"]\n[action.params.extra]\nvalues = [\"x\"]\n"
+        )])
+    }
+
+    fn notices_of(content: &str) -> Vec<(NoticeKind, String, u32)> {
+        notices(&canonical_of(content))
+            .into_iter()
+            .map(|n| (n.kind, n.param, n.item))
+            .collect()
+    }
+
+    /// A floor raising exactly one notice of `kind`; exhaustive, so a new
+    /// kind does not compile without its case.
+    fn notice_fixture(kind: NoticeKind) -> String {
+        match kind {
+            NoticeKind::RemoteCommandValue => notice_floor(
+                "C:/Windows/System32/OpenSSH/ssh.exe",
+                "[\"{host}\", \"systemctl\", \"status\", \"{extra}\"]",
+            ),
+            NoticeKind::TemplatedValue => notice_floor(
+                "C:/path/to/ansible-playbook.exe",
+                "[\"--limit\", \"{host}\", \"-e\", \"{extra}\"]",
+            ),
+        }
+    }
+
+    #[test]
+    fn every_notice_kind_has_a_case() {
+        for kind in NoticeKind::ALL {
+            let found = notices_of(&notice_fixture(*kind));
+            assert_eq!(found.len(), 1, "{kind:?}: {found:?}");
+            assert_eq!(found[0].0, *kind);
+            assert!(kind.explanation().contains(kind.program()));
+        }
+    }
+
+    #[test]
+    fn ssh_placeholder_after_the_destination_is_a_remote_command_value() {
+        assert_eq!(
+            notices_of(&notice_fixture(NoticeKind::RemoteCommandValue)),
+            [(NoticeKind::RemoteCommandValue, "extra".to_owned(), 3)]
+        );
+        let with_options = notice_floor(
+            "C:/x/SSH.EXE",
+            "[\"-p\", \"22\", \"-o\", \"BatchMode=yes\", \"web01\", \"echo {extra}\", \"{host}\"]",
+        );
+        let mut found = notices_of(&with_options);
+        found.sort_by_key(|n| n.2);
+        assert_eq!(
+            found,
+            [
+                (NoticeKind::RemoteCommandValue, "extra".to_owned(), 5),
+                (NoticeKind::RemoteCommandValue, "host".to_owned(), 6)
+            ],
+            "an option's value is not the destination"
+        );
+        let after_double_dash = notice_floor(
+            "C:/x/ssh.exe",
+            "[\"--\", \"web01\", \"{host}\", \"{extra}\"]",
+        );
+        assert_eq!(notices_of(&after_double_dash).len(), 2);
+    }
+
+    #[test]
+    fn ssh_placeholder_as_the_destination_is_no_notice() {
+        for args in [
+            "[\"{host}\", \"uptime\", \"--\", \"x{extra}\"]",
+            "[\"-l\", \"{extra}\", \"{host}\"]",
+        ] {
+            let found = notices_of(&notice_floor("C:/x/ssh.exe", args));
+            let at_destination = found
+                .iter()
+                .filter(|n| n.1 == "host" || (args.contains("-l") && n.1 == "extra"))
+                .count();
+            assert_eq!(at_destination, 0, "{args}: {found:?}");
+        }
+        assert!(
+            notices_of(&notice_floor(
+                "C:/x/scp.exe",
+                "[\"{host}\", \"a\", \"{extra}\"]"
+            ))
+            .is_empty(),
+            "only ssh"
+        );
+    }
+
+    #[test]
+    fn ansible_extra_vars_placeholder_is_a_templated_value() {
+        assert_eq!(
+            notices_of(&notice_fixture(NoticeKind::TemplatedValue)),
+            [(NoticeKind::TemplatedValue, "extra".to_owned(), 3)]
+        );
+        for (args, item) in [
+            ("[\"--extra-vars\", \"{extra}\", \"{host}\"]", 1),
+            ("[\"--extra-vars=target={extra}\", \"{host}\"]", 0),
+        ] {
+            assert_eq!(
+                notices_of(&notice_floor("C:/x/ansible-playbook.exe", args)),
+                [(NoticeKind::TemplatedValue, "extra".to_owned(), item)],
+                "{args}"
+            );
+        }
+    }
+
+    #[test]
+    fn ansible_args_placeholder_is_a_templated_value() {
+        for args in [
+            "[\"{host}\", \"-a\", \"{extra}\"]",
+            "[\"{host}\", \"--args\", \"{extra}\"]",
+            "[\"{host}\", \"--args=cmd={extra}\"]",
+        ] {
+            let found = notices_of(&notice_floor("C:/path/to/ANSIBLE.exe", args));
+            assert_eq!(found.len(), 1, "{args}: {found:?}");
+            assert_eq!(
+                (found[0].0, found[0].1.as_str()),
+                (NoticeKind::TemplatedValue, "extra")
+            );
+        }
+    }
+
+    #[test]
+    fn notices_keep_the_action() {
+        for kind in NoticeKind::ALL {
+            let catalogue = validated(&notice_fixture(*kind));
+            assert!(catalogue.issues.is_empty(), "{:#?}", catalogue.issues);
+            assert!(catalogue.actions.contains_key("probe"), "{kind:?}");
+        }
+    }
+
+    #[test]
+    fn notices_do_not_change_the_hash() {
+        let content = notice_fixture(NoticeKind::RemoteCommandValue);
+        let relay = load(&content, "C:/Work/officina.toml").unwrap();
+        assert!(!notices(&relay.canonical).is_empty());
+        assert_eq!(relay.hash, hash(&relay.canonical));
+        let serialized = serde_json::to_string(&relay.canonical).unwrap();
+        for kind in NoticeKind::ALL {
+            let tag = serde_json::to_value(kind).unwrap();
+            assert!(
+                !serialized.contains(tag.as_str().unwrap()),
+                "the canonical form carries a notice"
+            );
+        }
     }
 
     #[test]

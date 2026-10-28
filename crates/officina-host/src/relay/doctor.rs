@@ -27,7 +27,7 @@ use officina_core::relay::approvals::DEFAULT_WAIT_S;
 use officina_core::relay::argv::{WSL_ENV_PROGRAM, WSL_EXE, WSL_REMOVED_ENV, WSL_TIMEOUT_PROGRAM};
 use officina_core::relay::catalogue::{
     ActionClass, CanonicalAction, CanonicalCatalogue, CatalogueDiff, RelayFloor, Runner,
-    SectionDiff, diff, relay_in_use,
+    SectionDiff, diff, notices, relay_in_use,
 };
 use officina_core::relay::classes::{self, CHECK_VALID_MS, WAIT_RANGE_S};
 use officina_core::relay::credential::{cmdkey_line, target};
@@ -237,6 +237,7 @@ fn checks_with(
     };
     if let Some(relay) = current {
         checks.extend(catalogue_checks(relay));
+        checks.extend(notice_checks(&relay.canonical));
     }
     checks.push(approval_check(
         home,
@@ -638,6 +639,25 @@ fn program_checks(
     checks
 }
 
+/// D-172: one warning per catalogue notice, a value a program reads past
+/// the closed argument vector; never a failure, since a `values` list keeps
+/// such a parameter safe.
+fn notice_checks(catalogue: &CanonicalCatalogue) -> Vec<Check> {
+    notices(catalogue)
+        .into_iter()
+        .map(|notice| {
+            check(
+                Level::Warn,
+                &format!("relay notice {}", notice.action),
+                format!(
+                    "parameter {} (args item {}): {}",
+                    notice.param, notice.item, notice.explanation
+                ),
+            )
+        })
+        .collect()
+}
+
 /// FR-14, D-31, D-38: each credential the floor declares is in the
 /// Credential Manager, or doctor prints the `cmdkey` line that stores it
 /// (`/pass` without a value, so `cmdkey` prompts and the secret never lands
@@ -990,7 +1010,7 @@ mod tests {
     use super::*;
     #[cfg(windows)]
     use crate::relay::home::system_dir;
-    use officina_core::relay::catalogue::load;
+    use officina_core::relay::catalogue::{NoticeKind, load};
     use std::path::PathBuf;
 
     const FLOOR_PATH: &str = "C:/path/to/officina.toml";
@@ -1016,6 +1036,35 @@ mod tests {
 
     fn summary(checks: &[Check]) -> Vec<(String, Level)> {
         checks.iter().map(|c| (c.title.clone(), c.level)).collect()
+    }
+
+    #[test]
+    fn each_notice_is_one_warning_line() {
+        let relay = load(
+            "schema = 2\n[[project]]\nname = \"lab\"\npath = \"Lab\"\nactions = [\"status\", \"deploy\"]\n[[action]]\nname = \"status\"\nclass = \"free\"\nprogram = \"C:/Windows/System32/OpenSSH/ssh.exe\"\nargs = [\"web01\", \"systemctl\", \"status\", \"{unit}\"]\n[action.params.unit]\nvalues = [\"nginx.service\"]\n[[action]]\nname = \"deploy\"\nclass = \"free\"\nrunner = \"wsl\"\nprogram = \"/opt/venv/bin/ansible-playbook\"\nargs = [\"-e\", \"{vars}\", \"site.yml\"]\n[action.params.vars]\nvalues = [\"tier=web\"]\n",
+            FLOOR_PATH,
+        )
+        .unwrap();
+        let checks = notice_checks(&relay.canonical);
+        assert_eq!(
+            summary(&checks),
+            [
+                ("relay notice deploy".to_owned(), Level::Warn),
+                ("relay notice status".to_owned(), Level::Warn),
+            ]
+        );
+        for (check, kind) in checks
+            .iter()
+            .zip([NoticeKind::TemplatedValue, NoticeKind::RemoteCommandValue])
+        {
+            assert!(
+                check.detail.contains(kind.explanation()),
+                "{}",
+                check.detail
+            );
+            assert_eq!(check.detail.lines().count(), 1);
+        }
+        assert!(notice_checks(&wsl_floor(None).canonical).is_empty());
     }
 
     /// The fake store of the unit tests: names with their secret; a name

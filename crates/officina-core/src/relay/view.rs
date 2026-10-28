@@ -7,8 +7,8 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 use super::catalogue::{
-    ActionIssue, ApprovedCatalogue, CANONICAL_FORMAT, CanonicalCatalogue, CatalogueDiff,
-    RelayFloor, TIMEOUT_RANGE_S, diff, relay_in_use,
+    ActionIssue, ApprovedCatalogue, CANONICAL_FORMAT, CanonicalCatalogue, CatalogueDiff, Notice,
+    RelayFloor, TIMEOUT_RANGE_S, diff, notices, relay_in_use,
 };
 use super::journal::{
     ApprovalEvent, CatalogueApproved, GateDenied, GateError, JournalEntry, JournalLine, Refused,
@@ -137,6 +137,9 @@ pub struct RelayView {
     pub gate_errors_24h: u32,
     /// The approved catalogue's credentials, by name.
     pub credentials: Vec<CredentialView>,
+    /// What the programs do with some values (D-172): the current floor's
+    /// notices, or the approved snapshot's when the floor cannot be read.
+    pub notices: Vec<Notice>,
 }
 
 /// `relay/stopped` as the host found it (AD-34).
@@ -363,6 +366,12 @@ pub fn build(inputs: &ViewInputs<'_>) -> RelayView {
         journal_corrupt_lines: inputs.journal_corrupt_lines,
         gate_errors_24h: u32::try_from(gate_errors_24h).unwrap_or(u32::MAX),
         credentials: credentials(approved, inputs.credential_presence),
+        notices: match inputs.floor {
+            FloorRead::Valid(current) => notices(&current.canonical),
+            FloorRead::Missing | FloorRead::Unreadable(_) => {
+                approved.map(|a| notices(&a.canonical)).unwrap_or_default()
+            }
+        },
     }
 }
 
@@ -836,6 +845,34 @@ credential = "monitoring"
         assert!(
             nothing.credentials.is_empty(),
             "only the approved catalogue's"
+        );
+    }
+
+    #[test]
+    fn notices_come_from_the_current_floor() {
+        let ssh = FLOOR
+            .replace("C:/path/to/tool.exe", "C:/path/to/ssh.exe")
+            .replace(
+                "args = [\"{host}\"]",
+                "args = [\"web01\", \"echo\", \"{host}\"]",
+            );
+        let current = load(&ssh, FLOOR_PATH).unwrap();
+        let view = build(&inputs(
+            SnapshotState::Missing,
+            FloorRead::Valid(&current),
+            &[],
+        ));
+        assert_eq!(view.notices.len(), 1, "{:?}", view.notices);
+        assert_eq!(view.notices[0].action, "probe");
+        let approved = approved_of(&current);
+        let gone = build(&inputs(
+            SnapshotState::Valid(&approved),
+            FloorRead::Missing,
+            &[],
+        ));
+        assert_eq!(
+            gone.notices, view.notices,
+            "the snapshot's when the floor is gone"
         );
     }
 
