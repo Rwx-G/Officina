@@ -150,3 +150,40 @@ stories:
   - {id: "6.22", file: story-6.22-browser-base-image.md, slice: B, status: approved}
   - {id: "6.23", file: story-6.23-scene-workers.md, slice: B, status: approved}
   - {id: "6.24", file: story-6.24-docs-doctor-use-and-qa.md, slice: B, status: approved}
+---
+epic: 7
+version: v0.7
+# approved: written and approved, implementation not started.
+# Epic 7's research-note entries are E60 to E79 (epic-7-decisions.md D-301); Epic 6 keeps E26 to E59.
+# Slice 0 is two stories (epic-7-decisions.md P-62): 7.1 records gates 1, 2, 3 and 6 (E60 to E63) before any Slice A story; 7.13 closes Slice A on its own table and records gates 0, 4 and 5 (E64 to E66) and the Slice B entry conditions (D-331).
+# Halves (D-302): gate 6's second half closes 7.3; gate 5's first half is in 7.13, its second half closes 7.17. Gate 4 stops the worker container from outside (D-347).
+# Slice A (7.2-7.12: FR-1 to FR-6, FR-10, FR-11 in shadow, FR-17 and FR-18 without launch controls) launches nothing; Decision has no Launch variant (D-326).
+# One quota regime (D-304): on an api-key floor 7.7 and 7.8 stay unimplemented and 7.9 builds usd_budget on enforced caps only; E60 or E61 failing also leaves 7.8 unimplemented (D-303). A worker's reported cost gates nothing (P-64).
+# Implemented after v0.2 to v0.6; each seam has one owning story (epic-7-decisions.md D-300).
+# 7.2, 7.3 and 7.4 are independent; 7.5 needs 7.4; 7.6 needs 7.2, 7.4 and 7.5; 7.8 needs 7.7; 7.9 needs 7.3, 7.4, 7.7 and 7.8; 7.10 needs 7.2 to 7.4 and 7.6 to 7.9; 7.11 needs 7.10; 7.12 needs 7.5, 7.6 and 7.11.
+# 7.13 runs after 5 shadow working days (D-353); its Slice B decision is go, wait (v0.8 starts, PRD section 6.1.1) or not built.
+# Slice B (7.14-7.20: FR-8, FR-9's enforcement, FR-12 to FR-16, launch controls) starts only on 7.13's go; each story states its entry conditions. 7.15 needs 7.14; 7.16 needs 7.14 and 7.15; 7.17 needs 7.16 and E66's first half; 7.18 needs 7.16.
+# No build offers mode on before scope quarantine and held packages exist: 7.15 (scope, holding, the self-stop writer) merges before 7.16 (mode on), D-345.
+# Reworked after the story review (epic-7-decisions.md P-65, review F1 to F41; new decisions D-343 to D-355). F22 (this block in docs/stories/sprint-status.yaml) is left to the coordinator.
+# 7.19 closes the built slices (v0.8 may start); 7.20 reads the two-week measure alongside v0.8, at the latest at v1's close (P-62, PRD section 6.1.1's exception to P-7 and P-16, for the owner's confirmation).
+stories:
+  - {id: "7.1", file: story-7.1-workstation-gates.md, slice: "0", status: approved}
+  - {id: "7.2", file: story-7.2-floor-keys-and-catalogue-format.md, slice: A, status: approved}
+  - {id: "7.3", file: story-7.3-local-time-and-window.md, slice: A, status: approved}
+  - {id: "7.4", file: story-7.4-migration-4-and-governor-records.md, slice: A, status: approved}
+  - {id: "7.5", file: story-7.5-merged-detection.md, slice: A, status: approved}
+  - {id: "7.6", file: story-7.6-settlement-eligibility-and-order-state.md, slice: A, status: approved}
+  - {id: "7.7", file: story-7.7-quota-observations.md, slice: A, status: approved}
+  - {id: "7.8", file: story-7.8-usage-probe.md, slice: A, status: approved}
+  - {id: "7.9", file: story-7.9-projection-ratio-allowances-and-attention.md, slice: A, status: approved}
+  - {id: "7.10", file: story-7.10-the-decision.md, slice: A, status: approved}
+  - {id: "7.11", file: story-7.11-governor-step-and-shadow.md, slice: A, status: approved}
+  - {id: "7.12", file: story-7.12-governor-view-and-section.md, slice: A, status: approved}
+  - {id: "7.13", file: story-7.13-slice-a-close-and-slice-b-entry.md, slice: "0", status: approved}
+  - {id: "7.14", file: story-7.14-grant-and-launch.md, slice: B, status: approved}
+  - {id: "7.15", file: story-7.15-held-packages-and-scope.md, slice: B, status: approved}
+  - {id: "7.16", file: story-7.16-modes-guards-and-self-stop.md, slice: B, status: approved}
+  - {id: "7.17", file: story-7.17-stop-shortcut.md, slice: B, status: approved}
+  - {id: "7.18", file: story-7.18-automations-table.md, slice: B, status: approved}
+  - {id: "7.19", file: story-7.19-docs-doctor-and-qa.md, slice: B, status: approved}
+  - {id: "7.20", file: story-7.20-two-week-measure.md, slice: B, status: approved}
