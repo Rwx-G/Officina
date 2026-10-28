@@ -74,11 +74,15 @@ jobs:
         # left one in target/release with the dev-dependency features on. The
         # window links the authority, so the same search must find the marker
         # there, or the search proves nothing. The test seams (story 2.14)
-        # stay out of its feature graph too.
+        # stay out of its feature graph too. The registry's writer carries a
+        # marker of its own, which officina.exe must not hold either (AD-38,
+        # D-83).
         shell: bash
         run: |
           marker=$(sed -n 's/^pub const AUTHORITY_MARKER: &str = "\(.*\)";$/\1/p' crates/officina-host/src/relay/authority.rs)
           test -n "$marker"
+          registry_marker=$(sed -n 's/^pub const REGISTRY_MARKER: &str = "\(.*\)";$/\1/p' crates/officina-host/src/registry/write.rs)
+          test -n "$registry_marker"
           tree=$(cargo tree --locked -p officina -e normal,features)
           grep -q -F 'officina-host feature' <<<"$tree"
           if grep -F -e window-authority -e test-seams <<<"$tree"; then
@@ -91,6 +95,23 @@ jobs:
           fi
           if ! grep -a -q -F "$marker" target/release/officina-app.exe; then
             echo "positive control failed: officina-app.exe lacks the authority marker"; exit 1
+          fi
+          if grep -a -q -F "$registry_marker" target/release/officina.exe; then
+            echo "officina.exe contains the registry writer's marker"; exit 1
+          fi
+      - name: Registry dependencies
+        # v0.3 addendum section 3, D-91: the registry adds rusqlite and
+        # nothing the addendum rules out. Scoped to the host crate, since
+        # Tauri brings some of those crates into the workspace. The same
+        # query must list rusqlite, or the search proves nothing.
+        shell: bash
+        run: |
+          crates=$(cargo tree --locked -p officina-host -e normal --target all --prefix none | awk '{print $1}' | sort -u)
+          if ! grep -q -x rusqlite <<<"$crates"; then
+            echo "positive control failed: rusqlite not found"; exit 1
+          fi
+          if grep -x -E 'sqlx|diesel|refinery|rand|tokio' <<<"$crates"; then
+            echo "officina-host depends on a crate the v0.3 addendum rules out"; exit 1
           fi
       - name: No bundled roots
         # AD-36, story 2.11 AC 14: HTTP actions trust the Windows store
