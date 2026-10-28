@@ -54,8 +54,31 @@ pub const DEFAULT_MAX_OUTPUT_KIB: u32 = 64;
 /// Accepted `max_output_kib` (AD-23).
 pub const MAX_OUTPUT_RANGE_KIB: RangeInclusive<i64> = 1..=1024;
 
-/// Longest action or parameter name.
-pub const MAX_NAME_CHARS: usize = 32;
+/// The longest name, for [`MAX_NAME_CHARS`] and the rules' prose alike.
+macro_rules! max_name_chars {
+    () => {
+        32
+    };
+}
+
+/// Longest action, parameter or credential name.
+pub const MAX_NAME_CHARS: usize = max_name_chars!();
+
+/// What [`is_valid_action_name`] accepts, as every message about an
+/// action's or a credential's name says it.
+pub const NAME_RULE: &str = concat!(
+    "a lowercase letter followed by lowercase letters, digits or `-`, at most ",
+    max_name_chars!(),
+    " characters"
+);
+
+/// What [`is_valid_param_name`] accepts, as every message about a
+/// parameter's name says it.
+pub const PARAM_NAME_RULE: &str = concat!(
+    "a lowercase letter followed by lowercase letters, digits, `_` or `-`, at most ",
+    max_name_chars!(),
+    " characters"
+);
 /// Longest `env` key (D-1).
 pub const MAX_ENV_KEY_CHARS: usize = 64;
 /// Longest `distro` (D-4).
@@ -489,7 +512,8 @@ pub fn guarded_programs(floor: &FloorFile) -> Vec<String> {
     list
 }
 
-/// `[a-z]` then up to 31 of `[a-z0-9]` and `extra`.
+/// A lowercase letter, then lowercase letters, digits and `extra`, at most
+/// [`MAX_NAME_CHARS`] in all.
 fn is_lower_name(name: &str, extra: &[char]) -> bool {
     let mut chars = name.chars();
     chars.next().is_some_and(|c| c.is_ascii_lowercase())
@@ -497,12 +521,12 @@ fn is_lower_name(name: &str, extra: &[char]) -> bool {
         && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || extra.contains(&c))
 }
 
-/// An action name: `^[a-z][a-z0-9-]{0,31}$` (AD-23).
+/// An action or credential name: [`NAME_RULE`] (AD-23).
 pub fn is_valid_action_name(name: &str) -> bool {
     is_lower_name(name, &['-'])
 }
 
-/// A parameter name: `^[a-z][a-z0-9_-]{0,31}$`, so it can be passed as
+/// A parameter name: [`PARAM_NAME_RULE`], so it can be passed as
 /// `name=value` and read back from a placeholder.
 pub fn is_valid_param_name(name: &str) -> bool {
     is_lower_name(name, &['-', '_'])
@@ -586,12 +610,43 @@ impl Report<'_> {
     }
 }
 
+/// The `name` an entry declares, for its issues: [`UNNAMED`] without one.
+fn name_of(value: &toml::Value) -> String {
+    value
+        .get("name")
+        .and_then(toml::Value::as_str)
+        .unwrap_or(UNNAMED)
+        .to_owned()
+}
+
+/// `value` as its raw table, or the one `malformed` issue saying why it
+/// does not convert.
+fn parse_raw<T: serde::de::DeserializeOwned>(
+    value: &toml::Value,
+    report: &Report<'_>,
+) -> Result<T, Vec<ActionIssue>> {
+    value.clone().try_into().map_err(|e: toml::de::Error| {
+        vec![report.issue(IssueKind::Malformed, e.message().trim().to_owned())]
+    })
+}
+
+/// The names given more than once: every copy of each is dropped, so none
+/// wins by its place in the file. One rule for actions, credentials and
+/// projects.
+fn duplicated<'n>(names: impl IntoIterator<Item = &'n str>) -> BTreeSet<&'n str> {
+    let mut seen = BTreeSet::new();
+    names
+        .into_iter()
+        .filter(|name| !seen.insert(*name))
+        .collect()
+}
+
 /// What every action declares besides how it runs.
 struct Common<'a> {
     name: &'a str,
     class: ActionClass,
     params: &'a BTreeMap<String, RawParam>,
-    check: &'a Option<String>,
+    check: Option<&'a str>,
     timeout_s: Option<i64>,
     max_output_kib: Option<i64>,
 }
@@ -613,13 +668,22 @@ fn check_common(
     target: ValueTarget,
     used: &BTreeSet<&str>,
 ) -> Checked {
+    check_name_and_class(report, common);
+    let params = check_params(report, common.params, target);
+    check_placeholders(report, common.params, used);
+    let (timeout_s, max_output_kib) = check_limits(report, common);
+    check_check(report, common);
+    Checked {
+        params,
+        timeout_s,
+        max_output_kib,
+    }
+}
+
+/// The action's name follows [`NAME_RULE`]; class `auto` is reserved.
+fn check_name_and_class(report: &mut Report<'_>, common: &Common<'_>) {
     if !is_valid_action_name(common.name) {
-        report.add(
-            IssueKind::Name,
-            format!(
-                "the name must be a lowercase letter followed by lowercase letters, digits or `-`, at most {MAX_NAME_CHARS} characters"
-            ),
-        );
+        report.add(IssueKind::Name, format!("the name must be {NAME_RULE}"));
     }
     if common.class == ActionClass::Auto {
         report.add(
@@ -627,66 +691,91 @@ fn check_common(
             "class `auto` is reserved for the orchestrator (v0.5)".to_owned(),
         );
     }
+}
 
-    let mut params = BTreeMap::new();
-    for (param_name, raw_param) in common.params {
+/// Each parameter's name follows [`PARAM_NAME_RULE`] and its rule holds
+/// ([`param_rule`]); a parameter without a usable rule is left out.
+fn check_params(
+    report: &mut Report<'_>,
+    raw_params: &BTreeMap<String, RawParam>,
+    target: ValueTarget,
+) -> BTreeMap<String, Param> {
+    let mut checked = BTreeMap::new();
+    for (param_name, raw_param) in raw_params {
         if !is_valid_param_name(param_name) {
             report.add(
                 IssueKind::ParamName,
-                format!(
-                    "parameter {param_name:?} must be a lowercase letter followed by lowercase letters, digits, `_` or `-`, at most {MAX_NAME_CHARS} characters"
-                ),
+                format!("parameter {param_name:?} must be {PARAM_NAME_RULE}"),
             );
         }
-        let rule = match (&raw_param.values, &raw_param.pattern) {
-            (Some(values), None) => {
-                for value in values {
-                    if let Err(refusal) = params::check_value_for(target, value) {
-                        report.add(
-                            IssueKind::InvalidValue,
-                            format!("value {value:?} of parameter {param_name}: {refusal}"),
-                        );
-                    }
-                }
-                let mut sorted = values.clone();
-                sorted.sort();
-                sorted.dedup();
-                Some(ParamRule::Values(sorted))
-            }
-            (None, Some(source)) => match params::compile_pattern(source) {
-                Ok(pattern) => Some(ParamRule::Pattern(pattern)),
-                Err(error) => {
-                    let kind = match error {
-                        PatternError::TooLong => IssueKind::PatternTooLong,
-                        PatternError::TooComplex => IssueKind::PatternTooComplex,
-                        PatternError::Invalid(_) => IssueKind::PatternInvalid,
-                    };
-                    report.add(kind, format!("parameter {param_name}: {error}"));
-                    None
-                }
-            },
-            _ => {
-                report.add(
-                    IssueKind::ValuesOrPattern,
-                    format!("parameter {param_name} declares exactly one of `values` or `pattern`"),
-                );
-                None
-            }
-        };
-        if let Some(rule) = rule {
-            params.insert(param_name.clone(), Param { rule });
+        if let Some(rule) = param_rule(report, param_name, raw_param, target) {
+            checked.insert(param_name.clone(), Param { rule });
         }
     }
+    checked
+}
 
+/// Exactly one of a `values` list, each value passing the rules of
+/// `target`, or a `pattern` that compiles within its limits.
+fn param_rule(
+    report: &mut Report<'_>,
+    param_name: &str,
+    raw_param: &RawParam,
+    target: ValueTarget,
+) -> Option<ParamRule> {
+    match (&raw_param.values, &raw_param.pattern) {
+        (Some(values), None) => {
+            for value in values {
+                if let Err(refusal) = params::check_value_for(target, value) {
+                    report.add(
+                        IssueKind::InvalidValue,
+                        format!("value {value:?} of parameter {param_name}: {refusal}"),
+                    );
+                }
+            }
+            let mut sorted = values.clone();
+            sorted.sort();
+            sorted.dedup();
+            Some(ParamRule::Values(sorted))
+        }
+        (None, Some(source)) => match params::compile_pattern(source) {
+            Ok(pattern) => Some(ParamRule::Pattern(pattern)),
+            Err(error) => {
+                let kind = match error {
+                    PatternError::TooLong => IssueKind::PatternTooLong,
+                    PatternError::TooComplex => IssueKind::PatternTooComplex,
+                    PatternError::Invalid(_) => IssueKind::PatternInvalid,
+                };
+                report.add(kind, format!("parameter {param_name}: {error}"));
+                None
+            }
+        },
+        _ => {
+            report.add(
+                IssueKind::ValuesOrPattern,
+                format!("parameter {param_name} declares exactly one of `values` or `pattern`"),
+            );
+            None
+        }
+    }
+}
+
+/// Every placeholder in `used` names a declared parameter, and every
+/// parameter is used by a placeholder.
+fn check_placeholders(
+    report: &mut Report<'_>,
+    raw_params: &BTreeMap<String, RawParam>,
+    used: &BTreeSet<&str>,
+) {
     for placeholder in used {
-        if !common.params.contains_key(*placeholder) {
+        if !raw_params.contains_key(*placeholder) {
             report.add(
                 IssueKind::UndeclaredPlaceholder,
                 format!("placeholder {{{placeholder}}} names no declared parameter"),
             );
         }
     }
-    for param_name in common.params.keys() {
+    for param_name in raw_params.keys() {
         if !used.contains(param_name.as_str()) {
             report.add(
                 IssueKind::UnusedParameter,
@@ -694,7 +783,11 @@ fn check_common(
             );
         }
     }
+}
 
+/// `timeout_s` in [`TIMEOUT_RANGE_S`] and `max_output_kib` in
+/// [`MAX_OUTPUT_RANGE_KIB`], each defaulted when absent.
+fn check_limits(report: &mut Report<'_>, common: &Common<'_>) -> (u32, u32) {
     let timeout_s = common.timeout_s.unwrap_or(i64::from(DEFAULT_TIMEOUT_S));
     if !TIMEOUT_RANGE_S.contains(&timeout_s) {
         report.add(
@@ -719,10 +812,16 @@ fn check_common(
             ),
         );
     }
+    (
+        u32::try_from(timeout_s).unwrap_or(DEFAULT_TIMEOUT_S),
+        u32::try_from(max_output_kib).unwrap_or(DEFAULT_MAX_OUTPUT_KIB),
+    )
+}
 
-    // An `after-check` action needs its check; a `human` action may name one,
-    // its dry run (D-170); a `free` action runs without any, so naming one
-    // would promise a binding it never has.
+/// An `after-check` action needs its check; a `human` action may name one,
+/// its dry run (D-170); a `free` action runs without any, so naming one
+/// would promise a binding it never has.
+fn check_check(report: &mut Report<'_>, common: &Common<'_>) {
     match (common.class, common.check) {
         (ActionClass::AfterCheck, None) => report.add(
             IssueKind::Check,
@@ -733,12 +832,6 @@ fn check_common(
             IssueKind::Check,
             "only an `after-check` or `human` action names a `check`".to_owned(),
         ),
-    }
-
-    Checked {
-        params,
-        timeout_s: u32::try_from(timeout_s).unwrap_or(DEFAULT_TIMEOUT_S),
-        max_output_kib: u32::try_from(max_output_kib).unwrap_or(DEFAULT_MAX_OUTPUT_KIB),
     }
 }
 
@@ -754,11 +847,7 @@ fn check_common(
 /// assert_eq!(action.timeout_s, officina_core::relay::catalogue::DEFAULT_TIMEOUT_S);
 /// ```
 pub fn action_from_value(value: &toml::Value) -> Result<Action, Vec<ActionIssue>> {
-    let name = value
-        .get("name")
-        .and_then(toml::Value::as_str)
-        .unwrap_or(UNNAMED)
-        .to_owned();
+    let name = name_of(value);
     let mut report = Report {
         name: &name,
         issues: Vec::new(),
@@ -775,10 +864,51 @@ pub fn action_from_value(value: &toml::Value) -> Result<Action, Vec<ActionIssue>
             )]);
         }
     }
-    let raw: RawAction = value.clone().try_into().map_err(|e: toml::de::Error| {
-        vec![report.issue(IssueKind::Malformed, e.message().trim().to_owned())]
-    })?;
+    let raw: RawAction = parse_raw(value, &report)?;
+    check_program(&mut report, &raw);
+    if let Some(distro) = &raw.distro {
+        check_distro(&mut report, raw.runner, distro);
+    }
+    check_env(&mut report, &raw.env);
+    let args = arg_templates(&mut report, &raw.args);
+    let used: BTreeSet<&str> = args.iter().filter_map(ArgTemplate::param).collect();
+    let common = Common {
+        name: &raw.name,
+        class: raw.class,
+        params: &raw.params,
+        check: raw.check.as_deref(),
+        timeout_s: raw.timeout_s,
+        max_output_kib: raw.max_output_kib,
+    };
+    let checked = check_common(&mut report, &common, ValueTarget::from(raw.runner), &used);
+    if raw.forwarded_values != Some(ForwardedValues::Accepted) {
+        check_forwarded(&mut report, &raw, &checked.params);
+    }
 
+    if !report.issues.is_empty() {
+        return Err(report.issues);
+    }
+    Ok(Action {
+        name: raw.name,
+        description: raw.description,
+        class: raw.class,
+        runner: raw.runner,
+        distro: raw.distro,
+        program: raw.program,
+        env: raw.env,
+        args,
+        http: None,
+        params: checked.params,
+        check: raw.check,
+        timeout_s: checked.timeout_s,
+        max_output_kib: checked.max_output_kib,
+        forwarded_values: raw.forwarded_values,
+    })
+}
+
+/// `program`: a fixed path, absolute for its runner, never a batch file
+/// `cmd.exe` would parse again (D-5).
+fn check_program(report: &mut Report<'_>, raw: &RawAction) {
     if raw.program.contains(['{', '}']) {
         report.add(
             IssueKind::ProgramPlaceholder,
@@ -807,25 +937,29 @@ pub fn action_from_value(value: &toml::Value) -> Result<Action, Vec<ActionIssue>
             "a `.bat` or `.cmd` program is re-parsed by cmd.exe: run its interpreter's real program instead".to_owned(),
         );
     }
+}
 
-    if let Some(distro) = &raw.distro {
-        if raw.runner != Runner::Wsl {
-            report.add(
-                IssueKind::DistroWithoutWsl,
-                "`distro` applies to `runner = \"wsl\"` only".to_owned(),
-            );
-        }
-        if !is_valid_distro(distro) {
-            report.add(
-                IssueKind::Distro,
-                format!(
-                    "`distro` must start with a letter or digit, then letters, digits, `.`, `_` or `-`, at most {MAX_DISTRO_CHARS} characters"
-                ),
-            );
-        }
+/// `distro`: for the `wsl` runner only, and a name WSL accepts (D-4).
+fn check_distro(report: &mut Report<'_>, runner: Runner, distro: &str) {
+    if runner != Runner::Wsl {
+        report.add(
+            IssueKind::DistroWithoutWsl,
+            "`distro` applies to `runner = \"wsl\"` only".to_owned(),
+        );
     }
+    if !is_valid_distro(distro) {
+        report.add(
+            IssueKind::Distro,
+            format!(
+                "`distro` must start with a letter or digit, then letters, digits, `.`, `_` or `-`, at most {MAX_DISTRO_CHARS} characters"
+            ),
+        );
+    }
+}
 
-    for (key, value) in &raw.env {
+/// `env`: each key a variable name (D-1), each value a literal.
+fn check_env(report: &mut Report<'_>, env: &BTreeMap<String, String>) {
+    for (key, value) in env {
         if !is_valid_env_key(key) {
             report.add(
                 IssueKind::EnvKey,
@@ -843,61 +977,38 @@ pub fn action_from_value(value: &toml::Value) -> Result<Action, Vec<ActionIssue>
             );
         }
     }
+}
 
+/// `args`: each item a literal or one whole placeholder.
+fn arg_templates(report: &mut Report<'_>, items: &[String]) -> Vec<ArgTemplate> {
     let mut args = Vec::new();
-    for item in &raw.args {
+    for item in items {
         match ArgTemplate::parse(item) {
             Ok(template) => args.push(template),
             Err(message) => report.add(IssueKind::Braces, message),
         }
     }
-    let used: BTreeSet<&str> = args.iter().filter_map(ArgTemplate::param).collect();
-    let common = Common {
-        name: &raw.name,
-        class: raw.class,
-        params: &raw.params,
-        check: &raw.check,
-        timeout_s: raw.timeout_s,
-        max_output_kib: raw.max_output_kib,
-    };
-    let checked = check_common(&mut report, &common, ValueTarget::from(raw.runner), &used);
-    if raw.forwarded_values != Some(ForwardedValues::Accepted) {
-        for (kind, item, param) in forwarded_items(&raw.program, &raw.args) {
-            let Some(ParamRule::Pattern(pattern)) = checked.params.get(&param).map(|p| &p.rule)
-            else {
-                continue;
-            };
-            if let Some(admitted) = admitted_forwarded_char(pattern) {
-                report.add(
-                    IssueKind::ForwardedPattern,
-                    format!(
-                        "parameter {param} (args item {item}) is read by {}, and its pattern admits {admitted:?}: give it a `values` list, or set `forwarded_values = \"accepted\"` to keep the action",
-                        kind.program()
-                    ),
-                );
-            }
+    args
+}
+
+/// A parameter the program forwards to a remote shell or a template
+/// (D-172) has a `values` list, or a pattern that admits none of
+/// [`FORWARDED_PROBE_CHARS`] (D-173).
+fn check_forwarded(report: &mut Report<'_>, raw: &RawAction, params: &BTreeMap<String, Param>) {
+    for (kind, item, param) in forwarded_items(&raw.program, &raw.args) {
+        let Some(ParamRule::Pattern(pattern)) = params.get(&param).map(|p| &p.rule) else {
+            continue;
+        };
+        if let Some(admitted) = admitted_forwarded_char(pattern) {
+            report.add(
+                IssueKind::ForwardedPattern,
+                format!(
+                    "parameter {param} (args item {item}) is read by {}, and its pattern admits {admitted:?}: give it a `values` list, or set `forwarded_values = \"accepted\"` to keep the action",
+                    kind.program()
+                ),
+            );
         }
     }
-
-    if !report.issues.is_empty() {
-        return Err(report.issues);
-    }
-    Ok(Action {
-        name: raw.name,
-        description: raw.description,
-        class: raw.class,
-        runner: raw.runner,
-        distro: raw.distro,
-        program: raw.program,
-        env: raw.env,
-        args,
-        http: None,
-        params: checked.params,
-        check: raw.check,
-        timeout_s: checked.timeout_s,
-        max_output_kib: checked.max_output_kib,
-        forwarded_values: raw.forwarded_values,
-    })
 }
 
 /// [`action_from_value`] for `kind = "http"` (AD-36): `method`, `url` and an
@@ -906,47 +1017,11 @@ fn http_action_from_value(
     value: &toml::Value,
     mut report: Report<'_>,
 ) -> Result<Action, Vec<ActionIssue>> {
-    let process_keys: Vec<&str> = PROCESS_KEYS
-        .iter()
-        .copied()
-        .filter(|key| value.get(key).is_some())
-        .collect();
-    if !process_keys.is_empty() {
-        return Err(vec![report.issue(
-            IssueKind::HttpProgramFields,
-            format!(
-                "an HTTP action declares `method` and `url`, never {}",
-                process_keys
-                    .iter()
-                    .map(|key| format!("`{key}`"))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ),
-        )]);
+    if let Some(issue) = process_keys_issue(value, &report) {
+        return Err(vec![issue]);
     }
-    let raw: RawHttpAction = value.clone().try_into().map_err(|e: toml::de::Error| {
-        vec![report.issue(IssueKind::Malformed, e.message().trim().to_owned())]
-    })?;
-
-    let template = match UrlTemplate::parse(&raw.url) {
-        Ok(template) => Some(template),
-        Err(issue) => {
-            let kind = match issue {
-                UrlIssue::Userinfo => IssueKind::UrlUserinfo,
-                _ => IssueKind::Url,
-            };
-            report.add(kind, format!("`url`: {issue}"));
-            None
-        }
-    };
-    if let (Some(template), Some(_)) = (&template, &raw.credential)
-        && template.scheme() == UrlScheme::Http
-    {
-        report.add(
-            IssueKind::CredentialOverHttp,
-            "an action with a credential uses an `https` URL: plain `http` would send the secret in clear".to_owned(),
-        );
-    }
+    let raw: RawHttpAction = parse_raw(value, &report)?;
+    let template = url_template(&mut report, &raw);
     let used = template
         .as_ref()
         .map(UrlTemplate::placeholders)
@@ -955,7 +1030,7 @@ fn http_action_from_value(
         name: &raw.name,
         class: raw.class,
         params: &raw.params,
-        check: &raw.check,
+        check: raw.check.as_deref(),
         timeout_s: raw.timeout_s,
         max_output_kib: raw.max_output_kib,
     };
@@ -989,30 +1064,86 @@ fn http_action_from_value(
     })
 }
 
+/// The issue of an HTTP action that declares a process key, if it does.
+fn process_keys_issue(value: &toml::Value, report: &Report<'_>) -> Option<ActionIssue> {
+    let process_keys: Vec<&str> = PROCESS_KEYS
+        .iter()
+        .copied()
+        .filter(|key| value.get(key).is_some())
+        .collect();
+    (!process_keys.is_empty()).then(|| {
+        report.issue(
+            IssueKind::HttpProgramFields,
+            format!(
+                "an HTTP action declares `method` and `url`, never {}",
+                process_keys
+                    .iter()
+                    .map(|key| format!("`{key}`"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        )
+    })
+}
+
+/// `url`: a template the rules of AD-36 accept, over `https` when the
+/// action sends a credential.
+fn url_template(report: &mut Report<'_>, raw: &RawHttpAction) -> Option<UrlTemplate> {
+    let template = match UrlTemplate::parse(&raw.url) {
+        Ok(template) => Some(template),
+        Err(issue) => {
+            let kind = match issue {
+                UrlIssue::Userinfo => IssueKind::UrlUserinfo,
+                _ => IssueKind::Url,
+            };
+            report.add(kind, format!("`url`: {issue}"));
+            None
+        }
+    };
+    if let (Some(template), Some(_)) = (&template, &raw.credential)
+        && template.scheme() == UrlScheme::Http
+    {
+        report.add(
+            IssueKind::CredentialOverHttp,
+            "an action with a credential uses an `https` URL: plain `http` would send the secret in clear".to_owned(),
+        );
+    }
+    template
+}
+
 /// Converts and validates one `[[credential]]` alone (AD-36, D-37, D-40).
 fn credential_from_value(value: &toml::Value) -> Result<Credential, Vec<ActionIssue>> {
-    let name = value
-        .get("name")
-        .and_then(toml::Value::as_str)
-        .unwrap_or(UNNAMED)
-        .to_owned();
+    let name = name_of(value);
     let mut report = Report {
         name: &name,
         issues: Vec::new(),
     };
-    let raw: RawCredential = value.clone().try_into().map_err(|e: toml::de::Error| {
-        vec![report.issue(IssueKind::Malformed, e.message().trim().to_owned())]
-    })?;
+    let raw: RawCredential = parse_raw(value, &report)?;
     if !is_valid_action_name(&raw.name) {
         report.add(
             IssueKind::CredentialName,
-            format!(
-                "a credential's name must be a lowercase letter followed by lowercase letters, digits or `-`, at most {MAX_NAME_CHARS} characters"
-            ),
+            format!("a credential's name must be {NAME_RULE}"),
         );
     }
+    let hosts = credential_hosts(&mut report, &raw.hosts);
+    check_header(&mut report, &raw.header);
+    check_scheme(&mut report, &raw.scheme);
+    if !report.issues.is_empty() {
+        return Err(report.issues);
+    }
+    Ok(Credential {
+        name: raw.name,
+        hosts,
+        header: raw.header,
+        scheme: raw.scheme,
+    })
+}
+
+/// `hosts`: at least one, each a host name or address without a port or a
+/// wildcard; sorted, deduplicated.
+fn credential_hosts(report: &mut Report<'_>, entries: &[String]) -> Vec<String> {
     let mut hosts = BTreeSet::new();
-    for entry in &raw.hosts {
+    for entry in entries {
         match host_entry(entry) {
             Some(host) => {
                 hosts.insert(host);
@@ -1023,42 +1154,42 @@ fn credential_from_value(value: &toml::Value) -> Result<Credential, Vec<ActionIs
             ),
         }
     }
-    if raw.hosts.is_empty() {
+    if entries.is_empty() {
         report.add(
             IssueKind::CredentialHosts,
             "`hosts` names at least one host the credential may be sent to".to_owned(),
         );
     }
+    hosts.into_iter().collect()
+}
+
+/// `header`: an HTTP token, never one of [`FORBIDDEN_CREDENTIAL_HEADERS`].
+fn check_header(report: &mut Report<'_>, header: &str) {
     let forbidden = FORBIDDEN_CREDENTIAL_HEADERS
         .iter()
-        .any(|h| h.eq_ignore_ascii_case(&raw.header));
-    if !is_http_token(&raw.header) || forbidden {
+        .any(|h| h.eq_ignore_ascii_case(header));
+    if !is_http_token(header) || forbidden {
         report.add(
             IssueKind::CredentialHeader,
             if forbidden {
-                format!("`header` cannot be {}: it frames the request", raw.header)
+                format!("`header` cannot be {header}: it frames the request")
             } else {
                 "`header` is a header name: letters, digits and `!#$%&'*+-.^_`|~`, no space"
                     .to_owned()
             },
         );
     }
-    if !is_http_token(&raw.scheme) {
+}
+
+/// `scheme`: one HTTP token.
+fn check_scheme(report: &mut Report<'_>, scheme: &str) {
+    if !is_http_token(scheme) {
         report.add(
             IssueKind::CredentialScheme,
             "`scheme` is one word, like Bearer or Basic: letters, digits and `!#$%&'*+-.^_`|~`"
                 .to_owned(),
         );
     }
-    if !report.issues.is_empty() {
-        return Err(report.issues);
-    }
-    Ok(Credential {
-        name: raw.name,
-        hosts: hosts.into_iter().collect(),
-        header: raw.header,
-        scheme: raw.scheme,
-    })
 }
 
 /// 1-based line of a byte offset.
@@ -1069,6 +1200,11 @@ fn line_at(content: &str, offset: usize) -> u32 {
         .filter(|b| **b == b'\n')
         .count();
     u32::try_from(newlines + 1).unwrap_or(u32::MAX)
+}
+
+/// The line a spanned value starts on, when it was found.
+fn line_of(content: &str, spanned: Option<&toml::Spanned<toml::Value>>) -> Option<u32> {
+    spanned.map(|s| line_at(content, s.span().start))
 }
 
 /// Where the floor's projects and `guarded_programs` entries start. Phase 1
@@ -1087,35 +1223,104 @@ struct Positions {
 /// action lists. `content` is the text `floor` was parsed from, for lines.
 pub fn validate(floor: &FloorFile, content: &str) -> Catalogue {
     let positions: Positions = toml::from_str(content).unwrap_or_default();
-    let line_of = |spanned: Option<&toml::Spanned<toml::Value>>| {
-        spanned.map(|s| line_at(content, s.span().start))
-    };
-    let mut issues = Vec::new();
+    let mut issues = validate_guarded_programs(floor, &positions, content);
+    let credentials = validate_credentials(floor, content, &mut issues);
+    let actions = validate_actions(floor, content, &credentials, &mut issues);
+    let projects = validate_projects(floor, &positions, content, &actions, &mut issues);
+    issues.sort_by_key(|issue| issue.line.unwrap_or(u32::MAX));
+    Catalogue {
+        guarded_programs: guarded_programs(floor),
+        projects,
+        actions,
+        credentials,
+        issues,
+    }
+}
 
-    for (index, entry) in floor.guarded_programs.iter().flatten().enumerate() {
-        if let Some(problem) = guarded_program_problem(entry) {
-            issues.push(ActionIssue {
+/// An entry of `guarded_programs` the gate cannot match is ignored, and
+/// said.
+fn validate_guarded_programs(
+    floor: &FloorFile,
+    positions: &Positions,
+    content: &str,
+) -> Vec<ActionIssue> {
+    floor
+        .guarded_programs
+        .iter()
+        .flatten()
+        .enumerate()
+        .filter_map(|(index, entry)| {
+            let problem = guarded_program_problem(entry)?;
+            Some(ActionIssue {
                 name: "guarded_programs".to_owned(),
-                line: line_of(positions.guarded_programs.get(index)),
+                line: line_of(content, positions.guarded_programs.get(index)),
                 kind: IssueKind::GuardedProgram,
                 message: format!("entry {entry:?} is ignored: {problem}"),
-            });
+            })
+        })
+        .collect()
+}
+
+/// Converts and validates each `[[credential]]` alone, then drops every
+/// copy of a duplicated name. Issues carry the credential's line.
+fn validate_credentials(
+    floor: &FloorFile,
+    content: &str,
+    issues: &mut Vec<ActionIssue>,
+) -> BTreeMap<String, Credential> {
+    let duplicates = duplicated(
+        floor
+            .credentials
+            .iter()
+            .filter_map(|raw| raw.get_ref().get("name").and_then(toml::Value::as_str)),
+    );
+    let mut credentials = BTreeMap::new();
+    for raw in &floor.credentials {
+        let line = line_at(content, raw.span().start);
+        match credential_from_value(raw.get_ref()) {
+            Ok(credential) if duplicates.contains(credential.name.as_str()) => {
+                issues.push(ActionIssue {
+                    name: credential.name.clone(),
+                    line: Some(line),
+                    kind: IssueKind::DuplicateCredential,
+                    message: format!(
+                        "another credential is also named {}: both are dropped",
+                        credential.name
+                    ),
+                });
+            }
+            Ok(credential) => {
+                credentials.insert(credential.name.clone(), credential);
+            }
+            Err(found) => issues.extend(found.into_iter().map(|issue| ActionIssue {
+                line: Some(line),
+                ..issue
+            })),
         }
     }
+    credentials
+}
 
-    let credentials = validate_credentials(floor, content, &mut issues);
-
-    let mut name_counts: BTreeMap<&str, usize> = BTreeMap::new();
-    for raw in &floor.actions {
-        if let Some(name) = raw.get_ref().get("name").and_then(toml::Value::as_str) {
-            *name_counts.entry(name).or_default() += 1;
-        }
-    }
+/// Converts and validates each `[[action]]` alone, drops every copy of a
+/// duplicated name, then the actions whose credential (D-37) or `check`
+/// target (AD-23) does not hold across the catalogue.
+fn validate_actions(
+    floor: &FloorFile,
+    content: &str,
+    credentials: &BTreeMap<String, Credential>,
+    issues: &mut Vec<ActionIssue>,
+) -> BTreeMap<String, Action> {
+    let duplicates = duplicated(
+        floor
+            .actions
+            .iter()
+            .filter_map(|raw| raw.get_ref().get("name").and_then(toml::Value::as_str)),
+    );
     let mut candidates: BTreeMap<String, (Action, u32)> = BTreeMap::new();
     for raw in &floor.actions {
         let line = line_at(content, raw.span().start);
         match action_from_value(raw.get_ref()) {
-            Ok(action) if name_counts.get(action.name.as_str()) > Some(&1) => {
+            Ok(action) if duplicates.contains(action.name.as_str()) => {
                 issues.push(ActionIssue {
                     name: action.name.clone(),
                     line: Some(line),
@@ -1139,7 +1344,7 @@ pub fn validate(floor: &FloorFile, content: &str) -> Catalogue {
     // Credentials first, so a check target dropped for its credential is
     // unknown to the actions naming it.
     candidates.retain(|name, (action, line)| {
-        let Some((kind, message)) = credential_problem(action, &credentials) else {
+        let Some((kind, message)) = credential_problem(action, credentials) else {
             return true;
         };
         issues.push(ActionIssue {
@@ -1163,15 +1368,24 @@ pub fn validate(floor: &FloorFile, content: &str) -> Catalogue {
             actions.insert(name.clone(), action.clone());
         }
     }
+    actions
+}
 
-    let mut project_counts: BTreeMap<&str, usize> = BTreeMap::new();
-    for project in &floor.projects {
-        *project_counts.entry(project.name.as_str()).or_default() += 1;
-    }
+/// The projects of the catalogue: every copy of a duplicated name leaves
+/// it (the floor keeps them for the board and the gate), and each keeps
+/// the actions of its list that are valid, the others said.
+fn validate_projects(
+    floor: &FloorFile,
+    positions: &Positions,
+    content: &str,
+    actions: &BTreeMap<String, Action>,
+    issues: &mut Vec<ActionIssue>,
+) -> Vec<CatalogueProject> {
+    let duplicates = duplicated(floor.projects.iter().map(|project| project.name.as_str()));
     let mut projects = Vec::new();
     for (index, project) in floor.projects.iter().enumerate() {
-        let line = line_of(positions.project.get(index));
-        if project_counts.get(project.name.as_str()) > Some(&1) {
+        let line = line_of(content, positions.project.get(index));
+        if duplicates.contains(project.name.as_str()) {
             issues.push(ActionIssue {
                 name: project.name.clone(),
                 line,
@@ -1207,55 +1421,7 @@ pub fn validate(floor: &FloorFile, content: &str) -> Catalogue {
         });
     }
     projects.sort_by(|a, b| a.name.cmp(&b.name));
-    issues.sort_by_key(|issue| issue.line.unwrap_or(u32::MAX));
-
-    Catalogue {
-        guarded_programs: guarded_programs(floor),
-        projects,
-        actions,
-        credentials,
-        issues,
-    }
-}
-
-/// Converts and validates each `[[credential]]` alone, then drops every
-/// copy of a duplicated name. Issues carry the credential's line.
-fn validate_credentials(
-    floor: &FloorFile,
-    content: &str,
-    issues: &mut Vec<ActionIssue>,
-) -> BTreeMap<String, Credential> {
-    let mut name_counts: BTreeMap<&str, usize> = BTreeMap::new();
-    for raw in &floor.credentials {
-        if let Some(name) = raw.get_ref().get("name").and_then(toml::Value::as_str) {
-            *name_counts.entry(name).or_default() += 1;
-        }
-    }
-    let mut credentials = BTreeMap::new();
-    for raw in &floor.credentials {
-        let line = line_at(content, raw.span().start);
-        match credential_from_value(raw.get_ref()) {
-            Ok(credential) if name_counts.get(credential.name.as_str()) > Some(&1) => {
-                issues.push(ActionIssue {
-                    name: credential.name.clone(),
-                    line: Some(line),
-                    kind: IssueKind::DuplicateCredential,
-                    message: format!(
-                        "another credential is also named {}: both are dropped",
-                        credential.name
-                    ),
-                });
-            }
-            Ok(credential) => {
-                credentials.insert(credential.name.clone(), credential);
-            }
-            Err(found) => issues.extend(found.into_iter().map(|issue| ActionIssue {
-                line: Some(line),
-                ..issue
-            })),
-        }
-    }
-    credentials
+    projects
 }
 
 /// Why an HTTP action's credential does not hold across the catalogue, if
@@ -2362,6 +2528,27 @@ mod tests {
     fn every_issue_kind_has_a_case() {
         for kind in IssueKind::ALL {
             with_issue(&failing_fixture(*kind), *kind);
+        }
+    }
+
+    /// Each name rule is said one way, from the constant beside its
+    /// predicate, and its length from [`MAX_NAME_CHARS`].
+    #[test]
+    fn every_name_rule_message_comes_from_its_constant() {
+        for (kind, rule) in [
+            (IssueKind::Name, NAME_RULE),
+            (IssueKind::CredentialName, NAME_RULE),
+            (IssueKind::ParamName, PARAM_NAME_RULE),
+        ] {
+            let catalogue = with_issue(&failing_fixture(kind), kind);
+            let message = &issue_of(&catalogue, kind).message;
+            assert!(message.ends_with(rule), "{kind:?}: {message}");
+        }
+        for rule in [NAME_RULE, PARAM_NAME_RULE] {
+            assert!(
+                rule.ends_with(&format!("at most {MAX_NAME_CHARS} characters")),
+                "{rule}"
+            );
         }
     }
 
