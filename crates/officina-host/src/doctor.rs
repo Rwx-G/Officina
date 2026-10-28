@@ -607,7 +607,68 @@ fn check_hook_activity(events_dir: &Path, now: i64) -> Vec<Check> {
     checks
 }
 
-/// A fresh quota file for this floor's account, else the statusline wiring.
+/// The `statusLine.command` of a Claude settings file, if it sets one.
+fn statusline_command(settings: &Path) -> Option<String> {
+    read_json(settings)?
+        .get("statusLine")?
+        .get("command")?
+        .as_str()
+        .map(str::to_owned)
+}
+
+/// A project folder whose own settings set a statusline that does not run
+/// Officina's `quota write`: in a session opened there it wins over the
+/// user's (Claude Code's settings precedence), so the quota file is not
+/// written.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StatuslineOverride {
+    pub folder: PathBuf,
+    /// The settings file that sets it: `settings.local.json` wins over
+    /// `settings.json`.
+    pub file: PathBuf,
+    pub command: String,
+}
+
+/// The overrides among `folders`: each folder's `.claude/settings.local.json`
+/// statusline, else its `.claude/settings.json` one, when it does not run
+/// Officina's `quota write`. Read-only.
+pub fn statusline_overrides(folders: &[PathBuf]) -> Vec<StatuslineOverride> {
+    folders
+        .iter()
+        .filter_map(|folder| {
+            let claude = folder.join(".claude");
+            ["settings.local.json", "settings.json"]
+                .into_iter()
+                .map(|name| claude.join(name))
+                .find_map(|file| statusline_command(&file).map(|command| (file, command)))
+                .filter(|(_, command)| !runs_officina_quota_write(command))
+                .map(|(file, command)| StatuslineOverride {
+                    folder: folder.clone(),
+                    file,
+                    command,
+                })
+        })
+        .collect()
+}
+
+/// The folders of the sessions the hook saw recently, from the `cwd` of the
+/// event buffer's lines, existing folders only, sorted.
+fn recent_session_folders(events_dir: &Path, now: i64) -> Vec<PathBuf> {
+    let (events, _) = read_recent_events(events_dir, now);
+    let folders: std::collections::BTreeSet<PathBuf> = events
+        .iter()
+        .filter_map(|e| e.cwd.as_deref())
+        .map(PathBuf::from)
+        .filter(|folder| folder.is_dir())
+        .collect();
+    folders.into_iter().collect()
+}
+
+/// A fresh quota file for this floor's account; else why it is stale and
+/// what to paste where. A user statusline that already runs Officina's
+/// `quota write` is in place: the cause is then a project's own statusline,
+/// which wins in sessions opened in its folder, so the folders of the
+/// sessions the hook saw are checked for one, and each gets its snippet.
 fn check_quota(collector: &Collector, user_settings: &Path, exe: &Path, now: i64) -> Check {
     let found = collector.read_quota();
     if let Some(q) = found
@@ -624,21 +685,71 @@ fn check_quota(collector: &Collector, user_settings: &Path, exe: &Path, now: i64
             ),
         );
     }
-    let existing = read_json(user_settings).and_then(|s| {
-        s.get("statusLine")?
-            .get("command")?
-            .as_str()
-            .map(str::to_owned)
-    });
+    let state = format!(
+        "{} for account {}",
+        if found.is_some() { "stale" } else { "no data" },
+        collector.paths().account_key()
+    );
+    let existing = statusline_command(user_settings);
+    let user_wired = existing.as_deref().is_some_and(runs_officina_quota_write);
+    let overrides = statusline_overrides(&recent_session_folders(
+        &collector.paths().events_dir(),
+        now,
+    ));
+    let per_folder = overrides
+        .iter()
+        .map(|o| {
+            format!(
+                "In {}:\n{}",
+                o.folder
+                    .join(".claude")
+                    .join("settings.local.json")
+                    .display(),
+                statusline_snippet(exe, Some(&o.command))
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let folders = overrides
+        .iter()
+        .map(|o| o.file.display().to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let (detail, paste) = match (user_wired, overrides.is_empty()) {
+        (true, true) => (
+            format!(
+                "{state}. The user statusline already runs officina quota write and no folder of a recent session sets its own: the file is written while a session shows its statusline, so open one, and check that the statusline's officina is this one ({})",
+                quoted_exe(exe)
+            ),
+            None,
+        ),
+        (true, false) => (
+            format!(
+                "{state}. The user statusline already runs officina quota write, but these project settings set their own statusline, which wins in sessions opened there: {folders}. Add to each folder's .claude/settings.local.json, never a committed file:"
+            ),
+            Some(per_folder),
+        ),
+        (false, true) => (
+            format!(
+                "{state}. Wire one personal statusline (user settings or .claude/settings.local.json, never a committed file):"
+            ),
+            Some(statusline_snippet(exe, existing.as_deref())),
+        ),
+        (false, false) => (
+            format!(
+                "{state}. Wire one personal statusline (user settings, never a committed file), and in the folders whose project settings set their own ({folders}), in their .claude/settings.local.json:"
+            ),
+            Some(format!(
+                "{}\n{per_folder}",
+                statusline_snippet(exe, existing.as_deref())
+            )),
+        ),
+    };
     Check {
         level: Level::Warn,
         title: "quota".into(),
-        detail: format!(
-            "{} for account {}. Wire one personal statusline (user settings or .claude/settings.local.json, never a committed file):",
-            if found.is_some() { "stale" } else { "no data" },
-            collector.paths().account_key()
-        ),
-        paste: Some(statusline_snippet(exe, existing.as_deref())),
+        detail,
+        paste,
     }
 }
 
@@ -1811,6 +1922,131 @@ mod tests {
 
     /// An existing statusline that already runs Officina's `quota write` is
     /// not wrapped: the snippet is the plain command, never a tee into it.
+    /// A recent session's folder, its hook line in the buffer, and its
+    /// project settings.
+    fn session_folder(
+        paths: &Paths,
+        root: &Path,
+        name: &str,
+        settings: &[(&str, &str)],
+    ) -> PathBuf {
+        let folder = root.join(name);
+        std::fs::create_dir_all(folder.join(".claude")).unwrap();
+        for (file, command) in settings {
+            std::fs::write(
+                folder.join(".claude").join(file),
+                serde_json::json!({"statusLine": {"type": "command", "command": command}})
+                    .to_string(),
+            )
+            .unwrap();
+        }
+        let line = serde_json::json!({"v": 1, "ts": now_ms(), "event": "UserPromptSubmit",
+            "session_id": name, "cwd": folder.to_string_lossy()});
+        std::fs::create_dir_all(paths.events_dir()).unwrap();
+        append_line(
+            &event_file_for(&paths.events_dir(), now_ms()),
+            &format!("{line}\n"),
+        )
+        .unwrap();
+        folder
+    }
+
+    /// The owner's case: the user statusline runs Officina, but a project's
+    /// own wins in sessions opened there; doctor names the folder and gives
+    /// it the snippet teeing into its command, and ignores a folder whose
+    /// local settings already run Officina.
+    #[test]
+    fn a_stale_quota_names_the_project_statuslines_that_win() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths {
+            officina_home: dir.path().join("officina"),
+            claude_config_dir: dir.path().join("config"),
+            claude_config_override: None,
+            floor_file: None,
+        };
+        std::fs::create_dir_all(&paths.claude_config_dir).unwrap();
+        let exe = PathBuf::from("C:/Program Files/Officina/officina.exe");
+        let user = paths.claude_config_dir.join("settings.json");
+        std::fs::write(
+            &user,
+            serde_json::json!({"statusLine": {"command": format!("{} quota write", quoted_exe(&exe))}}).to_string(),
+        )
+        .unwrap();
+        let repo = session_folder(
+            &paths,
+            dir.path(),
+            "repo",
+            &[(
+                "settings.json",
+                "python \"$CLAUDE_PROJECT_DIR/.claude/statusline.py\"",
+            )],
+        );
+        session_folder(
+            &paths,
+            dir.path(),
+            "wired",
+            &[
+                ("settings.json", "python s.py"),
+                (
+                    "settings.local.json",
+                    "officina quota write --tee | python s.py",
+                ),
+            ],
+        );
+        session_folder(&paths, dir.path(), "plain", &[]);
+        let collector = Collector::from_parts(paths.clone(), LoadedFloor::default(), None);
+        let line = check_quota(&collector, &user, &exe, now_ms());
+        assert_eq!(line.level, Level::Warn);
+        assert!(
+            line.detail.contains("already runs officina quota write"),
+            "{}",
+            line.detail
+        );
+        assert!(
+            line.detail.contains(
+                &repo
+                    .join(".claude")
+                    .join("settings.json")
+                    .display()
+                    .to_string()
+            ),
+            "{}",
+            line.detail
+        );
+        assert!(!line.detail.contains("wired"), "{}", line.detail);
+        let paste = line.paste.expect("a snippet for the folder");
+        assert!(
+            paste.contains(
+                &repo
+                    .join(".claude")
+                    .join("settings.local.json")
+                    .display()
+                    .to_string()
+            ),
+            "{paste}"
+        );
+        assert!(paste.contains("quota write --tee | python"), "{paste}");
+        assert!(
+            !paste.contains("quota write --tee | \\\"C:/Program Files"),
+            "{paste}"
+        );
+
+        // No override: the user wiring is in place, nothing to paste.
+        let quiet = tempfile::tempdir().unwrap();
+        let paths = Paths {
+            officina_home: quiet.path().join("officina"),
+            ..paths
+        };
+        let collector = Collector::from_parts(paths, LoadedFloor::default(), None);
+        let line = check_quota(&collector, &user, &exe, now_ms());
+        assert!(line.paste.is_none(), "{line:?}");
+        assert!(
+            line.detail.contains("no folder of a recent session"),
+            "{}",
+            line.detail
+        );
+    }
+
     #[test]
     fn statusline_snippet_never_tees_into_officina_itself() {
         let exe = PathBuf::from("C:/Program Files/Officina/officina.exe");

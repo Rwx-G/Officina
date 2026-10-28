@@ -589,6 +589,12 @@ project uses [Semantic Versioning](https://semver.org/).
 
 - `officina doctor` no longer prints a statusline that tees Officina's
   `quota write` into itself when the existing statusline already runs it.
+- `officina doctor`, when the quota is stale, now looks for the cause: the
+  folders of the sessions the hook saw recently whose own
+  `.claude/settings.local.json` or `.claude/settings.json` sets a
+  statusline that does not run Officina's `quota write`, which wins over the
+  user's in sessions opened there. It names them and prints, for each, the
+  snippet for its `.claude/settings.local.json`. Read-only.
 - The Triage panel's Confirm all button keeps its width: what it leaves out
   is a line beside it ("Left out: ..."), which the button names as its
   description, instead of part of its label.
