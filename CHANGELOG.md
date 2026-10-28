@@ -45,6 +45,14 @@ project uses [Semantic Versioning](https://semver.org/).
   Officina's home, and any mention of an `OFFICINA_` setting or of Officina's
   own files. Outside a guarded repository it decides nothing. The documented
   limits of a text match are recorded in the architecture.
+- Relay gate in the hook: `officina hook` answers Claude Code's `PreToolUse`
+  for `Bash` with a deny that holds in every permission mode, bypass
+  included, and lists the actions the session may run instead; otherwise it
+  prints nothing. A repository is guarded when the current floor or the
+  approved catalogue says so, from the session's root or the shell's current
+  folder, so neither editing the floor nor `cd ..` lifts containment; an
+  unreadable approval or floor makes the gate stricter, never looser.
+  `PreToolUse` payloads are never written to the event buffer.
 - Relay journal (`~/.officina/journal/YYYY-MM-DD.jsonl`): every gate deny,
   gate error and catalogue approval leaves one line, written under a lock
   file so lines never interleave; command excerpts follow `no_excerpts`.

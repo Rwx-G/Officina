@@ -1,15 +1,25 @@
-//! The gate's decision (AD-26 steps 2 to 5, D-12, D-13, D-17): in a guarded
+//! The gate's decision (AD-26 steps 2 to 5, D-12 to D-17): in a guarded
 //! repository, deny a `Bash` command that would start a guarded program,
 //! hide its program, redirect Officina's home or touch Officina's own files;
-//! otherwise, and always outside a guarded repository, decide nothing. The
-//! host reads the payload, the floor and the snapshot and journals each deny
-//! (story 2.4); this module only decides, from text.
+//! otherwise, and always outside a guarded repository, decide nothing.
+//! [`containment`] combines the floor, the approved snapshot and the
+//! known-projects record into what is guarded, so that no file a session can
+//! write lifts containment alone. The host reads those files and the payload
+//! and journals each deny; this module only decides, from text.
+
+use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
+use super::catalogue::{
+    CanonicalCatalogue, DEFAULT_GUARDED_PROGRAMS, KnownProjects,
+    guarded_programs as floor_guarded_programs,
+};
+use super::classes;
+use super::journal::GateFault;
 use super::shell::{self, Assignment, Lexed, Origin, Program};
 use super::{HOME_DIR_NAME, JOURNAL_DIR, RELAY_DIR};
-use crate::floor::Autonomy;
+use crate::floor::{Autonomy, FloorFile, floor_dir_of, resolve_project_path};
 use crate::quota::normalise_path;
 
 /// Officina's own program, whose environment D-12 protects.
@@ -377,6 +387,9 @@ pub enum Offer<'a> {
     /// No approved snapshot: the action names the floor's project entry
     /// declares.
     AwaitingApproval(&'a [String]),
+    /// Neither the floor nor the snapshot names the project: it is guarded
+    /// from the known-projects record alone (D-15).
+    Unreadable,
 }
 
 /// The reason Claude Code shows the session (AD-26, D-17): what was denied
@@ -416,8 +429,212 @@ pub fn deny_reason(deny: &Deny, project: &str, offer: Offer<'_>) -> String {
             text.push_str(&names.join(", "));
             text.push('.');
         }
+        Offer::Unreadable => text.push_str(
+            "\nOfficina cannot read its floor or its approved catalogue, so every project it knows is guarded; the author can check the setup with `officina doctor`.",
+        ),
     }
     cut(text, MAX_REASON_BYTES)
+}
+
+/// The relay floor as the gate reads it: phase 1 only (AD-23, AD-28).
+#[derive(Debug, Clone, Copy)]
+pub enum FloorInput<'a> {
+    Missing,
+    Unreadable,
+    Invalid,
+    /// `path` is the floor's path as given, for its relative project paths.
+    Valid {
+        floor: &'a FloorFile,
+        path: &'a str,
+    },
+}
+
+/// `relay/approved.json` as the gate reads it.
+#[derive(Debug, Clone, Copy)]
+pub enum SnapshotInput<'a> {
+    Missing,
+    Unreadable,
+    Valid(&'a CanonicalCatalogue),
+}
+
+/// One source's projects, looked up on their own so a nested project in one
+/// source cannot hide a guarded parent in another.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Source {
+    projects: Vec<ProjectRoot>,
+}
+
+/// What is guarded for one `Bash` call, from every source the gate could
+/// read (D-14, D-15): the floor's and the snapshot's projects are looked up
+/// separately and a call is guarded if either says so, the guarded programs
+/// are the union of both lists, and a source that cannot be read makes the
+/// gate stricter, never looser.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Containment {
+    /// Looked up in order: snapshot, floor, known projects. The first source
+    /// that guards the call names the project.
+    sources: Vec<Source>,
+    /// The effective list [`decide`] takes: sorted, deduplicated.
+    pub guarded_programs: Vec<String>,
+    /// What could not be read, each one a `gate_error` line.
+    pub faults: Vec<GateFault>,
+    approved_offers: BTreeMap<String, Vec<OfferedAction>>,
+    floor_actions: BTreeMap<String, Vec<String>>,
+}
+
+/// Combines the gate's inputs into what is guarded (AD-26 step 2, D-14,
+/// D-15):
+///
+/// - a valid snapshot contributes its projects, each with its approved
+///   autonomy, and its guarded programs;
+/// - a valid floor contributes its projects and its list (defaults
+///   applied); when the snapshot is broken (unreadable, or missing while the
+///   known-projects record names an approved hash) every floor project is
+///   guarded and the default list is added;
+/// - when the floor fails while the relay is in use (a snapshot exists or
+///   the known-projects record does), every known project path is guarded
+///   with the default list.
+///
+/// With nothing configured (no floor, no snapshot, no record) nothing is
+/// guarded and nothing is a fault: the relay is simply not in use.
+pub fn containment(
+    floor: FloorInput<'_>,
+    snapshot: SnapshotInput<'_>,
+    known: Option<&KnownProjects>,
+) -> Containment {
+    let mut faults = Vec::new();
+    let recorded_approval = known.is_some_and(|k| k.approved_hash.is_some());
+    let snapshot_broken = match snapshot {
+        SnapshotInput::Unreadable => {
+            faults.push(GateFault::ApprovedUnreadable);
+            true
+        }
+        SnapshotInput::Missing if recorded_approval => {
+            faults.push(GateFault::ApprovedMissing);
+            true
+        }
+        SnapshotInput::Missing | SnapshotInput::Valid(_) => false,
+    };
+    let relay_in_use = !matches!(snapshot, SnapshotInput::Missing) || known.is_some();
+    let floor_failed = match floor {
+        FloorInput::Valid { .. } => None,
+        FloorInput::Missing => Some(GateFault::FloorMissing),
+        FloorInput::Unreadable => Some(GateFault::FloorUnreadable),
+        FloorInput::Invalid => Some(GateFault::FloorInvalid),
+    }
+    .filter(|_| relay_in_use);
+    faults.extend(floor_failed);
+
+    let mut sources = Vec::new();
+    let mut lists: Vec<String> = Vec::new();
+    let mut approved_offers = BTreeMap::new();
+    let mut floor_actions = BTreeMap::new();
+
+    if let SnapshotInput::Valid(canonical) = snapshot {
+        sources.push(Source {
+            projects: canonical
+                .projects
+                .iter()
+                .map(|(name, project)| ProjectRoot {
+                    name: name.clone(),
+                    path: project.path.clone(),
+                    autonomy: project.autonomy,
+                })
+                .collect(),
+        });
+        lists.extend(canonical.guarded_programs.iter().cloned());
+        for (name, project) in &canonical.projects {
+            let offered = project
+                .actions
+                .iter()
+                .filter_map(|action| {
+                    let canonical_action = canonical.actions.get(action)?;
+                    Some(OfferedAction {
+                        name: action.clone(),
+                        params: canonical_action.params.keys().cloned().collect(),
+                        available: classes::is_available(canonical_action.class),
+                    })
+                })
+                .collect();
+            approved_offers.insert(name.clone(), offered);
+        }
+    }
+    if let FloorInput::Valid { floor, path } = floor {
+        let floor_dir = floor_dir_of(path);
+        sources.push(Source {
+            projects: floor
+                .projects
+                .iter()
+                .map(|project| ProjectRoot {
+                    name: project.name.clone(),
+                    path: resolve_project_path(floor_dir, &project.path),
+                    autonomy: if snapshot_broken {
+                        Autonomy::Guarded
+                    } else {
+                        floor.autonomy_of(project)
+                    },
+                })
+                .collect(),
+        });
+        lists.extend(floor_guarded_programs(floor));
+        for project in &floor.projects {
+            floor_actions
+                .entry(project.name.clone())
+                .or_insert_with(|| project.actions.clone().unwrap_or_default());
+        }
+    }
+    if floor_failed.is_some() {
+        match known {
+            Some(known) => sources.push(Source {
+                projects: known
+                    .project_paths
+                    .iter()
+                    .map(|path| ProjectRoot {
+                        name: path.clone(),
+                        path: path.clone(),
+                        autonomy: Autonomy::Guarded,
+                    })
+                    .collect(),
+            }),
+            None if snapshot_broken => faults.push(GateFault::KnownProjectsUnreadable),
+            None => {}
+        }
+    }
+    if snapshot_broken || floor_failed.is_some() {
+        lists.extend(DEFAULT_GUARDED_PROGRAMS.iter().map(|p| (*p).to_owned()));
+    }
+    lists.sort();
+    lists.dedup();
+    Containment {
+        sources,
+        guarded_programs: lists,
+        faults,
+        approved_offers,
+        floor_actions,
+    }
+}
+
+impl Containment {
+    /// The guarded project of the first directory any source guards (D-16:
+    /// the session's project root or the call's `cwd`), sources in order.
+    pub fn guarded_project(&self, dirs: &[&str]) -> Option<&ProjectRoot> {
+        self.sources.iter().find_map(|source| {
+            dirs.iter()
+                .find_map(|dir| guarded_project(dir, &source.projects))
+        })
+    }
+
+    /// What the deny reason offers for `project` (D-17): its approved
+    /// actions, else the floor entry's action names, else nothing readable.
+    pub fn offer_for(&self, project: &str) -> Offer<'_> {
+        if let Some(actions) = self.approved_offers.get(project) {
+            Offer::Approved(actions)
+        } else if let Some(names) = self.floor_actions.get(project) {
+            Offer::AwaitingApproval(names)
+        } else {
+            Offer::Unreadable
+        }
+    }
 }
 
 fn why(deny: &Deny) -> String {
@@ -655,6 +872,191 @@ mod tests {
                 );
             }
         }
+    }
+
+    const FLOOR_PATH: &str = "C:/path/to/officina.toml";
+
+    fn floor(text: &str) -> FloorFile {
+        crate::floor::parse_floor(text).unwrap()
+    }
+
+    fn snapshot_of(text: &str) -> CanonicalCatalogue {
+        crate::relay::catalogue::load(text, FLOOR_PATH)
+            .unwrap()
+            .canonical
+    }
+
+    const GUARDED_LAB: &str = "schema = 2\n[[project]]\nname = \"lab\"\npath = \"Lab\"\nactions = [\"probe\"]\n[[project]]\nname = \"notes\"\npath = \"Notes\"\nautonomy = \"free\"\n[[action]]\nname = \"probe\"\nclass = \"free\"\nprogram = \"C:/path/to/tool.exe\"\nargs = [\"{host}\"]\n[action.params.host]\nvalues = [\"web01\"]\n";
+
+    fn known(paths: &[&str], approved: bool) -> KnownProjects {
+        KnownProjects {
+            schema: crate::relay::catalogue::KNOWN_PROJECTS_SCHEMA,
+            approved_hash: approved.then(|| "00".to_owned()),
+            project_paths: paths.iter().map(|p| (*p).to_owned()).collect(),
+        }
+    }
+
+    fn name_for<'c>(c: &'c Containment, dirs: &[&str]) -> Option<&'c str> {
+        c.guarded_project(dirs).map(|p| p.name.as_str())
+    }
+
+    #[test]
+    fn nothing_configured_guards_nothing_and_is_no_fault() {
+        let c = containment(FloorInput::Missing, SnapshotInput::Missing, None);
+        assert_eq!(c.guarded_project(&["C:/path/to/Lab"]), None);
+        assert!(c.faults.is_empty() && c.guarded_programs.is_empty());
+        let broken = containment(FloorInput::Invalid, SnapshotInput::Missing, None);
+        assert!(
+            broken.faults.is_empty(),
+            "a broken floor of a relay never used is the board's error, not the gate's"
+        );
+    }
+
+    #[test]
+    fn floor_and_snapshot_are_looked_up_separately_and_united() {
+        let approved = snapshot_of(GUARDED_LAB);
+        // A session's edit: the list emptied, the project set free, and a
+        // free project nested inside it.
+        let loosened = floor(
+            "schema = 2\nguarded_programs = []\n[[project]]\nname = \"lab\"\npath = \"Lab\"\nautonomy = \"free\"\n[[project]]\nname = \"inner\"\npath = \"Lab/inner\"\nautonomy = \"free\"\n",
+        );
+        let c = containment(
+            FloorInput::Valid {
+                floor: &loosened,
+                path: FLOOR_PATH,
+            },
+            SnapshotInput::Valid(&approved),
+            None,
+        );
+        assert_eq!(name_for(&c, &["C:/path/to/Lab/inner/x"]), Some("lab"));
+        assert_eq!(name_for(&c, &[r"C:\path\to\Lab"]), Some("lab"));
+        assert_eq!(name_for(&c, &["C:/path/to/Notes"]), None);
+        assert_eq!(
+            c.guarded_programs,
+            {
+                let mut all: Vec<String> = DEFAULT_GUARDED_PROGRAMS
+                    .iter()
+                    .map(|p| (*p).to_owned())
+                    .collect();
+                all.sort();
+                all
+            },
+            "an emptied floor list keeps the approved one"
+        );
+        assert!(c.faults.is_empty());
+        assert!(
+            matches!(c.offer_for("lab"), Offer::Approved(actions) if actions[0].name == "probe" && actions[0].params == ["host"] && actions[0].available)
+        );
+        assert!(matches!(c.offer_for("inner"), Offer::AwaitingApproval([])));
+    }
+
+    #[test]
+    fn broken_snapshot_guards_every_floor_project_with_the_defaults() {
+        let current = floor(&GUARDED_LAB.replace(
+            "[[project]]\nname = \"lab\"",
+            "guarded_programs = [\"ssh\"]\n[[project]]\nname = \"lab\"",
+        ));
+        let input = FloorInput::Valid {
+            floor: &current,
+            path: FLOOR_PATH,
+        };
+        for (snapshot, record, fault) in [
+            (
+                SnapshotInput::Unreadable,
+                None,
+                GateFault::ApprovedUnreadable,
+            ),
+            (
+                SnapshotInput::Missing,
+                Some(known(&[], true)),
+                GateFault::ApprovedMissing,
+            ),
+        ] {
+            let c = containment(input, snapshot, record.as_ref());
+            assert_eq!(c.faults, [fault]);
+            assert_eq!(name_for(&c, &["C:/path/to/Notes"]), Some("notes"));
+            assert!(c.guarded_programs.contains(&"ssh".to_owned()));
+            assert!(c.guarded_programs.contains(&"wsl".to_owned()));
+            assert!(
+                matches!(c.offer_for("lab"), Offer::AwaitingApproval(names) if names == ["probe"])
+            );
+        }
+        let never_approved = containment(input, SnapshotInput::Missing, Some(&known(&[], false)));
+        assert!(never_approved.faults.is_empty());
+        assert_eq!(name_for(&never_approved, &["C:/path/to/Notes"]), None);
+        assert_eq!(never_approved.guarded_programs, ["ssh"]);
+    }
+
+    #[test]
+    fn a_failed_floor_falls_back_to_the_known_projects() {
+        let record = known(&["c:/path/to/notes"], true);
+        let approved = snapshot_of(GUARDED_LAB);
+        for (floor_input, fault) in [
+            (FloorInput::Invalid, GateFault::FloorInvalid),
+            (FloorInput::Unreadable, GateFault::FloorUnreadable),
+            (FloorInput::Missing, GateFault::FloorMissing),
+        ] {
+            let both_broken = containment(floor_input, SnapshotInput::Unreadable, Some(&record));
+            assert_eq!(both_broken.faults, [GateFault::ApprovedUnreadable, fault]);
+            assert_eq!(
+                name_for(&both_broken, &["/c/path/to/notes/sub"]),
+                Some("c:/path/to/notes")
+            );
+            assert!(matches!(
+                both_broken.offer_for("c:/path/to/notes"),
+                Offer::Unreadable
+            ));
+            assert_eq!(name_for(&both_broken, &["C:/path/to/Other"]), None);
+
+            let snapshot_holds =
+                containment(floor_input, SnapshotInput::Valid(&approved), Some(&record));
+            assert_eq!(snapshot_holds.faults, [fault]);
+            assert_eq!(name_for(&snapshot_holds, &["C:/path/to/Lab"]), Some("lab"));
+            assert_eq!(
+                name_for(&snapshot_holds, &["C:/path/to/Notes"]),
+                Some("c:/path/to/notes"),
+                "a broken floor makes even a free known project guarded"
+            );
+        }
+        let nothing = containment(FloorInput::Invalid, SnapshotInput::Unreadable, None);
+        assert_eq!(
+            nothing.faults,
+            [
+                GateFault::ApprovedUnreadable,
+                GateFault::FloorInvalid,
+                GateFault::KnownProjectsUnreadable
+            ]
+        );
+        assert_eq!(nothing.guarded_project(&["C:/path/to/Lab"]), None);
+    }
+
+    #[test]
+    fn either_directory_guards_the_call() {
+        let current = floor(GUARDED_LAB);
+        let c = containment(
+            FloorInput::Valid {
+                floor: &current,
+                path: FLOOR_PATH,
+            },
+            SnapshotInput::Missing,
+            None,
+        );
+        assert_eq!(name_for(&c, &["C:/path/to/Lab", "C:/path/to"]), Some("lab"));
+        assert_eq!(
+            name_for(&c, &["C:/path/to/Notes", "C:/path/to/Lab/x"]),
+            Some("lab")
+        );
+        assert_eq!(name_for(&c, &["C:/path/to/Notes", "C:/path/to"]), None);
+    }
+
+    #[test]
+    fn unreadable_offer_points_to_doctor() {
+        let reason = deny_reason(
+            &deny(DenyKind::GuardedProgram, Some("ssh")),
+            "c:/path/to/lab",
+            Offer::Unreadable,
+        );
+        assert!(reason.contains("officina doctor") && reason.contains(LIST_COMMAND));
     }
 
     #[test]

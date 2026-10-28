@@ -1,11 +1,18 @@
-//! Hook latency and concurrent appends (story 1.3, AD-10, AD-17). Ignored by
-//! default: run with `cargo test --release -p officina -- --ignored`.
+//! Hook and gate latency, concurrent appends to the event buffer and the
+//! journal (stories 1.3 and 2.4, AD-10, AD-17, AD-28, AD-32, D-19). Ignored
+//! by default: run with `cargo test --release -p officina -- --ignored`.
+//!
+//! Every test takes [`SERIAL`] first: a stress test starting hundreds of
+//! processes next to a timing test would measure the stress, not Officina.
 
 mod common;
 
+use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use common::{TestEnv, read_events};
+use officina_core::relay::journal::{JournalEntry, JournalKind};
+use officina_host::relay::gate::{GateEnv, answer};
 
 fn big_payload() -> Vec<u8> {
     serde_json::json!({
@@ -21,6 +28,33 @@ fn big_payload() -> Vec<u8> {
 fn p95(mut samples: Vec<Duration>) -> Duration {
     samples.sort();
     samples[samples.len() * 95 / 100 - 1]
+}
+
+static SERIAL: Mutex<()> = Mutex::new(());
+
+fn serial() -> MutexGuard<'static, ()> {
+    SERIAL
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// Times `subject` and `baseline` alternately, so a change of machine load
+/// during the test weighs on both samples alike.
+fn timed_pairs(
+    runs: usize,
+    mut subject: impl FnMut(),
+    mut baseline: impl FnMut(),
+) -> (Vec<Duration>, Vec<Duration>) {
+    (0..runs)
+        .map(|_| {
+            let started = Instant::now();
+            subject();
+            let subject_took = started.elapsed();
+            let started = Instant::now();
+            baseline();
+            (subject_took, started.elapsed())
+        })
+        .unzip()
 }
 
 fn timed(runs: usize, mut f: impl FnMut()) -> Vec<Duration> {
@@ -43,6 +77,7 @@ fn timed(runs: usize, mut f: impl FnMut()) -> Vec<Duration> {
 #[test]
 #[ignore = "timing test, run in release by CI"]
 fn hook_latency_p95() {
+    let _serial = serial();
     let env = TestEnv::new();
     let payload = big_payload();
     for _ in 0..5 {
@@ -75,9 +110,158 @@ fn hook_latency_p95() {
     assert!(hook < budget, "p95 {hook:?} over {budget:?}");
 }
 
+const GATE_ACTIONS: usize = 50;
+const GATE_COMMAND_BYTES: usize = 64 * 1024;
+const GATE_RUNS: usize = 200;
+
+/// AD-28's sizing: a guarded project whose approved catalogue holds
+/// [`GATE_ACTIONS`] actions, each with a pattern parameter.
+fn gate_env() -> TestEnv {
+    let env = TestEnv::new();
+    let mut floor = String::from(
+        "schema = 2\n[[project]]\nname = \"lab\"\npath = \"C:/path/to/Lab\"\nactions = [",
+    );
+    let names: Vec<String> = (0..GATE_ACTIONS)
+        .map(|i| format!("\"action-{i}\""))
+        .collect();
+    floor.push_str(&names.join(", "));
+    floor.push_str("]\n");
+    for i in 0..GATE_ACTIONS {
+        floor.push_str(&format!(
+            "\n[[action]]\nname = \"action-{i}\"\ndescription = \"Probe number {i}\"\nclass = \"free\"\nprogram = \"{{tool}}\"\nargs = [\"--group\", \"{{group}}\", \"--fixed\"]\n\n[action.params.group]\npattern = \"lab-[a-z0-9-]{{1,30}}\"\n"
+        ));
+    }
+    env.write_floor(&floor);
+    env.approve();
+    env
+}
+
+/// A [`GATE_COMMAND_BYTES`] command the gate reads in full and lets through:
+/// pipes, quotes and substitutions, no guarded program.
+fn big_command() -> String {
+    let unit = "ls -la \"src/module dir\" && grep -n 'pattern' file.txt | head -5; echo $(date) ";
+    let mut command = String::with_capacity(GATE_COMMAND_BYTES + unit.len());
+    while command.len() < GATE_COMMAND_BYTES {
+        command.push_str(unit);
+    }
+    command
+}
+
+fn gate_payload(command: &str) -> serde_json::Value {
+    serde_json::json!({
+        "cwd": "C:\\path\\to\\Lab",
+        "effort": "high",
+        "hook_event_name": "PreToolUse",
+        "permission_mode": "bypassPermissions",
+        "prompt_id": "00000000-0000-0000-0000-00000000000a",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "tool_input": {"command": command, "description": "x"},
+        "tool_name": "Bash",
+        "tool_use_id": "toolu_00000000000000000000000001",
+        "transcript_path": "C:\\path\\to\\transcript.jsonl",
+    })
+}
+
+/// D-19: the gate's own cost through the real binary, its p95 over
+/// [`GATE_RUNS`] runs minus an empty process's, under 5 ms on any machine.
+#[test]
+#[ignore = "timing test, run in release by CI"]
+fn gate_overhead_over_empty_process() {
+    let _serial = serial();
+    let env = gate_env();
+    let payload = gate_payload(&big_command()).to_string().into_bytes();
+    let first = env.run(&["hook"], &payload);
+    assert!(
+        first.status.success() && first.stdout.is_empty(),
+        "the command is let through"
+    );
+    let (gate, baseline) = timed_pairs(
+        GATE_RUNS,
+        || assert!(env.run(&["hook"], &payload).status.success()),
+        || {
+            let out = std::process::Command::new(common::FAKE_TOOL)
+                .output()
+                .unwrap();
+            assert!(out.status.success());
+        },
+    );
+    let (gate, baseline) = (p95(gate), p95(baseline));
+    let own_cost = gate.saturating_sub(baseline);
+    println!("gate p95 {gate:?}, empty process p95 {baseline:?}, own cost {own_cost:?}");
+    assert!(own_cost < Duration::from_millis(5), "own cost {own_cost:?}");
+}
+
+/// AD-28's absolute bound, in process: payload parse, the two reads, phase 1
+/// and the lexer under 3 ms p95. Asserted only where it is meant to hold
+/// (`OFFICINA_PERF_WORKSTATION=1`), printed elsewhere (D-19).
+#[test]
+#[ignore = "timing test, run in release by CI"]
+fn gate_in_process_p95() {
+    let _serial = serial();
+    let env = gate_env();
+    let home = env.relay_home();
+    let raw = gate_payload(&big_command()).to_string();
+    let gate_env = GateEnv::default();
+    let in_process = p95(timed(GATE_RUNS, || {
+        let payload: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(answer(&home, &payload, &gate_env, 0), None);
+    }));
+    let enforced = std::env::var("OFFICINA_PERF_WORKSTATION").is_ok_and(|v| v == "1");
+    println!("gate in-process p95 {in_process:?} (asserted: {enforced})");
+    if enforced {
+        assert!(in_process < Duration::from_millis(3), "p95 {in_process:?}");
+    }
+}
+
+/// AD-37: 16 processes append 200 journal lines each, every line over
+/// 4096 bytes (past any size a single write is known to keep whole), and
+/// not one is corrupt: the lock, not the write size, keeps them apart.
+#[test]
+#[ignore = "stress test, run in release by CI"]
+fn journal_appends_never_interleave() {
+    const PROCESSES: usize = 16;
+    const LINES: usize = 200;
+    let _serial = serial();
+    let env = TestEnv::new();
+    env.write_floor("schema = 2\n[[project]]\nname = \"lab\"\npath = \"C:/path/to/Lab\"\n");
+    env.approve();
+    let mut payload = gate_payload("ssh host01");
+    payload["session_id"] = "s".repeat(4200).into();
+    let payload = payload.to_string().into_bytes();
+    std::thread::scope(|scope| {
+        for _ in 0..PROCESSES {
+            scope.spawn(|| {
+                for _ in 0..LINES {
+                    let out = env.run(&["hook"], &payload);
+                    assert!(out.status.success() && !out.stdout.is_empty());
+                }
+            });
+        }
+    });
+    let denied: Vec<JournalEntry> = env.journal_after_approvals();
+    assert_eq!(denied.len(), PROCESSES * LINES);
+    assert!(denied.iter().all(|e| e.kind() == JournalKind::GateDenied));
+    let shortest_line = std::fs::read_dir(env.relay_home().journal_dir())
+        .unwrap()
+        .flatten()
+        .filter(|e| e.file_name().to_string_lossy().ends_with(".jsonl"))
+        .flat_map(|e| {
+            std::fs::read_to_string(e.path())
+                .unwrap()
+                .lines()
+                .filter(|l| l.contains("gate_denied"))
+                .map(str::len)
+                .collect::<Vec<_>>()
+        })
+        .min()
+        .unwrap();
+    assert!(shortest_line > 4096, "{shortest_line}");
+}
+
 #[test]
 #[ignore = "stress test, run in release by CI"]
 fn concurrent_appends_never_interleave() {
+    let _serial = serial();
     let env = TestEnv::new();
     let payload = r#"{"hook_event_name":"UserPromptSubmit","session_id":"s","prompt":"a prompt long enough to make the write non-trivial, with some accents: é è à ç"}"#.as_bytes();
     std::thread::scope(|scope| {

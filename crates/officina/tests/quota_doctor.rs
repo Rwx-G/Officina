@@ -132,6 +132,15 @@ fn no_command_writes_under_the_claude_config_dir() {
     env.run(&["board", "--json"], b"");
     env.run(&["doctor"], b"");
 
+    // A gate deny, with the relay approved in this home.
+    env.write_floor("schema = 2\n[[project]]\nname = \"lab\"\npath = \"C:/path/to/Lab\"\n");
+    env.approve();
+    let deny = env.run(
+        &["hook"],
+        br#"{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"ssh host01"},"cwd":"C:\\path\\to\\Lab","session_id":"s"}"#,
+    );
+    assert!(String::from_utf8_lossy(&deny.stdout).contains("\"deny\""));
+
     // Long enough for the collector to see the hook and quota writes, spawn
     // `claude` again and run its follow-up refresh.
     std::thread::sleep(Duration::from_secs(2).saturating_sub(running_since.elapsed()));

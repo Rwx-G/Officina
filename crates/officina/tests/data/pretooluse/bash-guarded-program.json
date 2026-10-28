@@ -1,0 +1,15 @@
+{
+  "cwd": "C:\\path\\to\\Supervision",
+  "effort": "high",
+  "hook_event_name": "PreToolUse",
+  "permission_mode": "bypassPermissions",
+  "prompt_id": "00000000-0000-0000-0000-00000000000a",
+  "session_id": "00000000-0000-0000-0000-000000000001",
+  "tool_input": {
+    "command": "ansible-playbook -i inventory/lab playbooks/alerting.yml --check --limit lab-web",
+    "description": "Dry run of the alerting playbook on the lab"
+  },
+  "tool_name": "Bash",
+  "tool_use_id": "toolu_00000000000000000000000001",
+  "transcript_path": "C:\\path\\to\\transcript.jsonl"
+}

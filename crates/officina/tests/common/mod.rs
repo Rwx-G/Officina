@@ -82,6 +82,70 @@ impl TestEnv {
     pub fn run(&self, args: &[&str], stdin: &[u8]) -> Output {
         run_with(self.officina(args), stdin)
     }
+
+    /// The relay's view of this environment's Officina home.
+    pub fn relay_home(&self) -> officina_host::relay::home::RelayHome {
+        officina_host::relay::home::RelayHome::new(self.officina_home(), None)
+    }
+
+    /// `floor.toml` in the Officina home: the relay floor when nothing else
+    /// is configured (AD-24).
+    pub fn floor_file(&self) -> PathBuf {
+        self.officina_home().join("floor.toml")
+    }
+
+    /// Writes the floor, with `{tool}` standing for the fake tool's path.
+    pub fn write_floor(&self, text: &str) {
+        std::fs::create_dir_all(self.officina_home()).unwrap();
+        std::fs::write(self.floor_file(), text.replace("{tool}", &fake_tool_path())).unwrap();
+    }
+
+    /// Approves the current relay floor as the window does (story 2.2),
+    /// and returns the approved hash.
+    pub fn approve(&self) -> String {
+        let home = self.relay_home();
+        let floor = home.relay_floor(&home.read_approved());
+        let hash = officina_host::relay::home::load_relay_floor(&floor)
+            .unwrap()
+            .hash;
+        officina_host::relay::authority::approve_catalogue(&home, &hash)
+            .unwrap()
+            .hash
+    }
+
+    /// Every journal line of the last two days; asserts none is corrupt.
+    pub fn journal(&self) -> Vec<officina_core::relay::journal::JournalLine> {
+        let (lines, corrupt) = officina_host::relay::journal::read_recent(
+            &self.relay_home(),
+            officina_host::files::now_ms(),
+        );
+        assert_eq!(corrupt, 0, "corrupt journal lines");
+        lines
+    }
+
+    /// The journal without the approvals the test itself made.
+    pub fn journal_after_approvals(&self) -> Vec<officina_core::relay::journal::JournalEntry> {
+        self.journal()
+            .into_iter()
+            .map(|line| line.entry)
+            .filter(|entry| {
+                !matches!(
+                    entry,
+                    officina_core::relay::journal::JournalEntry::CatalogueApproved(_)
+                )
+            })
+            .collect()
+    }
+
+    pub fn tool_log(&self) -> PathBuf {
+        self.root.path().join("fake-tool.log")
+    }
+}
+
+/// The fake tool's path as a floor writes it: forward slashes, so it needs
+/// no escaping in a TOML string and stays a Windows absolute path.
+pub fn fake_tool_path() -> String {
+    FAKE_TOOL.replace('\\', "/")
 }
 
 pub fn run_with(mut cmd: Command, stdin: &[u8]) -> Output {

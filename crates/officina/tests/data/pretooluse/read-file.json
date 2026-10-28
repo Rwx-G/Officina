@@ -1,0 +1,14 @@
+{
+  "cwd": "C:\\path\\to\\Supervision",
+  "effort": "high",
+  "hook_event_name": "PreToolUse",
+  "permission_mode": "bypassPermissions",
+  "prompt_id": "00000000-0000-0000-0000-00000000000c",
+  "session_id": "00000000-0000-0000-0000-000000000001",
+  "tool_input": {
+    "file_path": "C:\\path\\to\\Supervision\\playbooks\\ssh.yml"
+  },
+  "tool_name": "Read",
+  "tool_use_id": "toolu_00000000000000000000000003",
+  "transcript_path": "C:\\path\\to\\transcript.jsonl"
+}

@@ -52,7 +52,19 @@ pub fn record_hook(
     let Ok(payload) = serde_json::from_slice::<serde_json::Value>(stdin) else {
         return HookOutcome::NotAHookPayload;
     };
-    let Some(mut line) = reduce_payload(&payload, now_ms, with_excerpts) else {
+    record_hook_payload(paths, &payload, now_ms, with_excerpts, claude_pid)
+}
+
+/// [`record_hook`] for a payload already parsed: the hook parses stdin once
+/// and branches on the event (AD-26).
+pub fn record_hook_payload(
+    paths: &Paths,
+    payload: &serde_json::Value,
+    now_ms: i64,
+    with_excerpts: bool,
+    claude_pid: Option<u32>,
+) -> HookOutcome {
+    let Some(mut line) = reduce_payload(payload, now_ms, with_excerpts) else {
         return HookOutcome::NotAHookPayload;
     };
     line.claude_pid = claude_pid;

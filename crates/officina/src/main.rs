@@ -14,7 +14,9 @@ use officina_host::collector::Collector;
 use officina_host::doctor::{self, Level};
 use officina_host::files::now_ms;
 use officina_host::paths::Paths;
-use officina_host::writers::{hook_keeps_excerpts, record_hook, record_quota};
+use officina_host::relay::gate::{self, GATE_EVENT, GateEnv};
+use officina_host::relay::home::RelayHome;
+use officina_host::writers::{hook_keeps_excerpts, record_hook_payload, record_quota};
 
 const USAGE: &str = "\
 usage: officina <command>
@@ -33,16 +35,31 @@ fn read_stdin() -> Vec<u8> {
 
 /// `officina hook`: exits 0 on every path, panics included (FR-3), so a broken
 /// Officina can never block or slow a session beyond its own runtime.
+///
+/// stdin is parsed once (AD-26): `PreToolUse` goes to the gate, which prints
+/// a deny or nothing and is never appended to the event buffer (volume, and
+/// `tool_input` can carry secrets); every other event is recorded as in v0.1.
 fn hook() -> ExitCode {
     let _ = std::panic::catch_unwind(|| {
         let stdin = read_stdin();
+        let Ok(payload) = serde_json::from_slice::<serde_json::Value>(&stdin) else {
+            return;
+        };
+        if payload
+            .get("hook_event_name")
+            .and_then(serde_json::Value::as_str)
+            == Some(GATE_EVENT)
+        {
+            gate_hook(&payload);
+            return;
+        }
         if let Some(paths) = Paths::from_env(None) {
             let claude_pid = std::env::var("CLAUDE_PID")
                 .ok()
                 .and_then(|v| v.parse().ok());
-            let _ = record_hook(
+            let _ = record_hook_payload(
                 &paths,
-                &stdin,
+                &payload,
                 now_ms(),
                 hook_keeps_excerpts(&paths),
                 claude_pid,
@@ -50,6 +67,18 @@ fn hook() -> ExitCode {
         }
     });
     ExitCode::SUCCESS
+}
+
+/// The gate's half of the hook: prints the deny JSON on stdout, or nothing.
+fn gate_hook(payload: &serde_json::Value) {
+    let Some(home) = RelayHome::from_env() else {
+        return;
+    };
+    if let Some(deny) = gate::answer(&home, payload, &GateEnv::from_env(), now_ms()) {
+        let mut out = std::io::stdout().lock();
+        let _ = writeln!(out, "{deny}");
+        let _ = out.flush();
+    }
 }
 
 /// `officina quota write [--tee]`: silent unless `--tee`, which copies stdin
