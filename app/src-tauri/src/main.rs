@@ -83,7 +83,8 @@ impl Emit for WindowEvents {
         });
         if let Some(window) = self.app.get_webview_window("main") {
             let _ = window.set_title(&taskbar::window_title(board));
-            let overlay = taskbar::overlay_for(board, OVERLAY_SIZE)
+            let size = taskbar::overlay_size(window.scale_factor().unwrap_or(1.0));
+            let overlay = taskbar::overlay_for(board, size)
                 .map(|badge| tauri::image::Image::new_owned(badge.rgba, badge.size, badge.size));
             let _ = window.set_overlay_icon(overlay);
             // An OS attention request that ends on focus (D-475), not page
@@ -415,10 +416,6 @@ fn floor_arg() -> Option<PathBuf> {
     let i = args.iter().position(|a| a == "--floor")?;
     args.get(i + 1).map(PathBuf::from)
 }
-
-/// The badge's size until AD-178's gate 2 picks the legible one: today's
-/// dot's.
-const OVERLAY_SIZE: u32 = taskbar::OVERLAY_SIZES[0];
 
 fn main() {
     tauri::Builder::default()

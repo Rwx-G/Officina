@@ -1,17 +1,31 @@
 //! The taskbar overlay badge, the window title and the attention request
-//! (FR-11, AD-174): a disc carrying the waiting count, drawn in code so no
-//! asset can drift from the palette, amber or in the alert colour. Pure:
-//! the window sets the image, the title and the flash; the tests compare
-//! pixels and words without one.
+//! (FR-11, AD-174 as amended by gate 2, D-523): an amber disc carrying the
+//! waiting count, or a disc in the alert colour carrying an exclamation
+//! mark, so the alert never rests on colour alone; drawn in code so no
+//! asset can drift from the palette. Pure: the window sets the image, the
+//! title and the flash; the tests compare pixels and words without one.
 
 use std::collections::BTreeSet;
 
 use officina_core::board::Board;
 use officina_core::scene::Zone;
 
-/// The sizes the Slice 0 probe shows (AD-178 gate 2); the window uses the
-/// one the gate finds legible.
-pub const OVERLAY_SIZES: [u32; 3] = [16, 24, 32];
+/// The overlay's side at 100 % display scaling: Windows draws the overlay
+/// at the small-icon size, so a larger image is only scaled down and blurs
+/// (gate 2, D-523).
+pub const BASE_SIZE: u32 = 16;
+
+/// The overlay's side in pixels for a window at `scale_factor`: the small
+/// icon's size at that scaling (16 px at 100 %, 24 px at 150 %).
+pub fn overlay_size(scale_factor: f64) -> u32 {
+    let scaled = (f64::from(BASE_SIZE) * scale_factor).round();
+    if scaled.is_finite() && scaled > f64::from(BASE_SIZE) {
+        // A display scale stays far below u32::MAX pixels.
+        scaled as u32
+    } else {
+        BASE_SIZE
+    }
+}
 
 /// The disc's fill while someone waits: the light `--color-attention`.
 pub const AMBER: [u8; 3] = [0xF5, 0xB7, 0x31];
@@ -20,10 +34,13 @@ pub const AMBER_TEXT: [u8; 3] = [0x2A, 0x1F, 0x05];
 /// The disc's fill while anyone is in alert: the prototype v2's light
 /// `--color-alert`.
 pub const ALERT: [u8; 3] = [0xB0, 0x3A, 0x22];
-/// The count on the alert colour: the prototype v2's light `--color-on-alert`.
+/// The mark on the alert colour: the prototype v2's light `--color-on-alert`.
 pub const ALERT_TEXT: [u8; 3] = [0xFF, 0xFF, 0xFF];
 /// The rim around the disc, today's dot's: the light `--color-text`.
 pub const RIM: [u8; 3] = [0x2A, 0x24, 0x1C];
+
+/// The small `+` beside a `9` above nine: 3 by 3 pixels, a row per byte.
+const PLUS: [u8; 3] = [0b010, 0b111, 0b010];
 
 /// The highest count the badge spells; above it, it reads `9+`.
 pub const MAX_SPELLED: u32 = 9;
@@ -44,18 +61,7 @@ fn glyph(c: char) -> [u8; 5] {
         '7' => [0b111, 0b001, 0b010, 0b010, 0b010],
         '8' => [0b111, 0b101, 0b111, 0b101, 0b111],
         '9' => [0b111, 0b101, 0b111, 0b001, 0b111],
-        '+' => [0b000, 0b010, 0b111, 0b010, 0b000],
         _ => [0; 5],
-    }
-}
-
-/// What the badge spells for `count`: the count up to [`MAX_SPELLED`],
-/// then `9+`.
-pub fn badge_text(count: u32) -> String {
-    if count > MAX_SPELLED {
-        format!("{MAX_SPELLED}+")
-    } else {
-        count.to_string()
     }
 }
 
@@ -70,25 +76,58 @@ fn opaque(rgb: [u8; 3]) -> [u8; 4] {
     [rgb[0], rgb[1], rgb[2], 0xFF]
 }
 
-/// The badge for `count` waiting at `size` pixels: a disc of amber, or of
-/// the alert colour when `alert`, inside a dark rim, with [`badge_text`] in
-/// a bitmap font scaled to the size. The rim is an eighth of the size, as
-/// today's 16 px dot's two pixels.
-pub fn overlay_badge(count: u32, alert: bool, size: u32) -> Overlay {
-    let (fill, ink) = if alert {
-        (ALERT, ALERT_TEXT)
-    } else {
-        (AMBER, AMBER_TEXT)
-    };
+/// `value` scaled from [`BASE_SIZE`] to `size`, rounded, at least 1.
+fn scaled(value: u32, size: u32) -> u32 {
+    ((value * size + BASE_SIZE / 2) / BASE_SIZE).max(1)
+}
+
+/// Paints the cells set in `rows` (`width` bits each, the leftmost first)
+/// at `(x0, y0)`, each cell `cell` pixels square, in `ink`.
+fn paint(image: &mut Overlay, rows: &[u8], width: u32, x0: u32, y0: u32, cell: u32, ink: [u8; 3]) {
+    for (row, bits) in rows.iter().enumerate() {
+        for column in 0..width {
+            if bits & (1 << (width - 1 - column)) == 0 {
+                continue;
+            }
+            for dy in 0..cell {
+                for dx in 0..cell {
+                    let (x, y) = (x0 + column * cell + dx, y0 + row as u32 * cell + dy);
+                    if x < image.size && y < image.size {
+                        let at = ((y * image.size + x) * 4) as usize;
+                        image.rgba[at..at + 4].copy_from_slice(&opaque(ink));
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Fills the rectangle `(x0, y0, w, h)` with `ink`.
+fn fill(image: &mut Overlay, x0: u32, y0: u32, w: u32, h: u32, ink: [u8; 3]) {
+    for y in y0..(y0 + h).min(image.size) {
+        for x in x0..(x0 + w).min(image.size) {
+            let at = ((y * image.size + x) * 4) as usize;
+            image.rgba[at..at + 4].copy_from_slice(&opaque(ink));
+        }
+    }
+}
+
+/// The rim's width: one pixel at 16 px.
+fn rim(size: u32) -> u32 {
+    (size / BASE_SIZE).max(1)
+}
+
+/// The disc of `size` pixels in `body`, inside a one-pixel rim (at 16 px).
+fn disc(size: u32, body: [u8; 3]) -> Overlay {
     let center = (size as f32 - 1.0) / 2.0;
     let outer = size as f32 / 2.0 - 0.5;
-    let inner = outer - (size / 8).max(1) as f32;
+    let inner = outer - rim(size) as f32;
     let mut rgba = Vec::with_capacity((size * size * 4) as usize);
     for y in 0..size {
         for x in 0..size {
             let d = ((x as f32 - center).powi(2) + (y as f32 - center).powi(2)).sqrt();
             let pixel = if d <= inner {
-                opaque(fill)
+                opaque(body)
             } else if d <= outer {
                 opaque(RIM)
             } else {
@@ -97,40 +136,69 @@ pub fn overlay_badge(count: u32, alert: bool, size: u32) -> Overlay {
             rgba.extend_from_slice(&pixel);
         }
     }
-    let mut image = Overlay { size, rgba };
-    let text: Vec<char> = badge_text(count).chars().collect();
-    let glyphs = text.len() as u32;
-    let scale = (size.saturating_sub(4) / 10).max(1);
-    let width = (glyphs * GLYPH_W + glyphs.saturating_sub(1)) * scale;
-    let height = GLYPH_H * scale;
-    let (x0, y0) = (
-        size.saturating_sub(width) / 2,
-        size.saturating_sub(height) / 2,
-    );
-    for (i, c) in text.iter().enumerate() {
-        let left = x0 + i as u32 * (GLYPH_W + 1) * scale;
-        for (row, bits) in glyph(*c).iter().enumerate() {
-            for column in 0..GLYPH_W {
-                if bits & (0b100 >> column) == 0 {
-                    continue;
-                }
-                for dy in 0..scale {
-                    for dx in 0..scale {
-                        let (x, y) = (left + column * scale + dx, y0 + row as u32 * scale + dy);
-                        if x < size && y < size {
-                            let at = ((y * size + x) * 4) as usize;
-                            image.rgba[at..at + 4].copy_from_slice(&opaque(ink));
-                        }
-                    }
-                }
-            }
-        }
+    Overlay { size, rgba }
+}
+
+/// The badge at `size` pixels: with `alert`, a disc in the alert colour
+/// carrying a bold `!` (the count stays in the title and the band); else an
+/// amber disc carrying `count` up to [`MAX_SPELLED`], its digits at twice the
+/// font's cell at 16 px so they fill the disc, and above nine a small `+`
+/// at the `9`'s top right (gate 2, D-523).
+pub fn overlay_badge(count: u32, alert: bool, size: u32) -> Overlay {
+    if alert {
+        let mut image = disc(size, ALERT);
+        let (stroke, bar, gap) = (scaled(2, size), scaled(7, size), scaled(1, size));
+        let height = bar + gap + stroke;
+        let (x0, y0) = ((size - stroke) / 2, (size - height) / 2);
+        fill(&mut image, x0, y0, stroke, bar, ALERT_TEXT);
+        fill(&mut image, x0, y0 + bar + gap, stroke, stroke, ALERT_TEXT);
+        return image;
+    }
+    let mut image = disc(size, AMBER);
+    let digit = char::from_digit(count.min(MAX_SPELLED), 10).unwrap_or('9');
+    let plus = count > MAX_SPELLED;
+    // Twice the font's cell, or the largest cell below it whose text keeps
+    // its corners inside the rim (a 9+ at 20 or 24 px).
+    let center = (size as f32 - 1.0) / 2.0;
+    let radius = size as f32 / 2.0 - 0.5 - rim(size) as f32;
+    let layout = |cell: u32| {
+        let plus_cell = if plus { scaled(1, size).min(cell) } else { 0 };
+        let width = GLYPH_W * cell + if plus { 4 * plus_cell } else { 0 };
+        let height = GLYPH_H * cell;
+        let (x0, y0) = ((size - width.min(size)) / 2, (size - height.min(size)) / 2);
+        let corners = [
+            (x0, y0),
+            (x0 + width - 1, y0),
+            (x0, y0 + height - 1),
+            (x0 + width - 1, y0 + height - 1),
+        ];
+        let fits = corners.iter().all(|&(x, y)| {
+            ((x as f32 - center).powi(2) + (y as f32 - center).powi(2)).sqrt() <= radius
+        });
+        (fits, x0, y0, plus_cell)
+    };
+    let cell = (1..=scaled(2, size))
+        .rev()
+        .find(|&c| layout(c).0)
+        .unwrap_or(1);
+    let (_, x0, y0, plus_cell) = layout(cell);
+    paint(&mut image, &glyph(digit), GLYPH_W, x0, y0, cell, AMBER_TEXT);
+    if plus {
+        paint(
+            &mut image,
+            &PLUS,
+            3,
+            x0 + GLYPH_W * cell + plus_cell,
+            y0,
+            plus_cell,
+            AMBER_TEXT,
+        );
     }
     image
 }
 
 /// The overlay for `board` at `size`: none when nothing waits and nobody
-/// is in alert; else the badge with the waiting count, in the alert colour
+/// is in alert; else the waiting badge with its count, or the alert badge
 /// while any card is in alert, a last known alert on unknown data included
 /// (D-494).
 pub fn overlay_for(board: &Board, size: u32) -> Option<Overlay> {
@@ -198,6 +266,96 @@ mod tests {
 
     const NOW: i64 = 1_793_102_400_000;
 
+    /// The display scales Windows offers most, as overlay sizes.
+    fn sizes() -> Vec<u32> {
+        [1.0, 1.25, 1.5, 1.75, 2.0]
+            .into_iter()
+            .map(overlay_size)
+            .collect()
+    }
+
+    /// The bounding box `(x, y, w, h)` of the pixels painted in `rgb`.
+    fn bbox(image: &Overlay, rgb: [u8; 3]) -> (u32, u32, u32, u32) {
+        let painted: Vec<(u32, u32)> = (0..image.size)
+            .flat_map(|y| (0..image.size).map(move |x| (x, y)))
+            .filter(|(x, y)| {
+                let at = ((y * image.size + x) * 4) as usize;
+                image.rgba[at..at + 4] == opaque(rgb)
+            })
+            .collect();
+        let xs = painted.iter().map(|p| p.0);
+        let ys = painted.iter().map(|p| p.1);
+        let (x0, x1) = (xs.clone().min().unwrap(), xs.max().unwrap());
+        let (y0, y1) = (ys.clone().min().unwrap(), ys.max().unwrap());
+        (x0, y0, x1 - x0 + 1, y1 - y0 + 1)
+    }
+
+    /// D-523: the overlay is the small icon's size at the window's scale.
+    #[test]
+    fn the_overlay_size_follows_the_display_scale() {
+        assert_eq!(overlay_size(1.0), BASE_SIZE);
+        assert_eq!(overlay_size(1.5), BASE_SIZE * 3 / 2);
+        assert_eq!(overlay_size(2.0), BASE_SIZE * 2);
+        assert_eq!(overlay_size(1.25), 20);
+        for odd in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+            assert_eq!(overlay_size(odd), BASE_SIZE, "{odd}");
+        }
+    }
+
+    /// D-523: at 16 px a digit fills the disc at twice the font's cell, and
+    /// every badge's ink stays inside the disc at every scale.
+    #[test]
+    fn digits_are_drawn_at_twice_the_font_cell() {
+        let image = overlay_badge(8, false, BASE_SIZE);
+        let (_, _, w, h) = bbox(&image, AMBER_TEXT);
+        assert_eq!((w, h), (2 * GLYPH_W, 2 * GLYPH_H));
+        for size in sizes() {
+            for count in [1, MAX_SPELLED, MAX_SPELLED + 1] {
+                for alert in [false, true] {
+                    let image = overlay_badge(count, alert, size);
+                    let ink = if alert { ALERT_TEXT } else { AMBER_TEXT };
+                    let (x, y, w, h) = bbox(&image, ink);
+                    let center = (size as f32 - 1.0) / 2.0;
+                    let radius = size as f32 / 2.0 - 0.5 - rim(size) as f32;
+                    for (cx, cy) in [
+                        (x, y),
+                        (x + w - 1, y),
+                        (x, y + h - 1),
+                        (x + w - 1, y + h - 1),
+                    ] {
+                        let d =
+                            ((cx as f32 - center).powi(2) + (cy as f32 - center).powi(2)).sqrt();
+                        assert!(
+                            d <= radius,
+                            "{count} {alert} at {size}: ink outside the disc"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// D-523: the alert badge carries a bold mark, the same whatever the
+    /// count, two pixels wide and ten high at 16 px, so the alert never
+    /// rests on colour alone.
+    #[test]
+    fn the_alert_badge_shows_a_mark_not_the_count() {
+        for size in sizes() {
+            assert_eq!(
+                overlay_badge(1, true, size),
+                overlay_badge(7, true, size),
+                "{size}"
+            );
+            assert_ne!(
+                overlay_badge(1, true, size),
+                overlay_badge(1, false, size),
+                "{size}"
+            );
+        }
+        let (_, _, w, h) = bbox(&overlay_badge(3, true, BASE_SIZE), ALERT_TEXT);
+        assert_eq!((w, h), (2, 10));
+    }
+
     /// `waiting` sessions waiting with no known start; the first `alerted`
     /// of them on a high-priority project, so in alert.
     fn board(waiting: u32, alerted: u32) -> Board {
@@ -257,7 +415,7 @@ mod tests {
 
     #[test]
     fn no_overlay_without_waiting() {
-        for size in OVERLAY_SIZES {
+        for size in sizes() {
             assert_eq!(overlay_for(&board(0, 0), size), None);
             assert_eq!(
                 overlay_for(&board(3, 0), size),
@@ -268,7 +426,7 @@ mod tests {
 
     #[test]
     fn the_badge_turns_to_the_alert_colour() {
-        for size in OVERLAY_SIZES {
+        for size in sizes() {
             assert_eq!(
                 overlay_for(&board(4, 1), size),
                 Some(overlay_badge(4, true, size))
@@ -276,14 +434,14 @@ mod tests {
         }
     }
 
-    /// D-494: a stale board keeps the alert colour, and the title says the
+    /// D-494: a stale board keeps the alert badge, and the title says the
     /// alert is the last one known.
     #[test]
     fn a_last_known_alert_keeps_the_alert_colour() {
         let alerted = board(2, 1);
         let stale = stale_after(&alerted, 2, 1);
         assert_eq!(stale.alert_count, 1);
-        for size in OVERLAY_SIZES {
+        for size in sizes() {
             assert_eq!(
                 overlay_for(&stale, size),
                 Some(overlay_badge(2, true, size))
@@ -379,11 +537,10 @@ mod tests {
     }
 
     /// AD-174: every count from 1 to the last spelled one, and above it,
-    /// draws its own text in the ink colour at every probed size, inside the
-    /// disc.
+    /// draws its own text in the ink colour at every display scale.
     #[test]
     fn overlay_badge_draws_each_count() {
-        for size in OVERLAY_SIZES {
+        for size in sizes() {
             let mut seen = Vec::new();
             for count in 1..=MAX_SPELLED + 1 {
                 let image = overlay_badge(count, false, size);
@@ -397,11 +554,11 @@ mod tests {
         }
     }
 
-    /// AD-174: the alert state fills the disc with the alert colour and its
-    /// ink, and no amber is left.
+    /// AD-174: the alert badge fills the disc with the alert colour and its
+    /// mark, and no amber is left.
     #[test]
     fn overlay_badge_uses_the_alert_colour() {
-        for size in OVERLAY_SIZES {
+        for size in sizes() {
             let image = overlay_badge(3, true, size);
             assert!(count_of(&image, ALERT) > 0, "{size}");
             assert!(count_of(&image, ALERT_TEXT) > 0, "{size}");
@@ -415,9 +572,7 @@ mod tests {
     /// image whatever the count.
     #[test]
     fn nine_plus_above_nine() {
-        assert_eq!(badge_text(MAX_SPELLED), MAX_SPELLED.to_string());
-        assert_eq!(badge_text(MAX_SPELLED + 1), format!("{MAX_SPELLED}+"));
-        for size in OVERLAY_SIZES {
+        for size in sizes() {
             assert_eq!(
                 overlay_badge(MAX_SPELLED + 1, false, size),
                 overlay_badge(MAX_SPELLED + 40, false, size)

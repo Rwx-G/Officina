@@ -12,7 +12,9 @@ project uses [Semantic Versioning](https://semver.org/).
   names the first session in alert, its project, what it waits on and why
   (a high-priority project, or waiting N minutes), and how many more; no
   dismiss, no toast, no theme change. The taskbar badge turns to the alert
-  colour and the button flashes once per session newly in alert; the title
+  colour with an exclamation mark instead of the count, so the alert does
+  not rest on colour alone, and the button flashes once per session newly
+  in alert; the title
   adds the alert count, and "data unknown" while an alert is the last one
   known. `--color-alert` and `--color-on-alert` join the tokens.
 - Floor keys of the scene (v0.4, in progress): `[[project]] priority`
@@ -366,10 +368,10 @@ project uses [Semantic Versioning](https://semver.org/).
   until the scene shows sub-agents, so v0.4's Slice 0 can check on real
   sessions which session each one names.
 - The taskbar overlay (v0.4) carries the waiting count on its amber disc,
-  "9+" above nine, drawn in code at today's 16 px until the taskbar check
-  picks the legible size; `cargo run -p officina-app --example
-  taskbar_probe` shows each count and size and the attention request for
-  that check.
+  "9+" above nine, drawn in code at the small icon's size for the display
+  scale (16 px at 100 %, where Windows draws it); `cargo run -p
+  officina-app --example taskbar_probe` shows the badges and the attention
+  request, asks what the owner sees and writes the taskbar check's report.
 
 ### Security
 

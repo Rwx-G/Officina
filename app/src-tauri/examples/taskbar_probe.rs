@@ -1,6 +1,7 @@
-//! The taskbar probe, gate 2 of AD-178 (story 4.1 AC 2): shows the overlay
-//! badge the window will use, for 1, 9 and above nine, amber then in the
-//! alert colour, at each probed size; then requests the user's attention
+//! The taskbar probe, gate 2 of AD-178 (story 4.1 AC 2, run 2 after D-523):
+//! shows the overlay badges the window uses, at the one size the window
+//! uses (the small icon's at the display scale): the waiting badge for 1, 9
+//! and above nine, then the alert badge; then requests the user's attention
 //! once while another window has focus, and once while the probe has it.
 //! Run by the owner, by hand, with a light and a dark taskbar; never by a
 //! test, never part of a shipped binary.
@@ -135,59 +136,61 @@ fn badge(window: &WebviewWindow, count: u32, alert: bool, size: u32) {
 }
 
 struct BadgeRating {
+    badge: &'static str,
     size: u32,
-    alert: bool,
     readable: &'static str,
     distinct: Option<&'static str>,
 }
 
-/// Rates each size and colour while the badge cycles through 1, 9 and 9+.
+/// Rates the waiting badge while it cycles through 1, 9 and 9+, then the
+/// alert badge, at the size the window uses at this display scale.
 fn rate_badges(probe: &Probe) -> Option<Vec<BadgeRating>> {
+    let size = taskbar::overlay_size(probe.window.scale_factor().unwrap_or(1.0));
     let counts = [1, taskbar::MAX_SPELLED, taskbar::MAX_SPELLED + 1];
-    let steps = taskbar::OVERLAY_SIZES.len() * 2;
-    let mut ratings = Vec::new();
-    for size in taskbar::OVERLAY_SIZES {
-        for alert in [false, true] {
-            let colour = if alert { "alert colour (red)" } else { "amber" };
-            let shown = std::cell::Cell::new(0);
-            badge(&probe.window, counts[0], alert, size);
-            let cycle = || {
-                shown.set((shown.get() + 1) % counts.len());
-                badge(&probe.window, counts[shown.get()], alert, size);
-            };
-            let body = format!(
-                "<p class=\"step\">Badge {} of {steps}</p>\
-                 <p>The probe's taskbar button now carries the <b>{size} px</b> badge in \
-                 <b>{colour}</b>, cycling through <b>1</b>, <b>9</b> and <b>9+</b> every \
-                 1.5 s.</p><p>Look at the taskbar button, not at this window: can you read \
-                 the number?</p>",
-                ratings.len() + 1
-            );
-            let readable = probe.ask_ticking("Badge legibility", &body, READABLE, cycle)?;
-            let distinct = if alert {
-                let body = format!(
-                    "<p>Same badge, {size} px, alert colour. Is it clearly different from \
-                     the amber one you just rated?</p>"
-                );
-                let choices = [
-                    ("yes", "Clearly different"),
-                    ("barely", "Barely"),
-                    ("no", "Not different"),
-                ];
-                Some(probe.ask_ticking("Alert colour", &body, &choices, cycle)?)
-            } else {
-                None
-            };
-            ratings.push(BadgeRating {
-                size,
-                alert,
-                readable,
-                distinct,
-            });
-        }
-    }
+    let shown = std::cell::Cell::new(0);
+    badge(&probe.window, counts[0], false, size);
+    let cycle = || {
+        shown.set((shown.get() + 1) % counts.len());
+        badge(&probe.window, counts[shown.get()], false, size);
+    };
+    let body = format!(
+        "<p class=\"step\">Badge 1 of 2</p>\
+         <p>The probe's taskbar button now carries the <b>waiting badge</b> ({size} px, \
+         amber), cycling through <b>1</b>, <b>9</b> and <b>9+</b> every 1.5 s.</p>\
+         <p>Look at the taskbar button, not at this window: can you read the number?</p>"
+    );
+    let waiting = probe.ask_ticking("Waiting badge", &body, READABLE, cycle)?;
+    badge(&probe.window, 1, true, size);
+    let body = format!(
+        "<p class=\"step\">Badge 2 of 2</p>\
+         <p>The taskbar button now carries the <b>alert badge</b> ({size} px): the alert \
+         colour with an exclamation mark instead of the count.</p>\
+         <p>Can you see the exclamation mark?</p>"
+    );
+    let mark = probe.ask("Alert badge", &body, READABLE)?;
+    let body =
+        format!("<p>Same alert badge, {size} px. Is the colour clearly different from amber?</p>");
+    let choices = [
+        ("yes", "Clearly different"),
+        ("barely", "Barely"),
+        ("no", "Not different"),
+    ];
+    let distinct = probe.ask("Alert colour", &body, &choices)?;
     let _ = probe.window.set_overlay_icon(None);
-    Some(ratings)
+    Some(vec![
+        BadgeRating {
+            badge: "waiting (1, 9, 9+)",
+            size,
+            readable: waiting,
+            distinct: None,
+        },
+        BadgeRating {
+            badge: "alert (!)",
+            size,
+            readable: mark,
+            distinct: Some(distinct),
+        },
+    ])
 }
 
 struct FlashResult {
@@ -299,16 +302,16 @@ fn report(
     let mut text = format!(
         "## Taskbar probe, run {run}\n\n\
          - Windows: {}\n- Tauri: {}\n- Display scaling: {scale}\n- Taskbar theme: {theme}\n\n\
-         | Size | Colour | Number | Alert vs amber |\n|---|---|---|---|\n",
+         | Badge | Size | Readable | Colour clearly different from amber |\n|---|---|---|---|\n",
         windows_build(),
         tauri::VERSION,
     );
     for r in ratings {
         let _ = writeln!(
             text,
-            "| {} px | {} | {} | {} |",
+            "| {} | {} px | {} | {} |",
+            r.badge,
             r.size,
-            if r.alert { "alert" } else { "amber" },
             r.readable,
             r.distinct.unwrap_or("-"),
         );
@@ -326,10 +329,29 @@ fn report(
     text
 }
 
-fn save(text: &str) -> String {
-    let path = std::env::current_exe()
+/// The report beside the probe's executable.
+fn report_path() -> Option<std::path::PathBuf> {
+    std::env::current_exe()
         .ok()
-        .and_then(|exe| exe.parent().map(|dir| dir.join("taskbar-probe-report.md")));
+        .and_then(|exe| exe.parent().map(|dir| dir.join("taskbar-probe-report.md")))
+}
+
+/// How many runs the report already holds, so a new run takes the next
+/// number.
+fn previous_runs() -> u32 {
+    report_path()
+        .and_then(|path| std::fs::read_to_string(path).ok())
+        .map_or(0, |text| {
+            let runs = text
+                .lines()
+                .filter(|l| l.starts_with("## Taskbar probe, run"))
+                .count();
+            u32::try_from(runs).unwrap_or(0)
+        })
+}
+
+fn save(text: &str) -> String {
+    let path = report_path();
     let Some(path) = path else {
         return "the report could not be saved (no executable path)".to_string();
     };
@@ -351,11 +373,12 @@ fn run(probe: &Probe) -> Option<()> {
             break;
         }
     }
-    for run in 1.. {
+    for run in previous_runs() + 1.. {
         let theme = probe.ask(
             "Officina taskbar probe",
-            "<p>The probe shows the waiting badge on its own taskbar button at each size and \
-             colour, then tests the attention flash. Answer each step with what you see; the \
+            "<p>The probe shows the waiting badge and the alert badge on its own taskbar \
+             button, at the size the window uses at this display scale, then tests the \
+             attention flash. Answer each step with what you see; the \
              report is written at the end.</p><p>Which taskbar theme is on now?</p>",
             &[("light", "Light taskbar"), ("dark", "Dark taskbar")],
         )?;
