@@ -76,17 +76,47 @@ fn network_location_is_not_opened() {
 fn writer_sets_every_pragma() {
     let home = Home::new();
     let writer = home.writer(NOW);
-    for (name, _, read_back) in WRITER_PRAGMAS {
-        assert_eq!(writer.pragma(name).as_deref(), Some(*read_back), "{name}");
+    for p in WRITER_PRAGMAS {
+        assert_eq!(
+            writer.pragma(p.name).as_deref(),
+            Some(p.reads_back),
+            "{}",
+            p.name
+        );
     }
     drop(writer);
     let again = home.writer(NOW);
-    for (name, _, read_back) in WRITER_PRAGMAS {
+    for p in WRITER_PRAGMAS {
         assert_eq!(
-            again.pragma(name).as_deref(),
-            Some(*read_back),
-            "{name} at a second open"
+            again.pragma(p.name).as_deref(),
+            Some(p.reads_back),
+            "{} at a second open",
+            p.name
         );
+    }
+}
+
+/// Quality audit L7: the values AD-39 names, pinned from the addendum
+/// rather than from the table that sets them, so editing a value and its
+/// read-back together still fails here.
+#[test]
+fn the_pragmas_are_the_ones_ad_39_names() {
+    let home = Home::new();
+    let writer = home.writer(NOW);
+    for (name, value) in [
+        ("journal_mode", "wal"),
+        ("synchronous", "2"),
+        ("secure_delete", "1"),
+        ("foreign_keys", "1"),
+        ("trusted_schema", "0"),
+        ("busy_timeout", "5000"),
+    ] {
+        assert_eq!(writer.pragma(name).as_deref(), Some(value), "writer {name}");
+    }
+    drop(writer);
+    let reader = open_reader(&home.home, &[]).unwrap();
+    for (name, value) in [("query_only", "1"), ("busy_timeout", "2000")] {
+        assert_eq!(reader.pragma(name).as_deref(), Some(value), "reader {name}");
     }
 }
 
@@ -95,8 +125,13 @@ fn reader_is_read_only_and_query_only() {
     let home = Home::new();
     fill(&home);
     let reader = open_reader(&home.home, &[]).unwrap();
-    for (name, _, read_back) in READER_PRAGMAS {
-        assert_eq!(reader.pragma(name).as_deref(), Some(*read_back), "{name}");
+    for p in READER_PRAGMAS {
+        assert_eq!(
+            reader.pragma(p.name).as_deref(),
+            Some(p.reads_back),
+            "{}",
+            p.name
+        );
     }
     let conn = read_only_connection(&home.paths().database()).unwrap();
     assert!(conn.is_readonly(rusqlite::MAIN_DB).unwrap());
@@ -210,8 +245,8 @@ fn reader_never_blocks_the_writer() {
     // (AD-39) before failing; well under half of it, nothing waited.
     let busy_ms: u64 = WRITER_PRAGMAS
         .iter()
-        .find(|(name, _, _)| *name == "busy_timeout")
-        .map(|(_, value, _)| value.parse().unwrap())
+        .find(|p| p.name == "busy_timeout")
+        .map(|p| p.set.parse().unwrap())
         .unwrap();
     assert!(
         started.elapsed() < Duration::from_millis(busy_ms / 2),

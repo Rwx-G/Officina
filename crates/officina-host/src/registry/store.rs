@@ -184,9 +184,28 @@ pub fn locate(officina_home: &Path, onedrive_roots: &[PathBuf]) -> Location {
     )
 }
 
-/// A reader's settings (AD-38, AD-39): name, value set, value read back.
-pub const READER_PRAGMAS: &[(&str, &str, &str)] =
-    &[("query_only", "ON", "1"), ("busy_timeout", "2000", "2000")];
+/// One connection setting: the pragma, the value set, and the value it
+/// reads back as.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Pragma {
+    pub name: &'static str,
+    pub set: &'static str,
+    pub reads_back: &'static str,
+}
+
+const fn pragma(name: &'static str, set: &'static str, reads_back: &'static str) -> Pragma {
+    Pragma {
+        name,
+        set,
+        reads_back,
+    }
+}
+
+/// A reader's settings (AD-38, AD-39).
+pub const READER_PRAGMAS: &[Pragma] = &[
+    pragma("query_only", "ON", "1"),
+    pragma("busy_timeout", "2000", "2000"),
+];
 
 /// Opens `db` the way every reader does: `SQLITE_OPEN_READ_ONLY`, then
 /// [`READER_PRAGMAS`]. Never creates the file. On a database in WAL mode
@@ -197,7 +216,10 @@ pub fn read_only_connection(db: &Path) -> rusqlite::Result<Connection> {
         db,
         OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
     )?;
-    for (name, value, _) in READER_PRAGMAS {
+    for Pragma {
+        name, set: value, ..
+    } in READER_PRAGMAS
+    {
         conn.pragma_update(None, name, value)?;
     }
     Ok(conn)
@@ -443,19 +465,18 @@ mod writing {
     use super::super::schema::{MIGRATIONS, VersionState, migrate};
     use super::super::write::RegistryError;
     use super::{
-        Location, SystemProbe, classify, copy_is_valid, daily_copies, daily_copy_name, passed,
-        pre_migration_copy_name, quick_check, read_only_connection, restore_order,
+        Location, Pragma, SystemProbe, classify, copy_is_valid, daily_copies, daily_copy_name,
+        passed, pragma, pre_migration_copy_name, quick_check, read_only_connection, restore_order,
     };
 
-    /// The writer's settings, applied at every open (AD-39): name, value
-    /// set, value read back.
-    pub const WRITER_PRAGMAS: &[(&str, &str, &str)] = &[
-        ("journal_mode", "WAL", "wal"),
-        ("synchronous", "FULL", "2"),
-        ("secure_delete", "ON", "1"),
-        ("foreign_keys", "ON", "1"),
-        ("trusted_schema", "OFF", "0"),
-        ("busy_timeout", "5000", "5000"),
+    /// The writer's settings, applied at every open (AD-39).
+    pub const WRITER_PRAGMAS: &[Pragma] = &[
+        pragma("journal_mode", "WAL", "wal"),
+        pragma("synchronous", "FULL", "2"),
+        pragma("secure_delete", "ON", "1"),
+        pragma("foreign_keys", "ON", "1"),
+        pragma("trusted_schema", "OFF", "0"),
+        pragma("busy_timeout", "5000", "5000"),
     ];
 
     /// The window's one connection to the registry (AD-38): the collector
@@ -563,7 +584,10 @@ mod writing {
                 | OpenFlags::SQLITE_OPEN_CREATE
                 | OpenFlags::SQLITE_OPEN_NO_MUTEX,
         )?;
-        for (name, value, _) in WRITER_PRAGMAS {
+        for Pragma {
+            name, set: value, ..
+        } in WRITER_PRAGMAS
+        {
             conn.pragma_update(None, name, value)?;
         }
         let findings = quick_check(&conn)?;
