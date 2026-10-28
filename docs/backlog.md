@@ -132,3 +132,12 @@ isolated workshop (v0.6) is the boundary.
   the file-tool rule does not see it (the README says so). Waits for: a
   decision on `mcp__*` tools whose input holds a path under the home, once
   a workstation uses such a server.
+
+From the Epic 4 plan challenge (`docs/stories/epic-4-decisions.md` D-509):
+
+- Story 6.23 (scene workers): rework it against D-460 to D-514 before
+  Epic 6 starts. Its "a review worker keeps its desk with the halo" predates
+  v0.4's rule that every wait queues at the decision office (a package to
+  review queues there like a pending approval, `architecture-v0.4.md`
+  section 4), and it cites Epic 4 story numbers from before D-460 and
+  D-498.
