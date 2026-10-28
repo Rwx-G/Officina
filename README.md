@@ -117,7 +117,8 @@ Run `officina-app.exe`. A second launch focuses the existing window. Keep it on 
 
 Everything stays on your machine, under `~/.officina`:
 
-- **Hook events**: the first 280 characters of each prompt and answer, plus the event type, session id and folder, in daily files deleted after at most 48 hours. Set `OFFICINA_NO_EXCERPTS=1` (or `no_excerpts = true` in the floor file) to keep no prompt or answer text at all. The hook finds the floor file at `~/.officina/floor.toml` or through `OFFICINA_FLOOR`; one passed only with `--floor` does not reach it.
+- **Hook events**: the first 280 characters of each prompt and answer, and the last 280 of an answer longer than that, plus the event type, session id and folder, in daily files the window deletes once its registry and both daily copies of it hold them, normally on the third or fourth day; with the window closed or its registry unusable they are kept. Set `OFFICINA_NO_EXCERPTS=1` (or `no_excerpts = true` in the floor file) to keep no prompt or answer text at all. The hook finds the floor file at `~/.officina/floor.toml` or through `OFFICINA_FLOOR`; one passed only with `--floor` does not reach it.
+- **Registry** (`registry/`): each session seen, its project and when it was first and last seen, and its latest prompt and the head and tail of its latest answer, each kept 28 days less an hour after the event it came from; a daily copy lives two days, so no prompt or answer text survives 30 days. `no_excerpts` keeps none and clears those already stored at the window's next hourly pass. These bounds are applied while the window runs and when it starts; while it is closed nothing expires.
 - **Quota**: the two rate-limit windows, nothing else.
 - **Focus statistics**: outcome codes and a hash of the card, never a window title or a path.
 - **Relay journal** (`journal/`, once you use the relay): one line per run start and end, refusal, gate refusal or fault, approval, stop and resume, with the session id, the action, its parameters and argument vector, the first 280 characters of a refused command unless excerpts are off, and never a program's output.
@@ -355,11 +356,21 @@ v0.3 gives Officina a memory that outlives the board's 24 hours: the sessions it
 
 ### The registry
 
-The memory is one SQLite database, `registry/registry.db` in the Officina home (`~/.officina/registry/` by default). Its folder also holds the database's `-wal` and `-shm` files, `backup/` and `quarantine/`. Only the window writes it; `officina doctor` opens it read-only, never creates it, and reads it with the window closed too.
+The memory is one SQLite database, `registry/registry.db` in the Officina home (`~/.officina/registry/` by default). Its folder also holds the database's `-wal` and `-shm` files, `backup/` and `quarantine/`. Only the window writes it; `officina doctor` and `officina board --json` open it read-only, never create it, and read it with the window closed too.
 
 **Exclude `registry/` from any sync client** (OneDrive, Dropbox, Synology Drive and the like): a client that writes an older copy back would undo what you decided. When the Officina home sits in a synchronised folder the registry still opens, and `officina doctor` warns and names the folder to exclude. On a network folder the registry is not opened at all, since SQLite's write-ahead log needs a local disk; `officina doctor` fails and the board keeps working without it.
 
 At each start the window checks the registry's integrity. A damaged database is set aside under `registry/quarantine/` and replaced by the newest daily copy that passes the check (`registry/backup/registry-<date>.db`, one a day, the two newest kept); with no valid copy a new one starts. A database written by an older Officina is copied (`backup/pre-v<version>-<date>.db`), then migrated; one written by a newer Officina is opened read-only. `officina doctor` reports the registry's location, version, integrity, copies, any quarantine and the last restore.
+
+### What it keeps, and for how long
+
+The window ingests the event files into the registry before it shows its first board, then whenever a hook writes, and once an hour; nothing is deleted before it is ingested. For each session it keeps its project, recorded the first time the session is seen, when it was first and last seen, its latest prompt and the beginning and end of its latest answer (the hook records the last 280 characters of a long answer beside the first 280).
+
+- Prompt and answer text is kept 28 days less an hour after the event it came from, never counted from when it was ingested; a daily copy lives two days, so none survives 30 days. With `no_excerpts` (environment or floor file) none is stored, and what was stored before is cleared at the next hourly pass.
+- An event file is deleted once it is older than yesterday's and the registry and both daily copies hold it complete: normally on its third or fourth day.
+- Daily copies, set-aside databases and pre-migration copies are kept two, for two days.
+
+These bounds are applied while the window runs and when it starts. While it is closed, or while its registry is read-only or unavailable, nothing expires and event files are kept; nothing is lost, they are ingested at the next start. `officina doctor` warns when more than seven event files wait. While the registry cannot be used, the Board view says why and keeps working from Claude Code's sessions.
 
 ## Command line
 

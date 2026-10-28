@@ -164,6 +164,19 @@ project uses [Semantic Versioning](https://semver.org/).
 - The board contract (`officina board --json`) is schema 2: it carries the
   pending approval requests, and `waiting_count` counts the approvable ones
   beside the sessions that wait.
+- Event files are deleted only once the registry has ingested them and both
+  kept daily copies hold them complete, by the window's start and hourly
+  pass; `officina board --json` no longer deletes anything, and reads the
+  registry read-only to report its state. With the window closed or the
+  registry unavailable, event files are kept and nothing expires.
+- The window ingests every event file into the registry before its first
+  board and whenever a hook writes, keeps each session's latest prompt and
+  the head and tail of its latest answer for 28 days less an hour from the
+  event, and clears them at once when `no_excerpts` is turned on. The board
+  contract is schema 3: `diagnostics.registry` says when the registry
+  cannot be used, and the Board view shows why in a banner.
+- The hook also records the last 280 characters of a long answer
+  (`last_message_tail`, an optional field of event line version 1).
 - The window deletes approval files older than 24 hours, kept check
   outputs older than 7 days and journal files older than 90 days on its
   startup and hourly pass; `officina run` and the gate never delete.
