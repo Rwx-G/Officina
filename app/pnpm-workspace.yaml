@@ -1,0 +1,13 @@
+# pnpm settings of the window's frontend.
+#
+# `pnpm audit` covers dev dependencies too (story 2.15). A finding is listed
+# here only when no fixed version is published, each with why it is
+# accepted and when to drop it.
+auditConfig:
+  ignoreGhsas:
+    # deepmerge 4.3.1, low, through @sveltejs/vite-plugin-svelte, a dev
+    # dependency: the advisory names 4.3.2 as patched, but no such version is
+    # published (npm registry, 2026-10-28). The plugin merges its own options
+    # with it, never input from a session. Drop this entry once a fixed
+    # version exists.
+    - GHSA-gcqx-w48m-w2h4
