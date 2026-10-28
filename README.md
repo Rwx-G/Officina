@@ -95,7 +95,15 @@ Officina finds `claude` through `OFFICINA_CLAUDE_BIN`, then the absolute folders
 }
 ```
 
-Hooks from user settings run alongside each project's own hooks. The hook appends one line to a local file and exits: no network, no server, no port. It always exits 0, so a broken Officina can never block a session. Measured p95: about 20 ms, process start included.
+Hooks from user settings run alongside each project's own hooks. The hook appends one line to a local file and exits: no network, no server, no port. It always exits 0, so a broken Officina can never block a session, except through the relay's gate below. Measured p95: about 20 ms, process start included.
+
+Once the floor guards a repository (see [Relay](#relay-v02-in-progress)), the block gains the gate's entry, which fails closed:
+
+```json
+"PreToolUse": [{ "matcher": "<every tool the gate reads>", "hooks": [{ "type": "command", "command": "\"C:/path/to/officina.exe\" hook", "timeout": 5, "onFailure": "block" }] }]
+```
+
+Claude Code lets a tool call through when a hook fails, unless the hook entry sets `"onFailure": "block"`, which Claude Code honours from 2.1.295. With it, a gate that cannot start, times out or crashes blocks the call instead. If you merged the gate's entry before Officina printed this field, paste the block doctor prints again.
 
 ### Wiring the quota (optional)
 
@@ -253,7 +261,7 @@ Run `officina doctor` after each floor edit. Once the floor uses the relay, it c
 - the decisions the window did not make (see the Relay view below), which fail until you acknowledge them;
 - warnings: an action whose timeout, plus the longest wait of a `human` action, can outlive the Bash tool's 10-minute cap; an action naming a check its project does not list (it could never run); a project with actions that bind files outside a git work tree (only the parameters bind); unreadable journal lines and gate errors of the last 24 hours.
 
-A missing `PreToolUse` registration while a project is guarded, a program that does not resolve, files that cannot be bound, an unacknowledged anomaly and a relay floor that cannot be read are failures (exit 1); everything else warns. The gate runs inside `officina hook` as a `PreToolUse` hook whose matcher names every shell tool of `SHELL_TOOLS` and every file tool of `FILE_TOOLS`, the constants in the relay's core: once the floor guards a project, doctor adds that registration to the block to paste, and names the tools a matcher you merged earlier leaves out.
+A missing `PreToolUse` registration while a project is guarded, a gate entry without `"onFailure": "block"`, a Claude Code too old to honour that field, a program that does not resolve, files that cannot be bound, an unacknowledged anomaly and a relay floor that cannot be read are failures (exit 1); everything else warns. The gate runs inside `officina hook` as a `PreToolUse` hook whose matcher names every shell tool of `SHELL_TOOLS` and every file tool of `FILE_TOOLS`, the constants in the relay's core: once the floor guards a project, doctor adds that registration to the block to paste, and names the tools a matcher you merged earlier leaves out. Its `gate failure mode` line reads `claude --version` and says whether that version blocks a call when the gate's hook fails.
 
 For each guarded project, doctor also prints a paragraph to paste into that repository's `CLAUDE.md`, generated from the approved catalogue: use `officina run` for the listed actions, `officina run --list` to see them and their values, the Bash tool's longest timeout for relay calls, read a refusal's reason before retrying, and run commands with the tools the gate reads. With nothing approved it says the catalogue awaits your approval and lists no action. Officina never writes it: paste it again after approving a change.
 

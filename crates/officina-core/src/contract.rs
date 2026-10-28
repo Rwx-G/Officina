@@ -48,6 +48,28 @@ pub fn absent_hook_fields(event: &str, payload: &serde_json::Value) -> Vec<Strin
         .collect()
 }
 
+/// The first Claude Code version that honours a hook entry's `onFailure`
+/// (hooks reference, changelog 2.1.295; D-452): before it, a gate hook that
+/// cannot start, times out or exits with a code other than 0 or 2 lets the
+/// tool call through.
+pub const ON_FAILURE_SINCE: [u32; 3] = [2, 1, 295];
+
+/// The `major.minor.patch` that `claude --version` prints as its first word
+/// (`2.1.312 (Claude Code)`), or `None` when that word is not one.
+///
+/// ```
+/// use officina_core::contract::{ON_FAILURE_SINCE, claude_version};
+/// assert_eq!(claude_version("2.1.312 (Claude Code)"), Some([2, 1, 312]));
+/// assert!(claude_version("2.1.294 (Claude Code)").unwrap() < ON_FAILURE_SINCE);
+/// assert_eq!(claude_version("Claude Code"), None);
+/// ```
+pub fn claude_version(text: &str) -> Option<[u32; 3]> {
+    let word = text.split_whitespace().next()?;
+    let mut parts = word.split('.').map(|part| part.parse::<u32>().ok());
+    let version = [parts.next()??, parts.next()??, parts.next()??];
+    parts.next().is_none().then_some(version)
+}
+
 /// What a run of event lines says about the hook payloads (AD-56): when
 /// each event was last seen, and when each `Event.field` was last reported
 /// absent. The window folds every line it ingests into one, then into the
@@ -194,6 +216,27 @@ pub fn check_agents(entries: &[serde_json::Value]) -> ContractCheck {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// Story 2.17 AC 3: only a plain `major.minor.patch` first word is a
+    /// version; anything else is unknown, never old or new.
+    #[test]
+    fn a_version_is_the_first_word_in_three_numbers() {
+        assert_eq!(claude_version("2.1.295"), Some(ON_FAILURE_SINCE));
+        assert_eq!(claude_version("  10.0.1 (Claude Code)"), Some([10, 0, 1]));
+        for unknown in [
+            "",
+            "2.1",
+            "2.1.312.4",
+            "v2.1.312",
+            "2.1.x",
+            "2..312",
+            "-1.2.3",
+        ] {
+            assert_eq!(claude_version(unknown), None, "{unknown:?}");
+        }
+        assert!(claude_version("2.1.312").unwrap() > ON_FAILURE_SINCE);
+        assert!(claude_version("2.0.999").unwrap() < ON_FAILURE_SINCE);
+    }
 
     #[test]
     fn a_vanished_field_breaks_the_contract() {

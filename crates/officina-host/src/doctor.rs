@@ -6,7 +6,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use officina_core::contract::check_agents;
+use officina_core::contract::{ON_FAILURE_SINCE, check_agents, claude_version};
 use officina_core::dates::{DAY_MS, dated_file_day, day_start_ms, utc_date, utc_day_text};
 use officina_core::floor::{Autonomy, parse_floor};
 use officina_core::quota::STALE_AFTER_MS;
@@ -47,16 +47,25 @@ pub const BUFFERED_EVENTS: [&str; 5] = [
 pub struct Registration {
     pub event: &'static str,
     pub tools: Vec<&'static str>,
+    /// The hook entry carries [`ON_FAILURE`]: a hook that cannot start,
+    /// times out or crashes blocks the call instead of letting it through.
+    pub fails_closed: bool,
 }
+
+/// The hook entry field and value that make Claude Code block the action
+/// when the hook itself fails (hooks reference, 2.1.295 and later; D-452).
+pub const ON_FAILURE: (&str, &str) = ("onFailure", "block");
 
 /// The gate's registration (AD-26, D-18 as amended by D-171 and D-173):
 /// `PreToolUse` for every shell tool of `SHELL_TOOLS` and file tool of
 /// `FILE_TOOLS` and no other, so no other tool call pays for a process
-/// start (E9).
+/// start (E9). It fails closed (D-452): a gate whose process fails must not
+/// let the call through.
 pub fn gate_registration() -> Registration {
     Registration {
         event: GATE_EVENT,
         tools: gated_tools(),
+        fails_closed: true,
     }
 }
 
@@ -69,6 +78,7 @@ pub fn registrations(gate: bool) -> Vec<Registration> {
         .map(|event| Registration {
             event,
             tools: Vec::new(),
+            fails_closed: false,
         })
         .chain(gate.then(gate_registration))
         .collect()
@@ -133,14 +143,17 @@ pub fn quoted_exe(exe: &Path) -> String {
 }
 
 /// The hooks block to paste into user settings (AD-16), one entry per
-/// registration, with a matcher naming its tools when it has some.
+/// registration, with a matcher naming its tools when it has some, and
+/// [`ON_FAILURE`] on the entry of a registration that fails closed.
 pub fn hooks_block(exe: &Path, registrations: &[Registration]) -> String {
     let command = format!("{} hook", quoted_exe(exe));
     let mut hooks = serde_json::Map::new();
     for registration in registrations {
-        let mut group = serde_json::json!({
-            "hooks": [{ "type": "command", "command": command, "timeout": 5 }]
-        });
+        let mut entry = serde_json::json!({ "type": "command", "command": command, "timeout": 5 });
+        if registration.fails_closed {
+            entry[ON_FAILURE.0] = ON_FAILURE.1.into();
+        }
+        let mut group = serde_json::json!({ "hooks": [entry] });
         if !registration.tools.is_empty() {
             group["matcher"] = registration.tools.join("|").into();
         }
@@ -168,54 +181,88 @@ pub fn statusline_snippet(exe: &Path, existing_command: Option<&str>) -> String 
 /// of whose matcher groups runs `officina hook` (a command whose first word
 /// is the `officina` binary and whose second is `hook`), or, for an event
 /// with tools, the tools no such group's matcher names, written
-/// `Event (Tool, Tool)` when only some are left out. Other hooks in the same
-/// file are ignored (E2: hooks merge).
+/// `Event (Tool, Tool)` when only some are left out. For a registration that
+/// fails closed, an `officina hook` entry of that event without
+/// [`ON_FAILURE`] is reported too, as `Event fail-closed (onFailure
+/// "block")` (D-452). Other hooks in the same file are ignored (E2: hooks
+/// merge).
 pub fn missing_hook_events(
     settings: &serde_json::Value,
     registrations: &[Registration],
 ) -> Vec<String> {
     registrations
         .iter()
-        .filter_map(|registration| {
+        .flat_map(|registration| {
             let ours: Vec<&serde_json::Value> = settings
                 .get("hooks")
                 .and_then(|h| h.get(registration.event))
                 .and_then(|m| m.as_array())
                 .into_iter()
                 .flatten()
-                .filter(|group| {
-                    group
-                        .get("hooks")
-                        .and_then(|h| h.as_array())
-                        .into_iter()
-                        .flatten()
-                        .filter_map(|h| h.get("command").and_then(|c| c.as_str()))
-                        .any(runs_officina_hook)
-                })
+                .filter(|group| officina_entries(group).next().is_some())
                 .collect();
-            if registration.tools.is_empty() {
-                return ours.is_empty().then(|| registration.event.to_owned());
-            }
-            let left_out: Vec<&str> = registration
-                .tools
-                .iter()
-                .copied()
-                .filter(|tool| {
-                    !ours.iter().any(|group| {
-                        group
-                            .get("matcher")
-                            .and_then(|m| m.as_str())
-                            .is_some_and(|matcher| matcher_names(matcher, tool))
-                    })
-                })
-                .collect();
-            match left_out.len() {
-                0 => None,
-                n if n == registration.tools.len() => Some(registration.event.to_owned()),
-                _ => Some(format!("{} ({})", registration.event, left_out.join(", "))),
-            }
+            let fails_open = registration.fails_closed
+                && ours
+                    .iter()
+                    .flat_map(|group| officina_entries(group))
+                    .any(|entry| {
+                        entry.get(ON_FAILURE.0).and_then(|v| v.as_str()) != Some(ON_FAILURE.1)
+                    });
+            let fail_open_entry = fails_open.then(|| {
+                format!(
+                    "{} fail-closed ({}: \"{}\")",
+                    registration.event, ON_FAILURE.0, ON_FAILURE.1
+                )
+            });
+            [missing_registration(registration, &ours), fail_open_entry]
+                .into_iter()
+                .flatten()
         })
         .collect()
+}
+
+/// The entries of a matcher group that run `officina hook`.
+fn officina_entries(group: &serde_json::Value) -> impl Iterator<Item = &serde_json::Value> {
+    group
+        .get("hooks")
+        .and_then(|h| h.as_array())
+        .into_iter()
+        .flatten()
+        .filter(|entry| {
+            entry
+                .get("command")
+                .and_then(|c| c.as_str())
+                .is_some_and(runs_officina_hook)
+        })
+}
+
+/// What [`missing_hook_events`] reports for `registration` whose groups
+/// running `officina hook` are `ours`: the event, or the tools left out.
+fn missing_registration(
+    registration: &Registration,
+    ours: &[&serde_json::Value],
+) -> Option<String> {
+    if registration.tools.is_empty() {
+        return ours.is_empty().then(|| registration.event.to_owned());
+    }
+    let left_out: Vec<&str> = registration
+        .tools
+        .iter()
+        .copied()
+        .filter(|tool| {
+            !ours.iter().any(|group| {
+                group
+                    .get("matcher")
+                    .and_then(|m| m.as_str())
+                    .is_some_and(|matcher| matcher_names(matcher, tool))
+            })
+        })
+        .collect();
+    match left_out.len() {
+        0 => None,
+        n if n == registration.tools.len() => Some(registration.event.to_owned()),
+        _ => Some(format!("{} ({})", registration.event, left_out.join(", "))),
+    }
 }
 
 /// True when a hook matcher names `tool`: the tool itself or one of its
@@ -284,9 +331,13 @@ pub fn run(collector: &Collector, exe: &Path) -> Vec<Check> {
     let paths = collector.paths();
     let user_settings = paths.claude_config_dir.join("settings.json");
     let relay = RelayHome::new(paths.officina_home.clone(), env_path(ENV_FLOOR));
-    let required = registrations(gate_required(&relay));
+    let gate = gate_required(&relay);
+    let required = registrations(gate);
     let (mut checks, version) = check_claude(collector);
     checks.push(check_hooks(&user_settings, exe, &required));
+    if let Some(version) = version.as_deref().filter(|_| gate) {
+        checks.push(check_gate_failure_mode(version));
+    }
     checks.extend(check_hook_activity(&paths.events_dir(), now));
     checks.push(check_quota(collector, &user_settings, exe, now));
     checks.push(check_officina_home(&paths.officina_home));
@@ -459,6 +510,43 @@ fn check_hooks(user_settings: &Path, exe: &Path, required: &[Registration]) -> C
             user_settings.display()
         ),
         paste: Some(hooks_block(exe, required)),
+    }
+}
+
+/// Whether the installed Claude Code, which printed `version`, honours the
+/// gate entry's [`ON_FAILURE`] (D-452). Older, the entry is not honoured and
+/// a gate hook that cannot start, times out or crashes lets the call
+/// through: a failure, as a hooks block without the field is. A version
+/// doctor cannot read warns.
+pub fn check_gate_failure_mode(version: &str) -> Check {
+    const TITLE: &str = "gate failure mode";
+    let [major, minor, patch] = ON_FAILURE_SINCE;
+    let since = format!("{major}.{minor}.{patch}");
+    match claude_version(version) {
+        Some(found) if found >= ON_FAILURE_SINCE => check(
+            Level::Ok,
+            TITLE,
+            format!(
+                "{version} blocks a gate call when the hook fails ({}: \"{}\", {since} or later)",
+                ON_FAILURE.0, ON_FAILURE.1
+            ),
+        ),
+        Some(_) => check(
+            Level::Fail,
+            TITLE,
+            format!(
+                "{version} predates {since}, which added {}: \"{}\": a gate hook that cannot start, times out or crashes lets the call through. Update Claude Code",
+                ON_FAILURE.0, ON_FAILURE.1
+            ),
+        ),
+        None => check(
+            Level::Warn,
+            TITLE,
+            format!(
+                "cannot read a version in \"{version}\": {}: \"{}\" needs Claude Code {since} or later",
+                ON_FAILURE.0, ON_FAILURE.1
+            ),
+        ),
     }
 }
 
@@ -1072,8 +1160,9 @@ mod tests {
     #[test]
     fn pre_tool_use_without_the_matcher_is_missing() {
         let with_matcher = |matcher: Option<&str>| {
-            let mut group =
-                serde_json::json!({"hooks": [{"type": "command", "command": "officina.exe hook"}]});
+            let mut group = serde_json::json!({"hooks": [
+                {"type": "command", "command": "officina.exe hook", "onFailure": "block"}
+            ]});
             if let Some(m) = matcher {
                 group["matcher"] = m.into();
             }
@@ -1108,9 +1197,130 @@ mod tests {
         }
         let other_hook_beside = serde_json::json!({"hooks": {GATE_EVENT: [
             {"matcher": gated_tools_matcher(), "hooks": [{"type": "command", "command": "python guard.py"}]},
-            {"matcher": gated_tools_matcher(), "hooks": [{"type": "command", "command": "officina hook"}]}
+            {"matcher": gated_tools_matcher(), "hooks": [{"type": "command", "command": "officina hook", "onFailure": "block"}]}
         ]}});
         assert!(missing_hook_events(&other_hook_beside, &gate).is_empty());
+    }
+
+    /// Story 2.17 AC 1, D-452: the printed gate entry fails closed, and only
+    /// the gate's; the buffered events keep failing open.
+    #[test]
+    fn only_the_gate_entry_fails_closed() {
+        let required = registrations(true);
+        let block: serde_json::Value =
+            serde_json::from_str(&hooks_block(&PathBuf::from("/opt/officina"), &required)).unwrap();
+        for registration in &required {
+            let entry = &block["hooks"][registration.event][0]["hooks"][0];
+            let expected = registration.fails_closed.then_some(ON_FAILURE.1);
+            assert_eq!(
+                entry[ON_FAILURE.0].as_str(),
+                expected,
+                "{}",
+                registration.event
+            );
+            assert_eq!(registration.fails_closed, registration.event == GATE_EVENT);
+        }
+    }
+
+    /// Story 2.17 AC 2, D-452: an installed gate entry without
+    /// `onFailure: "block"`, or with another value, is reported, also when a
+    /// second group carries it, and the printed block clears it; the field
+    /// on another tool's hook or on a buffered event changes nothing.
+    #[test]
+    fn a_gate_entry_that_fails_open_is_reported() {
+        let gate = [gate_registration()];
+        let fail_closed = format!("{GATE_EVENT} fail-closed (onFailure: \"block\")");
+        let entry = |on_failure: Option<&str>| {
+            let mut entry = serde_json::json!({"type": "command", "command": "officina.exe hook"});
+            if let Some(value) = on_failure {
+                entry[ON_FAILURE.0] = value.into();
+            }
+            entry
+        };
+        let settings =
+            |groups: Vec<serde_json::Value>| serde_json::json!({"hooks": {GATE_EVENT: groups}});
+        let group = |entries: Vec<serde_json::Value>| serde_json::json!({"matcher": gated_tools_matcher(), "hooks": entries});
+        for open in [None, Some("continue"), Some("Block"), Some("")] {
+            assert_eq!(
+                missing_hook_events(&settings(vec![group(vec![entry(open)])]), &gate),
+                std::slice::from_ref(&fail_closed),
+                "{open:?}"
+            );
+        }
+        let one_of_two = settings(vec![
+            group(vec![entry(Some("block"))]),
+            group(vec![entry(None)]),
+        ]);
+        assert_eq!(
+            missing_hook_events(&one_of_two, &gate),
+            std::slice::from_ref(&fail_closed)
+        );
+        let foreign_guard = serde_json::json!({"type": "command", "command": "python guard.py"});
+        let beside = settings(vec![group(vec![foreign_guard, entry(Some("block"))])]);
+        assert!(missing_hook_events(&beside, &gate).is_empty());
+
+        let names = gated_tools();
+        let partial = settings(vec![
+            serde_json::json!({"matcher": names[0], "hooks": [entry(None)]}),
+        ]);
+        assert_eq!(
+            missing_hook_events(&partial, &gate),
+            [
+                format!("{GATE_EVENT} ({})", names[1..].join(", ")),
+                fail_closed.clone()
+            ]
+        );
+
+        let buffered = registrations(false);
+        let without: serde_json::Value =
+            serde_json::from_str(&hooks_block(&PathBuf::from("/opt/officina"), &buffered)).unwrap();
+        assert!(missing_hook_events(&without, &buffered).is_empty());
+
+        let dir = tempfile::tempdir().unwrap();
+        let settings_file = dir.path().join("settings.json");
+        fs::write(
+            &settings_file,
+            settings(vec![group(vec![entry(None)])]).to_string(),
+        )
+        .unwrap();
+        let exe = PathBuf::from("/opt/officina");
+        let line = check_hooks(&settings_file, &exe, &gate);
+        assert_eq!(line.level, Level::Fail, "{line:?}");
+        assert!(line.detail.contains(&fail_closed), "{line:?}");
+        fs::write(&settings_file, line.paste.unwrap()).unwrap();
+        assert_eq!(check_hooks(&settings_file, &exe, &gate).level, Level::Ok);
+    }
+
+    /// Story 2.17 AC 3, D-452: a Claude Code older than the first version
+    /// honouring `onFailure` fails, that version and later pass, a version
+    /// doctor cannot read warns.
+    #[test]
+    fn a_claude_code_without_on_failure_fails() {
+        let [major, minor, patch] = ON_FAILURE_SINCE;
+        let level = |version: String| check_gate_failure_mode(&version).level;
+        assert_eq!(
+            level(format!("{major}.{minor}.{patch} (Claude Code)")),
+            Level::Ok
+        );
+        assert_eq!(
+            level(format!("{major}.{minor}.{} (Claude Code)", patch + 17)),
+            Level::Ok
+        );
+        assert_eq!(
+            level(format!("{major}.{}.0 (Claude Code)", minor + 1)),
+            Level::Ok
+        );
+        assert_eq!(
+            level(format!("{major}.{minor}.{} (Claude Code)", patch - 1)),
+            Level::Fail
+        );
+        assert_eq!(
+            level(format!("{major}.{}.999 (Claude Code)", minor - 1)),
+            Level::Fail
+        );
+        assert_eq!(level("Claude Code".to_owned()), Level::Warn);
+        let old = check_gate_failure_mode("2.1.294 (Claude Code)");
+        assert!(old.detail.contains("lets the call through"), "{old:?}");
     }
 
     /// D-171, D-173: the printed matcher names every shell and file tool of
@@ -1143,7 +1353,7 @@ mod tests {
     #[test]
     fn a_matcher_naming_bash_only_is_missing_powershell_and_monitor() {
         let gate = [gate_registration()];
-        let group = |matcher: &str| serde_json::json!({"matcher": matcher, "hooks": [{"type": "command", "command": "officina.exe hook"}]});
+        let group = |matcher: &str| serde_json::json!({"matcher": matcher, "hooks": [{"type": "command", "command": "officina.exe hook", "onFailure": "block"}]});
         let names = gated_tools();
         let (first, others) = names.split_first().unwrap();
         let only_first = serde_json::json!({"hooks": {GATE_EVENT: [group(first)]}});

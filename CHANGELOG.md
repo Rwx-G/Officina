@@ -326,6 +326,11 @@ project uses [Semantic Versioning](https://semver.org/).
 
 ### Security
 
+- The gate fails closed where it guards. Doctor prints its `PreToolUse`
+  entry with `"onFailure": "block"`, so Claude Code (2.1.295 and later)
+  blocks the call when the hook cannot start, times out or crashes, where
+  it used to let the call through. Doctor fails on an installed gate entry
+  without the field and on an older Claude Code: paste the block again.
 - The relay is a guardrail against mistakes and injected instructions, and
   a record; it is not a security boundary: a session runs as the author and
   could edit Officina's files. The isolated workshop (v0.6) is the

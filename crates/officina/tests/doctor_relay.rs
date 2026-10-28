@@ -575,6 +575,61 @@ fn missing_gate_with_a_guarded_project_exits_1() {
     assert_eq!(fixed.code, Some(0), "{}", fixed.text);
 }
 
+/// Story 2.17 AC 2 and 3, D-452: a gate entry merged before 2.17, without
+/// `onFailure: "block"`, fails doctor until the printed block is pasted; a
+/// Claude Code older than the version that honours the field fails too,
+/// and a newer one is reported as blocking on failure. No line without a
+/// guarded project.
+#[test]
+fn a_gate_that_fails_open_fails_doctor() {
+    let doctor = Doctor::new();
+    let report = doctor.report(&[]);
+    assert!(!report.has("gate failure mode"), "{}", report.text);
+
+    doctor.write(FLOOR);
+    doctor.env.approve();
+    doctor.register_hooks();
+    let settings = doctor.env.claude_config().join("settings.json");
+    let mut pasted: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&settings).unwrap()).unwrap();
+    let gate_entry = &mut pasted["hooks"]["PreToolUse"][0]["hooks"][0];
+    assert_eq!(gate_entry["onFailure"], "block", "{gate_entry}");
+    gate_entry.as_object_mut().unwrap().remove("onFailure");
+    std::fs::write(&settings, pasted.to_string()).unwrap();
+
+    let report = doctor.report(&[]);
+    assert_eq!(report.code, Some(1), "{}", report.text);
+    let hooks = report.line("hooks");
+    assert_eq!(hooks.tag, "FAIL");
+    assert!(
+        hooks
+            .detail
+            .starts_with("not registered for PreToolUse fail-closed (onFailure: \"block\")"),
+        "{hooks:?}"
+    );
+    assert!(
+        hooks.paste.contains("\"onFailure\": \"block\""),
+        "{hooks:?}"
+    );
+    let mode = report.line("gate failure mode");
+    assert_eq!(mode.tag, "ok", "{mode:?}");
+
+    doctor.register_hooks();
+    let fixed = doctor.report(&[]);
+    assert_eq!(fixed.code, Some(0), "{}", fixed.text);
+
+    let [major, minor, patch] = officina_core::contract::ON_FAILURE_SINCE;
+    let older = format!("{major}.{minor}.{}", patch - 1);
+    let mut cmd = doctor.env.officina(&["doctor"]);
+    cmd.env("FAKE_CLAUDE_VERSION", &older);
+    let report = Report::parse(&common::run_with(cmd, b""));
+    assert_eq!(report.code, Some(1), "{}", report.text);
+    let mode = report.line("gate failure mode");
+    assert_eq!(mode.tag, "FAIL", "{mode:?}");
+    assert!(mode.detail.starts_with(&older), "{mode:?}");
+    assert_eq!(report.failures().len(), 1, "{}", report.text);
+}
+
 #[test]
 fn warnings_alone_exit_0() {
     let doctor = Doctor::new();

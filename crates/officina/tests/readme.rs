@@ -135,6 +135,25 @@ fn readme_names_the_gate_tools_constant() {
     }
 }
 
+/// Story 2.17 AC 6 (D-452): the README's gate entry carries the field and
+/// value doctor prints, and the version it names is the one doctor checks.
+#[test]
+fn readme_states_the_gate_fails_closed() {
+    use officina_core::contract::ON_FAILURE_SINCE;
+    use officina_host::doctor::ON_FAILURE;
+    let readme = readme();
+    let (field, value) = ON_FAILURE;
+    assert!(
+        readme.contains(&format!("\"{field}\": \"{value}\"")),
+        "README.md does not show the gate entry's {field}"
+    );
+    let [major, minor, patch] = ON_FAILURE_SINCE;
+    assert!(
+        readme.contains(&format!("from {major}.{minor}.{patch}")),
+        "README.md does not name the version that honours {field}"
+    );
+}
+
 /// Story 2.13 AC 4 (D-172): the README no longer says that no shell reads a
 /// value; its paragraph on the values a program reads names the notice
 /// kinds' constant and, for every kind, the program that reads the value,
