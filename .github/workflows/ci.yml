@@ -78,8 +78,10 @@ jobs:
         run: cargo test --locked --release -p officina-host --test approvals_stress -- --ignored
       - name: A killed writer loses no event
         # Story 3.2 AC 11, D-89: the crash helper is killed inside a chunk's
-        # transaction and at 20 random points while it ingests; the seed is
-        # printed for a replay. A test target alone does not build examples.
+        # transaction and at 20 random points while it ingests, and (story
+        # 3.7 AC 3) inside a confirmation's transaction and at 20 random
+        # points while it confirms; each seed is printed for a replay. A
+        # test target alone does not build examples.
         run: |
           cargo build --locked --release -p officina-host --features window-authority --example registry_crash_helper
           cargo test --locked --release -p officina-host --features window-authority --test registry_crash -- --ignored --nocapture

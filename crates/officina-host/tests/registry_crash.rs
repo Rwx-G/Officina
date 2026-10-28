@@ -2,7 +2,8 @@
 //! section 7 Memory, D-89): killed inside a chunk's transaction at a chosen
 //! line, then at random points, the registry ends equal to one an
 //! uninterrupted ingestion of the same files built, passes `quick_check`,
-//! and every offset stands at a line end.
+//! and every offset stands at a line end. Killed while confirming (story
+//! 3.7 AC 3), it keeps every confirmation it acknowledged, once.
 //!
 //! Ignored by default: CI runs it in release, alone, after building the
 //! helper (`cargo build --release -p officina-host --features
@@ -211,6 +212,164 @@ fn killed_mid_transaction_and_at_random_loses_no_event() {
     drop(conn);
     offsets_at_line_ends(&crashed);
     assert_eq!(contents(&crashed), contents(&reference), "seed {seed}");
+}
+
+/// Sessions the confirm runs sort: each saw a prompt, an answer and an end,
+/// in a project with no subject, so each is an unfiled row.
+const ROWS: usize = 400;
+
+/// Every session prompted, answered and ended, today, with excerpts that
+/// expire long after `NOW`.
+fn write_rows(home: &Home) {
+    let lines: Vec<String> = (0..ROWS)
+        .flat_map(|i| {
+            let session = format!("s{i:03}");
+            let at = NOW - DAY / 4 + i as i64 * 1_000;
+            [
+                prompt(&session, at, "C:/work/api", &format!("task {i}")),
+                answer(
+                    &session,
+                    at + 200,
+                    "C:/work/api",
+                    &format!("done {i}"),
+                    None,
+                ),
+                line("SessionEnd", &session, at + 400, "C:/work/api"),
+            ]
+        })
+        .collect();
+    home.append(&day_file(NOW), &lines);
+}
+
+fn confirm_helper(
+    home: &Home,
+    stall_at: Option<usize>,
+) -> (Child, BufReader<std::process::ChildStdout>) {
+    let mut cmd = Command::new(example("registry_crash_helper"));
+    cmd.args(["confirm", &home.home.to_string_lossy(), &NOW.to_string()]);
+    if let Some(item) = stall_at {
+        cmd.arg(item.to_string());
+    }
+    let mut child = cmd
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit())
+        .spawn()
+        .unwrap();
+    let out = BufReader::new(child.stdout.take().unwrap());
+    (child, out)
+}
+
+/// The keys a run printed as acknowledged, read to the end of its output:
+/// after a kill, what it printed before dying.
+fn acks(out: BufReader<std::process::ChildStdout>) -> Vec<String> {
+    out.lines()
+        .map_while(Result::ok)
+        .filter_map(|line| line.strip_prefix("ack ").map(str::to_owned))
+        .collect()
+}
+
+/// Each confirmation's session, and whether it holds its input.
+fn confirmed_sessions(home: &Home) -> Vec<(String, bool)> {
+    let conn = read_only_connection(&home.paths().database()).unwrap();
+    let mut statement = conn
+        .prepare(
+            "SELECT c.session_id, i.confirmation_id IS NOT NULL FROM confirmation c
+             LEFT JOIN confirmation_input i ON i.confirmation_id = c.id ORDER BY c.id",
+        )
+        .unwrap();
+    statement
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap()
+}
+
+/// Story 3.7 AC 3 (AD-58's crash row, D-89): killed inside a confirmation
+/// transaction at a chosen item, then at random points while it confirms,
+/// the writer keeps every confirmation it acknowledged, once, with its
+/// input; no row is confirmed twice, and `quick_check` passes.
+#[test]
+#[ignore = "release build, run alone by CI's crash step"]
+fn killed_while_confirming_keeps_every_acknowledged_confirmation_once() {
+    let seed = seed();
+    println!("seed {seed} (replay with OFFICINA_CRASH_SEED={seed})");
+    let mut random = XorShift(seed);
+
+    let reference = Home::new();
+    write_rows(&reference);
+    let started = std::time::Instant::now();
+    let (mut child, out) = confirm_helper(&reference, None);
+    let all = acks(out);
+    assert!(child.wait().unwrap().success());
+    let uninterrupted = started.elapsed();
+    assert_eq!(all.len(), ROWS, "an uninterrupted run confirms every row");
+
+    let crashed = Home::new();
+    write_rows(&crashed);
+    let mut acknowledged = Vec::new();
+    // Killed inside the second batch's transaction, after its first item.
+    let (mut child, mut out) = confirm_helper(&crashed, Some(4));
+    expect_word(&mut out, "started");
+    let mut said = String::new();
+    while out.read_line(&mut said).unwrap() > 0 && said.trim() != "stalled" {
+        acknowledged.extend(said.trim().strip_prefix("ack ").map(str::to_owned));
+        said.clear();
+    }
+    assert_eq!(said.trim(), "stalled", "the helper did not stall");
+    child.kill().unwrap();
+    child.wait().unwrap();
+    assert_eq!(acknowledged.len(), 3, "the first batch only");
+    assert_eq!(
+        confirmed_sessions(&crashed).len(),
+        3,
+        "the stalled batch committed nothing"
+    );
+
+    // A window an order of magnitude shorter than a whole run: the twenty
+    // kills land in its first part, the next start finishes it.
+    let window = (u64::try_from(uninterrupted.as_millis()).unwrap_or(1000) / 25).max(5);
+    println!("uninterrupted run {uninterrupted:?}, kills within {window} ms of each start");
+    for kill in 1..=KILLS {
+        let (mut child, mut out) = confirm_helper(&crashed, None);
+        expect_word(&mut out, "started");
+        std::thread::sleep(Duration::from_millis(random.next() % window));
+        let _ = child.kill();
+        child.wait().unwrap();
+        let printed = acks(out);
+        println!("kill {kill}: {} acknowledged", printed.len());
+        acknowledged.extend(printed);
+    }
+    let (mut child, out) = confirm_helper(&crashed, None);
+    acknowledged.extend(acks(out));
+    assert!(child.wait().unwrap().success());
+
+    let conn = read_only_connection(&crashed.paths().database()).unwrap();
+    assert_eq!(quick_check(&conn).unwrap(), ["ok"]);
+    drop(conn);
+    let confirmed = confirmed_sessions(&crashed);
+    let mut seen = std::collections::BTreeMap::new();
+    for (session, with_input) in &confirmed {
+        assert!(with_input, "{session} lost its input");
+        *seen.entry(session.clone()).or_insert(0) += 1;
+    }
+    assert!(
+        seen.values().all(|count| *count == 1),
+        "a row confirmed twice, seed {seed}: {seen:?}"
+    );
+    for key in &acknowledged {
+        let session = key.strip_prefix("session:").unwrap();
+        assert_eq!(
+            seen.get(session),
+            Some(&1),
+            "{key} acknowledged, seed {seed}"
+        );
+    }
+    assert_eq!(seen.len(), ROWS, "every row confirmed in the end");
+    // A run killed between a commit and its acknowledgement leaves rows
+    // confirmed and never acknowledged; none is acknowledged twice.
+    let distinct: std::collections::BTreeSet<&String> = acknowledged.iter().collect();
+    assert_eq!(distinct.len(), acknowledged.len(), "acknowledged twice");
 }
 
 /// The comparison can fail (D-89): a registry whose offsets are right but
