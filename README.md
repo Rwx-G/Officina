@@ -290,6 +290,41 @@ Requests show first in **Needs you**, oldest first, with an amber border: the pr
 
 `officina relay --json` prints the relay's state once, without writing anything: whether it is stopped, the approved catalogue, a pending change with its diff, the floor's catalogue issues with their lines, and the last 50 journal entries with each run's start and end paired. A run with no end line 60 s past its timeout reads "abandoned" (its `officina run` was killed). The window reads the same contract.
 
+### HTTP actions and credentials
+
+An action can also read an HTTP endpoint, a health check or a monitoring API, with `kind = "http"`. It declares a `method` and a `url` instead of a program, and optionally a `credential`:
+
+```toml
+[[credential]]
+name = "monitoring"
+hosts = ["monitoring.example.com"]   # the only hosts its secret is ever sent to
+header = "Authorization"
+scheme = "Bearer"
+
+[[action]]
+name = "health"
+description = "Read one check of the monitoring API"
+class = "free"
+kind = "http"
+method = "GET"                       # GET or HEAD
+url = "https://monitoring.example.com/api/{check}?verbose=1"
+credential = "monitoring"            # optional
+
+[action.params.check]
+values = ["health", "ready"]
+```
+
+- The URL's scheme is `https`, or `http` for an action without a credential; its host and port are literal, and it carries no user or password. A placeholder fills one whole path segment or one whole query value, never a query key. Its value meets the same value rules as any other, then every byte outside letters, digits and `-._~` is percent-encoded, so a value can add neither a segment nor a parameter. The rules and their cases are the vector set `tests/vectors/url.json`.
+- The request follows no redirect and uses no proxy (proxy variables are ignored); it waits at most `timeout_s`, capped at `MAX_HTTP_TIMEOUT_S`; the body is read up to `max_output_kib`, then the connection is dropped and a last line says so; `HEAD` reads no body. TLS trusts the Windows certificate store, an enterprise CA included: no root set is bundled.
+- `officina run` prints `HTTP <status> <reason>`, then the body. It exits 0 for a 2xx status, 1 for any other with one stderr line `officina: http <status>`, 124 at the timeout, 127 when no response came (name resolution, connection or TLS failure).
+- The journal records the method, the URL with its values and the credential's name instead of an argument vector, then the status, the body's byte count and its SHA-256.
+
+A credential's secret is never in the floor. It lives in the Windows Credential Manager as the generic credential `officina:<name>`: `officina doctor` checks each declared credential and, for a missing one, prints the `cmdkey` line that stores it, `cmdkey /generic:officina:<name> /user:<user> /pass`, without the secret, so `cmdkey` asks for it and it stays out of your shell's history. A missing credential that an approved action uses fails doctor; an unused one warns.
+
+The header `<header>: <scheme> <secret>` is added only when the URL's host is one of the credential's `hosts`: the same name, any case, any port, no wildcard. The header cannot be one that frames the request (`FORBIDDEN_CREDENTIAL_HEADERS`). `officina run` reads the secret after every other check and just before the request; for a `human` action, before your approval is used, so a missing credential leaves the approval for the next call. The secret goes into that header and nowhere else: not the output, the journal, an approval file or the Relay view.
+
+Adding credentials and HTTP actions changed what an approval covers: after an upgrade, the catalogue shows as changed once and is approved again.
+
 ### The Relay view
 
 Once the relay is in use, the header gains a **Board** / **Relay** switch; the chips and **Stop relay** stay in the header in both views. The Relay view reads the same contract as `officina relay --json` and shows, in order:
@@ -297,7 +332,7 @@ Once the relay is in use, the header gains a **Board** / **Relay** switch; the c
 - whether the relay runs or is stopped, with its own **Stop relay** button, the relay floor, and why that floor or the approved catalogue cannot be read, when one cannot;
 - a pending catalogue change with its diff and **Approve this catalogue**, as on the board's banner;
 - the floor's issues with their lines;
-- the approved catalogue: each action's class, the projects that list it, what it starts, its parameters and limits; then the projects and the guarded programs;
+- the approved catalogue: each action's class, the projects that list it, what it starts (or, for an HTTP action, its method and URL template), its parameters and limits; then the credentials, with the hosts they go to, the actions that send them and whether the Credential Manager holds them; then the projects and the guarded programs. The window checks the credentials when the relay or its floor changes and at most once a minute otherwise; `officina relay --json` never asks the store and reports them unchecked;
 - the recent activity, newest first: time, project, action, parameters, outcome (an exit code, a timeout, a refusal and its reason, a gate deny with the command's excerpt, a gate error) and duration, and "abandoned" for a run whose end never came;
 - the number of unreadable journal lines and of gate errors in the last 24 hours.
 
@@ -307,7 +342,7 @@ The journal keeps 90 days of history (`JOURNAL_RETENTION_DAYS`): the window dele
 
 ### What works today
 
-Usable today: declare a catalogue, approve it in the window, let sessions run its `free` and `after-check` actions with `officina run` and its `human` actions after your click in Needs you, contained by the gate, journaled, stoppable from the window, audited in the Relay view, and checked by `officina doctor`, which prints each guarded project's `CLAUDE.md` paragraph. HTTP actions arrive with the rest of v0.2.
+Usable today: declare a catalogue, approve it in the window, let sessions run its `free` and `after-check` actions with `officina run` and its `human` actions after your click in Needs you, contained by the gate, journaled, stoppable from the window, audited in the Relay view, and checked by `officina doctor`, which prints each guarded project's `CLAUDE.md` paragraph; HTTP read actions with a credential from the Windows Credential Manager, sent only to the hosts it is bound to.
 
 ## Command line
 

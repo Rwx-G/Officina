@@ -109,6 +109,17 @@ project uses [Semantic Versioning](https://semver.org/).
   a git work tree, unreadable journal lines and gate errors of the last 24
   hours. For each guarded project it prints the `CLAUDE.md`
   paragraph to paste, generated from the approved catalogue.
+- HTTP read actions (`kind = "http"`, `GET` or `HEAD`) on a URL template
+  whose placeholders fill a whole path segment or query value,
+  percent-encoded; no redirect, no proxy, a bounded wait and a body cut at
+  `max_output_kib`; TLS trusts the Windows certificate store. Exit 0 for a
+  2xx status, 1 for any other, 124 on timeout, 127 without a response; the
+  journal records the method, the URL, the status and the body's hash.
+- Credentials (`[[credential]]`: name, hosts, header, scheme) whose secret
+  lives in the Windows Credential Manager as `officina:<name>`, read just
+  before the request and sent only to the hosts bound to it; `officina
+  doctor` checks each one and prints the `cmdkey` line that stores a missing
+  one, and the Relay view lists them with their presence.
 - Relay view in the window, behind a Board/Relay switch in the header once
   the relay is in use: the stop toggle, a pending catalogue change with
   Approve, the floor's issues with their lines, the approved catalogue
@@ -135,6 +146,9 @@ project uses [Semantic Versioning](https://semver.org/).
 - Floor files accept schema 2, where a project without `autonomy` is
   guarded. A schema 1 floor still loads with every project `free`, and the
   relay's keys in it are an error naming `schema = 2`.
+- The canonical catalogue is format 2: it covers credentials and HTTP
+  actions, so a catalogue approved before shows as changed once and is
+  approved again.
 - The board contract (`officina board --json`) is schema 2: it carries the
   pending approval requests, and `waiting_count` counts the approvable ones
   beside the sessions that wait.
@@ -174,6 +188,12 @@ project uses [Semantic Versioning](https://semver.org/).
 - The gate gets stricter, never looser, when the approved catalogue or the
   floor cannot be read, and a repository stays guarded when either says so,
   so editing the floor or `cd ..` does not lift containment.
+- A credential's secret goes into its one request header and nowhere else:
+  not the output, the journal, an approval file or the Relay view; a
+  secret holding a line break is refused, a header that frames the request
+  and a URL with a user or password are catalogue issues, and a credential
+  over plain `http` is refused. `officina.exe` bundles no root certificate
+  set; CI checks that `webpki-roots` stays out of its graph.
 - The tree fingerprint runs `git` with external diff tools, textconv
   drivers, fsmonitor and the caller's `GIT_` variables out of the way, so a
   repository's configuration runs nothing inside a relay run.
