@@ -213,6 +213,9 @@ pub struct ContractView {
     /// `None` until a check ran.
     pub held: Option<bool>,
     pub missing: Vec<String>,
+    /// Hook payload fields of `contract::HOOK_FIELDS` this version was seen
+    /// leaving out, as `Event.field` (AD-56, D-71).
+    pub hook_missing: Vec<String>,
 }
 
 /// Things the author should know about the data itself.
@@ -787,6 +790,7 @@ mod tests {
             last_message: None,
             last_message_tail: None,
             claude_pid: None,
+            absent: Vec::new(),
             truncated: false,
         }
     }
@@ -878,6 +882,35 @@ mod tests {
             UNLISTED_GRACE_MS + 100,
         );
         assert!(without.columns.all().all(|c| c.subject.is_none()));
+    }
+
+    /// AD-54, D-71: the hook fields the running version leaves out reach
+    /// the board's contract view as the collector found them, beside the
+    /// agents fields; none when nothing is missing.
+    #[test]
+    fn hook_missing_reaches_the_contract_view() {
+        let (event, fields) = crate::contract::HOOK_FIELDS[0];
+        let missing = vec![format!("{event}.{}", fields[0])];
+        let input = BoardInput {
+            contract: ContractView {
+                claude_version: Some("9.9.9".into()),
+                held: Some(true),
+                missing: Vec::new(),
+                hook_missing: missing.clone(),
+            },
+            ..Default::default()
+        };
+        let board = build_board(&input, 10);
+        assert_eq!(board.contract.hook_missing, missing);
+        assert_eq!(board.contract.held, Some(true), "the agents side holds");
+        let json = serde_json::to_value(&board).unwrap();
+        assert_eq!(json["contract"]["hook_missing"][0], missing[0]);
+        assert!(
+            build_board(&BoardInput::default(), 10)
+                .contract
+                .hook_missing
+                .is_empty()
+        );
     }
 
     /// AD-55, D-61: rows to sort block no session, so they leave

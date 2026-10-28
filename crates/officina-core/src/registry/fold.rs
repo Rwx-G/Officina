@@ -792,6 +792,7 @@ mod tests {
             last_message: None,
             last_message_tail: None,
             claude_pid: Some(PID),
+            absent: Vec::new(),
             truncated: false,
         }
     }

@@ -1,7 +1,134 @@
-//! The contract canary (FR-12, AD-12): the fields Officina reads from
-//! `claude agents --json`, checked against a live sample.
+//! The contract canary (FR-12, AD-12, AD-56): the fields Officina reads from
+//! `claude agents --json`, checked against a live sample, and the hook
+//! payload fields it reads, which the hook reports missing line by line.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
+
+use crate::events::EventLine;
+
+/// The payload fields Officina reads from each event the hook buffers, each
+/// verified always present for that event: research notes E2 (a print-mode
+/// capture) for every event but `Notification`, E17 (a background session
+/// in `default` mode asked to use Write) for `Notification` (D-90), which is
+/// how a later Claude Code version re-checks that entry. A field no research
+/// note shows observed does not enter. `hook_event_name` is not listed: a
+/// payload without it is no hook call and is dropped.
+pub const HOOK_FIELDS: &[(&str, &[&str])] = &[
+    ("SessionStart", &["session_id", "cwd", "source"]),
+    ("UserPromptSubmit", &["session_id", "cwd", "prompt"]),
+    ("Stop", &["session_id", "cwd", "last_assistant_message"]),
+    ("SessionEnd", &["session_id", "cwd", "reason"]),
+    (
+        "Notification",
+        &["session_id", "cwd", "notification_type", "message"],
+    ),
+];
+
+/// The [`HOOK_FIELDS`] entry of `event`; none for an event it does not name.
+///
+/// ```
+/// use officina_core::contract::hook_fields;
+/// assert!(hook_fields("Stop").contains(&"last_assistant_message"));
+/// assert!(hook_fields("PreToolUse").is_empty());
+/// ```
+pub fn hook_fields(event: &str) -> &'static [&'static str] {
+    HOOK_FIELDS
+        .iter()
+        .find(|(name, _)| *name == event)
+        .map_or(&[], |(_, fields)| fields)
+}
+
+/// The fields of `event`'s [`HOOK_FIELDS`] entry that `payload` lacks, in
+/// the entry's order (AD-45): one lookup per field, nothing more parsed.
+pub fn absent_hook_fields(event: &str, payload: &serde_json::Value) -> Vec<String> {
+    hook_fields(event)
+        .iter()
+        .filter(|field| payload.get(**field).is_none())
+        .map(|field| (*field).to_owned())
+        .collect()
+}
+
+/// What a run of event lines says about the hook payloads (AD-56): when
+/// each event was last seen, and when each `Event.field` was last reported
+/// absent. The window folds every line it ingests into one, then into the
+/// running version's record.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct HookSightings {
+    /// The latest `ts` of each event seen.
+    pub events: BTreeMap<String, i64>,
+    /// The latest `ts` at which each `Event.field` was absent.
+    pub absent: BTreeMap<String, i64>,
+}
+
+impl HookSightings {
+    /// Folds one event line in.
+    pub fn observe(&mut self, line: &EventLine) {
+        let latest = |seen: &mut BTreeMap<String, i64>, key: String| {
+            let at = seen.entry(key).or_insert(line.ts);
+            *at = (*at).max(line.ts);
+        };
+        latest(&mut self.events, line.event.clone());
+        for field in &line.absent {
+            latest(&mut self.absent, format!("{}.{field}", line.event));
+        }
+    }
+
+    /// Folds another run of sightings in.
+    pub fn merge(&mut self, other: &HookSightings) {
+        for (seen, theirs) in [
+            (&mut self.events, &other.events),
+            (&mut self.absent, &other.absent),
+        ] {
+            for (key, at) in theirs {
+                let mine = seen.entry(key.clone()).or_insert(*at);
+                *mine = (*mine).max(*at);
+            }
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.events.is_empty() && self.absent.is_empty()
+    }
+}
+
+/// A version's `hook_missing` once `sightings` are folded in (AD-56, D-71):
+/// what it held, plus every `Event.field` reported absent at or after the
+/// version's first sighting; an older line describes another version, so an
+/// upgrade does not inherit the previous version's gaps. Sorted, each once.
+pub fn hook_missing_after(
+    held: &[String],
+    sightings: &HookSightings,
+    first_seen_at: i64,
+) -> Vec<String> {
+    let mut missing: BTreeSet<String> = held.iter().cloned().collect();
+    missing.extend(
+        sightings
+            .absent
+            .iter()
+            .filter(|(_, at)| **at >= first_seen_at)
+            .map(|(field, _)| field.clone()),
+    );
+    missing.into_iter().collect()
+}
+
+/// A version's `hook_not_observed` once `sightings` are folded in: the
+/// events it held, less those seen at or after the version's first
+/// sighting.
+pub fn hook_not_observed_after(
+    held: &[String],
+    sightings: &HookSightings,
+    first_seen_at: i64,
+) -> Vec<String> {
+    held.iter()
+        .filter(|event| {
+            sightings
+                .events
+                .get(*event)
+                .is_none_or(|at| *at < first_seen_at)
+        })
+        .cloned()
+        .collect()
+}
 
 /// Fields every entry carries (research notes E1).
 pub const AGENT_FIELDS_ALWAYS: [&str; 4] = ["sessionId", "cwd", "kind", "startedAt"];
@@ -84,5 +211,57 @@ mod tests {
         let check = check_agents(&[]);
         assert!(check.held());
         assert_eq!(check.not_observed.len(), AGENT_FIELDS_CONDITIONAL.len());
+    }
+
+    fn line(event: &str, ts: i64, absent: &[&str]) -> EventLine {
+        let mut line: EventLine =
+            serde_json::from_value(json!({"v": 1, "ts": ts, "event": event})).unwrap();
+        line.absent = absent.iter().map(|f| (*f).to_owned()).collect();
+        line
+    }
+
+    /// D-71: only what follows the version's first sighting counts, a
+    /// missing field stays missing, and an event seen once since then is
+    /// observed.
+    #[test]
+    fn sightings_after_the_first_sighting_update_the_record() {
+        let (event, fields) = HOOK_FIELDS[0];
+        let mut seen = HookSightings::default();
+        seen.observe(&line(event, 100, &[fields[0]]));
+        seen.observe(&line(event, 300, &[]));
+        let later = HookSightings {
+            absent: [(format!("{event}.{}", fields[1]), 400)].into(),
+            ..HookSightings::default()
+        };
+        seen.merge(&later);
+        assert_eq!(seen.events[event], 300);
+        let held = vec!["Already.gone".to_owned()];
+        assert_eq!(
+            hook_missing_after(&held, &seen, 200),
+            ["Already.gone".to_owned(), format!("{event}.{}", fields[1])],
+            "the absence at 100 belongs to the version before"
+        );
+        let every: Vec<String> = HOOK_FIELDS.iter().map(|(e, _)| (*e).to_owned()).collect();
+        let left = hook_not_observed_after(&every, &seen, 200);
+        assert!(!left.contains(&event.to_owned()));
+        assert_eq!(left.len(), every.len() - 1);
+        assert_eq!(hook_not_observed_after(&every, &seen, 301), every);
+    }
+
+    #[test]
+    fn absent_fields_follow_the_entry_of_the_event() {
+        for (event, fields) in HOOK_FIELDS {
+            let complete: serde_json::Map<String, serde_json::Value> = fields
+                .iter()
+                .map(|f| ((*f).to_owned(), json!("x")))
+                .collect();
+            let complete = serde_json::Value::Object(complete);
+            assert!(absent_hook_fields(event, &complete).is_empty(), "{event}");
+            assert_eq!(
+                absent_hook_fields(event, &json!({})),
+                fields.iter().map(|f| (*f).to_owned()).collect::<Vec<_>>()
+            );
+        }
+        assert!(absent_hook_fields("PreToolUse", &json!({})).is_empty());
     }
 }

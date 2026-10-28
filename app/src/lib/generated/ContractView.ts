@@ -7,4 +7,9 @@ export type ContractView = { claude_version: string | null,
 /**
  * `None` until a check ran.
  */
-held: boolean | null, missing: Array<string>, };
+held: boolean | null, missing: Array<string>, 
+/**
+ * Hook payload fields of `contract::HOOK_FIELDS` this version was seen
+ * leaving out, as `Event.field` (AD-56, D-71).
+ */
+hook_missing: Array<string>, };

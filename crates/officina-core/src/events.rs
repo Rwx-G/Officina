@@ -3,6 +3,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::contract::absent_hook_fields;
+
 /// Version of the event buffer line format. Bumped on any incompatible change;
 /// readers skip lines carrying another version.
 pub const EVENT_LINE_VERSION: u32 = 1;
@@ -52,6 +54,13 @@ pub struct EventLine {
     /// session id that `/clear` replaced to the live card of its process.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub claude_pid: Option<u32>,
+    /// The fields of the event's [`HOOK_FIELDS`] entry the payload lacked
+    /// (AD-45, AD-56): an optional field of version 1, omitted when none
+    /// is missing, which older readers ignore.
+    ///
+    /// [`HOOK_FIELDS`]: crate::contract::HOOK_FIELDS
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub absent: Vec<String>,
     /// Set when excerpts were dropped to keep the line under [`MAX_LINE_BYTES`].
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub truncated: bool,
@@ -227,6 +236,7 @@ pub fn reduce_payload(
             None
         },
         claude_pid: None,
+        absent: absent_hook_fields(&event, payload),
         truncated: false,
         event,
     })
@@ -355,6 +365,56 @@ mod tests {
         assert_eq!(back.last_message, line.last_message);
         assert_eq!(back.prompt, line.prompt);
         assert_eq!(back.message, line.message);
+    }
+
+    /// The payload of `event` holding every field of its `HOOK_FIELDS`
+    /// entry, redacted values.
+    fn complete(event: &str) -> serde_json::Value {
+        let mut payload = json!({"hook_event_name": event});
+        for field in crate::contract::hook_fields(event) {
+            payload[*field] = json!(format!("redacted {field}"));
+        }
+        payload
+    }
+
+    /// AD-45, AD-56: each field of the entry missing from the payload is
+    /// listed, in the entry's order, on a version 1 line.
+    #[test]
+    fn absent_lists_the_missing_hook_fields() {
+        for (event, fields) in crate::contract::HOOK_FIELDS {
+            for field in *fields {
+                let mut payload = complete(event);
+                payload.as_object_mut().unwrap().remove(*field);
+                let line = reduce_payload(&payload, 5, true).unwrap();
+                assert_eq!(line.absent, [(*field).to_owned()], "{event}");
+                assert_eq!(line.v, EVENT_LINE_VERSION);
+                let text = line.to_bounded_line();
+                let back: EventLine = serde_json::from_str(text.trim_end()).unwrap();
+                assert_eq!(back.absent, line.absent, "{event}");
+            }
+            let bare = reduce_payload(&json!({"hook_event_name": event}), 5, false).unwrap();
+            assert_eq!(bare.absent.len(), fields.len(), "{event}");
+        }
+    }
+
+    #[test]
+    fn absent_is_omitted_when_empty() {
+        for (event, _) in crate::contract::HOOK_FIELDS {
+            let line = reduce_payload(&complete(event), 5, true).unwrap();
+            assert!(line.absent.is_empty(), "{event}");
+            assert!(!line.to_bounded_line().contains("absent"), "{event}");
+        }
+        let other = reduce_payload(&json!({"hook_event_name": "SubagentStop"}), 5, true).unwrap();
+        assert!(
+            other.absent.is_empty(),
+            "an event with no entry lists nothing"
+        );
+        let old: EventLine =
+            serde_json::from_str(r#"{"v":1,"ts":5,"event":"Stop","session_id":"s"}"#).unwrap();
+        assert!(
+            old.absent.is_empty(),
+            "a line written before reads as complete"
+        );
     }
 
     #[test]
