@@ -443,6 +443,15 @@ project uses [Semantic Versioning](https://semver.org/).
   proposal: the author confirms it, auto-archive never takes it, and the
   model pauses after three failed calls and turns itself off when it does
   worse than the default.
+- Officina runs no `.cmd` or `.bat` shim of `claude` for any call (v0.3):
+  `claude agents` and `claude --version` refuse it as the triage call
+  does, since `cmd.exe` runs whatever the script says; doctor and the
+  board say why. Install the native `claude.exe` or set
+  `OFFICINA_CLAUDE_BIN` to it.
+- A damaged registry is restored from the copy whose name carries the
+  newest UTC day (v0.3), never from the newest modification time, which any
+  process can set; a file of another name under `registry/backup/` is never
+  restored.
 - Officina itself writes nothing under the Claude config dir nor into
   `~/.claude.json` (v0.3): the zero-write fingerprint now covers the
   registry's commands and the window's own model call; the `claude`
