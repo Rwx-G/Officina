@@ -229,10 +229,14 @@ project uses [Semantic Versioning](https://semver.org/).
   not: an edit while its call waits for the author makes the run refuse
   `tree_changed` and leaves the approval unused. The card says what the
   files are bound to, or "no file binding: not a git tree".
-- `officina run` gives actions the `PATH`, `PATHEXT` and `ComSpec` Windows
-  builds from the registry, never the caller's, and no caller `WSLENV`; the
-  gate also denies an `officina` call with those variables or a `GIT_`
-  one reassigned.
+- `officina run` starts actions with the environment Windows builds from
+  the registry for the user, `ComSpec` the system's `cmd.exe` and `PATHEXT`
+  the machine's, then the action's `env`: nothing of the caller's
+  environment reaches the program, so a variable a session sets for one
+  call (`PATH`, `PYTHONPATH`, `NODE_OPTIONS`, `KUBECONFIG`) cannot change
+  what an approved action loads, and WSL actions get no `WSLENV`. The gate
+  also denies an `officina` call with `PATH`, a `GIT_` variable or another
+  variable of `OFFICINA_ENVIRONMENT_NAMES` reassigned.
 - Once a project is guarded, the file tools (Write, Edit and the others of
   `FILE_TOOLS`) cannot write under Officina's home from any project, and the
   hook resolves the session's folders, a file tool's target and the

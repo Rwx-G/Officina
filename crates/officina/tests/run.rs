@@ -991,6 +991,51 @@ fn a_caller_path_shim_is_not_found_by_the_action() {
     );
 }
 
+/// Story 2.16 AC 6 (D-175): a variable a session sets for one `officina
+/// run` never reaches the action, whatever program would read it; the
+/// action's environment is the registry's, then the catalogue's `env`.
+#[test]
+fn a_caller_variable_never_reaches_the_action() {
+    let relay = Relay::new();
+    let seeded = [
+        ("PYTHONPATH", "C:/path/to/shim"),
+        ("NODE_OPTIONS", "--require C:/path/to/shim.js"),
+        ("KUBECONFIG", "C:/path/to/shim/config"),
+        ("SEEDED_BY_THE_CALLER_7F3A9C", "seeded"),
+    ];
+    let mut cmd = relay.command(&relay.project(), &["probe", "host=web01"]);
+    for (name, value) in seeded {
+        cmd.env(name, value);
+    }
+    let names: Vec<&str> = seeded.iter().map(|(name, _)| *name).collect();
+    cmd.env(
+        "FAKE_TOOL_LOG_VALUES",
+        format!("{},PROBE_MODE,SystemRoot", names.join(",")),
+    );
+    let out = common::run_with(cmd, b"");
+    assert_eq!(out.status.code(), Some(0), "{:?}", stderr_lines(&out));
+    let logged = relay.launches().pop().unwrap();
+    for (name, value) in seeded {
+        assert_ne!(
+            logged["env"][name], value,
+            "the caller's {name} reached the action"
+        );
+    }
+    let keys = sorted_keys(&logged["env_keys"]);
+    assert!(
+        !keys.iter().any(|key| key == "SEEDED_BY_THE_CALLER_7F3A9C"),
+        "a name only the caller set reached the action: {keys:?}"
+    );
+    assert_eq!(
+        logged["env"]["PROBE_MODE"], "read-only",
+        "the catalogue's env"
+    );
+    assert!(
+        logged["env"]["SystemRoot"].is_string(),
+        "positive control: the registry's environment reached it"
+    );
+}
+
 /// AC 3 of story 2.14 (D-173): `WSLENV` forwards Windows variables into
 /// Linux; the caller's never reaches a program that could start `wsl.exe`.
 #[test]

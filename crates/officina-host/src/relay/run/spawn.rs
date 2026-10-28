@@ -5,7 +5,7 @@ use std::io::Write;
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
-use officina_core::relay::argv::{Launch, SYSTEM_ENV};
+use officina_core::relay::argv::Launch;
 use officina_core::relay::journal::RunOutcome;
 use officina_core::relay::run::{EXIT_NOT_STARTED, EXIT_TIMEOUT, RunPlan};
 
@@ -15,62 +15,88 @@ use super::output::{Output, no_streams};
 use crate::process::{Waited, hide_console, wait_until};
 use crate::relay::home::RelayHome;
 
-/// What each [`SYSTEM_ENV`] variable of a launch is: a value, or removed.
-pub type SystemEnv = Vec<(&'static str, Option<String>)>;
-
 /// The `PATH` a launch gets off Windows (Linux is v1): the system folders
 /// only an administrator writes.
 pub const PATH_OFF_WINDOWS: &str = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 
-/// The [`SYSTEM_ENV`] variables a launch gets (D-173): from the environment
-/// Windows builds from the registry for the user, a name it lacks removed;
-/// when it cannot be built, a `PATH` of the system and Windows folders only.
-/// Off Windows, [`PATH_OFF_WINDOWS`] and nothing else. Never the caller's.
-pub fn system_env() -> SystemEnv {
+/// Where Windows keeps the machine's own variables, which only an
+/// administrator writes.
+pub const MACHINE_ENVIRONMENT_KEY: &str =
+    r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment";
+
+/// The prefix of the fake tool's settings, which the tests of the
+/// `officina` crate set on `officina run` for the action to read (feature
+/// `test-seams` only, never in a shipped binary).
+#[cfg(feature = "test-seams")]
+pub const TEST_PASSED_PREFIX: &str = "FAKE_TOOL_";
+
+/// The environment every launch starts from (D-173, D-175): the one Windows
+/// builds from the registry for the user, as Explorer gives a new process,
+/// with `ComSpec` the system folder's `cmd.exe` and `PATHEXT` the
+/// machine's, since a user value of either is the user's, so a session's,
+/// to set. Nothing comes from the caller's environment: a variable a session
+/// sets for one `officina run` (`PYTHONPATH`, `NODE_OPTIONS`, `KUBECONFIG`)
+/// never reaches the program the author approved. When the block cannot be
+/// built: `PATH` the system and Windows folders, `SystemRoot` the Windows
+/// folder, `ComSpec` the system `cmd.exe`. Off Windows (Linux is v1):
+/// [`PATH_OFF_WINDOWS`] alone.
+pub fn launch_env() -> Vec<(String, String)> {
     #[cfg(windows)]
-    let found = crate::platform::windows::registry_environment().unwrap_or_else(|_| {
+    {
+        use crate::platform::windows::{Hive, registry_environment, registry_string};
         let system = crate::relay::home::system_dir().unwrap_or_default();
-        let windows = system
+        let windows_dir = system
             .parent()
             .map(std::path::Path::to_path_buf)
             .unwrap_or_default();
-        vec![(
-            "PATH".to_owned(),
-            format!("{};{}", system.display(), windows.display()),
-        )]
-    });
+        let mut vars = registry_environment().unwrap_or_else(|_| {
+            vec![
+                (
+                    "PATH".to_owned(),
+                    format!("{};{}", system.display(), windows_dir.display()),
+                ),
+                ("SystemRoot".to_owned(), windows_dir.display().to_string()),
+            ]
+        });
+        vars.retain(|(name, _)| {
+            !name.eq_ignore_ascii_case("ComSpec") && !name.eq_ignore_ascii_case("PATHEXT")
+        });
+        vars.push((
+            "ComSpec".to_owned(),
+            system.join("cmd.exe").display().to_string(),
+        ));
+        if let Some(pathext) =
+            registry_string(Hive::LocalMachine, MACHINE_ENVIRONMENT_KEY, "PATHEXT")
+        {
+            vars.push(("PATHEXT".to_owned(), pathext));
+        }
+        vars
+    }
     #[cfg(not(windows))]
-    let found = [("PATH".to_owned(), PATH_OFF_WINDOWS.to_owned())];
-    SYSTEM_ENV
-        .iter()
-        .map(|name| {
-            let value = found
-                .iter()
-                .find(|(key, _)| key.eq_ignore_ascii_case(name))
-                .map(|(_, value)| value.clone());
-            (*name, value)
-        })
-        .collect()
+    {
+        vec![("PATH".to_owned(), PATH_OFF_WINDOWS.to_owned())]
+    }
 }
 
 /// The command for a launch (AD-30): the program itself, its arguments as a
-/// vector, the project folder as working directory, the [`SYSTEM_ENV`]
-/// variables of `system` (D-173), then the declared `env` added and
+/// vector, the project folder as working directory, an environment cleared
+/// then built from `base` ([`launch_env`]), the declared `env` added and
 /// `env_remove` removed, stdin null, no console window.
-pub fn command_for(launch: &Launch, system: &[(&str, Option<String>)]) -> Command {
+pub fn command_for(launch: &Launch, base: &[(String, String)]) -> Command {
     let mut command = Command::new(&launch.program);
     command
         .args(&launch.args)
         .current_dir(&launch.cwd)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    for (name, value) in system {
-        match value {
-            Some(value) => command.env(name, value),
-            None => command.env_remove(name),
-        };
-    }
+        .stderr(Stdio::piped())
+        .env_clear()
+        .envs(base.iter().map(|(name, value)| (name, value)));
+    #[cfg(feature = "test-seams")]
+    command.envs(
+        std::env::vars_os()
+            .filter(|(name, _)| name.to_string_lossy().starts_with(TEST_PASSED_PREFIX)),
+    );
     command.envs(&launch.env);
     for key in &launch.env_remove {
         command.env_remove(key);
@@ -155,7 +181,7 @@ pub(super) fn spawn(
 ) -> i32 {
     let tree = ProcessTree::new();
     let started = Instant::now();
-    let mut child = match command_for(launch, &system_env()).spawn() {
+    let mut child = match command_for(launch, &launch_env()).spawn() {
         Ok(child) => child,
         Err(e) => {
             let _ = writeln!(err, "officina: could not start {}: {e}", launch.program);
@@ -220,28 +246,40 @@ mod tests {
     use super::*;
     use std::collections::BTreeMap;
 
-    /// AC 3 of story 2.14: the launch's `PATH` comes from the registry's
-    /// environment, whatever this process's says.
+    /// AC 3 of story 2.14, D-175: the launch's environment is the
+    /// registry's, its `PATH` holding the system folder, `ComSpec` the
+    /// system `cmd.exe` and each of `ComSpec` and `PATHEXT` once.
     #[cfg(windows)]
     #[test]
-    fn system_env_is_the_registrys() {
-        let system = system_env();
-        let names: Vec<&str> = system.iter().map(|(name, _)| *name).collect();
-        assert_eq!(names, SYSTEM_ENV);
-        let path = system
-            .iter()
-            .find(|(name, _)| *name == "PATH")
-            .and_then(|(_, value)| value.clone())
-            .expect("the registry's environment has a Path");
-        let system_dir = crate::relay::home::system_dir()
-            .unwrap()
-            .to_string_lossy()
-            .to_lowercase();
+    fn launch_env_is_the_registrys() {
+        let vars = launch_env();
+        let value = |name: &str| {
+            let found: Vec<&String> = vars
+                .iter()
+                .filter(|(key, _)| key.eq_ignore_ascii_case(name))
+                .map(|(_, value)| value)
+                .collect();
+            assert!(found.len() <= 1, "{name} once: {found:?}");
+            found.first().map(|v| (*v).clone())
+        };
+        let path = value("PATH").expect("the registry's environment has a Path");
+        let system_dir = crate::relay::home::system_dir().unwrap();
+        let system_text = system_dir.to_string_lossy().to_lowercase();
         assert!(
             std::env::split_paths(&path)
-                .any(|dir| dir.to_string_lossy().to_lowercase() == system_dir),
+                .any(|dir| dir.to_string_lossy().to_lowercase() == system_text),
             "{path}"
         );
+        assert_eq!(
+            value("ComSpec"),
+            Some(system_dir.join("cmd.exe").display().to_string())
+        );
+        let machine = crate::platform::windows::registry_string(
+            crate::platform::windows::Hive::LocalMachine,
+            MACHINE_ENVIRONMENT_KEY,
+            "PATHEXT",
+        );
+        assert_eq!(value("PATHEXT"), machine, "the machine's PATHEXT only");
     }
 
     #[test]
@@ -256,11 +294,11 @@ mod tests {
                 .map(|k| (*k).to_owned())
                 .collect(),
         };
-        let system = vec![
-            ("PATH", Some(r"C:\Windows\System32".to_owned())),
-            ("WSLENV", None),
+        let base = vec![
+            ("PATH".to_owned(), r"C:\Windows\System32".to_owned()),
+            ("WSLENV".to_owned(), "USERPROFILE/p".to_owned()),
         ];
-        let command = command_for(&launch, &system);
+        let command = command_for(&launch, &base);
         let envs: Vec<(String, Option<String>)> = command
             .get_envs()
             .map(|(k, v)| {
@@ -270,12 +308,22 @@ mod tests {
                 )
             })
             .collect();
+        // A cleared environment lists only what it sets: a removed name is
+        // simply absent.
         for removed in officina_core::relay::argv::WSL_REMOVED_ENV {
-            assert!(envs.contains(&((*removed).to_owned(), None)), "{envs:?}");
+            assert!(
+                !envs.iter().any(|(name, _)| name == removed),
+                "{removed} reaches wsl.exe: {envs:?}"
+            );
         }
         assert!(
             envs.contains(&("PATH".to_owned(), Some(r"C:\Windows\System32".to_owned()))),
-            "the system PATH, not the caller's: {envs:?}"
+            "the base PATH, not the caller's: {envs:?}"
+        );
+        assert!(
+            envs.iter()
+                .all(|(name, _)| name == "PATH" || name == "PROBE_MODE"),
+            "only the base and the catalogue's env: {envs:?}"
         );
         assert!(envs.contains(&("PROBE_MODE".to_owned(), Some("read-only".to_owned()))));
         assert_eq!(

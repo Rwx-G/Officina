@@ -33,8 +33,10 @@ workspace = true
 # tests, so the shipped exe a session can call holds no authority (P-5).
 window-authority = []
 # Lets the tests of the `officina` crate point the relay's `git` resolution
-# elsewhere through `OFFICINA_TEST_GIT` (story 2.14). Enabled only by that
-# crate's dev-dependencies: the exe a session can call never reads it, which
+# elsewhere through `OFFICINA_TEST_GIT` (story 2.14), and pass the fake
+# tool's `FAKE_TOOL_` settings to an action, whose environment is otherwise
+# the registry's alone (story 2.16). Enabled only by that crate's
+# dev-dependencies: the exe a session can call never reads either, which
 # the CI step that searches its feature graph checks.
 test-seams = []
 
