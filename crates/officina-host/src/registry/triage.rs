@@ -612,13 +612,19 @@ impl Writer {
         Ok(read::triage_calls_since(&self.conn, from_ms)?)
     }
 
-    /// True when `case` may be queued under `case_key` (D-81, D-87): its
-    /// last call was not refused, nor answered, on the same inputs, and
-    /// did not fail on them since the model was last turned on or lifted.
+    /// True when `case` may be queued under `case_key` (D-81, D-87 as the
+    /// owner amended it): its last call on the same inputs was not
+    /// answered, was not refused since the model was last turned on, and
+    /// did not fail since the model was last turned on or lifted.
     pub fn may_queue(&self, case_key: &str, case: &TriageCase) -> Result<bool, RegistryError> {
         let last = read::last_call_for(&self.conn, case_key)?;
-        let since = read::model_facts(&self.conn, None)?.since_ms();
-        Ok(may_send(last.as_ref(), &case.input_hash(), since))
+        let facts = read::model_facts(&self.conn, None)?;
+        Ok(may_send(
+            last.as_ref(),
+            &case.input_hash(),
+            facts.since_ms(),
+            facts.enabled_since_ms(),
+        ))
     }
 
     /// Lifts the pause when the `claude` binary changed since it paused

@@ -197,6 +197,18 @@ impl ModelFacts {
         enabled.max(lifted)
     }
 
+    /// Since when a refused case may be sent once more: the latest turning
+    /// on of the model (D-87 as amended by the owner, see
+    /// `epic-3-decisions.md`): the author turning it on again is the
+    /// moment a refusal's cause may have been fixed. A pause lifted by a
+    /// new binary does not count.
+    pub fn enabled_since_ms(&self) -> i64 {
+        self.setting
+            .as_ref()
+            .filter(|s| s.value.on)
+            .map_or(i64::MIN, |s| s.at_ms)
+    }
+
     /// The model's part of the proposals (AD-52): its stored answers while
     /// it serves, each only while the case it answered is the session's
     /// case now.
@@ -234,20 +246,22 @@ impl ModelFacts {
 }
 
 /// True when a case may be sent under the last proposal call about it
-/// (D-87): never sent; sent on other inputs; or its call on these inputs
+/// (D-87): never sent; sent on other inputs; its call on these inputs
 /// failed (`failed`, `timeout`, `invalid`) before `since_ms`, the latest
-/// enable or lift. An answer is held, and a refusal is never sent again on
-/// the same inputs.
+/// enable or lift; or it was refused before `enabled_ms`, the latest
+/// turning on, so turning the model on again sends each refused case once
+/// more. An answer is held.
 ///
 /// ```
 /// use officina_core::registry::model::{LastCall, may_send};
 /// use officina_core::registry::types::TriageOutcome;
 /// let refused = LastCall { outcome: TriageOutcome::Refused, refusal: None, input_hash: Some("h".into()), started_at_ms: 5 };
-/// assert!(!may_send(Some(&refused), "h", 10));
-/// assert!(may_send(Some(&refused), "other", 10));
-/// assert!(may_send(None, "h", 10));
+/// assert!(!may_send(Some(&refused), "h", 10, 1));
+/// assert!(may_send(Some(&refused), "h", 10, 10), "turned on again since");
+/// assert!(may_send(Some(&refused), "other", 10, 1));
+/// assert!(may_send(None, "h", 10, 1));
 /// ```
-pub fn may_send(last: Option<&LastCall>, input_hash: &str, since_ms: i64) -> bool {
+pub fn may_send(last: Option<&LastCall>, input_hash: &str, since_ms: i64, enabled_ms: i64) -> bool {
     let Some(last) = last else {
         return true;
     };
@@ -255,7 +269,8 @@ pub fn may_send(last: Option<&LastCall>, input_hash: &str, since_ms: i64) -> boo
         return true;
     }
     match last.outcome {
-        TriageOutcome::Answer | TriageOutcome::Refused => false,
+        TriageOutcome::Answer => false,
+        TriageOutcome::Refused => last.started_at_ms < enabled_ms,
         TriageOutcome::Failed | TriageOutcome::Timeout | TriageOutcome::Invalid => {
             last.started_at_ms < since_ms
         }
@@ -343,7 +358,7 @@ pub fn row_model(
     };
     let hash = case.input_hash();
     let last = facts.last_calls.get(&case_key(&session.session_id));
-    if facts.queues() && may_send(last, &hash, facts.since_ms()) {
+    if facts.queues() && may_send(last, &hash, facts.since_ms(), facts.enabled_since_ms()) {
         return RowModel::Pending;
     }
     match last {
@@ -608,8 +623,9 @@ mod tests {
         assert_eq!(off.input(&sessions, &excerpts), ModelInput::default());
     }
 
-    /// D-87, D-81: a refused case waits for new inputs; a failed one waits
-    /// for the next enable or lift; an answered one is held.
+    /// D-87, D-81 and the owner's amendment: a refused case waits for new
+    /// inputs or the next turning on, once; a failed one waits for the
+    /// next enable or lift; an answered one is held.
     #[test]
     fn a_case_is_sent_again_only_on_new_inputs_or_after_a_lift() {
         let last = |outcome, at| LastCall {
@@ -619,17 +635,35 @@ mod tests {
             started_at_ms: at,
         };
         for outcome in TriageOutcome::ALL {
-            assert!(may_send(Some(&last(*outcome, 10)), "new", 0), "{outcome:?}");
+            assert!(
+                may_send(Some(&last(*outcome, 10)), "new", 0, 0),
+                "{outcome:?}"
+            );
         }
-        assert!(!may_send(Some(&last(TriageOutcome::Answer, 10)), "h", 20));
-        assert!(!may_send(Some(&last(TriageOutcome::Refused, 10)), "h", 20));
+        assert!(!may_send(
+            Some(&last(TriageOutcome::Answer, 10)),
+            "h",
+            20,
+            20
+        ));
+        let refused = last(TriageOutcome::Refused, 10);
+        assert!(
+            !may_send(Some(&refused), "h", 20, 5),
+            "a lift alone sends nothing again"
+        );
+        assert!(
+            may_send(Some(&refused), "h", 20, 20),
+            "turned on again since"
+        );
+        let refused_again = last(TriageOutcome::Refused, 25);
+        assert!(!may_send(Some(&refused_again), "h", 20, 20), "once");
         for failed in [
             TriageOutcome::Failed,
             TriageOutcome::Timeout,
             TriageOutcome::Invalid,
         ] {
-            assert!(!may_send(Some(&last(failed, 10)), "h", 5));
-            assert!(may_send(Some(&last(failed, 10)), "h", 20));
+            assert!(!may_send(Some(&last(failed, 10)), "h", 5, 5));
+            assert!(may_send(Some(&last(failed, 10)), "h", 20, 5));
         }
     }
 

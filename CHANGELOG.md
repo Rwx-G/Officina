@@ -485,6 +485,11 @@ project uses [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Turning the triage model on again sends once more each row it had
+  refused (v0.3), on the same inputs: fixing the cause (an empty work
+  folder, a native `claude.exe`) no longer leaves those rows on the
+  default until their session changes.
+
 - The window says when it cannot write `relay/known-projects.json`, the
   record a broken floor falls back to: one `known_projects_unwritable` gate
   error in the journal, listed in the Relay view and counted by

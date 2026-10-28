@@ -934,6 +934,44 @@ mod proposals {
         assert_eq!(sent[0].case_key, case_key("r0"));
     }
 
+    /// The owner's amendment of D-87: turning the model on again sends a
+    /// row it had refused once more, on the same inputs; refused again, it
+    /// waits for the next turning on.
+    #[test]
+    fn refused_row_is_sent_once_more_when_the_model_is_turned_on_again() {
+        let setup = Setup::new("triage");
+        let home = setup.home();
+        let mut writer = writer_on(&home);
+        ended_sessions(
+            &home,
+            &mut writer,
+            "q",
+            "C:/work/api",
+            &["Ship it FAKE-VERDICT:finished"],
+            YESTERDAY,
+        );
+        enable(&mut writer, NOW - 10 * MINUTE);
+        let busy = workdir(&home);
+        std::fs::create_dir_all(&busy).unwrap();
+        std::fs::write(busy.join("left.txt"), "x").unwrap();
+        let (done, at) = drive(&setup, &mut writer, NOW, |job| job);
+        assert_eq!(done[0].refusal, Some(TriageRefusal::WorkdirNotEmpty));
+        let (again, at) = drive(&setup, &mut writer, at, |job| job);
+        assert!(again.is_empty(), "same inputs, not turned on again");
+        writer.set_triage_model(false, at).unwrap().unwrap();
+        writer.set_triage_model(true, at + 1).unwrap().unwrap();
+        let (resent, at) = drive(&setup, &mut writer, at + CALL_SPACING_MS, |job| job);
+        assert_eq!(resent.len(), 1, "sent once more");
+        assert_eq!(resent[0].refusal, Some(TriageRefusal::WorkdirNotEmpty));
+        let (none, at) = drive(&setup, &mut writer, at + CALL_SPACING_MS, |job| job);
+        assert!(none.is_empty(), "once only");
+        std::fs::remove_file(busy.join("left.txt")).unwrap();
+        writer.set_triage_model(true, at + 1).unwrap().unwrap();
+        let (answered, _) = drive(&setup, &mut writer, at + CALL_SPACING_MS, |job| job);
+        assert_eq!(answered.len(), 1);
+        assert_eq!(answered[0].outcome, TriageOutcome::Answer);
+    }
+
     /// AC 6 (FR-10 as amended, D-69): the fake says `finished` on 20 rows
     /// the author confirms `to_resume`: after the 20th, the model turns
     /// itself off with its reason, and a newer winning dry run is needed.
