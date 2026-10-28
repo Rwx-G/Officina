@@ -13,6 +13,12 @@ officina-core.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror = "2.0.21"
+# HTTP actions (AD-36): rustls with ring and the platform verifier, so the
+# Windows store and an enterprise CA are trusted and no root set is bundled
+# (`webpki-roots` stays out). ureq's stable `rustls` feature pulls
+# `webpki-roots`, so its unstable `rustls-no-provider` and `_ring` are named
+# instead: pinned, since ureq may change them in a minor version.
+ureq = { version = "=3.5.0", default-features = false, features = ["rustls-no-provider", "_ring", "platform-verifier"] }
 
 [lints]
 workspace = true
@@ -27,6 +33,10 @@ window-authority = []
 name = "authority"
 required-features = ["window-authority"]
 
+[[test]]
+name = "relay_http"
+required-features = ["window-authority"]
+
 # Approves, stops or resumes the relay of a fixture home through the
 # authority, for the e2e fixtures (D-25); never part of a shipped binary.
 [[example]]
@@ -34,7 +44,7 @@ name = "approve_fixture"
 required-features = ["window-authority"]
 
 [target."cfg(windows)".dependencies]
-windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_System_Diagnostics_ToolHelp", "Win32_System_Threading", "Win32_System_JobObjects", "Win32_System_SystemInformation"] }
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_System_Diagnostics_ToolHelp", "Win32_System_Threading", "Win32_System_JobObjects", "Win32_System_SystemInformation", "Win32_Security_Credentials"] }
 
 [dev-dependencies]
 tempfile = "3.27.0"

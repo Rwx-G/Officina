@@ -29,11 +29,14 @@ pub mod approvals;
 pub mod argv;
 pub mod catalogue;
 pub mod classes;
+pub mod credential;
 pub mod gate;
+pub mod http;
 pub mod journal;
 pub mod params;
 pub mod run;
 pub mod shell;
+pub mod url;
 pub mod view;
 
 use serde::{Deserialize, Serialize};

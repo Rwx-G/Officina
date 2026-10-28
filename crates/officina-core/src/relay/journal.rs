@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use super::catalogue::ActionClass;
 use super::gate::DenyKind;
+use super::http::HttpMethod;
 
 /// Version of the journal line format. Readers skip lines of another
 /// version without counting them corrupt.
@@ -154,8 +155,19 @@ pub struct RunStarted {
     pub action: String,
     pub class: ActionClass,
     pub params: BTreeMap<String, String>,
-    /// Exactly what is started: the program, then its arguments.
+    /// Exactly what is started: the program, then its arguments. Absent
+    /// for an HTTP action, which records its request instead.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub argv: Vec<String>,
+    /// An HTTP action's method (AD-36, D-36).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub method: Option<HttpMethod>,
+    /// An HTTP action's URL, its placeholders filled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    /// The credential an HTTP request carries, by name: never its secret.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credential: Option<String>,
     pub catalogue_hash: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub approval_id: Option<String>,
@@ -181,6 +193,11 @@ closed_enum! {
         Timeout,
         /// The program could not start.
         SpawnFailed,
+        /// An HTTP action got a response; `status` holds its code (D-36).
+        Http,
+        /// An HTTP action got no response: name resolution, connection or
+        /// TLS failure (D-35, D-36).
+        ConnectFailed,
     }
 }
 
@@ -205,12 +222,25 @@ pub struct RunFinished {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exit_code: Option<i64>,
     pub duration_ms: i64,
-    pub stdout: StreamSummary,
-    pub stderr: StreamSummary,
+    /// A process's streams; absent for an HTTP action.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stdout: Option<StreamSummary>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stderr: Option<StreamSummary>,
     /// Bytes read but not passed on, past `max_output_kib` (AD-31).
     #[serde(default, skip_serializing_if = "is_zero")]
     pub dropped_bytes: u64,
-    /// Why the program could not start.
+    /// An HTTP response's status code (D-36).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<u16>,
+    /// The body bytes read and passed on, at most `max_output_kib`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub body_bytes: Option<u64>,
+    /// SHA-256 of those bytes, lowercase hex.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub body_sha256: Option<String>,
+    /// Why the program could not start, why no response came, or that the
+    /// body was cut.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
 }
@@ -260,6 +290,12 @@ closed_enum! {
         /// The code changed since the dry run the approval was given for: the
         /// approval stays unconsumed (D-170).
         CheckNotSatisfied,
+        /// The credential an HTTP action names is not in the Credential
+        /// Manager: nothing was sent, an approval stays unconsumed (D-29).
+        CredentialMissing,
+        /// The credential cannot be read or decoded: nothing was sent, an
+        /// approval stays unconsumed (D-29).
+        CredentialUnreadable,
     }
 }
 
@@ -417,6 +453,9 @@ mod tests {
                 class: ActionClass::Free,
                 params: BTreeMap::from([("group".into(), "lab-web".into())]),
                 argv: vec!["C:/path/to/tool.exe".into(), "lab-web".into()],
+                method: None,
+                url: None,
+                credential: None,
                 catalogue_hash: "00".into(),
                 approval_id: None,
                 tree: Some(TreeFingerprint {
@@ -430,9 +469,12 @@ mod tests {
                 outcome: RunOutcome::Exited,
                 exit_code: Some(3_221_225_477),
                 duration_ms: 12,
-                stdout: stream.clone(),
-                stderr: stream,
+                stdout: Some(stream.clone()),
+                stderr: Some(stream),
                 dropped_bytes: 0,
+                status: None,
+                body_bytes: None,
+                body_sha256: None,
                 detail: None,
             }),
             JournalKind::Refused => JournalEntry::Refused(Refused {
@@ -491,6 +533,84 @@ mod tests {
                 ParsedLine::Line(JournalLine::new(7, sample(*kind)))
             );
         }
+    }
+
+    /// AC 9 of story 2.11 (D-36): an HTTP run records its request instead of
+    /// an argument vector, and its response instead of streams.
+    #[test]
+    fn http_lines_round_trip() {
+        let started = JournalEntry::RunStarted(RunStarted {
+            run_id: "r2".into(),
+            project: "lab".into(),
+            session_id: None,
+            action: "health".into(),
+            class: ActionClass::Free,
+            params: BTreeMap::from([("check".into(), "a b".into())]),
+            argv: Vec::new(),
+            method: Some(HttpMethod::Get),
+            url: Some("https://monitoring.example.com/a%20b".into()),
+            credential: Some("monitoring".into()),
+            catalogue_hash: "00".into(),
+            approval_id: None,
+            tree: None,
+            timeout_s: Some(60),
+        });
+        let response = |outcome: RunOutcome,
+                        status: Option<u16>,
+                        body: Option<&[u8]>,
+                        detail: Option<&str>| {
+            JournalEntry::RunFinished(RunFinished {
+                run_id: "r2".into(),
+                outcome,
+                exit_code: None,
+                duration_ms: 40,
+                stdout: None,
+                stderr: None,
+                dropped_bytes: 0,
+                status,
+                body_bytes: body.map(|b| b.len() as u64),
+                body_sha256: body.map(crate::relay::sha256_hex),
+                detail: detail.map(str::to_owned),
+            })
+        };
+        let finished = [
+            response(RunOutcome::Http, Some(503), Some(b"down"), None),
+            response(RunOutcome::Timeout, None, None, None),
+            response(RunOutcome::ConnectFailed, None, None, Some("refused")),
+        ];
+        for entry in std::iter::once(started).chain(finished) {
+            let line = JournalLine::new(9, entry.clone()).to_line();
+            let value: serde_json::Value = serde_json::from_str(&line).unwrap();
+            let object = value.as_object().unwrap();
+            match &entry {
+                JournalEntry::RunStarted(_) => {
+                    assert!(!object.contains_key("argv"), "{line}");
+                    assert_eq!(value["method"], "GET");
+                    assert_eq!(value["credential"], "monitoring");
+                }
+                _ => assert!(
+                    !object.contains_key("stdout") && !object.contains_key("stderr"),
+                    "{line}"
+                ),
+            }
+            assert_eq!(
+                parse_line(line.trim_end()),
+                ParsedLine::Line(JournalLine::new(9, entry))
+            );
+        }
+        let http: serde_json::Value = serde_json::from_str(
+            &JournalLine::new(9, response(RunOutcome::Http, Some(200), Some(b"ok"), None))
+                .to_line(),
+        )
+        .unwrap();
+        assert_eq!(
+            (&http["outcome"], &http["status"], &http["body_bytes"]),
+            (
+                &serde_json::json!("http"),
+                &serde_json::json!(200),
+                &serde_json::json!(2)
+            )
+        );
     }
 
     #[test]

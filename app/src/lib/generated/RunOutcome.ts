@@ -3,4 +3,4 @@
 /**
  * How a run ended (AD-32).
  */
-export type RunOutcome = "exited" | "timeout" | "spawn_failed";
+export type RunOutcome = "exited" | "timeout" | "spawn_failed" | "http" | "connect_failed";

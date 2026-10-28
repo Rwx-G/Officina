@@ -1,0 +1,202 @@
+{
+  "schema": 1,
+  "cases": [
+    {
+      "name": "literal template fills to itself",
+      "template": "https://monitoring.example.com/api/v1/health?verbose=1",
+      "params": {},
+      "expect": {"url": "https://monitoring.example.com/api/v1/health?verbose=1"}
+    },
+    {
+      "name": "a placeholder fills a whole path segment, unreserved bytes kept",
+      "template": "https://monitoring.example.com/api/{check}",
+      "params": {"check": "node-exporter_v1.2~x"},
+      "expect": {"url": "https://monitoring.example.com/api/node-exporter_v1.2~x"}
+    },
+    {
+      "name": "a slash in a value cannot add a segment",
+      "template": "https://monitoring.example.com/api/{check}/status",
+      "params": {"check": "a/b"},
+      "expect": {"url": "https://monitoring.example.com/api/a%2Fb/status"}
+    },
+    {
+      "name": "a placeholder fills a whole query value; & and = cannot add a parameter",
+      "template": "https://monitoring.example.com/search?q={q}&limit=10",
+      "params": {"q": "x&admin=1"},
+      "expect": {"url": "https://monitoring.example.com/search?q=x%26admin%3D1&limit=10"}
+    },
+    {
+      "name": "reserved bytes are encoded: space, ?, #, %, +, :, @",
+      "template": "https://monitoring.example.com/{v}",
+      "params": {"v": "a b?c#d%e+f:g@h"},
+      "expect": {"url": "https://monitoring.example.com/a%20b%3Fc%23d%25e%2Bf%3Ag%40h"}
+    },
+    {
+      "name": "an encoded-looking value is encoded again, never decoded",
+      "template": "https://monitoring.example.com/{v}",
+      "params": {"v": "%2E%2E"},
+      "expect": {"url": "https://monitoring.example.com/%252E%252E"}
+    },
+    {
+      "name": "non-ASCII bytes are encoded one by one",
+      "template": "https://monitoring.example.com/hosts/{host}",
+      "params": {"host": "café-€"},
+      "expect": {"url": "https://monitoring.example.com/hosts/caf%C3%A9-%E2%82%AC"}
+    },
+    {
+      "name": "a backslash is encoded",
+      "template": "https://monitoring.example.com/{v}",
+      "params": {"v": "a\\b"},
+      "expect": {"url": "https://monitoring.example.com/a%5Cb"}
+    },
+    {
+      "name": "port and plain http without a credential",
+      "template": "http://10.0.0.10:8080/metrics/{job}",
+      "params": {"job": "node"},
+      "expect": {"url": "http://10.0.0.10:8080/metrics/node"}
+    },
+    {
+      "name": "IPv6 literal host",
+      "template": "https://[::1]:8443/{x}",
+      "params": {"x": "y"},
+      "expect": {"url": "https://[::1]:8443/y"}
+    },
+    {
+      "name": "a value leading with / is fine in a URL",
+      "template": "https://monitoring.example.com/{v}",
+      "params": {"v": "/srv/data"},
+      "expect": {"url": "https://monitoring.example.com/%2Fsrv%2Fdata"}
+    },
+    {
+      "name": "refused: a leading dash (AD-30)",
+      "template": "https://monitoring.example.com/{v}",
+      "params": {"v": "-x"},
+      "expect": {"refusal": {"kind": "value", "param": "v", "refusal": "leading_dash"}}
+    },
+    {
+      "name": "refused: a dot segment, which a server would resolve",
+      "template": "https://monitoring.example.com/api/{v}",
+      "params": {"v": ".."},
+      "expect": {"refusal": {"kind": "value", "param": "v", "refusal": "dot_segment"}}
+    },
+    {
+      "name": "refused: a control character",
+      "template": "https://monitoring.example.com/{v}",
+      "params": {"v": "a\r\nHost: x"},
+      "expect": {"refusal": {"kind": "value", "param": "v", "refusal": "control_character"}}
+    },
+    {
+      "name": "refused: an invisible formatting character",
+      "template": "https://monitoring.example.com/{v}",
+      "params": {"v": "a‮b"},
+      "expect": {"refusal": {"kind": "value", "param": "v", "refusal": "format_character"}}
+    },
+    {
+      "name": "refused: an empty value",
+      "template": "https://monitoring.example.com/?q={v}",
+      "params": {"v": ""},
+      "expect": {"refusal": {"kind": "value", "param": "v", "refusal": "empty"}}
+    },
+    {
+      "name": "refused: a missing value",
+      "template": "https://monitoring.example.com/{v}",
+      "params": {},
+      "expect": {"refusal": {"kind": "missing_parameter", "param": "v"}}
+    },
+    {
+      "name": "issue: no scheme",
+      "template": "monitoring.example.com/api",
+      "expect": {"issue": "malformed"}
+    },
+    {
+      "name": "issue: another scheme",
+      "template": "ftp://monitoring.example.com/",
+      "expect": {"issue": "scheme"}
+    },
+    {
+      "name": "issue: an uppercase scheme",
+      "template": "HTTPS://monitoring.example.com/",
+      "expect": {"issue": "scheme"}
+    },
+    {
+      "name": "issue: a fragment",
+      "template": "https://monitoring.example.com/api#top",
+      "expect": {"issue": "fragment"}
+    },
+    {
+      "name": "issue: an unbalanced brace",
+      "template": "https://monitoring.example.com/{check",
+      "expect": {"issue": "braces"}
+    },
+    {
+      "name": "issue: a placeholder that names no parameter",
+      "template": "https://monitoring.example.com/{Check}",
+      "expect": {"issue": "braces"}
+    },
+    {
+      "name": "issue: userinfo (D-40)",
+      "template": "https://user01:pass@monitoring.example.com/",
+      "expect": {"issue": "userinfo"}
+    },
+    {
+      "name": "issue: a placeholder in the host",
+      "template": "https://{host}.example.com/",
+      "expect": {"issue": "placeholder_in_authority"}
+    },
+    {
+      "name": "issue: a placeholder as the port",
+      "template": "https://monitoring.example.com:{port}/",
+      "expect": {"issue": "placeholder_in_authority"}
+    },
+    {
+      "name": "issue: an empty host",
+      "template": "https:///api",
+      "expect": {"issue": "host"}
+    },
+    {
+      "name": "issue: a host with an empty label",
+      "template": "https://monitoring..example.com/",
+      "expect": {"issue": "host"}
+    },
+    {
+      "name": "issue: a port out of range",
+      "template": "https://monitoring.example.com:70000/",
+      "expect": {"issue": "port"}
+    },
+    {
+      "name": "issue: an empty port",
+      "template": "https://monitoring.example.com:/",
+      "expect": {"issue": "port"}
+    },
+    {
+      "name": "issue: a space in a literal",
+      "template": "https://monitoring.example.com/a b",
+      "expect": {"issue": "invalid_character"}
+    },
+    {
+      "name": "issue: a bad percent escape",
+      "template": "https://monitoring.example.com/a%zz",
+      "expect": {"issue": "invalid_character"}
+    },
+    {
+      "name": "issue: a placeholder inside a segment",
+      "template": "https://monitoring.example.com/v{n}/status",
+      "expect": {"issue": "partial_segment"}
+    },
+    {
+      "name": "issue: two placeholders in one segment",
+      "template": "https://monitoring.example.com/{a}{b}",
+      "expect": {"issue": "partial_segment"}
+    },
+    {
+      "name": "issue: a placeholder as a query key",
+      "template": "https://monitoring.example.com/?{key}=1",
+      "expect": {"issue": "placeholder_in_query_key"}
+    },
+    {
+      "name": "issue: a placeholder inside a query value",
+      "template": "https://monitoring.example.com/?q=prefix-{v}",
+      "expect": {"issue": "partial_query_value"}
+    }
+  ]
+}

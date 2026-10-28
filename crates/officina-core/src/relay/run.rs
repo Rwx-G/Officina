@@ -15,6 +15,7 @@ use super::catalogue::{
 };
 use super::classes::{self, CHECK_VALID_MS};
 use super::gate::{LIST_COMMAND, normalise_cwd};
+use super::http::{self, HttpPlan};
 use super::journal::{JournalLine, RefusalReason, TreeFingerprint};
 use crate::floor::{floor_dir_of, join_project_path};
 
@@ -83,7 +84,11 @@ pub struct RunPlan {
     pub project: String,
     pub action: String,
     pub class: ActionClass,
-    pub launch: Launch,
+    /// What runs: a process or an HTTP request.
+    pub target: Target,
+    /// The project folder as the floor declares it (D-6): a process's
+    /// working directory, and the tree a check binds.
+    pub project_dir: String,
     /// The approved hash, equal to the current one.
     pub catalogue_hash: String,
     pub timeout_s: u32,
@@ -99,12 +104,41 @@ pub struct RunPlan {
     pub keeps_output: bool,
 }
 
+/// What a plan runs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Target {
+    /// A program, as an argument vector (AD-30).
+    Process(Launch),
+    /// An HTTP request (AD-36).
+    Http(HttpPlan),
+}
+
 impl RunPlan {
-    /// The program, then its arguments: what the journal records as `argv`.
+    /// The program, then its arguments: what the journal records as `argv`;
+    /// empty for an HTTP action, which records its request instead.
     pub fn argv(&self) -> Vec<String> {
-        std::iter::once(self.launch.program.clone())
-            .chain(self.launch.args.iter().cloned())
-            .collect()
+        match &self.target {
+            Target::Process(launch) => std::iter::once(launch.program.clone())
+                .chain(launch.args.iter().cloned())
+                .collect(),
+            Target::Http(_) => Vec::new(),
+        }
+    }
+
+    /// The process to start, for a process action.
+    pub fn launch(&self) -> Option<&Launch> {
+        match &self.target {
+            Target::Process(launch) => Some(launch),
+            Target::Http(_) => None,
+        }
+    }
+
+    /// The request to send, for an HTTP action.
+    pub fn http(&self) -> Option<&HttpPlan> {
+        match &self.target {
+            Target::Http(plan) => Some(plan),
+            Target::Process(_) => None,
+        }
     }
 }
 
@@ -163,6 +197,27 @@ impl Refusal {
         Refusal::new(
             RefusalReason::ApprovalUnavailable,
             &format!("the approval request cannot be written ({why})"),
+            Some(project),
+        )
+    }
+
+    /// The credential an HTTP action names is not in the Credential
+    /// Manager: nothing was sent, and an approval stays (D-29).
+    pub fn credential_missing(project: &str, name: &str) -> Refusal {
+        Refusal::new(
+            RefusalReason::CredentialMissing,
+            &format!(
+                "the credential {name} is not in the Windows Credential Manager; the author stores it with the line `officina doctor` prints"
+            ),
+            Some(project),
+        )
+    }
+
+    /// The credential cannot be read; `why` never holds the secret.
+    pub fn credential_unreadable(project: &str, name: &str, why: &str) -> Refusal {
+        Refusal::new(
+            RefusalReason::CredentialUnreadable,
+            &format!("the credential {name} cannot be read ({why})"),
             Some(project),
         )
     }
@@ -321,21 +376,26 @@ pub fn plan(
         .find(|p| p.name == *project)
         .map(|p| join_project_path(floor_dir_of(floor_path), &p.path))
         .unwrap_or_else(|| approved.canonical.projects[*project].path.clone());
-    let launch =
-        argv::build(validated, params, &project_dir, inputs.system_dir).map_err(|refusal| {
-            let reason = match refusal {
-                ArgvRefusal::MissingParameter { .. } => RefusalReason::MissingParameter,
-                ArgvRefusal::UnknownParameter { .. } => RefusalReason::UnknownParameter,
-                ArgvRefusal::Value { .. } => RefusalReason::InvalidValue,
-            };
-            Refusal {
-                reason,
-                detail: one_line(&format!(
-                    "{refusal}; run `{LIST_COMMAND}` to see what it accepts"
-                )),
-                project: Some((*project).to_owned()),
-            }
-        })?;
+    let target = match http::build(validated, params, &relay.catalogue.credentials) {
+        Some(request) => request.map(Target::Http),
+        None => {
+            argv::build(validated, params, &project_dir, inputs.system_dir).map(Target::Process)
+        }
+    };
+    let target = target.map_err(|refusal| {
+        let reason = match refusal {
+            ArgvRefusal::MissingParameter { .. } => RefusalReason::MissingParameter,
+            ArgvRefusal::UnknownParameter { .. } => RefusalReason::UnknownParameter,
+            ArgvRefusal::Value { .. } => RefusalReason::InvalidValue,
+        };
+        Refusal {
+            reason,
+            detail: one_line(&format!(
+                "{refusal}; run `{LIST_COMMAND}` to see what it accepts"
+            )),
+            project: Some((*project).to_owned()),
+        }
+    })?;
     let names_a_check = validated.check.is_some();
     let is_a_check = relay
         .catalogue
@@ -346,7 +406,8 @@ pub fn plan(
         project: (*project).to_owned(),
         action: action.to_owned(),
         class: validated.class,
-        launch,
+        target,
+        project_dir,
         catalogue_hash: approved.hash.clone(),
         timeout_s: validated.timeout_s,
         max_output_kib: validated.max_output_kib,
@@ -660,7 +721,8 @@ mod tests {
         assert_eq!(run.project, "lab");
         assert_eq!(run.argv(), ["C:/path/to/tool.exe", "--host", "web01"]);
         assert_eq!(
-            run.launch.cwd, "C:/path/to/Lab",
+            run.launch().unwrap().cwd,
+            "C:/path/to/Lab",
             "the folder as declared (D-6)"
         );
         assert_eq!(run.catalogue_hash, approved.hash);
@@ -859,6 +921,9 @@ program = \"C:/path/to/tool.exe\"
                     class: verify.class,
                     params: group.clone(),
                     argv: verify.argv(),
+                    method: None,
+                    url: None,
+                    credential: None,
                     catalogue_hash: verify.catalogue_hash.clone(),
                     approval_id: None,
                     tree: Some(tree.clone()),
@@ -872,9 +937,12 @@ program = \"C:/path/to/tool.exe\"
                     outcome: RunOutcome::Exited,
                     exit_code: Some(0),
                     duration_ms: 30_000,
-                    stdout: stream.clone(),
-                    stderr: stream,
+                    stdout: Some(stream.clone()),
+                    stderr: Some(stream),
                     dropped_bytes: 0,
+                    status: None,
+                    body_bytes: None,
+                    body_sha256: None,
                     detail: None,
                 }),
             ),

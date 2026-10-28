@@ -199,6 +199,9 @@ fn started(run_id: &str, timeout_s: u32) -> JournalEntry {
             "--host".to_owned(),
             "web01".to_owned(),
         ],
+        method: None,
+        url: None,
+        credential: None,
         catalogue_hash: "00".to_owned(),
         approval_id: None,
         tree: None,
@@ -216,9 +219,12 @@ fn recent_pairs_runs_and_marks_abandoned() {
         outcome: RunOutcome::Exited,
         exit_code: Some(3),
         duration_ms: 1200,
-        stdout: stream(),
-        stderr: stream(),
+        stdout: Some(stream()),
+        stderr: Some(stream()),
         dropped_bytes: 0,
+        status: None,
+        body_bytes: None,
+        body_sha256: None,
         detail: None,
     });
     let refused = JournalEntry::Refused(Refused {
@@ -278,6 +284,29 @@ fn recent_pairs_runs_and_marks_abandoned() {
     assert_eq!(done.state, RunState::Finished);
     assert_eq!(done.finished.as_ref().unwrap().exit_code, Some(3));
     assert_eq!(done.finished_at_ms, Some(shown.recent[4].ts + 60_000));
+}
+
+/// Story 2.11 AC 12 (D-41): every session can run `officina relay --json`,
+/// so it never asks the Credential Manager anything. Had it asked, the
+/// credential below, stored nowhere, would read `false`; it reads `null`.
+#[test]
+fn relay_json_never_reads_credentials() {
+    let env = TestEnv::new();
+    env.write_floor(&format!(
+        "{FLOOR}\n[[credential]]\nname = \"officina-test-unstored\"\nhosts = [\"monitoring.example.com\"]\nheader = \"Authorization\"\nscheme = \"Bearer\"\n\n[[action]]\nname = \"health\"\nkind = \"http\"\nclass = \"free\"\nmethod = \"GET\"\nurl = \"https://monitoring.example.com/api/{{check}}\"\ncredential = \"officina-test-unstored\"\n[action.params.check]\nvalues = [\"health\"]\n"
+    ));
+    env.approve();
+    let view = view(&env);
+    assert_eq!(view.credentials.len(), 1, "{:?}", view.credentials);
+    let credential = &view.credentials[0];
+    assert_eq!(credential.name, "officina-test-unstored");
+    assert_eq!(credential.present, None, "relay --json read the store");
+    assert_eq!(credential.hosts, ["monitoring.example.com"]);
+    let raw: serde_json::Value = serde_json::from_slice(&relay_json(&env).stdout).unwrap();
+    assert!(raw["credentials"][0]["present"].is_null());
+    let http = &raw["catalogue"]["actions"]["health"]["http"];
+    assert_eq!(http["url"], "https://monitoring.example.com/api/{check}");
+    assert_eq!(http["method"], "GET");
 }
 
 #[test]

@@ -10,7 +10,9 @@ use std::ops::RangeInclusive;
 
 use serde::{Deserialize, Serialize};
 
-use super::params::{self, Param, ParamRule, PatternError};
+use super::http::HttpMethod;
+use super::params::{self, Param, ParamRule, PatternError, ValueTarget};
+use super::url::{UrlIssue, UrlScheme, UrlTemplate, host_entry};
 use crate::floor::{
     Autonomy, FloorError, FloorFile, floor_dir_of, is_windows_absolute, join_project_path,
     parse_floor, resolve_project_path,
@@ -60,8 +62,8 @@ pub const MAX_ENV_KEY_CHARS: usize = 64;
 pub const MAX_DISTRO_CHARS: usize = 64;
 
 /// Version of the canonical form. Bumping it invalidates every approval on
-/// purpose (AD-24).
-pub const CANONICAL_FORMAT: u32 = 1;
+/// purpose (AD-24); 2 added credentials and HTTP actions (D-39).
+pub const CANONICAL_FORMAT: u32 = 2;
 
 /// Version of `relay/known-projects.json` (D-15).
 pub const KNOWN_PROJECTS_SCHEMA: u32 = 1;
@@ -102,10 +104,36 @@ closed_enum! {
     #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
     #[serde(rename_all = "snake_case")]
     pub enum IssueKind {
-        /// The table does not convert: unknown key, wrong type, missing key.
+        /// The table does not convert: unknown key, wrong type, missing key,
+        /// or a `kind` other than `http`.
         Malformed,
-        /// `kind = "http"`: not in this build until AD-36.
-        HttpNotInThisBuild,
+        /// An HTTP action declaring `runner`, `distro`, `program`, `env` or
+        /// `args` (AD-36).
+        HttpProgramFields,
+        /// An HTTP action's `url` breaks a rule of `relay::url`.
+        Url,
+        /// An HTTP action's `url` carries a user or a password (D-40).
+        UrlUserinfo,
+        /// An HTTP action names a credential that is not declared or was
+        /// dropped.
+        UnknownCredential,
+        /// An HTTP action's host is not in its credential's `hosts` (D-37).
+        CredentialHostNotBound,
+        /// An HTTP action sends a credential over plain `http` (AD-36).
+        CredentialOverHttp,
+        /// A credential's name is not `[a-z][a-z0-9-]` of at most 32
+        /// characters.
+        CredentialName,
+        /// A credential's `hosts` is empty or holds an entry that is not a
+        /// host without a port; no wildcard (D-37).
+        CredentialHosts,
+        /// A credential's `header` is not an HTTP token, or names a header
+        /// Officina never sets (D-40).
+        CredentialHeader,
+        /// A credential's `scheme` is not an HTTP token (D-40).
+        CredentialScheme,
+        /// Two credentials share a name: both are dropped.
+        DuplicateCredential,
         /// `class = "auto"`: reserved for v0.5.
         AutoReserved,
         /// The name is not `[a-z][a-z0-9-]` of at most 32 characters.
@@ -249,7 +277,10 @@ impl ArgTemplate {
     }
 }
 
-/// A validated action, every default explicit.
+/// A validated action, every default explicit. A process action starts
+/// `program` with `args`; an HTTP action (`http` set) sends its request and
+/// leaves the process fields at their defaults: `native`, no distro, an
+/// empty program, no env, no args.
 #[derive(Debug, Clone)]
 pub struct Action {
     pub name: String,
@@ -260,10 +291,32 @@ pub struct Action {
     pub program: String,
     pub env: BTreeMap<String, String>,
     pub args: Vec<ArgTemplate>,
+    pub http: Option<HttpSpec>,
     pub params: BTreeMap<String, Param>,
     pub check: Option<String>,
     pub timeout_s: u32,
     pub max_output_kib: u32,
+}
+
+/// What an HTTP action sends (AD-36).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HttpSpec {
+    pub method: HttpMethod,
+    pub url: UrlTemplate,
+    /// The `[[credential]]` whose header the request carries.
+    pub credential: Option<String>,
+}
+
+/// A validated `[[credential]]` (AD-36, D-37, D-40): the secret is read from
+/// the Credential Manager at `officina:<name>` and sent as
+/// `<header>: <scheme> <secret>` to these hosts only.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Credential {
+    pub name: String,
+    /// Lowercase, sorted, deduplicated; no port.
+    pub hosts: Vec<String>,
+    pub header: String,
+    pub scheme: String,
 }
 
 /// A project as the catalogue sees it: the path as declared, the autonomy
@@ -285,8 +338,43 @@ pub struct Catalogue {
     /// Sorted by name.
     pub projects: Vec<CatalogueProject>,
     pub actions: BTreeMap<String, Action>,
+    /// Valid credentials, by name.
+    pub credentials: BTreeMap<String, Credential>,
     /// In file order; issues without a line last.
     pub issues: Vec<ActionIssue>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawHttpAction {
+    name: String,
+    #[serde(default)]
+    description: String,
+    /// `"http"`, read by `action_from_value` to choose this form.
+    #[serde(rename = "kind")]
+    _kind: String,
+    class: ActionClass,
+    method: HttpMethod,
+    url: String,
+    #[serde(default)]
+    credential: Option<String>,
+    #[serde(default)]
+    params: BTreeMap<String, RawParam>,
+    #[serde(default)]
+    check: Option<String>,
+    #[serde(default)]
+    timeout_s: Option<i64>,
+    #[serde(default)]
+    max_output_kib: Option<i64>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawCredential {
+    name: String,
+    hosts: Vec<String>,
+    header: String,
+    scheme: String,
 }
 
 #[derive(Deserialize)]
@@ -423,132 +511,105 @@ fn is_batch_program(program: &str) -> bool {
     trimmed.ends_with(".bat") || trimmed.ends_with(".cmd")
 }
 
-/// Converts and validates one action alone: every rule that needs no other
-/// action. The issues carry no line; [`validate`] adds it.
+/// The `kind` of an HTTP action (AD-36). A process action has no `kind`.
+pub const HTTP_KIND: &str = "http";
+
+/// The keys of a process action an HTTP action never declares (AD-36).
+pub const PROCESS_KEYS: &[&str] = &["runner", "distro", "program", "env", "args"];
+
+/// The headers a credential may not name (D-40): they frame the request,
+/// and Officina never sends a cookie.
+pub const FORBIDDEN_CREDENTIAL_HEADERS: &[&str] = &[
+    "host",
+    "content-length",
+    "transfer-encoding",
+    "connection",
+    "cookie",
+];
+
+/// An HTTP token (RFC 9110 `token`): what a header name and an
+/// authentication scheme are. No space, no CR or LF.
 ///
 /// ```
-/// let value: toml::Value = toml::from_str(
-///     "name = \"probe\"\nclass = \"free\"\nprogram = \"C:/path/to/tool.exe\"\n",
-/// ).unwrap();
-/// let action = officina_core::relay::catalogue::action_from_value(&value).unwrap();
-/// assert_eq!(action.timeout_s, officina_core::relay::catalogue::DEFAULT_TIMEOUT_S);
+/// use officina_core::relay::catalogue::is_http_token;
+/// assert!(is_http_token("X-Api-Key") && is_http_token("Bearer"));
+/// assert!(!is_http_token("") && !is_http_token("Bad Header") && !is_http_token("a:b"));
 /// ```
-pub fn action_from_value(value: &toml::Value) -> Result<Action, Vec<ActionIssue>> {
-    let name = value
-        .get("name")
-        .and_then(toml::Value::as_str)
-        .unwrap_or(UNNAMED)
-        .to_owned();
-    let issue = |kind: IssueKind, message: String| ActionIssue {
-        name: name.clone(),
-        line: None,
-        kind,
-        message,
-    };
-    if value.get("kind").and_then(toml::Value::as_str) == Some("http") {
-        return Err(vec![issue(
-            IssueKind::HttpNotInThisBuild,
-            "HTTP actions are not in this build".to_owned(),
-        )]);
-    }
-    let raw: RawAction = value.clone().try_into().map_err(|e: toml::de::Error| {
-        vec![issue(IssueKind::Malformed, e.message().trim().to_owned())]
-    })?;
-    let mut issues = Vec::new();
-    let mut report = |kind: IssueKind, message: String| issues.push(issue(kind, message));
+pub fn is_http_token(text: &str) -> bool {
+    !text.is_empty()
+        && text
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "!#$%&'*+-.^_`|~".contains(c))
+}
 
-    if !is_valid_action_name(&raw.name) {
-        report(
+/// The issues of one action, all carrying its name.
+struct Report<'a> {
+    name: &'a str,
+    issues: Vec<ActionIssue>,
+}
+
+impl Report<'_> {
+    fn issue(&self, kind: IssueKind, message: String) -> ActionIssue {
+        ActionIssue {
+            name: self.name.to_owned(),
+            line: None,
+            kind,
+            message,
+        }
+    }
+
+    fn add(&mut self, kind: IssueKind, message: String) {
+        let issue = self.issue(kind, message);
+        self.issues.push(issue);
+    }
+}
+
+/// What every action declares besides how it runs.
+struct Common<'a> {
+    name: &'a str,
+    class: ActionClass,
+    params: &'a BTreeMap<String, RawParam>,
+    check: &'a Option<String>,
+    timeout_s: Option<i64>,
+    max_output_kib: Option<i64>,
+}
+
+/// What the rules of every action leave: the parameters, the limits.
+struct Checked {
+    params: BTreeMap<String, Param>,
+    timeout_s: u32,
+    max_output_kib: u32,
+}
+
+/// The rules every action follows, whatever runs it: its name and class,
+/// its parameters (each value passing the rules of `target`), every
+/// placeholder in `used` declared and every parameter used, its limits and
+/// its `check`.
+fn check_common(
+    report: &mut Report<'_>,
+    common: &Common<'_>,
+    target: ValueTarget,
+    used: &BTreeSet<&str>,
+) -> Checked {
+    if !is_valid_action_name(common.name) {
+        report.add(
             IssueKind::Name,
             format!(
                 "the name must be a lowercase letter followed by lowercase letters, digits or `-`, at most {MAX_NAME_CHARS} characters"
             ),
         );
     }
-    if raw.class == ActionClass::Auto {
-        report(
+    if common.class == ActionClass::Auto {
+        report.add(
             IssueKind::AutoReserved,
             "class `auto` is reserved for the orchestrator (v0.5)".to_owned(),
         );
     }
 
-    if raw.program.contains(['{', '}']) {
-        report(
-            IssueKind::ProgramPlaceholder,
-            "`program` is a fixed path: it cannot hold a placeholder".to_owned(),
-        );
-    }
-    let absolute = match raw.runner {
-        Runner::Native => is_windows_absolute(&raw.program),
-        Runner::Wsl => raw.program.starts_with('/'),
-    };
-    if !absolute {
-        report(
-            IssueKind::ProgramNotAbsolute,
-            match raw.runner {
-                Runner::Native => {
-                    "`program` must be a Windows absolute path, like C:/path/to/tool.exe"
-                }
-                Runner::Wsl => "`program` must be a Linux absolute path, like /usr/bin/tool",
-            }
-            .to_owned(),
-        );
-    }
-    if raw.runner == Runner::Native && is_batch_program(&raw.program) {
-        report(
-            IssueKind::BatchProgram,
-            "a `.bat` or `.cmd` program is re-parsed by cmd.exe: run its interpreter's real program instead".to_owned(),
-        );
-    }
-
-    if let Some(distro) = &raw.distro {
-        if raw.runner != Runner::Wsl {
-            report(
-                IssueKind::DistroWithoutWsl,
-                "`distro` applies to `runner = \"wsl\"` only".to_owned(),
-            );
-        }
-        if !is_valid_distro(distro) {
-            report(
-                IssueKind::Distro,
-                format!(
-                    "`distro` must start with a letter or digit, then letters, digits, `.`, `_` or `-`, at most {MAX_DISTRO_CHARS} characters"
-                ),
-            );
-        }
-    }
-
-    for (key, value) in &raw.env {
-        if !is_valid_env_key(key) {
-            report(
-                IssueKind::EnvKey,
-                format!(
-                    "`env` key {key:?} must be a letter or `_`, then letters, digits or `_`, at most {MAX_ENV_KEY_CHARS} characters"
-                ),
-            );
-        }
-        if value.contains(['{', '}']) {
-            report(
-                IssueKind::EnvValuePlaceholder,
-                format!(
-                    "`env` value of {key} holds a brace: env values are literals, never placeholders"
-                ),
-            );
-        }
-    }
-
-    let mut args = Vec::new();
-    for item in &raw.args {
-        match ArgTemplate::parse(item) {
-            Ok(template) => args.push(template),
-            Err(message) => report(IssueKind::Braces, message),
-        }
-    }
-
     let mut params = BTreeMap::new();
-    for (param_name, raw_param) in &raw.params {
+    for (param_name, raw_param) in common.params {
         if !is_valid_param_name(param_name) {
-            report(
+            report.add(
                 IssueKind::ParamName,
                 format!(
                     "parameter {param_name:?} must be a lowercase letter followed by lowercase letters, digits, `_` or `-`, at most {MAX_NAME_CHARS} characters"
@@ -558,8 +619,8 @@ pub fn action_from_value(value: &toml::Value) -> Result<Action, Vec<ActionIssue>
         let rule = match (&raw_param.values, &raw_param.pattern) {
             (Some(values), None) => {
                 for value in values {
-                    if let Err(refusal) = params::check_value(raw.runner, value) {
-                        report(
+                    if let Err(refusal) = params::check_value_for(target, value) {
+                        report.add(
                             IssueKind::InvalidValue,
                             format!("value {value:?} of parameter {param_name}: {refusal}"),
                         );
@@ -578,12 +639,12 @@ pub fn action_from_value(value: &toml::Value) -> Result<Action, Vec<ActionIssue>
                         PatternError::TooComplex => IssueKind::PatternTooComplex,
                         PatternError::Invalid(_) => IssueKind::PatternInvalid,
                     };
-                    report(kind, format!("parameter {param_name}: {error}"));
+                    report.add(kind, format!("parameter {param_name}: {error}"));
                     None
                 }
             },
             _ => {
-                report(
+                report.add(
                     IssueKind::ValuesOrPattern,
                     format!("parameter {param_name} declares exactly one of `values` or `pattern`"),
                 );
@@ -595,27 +656,26 @@ pub fn action_from_value(value: &toml::Value) -> Result<Action, Vec<ActionIssue>
         }
     }
 
-    let used: BTreeSet<&str> = args.iter().filter_map(ArgTemplate::param).collect();
-    for placeholder in &used {
-        if !raw.params.contains_key(*placeholder) {
-            report(
+    for placeholder in used {
+        if !common.params.contains_key(*placeholder) {
+            report.add(
                 IssueKind::UndeclaredPlaceholder,
                 format!("placeholder {{{placeholder}}} names no declared parameter"),
             );
         }
     }
-    for param_name in raw.params.keys() {
+    for param_name in common.params.keys() {
         if !used.contains(param_name.as_str()) {
-            report(
+            report.add(
                 IssueKind::UnusedParameter,
-                format!("parameter {param_name} is used by no `args` item"),
+                format!("parameter {param_name} is used by no placeholder"),
             );
         }
     }
 
-    let timeout_s = raw.timeout_s.unwrap_or(i64::from(DEFAULT_TIMEOUT_S));
+    let timeout_s = common.timeout_s.unwrap_or(i64::from(DEFAULT_TIMEOUT_S));
     if !TIMEOUT_RANGE_S.contains(&timeout_s) {
-        report(
+        report.add(
             IssueKind::Timeout,
             format!(
                 "`timeout_s` must be {} to {}",
@@ -624,11 +684,11 @@ pub fn action_from_value(value: &toml::Value) -> Result<Action, Vec<ActionIssue>
             ),
         );
     }
-    let max_output_kib = raw
+    let max_output_kib = common
         .max_output_kib
         .unwrap_or(i64::from(DEFAULT_MAX_OUTPUT_KIB));
     if !MAX_OUTPUT_RANGE_KIB.contains(&max_output_kib) {
-        report(
+        report.add(
             IssueKind::MaxOutput,
             format!(
                 "`max_output_kib` must be {} to {}",
@@ -641,20 +701,147 @@ pub fn action_from_value(value: &toml::Value) -> Result<Action, Vec<ActionIssue>
     // An `after-check` action needs its check; a `human` action may name one,
     // its dry run (D-170); a `free` action runs without any, so naming one
     // would promise a binding it never has.
-    match (raw.class, &raw.check) {
-        (ActionClass::AfterCheck, None) => report(
+    match (common.class, common.check) {
+        (ActionClass::AfterCheck, None) => report.add(
             IssueKind::Check,
             "an `after-check` action names its check action in `check`".to_owned(),
         ),
         (ActionClass::AfterCheck | ActionClass::Human, _) | (_, None) => {}
-        (_, Some(_)) => report(
+        (_, Some(_)) => report.add(
             IssueKind::Check,
             "only an `after-check` or `human` action names a `check`".to_owned(),
         ),
     }
 
-    if !issues.is_empty() {
-        return Err(issues);
+    Checked {
+        params,
+        timeout_s: u32::try_from(timeout_s).unwrap_or(DEFAULT_TIMEOUT_S),
+        max_output_kib: u32::try_from(max_output_kib).unwrap_or(DEFAULT_MAX_OUTPUT_KIB),
+    }
+}
+
+/// Converts and validates one action alone: every rule that needs no other
+/// action. The issues carry no line; [`validate`] adds it. An action with
+/// `kind = "http"` is an HTTP action (AD-36); any other `kind` is malformed.
+///
+/// ```
+/// let value: toml::Value = toml::from_str(
+///     "name = \"probe\"\nclass = \"free\"\nprogram = \"C:/path/to/tool.exe\"\n",
+/// ).unwrap();
+/// let action = officina_core::relay::catalogue::action_from_value(&value).unwrap();
+/// assert_eq!(action.timeout_s, officina_core::relay::catalogue::DEFAULT_TIMEOUT_S);
+/// ```
+pub fn action_from_value(value: &toml::Value) -> Result<Action, Vec<ActionIssue>> {
+    let name = value
+        .get("name")
+        .and_then(toml::Value::as_str)
+        .unwrap_or(UNNAMED)
+        .to_owned();
+    let mut report = Report {
+        name: &name,
+        issues: Vec::new(),
+    };
+    match value.get("kind") {
+        None => {}
+        Some(kind) if kind.as_str() == Some(HTTP_KIND) => {
+            return http_action_from_value(value, report);
+        }
+        Some(_) => {
+            return Err(vec![report.issue(
+                IssueKind::Malformed,
+                format!("`kind` is \"{HTTP_KIND}\" for an HTTP action and absent otherwise"),
+            )]);
+        }
+    }
+    let raw: RawAction = value.clone().try_into().map_err(|e: toml::de::Error| {
+        vec![report.issue(IssueKind::Malformed, e.message().trim().to_owned())]
+    })?;
+
+    if raw.program.contains(['{', '}']) {
+        report.add(
+            IssueKind::ProgramPlaceholder,
+            "`program` is a fixed path: it cannot hold a placeholder".to_owned(),
+        );
+    }
+    let absolute = match raw.runner {
+        Runner::Native => is_windows_absolute(&raw.program),
+        Runner::Wsl => raw.program.starts_with('/'),
+    };
+    if !absolute {
+        report.add(
+            IssueKind::ProgramNotAbsolute,
+            match raw.runner {
+                Runner::Native => {
+                    "`program` must be a Windows absolute path, like C:/path/to/tool.exe"
+                }
+                Runner::Wsl => "`program` must be a Linux absolute path, like /usr/bin/tool",
+            }
+            .to_owned(),
+        );
+    }
+    if raw.runner == Runner::Native && is_batch_program(&raw.program) {
+        report.add(
+            IssueKind::BatchProgram,
+            "a `.bat` or `.cmd` program is re-parsed by cmd.exe: run its interpreter's real program instead".to_owned(),
+        );
+    }
+
+    if let Some(distro) = &raw.distro {
+        if raw.runner != Runner::Wsl {
+            report.add(
+                IssueKind::DistroWithoutWsl,
+                "`distro` applies to `runner = \"wsl\"` only".to_owned(),
+            );
+        }
+        if !is_valid_distro(distro) {
+            report.add(
+                IssueKind::Distro,
+                format!(
+                    "`distro` must start with a letter or digit, then letters, digits, `.`, `_` or `-`, at most {MAX_DISTRO_CHARS} characters"
+                ),
+            );
+        }
+    }
+
+    for (key, value) in &raw.env {
+        if !is_valid_env_key(key) {
+            report.add(
+                IssueKind::EnvKey,
+                format!(
+                    "`env` key {key:?} must be a letter or `_`, then letters, digits or `_`, at most {MAX_ENV_KEY_CHARS} characters"
+                ),
+            );
+        }
+        if value.contains(['{', '}']) {
+            report.add(
+                IssueKind::EnvValuePlaceholder,
+                format!(
+                    "`env` value of {key} holds a brace: env values are literals, never placeholders"
+                ),
+            );
+        }
+    }
+
+    let mut args = Vec::new();
+    for item in &raw.args {
+        match ArgTemplate::parse(item) {
+            Ok(template) => args.push(template),
+            Err(message) => report.add(IssueKind::Braces, message),
+        }
+    }
+    let used: BTreeSet<&str> = args.iter().filter_map(ArgTemplate::param).collect();
+    let common = Common {
+        name: &raw.name,
+        class: raw.class,
+        params: &raw.params,
+        check: &raw.check,
+        timeout_s: raw.timeout_s,
+        max_output_kib: raw.max_output_kib,
+    };
+    let checked = check_common(&mut report, &common, ValueTarget::from(raw.runner), &used);
+
+    if !report.issues.is_empty() {
+        return Err(report.issues);
     }
     Ok(Action {
         name: raw.name,
@@ -665,10 +852,171 @@ pub fn action_from_value(value: &toml::Value) -> Result<Action, Vec<ActionIssue>
         program: raw.program,
         env: raw.env,
         args,
-        params,
+        http: None,
+        params: checked.params,
         check: raw.check,
-        timeout_s: u32::try_from(timeout_s).unwrap_or(DEFAULT_TIMEOUT_S),
-        max_output_kib: u32::try_from(max_output_kib).unwrap_or(DEFAULT_MAX_OUTPUT_KIB),
+        timeout_s: checked.timeout_s,
+        max_output_kib: checked.max_output_kib,
+    })
+}
+
+/// [`action_from_value`] for `kind = "http"` (AD-36): `method`, `url` and an
+/// optional `credential`, never a process key.
+fn http_action_from_value(
+    value: &toml::Value,
+    mut report: Report<'_>,
+) -> Result<Action, Vec<ActionIssue>> {
+    let process_keys: Vec<&str> = PROCESS_KEYS
+        .iter()
+        .copied()
+        .filter(|key| value.get(key).is_some())
+        .collect();
+    if !process_keys.is_empty() {
+        return Err(vec![report.issue(
+            IssueKind::HttpProgramFields,
+            format!(
+                "an HTTP action declares `method` and `url`, never {}",
+                process_keys
+                    .iter()
+                    .map(|key| format!("`{key}`"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        )]);
+    }
+    let raw: RawHttpAction = value.clone().try_into().map_err(|e: toml::de::Error| {
+        vec![report.issue(IssueKind::Malformed, e.message().trim().to_owned())]
+    })?;
+
+    let template = match UrlTemplate::parse(&raw.url) {
+        Ok(template) => Some(template),
+        Err(issue) => {
+            let kind = match issue {
+                UrlIssue::Userinfo => IssueKind::UrlUserinfo,
+                _ => IssueKind::Url,
+            };
+            report.add(kind, format!("`url`: {issue}"));
+            None
+        }
+    };
+    if let (Some(template), Some(_)) = (&template, &raw.credential)
+        && template.scheme() == UrlScheme::Http
+    {
+        report.add(
+            IssueKind::CredentialOverHttp,
+            "an action with a credential uses an `https` URL: plain `http` would send the secret in clear".to_owned(),
+        );
+    }
+    let used = template
+        .as_ref()
+        .map(UrlTemplate::placeholders)
+        .unwrap_or_default();
+    let common = Common {
+        name: &raw.name,
+        class: raw.class,
+        params: &raw.params,
+        check: &raw.check,
+        timeout_s: raw.timeout_s,
+        max_output_kib: raw.max_output_kib,
+    };
+    let checked = check_common(&mut report, &common, ValueTarget::Http, &used);
+
+    let Some(url) = template else {
+        return Err(report.issues);
+    };
+    if !report.issues.is_empty() {
+        return Err(report.issues);
+    }
+    Ok(Action {
+        name: raw.name,
+        description: raw.description,
+        class: raw.class,
+        runner: Runner::Native,
+        distro: None,
+        program: String::new(),
+        env: BTreeMap::new(),
+        args: Vec::new(),
+        http: Some(HttpSpec {
+            method: raw.method,
+            url,
+            credential: raw.credential,
+        }),
+        params: checked.params,
+        check: raw.check,
+        timeout_s: checked.timeout_s,
+        max_output_kib: checked.max_output_kib,
+    })
+}
+
+/// Converts and validates one `[[credential]]` alone (AD-36, D-37, D-40).
+fn credential_from_value(value: &toml::Value) -> Result<Credential, Vec<ActionIssue>> {
+    let name = value
+        .get("name")
+        .and_then(toml::Value::as_str)
+        .unwrap_or(UNNAMED)
+        .to_owned();
+    let mut report = Report {
+        name: &name,
+        issues: Vec::new(),
+    };
+    let raw: RawCredential = value.clone().try_into().map_err(|e: toml::de::Error| {
+        vec![report.issue(IssueKind::Malformed, e.message().trim().to_owned())]
+    })?;
+    if !is_valid_action_name(&raw.name) {
+        report.add(
+            IssueKind::CredentialName,
+            format!(
+                "a credential's name must be a lowercase letter followed by lowercase letters, digits or `-`, at most {MAX_NAME_CHARS} characters"
+            ),
+        );
+    }
+    let mut hosts = BTreeSet::new();
+    for entry in &raw.hosts {
+        match host_entry(entry) {
+            Some(host) => {
+                hosts.insert(host);
+            }
+            None => report.add(
+                IssueKind::CredentialHosts,
+                format!("host {entry:?} is not a host name or address without a port; no wildcard"),
+            ),
+        }
+    }
+    if raw.hosts.is_empty() {
+        report.add(
+            IssueKind::CredentialHosts,
+            "`hosts` names at least one host the credential may be sent to".to_owned(),
+        );
+    }
+    let forbidden = FORBIDDEN_CREDENTIAL_HEADERS
+        .iter()
+        .any(|h| h.eq_ignore_ascii_case(&raw.header));
+    if !is_http_token(&raw.header) || forbidden {
+        report.add(
+            IssueKind::CredentialHeader,
+            if forbidden {
+                format!("`header` cannot be {}: it frames the request", raw.header)
+            } else {
+                "`header` is a header name: letters, digits and `!#$%&'*+-.^_`|~`, no space"
+                    .to_owned()
+            },
+        );
+    }
+    if !is_http_token(&raw.scheme) {
+        report.add(
+            IssueKind::CredentialScheme,
+            "`scheme` is one word, like Bearer or Basic: letters, digits and `!#$%&'*+-.^_`|~`"
+                .to_owned(),
+        );
+    }
+    if !report.issues.is_empty() {
+        return Err(report.issues);
+    }
+    Ok(Credential {
+        name: raw.name,
+        hosts: hosts.into_iter().collect(),
+        header: raw.header,
+        scheme: raw.scheme,
     })
 }
 
@@ -714,6 +1062,8 @@ pub fn validate(floor: &FloorFile, content: &str) -> Catalogue {
         }
     }
 
+    let credentials = validate_credentials(floor, content, &mut issues);
+
     let mut name_counts: BTreeMap<&str, usize> = BTreeMap::new();
     for raw in &floor.actions {
         if let Some(name) = raw.get_ref().get("name").and_then(toml::Value::as_str) {
@@ -745,6 +1095,20 @@ pub fn validate(floor: &FloorFile, content: &str) -> Catalogue {
         }
     }
 
+    // Credentials first, so a check target dropped for its credential is
+    // unknown to the actions naming it.
+    candidates.retain(|name, (action, line)| {
+        let Some((kind, message)) = credential_problem(action, &credentials) else {
+            return true;
+        };
+        issues.push(ActionIssue {
+            name: name.clone(),
+            line: Some(*line),
+            kind,
+            message,
+        });
+        false
+    });
     let mut actions = BTreeMap::new();
     for (name, (action, line)) in &candidates {
         if let Some(problem) = check_target_problem(action, &candidates) {
@@ -808,8 +1172,76 @@ pub fn validate(floor: &FloorFile, content: &str) -> Catalogue {
         guarded_programs: guarded_programs(floor),
         projects,
         actions,
+        credentials,
         issues,
     }
+}
+
+/// Converts and validates each `[[credential]]` alone, then drops every
+/// copy of a duplicated name. Issues carry the credential's line.
+fn validate_credentials(
+    floor: &FloorFile,
+    content: &str,
+    issues: &mut Vec<ActionIssue>,
+) -> BTreeMap<String, Credential> {
+    let mut name_counts: BTreeMap<&str, usize> = BTreeMap::new();
+    for raw in &floor.credentials {
+        if let Some(name) = raw.get_ref().get("name").and_then(toml::Value::as_str) {
+            *name_counts.entry(name).or_default() += 1;
+        }
+    }
+    let mut credentials = BTreeMap::new();
+    for raw in &floor.credentials {
+        let line = line_at(content, raw.span().start);
+        match credential_from_value(raw.get_ref()) {
+            Ok(credential) if name_counts.get(credential.name.as_str()) > Some(&1) => {
+                issues.push(ActionIssue {
+                    name: credential.name.clone(),
+                    line: Some(line),
+                    kind: IssueKind::DuplicateCredential,
+                    message: format!(
+                        "another credential is also named {}: both are dropped",
+                        credential.name
+                    ),
+                });
+            }
+            Ok(credential) => {
+                credentials.insert(credential.name.clone(), credential);
+            }
+            Err(found) => issues.extend(found.into_iter().map(|issue| ActionIssue {
+                line: Some(line),
+                ..issue
+            })),
+        }
+    }
+    credentials
+}
+
+/// Why an HTTP action's credential does not hold across the catalogue, if
+/// it does not: it must name a valid credential whose `hosts` hold the
+/// URL's host (D-37).
+fn credential_problem(
+    action: &Action,
+    credentials: &BTreeMap<String, Credential>,
+) -> Option<(IssueKind, String)> {
+    let spec = action.http.as_ref()?;
+    let name = spec.credential.as_deref()?;
+    let Some(credential) = credentials.get(name) else {
+        return Some((
+            IssueKind::UnknownCredential,
+            format!("`credential` names {name}, which is not declared or was dropped"),
+        ));
+    };
+    if !super::http::host_is_bound(&credential.hosts, spec.url.host()) {
+        return Some((
+            IssueKind::CredentialHostNotBound,
+            format!(
+                "the URL's host {} is not in the `hosts` of credential {name}: the secret goes to those hosts only",
+                spec.url.host()
+            ),
+        ));
+    }
+    None
 }
 
 /// Why an action's `check` does not hold across the catalogue, if it does
@@ -848,7 +1280,19 @@ pub enum CanonicalParam {
     Pattern(String),
 }
 
-/// The canonical form of one valid action, every default explicit.
+/// The canonical form of what an HTTP action sends (AD-36).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(deny_unknown_fields)]
+pub struct CanonicalHttp {
+    pub method: HttpMethod,
+    /// The URL template as the floor wrote it.
+    pub url: String,
+    pub credential: Option<String>,
+}
+
+/// The canonical form of one valid action, every default explicit. An HTTP
+/// action carries `http` and the process fields' defaults.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(deny_unknown_fields)]
@@ -860,10 +1304,24 @@ pub struct CanonicalAction {
     pub program: String,
     pub env: BTreeMap<String, String>,
     pub args: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
+    pub http: Option<CanonicalHttp>,
     pub params: BTreeMap<String, CanonicalParam>,
     pub check: Option<String>,
     pub timeout_s: u32,
     pub max_output_kib: u32,
+}
+
+/// The canonical form of one valid credential (D-39): hosts lowercase,
+/// sorted, deduplicated.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(deny_unknown_fields)]
+pub struct CanonicalCredential {
+    pub hosts: Vec<String>,
+    pub header: String,
+    pub scheme: String,
 }
 
 impl From<&Action> for CanonicalAction {
@@ -876,6 +1334,11 @@ impl From<&Action> for CanonicalAction {
             program: action.program.clone(),
             env: action.env.clone(),
             args: action.args.iter().map(ArgTemplate::source).collect(),
+            http: action.http.as_ref().map(|spec| CanonicalHttp {
+                method: spec.method,
+                url: spec.url.source().to_owned(),
+                credential: spec.credential.clone(),
+            }),
             params: action
                 .params
                 .iter()
@@ -923,6 +1386,10 @@ pub struct CanonicalCatalogue {
     pub guarded_programs: Vec<String>,
     pub projects: BTreeMap<String, CanonicalProject>,
     pub actions: BTreeMap<String, CanonicalAction>,
+    /// Absent from snapshots of format 1, which read as none: their hash
+    /// differs anyway, so they are approved again (D-39).
+    #[serde(default)]
+    pub credentials: BTreeMap<String, CanonicalCredential>,
 }
 
 /// The canonical form of a validated catalogue read from `floor_path`.
@@ -949,7 +1416,41 @@ pub fn canonical(catalogue: &Catalogue, floor_path: &str) -> CanonicalCatalogue 
             .iter()
             .map(|(name, action)| (name.clone(), CanonicalAction::from(action)))
             .collect(),
+        credentials: catalogue
+            .credentials
+            .iter()
+            .map(|(name, credential)| {
+                let canonical = CanonicalCredential {
+                    hosts: credential.hosts.clone(),
+                    header: credential.header.clone(),
+                    scheme: credential.scheme.clone(),
+                };
+                (name.clone(), canonical)
+            })
+            .collect(),
     }
+}
+
+/// The credentials of an approved snapshot as validated credentials, so a
+/// request is rebuilt from the approved catalogue alone (D-27). A snapshot
+/// entry that no longer validates is left out: no action can bind it.
+pub fn credentials_from_canonical(canonical: &CanonicalCatalogue) -> BTreeMap<String, Credential> {
+    canonical
+        .credentials
+        .iter()
+        .filter_map(|(name, credential)| {
+            let mut table = toml::Table::new();
+            table.insert("name".to_owned(), name.clone().into());
+            table.insert(
+                "hosts".to_owned(),
+                toml::Value::Array(credential.hosts.iter().cloned().map(Into::into).collect()),
+            );
+            table.insert("header".to_owned(), credential.header.clone().into());
+            table.insert("scheme".to_owned(), credential.scheme.clone().into());
+            let credential = credential_from_value(&toml::Value::Table(table)).ok()?;
+            Some((name.clone(), credential))
+        })
+        .collect()
 }
 
 /// SHA-256 of `serde_json::to_vec` of the canonical form, lowercase hex
@@ -996,6 +1497,15 @@ pub fn action_from_canonical(
         Ok(serde_json::Value::Object(fields)) => fields,
         _ => serde_json::Map::new(),
     };
+    // An HTTP action is written back as the floor declares one: `kind`, its
+    // request's fields at the top, no process key.
+    if let Some(serde_json::Value::Object(http)) = fields.remove("http") {
+        for key in PROCESS_KEYS {
+            fields.remove(*key);
+        }
+        fields.insert("kind".to_owned(), HTTP_KIND.into());
+        fields.extend(http);
+    }
     fields.retain(|_, value| !value.is_null());
     fields.insert("name".to_owned(), name.into());
     let value = toml::Value::try_from(serde_json::Value::Object(fields)).map_err(|e| {
@@ -1072,6 +1582,8 @@ pub struct CatalogueDiff {
     pub guarded_programs: ListDiff,
     pub projects: SectionDiff,
     pub actions: SectionDiff,
+    /// Credentials added, removed and changed per field (D-39).
+    pub credentials: SectionDiff,
 }
 
 impl CatalogueDiff {
@@ -1083,6 +1595,7 @@ impl CatalogueDiff {
             && self.guarded_programs.removed.is_empty()
             && self.projects.is_empty()
             && self.actions.is_empty()
+            && self.credentials.is_empty()
     }
 }
 
@@ -1157,6 +1670,7 @@ pub fn diff(approved: &CanonicalCatalogue, current: &CanonicalCatalogue) -> Cata
         },
         projects: section_diff(&approved.projects, &current.projects),
         actions: section_diff(&approved.actions, &current.actions),
+        credentials: section_diff(&approved.credentials, &current.credentials),
     }
 }
 
@@ -1235,6 +1749,21 @@ mod tests {
     const PROJECT: &str = "[[project]]\nname = \"lab\"\npath = \"Lab\"\nactions = [\"probe\"]\n";
     const VALID_PROBE: &str = "name = \"probe\"\nclass = \"free\"\nprogram = \"C:/path/to/tool.exe\"\nargs = [\"--host\", \"{host}\"]\n[action.params.host]\nvalues = [\"web01\", \"db01\"]\n";
 
+    const CREDENTIAL: &str = "name = \"monitoring\"\nhosts = [\"monitoring.example.com\"]\nheader = \"Authorization\"\nscheme = \"Bearer\"\n";
+    /// A valid HTTP action named like [`VALID_PROBE`], so the project lists
+    /// it, sending [`CREDENTIAL`].
+    const VALID_HEALTH: &str = "name = \"probe\"\nkind = \"http\"\nclass = \"free\"\nmethod = \"GET\"\nurl = \"https://monitoring.example.com/api/{host}\"\ncredential = \"monitoring\"\n[action.params.host]\nvalues = [\"web01\", \"db01\"]\n";
+
+    /// [`floor_with`] plus the given `[[credential]]` tables.
+    fn with_credentials(actions: &[&str], credentials: &[&str]) -> String {
+        let mut text = floor_with(actions);
+        for credential in credentials {
+            text.push_str("\n[[credential]]\n");
+            text.push_str(credential);
+        }
+        text
+    }
+
     /// A schema 2 floor with one project and the given `[[action]]` tables.
     fn floor_with(actions: &[&str]) -> String {
         let mut text = format!("schema = 2\n{PROJECT}");
@@ -1293,9 +1822,49 @@ mod tests {
                 "class = \"free\"\n",
                 "class = \"free\"\nunknown = 1\n",
             )]),
-            IssueKind::HttpNotInThisBuild => floor_with(&[
-                "name = \"probe\"\nkind = \"http\"\nurl = \"https://example.com/status\"\n",
-            ]),
+            IssueKind::HttpProgramFields => with_credentials(
+                &[&VALID_HEALTH.replace(
+                    "class = \"free\"\n",
+                    "class = \"free\"\nprogram = \"C:/x.exe\"\n",
+                )],
+                &[CREDENTIAL],
+            ),
+            IssueKind::Url => with_credentials(
+                &[&VALID_HEALTH.replace("/api/{host}", "/api/v{host}")],
+                &[CREDENTIAL],
+            ),
+            IssueKind::UrlUserinfo => with_credentials(
+                &[&VALID_HEALTH.replace("https://", "https://user01@")],
+                &[CREDENTIAL],
+            ),
+            IssueKind::UnknownCredential => with_credentials(&[VALID_HEALTH], &[]),
+            IssueKind::CredentialHostNotBound => with_credentials(
+                &[VALID_HEALTH],
+                &[&CREDENTIAL.replace("monitoring.example.com", "other.example.com")],
+            ),
+            IssueKind::CredentialOverHttp => with_credentials(
+                &[&VALID_HEALTH.replace("https://", "http://")],
+                &[CREDENTIAL],
+            ),
+            IssueKind::CredentialName => with_credentials(
+                &[VALID_HEALTH],
+                &[&CREDENTIAL.replace("\"monitoring\"", "\"Monitoring\"")],
+            ),
+            IssueKind::CredentialHosts => with_credentials(
+                &[VALID_HEALTH],
+                &[&CREDENTIAL.replace("\"monitoring.example.com\"", "\"*.example.com\"")],
+            ),
+            IssueKind::CredentialHeader => with_credentials(
+                &[VALID_HEALTH],
+                &[&CREDENTIAL.replace("Authorization", "Cookie")],
+            ),
+            IssueKind::CredentialScheme => with_credentials(
+                &[VALID_HEALTH],
+                &[&CREDENTIAL.replace("\"Bearer\"", "\"Bearer token\"")],
+            ),
+            IssueKind::DuplicateCredential => {
+                with_credentials(&[VALID_HEALTH], &[CREDENTIAL, CREDENTIAL])
+            }
             IssueKind::AutoReserved => floor_with(&[&replaced("\"free\"", "\"auto\"")]),
             IssueKind::Name => floor_with(&[&replaced("\"probe\"", "\"Probe\"")]),
             IssueKind::DuplicateName => floor_with(&[VALID_PROBE, VALID_PROBE]),
@@ -1402,13 +1971,272 @@ mod tests {
     }
 
     #[test]
-    fn http_is_not_in_this_build() {
-        let catalogue = validated(&failing_fixture(IssueKind::HttpNotInThisBuild));
-        assert!(
-            issue_of(&catalogue, IssueKind::HttpNotInThisBuild)
-                .message
-                .contains("not in this build")
+    fn http_action_parses() {
+        let catalogue = validated(&with_credentials(&[VALID_HEALTH], &[CREDENTIAL]));
+        assert!(catalogue.issues.is_empty(), "{:#?}", catalogue.issues);
+        let action = &catalogue.actions["probe"];
+        let http = action.http.as_ref().expect("an HTTP action");
+        assert_eq!(http.method, HttpMethod::Get);
+        assert_eq!(http.url.host(), "monitoring.example.com");
+        assert_eq!(http.credential.as_deref(), Some("monitoring"));
+        assert_eq!(
+            (action.program.as_str(), action.args.len(), action.env.len()),
+            ("", 0, 0)
         );
+        let canonical = canonical(&catalogue, "C:/path/to/officina.toml");
+        let http = canonical.actions["probe"].http.as_ref().unwrap();
+        assert_eq!(http.url, "https://monitoring.example.com/api/{host}");
+        assert_eq!(canonical.format, CANONICAL_FORMAT);
+
+        let head = VALID_HEALTH
+            .replace("\"GET\"", "\"HEAD\"")
+            .replace("credential = \"monitoring\"\n", "")
+            .replace("https://", "http://");
+        let plain = validated(&with_credentials(&[&head], &[]));
+        assert!(plain.issues.is_empty(), "{:#?}", plain.issues);
+        assert_eq!(
+            plain.actions["probe"].http.as_ref().unwrap().method,
+            HttpMethod::Head,
+            "plain http without a credential is allowed"
+        );
+
+        for (broken, kind) in [
+            (
+                VALID_HEALTH.replace("\"GET\"", "\"POST\""),
+                IssueKind::Malformed,
+            ),
+            (
+                VALID_HEALTH.replace("kind = \"http\"", "kind = \"process\""),
+                IssueKind::Malformed,
+            ),
+            (
+                VALID_HEALTH.replace("url = ", "location = "),
+                IssueKind::Malformed,
+            ),
+            (
+                VALID_HEALTH.replace("{host}", "{other}"),
+                IssueKind::UndeclaredPlaceholder,
+            ),
+        ] {
+            with_issue(&with_credentials(&[&broken], &[CREDENTIAL]), kind);
+        }
+    }
+
+    #[test]
+    fn http_action_with_program_fields_is_an_issue() {
+        dropped(IssueKind::HttpProgramFields);
+        for key in PROCESS_KEYS {
+            let value = match *key {
+                "env" => "{ A = \"b\" }",
+                "args" => "[\"x\"]",
+                _ => "\"x\"",
+            };
+            let action = VALID_HEALTH.replace(
+                "class = \"free\"\n",
+                &format!("class = \"free\"\n{key} = {value}\n"),
+            );
+            let catalogue = with_issue(
+                &with_credentials(&[&action], &[CREDENTIAL]),
+                IssueKind::HttpProgramFields,
+            );
+            assert!(
+                issue_of(&catalogue, IssueKind::HttpProgramFields)
+                    .message
+                    .contains(&format!("`{key}`")),
+                "{key}"
+            );
+        }
+    }
+
+    #[test]
+    fn credential_entry_parses() {
+        let credential = CREDENTIAL.replace(
+            "[\"monitoring.example.com\"]",
+            "[\"Monitoring.Example.com\", \"10.0.0.10\", \"monitoring.example.com\", \"[::1]\"]",
+        );
+        let catalogue = validated(&with_credentials(&[VALID_HEALTH], &[&credential]));
+        assert!(catalogue.issues.is_empty(), "{:#?}", catalogue.issues);
+        assert_eq!(
+            catalogue.credentials["monitoring"],
+            Credential {
+                name: "monitoring".to_owned(),
+                hosts: vec![
+                    "10.0.0.10".to_owned(),
+                    "[::1]".to_owned(),
+                    "monitoring.example.com".to_owned()
+                ],
+                header: "Authorization".to_owned(),
+                scheme: "Bearer".to_owned(),
+            }
+        );
+        let canonical = canonical(&catalogue, "C:/path/to/officina.toml");
+        assert_eq!(
+            canonical.credentials["monitoring"].hosts,
+            catalogue.credentials["monitoring"].hosts
+        );
+        assert_eq!(
+            credentials_from_canonical(&canonical),
+            catalogue.credentials
+        );
+        let line = line_of_text(
+            &with_credentials(
+                &[VALID_HEALTH],
+                &[&credential.replace("Bearer", "Bad scheme")],
+            ),
+            "[[credential]]",
+        );
+        let broken = validated(&with_credentials(
+            &[VALID_HEALTH],
+            &[&credential.replace("Bearer", "Bad scheme")],
+        ));
+        assert_eq!(issue_of(&broken, IssueKind::CredentialScheme).line, line);
+        for bad in ["", "example.com:443", "*.example.com", "a..b", "a b"] {
+            assert!(host_entry(bad).is_none(), "{bad:?}");
+        }
+        let empty = CREDENTIAL.replace("[\"monitoring.example.com\"]", "[]");
+        with_issue(
+            &with_credentials(&[VALID_HEALTH], &[&empty]),
+            IssueKind::CredentialHosts,
+        );
+    }
+
+    #[test]
+    fn unknown_credential_is_an_issue() {
+        dropped(IssueKind::UnknownCredential);
+        let dropped_credential = validated(&failing_fixture(IssueKind::CredentialHeader));
+        assert!(
+            dropped_credential
+                .issues
+                .iter()
+                .any(|i| i.kind == IssueKind::UnknownCredential && i.name == "probe"),
+            "a credential dropped as invalid is unknown to its actions"
+        );
+    }
+
+    #[test]
+    fn credential_host_not_bound_is_an_issue() {
+        dropped(IssueKind::CredentialHostNotBound);
+        let subdomain =
+            VALID_HEALTH.replace("monitoring.example.com", "api.monitoring.example.com");
+        with_issue(
+            &with_credentials(&[&subdomain], &[CREDENTIAL]),
+            IssueKind::CredentialHostNotBound,
+        );
+        let other_case =
+            VALID_HEALTH.replace("monitoring.example.com", "MONITORING.example.com:8443");
+        let bound = validated(&with_credentials(&[&other_case], &[CREDENTIAL]));
+        assert!(
+            bound.issues.is_empty(),
+            "case and port do not matter: {:#?}",
+            bound.issues
+        );
+    }
+
+    #[test]
+    fn credential_over_plain_http_is_an_issue() {
+        dropped(IssueKind::CredentialOverHttp);
+    }
+
+    #[test]
+    fn forbidden_or_malformed_header_is_an_issue() {
+        dropped(IssueKind::CredentialHeader);
+        let forbidden = FORBIDDEN_CREDENTIAL_HEADERS.iter().flat_map(|header| {
+            [
+                (*header).to_owned(),
+                header.to_ascii_uppercase(),
+                header
+                    .split('-')
+                    .map(|word| {
+                        let mut chars = word.chars();
+                        chars.next().map_or(String::new(), |first| {
+                            first.to_ascii_uppercase().to_string() + chars.as_str()
+                        })
+                    })
+                    .collect::<Vec<_>>()
+                    .join("-"),
+            ]
+        });
+        let malformed = ["", "X Api-Key", "X-Api-Key:", "Ä", "X\\tY"].map(str::to_owned);
+        for header in forbidden.chain(malformed) {
+            let credential = CREDENTIAL.replace("Authorization", &header);
+            with_issue(
+                &with_credentials(&[VALID_HEALTH], &[&credential]),
+                IssueKind::CredentialHeader,
+            );
+        }
+        let fine = CREDENTIAL.replace("Authorization", "X-Api-Key");
+        assert!(
+            validated(&with_credentials(&[VALID_HEALTH], &[&fine]))
+                .issues
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn malformed_scheme_is_an_issue() {
+        dropped(IssueKind::CredentialScheme);
+        for scheme in ["", "Bearer token", "Bea:rer", "Bearer\\r\\nX-Injected: 1"] {
+            let credential = CREDENTIAL.replace("\"Bearer\"", &format!("\"{scheme}\""));
+            with_issue(
+                &with_credentials(&[VALID_HEALTH], &[&credential]),
+                IssueKind::CredentialScheme,
+            );
+        }
+    }
+
+    #[test]
+    fn url_userinfo_and_url_rules_are_issues() {
+        dropped(IssueKind::UrlUserinfo);
+        dropped(IssueKind::Url);
+        let catalogue = validated(&failing_fixture(IssueKind::UrlUserinfo));
+        assert!(
+            issue_of(&catalogue, IssueKind::UrlUserinfo)
+                .message
+                .contains("user")
+        );
+    }
+
+    #[test]
+    fn duplicate_credentials_drop_every_copy() {
+        let catalogue = with_issue(
+            &failing_fixture(IssueKind::DuplicateCredential),
+            IssueKind::DuplicateCredential,
+        );
+        assert!(catalogue.credentials.is_empty());
+    }
+
+    #[test]
+    fn diff_reports_credential_changes() {
+        let before = canonical_of(&with_credentials(&[VALID_HEALTH], &[CREDENTIAL]));
+        let changed = CREDENTIAL
+            .replace(
+                "[\"monitoring.example.com\"]",
+                "[\"monitoring.example.com\", \"mon2.example.com\"]",
+            )
+            .replace("Bearer", "Token");
+        let added = CREDENTIAL.replace("\"monitoring\"", "\"backup\"");
+        let after = canonical_of(&with_credentials(&[VALID_HEALTH], &[&changed, &added]));
+        let d = diff(&before, &after);
+        assert_eq!(d.credentials.added, ["backup"]);
+        let entry = &d.credentials.changed[0];
+        assert_eq!(entry.name, "monitoring");
+        let fields: Vec<&str> = entry.fields.iter().map(|f| f.field.as_str()).collect();
+        assert_eq!(fields, ["hosts", "scheme"]);
+        assert!(!d.is_empty());
+
+        let removed = diff(
+            &after,
+            &canonical_of(&with_credentials(&[VALID_HEALTH], &[&changed])),
+        );
+        assert_eq!(removed.credentials.removed, ["backup"]);
+        let url = diff(
+            &before,
+            &canonical_of(&with_credentials(
+                &[&VALID_HEALTH.replace("/api/", "/v2/")],
+                &[CREDENTIAL],
+            )),
+        );
+        assert_eq!(url.actions.changed[0].fields[0].field, "http");
     }
 
     #[test]
@@ -1673,10 +2501,19 @@ mod tests {
             .replace("C:/path/to/tool.exe", "/usr/bin/tool")
             .replace("\"probe\"", "\"remote\""),
             VALID_PROBE,
-        ]);
+            &VALID_HEALTH.replace("\"probe\"", "\"health\""),
+            &VALID_HEALTH
+                .replace("\"probe\"", "\"ping\"")
+                .replace("credential = \"monitoring\"\n", "")
+                .replace("\"GET\"", "\"HEAD\""),
+        ]) + "\n[[credential]]\n"
+            + CREDENTIAL;
         let catalogue = canonical(&validated(&content), "C:/path/to/officina.toml");
         assert!(
-            catalogue.actions.len() >= 4,
+            catalogue.actions["health"].http.is_some() && catalogue.actions["ping"].http.is_some()
+        );
+        assert!(
+            catalogue.actions.len() >= 6,
             "{:?}",
             catalogue.actions.keys()
         );

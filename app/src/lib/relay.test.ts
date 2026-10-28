@@ -37,6 +37,7 @@ function catalogue(description: string): CanonicalCatalogue {
         max_output_kib: 64,
       },
     },
+    credentials: {},
   };
 }
 
@@ -59,6 +60,7 @@ function view(overrides: Partial<RelayView> = {}): RelayView {
         guarded_programs: { added: ["ssh"], removed: [] },
         projects: { added: ["lab"], removed: [], changed: [] },
         actions: { added: ["restart"], removed: [], changed: [] },
+        credentials: { added: [], removed: [], changed: [] },
       },
       current: catalogue(HOSTILE),
     },
@@ -66,6 +68,7 @@ function view(overrides: Partial<RelayView> = {}): RelayView {
     recent: [],
     journal_corrupt_lines: 0,
     gate_errors_24h: 0,
+    credentials: [],
     ...overrides,
   };
 }

@@ -371,6 +371,94 @@ fn forged_request_argv_is_not_shown_or_approvable() {
     assert!(relay.ids(FileKind::Approved).is_empty());
 }
 
+// ---- Story 2.11 AC 11: HTTP requests, rebuilt (D-27) ----
+
+/// [`Relay::new`] whose project also lists `health`, a `human` HTTP action
+/// with no credential (a CLI test never reads the Credential Manager); its
+/// requests only wait, so nothing is ever sent.
+fn http_relay() -> Relay {
+    let relay = Relay::new();
+    let floor = FLOOR
+        .replace("{lab}", &relay.lab().to_string_lossy().replace('\\', "/"))
+        .replace(
+            "actions = [\"restart\",",
+            "actions = [\"health\", \"restart\",",
+        )
+        + "\n[[action]]\nname = \"health\"\ndescription = \"Read one check\"\nkind = \"http\"\nclass = \"human\"\nmethod = \"GET\"\nurl = \"https://monitoring.example.com/api/{check}?verbose=1\"\n[action.params.check]\nvalues = [\"a b\", \"ready\"]\n";
+    relay.env.write_floor(&floor);
+    relay.env.approve();
+    relay
+}
+
+fn board_approvals(relay: &Relay) -> (Vec<serde_json::Value>, Vec<u8>) {
+    relay.env.write_agents("[]");
+    let out = relay.env.run(&["board", "--json"], b"");
+    let board: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    (board["approvals"].as_array().unwrap().clone(), out.stdout)
+}
+
+#[test]
+fn http_request_shows_rebuilt_method_and_url() {
+    let relay = http_relay();
+    assert_refused(
+        &relay.run(&["health", "check=a b", "--wait", "1"]),
+        RefusalReason::ApprovalPending,
+    );
+    let id = relay.ids(FileKind::Request).remove(0);
+    let request = relay.request(&id);
+    assert!(request.argv.is_empty());
+    let expected = serde_json::json!({
+        "method": "GET",
+        "url": "https://monitoring.example.com/api/a%20b?verbose=1",
+        "credential": null,
+    });
+    assert_eq!(serde_json::to_value(&request.http).unwrap(), expected);
+
+    let (approvals, _) = board_approvals(&relay);
+    let shown = approvals.iter().find(|a| a["id"] == id.as_str()).unwrap();
+    assert_eq!(shown["valid"], true, "{shown}");
+    assert_eq!(shown["http"], expected);
+    assert_eq!(shown["argv"], serde_json::json!([]));
+    assert_eq!(shown["description"], "Read one check");
+}
+
+#[test]
+fn forged_http_request_is_not_approvable() {
+    let relay = http_relay();
+    relay.run(&["health", "check=ready", "--wait", "1"]);
+    let real = relay.request(&relay.ids(FileKind::Request).remove(0));
+    // Same key, same parameters: only the stored URL is forged.
+    let mut forged = real.clone();
+    let mut http = serde_json::to_value(&forged.http).unwrap();
+    http["url"] = serde_json::json!("https://attacker.example.com/steal");
+    forged.http = serde_json::from_value(http).unwrap();
+    forged.created_at_ms += 1;
+    let id = request_id(&forged.request_key, forged.created_at_ms);
+    std::fs::write(
+        relay
+            .approvals_dir()
+            .join(file_name(&id, FileKind::Request)),
+        serde_json::to_vec(&forged).unwrap(),
+    )
+    .unwrap();
+
+    let (approvals, stdout) = board_approvals(&relay);
+    let shown = approvals.iter().find(|a| a["id"] == id.as_str()).unwrap();
+    assert_eq!(shown["valid"], false);
+    assert!(shown["http"].is_null(), "{shown}");
+    assert!(
+        shown["invalid_reason"]
+            .as_str()
+            .unwrap()
+            .contains("differs")
+    );
+    assert!(!stdout.windows(8).any(|w| w == b"attacker"));
+    assert!(matches!(
+        decide_approval(&relay.env.relay_home(), &id, true),
+        Err(AuthorityError::Decide(_))
+    ));
+}
+
 // ---- AC 4, AC 5: the wait ----
 
 #[test]

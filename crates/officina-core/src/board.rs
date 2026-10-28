@@ -1026,6 +1026,7 @@ values = [\"web01\"]
                     action: action.to_owned(),
                     params,
                     argv: vec!["C:/path/to/tool.exe".to_owned(), service.to_owned()],
+                    http: None,
                     catalogue_hash: approved.hash.clone(),
                     session_id: sid.map(str::to_owned),
                     check_run_id,

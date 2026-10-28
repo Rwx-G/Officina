@@ -7,8 +7,8 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 use super::catalogue::{
-    ActionIssue, CANONICAL_FORMAT, CanonicalCatalogue, CatalogueDiff, RelayFloor, TIMEOUT_RANGE_S,
-    diff, relay_in_use,
+    ActionIssue, ApprovedCatalogue, CANONICAL_FORMAT, CanonicalCatalogue, CatalogueDiff,
+    RelayFloor, TIMEOUT_RANGE_S, diff, relay_in_use,
 };
 use super::journal::{
     ApprovalEvent, CatalogueApproved, GateDenied, GateError, JournalEntry, JournalLine, Refused,
@@ -88,6 +88,22 @@ pub struct RecentEntry {
     pub event: RecentEvent,
 }
 
+/// A credential of the approved catalogue (AD-36, D-41): where it may go,
+/// which actions send it, and whether the Credential Manager holds it. Never
+/// its secret.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct CredentialView {
+    pub name: String,
+    pub hosts: Vec<String>,
+    /// The approved actions naming it, sorted.
+    pub actions: Vec<String>,
+    /// Whether `officina:<name>` is in the Credential Manager; `null` when
+    /// not checked: `officina relay --json` never reads the store, the
+    /// window checks on its own schedule (D-41).
+    pub present: Option<bool>,
+}
+
 /// The relay contract shared by `officina relay --json` and the window.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
@@ -119,6 +135,8 @@ pub struct RelayView {
     pub recent: Vec<RecentEntry>,
     pub journal_corrupt_lines: u32,
     pub gate_errors_24h: u32,
+    /// The approved catalogue's credentials, by name.
+    pub credentials: Vec<CredentialView>,
 }
 
 /// `relay/stopped` as the host found it (AD-34).
@@ -153,6 +171,9 @@ pub struct ViewInputs<'a> {
     pub lines: &'a [JournalLine],
     pub journal_corrupt_lines: u32,
     pub now_ms: i64,
+    /// Whether each credential is in the Credential Manager, by name, when
+    /// the caller checked; `None` reports every credential unchecked.
+    pub credential_presence: Option<&'a BTreeMap<String, bool>>,
 }
 
 /// What a first approval compares with: nothing approved.
@@ -163,6 +184,7 @@ fn nothing_approved() -> CanonicalCatalogue {
         guarded_programs: Vec::new(),
         projects: BTreeMap::new(),
         actions: BTreeMap::new(),
+        credentials: BTreeMap::new(),
     }
 }
 
@@ -183,6 +205,38 @@ fn pending(snapshot: SnapshotState<'_>, current: &RelayFloor) -> Option<PendingC
         diff: diff(&base, &current.canonical),
         current: current.canonical.clone(),
     })
+}
+
+/// The approved catalogue's credentials with the actions naming them and
+/// what the caller found in the store.
+fn credentials(
+    approved: Option<&ApprovedCatalogue>,
+    presence: Option<&BTreeMap<String, bool>>,
+) -> Vec<CredentialView> {
+    let Some(approved) = approved else {
+        return Vec::new();
+    };
+    let canonical = &approved.canonical;
+    canonical
+        .credentials
+        .iter()
+        .map(|(name, credential)| CredentialView {
+            name: name.clone(),
+            hosts: credential.hosts.clone(),
+            actions: canonical
+                .actions
+                .iter()
+                .filter(|(_, action)| {
+                    action
+                        .http
+                        .as_ref()
+                        .is_some_and(|http| http.credential.as_deref() == Some(name))
+                })
+                .map(|(action, _)| action.clone())
+                .collect(),
+            present: presence.and_then(|found| found.get(name).copied()),
+        })
+        .collect()
 }
 
 /// Pairs run lines and keeps the last [`RECENT_ENTRIES`] entries, newest
@@ -308,6 +362,7 @@ pub fn build(inputs: &ViewInputs<'_>) -> RelayView {
         recent: recent(inputs.lines, inputs.now_ms),
         journal_corrupt_lines: inputs.journal_corrupt_lines,
         gate_errors_24h: u32::try_from(gate_errors_24h).unwrap_or(u32::MAX),
+        credentials: credentials(approved, inputs.credential_presence),
     }
 }
 
@@ -345,6 +400,7 @@ mod tests {
             lines,
             journal_corrupt_lines: 0,
             now_ms: NOW,
+            credential_presence: None,
         }
     }
 
@@ -359,6 +415,9 @@ mod tests {
                 class: ActionClass::Free,
                 params: BTreeMap::from([("host".to_owned(), "web01".to_owned())]),
                 argv: vec!["C:/path/to/tool.exe".to_owned(), "web01".to_owned()],
+                method: None,
+                url: None,
+                credential: None,
                 catalogue_hash: "00".to_owned(),
                 approval_id: None,
                 tree: None,
@@ -379,9 +438,12 @@ mod tests {
                 outcome: RunOutcome::Exited,
                 exit_code: Some(0),
                 duration_ms: ts,
-                stdout: stream.clone(),
-                stderr: stream,
+                stdout: Some(stream.clone()),
+                stderr: Some(stream),
                 dropped_bytes: 0,
+                status: None,
+                body_bytes: None,
+                body_sha256: None,
                 detail: None,
             }),
         )
@@ -680,6 +742,98 @@ mod tests {
             };
             assert_eq!(tag, expected, "{kind:?}");
         }
+    }
+
+    const HTTP: &str = r#"
+[[credential]]
+name = "monitoring"
+hosts = ["Monitoring.example.com", "mon2.example.com"]
+header = "Authorization"
+scheme = "Bearer"
+
+[[credential]]
+name = "unused"
+hosts = ["example.com"]
+header = "X-Api-Key"
+scheme = "Token"
+
+[[action]]
+name = "health"
+kind = "http"
+class = "free"
+method = "GET"
+url = "https://monitoring.example.com/health"
+credential = "monitoring"
+
+[[action]]
+name = "ready"
+kind = "http"
+class = "free"
+method = "HEAD"
+url = "https://mon2.example.com/ready"
+credential = "monitoring"
+"#;
+
+    #[test]
+    fn credentials_list_their_actions() {
+        let current = load(&format!("{FLOOR}{HTTP}"), FLOOR_PATH).unwrap();
+        assert!(
+            current.catalogue.issues.is_empty(),
+            "{:#?}",
+            current.catalogue.issues
+        );
+        let approved = approved_of(&current);
+        let unchecked = build(&inputs(
+            SnapshotState::Valid(&approved),
+            FloorRead::Valid(&current),
+            &[],
+        ));
+        assert_eq!(
+            unchecked.credentials,
+            [
+                CredentialView {
+                    name: "monitoring".to_owned(),
+                    hosts: vec![
+                        "mon2.example.com".to_owned(),
+                        "monitoring.example.com".to_owned()
+                    ],
+                    actions: vec!["health".to_owned(), "ready".to_owned()],
+                    present: None,
+                },
+                CredentialView {
+                    name: "unused".to_owned(),
+                    hosts: vec!["example.com".to_owned()],
+                    actions: Vec::new(),
+                    present: None,
+                },
+            ]
+        );
+
+        let found = BTreeMap::from([("monitoring".to_owned(), true)]);
+        let mut checked = inputs(
+            SnapshotState::Valid(&approved),
+            FloorRead::Valid(&current),
+            &[],
+        );
+        checked.credential_presence = Some(&found);
+        let view = build(&checked);
+        assert_eq!(view.credentials[0].present, Some(true));
+        assert_eq!(view.credentials[1].present, None, "not checked");
+        let http = view.catalogue.unwrap().actions["health"]
+            .http
+            .clone()
+            .unwrap();
+        assert_eq!(http.url, "https://monitoring.example.com/health");
+
+        let nothing = build(&inputs(
+            SnapshotState::Missing,
+            FloorRead::Valid(&current),
+            &[],
+        ));
+        assert!(
+            nothing.credentials.is_empty(),
+            "only the approved catalogue's"
+        );
     }
 
     #[test]

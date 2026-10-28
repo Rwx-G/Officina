@@ -3,6 +3,7 @@
 //! [`officina_core::relay::view::build`]. Read-only: `officina relay --json`
 //! and the window's collector both call it.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::io;
 
@@ -10,6 +11,7 @@ use officina_core::relay::StopFlag;
 use officina_core::relay::run::SnapshotState;
 use officina_core::relay::view::{FloorRead, RelayView, StopState, ViewInputs, build};
 
+use super::credential::CredentialStore;
 use super::home::{ApprovedState, RelayHome, load_relay_floor};
 use super::journal::read_recent;
 
@@ -51,8 +53,20 @@ pub fn read_stop(home: &RelayHome) -> StopState {
     }
 }
 
-/// Reads the relay's state at `now_ms` and builds its view.
+/// Reads the relay's state at `now_ms` and builds its view, every
+/// credential unchecked: `officina relay --json` never reads the store
+/// (D-41).
 pub fn read_view(home: &RelayHome, now_ms: i64) -> Result<RelayView, HomeUnreadable> {
+    read_view_with(home, now_ms, None)
+}
+
+/// [`read_view`] with what the window found in the credential store
+/// ([`credential_presence`]), by credential name.
+pub fn read_view_with(
+    home: &RelayHome,
+    now_ms: i64,
+    credential_presence: Option<&BTreeMap<String, bool>>,
+) -> Result<RelayView, HomeUnreadable> {
     check_home(home)?;
     let stop = read_stop(home);
     let approved = home.read_approved();
@@ -98,5 +112,24 @@ pub fn read_view(home: &RelayHome, now_ms: i64) -> Result<RelayView, HomeUnreada
         lines: &lines,
         journal_corrupt_lines,
         now_ms,
+        credential_presence,
     }))
+}
+
+/// Whether each credential of the approved catalogue is in `store`, by
+/// name (D-41); a credential the store cannot answer for is left out, so
+/// it shows unchecked. Empty when nothing is approved.
+pub fn credential_presence(
+    home: &RelayHome,
+    store: &dyn CredentialStore,
+) -> BTreeMap<String, bool> {
+    let ApprovedState::Valid(approved) = home.read_approved() else {
+        return BTreeMap::new();
+    };
+    approved
+        .canonical
+        .credentials
+        .keys()
+        .filter_map(|name| Some((name.clone(), store.present(name).ok()?)))
+        .collect()
 }

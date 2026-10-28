@@ -59,6 +59,20 @@ describe("activityRow", () => {
     });
   });
 
+  it("states an HTTP run's status, or that no response came", () => {
+    expect(activityRow(run("finished", { outcome: "http", exit_code: null, status: 200 }))).toMatchObject({
+      outcome: "http 200",
+      tone: "ok",
+    });
+    expect(activityRow(run("finished", { outcome: "http", exit_code: null, status: 503 }))).toMatchObject({
+      outcome: "http 503",
+      tone: "fault",
+    });
+    expect(
+      activityRow(run("finished", { outcome: "connect_failed", exit_code: null, detail: "refused" })),
+    ).toMatchObject({ outcome: "no response", detail: "refused", tone: "fault" });
+  });
+
   it("marks a run without an end line as running or abandoned", () => {
     expect(activityRow(run("running", null))).toMatchObject({ outcome: "running", durationMs: null });
     expect(activityRow(run("abandoned", null))).toMatchObject({ outcome: "abandoned", tone: "abandoned" });

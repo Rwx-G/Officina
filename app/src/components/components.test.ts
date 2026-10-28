@@ -122,6 +122,7 @@ function approval(overrides: Partial<ApprovalView> = {}): ApprovalView {
     action: "restart",
     description: "Restart one service",
     argv: ["C:/path/to/tool.exe", "restart", "web01"],
+    http: null,
     valid: true,
     invalid_reason: null,
     session_id: "s",
@@ -162,6 +163,19 @@ describe("ApprovalCard", () => {
     const chips = getAllByTestId("arg");
     expect(chips.map((chip) => chip.textContent)).toEqual(argv);
     expect(chips.every((chip) => chip.children.length === 0)).toBe(true);
+  });
+
+  it("an HTTP request shows its method, URL and credential as inert text", () => {
+    const url = `https://monitoring.example.com/api/<img src=x onerror="window.__hit = 1">`;
+    const { container, getByTestId, queryByTestId } = render(ApprovalCard, {
+      approval: approval({ argv: [], http: { method: "GET", url, credential: "monitoring" } }),
+      store: store(),
+    });
+    expect(getByTestId("http-method").textContent).toBe("GET");
+    expect(getByTestId("http-url").textContent).toBe(url);
+    expect(getByTestId("http-credential").textContent).toBe("credential monitoring");
+    expect(queryByTestId("argv")).toBeNull();
+    expect(container.querySelector("img")).toBeNull();
   });
 
   it("a pointer click calls decideApproval with the card id", async () => {

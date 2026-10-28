@@ -23,12 +23,13 @@ use std::time::{Duration, Instant};
 
 use officina_core::relay::StreamHash;
 use officina_core::relay::approvals::{
-    ApprovalRequest, DEFAULT_WAIT_S, FileKind, KEPT_OUTPUT_BYTES, KeyInputs, NextStep,
-    WAIT_TICK_MS, kept_output, next_step, request_id, request_key,
+    ApprovalRequest, DEFAULT_WAIT_S, FileKind, HttpRequestView, KEPT_OUTPUT_BYTES, KeyInputs,
+    NextStep, WAIT_TICK_MS, kept_output, next_step, request_id, request_key,
 };
 use officina_core::relay::argv::Launch;
 use officina_core::relay::catalogue::ActionClass;
 use officina_core::relay::classes::WAIT_RANGE_S;
+use officina_core::relay::http::HttpPlan;
 use officina_core::relay::journal::{
     ApprovalEvent, JournalEntry, Refused, RunFinished, RunOutcome, RunStarted, StreamSummary,
     TreeFingerprint,
@@ -38,7 +39,9 @@ use officina_core::relay::run::{
     FloorState, Refusal, RunInputs, RunPlan, SnapshotState, check_step, list_text, plan,
 };
 
+use super::credential::{CredentialStore, Secret, SystemCredentialStore};
 use super::home::{ApprovedState, RelayHome, load_relay_floor, system_dir};
+use super::http::{self, HttpOutcome};
 use super::journal::JournalLock;
 use super::{approvals, journal, tree};
 use crate::files::now_ms;
@@ -186,13 +189,50 @@ pub fn run(
     session_id: Option<String>,
     wait: Duration,
 ) -> i32 {
+    let store = SystemCredentialStore;
+    let mut stdout = std::io::stdout();
+    run_with(
+        home,
+        cwd,
+        &Call {
+            action,
+            params,
+            session_id,
+            wait,
+        },
+        &store,
+        &mut stdout,
+    )
+}
+
+/// One `officina run` call: the action, its parameters, the session and how
+/// long a `human` action waits.
+pub struct Call<'a> {
+    pub action: &'a str,
+    pub params: &'a BTreeMap<String, String>,
+    pub session_id: Option<String>,
+    pub wait: Duration,
+}
+
+/// [`run`] with the credential store and the stream an HTTP action's
+/// response is written to given, for tests: a fake store, a captured
+/// output. A process action's output goes to this process's stdout.
+pub fn run_with(
+    home: &RelayHome,
+    cwd: &str,
+    call: &Call<'_>,
+    store: &dyn CredentialStore,
+    out: &mut dyn Write,
+) -> i32 {
+    let (action, params, wait) = (call.action, call.params, call.wait);
+    let session_id = call.session_id.clone();
     let plan = match with_inputs(home, cwd, |inputs| plan(inputs, action, params)) {
         Ok(plan) => plan,
         Err(refusal) => return refuse(home, &refusal, action, params, session_id),
     };
     let tree = plan
         .binds_tree
-        .then(|| tree::fingerprint(Path::new(&plan.launch.cwd)))
+        .then(|| tree::fingerprint(Path::new(&plan.project_dir)))
         .flatten();
     let mut check_run_id = None;
     if plan.check.is_some() {
@@ -211,24 +251,63 @@ pub fn run(
             cwd,
             params,
             session_id: &session_id,
+            store,
         };
         let bound = Bound {
             check_run_id: check_run_id.as_deref(),
             tree: tree.as_ref(),
         };
         return match approval(&caller, &plan, bound, wait) {
-            Ok((approval_id, approved_plan)) => execute(
+            Ok(approved) => execute(
                 home,
-                &approved_plan,
-                params,
-                session_id,
-                tree,
-                Some(approval_id),
+                &approved.plan,
+                Started {
+                    params,
+                    session_id,
+                    tree,
+                    approval_id: Some(approved.id),
+                },
+                approved.secret,
+                out,
             ),
             Err(code) => code,
         };
     }
-    execute(home, &plan, params, session_id, tree, None)
+    // After every check, just before the request (D-29).
+    let secret = match read_secret(&plan, store) {
+        Ok(secret) => secret,
+        Err(refusal) => return refuse(home, &refusal, action, params, session_id),
+    };
+    execute(
+        home,
+        &plan,
+        Started {
+            params,
+            session_id,
+            tree,
+            approval_id: None,
+        },
+        secret,
+        out,
+    )
+}
+
+/// The secret of the credential an HTTP action's plan carries, read from
+/// `store`; `None` for a plan without one. A missing or unreadable
+/// credential is a refusal, before any connection (D-29).
+fn read_secret(plan: &RunPlan, store: &dyn CredentialStore) -> Result<Option<Secret>, Refusal> {
+    let Some(binding) = plan.http().and_then(|http| http.credential.as_ref()) else {
+        return Ok(None);
+    };
+    match store.read(&binding.name) {
+        Ok(Some(secret)) => Ok(Some(secret)),
+        Ok(None) => Err(Refusal::credential_missing(&plan.project, &binding.name)),
+        Err(e) => Err(Refusal::credential_unreadable(
+            &plan.project,
+            &binding.name,
+            &e.to_string(),
+        )),
+    }
 }
 
 /// Who called and from where, for the steps of a `human` action.
@@ -237,6 +316,15 @@ struct Caller<'a> {
     cwd: &'a str,
     params: &'a BTreeMap<String, String>,
     session_id: &'a Option<String>,
+    store: &'a dyn CredentialStore,
+}
+
+/// An approval used: its id, the plan checked again just before, and the
+/// credential read before the approval was consumed (D-29).
+struct Approved {
+    id: String,
+    plan: RunPlan,
+    secret: Option<Secret>,
 }
 
 impl Caller<'_> {
@@ -270,7 +358,7 @@ fn approval(
     plan: &RunPlan,
     bound: Bound<'_>,
     wait: Duration,
-) -> Result<(String, RunPlan), i32> {
+) -> Result<Approved, i32> {
     let key = request_key(&KeyInputs {
         project: &plan.project,
         action: &plan.action,
@@ -287,7 +375,13 @@ fn approval(
                 return Err(caller.refuse(&Refusal::approval_rejected(&plan.project), &plan.action));
             }
             NextStep::Consume { id } => match consume(caller, plan, bound, &id) {
-                Consumed::Done(fresh) => return Ok((id, fresh)),
+                Consumed::Done(fresh, secret) => {
+                    return Ok(Approved {
+                        id,
+                        plan: *fresh,
+                        secret,
+                    });
+                }
                 Consumed::Gone => continue,
                 Consumed::Refused(refusal) => return Err(caller.refuse(&refusal, &plan.action)),
             },
@@ -317,8 +411,8 @@ fn approval(
 
 /// How using an approval went.
 enum Consumed {
-    /// Used: the plan checked again just before.
-    Done(RunPlan),
+    /// Used: the plan checked again just before, and its credential.
+    Done(Box<RunPlan>, Option<Secret>),
     /// Another call used it first.
     Gone,
     /// Refused before using it: the approval stays as it was.
@@ -327,8 +421,9 @@ enum Consumed {
 
 /// Uses approval `id`, last before the spawn (AD-33): the checks of [`plan`]
 /// again, the approval made under the same catalogue, and for an action
-/// naming a check the tree still the dry run's (D-170); then the rename.
-/// Anything refused leaves the approval unconsumed.
+/// naming a check the tree still the dry run's (D-170), and an HTTP action's
+/// credential read (D-29); then the claim. Anything refused leaves the
+/// approval unconsumed.
 fn consume(caller: &Caller<'_>, planned: &RunPlan, bound: Bound<'_>, id: &str) -> Consumed {
     let fresh = match with_inputs(caller.home, caller.cwd, |inputs| {
         plan(inputs, &planned.action, caller.params)
@@ -340,12 +435,16 @@ fn consume(caller: &Caller<'_>, planned: &RunPlan, bound: Bound<'_>, id: &str) -
         return Consumed::Refused(Refusal::catalogue_changed_since_request(&fresh.project));
     }
     if let Some(check) = &fresh.check
-        && tree::fingerprint(Path::new(&fresh.launch.cwd)).as_ref() != bound.tree
+        && tree::fingerprint(Path::new(&fresh.project_dir)).as_ref() != bound.tree
     {
         return Consumed::Refused(Refusal::check_not_satisfied(&fresh.project, check));
     }
+    let secret = match read_secret(&fresh, caller.store) {
+        Ok(secret) => secret,
+        Err(refusal) => return Consumed::Refused(refusal),
+    };
     match approvals::consume(caller.home, id) {
-        Ok(()) => Consumed::Done(fresh),
+        Ok(()) => Consumed::Done(Box::new(fresh), secret),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Consumed::Gone,
         Err(e) => Consumed::Refused(Refusal::approval_unavailable(
             &fresh.project,
@@ -379,6 +478,7 @@ fn create(caller: &Caller<'_>, plan: &RunPlan, bound: Bound<'_>, key: &str) -> R
         action: plan.action.clone(),
         params: caller.params.clone(),
         argv: plan.argv(),
+        http: plan.http().map(HttpRequestView::from),
         catalogue_hash: plan.catalogue_hash.clone(),
         session_id: caller.session_id.clone(),
         check_run_id: bound.check_run_id.map(str::to_owned),
@@ -711,10 +811,13 @@ fn finished(
         run_id: run_id.to_owned(),
         outcome,
         exit_code,
-        duration_ms: i64::try_from(started.elapsed().as_millis()).unwrap_or(i64::MAX),
-        stdout,
-        stderr,
+        duration_ms: elapsed_ms(started),
+        stdout: Some(stdout),
+        stderr: Some(stderr),
         dropped_bytes: dropped,
+        status: None,
+        body_bytes: None,
+        body_sha256: None,
         detail,
     })
 }
@@ -736,41 +839,200 @@ fn keep(home: &RelayHome, run_id: &str, output: &Output) {
     }
 }
 
-/// Journals `run_started`, starts the launch in its process tree, copies
-/// its output, waits for it against its deadline, keeps a check's output
-/// and journals the end.
-fn execute(
-    home: &RelayHome,
-    plan: &RunPlan,
-    params: &BTreeMap<String, String>,
+/// What the start line records besides the plan.
+struct Started<'a> {
+    params: &'a BTreeMap<String, String>,
     session_id: Option<String>,
     tree: Option<TreeFingerprint>,
     approval_id: Option<String>,
+}
+
+/// Journals `run_started`, then starts the process or sends the request.
+fn execute(
+    home: &RelayHome,
+    plan: &RunPlan,
+    context: Started<'_>,
+    secret: Option<Secret>,
+    out: &mut dyn Write,
 ) -> i32 {
     let run_id = format!("{:x}-{:x}", now_ms(), std::process::id());
+    let http = plan.http();
     let start = JournalEntry::RunStarted(RunStarted {
         run_id: run_id.clone(),
         project: plan.project.clone(),
-        session_id,
+        session_id: context.session_id,
         action: plan.action.clone(),
         class: plan.class,
-        params: params.clone(),
+        params: context.params.clone(),
         argv: plan.argv(),
+        method: http.map(|h| h.method),
+        url: http.map(|h| h.url.clone()),
+        credential: http.and_then(|h| h.credential.as_ref().map(|c| c.name.clone())),
         catalogue_hash: plan.catalogue_hash.clone(),
-        approval_id,
-        tree,
-        timeout_s: Some(plan.timeout_s),
+        approval_id: context.approval_id,
+        tree: context.tree,
+        timeout_s: Some(http.map_or(plan.timeout_s, |h| h.timeout_s)),
     });
     if let Err(e) = journal::append(home, &[start], now_ms()) {
         eprintln!("officina: refused: {e}, so nothing ran (journal_unavailable)");
         return EXIT_REFUSED;
     }
+    match (plan.launch(), http) {
+        (Some(launch), _) => spawn(home, plan, launch, &run_id),
+        (None, Some(request)) => send_request(home, plan, request, &run_id, secret, out),
+        (None, None) => EXIT_NOT_STARTED,
+    }
+}
+
+fn elapsed_ms(started: Instant) -> i64 {
+    i64::try_from(started.elapsed().as_millis()).unwrap_or(i64::MAX)
+}
+
+/// Passes what an HTTP run prints on, keeping its first bytes for a check
+/// run's kept output (D-170).
+struct Tee<'a> {
+    out: &'a mut dyn Write,
+    kept: Option<Vec<u8>>,
+    total: u64,
+}
+
+impl Write for Tee<'_> {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        let written = self.out.write(bytes)?;
+        self.total += written as u64;
+        if let Some(kept) = &mut self.kept {
+            let room = KEPT_OUTPUT_BYTES.saturating_sub(kept.len()).min(written);
+            kept.extend_from_slice(&bytes[..room]);
+        }
+        Ok(written)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.out.flush()
+    }
+}
+
+/// The response half of a `run_finished` line: status, body bytes and hash.
+struct Response {
+    status: u16,
+    body_bytes: u64,
+    body_sha256: String,
+}
+
+fn http_finished(
+    run_id: &str,
+    outcome: RunOutcome,
+    started: Instant,
+    response: Option<Response>,
+    detail: Option<String>,
+) -> JournalEntry {
+    JournalEntry::RunFinished(RunFinished {
+        run_id: run_id.to_owned(),
+        outcome,
+        exit_code: None,
+        duration_ms: elapsed_ms(started),
+        stdout: None,
+        stderr: None,
+        dropped_bytes: 0,
+        status: response.as_ref().map(|r| r.status),
+        body_bytes: response.as_ref().map(|r| r.body_bytes),
+        body_sha256: response.map(|r| r.body_sha256),
+        detail,
+    })
+}
+
+/// Sends an HTTP action's request (AD-36), writes the response to `out`,
+/// journals the end and returns the exit code of D-35: 0 for a 2xx status,
+/// 1 for any other (one stderr line `officina: http <status>`), 124 on
+/// timeout, 127 without a response; never 2.
+fn send_request(
+    home: &RelayHome,
+    plan: &RunPlan,
+    request: &HttpPlan,
+    run_id: &str,
+    secret: Option<Secret>,
+    out: &mut dyn Write,
+) -> i32 {
+    let started = Instant::now();
+    let mut tee = Tee {
+        out,
+        kept: plan.keeps_output.then(Vec::new),
+        total: 0,
+    };
+    let outcome = http::send(request, secret.as_ref(), &mut tee);
+    drop(secret);
+    let (line, code) = match outcome {
+        HttpOutcome::Response {
+            status,
+            body_bytes,
+            body_sha256,
+            cut,
+            read_error,
+        } => {
+            let detail = match (&read_error, cut) {
+                (Some(e), _) => Some(format!("the body broke off: {e}")),
+                (None, true) => Some(format!(
+                    "body cut at {} KiB, connection dropped",
+                    request.max_body_bytes / 1024
+                )),
+                (None, false) => None,
+            };
+            let success = (200..300).contains(&status) && read_error.is_none();
+            if !success {
+                match &read_error {
+                    Some(e) => eprintln!("officina: http {status}, the body broke off: {e}"),
+                    None => eprintln!("officina: http {status}"),
+                }
+            }
+            let response = Response {
+                status,
+                body_bytes,
+                body_sha256,
+            };
+            let line = http_finished(run_id, RunOutcome::Http, started, Some(response), detail);
+            (line, i32::from(!success))
+        }
+        HttpOutcome::Timeout => {
+            eprintln!(
+                "officina: timeout: {} got no complete response within {} s",
+                plan.action, request.timeout_s
+            );
+            let line = http_finished(run_id, RunOutcome::Timeout, started, None, None);
+            (line, EXIT_TIMEOUT)
+        }
+        HttpOutcome::ConnectFailed { detail } => {
+            eprintln!("officina: no response from {}: {detail}", request.host);
+            let line = http_finished(
+                run_id,
+                RunOutcome::ConnectFailed,
+                started,
+                None,
+                Some(detail),
+            );
+            (line, EXIT_NOT_STARTED)
+        }
+    };
+    journal_end(home, line);
+    if let Some(kept) = &tee.kept {
+        let bytes = kept_output(kept, &[], tee.total, 0);
+        if let Err(e) = approvals::keep_output(home, run_id, &bytes) {
+            eprintln!("officina: this check's output could not be kept: {e}");
+        }
+    }
+    code
+}
+
+/// Starts a process action in its process tree, copies its output, waits
+/// for it against its deadline, keeps a check's output and journals the
+/// end.
+fn spawn(home: &RelayHome, plan: &RunPlan, launch: &Launch, run_id: &str) -> i32 {
+    let run_id = run_id.to_owned();
     let tree = ProcessTree::new();
     let started = Instant::now();
-    let mut child = match command_for(&plan.launch).spawn() {
+    let mut child = match command_for(launch).spawn() {
         Ok(child) => child,
         Err(e) => {
-            eprintln!("officina: could not start {}: {e}", plan.launch.program);
+            eprintln!("officina: could not start {}: {e}", launch.program);
             journal_end(
                 home,
                 finished(

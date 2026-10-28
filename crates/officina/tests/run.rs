@@ -487,6 +487,16 @@ fn scenario(reason: RefusalReason) -> Option<Scenario> {
         }
         RefusalReason::ApprovalPending => (project, human("1")),
         RefusalReason::CheckNotSatisfied => unreachable!("built above"),
+        // These need a credential store, which a CLI test never touches: the
+        // real one is the author's. They are proved with a fake store by
+        // `crates/officina-host/tests/relay_http.rs::{
+        // missing_credential_refuses_before_any_connection,
+        // unreadable_credential_refuses_before_any_connection}` (story 2.11
+        // AC 7).
+        RefusalReason::CredentialMissing | RefusalReason::CredentialUnreadable => {
+            println!("{reason:?}: proved at host level, crates/officina-host/tests/relay_http.rs");
+            return None;
+        }
     };
     Some(Scenario {
         relay,
@@ -725,7 +735,13 @@ fn output_is_capped_and_drained() {
     let passed = out.stdout.len() - marker.len() + out.stderr.len();
     assert!(passed <= 1024 + 1, "{passed} bytes passed a 1 KiB budget");
     let finished = &relay.finished()[0];
-    assert_eq!((finished.stdout.bytes, finished.stderr.bytes), (LEN, LEN));
+    assert_eq!(
+        (
+            finished.stdout.as_ref().unwrap().bytes,
+            finished.stderr.as_ref().unwrap().bytes
+        ),
+        (LEN, LEN)
+    );
     assert_eq!(finished.dropped_bytes, marker_dropped);
 }
 
@@ -740,8 +756,14 @@ fn hashes_cover_all_bytes() {
     tool_with_mode(&relay, "capped", "bytes:100000");
     let finished = relay.finished();
     for (f, len) in finished.iter().zip([30_000u64, 100_000]) {
-        assert_eq!(f.stdout.sha256, sha256_hex(&stream(len, stdout_byte)));
-        assert_eq!(f.stderr.sha256, sha256_hex(&stream(len, stderr_byte)));
+        assert_eq!(
+            f.stdout.as_ref().unwrap().sha256,
+            sha256_hex(&stream(len, stdout_byte))
+        );
+        assert_eq!(
+            f.stderr.as_ref().unwrap().sha256,
+            sha256_hex(&stream(len, stderr_byte))
+        );
     }
 }
 
@@ -1459,6 +1481,9 @@ fn seed_check(git: &GitRelay, run_id: &str, ago: i64) {
             "--check".to_owned(),
             "lab-web".to_owned(),
         ],
+        method: None,
+        url: None,
+        credential: None,
         catalogue_hash: hash,
         approval_id: None,
         tree: git.tree(),
@@ -1469,9 +1494,12 @@ fn seed_check(git: &GitRelay, run_id: &str, ago: i64) {
         outcome: RunOutcome::Exited,
         exit_code: Some(0),
         duration_ms: 1000,
-        stdout: stream.clone(),
-        stderr: stream,
+        stdout: Some(stream.clone()),
+        stderr: Some(stream),
         dropped_bytes: 0,
+        status: None,
+        body_bytes: None,
+        body_sha256: None,
         detail: None,
     });
     officina_host::relay::journal::append(&home, &[start], now - ago).unwrap();

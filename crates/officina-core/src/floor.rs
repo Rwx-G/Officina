@@ -18,9 +18,10 @@ pub const FLOOR_SCHEMA_V1: u32 = 1;
 /// Keys only a schema 2 floor may carry. A dotted key names a key of every
 /// `[[project]]` table. Asserted against [`FloorFile`] by a test, so a new
 /// relay key cannot be forgotten here (D-7).
-pub const RELAY_KEYS: [&str; 4] = [
+pub const RELAY_KEYS: [&str; 5] = [
     "guarded_programs",
     "action",
+    "credential",
     "project.autonomy",
     "project.actions",
 ];
@@ -95,6 +96,10 @@ pub struct FloorFile {
     /// interprets them (AD-23).
     #[serde(default, rename = "action", skip_serializing_if = "Vec::is_empty")]
     pub actions: Vec<toml::Spanned<toml::Value>>,
+    /// Raw `[[credential]]` tables (AD-36), converted by phase 2 like the
+    /// actions.
+    #[serde(default, rename = "credential", skip_serializing_if = "Vec::is_empty")]
+    pub credentials: Vec<toml::Spanned<toml::Value>>,
 }
 
 impl FloorFile {
@@ -416,8 +421,8 @@ program = "C:/path/to/tool.exe"
     fn relay_keys_constant_matches_the_type() {
         // Struct literals: a field added to either type fails to compile here
         // until it is populated, and then shows up in the key comparison.
-        // An action's own keys belong to phase 2, not to this type, hence
-        // the empty table.
+        // An action's or a credential's own keys belong to phase 2, not to
+        // this type, hence the empty tables.
         let action = toml::Value::Table(toml::Table::new());
         let full = FloorFile {
             schema: FLOOR_SCHEMA,
@@ -432,7 +437,8 @@ program = "C:/path/to/tool.exe"
                 autonomy: Some(Autonomy::Guarded),
                 actions: Some(vec!["x".to_owned()]),
             }],
-            actions: vec![toml::Spanned::new(0..0, action)],
+            actions: vec![toml::Spanned::new(0..0, action.clone())],
+            credentials: vec![toml::Spanned::new(0..0, action)],
         };
         let v0_1 = serialized_keys(&parse_floor(V0_1_FLOOR).unwrap());
         let relay: BTreeSet<String> = serialized_keys(&full).difference(&v0_1).cloned().collect();

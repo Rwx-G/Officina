@@ -352,6 +352,7 @@ mod tests {
             action: "restart".to_owned(),
             description: String::new(),
             argv: Vec::new(),
+            http: None,
             valid,
             invalid_reason: (!valid).then(|| "forged".to_owned()),
             session_id: None,

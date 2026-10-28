@@ -7,9 +7,11 @@
 pub mod approvals;
 #[cfg(feature = "window-authority")]
 pub mod authority;
+pub mod credential;
 pub mod doctor;
 pub mod gate;
 pub mod home;
+pub mod http;
 pub mod journal;
 pub mod run;
 pub mod tree;

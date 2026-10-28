@@ -41,12 +41,22 @@
     <p class="description" data-testid="approval-description">{approval.description}</p>
   {/if}
 
-  {#if approval.valid}
+  {#if approval.valid && approval.http}
+    <ol class="argv" data-testid="http-request" aria-label="The request: method, URL and credential">
+      <li class="arg" data-testid="http-method">{approval.http.method}</li>
+      <li class="arg" data-testid="http-url">{approval.http.url}</li>
+      {#if approval.http.credential}
+        <li class="arg" data-testid="http-credential">credential {approval.http.credential}</li>
+      {/if}
+    </ol>
+  {:else if approval.valid}
     <ol class="argv" data-testid="argv" aria-label="The command, one argument per chip">
       {#each approval.argv as arg, i (i)}
         <li class="arg" data-testid="arg">{arg}</li>
       {/each}
     </ol>
+  {/if}
+  {#if approval.valid}
     {#if dryRun}
       <section class="dry-run" data-testid="dry-run" aria-label="Dry run">
         <div class="dry-run-head">Dry run: {dryRun.check}</div>

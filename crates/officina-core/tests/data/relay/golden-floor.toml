@@ -8,7 +8,7 @@ name = "supervision"
 path = "Supervision"
 color = "green"
 autonomy = "guarded"
-actions = ["check", "apply", "apply-sensitive", "status"]
+actions = ["check", "apply", "apply-sensitive", "status", "health", "ping"]
 
 [[project]]
 name = "notes"
@@ -75,3 +75,36 @@ values = ["web01", "db01"]
 
 [action.params.unit]
 pattern = "[a-z0-9-]+\\.service"
+
+[[action]]
+name = "health"
+description = "Read one check of the monitoring API"
+class = "free"
+kind = "http"
+method = "GET"
+url = "https://monitoring.example.com/api/v1/{check}?host={host}&verbose=1"
+credential = "monitoring"
+timeout_s = 30
+
+[action.params.check]
+values = ["health", "ready"]
+
+[action.params.host]
+pattern = "[a-z0-9-]+"
+
+[[action]]
+name = "ping"
+description = "Is the status page up"
+class = "free"
+kind = "http"
+method = "HEAD"
+url = "http://status.example.com/{page}"
+
+[action.params.page]
+values = ["index"]
+
+[[credential]]
+name = "monitoring"
+hosts = ["monitoring.example.com", "mon2.example.com"]
+header = "Authorization"
+scheme = "Bearer"

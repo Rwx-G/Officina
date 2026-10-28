@@ -2,6 +2,8 @@
 //! the Claude config dir (stories 1.8, 1.9, 1.11; FR-5, FR-11, FR-13).
 
 mod common;
+#[path = "../../../tests/support/stub_server.rs"]
+mod stub_server;
 
 use std::path::PathBuf;
 use std::sync::mpsc;
@@ -202,8 +204,10 @@ fn no_command_writes_under_the_claude_config_dir() {
     let lab = env.root.path().join("work").join("Lab");
     std::fs::create_dir_all(&lab).unwrap();
     let lab_path = lab.to_string_lossy().replace('\\', "/");
+    let stub = stub_server::Stub::start(vec![stub_server::Reply::ok("up")]);
+    let health = stub.url("/health");
     env.write_floor(&format!(
-        "schema = 2\n[[project]]\nname = \"lab\"\npath = \"{lab_path}\"\nactions = [\"probe\", \"restart\"]\n[[action]]\nname = \"probe\"\nclass = \"free\"\nprogram = \"{{tool}}\"\n[[action]]\nname = \"restart\"\nclass = \"human\"\nprogram = \"{{tool}}\"\n"
+        "schema = 2\n[[project]]\nname = \"lab\"\npath = \"{lab_path}\"\nactions = [\"probe\", \"restart\", \"health\"]\n[[action]]\nname = \"probe\"\nclass = \"free\"\nprogram = \"{{tool}}\"\n[[action]]\nname = \"restart\"\nclass = \"human\"\nprogram = \"{{tool}}\"\n[[action]]\nname = \"health\"\nkind = \"http\"\nclass = \"free\"\nmethod = \"GET\"\nurl = \"{health}\"\n"
     ));
     env.approve();
     let payload = serde_json::json!({
@@ -221,6 +225,7 @@ fn no_command_writes_under_the_claude_config_dir() {
     assert!(String::from_utf8_lossy(&deny.stdout).contains("\"deny\""));
     for args in [
         &["run", "probe"][..],
+        &["run", "health"],
         &["run", "--list"],
         &["run", "restart", "--wait", "1"],
         &["relay", "--json"],
@@ -238,5 +243,6 @@ fn no_command_writes_under_the_claude_config_dir() {
     watch.sender.send(CollectorMsg::Shutdown).unwrap();
     watch.thread.join().unwrap();
 
+    assert_eq!(stub.requests().len(), 1, "the HTTP run went out");
     assert_eq!(fingerprint(&config), before);
 }

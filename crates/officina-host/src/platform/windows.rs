@@ -1,5 +1,6 @@
-//! Win32 calls for the focus action (AD-15) and for the relay's process tree
-//! (AD-30, AD-31). The only module of the workspace allowed `unsafe`; every
+//! Win32 calls for the focus action (AD-15), for the relay's process tree
+//! (AD-30, AD-31) and for the credentials of HTTP actions (AD-36). The only
+//! module of the workspace allowed `unsafe`; every
 //! block carries its safety argument. Decisions (which window, which
 //! arguments) are made by pure functions in `officina_core`.
 
@@ -145,6 +146,45 @@ pub fn system_directory() -> io::Result<PathBuf> {
         buf.resize(len, 0);
     }
 }
+/// The blob of the generic credential `target` in the Windows Credential
+/// Manager (`CredReadW`, `CRED_TYPE_GENERIC`), copied out and freed with
+/// `CredFree`; `None` when no such credential exists (AD-36). The bytes are
+/// the secret: the caller decodes them and never prints them.
+pub fn read_generic_credential(target: &str) -> io::Result<Option<Vec<u8>>> {
+    use windows_sys::Win32::Foundation::ERROR_NOT_FOUND;
+    use windows_sys::Win32::Security::Credentials::{
+        CRED_TYPE_GENERIC, CREDENTIALW, CredFree, CredReadW,
+    };
+    let wide: Vec<u16> = target.encode_utf16().chain(std::iter::once(0)).collect();
+    let mut credential: *mut CREDENTIALW = std::ptr::null_mut();
+    // SAFETY: `wide` is a NUL-terminated UTF-16 string that outlives the
+    // call; `credential` is a valid out pointer, set only on success.
+    let ok = unsafe { CredReadW(wide.as_ptr(), CRED_TYPE_GENERIC, 0, &mut credential) };
+    if ok == 0 {
+        let error = io::Error::last_os_error();
+        return match error.raw_os_error() {
+            Some(code) if code == ERROR_NOT_FOUND as i32 => Ok(None),
+            _ => Err(error),
+        };
+    }
+    // SAFETY: on success `credential` points to a CREDENTIALW the system
+    // allocated; its blob pointer is valid for `CredentialBlobSize` bytes
+    // (or null with size 0). The bytes are copied before the free below.
+    let blob = unsafe {
+        let record = &*credential;
+        let size = usize::try_from(record.CredentialBlobSize).unwrap_or(0);
+        if record.CredentialBlob.is_null() || size == 0 {
+            Vec::new()
+        } else {
+            std::slice::from_raw_parts(record.CredentialBlob, size).to_vec()
+        }
+    };
+    // SAFETY: `credential` came from a successful CredReadW and is freed
+    // once, here; nothing reads it afterwards.
+    unsafe { CredFree(credential.cast()) };
+    Ok(Some(blob))
+}
+
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     EnumWindows, FLASHW_ALL, FLASHW_TIMERNOFG, FLASHWINFO, FlashWindowEx, GW_OWNER,
     GetForegroundWindow, GetWindow, GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId,

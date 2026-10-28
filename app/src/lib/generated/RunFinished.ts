@@ -10,12 +10,29 @@ export type RunFinished = { run_id: string, outcome: RunOutcome,
 /**
  * The program's own code, full Windows value; absent unless `exited`.
  */
-exit_code?: number | null, duration_ms: number, stdout: StreamSummary, stderr: StreamSummary, 
+exit_code?: number | null, duration_ms: number, 
+/**
+ * A process's streams; absent for an HTTP action.
+ */
+stdout?: StreamSummary | null, stderr?: StreamSummary | null, 
 /**
  * Bytes read but not passed on, past `max_output_kib` (AD-31).
  */
 dropped_bytes?: number, 
 /**
- * Why the program could not start.
+ * An HTTP response's status code (D-36).
+ */
+status?: number | null, 
+/**
+ * The body bytes read and passed on, at most `max_output_kib`.
+ */
+body_bytes?: number | null, 
+/**
+ * SHA-256 of those bytes, lowercase hex.
+ */
+body_sha256?: string | null, 
+/**
+ * Why the program could not start, why no response came, or that the
+ * body was cut.
  */
 detail?: string | null, };

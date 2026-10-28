@@ -4,4 +4,4 @@
  * Why `officina run` refused (AD-29), in the order its checks run. The
  * stderr line and the journal's `refused` line carry the code.
  */
-export type RefusalReason = "stopped" | "not_approved" | "approved_unreadable" | "floor_unreadable" | "catalogue_changed" | "outside_projects" | "action_not_allowed" | "missing_parameter" | "unknown_parameter" | "invalid_value" | "check_required" | "approval_rejected" | "approval_unavailable" | "approval_pending" | "check_not_satisfied";
+export type RefusalReason = "stopped" | "not_approved" | "approved_unreadable" | "floor_unreadable" | "catalogue_changed" | "outside_projects" | "action_not_allowed" | "missing_parameter" | "unknown_parameter" | "invalid_value" | "check_required" | "approval_rejected" | "approval_unavailable" | "approval_pending" | "check_not_satisfied" | "credential_missing" | "credential_unreadable";

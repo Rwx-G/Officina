@@ -9,7 +9,7 @@ name = "home"
 guarded_programs = ["wsl", "SSH", "ansible*", "scp", "ssh"]
 
 [[project]]
-actions = ["status", "broken", "apply-sensitive", "apply", "check"]
+actions = ["ping", "status", "broken", "health", "apply-sensitive", "apply", "check"]
 autonomy = "guarded"
 color = "terracotta"
 path = "Supervision"
@@ -88,3 +88,31 @@ pattern = "lab-[a-z0-9-]{1,30}"
 
 [action.params.playbook]
 values = ["alerting.yml", "node-exporter.yml"]
+
+[[credential]]
+scheme = "Bearer"
+header = "Authorization"
+hosts = ["MON2.example.com", "Monitoring.Example.com", "monitoring.example.com"]
+name = "monitoring"
+
+[[action]]
+url = "http://status.example.com/{page}"
+method = "HEAD"
+kind = "http"
+name = "ping"
+class = "free"
+description = "Is the status page up"
+timeout_s = 540
+max_output_kib = 64
+params = { page = { values = ["index"] } }
+
+[[action]]
+kind = "http"
+name = "health"
+credential = "monitoring"
+class = "free"
+method = "GET"
+url = "https://monitoring.example.com/api/v1/{check}?host={host}&verbose=1"
+description = "Read one check of the monitoring API"
+timeout_s = 30
+params = { host = { pattern = "[a-z0-9-]+" }, check = { values = ["ready", "health", "ready"] } }

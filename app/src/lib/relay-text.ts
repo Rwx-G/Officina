@@ -25,6 +25,8 @@ export const REFUSAL_TEXT: Record<RefusalReason, string> = {
   approval_unavailable: "request could not be written",
   approval_pending: "approval still pending",
   check_not_satisfied: "code changed since the dry run",
+  credential_missing: "credential not in the Credential Manager",
+  credential_unreadable: "credential cannot be read",
 };
 
 export const DENY_TEXT: Record<DenyKind, string> = {
@@ -53,6 +55,8 @@ export const RUN_OUTCOME_TEXT: Record<RunOutcome, string> = {
   exited: "exit",
   timeout: "timed out",
   spawn_failed: "could not start",
+  http: "http",
+  connect_failed: "no response",
 };
 
 export const RUN_STATE_TEXT: Record<RunState, string> = {
@@ -102,6 +106,10 @@ export function activityRow(entry: RecentEntry): ActivityRow {
       if (finished.outcome === "exited") {
         row.outcome = `${RUN_OUTCOME_TEXT.exited} ${finished.exit_code ?? "?"}`;
         row.tone = finished.exit_code === 0 ? "ok" : "fault";
+      } else if (finished.outcome === "http") {
+        const status = finished.status ?? 0;
+        row.outcome = `${RUN_OUTCOME_TEXT.http} ${finished.status ?? "?"}`;
+        row.tone = status >= 200 && status < 300 ? "ok" : "fault";
       } else {
         row.outcome = RUN_OUTCOME_TEXT[finished.outcome];
         row.tone = "fault";

@@ -6,4 +6,8 @@ import type { SectionDiff } from "./SectionDiff";
 /**
  * What changed between the approved catalogue and the current one (AD-24).
  */
-export type CatalogueDiff = { format: FieldChange | null, floor_path: FieldChange | null, guarded_programs: ListDiff, projects: SectionDiff, actions: SectionDiff, };
+export type CatalogueDiff = { format: FieldChange | null, floor_path: FieldChange | null, guarded_programs: ListDiff, projects: SectionDiff, actions: SectionDiff, 
+/**
+ * Credentials added, removed and changed per field (D-39).
+ */
+credentials: SectionDiff, };

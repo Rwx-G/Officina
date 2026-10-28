@@ -384,6 +384,7 @@ fn write_request(relay: &RelayHome, service: &str, ago: i64) -> (String, Approva
         action: "restart".to_owned(),
         params,
         argv: vec!["C:/path/to/tool.exe".to_owned(), service.to_owned()],
+        http: None,
         catalogue_hash: hash,
         session_id: None,
         check_run_id: None,

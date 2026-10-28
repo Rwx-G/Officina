@@ -20,8 +20,8 @@ const FLOOR_PATH: &str = "C:/path/to/work/officina.toml";
 /// and the new pair pinned here: every approval is then invalidated on
 /// purpose (AD-24).
 const PINNED: (u32, &str) = (
-    1,
-    "e0dcce6a5fbedab9dbf45400632f601a4112784bfb0cf5a03a8b54c704e1ecc9",
+    2,
+    "3113cd73c06f616216aed61dc1910f43f4176920f4c0988011f41cb5de3cdb14",
 );
 
 fn golden() -> RelayFloor {

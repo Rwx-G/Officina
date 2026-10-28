@@ -10,7 +10,10 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 use super::argv;
-use super::catalogue::{ActionClass, ApprovedCatalogue, action_from_canonical};
+use super::catalogue::{
+    ActionClass, ApprovedCatalogue, action_from_canonical, credentials_from_canonical,
+};
+use super::http::{self, HttpMethod, HttpPlan};
 use super::journal::TreeFingerprint;
 use crate::quota::normalise_path;
 
@@ -143,8 +146,12 @@ pub struct ApprovalRequest {
     pub action: String,
     pub params: BTreeMap<String, String>,
     /// What `officina run` would start, for the journal and for diagnosis;
-    /// never shown (D-27).
+    /// never shown (D-27). Absent for an HTTP action.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub argv: Vec<String>,
+    /// What an HTTP action would send; never shown either (D-27).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub http: Option<HttpRequestView>,
     pub catalogue_hash: String,
     #[serde(default)]
     pub session_id: Option<String>,
@@ -264,11 +271,35 @@ pub struct ApprovalContext<'a> {
     pub system_dir: &'a str,
 }
 
+/// An HTTP request as a card and a request file state it (AD-36, D-27):
+/// the method, the URL with its values, and the credential by name.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(deny_unknown_fields)]
+pub struct HttpRequestView {
+    pub method: HttpMethod,
+    pub url: String,
+    pub credential: Option<String>,
+}
+
+impl From<&HttpPlan> for HttpRequestView {
+    fn from(plan: &HttpPlan) -> HttpRequestView {
+        HttpRequestView {
+            method: plan.method,
+            url: plan.url.clone(),
+            credential: plan.credential.as_ref().map(|c| c.name.clone()),
+        }
+    }
+}
+
 /// A request rebuilt from the approved catalogue (D-27).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Rebuilt {
-    /// The program, then its arguments: exactly what `officina run` starts.
+    /// The program, then its arguments: exactly what `officina run` starts;
+    /// empty for an HTTP action.
     pub argv: Vec<String>,
+    /// What an HTTP action sends.
+    pub http: Option<HttpRequestView>,
     pub description: String,
     /// The check the action names, its dry run (D-170).
     pub check: Option<String>,
@@ -327,14 +358,28 @@ pub fn rebuild(
         .filter(|dir| normalise_path(dir) == project.path)
         .cloned()
         .unwrap_or_else(|| project.path.clone());
-    let launch = argv::build(&validated, &request.params, &project_dir, ctx.system_dir)
-        .map_err(|refusal| format!("its parameters do not fit the approved action: {refusal}"))?;
-    let rebuilt: Vec<String> = std::iter::once(launch.program).chain(launch.args).collect();
-    if rebuilt != request.argv {
+    let unfit = |refusal: argv::ArgvRefusal| {
+        format!("its parameters do not fit the approved action: {refusal}")
+    };
+    let credentials = credentials_from_canonical(&approved.canonical);
+    let (rebuilt, http) = match http::build(&validated, &request.params, &credentials) {
+        Some(plan) => (
+            Vec::new(),
+            Some(HttpRequestView::from(&plan.map_err(unfit)?)),
+        ),
+        None => {
+            let launch = argv::build(&validated, &request.params, &project_dir, ctx.system_dir)
+                .map_err(unfit)?;
+            let argv = std::iter::once(launch.program).chain(launch.args).collect();
+            (argv, None)
+        }
+    };
+    if rebuilt != request.argv || http != request.http {
         return Err("its stored command differs from the approved catalogue's".to_owned());
     }
     Ok(Rebuilt {
         argv: rebuilt,
+        http,
         description: action.description.clone(),
         check: action.check.clone(),
     })
@@ -406,8 +451,10 @@ pub struct ApprovalView {
     /// From the approved catalogue; empty for an invalid request.
     pub description: String,
     /// Rebuilt from the approved catalogue (D-27); empty for an invalid
-    /// request, whose own command is never shown.
+    /// request, whose own command is never shown, and for an HTTP action.
     pub argv: Vec<String>,
+    /// An HTTP action's request, rebuilt from the approved catalogue (D-27).
+    pub http: Option<HttpRequestView>,
     pub valid: bool,
     pub invalid_reason: Option<String>,
     pub session_id: Option<String>,
@@ -471,16 +518,17 @@ pub fn pending(
         .filter(|(id, r)| !files.decided(id) && is_live(r.created_at_ms, now_ms))
         .map(|(id, request)| {
             let rebuilt = rebuild(ctx, id, request);
-            let (description, argv, dry_run) = match &rebuilt {
+            let (description, argv, http, dry_run) = match &rebuilt {
                 Ok(rebuilt) => (
                     rebuilt.description.clone(),
                     rebuilt.argv.clone(),
+                    rebuilt.http.clone(),
                     rebuilt
                         .check
                         .as_deref()
                         .map(|check| dry_run_view(request, check, dry_runs)),
                 ),
-                Err(_) => (String::new(), Vec::new(), None),
+                Err(_) => (String::new(), Vec::new(), None, None),
             };
             ApprovalView {
                 id: id.clone(),
@@ -488,6 +536,7 @@ pub fn pending(
                 action: request.action.clone(),
                 description,
                 argv,
+                http,
                 valid: rebuilt.is_ok(),
                 invalid_reason: rebuilt.err(),
                 session_id: request.session_id.clone(),
@@ -653,6 +702,7 @@ pattern = \"lab-[a-z]+\"
             action: action.to_owned(),
             params,
             argv: argv.iter().map(|a| (*a).to_owned()).collect(),
+            http: None,
             catalogue_hash: approved.hash.clone(),
             session_id: Some("s1".to_owned()),
             check_run_id,

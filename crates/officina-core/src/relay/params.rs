@@ -182,6 +182,37 @@ pub fn is_forbidden_format(c: char) -> bool {
 /// assert_eq!(check_value(Runner::Wsl, "/srv/data"), Ok(()));
 /// ```
 pub fn check_value(runner: Runner, value: &str) -> Result<(), ValueRefusal> {
+    check_value_for(ValueTarget::from(runner), value)
+}
+
+/// Where a value goes, which decides whether D-5's rule applies: only a
+/// `native` program reads a leading `/` or `@` as a switch. An HTTP action's
+/// values are percent-encoded into its URL (AD-36), so they meet the AD-30
+/// rules alone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ValueTarget {
+    Native,
+    Wsl,
+    Http,
+}
+
+impl From<Runner> for ValueTarget {
+    fn from(runner: Runner) -> ValueTarget {
+        match runner {
+            Runner::Native => ValueTarget::Native,
+            Runner::Wsl => ValueTarget::Wsl,
+        }
+    }
+}
+
+/// [`check_value`] for any [`ValueTarget`].
+///
+/// ```
+/// use officina_core::relay::params::{check_value_for, ValueRefusal, ValueTarget};
+/// assert_eq!(check_value_for(ValueTarget::Http, "/srv"), Ok(()));
+/// assert_eq!(check_value_for(ValueTarget::Http, ".."), Err(ValueRefusal::DotSegment));
+/// ```
+pub fn check_value_for(target: ValueTarget, value: &str) -> Result<(), ValueRefusal> {
     let length = value.chars().count();
     if length < *VALUE_LENGTH.start() {
         return Err(ValueRefusal::Empty);
@@ -192,7 +223,7 @@ pub fn check_value(runner: Runner, value: &str) -> Result<(), ValueRefusal> {
     if value.starts_with('-') {
         return Err(ValueRefusal::LeadingDash);
     }
-    if runner == Runner::Native && value.starts_with(['/', '@']) {
+    if target == ValueTarget::Native && value.starts_with(['/', '@']) {
         return Err(ValueRefusal::NativeSwitch);
     }
     if value.chars().any(char::is_control) {
@@ -209,7 +240,12 @@ pub fn check_value(runner: Runner, value: &str) -> Result<(), ValueRefusal> {
 
 /// The value rules, then the parameter's `values` or `pattern`.
 pub fn accept(param: &Param, runner: Runner, value: &str) -> Result<(), ValueRefusal> {
-    check_value(runner, value)?;
+    accept_for(param, ValueTarget::from(runner), value)
+}
+
+/// [`accept`] for any [`ValueTarget`].
+pub fn accept_for(param: &Param, target: ValueTarget, value: &str) -> Result<(), ValueRefusal> {
+    check_value_for(target, value)?;
     match &param.rule {
         ParamRule::Values(values) if values.iter().any(|v| v == value) => Ok(()),
         ParamRule::Values(_) => Err(ValueRefusal::NotInValues),
