@@ -1,16 +1,16 @@
 <script lang="ts">
   // The Subjects view (FR-6, journey 1, AD-55): the registry's notes, the
-  // open subjects with their sessions, the unfiled sessions by project and
-  // the archived subjects on demand; the selected sessions are filed,
-  // unfiled or start a subject from the bar above the lists. Story 3.7's
-  // Triage panel heads the view, above the subjects. Every text renders as
-  // text.
+  // Triage panel at its head (D-61), the open subjects with their sessions,
+  // the unfiled sessions by project and the archived subjects on demand;
+  // the selected sessions are filed, unfiled or start a subject from the bar
+  // above the lists. Every text renders as text.
   import type { RegistryStore } from "../lib/registry.svelte";
   import { REGISTRY_STATE_TEXT } from "../lib/registry-text";
   import { clock } from "../lib/time";
   import ArchivedList from "./ArchivedList.svelte";
   import SubjectCard from "./SubjectCard.svelte";
   import SubjectPicker, { type PickerChoice } from "./SubjectPicker.svelte";
+  import TriagePanel from "./TriagePanel.svelte";
   import UnfiledSessions from "./UnfiledSessions.svelte";
 
   interface Props {
@@ -62,6 +62,8 @@
         ({clock(view.restore_notice.restored_at_ms, nowMs)}): what you decided after that copy was taken is lost.
       </div>
     {/if}
+
+    <TriagePanel {store} />
 
     {#if selected > 0}
       <section class="block selection" data-testid="selection-bar" aria-label="Selected sessions">

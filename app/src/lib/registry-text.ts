@@ -3,9 +3,15 @@
 // value added there fails `pnpm check` until it has a text here.
 import type { AuthorRefusal } from "./generated/AuthorRefusal";
 import type { Column } from "./generated/Column";
+import type { ConfirmRefusal } from "./generated/ConfirmRefusal";
 import type { EndHow } from "./generated/EndHow";
+import type { ModelVerdict } from "./generated/ModelVerdict";
+import type { NotNeeded } from "./generated/NotNeeded";
+import type { ProposalSource } from "./generated/ProposalSource";
+import type { ReasonCode } from "./generated/ReasonCode";
 import type { RegistryState } from "./generated/RegistryState";
 import type { SubjectStatus } from "./generated/SubjectStatus";
+import type { Verdict } from "./generated/Verdict";
 
 /** The Board view's banner per state; `null` where nothing needs saying.
  *  The window creates the registry before its first board, so only a board
@@ -60,4 +66,49 @@ export const END_TEXT: Record<EndHow, string> = {
   session_end: "ended",
   interrupted: "interrupted",
   state: "finished",
+};
+
+/** Why a proposal says what it says (AD-40, AD-54): a reason code, never
+ *  prose, worded here. */
+export const REASON_TEXT: Record<ReasonCode, string> = {
+  state_done: "Claude Code reports the background session done.",
+  state_failed: "Claude Code reports the background session failed.",
+  state_stopped: "Claude Code reports the background session stopped.",
+  cut_mid_turn: "The session ended in the middle of a turn: the last prompt got no answer.",
+  default_to_resume: "Nothing says it is finished: to resume by default.",
+  empty_subject: "No session of this subject ever saw a prompt.",
+  model: "The triage model proposes it.",
+};
+
+/** Where a proposal came from (FR-8). */
+export const PROPOSAL_SOURCE_TEXT: Record<ProposalSource, string> = {
+  state: "from Claude Code's state",
+  rules: "from Officina's rules",
+  model: "from the triage model",
+};
+
+/** A proposed verdict, `unsure` included (D-59). */
+export const PROPOSED_VERDICT_TEXT: Record<ModelVerdict, string> = {
+  finished: "finished",
+  to_resume: "to resume",
+  unsure: "unsure",
+};
+
+/** A verdict the author confirms. */
+export const VERDICT_TEXT: Record<Verdict, string> = {
+  finished: "Finished",
+  to_resume: "To resume",
+};
+
+/** Why one confirmed row was refused; nothing was written for it. */
+export const CONFIRM_REFUSAL_TEXT: Record<ConfirmRefusal, string> = {
+  row_gone: "This row no longer needs a verdict.",
+  proposal_changed: "The proposal changed since it was shown: read it again before confirming.",
+  no_subject: "Choose the subject to file this session under, or name a new one.",
+};
+
+/** Why a filed session's verdict was left to its subject's own row (D-60). */
+export const NOT_NEEDED_TEXT: Record<NotNeeded, string> = {
+  not_latest: "a later session of that subject decides its verdict",
+  live_session: "a session of that subject is still running",
 };

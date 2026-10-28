@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { BoardStore } from "../lib/board.svelte";
+  import type { RegistryStore } from "../lib/registry.svelte";
   import type { RelayStore, WindowView } from "../lib/relay.svelte";
   import Gauge from "./Gauge.svelte";
   import logo from "../assets/logo.svg";
@@ -7,11 +8,23 @@
   interface Props {
     store: BoardStore;
     relay?: RelayStore;
+    /** Its rows to sort make the neutral "N to sort" chip (D-61). */
+    registry?: RegistryStore;
     /** The view shown, local window state (stories 2.9 and 3.5). */
     view?: WindowView;
     onView?: (view: WindowView) => void;
   }
-  let { store, relay, view = "board", onView }: Props = $props();
+  let { store, relay, registry, view = "board", onView }: Props = $props();
+
+  // Triage blocks no session: the chip is neutral, never amber, and the
+  // rows it counts stay out of the title and the overlay (AD-55).
+  let toSort = $derived(registry?.view?.to_sort ?? 0);
+
+  function openTriage(): void {
+    if (!registry || !onView) return;
+    registry.openPanel = true;
+    onView("subjects");
+  }
 
   const VIEWS: { id: WindowView; label: string }[] = [
     { id: "board", label: "Board" },
@@ -59,6 +72,11 @@
   {/if}
   {#if relay?.pending}
     <div class="chip pending" data-testid="catalogue-chip" role="status">catalogue change</div>
+  {/if}
+  {#if toSort > 0 && onView}
+    <button class="chip to-sort" data-testid="to-sort-chip" onclick={openTriage} title="Open the Triage panel">
+      {toSort} to sort
+    </button>
   {/if}
 
   {#if board}
@@ -174,6 +192,14 @@
   .chip.stopped {
     background: var(--color-stopped);
     color: var(--color-surface);
+  }
+  .chip.to-sort {
+    border: 1px solid var(--color-border);
+    background: var(--color-surface);
+    color: var(--color-text);
+    font: inherit;
+    font-weight: 700;
+    cursor: pointer;
   }
   .tool.relay-toggle[aria-pressed="true"] {
     border-color: var(--color-stopped);

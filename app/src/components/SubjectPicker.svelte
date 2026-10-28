@@ -1,23 +1,29 @@
 <script lang="ts" module>
+  import type { SubjectView } from "../lib/generated/SubjectView";
+
   /** What the author picked: an open subject, or a new subject's name. */
   export type PickerChoice = { subject: number } | { name: string };
+
+  /** What the picker shows of a subject. */
+  export type PickerSubject = Pick<SubjectView, "id" | "name" | "project">;
 </script>
 
 <script lang="ts">
   // The subject to file sessions under (AD-55): the open subjects of the
-  // sessions' project first, then the others, and a new name. Subject names
-  // render as text.
-  import type { SubjectView } from "../lib/generated/SubjectView";
-
+  // sessions' project first, then the others, and a new name. The Subjects
+  // view's selection bar and the Triage panel's unfiled rows use it.
+  // Subject names render as text.
   interface Props {
-    subjects: SubjectView[];
+    subjects: PickerSubject[];
     /** The sessions' project, whose subjects come first. */
     project: string | null;
     label: string;
     disabled?: boolean;
+    /** The subject currently chosen, marked pressed. */
+    selected?: number | null;
     onPick: (choice: PickerChoice) => void;
   }
-  let { subjects, project, label, disabled = false, onPick }: Props = $props();
+  let { subjects, project, label, disabled = false, selected = null, onPick }: Props = $props();
 
   let name = $state("");
   let ordered = $derived([
@@ -41,6 +47,7 @@
             type="button"
             class="option"
             class:own={subject.project === project}
+            aria-pressed={selected === subject.id}
             data-testid="pick-subject"
             data-subject={subject.id}
             {disabled}
@@ -97,6 +104,13 @@
   }
   .option.own {
     border-width: 2px;
+  }
+  .option[aria-pressed="true"] {
+    background: var(--color-text);
+    color: var(--color-bg);
+  }
+  .option[aria-pressed="true"] .project {
+    color: inherit;
   }
   .project {
     margin-left: 6px;

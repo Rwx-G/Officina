@@ -55,7 +55,7 @@
 
 <svelte:window onkeydown={onKey} />
 
-<Header {store} {relay} {view} onView={(next) => (chosenView = next)} />
+<Header {store} {relay} {registry} {view} onView={(next) => (chosenView = next)} />
 
 {#if view === "relay"}
   <RelayView store={relay} nowMs={store.nowMs} />

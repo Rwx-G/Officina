@@ -4,18 +4,28 @@ import ApprovalCard from "./ApprovalCard.svelte";
 import Gauge from "./Gauge.svelte";
 import SessionCard from "./SessionCard.svelte";
 import SubjectPicker, { type PickerChoice } from "./SubjectPicker.svelte";
+import TriagePanel from "./TriagePanel.svelte";
+import TriageRow from "./TriageRow.svelte";
 import { BoardStore } from "../lib/board.svelte";
-import { refusalText } from "../lib/registry.svelte";
-import { AUTHOR_REFUSAL_TEXT } from "../lib/registry-text";
+import * as ipc from "../lib/ipc";
+import { RegistryStore, refusalText } from "../lib/registry.svelte";
+import { AUTHOR_REFUSAL_TEXT, REASON_TEXT } from "../lib/registry-text";
 import type { ApprovalView } from "../lib/generated/ApprovalView";
 import type { AuthorRefusal } from "../lib/generated/AuthorRefusal";
 import type { Card } from "../lib/generated/Card";
 import type { IpcError } from "../lib/generated/IpcError";
+import type { ReasonCode } from "../lib/generated/ReasonCode";
+import type { RegistryView } from "../lib/generated/RegistryView";
 import type { SubjectView } from "../lib/generated/SubjectView";
+import type { TriageRow as Row } from "../lib/generated/TriageRow";
+// The generated union itself, read as text: its values come from Rust's
+// `ReasonCode::ALL`, so a new code is iterated here without a list to edit.
+import reasonCodeSource from "../lib/generated/ReasonCode.ts?raw";
 
 vi.mock("../lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../lib/ipc")>()),
   decideApproval: vi.fn(async () => undefined),
+  confirmTriage: vi.fn(async () => []),
 }));
 
 const NOW = 1_800_000_000_000;
@@ -354,6 +364,79 @@ describe("SessionCard subject", () => {
   it("shows no subject line on a session filed nowhere", () => {
     const { queryByTestId } = render(SessionCard, { card: card(), store: store() });
     expect(queryByTestId("card-subject")).toBeNull();
+  });
+});
+
+function triageRow(overrides: Partial<Row> = {}): Row {
+  return {
+    key: "subject:1",
+    kind: "subject",
+    project: "billing-api",
+    subject: { id: 1, name: "invoice export" },
+    session_id: "s1",
+    session_name: "invoice-export",
+    proposal: { verdict: "to_resume", source: "rules", reason: "default_to_resume", call_id: null },
+    verdict: "to_resume",
+    excerpts: null,
+    end: null,
+    proposed_subject: null,
+    choices: [],
+    ...overrides,
+  };
+}
+
+function registryWith(rows: Row[]): RegistryStore {
+  const view: RegistryView = {
+    schema: 1,
+    generated_at_ms: NOW,
+    registry: { state: "ready", detail: null, exclude_from_sync: null },
+    ingestion: { pending_bytes: 0, incomplete_files: 0, rewritten_files: 0, corrupt_lines: 0 },
+    subjects: [],
+    unfiled: [],
+    projects: [],
+    triage: rows,
+    to_sort: rows.length,
+    restore_notice: null,
+    thresholds: { restore_notice_ms: 1, excerpt_ttl_ms: 1, non_interactive_listed: 10, supersession_window_ms: 1 },
+  };
+  const store = new RegistryStore();
+  store.view = view;
+  return store;
+}
+
+describe("TriageRow", () => {
+  it("TriageRow renders the reason wording of every reason code", () => {
+    const codes = [...reasonCodeSource.matchAll(/"([a-z_]+)"/g)].map((m) => m[1] as ReasonCode);
+    expect(codes.length).toBeGreaterThan(0);
+    expect(new Set(codes)).toEqual(new Set(Object.keys(REASON_TEXT)));
+    for (const reason of codes) {
+      const row = triageRow({ proposal: { verdict: "to_resume", source: "rules", reason, call_id: null } });
+      const { getByTestId } = render(TriageRow, { row, store: registryWith([row]) });
+      expect(getByTestId("triage-reason").textContent).toBe(REASON_TEXT[reason]);
+      expect(REASON_TEXT[reason].length).toBeGreaterThan(0);
+      cleanup();
+    }
+  });
+});
+
+describe("TriagePanel", () => {
+  it("Enter and Space on Confirm all do nothing", async () => {
+    const confirm = vi.mocked(ipc.confirmTriage);
+    confirm.mockClear();
+    const { getByTestId } = render(TriagePanel, { store: registryWith([triageRow()]) });
+    const button = getByTestId("confirm-all");
+    button.focus();
+    for (const key of ["Enter", " "]) {
+      const keydown = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true });
+      button.dispatchEvent(keydown);
+      expect(keydown.defaultPrevented).toBe(true);
+    }
+    // What a browser does for a key activation: a click with detail 0.
+    await fireEvent.click(button, { detail: 0 });
+    expect(confirm).not.toHaveBeenCalled();
+    // Positive control: a pointer click confirms.
+    await fireEvent.click(button, { detail: 1 });
+    expect(confirm).toHaveBeenCalledTimes(1);
   });
 });
 

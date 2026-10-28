@@ -673,12 +673,73 @@ const subjectsSteps = [
   create(hostile, { sessions: [sid(110)] }),
 ];
 
+// What every Subjects scenario must show, beside its own checks.
+const subjectsChecks = (printed, board) => [
+  [printed.subjects.some((s) => s.status === "active") && printed.subjects.some((s) => s.status === "to_resume"), "active and to_resume subjects"],
+  [printed.subjects.some((s) => s.sessions.some((x) => x.card !== null)), "a session joined to its live card"],
+  [printed.unfiled.some((p) => p.non_interactive_count > p.non_interactive.length), "non-interactive runs counted beyond those listed"],
+  [board.columns.working.some((c) => c.subject !== null), "a board card naming its subject"],
+];
+
+// Triage (story 3.7, D-72): a subject with two ended sessions, a background
+// session Claude Code reports done (proposed from its state), a session cut
+// mid-turn under a subject whose name is markup, an empty subject, an
+// unfiled session whose project has one open subject and one whose project
+// has none, its prompt markup too.
+const triageAgents = [
+  { pid: 4301, id: "bg0001", cwd: work("ops-scripts"), kind: "background", startedAt: now - 3 * HOUR, sessionId: sid(203), name: "nightly-report", status: "idle", state: "done" },
+];
+const triageEvents = [
+  prompted(201, "billing-api", now - 30 * HOUR, "Sketch the CSV export of invoices"),
+  stopped(201, "billing-api", now - 30 * HOUR + 4 * MIN, "Here is a plan in three steps."),
+  ended(201, "billing-api", now - 30 * HOUR + 5 * MIN, "prompt_input_exit"),
+  prompted(202, "billing-api", now - 6 * HOUR, "Write the CSV export, with tests"),
+  stopped(202, "billing-api", now - 6 * HOUR + 30 * MIN, "The export is in place.", "...and both suites pass ten times in a row."),
+  ended(202, "billing-api", now - 6 * HOUR + 31 * MIN, "prompt_input_exit"),
+  prompted(203, "ops-scripts", now - 3 * HOUR, "Build the nightly usage report"),
+  stopped(203, "ops-scripts", now - 2 * HOUR, "Report built and saved."),
+  prompted(204, "ops-scripts", now - 4 * HOUR, "Rotate the logs"),
+  stopped(204, "ops-scripts", now - 4 * HOUR + 2 * MIN, "Rotation configured."),
+  prompted(204, "ops-scripts", now - 4 * HOUR + 3 * MIN, "Now compress the old ones"),
+  ended(204, "ops-scripts", now - 4 * HOUR + 4 * MIN, "logout"),
+  prompted(205, "billing-api", now - 2 * HOUR, "Fix the rounding in the invoice totals"),
+  stopped(205, "billing-api", now - 2 * HOUR + 10 * MIN, "Rounded half up, with a test."),
+  ended(205, "billing-api", now - 2 * HOUR + 11 * MIN, "prompt_input_exit"),
+  prompted(206, "web-portal", now - 90 * MIN, hostile),
+  stopped(206, "web-portal", now - 85 * MIN, "Checked."),
+  ended(206, "web-portal", now - 80 * MIN, "prompt_input_exit"),
+  { ts: now - 5 * HOUR, event: "SessionStart", session_id: sid(207), cwd: work("docs-site"), source: "startup" },
+  ended(207, "docs-site", now - 5 * HOUR + MIN, "prompt_input_exit"),
+].map((e) => ({ v: 1, ...e }));
+const triageSteps = [
+  "ingest",
+  { agents: triageAgents },
+  create("invoice export", { sessions: [sid(201), sid(202)] }),
+  create("nightly report", { sessions: [sid(203)] }),
+  create(hostile, { sessions: [sid(204)] }),
+  create("release notes", { project: "docs-site" }),
+];
+const triageChecks = (printed) => {
+  const rows = printed.triage;
+  const kinds = new Set(rows.map((r) => r.kind));
+  const unfiled = rows.filter((r) => r.kind === "unfiled_session");
+  return [
+    [["subject", "empty_subject", "unfiled_session"].every((k) => kinds.has(k)), "a row of every kind"],
+    [rows.some((r) => r.proposal.source === "state"), "a row proposed from Claude Code's state"],
+    [rows.some((r) => r.proposal.reason === "cut_mid_turn"), "a row cut mid-turn"],
+    [unfiled.some((r) => r.proposed_subject !== null) && unfiled.some((r) => r.proposed_subject === null && r.choices.length === 0), "an unfiled row with one obvious subject and one with none"],
+    [printed.subjects.some((s) => s.sessions.length > 1 && rows.some((r) => r.subject?.id === s.id)), "a row for a subject of several sessions"],
+    [printed.to_sort === rows.length, "the count of rows to sort"],
+  ];
+};
+
 const registryScenarios = {
-  subjects: { steps: subjectsSteps },
+  subjects: { steps: subjectsSteps, checks: subjectsChecks },
   // AD-39: the home lies under a sync client's folder marker.
-  "subjects-synced": { steps: subjectsSteps, synced: true },
+  "subjects-synced": { steps: subjectsSteps, synced: true, checks: subjectsChecks },
   // D-93: a daily copy, then the database damaged and restored from it.
-  "subjects-restored": { steps: [...subjectsSteps, "copy", "damage"] },
+  "subjects-restored": { steps: [...subjectsSteps, "copy", "damage"], checks: subjectsChecks },
+  triage: { steps: triageSteps, events: triageEvents, agents: triageAgents, checks: triageChecks },
 };
 
 function officinaJson(args, env) {
@@ -693,8 +754,9 @@ for (const [name, scenario] of Object.entries(registryScenarios)) {
   mkdirSync(join(home, ".claude", "sessions"), { recursive: true });
   mkdirSync(join(officinaHome, "events"), { recursive: true });
   if (scenario.synced) mkdirSync(join(tmp, ".SynologyWorkingDirectory"));
+  const agents = scenario.agents ?? subjectsAgents;
   const byDay = new Map();
-  for (const event of subjectsEvents) {
+  for (const event of scenario.events ?? subjectsEvents) {
     const day = utcDay(event.ts);
     byDay.set(day, (byDay.get(day) ?? "") + JSON.stringify(event) + "\n");
   }
@@ -704,7 +766,7 @@ for (const [name, scenario] of Object.entries(registryScenarios)) {
   execFileSync(registryFixture, [officinaHome, steps], { stdio: ["ignore", "ignore", "inherit"] });
 
   const fixture = join(tmp, "agents.json");
-  writeFileSync(fixture, JSON.stringify(subjectsAgents));
+  writeFileSync(fixture, JSON.stringify(agents));
   const env = {
     SYSTEMROOT: process.env.SYSTEMROOT ?? "",
     USERPROFILE: home,
@@ -721,12 +783,9 @@ for (const [name, scenario] of Object.entries(registryScenarios)) {
   const printed = JSON.parse(view.stdout);
   const checks = [
     [printed.registry.state === "ready", "the registry reads ready"],
-    [printed.subjects.some((s) => s.status === "active") && printed.subjects.some((s) => s.status === "to_resume"), "active and to_resume subjects"],
-    [printed.subjects.some((s) => s.sessions.some((x) => x.card !== null)), "a session joined to its live card"],
-    [printed.unfiled.some((p) => p.non_interactive_count > p.non_interactive.length), "non-interactive runs counted beyond those listed"],
     [!scenario.synced || printed.registry.exclude_from_sync !== null, "a folder to exclude from sync"],
     [!scenario.steps.includes("damage") || printed.restore_notice !== null, "the copy a restore used"],
-    [JSON.parse(board.stdout).columns.working.some((c) => c.subject !== null), "a board card naming its subject"],
+    ...scenario.checks(printed, JSON.parse(board.stdout)),
   ];
   for (const [held, what] of checks) {
     if (!held) throw new Error(`${name}: expected ${what}: ${view.stdout}`);

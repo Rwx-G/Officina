@@ -16,11 +16,13 @@ export type Scenario =
   | "quota-reset"
   | "approvals"
   | "registry-unavailable"
-  | "subjects-board";
+  | "subjects-board"
+  | "triage-board";
 
 /** Registry views printed by `officina subjects --json` after the
- *  `registry_fixture` example wrote the registry (story 3.5, D-72). */
-export type RegistryScenario = "subjects" | "subjects-synced" | "subjects-restored" | "subjects-unavailable";
+ *  `registry_fixture` example wrote the registry (stories 3.5 and 3.7,
+ *  D-72). */
+export type RegistryScenario = "subjects" | "subjects-synced" | "subjects-restored" | "subjects-unavailable" | "triage";
 
 export type RelayScenario =
   | "relay-clean"
