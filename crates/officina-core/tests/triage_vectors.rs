@@ -17,6 +17,7 @@ use officina_core::registry::confirm::{
     AuthorAction, AuthorContext, ConfirmItem, ConfirmationInput, ItemAnswer, ItemOutcome, Plan,
     Target, TriageContext, confirm_item, plan, wake,
 };
+use officina_core::registry::dry_run::{Evaluation, Tally};
 use officina_core::registry::filing::{excerpts_to_clear, filing_at_creation};
 use officina_core::registry::fold::{
     AgentsSnapshot, FactWrite, Mark, candidates_needed, fold_agents, line_facts, link_for_line,
@@ -25,6 +26,7 @@ use officina_core::registry::fold::{
 use officina_core::registry::ingestion::{ExcerptObservation, excerpt_observation};
 use officina_core::registry::proposal::ModelInput;
 use officina_core::registry::proposal::Proposal;
+use officina_core::registry::rates::{GateState, SourceRate, VerdictRecord, gates, rates};
 use officina_core::registry::triage_call::{
     CallAnswer, CallUsage, ModelOutputError, PromptError, STDOUT_CAP_BYTES, TriageCase, prompt,
     read_output,
@@ -51,6 +53,60 @@ struct VectorSet {
     triage: Vec<RowsCase>,
     prompt: Vec<PromptCase>,
     model_output: Vec<ModelOutputCase>,
+    rates: Vec<RatesCase>,
+}
+
+/// A case of the `rates` section (FR-11, FR-12, AD-50): confirmations and
+/// the latest dry run in, every source's rate and the three gates out.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RatesCase {
+    name: String,
+    now_ms: i64,
+    confirmations: Vec<RatedConfirmation>,
+    latest_dry_run: Option<DryRunSummary>,
+    expect: RatesExpect,
+}
+
+/// A confirmation as the `rates` section writes it; `times` repeats it with
+/// ids counting up and times a second apart, going back.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RatedConfirmation {
+    id: i64,
+    proposed: (ModelVerdict, ProposalSource, ReasonCode),
+    verdict: Verdict,
+    at: i64,
+    #[serde(default)]
+    auto: bool,
+    #[serde(default)]
+    reopened: Option<i64>,
+    #[serde(default)]
+    times: Option<i64>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DryRunSummary {
+    at_ms: i64,
+    cases: u32,
+    model_correct: u32,
+    default_correct: u32,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RatesExpect {
+    rates: Vec<SourceRate>,
+    gates: GatesExpect,
+}
+
+#[derive(Deserialize, Debug, PartialEq)]
+#[serde(deny_unknown_fields)]
+struct GatesExpect {
+    auto_archive: GateState,
+    model_enable: GateState,
+    model_self_disable: GateState,
 }
 
 /// A case of the `prompt` section (AD-51): a case and a nonce in, the data
@@ -865,6 +921,63 @@ fn every_case_matches() {
     for case in &set.model_output {
         replay_output(case);
     }
+    assert!(!set.rates.is_empty());
+    for case in &set.rates {
+        replay_rates(case);
+    }
+}
+
+/// The confirmations a `rates` case writes, its repeats expanded.
+fn verdict_records(case: &RatesCase) -> Vec<VerdictRecord> {
+    case.confirmations
+        .iter()
+        .flat_map(|c| {
+            (0..c.times.unwrap_or(1)).map(move |k| VerdictRecord {
+                id: c.id + k,
+                proposal: Proposal {
+                    verdict: c.proposed.0,
+                    source: c.proposed.1,
+                    reason: c.proposed.2,
+                    call_id: None,
+                },
+                verdict: c.verdict,
+                auto: c.auto,
+                confirmed_at_ms: c.at - k * 1_000,
+                reopened_at_ms: c.reopened,
+            })
+        })
+        .collect()
+}
+
+/// FR-11, FR-12, AD-50: every source's counts and each gate's state.
+fn replay_rates(case: &RatesCase) {
+    let records = verdict_records(case);
+    let latest = case.latest_dry_run.as_ref().map(|d| Evaluation {
+        at_ms: d.at_ms,
+        tally: Tally {
+            cases: d.cases,
+            model_correct: d.model_correct,
+            default_correct: d.default_correct,
+            ..Tally::default()
+        },
+    });
+    assert_eq!(
+        rates(&records, case.now_ms),
+        case.expect.rates,
+        "rates case: {}",
+        case.name
+    );
+    let found = gates(&records, latest.as_ref(), case.now_ms);
+    assert_eq!(
+        GatesExpect {
+            auto_archive: found.auto_archive.state,
+            model_enable: found.model_enable.state,
+            model_self_disable: found.model_self_disable.state,
+        },
+        case.expect.gates,
+        "rates case gates: {}",
+        case.name
+    );
 }
 
 /// AD-51: the prompt carries the expected line, alone on its own line
@@ -1073,6 +1186,23 @@ fn every_value_has_a_case() {
     let sources: HashSet<ProposalSource> = expected().map(|r| r.proposal.1).collect();
     let proposed: HashSet<ModelVerdict> = expected().map(|r| r.proposal.0).collect();
     let verdicts: HashSet<Verdict> = expected().filter_map(|r| r.verdict).collect();
+    let gate_states: HashSet<GateState> = set
+        .rates
+        .iter()
+        .flat_map(|c| {
+            [
+                c.expect.gates.auto_archive,
+                c.expect.gates.model_enable,
+                c.expect.gates.model_self_disable,
+            ]
+        })
+        .collect();
+    for state in GateState::ALL {
+        assert!(
+            gate_states.contains(state),
+            "no rates case for gate state {state:?}"
+        );
+    }
     let output_errors: HashSet<ModelOutputError> = set
         .model_output
         .iter()

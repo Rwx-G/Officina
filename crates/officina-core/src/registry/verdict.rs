@@ -9,7 +9,10 @@
 use std::collections::BTreeMap;
 
 use super::proposal::{ModelInput, Proposal, empty_subject, propose};
-use super::types::{ConfirmationRecord, RowKind, SessionRecord, SubjectRecord, SubjectStatus};
+use super::types::{
+    ConfirmationRecord, ModelVerdict, ProposalSource, RowKind, SessionRecord, SubjectRecord,
+    SubjectStatus,
+};
 
 /// A row of the triage list, before the view joins its excerpts.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -192,12 +195,21 @@ pub fn rows(input: &VerdictInput) -> Vec<Row> {
     found
 }
 
+/// True for a row auto-archive confirms (FR-12, D-70, R18): a filed
+/// subject's row whose proposal is `state` `finished`. Never an unfiled
+/// row, an empty subject's row, or any other source's proposal, the
+/// model's included.
+pub fn auto_archivable(row: &Row) -> bool {
+    row.kind == RowKind::Subject
+        && row.proposal.source == ProposalSource::State
+        && row.proposal.verdict == ModelVerdict::Finished
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::registry::types::{
-        HookEnd, ModelVerdict, ProposalSource, ReasonCode, Source, Sourced,
-    };
+    use crate::registry::proposal::Proposal;
+    use crate::registry::types::{HookEnd, ReasonCode, Source, Sourced};
 
     fn sourced<T>(value: T, at_ms: i64) -> Option<Sourced<T>> {
         Some(Sourced {
@@ -412,5 +424,58 @@ mod tests {
             ),
             (RowKind::UnfiledSession, "session:ended", Some(1), &[1][..])
         );
+    }
+
+    /// R18, D-70: only a filed subject's `state` `finished` proposal is
+    /// auto-archived; the same proposal on an unfiled row, an empty
+    /// subject's `finished` and a model `finished` never are.
+    #[test]
+    fn only_state_finished_subject_rows_are_auto_archivable() {
+        let row = |kind, source, reason| Row {
+            kind,
+            key: "subject:1".into(),
+            project: "api".into(),
+            subject: Some(1),
+            session_id: None,
+            proposal: Proposal {
+                verdict: ModelVerdict::Finished,
+                source,
+                reason,
+                call_id: None,
+            },
+            at_ms: 1,
+            proposed_subject: None,
+            choices: Vec::new(),
+        };
+        assert!(auto_archivable(&row(
+            RowKind::Subject,
+            ProposalSource::State,
+            ReasonCode::StateDone
+        )));
+        for (kind, source, reason) in [
+            (
+                RowKind::UnfiledSession,
+                ProposalSource::State,
+                ReasonCode::StateDone,
+            ),
+            (
+                RowKind::EmptySubject,
+                ProposalSource::Rules,
+                ReasonCode::EmptySubject,
+            ),
+            (RowKind::Subject, ProposalSource::Model, ReasonCode::Model),
+        ] {
+            assert!(
+                !auto_archivable(&row(kind, source, reason)),
+                "{kind:?} {source:?}"
+            );
+        }
+        let mut to_resume = row(
+            RowKind::Subject,
+            ProposalSource::State,
+            ReasonCode::StateFailed,
+        );
+        to_resume.proposal.verdict = ModelVerdict::ToResume;
+        assert!(!auto_archivable(&to_resume));
     }
 }
