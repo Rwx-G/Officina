@@ -101,7 +101,7 @@ pub struct Tally {
 fn add(sum: Option<i64>, more: Option<i64>) -> Option<i64> {
     match (sum, more) {
         (None, None) => None,
-        (sum, more) => Some(sum.unwrap_or(0) + more.unwrap_or(0)),
+        (sum, more) => Some(sum.unwrap_or(0).saturating_add(more.unwrap_or(0))),
     }
 }
 

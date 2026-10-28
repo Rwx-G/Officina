@@ -481,10 +481,27 @@ pub struct CallUsage {
     pub cost_microusd: Option<i64>,
 }
 
-/// The usage of a parsed stdout object.
+/// The most tokens one call is counted with, per field: far above what
+/// one case costs (E16: about 4,500), so a figure past it is not a real
+/// count and is read as unknown.
+pub const USAGE_MAX_TOKENS: i64 = 10_000_000;
+
+/// The most one call is counted to cost, in US dollars, for the same
+/// reason (E16: about a tenth of a cent).
+pub const USAGE_MAX_USD: f64 = 1_000.0;
+
+/// The usage of a parsed stdout object: a figure that is not a number in
+/// range (negative, past [`USAGE_MAX_TOKENS`] or [`USAGE_MAX_USD`]) is
+/// unknown, so a crafted answer cannot distort or overflow the counts
+/// (penetration audit M3).
 fn usage_of(value: &serde_json::Value) -> CallUsage {
     let usage = value.get("usage");
-    let tokens = |name: &str| usage.and_then(|u| u.get(name)).and_then(|v| v.as_i64());
+    let tokens = |name: &str| {
+        usage
+            .and_then(|u| u.get(name))
+            .and_then(serde_json::Value::as_i64)
+            .filter(|n| (0..=USAGE_MAX_TOKENS).contains(n))
+    };
     let input: Vec<i64> = [
         "input_tokens",
         "cache_creation_input_tokens",
@@ -496,8 +513,8 @@ fn usage_of(value: &serde_json::Value) -> CallUsage {
     let cost = value
         .get("total_cost_usd")
         .and_then(serde_json::Value::as_f64)
-        .filter(|usd| usd.is_finite() && *usd >= 0.0)
-        // A cost of a whole call fits an i64 of millionths many times over.
+        .filter(|usd| usd.is_finite() && (0.0..=USAGE_MAX_USD).contains(usd))
+        // Within the bound, the millionths fit an i64 many times over.
         .map(|usd| (usd * 1_000_000.0).round() as i64);
     CallUsage {
         input_tokens: (!input.is_empty()).then(|| input.iter().sum()),
@@ -675,9 +692,15 @@ impl CallCounts {
                 self.unanswered += 1;
             }
         }
-        self.input_tokens += call.input_tokens.unwrap_or(0);
-        self.output_tokens += call.output_tokens.unwrap_or(0);
-        self.cost_microusd += call.cost_microusd.unwrap_or(0);
+        self.input_tokens = self
+            .input_tokens
+            .saturating_add(call.input_tokens.unwrap_or(0));
+        self.output_tokens = self
+            .output_tokens
+            .saturating_add(call.output_tokens.unwrap_or(0));
+        self.cost_microusd = self
+            .cost_microusd
+            .saturating_add(call.cost_microusd.unwrap_or(0));
     }
 }
 
