@@ -397,6 +397,18 @@ The window's header switches between **Board**, **Subjects** and, once the relay
 
 Tick sessions, wherever they are listed, to file them under a subject (those of their project are offered first), to unfile them, or to name a new subject, which takes their project. **New subject** also creates one in any project the registry knows. Each subject has **Rename**, **Merge** (its sessions move to the subject you pick, and it is archived) and **Archive**, which offers the "routine, could have run alone" box. The window asks the registry's one writer and waits ten seconds at most; a refused action says which rule refused it and changes nothing, and an action not run in time is never run later. Notes say when the registry lies in a synchronised folder (with the folder to exclude), when it was restored from a copy (for seven days, naming the copy), and why it cannot be read. Digit keys open Needs you sessions in the Board view only.
 
+### What needs a verdict
+
+When work ends, Officina asks for one verdict per subject, never one per session: `finished` (it archives the subject) or `to_resume`. A subject needs one when it is `active` and every one of its sessions has ended; the row rests on its latest session that saw a prompt, even when a later one was started by `/clear` and closed without a prompt. A session under no subject needs one too once it has ended after a prompt, unless `/clear` or `/resume` replaced it in its process or it was a non-interactive run; its row also proposes the subject to file it under when its project has exactly one open subject, and lists the others. An `active` subject none of whose sessions saw a prompt, or left with no session, is offered for archiving as "empty subject: archive?", so no subject stays open forever. A verdict you gave answers its row until the subject is reopened or its session ends again.
+
+Each row carries one proposal, and says where it came from:
+
+- `state`: a background session's own state; `done` proposes `finished`, `failed` and `stopped` propose `to_resume`.
+- `rules`: a session that ended inside a turn (its last prompt came after its last answer) proposes `to_resume`; with nothing else to go on, the default is `to_resume` too. A normal exit after the answer proposes nothing by itself.
+- `model`: the triage model's answer, `finished`, `to_resume` or `unsure`, when it is enabled (a later version), in place of the default only.
+
+Proposals are worked out again from the session's facts every time the view is built, and each gives its reason as a code, never as prose. `officina subjects --json` prints the rows and how many there are; the window's panel to confirm them comes next.
+
 `officina subjects --json` prints the subjects that are not archived with their sessions (and their live board card), the latest excerpts, the unfiled sessions per project (non-interactive runs counted, the ten most recent listed), and how many event bytes wait for the window: it reads the registry read-only, works with the window closed, and exits 3 with the reason when the registry cannot be read. On the board, each card names its subject.
 
 ## Command line

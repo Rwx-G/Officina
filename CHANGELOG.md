@@ -181,6 +181,16 @@ project uses [Semantic Versioning](https://semver.org/).
   name the folder to exclude from a sync client, the copy a damaged
   registry was restored from (for 7 days), or why the registry cannot be
   read. Digit keys focus cards in the Board view only.
+- What needs a verdict (v0.3, in progress): one row per `active` subject
+  whose sessions have all ended, never one per session, anchored on its
+  latest session that saw a prompt; one per ended, unfiled, interactive
+  session that saw a prompt and was not replaced by `/clear` or
+  `/resume`, with the subject to file it under when its project has only
+  one open; and "empty subject: archive?" for an `active` subject none of
+  whose sessions saw a prompt. Each row carries one proposal, `finished`,
+  `to_resume` or `unsure`, with its source (`state`, `rules` or `model`)
+  and a reason code, computed again on every view and never stored.
+  `officina subjects --json` prints the rows and their count.
 
 ### Changed
 
