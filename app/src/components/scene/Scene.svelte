@@ -2,11 +2,12 @@
   // The scene element (AD-59, AD-61, AD-72): the five layers on one logical
   // box, scaled as one to the sessions area. It reads the board only, never
   // the store's clock (AD-64); the layout is derived from the board, and its
-  // memory committed after each layout without re-running it (D-184).
+  // memory committed after each layout without re-running it (D-184). It
+  // hosts the mover (AD-172), between the layout and layer 3.
   // Beside the scene element, outside it (AD-177, D-111): the line under the
   // scene, in the canvas's empty bottom-left corner, and the file panel,
   // which this component opens, closes and returns focus from (AD-63).
-  import { tick } from "svelte";
+  import { onDestroy, tick } from "svelte";
   import type { BoardStore } from "../../lib/board.svelte";
   import { beaconPair } from "../../lib/alert";
   import type { Board } from "../../lib/generated/Board";
@@ -15,6 +16,8 @@
   import { fitScale, stripRect } from "../../lib/scene/geometry";
   import { layoutScene, liveCards, type Target } from "../../lib/scene/layout";
   import * as memory from "../../lib/scene/memory";
+  import { Mover } from "../../lib/scene/mover";
+  import { DEFAULT_WALKING } from "../../lib/view.svelte";
   import SessionFile, { type FileForm } from "../SessionFile.svelte";
   import SceneFloor from "./SceneFloor.svelte";
   import SceneHalos from "./SceneHalos.svelte";
@@ -29,8 +32,23 @@
     store: BoardStore;
     /** Switches the Sessions view to Board mode. */
     onBoard: () => void;
+    /** Figures walk to their places, or glide there (AD-66). */
+    walking?: boolean;
   }
-  let { board, store, onBoard }: Props = $props();
+  let { board, store, onBoard, walking = DEFAULT_WALKING }: Props = $props();
+
+  // One mover per mounted scene: its first layout places everyone at once,
+  // so a new run or a mode switch never makes the company walk in (D-469).
+  const mover = new Mover();
+  /** The keys on their way to a place: no halo until they arrive (AD-65). */
+  let transit = $state<ReadonlySet<string>>(new Set());
+  mover.onTransit = (keys) => (transit = keys);
+  onDestroy(() => mover.destroy());
+
+  /** Hands the scene element to the mover, which keeps `data-moving`. */
+  function host(node: HTMLElement) {
+    mover.attach(node);
+  }
 
   // `load` reads storage once, before the first layout, and returns the
   // committed memory after that.
@@ -148,7 +166,7 @@
      line under the scene with it; the file panel stays at its right edge. -->
 <div class="area" data-testid="scene-area">
   <!-- `data-scale` is written with the transform, in the same update (D-185);
-       `data-moving` is story 4.10's mover's, "0" while nothing walks. -->
+       `data-moving` starts at "0" and is the mover's after that. -->
   <div
     class="scene"
     data-testid="scene"
@@ -161,12 +179,13 @@
     style:margin-left="{left}px"
     bind:this={sceneElement}
     use:fit
+    use:host
   >
     <p class="summary" data-testid="scene-summary">{layout.summary}</p>
     <div class="stack" style:width="{layout.canvas.w}px" style:height="{layout.canvas.h}px" style:transform="scale({scale})">
       <SceneFloor {layout} />
-      <SceneHalos {layout} {cards} {beacon} />
-      <SceneObjects {layout} {colours} snap={scale * pixelRatio} />
+      <SceneHalos {layout} {cards} {beacon} {transit} />
+      <SceneObjects {layout} {colours} snap={scale * pixelRatio} {mover} {walking} />
       <SceneOverlay {layout} {cards} />
       <SceneTargets {layout} onActivate={activate} bind:this={targetsLayer} />
     </div>

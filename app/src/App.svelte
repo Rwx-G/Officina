@@ -80,6 +80,8 @@
     theme={windowView.theme}
     resolvedTheme={windowView.resolvedTheme}
     onTheme={() => windowView.cycleTheme()}
+    walking={windowView.walking}
+    onWalking={(next) => windowView.setWalking(next)}
   />
   <AlertBand {board} nowMs={store.nowMs} />
 
@@ -119,7 +121,7 @@
       <main class="loading" data-testid="loading">Asking Claude Code for its sessions...</main>
     {:else if scene}
       <main class="sessions-area" data-testid="sessions-area">
-        <Scene {board} {store} onBoard={() => windowView.setBase("board")} />
+        <Scene {board} {store} onBoard={() => windowView.setBase("board")} walking={windowView.walking} />
       </main>
     {:else if columns}
       <main class="board">

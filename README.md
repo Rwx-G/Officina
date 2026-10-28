@@ -499,7 +499,13 @@ The window's first view is now called **Sessions**; it has two modes, **Board** 
 - **High priority**: the office of a project marked `priority = "high"` carries a "high priority" pill above its plaque.
 - **More offices**, when there are more than eight projects: the projects beyond the seventh share it.
 
-Nothing moves while nothing changes: a changed board places each employee at its new place at once, a halo breathes for two minutes then rests, and nothing in the scene reads the clock. Missing data leaves an employee where it was, with a question mark. The floor grows a column for a fifth and a seventh project, up to eight offices; below the size at which every employee stays at least 44 px wide, the sessions area scrolls instead of shrinking it.
+Nothing moves while nothing changes: an employee moves only when the board changes its place (see **Walking** below), a halo breathes for two minutes then rests, and nothing in the scene reads the clock between payloads. Missing data leaves an employee where it was, with a question mark. The floor grows a column for a fifth and a seventh project, up to eight offices; below the size at which every employee stays at least 44 px wide, the sessions area scrolls instead of shrinking it.
+
+### Walking
+
+When the board changes an employee's place, it gets up and walks there along the corridors, through its room's door, at a walking pace, and sits down when its place is a seat; its halo waits until it has arrived. A new session comes in through the entrance, fading in, and walks to its place; an ended one walks out through the entrance and fades. Once everyone has arrived nothing moves, and the scene does no work until the next change. Opening the window, or switching to Scene, shows everyone already at their place; so does a window brought back from behind another one.
+
+The header's **Walking** toggle, shown in Scene mode and kept for the next start, turns walking off: an employee then glides straight to its new place in about a third of a second, and a new or ended session fades in or out where it stands. With the system's reduced-motion setting on, every employee is placed at once and nothing fades. Walking is on by default; the workstation's CPU measurement of the release decides whether it stays so.
 
 ### Acting from the scene
 

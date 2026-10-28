@@ -3,7 +3,7 @@
 // defaults, and the banners above the sessions area.
 import { expect, test, type Page } from "@playwright/test";
 import { calls, loadBoard, loadRelay, openBoard, openScene, sceneSettled } from "./fixtures";
-import { VIEW_STORAGE_KEY } from "../src/lib/view.svelte";
+import { DEFAULT_WALKING, VIEW_STORAGE_KEY, readViewState } from "../src/lib/view.svelte";
 
 const scene = (page: Page) => page.getByTestId("scene");
 const boardColumns = (page: Page) => page.getByTestId("column-needs_you");
@@ -129,6 +129,85 @@ test.describe("modes", () => {
     await expect(page.getByTestId("mode-board")).toHaveAttribute("aria-checked", "true");
     await page.keyboard.press("m");
     await sceneSettled(page);
+  });
+
+  // Walking (story 4.10; AD-66 as amended, D-469, D-517).
+  test("walking is on by default", async ({ page }) => {
+    expect(DEFAULT_WALKING).toBe(true);
+    await openScene(page, loadBoard("scene-c"));
+    const toggle = page.getByRole("button", { name: "Walking" });
+    await expect(toggle).toBeVisible();
+    await expect(toggle).toHaveAttribute("aria-pressed", "true");
+    await expect(toggle).toHaveText("Walking");
+  });
+
+  test("the walking toggle shows in Scene mode only", async ({ page }) => {
+    await openBoard(page, loadBoard("scene-c"), {}, loadRelay("relay-clean"));
+    const toggle = page.getByTestId("walking-toggle");
+    await expect(toggle).toHaveCount(0);
+    await page.getByTestId("mode-scene").click();
+    await sceneSettled(page);
+    await expect(toggle).toBeVisible();
+    await expect(toggle).toHaveText("Walking");
+    // Its appearance moves no gauge and no button (D-517, D-526): their
+    // boxes with the toggle equal those with it taken out of the layout,
+    // the relay's toggle shown too. Below the scene's minimum area (1000
+    // px wide) the header already spans several lines and the buttons may
+    // wrap under the gauges; the gauges still keep their places.
+    const fixed = (gaugesOnly: boolean) =>
+      page.locator(gaugesOnly ? 'header [data-testid^="gauge-"]' : 'header [data-testid^="gauge-"], header button:not([data-testid="header-status"] button)').evaluateAll((elements) =>
+        elements
+          .filter((e) => e.getAttribute("data-testid") !== "walking-toggle")
+          .map((e) => {
+            const r = e.getBoundingClientRect();
+            return { name: e.getAttribute("data-testid") ?? e.textContent?.trim(), x: r.x, y: r.y, w: r.width, h: r.height };
+          }),
+      );
+    await expect(page.getByTestId("relay-toggle")).toBeVisible();
+    for (const [width, height] of [[1000, 760], [1400, 900], [1920, 1001]] as const) {
+      await page.setViewportSize({ width, height });
+      const gaugesOnly = width === 1000;
+      const shown = await fixed(gaugesOnly);
+      expect(shown.length).toBeGreaterThan(1);
+      await toggle.evaluate((e) => ((e as HTMLElement).style.display = "none"));
+      const absent = await fixed(gaugesOnly);
+      await toggle.evaluate((e) => ((e as HTMLElement).style.display = ""));
+      expect(absent.map((b) => b.name)).toEqual(shown.map((b) => b.name));
+      for (const [i, before] of absent.entries()) {
+        for (const key of ["x", "y", "w", "h"] as const) {
+          expect(Math.abs(shown[i]![key] - before[key]), `${width} x ${height}: ${before.name} ${key}`).toBeLessThanOrEqual(0.5);
+        }
+      }
+    }
+    // On the owner's screen the header keeps one line (D-526): the toggle
+    // and the last button on the brand's line.
+    const top = (await page.locator("header .brand").boundingBox())!.y;
+    for (const id of ["walking-toggle", "pin-toggle"]) expect((await page.getByTestId(id).boundingBox())!.y, id).toBe(top);
+    await page.setViewportSize({ width: 1400, height: 900 });
+    // Outside the Sessions view it keeps its room, unseen and unreachable.
+    const box = await toggle.boundingBox();
+    await page.getByTestId("view-subjects").click();
+    await expect(toggle).toBeHidden();
+    expect(await toggle.boundingBox()).toEqual(box);
+    await page.getByTestId("view-sessions").click();
+    await expect(toggle).toBeVisible();
+    await page.getByTestId("mode-board").click();
+    await expect(toggle).toHaveCount(0);
+  });
+
+  test("the walking setting survives a reload", async ({ page }) => {
+    await openScene(page, loadBoard("scene-c"));
+    const toggle = page.getByTestId("walking-toggle");
+    await toggle.click();
+    await expect(toggle).toHaveAttribute("aria-pressed", "false");
+    expect(readViewState(await page.evaluate((key) => localStorage.getItem(key), VIEW_STORAGE_KEY)).walking).toBe(false);
+    await page.reload();
+    await sceneSettled(page);
+    await expect(toggle).toHaveAttribute("aria-pressed", "false");
+    await toggle.click();
+    await page.reload();
+    await sceneSettled(page);
+    await expect(toggle).toHaveAttribute("aria-pressed", "true");
   });
 
   test("banners stay above the scene", async ({ page }) => {

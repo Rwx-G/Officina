@@ -180,6 +180,9 @@ test.describe("the scene draws every live session of each fixture", () => {
 
 test.describe("scene", () => {
   test("a changed board places the figure at its new place at once", async ({ page }) => {
+    // Under reduced motion: otherwise the figure walks there (story 4.10,
+    // walk.spec.ts).
+    await page.emulateMedia({ reducedMotion: "reduce" });
     const board = loadBoard("scene-c");
     await openScene(page, board);
     const scale = Number(await scene(page).getAttribute("data-scale"));
@@ -595,7 +598,55 @@ test.describe("acting from the scene", () => {
     expect(await offset()).toBeGreaterThan(1);
     await push(page, next);
     await expect.poll(offset).toBeLessThan(0.5);
-    await expect(scene(page)).toHaveAttribute("data-moving", "0");
+    await sceneSettled(page);
+    expect(await offset()).toBeLessThan(0.5);
+  });
+
+  // D-471, story 4.10: the figure walks, its target does not. The clock is
+  // paused so each frame is stepped: from the first frame after the push
+  // the target is at the destination while the figure is still at its old
+  // place, and the walking figure takes no click.
+  test("a walking figure's target is at its destination from the first frame", async ({ page }) => {
+    const board = loadBoard("scene-c");
+    await openScene(page, board);
+    await page.clock.pauseAt(board.generated_at_ms + 60_000);
+    const walker = liveCards(board).find((c) => c.scene?.zone === "lounge")!;
+    const next = startsWorking(board, walker.key);
+    const [before, after] = layouts(board, next);
+    const targetOf = (layout: SceneLayout) => layout.targets.find((t) => t.kind === "figure" && t.keys[0] === walker.key)!;
+    const scale = Number(await scene(page).getAttribute("data-scale"));
+    const was = (await figures(page))[walker.key]!.transform;
+    await push(page, next);
+    await page.clock.runFor(16);
+    await expect(scene(page)).toHaveAttribute("data-moving", "1");
+    // Layer 5's target for the key: at the destination, not at the start.
+    const box = (await boxes(page)).targets.find((t) => t.id === targetOf(after!).id)!.box;
+    const want = targetOf(after!).rect;
+    const old = targetOf(before!).rect;
+    expect(Math.abs(box.x - want.x * scale) + Math.abs(box.y - want.y * scale)).toBeLessThan(0.5);
+    expect(Math.abs(box.x - old.x * scale) + Math.abs(box.y - old.y * scale)).toBeGreaterThan(1);
+    // The figure is on its way, near where it was.
+    const [wx, wy] = parse(was);
+    const [fx, fy] = parse((await figures(page))[walker.key]!.transform);
+    expect(Math.hypot(fx - wx, fy - wy)).toBeLessThan(3);
+    // A click on the walking figure reaches what lies under it, not it:
+    // layer 3 ignores the pointer, and no target sits there any more.
+    const hit = await scene(page).evaluate(
+      (root, [x, y, s]) => {
+        const origin = root.getBoundingClientRect();
+        const el = document.elementFromPoint(origin.left + x * s, origin.top + (y - 20) * s);
+        return { figure: el?.closest("[data-figure]") !== null, target: el?.closest("[data-target]")?.getAttribute("data-target") ?? null };
+      },
+      [fx, fy, scale] as const,
+    );
+    expect(hit.figure).toBe(false);
+    expect(hit.target).not.toBe(targetOf(after!).id);
+    // Each frame of the walk leaves the target where it is.
+    for (let i = 0; i < 30; i++) {
+      await page.clock.runFor(16);
+      const now = (await boxes(page)).targets.find((t) => t.id === targetOf(after!).id)!.box;
+      expect([now.x, now.y]).toEqual([box.x, box.y]);
+    }
   });
 
   test("clicking a figure opens its file with Bring to front focused", async ({ page }) => {

@@ -68,6 +68,8 @@ const CASES: ToggleCase[] = [
   // The theme control (AD-67, D-517), in both header layouts.
   { name: "theme switch", selector: '[data-testid="theme-switch"]', scene: "board" },
   { name: "theme switch on one line", selector: '[data-testid="theme-switch"]', scene: "sceneMode" },
+  // Scene mode's Walking toggle (D-469, D-517): a fixed control.
+  { name: "walking toggle", selector: '[data-testid="walking-toggle"]', scene: "sceneMode", pressed: true },
   { name: "copy attach command", selector: '[data-testid="copy-attach"]', scene: "board" },
   { name: "Relay view stop toggle", selector: '[data-testid="relay-view-stop"]', scene: "relay" },
   { name: "triage verdict", selector: '[data-testid^="triage-verdict-"]', scene: "subjects" },

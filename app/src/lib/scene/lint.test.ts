@@ -1,7 +1,8 @@
 // @vitest-environment node
 // The scene's lint (AD-64, D-110, D-470): every name the config restricts
-// under the scene's globs is reported in a file of each glob, a mover's
-// file included while no override exists, and in no file outside them.
+// under the scene's globs is reported in a file of each glob and in no file
+// outside them; the mover's module alone may use the frame loop and the
+// page's clock, and nothing else.
 // The names come from the config itself, never from a list here; whether
 // they still cover AD-64's list is a review item (D-110).
 /// <reference types="node" />
@@ -10,8 +11,19 @@ import { describe, expect, it } from "vitest";
 
 const eslint = new ESLint({ cwd: process.cwd() });
 
-/** A file of each scene glob, the mover's included, and files outside. */
-const INSIDE = ["src/lib/scene/probe.ts", "src/components/scene/probe.ts", "src/lib/scene/mover.ts"];
+/** A file of each scene glob, files next to the mover's or named like it,
+ *  and files outside. */
+const INSIDE = [
+  "src/lib/scene/probe.ts",
+  "src/components/scene/probe.ts",
+  "src/lib/scene/mover.test.ts",
+  "src/lib/scene/objects.ts",
+  "src/components/scene/mover.ts",
+  "src/lib/scene/sub/mover.ts",
+];
+const MOVER = "src/lib/scene/mover.ts";
+/** What story 4.10 AC 12 lets the mover use. */
+const MOVER_MAY_USE = ["requestAnimationFrame", "cancelAnimationFrame", "performance.now"];
 const OUTSIDE = ["src/lib/probe.ts", "src/components/probe.ts", "e2e/probe.ts"];
 
 type RuleEntry = [unknown, ...unknown[]];
@@ -48,6 +60,17 @@ describe("scene lint", () => {
     for (const { rule, name, code } of restricted) {
       for (const file of INSIDE) expect(await reported(code, file), `${name} in ${file}`).toContain(rule);
       for (const file of OUTSIDE) expect(await reported(code, file), `${name} in ${file}`).not.toContain(rule);
+    }
+  });
+
+  it("the mover alone may use the frame loop and performance.now", async () => {
+    const restricted = await snippets(INSIDE[0]!);
+    for (const name of MOVER_MAY_USE) expect(restricted.map((s) => s.name), name).toContain(name);
+    const allowed = new Set(MOVER_MAY_USE);
+    for (const { rule, name, code } of restricted) {
+      const messages = await reported(code, MOVER);
+      if (allowed.has(name)) expect(messages, `${name} in the mover`).not.toContain(rule);
+      else expect(messages, `${name} in the mover`).toContain(rule);
     }
   });
 });

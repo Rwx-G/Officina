@@ -122,13 +122,24 @@ export async function expectedScale(page: Page): Promise<string> {
   return String(fitScale({ w, h }, canvas(columns)));
 }
 
+/** How far a settling scene's clock is run at a time, in ms, and for how
+ *  long at most: a walk across the floor lasts longer than an expectation
+ *  waits in real time. */
+const SETTLE_STEP_MS = 5_000;
+const SETTLE_MAX_MS = 120_000;
+
 /** Waits until the scene has its scale for the area and nothing moves
- *  (D-185): polled, never through `requestAnimationFrame`, which the
- *  installed clock fakes. */
+ *  (D-185, `data-moving="0"`, the mover's): polled, never through
+ *  `requestAnimationFrame`, which the installed clock fakes. A scene still
+ *  walking has its clock run ahead, so its walks end without real seconds
+ *  passing. */
 export async function sceneSettled(page: Page): Promise<void> {
   const scene = page.getByTestId("scene");
   await expect(scene).toBeVisible();
   await expect.poll(async () => (await scene.getAttribute("data-scale")) === (await expectedScale(page))).toBe(true);
+  for (let run = 0; run < SETTLE_MAX_MS && (await scene.getAttribute("data-moving")) !== "0"; run += SETTLE_STEP_MS) {
+    await page.clock.runFor(SETTLE_STEP_MS);
+  }
   await expect(scene).toHaveAttribute("data-moving", "0");
 }
 

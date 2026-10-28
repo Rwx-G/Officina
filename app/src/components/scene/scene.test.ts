@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { tick } from "svelte";
 import { cleanup, render } from "@testing-library/svelte";
 import Scene from "./Scene.svelte";
 import { BoardStore } from "../../lib/board.svelte";
@@ -189,5 +190,69 @@ describe("Scene", () => {
     const strip = getByTestId("scene-strip");
     expect(scene.contains(strip)).toBe(false);
     expect(scene.compareDocumentPosition(strip) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+});
+
+describe("Scene with walking", () => {
+  /** Motion allowed (the setup's default is reduced), the frames and the
+   *  page clock driven by the test. */
+  function moving(): () => void {
+    const reduced = window.matchMedia;
+    window.matchMedia = (query: string) => ({ ...reduced(query), matches: false });
+    vi.useFakeTimers({ toFake: ["requestAnimationFrame", "cancelAnimationFrame", "performance"] });
+    return () => {
+      vi.useRealTimers();
+      window.matchMedia = reduced;
+    };
+  }
+
+  /** Steps frames until the scene settles; returns how many it took. */
+  async function settle(scene: HTMLElement): Promise<number> {
+    let frames = 0;
+    while (scene.getAttribute("data-moving") === "1" && frames < 2_000) {
+      vi.advanceTimersByTime(16);
+      frames++;
+    }
+    await tick();
+    return frames;
+  }
+
+  it("a walking employee has no halo until it arrives", async () => {
+    const restore = moving();
+    try {
+      // From the lounge, which has a place whatever offices the run holds.
+      const other = card("walk-other", "office", { project: "walk-p" });
+      const { getByTestId, container, rerender } = renderScene(board([card("walker", "lounge", { project: "walk-p" }), other]));
+      const scene = getByTestId("scene");
+      const halo = () => container.querySelector<HTMLElement>('[data-halo="walker"]');
+      await tick();
+      expect(scene.getAttribute("data-moving")).toBe("0");
+      expect(halo()).toBeNull();
+
+      // To the decision office: no halo on the way, one on arrival.
+      await rerender({ board: board([card("walker", "decision", { project: "walk-p" }), other]) });
+      await tick();
+      expect(scene.getAttribute("data-moving")).toBe("1");
+      expect(halo()).toBeNull();
+      vi.advanceTimersByTime(500);
+      await tick();
+      expect(halo()).toBeNull();
+      expect(await settle(scene)).toBeGreaterThan(10);
+      expect(halo()).not.toBeNull();
+      const count = halo()!.style.getPropertyValue("--halo-count");
+
+      // On to the alert room: the halo goes while it walks and comes back
+      // with the same wait's timing, the memo's (key, enteredAt).
+      await rerender({ board: board([card("walker", "alert", { project: "walk-p", alert: "priority" }), other]) });
+      await tick();
+      expect(scene.getAttribute("data-moving")).toBe("1");
+      expect(halo()).toBeNull();
+      await settle(scene);
+      expect(halo()).not.toBeNull();
+      expect(halo()!.style.getPropertyValue("--halo-colour")).toBe(paint("color-alert"));
+      expect(halo()!.style.getPropertyValue("--halo-count")).toBe(count);
+    } finally {
+      restore();
+    }
   });
 });

@@ -18,6 +18,14 @@ project uses [Semantic Versioning](https://semver.org/).
   mode the header keeps to one line, so eight projects fit a maximised
   Full HD window. The scene's light materials, figure and people colours
   join the tokens.
+- Walking in the scene (v0.4, in progress): an employee whose place
+  changes walks there along the corridors, with a walk cycle, and sits
+  down at a seat; its halo appears when it arrives. A new session fades in
+  at the entrance and walks in; an ended one walks out and fades. Opening
+  the scene, a window brought back from behind another, and the system's
+  reduced motion place everyone at once; nothing runs once everyone has
+  arrived. A "Walking" toggle in the header, in Scene mode, kept for the
+  next start, turns it off: employees then glide to their places.
 - Acting from the scene (v0.4, in progress): every employee is a button
   with its name on hover and keyboard focus. It opens the session's file,
   a side panel that resizes nothing: project and priority, number, place,

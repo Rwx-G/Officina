@@ -3,22 +3,31 @@
 // sort took them from. It holds the statics of `furniture.ts`, sorted by
 // depth `gx + gy`, and one persistent node per figure inserted among them
 // by its own depth (its seat's when seated, ties by creation order). A
-// figure is placed at its layout place at once (story 4.10 adds walking),
-// at a position snapped to whole device pixels. Every attribute is written
-// only when its cached value changes, so an unchanged layout writes
-// nothing. Ported from the prototype v2's `renderActor`, `staticIndexFor`
-// and `updateSnap`.
+// figure is drawn where the mover's frame says (`mover.ts`), at a position
+// snapped to whole device pixels; a moving figure changes place among the
+// statics with hysteresis, so walking along a desk never flickers in front
+// of and behind it. Every attribute is written only when its cached value
+// changes, so a settled scene receives no write. Ported from the
+// prototype v2's `renderActor`, `reorder`, `staticIndexFor` and
+// `updateSnap`.
 import type { ProjectColor } from "../generated/ProjectColor";
 import { projector } from "./geometry";
 import { ALERT_PAINTS, buildStatics, paint, type OfficeUse, type Static } from "./furniture";
-import { alertLit, type Employee, type SceneLayout } from "./layout";
-import { allSpots, restPoint, type Spot } from "./places";
+import { alertLit, type SceneLayout } from "./layout";
+import type { FigureFrame } from "./mover";
+import { allSpots, type Spot } from "./places";
 import { badgeMarkup, createRig, lookOf, marksMarkup, setPose, ticketMarkup, underMarkup, write, type Rig } from "./rig";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 
 /** A figure stands just in front of a static at its very depth. */
 const DEPTH_EPSILON = 0.001;
+/** A moving figure keeps its index among statics while its depth stays
+ *  within this window of the statics around it, in tiles (AD-171). */
+export const DEPTH_WINDOW = 0.05;
+/** A moving figure's depth, as ties among figures read it, changes only
+ *  past this step, in tiles (AD-171). */
+export const DEPTH_QUANTUM = 0.06;
 /** Where a kept desk's number floats above its empty chair, in px. */
 const AWAY_LIFT = 25;
 /** A free desk is drawn faded. */
@@ -31,6 +40,8 @@ export interface ObjectsInput {
   /** Device pixels per logical px: the scene's scale times the device
    *  pixel ratio. */
   snap: number;
+  /** Every figure as the mover draws it now. */
+  figures: ReadonlyMap<string, FigureFrame>;
 }
 
 interface Figure {
@@ -39,6 +50,11 @@ interface Figure {
   /** Creation order, the depth sort's last tie-break. */
   token: number;
   depth: number;
+  moving: boolean;
+  /** Its index among statics and its quantised depth, held while it moves;
+   *  `-1` before its first sort. */
+  si: number;
+  dq: number;
 }
 
 interface DeskParts {
@@ -90,6 +106,9 @@ export class SceneObjects {
   #created = 0;
   #spots = new Map<string, Spot>();
   #spotsColumns: number | null = null;
+  #columns = 0;
+  #colours: ReadonlyMap<string, ProjectColor | null> = new Map();
+  #snap = 1;
 
   constructor(root: SVGGElement) {
     this.#root = root;
@@ -100,12 +119,22 @@ export class SceneObjects {
     return [...this.#root.querySelectorAll("[data-figure]")].map((el) => el.getAttribute("data-figure")!);
   }
 
-  update({ layout, colours, snap }: ObjectsInput): void {
+  /** One frame of the mover: the figures only, on the last layout. */
+  frame(figures: ReadonlyMap<string, FigureFrame>): void {
+    this.#applyFigures(figures);
+    this.#reorder();
+  }
+
+  update({ layout, colours, snap, figures }: ObjectsInput): void {
+    this.#columns = layout.columns;
+    this.#colours = colours;
+    this.#snap = snap;
     const uses = officeUses(layout);
     const key = staticsKey(layout.columns, uses);
     if (key !== this.#staticsKey) {
       this.#rebuildStatics(buildStatics(layout.columns, uses), uses);
       this.#staticsKey = key;
+      for (const figure of this.#figures.values()) figure.si = -1;
     }
     if (this.#spotsColumns !== layout.columns) {
       this.#spots = new Map(allSpots(layout.columns).map((s) => [s.id, s]));
@@ -114,7 +143,7 @@ export class SceneObjects {
     this.#applyDesks(layout);
     this.#applyQueue(layout);
     this.#applyAlert(layout);
-    this.#applyFigures(layout, colours, snap);
+    this.#applyFigures(figures);
     this.#reorder();
   }
 
@@ -233,47 +262,46 @@ export class SceneObjects {
     }
   }
 
-  #applyFigures(layout: SceneLayout, colours: ReadonlyMap<string, ProjectColor | null>, snap: number): void {
-    const p = projector(layout.columns);
-    const placed = layout.employees.filter((e): e is Employee & { spot: string; at: NonNullable<Employee["at"]> } => e.spot !== null && e.at !== null);
-    const live = new Set(placed.map((e) => e.key));
+  #applyFigures(figures: ReadonlyMap<string, FigureFrame>): void {
+    const p = projector(this.#columns);
+    const snap = this.#snap;
     for (const [key, figure] of this.#figures) {
-      if (live.has(key)) continue;
+      if (figures.has(key)) continue;
       figure.rig.node.remove();
       this.#figures.delete(key);
     }
-    for (const e of placed) {
-      const spot = this.#spots.get(e.spot);
-      if (!spot) continue;
-      const colour = colours.get(e.project) ?? null;
-      let figure = this.#figures.get(e.key);
+    for (const f of figures.values()) {
+      let figure = this.#figures.get(f.key);
+      // A figure walking out keeps its colour once its project has left.
+      const colour = this.#colours.has(f.project) ? (this.#colours.get(f.project) ?? null) : (figure?.colour ?? null);
       if (figure && figure.colour !== colour) {
         figure.rig.node.remove();
         figure = undefined;
       }
       if (!figure) {
-        const rig = createRig(this.#root.ownerDocument, { look: lookOf(e.key), colour, cap: true, scale: 1 });
-        rig.node.setAttribute("data-figure", e.key);
+        const rig = createRig(this.#root.ownerDocument, { look: lookOf(f.key), colour, cap: true, scale: 1 });
+        rig.node.setAttribute("data-figure", f.key);
         rig.node.setAttribute("aria-hidden", "true");
-        figure = { rig, colour, token: this.#created++, depth: 0 };
-        this.#figures.set(e.key, figure);
+        figure = { rig, colour, token: this.#created++, depth: 0, moving: false, si: -1, dq: 0 };
+        this.#figures.set(f.key, figure);
       }
-      figure.depth = spot.gx + spot.gy + DEPTH_EPSILON;
+      figure.depth = f.gx + f.gy + DEPTH_EPSILON;
+      figure.moving = f.moving;
       const { rig } = figure;
-      const x = Math.round(e.at.x * snap) / snap;
-      const y = Math.round(e.at.y * snap) / snap;
+      const at = p(f.drawGx, f.drawGy);
+      const x = Math.round(at.x * snap) / snap;
+      const y = Math.round(at.y * snap) / snap;
       write(rig, "transform", rig.node, "transform", `translate(${x} ${y})`);
-      setPose(rig, e.pose, e.facing, e.marks.hand);
+      write(rig, "opacity", rig.node, "opacity", f.opacity < 1 ? String(f.opacity) : null);
+      setPose(rig, f.pose, f.facing, f.marks.hand, { flip: f.flip, stride: f.stride });
       // An unknown employee keeps its alert (D-494), and its ticket's colour.
-      const marks = marksMarkup(e.marks, e.pose, e.facing, e.alert !== null, colour);
+      const marks = marksMarkup(f.marks, f.pose, f.facing, f.alerted, colour);
       if (rig.cache.get("marks") !== marks) {
         rig.cache.set("marks", marks);
         rig.marks.innerHTML = marks;
       }
-      const floor = p(spot.gx, spot.gy);
-      const rest = restPoint(spot);
-      const restAt = p(rest.gx, rest.gy);
-      const under = underMarkup(e.marks.ring, Math.round(floor.x - restAt.x), Math.round(floor.y - restAt.y));
+      const floor = p(f.gx, f.gy);
+      const under = underMarkup(f.marks.ring, Math.round(floor.x - at.x), Math.round(floor.y - at.y));
       if (rig.cache.get("under") !== under) {
         rig.cache.set("under", under);
         rig.under.innerHTML = under;
@@ -295,14 +323,29 @@ export class SceneObjects {
 
   /** Inserts each figure before the first static deeper than it, or before
    *  the next figure sharing that static; moves a node only when its
-   *  neighbour changed. */
+   *  neighbour changed. A figure at rest takes its exact index; a moving
+   *  one keeps its index while its depth stays within `DEPTH_WINDOW` of
+   *  the statics around it, and its tie depth while it moves less than
+   *  `DEPTH_QUANTUM` (the prototype v2's hysteresis). */
   #reorder(): void {
-    const list = [...this.#figures.values()].map((figure) => ({ figure, si: this.#staticIndexFor(figure.depth) }));
-    list.sort((a, b) => a.si - b.si || a.figure.depth - b.figure.depth || a.figure.token - b.figure.token);
+    for (const figure of this.#figures.values()) {
+      const d = figure.depth;
+      if (!figure.moving || figure.si < 0) {
+        figure.si = this.#staticIndexFor(d);
+        figure.dq = d;
+        continue;
+      }
+      if (Math.abs(d - figure.dq) > DEPTH_QUANTUM) figure.dq = d;
+      const lo = this.#staticIndexFor(d - DEPTH_WINDOW);
+      const hi = this.#staticIndexFor(d + DEPTH_WINDOW);
+      if (figure.si < lo || figure.si > hi) figure.si = this.#staticIndexFor(d);
+    }
+    const list = [...this.#figures.values()];
+    list.sort((a, b) => a.si - b.si || a.dq - b.dq || a.token - b.token);
     for (let i = list.length - 1; i >= 0; i--) {
-      const { figure, si } = list[i]!;
+      const figure = list[i]!;
       const next = list[i + 1];
-      const ref = next && next.si === si ? next.figure.rig.node : (this.#statics[si]?.node ?? null);
+      const ref = next && next.si === figure.si ? next.rig.node : (this.#statics[figure.si]?.node ?? null);
       const node = figure.rig.node;
       if (node.parentNode !== this.#root || node.nextSibling !== ref) this.#root.insertBefore(node, ref);
     }

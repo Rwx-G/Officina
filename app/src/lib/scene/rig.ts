@@ -9,6 +9,7 @@
 import type { ProjectColor } from "../generated/ProjectColor";
 import type { Facing } from "./places";
 import type { Marks, Pose } from "./layout";
+import type { Stride } from "./mover";
 import { SHADE_1, SHADE_2, fnv1a, paint, projectPaint } from "./furniture";
 
 export const HAIR_STYLES = ["short", "bob", "bun", "curly", "crop"] as const;
@@ -189,6 +190,11 @@ export interface Rig {
   poses: Record<Pose, SVGGElement>;
   fronts: SVGGElement[];
   backs: SVGGElement[];
+  flip: SVGGElement;
+  bob: SVGGElement;
+  legFar: SVGGElement;
+  legNear: SVGGElement;
+  armFar: SVGGElement;
   armNear: SVGGElement;
   seatedArmFar: SVGGElement;
   seatedArmNear: SVGGElement;
@@ -210,6 +216,11 @@ export function createRig(doc: Document, options: RigOptions): Rig {
     poses: { standing: part("stand"), "seated-facing": part("seated-facing"), "seated-working": part("seated-working") },
     fronts: [...part("stand").querySelectorAll<SVGGElement>('[data-view="front"]')],
     backs: [...part("stand").querySelectorAll<SVGGElement>('[data-view="back"]')],
+    flip: part("flip"),
+    bob: part("bob"),
+    legFar: part("leg-far"),
+    legNear: part("leg-near"),
+    armFar: part("arm-far"),
     armNear: part("arm-near"),
     seatedArmFar: part("seated-arm-far"),
     seatedArmNear: part("seated-arm-near"),
@@ -229,8 +240,20 @@ export function write(rig: Rig, key: string, element: Element, name: string, val
 
 const shown = (on: boolean): string | null => (on ? null : "none");
 
-/** Shows `pose` and its view, its arms as the layout says. */
-export function setPose(rig: Rig, pose: Pose, facing: Facing, hand: boolean): void {
+/** How a standing figure is turned and moving: flipped to face left, and
+ *  its stride while it walks (`null` at rest). */
+export interface Motion {
+  flip: boolean;
+  stride: Stride | null;
+}
+
+const AT_REST: Motion = { flip: false, stride: null };
+const rotate = (angle: number, pivot: string): string | null => (angle === 0 ? null : `rotate(${angle} ${pivot})`);
+
+/** Shows `pose` and its view, its arms as the layout says, and the walk
+ *  cycle the mover drives from script, never from CSS (AD-171). A limb at
+ *  rest carries no transform. */
+export function setPose(rig: Rig, pose: Pose, facing: Facing, hand: boolean, motion: Motion = AT_REST): void {
   for (const [name, group] of Object.entries(rig.poses) as [Pose, SVGGElement][]) {
     write(rig, `pose:${POSE_PART[name]}`, group, "display", shown(name === pose));
   }
@@ -238,7 +261,13 @@ export function setPose(rig: Rig, pose: Pose, facing: Facing, hand: boolean): vo
     const front = facing === "front";
     rig.fronts.forEach((el, i) => write(rig, `front:${i}`, el, "display", shown(front)));
     rig.backs.forEach((el, i) => write(rig, `back:${i}`, el, "display", shown(!front)));
-    write(rig, "arm-near", rig.armNear, "transform", hand ? "rotate(-160 10.6 -38.5)" : null);
+    const stride = motion.stride ?? { leg: 0, arm: 0, bob: 0 };
+    write(rig, "flip", rig.flip, "transform", motion.flip ? "scale(-1 1)" : null);
+    write(rig, "bob", rig.bob, "transform", stride.bob === 0 ? null : `translate(0 ${stride.bob})`);
+    write(rig, "leg-far", rig.legFar, "transform", rotate(stride.leg, "-3.2 -21"));
+    write(rig, "leg-near", rig.legNear, "transform", rotate(-stride.leg, "3.2 -21"));
+    write(rig, "arm-far", rig.armFar, "transform", rotate(stride.arm, "-10.6 -38.5"));
+    write(rig, "arm-near", rig.armNear, "transform", hand ? "rotate(-160 10.6 -38.5)" : rotate(-stride.arm, "10.6 -38.5"));
   } else if (pose === "seated-facing") {
     write(rig, "seated-arm-far", rig.seatedArmFar, "transform", "rotate(-16 -10.6 -34.5)");
     write(rig, "seated-arm-near", rig.seatedArmNear, "transform", hand ? "rotate(-160 10.6 -34.5)" : "rotate(16 10.6 -34.5)");

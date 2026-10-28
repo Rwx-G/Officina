@@ -5,7 +5,9 @@
   // composited. Each is timed by story 4.4's `breathe`, which shares one
   // memo with the board's ring: a mode switch or a remount never restarts
   // the breathing (D-108, D-522). A halo is keyed by card key and the start
-  // of the wait, the beacon by the first alerted card (D-474).
+  // of the wait, the beacon by the first alerted card (D-474). A figure on
+  // its way has no halo; it gets it on arrival, under the same key, so the
+  // memo keeps its phase across a move between the two rooms (AD-65).
   import type { Card } from "../../lib/generated/Card";
   import { breathe, haloEnteredAt, type HaloPair } from "../../lib/halo";
   import { BEACON, beaconPoint } from "../../lib/scene/geometry";
@@ -17,8 +19,10 @@
     cards: ReadonlyMap<string, Card>;
     /** What the beacon breathes for: `beaconPair` of the board. */
     beacon: HaloPair | null;
+    /** The keys walking or gliding to their place (the mover's). */
+    transit?: ReadonlySet<string>;
   }
-  let { layout, cards, beacon }: Props = $props();
+  let { layout, cards, beacon, transit = new Set() }: Props = $props();
 
   /** The prototype's ellipse for a standing figure, centred above its
    *  floor point, in logical px. */
@@ -26,7 +30,7 @@
 
   let halos = $derived(
     layout.employees.flatMap((e) => {
-      if ((e.zone !== "decision" && e.zone !== "alert") || e.at === null) return [];
+      if ((e.zone !== "decision" && e.zone !== "alert") || e.at === null || transit.has(e.key)) return [];
       const card = cards.get(e.key);
       const enteredAt = card ? haloEnteredAt(card) : null;
       // In the alert room the halo takes the alert colour (AD-65 as amended).

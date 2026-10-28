@@ -3,7 +3,8 @@ import type { Board } from "../generated/Board";
 import type { ProjectColor } from "../generated/ProjectColor";
 import { layoutScene, liveCards, type SceneLayout } from "./layout";
 import { emptyMemory, type SceneMemory } from "./memory";
-import { SceneObjects } from "./objects";
+import { restingFrames, type FigureFrame } from "./mover";
+import { DEPTH_QUANTUM, DEPTH_WINDOW, SceneObjects } from "./objects";
 import { allSpots } from "./places";
 import { board, card, fixtureBoards } from "./testing";
 
@@ -40,7 +41,7 @@ describe("objects", () => {
     for (const { name, board: b } of fixtureBoards()) {
       const [layout] = layouts(b);
       const { root, objects } = mount();
-      objects.update({ layout: layout!, colours: colours(b), snap: 1 });
+      objects.update({ layout: layout!, colours: colours(b), snap: 1, figures: restingFrames(layout!) });
       const spots = new Map(allSpots(layout!.columns).map((s) => [s.id, s]));
       const placed = layout!.employees.filter((e) => e.spot !== null);
       expect(objects.figureOrder().sort(), name).toEqual(placed.map((e) => e.key).sort());
@@ -62,9 +63,9 @@ describe("objects", () => {
     const b = board([card("a", "decision"), card("b", "decision")]);
     const [layout] = layouts(b);
     const { objects } = mount();
-    objects.update({ layout: layout!, colours: colours(b), snap: 1 });
+    objects.update({ layout: layout!, colours: colours(b), snap: 1, figures: restingFrames(layout!) });
     const keys = objects.figureOrder();
-    objects.update({ layout: layouts(b)[0]!, colours: colours(b), snap: 1 });
+    objects.update({ layout: layouts(b)[0]!, colours: colours(b), snap: 1, figures: restingFrames(layouts(b)[0]!) });
     expect(objects.figureOrder()).toEqual(keys);
   });
 
@@ -72,12 +73,12 @@ describe("objects", () => {
     const b = fixtureBoards().find(({ board: f }) => liveCards(f).length > 5)!.board;
     const { root, objects } = mount();
     const [first] = layouts(b);
-    objects.update({ layout: first!, colours: colours(b), snap: 1 });
+    objects.update({ layout: first!, colours: colours(b), snap: 1, figures: restingFrames(first!) });
     const observer = new MutationObserver(() => undefined);
     observer.observe(root, { subtree: true, childList: true, attributes: true, characterData: true });
     // The same board again, as a new payload: nothing is written.
     const [, again] = layouts(b, structuredClone(b));
-    objects.update({ layout: again!, colours: colours(b), snap: 1 });
+    objects.update({ layout: again!, colours: colours(b), snap: 1, figures: restingFrames(again!) });
     expect(observer.takeRecords()).toEqual([]);
 
     // One card starts working: only what changed is written, and nothing
@@ -90,7 +91,7 @@ describe("objects", () => {
     }
     changed.columns.working.push({ ...moved, column: "working", scene: { ...moved.scene!, zone: "office", alert: null, approval: false } });
     const [before, after] = layouts(b, changed);
-    objects.update({ layout: after!, colours: colours(changed), snap: 1 });
+    objects.update({ layout: after!, colours: colours(changed), snap: 1, figures: restingFrames(after!) });
     const records = observer.takeRecords();
     expect(records.length).toBeGreaterThan(0);
     const settled = before!.employees.filter((e) => {
@@ -115,15 +116,15 @@ describe("objects", () => {
     const three = board([card("b", "office", { started: 1 })]);
     const [l1, l2, l3] = layouts(one, two, three);
     const { root, objects } = mount();
-    objects.update({ layout: l1!, colours: colours(one), snap: 1 });
+    objects.update({ layout: l1!, colours: colours(one), snap: 1, figures: restingFrames(l1!) });
     const a = figure(root, "a")!;
     expect(figure(root, "b")).toBeNull();
-    objects.update({ layout: l2!, colours: colours(two), snap: 1 });
+    objects.update({ layout: l2!, colours: colours(two), snap: 1, figures: restingFrames(l2!) });
     const b = figure(root, "b")!;
     const at = l2!.employees.find((e) => e.key === "b")!.at!;
     expect(b.getAttribute("transform")).toBe(translate(Math.round(at.x), Math.round(at.y)));
     expect(figure(root, "a")).toBe(a);
-    objects.update({ layout: l3!, colours: colours(three), snap: 1 });
+    objects.update({ layout: l3!, colours: colours(three), snap: 1, figures: restingFrames(l3!) });
     expect(figure(root, "a")).toBeNull();
     expect(a.isConnected).toBe(false);
     expect(figure(root, "b")).toBe(b);
@@ -135,7 +136,7 @@ describe("objects", () => {
     const { root, objects } = mount();
     const at = layout!.employees[0]!.at!;
     for (const snap of [1, 1.25, 2, 0.9166666666666666]) {
-      objects.update({ layout: layout!, colours: colours(b), snap });
+      objects.update({ layout: layout!, colours: colours(b), snap, figures: restingFrames(layout!) });
       const [, x, y] = /translate\(([-\d.e]+) ([-\d.e]+)\)/.exec(figure(root, "a")!.getAttribute("transform")!)!;
       for (const [value, raw] of [[Number(x), at.x], [Number(y), at.y]] as const) {
         expect(Math.abs(value * snap - Math.round(value * snap))).toBeLessThan(1e-6);
@@ -151,13 +152,101 @@ describe("objects", () => {
     const waiting = board([card("a", "decision")]);
     const [l1, l2] = layouts(working, waiting);
     const { root, objects } = mount();
-    objects.update({ layout: l1!, colours: colours(working), snap: 1 });
+    objects.update({ layout: l1!, colours: colours(working), snap: 1, figures: restingFrames(l1!) });
     const desk = (index: number, part: string) => root.querySelector(`[data-desk="0:${index}"][data-desk-part="${part}"]`)!;
     expect(desk(0, "desk").hasAttribute("opacity")).toBe(false);
     expect(desk(1, "desk").getAttribute("opacity")).toBe("0.42");
     expect(desk(0, "desk").querySelector("[data-lines]")!.hasAttribute("display")).toBe(false);
-    objects.update({ layout: l2!, colours: colours(waiting), snap: 1 });
+    objects.update({ layout: l2!, colours: colours(waiting), snap: 1, figures: restingFrames(l2!) });
     expect(desk(0, "chair").querySelector("[data-away]")!.textContent).toBe("1");
     expect(desk(0, "desk").querySelector("[data-lines]")!.getAttribute("display")).toBe("none");
+  });
+
+  describe("depth while moving (AD-171)", () => {
+    const b = board([card("a", "office"), card("b", "office", { started: 1 })]);
+    const [layout] = layouts(b);
+
+    /** A figure frame of `key` moving at floor depth `depth` (gx + gy). */
+    const moving = (key: string, depth: number, isMoving = true): FigureFrame => ({
+      ...restingFrames(layout!).get(key)!,
+      gx: depth,
+      gy: 0,
+      drawGx: depth,
+      drawGy: 0,
+      moving: isMoving,
+    });
+
+    /** A static with no other static within `gap` tiles of its depth. */
+    function lonelyStatic(root: Element, gap: number): { node: Element; depth: number } {
+      const statics = [...root.querySelectorAll("[data-static]")].map((node) => ({ node, depth: Number(node.getAttribute("data-depth")) }));
+      const found = statics.find((s, i) => i > 0 && s.depth - statics[i - 1]!.depth > gap && (statics[i + 1]?.depth ?? Infinity) - s.depth > gap);
+      if (!found) throw new Error("no lonely static");
+      return found;
+    }
+
+    const before = (a: Element, b: Element) => (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
+
+    it("a moving figure's index among statics changes only past the hysteresis", () => {
+      const { root, objects } = mount();
+      objects.update({ layout: layout!, colours: colours(b), snap: 1, figures: restingFrames(layout!) });
+      const s = lonelyStatic(root, 4 * DEPTH_WINDOW);
+      const frame = (aDepth: number, bDepth: number, aMoving = true) =>
+        objects.frame(new Map([["a", moving("a", aDepth, aMoving)], ["b", moving("b", bDepth)]]));
+      const a = () => figure(root, "a")!;
+      const far = s.depth + 3;
+      frame(s.depth + 2 * DEPTH_WINDOW, far);
+      expect(before(s.node, a())).toBe(true);
+      // Just behind the static, within the window: it keeps its index.
+      frame(s.depth - DEPTH_WINDOW / 2, far);
+      expect(before(s.node, a())).toBe(true);
+      // Past the window: it goes behind.
+      frame(s.depth - DEPTH_WINDOW - 0.01, far);
+      expect(before(a(), s.node)).toBe(true);
+      // Back within the window on the other side: it stays behind.
+      frame(s.depth + DEPTH_WINDOW / 2, far);
+      expect(before(a(), s.node)).toBe(true);
+      // At rest a figure takes its exact index at once.
+      frame(s.depth + DEPTH_WINDOW / 2, far, false);
+      expect(before(s.node, a())).toBe(true);
+
+      // Two moving figures between the same statics: the tie depth changes
+      // only past DEPTH_QUANTUM.
+      const base = s.depth + 2 * DEPTH_WINDOW;
+      frame(base, base + DEPTH_QUANTUM * 0.6);
+      expect(objects.figureOrder()).toEqual(["a", "b"]);
+      frame(base + DEPTH_QUANTUM * 0.9, base + DEPTH_QUANTUM * 0.6);
+      expect(objects.figureOrder()).toEqual(["a", "b"]);
+      frame(base + DEPTH_QUANTUM * 1.2, base + DEPTH_QUANTUM * 0.6);
+      expect(objects.figureOrder()).toEqual(["b", "a"]);
+    });
+
+    it("only figure nodes move, and only when their neighbour changed", () => {
+      const { root, objects } = mount();
+      objects.update({ layout: layout!, colours: colours(b), snap: 1, figures: restingFrames(layout!) });
+      const s = lonelyStatic(root, 4 * DEPTH_WINDOW);
+      const far = s.depth + 3;
+      const frame = (aDepth: number) => objects.frame(new Map([["a", moving("a", aDepth)], ["b", moving("b", far)]]));
+      frame(s.depth + 2 * DEPTH_WINDOW);
+      const observer = new MutationObserver(() => undefined);
+      observer.observe(root, { childList: true });
+      // A walk toward the static and past it, in small steps.
+      const moves: number[] = [];
+      for (let d = s.depth + 2 * DEPTH_WINDOW; d > s.depth - 3 * DEPTH_WINDOW; d -= 0.01) {
+        frame(d);
+        moves.push(observer.takeRecords().length);
+      }
+      observer.disconnect();
+      // One move, when it crossed the window, of the figure's node only.
+      expect(moves.filter((n) => n > 0)).toHaveLength(1);
+      const observer2 = new MutationObserver(() => undefined);
+      observer2.observe(root, { childList: true });
+      frame(s.depth + 2 * DEPTH_WINDOW);
+      const records = observer2.takeRecords();
+      expect(records.length).toBeGreaterThan(0);
+      for (const r of records) {
+        for (const node of [...r.addedNodes, ...r.removedNodes]) expect((node as Element).getAttribute("data-figure")).toBe("a");
+      }
+      observer2.disconnect();
+    });
   });
 });
