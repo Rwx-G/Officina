@@ -9,6 +9,7 @@ import { calls, loadBoard, loadRegistry, openBoard } from "./fixtures";
 import {
   AUTHOR_REFUSAL_TEXT,
   CONFIRM_REFUSAL_TEXT,
+  NOT_NEEDED_TEXT,
   PROPOSAL_SOURCE_TEXT,
   PROPOSED_VERDICT_TEXT,
   REASON_TEXT,
@@ -303,6 +304,22 @@ test.describe("Triage panel", () => {
     await expect(page.getByTestId("triage-row")).toHaveCount(view.triage.length);
     await expect(rowOf(page, changed).getByTestId("triage-confirm")).toBeEnabled();
     await expect(rowOf(page, changed).getByTestId("triage-in-flight")).toHaveCount(0);
+  });
+
+  test("a session filed without its verdict says its subject's row decides", async ({ page }) => {
+    const view = loadRegistry("triage");
+    await openTriage(page, view);
+    const row = obvious(view);
+    await page.evaluate(
+      ([key, subject]) =>
+        (window.__officinaConfirmOutcome = { [key]: { kind: "verdict_not_needed", subject, cause: "not_latest" } }),
+      [row.key, row.proposed_subject!] as const,
+    );
+    await rowOf(page, row).getByTestId("triage-confirm").click();
+    await expect(page.getByTestId("triage-note")).toHaveText(
+      `The session was filed, and its verdict left to its subject's own row: ${NOT_NEEDED_TEXT.not_latest}.`,
+    );
+    await expect(rowOf(page, row).getByTestId("triage-error")).toHaveCount(0);
   });
 
   test("excerpts and names render as text, never as HTML", async ({ page }) => {
