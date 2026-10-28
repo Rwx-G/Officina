@@ -106,24 +106,6 @@ impl AuthorError {
     }
 }
 
-/// The sessions and subjects an action reads beyond every subject: those it
-/// names, and the sessions of the subjects it touches.
-fn involved(action: &AuthorAction) -> (Vec<String>, Vec<i64>) {
-    match action {
-        AuthorAction::Create {
-            origin: SubjectOrigin::Sessions(ids),
-            ..
-        } => (ids.clone(), Vec::new()),
-        AuthorAction::Create { .. } => (Vec::new(), Vec::new()),
-        AuthorAction::Rename { subject, .. }
-        | AuthorAction::Archive { subject, .. }
-        | AuthorAction::Reopen { subject } => (Vec::new(), vec![*subject]),
-        AuthorAction::Merge { source, target } => (Vec::new(), vec![*source, *target]),
-        AuthorAction::File { sessions, subject } => (sessions.clone(), vec![*subject]),
-        AuthorAction::Unfile { sessions } => (sessions.clone(), Vec::new()),
-    }
-}
-
 /// Stamps `reopened_at_ms` on `subject`'s latest confirmation, unless it
 /// was already reopened (D-58): the first reopen is the one the flip rate
 /// reads (AD-50).
@@ -464,7 +446,7 @@ impl Writer {
             .conn
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         let subjects = read::subjects(&tx)?;
-        let (named, touched) = involved(action);
+        let (named, touched) = action.involved();
         let mut ids: BTreeSet<String> = named.into_iter().collect();
         for subject in touched {
             ids.extend(read::session_ids_of_subject(&tx, subject)?);

@@ -71,6 +71,34 @@ pub enum AuthorAction {
     },
 }
 
+impl AuthorAction {
+    /// The sessions and subjects the action reads beyond every subject:
+    /// those it names, and the sessions of the subjects it touches. Here,
+    /// beside the variants, so a new action cannot compile without saying
+    /// what it reads (quality audit M1).
+    ///
+    /// ```
+    /// use officina_core::registry::confirm::AuthorAction;
+    /// let merge = AuthorAction::Merge { source: 1, target: 2 };
+    /// assert_eq!(merge.involved(), (Vec::new(), vec![1, 2]));
+    /// ```
+    pub fn involved(&self) -> (Vec<String>, Vec<i64>) {
+        match self {
+            AuthorAction::Create {
+                origin: SubjectOrigin::Sessions(ids),
+                ..
+            } => (ids.clone(), Vec::new()),
+            AuthorAction::Create { .. } => (Vec::new(), Vec::new()),
+            AuthorAction::Rename { subject, .. }
+            | AuthorAction::Archive { subject, .. }
+            | AuthorAction::Reopen { subject } => (Vec::new(), vec![*subject]),
+            AuthorAction::Merge { source, target } => (Vec::new(), vec![*source, *target]),
+            AuthorAction::File { sessions, subject } => (sessions.clone(), vec![*subject]),
+            AuthorAction::Unfile { sessions } => (sessions.clone(), Vec::new()),
+        }
+    }
+}
+
 /// What an action reads: every subject, the sessions it names and those of
 /// the subjects it touches, and the projects the registry knows.
 #[derive(Debug, Clone, Copy)]
