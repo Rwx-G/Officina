@@ -11,7 +11,7 @@ use std::time::Duration;
 use officina_core::board::Board;
 use officina_core::focus::FocusOutcome;
 use officina_core::ipc::{IpcError, IpcErrorCode};
-use officina_core::registry::confirm::{AuthorAction, SubjectOrigin};
+use officina_core::registry::confirm::{AuthorAction, ConfirmItem, ItemAnswer, SubjectOrigin};
 use officina_core::registry::view::{RegistryView, SubjectView};
 use officina_core::relay::view::RelayView;
 use officina_host::collector::Collector;
@@ -246,6 +246,22 @@ async fn reopen_subject(state: State<'_, AppState>, subject: i64) -> Result<(), 
         .map(|_| ())
 }
 
+/// Confirms triage rows in one transaction (AD-49): each item carries the
+/// row's key and the proposal the window showed, and is answered on its
+/// own, confirmed, filed without its verdict (D-60) or refused with why.
+#[tauri::command]
+async fn confirm_triage(
+    state: State<'_, AppState>,
+    items: Vec<ConfirmItem>,
+) -> Result<Vec<ItemAnswer>, IpcError> {
+    match ask(state, AuthorCommand::Confirm(items)).await? {
+        AuthorAnswer::Confirmed(answers) => Ok(answers),
+        AuthorAnswer::Done { .. } | AuthorAnswer::Archived(_) => {
+            Err(IpcError::internal("the collector answered another request"))
+        }
+    }
+}
+
 #[tauri::command]
 fn refresh(state: State<'_, AppState>) {
     if let Ok(sender) = state.sender.lock() {
@@ -446,7 +462,8 @@ fn main() {
             merge_subjects,
             file_sessions,
             archive_subject,
-            reopen_subject
+            reopen_subject,
+            confirm_triage
         ])
         .run(tauri::generate_context!())
         .expect("failed to run the Officina window");
@@ -524,6 +541,7 @@ mod tests {
             "file_sessions",
             "archive_subject",
             "reopen_subject",
+            "confirm_triage",
         ] {
             assert!(declared.contains(command), "{command}");
         }

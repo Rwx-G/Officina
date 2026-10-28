@@ -23,6 +23,7 @@
     "allow-merge-subjects",
     "allow-file-sessions",
     "allow-archive-subject",
-    "allow-reopen-subject"
+    "allow-reopen-subject",
+    "allow-confirm-triage"
   ]
 }

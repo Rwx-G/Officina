@@ -4,8 +4,10 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { Board } from "./generated/Board";
+import type { ConfirmItem } from "./generated/ConfirmItem";
 import type { FocusOutcome } from "./generated/FocusOutcome";
 import type { IpcError } from "./generated/IpcError";
+import type { ItemAnswer } from "./generated/ItemAnswer";
 import type { RegistryView } from "./generated/RegistryView";
 import type { RelayView } from "./generated/RelayView";
 import type { SubjectOrigin } from "./generated/SubjectOrigin";
@@ -106,6 +108,12 @@ export function archiveSubject(subject: number, routine: boolean): Promise<void>
 /** Reopens an archived subject as `to_resume` (AD-48). */
 export function reopenSubject(subject: number): Promise<void> {
   return invoke("reopen_subject", { subject });
+}
+
+/** Confirms triage rows in one batch (AD-49): each item carries the row's
+ *  key and the proposal shown; each is answered on its own. */
+export function confirmTriage(items: ConfirmItem[]): Promise<ItemAnswer[]> {
+  return invoke<ItemAnswer[]>("confirm_triage", { items });
 }
 
 export function getBoard(): Promise<Board | null> {

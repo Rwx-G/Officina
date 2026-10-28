@@ -20,6 +20,7 @@ const COMMANDS: &[&str] = &[
     "file_sessions",
     "archive_subject",
     "reopen_subject",
+    "confirm_triage",
 ];
 
 fn main() {

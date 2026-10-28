@@ -4,7 +4,9 @@
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 import { emit } from "@tauri-apps/api/event";
 import type { Board } from "./lib/generated/Board";
+import type { ConfirmItem } from "./lib/generated/ConfirmItem";
 import type { IpcError } from "./lib/generated/IpcError";
+import type { ItemAnswer } from "./lib/generated/ItemAnswer";
 import type { RegistryView } from "./lib/generated/RegistryView";
 import type { RelayView } from "./lib/generated/RelayView";
 
@@ -57,6 +59,8 @@ export function installE2eMock(): void {
           return window.__officinaRegistry ?? null;
         case "list_archived":
           return window.__officinaArchived ?? [];
+        case "confirm_triage":
+          return confirmTriage((args as { items: ConfirmItem[] }).items);
         default:
           if (AUTHOR_COMMANDS.includes(cmd)) return author(cmd);
           return null;
@@ -87,6 +91,17 @@ function author(cmd: string): Promise<number | null> {
     return Promise.reject(error);
   }
   return Promise.resolve(cmd === "create_subject" ? 1 : null);
+}
+
+/** Mirrors the collector's answer to `confirm_triage` (AD-49): each item is
+ *  answered on its own, as the test sets it in `__officinaConfirmOutcome`
+ *  by key, else confirmed with the verdict sent; a test shows the outcome
+ *  on screen by pushing the next registry view. */
+function confirmTriage(items: ConfirmItem[]): ItemAnswer[] {
+  return items.map((item) => ({
+    key: item.key,
+    outcome: window.__officinaConfirmOutcome?.[item.key] ?? { kind: "confirmed", subject: 0, verdict: item.verdict },
+  }));
 }
 
 /** Mirrors `authority::approve_catalogue`: approves only the hash the
