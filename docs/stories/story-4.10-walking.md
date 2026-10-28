@@ -1,6 +1,6 @@
 # Story 4.10: Walking
 
-**Status:** Approved
+**Status:** Review
 
 ## Story
 
@@ -27,13 +27,13 @@ so that I enjoy the movement and follow who went where, while nothing moves once
 
 ## Tasks
 
-- [ ] `lib/view.svelte.ts` (`walking`), `WalkingSwitch.svelte`, `Header.svelte` (AC 1)
-- [ ] The navigation graph in `places.ts`; `paths.ts`; their tests (AC 2, 3)
-- [ ] `mover.ts` and its tests; `Scene.svelte` hosts it between the layout and `objects.ts` (AC 4, 9)
-- [ ] `objects.ts`: hysteresis for moving figures; halos only on arrival in `SceneHalos.svelte` (AC 5, 6)
-- [ ] `eslint.config.js` override and its `lint.test.ts` case (AC 12)
-- [ ] `walk.spec.ts`; `scene.spec.ts` and `modes.spec.ts` cases (AC 1, 7-11, 13)
-- [ ] Update `CHANGELOG.md` and the README (AC 14)
+- [x] `lib/view.svelte.ts` (`walking`), `WalkingSwitch.svelte`, `Header.svelte` (AC 1)
+- [x] The navigation graph in `places.ts`; `paths.ts`; their tests (AC 2, 3)
+- [x] `mover.ts` and its tests; `Scene.svelte` hosts it between the layout and `objects.ts` (AC 4, 9)
+- [x] `objects.ts`: hysteresis for moving figures; halos only on arrival in `SceneHalos.svelte` (AC 5, 6)
+- [x] `eslint.config.js` override and its `lint.test.ts` case (AC 12)
+- [x] `walk.spec.ts`; `scene.spec.ts` and `modes.spec.ts` cases (AC 1, 7-11, 13)
+- [x] Update `CHANGELOG.md` and the README (AC 14)
 
 ## Dev Notes
 
@@ -54,10 +54,75 @@ so that I enjoy the movement and follow who went where, while nothing moves once
 
 ### Debug Log
 
+- The graph (AC 2) links story 4.6's spots, never the prototype's old list. Each room keeps the prototype's door, halls and aisle stops; a lounge or alert room spot links to the nearest of its room's halls (the prototype assigned each by hand, and its spots moved in 4.6); the reception visitors link to the hub and the door, the queue's three inside places to the door, an office's desks and chip spot to the nearest aisle stop. The lounge's `H6` hall is dropped: it served the side sofa's seats, which 4.6 removed. The queue's corridor places are corridor nodes of the chain, as in the prototype. "Every spot linked to its room's door" is read as: reached from its door through its own room's nodes only; the test checks exactly that.
+- AC 3's "from the nearer of a walker's previous and next node" is implemented as the prototype's `planRoute`: the start whose distance from the walker plus the route from it is shorter, so a walker turns back rather than walk on and return. The test asserts that rule.
+- Walking marks: a figure on its way shows no ticket, desk badge, hand or ring, only the question mark, as the prototype's `poseOf` (the marks belong to the place it walks to).
+- Departures not settled by the story, decided here (recorded as D-531): with walking off, a new session fades in at its place and an ended one fades out where it stands (a straight glide from or to the entrance would cross walls); a key moving between a place and a group (a full room, More offices) fades in or out where it stands, since it neither entered nor left the board; a layout received while the window is hidden places at once, as reduced motion does (D-502's intent).
+- Found by the e2e: a seated figure leaving its seat jumped back to the seat's floor point (24 px). It now leaves from where it is drawn (`mover.test.ts > a seated figure walks off from its seat, without a jump`).
+- `objects.ts` takes the mover's frames; a figure at rest takes its exact index among statics (story 4.7's rule), a moving one the hysteresis (AD-171). `restingFrames(layout)` is the mover's output when nobody walks; `objects.test.ts` uses it.
+- Halos (AC 6): the mover tells the scene which keys are on their way; `SceneHalos` leaves them out. Same `(key, enteredAt)` key, so the memo keeps the phase.
+- The lint (AC 12): the scene's restricted names live in `eslint.config.js` as lists, and the mover's override removes `requestAnimationFrame`, `cancelAnimationFrame` and `performance.now` from them; `cancelAnimationFrame` joins the scene's restricted globals so its exemption means something.
+- The e2e: `sceneSettled` runs the installed clock ahead in 5 s steps while `data-moving` is `1` (a walk across six columns lasts about 15 s at 1.9 tiles/s); story 4.7's "a changed board places the figure at its new place at once" now runs under reduced motion; story 4.8's "a figure's target is at its new place as soon as the board changes" settles through `sceneSettled`.
+- Header (D-517, D-526): the toggle is the first of the right-aligned buttons. At 1400 x 900 and 1920 x 1001, the relay's toggle shown, its appearance moves no gauge and no button and the header keeps one line. At 1000 x 760, below the scene's minimum area, the header already spans several lines and, with the relay's toggle shown, the toggle's room wraps the buttons under the gauges (the gauges keep their places). Recorded in D-531; `modes.spec.ts` asserts the gauges only at that width.
+- AC 10 is proved on story 4.8's real targets (merged before recording): the target's button is at the destination from the first stepped frame while the figure is still near its old place, and a click there reaches no figure.
+
 ### Completion Notes
 
+AC to test:
+
+- AC 1: Playwright `app/e2e/modes.spec.ts > walking is on by default`, `> the walking toggle shows in Scene mode only` (also: its appearance moves no gauge or button), `> the walking setting survives a reload`; Vitest `app/src/lib/view.test.ts > a stored view without walking reads as walking on`, `> the walking setting is stored with the mode and the theme and read back`; `app/e2e/stable-size.spec.ts > walking toggle keeps its box and moves nothing after it` and the sceneMode coverage case.
+- AC 2: Vitest `app/src/lib/scene/places.test.ts > every spot is reachable from the exit`, `> each door links its room to the corridor`, `> the corridor nodes are chained in gx order` (each for every `COLUMN_COUNTS`), `> the same column count gives the same graph`.
+- AC 3: Vitest `app/src/lib/scene/paths.test.ts > a route follows graph edges`, `> a route from mid-walk starts at the nearer node`, `> smoothing keeps both ends and stays within the corner radius`, `> the same input gives the same route`.
+- AC 4: Vitest `app/src/lib/scene/mover.test.ts`, each case named in the AC, plus `> a key that leaves and returns turns back on its way out`, `> a seat is taken after a pause, sliding in`, `> a seated figure walks off from its seat, without a jump`, `> turning walking off mid-walk places the walkers`.
+- AC 5: Vitest `app/src/lib/scene/objects.test.ts > a moving figure's index among statics changes only past the hysteresis` (fails with the hysteresis removed), `> only figure nodes move, and only when their neighbour changed`.
+- AC 6: Vitest `app/src/components/scene/scene.test.ts > a walking employee has no halo until it arrives` (fails with the transit filter removed).
+- AC 7: Playwright `app/e2e/walk.spec.ts > a walking figure stays one stable node`, `> no CSS animation runs inside a walking figure`, `> the frame loop stops after arrival`.
+- AC 8: Playwright `walk.spec.ts > a new session walks in from the entrance and an ended one walks out`, `> a reload places everyone at once`.
+- AC 9: Playwright `walk.spec.ts > walking off glides in under 400 ms`, `> reduced motion places at once`, `> turning walking off mid-walk places the walkers`; and D-502 on the real window, `> a hidden window places every walker at once`.
+- AC 10: Playwright `app/e2e/scene.spec.ts > a walking figure's target is at its destination from the first frame`, on story 4.8's layer 5.
+- AC 11: Playwright `scene.spec.ts > nothing in the scene changes while the payloads are unchanged`, unchanged, `openScene` waiting for `data-moving="0"`.
+- AC 12: `pnpm lint`; Vitest `app/src/lib/scene/lint.test.ts > the mover alone may use the frame loop and performance.now`, and the existing case, which now also covers files beside and named like the mover.
+- AC 13: `modes.spec.ts > walking is on by default`; story 4.14's AD-71 walking run is the fallback's trigger.
+- AC 14: `CHANGELOG.md` `[Unreleased]` Added (walking and the toggle); README "The scene (v0.4, in progress)": a Walking section (walking, walking off, reduced motion, arrivals and departures through the entrance).
+
+Gates run: `pnpm check`, `pnpm lint`, `pnpm test` (241), `pnpm build`, `cargo test -p officina-app`, the whole Playwright suite with `--repeat-each=3` (720 passed, 3 skipped: the baseline case of story 4.7, D-508).
+
+Open: walking's CPU cost on the workstation (AD-71's walking run, D-515) is story 4.14's; the header wrap at 1000 x 760 with the relay in use is recorded in D-531.
+
 ## File List
+
+- `CHANGELOG.md` (modified)
+- `README.md` (modified)
+- `app/e2e/fixtures.ts` (modified)
+- `app/e2e/modes.spec.ts` (modified)
+- `app/e2e/scene.spec.ts` (modified)
+- `app/e2e/stable-size.spec.ts` (modified)
+- `app/e2e/walk.spec.ts` (new)
+- `app/eslint.config.js` (modified)
+- `app/src/App.svelte` (modified)
+- `app/src/components/Header.svelte` (modified)
+- `app/src/components/WalkingSwitch.svelte` (new)
+- `app/src/components/scene/Scene.svelte` (modified)
+- `app/src/components/scene/SceneHalos.svelte` (modified)
+- `app/src/components/scene/SceneObjects.svelte` (modified)
+- `app/src/components/scene/scene.test.ts` (modified)
+- `app/src/lib/scene/lint.test.ts` (modified)
+- `app/src/lib/scene/mover.ts` (new)
+- `app/src/lib/scene/mover.test.ts` (new)
+- `app/src/lib/scene/objects.ts` (modified)
+- `app/src/lib/scene/objects.test.ts` (modified)
+- `app/src/lib/scene/paths.ts` (new)
+- `app/src/lib/scene/paths.test.ts` (new)
+- `app/src/lib/scene/places.ts` (modified)
+- `app/src/lib/scene/places.test.ts` (modified)
+- `app/src/lib/scene/rig.ts` (modified)
+- `app/src/lib/view.svelte.ts` (modified)
+- `app/src/lib/view.test.ts` (modified)
+- `docs/stories/sprint-status.yaml` (modified)
+- `docs/stories/story-4.10-walking.md` (modified)
 
 ## Change Log
 
 - 2026-10-28 created after the plan challenge (D-497), from the walking parts of the former stories 4.5 (graph and paths) and 4.6 (mover, walk cycle, hysteresis, fades, walking off, reduced motion, the stable-figures e2e, the lint override), with the hidden-window rule (D-502) and no prototype gate (D-500)
+- 2026-10-28 implemented: navigation graph and routes, the mover, depth hysteresis, halos on arrival, the Walking toggle, the lint override; every AC proved, moved to Review
+- 2026-10-28 recovered from the killed run's worktree and replayed on main after story 4.13 (the dark theme): `ViewState` holds both `theme` and `walking`, the header both controls; D-531 records the choices made under delegation
