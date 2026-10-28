@@ -479,6 +479,18 @@ A call is refused before anything starts, and spends nothing, when `claude` reso
 
 **Turning itself off.** After each confirmation of one of its proposals, the model is judged on its last 50 confirmed proposals: from 20 on, if it was right less often than `to_resume` would have been, it turns itself off, and the panel says why. Turning it on again then needs a newer dry run that wins. With `no_excerpts`, or `claude` a shim, it cannot be called: it proposes nothing and cannot be turned on.
 
+## The scene (v0.4, in progress)
+
+v0.4 draws the board's sessions as the employees of a small company. The parts that already ship:
+
+### The alert
+
+A session that waits for you is **in alert** when its project is marked `priority = "high"` in the floor file, or when it has waited for you at least `[alert] after_minutes` (10 by default). A wait whose start Officina did not see, and a session that waits on a relay approval alone, never escalate by time; a high-priority project still alerts at once.
+
+While anyone is in alert, a band under the header, in every view, names the first one, its project, what it waits on and why, and how many more; it has no dismiss and leaves when nobody is in alert any more. The taskbar button carries the waiting count on an amber badge ("9+" above nine), red while anyone is in alert, and flashes once when a session newly enters alert, until you bring the window forward. The window's title says the same in words. There is no toast, no sound, and the theme never changes.
+
+When Claude Code's session list cannot be read, Officina keeps the last known alerts rather than clearing them: the band ends with "Last known state: data unknown." and the title says "data unknown", until fresh data places each session again.
+
 ## Command line
 
 | Command | Purpose |

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render } from "@testing-library/svelte";
+import AlertBand from "./AlertBand.svelte";
 import ApprovalCard from "./ApprovalCard.svelte";
 import Gauge from "./Gauge.svelte";
 import { tick } from "svelte";
@@ -14,7 +15,10 @@ import * as ipc from "../lib/ipc";
 import { RegistryStore, refusalText } from "../lib/registry.svelte";
 import { AUTHOR_REFUSAL_TEXT, LIVE_STATE_TEXT, REASON_TEXT } from "../lib/registry-text";
 import { RELAY_TOGGLE_TEXT } from "../lib/relay-text";
+import { alertedCards, CAUSE_TEXT, causeText, LAST_KNOWN } from "../lib/alert";
 import type { ApprovalView } from "../lib/generated/ApprovalView";
+import type { Board } from "../lib/generated/Board";
+import { fixturesOf } from "../../e2e/fixture-index";
 import type { AuthorRefusal } from "../lib/generated/AuthorRefusal";
 import type { Card } from "../lib/generated/Card";
 import type { Column } from "../lib/generated/Column";
@@ -581,5 +585,72 @@ describe("refusalText", () => {
     }
     expect(refusalText({ code: "timeout", message: "too slow", refusal: null })).toBe("too slow");
     expect(refusalText(new Error("boom"))).toBe("Error: boom");
+  });
+});
+
+describe("AlertBand", () => {
+  /** A scene fixture board, read through the fixture index (D-181). */
+  function sceneBoard(name: string): Board {
+    const found = fixturesOf<Board>("board").find((f) => f.name === name);
+    if (!found) throw new Error(`no fixture ${name}: run pnpm e2e:fixtures`);
+    return found.data;
+  }
+
+  it("AlertBand renders session text as text", () => {
+    const board = sceneBoard("scene-alert");
+    const hostile = `<img src=x onerror="window.__officinaXss = 1">`;
+    const first = alertedCards(board)[0]!;
+    const named = {
+      ...board,
+      columns: {
+        ...board.columns,
+        needs_you: board.columns.needs_you.map((c) => (c.key === first.key ? { ...c, name: hostile } : c)),
+      },
+    };
+    const { getByTestId, container } = render(AlertBand, { board: named, nowMs: board.generated_at_ms });
+    expect(getByTestId("alert-band-text").textContent).toContain(hostile);
+    expect(container.querySelector("img")).toBeNull();
+  });
+
+  it("AlertBand words both causes", () => {
+    const board = sceneBoard("scene-alert");
+    const causes = new Set(alertedCards(board).map((c) => c.scene!.alert));
+    expect([...causes].sort()).toEqual(Object.keys(CAUSE_TEXT).sort());
+    for (const card of alertedCards(board)) {
+      const words = causeText(card, board.generated_at_ms);
+      expect(words.startsWith(CAUSE_TEXT[card.scene!.alert!])).toBe(true);
+      if (card.scene!.alert === "waited") {
+        const minutes = Math.floor((board.generated_at_ms - card.scene!.waiting_since_ms!) / 60_000);
+        expect(words).toBe(`${CAUSE_TEXT.waited} ${minutes} min`);
+      }
+    }
+    const { getByTestId } = render(AlertBand, { board, nowMs: board.generated_at_ms });
+    expect(getByTestId("alert-band-text").textContent).toContain(", and 1 more.");
+  });
+
+  it("AlertBand marks a last known alert on unknown data", () => {
+    const board = sceneBoard("scene-alert");
+    const first = alertedCards(board)[0]!;
+    const unknown = {
+      ...board,
+      columns: {
+        ...board.columns,
+        needs_you: board.columns.needs_you.map((c) =>
+          c.key === first.key ? { ...c, scene: { ...c.scene!, zone: "unknown" as const } } : c,
+        ),
+      },
+    };
+    const { getByTestId } = render(AlertBand, { board: unknown, nowMs: board.generated_at_ms });
+    expect(getByTestId("alert-band-text").textContent!.endsWith(LAST_KNOWN)).toBe(true);
+    cleanup();
+    const fresh = render(AlertBand, { board, nowMs: board.generated_at_ms });
+    expect(fresh.getByTestId("alert-band-text").textContent).not.toContain(LAST_KNOWN);
+  });
+
+  it("AlertBand is absent without an alert", () => {
+    const board = sceneBoard("scene-c");
+    expect(board.alert_count).toBe(0);
+    const { queryByTestId } = render(AlertBand, { board, nowMs: board.generated_at_ms });
+    expect(queryByTestId("alert-band")).toBeNull();
   });
 });

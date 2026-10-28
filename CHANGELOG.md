@@ -8,6 +8,13 @@ project uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- The alert (v0.4, in progress): a band under the header, in every view,
+  names the first session in alert, its project, what it waits on and why
+  (a high-priority project, or waiting N minutes), and how many more; no
+  dismiss, no toast, no theme change. The taskbar badge turns to the alert
+  colour and the button flashes once per session newly in alert; the title
+  adds the alert count, and "data unknown" while an alert is the last one
+  known. `--color-alert` and `--color-on-alert` join the tokens.
 - Floor keys of the scene (v0.4, in progress): `[[project]] priority`
   (`normal` by default, or `high`) and `[alert] after_minutes` (1 to 1440,
   10 by default), valid in either schema. They authorise nothing, so they

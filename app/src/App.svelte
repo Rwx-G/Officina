@@ -7,6 +7,7 @@
   import { REGISTRY_STATE_TEXT } from "./lib/registry-text";
   import { clock, hours } from "./lib/time";
   import Header from "./components/Header.svelte";
+  import AlertBand from "./components/AlertBand.svelte";
   import BoardColumn from "./components/BoardColumn.svelte";
   import RelayBanners from "./components/RelayBanners.svelte";
   import RelayView from "./components/RelayView.svelte";
@@ -56,6 +57,7 @@
 <svelte:window onkeydown={onKey} />
 
 <Header {store} {relay} {registry} {view} onView={(next) => (chosenView = next)} />
+<AlertBand {board} nowMs={store.nowMs} />
 
 {#if view === "relay"}
   <RelayView store={relay} nowMs={store.nowMs} />
