@@ -156,8 +156,9 @@ fn doctor_with_a_guarded_project_requires_every_gated_tool() {
 
 /// FR-13, D-80: Officina writes nothing under the Claude config dir nor
 /// into `~/.claude.json`, whatever command runs, with the window's
-/// collector running beside them, ingesting into its registry, and a
-/// triage call made through the fake (story 3.9 AC 12).
+/// collector running beside them, ingesting into its registry and sending a
+/// row to the enabled model through the fake (story 3.11, story 3.12
+/// AC 6), and a dry run's call made through the fake (story 3.9 AC 12).
 #[test]
 fn no_command_writes_under_the_claude_config_dir() {
     let env = TestEnv::new();
@@ -169,6 +170,44 @@ fn no_command_writes_under_the_claude_config_dir() {
     env.write_agents(
         r#"[{"pid":1,"cwd":"C:/x","kind":"interactive","startedAt":1,"sessionId":"s","status":"busy"}]"#,
     );
+    // A row the window's model is sent: a session ended after a prompt,
+    // and the model on after a winning dry run.
+    for payload in [
+        r#"{"hook_event_name":"UserPromptSubmit","session_id":"t","cwd":"C:/x","prompt":"Ship it FAKE-VERDICT:finished"}"#,
+        r#"{"hook_event_name":"Stop","session_id":"t","cwd":"C:/x","last_assistant_message":"Shipped."}"#,
+        r#"{"hook_event_name":"SessionEnd","session_id":"t","cwd":"C:/x","reason":"prompt_input_exit"}"#,
+    ] {
+        assert!(env.run(&["hook"], payload.as_bytes()).status.success());
+    }
+    {
+        let (events, home) = (env.events_dir(), env.officina_home());
+        let mut writer = officina_host::registry::store::open_writer(&home, &[], now_ms())
+            .writer()
+            .unwrap();
+        writer
+            .ingest(
+                &officina_host::registry::ingest::IngestContext {
+                    events_dir: &events,
+                    officina_home: &home,
+                    projects: &[],
+                    no_excerpts: false,
+                },
+                now_ms(),
+            )
+            .unwrap();
+        writer
+            .record_evaluation(
+                &officina_core::registry::dry_run::Tally {
+                    cases: 30,
+                    model_correct: 20,
+                    default_correct: 10,
+                    ..Default::default()
+                },
+                now_ms() - 60_000,
+            )
+            .unwrap();
+        writer.set_triage_model(true, now_ms()).unwrap().unwrap();
+    }
     let before = fingerprint(&config);
     let claude_json_before = std::fs::read(&claude_json).unwrap();
 
@@ -183,9 +222,13 @@ fn no_command_writes_under_the_claude_config_dir() {
     };
     let fake = common::fake_claude_in(
         &env.root.path().join("bin"),
-        &serde_json::json!({"fixture": env.fixture()}),
+        &serde_json::json!({"fixture": env.fixture(), "mode": "triage"}),
     );
-    let collector = Collector::from_parts(paths, LoadedFloor::default(), Some(fake));
+    let collector = Collector::from_parts(paths, LoadedFloor::default(), Some(fake))
+        .with_triage_base_env(vec![(
+            "SYSTEMROOT".to_owned(),
+            std::env::var("SYSTEMROOT").unwrap_or_default(),
+        )]);
     let (sink, emitted) = common::sink(|_| {});
     let watch = spawn(collector, sink).unwrap();
     emitted
@@ -283,8 +326,23 @@ fn no_command_writes_under_the_claude_config_dir() {
     );
 
     // Long enough for the collector to see the hook and quota writes, spawn
-    // `claude` again and run its follow-up refresh.
+    // `claude` again and run its follow-up refresh, and for its model call
+    // to come back.
     std::thread::sleep(Duration::from_secs(2).saturating_sub(running_since.elapsed()));
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let answered = || {
+        officina_host::registry::store::open_reader(&env.officina_home(), &[])
+            .ok()
+            .and_then(|reader| reader.model_facts(None).ok())
+            .is_some_and(|facts| !facts.answers.is_empty())
+    };
+    while !answered() {
+        assert!(
+            Instant::now() < deadline,
+            "the window's model call never came back"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
     watch.sender.send(CollectorMsg::Shutdown).unwrap();
     watch.thread.join().unwrap();
 
