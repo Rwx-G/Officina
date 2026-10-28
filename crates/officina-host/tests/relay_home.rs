@@ -42,6 +42,7 @@ fn paths_follow_the_relay_file_table() {
         relative(home.known_projects_file()),
         "relay/known-projects.json"
     );
+    assert_eq!(relative(home.final_roots_file()), "relay/final-roots.json");
     assert_eq!(relative(home.journal_dir()), "journal");
     assert_eq!(relative(home.journal_lock_file()), "journal/.lock");
     assert_eq!(relative(home.default_floor()), "floor.toml");

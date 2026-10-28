@@ -11,11 +11,15 @@
 //! `subst` drive leading into a guarded project, or into the Officina home,
 //! reads as the folder it leads to. A path that cannot be opened keeps its
 //! normalised string; the folders are looked up as given and as resolved.
+//! The guarded projects' roots are resolved the same way, once per set of
+//! roots ([`final_roots`]), so a floor that writes a root through an alias
+//! (a temp folder under an 8.3 user name) matches a folder given in full.
 //!
 //! It is containment, not the authority: an internal fault gives no
 //! decision (fail open, AD-28), while an input it cannot read makes it
 //! stricter (D-15). `officina run` fails closed on its own.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io;
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -24,7 +28,6 @@ use std::path::{Path, PathBuf};
 use officina_core::events::excerpt;
 use officina_core::floor::{parse_floor, requests_no_excerpts};
 use officina_core::quota::normalise_path;
-use officina_core::relay::HOME_DIR_NAME;
 use officina_core::relay::gate::{
     Deny, FloorInput, Offer, SnapshotInput, ToolRule, containment, decide_call, decide_file_write,
     deny_reason, file_tool_field, normalise_cwd, protected_dirs, tool_rule,
@@ -32,9 +35,13 @@ use officina_core::relay::gate::{
 use officina_core::relay::journal::{
     COMMAND_EXCERPT_CHARS, GateDenied, GateError, GateFault, JournalEntry,
 };
+use officina_core::relay::{HOME_DIR_NAME, sha256_hex};
+
+use serde::{Deserialize, Serialize};
 
 use super::home::{ApprovedState, RelayHome};
 use super::journal;
+use crate::files::atomic_write;
 use crate::paths::{excerpts_disabled_by_env, user_home};
 
 /// The hook event the gate answers (AD-26).
@@ -137,6 +144,58 @@ pub fn final_dir(dir: &str) -> Option<String> {
         .map(|path| path.to_string_lossy().into_owned())
 }
 
+/// `relay/final-roots.json`: the guarded roots it was written for, by
+/// hash, and the final path of each one that opened.
+#[derive(Debug, Serialize, Deserialize)]
+struct FinalRoots {
+    key: String,
+    finals: BTreeMap<String, String>,
+}
+
+/// The final path of each guarded root by an opened handle (D-173), taken
+/// from `relay/final-roots.json` when it was written for the same roots,
+/// else resolved and written there: the handles are opened once per set of
+/// roots, not on every call (AD-28 budget), and a root on a share that does
+/// not answer delays one call, not each. A root that cannot be opened has
+/// no entry and keeps its written form. The file is as writable as every
+/// relay file (AD-25), so the gate adds what it holds to guarded projects
+/// only ([`officina_core::relay::gate::Containment::add_final_roots`]).
+pub fn final_roots(home: &RelayHome, roots: &BTreeSet<&str>) -> BTreeMap<String, String> {
+    if roots.is_empty() {
+        return BTreeMap::new();
+    }
+    let key = sha256_hex(
+        roots
+            .iter()
+            .copied()
+            .collect::<Vec<_>>()
+            .join(
+                "
+",
+            )
+            .as_bytes(),
+    );
+    let file = home.final_roots_file();
+    if let Some(cached) = fs::read(&file)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<FinalRoots>(&bytes).ok())
+        .filter(|cached| cached.key == key)
+    {
+        return cached.finals;
+    }
+    let finals: BTreeMap<String, String> = roots
+        .iter()
+        .filter_map(|root| Some(((*root).to_owned(), final_dir(root)?)))
+        .collect();
+    if let Ok(bytes) = serde_json::to_vec(&FinalRoots {
+        key,
+        finals: finals.clone(),
+    }) {
+        let _ = atomic_write(&file, &bytes);
+    }
+    finals
+}
+
 /// `path` with its deepest folder that opens resolved by handle and the
 /// rest joined as written (D-173): what a file a tool is about to create
 /// resolves to. The path itself when no part of it opens.
@@ -220,7 +279,9 @@ pub fn evaluate(home: &RelayHome, call: &ToolCall, project_dir: Option<&str>) ->
         home.read_known_projects()
     };
 
-    let contained = containment(floor, snapshot, known.as_ref());
+    let mut contained = containment(floor, snapshot, known.as_ref());
+    let finals = final_roots(home, &contained.guarded_roots());
+    contained.add_final_roots(&finals);
     let detail_of = |fault: GateFault| -> String {
         let floor_shown = floor_path.display();
         match (fault, &parsed, &approved) {
@@ -566,6 +627,76 @@ mod tests {
             found.deny.kind,
             officina_core::relay::gate::DenyKind::RelayStateWrite
         );
+    }
+
+    /// The hosted runner's failure of story 2.14 (its temp folder sits under
+    /// an 8.3 user name): a floor naming the guarded project by the short
+    /// form of a long path guards the folder given in long form, and the
+    /// reverse; both sides of the match are final paths.
+    #[cfg(windows)]
+    #[test]
+    fn a_short_root_matches_a_long_folder_and_the_reverse() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("Supervision Platform Project");
+        fs::create_dir_all(project.join("roles")).unwrap();
+        let short = cmd(&format!(
+            "for %I in (\"{}\") do @echo %~sI",
+            project.display()
+        ));
+        if !short.contains('~') {
+            println!("skipped: this volume makes no 8.3 short names");
+            return;
+        }
+        let long = fs::canonicalize(&project).unwrap();
+        let long = long.to_string_lossy();
+        let long = long.trim_start_matches(r"\\?\");
+        assert!(!long.contains('~'), "{long}");
+
+        let home = home_guarding(dir.path(), Path::new(&short));
+        let found = evaluate(&home, &bash_in(&Path::new(long).join("roles")), None);
+        assert_eq!(found.deny.map(|d| d.project), Some("lab".to_owned()));
+
+        let home = home_guarding(dir.path(), Path::new(long));
+        let found = evaluate(&home, &bash_in(&Path::new(&short).join("roles")), None);
+        assert_eq!(found.deny.map(|d| d.project), Some("lab".to_owned()));
+    }
+
+    /// The roots are resolved once per set of roots: a second call reads
+    /// `relay/final-roots.json` back, and another set resolves again.
+    /// Windows only, like every resolution here: [`final_dir`] reads a folder
+    /// as Windows names it, case folded.
+    #[cfg(windows)]
+    #[test]
+    fn final_roots_are_resolved_once_per_set_of_roots() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = RelayHome::new(dir.path().join("officina-home"), None);
+        let lab = dir.path().join("Lab");
+        let other = dir.path().join("Other");
+        fs::create_dir_all(&lab).unwrap();
+        fs::create_dir_all(&other).unwrap();
+        let root = lab.to_string_lossy().into_owned();
+        let resolved = fs::canonicalize(&lab)
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        let roots = BTreeSet::from([root.as_str()]);
+        assert_eq!(final_roots(&home, &roots).get(&root), Some(&resolved));
+
+        let file = home.final_roots_file();
+        let mut cached: FinalRoots = serde_json::from_slice(&fs::read(&file).unwrap()).unwrap();
+        cached
+            .finals
+            .insert(root.clone(), "C:/path/to/elsewhere".to_owned());
+        fs::write(&file, serde_json::to_vec(&cached).unwrap()).unwrap();
+        assert_eq!(
+            final_roots(&home, &roots).get(&root).map(String::as_str),
+            Some("C:/path/to/elsewhere"),
+            "read back, not resolved again"
+        );
+
+        let other_root = other.to_string_lossy().into_owned();
+        let both = BTreeSet::from([root.as_str(), other_root.as_str()]);
+        assert_eq!(final_roots(&home, &both).get(&root), Some(&resolved));
     }
 
     #[test]

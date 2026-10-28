@@ -224,9 +224,9 @@ project uses [Semantic Versioning](https://semver.org/).
   one reassigned.
 - Once a project is guarded, the file tools (Write, Edit and the others of
   `FILE_TOOLS`) cannot write under Officina's home from any project, and the
-  hook resolves the session's folders and a file tool's target by handle,
-  so an 8.3 name, a junction, a link or a `subst` drive cannot lead around
-  the gate.
+  hook resolves the session's folders, a file tool's target and the
+  guarded projects' own paths by handle, so an 8.3 name, a junction, a
+  link or a `subst` drive cannot lead around the gate, on either side.
 - The window records its own decisions and lists, in the Relay view, an
   approval file, a run, an approved catalogue or a missing stop flag it
   cannot account for; `officina doctor` fails until the author acknowledges

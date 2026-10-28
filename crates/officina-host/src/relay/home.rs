@@ -115,6 +115,12 @@ impl RelayHome {
         self.relay_dir().join("known-projects.json")
     }
 
+    /// `relay/final-roots.json`: the final path of each guarded project
+    /// root, which the gate resolves once per set of roots (D-173).
+    pub fn final_roots_file(&self) -> PathBuf {
+        self.relay_dir().join("final-roots.json")
+    }
+
     /// `relay/decisions.json`: the window's record of its own decisions
     /// (D-173).
     pub fn decisions_file(&self) -> PathBuf {

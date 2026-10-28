@@ -9,7 +9,7 @@
 //! write lifts containment alone. The host reads those files and the payload
 //! and journals each deny; this module only decides, from text.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
@@ -836,6 +836,42 @@ impl Containment {
         })
     }
 
+    /// The roots of the guarded projects of every source, as written, each
+    /// once: what the host resolves to final paths (D-173).
+    pub fn guarded_roots(&self) -> BTreeSet<&str> {
+        self.sources
+            .iter()
+            .flat_map(|source| &source.projects)
+            .filter(|project| project.autonomy == Autonomy::Guarded)
+            .map(|project| project.path.as_str())
+            .collect()
+    }
+
+    /// Looks each guarded project up at the final path of its root too
+    /// (D-173): `finals` maps a root as written to the path an opened handle
+    /// gives, so a root written through an 8.3 name, a junction or a `subst`
+    /// drive matches a folder resolved the same way. Guarded projects only:
+    /// a guarded root added anywhere can only make the gate stricter, so a
+    /// `finals` read from a file a session can write cannot loosen it. A
+    /// root without a final path keeps its written form alone.
+    pub fn add_final_roots(&mut self, finals: &BTreeMap<String, String>) {
+        for source in &mut self.sources {
+            let resolved: Vec<ProjectRoot> = source
+                .projects
+                .iter()
+                .filter(|project| project.autonomy == Autonomy::Guarded)
+                .filter_map(|project| {
+                    let path = finals.get(&project.path)?;
+                    (normalise_cwd(path) != normalise_cwd(&project.path)).then(|| ProjectRoot {
+                        path: path.clone(),
+                        ..project.clone()
+                    })
+                })
+                .collect();
+            source.projects.extend(resolved);
+        }
+    }
+
     /// The guarded project of the first directory any source guards (D-16:
     /// the session's project root or the call's `cwd`), sources in order.
     pub fn guarded_project(&self, dirs: &[&str]) -> Option<&ProjectRoot> {
@@ -1141,6 +1177,41 @@ mod tests {
             broken.faults.is_empty(),
             "a broken floor of a relay never used is the board's error, not the gate's"
         );
+    }
+
+    /// D-173: a guarded root written through an alias matches the folder it
+    /// resolves to once its final path is added, and still matches as
+    /// written; a free project's final path is never added, so a forged one
+    /// cannot carve a free folder out of a guarded project.
+    #[test]
+    fn final_roots_add_to_guarded_projects_only() {
+        let written = floor(
+            "schema = 2\n[[project]]\nname = \"lab\"\npath = \"C:/Users/RUNNER~1/Lab\"\n[[project]]\nname = \"notes\"\npath = \"C:/Notes\"\nautonomy = \"free\"\n",
+        );
+        let mut c = containment(
+            FloorInput::Valid {
+                floor: &written,
+                path: FLOOR_PATH,
+            },
+            SnapshotInput::Missing,
+            None,
+        );
+        let roots: Vec<String> = c.guarded_roots().into_iter().map(str::to_owned).collect();
+        assert_eq!(roots.len(), 1, "{roots:?}");
+        let free_root = resolve_project_path(floor_dir_of(FLOOR_PATH), "C:/Notes");
+        assert!(!roots.contains(&free_root));
+        assert_eq!(name_for(&c, &["C:/Users/runneradmin/Lab/roles"]), None);
+        let finals = BTreeMap::from([
+            (roots[0].clone(), "C:/Users/runneradmin/Lab".to_owned()),
+            (free_root, "C:/Users/runneradmin/Lab/roles".to_owned()),
+        ]);
+        c.add_final_roots(&finals);
+        assert_eq!(
+            name_for(&c, &["C:/Users/runneradmin/Lab/roles/x"]),
+            Some("lab")
+        );
+        assert_eq!(name_for(&c, &[r"C:\Users\RUNNER~1\Lab"]), Some("lab"));
+        assert_eq!(name_for(&c, &["C:/Notes"]), None);
     }
 
     #[test]
