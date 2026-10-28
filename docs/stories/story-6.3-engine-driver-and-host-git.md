@@ -39,7 +39,7 @@ so that no CLI path a session can reach starts a container, no child of Officina
 
 - Requirements: FR-1 (engine, CLI subset), FR-10 (git rule), FR-18 Slice A (engine, `docker.exe`, `git`). Decisions: AD-3, AD-21, AD-51, AD-97, AD-98, AD-111 (resolution and rule), AD-123. Facts: addendum section 1 items 1 to 3, 10, 11, 13, 14. Risks: R60, R61, R63. Epic decisions: D-9, D-22, D-23 (Epic 2); D-64, D-86 (Epic 3); D-124, D-128, D-129, D-135, D-154 (Epic 5); P-50, D-200, D-204 to D-206, D-223, D-224, D-228, D-232, D-238, D-239, D-242, D-243.
 - Seams (D-200): `platform::windows`, `host::git` of D-124 (resolution moves every caller, the tree fingerprint of 2.6 and the meeting of 5.10), `spawn_lint.rs` and the `clippy.toml` of D-128, `SESSION_ENV_REMOVED` (5.2), the collector's `AuthorRequest` (3.5).
-- Waits for: E26, E27.
+- Waits for: the gate 7 and 0 entries.
 - HKLM first because no process running as the author can write it, while `PATH` is whatever started the window (AD-98). The overrides and the Docker CLI's own configuration are the same-user surface R63 accepts; doctor names them (review F40).
 - The launch half's kinds are compiled but unused until stories 6.8 to 6.17 call them; each later story adds its fake engine mode, never a new kind without a case (`every_engine_call_kind_has_a_case` holds at every merge, so all kinds and their cases land here).
 - `GitRule::Workshop` applies to every call that touches a package or the project for the workshop (stories 6.11, 6.13, 6.15, 6.16); the relay's and the meeting's calls keep their own rule.
@@ -64,3 +64,4 @@ so that no CLI path a session can reach starts a container, no child of Officina
 
 - 2026-10-28 created
 - 2026-10-28 reworked after review: `inspect` formatted to state and labels only (F14); `log.showSignature` off, every git call in a job, two new controls (F17); `ContainerRole` and `ContainerVector` declared here, `create` copies a vector (F22); the no-feature test points at a missing path (F35); `officina-git-logger` (F38); doctor names Docker CLI context, plugin dirs and plain TCP (F40); `EngineKey` gains a settings digest (F52); the Linux path of `execute` (F56); `closing_the_job_ends_the_child`
+- 2026-10-29 research-note entries named by subject, no number reserved (D-600)

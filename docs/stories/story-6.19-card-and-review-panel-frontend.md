@@ -17,7 +17,7 @@ so that what I click is what I saw, no worker text can act in the window, and a 
 5. **The store** (AD-122, D-249). `lib/workshop.svelte.ts` holds the review panel's state and approvals in flight, through the `ipc.ts` wrappers and `e2e-mock.ts` answers the backend stories own (6.11, 6.13, 6.15, 6.16; review F33). Proof: `pnpm check`; the Playwright cases above against the mock.
 6. **Never amber for state** (AD-55, D-163). The workshop chip, the "isolated" chip and the "no change" badge never use the attention colour; only a Needs you card does. Proof: Playwright `workshop.spec.ts > chips never use the attention colour` (computed colours compared with `--color-attention` resolved on the document root).
 7. **Documentation** (D-226). README screenshots or text for the card and the review panel; `CHANGELOG.md`. Proof: review.
-8. **Gate 3, window half** (AD-126 row 3, D-202; owner). This is the first story whose window can issue, launch and review a workshop card, so gate 3's window half closes here (review F5): with a build of this story, Build images and Run escape battery through `crates/officina-host/examples/battery_ci.rs` (the window's buttons are story 6.20's), then one launch from the window on a scratch repository whose git-ignored `.claude` holds no hook, a prompt that edits a file, runs `git status` and commits; record the outcome, the commit in the package seen in the review panel, every host in `gateway_summary` and `gateway_refused`, and no dialog or prompt. Proof: research notes entry E31, window half.
+8. **Gate 3, window half** (AD-126 row 3, D-202; owner). This is the first story whose window can issue, launch and review a workshop card, so gate 3's window half closes here (review F5): with a build of this story, Build images and Run escape battery through `crates/officina-host/examples/battery_ci.rs` (the window's buttons are story 6.20's), then one launch from the window on a scratch repository whose git-ignored `.claude` holds no hook, a prompt that edits a file, runs `git status` and commits; record the outcome, the commit in the package seen in the review panel, every host in `gateway_summary` and `gateway_refused`, and no dialog or prompt. Proof: the research notes' gate 3 entry, window half.
 
 ## Tasks
 
@@ -54,3 +54,4 @@ so that what I click is what I saw, no worker text can act in the window, and a 
 
 - 2026-10-28 created
 - 2026-10-28 reworked after review: gate 3's window half closes here (F5); format characters rendered as escapes, with tests that can fail (F26); `ipc.ts` wrappers owned by the backend stories (F33); keyboard launch cases replayed from the injection battery (F34)
+- 2026-10-29 research-note entries named by subject, no number reserved (D-600)

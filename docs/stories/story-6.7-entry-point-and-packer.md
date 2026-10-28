@@ -25,9 +25,9 @@ so that Officina adds nothing to the workspace but its flags, and a killed, stop
 
 ## Dev Notes
 
-- Requirements: FR-6 step 3, FR-7 (the vector runs as the plan says), FR-8 (`timeout`), FR-9, FR-10 as amended (amendment 8). Decisions: AD-108, AD-110 (the packer's half). Facts: E29 (copy into the volume worked, or `in/` is a read-only bind mount, D-203). Risks: R50, R60. Epic decisions: D-200, D-216, D-219, D-224, D-229, D-248.
+- Requirements: FR-6 step 3, FR-7 (the vector runs as the plan says), FR-8 (`timeout`), FR-9, FR-10 as amended (amendment 8). Decisions: AD-108, AD-110 (the packer's half). Facts: the gate 1 entry (copy into the volume worked, or `in/` is a read-only bind mount, D-203). Risks: R50, R60. Epic decisions: D-200, D-216, D-219, D-224, D-229, D-248.
 - Seams (D-200): none; `RunPlan` is story 6.6's.
-- Waits for: E29, E31.
+- Waits for: the gate 1 and 3 entries.
 - Why a packer instead of the entry point packaging at the end (AD-110): a stopped, killed or out-of-memory worker never reaches its last step, and std cannot catch the engine's stop signal.
 - The clone's own configuration still applies in the packer: whatever it makes git run, it runs with no network and no credential, and the host verifies the output (story 6.13, D-218, D-219). The test with a planted hook shows only that the hooks path is neutralised; it does not claim more.
 - `pack` with no commit past the base writes no bundle on purpose: `git bundle create` refuses an empty range, and AD-110's outcome table reads that case as `no_change` or `failed` on the host, never from the packer's word.
@@ -50,3 +50,4 @@ so that Officina adds nothing to the workspace but its flags, and a killed, stop
 
 - 2026-10-28 created
 - 2026-10-28 reworked after review: the packer's branch and base from its arguments, `out` replaced without following a symlink (F48); `run` and `pack` are unix-only, Windows exits 64 (F23); the host's allow-list noted (F1)
+- 2026-10-29 research-note entries named by subject, no number reserved (D-600)

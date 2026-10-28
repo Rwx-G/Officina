@@ -153,15 +153,15 @@ version: v0.6
 # approved: written and approved, implementation not started.
 # Reworked after the story review (review-stories-epic6.md, F1 to F56, all accepted; epic-6-decisions.md P-54 to P-56, D-229 to D-249).
 # Before 6.1 starts, this block is appended to docs/stories/sprint-status.yaml, the only place a story's status is stated (review F28, P-54).
-# Slice 0 (6.1) runs the first half of every gate of architecture-v0.6.md AD-126 and records E26 to E36 (epic-6-decisions.md D-201 to D-203); E37 and E38 are reserved for 6.20 and 6.24, so the next epic starts at E39 (review F29).
-# Gates 7 and 0 (E26, E27) come first: no Slice A story starts before both are recorded (FR-0). If E26 records neither an accepted token nor an available API key, v0.6 stops at Slice 0 (P-52).
-# First halves before the stories that rest on them: E28 before 6.5; E29 before 6.6, 6.7, 6.8; E30 before 6.6, 6.10; E31 before 6.5, 6.6, 6.7, 6.11; E32 before 6.9; E33 before 6.12; E34 before 6.2, 6.6; E35 before 6.22.
+# Slice 0 (6.1) runs the first half of every gate of architecture-v0.6.md AD-126 and records the gate entries (epic-6-decisions.md D-201 to D-203); no E-number is reserved: each entry takes the next free number when recorded and is named by its subject (D-600). The Slice A entry is 6.20's, the use entry 6.24's.
+# Gates 7 and 0 come first: no Slice A story starts before both are recorded (FR-0). If the gate 7 entry records neither an accepted token nor an available API key, v0.6 stops at Slice 0 (P-52).
+# First halves before the stories that rest on them: gate 9 before 6.5; gate 1 before 6.6, 6.7, 6.8; gate 2 before 6.6, 6.10; gate 3 before 6.5, 6.6, 6.7, 6.11; gate 4 before 6.9; gate 5 before 6.12; gate 6 before 6.2, 6.6; gate 8 before 6.22.
 # Needs merged (code only): 6.2, 6.3 and 6.4 are independent; 6.6 needs 6.2, 6.3 and 6.5; 6.7 needs 6.6; 6.8 needs 6.3, 6.4, 6.5 and 6.7; 6.9 needs 6.8; 6.10 needs 6.6 and 6.8; 6.11 needs 6.9 and 6.10; 6.12 needs 6.11; 6.13 needs 6.12; 6.14 and 6.15 need 6.13; 6.16 needs 6.15; 6.17 needs 6.13; 6.18 needs 6.11 to 6.17; 6.19 and 6.20 need 6.18; 6.21 to 6.23 need Slice A; 6.24 needs every other story.
-# Closes on (second halves and records; they close their own story and never block dependent code, D-202): gates 9 and 1 close 6.8 and gate 2 closes 6.10, both driven by crates/officina-host/examples/battery_ci.rs on Docker Desktop; gate 3 closes 6.19, the first story with a workshop Launch (review F5); gate 4 and E37 close 6.20; gate 8 closes 6.22; E38 closes 6.24.
-# Slice A (6.2-6.20: FR-1 to FR-12, FR-14, FR-15, FR-17 without the scene, FR-18 Slice A) is usable alone; 6.20 records it in E37. Slice B (6.21-6.23: FR-13, FR-16, FR-17's scene, FR-18 Slice B).
+# Closes on (second halves and records; they close their own story and never block dependent code, D-202): gates 9 and 1 close 6.8 and gate 2 closes 6.10, both driven by crates/officina-host/examples/battery_ci.rs on Docker Desktop; gate 3 closes 6.19, the first story with a workshop Launch (review F5); gate 4 and the Slice A entry close 6.20; gate 8 closes 6.22; the use entry closes 6.24.
+# Slice A (6.2-6.20: FR-1 to FR-12, FR-14, FR-15, FR-17 without the scene, FR-18 Slice A) is usable alone; 6.20 records it in the Slice A entry. Slice B (6.21-6.23: FR-13, FR-16, FR-17's scene, FR-18 Slice B).
 # Implemented after v0.2 to v0.5; story 2.11 is a hard prerequisite (6.11 reuses its Secret and CredentialStore); each seam has one owning story (epic-6-decisions.md D-200).
 # 6.2 bumps the catalogue format once, with the relay-section hash (P-53, D-244); 6.4 writes the workshop migration whole, the next one relative to main (P-53, D-212).
-# 6.24 closes the PRD after real use and records E38 (owner rule, epic-2-decisions.md P-7, epic-6-decisions.md P-52).
+# 6.24 closes the PRD after real use and records the use entry (owner rule, epic-2-decisions.md P-7, epic-6-decisions.md P-52).
 stories:
   - {id: "6.1", file: story-6.1-workstation-gates.md, slice: "0", status: approved}
   - {id: "6.2", file: story-6.2-floor-keys-and-catalogue-format.md, slice: A, status: approved}
@@ -191,7 +191,7 @@ stories:
 epic: 7
 version: v0.7
 # approved: written and approved, implementation not started.
-# Epic 7's research-note entries are E60 to E79 (epic-7-decisions.md D-301); Epic 6 keeps E26 to E59.
+# Epic 7's research-note entries are E60 to E79 (epic-7-decisions.md D-301); Epic 6 reserves none, its entries taking the next free number (epic-6-decisions.md D-600).
 # Slice 0 is two stories (epic-7-decisions.md P-62): 7.1 records gates 1, 2, 3 and 6 (E60 to E63) before any Slice A story; 7.13 closes Slice A on its own table and records gates 0, 4 and 5 (E64 to E66) and the Slice B entry conditions (D-331).
 # Halves (D-302): gate 6's second half closes 7.3; gate 5's first half is in 7.13, its second half closes 7.17. Gate 4 stops the worker container from outside (D-347).
 # Slice A (7.2-7.12: FR-1 to FR-6, FR-10, FR-11 in shadow, FR-17 and FR-18 without launch controls) launches nothing; Decision has no Launch variant (D-326).
