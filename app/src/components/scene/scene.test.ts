@@ -103,6 +103,13 @@ describe("Scene", () => {
     // The start unknown: the beacon counts from when the card's halo does.
     const unknownStart = alerted("unknown-start", null, 1);
     expect(beaconPair(board([unknownStart]))).toEqual({ key: "unknown-start", enteredAt: unknownStart.last_event_at_ms });
+    // A wait that reached the threshold: the beacon counts from that moment,
+    // so a fresh alert breathes even though its wait is older than two
+    // minutes (D-527).
+    const waited = { ...alerted("waited", 30 * 60_000, 1), scene: { ...first.scene!, alert: "waited" as const, waiting_since_ms: now - 30 * 60_000 } };
+    const late = { ...board([waited]), alert_after_ms: 30 * 60_000 - 1_000 };
+    expect(beaconPair(late)).toEqual({ key: "waited", enteredAt: now - 1_000 });
+    expect(haloMemo.timing("waited", now - 1_000).iterations).toBeGreaterThan(0);
     // No one in alert: no beacon.
     const quiet = render(Scene, { board: board([card("queued", "decision")]) });
     expect(quiet.container.querySelector("[data-beacon]")).toBeNull();

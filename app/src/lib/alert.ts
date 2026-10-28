@@ -36,13 +36,18 @@ export function alertedCards(board: Board): Card[] {
   return [...needs_you, ...your_turn, ...working, ...to_resume, ...done].filter((card) => card.scene?.alert);
 }
 
-/** What the alert room's beacon breathes for (AD-175, D-474): the first
- *  alerted card in board order, keyed on when its wait began, or on when
- *  its halo counts from when that start is unknown; `null` with no alert. */
+/** What the alert room's beacon breathes for (AD-175, D-474 as refined by
+ *  D-527): the first alerted card in board order, keyed on when its alert
+ *  began: the wait's start for a high-priority project, the start plus the
+ *  board's threshold for a wait that reached it, or, the start unknown, when
+ *  its halo counts from; `null` with no alert. */
 export function beaconPair(board: Board): HaloPair | null {
   const first = alertedCards(board)[0];
   if (!first) return null;
-  return { key: first.key, enteredAt: first.scene?.waiting_since_ms ?? haloEnteredAt(first) };
+  const since = first.scene?.waiting_since_ms ?? null;
+  if (since === null) return { key: first.key, enteredAt: haloEnteredAt(first) };
+  const reached = first.scene?.alert === "waited" ? board.alert_after_ms : 0;
+  return { key: first.key, enteredAt: since + reached };
 }
 
 /** What the band shows for `board`, or `null` when nobody is in alert. */

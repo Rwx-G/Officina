@@ -226,7 +226,10 @@ test.describe("scene", () => {
     const board = structuredClone(generated);
     const beacon = beaconPair(board)!;
     const card = liveCards(board).find((c) => c.key === beacon.key)!;
-    card.scene = { ...card.scene!, waiting_since_ms: board.generated_at_ms - HALO_BREATHING_MS + BEACON_LEFT_MS };
+    // The beacon counts from when the alert began: a wait that reached the
+    // threshold alerted the threshold after its start (D-527).
+    const reached = card.scene!.alert === "waited" ? board.alert_after_ms : 0;
+    card.scene = { ...card.scene!, waiting_since_ms: board.generated_at_ms - HALO_BREATHING_MS + BEACON_LEFT_MS - reached };
     await openScene(page, board);
     await expect(scene(page).locator("[data-beacon]")).toHaveAttribute("data-beacon", beacon.key);
     await expect.poll(() => runningInScene(page)).toBeGreaterThan(0);
