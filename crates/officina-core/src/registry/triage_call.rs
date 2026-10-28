@@ -164,16 +164,20 @@ pub fn triage_env(base: &[(String, String)], config_dir: Option<&str>) -> Vec<(S
 }
 
 /// The refusal a `claude` binary at `binary` earns before anything starts
-/// (AD-51): a `.cmd` or `.bat` shim, which only `cmd.exe` runs.
+/// (AD-51): a `.cmd` or `.bat` shim, which only `cmd.exe` runs. Windows
+/// drops trailing dots and spaces from a file name, so `claude.cmd.` is a
+/// shim too.
 ///
 /// ```
 /// use officina_core::registry::triage_call::refusal_for_binary;
 /// use officina_core::registry::types::TriageRefusal;
 /// assert_eq!(refusal_for_binary("C:/npm/claude.CMD"), Some(TriageRefusal::CmdShim));
+/// assert_eq!(refusal_for_binary("C:/npm/claude.bat. "), Some(TriageRefusal::CmdShim));
 /// assert_eq!(refusal_for_binary("C:/bin/claude.exe"), None);
 /// ```
 pub fn refusal_for_binary(binary: &str) -> Option<TriageRefusal> {
     let name = binary.rsplit(['/', '\\']).next().unwrap_or(binary);
+    let name = name.trim_end_matches(['.', ' ']);
     let extension = name.rsplit_once('.').map(|(_, ext)| ext)?;
     (extension.eq_ignore_ascii_case("cmd") || extension.eq_ignore_ascii_case("bat"))
         .then_some(TriageRefusal::CmdShim)
@@ -969,6 +973,34 @@ OFFICINA-DATA-0f1e2d3c4b5a6978>>>\n";
                 last_at_ms: NOW - 3_000
             }]
         );
+    }
+
+    /// AD-51: every spelling Windows runs as a batch file is a shim.
+    #[test]
+    fn every_spelling_of_a_shim_is_refused() {
+        for shim in [
+            "claude.cmd",
+            r"C:\npm\claude.Cmd",
+            "C:/npm/claude.BAT",
+            "claude.cmd.",
+            "claude.bat ",
+            "claude.cmd. . ",
+        ] {
+            assert_eq!(
+                refusal_for_binary(shim),
+                Some(TriageRefusal::CmdShim),
+                "{shim:?}"
+            );
+        }
+        for native in [
+            "claude.exe",
+            "C:/cmd/claude.exe",
+            "claude",
+            "claude.cmd.exe",
+            "C:/x.bat/claude",
+        ] {
+            assert_eq!(refusal_for_binary(native), None, "{native:?}");
+        }
     }
 
     #[test]

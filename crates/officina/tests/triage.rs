@@ -326,7 +326,8 @@ fn refused_with_zero_launches(setup: &Setup, done: &CallResult, cause: TriageRef
 #[test]
 fn cmd_or_bat_shim_is_refused_with_zero_launches() {
     let setup = Setup::new("triage");
-    for name in ["claude.cmd", "claude.BAT"] {
+    // Windows drops a trailing dot: `claude.cmd.` runs the shim.
+    for name in ["claude.cmd", "claude.BAT", "claude.cmd."] {
         let shim = setup.root.path().join(name);
         let ran = setup.root.path().join(format!("{name}.ran"));
         std::fs::write(
