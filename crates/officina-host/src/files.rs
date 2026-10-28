@@ -7,7 +7,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use officina_core::dates::{event_file_name, event_files_to_read, is_expired_event_file};
-use officina_core::events::{EVENT_LINE_VERSION, EventLine};
+use officina_core::events::{EventLine, ParsedLine, parse_line};
 
 /// Appends `line` to `path` with one `write_all` on a file opened in append
 /// mode. On Windows, Rust opens append-mode files with `FILE_APPEND_DATA`
@@ -108,28 +108,10 @@ pub fn read_recent_events(events_dir: &Path, now_ms: i64) -> (Vec<EventLine>, u3
         let last_index = raw_lines.len().saturating_sub(1);
         for (index, raw) in raw_lines.iter().enumerate() {
             let is_partial_tail = index == last_index && !ends_with_newline;
-            let Ok(line) = std::str::from_utf8(raw) else {
-                if !is_partial_tail {
-                    corrupt += 1;
-                }
-                continue;
-            };
-            let line = line.trim_end_matches('\r');
-            if line.trim().is_empty() {
-                continue;
-            }
-            match serde_json::from_str::<EventLine>(line) {
-                Ok(event) if event.v == EVENT_LINE_VERSION => events.push(event),
-                Ok(_) => {}
-                Err(_) => {
-                    let is_foreign_version = serde_json::from_str::<serde_json::Value>(line)
-                        .ok()
-                        .and_then(|v| v.get("v").and_then(serde_json::Value::as_u64))
-                        .is_some_and(|v| v != u64::from(EVENT_LINE_VERSION));
-                    if !is_partial_tail && !is_foreign_version {
-                        corrupt += 1;
-                    }
-                }
+            match parse_line(raw) {
+                ParsedLine::Event(event) => events.push(*event),
+                ParsedLine::Corrupt if !is_partial_tail => corrupt += 1,
+                ParsedLine::Corrupt | ParsedLine::Blank | ParsedLine::OtherVersion => {}
             }
         }
     }

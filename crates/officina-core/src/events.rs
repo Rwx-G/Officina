@@ -95,6 +95,54 @@ impl EventLine {
     }
 }
 
+/// What one raw line of an event file holds.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ParsedLine {
+    /// A line of this format version.
+    Event(Box<EventLine>),
+    /// An empty line, as a hook killed mid-line leaves before the next one.
+    Blank,
+    /// A well-formed line of another format version: skipped, not corrupt.
+    OtherVersion,
+    /// Anything else, a line that is not UTF-8 included.
+    Corrupt,
+}
+
+/// Reads one line of an event file, without its `\n` (AD-10). Lines are
+/// decoded one by one, so a bad byte costs one line, never the file.
+///
+/// ```
+/// use officina_core::events::{ParsedLine, parse_line};
+/// assert!(matches!(parse_line(br#"{"v":1,"ts":5,"event":"Stop"}"#), ParsedLine::Event(_)));
+/// assert_eq!(parse_line(br#"{"v":2,"ts":5,"new":true}"#), ParsedLine::OtherVersion);
+/// assert_eq!(parse_line(b"garbage"), ParsedLine::Corrupt);
+/// assert_eq!(parse_line(b"\r"), ParsedLine::Blank);
+/// ```
+pub fn parse_line(raw: &[u8]) -> ParsedLine {
+    let Ok(line) = std::str::from_utf8(raw) else {
+        return ParsedLine::Corrupt;
+    };
+    let line = line.trim_end_matches('\r');
+    if line.trim().is_empty() {
+        return ParsedLine::Blank;
+    }
+    match serde_json::from_str::<EventLine>(line) {
+        Ok(event) if event.v == EVENT_LINE_VERSION => ParsedLine::Event(Box::new(event)),
+        Ok(_) => ParsedLine::OtherVersion,
+        Err(_) => {
+            let other_version = serde_json::from_str::<serde_json::Value>(line)
+                .ok()
+                .and_then(|v| v.get("v").and_then(serde_json::Value::as_u64))
+                .is_some_and(|v| v != u64::from(EVENT_LINE_VERSION));
+            if other_version {
+                ParsedLine::OtherVersion
+            } else {
+                ParsedLine::Corrupt
+            }
+        }
+    }
+}
+
 /// Cuts `text` to at most `max_chars` characters on a character boundary,
 /// marking the cut with an ellipsis.
 pub fn excerpt(text: &str, max_chars: usize) -> String {
