@@ -27,9 +27,19 @@ macro_rules! closed_enum {
 
 pub mod argv;
 pub mod catalogue;
+pub mod gate;
 pub mod params;
+pub mod shell;
 
 use sha2::{Digest, Sha256};
+
+/// The Officina home's directory name under the user's home, when
+/// `OFFICINA_HOME` does not set another one (AD-7).
+pub const HOME_DIR_NAME: &str = ".officina";
+/// The relay's directory under the Officina home (AD-25).
+pub const RELAY_DIR: &str = "relay";
+/// The journal's directory under the Officina home (AD-25, AD-32).
+pub const JOURNAL_DIR: &str = "journal";
 
 /// SHA-256 of `bytes`, lowercase hex.
 ///

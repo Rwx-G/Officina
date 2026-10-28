@@ -9,6 +9,7 @@ use officina_core::floor::FloorError;
 use officina_core::relay::catalogue::{
     self, ApprovedCatalogue, KnownProjects, RelayFloor, parse_known_projects,
 };
+use officina_core::relay::{JOURNAL_DIR, RELAY_DIR};
 
 use crate::paths::{ENV_FLOOR, env_path, officina_home_from_env};
 
@@ -77,7 +78,7 @@ impl RelayHome {
 
     /// `relay/`, where the window and `officina run` keep their files.
     pub fn relay_dir(&self) -> PathBuf {
-        self.officina_home.join("relay")
+        self.officina_home.join(RELAY_DIR)
     }
 
     /// `relay/approved.json`: the approved catalogue, written by the window.
@@ -102,7 +103,7 @@ impl RelayHome {
 
     /// `journal/`: one file per UTC day (AD-32).
     pub fn journal_dir(&self) -> PathBuf {
-        self.officina_home.join("journal")
+        self.officina_home.join(JOURNAL_DIR)
     }
 
     /// `journal/.lock`, taken around every journal append (AD-32).

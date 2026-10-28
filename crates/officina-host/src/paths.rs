@@ -3,6 +3,8 @@
 
 use std::path::{Path, PathBuf};
 
+use officina_core::relay::HOME_DIR_NAME;
+
 /// Environment variable overriding the Officina home.
 pub const ENV_HOME: &str = "OFFICINA_HOME";
 /// Environment variable naming the floor file.
@@ -32,7 +34,7 @@ pub fn env_path(name: &str) -> Option<PathBuf> {
 
 /// The Officina home: `OFFICINA_HOME`, else `.officina` in the user's home.
 pub fn officina_home_from_env() -> Option<PathBuf> {
-    env_path(ENV_HOME).or_else(|| user_home().map(|h| h.join(".officina")))
+    env_path(ENV_HOME).or_else(|| user_home().map(|h| h.join(HOME_DIR_NAME)))
 }
 
 /// Resolved locations for one run.

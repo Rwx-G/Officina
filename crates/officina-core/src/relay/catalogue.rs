@@ -18,9 +18,29 @@ use crate::floor::{
 use crate::quota::normalise_path;
 
 /// Programs the gate denies in a guarded project when the floor declares no
-/// `guarded_programs` (AD-22, PRD amendment 6). A trailing `*` is a prefix.
-/// The only list: story 2.3 extends it (D-11).
-pub const DEFAULT_GUARDED_PROGRAMS: &[&str] = &["ansible*", "ssh", "scp", "sftp", "rsync", "wsl"];
+/// `guarded_programs`: PRD amendment 6's list, the WSL routes of D-11
+/// (Windows `bash.exe`, the distro launchers) and `wslg`, which starts a
+/// Linux program like `wsl`. A trailing `*` is a prefix; an entry ending in
+/// `.exe` is matched on the word as written (`relay::gate::guarded_match`).
+/// The only list.
+pub const DEFAULT_GUARDED_PROGRAMS: &[&str] = &[
+    "ansible*",
+    "ssh",
+    "scp",
+    "sftp",
+    "rsync",
+    "wsl",
+    "wslg",
+    "bash.exe",
+    "ubuntu*",
+    "debian",
+    "kali",
+    "opensuse*",
+    "sles*",
+    "fedora*",
+    "alpine*",
+    "oracle*",
+];
 
 /// `timeout_s` when the action does not set it: fits the Bash tool's
 /// 10-minute cap with a margin (AD-31).
