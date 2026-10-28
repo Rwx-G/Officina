@@ -283,22 +283,23 @@ pub fn run(collector: &Collector, exe: &Path) -> Vec<Check> {
     let user_settings = paths.claude_config_dir.join("settings.json");
     let relay = RelayHome::new(paths.officina_home.clone(), env_path(ENV_FLOOR));
     let required = registrations(gate_required(&relay));
-    let mut checks = check_claude(collector);
+    let (mut checks, version) = check_claude(collector);
     checks.push(check_hooks(&user_settings, exe, &required));
     checks.extend(check_hook_activity(&paths.events_dir(), now));
     checks.push(check_quota(collector, &user_settings, exe, now));
     checks.push(check_officina_home(&paths.officina_home));
-    checks.extend(check_registry(
-        &paths.officina_home,
-        &onedrive_roots_from_env(),
-        now,
-    ));
-    checks.extend(check_triage(
+    let onedrive_roots = onedrive_roots_from_env();
+    let mut registry = check_registry(&paths.officina_home, &onedrive_roots, now);
+    if let Some(version) = &version {
+        registry.push(check_hook_fields(&collector.contract_file(), version));
+    }
+    registry.extend(check_triage(
         collector.claude(),
         &paths.officina_home,
-        &onedrive_roots_from_env(),
+        &onedrive_roots,
         now,
     ));
+    checks.extend(registry_section(registry));
     checks.push(check_floor(collector));
     let system_dir = crate::relay::home::system_dir();
     checks.extend(relay_doctor::checks(&RelayDoctor {
@@ -310,32 +311,76 @@ pub fn run(collector: &Collector, exe: &Path) -> Vec<Check> {
     checks
 }
 
-/// `claude --version`, then `claude agents --json` against the contract.
-fn check_claude(collector: &Collector) -> Vec<Check> {
+/// The titles of the registry section (story 3.12 AC 1, AD-53), in the
+/// order doctor prints them: the registry's own checks (stories 3.1, 3.2),
+/// then the canary's hook fields (3.8), then the triage model's (3.9,
+/// 3.11).
+pub const REGISTRY_SECTION: &[&str] = &[
+    "registry location",
+    "registry",
+    "registry integrity",
+    "registry copies",
+    "event files",
+    "event files rewritten",
+    "registry quarantine",
+    "registry restore",
+    "hook fields",
+    "triage call",
+    "triage model",
+];
+
+/// The registry section's checks in [`REGISTRY_SECTION`]'s order: whichever
+/// check emits a line, it lands at its place, so the section reads the same
+/// on every run.
+fn registry_section(mut checks: Vec<Check>) -> Vec<Check> {
+    let place = |check: &Check| {
+        REGISTRY_SECTION
+            .iter()
+            .position(|title| *title == check.title)
+            .unwrap_or(REGISTRY_SECTION.len())
+    };
+    checks.sort_by_key(place);
+    checks
+}
+
+/// `claude --version`, then `claude agents --json` against the contract;
+/// the version, when it was read, for the hook fields of the registry
+/// section.
+fn check_claude(collector: &Collector) -> (Vec<Check>, Option<String>) {
     let Some(bin) = collector.claude() else {
-        return vec![check(
-            Level::Fail,
-            "claude",
-            claude::ClaudeError::NotFound.to_string(),
-        )];
+        return (
+            vec![check(
+                Level::Fail,
+                "claude",
+                claude::ClaudeError::NotFound.to_string(),
+            )],
+            None,
+        );
     };
     let config_dir = collector.paths().claude_config_override.as_deref();
     match claude::version(bin, config_dir) {
-        Ok(v) => vec![
-            check(Level::Ok, "claude", format!("{v} at {}", bin.display())),
-            check_agents_output(bin, config_dir),
-            check_hook_fields(&collector.contract_file(), &v),
-        ],
-        Err(e) => vec![
-            check(Level::Fail, "claude", e.to_string()),
-            check_agents_output(bin, config_dir),
-        ],
+        Ok(v) => (
+            vec![
+                check(Level::Ok, "claude", format!("{v} at {}", bin.display())),
+                check_agents_output(bin, config_dir),
+            ],
+            Some(v),
+        ),
+        Err(e) => (
+            vec![
+                check(Level::Fail, "claude", e.to_string()),
+                check_agents_output(bin, config_dir),
+            ],
+            None,
+        ),
     }
 }
 
 /// The hook payload fields of `HOOK_FIELDS` the running version left out,
 /// and the buffered events none of its lines carried yet, from the record
-/// the window keeps in `state/contract.json` (AD-56, D-71).
+/// the window keeps in `state/contract.json` (AD-56, D-71). A missing field
+/// warns (story 3.12 AC 1): the board keeps working, and the registry
+/// records the session without it.
 fn check_hook_fields(contract_file: &Path, version: &str) -> Check {
     const TITLE: &str = "hook fields";
     let store = ContractStore::read(contract_file);
@@ -353,7 +398,7 @@ fn check_hook_fields(contract_file: &Path, version: &str) -> Check {
         )
     } else {
         (
-            Level::Fail,
+            Level::Warn,
             format!("missing: {}", record.hook_missing.join(", ")),
         )
     };

@@ -392,7 +392,7 @@ fn doctor_reports_hook_fields_missing_and_not_observed() {
         .lines()
         .find(|line| line.contains("hook fields"))
         .unwrap_or_else(|| panic!("no hook fields line: {text}"));
-    assert!(line.contains("[FAIL]"), "{line}");
+    assert!(line.contains("[warn]"), "{line}");
     assert!(
         line.contains(&format!("missing: {event}.{}", fields[0])),
         "{line}"
