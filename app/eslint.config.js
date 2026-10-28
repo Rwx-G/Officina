@@ -1,13 +1,14 @@
 // The lint gate is narrow on purpose: it blocks the XSS and code-injection
 // constructs that the type checker cannot see. Session prompts and assistant
 // messages are untrusted text, so `{@html}` is an error, not a warning.
+import { defineConfig, globalIgnores } from "eslint/config";
 import js from "@eslint/js";
 import svelte from "eslint-plugin-svelte";
 import svelteParser from "svelte-eslint-parser";
 import tsParser from "@typescript-eslint/parser";
 import globals from "globals";
 
-export default [
+export default defineConfig([
   js.configs.recommended,
   ...svelte.configs["flat/recommended"],
   {
@@ -34,5 +35,5 @@ export default [
       parserOptions: { parser: tsParser, extraFileExtensions: [".svelte"], sourceType: "module" },
     },
   },
-  { ignores: ["dist/**", "node_modules/**", "coverage/**", "test-results/**", "**/*.generated.ts", "src/lib/generated/**"] },
-];
+  globalIgnores(["dist/**", "node_modules/**", "coverage/**", "test-results/**", "**/*.generated.ts", "src/lib/generated/**"]),
+]);
