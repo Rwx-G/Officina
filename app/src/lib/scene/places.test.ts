@@ -1,7 +1,35 @@
-// The spots of AD-170 as amended, from `places.ts` and `geometry.ts`.
+// The spots and the navigation graph of AD-170 as amended, from
+// `places.ts` and `geometry.ts`.
 import { describe, expect, it } from "vitest";
-import { FLOOR_DEPTH, G, M, MAX_COLUMNS, MAX_OFFICES, R, SHARED_CELLS, floorWidth, roomOrigin, type SharedZone } from "./geometry";
-import { CAPACITY, DECIDER, allSpots, officeCell, officeSpots, restPoint, sharedSpots, type Spot } from "./places";
+import {
+  COLUMN_COUNTS,
+  CORR_Y,
+  FLOOR_DEPTH,
+  G,
+  M,
+  MAX_COLUMNS,
+  MAX_OFFICES,
+  R,
+  SHARED_CELLS,
+  floorWidth,
+  officesIn,
+  roomOrigin,
+  type SharedZone,
+} from "./geometry";
+import { route } from "./paths";
+import {
+  CAPACITY,
+  DECIDER,
+  allSpots,
+  navGraph,
+  officeCell,
+  officeSpots,
+  restPoint,
+  roomOf,
+  sharedSpots,
+  type NavGraph,
+  type Spot,
+} from "./places";
 
 const SHARED = Object.keys(SHARED_CELLS) as SharedZone[];
 
@@ -96,5 +124,90 @@ describe("places", () => {
       expect(key(s.gx, s.gy), s.id).not.toBe(chair);
       expect(key(restPoint(s).gx, restPoint(s).gy), s.id).not.toBe(chair);
     }
+  });
+});
+
+/** The rooms of a floor of `columns` columns, by id. */
+function rooms(columns: number): string[] {
+  return [...(Object.keys(SHARED_CELLS) as SharedZone[]), ...Array.from({ length: officesIn(columns) }, (_, slot) => `office${slot}`)];
+}
+
+const onCentreLine = (graph: NavGraph, id: string) => Math.abs(graph.nodes.get(id)!.gy - CORR_Y) < 1e-9;
+
+describe("navigation graph", () => {
+  it("every spot is reachable from the exit", () => {
+    for (const columns of COLUMN_COUNTS) {
+      const graph = navGraph(columns);
+      // Links go both ways, once, between known nodes.
+      for (const node of graph.nodes.values()) {
+        expect(new Set(node.adj).size, node.id).toBe(node.adj.length);
+        for (const id of node.adj) expect(graph.nodes.get(id)?.adj, `${node.id} - ${id}`).toContain(node.id);
+      }
+      const spots = allSpots(columns);
+      expect(spots.length).toBeGreaterThan(0);
+      for (const s of spots) {
+        expect(graph.nodes.get(s.id), `${columns} columns: ${s.id}`).toMatchObject({ gx: s.gx, gy: s.gy });
+        const ids = route(graph, graph.exit, s.id);
+        expect(ids, `${columns} columns: ${s.id}`).not.toBeNull();
+        expect(ids![0]).toBe(graph.exit);
+        expect(ids![ids!.length - 1]).toBe(s.id);
+        // A spot inside its room is reached from its door through its room.
+        if (s.corridor) continue;
+        const inside = route(graph, graph.doors.get(roomOf(s))!, s.id)!;
+        for (const id of inside) expect(graph.nodes.get(id)!.room, `${s.id} via ${id}`).toBe(roomOf(s));
+      }
+      // Nothing of the graph is cut off.
+      for (const id of graph.nodes.keys()) expect(route(graph, graph.exit, id), id).not.toBeNull();
+    }
+  });
+
+  it("each door links its room to the corridor", () => {
+    for (const columns of COLUMN_COUNTS) {
+      const graph = navGraph(columns);
+      expect([...graph.doors.keys()].sort()).toEqual(rooms(columns).sort());
+      for (const [room, door] of graph.doors) {
+        const node = graph.nodes.get(door)!;
+        expect(node.room).toBe(room);
+        const outside = node.adj.filter((id) => graph.nodes.get(id)!.room !== room);
+        // One way out, onto the centre line in front of the door.
+        expect(outside, room).toHaveLength(1);
+        expect(onCentreLine(graph, outside[0]!), room).toBe(true);
+        expect(Math.abs(graph.nodes.get(outside[0]!)!.gx - node.gx), room).toBeLessThan(G / 2);
+        // No other node of the room leaves it, but the entrance to the exit
+        // and the queue's places on the centre line, which are corridor.
+        for (const other of graph.nodes.values()) {
+          if (other.room !== room || other.id === door || onCentreLine(graph, other.id)) continue;
+          for (const id of other.adj) {
+            const to = graph.nodes.get(id)!;
+            if (to.room !== room) expect([other.id, to.id], room).toEqual(["reception:entry", graph.exit]);
+          }
+        }
+      }
+    }
+  });
+
+  it("the corridor nodes are chained in gx order", () => {
+    for (const columns of COLUMN_COUNTS) {
+      const graph = navGraph(columns);
+      const corridor = [...graph.nodes.keys()]
+        .filter((id) => onCentreLine(graph, id))
+        .sort((a, b) => graph.nodes.get(a)!.gx - graph.nodes.get(b)!.gx);
+      // At least one node in front of each column's doors.
+      expect(corridor.length).toBeGreaterThanOrEqual(columns);
+      corridor.forEach((id, i) => {
+        const gx = graph.nodes.get(id)!.gx;
+        if (i > 0) expect(gx, id).toBeGreaterThan(graph.nodes.get(corridor[i - 1]!)!.gx);
+        // Linked to its neighbours on the line, and to no other node on it.
+        const along = graph.nodes.get(id)!.adj.filter((a) => onCentreLine(graph, a)).sort();
+        expect(along, id).toEqual([corridor[i - 1], corridor[i + 1]].filter((a): a is string => a !== undefined).sort());
+        expect(gx, id).toBeGreaterThan(M);
+        expect(gx, id).toBeLessThan(floorWidth(columns) - M);
+      });
+    }
+  });
+
+  it("the same column count gives the same graph", () => {
+    const flat = (g: NavGraph) => JSON.stringify([[...g.nodes.values()], g.exit, [...g.doors]]);
+    for (const columns of COLUMN_COUNTS) expect(flat(navGraph(columns))).toBe(flat(navGraph(columns)));
   });
 });

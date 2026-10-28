@@ -2,10 +2,13 @@
 // `geometry.ts`. Room-local coordinates are the prototype v2's starting
 // values, spread or removed where two figure targets would meet (D-471):
 // the geometry property test arbitrates every change here. The navigation
-// graph that joins the spots is story 4.10's.
+// graph that joins them (story 4.10) is the prototype v2's, linked to these
+// spots: doors, halls and aisles inside each room, one corridor node per
+// door on the centre line.
 import {
   CORR_Y,
   OFFICE_CELLS,
+  ROWS,
   SHARED_CELLS,
   officesIn,
   roomOrigin,
@@ -189,3 +192,147 @@ export const DECIDER = {
   chair: { lx: 2.4, ly: 1.9 },
   desk: { lx: 1.4, ly: 0.82, w: 2.0, d: 0.58 },
 } as const;
+
+// ------------------------------------------------------------ navigation graph
+
+/** A node of the navigation graph: a spot (its id is the spot's), or a
+ *  door, hall, aisle, corridor or exit node. */
+export interface NavNode {
+  id: string;
+  gx: number;
+  gy: number;
+  /** The room it belongs to (`reception`, `office3`, ...), `corridor` for
+   *  a corridor node of its own, `outside` for the exit. */
+  room: string;
+  adj: string[];
+}
+
+export interface NavGraph {
+  nodes: ReadonlyMap<string, NavNode>;
+  /** Reception's exit node, outside the entrance door: a new session
+   *  appears there and an ended one leaves there (D-483). */
+  exit: string;
+  /** Each room's door node on its corridor side, by room id. */
+  doors: ReadonlyMap<string, string>;
+}
+
+/** The exit node's id. */
+export const EXIT = "reception:exit";
+
+/** A spot's room id: its shared zone, or `office<slot>`. */
+export function roomOf(s: Pick<Spot, "room" | "slot">): string {
+  return s.slot === null ? s.room : `office${s.slot}`;
+}
+
+/** A shared room's nodes besides its spots, room-local tiles: its door on
+ *  the corridor side, then its halls, chained from the door. */
+const SHARED_WAYS: Record<SharedZone, { door: Local; halls: readonly Local[] }> = {
+  reception: { door: [2.5, 4.4], halls: [] },
+  decision: { door: [2.6, 4.4], halls: [] },
+  lounge: { door: [3.5, 0], halls: [[3.5, 0.7], [2.95, 1.3], [2.95, 2.95], [2.95, 4.05]] },
+  alert: { door: [2.2, 0], halls: [[2.2, 0.75], [2.2, 2.4]] },
+};
+/** The entrance: the exit outside the door, the entry inside it, and the
+ *  hub between the counter and the coat rack. */
+const RECEPTION_EXIT: Local = [-0.95, 1.6];
+const RECEPTION_ENTRY: Local = [0.35, 1.6];
+const RECEPTION_HUB: Local = [1.0, 2.75];
+/** An office's aisle between its two columns of desks, and its stops: by
+ *  the back desks' chairs, then by the front ones'. */
+const AISLE_LX = 2.25;
+const AISLE_LY = [2.3, 4.05] as const;
+/** A front-row office's door, on its back side, and the stop inside it. */
+const FRONT_DOOR_LY = 0;
+const FRONT_ENTRY_LY = 0.45;
+/** A back-row office's door, on its front side. */
+const BACK_DOOR_LY = 4.4;
+/** Two corridor nodes closer than this along gx are one. */
+const SAME_GX = 0.05;
+
+/** The navigation graph of a floor of `columns` columns (AD-170 as
+ *  amended, D-503: no staff node, no consult spot), ported from the
+ *  prototype v2 and linked to this module's spots. Pure: the same column
+ *  count gives the same graph. */
+export function navGraph(columns: number): NavGraph {
+  const nodes = new Map<string, NavNode>();
+  const doors = new Map<string, string>();
+  const add = (id: string, room: string, gx: number, gy: number): string => {
+    nodes.set(id, { id, gx, gy, room, adj: [] });
+    return id;
+  };
+  const local = (id: string, room: string, cell: Cell, [lx, ly]: Local): string => {
+    const o = roomOrigin(cell);
+    return add(id, room, o.gx + lx, o.gy + ly);
+  };
+  const link = (a: string, b: string): void => {
+    nodes.get(a)!.adj.push(b);
+    nodes.get(b)!.adj.push(a);
+  };
+  const chain = (ids: readonly string[]): void => ids.slice(1).forEach((id, i) => link(ids[i]!, id));
+  const spotNode = (s: Spot): string => add(s.id, roomOf(s), s.gx, s.gy);
+  const distance = (a: string, b: string): number => {
+    const u = nodes.get(a)!;
+    const v = nodes.get(b)!;
+    return Math.hypot(u.gx - v.gx, u.gy - v.gy);
+  };
+  /** Links a spot to the nearest of its room's ways, the first on a tie. */
+  const linkNearest = (spot: string, ways: readonly string[]): void => {
+    link(spot, ways.reduce((a, b) => (distance(spot, b) < distance(spot, a) ? b : a)));
+  };
+
+  for (const zone of Object.keys(SHARED_CELLS) as SharedZone[]) {
+    const cell = SHARED_CELLS[zone];
+    const door = local(`${zone}:door`, zone, cell, SHARED_WAYS[zone].door);
+    doors.set(zone, door);
+    const halls = SHARED_WAYS[zone].halls.map((at, i) => local(`${zone}:hall${i}`, zone, cell, at));
+    chain([door, ...halls]);
+    const spots = sharedSpots(zone).filter((s) => !s.corridor).map(spotNode);
+    if (zone === "reception") {
+      const hub = local("reception:hub", zone, cell, RECEPTION_HUB);
+      chain([local(EXIT, "outside", cell, RECEPTION_EXIT), local("reception:entry", zone, cell, RECEPTION_ENTRY), hub, door]);
+      // Visitors reach the counter from the hub and from the door.
+      for (const s of spots) {
+        link(s, hub);
+        link(s, door);
+      }
+    } else if (halls.length === 0) {
+      for (const s of spots) link(s, door);
+    } else {
+      for (const s of spots) linkNearest(s, halls);
+    }
+  }
+
+  for (let slot = 0; slot < officesIn(columns); slot++) {
+    const cell = officeCell(slot);
+    const room = `office${slot}`;
+    const aisle = AISLE_LY.map((ly, i) => local(`${room}:aisle${i}`, room, cell, [AISLE_LX, ly]));
+    let door: string;
+    if (cell[1] === ROWS - 1) {
+      door = local(`${room}:door`, room, cell, [AISLE_LX, FRONT_DOOR_LY]);
+      chain([door, local(`${room}:entry`, room, cell, [AISLE_LX, FRONT_ENTRY_LY]), ...aisle]);
+    } else {
+      door = local(`${room}:door`, room, cell, [AISLE_LX, BACK_DOOR_LY]);
+      chain([door, ...[...aisle].reverse()]);
+    }
+    doors.set(room, door);
+    const { desks, chips } = officeSpots(slot);
+    for (const s of [...desks, ...chips]) linkNearest(spotNode(s), aisle);
+  }
+
+  // The corridor: the queue's places on the centre line, and one node per
+  // door that none of them stands in front of, chained in gx order.
+  const corridor = sharedSpots("decision").filter((s) => s.corridor).map(spotNode);
+  for (const [room, door] of doors) {
+    const d = nodes.get(door)!;
+    let c = corridor.find((id) => Math.abs(nodes.get(id)!.gx - d.gx) < SAME_GX);
+    if (c === undefined) {
+      c = add(`corridor:${room}`, "corridor", d.gx, CORR_Y);
+      corridor.push(c);
+    }
+    link(door, c);
+  }
+  corridor.sort((a, b) => nodes.get(a)!.gx - nodes.get(b)!.gx);
+  chain(corridor);
+
+  return { nodes, exit: EXIT, doors };
+}
