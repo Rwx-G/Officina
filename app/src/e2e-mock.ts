@@ -68,6 +68,7 @@ async function approve(hash: string): Promise<string> {
     const error: IpcError = {
       code: "catalogue_changed",
       message: `officina-window-authority: the catalogue changed since it was displayed (displayed ${hash}, current ${current?.pending?.hash ?? "none"}); review the new diff`,
+      refusal: null,
     };
     return Promise.reject(error);
   }
@@ -107,7 +108,11 @@ async function decide(id: string): Promise<void> {
   const board = window.__officinaBoard;
   const approval = board?.approvals.find((a) => a.id === id);
   if (!board || !approval?.valid) {
-    const error: IpcError = { code: "refused", message: `officina-window-authority: request ${id} is invalid or unknown` };
+    const error: IpcError = {
+      code: "refused",
+      message: `officina-window-authority: request ${id} is invalid or unknown`,
+      refusal: null,
+    };
     return Promise.reject(error);
   }
   await window.__officinaPushBoard?.({

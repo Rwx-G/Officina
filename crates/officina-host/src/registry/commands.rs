@@ -3,7 +3,7 @@
 //! the Subjects view, with the window open or closed. Neither writes.
 
 use officina_core::registry::types::{RegistryReport, RegistryState};
-use officina_core::registry::view::{IngestionView, RegistryView, ViewInput, build_view};
+use officina_core::registry::view::{RegistryView, unread_view};
 
 use super::read::Reader;
 use super::store::{ReaderFailure, onedrive_roots_from_env, open_reader, reader_report};
@@ -32,22 +32,6 @@ pub fn read_registry(collector: &mut Collector) -> Result<Reader, ReaderFailure>
     opened
 }
 
-/// The view with nothing read, and the reason.
-fn unread(report: RegistryReport, now_ms: i64) -> RegistryView {
-    build_view(
-        &ViewInput {
-            registry: report,
-            ingestion: IngestionView::default(),
-            subjects: &[],
-            sessions: &[],
-            excerpts: &[],
-            board: None,
-            restore_notice: None,
-        },
-        now_ms,
-    )
-}
-
 /// What `officina subjects --json` prints, and whether the registry was
 /// read: from the read-only registry and a fresh board, whose staleness
 /// does not make the registry unread (D-97).
@@ -66,7 +50,7 @@ pub fn subjects_view(collector: &mut Collector, now_ms: i64) -> (RegistryView, b
             match reader.view(report.clone(), Some(&board), &events, now_ms) {
                 Ok(view) => (view, true),
                 Err(error) => (
-                    unread(
+                    unread_view(
                         RegistryReport {
                             state: RegistryState::Unavailable,
                             detail: Some(error.to_string()),
@@ -78,6 +62,6 @@ pub fn subjects_view(collector: &mut Collector, now_ms: i64) -> (RegistryView, b
                 ),
             }
         }
-        _ => (unread(report, now_ms), false),
+        _ => (unread_view(report, now_ms), false),
     }
 }

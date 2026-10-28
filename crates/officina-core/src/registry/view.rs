@@ -45,6 +45,10 @@ pub struct RegistryView {
     pub subjects: Vec<SubjectView>,
     /// Sessions under no subject, by project.
     pub unfiled: Vec<UnfiledProject>,
+    /// Every project the registry knows, those of its sessions and of its
+    /// subjects, archived ones included: where a subject may be created
+    /// (D-95).
+    pub projects: Vec<String>,
     /// The copy a damaged registry was restored from, for
     /// [`RESTORE_NOTICE_MS`] after the restore (D-93).
     pub restore_notice: Option<RestoreNotice>,
@@ -92,6 +96,9 @@ pub struct SubjectView {
     pub status_src: Source,
     #[cfg_attr(feature = "ts", ts(type = "number"))]
     pub status_at_ms: i64,
+    /// "Routine, could have run alone", set when it was archived (FR-13,
+    /// P-10).
+    pub routine: bool,
     /// Its sessions, the latest seen first.
     pub sessions: Vec<SessionView>,
     /// The latest prompt and answer of its sessions (FR-4).
@@ -243,6 +250,139 @@ fn latest_first(sessions: &mut [SessionView]) {
     });
 }
 
+/// The board's cards by session id, for joining (AD-54).
+fn cards_by_session(board: Option<&Board>) -> BTreeMap<&str, &Card> {
+    board
+        .iter()
+        .flat_map(|board| board.columns.all())
+        .filter_map(|card| Some((card.session_id.as_deref()?, card)))
+        .collect()
+}
+
+/// One subject with `records`, the sessions counting under it, and its
+/// latest activity, which orders the list.
+fn subject_view(
+    subject: &SubjectRecord,
+    records: &[&SessionRecord],
+    excerpts: &BTreeMap<&str, &ExcerptRecord>,
+    cards: &BTreeMap<&str, &Card>,
+) -> (i64, SubjectView) {
+    let latest_excerpt = records
+        .iter()
+        .filter_map(|r| excerpts.get(r.session_id.as_str()))
+        .max_by_key(|e| (excerpt_time(e), e.session_id.clone()))
+        .map(|e| excerpt_view(e));
+    let activity = records
+        .iter()
+        .map(|r| r.last_seen_ms)
+        .max()
+        .unwrap_or(subject.status.at_ms);
+    let mut sessions: Vec<SessionView> = records.iter().map(|r| session_view(r, cards)).collect();
+    latest_first(&mut sessions);
+    (
+        activity,
+        SubjectView {
+            id: subject.id,
+            project: subject.project.clone(),
+            name: subject.name.clone(),
+            status: subject.status.value,
+            status_src: subject.status.src,
+            status_at_ms: subject.status.at_ms,
+            routine: subject.routine,
+            sessions,
+            excerpts: latest_excerpt,
+        },
+    )
+}
+
+fn excerpt_view(e: &ExcerptRecord) -> ExcerptView {
+    ExcerptView {
+        session_id: e.session_id.clone(),
+        prompt: e.prompt.clone(),
+        prompt_at_ms: e.prompt_at_ms,
+        answer_head: e.answer_head.clone(),
+        answer_tail: e.answer_tail.clone(),
+        answer_at_ms: e.answer_at_ms,
+    }
+}
+
+/// The projects of `subjects` and `sessions`, sorted, each once: those the
+/// writer accepts for a new subject (D-95).
+fn known_projects(subjects: &[SubjectRecord], sessions: &[SessionRecord]) -> Vec<String> {
+    let known: std::collections::BTreeSet<&str> = subjects
+        .iter()
+        .map(|s| s.project.as_str())
+        .chain(sessions.iter().map(|s| s.project.as_str()))
+        .collect();
+    known.into_iter().map(str::to_owned).collect()
+}
+
+/// True for a subject the archived list shows: archived by the author or a
+/// verdict, not merged into another (D-55).
+pub fn is_listed_archived(subject: &SubjectRecord) -> bool {
+    subject.status.value == SubjectStatus::Archived && subject.merged_into.is_none()
+}
+
+/// The archived subjects the author may reopen (`list_archived`, AD-54),
+/// the latest archived first, each with its sessions and their live cards;
+/// merged subjects are left out (D-55).
+///
+/// ```
+/// use officina_core::registry::view::archived_subjects;
+/// assert!(archived_subjects(&[], &[], None).is_empty());
+/// ```
+pub fn archived_subjects(
+    subjects: &[SubjectRecord],
+    sessions: &[SessionRecord],
+    board: Option<&Board>,
+) -> Vec<SubjectView> {
+    let cards = cards_by_session(board);
+    let mut listed: Vec<SubjectView> = subjects
+        .iter()
+        .filter(|s| is_listed_archived(s))
+        .map(|subject| {
+            let records: Vec<&SessionRecord> = sessions
+                .iter()
+                .filter(|r| r.filed_subject() == Some(subject.id))
+                .collect();
+            subject_view(subject, &records, &BTreeMap::new(), &cards).1
+        })
+        .collect();
+    listed.sort_by(|a, b| {
+        b.status_at_ms
+            .cmp(&a.status_at_ms)
+            .then_with(|| a.id.cmp(&b.id))
+    });
+    listed
+}
+
+/// The view with nothing read, saying why in `report` (D-47): what a
+/// command line prints, and the window shows, while the registry cannot be
+/// read.
+///
+/// ```
+/// use officina_core::registry::types::{RegistryReport, RegistryState};
+/// use officina_core::registry::view::unread_view;
+/// let report = RegistryReport { state: RegistryState::Network, detail: None, exclude_from_sync: None };
+/// let view = unread_view(report, 1_000);
+/// assert_eq!(view.registry.state, RegistryState::Network);
+/// assert!(view.subjects.is_empty());
+/// ```
+pub fn unread_view(report: RegistryReport, now_ms: i64) -> RegistryView {
+    build_view(
+        &ViewInput {
+            registry: report,
+            ingestion: IngestionView::default(),
+            subjects: &[],
+            sessions: &[],
+            excerpts: &[],
+            board: None,
+            restore_notice: None,
+        },
+        now_ms,
+    )
+}
+
 /// Builds the view (AD-54).
 ///
 /// ```
@@ -259,12 +399,7 @@ fn latest_first(sessions: &mut [SessionView]) {
 /// assert!(view.subjects.is_empty() && view.unfiled.is_empty());
 /// ```
 pub fn build_view(input: &ViewInput, now_ms: i64) -> RegistryView {
-    let cards: BTreeMap<&str, &Card> = input
-        .board
-        .iter()
-        .flat_map(|board| board.columns.all())
-        .filter_map(|card| Some((card.session_id.as_deref()?, card)))
-        .collect();
+    let cards = cards_by_session(input.board);
     let excerpts: BTreeMap<&str, &ExcerptRecord> = input
         .excerpts
         .iter()
@@ -301,39 +436,7 @@ pub fn build_view(input: &ViewInput, now_ms: i64) -> RegistryView {
         .filter(|s| s.status.value != SubjectStatus::Archived)
         .map(|subject| {
             let records = by_subject.remove(&subject.id).unwrap_or_default();
-            let latest_excerpt = records
-                .iter()
-                .filter_map(|r| excerpts.get(r.session_id.as_str()))
-                .max_by_key(|e| (excerpt_time(e), e.session_id.clone()))
-                .map(|e| ExcerptView {
-                    session_id: e.session_id.clone(),
-                    prompt: e.prompt.clone(),
-                    prompt_at_ms: e.prompt_at_ms,
-                    answer_head: e.answer_head.clone(),
-                    answer_tail: e.answer_tail.clone(),
-                    answer_at_ms: e.answer_at_ms,
-                });
-            let activity = records
-                .iter()
-                .map(|r| r.last_seen_ms)
-                .max()
-                .unwrap_or(subject.status.at_ms);
-            let mut sessions: Vec<SessionView> =
-                records.iter().map(|r| session_view(r, &cards)).collect();
-            latest_first(&mut sessions);
-            (
-                activity,
-                SubjectView {
-                    id: subject.id,
-                    project: subject.project.clone(),
-                    name: subject.name.clone(),
-                    status: subject.status.value,
-                    status_src: subject.status.src,
-                    status_at_ms: subject.status.at_ms,
-                    sessions,
-                    excerpts: latest_excerpt,
-                },
-            )
+            subject_view(subject, &records, &excerpts, &cards)
         })
         .collect();
     subjects.sort_by(|(a_at, a), (b_at, b)| {
@@ -359,6 +462,7 @@ pub fn build_view(input: &ViewInput, now_ms: i64) -> RegistryView {
         ingestion: input.ingestion.clone(),
         subjects: subjects.into_iter().map(|(_, s)| s).collect(),
         unfiled,
+        projects: known_projects(input.subjects, input.sessions),
         restore_notice: input
             .restore_notice
             .clone()
@@ -646,5 +750,52 @@ mod tests {
             (latest.session_id.as_str(), latest.answer_head.as_deref()),
             ("new", Some("Done."))
         );
+    }
+
+    /// D-55, AD-54: `list_archived` lists the archived subjects, latest
+    /// archived first, with their sessions and routine flag; a merged one
+    /// is left out.
+    #[test]
+    fn archived_list_leaves_merged_out_latest_first() {
+        let mut merged = subject(3, SubjectStatus::Archived, NOW);
+        merged.merged_into = Some(1);
+        let mut routine = subject(4, SubjectStatus::Archived, NOW - 5);
+        routine.routine = true;
+        let subjects = [
+            subject(1, SubjectStatus::Active, NOW),
+            subject(2, SubjectStatus::Archived, NOW - 10),
+            merged,
+            routine,
+        ];
+        let sessions = [
+            session("s2", "api", Some(2), NOW - 20),
+            session("s4", "api", Some(4), NOW - 30),
+        ];
+        let listed = archived_subjects(&subjects, &sessions, None);
+        assert_eq!(listed.iter().map(|s| s.id).collect::<Vec<_>>(), [4, 2]);
+        assert!(listed[0].routine && !listed[1].routine);
+        assert_eq!(listed[1].sessions[0].session_id, "s2");
+        assert!(listed.iter().all(|s| s.excerpts.is_none()));
+        assert!(
+            view(&subjects, &sessions)
+                .subjects
+                .iter()
+                .all(|s| s.status != SubjectStatus::Archived)
+        );
+    }
+
+    /// D-95: the projects a subject may be created in are those of every
+    /// session and subject, archived ones included.
+    #[test]
+    fn projects_are_those_of_every_session_and_subject() {
+        let mut archived = subject(2, SubjectStatus::Archived, NOW);
+        archived.project = "old".to_owned();
+        let subjects = [subject(1, SubjectStatus::Active, NOW), archived];
+        let sessions = [
+            session("w1", "web", None, NOW),
+            session("a1", "api", Some(1), NOW),
+        ];
+        assert_eq!(view(&subjects, &sessions).projects, ["api", "old", "web"]);
+        assert!(view(&[], &[]).projects.is_empty());
     }
 }

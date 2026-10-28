@@ -27,6 +27,12 @@ subjects: Array<SubjectView>,
  */
 unfiled: Array<UnfiledProject>, 
 /**
+ * Every project the registry knows, those of its sessions and of its
+ * subjects, archived ones included: where a subject may be created
+ * (D-95).
+ */
+projects: Array<string>, 
+/**
  * The copy a damaged registry was restored from, for
  * [`RESTORE_NOTICE_MS`] after the restore (D-93).
  */

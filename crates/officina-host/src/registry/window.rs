@@ -8,15 +8,18 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use officina_core::agents::AgentRecord;
-use officina_core::board::ProjectRule;
+use officina_core::board::{Board, ProjectRule};
+use officina_core::ipc::{IpcError, IpcErrorCode};
+use officina_core::registry::confirm::AuthorAction;
 use officina_core::registry::fold::{AgentsChanges, AgentsSnapshot};
 use officina_core::registry::types::{RegistryReport, RegistryState, SubjectRef};
+use officina_core::registry::view::{RegistryView, SubjectView, unread_view};
 
 use super::ingest::{IngestContext, IngestReport};
 use super::read::{self, Reader};
 use super::retention::PassReport;
 use super::store::{Integrity, Writer, WriterOpen, open_writer};
-use super::write::RegistryError;
+use super::write::{AuthorError, RegistryError};
 
 #[derive(Debug)]
 enum Slot {
@@ -108,9 +111,22 @@ impl WindowRegistry {
         }
     }
 
-    /// Runs `step` on the writer, when there is one: an error that says the
-    /// database is damaged makes the registry unavailable until the next
-    /// start (AD-42); any other is reported and the registry stays.
+    /// Takes a writer error: one that says the database is damaged makes
+    /// the registry unavailable until the next start (AD-42); any other is
+    /// reported and the registry stays.
+    fn failed(&mut self, error: &RegistryError) {
+        if error.is_corruption() {
+            let found = std::mem::replace(&mut self.slot, Slot::Unavailable(error.to_string()));
+            if let Slot::Writable(writer) = found {
+                writer.abandon();
+            }
+        } else {
+            self.last_error = Some(error.to_string());
+        }
+    }
+
+    /// Runs `step` on the writer, when there is one, and takes its error
+    /// as [`WindowRegistry::failed`] says.
     fn on_writer<T>(
         &mut self,
         step: impl FnOnce(&mut Writer) -> Result<T, RegistryError>,
@@ -123,16 +139,89 @@ impl WindowRegistry {
                 self.last_error = None;
                 Some(done)
             }
-            Err(error) if error.is_corruption() => {
-                let found = std::mem::replace(&mut self.slot, Slot::Unavailable(error.to_string()));
-                if let Slot::Writable(writer) = found {
-                    writer.abandon();
-                }
+            Err(error) => {
+                self.failed(&error);
                 None
             }
+        }
+    }
+
+    /// Why an author action cannot be written now, from the registry's
+    /// state: read only, unavailable or on a network folder.
+    fn not_writable(&self) -> IpcError {
+        let report = self.report();
+        let detail = report
+            .detail
+            .map(|detail| format!(" ({detail})"))
+            .unwrap_or_default();
+        IpcError::new(
+            IpcErrorCode::RegistryUnavailable,
+            format!(
+                "the registry cannot be written: it is {}{detail}",
+                report.state.code()
+            ),
+        )
+    }
+
+    /// Runs one author action at `now_ms` on the window's one connection
+    /// (AD-38): the subject it created, if any; a refusal names its rule
+    /// and writes nothing (D-57).
+    pub fn act(&mut self, action: &AuthorAction, now_ms: i64) -> Result<Option<i64>, IpcError> {
+        let Slot::Writable(writer) = &mut self.slot else {
+            return Err(self.not_writable());
+        };
+        match writer.author(action, now_ms) {
+            Ok(created) => {
+                self.last_error = None;
+                Ok(created)
+            }
+            Err(AuthorError::Refused(refusal)) => Err(IpcError::refused_action(refusal)),
+            Err(AuthorError::Registry(error)) => {
+                let code = if error.is_corruption() {
+                    IpcErrorCode::RegistryUnavailable
+                } else {
+                    IpcErrorCode::WriteFailed
+                };
+                let failure = IpcError::new(code, error.to_string());
+                self.failed(&error);
+                Err(failure)
+            }
+        }
+    }
+
+    /// The archived subjects the author may reopen (AD-54), with the live
+    /// cards of `board`; read from the writer, or from the read-only
+    /// connection of a registry written by a newer Officina.
+    pub fn archived(&mut self, board: Option<&Board>) -> Result<Vec<SubjectView>, IpcError> {
+        let read = match &self.slot {
+            Slot::Writable(writer) => read::archived(&writer.conn, board),
+            Slot::ReadOnly(reader) => reader.archived(board),
+            Slot::Unavailable(_) | Slot::Network => return Err(self.not_writable()),
+        };
+        read.map_err(|error| {
+            let failure = IpcError::new(IpcErrorCode::RegistryUnavailable, error.to_string());
+            self.failed(&RegistryError::from(error));
+            failure
+        })
+    }
+
+    /// The Subjects view (AD-54), with the live cards of `board` and the
+    /// lag behind the event files of `events_dir`; with nothing read, the
+    /// view says why (D-47).
+    pub fn view(&mut self, board: Option<&Board>, events_dir: &Path, now_ms: i64) -> RegistryView {
+        let report = self.report();
+        let read = match &self.slot {
+            Slot::Writable(writer) => {
+                read::view(&writer.conn, report.clone(), board, events_dir, now_ms)
+            }
+            Slot::ReadOnly(reader) => reader.view(report.clone(), board, events_dir, now_ms),
+            Slot::Unavailable(_) | Slot::Network => return unread_view(report, now_ms),
+        };
+        match read {
+            Ok(view) => view,
             Err(error) => {
-                self.last_error = Some(error.to_string());
-                None
+                self.failed(&RegistryError::from(error));
+                unread_view(self.report(), now_ms)
             }
         }
     }

@@ -9,6 +9,11 @@ import type { SubjectStatus } from "./SubjectStatus";
  */
 export type SubjectView = { id: number, project: string, name: string, status: SubjectStatus, status_src: Source, status_at_ms: number, 
 /**
+ * "Routine, could have run alone", set when it was archived (FR-13,
+ * P-10).
+ */
+routine: boolean, 
+/**
  * Its sessions, the latest seen first.
  */
 sessions: Array<SessionView>, 

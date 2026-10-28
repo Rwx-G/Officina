@@ -17,7 +17,9 @@ use officina_core::registry::types::{
 };
 #[cfg(feature = "window-authority")]
 use officina_core::registry::types::{HookEnd, HookStart, SessionFact};
-use officina_core::registry::view::{IngestionView, RegistryView, ViewInput, build_view};
+use officina_core::registry::view::{
+    IngestionView, RegistryView, SubjectView, ViewInput, archived_subjects, build_view,
+};
 use rusqlite::Connection;
 #[cfg(feature = "window-authority")]
 use rusqlite::OptionalExtension;
@@ -143,6 +145,12 @@ impl Reader {
     ) -> rusqlite::Result<RegistryView> {
         view(&self.conn, report, board, events_dir, now_ms)
     }
+
+    /// The archived subjects the author may reopen, with the live cards of
+    /// `board` (AD-54, D-55).
+    pub fn archived(&self, board: Option<&Board>) -> rusqlite::Result<Vec<SubjectView>> {
+        archived(&self.conn, board)
+    }
 }
 
 const SUBJECT_COLUMNS: &str =
@@ -266,6 +274,18 @@ pub(crate) fn view(
         },
         now_ms,
     ))
+}
+
+/// The archived subjects the author may reopen, from one read
+/// transaction, like the view.
+pub(crate) fn archived(
+    conn: &Connection,
+    board: Option<&Board>,
+) -> rusqlite::Result<Vec<SubjectView>> {
+    let snapshot = conn.unchecked_transaction()?;
+    let subjects = subjects(&snapshot)?;
+    let sessions = session_records(&snapshot)?;
+    Ok(archived_subjects(&subjects, &sessions, board))
 }
 
 /// `subject_id`, `subject_src` and `subject_at_ms` as one value: `None`

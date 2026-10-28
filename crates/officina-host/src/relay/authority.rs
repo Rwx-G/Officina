@@ -70,10 +70,7 @@ impl AuthorityError {
             AuthorityError::Journal(_) => IpcErrorCode::JournalUnavailable,
             AuthorityError::Decide(_) | AuthorityError::RecordBroken(_) => IpcErrorCode::Refused,
         };
-        IpcError {
-            code,
-            message: self.to_string(),
-        }
+        IpcError::new(code, self.to_string())
     }
 }
 

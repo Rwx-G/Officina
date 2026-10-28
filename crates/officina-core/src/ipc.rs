@@ -4,6 +4,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::registry::types::AuthorRefusal;
+
 closed_enum! {
     #[serde(rename_all = "snake_case")]
     /// What kind of failure a window command met.
@@ -22,6 +24,15 @@ closed_enum! {
         /// The request cannot be decided: unknown, decided, expired or
         /// invalid (D-27).
         Refused,
+        /// A rule refused an author action on subjects and nothing was
+        /// written: `refusal` says which (D-57).
+        AuthorRefused,
+        /// The registry cannot be written now: read only, unavailable or on
+        /// a network folder (AD-41, AD-42).
+        RegistryUnavailable,
+        /// The collector did not answer in time; a request it had not
+        /// started is dropped, never run later (D-92).
+        Timeout,
         /// The window's own machinery failed, such as a task that did not
         /// finish.
         Internal,
@@ -35,9 +46,21 @@ closed_enum! {
 pub struct IpcError {
     pub code: IpcErrorCode,
     pub message: String,
+    /// Which rule refused an author action, for
+    /// [`IpcErrorCode::AuthorRefused`]: the window words it.
+    pub refusal: Option<AuthorRefusal>,
 }
 
 impl IpcError {
+    /// A failure of kind `code`, saying `message`.
+    pub fn new(code: IpcErrorCode, message: impl Into<String>) -> IpcError {
+        IpcError {
+            code,
+            message: message.into(),
+            refusal: None,
+        }
+    }
+
     /// A failure of the window's own machinery.
     ///
     /// ```
@@ -45,9 +68,22 @@ impl IpcError {
     /// assert_eq!(IpcError::internal("a task panicked").code, IpcErrorCode::Internal);
     /// ```
     pub fn internal(message: impl Into<String>) -> IpcError {
+        IpcError::new(IpcErrorCode::Internal, message)
+    }
+
+    /// An author action a rule refused (D-57).
+    ///
+    /// ```
+    /// use officina_core::ipc::{IpcError, IpcErrorCode};
+    /// use officina_core::registry::types::AuthorRefusal;
+    /// let refused = IpcError::refused_action(AuthorRefusal::NameTaken);
+    /// assert_eq!((refused.code, refused.refusal), (IpcErrorCode::AuthorRefused, Some(AuthorRefusal::NameTaken)));
+    /// ```
+    pub fn refused_action(refusal: AuthorRefusal) -> IpcError {
         IpcError {
-            code: IpcErrorCode::Internal,
-            message: message.into(),
+            code: IpcErrorCode::AuthorRefused,
+            message: format!("refused: {}", refusal.code()),
+            refusal: Some(refusal),
         }
     }
 }

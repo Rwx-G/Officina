@@ -15,8 +15,10 @@ use super::types::{AuthorRefusal, SessionRecord, SubjectRecord, SubjectStatus};
 /// The longest subject name, in characters, once trimmed (D-57).
 pub const NAME_MAX_CHARS: usize = 80;
 
-/// Where a new subject's project comes from (D-95).
+/// Where a new subject's project comes from (D-95); the window's
+/// `create_subject` command takes it as sent.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "snake_case")]
 pub enum SubjectOrigin {
     /// The selected sessions: their one project, and they are filed under
