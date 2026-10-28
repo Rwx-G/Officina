@@ -247,18 +247,22 @@ pub(crate) fn view(
     events_dir: &Path,
     now_ms: i64,
 ) -> rusqlite::Result<RegistryView> {
-    let subjects = subjects(conn)?;
-    let sessions = session_records(conn)?;
-    let excerpts = excerpts(conn)?;
+    // One read transaction, so the subjects, sessions and excerpts come from
+    // the same commit while the window writes beside a command line (WAL);
+    // it is never written in, and ends when dropped.
+    let snapshot = conn.unchecked_transaction()?;
+    let subjects = subjects(&snapshot)?;
+    let sessions = session_records(&snapshot)?;
+    let excerpts = excerpts(&snapshot)?;
     Ok(build_view(
         &ViewInput {
             registry: report,
-            ingestion: ingestion_view(conn, events_dir)?,
+            ingestion: ingestion_view(&snapshot, events_dir)?,
             subjects: &subjects,
             sessions: &sessions,
             excerpts: &excerpts,
             board,
-            restore_notice: restore_notice(conn),
+            restore_notice: restore_notice(&snapshot),
         },
         now_ms,
     ))
