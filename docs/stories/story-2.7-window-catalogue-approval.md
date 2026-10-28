@@ -1,6 +1,6 @@
 # Story 2.7: Window, slice A: catalogue approval and stop
 
-**Status:** Approved
+**Status:** Review
 
 ## Story
 
@@ -26,14 +26,14 @@ so that nothing new runs through the relay until I have seen it, approving takes
 
 ## Tasks
 
-- [ ] `watch.rs`: floor stamp and reload with watched-path rebuild, relay tree fingerprint, journal stamp, relay callback and diff before emit, `known-projects.json` upkeep, `CollectorMsg::RelayChanged` (AC 1-4)
-- [ ] `authority::set_relay_stopped` with journal lines (AC 5)
-- [ ] `app/src-tauri/src/main.rs`: `get_relay`, `approve_catalogue`, `set_relay_stopped`, `relay://updated` emit; `build.rs`, `capabilities/default.json` (AC 4, 5, 7)
-- [ ] `ipc.ts`, `lib/relay.svelte.ts`, `e2e-mock.ts`, `e2e-globals.d.ts` (AC 8)
-- [ ] Banner with the diff and Approve; header chips and stop toggle; stopped banner (AC 9-12)
-- [ ] `crates/officina-host/examples/approve_fixture.rs` (approve the relay floor of a given home; set or clear the stop flag); relay scenarios in `scripts/e2e-fixtures.mjs`; `app/e2e/relay.spec.ts` (AC 9-13)
-- [ ] CLI tests `run.rs`, `gate.rs` for the stop flow (AC 6)
-- [ ] Update `CHANGELOG.md` `[Unreleased]` and the README relay section (approval, stop) (D-34)
+- [x] `watch.rs`: floor stamp and reload with watched-path rebuild, relay tree fingerprint, journal stamp, relay callback and diff before emit, `known-projects.json` upkeep, `CollectorMsg::RelayChanged` (AC 1-4)
+- [x] `authority::set_relay_stopped` with journal lines (AC 5)
+- [x] `app/src-tauri/src/main.rs`: `get_relay`, `approve_catalogue`, `set_relay_stopped`, `relay://updated` emit; `build.rs`, `capabilities/default.json` (AC 4, 5, 7)
+- [x] `ipc.ts`, `lib/relay.svelte.ts`, `e2e-mock.ts`, `e2e-globals.d.ts` (AC 8)
+- [x] Banner with the diff and Approve; header chips and stop toggle; stopped banner (AC 9-12)
+- [x] `crates/officina-host/examples/approve_fixture.rs` (approve the relay floor of a given home; set or clear the stop flag); relay scenarios in `scripts/e2e-fixtures.mjs`; `app/e2e/relay.spec.ts` (AC 9-13)
+- [x] CLI tests `run.rs`, `gate.rs` for the stop flow (AC 6)
+- [x] Update `CHANGELOG.md` `[Unreleased]` and the README relay section (approval, stop) (D-34)
 
 ## Dev Notes
 
@@ -57,11 +57,54 @@ so that nothing new runs through the relay until I have seen it, approving takes
 
 ### Debug Log
 
+- **Decisions where the documents are silent**, each the reading that fails closed or matches the architecture:
+  - `PendingChange` gains `current`, the canonical catalogue the Approve button would approve: `CatalogueDiff` lists added actions by name only, and the author must see what an added action runs (AD-24: the author approves meaning). The banner shows each added action's class, runner, program and arguments as chips, `env`, parameters and limits; a changed map field (`params`, `env`) is split by key so one added value is not lost in the whole map.
+  - The banner also lists the actions the floor skips as invalid (`RelayView.issues`), with their lines, so the author knows what is not part of the approval; the Relay view of story 2.9 keeps the full list.
+  - The stop toggle, the chips and the relay banners appear only while the relay is in use (an approved hash, a pending change, a stop flag or a broken snapshot): a v0.1 workstation sees nothing new, and the board e2e cases and README assets are unchanged.
+  - A refused approval says "changed again" when the next relay view's pending hash differs from the hash the author approved; the store compares hashes rather than parsing the error text. Any other refusal shows the backend's message.
+  - `with_authority` sends `RelayChanged` after every authority call, refused ones included: a refusal usually means the floor moved.
+  - Floor reload: the default floor (`floor.toml` in the home) counts when it exists, as at startup (created later it is picked up, deleted it leaves no floor); a floor named by `--floor` or `OFFICINA_FLOOR` that disappears is a board error. `Collector::from_parts` now takes the environment's paths and applies the floor's `config_dir` itself, keeping the base for reloads; `Collector` carries the relay home (`OFFICINA_FLOOR` applied in `Collector::new`).
+  - The collector also stats the relay floor (AD-24, D-8), which can differ from the window's floor, and re-resolves it when the relay tree changes; a relay floor edit rebuilds the relay view, not the board (AD-7).
+  - The relay view is rebuilt every 15 s besides its triggers (`RELAY_POLL`), so a run turns "abandoned" and old gate errors leave the 24 h count without a file change.
+  - `relay/known-projects.json` upkeep (D-15): written only while the relay is in use (a valid snapshot, a record already there, or a floor that declares an action or a guarded project), because a record makes a broken floor guard every known project, which a workstation without the relay must not get. The record holds the paths of the valid floor and the valid snapshot, and keeps its recorded hash when the snapshot is gone, so the gate keeps reading that state as broken. The "in use" rule is one core function, `catalogue::relay_in_use`, also used for a first pending change.
+  - The e2e mock synthesises only what the authority would change for `set_relay_stopped` (the flag and its time); approval views come from fixtures (`__officinaRelayApproved`). `__officinaPushRelay` is defined here, as the Epic 4 stories expect, with `loadRelay` in `e2e/fixtures.ts`.
+  - The fixtures run `cargo run -p officina-host --example approve_fixture --features window-authority` (AC 13's command) from `e2e-fixtures.mjs`, so CI's existing step "e2e fixtures from the real CLI" covers them without a workflow change. Each scenario has its own temporary home, so hashes differ between scenarios and the e2e cases read them from the fixtures.
+- **Interrupted twice by the coordinator**, each in its own commit: the core-linux CI failure (story 2.6's record) and `perf.rs::gate_overhead_over_empty_process` on the hosted Windows runner, whose baseline is now the same binary answering another tool than `Bash` (recorded in story 2.4, commit `test(relay): measure the gate's own cost against the same binary`).
+- **Adversarial pass.** Tried: a floor edited between display and click (refused, new diff shown), a double click and Enter, Space and number keys on the focused Approve button, markup in a description, an invalid action's name and an issue message, approving with the window on another floor than the relay's, stopping twice and concurrently, stopping with the journal locked, a floor moving `config_dir`, a default floor created and deleted, the relay floor differing from the window's, `approved.json` deleted under a running window, a v0.1 floor, and a relay file the view does not show. Two real misses became tests: after a reload moved `config_dir`, the window's focus and attach commands kept the startup config dir and would have attached with the wrong account (`watch.rs::floor_edit_rebuilds_watched_paths` now asserts the shared paths; the window builds its focus context per call from them); and the "relay in use" rule was written twice, on the canonical form and on the raw floor (now one core function with a doctest). The header's Resume button took the pin button's dark pressed style (equal specificity, later rule), seen on a screenshot and fixed.
+- **Not run here:** the window itself (Tauri) was not started; its commands are thin wrappers proved by the host and collector tests, and its declarations by `main.rs::tests::every_declared_command_is_allowed`. The release search for the authority marker was not rerun locally; `cargo tree -p officina -e normal,features` still shows no `window-authority`.
+
 ### Completion Notes
 
+- AC 1: `crates/officina/tests/watch.rs::{floor_edit_reloads_board_projects, floor_edit_rebuilds_watched_paths, relay_tree_change_recomputes_the_relay_view, journal_append_recomputes_the_relay_view}`; host `watch.rs::tests::{relay_changes_rebuild_the_relay_view_alone_and_time_does_too, floor_change_rebuilds_everything, relay_tree_changes_change_its_fingerprint}`.
+- AC 2: `watch.rs::relay_view_is_emitted_only_on_change`; `relay_tree_change_recomputes_the_relay_view` reads `WatchHandle::relay`, the cache `get_relay` answers.
+- AC 3: `watch.rs::known_projects_follow_the_floor` (floor edit, snapshot gone, and no record for a v0.1 floor).
+- AC 4: host `authority.rs` approval tests (story 2.2); `watch.rs::relay_changed_message_recomputes_now` (a change no stat sees, shown within 2 s of the message).
+- AC 5: `crates/officina-host/tests/authority.rs::{stop_writes_the_flag_and_journals, resume_deletes_the_flag_and_journals, stopping_twice_journals_once}`, plus `a_locked_journal_stops_nothing`.
+- AC 6: `crates/officina/tests/run.rs::{stop_through_the_authority_refuses, resume_lets_runs_through}`, `crates/officina/tests/gate.rs::stop_does_not_change_gate_decisions`.
+- AC 7: `app/src-tauri/src/main.rs::tests::every_declared_command_is_allowed` (build.rs list, capability file and `generate_handler!` list, each read from its file).
+- AC 8: the Playwright cases below run against the mock; Vitest `app/src/lib/relay.test.ts` covers the store.
+- AC 9: `app/e2e/relay.spec.ts > a pending catalogue change shows the diff and approves the displayed hash`, `> the header chip marks a pending change`.
+- AC 10: `relay.spec.ts > a refused approval says the catalogue changed again`.
+- AC 11: `relay.spec.ts > the stop toggle calls set_relay_stopped`, `> a stopped relay shows the terracotta chip and the board banner`.
+- AC 12: `relay.spec.ts > catalogue text renders as text, never as HTML`, Vitest `relay.test.ts > RelayBanners > renders catalogue text as text, never as markup`, and the `svelte/no-at-html-tags` lint.
+- AC 13: `app/scripts/e2e-fixtures.mjs` scenarios `relay-clean`, `relay-pending`, `relay-pending-again`, `relay-pending-approved`, `relay-stopped`; `crates/officina-host/Cargo.toml` declares the example with `required-features = ["window-authority"]`.
+- Beyond the ACs: `relay.spec.ts > no key approves`, `> a workstation without the relay shows no relay control`; Vitest `relay.test.ts > RelayBanners > approves on a pointer click only`.
+- Gates at the end of the story: `cargo fmt --all -- --check`; `cargo clippy --workspace --all-targets --all-features -- -D warnings` and with CI's feature sets; `cargo test --workspace --all-features` 386 passed, 0 failed, 5 ignored; TS drift test green; `cargo test --release -p officina --test perf -- --ignored` 5 passed; `cargo deny check` ok (existing duplicate-version warnings only); `pnpm -C app check`, `lint`, `test` (20 passed); fixtures rebuilt from the real CLI and `pnpm -C app e2e` 28 passed. The two Rust commits before the UI one were built and tested alone in a scratch worktree.
+
 ## File List
+
+- `crates/officina-core/src/relay/{catalogue,view}.rs`, `app/src/lib/generated/PendingChange.ts`
+- `crates/officina-host/src/{collector,watch}.rs`, `crates/officina-host/src/relay/authority.rs`
+- `crates/officina-host/Cargo.toml`, `crates/officina-host/examples/approve_fixture.rs`
+- `crates/officina-host/tests/authority.rs`
+- `crates/officina/tests/{watch,run,gate,quota_doctor}.rs`
+- `app/src-tauri/src/main.rs`, `app/src-tauri/build.rs`, `app/src-tauri/capabilities/default.json`
+- `app/src/{App.svelte,app.css,e2e-mock.ts,e2e-globals.d.ts}`, `app/src/components/{Header,RelayBanners}.svelte`, `app/src/lib/{ipc.ts,relay.svelte.ts,relay.test.ts}`
+- `app/e2e/{fixtures.ts,relay.spec.ts}`, `app/scripts/e2e-fixtures.mjs`
+- `README.md`, `CHANGELOG.md`
 
 ## Change Log
 
 - 2026-10-27 created
 - 2026-10-27 reworked after review: stop moved here into Slice A (D-26), fixtures approved through the `approve_fixture` example (D-25), relay floor approved (D-8), `known-projects.json` upkeep (D-15), watched paths rebuilt on reload, journal-append recompute test
+- 2026-10-28 implemented: stop and resume in the authority, the collector's floor reload and relay view, the window's commands, the approval banner, chips and stop toggle, fixtures through `approve_fixture`; adversarial pass (focus after a config dir move, one "in use" rule); status Review
