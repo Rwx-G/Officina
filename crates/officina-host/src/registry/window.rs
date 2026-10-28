@@ -6,6 +6,9 @@
 
 use std::path::{Path, PathBuf};
 
+use officina_core::agents::AgentRecord;
+use officina_core::board::ProjectRule;
+use officina_core::registry::fold::{AgentsChanges, AgentsSnapshot};
 use officina_core::registry::types::{RegistryReport, RegistryState};
 
 use super::ingest::{IngestContext, IngestReport};
@@ -34,6 +37,9 @@ pub struct WindowRegistry {
     /// The last error that did not make the registry unavailable (a disk
     /// full, a busy file), cleared by the next success.
     last_error: Option<String>,
+    /// The previous `claude agents` snapshot, in memory only (AD-46);
+    /// seeded from the registry at the first refresh (D-51).
+    agents: Option<AgentsSnapshot>,
 }
 
 impl WindowRegistry {
@@ -54,6 +60,7 @@ impl WindowRegistry {
             slot,
             integrity,
             last_error: None,
+            agents: None,
         }
     }
 
@@ -123,6 +130,22 @@ impl WindowRegistry {
     /// One ingestion pass, when the registry is writable.
     pub fn ingest(&mut self, ctx: &IngestContext, now_ms: i64) -> Option<IngestReport> {
         self.on_writer(|writer| writer.ingest(ctx, now_ms))
+    }
+
+    /// Folds a successful `claude agents` refresh into the registry, when
+    /// it is writable (AD-46). Only call it after a refresh that succeeded:
+    /// a failed one keeps the previous snapshot and writes nothing.
+    pub fn apply_agents(
+        &mut self,
+        records: &[AgentRecord],
+        projects: &[ProjectRule],
+        now_ms: i64,
+    ) -> Option<AgentsChanges> {
+        let mut snapshot = self.agents.take();
+        let applied =
+            self.on_writer(|writer| writer.apply_agents(&mut snapshot, records, projects, now_ms));
+        self.agents = snapshot;
+        applied
     }
 
     /// The registry's hourly pass, when the registry is writable: read-only

@@ -491,6 +491,14 @@ fn ingest(collector: &mut Collector, registry: &mut WindowRegistry) {
     collector.set_registry(registry.report());
 }
 
+/// Folds the session list the collector just received into the window's
+/// registry (AD-46), after the tick's ingestion (D-78).
+fn apply_agents(collector: &mut Collector, registry: &mut WindowRegistry, now_ms: i64) {
+    let records = collector.agents().unwrap_or_default();
+    registry.apply_agents(records, &collector.floor().projects, now_ms);
+    collector.set_registry(registry.report());
+}
+
 /// The hourly pass, also run at start before the first board (AD-44,
 /// D-44, D-85): the registry's part (ingest, copy when due, retention, the
 /// WAL truncated) only while the registry is writable, then v0.2's focus
@@ -546,7 +554,10 @@ fn run(
             ingest(collector, &mut registry);
         }
         if due.agents {
-            collector.refresh_agents(now_ms());
+            let now = now_ms();
+            if collector.refresh_agents(now) {
+                apply_agents(collector, &mut registry, now);
+            }
             if due.contract {
                 collector.refresh_contract(now_ms());
             }

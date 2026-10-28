@@ -274,10 +274,15 @@ impl Collector {
             .with_floor_config_dir(config_dir.as_deref());
     }
 
-    /// Runs `claude agents --json --all`. On failure the previous list is
-    /// kept and the board is marked stale (FR-1): a failed call never empties
-    /// the board.
-    pub fn refresh_agents(&mut self, now_ms: i64) {
+    /// The session list of the last successful `claude agents` call.
+    pub fn agents(&self) -> Option<&[AgentRecord]> {
+        self.agents.as_deref()
+    }
+
+    /// Runs `claude agents --json --all`; true when it answered. On failure
+    /// the previous list is kept and the board is marked stale (FR-1): a
+    /// failed call never empties the board.
+    pub fn refresh_agents(&mut self, now_ms: i64) -> bool {
         let result = match &self.claude {
             None => Err(claude::ClaudeError::NotFound.to_string()),
             Some(bin) => claude::agents_json(bin, self.paths.claude_config_override.as_deref())
@@ -295,10 +300,12 @@ impl Collector {
                 self.agents_raw = Some(raw);
                 self.stale = None;
                 self.check_contract(now_ms);
+                true
             }
             Err(error) => {
                 let since_ms = self.stale.as_ref().map_or(now_ms, |s| s.since_ms);
                 self.stale = Some(Staleness { since_ms, error });
+                false
             }
         }
     }

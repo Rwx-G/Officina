@@ -21,7 +21,7 @@ use std::time::{Duration, Instant};
 
 use officina_core::board::Board;
 use officina_core::registry::retention::EXCERPT_TTL_MS;
-use officina_core::registry::types::{RegistryState, SettingKey, Source};
+use officina_core::registry::types::{Ending, RegistryState, SessionRecord, SettingKey, Source};
 use officina_core::relay::journal::{CatalogueApproved, JournalEntry};
 use officina_core::relay::view::{RecentEvent, RelayView};
 use officina_host::collector::{Collector, LoadedFloor, load_floor};
@@ -684,6 +684,206 @@ fn today_growth_is_ingested_before_the_recompute() {
     );
     until(&rx, |b| shows(b, "s-growth"));
     assert_eq!(*held_when_shown.lock().unwrap(), Some(true));
+    stop(handle);
+}
+
+/// The registry's records, read as another process would, once `wanted`
+/// holds for them; panics after 10 s.
+fn records_once(
+    env: &common::TestEnv,
+    wanted: impl Fn(&[SessionRecord]) -> bool,
+) -> Vec<SessionRecord> {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let records = open_reader(&env.officina_home(), &[])
+            .ok()
+            .and_then(|r| r.session_records().ok())
+            .unwrap_or_default();
+        if wanted(&records) {
+            return records;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the registry never held what was wanted: {records:#?}"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+fn record<'a>(records: &'a [SessionRecord], id: &str) -> Option<&'a SessionRecord> {
+    records.iter().find(|r| r.session_id == id)
+}
+
+/// AD-46: what `claude agents` reports is stored with source `agents`.
+#[test]
+fn agents_facts_carry_source_agents() {
+    let env = common::TestEnv::new();
+    let now = officina_host::files::now_ms();
+    env.write_agents(
+        &serde_json::json!([{"pid": 4300, "id": "bg01", "cwd": "C:/work/web", "kind": "background",
+            "startedAt": now - 60_000, "sessionId": "s-bg", "name": "nightly", "status": "waiting",
+            "state": "blocked", "waitingFor": "permission prompt"}])
+        .to_string(),
+    );
+    let (handle, rx, _) = watch_listing(&env, |_| {});
+    until(&rx, |b| shows(b, "s-bg"));
+    let records = records_once(&env, |r| {
+        record(r, "s-bg").is_some_and(|s| s.state.is_some())
+    });
+    let bg = record(&records, "s-bg").unwrap();
+    let sources = [
+        bg.kind.as_ref().map(|f| f.src),
+        bg.name.as_ref().map(|f| f.src),
+        bg.cwd.as_ref().map(|f| f.src),
+        bg.claude_pid.as_ref().map(|f| f.src),
+        bg.background_id.as_ref().map(|f| f.src),
+        bg.status.as_ref().map(|f| f.src),
+        bg.state.as_ref().map(|f| f.src),
+        bg.listed.as_ref().map(|f| f.src),
+    ];
+    assert!(
+        sources.iter().all(|src| *src == Some(Source::Agents)),
+        "{sources:?}"
+    );
+    assert_eq!(bg.name.as_ref().unwrap().value, "nightly");
+    assert_eq!(bg.project, "web");
+    stop(handle);
+}
+
+/// D-79: a session first seen in `claude agents` is created by the one
+/// creation function, like one first seen in an event; its later events
+/// join the same record.
+#[test]
+fn a_session_first_seen_in_agents_gets_one_record() {
+    let env = common::TestEnv::new();
+    let now = officina_host::files::now_ms();
+    env.write_agents(&listed_session("s-agents", now));
+    let (handle, rx, _) = watch_listing(&env, |_| {});
+    until(&rx, |b| shows(b, "s-agents"));
+    let records = records_once(&env, |r| record(r, "s-agents").is_some());
+    assert_eq!(record(&records, "s-agents").unwrap().project, "api");
+    assert!(
+        record(&records, "s-agents")
+            .unwrap()
+            .last_prompt_at
+            .is_none()
+    );
+    hook_line(
+        &env,
+        serde_json::json!({"hook_event_name": "UserPromptSubmit", "session_id": "s-agents", "cwd": "C:/work/api", "prompt": "x"}),
+        officina_host::files::now_ms(),
+    );
+    let records = records_once(&env, |r| {
+        record(r, "s-agents").is_some_and(|s| s.last_prompt_at.is_some())
+    });
+    assert_eq!(
+        records
+            .iter()
+            .filter(|r| r.session_id == "s-agents")
+            .count(),
+        1
+    );
+    let session = record(&records, "s-agents").unwrap();
+    assert_eq!(session.project, "api");
+    assert_eq!(session.listed.as_ref().unwrap().src, Source::Agents);
+    stop(handle);
+}
+
+/// D-51: the snapshot is seeded from the registry at start, so a session
+/// that died while the window was closed is `interrupted` at the first
+/// refresh.
+#[test]
+fn session_gone_while_the_window_was_closed_is_interrupted() {
+    let env = common::TestEnv::new();
+    let now = officina_host::files::now_ms();
+    env.write_agents(&listed_session("s-closed", now));
+    let (handle, rx, _) = watch_listing(&env, |_| {});
+    until(&rx, |b| shows(b, "s-closed"));
+    records_once(&env, |r| {
+        record(r, "s-closed").is_some_and(|s| s.status.is_some())
+    });
+    stop(handle);
+
+    env.write_agents("[]");
+    let (handle, rx, _) = watch_listing(&env, |_| {});
+    until(&rx, |b| !shows(b, "s-closed"));
+    let records = records_once(&env, |r| {
+        record(r, "s-closed").is_some_and(|s| s.interrupted.is_some())
+    });
+    let session = record(&records, "s-closed").unwrap();
+    assert_eq!(session.interrupted.as_ref().unwrap().src, Source::Rules);
+    assert_eq!(session.ending().map(|e| e.value), Some(Ending::Interrupted));
+    stop(handle);
+}
+
+/// Writes a `SessionEnd` for `session` with `reason`, then empties the
+/// session list, and waits for a board that no longer lists `session`.
+/// Past the startup's spawns and follow-ups, the line's tick both ingests
+/// and lists the sessions, so the order within one tick decides (D-78).
+fn end_then_vanish(env: &common::TestEnv, rx: &Receiver<Board>, session: &str, reason: &str) {
+    std::thread::sleep(Duration::from_millis(1500));
+    hook_line(
+        env,
+        serde_json::json!({"hook_event_name": "SessionEnd", "session_id": session, "cwd": "C:/work/api", "reason": reason}),
+        officina_host::files::now_ms(),
+    );
+    env.write_agents("[]");
+    until(rx, |b| !shows(b, session) && b.stale.is_none());
+}
+
+/// D-78: a `SessionEnd` and the vanishing of its session seen in one tick:
+/// the tick ingests first, so the real end is kept and no `interrupted` is
+/// inferred.
+#[test]
+fn session_end_and_vanishing_in_one_tick_keep_the_real_end() {
+    let env = common::TestEnv::new();
+    let now = officina_host::files::now_ms();
+    env.write_agents(&listed_session("s-end", now));
+    let (handle, rx, _) = watch_listing(&env, |_| {});
+    until(&rx, |b| shows(b, "s-end"));
+    records_once(&env, |r| record(r, "s-end").is_some());
+    end_then_vanish(&env, &rx, "s-end", "prompt_input_exit");
+    let records = records_once(&env, |r| {
+        record(r, "s-end").is_some_and(|s| s.ended.is_some())
+    });
+    let session = record(&records, "s-end").unwrap();
+    assert!(session.interrupted.is_none(), "{session:#?}");
+    assert_eq!(
+        session.ending().map(|e| e.value),
+        Some(Ending::SessionEnd {
+            reason: Some("prompt_input_exit".to_owned())
+        })
+    );
+    stop(handle);
+}
+
+/// FR-3 as amended, AD-47: a session seen in `claude agents` that ends with
+/// `other` is not non-interactive; a run seen only in events is.
+#[test]
+fn session_seen_live_is_never_non_interactive() {
+    let env = common::TestEnv::new();
+    let now = officina_host::files::now_ms();
+    env.write_agents(&listed_session("s-live", now));
+    let (handle, rx, _) = watch_listing(&env, |_| {});
+    until(&rx, |b| shows(b, "s-live"));
+    records_once(&env, |r| record(r, "s-live").is_some());
+    for (event, extra) in [
+        ("SessionStart", ("source", "startup")),
+        ("SessionEnd", ("reason", "other")),
+    ] {
+        let mut payload = serde_json::json!({"hook_event_name": event, "session_id": "p-run", "cwd": "C:/work/api"});
+        payload[extra.0] = extra.1.into();
+        hook_line(&env, payload, officina_host::files::now_ms());
+    }
+    end_then_vanish(&env, &rx, "s-live", "other");
+    let records = records_once(&env, |r| {
+        record(r, "s-live").is_some_and(|s| s.ended.is_some())
+            && record(r, "p-run").is_some_and(|s| s.ended.is_some())
+    });
+    let live = record(&records, "s-live").unwrap();
+    assert!(live.is_ended());
+    assert!(!live.is_non_interactive(), "{live:#?}");
+    assert!(record(&records, "p-run").unwrap().is_non_interactive());
     stop(handle);
 }
 

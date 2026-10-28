@@ -10,6 +10,8 @@
 use std::path::{Path, PathBuf};
 
 #[cfg(feature = "window-authority")]
+pub mod agents;
+#[cfg(feature = "window-authority")]
 pub mod ingest;
 pub mod read;
 #[cfg(feature = "window-authority")]

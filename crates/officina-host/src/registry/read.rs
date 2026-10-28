@@ -2,10 +2,18 @@
 //! and the queries it shares with the window's writer, each turning rows
 //! into core records.
 
+use officina_core::registry::fold::pivot;
+#[cfg(feature = "window-authority")]
+use officina_core::registry::fold::{Mark, MarkQuery};
 use officina_core::registry::types::{
-    EventFileRecord, ExcerptRecord, RestoreNotice, SessionRow, SettingKey, Source, Sourced,
+    EventFileRecord, ExcerptRecord, FactRow, FactValue, RestoreNotice, SessionRecord, SessionRow,
+    SettingKey, Source, Sourced,
 };
+#[cfg(feature = "window-authority")]
+use officina_core::registry::types::{HookEnd, HookStart, SessionFact};
 use rusqlite::Connection;
+#[cfg(feature = "window-authority")]
+use rusqlite::OptionalExtension;
 use rusqlite::types::ValueRef;
 
 use super::store::{self, Location};
@@ -94,23 +102,16 @@ impl Reader {
     pub fn excerpts(&self) -> rusqlite::Result<Vec<ExcerptRecord>> {
         excerpts(&self.conn)
     }
-}
 
-/// Every `event_file` row, by name.
-pub(crate) fn event_files(conn: &Connection) -> rusqlite::Result<Vec<EventFileRecord>> {
-    conn.prepare_cached(
-        "SELECT name, ingested_bytes, complete_at_ms, corrupt_lines, rewrites FROM event_file ORDER BY name",
-    )?
-    .query_map([], |row| {
-        Ok(EventFileRecord {
-            name: row.get(0)?,
-            ingested_bytes: u64::try_from(row.get::<_, i64>(1)?).unwrap_or(0),
-            complete_at_ms: row.get(2)?,
-            corrupt_lines: row.get(3)?,
-            rewrites: row.get(4)?,
-        })
-    })?
-    .collect()
+    /// Every `session_fact` row, by session id and fact.
+    pub fn facts(&self) -> rusqlite::Result<Vec<FactRow>> {
+        facts(&self.conn)
+    }
+
+    /// Every session with its facts, by session id (AD-40).
+    pub fn session_records(&self) -> rusqlite::Result<Vec<SessionRecord>> {
+        session_records(&self.conn)
+    }
 }
 
 /// `subject_id`, `subject_src` and `subject_at_ms` as one value: `None`
@@ -138,6 +139,123 @@ fn session_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SessionRow> {
         last_seen_ms: row.get(3)?,
         subject: filing(row.get(4)?, row.get(5)?, row.get(6)?),
     })
+}
+
+fn fact_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<FactRow> {
+    let value = match row.get_ref(2)? {
+        ValueRef::Integer(i) => FactValue::Integer(i),
+        other => FactValue::Text(text_of(other)),
+    };
+    let src: String = row.get(3)?;
+    Ok(FactRow {
+        session_id: row.get(0)?,
+        fact: row.get(1)?,
+        value,
+        // The column's `CHECK` lists every source this build knows.
+        src: Source::from_code(&src).ok_or_else(|| {
+            rusqlite::Error::InvalidColumnType(3, src.clone(), rusqlite::types::Type::Text)
+        })?,
+        at_ms: row.get(4)?,
+    })
+}
+
+const FACT_COLUMNS: &str = "session_id, fact, value, src, at_ms";
+
+/// Every `session_fact` row, by session id and fact.
+pub(crate) fn facts(conn: &Connection) -> rusqlite::Result<Vec<FactRow>> {
+    conn.prepare_cached(&format!(
+        "SELECT {FACT_COLUMNS} FROM session_fact ORDER BY session_id, fact"
+    ))?
+    .query_map([], fact_row)?
+    .collect()
+}
+
+/// Every session with its facts, by session id.
+pub(crate) fn session_records(conn: &Connection) -> rusqlite::Result<Vec<SessionRecord>> {
+    Ok(pivot(&sessions(conn)?, &facts(conn)?))
+}
+
+#[cfg(feature = "window-authority")]
+/// The session `session_id` with its facts, when the registry holds it.
+pub(crate) fn session_record(
+    conn: &Connection,
+    session_id: &str,
+) -> rusqlite::Result<Option<SessionRecord>> {
+    let Some(row) = conn
+        .prepare_cached(&format!(
+            "SELECT {SESSION_COLUMNS} FROM session WHERE session_id = ?1"
+        ))?
+        .query_row([session_id], session_row)
+        .optional()?
+    else {
+        return Ok(None);
+    };
+    let facts: Vec<FactRow> = conn
+        .prepare_cached(&format!(
+            "SELECT {FACT_COLUMNS} FROM session_fact WHERE session_id = ?1"
+        ))?
+        .query_map([session_id], fact_row)?
+        .collect::<rusqlite::Result<_>>()?;
+    Ok(pivot(&[row], &facts).pop())
+}
+
+#[cfg(feature = "window-authority")]
+/// The supersession marks (D-52) the registry holds within `query`'s range:
+/// the host narrows by time, the core decides which link.
+pub(crate) fn marks(conn: &Connection, query: MarkQuery) -> rusqlite::Result<Vec<Mark>> {
+    let (fact, from_ms, to_ms) = match query {
+        MarkQuery::Starts { from_ms, to_ms } => (SessionFact::Started, from_ms, to_ms),
+        MarkQuery::Ends { from_ms, to_ms } => (SessionFact::Ended, from_ms, to_ms),
+    };
+    let rows: Vec<FactRow> = conn
+        .prepare_cached(&format!(
+            "SELECT {FACT_COLUMNS} FROM session_fact WHERE fact = ?1 AND at_ms BETWEEN ?2 AND ?3"
+        ))?
+        .query_map(rusqlite::params![fact.code(), from_ms, to_ms], fact_row)?
+        .collect::<rusqlite::Result<_>>()?;
+    Ok(rows
+        .iter()
+        .filter_map(|row| {
+            let FactValue::Text(text) = &row.value else {
+                return None;
+            };
+            match fact {
+                SessionFact::Started => Mark::of_start(
+                    &row.session_id,
+                    &Sourced {
+                        value: serde_json::from_str::<HookStart>(text).ok()?,
+                        src: row.src,
+                        at_ms: row.at_ms,
+                    },
+                ),
+                _ => Mark::of_end(
+                    &row.session_id,
+                    &Sourced {
+                        value: serde_json::from_str::<HookEnd>(text).ok()?,
+                        src: row.src,
+                        at_ms: row.at_ms,
+                    },
+                ),
+            }
+        })
+        .collect())
+}
+
+/// Every `event_file` row, by name.
+pub(crate) fn event_files(conn: &Connection) -> rusqlite::Result<Vec<EventFileRecord>> {
+    conn.prepare_cached(
+        "SELECT name, ingested_bytes, complete_at_ms, corrupt_lines, rewrites FROM event_file ORDER BY name",
+    )?
+    .query_map([], |row| {
+        Ok(EventFileRecord {
+            name: row.get(0)?,
+            ingested_bytes: u64::try_from(row.get::<_, i64>(1)?).unwrap_or(0),
+            complete_at_ms: row.get(2)?,
+            corrupt_lines: row.get(3)?,
+            rewrites: row.get(4)?,
+        })
+    })?
+    .collect()
 }
 
 /// Every `session` row, by session id.

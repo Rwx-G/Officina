@@ -4,11 +4,13 @@
 
 use std::path::Path;
 
+use officina_core::registry::fold::FactWrite;
 use officina_core::registry::types::{
-    EventFileRecord, ExcerptRecord, SessionRow, SettingKey, Source,
+    EventFileRecord, ExcerptRecord, FactValue, SessionRecord, SessionRow, SettingKey, Source,
 };
-use rusqlite::ErrorCode;
 use rusqlite::config::DbConfig;
+use rusqlite::types::Value;
+use rusqlite::{Connection, ErrorCode, TransactionBehavior};
 
 use super::read::{self, SettingRow};
 use super::store::Writer;
@@ -125,4 +127,49 @@ impl Writer {
     pub fn excerpts(&self) -> Result<Vec<ExcerptRecord>, RegistryError> {
         Ok(read::excerpts(&self.conn)?)
     }
+
+    /// Every session with its facts, by session id (AD-40).
+    pub fn session_records(&self) -> Result<Vec<SessionRecord>, RegistryError> {
+        Ok(read::session_records(&self.conn)?)
+    }
+
+    /// Records `writes` in one transaction, each replacing the stored fact
+    /// only when it is later (AD-43). Every session must exist.
+    pub fn record_facts(&mut self, writes: &[FactWrite]) -> Result<(), RegistryError> {
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        for write in writes {
+            write_fact(&tx, write)?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+}
+
+/// Writes one fact, replacing the stored row only when
+/// [`officina_core::registry::fold::replaces`] says so: whatever the order
+/// observations arrive in, the latest wins, and a replayed one changes
+/// nothing (AD-43).
+pub(crate) fn write_fact(conn: &Connection, write: &FactWrite) -> rusqlite::Result<()> {
+    let value = match &write.value {
+        FactValue::Integer(i) => Value::Integer(*i),
+        FactValue::Text(text) => Value::Text(text.clone()),
+    };
+    // The `WHERE` is `replaces` in SQL: a strictly later observation only.
+    // The fold vectors replayed through the writer hold the two together.
+    conn.prepare_cached(
+        "INSERT INTO session_fact (session_id, fact, value, src, at_ms) VALUES (?1, ?2, ?3, ?4, ?5)
+         ON CONFLICT (session_id, fact) DO UPDATE SET value = excluded.value, src = excluded.src,
+             at_ms = excluded.at_ms
+         WHERE excluded.at_ms > session_fact.at_ms",
+    )?
+    .execute(rusqlite::params![
+        write.session_id,
+        write.fact.code(),
+        value,
+        write.src.code(),
+        write.at_ms
+    ])?;
+    Ok(())
 }

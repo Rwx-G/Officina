@@ -109,9 +109,10 @@ fn expect_word(out: &mut BufReader<std::process::ChildStdout>, word: &str) {
 fn contents(home: &Home) -> String {
     let reader = open_reader(&home.home, &[]).unwrap();
     format!(
-        "{:#?}\n{:#?}\n{:#?}",
+        "{:#?}\n{:#?}\n{:#?}\n{:#?}",
         reader.event_files().unwrap(),
         reader.sessions().unwrap(),
+        reader.facts().unwrap(),
         reader.excerpts().unwrap()
     )
 }

@@ -6,10 +6,13 @@
 mod common;
 
 use common::registry::{DAY, Home, NOW, answer, day_file, line, prompt};
+use officina_core::agents::parse_agents;
 use officina_core::board::ProjectRule;
 use officina_core::dates::{day_start_ms, utc_date};
 use officina_core::registry::ingestion::{CHUNK_MAX_LINES, COMPLETE_GRACE_MS};
-use officina_core::registry::types::{EventFileRecord, ExcerptRecord};
+use officina_core::registry::types::{
+    Ending, EventFileRecord, ExcerptRecord, FactValue, SessionFact, Source,
+};
 use officina_host::registry::ingest::IngestContext;
 use officina_host::registry::store::open_reader;
 
@@ -573,6 +576,158 @@ fn an_unreadable_entry_does_not_stop_the_pass() {
     let report = writer.ingest(&home.ctx(), NOW).unwrap();
     assert_eq!(report.lines, 1);
     assert_eq!(project_of(&home, "s1"), "api");
+}
+
+/// One case of the `fold` section of `tests/vectors/triage.json`.
+#[derive(serde::Deserialize)]
+struct FoldCase {
+    name: String,
+    steps: Vec<serde_json::Value>,
+    expect: Vec<ExpectedSession>,
+}
+
+#[derive(serde::Deserialize, Debug, PartialEq)]
+struct ExpectedSession {
+    session_id: String,
+    #[serde(default)]
+    project: Option<String>,
+    facts: std::collections::BTreeMap<String, (serde_json::Value, Source)>,
+    ended: Option<Ending>,
+    superseded: bool,
+    non_interactive: bool,
+}
+
+/// What the registry holds, in the vector set's terms.
+fn observed(home: &Home, expected: &[ExpectedSession]) -> Vec<ExpectedSession> {
+    let reader = open_reader(&home.home, &[]).unwrap();
+    let facts = reader.facts().unwrap();
+    reader
+        .session_records()
+        .unwrap()
+        .into_iter()
+        .map(|record| ExpectedSession {
+            facts: facts
+                .iter()
+                .filter(|f| f.session_id == record.session_id)
+                .map(|f| {
+                    let value = match (&f.value, SessionFact::from_code(&f.fact)) {
+                        (FactValue::Text(t), Some(SessionFact::Started | SessionFact::Ended)) => {
+                            serde_json::from_str(t).unwrap()
+                        }
+                        (FactValue::Text(t), _) => t.clone().into(),
+                        (FactValue::Integer(i), _) => (*i).into(),
+                    };
+                    (f.fact.clone(), (value, f.src))
+                })
+                .collect(),
+            ended: record.ending().map(|e| e.value),
+            superseded: record.is_superseded(),
+            non_interactive: record.is_non_interactive(),
+            project: expected
+                .iter()
+                .find(|e| e.session_id == record.session_id && e.project.is_some())
+                .map(|_| record.project.clone()),
+            session_id: record.session_id,
+        })
+        .collect()
+}
+
+/// Story 3.3 AC 8, derived-not-transcribed: the core replays the `fold`
+/// section through its rules; this replays it through the real writer, the
+/// event files and the agents snapshot, so the SQL and the rules agree.
+#[test]
+fn fold_vectors_hold_through_the_writer() {
+    let set: serde_json::Value =
+        serde_json::from_str(include_str!("../../../tests/vectors/triage.json")).unwrap();
+    let cases: Vec<FoldCase> = serde_json::from_value(set["fold"].clone()).unwrap();
+    assert!(!cases.is_empty());
+    for case in cases {
+        let home = Home::new();
+        let mut writer = home.writer(NOW);
+        let mut snapshot = None;
+        for step in &case.steps {
+            if let Some(lines) = step.get("events").and_then(|l| l.as_array()) {
+                let mut latest = 0;
+                for line in lines {
+                    let ts = line["ts"].as_i64().unwrap();
+                    latest = latest.max(ts);
+                    home.append(&day_file(ts), &[format!("{line}\n")]);
+                }
+                writer.ingest(&home.ctx(), latest + 1_000).unwrap();
+            } else if let Some(agents) = step.get("agents") {
+                let records = parse_agents(&agents["records"].to_string()).unwrap();
+                let now = agents["now_ms"].as_i64().unwrap();
+                writer
+                    .apply_agents(&mut snapshot, &records, &[], now)
+                    .unwrap();
+            } else {
+                assert_eq!(step, "restart", "{}", case.name);
+                snapshot = None;
+            }
+        }
+        assert_eq!(
+            observed(&home, &case.expect),
+            case.expect,
+            "fold case: {}",
+            case.name
+        );
+    }
+}
+
+/// AD-46: no raw snapshot, no status history and no `waitingFor` reach the
+/// registry, its file or its log: one row per fact, the latest.
+#[test]
+fn no_waiting_for_and_no_status_history_are_stored() {
+    let home = Home::new();
+    let mut writer = home.writer(NOW);
+    let mut snapshot = None;
+    let reports = [
+        ("busy", None),
+        ("waiting", Some("permission prompt")),
+        ("idle", None),
+        ("waiting", Some("input needed")),
+    ];
+    for (i, (status, waiting_for)) in reports.iter().enumerate() {
+        let mut record = serde_json::json!({"pid": 4100, "sessionId": "s1", "kind": "interactive",
+            "cwd": "C:/work/api", "name": "api", "status": status, "startedAt": NOW - 60_000});
+        if let Some(waiting_for) = waiting_for {
+            record["waitingFor"] = (*waiting_for).into();
+        }
+        let records = parse_agents(&format!("[{record}]")).unwrap();
+        let at = NOW + i64::try_from(i).unwrap() * 1_000;
+        writer
+            .apply_agents(&mut snapshot, &records, &[], at)
+            .unwrap();
+    }
+    let reader = open_reader(&home.home, &[]).unwrap();
+    let facts = reader.facts().unwrap();
+    let statuses: Vec<_> = facts
+        .iter()
+        .filter(|f| f.fact == SessionFact::Status.code())
+        .collect();
+    assert_eq!(statuses.len(), 1, "one row, no history");
+    assert_eq!(
+        (&statuses[0].value, statuses[0].at_ms),
+        (&FactValue::Text("waiting".into()), NOW + 3_000)
+    );
+    assert!(
+        facts
+            .iter()
+            .all(|f| SessionFact::from_code(&f.fact).is_some())
+    );
+    drop(reader);
+    writer.checkpoint().unwrap();
+    for (_, waiting_for) in reports {
+        if let Some(text) = waiting_for {
+            for file in [home.paths().database(), home.paths().wal()] {
+                assert!(
+                    !common::registry::file_contains(&file, text),
+                    "{text} in {}",
+                    file.display()
+                );
+            }
+        }
+    }
 }
 
 /// Adversarial pass: a line without a session id, or with an empty one,

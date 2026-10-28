@@ -1,6 +1,8 @@
-//! Ingesting the event files into the registry (AD-43, D-49, D-79, D-84,
-//! D-97): every pass covers every incomplete file, oldest first, lines in
-//! file order, one transaction per chunk. Compiled only with the
+//! Ingesting the event files into the registry (AD-43, D-49, D-52, D-79,
+//! D-84, D-97): every pass covers every incomplete file, oldest first, lines
+//! in file order, one transaction per chunk; each line creates its session
+//! at first sight, stores its excerpt and its facts, and links a session
+//! `/clear` or `/resume` replaced. Compiled only with the
 //! `window-authority` feature: only the window writes.
 
 use std::fs;
@@ -10,6 +12,7 @@ use std::path::Path;
 use officina_core::board::{ProjectRule, project_for};
 use officina_core::dates::dated_file_day;
 use officina_core::events::{EventLine, ParsedLine, parse_line};
+use officina_core::registry::fold::{candidates_needed, line_facts, link_for_line};
 use officina_core::registry::ingestion::{
     CHUNK_MAX_BYTES, CHUNK_MAX_LINES, ExcerptObservation, complete_once_read, excerpt_observation,
     in_triage_workdir, partial_tail_is_corrupt,
@@ -20,7 +23,7 @@ use rusqlite::{Connection, TransactionBehavior, params};
 
 use super::read;
 use super::store::Writer;
-use super::write::RegistryError;
+use super::write::{RegistryError, write_fact};
 
 /// What a pass needs besides the registry.
 #[derive(Debug, Clone, Copy)]
@@ -309,6 +312,16 @@ fn apply(
     ensure_session(conn, session_id, line.cwd.as_deref(), line.ts, ctx.projects)?;
     if !ctx.no_excerpts && !excerpt_expired(line.ts, now_ms) {
         store_excerpt(conn, session_id, line)?;
+    }
+    for fact in line_facts(line) {
+        write_fact(conn, &fact)?;
+    }
+    // The line's own facts are stored first, so the other line of a
+    // supersession finds this one whichever comes first (D-52).
+    if let Some(query) = candidates_needed(line)
+        && let Some(link) = link_for_line(line, &read::marks(conn, query)?)
+    {
+        write_fact(conn, &link)?;
     }
     Ok(true)
 }
