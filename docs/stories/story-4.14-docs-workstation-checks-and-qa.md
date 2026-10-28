@@ -1,6 +1,6 @@
 # Story 4.14: Documentation, README assets, workstation checks and QA closure
 
-**Status:** Approved
+**Status:** In progress (the owner's workstation runs, AC 5 to 10, and his review of the README assets are open; see Completion Notes)
 
 ## Story
 
@@ -26,12 +26,12 @@ so that v0.4 is understood without guessing, its CPU promise is a number, and no
 
 ## Tasks
 
-- [ ] README "The scene" made coherent; roadmap (AC 1)
-- [ ] `readme-assets.spec.ts` cases; `pnpm readme-assets`; commit the assets (AC 2)
-- [ ] CHANGELOG consolidation (AC 3)
-- [ ] `e2e-fixtures.mjs` `--home`, `scene-measure`; `scene-replay.mjs` and its test; the Vitest include gains `scripts/*.test.ts` (AC 4)
-- [ ] Workstation runs and research-notes entries (AC 5-10); the fallbacks if a check fails (AC 5, 7)
-- [ ] Audits, `docs/qa/epic-4-report.md`, backlog (AC 11, 13)
+- [x] README "The scene" made coherent; roadmap (AC 1)
+- [x] `readme-assets.spec.ts` cases; `pnpm readme-assets`; commit the assets (AC 2). The owner's review is open
+- [x] CHANGELOG consolidation (AC 3)
+- [x] `e2e-fixtures.mjs` `--home`, `scene-measure`; `scene-replay.mjs` and its test; the Vitest include gains `scripts/*.test.ts` (AC 4): built in story 4.2
+- [ ] Workstation runs and research-notes entries (AC 5-10); the fallbacks if a check fails (AC 5, 7): the owner's
+- [ ] Audits, `docs/qa/epic-4-report.md`, backlog (AC 11, 13): the report is written, open until the owner's entries; the five audits run at closure
 
 ## Dev Notes
 
@@ -54,9 +54,32 @@ so that v0.4 is understood without guessing, its CPU promise is a number, and no
 
 ### Debug Log
 
+- README (AC 1): the scene section gained the three modes and `f` (story 4.11), the scene's animated picture, the offices remembered on this machine (the README said "kept until the window restarts", which `memory.ts` contradicts: projects with a live session at start keep their office, and a session its desk), the halo's two-minute rule from the wait's start, and a "Sub-agents" paragraph saying the scene does not draw them while gate 1 has not passed; the scene screenshot sits beside the board's; the roadmap's v0.4 row and the design documents' links name v0.4. No list owned by code is transcribed.
+- Assets (AC 2): `scene.png` and `scene-dark.png` from a settled `scene-c`, and `scene.gif`: the reception session's first prompt and its walk to its desk, a Working session's walk to the decision office and its halo, its file and Bring to front, then its walk back. Encoded with one palette and only the changed pixels per frame (`changesOnlyGif`), the GIF is 450 KB instead of 8.3 MB. Only the scene cases were run (`-g scene`), so `board.png` and `demo.gif` are unchanged.
+- CHANGELOG (AC 3): the v0.4 entries already form one set under Added (Scene mode, walking, Focus mode, acting from the scene, the alert, the alert room, floor keys, dark theme) and Changed; nothing to move.
+- AC 4 was built with story 4.2's fixtures: `--home`, `scene-measure`, `scene-replay.mjs` and `scene-replay.test.ts > the replay schedules one crossing change every 10 s`, in the Vitest include.
+
 ### Completion Notes
 
+- AC 1: review; `crates/officina/tests/readme.rs` green in the gate.
+- AC 2: `pnpm exec playwright test --config playwright.readme.config.ts -g scene` wrote the three assets. **Open**: the owner's review of `docs/assets/scene.png`, `scene-dark.png` and `scene.gif`.
+- AC 3: review.
+- AC 4: Vitest `app/scripts/scene-replay.test.ts > the replay schedules one crossing change every 10 s`; the CI step "e2e fixtures from the real CLI" unchanged.
+- AC 5 to 10: **open (owner)**. Build the release window from `main`, quit any running Officina, then `node app/scripts/e2e-fixtures.mjs --home <new folder> scene-measure` and start `officina-app.exe` with the environment it prints; `node app/scripts/scene-replay.mjs --home <that folder>` drives the walks. Measure the `officina-app` process and its `msedgewebview2.exe` children, in % of the machine and of one core, over 10 minutes each: halos breathing, the two-minute rule, halos steady, the replay with walking on, the replay with walking off (AC 5; if the walking run reaches 1 % of the machine, `DEFAULT_WALKING` becomes `false` in the same change). Then the taskbar at 100 % and 150 % (AC 6), Windows switched between light and dark with the theme on Auto (AC 7), the look at 100 % and 150 %, light and dark, settled and walking (AC 8), the 2 s readability on five fixtures (AC 9), and the day Scene becomes the chosen mode (AC 10), each a research-notes entry.
+- AC 11: `docs/qa/epic-4-report.md` "Slice 0 order": gate 2 before 4.5's close, gate 3 withdrawn, gate 1 not run and 4.12 not started; gate 4 did not precede 4.3 (recorded in story 4.3); gate 5's answers preceded 4.6, its counts open.
+- AC 12: the `windows` job's Playwright step runs `--repeat-each=3`; the local replay of it passed (783 passed, 6 skipped).
+- AC 13: `docs/qa/epic-4-report.md`, gate decision open; the per-AD traceability, the audits and the closure wait for the owner's entries.
+
 ## File List
+
+- `README.md`
+- `app/e2e/readme-assets.spec.ts`
+- `app/e2e/gifenc.d.ts`
+- `docs/assets/scene.png` (new)
+- `docs/assets/scene-dark.png` (new)
+- `docs/assets/scene.gif` (new)
+- `docs/qa/epic-4-report.md` (new)
+- `docs/stories/sprint-status.yaml`
 
 ## Change Log
 
@@ -64,3 +87,4 @@ so that v0.4 is understood without guessing, its CPU promise is a number, and no
 - 2026-10-28 reworked after review (F29 to F32, F35)
 - 2026-10-28 renumbered 4.12 and reworked for the scene v2 (D-460): the walking runs and the replay, the taskbar on the real app, the WebView2 look during walks, Slice 0's order, FR-10 to FR-13 and AD-167 to AD-178 in the traceability
 - 2026-10-28 renumbered 4.14 after the plan challenge (D-497 to D-501, D-506): the former AC 11 (what a real wait emits) moved to story 4.1's gate 4; the CPU threshold in both units and the only walking measurement; Slice 0's order for gates 1, 2, 4 and 5; the challenge's outcomes in the report
+- 2026-10-28 started: README pass, the scene's README assets, the QA report written open; the workstation runs and the assets' review are the owner's
