@@ -328,6 +328,30 @@ fn doctor_reports_hook_fields_missing_and_not_observed() {
     let report = writer.ingest(&ctx, now_ms()).unwrap();
     drop(writer);
     record_hook_fields(&contract, &version, &report.hook_sightings).unwrap();
+    // A new agents sample rewrites the record's agents fields (a session
+    // now waits, so `waitingFor` is observed); the hook fields stay.
+    let before = ContractStore::read(&contract).versions[&version].clone();
+    env.write_agents(
+        r#"[{"pid":1,"cwd":"C:/work/api","kind":"interactive","startedAt":1,"sessionId":"s","status":"waiting","waitingFor":"permission prompt"}]"#,
+    );
+    assert!(env.run(&["board", "--json"], b"").status.success());
+    let after = ContractStore::read(&contract).versions[&version].clone();
+    assert_ne!(
+        after.not_observed, before.not_observed,
+        "the record was rewritten"
+    );
+    assert_eq!(
+        (
+            after.hook_missing,
+            after.hook_not_observed,
+            after.first_seen_at
+        ),
+        (
+            before.hook_missing,
+            before.hook_not_observed,
+            before.first_seen_at
+        )
+    );
 
     let out = env.run(&["doctor"], b"");
     let text = String::from_utf8_lossy(&out.stdout);
