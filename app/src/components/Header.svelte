@@ -2,7 +2,9 @@
   import type { BoardStore } from "../lib/board.svelte";
   import type { RegistryStore } from "../lib/registry.svelte";
   import type { RelayStore, WindowView } from "../lib/relay.svelte";
+  import { RELAY_TOGGLE_TEXT } from "../lib/relay-text";
   import Gauge from "./Gauge.svelte";
+  import StableLabel from "./StableLabel.svelte";
   import logo from "../assets/logo.svg";
 
   interface Props {
@@ -122,17 +124,21 @@
           ? "Let officina run start approved actions again"
           : "Refuse every officina run call until you resume"}
       >
-        {relay.stopped ? "Resume relay" : "Stop relay"}
+        <StableLabel labels={RELAY_TOGGLE_TEXT} current={relay.stopped ? "stopped" : "running"} />
       </button>
     {/if}
     <button class="tool" onclick={() => store.refresh()} title="Refresh now (r)">Refresh</button>
     <button
       class="tool"
+      data-testid="pin-toggle"
       aria-pressed={store.alwaysOnTop}
       onclick={() => store.toggleAlwaysOnTop()}
       title="Keep the board above other windows"
     >
-      {store.alwaysOnTop ? "Pinned" : "Pin on top"}
+      <StableLabel
+        labels={{ pinned: "Pinned", unpinned: "Pin on top" }}
+        current={store.alwaysOnTop ? "pinned" : "unpinned"}
+      />
     </button>
   </div>
 </header>

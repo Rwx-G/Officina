@@ -6,11 +6,12 @@
   // Every text is rendered as text.
   import { isPointerClick } from "../lib/pointer";
   import type { RelayStore } from "../lib/relay.svelte";
-  import { ANOMALY_TEXT } from "../lib/relay-text";
+  import { ANOMALY_TEXT, RELAY_TOGGLE_TEXT } from "../lib/relay-text";
   import { clock, hours } from "../lib/time";
   import CatalogueTable from "./CatalogueTable.svelte";
   import PendingCatalogue from "./PendingCatalogue.svelte";
   import RecentActivity from "./RecentActivity.svelte";
+  import StableLabel from "./StableLabel.svelte";
 
   interface Props {
     store: RelayStore;
@@ -40,7 +41,7 @@
       disabled={store.switching}
       onclick={() => store.setStopped(!store.stopped)}
     >
-      {store.stopped ? "Resume relay" : "Stop relay"}
+      <StableLabel labels={RELAY_TOGGLE_TEXT} current={store.stopped ? "stopped" : "running"} />
     </button>
     {#if store.stopError}
       <p class="fault" role="alert">The relay could not be switched: {store.stopError}</p>

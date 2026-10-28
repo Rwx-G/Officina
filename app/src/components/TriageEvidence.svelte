@@ -141,15 +141,22 @@
     {/if}
     <div class="head">
       <h3 id="evidence-title">Triage model</h3>
-      {#if running}
-        <p class="progress" role="status" data-testid="dry-run-progress">
-          Dry run: {running.done} of {running.total} cases
-        </p>
-      {:else}
-        <button class="tool" data-testid="evaluate" disabled={evaluating} onclick={() => store.evaluate()}>
+      <!-- The button and the progress share one grid cell, as StableLabel's
+           labels do: starting or ending a dry run moves nothing. -->
+      <div class="evaluate" data-testid="evaluate-slot" data-stable-slot>
+        <button
+          class="tool"
+          class:inactive={running !== null}
+          data-testid="evaluate"
+          disabled={evaluating || running !== null}
+          onclick={() => store.evaluate()}
+        >
           Evaluate the model
         </button>
-      {/if}
+        <p class="progress" class:inactive={running === null} role="status" data-testid="dry-run-progress">
+          {#if running}Dry run: {running.done} of {running.total} cases{/if}
+        </p>
+      </div>
     </div>
     <p class="muted" data-testid="model-state">
       {#if model.enabled}
@@ -268,6 +275,17 @@
   .muted {
     font-size: 13px;
     color: var(--color-text-muted);
+  }
+  .evaluate {
+    display: inline-grid;
+    align-items: center;
+    justify-items: end;
+  }
+  .evaluate > * {
+    grid-area: 1 / 1;
+  }
+  .evaluate > .inactive {
+    visibility: hidden;
   }
   .progress {
     margin: 0;

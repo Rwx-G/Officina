@@ -35,13 +35,13 @@ test.describe("view toggle", () => {
   test("chips and stop toggle stay visible in the Relay view", async ({ page }) => {
     await openRelayView(page, loadRelay("relay-activity"));
     await expect(page.getByTestId("catalogue-chip")).toBeVisible();
-    await expect(page.getByTestId("relay-toggle")).toHaveText("Stop relay");
+    await expect(page.getByTestId("relay-toggle")).toHaveAccessibleName("Stop relay");
 
     await page.evaluate(async (stopped) => window.__officinaPushRelay?.(stopped), loadRelay("relay-stopped"));
     await expect(page.getByTestId("relay-view")).toBeVisible();
     await expect(page.getByTestId("relay-stopped-chip")).toBeVisible();
-    await expect(page.getByTestId("relay-toggle")).toHaveText("Resume relay");
-    await expect(page.getByTestId("relay-view-stop")).toHaveText("Resume relay");
+    await expect(page.getByTestId("relay-toggle")).toHaveAccessibleName("Resume relay");
+    await expect(page.getByTestId("relay-view-stop")).toHaveAccessibleName("Resume relay");
     await expect(page.getByTestId("relay-state")).toContainText("Stopped since");
   });
 
@@ -231,7 +231,7 @@ test.describe("Relay view", () => {
     await openRelayView(page, loadRelay("relay-activity"));
     const stop = page.getByTestId("relay-view-stop");
     await stop.click();
-    await expect(stop).toHaveText("Resume relay");
+    await expect(stop).toHaveAccessibleName("Resume relay");
     await expect(page.getByTestId("relay-stopped-chip")).toBeVisible();
   });
 });

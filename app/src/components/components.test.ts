@@ -2,7 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render } from "@testing-library/svelte";
 import ApprovalCard from "./ApprovalCard.svelte";
 import Gauge from "./Gauge.svelte";
+import { tick } from "svelte";
 import SessionCard from "./SessionCard.svelte";
+import StableLabel from "./StableLabel.svelte";
 import SubjectPicker, { type PickerChoice } from "./SubjectPicker.svelte";
 import TriagePanel from "./TriagePanel.svelte";
 import TriageRow from "./TriageRow.svelte";
@@ -10,6 +12,7 @@ import { BoardStore } from "../lib/board.svelte";
 import * as ipc from "../lib/ipc";
 import { RegistryStore, refusalText } from "../lib/registry.svelte";
 import { AUTHOR_REFUSAL_TEXT, REASON_TEXT } from "../lib/registry-text";
+import { RELAY_TOGGLE_TEXT } from "../lib/relay-text";
 import type { ApprovalView } from "../lib/generated/ApprovalView";
 import type { AuthorRefusal } from "../lib/generated/AuthorRefusal";
 import type { Card } from "../lib/generated/Card";
@@ -98,6 +101,30 @@ describe("SessionCard", () => {
       store: store(),
     });
     expect(getByTestId("badge").textContent).toBe("unknown");
+  });
+});
+
+describe("StableLabel", () => {
+  it("keeps every label in place and exposes only the current one", async () => {
+    const { container, rerender } = render(StableLabel, { labels: RELAY_TOGGLE_TEXT, current: "running" });
+    const all = () => Array.from(container.querySelectorAll("[data-stable-label] > *"));
+    const exposed = () => all().filter((label) => label.getAttribute("aria-hidden") !== "true");
+    for (const [state, text] of Object.entries(RELAY_TOGGLE_TEXT) as [keyof typeof RELAY_TOGGLE_TEXT, string][]) {
+      await rerender({ labels: RELAY_TOGGLE_TEXT, current: state });
+      expect(all().map((label) => label.textContent)).toEqual(Object.values(RELAY_TOGGLE_TEXT));
+      expect(exposed().map((label) => label.textContent)).toEqual([text]);
+    }
+  });
+
+  it("names its button after the current label only", async () => {
+    const s = store();
+    const background = card({ kind: "background", background_id: "abc", attach_available: true });
+    const { getByRole, queryByRole } = render(SessionCard, { card: background, store: s });
+    expect(getByRole("button", { name: "Copy attach command" })).toBeTruthy();
+    s.copied = background.key;
+    await tick();
+    expect(getByRole("button", { name: "Copied" })).toBeTruthy();
+    expect(queryByRole("button", { name: "Copy attach command" })).toBeNull();
   });
 });
 

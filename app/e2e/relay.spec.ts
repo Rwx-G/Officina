@@ -129,13 +129,13 @@ test.describe("stop", () => {
   test("the stop toggle calls set_relay_stopped", async ({ page }) => {
     await open(page, loadRelay("relay-clean"));
     const toggle = page.getByTestId("relay-toggle");
-    await expect(toggle).toHaveText("Stop relay");
+    await expect(toggle).toHaveAccessibleName("Stop relay");
     await expect(toggle).toHaveAttribute("aria-pressed", "false");
     await toggle.click();
-    await expect(toggle).toHaveText("Resume relay");
+    await expect(toggle).toHaveAccessibleName("Resume relay");
     await expect(toggle).toHaveAttribute("aria-pressed", "true");
     await toggle.click();
-    await expect(toggle).toHaveText("Stop relay");
+    await expect(toggle).toHaveAccessibleName("Stop relay");
     const stops = (await calls(page)).filter((c) => c.cmd === "set_relay_stopped").map((c) => c.args);
     expect(stops).toEqual([{ stopped: true }, { stopped: false }]);
   });
@@ -149,7 +149,7 @@ test.describe("stop", () => {
     );
     await expect(chip).toHaveCSS("background-color", hexToRgb(terracotta));
     await expect(page.getByTestId("relay-stopped-banner")).toContainText("The relay is stopped since");
-    await expect(page.getByTestId("relay-toggle")).toHaveText("Resume relay");
+    await expect(page.getByTestId("relay-toggle")).toHaveAccessibleName("Resume relay");
     await expect(page.getByTestId("catalogue-chip")).toBeHidden();
   });
 

@@ -13,6 +13,10 @@ import type { RunState } from "./generated/RunState";
 import type { Tone } from "./generated/Tone";
 import type { TreeBinding } from "./generated/TreeBinding";
 
+/** The stop toggle's label in each relay state, in the header and the
+ *  Relay view alike: it names what a click does. */
+export const RELAY_TOGGLE_TEXT = { stopped: "Resume relay", running: "Stop relay" } as const;
+
 export const REFUSAL_TEXT: Record<RefusalReason, string> = {
   stopped: "the relay is stopped",
   not_approved: "no catalogue approved",

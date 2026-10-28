@@ -43,6 +43,13 @@
   box-sizing: border-box;
 }
 
+/* A view taller than the window brings a scrollbar: its room is kept in
+   every view, so switching views does not slide the header's right-hand
+   buttons sideways. */
+html {
+  scrollbar-gutter: stable;
+}
+
 body {
   margin: 0;
   background: var(--color-bg);

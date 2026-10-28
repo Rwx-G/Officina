@@ -55,13 +55,13 @@ test.describe("Triage evidence", () => {
     };
     await openEvidence(page, running);
     await expect(page.getByTestId("dry-run-progress")).toHaveText("Dry run: 2 of 6 cases");
-    await expect(page.getByTestId("evaluate")).toHaveCount(0);
+    await expect(page.getByTestId("evaluate")).toBeHidden();
     // When it ends, the next view shows the result and how it stopped.
     await page.evaluate(
       (done) => window.__officinaPushRegistry?.(done),
       { ...view, model: { ...view.model, dry_run: null, last_stop: "budget_spent" as const } },
     );
-    await expect(page.getByTestId("dry-run-progress")).toHaveCount(0);
+    await expect(page.getByTestId("dry-run-progress")).toBeHidden();
     await expect(page.getByTestId("dry-run-stop")).toHaveText(DRY_RUN_STOP_TEXT.budget_spent);
     await expect(page.getByTestId("evaluate")).toBeVisible();
   });

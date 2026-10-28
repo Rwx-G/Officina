@@ -500,6 +500,14 @@ project uses [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Toggling a control no longer moves the controls beside it. A button
+  whose label follows its state (Stop relay and Resume relay in the header
+  and the Relay view, Pin on top and Pinned, Copy attach command and
+  Copied) keeps the width of its longest label; Evaluate the model and the
+  dry run's progress share one place; the page keeps the scrollbar's room
+  in every view, so switching views does not shift the header's buttons. A
+  Playwright spec flips every toggle the window shows and fails when one
+  changes size or moves what follows it, or when a toggle has no case.
 - Smaller fixes from the Epic 3 audits (v0.3): a registry read that fails
   is reported (doctor fails its triage line instead of calling the model
   disabled, the board names the error instead of showing no subject); a

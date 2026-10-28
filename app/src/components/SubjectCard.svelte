@@ -72,11 +72,17 @@
   {/if}
 
   <div class="actions">
-    <button class="tool" aria-pressed={mode === "rename"} onclick={() => open("rename")}>Rename</button>
+    <button class="tool" data-testid="subject-rename" aria-pressed={mode === "rename"} onclick={() => open("rename")}
+      >Rename</button
+    >
     {#if others.length > 0}
-      <button class="tool" aria-pressed={mode === "merge"} onclick={() => open("merge")}>Merge</button>
+      <button class="tool" data-testid="subject-merge" aria-pressed={mode === "merge"} onclick={() => open("merge")}
+        >Merge</button
+      >
     {/if}
-    <button class="tool" aria-pressed={mode === "archive"} onclick={() => open("archive")}>Archive</button>
+    <button class="tool" data-testid="subject-archive" aria-pressed={mode === "archive"} onclick={() => open("archive")}
+      >Archive</button
+    >
   </div>
 
   {#if mode === "rename"}

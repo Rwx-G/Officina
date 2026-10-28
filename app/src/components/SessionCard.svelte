@@ -3,6 +3,7 @@
   import type { BoardStore } from "../lib/board.svelte";
   import { projectColor } from "../lib/colors";
   import { ago, duration } from "../lib/time";
+  import StableLabel from "./StableLabel.svelte";
 
   interface Props {
     card: Card;
@@ -88,8 +89,11 @@
   {/if}
 
   {#if card.attach_available}
-    <button class="link copy" onclick={() => store.copyAttach(card)}>
-      {store.copied === card.key ? "Copied" : "Copy attach command"}
+    <button class="link copy" data-testid="copy-attach" onclick={() => store.copyAttach(card)}>
+      <StableLabel
+        labels={{ copied: "Copied", ready: "Copy attach command" }}
+        current={store.copied === card.key ? "copied" : "ready"}
+      />
     </button>
   {/if}
 </article>
