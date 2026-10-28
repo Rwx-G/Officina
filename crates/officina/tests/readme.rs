@@ -5,7 +5,7 @@
 mod common;
 
 use common::TestEnv;
-use officina_core::relay::catalogue::DEFAULT_GUARDED_PROGRAMS;
+use officina_core::relay::catalogue::{DEFAULT_GUARDED_PROGRAMS, NoticeKind};
 use officina_core::relay::gate::{SHELL_TOOLS, ToolRule};
 
 fn readme() -> String {
@@ -127,5 +127,34 @@ fn readme_names_the_gate_tools_constant() {
                 "README.md does not say the {tool} tool is refused"
             );
         }
+    }
+}
+
+/// Story 2.13 AC 4 (D-172): the README no longer says that no shell reads a
+/// value; its paragraph on the values a program reads names the notice
+/// kinds' constant and, for every kind, the program that reads the value,
+/// without transcribing the kinds themselves.
+#[test]
+fn readme_names_the_notice_kinds() {
+    let text = readme();
+    assert!(
+        !text.contains("no shell ever reads it"),
+        "the README still says no shell reads a value"
+    );
+    let paragraph = text
+        .lines()
+        .find(|line| line.contains("`NoticeKind`"))
+        .expect("the README names NoticeKind");
+    for kind in NoticeKind::ALL {
+        assert!(
+            paragraph.contains(kind.program()),
+            "the paragraph does not say that {} reads a value",
+            kind.program()
+        );
+        let tag = serde_json::to_value(kind).unwrap();
+        assert!(
+            !text.contains(tag.as_str().unwrap()),
+            "the README transcribes the kind {tag}"
+        );
     }
 }

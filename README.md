@@ -209,7 +209,7 @@ values = ["site.yml", "monitoring.yml"]
 pattern = "lab-[a-z0-9-]{1,30}"
 ```
 
-- An `args` item holds at most one `{placeholder}`, with an optional literal prefix and suffix, and always becomes exactly one argument: no shell ever reads it.
+- An `args` item holds at most one `{placeholder}`, with an optional literal prefix and suffix, and always becomes exactly one argument: no local shell ever reads it. The program may still read a value further: ssh hands the arguments after its destination to the remote host's shell as one command line, and Ansible templates extra vars and module arguments and expands `~` and `$VAR` in paths. Give such parameters a `values` list, or a pattern without whitespace, shell characters or template characters (`{`, `%`). The catalogue reports these values as notices (`NoticeKind`, one line of explanation each) on the banner, in `officina relay --json` and in `officina doctor`, as warnings: they never block the action or change its approval.
 - A parameter declares `values` or a `pattern`, never both. Whatever it declares, a value is refused when it starts with `-`, holds a control, bidirectional or invisible formatting character, or has a `.` or `..` path segment; on the `native` runner also when it starts with `/` or `@`.
 - An invalid action is skipped and reported with its line; it never invalidates the floor, so the board keeps working.
 

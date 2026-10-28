@@ -146,6 +146,8 @@ project uses [Semantic Versioning](https://semver.org/).
 - Floor files accept schema 2, where a project without `autonomy` is
   guarded. A schema 1 floor still loads with every project `free`, and the
   relay's keys in it are an error naming `schema = 2`.
+- Approval journal lines name their project and action, and a request says
+  whether its action has a dry run; lines written before still read.
 - The canonical catalogue is format 2: it covers credentials and HTTP
   actions, so a catalogue approved before shows as changed once and is
   approved again.
@@ -188,6 +190,13 @@ project uses [Semantic Versioning](https://semver.org/).
 - The gate gets stricter, never looser, when the approved catalogue or the
   floor cannot be read, and a repository stays guarded when either says so,
   so editing the floor or `cd ..` does not lift containment.
+- Catalogue notices: a closed argument vector does not close what the
+  program does with a value. An ssh action's placeholder after the
+  destination reaches the remote shell, and an Ansible action's placeholder
+  in extra vars or module arguments is templated; the banner, `officina
+  relay --json` and `officina doctor` (as warnings) say so with one line
+  each, without blocking the action or changing its approval. The README no
+  longer says that no shell reads a value.
 - A credential's secret goes into its one request header and nowhere else:
   not the output, the journal, an approval file or the Relay view; a
   secret holding a line break is refused, a header that frames the request
