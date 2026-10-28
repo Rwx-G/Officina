@@ -13,8 +13,8 @@ use std::time::Duration;
 use officina_core::registry::confirm::{ConfirmItem, FileUnder, ItemOutcome};
 use officina_core::registry::proposal::default_proposal;
 use officina_core::registry::triage_call::{
-    CALL_SPACING_MS, CONFIG_DIR_VAR, NO_CURRENT_DIR_VAR, TRIAGE_ENV_REMOVED,
-    TRIAGE_ENV_REMOVED_PREFIX, TriageCase, argv,
+    CALL_SPACING_MS, CONFIG_DIR_VAR, NO_CURRENT_DIR_VAR, TRIAGE_ENV_AUTH, TRIAGE_ENV_NETWORK,
+    TRIAGE_ENV_SYSTEM, TriageCase, argv, passed_to_triage,
 };
 use officina_core::registry::types::{
     ModelVerdict, ProposalSource, TriageOutcome, TriagePurpose, TriageRefusal, Verdict,
@@ -189,43 +189,62 @@ fn excerpts_reach_the_child_on_stdin_only() {
     );
 }
 
-/// AD-51, D-86: a base environment holding every removed name, in two
-/// cases, and Officina's own variables: none reaches the child, the rest
-/// does, and `NoDefaultCurrentDirectoryInExePath` is set.
+/// AD-51, D-86, security audit L1: the child's environment is the allow
+/// lists' variables of the base, whatever their case, and
+/// `NoDefaultCurrentDirectoryInExePath`; a session's, an IDE's,
+/// Officina's own and a model override do not reach it.
 #[test]
-fn removed_variables_do_not_reach_the_child() {
+fn only_the_allowed_variables_reach_the_child() {
     let setup = Setup::new("triage");
     let mut base = plain_base();
-    for name in TRIAGE_ENV_REMOVED {
-        base.push((name.to_owned(), "from a session".into()));
-        base.push((name.to_ascii_lowercase(), "from a session".into()));
+    let allowed: Vec<&str> = TRIAGE_ENV_SYSTEM
+        .iter()
+        .chain(TRIAGE_ENV_NETWORK)
+        .chain(TRIAGE_ENV_AUTH)
+        .copied()
+        .filter(|name| !name.eq_ignore_ascii_case("SystemRoot"))
+        .collect();
+    for name in &allowed {
+        base.push(((*name).to_owned(), format!("kept {name}")));
     }
-    base.push((
-        format!("{TRIAGE_ENV_REMOVED_PREFIX}HOME"),
-        "C:/other".into(),
-    ));
-    base.push((
-        format!("{TRIAGE_ENV_REMOVED_PREFIX}FLOOR"),
-        "C:/floor.toml".into(),
-    ));
-    base.push(("KEPT_BY_THE_TEST".into(), "kept".into()));
+    for name in [
+        "CLAUDE_CODE_SESSION_ID",
+        "claude_pid",
+        "CLAUDE_PROJECT_DIR",
+        "OFFICINA_HOME",
+        "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+        "NOT_ALLOWED_BY_THE_TEST",
+    ] {
+        base.push((name.to_owned(), "dropped".into()));
+    }
     setup.run(&setup.job(case_naming("finished"), base));
     let env = &setup.logged()[0].env;
-    for name in env.keys() {
+    for name in &allowed {
+        let found = env
+            .iter()
+            .find(|(n, _)| n.eq_ignore_ascii_case(name))
+            .map(|(_, v)| v.clone());
+        assert!(found.is_some(), "{name} did not reach the child");
+        // Windows sets these two again for a 64-bit process, from
+        // ProgramW6432 and CommonProgramW6432, whatever its parent gave.
+        let recomputed = ["ProgramFiles", "CommonProgramFiles"].contains(name);
+        if !recomputed {
+            assert_eq!(
+                found,
+                Some(serde_json::json!(format!("kept {name}"))),
+                "{name}"
+            );
+        }
+    }
+    for (name, value) in env {
+        assert_ne!(value, "dropped", "{name} reached the child");
         assert!(
-            !TRIAGE_ENV_REMOVED
-                .iter()
-                .any(|removed| removed.eq_ignore_ascii_case(name)),
-            "{name} reached the child"
-        );
-        assert!(
-            !name
-                .to_ascii_uppercase()
-                .starts_with(TRIAGE_ENV_REMOVED_PREFIX),
+            passed_to_triage(name)
+                || name.eq_ignore_ascii_case(NO_CURRENT_DIR_VAR)
+                || name.eq_ignore_ascii_case(CONFIG_DIR_VAR),
             "{name} reached the child"
         );
     }
-    assert_eq!(env["KEPT_BY_THE_TEST"], "kept");
     let set = env
         .iter()
         .find(|(name, _)| name.eq_ignore_ascii_case(NO_CURRENT_DIR_VAR))

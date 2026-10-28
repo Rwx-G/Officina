@@ -457,6 +457,12 @@ project uses [Semantic Versioning](https://semver.org/).
   longer than the hook writes is one corrupt line, an excerpt is stored cut
   to 280 characters, and a triage call carries each text cut to its bound,
   so what one call costs is bounded too.
+- The triage call's environment is an allow list (v0.3), no longer the
+  window's minus a few names: what a process needs to start, the proxy and
+  certificate variables, and what `claude` authenticates with. A variable
+  that maps the `haiku` alias or a default model to another one, an IDE's
+  or a session's variables, and the Bedrock and Vertex switches no longer
+  reach it.
 - A damaged registry is restored from the copy whose name carries the
   newest UTC day (v0.3), never from the newest modification time, which any
   process can set; a file of another name under `registry/backup/` is never

@@ -2,8 +2,8 @@
 //! 8): every part of one `claude -p` call built here, the host only spawns
 //! it. The argument vector and the answer's JSON schema are fixed; the
 //! prompt goes on stdin, a constant instruction and one line of escaped
-//! JSON between two markers carrying a nonce; the environment is the one
-//! given minus the variables a session or Officina sets; the answer is read
+//! JSON between two markers carrying a nonce; the environment is an allow
+//! list taken from the one given; the answer is read
 //! from `structured_output` alone and checked, and anything else is an
 //! outcome, never a proposal. The budget and the counts are read from the
 //! `triage_call` rows (AD-52, D-65).
@@ -21,15 +21,85 @@ use super::types::{ModelVerdict, TriageOutcome, TriagePurpose, TriageRefusal};
 /// The model the call asks for: the light one E16 verified.
 pub const TRIAGE_MODEL: &str = "haiku";
 
-/// Variables a `claude` session sets in what it starts, which would tie the
-/// call to that session (AD-51): never passed on. Matched ignoring case, as
-/// Windows names variables.
-pub const TRIAGE_ENV_REMOVED: [&str; 3] =
-    ["CLAUDE_CODE_SESSION_ID", "CLAUDE_PID", "CLAUDE_PROJECT_DIR"];
+/// What a process needs from its environment to start and find its files,
+/// on Windows and on Linux: the system folders, the user's folders, the
+/// temporary folder, the program search path, the locale. The triage call
+/// passes these on, never anything else of the window's environment
+/// (security comes from what the call does not hold, not from a deny list).
+pub const TRIAGE_ENV_SYSTEM: &[&str] = &[
+    "SystemRoot",
+    "SystemDrive",
+    "windir",
+    "ComSpec",
+    "PATH",
+    "PATHEXT",
+    "TEMP",
+    "TMP",
+    "TMPDIR",
+    "USERPROFILE",
+    "HOMEDRIVE",
+    "HOMEPATH",
+    "HOME",
+    "APPDATA",
+    "LOCALAPPDATA",
+    "ProgramData",
+    "ProgramFiles",
+    "ProgramFiles(x86)",
+    "ProgramW6432",
+    "CommonProgramFiles",
+    "CommonProgramFiles(x86)",
+    "CommonProgramW6432",
+    "USERNAME",
+    "USERDOMAIN",
+    "USER",
+    "LOGNAME",
+    "COMPUTERNAME",
+    "OS",
+    "PROCESSOR_ARCHITECTURE",
+    "NUMBER_OF_PROCESSORS",
+    "XDG_CONFIG_HOME",
+    "XDG_DATA_HOME",
+    "XDG_CACHE_HOME",
+    "XDG_STATE_HOME",
+    "XDG_RUNTIME_DIR",
+    "LANG",
+    "LC_ALL",
+    "TZ",
+];
 
-/// Every variable whose name starts with this, ignoring case, is Officina's
-/// own and never reaches the call (AD-51).
-pub const TRIAGE_ENV_REMOVED_PREFIX: &str = "OFFICINA_";
+/// What `claude` needs to reach the API through a corporate network: the
+/// proxy variables, and the certificate variables of a proxy that
+/// inspects TLS or asks for a client certificate (Claude Code's network
+/// configuration documentation).
+pub const TRIAGE_ENV_NETWORK: &[&str] = &[
+    "HTTPS_PROXY",
+    "HTTP_PROXY",
+    "NO_PROXY",
+    "ALL_PROXY",
+    "NODE_EXTRA_CA_CERTS",
+    "SSL_CERT_FILE",
+    "SSL_CERT_DIR",
+    "CLAUDE_CODE_CLIENT_CERT",
+    "CLAUDE_CODE_CLIENT_KEY",
+    "CLAUDE_CODE_CLIENT_KEY_PASSPHRASE",
+];
+
+/// What `claude` authenticates with, as Claude Code documents it: an API
+/// key or a token, the endpoint and the headers a gateway the author's own
+/// sessions go through asks for. The endpoint is kept because the call
+/// sends where the author's sessions already send the same text; with it
+/// dropped, a key valid only at a gateway would fail every call. Variables
+/// that choose the model (the `haiku` alias's mapping, a default model)
+/// are not kept: `--model` pins it (AD-51). Neither are the Bedrock and
+/// Vertex switches: the call was verified against Anthropic's API only
+/// (E16).
+pub const TRIAGE_ENV_AUTH: &[&str] = &[
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_TOKEN",
+    "ANTHROPIC_BASE_URL",
+    "ANTHROPIC_CUSTOM_HEADERS",
+];
 
 /// Claude Code's config dir variable: the call gets the floor's (AD-6),
 /// never one inherited from the base environment.
@@ -129,36 +199,39 @@ pub fn argv() -> Vec<String> {
     .collect()
 }
 
-/// True when `name` is a variable the call never inherits: one of
-/// [`TRIAGE_ENV_REMOVED`], one starting with [`TRIAGE_ENV_REMOVED_PREFIX`],
-/// or one the call gets its own value of. Windows ignores case in names.
-fn replaced_or_removed(name: &str) -> bool {
-    let prefix = TRIAGE_ENV_REMOVED_PREFIX.len();
-    TRIAGE_ENV_REMOVED
+/// True when `name` is passed on to the call: one of
+/// [`TRIAGE_ENV_SYSTEM`], [`TRIAGE_ENV_NETWORK`] or [`TRIAGE_ENV_AUTH`],
+/// ignoring case as Windows does. [`CONFIG_DIR_VAR`] and
+/// [`NO_CURRENT_DIR_VAR`] are not: the call gets its own values.
+pub fn passed_to_triage(name: &str) -> bool {
+    TRIAGE_ENV_SYSTEM
         .iter()
-        .chain(&[CONFIG_DIR_VAR, NO_CURRENT_DIR_VAR])
-        .any(|removed| removed.eq_ignore_ascii_case(name))
-        || name
-            .get(..prefix)
-            .is_some_and(|head| head.eq_ignore_ascii_case(TRIAGE_ENV_REMOVED_PREFIX))
+        .chain(TRIAGE_ENV_NETWORK)
+        .chain(TRIAGE_ENV_AUTH)
+        .any(|kept| kept.eq_ignore_ascii_case(name))
 }
 
-/// The call's whole environment, built from `base` (AD-51, D-86): `base`
-/// without the removed variables and without its own config dir, then the
-/// floor's `config_dir` when it names one, and
+/// The call's whole environment, built from `base` (AD-51, D-86): the
+/// variables of `base` [`passed_to_triage`] keeps, nothing else of it,
+/// then the floor's `config_dir` when it names one, and
 /// [`NO_CURRENT_DIR_VAR`]` = 1`. The host clears the child's environment
 /// and sets exactly this.
 ///
 /// ```
 /// use officina_core::registry::triage_call::triage_env;
-/// let base = vec![("CLAUDE_PID".to_owned(), "7".to_owned()), ("PATH".to_owned(), "C:/bin".to_owned())];
+/// let base = vec![
+///     ("CLAUDE_PID".to_owned(), "7".to_owned()),
+///     ("ANTHROPIC_DEFAULT_HAIKU_MODEL".to_owned(), "another".to_owned()),
+///     ("PATH".to_owned(), "C:/bin".to_owned()),
+/// ];
 /// let env = triage_env(&base, Some("C:/claude"));
-/// assert!(env.iter().all(|(name, _)| name != "CLAUDE_PID"));
+/// assert!(env.iter().all(|(name, _)| name != "CLAUDE_PID" && !name.contains("MODEL")));
+/// assert!(env.contains(&("PATH".to_owned(), "C:/bin".to_owned())));
 /// assert!(env.contains(&("CLAUDE_CONFIG_DIR".to_owned(), "C:/claude".to_owned())));
 /// ```
 pub fn triage_env(base: &[(String, String)], config_dir: Option<&str>) -> Vec<(String, String)> {
     base.iter()
-        .filter(|(name, _)| !replaced_or_removed(name))
+        .filter(|(name, _)| passed_to_triage(name))
         .cloned()
         .chain(config_dir.map(|dir| (CONFIG_DIR_VAR.to_owned(), dir.to_owned())))
         .chain([(NO_CURRENT_DIR_VAR.to_owned(), "1".to_owned())])
@@ -873,30 +946,47 @@ OFFICINA-DATA-0f1e2d3c4b5a6978>>>\n";
         }
     }
 
+    /// Security audit L1: only the allow lists pass, in any case; the
+    /// variables a session, an IDE or Officina sets, and those that would
+    /// choose another model, do not; the config dir is the floor's.
     #[test]
-    fn environment_changes_are_derived_from_the_constant() {
+    fn environment_is_an_allow_list_derived_from_the_constants() {
+        let allowed: Vec<&str> = TRIAGE_ENV_SYSTEM
+            .iter()
+            .chain(TRIAGE_ENV_NETWORK)
+            .chain(TRIAGE_ENV_AUTH)
+            .copied()
+            .collect();
         let mut base: Vec<(String, String)> = Vec::new();
-        for name in TRIAGE_ENV_REMOVED {
-            base.push((name.to_owned(), "from a session".into()));
-            base.push((name.to_ascii_lowercase(), "from a session".into()));
+        for name in &allowed {
+            base.push(((*name).to_owned(), "kept".into()));
+            base.push((name.to_ascii_lowercase(), "kept lower".into()));
         }
         for name in [
-            format!("{TRIAGE_ENV_REMOVED_PREFIX}HOME"),
-            format!("{}floor", TRIAGE_ENV_REMOVED_PREFIX.to_ascii_lowercase()),
-            CONFIG_DIR_VAR.to_owned(),
-            NO_CURRENT_DIR_VAR.to_ascii_uppercase(),
+            "CLAUDE_CODE_SESSION_ID",
+            "CLAUDE_PID",
+            "CLAUDE_PROJECT_DIR",
+            "CLAUDE_CODE_ENTRYPOINT",
+            "CLAUDE_CODE_SSE_PORT",
+            "OFFICINA_HOME",
+            "officina_floor",
+            "ANTHROPIC_MODEL",
+            "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+            "ANTHROPIC_SMALL_FAST_MODEL",
+            "CLAUDE_CODE_USE_BEDROCK",
+            "NODE_OPTIONS",
+            CONFIG_DIR_VAR,
+            &NO_CURRENT_DIR_VAR.to_ascii_uppercase(),
         ] {
-            base.push((name, "inherited".into()));
+            base.push((name.to_owned(), "inherited".into()));
         }
-        base.push(("PATH".into(), "C:/bin".into()));
-        base.push(("OFFICINA".into(), "no underscore".into()));
         let env = triage_env(&base, Some("C:/claude-a"));
-        let names: Vec<&str> = env.iter().map(|(name, _)| name.as_str()).collect();
         for (name, value) in &base {
             let kept = env.iter().any(|(n, v)| n == name && v == value);
-            assert_eq!(kept, !replaced_or_removed(name), "{name}");
+            let expected = allowed.iter().any(|a| a.eq_ignore_ascii_case(name));
+            assert_eq!(kept, expected, "{name}");
+            assert_eq!(passed_to_triage(name), expected, "{name}");
         }
-        assert!(names.contains(&"PATH") && names.contains(&"OFFICINA"));
         assert_eq!(
             env.iter()
                 .filter(|(n, _)| n.eq_ignore_ascii_case(CONFIG_DIR_VAR))
@@ -917,11 +1007,16 @@ OFFICINA-DATA-0f1e2d3c4b5a6978>>>\n";
                 .iter()
                 .all(|(n, _)| !n.eq_ignore_ascii_case(CONFIG_DIR_VAR))
         );
-        // A non-ASCII name next to the prefix's length never panics.
-        assert_eq!(
-            triage_env(&[("OFFICIN\u{e9}".into(), "x".into())], None).len(),
-            2
-        );
+        // None of the lists names a variable the call gets its own value
+        // of, or one starting with Officina's prefix.
+        for name in &allowed {
+            assert!(!name.eq_ignore_ascii_case(CONFIG_DIR_VAR), "{name}");
+            assert!(!name.eq_ignore_ascii_case(NO_CURRENT_DIR_VAR), "{name}");
+            assert!(
+                !name.to_ascii_uppercase().starts_with("OFFICINA_"),
+                "{name}"
+            );
+        }
     }
 
     fn call(started_at_ms: i64, outcome: TriageOutcome) -> CallRecord {

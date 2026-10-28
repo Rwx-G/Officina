@@ -463,7 +463,7 @@ fn main() {
         }))
         .setup(|app| {
             // A triage call's environment is built from the window's own
-            // (AD-51, D-86), minus what core removes.
+            // (AD-51, D-86), as core's allow lists keep it.
             let collector = Collector::new(floor_arg().as_deref())?.with_triage_base_env(
                 std::env::vars_os()
                     .filter_map(|(name, value)| {
