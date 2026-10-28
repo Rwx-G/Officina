@@ -5,6 +5,7 @@
   import type { BoardStore } from "../lib/board.svelte";
   import { DROP_ATTRIBUTE, drag } from "../lib/drag.svelte";
   import type { SettleTarget } from "../lib/settle";
+  import { fadeMotion, flipMotion } from "../lib/motion";
   import ApprovalCard from "./ApprovalCard.svelte";
   import SessionCard from "./SessionCard.svelte";
 
@@ -45,6 +46,7 @@
   <p class="hint">{hint}</p>
   <div class="cards">
     {#each approvals as approval (approval.id)}
+      <div class="slot" animate:flipMotion in:fadeMotion out:fadeMotion>
       <ApprovalCard
         {approval}
         busy={store.deciding[approval.id] === true}
@@ -52,9 +54,12 @@
         nowMs={store.nowMs}
         onDecide={(approve) => void store.decideApproval(approval.id, approve)}
       />
+      </div>
     {/each}
     {#each visible as card, i (card.key)}
-      <SessionCard {card} {store} index={numbered ? i : undefined} />
+      <div class="slot" animate:flipMotion in:fadeMotion out:fadeMotion>
+        <SessionCard {card} {store} index={numbered ? i : undefined} />
+      </div>
     {:else}
       {#if approvals.length === 0}<p class="empty">Nothing here.</p>{/if}
     {/each}

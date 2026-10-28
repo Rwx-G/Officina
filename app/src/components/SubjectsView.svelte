@@ -4,6 +4,7 @@
   // the unfiled sessions by project and the archived subjects on demand;
   // the selected sessions are filed, unfiled or start a subject from the bar
   // above the lists. Every text renders as text.
+  import { fadeMotion } from "../lib/motion";
   import type { RegistryStore } from "../lib/registry.svelte";
   import { REGISTRY_STATE_TEXT } from "../lib/registry-text";
   import { clock } from "../lib/time";
@@ -39,7 +40,7 @@
   }
 </script>
 
-<main class="subjects-view" data-testid="subjects-view">
+<main class="subjects-view" data-testid="subjects-view" in:fadeMotion|global>
   {#if !view}
     <p class="block muted" data-testid="subjects-loading">Reading the registry...</p>
   {:else}

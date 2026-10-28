@@ -159,6 +159,16 @@ export async function openScene(
   await sceneSettled(page);
 }
 
+/** Waits for the window's transitions to end (story 4.15, D-545): the
+ *  Web Animations a view, a card or a panel runs once when it comes or
+ *  goes. CSS animations (the halos) are not transitions and are left
+ *  alone. */
+export async function transitionsDone(page: Page): Promise<void> {
+  await expect
+    .poll(() => page.evaluate(() => document.getAnimations().filter((a) => !(a instanceof CSSAnimation) && a.playState === "running").length))
+    .toBe(0);
+}
+
 export async function calls(page: Page): Promise<{ cmd: string; args: unknown }[]> {
   return page.evaluate(() => window.__officinaCalls ?? []);
 }

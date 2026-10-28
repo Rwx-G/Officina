@@ -8,7 +8,7 @@
 // (D-101), and a case that needs time to pass for the animations waits in
 // real time, which both clocks share.
 import { expect, test, type Page } from "@playwright/test";
-import { loadBoard, openBoard } from "./fixtures";
+import { loadBoard, openBoard, transitionsDone } from "./fixtures";
 import { HALO_ANIMATION, HALO_BREATHING_MS, HALO_CYCLE_MS } from "../src/lib/halo";
 import type { Board } from "../src/lib/generated/Board";
 
@@ -133,6 +133,8 @@ test.describe("board halo", () => {
       const { metrics } = await cdp.send("Performance.getMetrics");
       return metrics.find((metric) => metric.name === "RecalcStyleCount")!.value;
     };
+    // The board's fade in ends first (D-545): a transition, not the halos.
+    await transitionsDone(page);
     await realDelay(100);
     const before = await recalcs();
     await realDelay(3_000);

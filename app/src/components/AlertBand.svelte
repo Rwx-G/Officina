@@ -5,6 +5,7 @@
   // theme never changes (FR-8).
   import type { Board } from "../lib/generated/Board";
   import { alertSummary, bandText } from "../lib/alert";
+  import { slideMotion } from "../lib/motion";
 
   interface Props {
     board: Board | null;
@@ -17,7 +18,7 @@
 </script>
 
 {#if summary}
-  <div class="band" role="status" data-testid="alert-band">
+  <div class="band" role="status" data-testid="alert-band" transition:slideMotion={{ y: -6 }}>
     <span class="pill">Alert</span>
     <span class="text" data-testid="alert-band-text">{bandText(summary, nowMs)}</span>
   </div>

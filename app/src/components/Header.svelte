@@ -5,6 +5,7 @@
   import type { Base, Mode, WindowView } from "../lib/view.svelte";
   import { RELAY_TOGGLE_TEXT } from "../lib/relay-text";
   import EndedCounts, { type EndedColumn } from "./EndedCounts.svelte";
+  import { fadeMotion } from "../lib/motion";
   import Gauge from "./Gauge.svelte";
   import ModeSwitch from "./ModeSwitch.svelte";
   import StableLabel from "./StableLabel.svelte";
@@ -179,16 +180,16 @@
     </div>
     <div class="status" data-testid="header-status">
       {#if waiting > 0}
-        <div class="pill" data-testid="waiting-pill" role="status">{waiting} waiting</div>
+        <div class="pill" data-testid="waiting-pill" role="status" transition:fadeMotion>{waiting} waiting</div>
       {/if}
       {#if relay?.stopped}
-        <div class="chip stopped" data-testid="relay-stopped-chip" role="status">relay stopped</div>
+        <div class="chip stopped" data-testid="relay-stopped-chip" role="status" transition:fadeMotion>relay stopped</div>
       {/if}
       {#if relay?.pending}
-        <div class="chip pending" data-testid="catalogue-chip" role="status">catalogue change</div>
+        <div class="chip pending" data-testid="catalogue-chip" role="status" transition:fadeMotion>catalogue change</div>
       {/if}
       {#if toSort > 0 && onView}
-        <button class="chip to-sort" data-testid="to-sort-chip" onclick={openTriage} title="Open the Triage panel">
+        <button class="chip to-sort" data-testid="to-sort-chip" transition:fadeMotion onclick={openTriage} title="Open the Triage panel">
           {toSort} to sort
         </button>
       {/if}

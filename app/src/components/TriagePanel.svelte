@@ -7,6 +7,7 @@
   // without a subject, those being confirmed and those the model proposed
   // `finished`, which are confirmed one by one. The evidence on the triage
   // model closes the panel.
+  import { fadeMotion } from "../lib/motion";
   import { tick } from "svelte";
   import type { TriageRow as Row } from "../lib/generated/TriageRow";
   import type { LeftOut, RegistryStore } from "../lib/registry.svelte";
@@ -171,6 +172,7 @@
            article of the WAI feed pattern does; its controls stay buttons. -->
       <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
       <li
+        in:fadeMotion
         data-row={row.key}
         tabindex={row.key === focusKey || (focusKey === null && index === 0) ? 0 : -1}
         onfocus={() => {

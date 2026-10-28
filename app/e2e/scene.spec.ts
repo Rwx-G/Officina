@@ -8,7 +8,7 @@
 // from `layoutScene`, imported, never retyped.
 import { existsSync } from "node:fs";
 import { expect, test, type Page } from "@playwright/test";
-import { SCREENSHOT_MAX_DIFF_RATIO, calls, loadBoard, loadRelay, openScene, sceneSettled } from "./fixtures";
+import { SCREENSHOT_MAX_DIFF_RATIO, calls, loadBoard, loadRelay, openScene, sceneSettled, transitionsDone } from "./fixtures";
 import { fixturesOf } from "./fixture-index";
 import { beaconPair } from "../src/lib/alert";
 import { HALO_BREATHING_MS, HALO_CYCLE_MS } from "../src/lib/halo";
@@ -636,7 +636,9 @@ test.describe("acting from the scene", () => {
     await expect(page.getByTestId("file-number")).toHaveText("1");
     await expect(page.getByTestId("file-zone")).toHaveText(ZONE_WORDS.decision);
     await expect(page.getByTestId("file-waiting-for")).toHaveText(first.waiting_for!);
-    // At the sessions area's right edge, 420 px wide, the scene unscaled.
+    // At the sessions area's right edge, 420 px wide, the scene unscaled,
+    // once its slide in ended (D-545).
+    await transitionsDone(page);
     const file = (await sessionFile(page).boundingBox())!;
     const area = (await page.getByTestId("sessions-area").boundingBox())!;
     expect(file.width).toBe(420);

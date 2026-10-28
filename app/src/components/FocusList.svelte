@@ -5,6 +5,7 @@
   // act; the Your turn sessions; the Working ones as a count. A row's
   // activation is the board card's, its outcome shown in the row. No scene,
   // no halo, no transition and no frame loop: nothing here moves.
+  import { fadeMotion } from "../lib/motion";
   import type { BoardStore } from "../lib/board.svelte";
   import { causeText } from "../lib/alert";
   import { projectColor } from "../lib/colors";
@@ -61,7 +62,7 @@
   </li>
 {/snippet}
 
-<main class="focus" data-testid="focus-list">
+<main class="focus" data-testid="focus-list" in:fadeMotion|global>
   {#if approvals > 0}
     <button class="approvals" data-testid="focus-approvals" onclick={onApprovals} title="Open them on the board">
       {plural(approvals, "approval", "approvals")} waiting

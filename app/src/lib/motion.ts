@@ -5,6 +5,7 @@
 // the system at the moment it runs and takes no time under reduced motion.
 // Nothing here loops: a transition runs once, when its element comes or
 // goes (FR-9).
+import { flip, type FlipParams } from "svelte/animate";
 import { fade, fly, type FadeParams, type FlyParams, type TransitionConfig } from "svelte/transition";
 
 /** How long a fade or a short slide lasts, in ms. */
@@ -22,7 +23,14 @@ export function fadeMotion(node: Element, params: FadeParams = {}): TransitionCo
   return fade(node, { duration: duration(), ...params });
 }
 
-/** A short slide with a fade, `y` px from below (negative: from above). */
+/** A short slide with a fade, `y` px from below (negative: from above),
+ *  or `x` px from the side when given. */
 export function slideMotion(node: Element, params: FlyParams = {}): TransitionConfig {
-  return fly(node, { duration: duration(), y: 6, ...params });
+  return fly(node, { duration: duration(), y: params.x === undefined ? 6 : 0, ...params });
+}
+
+/** The other items of a list sliding to their new places when one comes
+ *  or goes, on transform only. */
+export function flipMotion(node: Element, fromTo: { from: DOMRect; to: DOMRect }, params: FlipParams = {}) {
+  return flip(node, fromTo, { duration: duration(), ...params });
 }

@@ -7,6 +7,7 @@
   import { startAll } from "./lib/lifecycle";
   import { REGISTRY_STATE_TEXT } from "./lib/registry-text";
   import { clock, hours } from "./lib/time";
+  import { fadeMotion } from "./lib/motion";
   import Header from "./components/Header.svelte";
   import AlertBand from "./components/AlertBand.svelte";
   import DiscardTarget from "./components/DiscardTarget.svelte";
@@ -49,7 +50,10 @@
     const { key, board } = refocus;
     const last = store.board !== board;
     void tick().then(() => {
-      const card = document.querySelector<HTMLElement>(`[data-testid="card"][data-key="${CSS.escape(key)}"] button.main`);
+      // A card on its way out is inert while it fades: never that one.
+      const card = Array.from(
+        document.querySelectorAll<HTMLElement>(`[data-testid="card"][data-key="${CSS.escape(key)}"] button.main`),
+      ).find((button) => !button.closest("[inert]"));
       card?.focus();
       if (card || last) refocus = null;
     });
@@ -163,11 +167,11 @@
     {:else if windowView.mode === "focus"}
       <FocusList {board} {store} onApprovals={() => windowView.setMode("board")} />
     {:else if scene}
-      <main class="sessions-area" data-testid="sessions-area">
+      <main class="sessions-area" data-testid="sessions-area" in:fadeMotion>
         <Scene {board} {store} onBoard={() => windowView.setBase("board")} walking={windowView.walking} />
       </main>
     {:else if columns}
-      <main class="board">
+      <main class="board" in:fadeMotion>
         <BoardColumn
           column="needs_you"
           title="Needs you"

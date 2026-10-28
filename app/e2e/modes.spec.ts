@@ -2,7 +2,7 @@
 // the view switch's names, the mode switch, `m`, the stored mode and its
 // defaults, and the banners above the sessions area.
 import { expect, test, type Page } from "@playwright/test";
-import { calls, loadBoard, loadRelay, openBoard, openScene, sceneSettled } from "./fixtures";
+import { calls, loadBoard, loadRelay, openBoard, openScene, sceneSettled, transitionsDone } from "./fixtures";
 import { DEFAULT_WALKING, VIEW_STORAGE_KEY, defaultViewState, readViewState, serialiseViewState } from "../src/lib/view.svelte";
 import { FOCUS_REPEAT_GUARD_MS } from "../src/lib/board.svelte";
 import type { Board } from "../src/lib/generated/Board";
@@ -342,6 +342,8 @@ test.describe("modes", () => {
   test("Focus runs no animation", async ({ page }) => {
     await openFocus(page, loadBoard("scene-alert"));
     await expect(scene(page)).toHaveCount(0);
+    // Its fade in ends, and nothing runs after it (D-545).
+    await transitionsDone(page);
     expect(await page.evaluate(() => document.getAnimations().length)).toBe(0);
     await page.clock.runFor(5_000);
     expect(await page.evaluate(() => document.getAnimations().length)).toBe(0);

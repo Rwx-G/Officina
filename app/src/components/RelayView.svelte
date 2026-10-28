@@ -4,6 +4,7 @@
   // recent activity and the journal's own diagnostics. Approvals of `human`
   // actions are not here: they are decided on their cards in Needs you.
   // Every text is rendered as text.
+  import { fadeMotion } from "../lib/motion";
   import { isPointerClick } from "../lib/pointer";
   import type { RelayStore } from "../lib/relay.svelte";
   import { ANOMALY_TEXT, RELAY_TOGGLE_TEXT } from "../lib/relay-text";
@@ -23,7 +24,7 @@
   let open = $derived(relay?.anomalies.filter((a) => !a.acknowledged).length ?? 0);
 </script>
 
-<main class="relay-view" data-testid="relay-view">
+<main class="relay-view" data-testid="relay-view" in:fadeMotion|global>
   <section class="block" data-testid="relay-stop" aria-labelledby="relay-stop-title">
     <h2 id="relay-stop-title">Relay</h2>
     <p data-testid="relay-state">

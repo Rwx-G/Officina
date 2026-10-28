@@ -13,6 +13,7 @@
   // and acts on it as its board card does, with the same outcome words
   // (`lib/outcome.ts`). Session text renders as text only.
   import { onMount } from "svelte";
+  import { slideMotion } from "../lib/motion";
   import type { Board } from "../lib/generated/Board";
   import type { BoardStore } from "../lib/board.svelte";
   import { causeText, waitText } from "../lib/alert";
@@ -69,7 +70,7 @@
   });
 </script>
 
-<div class="file" role="dialog" aria-labelledby={titleId} data-testid="session-file" data-form={form.kind} bind:this={panel}>
+<div class="file" role="dialog" aria-labelledby={titleId} data-testid="session-file" data-form={form.kind} bind:this={panel} in:slideMotion|global={{ x: 16 }}>
   <header>
     <h2 id={titleId}>{form.kind === "file" ? form.card.name : form.title}</h2>
     <button type="button" class="close" data-testid="file-close" onclick={onClose}>
