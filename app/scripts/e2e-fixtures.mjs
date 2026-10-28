@@ -1115,13 +1115,14 @@ function sceneFloorToml(floor, projectPaths) {
 }
 
 let scenePid = 6000;
-/** One live session: its agents record, its event lines and its intent. */
-function sceneSession(n, project, column, name, events, extra = {}) {
+/** One live session: its agents record, its event lines and its intent, the
+ *  column and the zone core places it in (story 4.3). */
+function sceneSession(n, project, column, zone, name, events, extra = {}) {
   const status = { needs_you: "waiting", working: "busy", your_turn: "idle" }[column];
   return {
     n,
     project,
-    intent: { column },
+    intent: { column, zone },
     agent: {
       pid: scenePid++,
       cwd: work(project),
@@ -1140,22 +1141,25 @@ const prompt = (minsAgo, text = "Carry on with the plan") => ({ ts: now - minsAg
 const stopAt = (minsAgo, text = "Done. Ready for review.") => ({ ts: now - minsAgo * MIN, event: "Stop", last_message: text });
 const startAt = (minsAgo, source) => ({ ts: now - minsAgo * MIN, event: "SessionStart", source });
 
-/** Needs you since `waitMin` minutes: a prompt, then a permission prompt. */
-const waitingOn = (n, project, name, waitMin, extra) =>
-  sceneSession(n, project, "needs_you", name, [
+/** Needs you since `waitMin` minutes: a prompt, then a permission prompt;
+ *  in the alert room when `alerted`. */
+const waitingOn = (n, project, name, waitMin, extra = {}) =>
+  sceneSession(n, project, "needs_you", extra.alerted ? "alert" : "decision", name, [
     prompt(waitMin + 2),
     { ts: now - waitMin * MIN, event: "Notification", notification_type: "permission_prompt", message: "Claude needs your permission to use Bash" },
   ], extra);
-/** Working since a prompt `sinceMin` minutes ago. */
-const workingOn = (n, project, name, sinceMin = 6, extra) => sceneSession(n, project, "working", name, [prompt(sinceMin)], extra);
+/** Working since a prompt `sinceMin` minutes ago; queued at the decision
+ *  office while its relay request is pending. */
+const workingOn = (n, project, name, sinceMin = 6, extra = {}) =>
+  sceneSession(n, project, "working", extra.request ? (extra.alerted ? "alert" : "decision") : "office", name, [prompt(sinceMin)], extra);
 /** Your turn after a finished round. */
 const resting = (n, project, name, stoppedMin = 12) =>
-  sceneSession(n, project, "your_turn", name, [prompt(stoppedMin + 5), stopAt(stoppedMin)]);
+  sceneSession(n, project, "your_turn", "lounge", name, [prompt(stoppedMin + 5), stopAt(stoppedMin)]);
 /** Your turn, just started from the command line, no prompt yet. */
-const arriving = (n, project, name) => sceneSession(n, project, "your_turn", name, [startAt(4, "startup")]);
+const arriving = (n, project, name) => sceneSession(n, project, "your_turn", "reception", name, [startAt(4, "startup")]);
 /** Your turn, compacted after its round, no prompt since. */
 const compacted = (n, project, name) =>
-  sceneSession(n, project, "your_turn", name, [prompt(30), stopAt(25), startAt(20, "compact")]);
+  sceneSession(n, project, "your_turn", "lounge", name, [prompt(30), stopAt(25), startAt(20, "compact")]);
 
 const P = {
   billing: "billing-api",
@@ -1229,8 +1233,8 @@ const sceneScenarios = {
       ],
     },
     sessions: [
-      waitingOn(1, P.billing, "billing-api", 3),
-      waitingOn(2, P.web, "web-portal", 8),
+      waitingOn(1, P.billing, "billing-api", 3, { alerted: true }),
+      waitingOn(2, P.web, "web-portal", 8, { alerted: true }),
       workingOn(3, P.docs, "rebuild-index", 9, { request: true }),
       workingOn(4, P.web, "upgrade-deps"),
       resting(5, P.docs, "docs-site"),
@@ -1247,7 +1251,7 @@ const sceneScenarios = {
       ],
     },
     sessions: [
-      waitingOn(1, P.billing, "billing-api", 3),
+      waitingOn(1, P.billing, "billing-api", 3, { alerted: true }),
       waitingOn(2, P.web, "web-portal", 4),
       workingOn(3, P.docs, "rebuild-index", 9, { request: true }),
       workingOn(4, P.web, "upgrade-deps"),
@@ -1360,8 +1364,9 @@ function checkSceneIntents(name, board, sessions, scenario) {
       problems.push(`${s.agent.name}: no live card`);
       continue;
     }
+    const placed = { column: card.column, zone: card.scene?.zone };
     for (const [key, expected] of Object.entries(s.intent)) {
-      if (card[key] !== expected) problems.push(`${s.agent.name}: ${key} ${card[key]}, meant ${expected}`);
+      if (placed[key] !== expected) problems.push(`${s.agent.name}: ${key} ${placed[key]}, meant ${expected}`);
     }
   }
   if (live.length !== sessions.length) problems.push(`${live.length} live cards for ${sessions.length} sessions`);
