@@ -265,14 +265,16 @@ test.describe("Triage panel", () => {
     const view = withUnsure(base, unsure);
     await openTriage(page, view);
     const all = page.getByTestId("confirm-all");
+    const leftOut = page.getByTestId("confirm-all-left-out");
     const total = view.triage.length;
-    await expect(all).toHaveText(`Confirm all ${total - 2} shown; left out: 1 without a verdict, 1 without a subject`);
+    await expect(all).toHaveText(`Confirm all ${total - 2} shown`);
+    await expect(leftOut).toHaveText("Left out: 1 without a verdict, 1 without a subject");
+    await expect(all).toHaveAccessibleDescription("Left out: 1 without a verdict, 1 without a subject");
     const pending = view.triage.find((r) => r.key !== unsure.key && r.key !== homeless(view).key)!;
     await holder(page, pending).focus();
     await page.keyboard.press("Enter");
-    await expect(all).toHaveText(
-      `Confirm all ${total - 3} shown; left out: 1 without a verdict, 1 without a subject, 1 being confirmed`,
-    );
+    await expect(all).toHaveText(`Confirm all ${total - 3} shown`);
+    await expect(leftOut).toHaveText("Left out: 1 without a verdict, 1 without a subject, 1 being confirmed");
   });
 
   test("confirm all leaves out a model's finished, which Enter confirms on its row", async ({ page }) => {
@@ -282,8 +284,9 @@ test.describe("Triage panel", () => {
     await openTriage(page, view);
     const all = page.getByTestId("confirm-all");
     const total = view.triage.length;
-    await expect(all).toHaveText(
-      `Confirm all ${total - 2} shown; left out: 1 without a subject, 1 the model calls finished, to confirm one by one`,
+    await expect(all).toHaveText(`Confirm all ${total - 2} shown`);
+    await expect(page.getByTestId("confirm-all-left-out")).toHaveText(
+      "Left out: 1 without a subject, 1 the model calls finished, to confirm one by one",
     );
     await all.click();
     await expect.poll(async () => (await confirmed(page)).length).toBe(1);

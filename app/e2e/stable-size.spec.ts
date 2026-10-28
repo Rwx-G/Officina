@@ -257,6 +257,32 @@ test.describe("controls keep their size whatever their state", () => {
     }
   });
 
+  // D-516: what Confirm all leaves out is a line beside the button, so the
+  // button keeps its box when more rows are left out.
+  test("Confirm all keeps its box whatever it leaves out", async ({ page }) => {
+    await SCENES.triage(page);
+    const all = page.getByTestId("confirm-all");
+    const before = await all.boundingBox();
+    const leftOut = await page.getByTestId("confirm-all-left-out").textContent();
+    await page.evaluate(() => {
+      const view: RegistryView = window.__officinaRegistry!;
+      const row = view.triage.find((r) => r.kind !== "unfiled_session")!;
+      return window.__officinaPushRegistry?.({
+        ...view,
+        triage: view.triage.map((r) =>
+          r.key === row.key
+            ? { ...r, proposal: { verdict: "unsure", source: "model", reason: "model", call_id: 9 }, verdict: null }
+            : r,
+        ),
+      });
+    });
+    await expect(page.getByTestId("confirm-all-left-out")).not.toHaveText(leftOut ?? "");
+    const after = await all.boundingBox();
+    for (const key of ["x", "y", "width", "height"] as const) {
+      expectClose(after![key], before![key], `Confirm all ${key}`);
+    }
+  });
+
   test("the scrollbar's room is kept in every view", async ({ page }) => {
     await SCENES.board(page);
     // Headless Chromium hides scrollbars, so the style is what can be seen.

@@ -136,17 +136,25 @@
   <div class="head">
     <h2 id="triage-title">To sort</h2>
     {#if rows.length > 0}
-      <button
-        class="tool"
-        data-testid="confirm-all"
-        disabled={taken.length === 0}
-        onclick={confirmAll}
-        onkeydown={noKeyConfirms}
-      >
-        Confirm all {taken.length} shown{#if leftOutText}<span class="left-out" data-testid="confirm-all-left-out"
-            >; left out: {leftOutText}</span
-          >{/if}
-      </button>
+      <!-- What the batch leaves out is a line beside the button, never in
+           it, so the button keeps its width whatever is left out (D-516). -->
+      <div class="confirm">
+        {#if leftOutText}
+          <span class="left-out" id="confirm-all-left-out" data-testid="confirm-all-left-out"
+            >Left out: {leftOutText}</span
+          >
+        {/if}
+        <button
+          class="tool confirm-all"
+          data-testid="confirm-all"
+          aria-describedby={leftOutText ? "confirm-all-left-out" : undefined}
+          disabled={taken.length === 0}
+          onclick={confirmAll}
+          onkeydown={noKeyConfirms}
+        >
+          Confirm all {taken.length} shown
+        </button>
+      </div>
     {/if}
   </div>
   {#if rows.length === 0}
@@ -228,7 +236,21 @@
     font-weight: 600;
     cursor: pointer;
   }
+  .confirm {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 6px 12px;
+  }
   .left-out {
-    font-weight: 400;
+    font-size: 13px;
+    color: var(--color-text-muted);
+  }
+  /* Room for a three-digit count, digits of one width: the label's
+     width does not follow the count either. */
+  .confirm-all {
+    min-width: 21ch;
+    font-variant-numeric: tabular-nums;
   }
 </style>

@@ -512,6 +512,9 @@ project uses [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- The Triage panel's Confirm all button keeps its width: what it leaves out
+  is a line beside it ("Left out: ..."), which the button names as its
+  description, instead of part of its label.
 - A header status chip (the waiting pill, relay stopped, catalogue change,
   to sort, the contract) no longer moves the quota gauges or the buttons:
   the chips sit on one status line under the right-hand buttons, kept even
