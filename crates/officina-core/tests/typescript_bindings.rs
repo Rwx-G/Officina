@@ -1,7 +1,8 @@
-//! The TypeScript types of the board and relay contracts are generated from
-//! the Rust types (AD-13) and committed under `app/src/lib/generated/`. This test
-//! regenerates them in memory and fails when the committed files differ, so a
-//! Rust change cannot leave the frontend on a stale contract.
+//! The TypeScript types of the board, relay and registry contracts are
+//! generated from the Rust types (AD-13) and committed under
+//! `app/src/lib/generated/`. This test regenerates them in memory and fails
+//! when the committed files differ, so a Rust change cannot leave the
+//! frontend on a stale contract.
 //!
 //! Regenerate with:
 //! `OFFICINA_WRITE_TS=1 cargo test -p officina-core --features ts --test typescript_bindings`
@@ -17,6 +18,7 @@ use std::path::{Path, PathBuf};
 use officina_core::board::Board;
 use officina_core::focus::FocusOutcome;
 use officina_core::ipc::IpcError;
+use officina_core::registry::view::RegistryView;
 use officina_core::relay::view::RelayView;
 use ts_rs::{Config, TS};
 
@@ -47,6 +49,7 @@ fn export(dir: &Path) {
     FocusOutcome::export_all(&cfg).unwrap();
     IpcError::export_all(&cfg).unwrap();
     RelayView::export_all(&cfg).unwrap();
+    RegistryView::export_all(&cfg).unwrap();
 }
 
 #[test]

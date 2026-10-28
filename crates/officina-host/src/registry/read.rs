@@ -3,16 +3,21 @@
 //! into core records.
 
 use std::collections::BTreeMap;
+use std::path::Path;
 
+use officina_core::board::Board;
+use officina_core::dates::dated_file_day;
 use officina_core::registry::fold::pivot;
 #[cfg(feature = "window-authority")]
 use officina_core::registry::fold::{Mark, MarkQuery};
 use officina_core::registry::types::{
-    EventFileRecord, ExcerptRecord, FactRow, FactValue, RestoreNotice, SessionRecord, SessionRow,
-    SettingKey, Source, Sourced, SubjectRecord, SubjectRef, SubjectStatus,
+    EventFileRecord, ExcerptRecord, FactRow, FactValue, RegistryReport, RestoreNotice,
+    SessionRecord, SessionRow, SettingKey, Source, Sourced, SubjectRecord, SubjectRef,
+    SubjectStatus,
 };
 #[cfg(feature = "window-authority")]
 use officina_core::registry::types::{HookEnd, HookStart, SessionFact};
+use officina_core::registry::view::{IngestionView, RegistryView, ViewInput, build_view};
 use rusqlite::Connection;
 #[cfg(feature = "window-authority")]
 use rusqlite::OptionalExtension;
@@ -125,6 +130,19 @@ impl Reader {
     pub fn card_subjects(&self) -> rusqlite::Result<BTreeMap<String, SubjectRef>> {
         card_subjects(&self.conn)
     }
+
+    /// The registry as the Subjects view shows it (AD-53, AD-54), with the
+    /// lag behind the event files of `events_dir` and the live cards of
+    /// `board`.
+    pub fn view(
+        &self,
+        report: RegistryReport,
+        board: Option<&Board>,
+        events_dir: &Path,
+        now_ms: i64,
+    ) -> rusqlite::Result<RegistryView> {
+        view(&self.conn, report, board, events_dir, now_ms)
+    }
 }
 
 const SUBJECT_COLUMNS: &str =
@@ -177,6 +195,71 @@ pub(crate) fn card_subjects(conn: &Connection) -> rusqlite::Result<BTreeMap<Stri
         ))
     })?
     .collect()
+}
+
+/// How far the registry lags behind the event files of `events_dir`, from
+/// their sizes against the stored offsets (AD-53, D-84).
+pub(crate) fn ingestion_view(
+    conn: &Connection,
+    events_dir: &Path,
+) -> rusqlite::Result<IngestionView> {
+    let rows: BTreeMap<String, EventFileRecord> = event_files(conn)?
+        .into_iter()
+        .map(|row| (row.name.clone(), row))
+        .collect();
+    let mut view = IngestionView {
+        rewritten_files: u32::try_from(rows.values().filter(|row| row.rewrites > 0).count())
+            .unwrap_or(u32::MAX),
+        corrupt_lines: rows.values().map(|row| row.corrupt_lines).sum(),
+        ..IngestionView::default()
+    };
+    for entry in std::fs::read_dir(events_dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+    {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let Some(meta) = entry.metadata().ok().filter(|m| m.is_file()) else {
+            continue;
+        };
+        if dated_file_day(&name).is_none() {
+            continue;
+        }
+        let row = rows.get(&name);
+        if row.is_some_and(|row| row.complete_at_ms.is_some()) {
+            continue;
+        }
+        view.incomplete_files += 1;
+        view.pending_bytes += meta
+            .len()
+            .saturating_sub(row.map_or(0, |row| row.ingested_bytes));
+    }
+    Ok(view)
+}
+
+/// The registry as the Subjects view shows it.
+pub(crate) fn view(
+    conn: &Connection,
+    report: RegistryReport,
+    board: Option<&Board>,
+    events_dir: &Path,
+    now_ms: i64,
+) -> rusqlite::Result<RegistryView> {
+    let subjects = subjects(conn)?;
+    let sessions = session_records(conn)?;
+    let excerpts = excerpts(conn)?;
+    Ok(build_view(
+        &ViewInput {
+            registry: report,
+            ingestion: ingestion_view(conn, events_dir)?,
+            subjects: &subjects,
+            sessions: &sessions,
+            excerpts: &excerpts,
+            board,
+            restore_notice: restore_notice(conn),
+        },
+        now_ms,
+    ))
 }
 
 /// `subject_id`, `subject_src` and `subject_at_ms` as one value: `None`

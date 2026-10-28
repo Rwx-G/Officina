@@ -9,3 +9,4 @@ pub mod fold;
 pub mod ingestion;
 pub mod retention;
 pub mod types;
+pub mod view;

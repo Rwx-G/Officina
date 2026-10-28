@@ -203,6 +203,7 @@ fn no_command_writes_under_the_claude_config_dir() {
     env.run(&["hook"], br#"{"hook_event_name":"Stop","session_id":"s"}"#);
     env.run(&["quota", "write", "--tee"], STATUSLINE.as_bytes());
     env.run(&["board", "--json"], b"");
+    env.run(&["subjects", "--json"], b"");
     env.run(&["doctor"], b"");
 
     // A gate deny, the relay's own commands, an approval request and

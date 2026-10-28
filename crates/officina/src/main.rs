@@ -1,12 +1,13 @@
 //! `officina`: the console binary. Claude Code runs `hook` and `quota write`;
-//! sessions run `run`; the author runs `doctor`, `board --json` and
-//! `relay --json`.
+//! sessions run `run`; the author runs `doctor`, `board --json`,
+//! `relay --json` and `subjects --json`.
 //! Arguments are parsed by hand (AD-16, AD-29): a few subcommands do not
 //! justify a parser in the hook's image.
 //!
 //! Exit codes never use 2: Claude Code reads a hook exiting 2 as "block",
 //! so a mistyped hook command must not be able to stop sessions. Usage errors
-//! exit 64 (EX_USAGE), runtime failures 1, a stale board 3; `run` passes the
+//! exit 64 (EX_USAGE), runtime failures 1, a stale board or an unreadable
+//! registry 3; `run` passes the
 //! program's code through and uses 126, 124 and 127 as a shell does.
 
 use std::io::{Read, Write};
@@ -17,7 +18,7 @@ use officina_host::collector::Collector;
 use officina_host::doctor::{self, Level};
 use officina_host::files::now_ms;
 use officina_host::paths::Paths;
-use officina_host::registry::commands::read_registry;
+use officina_host::registry::commands::{read_registry, subjects_view};
 use officina_host::relay::gate::{self, GATE_EVENT, GateEnv};
 use officina_host::relay::home::RelayHome;
 use officina_host::relay::run::{self as relay_run, RunArgs};
@@ -39,6 +40,9 @@ usage: officina <command>
                                   up to <s> seconds (exit: its own code, 126
                                   refused, 124 timed out, 127 not started)
   run --list                      list the actions this folder's project may run
+  subjects --json [--floor <path>]
+                                  print the registry's subjects and sessions once,
+                                  read-only (exit 3 when it cannot be read)
   version                         print the version";
 
 fn read_stdin() -> Vec<u8> {
@@ -145,6 +149,31 @@ fn board(floor: Option<&PathBuf>) -> ExitCode {
         ExitCode::from(3)
     } else {
         ExitCode::SUCCESS
+    }
+}
+
+/// `officina subjects --json` (AD-53, D-82, D-97): the Subjects view from the
+/// read-only registry and a fresh board, with the window open or closed.
+/// Exit 0 when the registry was read, a stale board inside the view
+/// notwithstanding; 3, the view printed with the reason, when nothing could
+/// be read.
+fn subjects_json(floor: Option<&PathBuf>) -> ExitCode {
+    let mut collector = match collector(floor) {
+        Ok(c) => c,
+        Err(code) => return code,
+    };
+    let (view, read) = subjects_view(&mut collector, now_ms());
+    match serde_json::to_string_pretty(&view) {
+        Ok(json) => println!("{json}"),
+        Err(e) => {
+            eprintln!("officina: {e}");
+            return ExitCode::FAILURE;
+        }
+    }
+    if read {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::from(3)
     }
 }
 
@@ -281,6 +310,10 @@ fn main() -> ExitCode {
         },
         Some("run") => run_cmd(rest),
         Some("relay") if rest == ["--json"] => relay_json(),
+        Some("subjects") if rest.iter().any(|a| a == "--json") => match floor_arg(rest) {
+            Ok(floor) => subjects_json(floor.as_ref()),
+            Err(()) => usage_error(),
+        },
         Some("version" | "--version") => {
             println!("officina {}", env!("CARGO_PKG_VERSION"));
             ExitCode::SUCCESS
