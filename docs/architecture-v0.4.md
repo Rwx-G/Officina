@@ -2,7 +2,7 @@
 title: "Architecture addendum: Officina v0.4 - The Scene"
 author: Rwx-G
 date: 2026-10-28
-status: approved 2026-10-28 (owner delegated design decisions); reworked 2026-10-28 after the owner approved the interactive scene prototype v2 (section 7)
+status: approved 2026-10-28 (owner delegated design decisions); reworked 2026-10-28 after the owner approved the interactive scene prototype v2, then amended the same day after a requirement challenge of the plan (section 7)
 inputs:
   - prd/prd-v0.4.md
   - (requirement challenge, not published)
@@ -12,6 +12,7 @@ inputs:
   - architecture-v0.3.md
   - (Slice 0 mock, not published: _bmad-output/planning-artifacts/design/scene-mock.html, git-ignored)
   - (interactive scene prototype v2, not published: _bmad-output/planning-artifacts/design/prototype/interactive/, git-ignored)
+  - (requirement challenge of the Epic 4 plan, not published: _bmad-output/planning-artifacts/qa/epic-4-plan-challenge.md)
   - https://code.claude.com/docs/en/hooks
   - https://v2.tauri.app/reference/javascript/api/namespacewindow/
   - https://docs.rs/tauri/2.12.5/tauri/webview/struct.WebviewWindow.html
@@ -67,7 +68,7 @@ The two-minute run costs the static scene plus a fifth of the worst case (0.25 +
 4. Canvas needs a frame loop for any animation and costs 5 to 9 times the SVG scene while it runs.
 5. Any running animation costs per displayed frame. The two-minute breathing limit (FR-3), not the technique, is what keeps the scene's average cost near zero.
 
-**Not measured: walking.** The v2 prototype drives the walk cycle from a JavaScript frame loop that runs while someone walks. Its cost is gate 3 of AD-178 (Slice 0), and the workstation measurement of AD-71 as amended includes it.
+**Not measured: walking.** The v2 prototype drives the walk cycle from a JavaScript frame loop that runs on every frame, beside motion the port drops (per-tool screens, a ticking clock, a log panel), so measuring it would say little about the mover: gate 3 of AD-178 is withdrawn (epic-4-decisions.md D-500), and the workstation measurement of AD-71 as amended decides.
 
 ## 2. Decisions
 
@@ -98,6 +99,8 @@ Why TypeScript and not the Rust core: it is geometry and presentation (logical p
 ### AD-61: Composition, geometry and scaling
 
 **Superseded 2026-10-28 by AD-169** for the composition, the grid, the room sizes and the canvas. Kept: figure targets of 48 x 48 logical px; plaques capped at 140 logical px with CSS ellipsis; the scale rule `s = clamp(min(areaWidth / CANVAS.w, areaHeight / CANVAS.h), MIN_SCALE, MAX_SCALE)` applied as one `transform: scale(s)` on the layer stack, with `MIN_SCALE = 44 / 48` so every target is 44 CSS px at the minimum; below the minimum area the scene stays at `MIN_SCALE` and the sessions area scrolls, while Board and Focus fit any size.
+
+**Pending (2026-10-28, epic-4-decisions.md D-506):** whether `MIN_SCALE` holds on the screen that shows the scene. Gate 5 of AD-178 records that window's size and scaling; if its sessions area is below the minimum, the owner chooses between scrolling (this rule) and a scene-only viewing scale down to 24 CSS px targets, 44 px kept in Board, Focus and the file (recommended).
 
 ### AD-62: Slot and desk assignment
 
@@ -166,11 +169,11 @@ Unchanged (a side panel, 420 px, outside the scene element, actions with the boa
 
 | Layer | What | How |
 |---|---|---|
-| core scene state | every rule of AD-167: zones from column and badge, reception on evidence, approvals, alert by priority and by time, unknown wait start, stale board, next escalation; a coverage test over `Zone` and `AlertCause` | `tests/vectors/scene.json`, replayed through `build_board` (AD-14's pattern) |
+| core scene state | every rule of AD-167: zones from column and badge, reception on a `startup` start only, approvals while Working and never by time, alert by priority and by time, unknown wait start, stale board and unknown badge keeping the last known alert, next escalation; a coverage test over `Zone` and `AlertCause` | `tests/vectors/scene.json`, replayed through `build_board` (AD-14's pattern) |
 | layout unit | office order (floor, memory, first appearance, pruning, floor change, growth, More offices); desks (kept while away, freed on end, chip list); queue and alert room in board order with approvals after; sticky reception and lounge spots; groups beyond capacity; unknown keeps its last place, first sight at its desk; identical input gives a deep-equal layout; fixed point of its own memory | Vitest on `layoutScene`, boards from the fixture index (D-181) |
 | geometry property | at full occupancy for 4, 6 and 8 offices (every spot, desk, chip, register overflow, More offices): no two targets intersect; no target meets a plaque it does not own; every target is 44 CSS px or more at `MIN_SCALE`; every target lies inside the canvas | Vitest, constants imported, never retyped |
-| paths | every spot reachable from every spot and from the entrance without staff nodes; routes stay on graph edges; smoothing keeps the end points; deterministic | Vitest on `lib/scene/paths.ts` |
-| mover | with an injected clock: positions continuous, speed within `WALK.vmax`, arrival exact; glide ends in `GLIDE_MS`; reduced motion places at once; the loop stops when all arrived; facing hysteresis | Vitest on `lib/scene/mover.ts` |
+| paths | every spot reachable from every spot and from the entrance; routes stay on graph edges; smoothing keeps the end points; deterministic | Vitest on `lib/scene/paths.ts` |
+| mover | with an injected clock: positions continuous, speed within `WALK.vmax`, arrival exact; glide ends in `GLIDE_MS`; reduced motion places at once; a hidden window or a long frame gap places at once; the loop stops when all arrived; facing hysteresis | Vitest on `lib/scene/mover.ts` |
 | markup | layer 3's builders take closed types only and output no text node from a payload | Vitest: built for every pose, look and project colour, scanned for text nodes |
 | truthful motion | Scene open, figures settled (`data-moving="0"` on the scene element, written by the mover), `page.clock.install`, a `MutationObserver` on `[data-testid=scene]`; advance 150 s, push the same board: zero records; push a changed board: records | Playwright |
 | stable figures | a state change that makes a figure walk, stepped with `page.clock.runFor(16)` for 72 frames: one node from A to B, exactly one pose group and one view visible per frame, opacity 1, largest step under 3 logical px per frame, facing never flips back within 8 frames, no CSS animation inside any figure (`document.getAnimations()` filtered by `[data-figure]` ancestors), and the loop stopped after arrival | Playwright, the prototype's flicker check ported |
@@ -178,13 +181,13 @@ Unchanged (a side panel, 420 px, outside the scene element, actions with the boa
 | taskbar | the overlay image for counts 1 to 9 and above nine, amber and alert; its colours equal `app.css`'s light tokens; a new alerted key requests attention once, a known one never | Rust unit tests in the app crate (AD-174) |
 | screenshots | the densities in both themes with the scene settled, `toHaveScreenshot` with the clock installed and animations disabled; baselines from CI (D-119), compared once by the owner with the prototype's renders | Playwright, `app/e2e/scene.spec.ts` |
 
-Not automatable, recorded in research notes: AD-178's gates; AD-71's CPU measurement; AD-67's live theme gate; the scene on the workstation's WebView2 at 100 % and 150 % scaling.
+Not automatable, recorded in research notes: AD-178's gates 1, 2, 4 and 5; AD-71's CPU measurement; AD-67's live theme gate; the scene on the workstation's WebView2 at 100 % and 150 % scaling.
 
 ### AD-71: Measuring FR-9 on the workstation
 
 The officina-app process and its `msedgewebview2.exe` children, 10 minutes, a fixture home of 10 employees and 5 waiting (D-120), Task Manager's CPU column or `Get-Counter "\Process(*)\% Processor Time"` summed over those processes, recorded with the logical core count and the display refresh rate in % of the machine and % of one core. Runs: halos breathing throughout, the real two-minute rule, halos steady.
 
-**Amended 2026-10-28 (scene v2):** two more runs. **Walking**: the same home with a replay script that rewrites the fixture's event files and agents sidecar so one state change happens every 10 s for 10 minutes (60 walks, each crossing at least one corridor), walking on. **Glide**: the same replay with walking off. FR-9's threshold applies to the machine figure of the walking run with the two-minute halo rule; if it exceeds it, walking ships off by default (D-480) and halos keep their rule; if the halo run alone exceeds it, halos are steady from the start.
+**Amended 2026-10-28 (scene v2):** two more runs. **Walking**: the same home with a replay script that rewrites the fixture's event files and agents sidecar so one state change happens every 10 s for 10 minutes (60 walks, each crossing at least one corridor), walking on. **Glide**: the same replay with walking off. FR-9's threshold applies to the walking run with the two-minute halo rule, in both units: under 1 % of the machine and under 8 % of one logical core (epic-4-decisions.md D-501); if it exceeds either, walking ships off by default (D-480) and halos keep their rule; if the halo run alone exceeds either, halos are steady from the start.
 
 ### AD-72: Frontend structure and README assets
 
@@ -205,14 +208,16 @@ README assets: `docs/assets/scene.png` and `scene-dark.png` from a settled scene
 
 1. `board.stale` is set (the agents snapshot failed): `unknown`. The view keeps the employee where it was, with a question mark.
 2. The card's badge is `unknown`: `unknown`.
-3. **Waiting**: the column is Needs you, or a pending approval names the card's session. `waiting_since_ms` is, for Needs you, the latest blocking `Notification` (`BLOCKING_NOTIFICATIONS`) after the session's last prompt and last stop, else `None`; for an approval only, the earliest pending approval's `requested_at_ms`, and `approval = true`. `alert` is `priority` when the project's priority is high, else `waited` when `waiting_since_ms` is known and `now_ms - waiting_since_ms >= alert_after_ms`, else `None`. Zone `alert` with an alert, else `decision`.
-4. Your turn, with a `SessionStart` among the session's events and no `UserPromptSubmit` since: `reception`.
+3. **Waiting**: the column is Needs you, or the column is Working and a pending approval names the card's session (the run still blocks on it; epic-4-decisions.md D-496). `waiting_since_ms` is, for Needs you, the latest blocking `Notification` (`BLOCKING_NOTIFICATIONS`) after the session's last prompt and last stop, else `None`; for an approval only, the earliest pending approval's `requested_at_ms`, and `approval = true`. `alert` is `priority` when the project's priority is high, else `waited` when the card is Needs you, `waiting_since_ms` is known and `now_ms - waiting_since_ms >= alert_after_ms`, else `None`: an approval-only wait never escalates by time. Zone `alert` with an alert, else `decision`.
+4. Your turn, when the session's latest `SessionStart` carries `source` `startup` and no `UserPromptSubmit` follows it: `reception`. A `SessionStart` from `resume`, `clear`, `compact` or `fork`, or without a source, never gives reception (D-495).
 5. Your turn otherwise: `lounge`.
 6. Working: `office`.
 
-`Board.alert_count` counts cards with an alert; `Board.next_escalation_at_ms` is the earliest `waiting_since_ms + alert_after_ms` among waiting cards without an alert whose start is known, else `None`. Board order is unchanged, so digits keep acting on `columns.needs_you`; an alerted session keeps its number.
+**Unknown keeps the last known alert** (D-494). A card placed by rule 1 or 2 keeps the `alert` and `waiting_since_ms` its key had on the previous board, which the collector passes to `build_board` as `BoardInput.previous_scene` (the scene states of the last board it built, by card key); it never gains an alert while unknown. A board built without a previous one (the first of a run, `officina board --json`) has none to keep. Only a board that places the card in a known zone clears its alert.
 
-Reception rests on positive evidence: without hook events no session is ever at reception. An `idle_prompt` notification is not blocking and moves nobody (D-462). `PreToolUse` is not an input (D-463).
+`Board.alert_count` counts cards with an alert, unknown ones included; `Board.next_escalation_at_ms` is the earliest `waiting_since_ms + alert_after_ms` among Needs you cards in a known zone, without an alert and with a known start, else `None`. Board order is unchanged, so digits keep acting on `columns.needs_you`; an alerted session keeps its number.
+
+Reception rests on positive evidence: without hook events, or without a `startup` source, no session is ever at reception. An `idle_prompt` notification is not blocking and moves nobody (D-462). `PreToolUse` is not an input (D-463).
 
 The vector set `tests/vectors/scene.json` (hand-written, redacted, exempt from every formatter) holds raw agents objects, event lines, approvals, floor priorities, the threshold and `now_ms`, and the expected `scene` per card key; a coverage test iterates `Zone::ALL` and `AlertCause::ALL` and fails when a value appears in no case. The frontend never re-implements these rules (AD-13).
 
@@ -229,24 +234,24 @@ The prototype's projection and constants, in `geometry.ts`, imported by every te
 
 - **Projection**: 2:1 dimetric, `P(gx, gy, z) = [OX + (gx - gy) * 36, OY + (gx + gy) * 18 - z * 30]`: tile 72 x 36 logical px, z unit 30.
 - **Grid**: rooms are square cells of `R = 4.4` tiles, separated by corridors of `G = 1.1` tiles, inside a margin `M = 0.5`. Two rows. Columns 0 and 1 hold the shared zones: reception (0, 0), decision office (1, 0), lounge (0, 1), alert room (1, 1). Columns from 2 hold offices, back row then front row: offices 1 to 4 in (2, 0), (3, 0), (2, 1), (3, 1); offices 5 and 6 in (4, 0), (4, 1); offices 7 and 8 in (5, 0), (5, 1).
-- **Growth (FR-1)**: the floor has 4 columns until a fifth project needs an office, then 5, then 6 from the seventh. Columns are added on the right, `OX` and `OY` depend on the row count only, so no existing room moves. The floor never shrinks before restart.
+- **Growth (FR-1), pending gate 5 and the owner's answer (epic-4-decisions.md D-506)**: the floor has 4 columns until a fifth project needs an office, then 5, then 6 from the seventh. Columns are added on the right, `OX` and `OY` depend on the row count only, so no existing room moves. The floor never shrinks before restart. If the owner's answer is that four or fewer projects are typically live, the floor stays at 4 columns, office 4 turns into More offices from the fifth project, and growth goes to the backlog.
 - **Floor size**: `FX = 2M + C x R + (C - 1) x G` for C columns, `FY = 2M + 2R + G = 10.9`; walls 3.4 z units high; slab 0.45; partitions 0.42 high and 0.14 thick with door gaps; the corridor centre line runs at `gy = M + R + G / 2 = 5.45`.
-- **Canvas**: padding top 30, left 14, right 14, bottom 14; `w = (FX + FY) x 36 + 28`, `h = 30 + 3.4 x 30 + (FX + FY) x 18 + 0.45 x 30 + 14`: **1209 x 750** logical px with 4 columns, 1407 x 849 with 5, 1605 x 948 with 6, computed, never typed. The minimum sessions area is the canvas times `MIN_SCALE` (about 1108 x 688 CSS px with 4 columns), below which the scene scrolls.
+- **Canvas**: padding top 30, left 14, right 14, bottom 14; `w = (FX + FY) x 36 + 28`, `h = 30 + 3.4 x 30 + (FX + FY) x 18 + 0.45 x 30 + 14`: **1209 x 750** logical px with 4 columns, 1407 x 849 with 5, 1605 x 948 with 6, computed, never typed. The minimum sessions area is the canvas times `MIN_SCALE` (about 1108 x 688 CSS px with 4 columns), below which the scene scrolls (AD-61's pending point).
 - **Wall furniture**: the entrance door on the left wall at `gy` 1.5 to 2.7; windows and seeded frames on both walls; a whiteboard on the back wall above the decision office (static in v0.4); a wall clock drawn at a fixed time, never ticking (AD-64).
 - **Targets**: 48 x 48 logical px for figures, centred on the place's floor point and rising 56 px above it; group targets (register overflow, chips, More offices, zone overflows) as epic decision D-104 and D-484 fix them. The prototype's spots are starting values: where two spots are too close for disjoint targets (the queue's 1.1-tile pitch, the lounge's 0.7-tile seats), spots are spread or removed until AD-70's property holds; the property never changes (D-471).
 
 ### AD-170: Places and the navigation graph
 
-`places.ts` builds, from `geometry.ts`, a graph of nodes in floor coordinates and its spots, as the prototype's navigation graph:
+`places.ts` builds, from `geometry.ts`, the spots of every zone (story 4.6, which the layout needs) and the navigation graph that joins them (story 4.10, which only the mover needs), as the prototype's navigation graph:
 
 - **Reception**: the exit node outside the door, an entry node, a hub, a door node to the corridor; four visitor spots around the counter. A new session appears on the exit node and walks in; an ended one walks out and disappears there.
-- **Decision office**: the decider's desk with two screens and a chair (empty in v0.4: the author is the decider); a door to the corridor; the queue's spots, three inside along the rug, then four in the corridor leading back to the door; a consult spot in front of the desk and staff nodes from the reception counter, unused in v0.4 and reserved for v0.5's orchestrator (prd-v0.5.md section 9).
+- **Decision office**: the decider's desk with two screens and a chair, drawn and empty in v0.4 (the author is the decider); a door to the corridor; the queue's spots, three inside along the rug, then four in the corridor leading back to the door. No staff node and no consult spot: v0.5's scene story adds the staff nodes its orchestrator needs (architecture-v0.5.md AD-179, epic-4-decisions.md D-503).
 - **Offices**: a door on the corridor side (front side for the back row, back side for the front row), an aisle, four chairs at local (1.25, 1.9), (3.25, 1.9), (1.25, 3.7), (3.25, 3.7), two standing spots for the chip list.
 - **Lounge**: a three-seat sofa, a two-seat sofa, two armchairs and two standing places by the coffee corner, each seat with its slide-in offset; a door to the corridor.
 - **Alert room**: five standing spots around the beacon; a door to the corridor.
 - **Corridor**: one node per door on the centre line, chained in `gx` order.
 
-Routes are shortest paths (Dijkstra on Euclidean edge lengths) that never pass staff nodes; interior corners are rounded by a quadratic curve of radius 0.45 tile (at most half of each segment); a route starting mid-walk starts from the nearer of the walker's previous and next nodes. All of it is pure and deterministic.
+Routes are shortest paths (Dijkstra on Euclidean edge lengths); interior corners are rounded by a quadratic curve of radius 0.45 tile (at most half of each segment); a route starting mid-walk starts from the nearer of the walker's previous and next nodes. All of it is pure and deterministic.
 
 ### AD-171: Figures, the object layer, depth and snapping
 
@@ -255,7 +260,7 @@ The prototype's v2 rendering rules, which removed its flicker, are requirements:
 - **One persistent node per figure**, created when its card key first appears and kept until it leaves; a pose change toggles the visibility of one of three pose groups built once (standing, with a front and a back view and a horizontal flip; seated facing the author; seated working, back turned with the chair back covering the body). A pose change never rebuilds markup.
 - **No CSS animation inside a figure.** The walk cycle, fades and seat slide are written by the mover (AD-172), so moving a node in the DOM restarts nothing.
 - **The object layer is owned by `objects.ts`**, not by Svelte templates, because the depth sort moves figure nodes among static ones and Svelte's keyed blocks would fight it. `SceneObjects.svelte` mounts it with an action; the module builds statics from `furniture.ts`, sorted by depth `gx + gy`, and inserts figures among them.
-- **Depth with hysteresis**: a figure's depth is `gx + gy` (its seat's when seated); its index among statics changes only when its depth leaves a window of 0.05 tile around the index's statics, and its quantised depth only when it moves by more than 0.06; ties by quantised depth, then creation order. Only figure nodes are moved, with `insertBefore`, and only when their neighbour changed.
+- **Depth with hysteresis**: a figure's depth is `gx + gy` (its seat's when seated); a placed figure is inserted among statics by that depth (story 4.7); once figures move (story 4.10), its index among statics changes only when its depth leaves a window of 0.05 tile around the index's statics, and its quantised depth only when it moves by more than 0.06; ties by quantised depth, then creation order. Only figure nodes are moved, with `insertBefore`, and only when their neighbour changed.
 - **Snapped positions**: a figure's translate is rounded to whole device pixels (`snapK` = the scene's screen matrix scale times `devicePixelRatio`, recomputed on resize and scale change).
 - **Writes only on change**: every attribute the mover writes goes through a per-figure cache, so a settled figure receives no write.
 - **Markup from closed types**: rig markup takes a look (skin index, hair index, hair style), a project colour token, the cap flag and the scale, never text; a figure carries `data-figure` (its card key, an attribute, not markup) and `aria-hidden`.
@@ -270,6 +275,7 @@ The prototype's v2 rendering rules, which removed its flicker, are requirements:
 - **Glide** (walking off): a straight ease-in-out move to the spot in `GLIDE_MS = 320`.
 - **Reduced motion** (system setting, read at each move): placed at once, no fade.
 - **Appear and leave**: a new key fades in over 320 ms on the exit node and walks in; a key gone from the layout walks to the exit and fades out over 320 ms (at once under reduced motion). On the first layout of a run every figure is placed at its place at once, with no walk and no fade.
+- **Hidden window** (epic-4-decisions.md D-502): on `visibilitychange` to hidden, or a frame gap above 0.25 s, every walker is placed at its place at once and every fade ends, so a window brought back from behind the editor never shows figures still on their way.
 - **The loop**: one `requestAnimationFrame` loop, started when a layout changes a place or a fade begins, with frame time capped at 0.1 s, stopped when nothing moves; it writes `data-moving` (`1` or `0`) on the scene element when that changes, which the e2e waits on. A new layout during a walk re-routes from the walker's position.
 - **Durations** are constants of `mover.ts`, exported for the tests.
 
@@ -290,14 +296,14 @@ The prototype's v2 rendering rules, which removed its flicker, are requirements:
 **Design.** `WindowEvents::board` in the app's `main.rs` already sets the title and the overlay on each emitted board; it now:
 
 - draws the overlay in code (no asset): a disc with the waiting count (`waiting_count`, 1 to 9, "9+" above) in a small bitmap digit font, amber with dark digits, or `--color-alert` with light digits while `alert_count > 0`, inside the dark rim of today's dot; no overlay when nothing waits. The pixel size is the one gate 2 of AD-178 finds legible at 100 % and 150 % display scaling (16, 24 or 32 px);
-- sets the title to `Officina (N waiting)`, or `Officina (N waiting, M in alert)`;
+- sets the title to `Officina (N waiting)`, or `Officina (N waiting, M in alert)`, or, while an alerted card's zone is `unknown`, `Officina (N waiting, M in alert, data unknown)` (D-494: the overlay keeps the alert colour, and Windows shows the title on the button);
 - keeps the set of alerted card keys of the last emitted board and calls `request_user_attention(Some(UserAttentionType::Informational))` once when a key appears that the set did not hold. Focusing the window ends the flash (documented). The flash is not repeated for a known key.
 
 The calls are Rust, so no capability is added. The overlay's colours are constants of the app crate, and a Rust test reads `app/src/app.css` and asserts they equal the light `--color-attention`, `--color-attention-text` and `--color-alert` values (`derived-not-transcribed`). The new-alert decision is a pure function (`alerts_to_announce(previous, board) -> bool`) with unit tests. No new dependency.
 
 ### AD-175: The alert band and the beacon
 
-- **Band**: `AlertBand.svelte`, under the header and above the other banners, in every view and mode while `board.alert_count > 0`; `role="status"`; amber background (`--color-attention`, `--color-attention-text`) with a 3 px `--color-alert` bottom border and an "Alert" pill in `--color-alert` and `--color-on-alert`. Text: "{name} ({project}) is blocked: {waiting reason}, {cause}, and N more." where cause is "high-priority project" or "waiting N min" (worded from `waiting_since_ms` on the board store's 30 s tick, outside the scene). The first alerted session is the first in board order. No dismiss: the band leaves when nobody is in alert. Session text renders as text.
+- **Band**: `AlertBand.svelte`, under the header and above the other banners, in every view and mode while `board.alert_count > 0`; `role="status"`; amber background (`--color-attention`, `--color-attention-text`) with a 3 px `--color-alert` bottom border and an "Alert" pill in `--color-alert` and `--color-on-alert`. Text: "{name} ({project}) is blocked: {waiting reason}, {cause}, and N more." where cause is "high-priority project" or "waiting N min" (worded from `waiting_since_ms` on the board store's 30 s tick, outside the scene). The first alerted session is the first in board order. While an alerted card's zone is `unknown`, the band ends with "Last known state: data unknown." (D-494). No dismiss: the band leaves when nobody is in alert, which only a board placing every formerly alerted card in a known zone can say. Session text renders as text.
 - **The theme never changes** (FR-8).
 - **Beacon**: the alert room's lamp is lit (`--color-alert`) while the room holds someone; its glow animates `opacity` only, under AD-65's memo keyed on the first alerted card's `(key, waiting_since_ms)`, two minutes in the shared phase, then steady; steady under reduced motion. The prototype's rotating beam is drawn static (D-474). The status board's "!" turns `--color-alert`, and the room's floor and hazard outline take `--scene-alert-floor` and `--color-alert`.
 - **Plaques**: the alert room's plaque is `--color-alert` with its count while occupied; an office of a high-priority project carries a small "high priority" pill beside its plaque.
@@ -326,13 +332,15 @@ The prototype dropped the scene's instruments to keep the eye on movement, and t
 
 ### AD-178: Slice 0 checks, exact procedures
 
-Each runs on the owner's workstation, records a research-notes entry (version, date, what was seen; numbered when written) and leaves no session behind.
+Each runs on the owner's workstation, records a research-notes entry (version, date, what was seen; numbered when written) and leaves no session behind. Gate 3 is withdrawn and its number not reused (epic-4-decisions.md D-500); gates 4 and 5 were added after the plan challenge (D-499, D-506). Order: gate 4 before story 4.3 starts, gate 5 before story 4.6 merges, gate 2 before story 4.5 closes, gate 1 before story 4.12 starts.
 
 | # | Procedure | Pass | On failure |
 |---|---|---|---|
-| 1 | Sub-agent signals. In a trusted scratch folder, the owner adds to that folder's `.claude/settings.local.json` a logging hook on `SubagentStart`, `SubagentStop` and `UserPromptSubmit` that appends the raw payload's `session_id`, `agent_id`, `agent_type`, `hook_event_name` and `cwd` to a file. Cases: an interactive session asked to run one Explore sub-agent; two in parallel; one launched in the background that outlives the lead's turn; a `claude --bg` session spawning one; a nested sub-agent if the version allows it; a `/btw` side question. Record the payloads, redacted | `SubagentStart.session_id` equals the lead's `UserPromptSubmit.session_id`; each started `agent_id` has one later stop; the `/btw` stop has no start | FR-12 ships nothing (AD-176); story 4.9 stays approved and unimplemented |
+| 1 | Sub-agent signals. In a trusted scratch folder, the owner adds to that folder's `.claude/settings.local.json` a logging hook on `SubagentStart`, `SubagentStop` and `UserPromptSubmit` that appends the raw payload's `session_id`, `agent_id`, `agent_type`, `hook_event_name` and `cwd` to a file. Cases: an interactive session asked to run one Explore sub-agent; two in parallel; one launched in the background that outlives the lead's turn; a `claude --bg` session spawning one; a nested sub-agent if the version allows it; a `/btw` side question; an agent-team teammate handling two messages, counting its `SubagentStart` and `SubagentStop` lines for one `agent_id` (D-507). Record the payloads, redacted | `SubagentStart.session_id` equals the lead's `UserPromptSubmit.session_id`; each started `agent_id` has one later stop; the `/btw` stop has no start | FR-12 ships nothing (AD-176); story 4.12 stays approved and unimplemented |
 | 2 | Taskbar. `cargo run -p officina-app --example taskbar_probe` (an example of the app crate, no change to the app): sets overlays for 1, 9 and "9+", amber then alert colour, at 16, 24 and 32 px, five seconds each, then, after a 5 s delay for the owner to focus another window, calls `request_user_attention(Informational)`; then calls it again with the probe focused. Observed at 100 % and 150 % display scaling, with a light and a dark taskbar | the badge is legible at one size; the button flashes until the probe is focused; nothing happens when focused | an illegible count: the overlay keeps today's dot, recoloured on alert, and the count stays in the title; no flash: the band and the red badge carry the alert alone |
-| 3 | Walking CPU on the prototype. `perf-run.mjs` gains two pages: the v2 prototype in v0.4 mode running `busy` at 1x for 10 minutes with walking on, and the same with walking off; same method as section 1 (GPU path, 600 s, % of one core, % of the machine, main busy, recalcs) | the walking run under 1 % of the machine | walking ships off by default (D-480) and AD-71's measurement decides again on the real window |
+| 3 | Withdrawn (D-500): the prototype's harness runs motion the port drops, so AD-71's walking run on the real window decides walking's default | | |
+| 4 | What a real wait emits (D-499). In a trusted scratch folder with the same logging hook as gate 1, extended to `Notification`, `Stop` and `PreToolUse` lines with their `ts`: an interactive session asked a question through `AskUserQuestion`, then a command that raises a permission prompt (the folder's settings in `default` mode); record every event between the prompt and the answer, and the delay from the dialog showing to the first blocking `Notification`. Then count, over the days the hook buffer on disk holds, the `Notification` lines per `notification_type` per day | the entry states, for a question and for a permission prompt, whether a blocking notification arrives and after how long | a wait with no blocking notification keeps no known start and never escalates by time (D-465); story 4.3's vectors carry the observed shape; findings that change the alert go to story 4.3 before it starts |
+| 5 | Floor and window (D-506). A read-only query of `registry.db` (the registry the owner started using on 2026-10-28): per local day, the distinct projects with a session live that day (`first_seen_ms` to `last_seen_ms`) and the most projects live at one time. Then, on the screen that will show the scene, the display resolution, the Windows scaling, the Officina window kept as it is used (maximised or its size), and from the dev build's devtools `innerWidth`, `innerHeight`, `devicePixelRatio` and the sessions area's client size | the entry gives both numbers and whether that sessions area holds AD-169's minimum area | the owner answers, and D-506's two outcomes settle growth and `MIN_SCALE` before story 4.6 merges |
 
 ## 3. Amendments to earlier decisions
 
@@ -355,13 +363,13 @@ No dependency is added. Rejected: `axe-core`, a FLIP or animation library (the m
 - `core/board.rs` (`floor_projects`, `scene`, alert fields, schema bump), `core/scene.rs` (new), `core/floor.rs` (`priority`, `[alert]`, `Plum`), `core/contract.rs` (sub-agent fields, if gate 1 passes); `host/watch.rs` (escalation recompute); `host/doctor.rs` (buffered events, if gate 1 passes; floor key checks); the app's `main.rs` (overlay, title, attention).
 - `ipc.ts` (none new), `e2e-mock.ts` (the scene reads `get_board`), `Header.svelte` (view, mode, walking and theme controls), `App.svelte` (alert band), `SessionCard.svelte` and `app.css` (halo, tokens), `BoardColumn.svelte` (tokens).
 - `e2e-fixtures.mjs` gains floor files with priorities and the scene scenarios; `board.spec.ts` keeps passing unchanged in Board mode.
-- **v0.5** places its orchestrator in the decision office and briefs arrivals at reception (prd-v0.5.md section 9, architecture-v0.5.md section 6, AD-179); the staff nodes and the consult spot of AD-170 are reserved for it.
-- **v0.6**'s scene workers (architecture-v0.6.md AD-122 Slice B) map onto these zones: a live worker at a desk of its project's office; a package awaiting review in the decision office's queue, like a pending approval. v0.6 confirms this when its scene story is written.
-- **v0.7**'s helpers walk in through the decision office (prd-v0.7.md section 9, architecture-v0.7.md section 6, AD-184).
+- **v0.5** places its orchestrator in the decision office and briefs launched work orders at the reception counter (prd-v0.5.md section 9, architecture-v0.5.md section 6, AD-179, epic-4-decisions.md D-504); its scene story adds the staff nodes it needs to AD-170's graph (D-503).
+- **v0.6**'s scene workers (architecture-v0.6.md AD-122 Slice B) map onto these zones: a live worker at a desk of its project's office; a package awaiting review in the decision office's queue, like a pending approval. Story 6.23 is reworked on this before Epic 6 starts (`docs/backlog.md`, D-509).
+- **v0.7**'s helpers walk in from the entrance to the orchestrator's desk (prd-v0.7.md section 9, architecture-v0.7.md section 6, AD-184 as amended by D-510).
 
 ## 5. PRD amendments
 
-The first version's amendments 1 to 11 were applied to the PRD text on 2026-10-28. The scene rework edited the PRD directly; its Change Log (section 8) lists what changed, and epic-4-decisions.md D-460 to D-485 record why.
+The first version's amendments 1 to 11 were applied to the PRD text on 2026-10-28. The scene rework edited the PRD directly; its Change Log (section 8) lists what changed, and epic-4-decisions.md D-460 to D-485 record why. The plan challenge's amendments did the same (D-494 to D-514).
 
 ## 6. Risks
 
@@ -375,17 +383,19 @@ The first version's amendments 1 to 11 were applied to the PRD text on 2026-10-2
 | R30 | v0.2 or v0.3 not merged when Slice A starts | Slice A reads the board only |
 | R31 | A walk, a hover or a re-render mutates the scene with no payload change once settled | per-figure write cache, the mover's stop, CSS-only name tags, the mutation e2e after `data-moving="0"` |
 | R32 | WebKitGTK at v1 composites SVG and HTML layers differently | AD-59 keeps the portable layer; re-measure at v1 |
-| R98 | Walking costs more CPU than FR-9 allows on the real window | gate 3 on the prototype first; AD-71's walking run; walking off by default as the fallback (D-480); the loop runs only while someone moves |
+| R98 | Walking costs more CPU than FR-9 allows on the real window | AD-71's walking run in both units (D-501); walking off by default as the fallback (D-480); the loop runs only while someone moves, and stops on a hidden window (D-502) |
 | R99 | `SubagentStart` does not carry the lead's session id, or stops arrive without starts | gate 1 before any sub-agent code; fold by `agent_id`, stops without a start ignored; on failure nothing is drawn (FR-12) |
 | R100 | The prototype's spots are too dense for disjoint 44 px targets | AD-70's property decides; spots spread or removed; zone groups take the overflow (D-484) |
-| R101 | A wait's start is unknown, so a long wait never escalates | stated on the file ("since unknown"); priority still escalates; 4.12 records how often it happens |
+| R101 | A wait's start is unknown, so a long wait never escalates | gate 4 records what a real question and a real permission prompt emit, and counts the Needs you causes, before story 4.3 (D-499); stated on the file ("since unknown"); priority still escalates |
 | R102 | The overlay count is illegible at the taskbar's size or scaling | gate 2 picks the size; fallback to today's dot recoloured, the count in the title |
-| R103 | Depth order flickers in WebView2 although it does not in Chromium and Firefox | AD-171's hysteresis and snapping; the stable-figures e2e; the WebView2 look in 4.12 |
+| R103 | Depth order flickers in WebView2 although it does not in Chromium and Firefox | AD-171's hysteresis and snapping; the stable-figures e2e; the WebView2 look in 4.14 |
 | R104 | The frame loop never stops after an interrupted walk and burns CPU | `data-moving` and the mover's unit cases; the truthful-motion e2e waits for it and fails on a timeout |
-| R105 | More than four projects make the canvas larger than the default window | growth only with the fifth project; scroll below the minimum area (unchanged rule); the owner's real project count read in 4.12 |
-| R106 | A missed `SubagentStop` leaves a sub-agent drawn forever | cleared at `SessionEnd` and on `/clear`; the file shows its start time; recorded in 4.12 if seen |
+| R105 | More than four projects make the canvas larger than the default window, or the minimum area does not fit the screen that shows the scene | gate 5 reads the project count and the window's size and scaling in Slice 0; the owner's answer settles growth and `MIN_SCALE` before story 4.6 merges (D-506) |
+| R106 | A missed `SubagentStop` leaves a sub-agent drawn forever | cleared at `SessionEnd` and on `/clear`; the file shows its start time; recorded in 4.14 if seen |
+| R113 | A stale snapshot, an unknown badge or a stale approval misreports an alert | unknown keeps the last known alert and never gains one (D-494); approval-only waits only while Working, never by time (D-496); vector cases for each |
 
 ## 7. Change Log
 
 - 2026-10-28 created and approved.
 - 2026-10-28 reworked after the owner approved the interactive scene prototype v2: AD-59, AD-60, AD-62 to AD-72 amended in place, each amendment marked; AD-61 superseded by AD-169; AD-167 to AD-178 added; sections 3, 4 and 6 updated; R98 to R106 added. Decisions: epic-4-decisions.md D-460 to D-485.
+- 2026-10-28 amended after a requirement challenge of the plan, decided by the owner (epic-4-decisions.md D-494 to D-514): AD-167 (unknown keeps the last known alert, reception on a `startup` start only, approval-only waits while Working and never by time), AD-61 and AD-169 (`MIN_SCALE` and growth pending gate 5 and the owner's answer), AD-170 (no staff node or consult spot in v0.4; spots and graph split between stories 4.6 and 4.10), AD-171 and AD-172 (placed figures first; a hidden window places walkers at once), AD-174 and AD-175 (the "data unknown" mark), AD-71 (both units), AD-178 (gate 3 withdrawn, gates 4 and 5 added, gate 1's teammate case), AD-70's rows, sections 1 and 4, R98, R101, R105, R106, R113 added.

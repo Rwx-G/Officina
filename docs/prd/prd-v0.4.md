@@ -2,10 +2,11 @@
 title: "PRD: Officina v0.4 - The Scene"
 author: Rwx-G
 date: 2026-10-28
-status: approved 2026-10-28 (owner delegated design decisions), with the amendments of ../architecture-v0.4.md section 5 applied; reworked 2026-10-28 after the owner approved the interactive scene prototype v2 (Change Log)
+status: approved 2026-10-28 (owner delegated design decisions), with the amendments of ../architecture-v0.4.md section 5 applied; reworked 2026-10-28 after the owner approved the interactive scene prototype v2, then amended the same day after a requirement challenge of the plan (Change Log)
 inputs:
   - (framing, not published)
   - (requirement challenge, not published)
+  - (requirement challenge of the Epic 4 plan, not published: _bmad-output/planning-artifacts/qa/epic-4-plan-challenge.md)
   - (interactive scene prototype v2, not published: _bmad-output/planning-artifacts/design/prototype/interactive/, git-ignored)
   - prd/prd-v0.1.md
   - prd/prd-v0.2.md
@@ -111,11 +112,14 @@ zones and their furniture, the figure rig and its poses, the walk cycle, the
 lead's cap and the sub-agent figure, tickets and badges, the alert band and
 beacon, the taskbar badge, and the light and dark tokens. Its numbers are
 ported, not retyped, and are adjusted by constant edits as use requires.
-Before the stories that depend on them, three checks run on the workstation
+Before the stories that depend on them, four checks run on the workstation
 and are recorded in the research notes: what `SubagentStart` and
 `SubagentStop` carry (FR-12); the taskbar overlay badge and attention request
-from the real window on Windows 11 (FR-11); the CPU cost of walking (FR-9). A
-failed check changes the FR it names first.
+from the real window on Windows 11 (FR-11); what a real question and a real
+permission prompt emit, and which waits actually happen (FR-10); and how many
+projects are live per day, with the size and scaling of the window that shows
+the scene (FR-1, FR-6). A failed check changes the FR it names first. The
+cost of walking is measured on the real window, not on the prototype (FR-9).
 
 ### 4.1 The scene
 
@@ -125,7 +129,10 @@ office per project. Offices take slots in floor-file order, then in order of
 first appearance; the order is remembered on the machine, so a project with a
 session at the next start keeps its office. Four offices fit the base floor;
 the fifth to eighth projects each add an office, in a column of two added to
-the right, and the floor never shrinks until restart. An empty office keeps
+the right, and the floor never shrinks until restart (pending the Slice 0
+project count and the owner's answer: if four or fewer projects are typically
+live, the floor keeps four offices and the fourth becomes 'More offices' from
+the fifth project). An empty office keeps
 its slot, dimmed, until restart. Nothing reorders by activity. Beyond 8
 projects, the eighth office becomes 'More offices', which lists the remaining
 projects' employees by name. Every room is furnished; the furniture of each
@@ -144,7 +151,7 @@ the author with a raised hand inside an amber ring, wearing their desk number,
 which the empty chair at their desk repeats; a session at reception stands
 with its back turned toward the counter. Missing or stale data shows as a
 question mark on an employee that stays where it was: never moved to the
-lounge, never shown as done or idle.
+lounge, never shown as done or idle, and never clearing an alert it had.
 
 #### FR-3: Only state changes move
 An employee changes place or pose only when its own state changes, or when a
@@ -203,8 +210,10 @@ re-renders only when its input payload changed, and a frame loop runs only
 while an employee walks, glides or fades; when every employee has arrived it
 stops. No CSS animation runs inside a figure. Measured on the workstation over
 10 minutes with 10 employees and 5 waiting, plus a replay of state changes at
-a busy day's rate, in % of the machine as v0.1 measures idle CPU, with the
-core count and display refresh rate recorded: under 1 %. Above it, halos are
+a busy day's rate, with the core count and display refresh rate recorded:
+under 1 % of the machine, as v0.1 measures idle CPU, and under 8 % of one
+logical core, so the result holds on an 8-core machine too. When the window
+is hidden, walkers are placed at once rather than replayed. Above it, halos are
 steady from the start; if walking alone exceeds it, walking ships off by
 default and stays available. The board halo follows the same rules, two-minute
 limit included.
@@ -214,9 +223,12 @@ limit included.
 #### FR-10: Alert
 The floor file gains a per-project priority (`priority = "high"`, default
 normal) and an escalation threshold in minutes (default 10). A waiting session
-(Needs you, or a pending relay approval) is in alert when its project is high
-priority, or when it has waited at least the threshold since it started
-waiting; a wait whose start is unknown never escalates by time. An alerted
+(Needs you, or a pending relay approval while its run still waits) is in alert
+when its project is high priority, or, for Needs you, when it has waited at
+least the threshold since it started waiting; a wait whose start is unknown,
+and a wait on a relay approval alone, never escalate by time. Stale or unknown
+data never clears an alert: the band, the badge and the title keep the last
+known alert, marked as unknown, until fresh data places the session. An alerted
 session walks to the alert room, keeps its number, and leaves it when it stops
 waiting. While anyone is in alert, a band under the header, in every view and
 mode, names the first alerted session, its project, its reason and cause, and
@@ -272,7 +284,7 @@ figure, no briefing at reception, no helpers in v0.4.
 |---|---|---|
 | Truthful motion | once every employee has arrived, no change in the scene while payloads are unchanged | e2e: clock installed, the scene settled, advanced 150 s, the same board pushed again, a mutation observer on the scene element: zero mutations; a changed board then produces some |
 | Stable figures | a walking employee keeps one node, one pose and one view per frame, a continuous position, and no CSS animation inside a figure | e2e frame stepping on a walk, as the prototype's flicker check |
-| Idle CPU | under 1 % with 10 employees, 5 halos and a busy day's walks | workstation, AD-71 protocol as amended, both units recorded |
+| Idle CPU | under 1 % of the machine and under 8 % of one core, with 10 employees, 5 halos and a busy day's walks | workstation, AD-71 protocol as amended, both units recorded |
 | Alert | an alert reaches the band and the taskbar badge within 1 s of its threshold, with no `claude` spawn | core vectors and a host test on the recompute; manual check of the badge and flash recorded |
 | Readability | on 5 fixtures, Needs you count and oldest waiting name read in under 2 s, as on the board | manual check recorded; e2e asserts both are present in the scene's text alternative |
 | Adoption | Scene chosen for 10 working days before it becomes the default | owner's use |
@@ -296,3 +308,11 @@ figure, no briefing at reception, no helpers in v0.4.
   FR-13 (signals). Moved: the orchestrator figure and the permissions design
   to v0.5 (prd-v0.5.md section 9), the critic and research helpers to v0.7
   (prd-v0.7.md section 9).
+- 2026-10-28 amended after a requirement challenge of the plan, decided by
+  the owner (epic-4-decisions.md D-494 to D-514): FR-0 (four checks: gate 3,
+  walking on the prototype, withdrawn; what a real wait emits, the project
+  count and the window's size added), FR-1 (growth pending the project count
+  and the owner's answer), FR-2 (stale data never clears an alert), FR-9 (the
+  threshold in both units; a hidden window places walkers at once), FR-10
+  (approval-only waits never escalate by time; the last known alert kept on
+  stale data), section 7 (the CPU metric in both units).
