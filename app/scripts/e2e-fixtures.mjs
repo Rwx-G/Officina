@@ -598,3 +598,171 @@ program = "relative.exe"
   rmSync(tmp, { recursive: true, force: true });
   console.log(`fixture ${name}: exit ${run.status}`);
 }
+
+// Subjects (story 3.5, D-72, D-82): event files written here, then the
+// window's own writer, through the `registry_fixture` example at an explicit
+// `now_ms`, ingests them and runs the author's actions; with that writer
+// gone, the real `officina subjects --json` and `officina board --json`
+// print the fixtures. No SQL from Node, no command line write path.
+const registryFixture = join(targetDir, "debug", "examples", `registry_fixture${exe}`);
+execFileSync(
+  "cargo",
+  ["build", "--quiet", "--locked", "-p", "officina-host", "--example", "registry_fixture", "--features", "window-authority"],
+  { cwd: root, stdio: ["ignore", "ignore", "inherit"] },
+);
+
+const hostile = `<img src=x onerror="window.__officinaXss = 1">`;
+const subjectsAgents = [
+  { pid: 4201, cwd: work("billing-api"), kind: "interactive", startedAt: now - 40 * MIN, sessionId: sid(101), name: "invoice-export", status: "busy" },
+];
+const prompted = (n, project, at, prompt) => ({ ts: at, event: "UserPromptSubmit", session_id: sid(n), cwd: work(project), prompt });
+// The hook keeps the start of a long answer and its end apart (AD-45); a
+// hand-written line carries both, as the hook would write them.
+const stopped = (n, project, at, message, tail) => ({
+  ts: at,
+  event: "Stop",
+  session_id: sid(n),
+  cwd: work(project),
+  last_message: message,
+  ...(tail ? { last_message_tail: tail } : {}),
+});
+const ended = (n, project, at, reason) => ({ ts: at, event: "SessionEnd", session_id: sid(n), cwd: work(project), reason });
+const nonInteractive = [...Array(12).keys()].flatMap((i) => [
+  { ts: now - (3 * HOUR) + i * MIN, event: "SessionStart", session_id: sid(300 + i), cwd: work("billing-api"), source: "startup" },
+  ended(300 + i, "billing-api", now - (3 * HOUR) + i * MIN + 20_000, "other"),
+]);
+const answerStart = "Found it: the retry test shares a clock with the payment mock, so a slow run sees the retry window close early.";
+const answerEnd = "...the clock is pinned per test and the shared fixture is gone. Both suites pass ten times in a row now.";
+const subjectsEvents = [
+  prompted(102, "billing-api", now - 26 * HOUR, "Sketch the CSV export of invoices"),
+  stopped(102, "billing-api", now - 26 * HOUR + 5 * MIN, "Here is a plan in three steps."),
+  ended(102, "billing-api", now - 26 * HOUR + 6 * MIN, "prompt_input_exit"),
+  prompted(101, "billing-api", now - 3 * MIN, "Add CSV export to the invoice list, with tests"),
+  prompted(104, "billing-api", now - 5 * HOUR, "Investigate the flaky payment retry test"),
+  stopped(104, "billing-api", now - 5 * HOUR + 20 * MIN, answerStart, answerEnd),
+  ended(104, "billing-api", now - 5 * HOUR + 21 * MIN, "prompt_input_exit"),
+  prompted(105, "web-portal", now - 2 * 24 * HOUR, "Clean up the ledger exports"),
+  ended(105, "web-portal", now - 2 * 24 * HOUR + 30 * MIN, "prompt_input_exit"),
+  prompted(106, "docs-site", now - 3 * 24 * HOUR, "Draft the release notes"),
+  ended(106, "docs-site", now - 3 * 24 * HOUR + 10 * MIN, "prompt_input_exit"),
+  prompted(107, "docs-site", now - 3 * 24 * HOUR, "Draft the release notes again"),
+  ended(107, "docs-site", now - 3 * 24 * HOUR + 12 * MIN, "prompt_input_exit"),
+  prompted(110, "docs-site", now - 70 * MIN, hostile),
+  ended(110, "docs-site", now - 60 * MIN, "prompt_input_exit"),
+  prompted(111, "web-portal", now - 50 * MIN, "Bump the chart library"),
+  ended(111, "web-portal", now - 45 * MIN, "logout"),
+  ...nonInteractive,
+].map((e) => ({ v: 1, ...e }));
+
+// Subject ids follow creation order in a fresh registry.
+const create = (name, origin) => ({ author: { kind: "create", name, origin } });
+const subjectsSteps = [
+  "ingest",
+  { agents: subjectsAgents },
+  create("invoice export", { sessions: [sid(101), sid(102)] }),
+  create("flaky retry", { sessions: [sid(104)] }),
+  create("ledger cleanup", { sessions: [sid(105)] }),
+  { author: { kind: "archive", subject: 3, routine: false } },
+  { author: { kind: "reopen", subject: 3 } },
+  create("release notes", { sessions: [sid(106)] }),
+  { author: { kind: "archive", subject: 4, routine: true } },
+  create("release notes draft", { sessions: [sid(107)] }),
+  create("notes copy", { project: "docs-site" }),
+  { author: { kind: "merge", source: 6, target: 5 } },
+  { author: { kind: "archive", subject: 5, routine: false } },
+  create(hostile, { sessions: [sid(110)] }),
+];
+
+const registryScenarios = {
+  subjects: { steps: subjectsSteps },
+  // AD-39: the home lies under a sync client's folder marker.
+  "subjects-synced": { steps: subjectsSteps, synced: true },
+  // D-93: a daily copy, then the database damaged and restored from it.
+  "subjects-restored": { steps: [...subjectsSteps, "copy", "damage"] },
+};
+
+function officinaJson(args, env) {
+  const run = spawnSync(officina, args, { env, encoding: "utf8" });
+  return { status: run.status, stdout: run.stdout, stderr: run.stderr };
+}
+
+for (const [name, scenario] of Object.entries(registryScenarios)) {
+  const tmp = mkdtempSync(join(tmpdir(), `officina-fixture-${name}-`));
+  const home = join(tmp, "home");
+  const officinaHome = join(tmp, "officina");
+  mkdirSync(join(home, ".claude", "sessions"), { recursive: true });
+  mkdirSync(join(officinaHome, "events"), { recursive: true });
+  if (scenario.synced) mkdirSync(join(tmp, ".SynologyWorkingDirectory"));
+  const byDay = new Map();
+  for (const event of subjectsEvents) {
+    const day = utcDay(event.ts);
+    byDay.set(day, (byDay.get(day) ?? "") + JSON.stringify(event) + "\n");
+  }
+  for (const [day, content] of byDay) writeFileSync(join(officinaHome, "events", `${day}.jsonl`), content);
+  const steps = join(tmp, "steps.json");
+  writeFileSync(steps, JSON.stringify({ now_ms: now, steps: scenario.steps }));
+  execFileSync(registryFixture, [officinaHome, steps], { stdio: ["ignore", "ignore", "inherit"] });
+
+  const fixture = join(tmp, "agents.json");
+  writeFileSync(fixture, JSON.stringify(subjectsAgents));
+  const env = {
+    SYSTEMROOT: process.env.SYSTEMROOT ?? "",
+    USERPROFILE: home,
+    HOME: home,
+    OFFICINA_HOME: officinaHome,
+    OFFICINA_CLAUDE_BIN: fakeClaude,
+    FAKE_CLAUDE_FIXTURE: fixture,
+    FAKE_CLAUDE_MODE: "ok",
+  };
+  const view = officinaJson(["subjects", "--json"], env);
+  if (view.status !== 0) throw new Error(`${name}: officina subjects exited ${view.status}: ${view.stderr}`);
+  const board = officinaJson(["board", "--json"], env);
+  if (board.status !== 0) throw new Error(`${name}: officina board exited ${board.status}: ${board.stderr}`);
+  const printed = JSON.parse(view.stdout);
+  const checks = [
+    [printed.registry.state === "ready", "the registry reads ready"],
+    [printed.subjects.some((s) => s.status === "active") && printed.subjects.some((s) => s.status === "to_resume"), "active and to_resume subjects"],
+    [printed.subjects.some((s) => s.sessions.some((x) => x.card !== null)), "a session joined to its live card"],
+    [printed.unfiled.some((p) => p.non_interactive_count > p.non_interactive.length), "non-interactive runs counted beyond those listed"],
+    [!scenario.synced || printed.registry.exclude_from_sync !== null, "a folder to exclude from sync"],
+    [!scenario.steps.includes("damage") || printed.restore_notice !== null, "the copy a restore used"],
+    [JSON.parse(board.stdout).columns.working.some((c) => c.subject !== null), "a board card naming its subject"],
+  ];
+  for (const [held, what] of checks) {
+    if (!held) throw new Error(`${name}: expected ${what}: ${view.stdout}`);
+  }
+  writeFileSync(join(outDir, `${name}.json`), view.stdout);
+  writeFileSync(join(outDir, `${name}-board.json`), board.stdout);
+  rmSync(tmp, { recursive: true, force: true });
+  console.log(`fixture ${name}: exit ${view.status}, board exit ${board.status}`);
+}
+
+// D-47: a registry that cannot be read prints the view with the reason,
+// exit 3.
+{
+  const name = "subjects-unavailable";
+  const tmp = mkdtempSync(join(tmpdir(), `officina-fixture-${name}-`));
+  const home = join(tmp, "home");
+  const officinaHome = join(tmp, "officina");
+  mkdirSync(join(home, ".claude", "sessions"), { recursive: true });
+  mkdirSync(join(officinaHome, "registry"), { recursive: true });
+  writeFileSync(join(officinaHome, "registry", "registry.db"), "this is not a SQLite database\n".repeat(64));
+  const fixture = join(tmp, "agents.json");
+  writeFileSync(fixture, "[]");
+  const env = {
+    SYSTEMROOT: process.env.SYSTEMROOT ?? "",
+    USERPROFILE: home,
+    HOME: home,
+    OFFICINA_HOME: officinaHome,
+    OFFICINA_CLAUDE_BIN: fakeClaude,
+    FAKE_CLAUDE_FIXTURE: fixture,
+    FAKE_CLAUDE_MODE: "ok",
+  };
+  const view = officinaJson(["subjects", "--json"], env);
+  if (view.status !== 3 || JSON.parse(view.stdout).registry.state !== "unavailable") {
+    throw new Error(`${name}: expected exit 3 and an unavailable registry: ${view.status} ${view.stdout}`);
+  }
+  writeFileSync(join(outDir, `${name}.json`), view.stdout);
+  rmSync(tmp, { recursive: true, force: true });
+  console.log(`fixture ${name}: exit ${view.status}`);
+}

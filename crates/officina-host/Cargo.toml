@@ -92,6 +92,12 @@ required-features = ["window-authority"]
 name = "registry_crash_helper"
 required-features = ["window-authority"]
 
+# Writes the registry of an e2e fixture home through the window's writer at
+# an explicit time (D-72); never part of a shipped binary.
+[[example]]
+name = "registry_fixture"
+required-features = ["window-authority"]
+
 [target."cfg(windows)".dependencies]
 windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_System_Diagnostics_ToolHelp", "Win32_System_Threading", "Win32_System_JobObjects", "Win32_System_SystemInformation", "Win32_Security_Credentials", "Win32_System_Registry", "Win32_System_Environment", "Win32_Storage_FileSystem"] }
 
