@@ -349,6 +349,18 @@ The journal keeps 90 days of history (`JOURNAL_RETENTION_DAYS`): the window dele
 
 Usable today: declare a catalogue, approve it in the window, let sessions run its `free` and `after-check` actions with `officina run` and its `human` actions after your click in Needs you, contained by the gate, journaled, stoppable from the window, audited in the Relay view, and checked by `officina doctor`, which prints each guarded project's `CLAUDE.md` paragraph; HTTP read actions with a credential from the Windows Credential Manager, sent only to the hosts it is bound to.
 
+## Subjects and triage (v0.3, in progress)
+
+v0.3 gives Officina a memory that outlives the board's 24 hours: the sessions it has seen, the subjects they belong to and the verdicts you confirm.
+
+### The registry
+
+The memory is one SQLite database, `registry/registry.db` in the Officina home (`~/.officina/registry/` by default). Its folder also holds the database's `-wal` and `-shm` files, `backup/` and `quarantine/`. Only the window writes it; `officina doctor` opens it read-only, never creates it, and reads it with the window closed too.
+
+**Exclude `registry/` from any sync client** (OneDrive, Dropbox, Synology Drive and the like): a client that writes an older copy back would undo what you decided. When the Officina home sits in a synchronised folder the registry still opens, and `officina doctor` warns and names the folder to exclude. On a network folder the registry is not opened at all, since SQLite's write-ahead log needs a local disk; `officina doctor` fails and the board keeps working without it.
+
+At each start the window checks the registry's integrity. A damaged database is set aside under `registry/quarantine/` and replaced by the newest daily copy that passes the check (`registry/backup/registry-<date>.db`, one a day, the two newest kept); with no valid copy a new one starts. A database written by an older Officina is copied (`backup/pre-v<version>-<date>.db`), then migrated; one written by a newer Officina is opened read-only. `officina doctor` reports the registry's location, version, integrity, copies, any quarantine and the last restore.
+
 ## Command line
 
 | Command | Purpose |

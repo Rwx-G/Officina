@@ -131,6 +131,16 @@ project uses [Semantic Versioning](https://semver.org/).
   colours, a moved config dir (sessions, quota, attach) and the relay's
   state, which it also rebuilds when the relay's files or today's journal
   change.
+- Registry (v0.3, in progress): a local SQLite database at
+  `~/.officina/registry/registry.db` that only the window writes and every
+  command line reads read-only. It is never opened on a network folder; in
+  a folder a sync client manages it opens and `officina doctor` names the
+  folder to exclude. At each open the window checks its integrity: a
+  damaged database is set aside under `registry/quarantine/` and replaced
+  by the newest valid daily copy (`registry/backup/`, two kept), and a
+  database written by an older version is copied, then migrated.
+  `officina doctor` reports its location, version, integrity, copies,
+  quarantine and last restore, and never creates it.
 
 ### Changed
 
