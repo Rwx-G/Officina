@@ -1,0 +1,97 @@
+//! What the registry tests share: a writer on a temporary home, a damaged
+//! page, the helper processes, byte searches.
+
+use std::io::{Seek, SeekFrom, Write};
+use std::path::{Path, PathBuf};
+
+use officina_host::registry::RegistryPaths;
+use officina_host::registry::store::{Writer, WriterOpen, open_writer};
+
+/// 2026-10-27T12:00:00Z.
+pub const NOW: i64 = 1_793_102_400_000;
+pub const DAY: i64 = 86_400_000;
+
+/// A temporary folder holding an Officina home, kept while the value lives.
+pub struct Home {
+    _dir: tempfile::TempDir,
+    pub root: PathBuf,
+    pub home: PathBuf,
+}
+
+impl Home {
+    pub fn new() -> Home {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        let home = root.join("officina-home");
+        Home {
+            _dir: dir,
+            root,
+            home,
+        }
+    }
+
+    pub fn paths(&self) -> RegistryPaths {
+        RegistryPaths::new(&self.home)
+    }
+
+    /// The registry opened for writing at `now`; panics on any other outcome.
+    pub fn writer(&self, now: i64) -> Writer {
+        writable(open_writer(&self.home, &[], now))
+    }
+}
+
+/// The writer of an outcome that must be writable.
+pub fn writable(opened: WriterOpen) -> Writer {
+    match opened {
+        WriterOpen::Writable { writer, .. } => writer,
+        other => panic!("the registry did not open writable: {other:?}"),
+    }
+}
+
+/// The page size of the database file `db`, from its header.
+fn page_size(bytes: &[u8]) -> u64 {
+    match u16::from_be_bytes([bytes[16], bytes[17]]) {
+        1 => 65_536,
+        size => u64::from(size),
+    }
+}
+
+/// Overwrites page 2 of `db`, a table's root, with bytes that are no
+/// b-tree page: `quick_check` reports it (verified in the addendum).
+pub fn damage_page(db: &Path) {
+    let bytes = std::fs::read(db).unwrap();
+    let size = page_size(&bytes);
+    assert!(
+        bytes.len() as u64 >= 2 * size,
+        "{} has one page",
+        db.display()
+    );
+    let mut file = std::fs::OpenOptions::new().write(true).open(db).unwrap();
+    file.seek(SeekFrom::Start(size)).unwrap();
+    file.write_all(&vec![0xFF; usize::try_from(size).unwrap()])
+        .unwrap();
+}
+
+/// True when `needle` occurs in the file at `path`; false when it is absent.
+pub fn file_contains(path: &Path, needle: &str) -> bool {
+    std::fs::read(path)
+        .unwrap_or_default()
+        .windows(needle.len())
+        .any(|w| w == needle.as_bytes())
+}
+
+/// The example `name`, which `cargo test` builds next to the test
+/// executables: `target/<profile>/examples/`.
+pub fn example(name: &str) -> PathBuf {
+    let exe = std::env::current_exe().unwrap();
+    let profile = exe.parent().and_then(Path::parent).unwrap();
+    let path = profile
+        .join("examples")
+        .join(format!("{name}{}", std::env::consts::EXE_SUFFIX));
+    assert!(
+        path.is_file(),
+        "{} is missing: build it with `cargo build --features window-authority --example {name}`",
+        path.display()
+    );
+    path
+}

@@ -21,14 +21,65 @@ pub fn utc_date(unix_ms: i64) -> (i64, u32, u32) {
     (year, month, day)
 }
 
+/// The UTC day containing `unix_ms`, written `YYYY-MM-DD`.
+///
+/// ```
+/// assert_eq!(officina_core::dates::utc_day_text(0), "1970-01-01");
+/// ```
+pub fn utc_day_text(unix_ms: i64) -> String {
+    let (y, m, d) = utc_date(unix_ms);
+    format!("{y:04}-{m:02}-{d:02}")
+}
+
+/// The day a `YYYY-MM-DD` text stands for; `None` for any other text.
+///
+/// ```
+/// use officina_core::dates::parse_utc_day;
+/// assert_eq!(parse_utc_day("2026-10-27"), Some((2026, 10, 27)));
+/// assert_eq!(parse_utc_day("2026-13-01"), None);
+/// assert_eq!(parse_utc_day("26-10-27"), None);
+/// ```
+pub fn parse_utc_day(text: &str) -> Option<(i64, u32, u32)> {
+    let parts: Vec<&str> = text.split('-').collect();
+    let [y, m, d] = parts.as_slice() else {
+        return None;
+    };
+    let (Ok(y), Ok(m), Ok(d)) = (y.parse::<i64>(), m.parse::<u32>(), d.parse::<u32>()) else {
+        return None;
+    };
+    if y.to_string().len() != 4 || m == 0 || m > 12 || d == 0 || d > 31 {
+        return None;
+    }
+    Some((y, m, d))
+}
+
+/// Unix milliseconds at which the UTC day `day` begins.
+///
+/// ```
+/// use officina_core::dates::{day_start_ms, utc_date};
+/// assert_eq!(day_start_ms((1970, 1, 2)), 86_400_000);
+/// let now = 1_793_102_400_000;
+/// assert_eq!(utc_date(day_start_ms(utc_date(now))), utc_date(now));
+/// ```
+pub fn day_start_ms(day: (i64, u32, u32)) -> i64 {
+    // Howard Hinnant's `days_from_civil`, the inverse of `utc_date`.
+    let (y, m, d) = day;
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = y.div_euclid(400);
+    let yoe = y.rem_euclid(400);
+    let mp = i64::from(if m > 2 { m - 3 } else { m + 9 });
+    let doy = (153 * mp + 2) / 5 + i64::from(d) - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    (era * 146_097 + doe - 719_468) * MS_PER_DAY
+}
+
 /// Event file name for the UTC day containing `unix_ms`: `YYYY-MM-DD.jsonl`.
 ///
 /// ```
 /// assert_eq!(officina_core::dates::event_file_name(0), "1970-01-01.jsonl");
 /// ```
 pub fn event_file_name(unix_ms: i64) -> String {
-    let (y, m, d) = utc_date(unix_ms);
-    format!("{y:04}-{m:02}-{d:02}.jsonl")
+    format!("{}.jsonl", utc_day_text(unix_ms))
 }
 
 /// The event files a reader needs at `now_ms`: yesterday's and today's, in
@@ -42,19 +93,8 @@ pub fn event_files_to_read(now_ms: i64) -> [String; 2] {
 
 /// The UTC day a `YYYY-MM-DD.jsonl` file name stands for; `None` for any
 /// other name.
-fn dated_file_day(name: &str) -> Option<(i64, u32, u32)> {
-    let stem = name.strip_suffix(".jsonl")?;
-    let parts: Vec<&str> = stem.split('-').collect();
-    let [y, m, d] = parts.as_slice() else {
-        return None;
-    };
-    let (Ok(y), Ok(m), Ok(d)) = (y.parse::<i64>(), m.parse::<u32>(), d.parse::<u32>()) else {
-        return None;
-    };
-    if y.to_string().len() != 4 || m == 0 || m > 12 || d == 0 || d > 31 {
-        return None;
-    }
-    Some((y, m, d))
+pub fn dated_file_day(name: &str) -> Option<(i64, u32, u32)> {
+    parse_utc_day(name.strip_suffix(".jsonl")?)
 }
 
 /// True when a `YYYY-MM-DD.jsonl` file is dated before the UTC day `days`
@@ -101,8 +141,14 @@ mod tests {
         for day in 1..(366 * 4 + 1) {
             let current = utc_date(day * MS_PER_DAY);
             assert!(current > previous, "{current:?} after {previous:?}");
+            assert_eq!(day_start_ms(current), day * MS_PER_DAY);
+            assert_eq!(
+                parse_utc_day(&utc_day_text(day * MS_PER_DAY)),
+                Some(current)
+            );
             previous = current;
         }
+        assert_eq!(day_start_ms(utc_date(-1)), -MS_PER_DAY);
     }
 
     #[test]

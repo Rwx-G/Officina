@@ -1,5 +1,6 @@
 //! Win32 calls for the focus action (AD-15), for the relay's process tree
-//! (AD-30, AD-31) and for the credentials of HTTP actions (AD-36). The only
+//! (AD-30, AD-31), for the credentials of HTTP actions (AD-36) and for the
+//! registry's location check (AD-39). The only
 //! module of the workspace allowed `unsafe`; every
 //! block carries its safety argument. Decisions (which window, which
 //! arguments) are made by pure functions in `officina_core`.
@@ -145,6 +146,21 @@ pub fn system_directory() -> io::Result<PathBuf> {
         // Too small: `len` is the size needed, terminator included.
         buf.resize(len, 0);
     }
+}
+
+/// True when the drive whose root is `root` (`C:\`) is a network drive:
+/// `GetDriveTypeW` answers `DRIVE_REMOTE` (AD-39). The registry is never
+/// opened there.
+pub fn is_remote_drive(root: &str) -> bool {
+    use windows_sys::Win32::Storage::FileSystem::GetDriveTypeW;
+    // windows-sys declares DRIVE_REMOTE under its `Win32_System_
+    // WindowsProgramming` feature, which the addendum does not list; the
+    // value is part of GetDriveTypeW's documented contract.
+    const DRIVE_REMOTE: u32 = 4;
+    let wide: Vec<u16> = root.encode_utf16().chain(std::iter::once(0)).collect();
+    // SAFETY: `wide` is a NUL-terminated UTF-16 string that outlives the
+    // call, which only reads it.
+    unsafe { GetDriveTypeW(wide.as_ptr()) == DRIVE_REMOTE }
 }
 
 // windows-sys declares OpenProcessToken only with its `Win32_Security`

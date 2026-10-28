@@ -6,6 +6,8 @@
 
 #[path = "../../../../tests/support/git.rs"]
 pub mod git_support;
+#[cfg(feature = "window-authority")]
+pub mod registry;
 
 use std::path::{Path, PathBuf};
 
