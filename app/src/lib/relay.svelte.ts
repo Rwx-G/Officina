@@ -67,6 +67,8 @@ export class RelayStore {
   switching = $state(false);
   refused = $state<RefusedApproval | null>(null);
   stopError = $state<string | null>(null);
+  acknowledging = $state<Record<string, boolean>>({});
+  anomalyError = $state<string | null>(null);
 
   pending = $derived(this.relay?.pending ?? null);
   stopped = $derived(this.relay?.stopped ?? false);
@@ -97,6 +99,20 @@ export class RelayStore {
       this.refused = { hash, message: String(error) };
     } finally {
       this.approving = false;
+    }
+  }
+
+  /** Acknowledges anomaly `key`, on a pointer click only, as a decision. */
+  async acknowledge(key: string): Promise<void> {
+    if (this.acknowledging[key]) return;
+    this.acknowledging = { ...this.acknowledging, [key]: true };
+    this.anomalyError = null;
+    try {
+      await ipc.acknowledgeAnomaly(key);
+    } catch (error) {
+      this.anomalyError = String(error);
+    } finally {
+      this.acknowledging = { ...this.acknowledging, [key]: false };
     }
   }
 

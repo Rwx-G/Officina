@@ -14,6 +14,7 @@
     "allow-copy-attach-command",
     "allow-approve-catalogue",
     "allow-decide-approval",
-    "allow-set-relay-stopped"
+    "allow-set-relay-stopped",
+    "allow-acknowledge-anomaly"
   ]
 }

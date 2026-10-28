@@ -2,6 +2,7 @@
 // vocabulary the view shows is mapped through an exhaustive `Record`, so a
 // variant added on the Rust side fails `pnpm check` until it has a text. No
 // relay rule is computed here: the entries come paired and dated from Rust.
+import type { AnomalyKind } from "./generated/AnomalyKind";
 import type { ApprovalView } from "./generated/ApprovalView";
 import type { DenyKind } from "./generated/DenyKind";
 import type { GateFault } from "./generated/GateFault";
@@ -65,6 +66,14 @@ export const RUN_OUTCOME_TEXT: Record<RunOutcome, string> = {
   spawn_failed: "could not start",
   http: "http",
   connect_failed: "no response",
+};
+
+/** What each decision the window did not make is (D-173). */
+export const ANOMALY_TEXT: Record<AnomalyKind, string> = {
+  foreign_approval: "approval not given here",
+  run_without_decision: "run without an approval given here",
+  foreign_catalogue: "catalogue not approved here",
+  stop_flag_removed: "relay resumed outside the window",
 };
 
 /** What a request's files are compared with before its run (D-173). */

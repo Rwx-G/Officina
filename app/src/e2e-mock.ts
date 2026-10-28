@@ -37,6 +37,8 @@ export function installE2eMock(): void {
         }
         case "set_relay_stopped":
           return setStopped((args as { stopped: boolean }).stopped);
+        case "acknowledge_anomaly":
+          return acknowledge((args as { key: string }).key);
         default:
           return null;
       }
@@ -82,6 +84,17 @@ async function setStopped(stopped: boolean): Promise<boolean> {
     stopped_since_ms: stopped ? Date.now() : null,
   });
   return true;
+}
+
+/** Mirrors `authority::acknowledge_anomaly`: the anomaly stays listed,
+ *  acknowledged. */
+async function acknowledge(key: string): Promise<void> {
+  const current = window.__officinaRelay;
+  if (!current) return;
+  await window.__officinaPushRelay?.({
+    ...current,
+    anomalies: current.anomalies.map((a) => (a.key === key ? { ...a, acknowledged: true } : a)),
+  });
 }
 
 /** Mirrors `authority::decide_approval`: a request the board lists as valid

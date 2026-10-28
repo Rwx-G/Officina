@@ -170,6 +170,16 @@ async fn set_relay_stopped(state: State<'_, AppState>, stopped: bool) -> Result<
     .await
 }
 
+/// Acknowledges an anomaly the Relay view lists (D-173): a decision the
+/// window did not make, which doctor then no longer fails on.
+#[tauri::command]
+async fn acknowledge_anomaly(state: State<'_, AppState>, key: String) -> Result<(), String> {
+    with_authority(state, move |home| {
+        authority::acknowledge_anomaly(home, &key).map_err(|e| e.to_string())
+    })
+    .await
+}
+
 fn floor_arg() -> Option<PathBuf> {
     let args: Vec<String> = std::env::args().collect();
     let i = args.iter().position(|a| a == "--floor")?;
@@ -217,6 +227,10 @@ fn main() {
             let collector = Collector::new(floor_arg().as_deref())?;
             let claude = collector.claude.clone();
             let relay_home = collector.relay.clone();
+            // From now on, a decision the window did not make shows (D-173).
+            if let Err(e) = authority::ensure_record(&relay_home) {
+                eprintln!("officina: the decision record could not be started: {e}");
+            }
             let handle = app.handle().clone();
             let relay_handle = app.handle().clone();
             let watch = spawn(
@@ -264,7 +278,8 @@ fn main() {
             copy_attach_command,
             approve_catalogue,
             decide_approval,
-            set_relay_stopped
+            set_relay_stopped,
+            acknowledge_anomaly
         ])
         .run(tauri::generate_context!())
         .expect("failed to run the Officina window");
@@ -333,6 +348,7 @@ mod tests {
             "approve_catalogue",
             "decide_approval",
             "set_relay_stopped",
+            "acknowledge_anomaly",
         ] {
             assert!(declared.contains(command), "{command}");
         }

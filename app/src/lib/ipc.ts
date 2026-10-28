@@ -30,6 +30,12 @@ export function decideApproval(id: string, approve: boolean): Promise<void> {
   return invoke("decide_approval", { id, approve });
 }
 
+/** Acknowledges an anomaly by its key (D-173): the Relay view keeps it,
+ *  marked acknowledged, and doctor no longer fails on it. */
+export function acknowledgeAnomaly(key: string): Promise<void> {
+  return invoke("acknowledge_anomaly", { key });
+}
+
 /** Stops or resumes the relay (AD-34). True when the state changed. */
 export function setRelayStopped(stopped: boolean): Promise<boolean> {
   return invoke<boolean>("set_relay_stopped", { stopped });

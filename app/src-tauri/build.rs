@@ -11,6 +11,7 @@ const COMMANDS: &[&str] = &[
     "approve_catalogue",
     "decide_approval",
     "set_relay_stopped",
+    "acknowledge_anomaly",
 ];
 
 fn main() {

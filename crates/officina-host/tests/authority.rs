@@ -515,3 +515,117 @@ fn decide_refuses_a_forged_request() {
     assert!(decision_file(&relay, &id, FileKind::Approved).is_none());
     decide_approval(&relay, &real, true).unwrap();
 }
+
+/// The anomalies the relay view and doctor read now (D-173).
+fn anomalies_now(relay: &RelayHome) -> Vec<officina_core::relay::record::Anomaly> {
+    let (lines, _) = read_recent(relay, now_ms());
+    officina_host::relay::view::read_anomalies(
+        relay,
+        &lines,
+        relay.read_approved().approved().map(|a| a.hash.as_str()),
+        relay.relay_stopped(),
+    )
+}
+
+/// AC 7 of story 2.14, the audits' forged approval: an approval file the
+/// window did not write, for a request it never decided, is an anomaly
+/// until the author acknowledges it; the window's own approval is none.
+#[test]
+fn a_foreign_approval_file_is_an_anomaly() {
+    use officina_core::relay::record::AnomalyKind;
+    use officina_host::relay::authority::acknowledge_anomaly;
+    let home = Home::new();
+    let relay = human_relay(&home);
+    let (given, _) = write_request(&relay, "web01", 60_000);
+    decide_approval(&relay, &given, true).unwrap();
+    assert!(
+        anomalies_now(&relay).is_empty(),
+        "the window's own approval"
+    );
+
+    let (forged_id, forged) = write_request(&relay, "db01", 30_000);
+    std::fs::write(
+        relay
+            .approvals_dir()
+            .join(file_name(&forged_id, FileKind::Approved)),
+        serde_json::to_vec(&Decision {
+            decided_at_ms: now_ms(),
+            request_key: forged.request_key,
+        })
+        .unwrap(),
+    )
+    .unwrap();
+    let found = anomalies_now(&relay);
+    assert_eq!(found.len(), 1, "{found:#?}");
+    assert_eq!(found[0].kind, AnomalyKind::ForeignApproval);
+    assert!(found[0].detail.contains(&forged_id));
+    assert!(!found[0].acknowledged);
+
+    acknowledge_anomaly(&relay, &found[0].key).unwrap();
+    assert!(
+        anomalies_now(&relay)[0].acknowledged,
+        "listed, acknowledged"
+    );
+}
+
+/// AC 7 of story 2.14: a run journaled with an approval the window never
+/// gave is an anomaly; so are a catalogue the window did not approve and a
+/// stop flag gone while the window holds the relay stopped.
+#[test]
+fn a_run_without_a_window_decision_is_an_anomaly() {
+    use officina_core::relay::journal::RunStarted;
+    use officina_core::relay::record::AnomalyKind;
+    let home = Home::new();
+    let relay = human_relay(&home);
+    let start = |approval_id: &str| {
+        JournalEntry::RunStarted(RunStarted {
+            run_id: format!("run-{approval_id}"),
+            project: "lab".to_owned(),
+            session_id: None,
+            action: "restart".to_owned(),
+            class: officina_core::relay::catalogue::ActionClass::Human,
+            params: BTreeMap::from([("service".to_owned(), "web01".to_owned())]),
+            argv: vec!["C:/path/to/tool.exe".to_owned(), "web01".to_owned()],
+            method: None,
+            url: None,
+            credential: None,
+            catalogue_hash: "00".to_owned(),
+            approval_id: Some(approval_id.to_owned()),
+            tree: None,
+            timeout_s: Some(60),
+        })
+    };
+    let (given, _) = write_request(&relay, "web01", 60_000);
+    decide_approval(&relay, &given, true).unwrap();
+    officina_host::relay::journal::append(&relay, &[start(&given)], now_ms()).unwrap();
+    assert!(
+        anomalies_now(&relay).is_empty(),
+        "a run the window approved"
+    );
+
+    officina_host::relay::journal::append(&relay, &[start("0123456789abcdef-9")], now_ms())
+        .unwrap();
+    let kinds = |found: &[officina_core::relay::record::Anomaly]| {
+        found.iter().map(|a| a.kind).collect::<Vec<_>>()
+    };
+    assert_eq!(
+        kinds(&anomalies_now(&relay)),
+        [AnomalyKind::RunWithoutDecision]
+    );
+
+    set_relay_stopped(&relay, true).unwrap();
+    std::fs::remove_file(relay.stopped_file()).unwrap();
+    let mut forged = relay.read_approved().approved().unwrap().clone();
+    forged.hash = "f".repeat(64);
+    std::fs::write(relay.approved_file(), serde_json::to_vec(&forged).unwrap()).unwrap();
+    let mut found = kinds(&anomalies_now(&relay));
+    found.sort_by_key(|k| AnomalyKind::ALL.iter().position(|a| a == k));
+    assert_eq!(
+        found,
+        [
+            AnomalyKind::RunWithoutDecision,
+            AnomalyKind::ForeignCatalogue,
+            AnomalyKind::StopFlagRemoved
+        ]
+    );
+}

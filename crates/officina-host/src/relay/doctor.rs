@@ -262,6 +262,7 @@ fn checks_with(
         checks.extend(tree_checks(&relay.canonical, &dirs));
     }
     checks.push(journal_check(home, inputs.now_ms));
+    checks.extend(anomaly_check(home, &approved, inputs.now_ms));
     let snapshot = approved.approved().map(|a| &a.canonical);
     checks.extend(paragraph_checks(current.map(|r| &r.canonical), snapshot));
     checks
@@ -895,6 +896,42 @@ fn journal_check(home: &RelayHome, now_ms: i64) -> Check {
             home.journal_dir().display()
         ),
     )
+}
+
+/// D-173: a decision the window did not make fails doctor until the author
+/// acknowledges it in the Relay view; no line before the window started
+/// its record.
+fn anomaly_check(home: &RelayHome, approved: &ApprovedState, now_ms: i64) -> Option<Check> {
+    const TITLE: &str = "relay anomalies";
+    home.read_record()?;
+    let (lines, _) = journal::read_recent(home, now_ms);
+    let found = super::view::read_anomalies(
+        home,
+        &lines,
+        approved.approved().map(|a| a.hash.as_str()),
+        home.relay_stopped(),
+    );
+    let open: Vec<&str> = found
+        .iter()
+        .filter(|anomaly| !anomaly.acknowledged)
+        .map(|anomaly| anomaly.detail.as_str())
+        .collect();
+    Some(if open.is_empty() {
+        check(
+            Level::Ok,
+            TITLE,
+            "every approval, approved catalogue and stop seen was the window's",
+        )
+    } else {
+        check(
+            Level::Fail,
+            TITLE,
+            format!(
+                "{}; acknowledge each in the window's Relay view once you know where it came from",
+                open.join("; ")
+            ),
+        )
+    })
 }
 
 /// One action of the paragraph: its call with every parameter, then what

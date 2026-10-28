@@ -14,6 +14,7 @@ use super::journal::{
     ApprovalEvent, CatalogueApproved, GateDenied, GateError, JournalEntry, JournalLine, Refused,
     RunFinished, RunStarted,
 };
+use super::record::Anomaly;
 use super::run::SnapshotState;
 
 /// Version of the relay view contract.
@@ -140,6 +141,8 @@ pub struct RelayView {
     /// What the programs do with some values (D-172): the current floor's
     /// notices, or the approved snapshot's when the floor cannot be read.
     pub notices: Vec<Notice>,
+    /// Decisions the window did not make (D-173), acknowledged or not.
+    pub anomalies: Vec<Anomaly>,
 }
 
 /// `relay/stopped` as the host found it (AD-34).
@@ -177,6 +180,8 @@ pub struct ViewInputs<'a> {
     /// Whether each credential is in the Credential Manager, by name, when
     /// the caller checked; `None` reports every credential unchecked.
     pub credential_presence: Option<&'a BTreeMap<String, bool>>,
+    /// What `relay::record::anomalies` found.
+    pub anomalies: &'a [Anomaly],
 }
 
 /// What a first approval compares with: nothing approved.
@@ -372,6 +377,7 @@ pub fn build(inputs: &ViewInputs<'_>) -> RelayView {
                 approved.map(|a| notices(&a.canonical)).unwrap_or_default()
             }
         },
+        anomalies: inputs.anomalies.to_vec(),
     }
 }
 
@@ -410,6 +416,7 @@ mod tests {
             journal_corrupt_lines: 0,
             now_ms: NOW,
             credential_presence: None,
+            anomalies: &[],
         }
     }
 

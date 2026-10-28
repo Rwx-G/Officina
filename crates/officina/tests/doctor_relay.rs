@@ -755,3 +755,36 @@ fn doctor_writes_nothing_in_project_folders() {
     }
     assert_eq!(fingerprint(&doctor.work()), before);
 }
+
+/// AC 7 of story 2.14 (D-173): a decision the window did not make fails
+/// doctor, here a stop flag deleted while the window holds the relay
+/// stopped, until the author acknowledges it in the window.
+#[test]
+fn an_anomaly_fails_doctor_until_acknowledged() {
+    use officina_host::relay::authority::{acknowledge_anomaly, set_relay_stopped};
+    let doctor = Doctor::new();
+    doctor.write(FLOOR);
+    doctor.env.approve();
+    doctor.register_hooks();
+    assert_eq!(doctor.report(&[]).line("relay anomalies").tag, "ok");
+
+    let home = doctor.env.relay_home();
+    set_relay_stopped(&home, true).unwrap();
+    std::fs::remove_file(home.stopped_file()).unwrap();
+    let report = doctor.report(&[]);
+    let line = report.line("relay anomalies");
+    assert_eq!(line.tag, "FAIL", "{}", report.text);
+    assert!(line.detail.contains("stop flag is gone"), "{}", line.detail);
+    assert_eq!(report.code, Some(1));
+
+    let (lines, _) = officina_host::relay::journal::read_recent(&home, now_ms());
+    for anomaly in officina_host::relay::view::read_anomalies(
+        &home,
+        &lines,
+        home.read_approved().approved().map(|a| a.hash.as_str()),
+        home.relay_stopped(),
+    ) {
+        acknowledge_anomaly(&home, &anomaly.key).unwrap();
+    }
+    assert_eq!(doctor.report(&[]).line("relay anomalies").tag, "ok");
+}

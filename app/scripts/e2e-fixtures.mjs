@@ -249,6 +249,59 @@ for (const [name, steps] of Object.entries(relayScenarios)) {
   console.log(`fixture ${name}: exit ${run.status}`);
 }
 
+// Anomalies (story 2.14, D-173): a catalogue approved and the relay stopped
+// through `approve_fixture`, which start the window's decision record; then,
+// behind the window's back, the stop flag deleted, an approval file written
+// for a request the window never decided, and a run journaled with it.
+// Printed by `officina relay --json`.
+{
+  const name = "relay-anomalies";
+  const tmp = mkdtempSync(join(tmpdir(), `officina-fixture-${name}-`));
+  const home = join(tmp, "home");
+  const officinaHome = join(tmp, "officina");
+  mkdirSync(home, { recursive: true });
+  mkdirSync(officinaHome, { recursive: true });
+  writeFileSync(join(officinaHome, "floor.toml"), relayFloor);
+  approveFixture(officinaHome, "approve");
+  approveFixture(officinaHome, "stop");
+  rmSync(join(officinaHome, "relay", "stopped"));
+  const forgedId = `0123456789abcdef-${Date.now()}`;
+  const approvalsDir = join(officinaHome, "relay", "approvals");
+  mkdirSync(approvalsDir, { recursive: true });
+  writeFileSync(
+    join(approvalsDir, `${forgedId}.approved.json`),
+    JSON.stringify({ decided_at_ms: Date.now(), request_key: "f".repeat(64) }),
+  );
+  const approvedHash = JSON.parse(readFileSync(join(officinaHome, "relay", "approved.json"), "utf8")).hash;
+  const ranAt = Date.now();
+  const run = {
+    v: 1,
+    ts: ranAt,
+    kind: "run_started",
+    run_id: "00000000000000000000000000f0f0f0",
+    project: "infra-scripts",
+    session_id: sid(2),
+    action: "check",
+    class: "free",
+    params: { group: "lab-web", playbook: "alerting.yml" },
+    catalogue_hash: approvedHash,
+    approval_id: forgedId,
+    timeout_s: 60,
+  };
+  mkdirSync(join(officinaHome, "journal"), { recursive: true });
+  appendFileSync(join(officinaHome, "journal", `${utcDay(ranAt)}.jsonl`), JSON.stringify(run) + "\n");
+  const env = { SYSTEMROOT: process.env.SYSTEMROOT ?? "", USERPROFILE: home, HOME: home, OFFICINA_HOME: officinaHome };
+  const view = spawnSync(officina, ["relay", "--json"], { env, encoding: "utf8" });
+  if (view.status !== 0) throw new Error(`${name}: officina relay exited ${view.status}: ${view.stderr}`);
+  const kinds = new Set(JSON.parse(view.stdout).anomalies.map((a) => a.kind));
+  for (const kind of ["foreign_approval", "run_without_decision", "stop_flag_removed"]) {
+    if (!kinds.has(kind)) throw new Error(`${name}: no ${kind} anomaly: ${view.stdout}`);
+  }
+  writeFileSync(join(outDir, `${name}.json`), view.stdout);
+  rmSync(tmp, { recursive: true, force: true });
+  console.log(`fixture ${name}: exit ${view.status}`);
+}
+
 // Approval requests (story 2.8, D-25, D-170): a catalogue approved through
 // `approve_fixture`, a dry run and two requests made by the real
 // `officina run --wait 1` (one from a session the busy board lists), and one

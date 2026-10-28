@@ -166,3 +166,38 @@ function hexToRgb(hex: string): string {
   const [r, g, b] = [0, 2, 4].map((i) => parseInt(value.slice(i, i + 2), 16));
   return `rgb(${r}, ${g}, ${b})`;
 }
+
+// Story 2.14 (D-173): decisions the window did not make, from files written
+// behind its back, are listed in the Relay view until acknowledged.
+test.describe("anomalies", () => {
+  test("anomalies are listed", async ({ page }) => {
+    const relay = loadRelay("relay-anomalies");
+    await open(page, relay);
+    await page.getByTestId("view-relay").click();
+    const section = page.getByTestId("relay-anomalies");
+    await expect(section).toBeVisible();
+    const rows = section.getByTestId("relay-anomaly");
+    await expect(rows).toHaveCount(relay.anomalies.length);
+    for (const anomaly of relay.anomalies) {
+      const row = section.locator(`[data-testid="relay-anomaly"][data-kind="${anomaly.kind}"]`);
+      await expect(row).toContainText(anomaly.detail);
+    }
+
+    const first = relay.anomalies[0]!;
+    await rows.first().getByTestId("acknowledge-anomaly").press("Enter");
+    expect((await calls(page)).filter((c) => c.cmd === "acknowledge_anomaly")).toEqual([]);
+    await rows.first().getByTestId("acknowledge-anomaly").click();
+    expect((await calls(page)).filter((c) => c.cmd === "acknowledge_anomaly").map((c) => c.args)).toEqual([
+      { key: first.key },
+    ]);
+    await expect(rows.first().getByTestId("anomaly-acknowledged")).toBeVisible();
+    await expect(section.getByTestId("acknowledge-anomaly")).toHaveCount(relay.anomalies.length - 1);
+  });
+
+  test("a relay without anomalies lists none", async ({ page }) => {
+    await open(page, loadRelay("relay-clean"));
+    await page.getByTestId("view-relay").click();
+    await expect(page.getByTestId("relay-view")).toBeVisible();
+    await expect(page.getByTestId("relay-anomalies")).toHaveCount(0);
+  });
+});

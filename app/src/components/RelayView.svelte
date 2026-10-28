@@ -4,7 +4,8 @@
   // recent activity and the journal's own diagnostics. Approvals of `human`
   // actions are not here: they are decided on their cards in Needs you.
   // Every text is rendered as text.
-  import type { RelayStore } from "../lib/relay.svelte";
+  import { isPointerClick, type RelayStore } from "../lib/relay.svelte";
+  import { ANOMALY_TEXT } from "../lib/relay-text";
   import { clock } from "../lib/time";
   import CatalogueTable from "./CatalogueTable.svelte";
   import PendingCatalogue from "./PendingCatalogue.svelte";
@@ -17,6 +18,7 @@
   let { store, nowMs }: Props = $props();
 
   let relay = $derived(store.relay);
+  let open = $derived(relay?.anomalies.filter((a) => !a.acknowledged).length ?? 0);
 </script>
 
 <main class="relay-view" data-testid="relay-view">
@@ -54,6 +56,41 @@
       <p class="fault" role="alert">The approved catalogue cannot be read ({relay.snapshot_error}).</p>
     {/if}
   </section>
+
+  {#if relay && relay.anomalies.length > 0}
+    <section class="block" data-testid="relay-anomalies" aria-labelledby="relay-anomalies-title">
+      <h2 id="relay-anomalies-title">Decisions this window did not make</h2>
+      <p class="muted">
+        {open} to acknowledge. A file another process wrote can stand for an approval, a catalogue or a resume made here;
+        doctor fails until you acknowledge each one you have traced.
+      </p>
+      <ul class="issues">
+        {#each relay.anomalies as anomaly (anomaly.key)}
+          <li data-testid="relay-anomaly" data-kind={anomaly.kind} class:fault={!anomaly.acknowledged}>
+            <strong>{ANOMALY_TEXT[anomaly.kind]}</strong>{anomaly.at_ms !== null ? `, ${clock(anomaly.at_ms, nowMs)}` : ""}:
+            {anomaly.detail}
+            {#if anomaly.acknowledged}
+              <span class="muted" data-testid="anomaly-acknowledged">(acknowledged)</span>
+            {:else}
+              <button
+                class="tool"
+                data-testid="acknowledge-anomaly"
+                disabled={store.acknowledging[anomaly.key] === true}
+                onclick={(event) => {
+                  if (isPointerClick(event)) void store.acknowledge(anomaly.key);
+                }}
+              >
+                Acknowledge
+              </button>
+            {/if}
+          </li>
+        {/each}
+      </ul>
+      {#if store.anomalyError}
+        <p class="fault" role="alert">The anomaly could not be acknowledged: {store.anomalyError}</p>
+      {/if}
+    </section>
+  {/if}
 
   <PendingCatalogue {store} showIssues={false} />
 

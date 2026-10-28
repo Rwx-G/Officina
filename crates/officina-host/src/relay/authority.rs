@@ -1,6 +1,8 @@
 //! What only the author may decide, from the window (AD-21): approving the
 //! catalogue, approving or rejecting a `human` action's request, stopping
-//! and resuming the relay. Compiled only with the
+//! and resuming the relay, and acknowledging an anomaly. Each decision is
+//! also kept in the window's record (`relay/decisions.json`, D-173), so one
+//! the window did not make shows. Compiled only with the
 //! `window-authority` feature, so the `officina` binary a session can call
 //! holds none of it (P-5).
 
@@ -11,6 +13,7 @@ use officina_core::relay::StopFlag;
 use officina_core::relay::approvals::{DecideRefusal, Decision, FileKind, decidable, file_name};
 use officina_core::relay::catalogue::{ApprovedCatalogue, KnownProjects};
 use officina_core::relay::journal::{ApprovalEvent, CatalogueApproved, JournalEntry};
+use officina_core::relay::record::DecisionRecord;
 use serde::Serialize;
 
 use super::approvals::{self, ContextSources};
@@ -52,6 +55,60 @@ fn write_json(path: &Path, value: &impl Serialize) -> Result<(), AuthorityError>
     };
     let bytes = serde_json::to_vec_pretty(value).map_err(|e| failed(e.to_string()))?;
     atomic_write(path, &bytes).map_err(|e| failed(e.to_string()))
+}
+
+/// The window's record as it stands, or a new one taking the approved
+/// catalogue and the stop flag as they are: what the window finds when it
+/// first runs (D-173).
+fn current_record(home: &RelayHome, now: i64) -> DecisionRecord {
+    home.read_record().unwrap_or_else(|| {
+        let stopped = super::view::read_stop(home);
+        DecisionRecord::start(
+            now,
+            home.read_approved().approved().map(|a| a.hash.clone()),
+            match stopped {
+                officina_core::relay::view::StopState::Stopped { since_ms } => {
+                    Some(since_ms.unwrap_or(now))
+                }
+                officina_core::relay::view::StopState::Running => None,
+            },
+        )
+    })
+}
+
+/// Applies `change` to the window's record and writes it back, pruned.
+/// Called under the journal lock, as every decision is.
+fn update_record(
+    home: &RelayHome,
+    now: i64,
+    change: impl FnOnce(&mut DecisionRecord),
+) -> Result<(), AuthorityError> {
+    let mut record = current_record(home, now);
+    change(&mut record);
+    record.prune(now);
+    write_json(&home.decisions_file(), &record)
+}
+
+/// Starts the window's record when there is none (D-173): what the window
+/// does as it opens, so later decisions are judged from then.
+pub fn ensure_record(home: &RelayHome) -> Result<(), AuthorityError> {
+    if home.read_record().is_some() {
+        return Ok(());
+    }
+    let _journal =
+        JournalLock::acquire(home).map_err(|e| AuthorityError::Journal(e.to_string()))?;
+    update_record(home, now_ms(), |_| {})
+}
+
+/// Acknowledges the anomaly `key` (D-173): the Relay view keeps listing it
+/// as acknowledged, and doctor no longer fails on it.
+pub fn acknowledge_anomaly(home: &RelayHome, key: &str) -> Result<(), AuthorityError> {
+    let _journal =
+        JournalLock::acquire(home).map_err(|e| AuthorityError::Journal(e.to_string()))?;
+    let now = now_ms();
+    update_record(home, now, |record| {
+        record.acknowledged.insert(key.to_owned(), now);
+    })
 }
 
 /// Approves the relay's catalogue if it is still the one the author saw.
@@ -96,6 +153,9 @@ pub fn approve_catalogue(
         canonical: current.canonical,
     };
     write_json(&home.approved_file(), &approved)?;
+    update_record(home, approved.approved_at_ms, |record| {
+        record.approved_hash = Some(approved.hash.clone());
+    })?;
     let line = JournalEntry::CatalogueApproved(CatalogueApproved {
         hash: approved.hash.clone(),
         previous_hash: previous.approved().map(|p| p.hash.clone()),
@@ -133,6 +193,11 @@ pub fn decide_approval(home: &RelayHome, id: &str, approve: bool) -> Result<(), 
     } else {
         (FileKind::Rejected, JournalEntry::ApprovalRejected(event))
     };
+    // Recorded first: a decision file the record does not name is what an
+    // anomaly is (D-173).
+    update_record(home, now, |record| {
+        record.decided.insert(id.to_owned(), now);
+    })?;
     write_json(
         &home.approvals_dir().join(file_name(id, kind)),
         &Decision {
@@ -160,6 +225,11 @@ pub fn set_relay_stopped(home: &RelayHome, stopped: bool) -> Result<bool, Author
         return Ok(false);
     }
     let now = now_ms();
+    // Recorded first both ways: a record saying stopped while the flag is
+    // gone is the anomaly, never the other way round (D-173).
+    update_record(home, now, |record| {
+        record.stopped_since_ms = stopped.then_some(now);
+    })?;
     let line = if stopped {
         write_json(&flag, &StopFlag { since_ms: now })?;
         JournalEntry::RelayStopped

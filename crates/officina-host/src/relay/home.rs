@@ -10,6 +10,7 @@ use officina_core::relay::approvals::OUTPUTS_DIR;
 use officina_core::relay::catalogue::{
     self, ApprovedCatalogue, KnownProjects, RelayFloor, parse_known_projects,
 };
+use officina_core::relay::record::{DECISION_RECORD_FILE, DecisionRecord, parse_record};
 use officina_core::relay::{JOURNAL_DIR, RELAY_DIR};
 
 use crate::paths::{ENV_FLOOR, env_path, officina_home_from_env};
@@ -112,6 +113,17 @@ impl RelayHome {
     /// `relay/known-projects.json`: the last readable state (D-15).
     pub fn known_projects_file(&self) -> PathBuf {
         self.relay_dir().join("known-projects.json")
+    }
+
+    /// `relay/decisions.json`: the window's record of its own decisions
+    /// (D-173).
+    pub fn decisions_file(&self) -> PathBuf {
+        self.relay_dir().join(DECISION_RECORD_FILE)
+    }
+
+    /// Reads `relay/decisions.json`, if present and of this schema.
+    pub fn read_record(&self) -> Option<DecisionRecord> {
+        parse_record(&fs::read(self.decisions_file()).ok()?)
     }
 
     /// `journal/`: one file per UTC day (AD-32).

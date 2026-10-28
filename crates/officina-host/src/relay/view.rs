@@ -8,9 +8,11 @@ use std::fs;
 use std::io;
 
 use officina_core::relay::StopFlag;
+use officina_core::relay::record::{Anomaly, AnomalyInputs, anomalies};
 use officina_core::relay::run::SnapshotState;
 use officina_core::relay::view::{FloorRead, RelayView, StopState, ViewInputs, build};
 
+use super::approvals::read_files;
 use super::credential::CredentialStore;
 use super::home::{ApprovedState, RelayHome, load_relay_floor};
 use super::journal::read_recent;
@@ -104,6 +106,12 @@ pub fn read_view_with(
         ApprovedState::Valid(approved) => SnapshotState::Valid(approved),
     };
     let (lines, journal_corrupt_lines) = read_recent(home, now_ms);
+    let anomalies = read_anomalies(
+        home,
+        &lines,
+        approved.approved().map(|a| a.hash.as_str()),
+        !matches!(stop, StopState::Running),
+    );
     Ok(build(&ViewInputs {
         stop,
         snapshot,
@@ -113,7 +121,30 @@ pub fn read_view_with(
         journal_corrupt_lines,
         now_ms,
         credential_presence,
+        anomalies: &anomalies,
     }))
+}
+
+/// The decisions the window did not make (D-173), judged on the window's
+/// record, the approval files, `lines` of journal, the approved hash and
+/// whether the relay is stopped.
+pub fn read_anomalies(
+    home: &RelayHome,
+    lines: &[officina_core::relay::journal::JournalLine],
+    approved_hash: Option<&str>,
+    stopped: bool,
+) -> Vec<Anomaly> {
+    let record = home.read_record();
+    if record.is_none() {
+        return Vec::new();
+    }
+    anomalies(&AnomalyInputs {
+        record: record.as_ref(),
+        files: &read_files(home),
+        lines,
+        approved_hash,
+        stopped,
+    })
 }
 
 /// Whether each credential of the approved catalogue is in `store`, by
