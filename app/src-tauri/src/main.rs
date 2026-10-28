@@ -97,7 +97,7 @@ fn ask_collector(
         IpcError::new(
             IpcErrorCode::Timeout,
             format!(
-                "the registry did not answer within {} ms; nothing was changed",
+                "the registry did not answer within {} ms; the next view shows whether the change was made",
                 wait.as_millis()
             ),
         )
@@ -124,14 +124,7 @@ async fn ask(state: State<'_, AppState>, command: AuthorCommand) -> Result<Autho
 
 /// Runs one author action; the subject it created, if any.
 async fn act(state: State<'_, AppState>, action: AuthorAction) -> Result<Option<i64>, IpcError> {
-    match ask(state, AuthorCommand::Act(action)).await? {
-        AuthorAnswer::Done { created } => Ok(created),
-        AuthorAnswer::Archived(_)
-        | AuthorAnswer::Confirmed(_)
-        | AuthorAnswer::Evaluating { .. } => {
-            Err(IpcError::internal("the collector answered another request"))
-        }
-    }
+    ask(state, AuthorCommand::Act(action)).await?.into_done()
 }
 
 fn card_for(state: &AppState, key: &str) -> Option<officina_core::board::Card> {
@@ -166,14 +159,9 @@ fn get_registry(state: State<'_, AppState>) -> Option<RegistryView> {
 /// connection (AD-54).
 #[tauri::command]
 async fn list_archived(state: State<'_, AppState>) -> Result<Vec<SubjectView>, IpcError> {
-    match ask(state, AuthorCommand::ListArchived).await? {
-        AuthorAnswer::Archived(listed) => Ok(listed),
-        AuthorAnswer::Done { .. }
-        | AuthorAnswer::Confirmed(_)
-        | AuthorAnswer::Evaluating { .. } => {
-            Err(IpcError::internal("the collector answered another request"))
-        }
-    }
+    ask(state, AuthorCommand::ListArchived)
+        .await?
+        .into_archived()
 }
 
 /// Creates a subject named `name` (D-95): from the selected sessions,
@@ -258,12 +246,9 @@ async fn confirm_triage(
     state: State<'_, AppState>,
     items: Vec<ConfirmItem>,
 ) -> Result<Vec<ItemAnswer>, IpcError> {
-    match ask(state, AuthorCommand::Confirm(items)).await? {
-        AuthorAnswer::Confirmed(answers) => Ok(answers),
-        AuthorAnswer::Done { .. } | AuthorAnswer::Archived(_) | AuthorAnswer::Evaluating { .. } => {
-            Err(IpcError::internal("the collector answered another request"))
-        }
-    }
+    ask(state, AuthorCommand::Confirm(items))
+        .await?
+        .into_confirmed()
 }
 
 /// Turns auto-archive on, only while its gate holds, or off (FR-12,
@@ -271,14 +256,10 @@ async fn confirm_triage(
 /// the toggle is disabled.
 #[tauri::command]
 async fn set_auto_archive(state: State<'_, AppState>, on: bool) -> Result<(), IpcError> {
-    match ask(state, AuthorCommand::SetAutoArchive(on)).await? {
-        AuthorAnswer::Done { .. } => Ok(()),
-        AuthorAnswer::Archived(_)
-        | AuthorAnswer::Confirmed(_)
-        | AuthorAnswer::Evaluating { .. } => {
-            Err(IpcError::internal("the collector answered another request"))
-        }
-    }
+    ask(state, AuthorCommand::SetAutoArchive(on))
+        .await?
+        .into_done()
+        .map(|_| ())
 }
 
 /// Turns the triage model on, only while it can be called and its enable
@@ -287,14 +268,10 @@ async fn set_auto_archive(state: State<'_, AppState>, on: bool) -> Result<(), Ip
 /// toggle is disabled.
 #[tauri::command]
 async fn set_triage_model(state: State<'_, AppState>, on: bool) -> Result<(), IpcError> {
-    match ask(state, AuthorCommand::SetTriageModel(on)).await? {
-        AuthorAnswer::Done { .. } => Ok(()),
-        AuthorAnswer::Archived(_)
-        | AuthorAnswer::Confirmed(_)
-        | AuthorAnswer::Evaluating { .. } => {
-            Err(IpcError::internal("the collector answered another request"))
-        }
-    }
+    ask(state, AuthorCommand::SetTriageModel(on))
+        .await?
+        .into_done()
+        .map(|_| ())
 }
 
 /// Queues a dry run of the triage model on the author's past
@@ -303,12 +280,7 @@ async fn set_triage_model(state: State<'_, AppState>, on: bool) -> Result<(), Ip
 /// as a proposal.
 #[tauri::command]
 async fn evaluate_triage_model(state: State<'_, AppState>) -> Result<u32, IpcError> {
-    match ask(state, AuthorCommand::Evaluate).await? {
-        AuthorAnswer::Evaluating { cases } => Ok(cases),
-        AuthorAnswer::Done { .. } | AuthorAnswer::Archived(_) | AuthorAnswer::Confirmed(_) => {
-            Err(IpcError::internal("the collector answered another request"))
-        }
-    }
+    ask(state, AuthorCommand::Evaluate).await?.into_evaluating()
 }
 
 #[tauri::command]
@@ -587,24 +559,29 @@ mod tests {
             declared,
             "generate_handler! against build.rs"
         );
-        for command in [
-            "get_relay",
-            "approve_catalogue",
-            "decide_approval",
-            "set_relay_stopped",
-            "acknowledge_anomaly",
-            "get_registry",
-            "list_archived",
-            "create_subject",
-            "rename_subject",
-            "merge_subjects",
-            "file_sessions",
-            "archive_subject",
-            "reopen_subject",
-            "confirm_triage",
-        ] {
-            assert!(declared.contains(command), "{command}");
-        }
+        // The frontend's calls, read from `ipc.ts`, the only module that
+        // invokes a command: each is declared, and each declared command
+        // is called, so neither list can be edited alone.
+        let invoked = invoked_commands(include_str!("../../src/lib/ipc.ts"));
+        assert!(!invoked.is_empty());
+        assert_eq!(invoked, declared, "ipc.ts invocations against build.rs");
+    }
+
+    /// The command names `ipc.ts` passes to `invoke`, typed or not.
+    fn invoked_commands(source: &str) -> BTreeSet<String> {
+        source
+            .split("invoke")
+            .skip(1)
+            .filter_map(|rest| {
+                let rest = rest.strip_prefix('<').map_or(rest, |typed| {
+                    typed.split_once(">(").map_or("", |(_, call)| call)
+                });
+                let name = rest
+                    .strip_prefix("(\"")
+                    .or_else(|| rest.strip_prefix('"'))?;
+                name.split_once('"').map(|(name, _)| name.to_owned())
+            })
+            .collect()
     }
 
     /// AD-38, D-92: a command waits for the collector at most the time it
@@ -625,6 +602,9 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(error.code, IpcErrorCode::Timeout, "{error:?}");
+        // Security audit Info: a request that started in time may still be
+        // applied after the window gave up, so it never says nothing was.
+        assert!(error.message.contains("the next view shows"), "{error:?}");
         let waited = started.elapsed();
         assert!(
             waited >= Duration::from_millis(50) && waited < Duration::from_secs(5),

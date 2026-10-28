@@ -83,6 +83,46 @@ pub enum AuthorCommand {
     SetTriageModel(bool),
 }
 
+impl AuthorAnswer {
+    /// The internal error of a command answered for another request: a
+    /// fault of the window, never of the author.
+    fn unexpected(&self) -> IpcError {
+        IpcError::internal(format!("the collector answered another request: {self:?}"))
+    }
+
+    /// The subject an action created, for an action's answer.
+    pub fn into_done(self) -> Result<Option<i64>, IpcError> {
+        match self {
+            AuthorAnswer::Done { created } => Ok(created),
+            other => Err(other.unexpected()),
+        }
+    }
+
+    /// The archived subjects, for `ListArchived`'s answer.
+    pub fn into_archived(self) -> Result<Vec<SubjectView>, IpcError> {
+        match self {
+            AuthorAnswer::Archived(listed) => Ok(listed),
+            other => Err(other.unexpected()),
+        }
+    }
+
+    /// Each item's answer, for `Confirm`'s answer.
+    pub fn into_confirmed(self) -> Result<Vec<ItemAnswer>, IpcError> {
+        match self {
+            AuthorAnswer::Confirmed(answers) => Ok(answers),
+            other => Err(other.unexpected()),
+        }
+    }
+
+    /// How many cases the dry run holds, for `Evaluate`'s answer.
+    pub fn into_evaluating(self) -> Result<u32, IpcError> {
+        match self {
+            AuthorAnswer::Evaluating { cases } => Ok(cases),
+            other => Err(other.unexpected()),
+        }
+    }
+}
+
 /// What the collector answers to an author request.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AuthorAnswer {
@@ -1212,6 +1252,35 @@ mod tests {
         assert!(!plan.due().retention, "the hour counts from the pass run");
         advance(&now, TICK);
         assert!(plan.due().retention);
+    }
+
+    /// Quality audit M6: each command takes its own answer and reports any
+    /// other as an internal fault.
+    #[test]
+    fn an_answer_for_another_request_is_an_internal_error() {
+        use officina_core::ipc::IpcErrorCode;
+        assert_eq!(
+            AuthorAnswer::Done { created: Some(4) }.into_done(),
+            Ok(Some(4))
+        );
+        assert_eq!(
+            AuthorAnswer::Evaluating { cases: 3 }.into_evaluating(),
+            Ok(3)
+        );
+        let wrong = AuthorAnswer::Evaluating { cases: 3 }
+            .into_done()
+            .unwrap_err();
+        assert_eq!(wrong.code, IpcErrorCode::Internal);
+        assert!(
+            AuthorAnswer::Done { created: None }
+                .into_archived()
+                .is_err()
+        );
+        assert!(
+            AuthorAnswer::Done { created: None }
+                .into_confirmed()
+                .is_err()
+        );
     }
 
     #[test]
