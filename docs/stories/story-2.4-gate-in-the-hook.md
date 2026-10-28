@@ -1,6 +1,6 @@
 # Story 2.4: Gate in the hook, journal, doctor block
 
-**Status:** Approved
+**Status:** Review
 
 ## Story
 
@@ -31,16 +31,16 @@ so that a raw guarded command is refused with the list of actions the session ma
 
 ## Tasks
 
-- [ ] `crates/officina-core/src/relay/journal.rs`: line types per AD-32 (AC 9)
-- [ ] `crates/officina-host/src/relay/journal.rs`: locked append, two-day reader with corrupt count (AC 9)
-- [ ] `crates/officina-host/src/relay/gate.rs`: payload to decision, `CLAUDE_PROJECT_DIR` and `cwd`, relay floor resolution (story 2.2), phase 1 parse, snapshot states, union of sources, `known-projects.json` fallback, protected dirs, injected-closure guard, journal of denies and errors (AC 2-8, 10, 13)
-- [ ] `crates/officina/src/main.rs` hook: one parse, branch on `hook_event_name` (AC 1)
-- [ ] `approve_catalogue` journals `catalogue_approved` (AC 11)
-- [ ] `crates/officina/src/bin/officina-fake-tool.rs` (`test = false`, `doc = false`) and `fake_tool.rs` (AC 12)
-- [ ] `doctor.rs`: buffered-events constant, (event, matcher) registrations, conditional `PreToolUse`; update `hook.rs` to the buffered constant (AC 1, 14)
-- [ ] Payload fixtures and `crates/officina/tests/gate.rs`; perf and stress tests in `perf.rs`; extend the zero-write test (AC 2-8, 10, 13, 15-17)
-- [ ] Manual check recorded in research notes (AC 18)
-- [ ] Update `CHANGELOG.md` `[Unreleased]` and the README relay section (gate, journal) (D-34)
+- [x] `crates/officina-core/src/relay/journal.rs`: line types per AD-32 (AC 9)
+- [x] `crates/officina-host/src/relay/journal.rs`: locked append, two-day reader with corrupt count (AC 9)
+- [x] `crates/officina-host/src/relay/gate.rs`: payload to decision, `CLAUDE_PROJECT_DIR` and `cwd`, relay floor resolution (story 2.2), phase 1 parse, snapshot states, union of sources, `known-projects.json` fallback, protected dirs, injected-closure guard, journal of denies and errors (AC 2-8, 10, 13)
+- [x] `crates/officina/src/main.rs` hook: one parse, branch on `hook_event_name` (AC 1)
+- [x] `approve_catalogue` journals `catalogue_approved` (AC 11)
+- [x] `crates/officina/src/bin/officina-fake-tool.rs` (`test = false`, `doc = false`) and `fake_tool.rs` (AC 12)
+- [x] `doctor.rs`: buffered-events constant, (event, matcher) registrations, conditional `PreToolUse`; update `hook.rs` to the buffered constant (AC 1, 14)
+- [x] Payload fixtures and `crates/officina/tests/gate.rs`; perf and stress tests in `perf.rs`; extend the zero-write test (AC 2-8, 10, 13, 15-17)
+- [ ] Manual check recorded in research notes (AC 18): open, the owner's to run (backlog, High)
+- [x] Update `CHANGELOG.md` `[Unreleased]` and the README relay section (gate, journal) (D-34)
 
 ## Dev Notes
 
@@ -65,11 +65,60 @@ so that a raw guarded command is refused with the list of actions the session ma
 
 ### Debug Log
 
+- **Decisions where the documents are silent**, each the stricter or the cheaper reading consistent with D-14 to D-19:
+  - D-15 generalised: whenever the relay floor fails (unreadable, refused by phase 1, or missing) while the relay is in use (an `approved.json` exists in any state, or `known-projects.json` exists), every path of `known-projects.json` is guarded with the default list, even beside a valid snapshot. Without it a session could break the floor of a guarded project that is not approved yet and lift containment. A broken floor of a relay never used (no snapshot, no record) is the board's `floor_error`, not a gate fault.
+  - The snapshot, the floor and the known-projects record are looked up as separate sources, each by longest prefix, and a call is guarded if any source guards it: a free project nested in the floor cannot hide a guarded parent of the snapshot. The first source that guards the call names the project (snapshot, then floor, then record).
+  - `gate_error` is written on every `Bash` call that meets a degraded input, one line per fault, each with a closed `cause` code (`GateFault`, the journal's vocabulary, in `core::relay::journal`) and a `detail`; a deny and its faults go in one locked append. Doctor's "gate errors in the last 24 h" (D-32) counts them.
+  - The deny reason gains `Offer::Unreadable` for a project known only from the record (no name, no actions readable): it points to `officina doctor`.
+  - `gate_denied` also carries the deny kind of story 2.3 (`deny`), beyond AD-32's fields, as story 2.3's notes asked.
+  - After a panic or an error inside the gate the `gate_error` line drops the command excerpt: the floor's `no_excerpts` is unknown then.
+  - `journal::append` with nothing to write takes no lock: the gate locks only to record something (AD-28).
+  - `approve_catalogue` takes the journal lock before reading and holds it until its line is written, so a lock timeout approves nothing (`AuthorityError::Journal`) instead of approving without a line.
+  - Doctor counts a `PreToolUse` registration only when its matcher names `Bash` (exactly, or as one `|` alternative); a missing, empty or `*` matcher is reported missing, since it would put a process start on every tool call (E9). The gate is required when the relay floor (phase 1) or the approved snapshot guards a project.
+  - The refusal reasons of `officina run` (`RefusalReason`) are defined with the journal line types, since `refused` is one of AD-32's kinds; story 2.5 fills their checks.
+  - Fake tool: environment values are logged only for names listed in `FAKE_TOOL_LOG_VALUES` (names only otherwise, so no secret reaches a log by default); the `tree` heartbeat ends by itself after 30 s or when `<heartbeat>.stop` exists, so a failed test leaves no lasting orphan; the byte pattern of `bytes:<n>` lives in `tests/common/fake_output.rs`, which the binary includes by path.
+- **Budget (AC 15).** The first measurement failed: the gate cost about 13 ms in process and 15 ms over an empty process. A 64 KiB command took the lexer 4.4 ms: every command of a line without a newline stayed in memory until the line ended (megabytes of fresh heap pages), `fold` allocated twice, name comparisons folded both sides, and each word copied its source. A separate commit (`perf(relay)`) analyses each command as soon as no here-document waits, folds ASCII in one pass, compares names in place, keeps a word's source as a range and folds the guarded list once per call; the gate vector set is unchanged and passes. Lexing the test command now takes about 1.2 ms. Measured on the workstation (release, serial): in-process p95 2.5 to 2.6 ms, own cost over an empty process 2.1 to 4.0 ms. The perf tests now share a mutex (CI runs them in one binary, and a stress test beside a timing test measured the stress) and the gate's runs alternate with the baseline's, so a change of load weighs on both. Hosted runners start processes more slowly, which the own cost subtracts; their in-process speed is not measured here.
+- **Adversarial pass.** Tried: a 300 KiB command (unparsable, denied, excerpt bounded), verbatim (`\\?\`) and mixed-case `cwd` spellings, `/./` segments, payloads that are not objects or carry wrong types, a NUL inside a command name, a held journal lock, an unwritable journal directory, a corrupt approval, a missing approval with a recorded hash, a broken floor and record together. All behaved; they are now `gate.rs::hostile_payloads_never_break_the_hook` and the AC 6 and AC 10 tests. A mutation that made the gate ignore the approved snapshot was first caught only by tests outside AC 5, because the D-15 fallback still denied; the AC 5 tests now also assert that no fault was journaled, and catch it.
+- **Not done: AC 18** (a deny inside an interactive session in bypass mode) needs the author's own interactive session with the hook registered; it is listed in `docs/backlog.md` (High) with the steps.
+
 ### Completion Notes
 
+- AC 1: `gate.rs::{pre_tool_use_is_never_appended, v0_1_events_are_still_appended}`; `hook.rs::appends_one_line_per_event_silently` iterates `doctor::BUFFERED_EVENTS`.
+- AC 2: `gate.rs::{guarded_raw_command_is_denied_with_the_verified_shape, run_call_gets_no_decision, free_project_gets_no_decision, undeclared_folder_gets_no_decision, non_bash_tool_gets_no_decision}` on the fixtures of `crates/officina/tests/data/pretooluse/`, whose field set `gate.rs::fixtures_carry_the_verified_field_set` holds to E15's.
+- AC 3: `gate.rs::every_default_guarded_program_is_denied`, iterating `DEFAULT_GUARDED_PROGRAMS`.
+- AC 4: `gate.rs::{cd_out_of_a_guarded_project_stays_guarded, cwd_inside_a_guarded_project_is_guarded_from_a_free_root, no_project_dir_falls_back_to_cwd}`; core `gate.rs::tests::either_directory_guards_the_call`.
+- AC 5: `gate.rs::{emptying_guarded_programs_does_not_lift_containment, dropping_a_program_from_the_floor_does_not_lift_it, setting_free_in_the_floor_does_not_lift_containment}`; core `gate.rs::tests::floor_and_snapshot_are_looked_up_separately_and_united`.
+- AC 6: `gate.rs::{corrupt_approved_json_guards_every_floor_project, missing_approved_after_an_approval_guards_every_floor_project, broken_floor_and_snapshot_fall_back_to_known_projects, nothing_readable_gives_no_decision}`; core `gate.rs::tests::{broken_snapshot_guards_every_floor_project_with_the_defaults, a_failed_floor_falls_back_to_the_known_projects, nothing_configured_guards_nothing_and_is_no_fault}`.
+- AC 7: host `relay/gate.rs::tests::{panic_gives_no_decision_and_records_gate_error, io_error_gives_no_decision}`, plus `an_unreachable_journal_does_not_change_the_answer`.
+- AC 8: `gate.rs::{reason_lists_approved_actions, reason_without_approval_names_floor_actions, relay_dir_in_a_command_is_denied}`; core `gate.rs::tests::unreadable_offer_points_to_doctor`.
+- AC 9: `crates/officina-host/tests/relay_journal.rs::{append_writes_one_line_under_the_lock_file, lock_held_past_2_s_times_out, reader_spans_two_days_and_counts_corrupt, unknown_kind_is_not_corrupt}`, plus `several_entries_go_in_one_append`; core `journal.rs::tests::{every_kind_round_trips_with_its_tag, absent_session_is_written_as_null, foreign_and_corrupt_lines_are_told_apart}` iterate `JournalKind::ALL`.
+- AC 10: `gate.rs::{deny_is_journaled_once, excerpt_dropped_when_excerpts_are_off, deny_stands_when_the_journal_lock_is_held}`.
+- AC 11: `crates/officina-host/tests/authority.rs::approval_is_journaled_once_with_previous_hash`, plus `a_locked_journal_approves_nothing`.
+- AC 12: `crates/officina/tests/fake_tool.rs::{logs_argv_cwd_and_env_keys, each_mode_behaves}`.
+- AC 13: `gate.rs::{invalid_pattern_does_not_affect_the_decision, gate_spawns_nothing}`.
+- AC 14: `doctor.rs::tests::{block_includes_pre_tool_use_only_with_a_guarded_project, pre_tool_use_without_the_matcher_is_missing}`; `quota_doctor.rs::{doctor_passes_once_the_block_is_merged, doctor_with_a_guarded_project_requires_pre_tool_use}`.
+- AC 15: `perf.rs::{gate_overhead_over_empty_process, gate_in_process_p95}` (`#[ignore]`, run by the CI release step); figures in the Debug Log.
+- AC 16: `perf.rs::journal_appends_never_interleave` (16 processes x 200 lines, each over 4096 bytes, zero corrupt).
+- AC 17: `quota_doctor.rs::no_command_writes_under_the_claude_config_dir` now runs a gate deny.
+- AC 18: open (see Debug Log).
+- Gates at the end of the story: `cargo fmt --all -- --check`; `cargo clippy --workspace --all-targets --all-features -- -D warnings` and with the CI feature set; `cargo test --workspace --all-features` 279 passed, 0 failed, 5 ignored; `cargo test --release -p officina --test perf -- --ignored` 5 passed; every intermediate commit clippy-clean on the Linux job's crate set. No board type changed (no TypeScript regeneration).
+
 ## File List
+
+- `crates/officina-core/src/relay/{mod,journal,classes,gate,shell}.rs`
+- `crates/officina-host/src/relay/{mod,journal,gate,authority}.rs`
+- `crates/officina-host/src/{doctor,writers}.rs`
+- `crates/officina-host/tests/{relay_journal,authority}.rs`
+- `crates/officina/Cargo.toml`
+- `crates/officina/src/main.rs`
+- `crates/officina/src/bin/officina-fake-tool.rs`
+- `crates/officina/tests/{gate,fake_tool,hook,perf,quota_doctor}.rs`
+- `crates/officina/tests/common/{mod,fake_output}.rs`
+- `crates/officina/tests/data/pretooluse/{bash-guarded-program,bash-officina-run,read-file}.json`
+- `README.md`, `CHANGELOG.md`, `docs/backlog.md`
 
 ## Change Log
 
 - 2026-10-27 created
 - 2026-10-27 reworked after review: D-14 (union of sources), D-15 (broken snapshot is stricter, known-projects fallback), D-16 (`CLAUDE_PROJECT_DIR` or `cwd`, E15), D-18 (conditional `PreToolUse`, buffered constant), D-19 (relative budget); fake tool moved here from story 2.5
+- 2026-10-28 implemented: journal types and locked append, approvals journaled, the fake tool, the gate in the hook with the union of sources and the broken-input fallbacks, doctor's conditional `PreToolUse`; the lexer made about 3.5 times faster to meet the gate budget; adversarial pass; status Review, AC 18 (manual) open
