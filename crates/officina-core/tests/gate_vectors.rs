@@ -10,8 +10,8 @@ use std::collections::HashSet;
 use officina_core::floor::parse_floor;
 use officina_core::relay::catalogue::{DEFAULT_GUARDED_PROGRAMS, guarded_programs};
 use officina_core::relay::gate::{
-    DenyKind, FILE_TOOLS, HOME_REDIRECTION_NAMES, OFFICINA_ENVIRONMENT_NAMES, SHELL_TOOLS,
-    decide_call, decide_file_write, file_tool_field, guarded_match, protected_dirs,
+    DenyKind, FILE_TOOLS, GateInputs, HOME_REDIRECTION_NAMES, OFFICINA_ENVIRONMENT_NAMES,
+    SHELL_TOOLS, decide_call, decide_file_write, file_tool_field, guarded_match, protected_dirs,
 };
 use officina_core::relay::shell;
 use serde::Deserialize;
@@ -104,9 +104,11 @@ fn every_case_matches() {
             (None, None) => decide_call(
                 case.tool(),
                 Some(&case.command),
-                list,
-                &dirs,
-                case.cwd_guarded,
+                &GateInputs {
+                    guarded_programs: list,
+                    protected_dirs: &dirs,
+                    cwd_guarded: case.cwd_guarded,
+                },
             ),
             _ => panic!(
                 "case {}: a target goes with a file tool, and only",

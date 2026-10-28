@@ -29,8 +29,8 @@ use officina_core::events::excerpt;
 use officina_core::floor::{parse_floor, requests_no_excerpts};
 use officina_core::quota::normalise_path;
 use officina_core::relay::gate::{
-    Deny, FloorInput, Offer, SnapshotInput, ToolRule, containment, decide_call, decide_file_write,
-    deny_reason, file_tool_field, normalise_cwd, protected_dirs, tool_rule,
+    Deny, FloorInput, GateInputs, Offer, SnapshotInput, ToolRule, containment, decide_call,
+    decide_file_write, deny_reason, file_tool_field, normalise_cwd, protected_dirs, tool_rule,
 };
 use officina_core::relay::journal::{
     COMMAND_EXCERPT_CHARS, GateDenied, GateError, GateFault, JournalEntry,
@@ -357,14 +357,12 @@ pub fn evaluate(home: &RelayHome, call: &ToolCall, project_dir: Option<&str>) ->
         &home.officina_home().to_string_lossy(),
         is_default_home(home),
     );
-    let deny = decide_call(
-        &call.tool,
-        call.command.as_deref(),
-        &contained.guarded_programs,
-        &protected,
-        true,
-    )
-    .map(|deny| GateDeny {
+    let inputs = GateInputs {
+        guarded_programs: &contained.guarded_programs,
+        protected_dirs: &protected,
+        cwd_guarded: true,
+    };
+    let deny = decide_call(&call.tool, call.command.as_deref(), &inputs).map(|deny| GateDeny {
         reason: deny_reason(&deny, &project.name, contained.offer_for(&project.name)),
         project: project.name.clone(),
         deny,
