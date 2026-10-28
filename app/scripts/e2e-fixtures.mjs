@@ -733,10 +733,15 @@ const triageChecks = (printed) => {
   ];
 };
 
-// Evidence (story 3.9, D-72): sessions ended and confirmed by the author
-// from their default proposal, a dry run of the disabled model on them
-// (answered by the fixture tool, no process started) and a call refused
-// before it started.
+// Evidence (stories 3.9 and 3.10, D-72), at explicit times: a nightly job
+// whose state proposals the author confirmed (two flipped, then fifty
+// kept), auto-archive turned on with its gate holding and three of the
+// job's later runs auto-archived (one over 7 days ago, two within them, the
+// last reopened since), the pass that then finds the gate broken; empty
+// subjects confirmed and flipped; sessions confirmed from their default
+// proposal; a dry run of the disabled model on them (answered by the
+// fixture tool, no process started) and a call refused before it started.
+const DAY = 24 * HOUR;
 const evidenceTasks = [
   ["Add CSV export to the invoice list", "finished", "finished"],
   ["Fix the rounding in the totals", "finished", "to_resume"],
@@ -745,18 +750,67 @@ const evidenceTasks = [
   ["Bump the chart library", "to_resume", "finished"],
   ["Rotate the logs", "to_resume", "timeout"],
 ];
-const evidenceEvents = evidenceTasks
-  .flatMap(([task], i) => {
+// The nightly job's runs: ids 500 and up; when each is reported done.
+const nightly = [
+  ...[0, 1].map((i) => ({ n: 500 + i, doneAt: now - 16 * DAY, verdict: "to_resume" })),
+  ...[...Array(50).keys()].map((i) => ({ n: 510 + i, doneAt: now - 15 * DAY, verdict: "finished" })),
+];
+const autoRuns = [
+  { n: 600, doneAt: now - 10 * DAY },
+  { n: 601, doneAt: now - 3 * DAY },
+  { n: 602, doneAt: now - 2 * DAY },
+];
+const nightlyAgent = ({ n, doneAt }) => ({
+  pid: 5000 + n,
+  id: `bg${String(n).padStart(4, "0")}`,
+  cwd: work("ops-nightly"),
+  kind: "background",
+  startedAt: doneAt - HOUR,
+  sessionId: sid(n),
+  name: `nightly-${n}`,
+  status: "idle",
+  state: "done",
+});
+const evidenceEvents = [
+  ...evidenceTasks.flatMap(([task], i) => {
     const at = now - 20 * HOUR + i * 30 * MIN;
     return [
       prompted(400 + i, "billing-api", at, task),
       stopped(400 + i, "billing-api", at + 5 * MIN, "Done, with tests."),
       ended(400 + i, "billing-api", at + 6 * MIN, "prompt_input_exit"),
     ];
-  })
-  .map((e) => ({ v: 1, ...e }));
+  }),
+  ...[...nightly, ...autoRuns].flatMap(({ n, doneAt }) => [
+    prompted(n, "ops-nightly", doneAt - HOUR, "Build the nightly usage report"),
+    stopped(n, "ops-nightly", doneAt - 30 * MIN, "Report built and saved."),
+  ]),
+].map((e) => ({ v: 1, ...e }));
+const nightlyStep = (run, verdict) => {
+  const subject = `nightly report ${run.n}`;
+  return [
+    { at: run.doneAt },
+    { agents: [nightlyAgent(run)] },
+    { author: { kind: "create", name: subject, origin: { sessions: [sid(run.n)] } } },
+    ...(verdict ? [{ at: run.doneAt + MIN }, { confirm: { key: `subject:SUBJECT(${subject})`, verdict } }] : []),
+  ];
+};
 const evidenceSteps = [
+  { at: now - 17 * DAY },
   "ingest",
+  ...nightly.flatMap((run) => nightlyStep(run, run.verdict)),
+  { at: now - 15 * DAY + HOUR },
+  { auto_archive: true },
+  ...autoRuns.flatMap((run) => [...nightlyStep(run, null), { at: run.doneAt + MIN }, "auto_archive_pass"]),
+  { at: now - DAY },
+  { author: { kind: "reopen", subject: "SUBJECT(nightly report 602)" } },
+  { at: now - 12 * HOUR },
+  "auto_archive_pass",
+  { at: now - 6 * HOUR },
+  { author: { kind: "create", name: "spike on caching", origin: { project: "billing-api" } } },
+  { author: { kind: "create", name: "spike on queues", origin: { project: "billing-api" } } },
+  { at: now - 5 * HOUR },
+  { confirm: { key: "subject:SUBJECT(spike on caching)", verdict: "finished" } },
+  { confirm: { key: "subject:SUBJECT(spike on queues)", verdict: "to_resume" } },
   { at: now - 2 * HOUR },
   ...evidenceTasks.map(([task, verdict], i) => ({
     confirm: { key: `session:${sid(400 + i)}`, verdict, file_under: { new: { name: task } } },
@@ -768,13 +822,39 @@ const evidenceSteps = [
 ];
 const evidenceChecks = (printed) => {
   const run = printed.model.latest_dry_run;
+  const rate = (source) => printed.rates.find((r) => r.source === source);
   return [
     [run !== null && run.tally.cases === evidenceTasks.length, "a dry run over every case"],
     [run !== null && run.tally.unanswered > 0 && run.tally.model_false_finished > 0, "unanswered and false finished cases"],
     [printed.model.calls.today.refused === 1 && printed.model.calls.refusals.length === 1, "a refused call with its cause"],
     [printed.model.enabled === false, "the model disabled"],
+    [rate("state").finished !== null && rate("state").finished.cases === 50 && rate("state").finished.flipped === 1, "a state source with one flip among its last 50 finished"],
+    [rate("rules").finished !== null && rate("rules").all.flipped > 0, "a rules source with empty subjects and flips"],
+    [rate("model").finished === null, "a source with no finished proposal"],
+    [printed.auto_archive.on === false && printed.auto_archive.reason === "too_many_flips" && printed.auto_archive.src === "rules", "auto-archive turned off by its broken gate"],
+    [printed.recent_auto_archives.length === 2 && printed.recent_auto_archives.some((a) => a.archived) && printed.recent_auto_archives.some((a) => a.reopened_at_ms !== null), "recent auto-archives, one reopened"],
   ];
 };
+
+// Subject ids follow creation order in a fresh registry: an author's
+// `create`, and a confirmation filing a session under a new subject. Steps
+// name a subject as `SUBJECT(<name>)`, resolved here to its id.
+function resolveSubjects(steps) {
+  const ids = new Map();
+  const created = (name) => ids.set(name, ids.size + 1);
+  const resolve = (text) =>
+    text.replace(/SUBJECT\(([^)]*)\)/g, (_, name) => {
+      if (!ids.has(name)) throw new Error(`no subject ${name} created before it is named`);
+      return String(ids.get(name));
+    });
+  return steps.map((step) => {
+    if (step?.author?.kind === "create") created(step.author.name);
+    if (step?.confirm?.file_under?.new) created(step.confirm.file_under.new.name);
+    const resolved = JSON.parse(resolve(JSON.stringify(step)));
+    if (typeof resolved?.author?.subject === "string") resolved.author.subject = Number(resolved.author.subject);
+    return resolved;
+  });
+}
 
 const registryScenarios = {
   subjects: { steps: subjectsSteps, checks: subjectsChecks },
@@ -806,7 +886,7 @@ for (const [name, scenario] of Object.entries(registryScenarios)) {
   }
   for (const [day, content] of byDay) writeFileSync(join(officinaHome, "events", `${day}.jsonl`), content);
   const steps = join(tmp, "steps.json");
-  writeFileSync(steps, JSON.stringify({ now_ms: now, steps: scenario.steps }));
+  writeFileSync(steps, JSON.stringify({ now_ms: now, steps: resolveSubjects(scenario.steps) }));
   execFileSync(registryFixture, [officinaHome, steps], { stdio: ["ignore", "ignore", "inherit"] });
 
   const fixture = join(tmp, "agents.json");

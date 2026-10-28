@@ -28,7 +28,11 @@
 //!   triage state, each case answered in turn as the list says, one call
 //!   per spacing, no process started (AD-52);
 //! - `{"refused_call": "<refusal>"}`: one call refused for that cause, as
-//!   the runner records it (D-65).
+//!   the runner records it (D-65);
+//! - `{"auto_archive": true | false}`: the author turns auto-archive on,
+//!   which must be accepted, or off (FR-12);
+//! - `"auto_archive_pass"`: one auto-archive pass, as the collector runs it
+//!   after a view build (D-70).
 //!
 //! Exit 0, 1 when a step fails, 64 on usage.
 
@@ -71,6 +75,8 @@ enum Step {
     Confirm(Confirmation),
     DryRun(Vec<String>),
     RefusedCall(TriageRefusal),
+    AutoArchive(bool),
+    AutoArchivePass,
 }
 
 /// A row the author confirms, as the window sends it, the proposal aside:
@@ -243,6 +249,21 @@ fn run(home: &Path, script: Script) -> Result<(), String> {
                 writer
                     .record_call(&result)
                     .map_err(|e| failed(e.to_string()))?;
+            }
+            Step::AutoArchive(on) => {
+                writer
+                    .set_auto_archive(on, now_ms)
+                    .map_err(|e| failed(e.to_string()))?
+                    .map_err(|state| failed(format!("auto-archive refused: {}", state.code())))?;
+            }
+            Step::AutoArchivePass => {
+                let run = writer
+                    .auto_archive(now_ms)
+                    .map_err(|e| failed(e.to_string()))?;
+                println!(
+                    "auto-archived {:?}, turned off: {:?}",
+                    run.archived, run.turned_off
+                );
             }
             Step::Damage => {
                 drop(writer);
