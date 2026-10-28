@@ -197,6 +197,175 @@
       "name": "issue: a placeholder inside a query value",
       "template": "https://monitoring.example.com/?q=prefix-{v}",
       "expect": {"issue": "partial_query_value"}
+    },
+    {
+      "name": "defensive: an @ in a value cannot become userinfo or a host",
+      "template": "https://monitoring.example.com/{v}",
+      "params": {"v": "user01@evil.example.com"},
+      "bound_to": ["monitoring.example.com"],
+      "expect": {"url": "https://monitoring.example.com/user01%40evil.example.com"},
+      "bound": true
+    },
+    {
+      "name": "defensive: a value of //host cannot become an authority",
+      "template": "https://monitoring.example.com/{v}/status",
+      "params": {"v": "//evil.example.com/x"},
+      "expect": {"url": "https://monitoring.example.com/%2F%2Fevil.example.com%2Fx/status"}
+    },
+    {
+      "name": "defensive: a UNC-like value of backslashes stays one segment",
+      "template": "https://monitoring.example.com/{v}",
+      "params": {"v": "\\\\evil.example.com\\share"},
+      "expect": {"url": "https://monitoring.example.com/%5C%5Cevil.example.com%5Cshare"}
+    },
+    {
+      "name": "defensive: a percent-encoded slash in a value is encoded again",
+      "template": "https://monitoring.example.com/api/{v}",
+      "params": {"v": "%2F%2Fevil.example.com"},
+      "expect": {"url": "https://monitoring.example.com/api/%252F%252Fevil.example.com"}
+    },
+    {
+      "name": "defensive: a half-encoded dot segment in a value is no dot segment",
+      "template": "https://monitoring.example.com/api/{v}",
+      "params": {"v": ".%2e"},
+      "expect": {"url": "https://monitoring.example.com/api/.%252e"}
+    },
+    {
+      "name": "defensive: a whole URL as a value cannot change the scheme, host or port",
+      "template": "https://monitoring.example.com/?next={v}",
+      "params": {"v": "http://evil.example.com:8080/"},
+      "expect": {"url": "https://monitoring.example.com/?next=http%3A%2F%2Fevil.example.com%3A8080%2F"}
+    },
+    {
+      "name": "defensive: a port-looking value stays in its segment",
+      "template": "https://monitoring.example.com/{v}",
+      "params": {"v": ":8443"},
+      "expect": {"url": "https://monitoring.example.com/%3A8443"}
+    },
+    {
+      "name": "defensive: an uppercase host keeps its spelling in the URL and binds as lowercase",
+      "template": "https://MONITORING.Example.com/{v}",
+      "params": {"v": "x"},
+      "bound_to": ["monitoring.example.com"],
+      "expect": {"url": "https://MONITORING.Example.com/x"},
+      "bound": true
+    },
+    {
+      "name": "defensive: an uppercase credential entry binds the lowercase host",
+      "template": "https://monitoring.example.com/x",
+      "bound_to": ["Monitoring.EXAMPLE.com"],
+      "expect": {"url": "https://monitoring.example.com/x"},
+      "bound": true
+    },
+    {
+      "name": "defensive: the port is ignored by the binding",
+      "template": "https://monitoring.example.com:8443/x",
+      "bound_to": ["monitoring.example.com"],
+      "expect": {"url": "https://monitoring.example.com:8443/x"},
+      "bound": true
+    },
+    {
+      "name": "defensive: a subdomain of a bound host is not bound",
+      "template": "https://api.monitoring.example.com/x",
+      "bound_to": ["monitoring.example.com"],
+      "expect": {"url": "https://api.monitoring.example.com/x"},
+      "bound": false
+    },
+    {
+      "name": "defensive: a host sharing a bound host's suffix is not bound",
+      "template": "https://evilmonitoring.example.com/x",
+      "bound_to": ["monitoring.example.com"],
+      "expect": {"url": "https://evilmonitoring.example.com/x"},
+      "bound": false
+    },
+    {
+      "name": "defensive: a credential entry with a port, a wildcard or a trailing dot binds nothing",
+      "template": "https://monitoring.example.com/x",
+      "bound_to": ["monitoring.example.com:443", "*.example.com", "monitoring.example.com."],
+      "expect": {"url": "https://monitoring.example.com/x"},
+      "bound": false
+    },
+    {
+      "name": "defensive: a trailing-dot host is refused",
+      "template": "https://monitoring.example.com./x",
+      "expect": {"issue": "host"}
+    },
+    {
+      "name": "defensive: an IDN host is refused; its punycode form is the one to write",
+      "template": "https://bücher.example.com/x",
+      "expect": {"issue": "host"}
+    },
+    {
+      "name": "defensive: a punycode host fills and binds as written",
+      "template": "https://xn--bcher-kva.example.com/{v}",
+      "params": {"v": "x"},
+      "bound_to": ["xn--bcher-kva.example.com"],
+      "expect": {"url": "https://xn--bcher-kva.example.com/x"},
+      "bound": true
+    },
+    {
+      "name": "defensive: a punycode host does not bind a credential entry in Unicode",
+      "template": "https://xn--bcher-kva.example.com/x",
+      "bound_to": ["bücher.example.com"],
+      "expect": {"url": "https://xn--bcher-kva.example.com/x"},
+      "bound": false
+    },
+    {
+      "name": "defensive: an IPv6 literal binds its lowercase entry",
+      "template": "https://[2001:DB8::1]:8443/{v}",
+      "params": {"v": "x"},
+      "bound_to": ["[2001:db8::1]"],
+      "expect": {"url": "https://[2001:DB8::1]:8443/x"},
+      "bound": true
+    },
+    {
+      "name": "defensive: another spelling of the same IPv6 address is not bound",
+      "template": "https://[2001:db8:0:0:0:0:0:1]/x",
+      "bound_to": ["[2001:db8::1]"],
+      "expect": {"url": "https://[2001:db8:0:0:0:0:0:1]/x"},
+      "bound": false
+    },
+    {
+      "name": "defensive: an IPv4-mapped IPv6 literal is a host of its own",
+      "template": "https://[::ffff:192.0.2.10]/x",
+      "bound_to": ["192.0.2.10"],
+      "expect": {"url": "https://[::ffff:192.0.2.10]/x"},
+      "bound": false
+    },
+    {
+      "name": "defensive: an IPv6 zone is refused",
+      "template": "https://[fe80::1%25eth0]/x",
+      "expect": {"issue": "host"}
+    },
+    {
+      "name": "defensive: an unclosed IPv6 literal is refused",
+      "template": "https://[::1/x",
+      "expect": {"issue": "host"}
+    },
+    {
+      "name": "defensive: an encoded @ before the host is still userinfo",
+      "template": "https://user01%40x@monitoring.example.com/",
+      "expect": {"issue": "userinfo"}
+    },
+    {
+      "name": "defensive: a backslash before an @ is still userinfo",
+      "template": "https://monitoring.example.com\\@evil.example.com/",
+      "expect": {"issue": "userinfo"}
+    },
+    {
+      "name": "defensive: a backslash in the host is refused",
+      "template": "https://monitoring.example.com\\evil/x",
+      "expect": {"issue": "host"}
+    },
+    {
+      "name": "defensive: an encoded slash in the host is refused",
+      "template": "https://monitoring.example.com%2fevil/x",
+      "expect": {"issue": "host"}
+    },
+    {
+      "name": "defensive: a scheme-relative template is malformed",
+      "template": "//monitoring.example.com/x",
+      "expect": {"issue": "malformed"}
     }
   ]
 }
