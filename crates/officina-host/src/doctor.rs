@@ -7,7 +7,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use officina_core::contract::check_agents;
-use officina_core::dates::{dated_file_day, day_start_ms, utc_date};
+use officina_core::dates::{DAY_MS, dated_file_day, day_start_ms, utc_date};
 use officina_core::floor::{Autonomy, parse_floor};
 use officina_core::quota::STALE_AFTER_MS;
 use officina_core::registry::model::PAUSE_AFTER_FAILED_CALLS;
@@ -15,6 +15,7 @@ use officina_core::registry::triage_call::{
     COUNT_WINDOW_MS, CallCounts, count_calls, refusal_for_binary,
 };
 use officina_core::registry::types::RegistryState;
+use officina_core::registry::view::RESTORE_NOTICE_MS;
 use officina_core::relay::gate::gated_tools;
 
 use crate::claude;
@@ -542,9 +543,6 @@ fn check_officina_home(home: &Path) -> Check {
     }
 }
 
-/// How long a restore stays a warning: as long as the view shows it (D-93).
-const RESTORE_NOTICE_MS: i64 = 7 * 86_400_000;
-
 /// More event files than this waiting for ingestion or deletion is a
 /// warning (AD-44, R21): normally today's, yesterday's and the two before
 /// them, until both kept copies hold them.
@@ -635,7 +633,7 @@ pub fn check_registry(officina_home: &Path, onedrive_roots: &[PathBuf], now: i64
                 "no daily copy yet: the window takes one each day it runs",
             ),
             Some(newest) => {
-                let age = (day_start_ms(utc_date(now)) - day_start_ms(newest.day)) / 86_400_000;
+                let age = (day_start_ms(utc_date(now)) - day_start_ms(newest.day)) / DAY_MS;
                 let (y, m, d) = newest.day;
                 check(
                     Level::Ok,
@@ -1180,7 +1178,7 @@ mod tests {
     }
 
     const NOW: i64 = 1_793_102_400_000;
-    const DAY: i64 = 86_400_000;
+    const DAY: i64 = DAY_MS;
 
     /// A registry of schema 1 at `version` under `home`, written without the
     /// window's writer, which this test build may not hold.

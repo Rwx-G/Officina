@@ -645,8 +645,7 @@ impl Writer {
     /// The budget at `now_ms`, from the calls of the last day (AD-52): it
     /// survives restarts since it is read from the rows.
     pub fn budget(&self, now_ms: i64) -> Result<Budget, RegistryError> {
-        const DAY_MS: i64 = 86_400_000;
-        let calls = read::triage_calls_since(&self.conn, now_ms - DAY_MS)?;
+        let calls = read::triage_calls_since(&self.conn, now_ms - officina_core::dates::DAY_MS)?;
         Ok(budget(&calls, now_ms))
     }
 

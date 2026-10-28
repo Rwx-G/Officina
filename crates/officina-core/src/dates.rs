@@ -1,14 +1,18 @@
 //! UTC civil dates for event file names (AD-9). Local dates would need a
 //! timezone database; the 24 h reading window is exact with UTC files too.
 
-const MS_PER_DAY: i64 = 86_400_000;
+/// One hour, in milliseconds: the one copy every module uses.
+pub const HOUR_MS: i64 = 3_600_000;
+
+/// One day, in milliseconds: the one copy every module uses.
+pub const DAY_MS: i64 = 24 * HOUR_MS;
 
 /// `(year, month, day)` of the UTC day containing `unix_ms`.
 ///
 /// Howard Hinnant's `civil_from_days`, valid for the whole `i64` day range
 /// Officina can meet.
 pub fn utc_date(unix_ms: i64) -> (i64, u32, u32) {
-    let days = unix_ms.div_euclid(MS_PER_DAY);
+    let days = unix_ms.div_euclid(DAY_MS);
     let z = days + 719_468;
     let era = z.div_euclid(146_097);
     let doe = z.rem_euclid(146_097);
@@ -70,7 +74,7 @@ pub fn day_start_ms(day: (i64, u32, u32)) -> i64 {
     let mp = i64::from(if m > 2 { m - 3 } else { m + 9 });
     let doy = (153 * mp + 2) / 5 + i64::from(d) - 1;
     let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    (era * 146_097 + doe - 719_468) * MS_PER_DAY
+    (era * 146_097 + doe - 719_468) * DAY_MS
 }
 
 /// Event file name for the UTC day containing `unix_ms`: `YYYY-MM-DD.jsonl`.
@@ -85,10 +89,7 @@ pub fn event_file_name(unix_ms: i64) -> String {
 /// The event files a reader needs at `now_ms`: yesterday's and today's, in
 /// that order, so the last 24 h are always covered.
 pub fn event_files_to_read(now_ms: i64) -> [String; 2] {
-    [
-        event_file_name(now_ms - MS_PER_DAY),
-        event_file_name(now_ms),
-    ]
+    [event_file_name(now_ms - DAY_MS), event_file_name(now_ms)]
 }
 
 /// The UTC day a `YYYY-MM-DD.jsonl` file name stands for; `None` for any
@@ -110,7 +111,7 @@ pub fn dated_file_day(name: &str) -> Option<(i64, u32, u32)> {
 /// assert!(!is_dated_file_older_than(".lock", now, 1));
 /// ```
 pub fn is_dated_file_older_than(name: &str, now_ms: i64, days: i64) -> bool {
-    dated_file_day(name).is_some_and(|day| day < utc_date(now_ms - days * MS_PER_DAY))
+    dated_file_day(name).is_some_and(|day| day < utc_date(now_ms - days * DAY_MS))
 }
 
 /// True when an event file name is older than yesterday (UTC) and may be
@@ -139,16 +140,13 @@ mod tests {
     fn every_day_of_a_leap_cycle_round_trips_in_order() {
         let mut previous = utc_date(0);
         for day in 1..(366 * 4 + 1) {
-            let current = utc_date(day * MS_PER_DAY);
+            let current = utc_date(day * DAY_MS);
             assert!(current > previous, "{current:?} after {previous:?}");
-            assert_eq!(day_start_ms(current), day * MS_PER_DAY);
-            assert_eq!(
-                parse_utc_day(&utc_day_text(day * MS_PER_DAY)),
-                Some(current)
-            );
+            assert_eq!(day_start_ms(current), day * DAY_MS);
+            assert_eq!(parse_utc_day(&utc_day_text(day * DAY_MS)), Some(current));
             previous = current;
         }
-        assert_eq!(day_start_ms(utc_date(-1)), -MS_PER_DAY);
+        assert_eq!(day_start_ms(utc_date(-1)), -DAY_MS);
     }
 
     #[test]

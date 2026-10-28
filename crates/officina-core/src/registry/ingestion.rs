@@ -6,7 +6,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::dates::{dated_file_day, day_start_ms, utc_date};
+use crate::dates::{DAY_MS, dated_file_day, day_start_ms, utc_date};
 use crate::events::{EXCERPT_CHARS, EventLine, MAX_LINE_BYTES, excerpt, tail_excerpt};
 use crate::quota::normalise_path;
 
@@ -26,8 +26,6 @@ pub const COMPLETE_GRACE_MS: i64 = 60_000;
 /// The folder, under the Officina home, where the triage call runs (AD-51);
 /// lines from it are never ingested (AD-43).
 pub const TRIAGE_DIR: &str = "triage";
-
-const DAY_MS: i64 = 86_400_000;
 
 /// True when the event file `name`, read to its end at `now_ms`, is
 /// complete: dated before today and past the grace after the end of its

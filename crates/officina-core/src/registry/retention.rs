@@ -3,10 +3,7 @@
 
 use std::collections::BTreeSet;
 
-use crate::dates::{day_start_ms, is_expired_event_file};
-
-const HOUR_MS: i64 = 3_600_000;
-const DAY_MS: i64 = 24 * HOUR_MS;
+use crate::dates::{DAY_MS, HOUR_MS, day_start_ms, is_expired_event_file};
 
 /// No excerpt survives this long, in the registry or in a copy of it
 /// (FR-4 as amended).

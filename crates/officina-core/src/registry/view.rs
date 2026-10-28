@@ -8,6 +8,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 use crate::board::{Badge, Board, Card, Column, SessionKindView};
+use crate::dates::DAY_MS;
 
 use super::dry_run::{DryRunProgress, DryRunState, DryRunStop, Evaluation};
 use super::filing::excerpt_time;
@@ -29,7 +30,7 @@ pub const REGISTRY_VIEW_SCHEMA: u32 = 1;
 
 /// How long the view names the copy a damaged registry was restored from
 /// (D-93).
-pub const RESTORE_NOTICE_MS: i64 = 7 * 86_400_000;
+pub const RESTORE_NOTICE_MS: i64 = 7 * DAY_MS;
 
 /// How many non-interactive runs each project lists, newest first; the
 /// rest are counted (D-96).

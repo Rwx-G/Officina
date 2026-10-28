@@ -130,7 +130,7 @@ pub fn now_ms() -> i64 {
 mod tests {
     use super::*;
 
-    const DAY: i64 = 86_400_000;
+    const DAY: i64 = officina_core::dates::DAY_MS;
     const NOW: i64 = 1_793_102_400_000;
 
     fn line(ts: i64, event: &str) -> String {

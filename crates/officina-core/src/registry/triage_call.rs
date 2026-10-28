@@ -11,7 +11,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::agents::is_cmd_shim;
-use crate::dates::{day_start_ms, utc_date};
+use crate::dates::{DAY_MS, HOUR_MS, day_start_ms, utc_date};
 use crate::events::{EXCERPT_CHARS, excerpt, tail_excerpt};
 use crate::relay::params::is_forbidden_format;
 
@@ -140,9 +140,6 @@ pub const CALLS_PER_DAY: usize = 300;
 
 /// The window the view and doctor count calls over, beside today (AD-52).
 pub const COUNT_WINDOW_MS: i64 = 30 * DAY_MS;
-
-const HOUR_MS: i64 = 3_600_000;
-const DAY_MS: i64 = 24 * HOUR_MS;
 
 /// The schema `--json-schema` constrains the answer with (AD-51): a
 /// `verdict` among [`ModelVerdict::ALL`] and a `reason` of 1 to

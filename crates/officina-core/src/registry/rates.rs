@@ -8,13 +8,12 @@
 //! travel in the view (AD-5), each gate with the count it needs, so the
 //! panel and the switches read the same numbers (AD-38).
 
+use crate::dates::DAY_MS;
 use serde::{Deserialize, Serialize};
 
 use super::dry_run::Evaluation;
 use super::proposal::Proposal;
 use super::types::{ModelVerdict, ProposalSource, Verdict};
-
-const DAY_MS: i64 = 86_400_000;
 
 /// Each rate rests on a source's last this many counted confirmations.
 pub const RATE_WINDOW: usize = 50;
