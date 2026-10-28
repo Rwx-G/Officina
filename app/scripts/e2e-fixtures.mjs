@@ -197,6 +197,16 @@ values = ["web01"]
 name = "<b>bad</b>"
 class = "free"
 program = "relative.exe"
+
+[[action]]
+name = "status"
+description = "Service status on one host"
+class = "free"
+program = "C:/Windows/System32/OpenSSH/ssh.exe"
+args = ["web01", "systemctl", "status", "{unit}"]
+
+[action.params.unit]
+values = ["nginx.service"]
 `;
 
 // The floor edited again after the window displayed the pending change.

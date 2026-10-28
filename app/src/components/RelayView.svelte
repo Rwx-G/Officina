@@ -74,6 +74,16 @@
           {/each}
         </ul>
       {/if}
+      {#if relay.notices.length > 0}
+        <h3>Values a program reads</h3>
+        <ul class="issues">
+          {#each relay.notices as notice, i (i)}
+            <li data-testid="relay-notice" data-kind={notice.kind}>
+              <strong>{notice.action}</strong>, parameter {notice.param}: {notice.explanation}
+            </li>
+          {/each}
+        </ul>
+      {/if}
     </section>
 
     <section class="block" data-testid="relay-catalogue" aria-labelledby="relay-catalogue-title">

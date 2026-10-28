@@ -87,6 +87,19 @@ test.describe("catalogue approval", () => {
     expect(await approvals(page)).toEqual([{ hash: shown.pending!.hash }, { hash: again.pending!.hash }]);
   });
 
+  test("the banner lists catalogue notices", async ({ page }) => {
+    const pending = loadRelay("relay-pending");
+    expect(pending.notices.length).toBeGreaterThan(0);
+    await open(page, pending);
+    const items = page.getByTestId("catalogue-banner").getByTestId("catalogue-notice");
+    await expect(items).toHaveCount(pending.notices.length);
+    for (const [i, notice] of pending.notices.entries()) {
+      await expect(items.nth(i)).toHaveAttribute("data-kind", notice.kind);
+      await expect(items.nth(i)).toContainText(notice.action);
+      await expect(items.nth(i)).toContainText(notice.explanation);
+    }
+  });
+
   test("no key approves", async ({ page }) => {
     await open(page, loadRelay("relay-pending"));
     const approve = page.getByTestId("approve-catalogue");

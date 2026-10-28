@@ -11,8 +11,8 @@
 
   interface Props {
     store: RelayStore;
-    /** The banner lists the floor's issues; the Relay view has its own
-     *  section for them. */
+    /** The banner lists the floor's notices and issues; the Relay view has
+     *  its own section for them. */
     showIssues?: boolean;
   }
   let { store, showIssues = true }: Props = $props();
@@ -168,6 +168,17 @@
         {/each}
         {#each diff.credentials.removed as name (name)}
           <li data-testid="credential-removed" data-name={name}><strong>{name}</strong> removed</li>
+        {/each}
+      </ul>
+    {/if}
+
+    {#if showIssues && relay.notices.length > 0}
+      <h3>Values a program reads</h3>
+      <ul class="changes" data-testid="catalogue-notices">
+        {#each relay.notices as notice, i (i)}
+          <li data-testid="catalogue-notice" data-kind={notice.kind}>
+            <strong>{notice.action}</strong>, parameter {notice.param}: {notice.explanation}
+          </li>
         {/each}
       </ul>
     {/if}
