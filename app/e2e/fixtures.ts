@@ -114,6 +114,8 @@ export async function openBoard(
 ): Promise<void> {
   await load(page, board, focus, relay, registry);
   if (board) await page.getByTestId("column-needs_you").waitFor();
+  // The board fades in once it arrives (D-545): measured settled.
+  await transitionsDone(page);
 }
 
 /** The scale the scene should have in its sessions area, from geometry.ts
@@ -157,6 +159,7 @@ export async function openScene(
 ): Promise<void> {
   await load(page, board, focus, relay, registry, { [VIEW_STORAGE_KEY]: serialiseViewState({ ...defaultViewState(), base: "scene" }) });
   await sceneSettled(page);
+  await transitionsDone(page);
 }
 
 /** Waits for the window's transitions to end (story 4.15, D-545): the
