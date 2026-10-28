@@ -20,7 +20,6 @@ export type Scenario =
   | "triage-board"
   | "evidence-board"
   | "model-board"
-  | "model-paused-board"
   | "contract-hook-missing";
 
 /** Registry views printed by `officina subjects --json` after the

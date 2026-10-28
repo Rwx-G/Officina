@@ -917,15 +917,17 @@ function resolveSubjects(steps) {
   });
 }
 
+// `board: true` writes the scenario's board too, for the specs that open
+// it; every scenario's board is still printed for its checks.
 const registryScenarios = {
-  subjects: { steps: subjectsSteps, checks: subjectsChecks },
+  subjects: { steps: subjectsSteps, checks: subjectsChecks, board: true },
   // AD-39: the home lies under a sync client's folder marker.
   "subjects-synced": { steps: subjectsSteps, synced: true, checks: subjectsChecks },
   // D-93: a daily copy, then the database damaged and restored from it.
   "subjects-restored": { steps: [...subjectsSteps, "copy", "damage"], checks: subjectsChecks },
-  triage: { steps: triageSteps, events: triageEvents, agents: triageAgents, checks: triageChecks },
-  evidence: { steps: evidenceSteps, events: evidenceEvents, agents: [], checks: evidenceChecks },
-  model: { steps: modelSteps, events: modelEvents, agents: [], checks: modelOpenChecks },
+  triage: { steps: triageSteps, events: triageEvents, agents: triageAgents, checks: triageChecks, board: true },
+  evidence: { steps: evidenceSteps, events: evidenceEvents, agents: [], checks: evidenceChecks, board: true },
+  model: { steps: modelSteps, events: modelEvents, agents: [], checks: modelOpenChecks, board: true },
   "model-paused": {
     steps: [
       ...modelSteps,
@@ -987,7 +989,7 @@ for (const [name, scenario] of Object.entries(registryScenarios)) {
     if (!held) throw new Error(`${name}: expected ${what}: ${view.stdout}`);
   }
   writeFileSync(join(outDir, `${name}.json`), view.stdout);
-  writeFileSync(join(outDir, `${name}-board.json`), board.stdout);
+  if (scenario.board) writeFileSync(join(outDir, `${name}-board.json`), board.stdout);
   rmSync(tmp, { recursive: true, force: true });
   console.log(`fixture ${name}: exit ${view.status}, board exit ${board.status}`);
 }
