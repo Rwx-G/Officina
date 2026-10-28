@@ -1,6 +1,6 @@
 # Story 2.5: `officina run` and `run --list`
 
-**Status:** Approved
+**Status:** Review
 
 ## Story
 
@@ -29,12 +29,12 @@ so that I can do the author's routine actions myself and every run is journaled.
 
 ## Tasks
 
-- [ ] Core: refusal-reason enum with `ALL`, class decision for `free`, run plan (checks in order) as pure functions (AC 2, 3, 5)
-- [ ] Host `relay::run`: checks, launch build via core `argv`, spawn, `try_wait` every 50 ms (AD-3), reader threads with shared budget and SHA-256, journal lines (AC 2-13)
-- [ ] `platform/windows.rs`: job object create, assign self, terminate; `GetSystemDirectoryW`; `windows-sys` features of addendum section 2 (AC 7, 11)
-- [ ] `officina run` and `run --list` in `crates/officina/src/main.rs`; update `USAGE` (AC 1, 15)
-- [ ] `crates/officina/tests/run.rs` using `officina-fake-tool` (story 2.4); extend the zero-write test (AC 1-16)
-- [ ] Update `CHANGELOG.md` `[Unreleased]` and the README relay section (`officina run`, exit codes) (D-34)
+- [x] Core: refusal-reason enum with `ALL`, class decision for `free`, run plan (checks in order) as pure functions (AC 2, 3, 5)
+- [x] Host `relay::run`: checks, launch build via core `argv`, spawn, `try_wait` every 50 ms (AD-3), reader threads with shared budget and SHA-256, journal lines (AC 2-13)
+- [x] `platform/windows.rs`: job object create, assign self, terminate; `GetSystemDirectoryW`; `windows-sys` features of addendum section 2 (AC 7, 11)
+- [x] `officina run` and `run --list` in `crates/officina/src/main.rs`; update `USAGE` (AC 1, 15)
+- [x] `crates/officina/tests/run.rs` using `officina-fake-tool` (story 2.4); extend the zero-write test (AC 1-16)
+- [x] Update `CHANGELOG.md` `[Unreleased]` and the README relay section (`officina run`, exit codes) (D-34)
 
 ## Dev Notes
 
@@ -58,11 +58,59 @@ so that I can do the author's routine actions myself and every run is journaled.
 
 ### Debug Log
 
+- **Decisions where the documents are silent**, each the reading that fails closed or matches the architecture:
+  - Refusal codes (`RefusalReason`, a closed enum with the journal's types): `stopped`, `not_approved`, `approved_unreadable`, `floor_unreadable`, `catalogue_changed`, `outside_projects`, `action_not_allowed`, `missing_parameter`, `unknown_parameter`, `invalid_value`, `class_not_available`. AD-29's step 2 and step 5 each split into the cases a session can act on differently.
+  - Two refusals cannot leave a journal line and are not in the enum: a journal that stays locked (AC 13, `journal_unavailable`) and no Officina home (`no_home`). Both exit 126 with one stderr line.
+  - The stderr line is `officina: refused: <why> (<code>)`, on one line (a quoted TOML error is folded), and never echoes a refused value, only parameter names.
+  - Two approved projects with one path: the first by name that lists the action serves it.
+  - The output budget is shared first come, first served; the cut line goes last on stdout, after a newline when stdout did not end with one. After the program exits, its streams get 500 ms to close; a process it left holding them ends with the tree.
+  - `spawn_failed` carries the start error in `detail`. A failure of `try_wait` itself (never seen) journals `exited` without a code and exits 1.
+  - `--wait` is a usage error until story 2.8 adds it; `run --list` exits 0 whatever it says.
+  - `CreateJobObjectW` is declared in `platform/windows.rs`: windows-sys gates it behind `Win32_Security` only for the security-attributes pointer type, which Officina passes null, and the addendum does not list that feature.
+  - If `officina run` cannot put itself in the job, the child is put in it right after it starts (best effort, the AD-31 race accepted in that case only).
+  - The collector's `claude` call uses the same job helper without kill-on-close: a timeout terminates the job, but a process `claude` leaves running after it answered (a background-session supervisor) is not Officina's to end. What `claude` starts in the instant before the assignment escapes it.
+  - The fake tool gains an `orphan` mode beyond AD-37's list, and the fake claude a `tree` mode, for the two adversarial and backlog tests below.
+  - A command-line argument that is not Unicode is a usage error (64) instead of the panic `std::env::args` raised; `officina hook` still exits 0 whatever follows it.
+  - The tests turn each `argv.json` action into TOML with a small emitter (JSON string escapes are TOML's), so the `officina` crate takes no `toml` dev-dependency.
+- **Found by the tests, fixed before commit.** With `officina run` in its own kill-on-close job, a plain exit let the job end the exiting process a second time and replace the program's exit code with 0 (`exit_code_passes_through`, `full_windows_exit_code_passes_through`, `missing_program_exits_127` all read 0). `officina run` now ends its tree with the program's code (`TerminateJobObject(job, code)`), as the timeout path does with 124. A refusal quoting a TOML parse error printed six stderr lines (`every_refusal_code_exits_126_with_one_journal_line`); details are now folded to one line in core.
+- **Adversarial pass.** Tried: a program that exits at once leaving a process holding its output, eight concurrent runs on one journal, a run killed mid-way (abandoned: a start line, no end), a stop flag that is a folder or unreadable, a value carrying a shell command, a NUL (Windows cannot carry it on a command line), every refusal of the vector set, `PATH` and `SYSTEMROOT` pointing at a planted `wsl.exe`, and output past the budget with both streams. The first two are new tests (`a_process_left_behind_neither_holds_nor_outlives_the_run`, `concurrent_runs_each_journal_one_start_and_one_end`), the value one a core test (`a_refusal_never_echoes_the_value`); the others are AC tests. A mutation that removed the collector's job terminate made `a_timed_out_claude_stops_with_every_process_it_started` fail.
+- **WSL leg (AC 10).** Ran on the workstation against the first installed distro (Debian): every accepted `wsl` case of `argv.json` arrived byte for byte at `/bin/bash -c 'printf "%s\0" "$@"'`. Hosted runners without a distro print why they skip.
+
 ### Completion Notes
 
+- AC 1: `crates/officina/tests/run.rs::{token_without_equals_is_usage, duplicate_parameter_is_usage, missing_action_is_usage}`; host `relay/run.rs::tests::arguments_split_at_the_first_equals`.
+- AC 2: `run.rs::{checks_run_in_the_documented_order, free_project_listing_the_action_is_served}`; core `relay/run.rs::tests::checks_fail_in_the_documented_order`.
+- AC 3: `run.rs::every_refusal_code_exits_126_with_one_journal_line`, iterating `RefusalReason::ALL` through `scenario`, whose `match` is exhaustive.
+- AC 4: `run.rs::stop_flag_written_by_hand_refuses`; host `relay/home.rs::tests::metadata_error_other_than_not_found_is_stopped` on `home::is_stopped`.
+- AC 5: `run.rs::{free_action_runs, after_check_and_human_are_not_available_yet}`; core `classes.rs::tests::only_free_runs_in_this_build`.
+- AC 6: `run.rs::{exit_code_passes_through, full_windows_exit_code_passes_through, missing_program_exits_127}`.
+- AC 7: `run.rs::{timeout_exits_124_and_the_tree_stops, killing_run_stops_the_grandchild}`.
+- AC 8: `run.rs::{output_is_capped_and_drained, hashes_cover_all_bytes}`.
+- AC 9: `run.rs::every_argv_injection_is_refused_before_launch`.
+- AC 10: `run.rs::{every_accepted_native_case_arrives_intact, every_accepted_wsl_case_arrives_intact}`.
+- AC 11: `run.rs::{native_launch_gets_cwd_env_and_null_stdin, wsl_program_comes_from_the_system_directory}`; host `relay/run.rs::tests::wsl_command_removes_wslenv`.
+- AC 12: `run.rs::outer_deadline_precedes_the_inner_timeout`.
+- AC 13: `run.rs::{run_leaves_one_start_and_one_finish_line, journal_lock_timeout_refuses_before_spawn}`.
+- AC 14: `run.rs::session_id_from_env_or_null`.
+- AC 15: `run.rs::{list_prints_the_projects_approved_actions, list_marks_unavailable_classes, list_outside_every_project, list_reports_stop_and_pending_change}`; core `relay/run.rs::tests::list_states_what_blocks_and_marks_unavailable_classes`.
+- AC 16: `crates/officina/tests/quota_doctor.rs::no_command_writes_under_the_claude_config_dir` now runs `run` and `run --list`.
+- Backlog Low item (a timed-out `claude` killed only as the direct child) closed: `crates/officina/tests/board.rs::a_timed_out_claude_stops_with_every_process_it_started`.
+- Gates at the end of the story: `cargo fmt --all -- --check`; `cargo clippy --workspace --all-targets --all-features -- -D warnings` and with the CI feature set; `cargo test --workspace --all-features` 319 passed, 0 failed, 5 ignored (`run.rs` 31); `cargo test --release -p officina --test perf -- --ignored` 5 passed; `cargo deny check` clean (only the existing duplicate-version warnings); the shipped `officina.exe` built alone holds no authority marker and imports no `user32.dll`; each intermediate commit clippy-clean. No board type changed.
+
 ## File List
+
+- `crates/officina-core/src/relay/{mod,run,classes}.rs`
+- `crates/officina-host/Cargo.toml` (windows-sys features `Win32_System_JobObjects`, `Win32_System_SystemInformation`)
+- `crates/officina-host/src/platform/windows.rs`
+- `crates/officina-host/src/relay/{mod,home,run}.rs`
+- `crates/officina-host/src/claude.rs`
+- `crates/officina/src/main.rs`
+- `crates/officina/src/bin/{officina-fake-tool,officina-fake-claude}.rs`
+- `crates/officina/tests/{run,board,quota_doctor}.rs`
+- `README.md`, `CHANGELOG.md`, `docs/backlog.md`
 
 ## Change Log
 
 - 2026-10-27 created
 - 2026-10-27 reworked after review: fake tool moved to story 2.4; D-6 (`WSLENV`, inner timeout margin), D-21 (free projects served, `--list`), argument fidelity through the fake tool and WSL, stop flag written by hand
+- 2026-10-28 implemented: the checks as pure functions, `officina run` and `run --list` with the job object, output budget and hashes, the journal lines; the collector's `claude` call ends its tree on timeout (backlog item closed); adversarial pass; status Review

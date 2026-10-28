@@ -28,7 +28,7 @@ stories:
   - {id: "2.2", file: story-2.2-catalogue-approval-core.md, slice: A, status: review}
   - {id: "2.3", file: story-2.3-command-lexer-and-gate.md, slice: A, status: review}
   - {id: "2.4", file: story-2.4-gate-in-the-hook.md, slice: A, status: review}
-  - {id: "2.5", file: story-2.5-officina-run.md, slice: A, status: approved}
+  - {id: "2.5", file: story-2.5-officina-run.md, slice: A, status: review}
   - {id: "2.6", file: story-2.6-after-check-and-relay-view.md, slice: A, status: approved}
   - {id: "2.7", file: story-2.7-window-catalogue-approval.md, slice: A, status: approved}
   - {id: "2.8", file: story-2.8-approvals-and-class-human.md, slice: B, status: approved}
