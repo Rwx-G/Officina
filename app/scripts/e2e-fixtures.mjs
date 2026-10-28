@@ -733,6 +733,49 @@ const triageChecks = (printed) => {
   ];
 };
 
+// Evidence (story 3.9, D-72): sessions ended and confirmed by the author
+// from their default proposal, a dry run of the disabled model on them
+// (answered by the fixture tool, no process started) and a call refused
+// before it started.
+const evidenceTasks = [
+  ["Add CSV export to the invoice list", "finished", "finished"],
+  ["Fix the rounding in the totals", "finished", "to_resume"],
+  ["Investigate the flaky retry test", "to_resume", "to_resume"],
+  ["Draft the release notes", "finished", "unsure"],
+  ["Bump the chart library", "to_resume", "finished"],
+  ["Rotate the logs", "to_resume", "timeout"],
+];
+const evidenceEvents = evidenceTasks
+  .flatMap(([task], i) => {
+    const at = now - 20 * HOUR + i * 30 * MIN;
+    return [
+      prompted(400 + i, "billing-api", at, task),
+      stopped(400 + i, "billing-api", at + 5 * MIN, "Done, with tests."),
+      ended(400 + i, "billing-api", at + 6 * MIN, "prompt_input_exit"),
+    ];
+  })
+  .map((e) => ({ v: 1, ...e }));
+const evidenceSteps = [
+  "ingest",
+  { at: now - 2 * HOUR },
+  ...evidenceTasks.map(([task, verdict], i) => ({
+    confirm: { key: `session:${sid(400 + i)}`, verdict, file_under: { new: { name: task } } },
+  })),
+  { at: now - HOUR },
+  { dry_run: evidenceTasks.map(([, , answer]) => answer).reverse() },
+  { at: now - 30 * MIN },
+  { refused_call: "cmd_shim" },
+];
+const evidenceChecks = (printed) => {
+  const run = printed.model.latest_dry_run;
+  return [
+    [run !== null && run.tally.cases === evidenceTasks.length, "a dry run over every case"],
+    [run !== null && run.tally.unanswered > 0 && run.tally.model_false_finished > 0, "unanswered and false finished cases"],
+    [printed.model.calls.today.refused === 1 && printed.model.calls.refusals.length === 1, "a refused call with its cause"],
+    [printed.model.enabled === false, "the model disabled"],
+  ];
+};
+
 const registryScenarios = {
   subjects: { steps: subjectsSteps, checks: subjectsChecks },
   // AD-39: the home lies under a sync client's folder marker.
@@ -740,6 +783,7 @@ const registryScenarios = {
   // D-93: a daily copy, then the database damaged and restored from it.
   "subjects-restored": { steps: [...subjectsSteps, "copy", "damage"], checks: subjectsChecks },
   triage: { steps: triageSteps, events: triageEvents, agents: triageAgents, checks: triageChecks },
+  evidence: { steps: evidenceSteps, events: evidenceEvents, agents: [], checks: evidenceChecks },
 };
 
 function officinaJson(args, env) {

@@ -17,7 +17,18 @@
 //! - `{"hook_fields": "<claude version>"}`: one ingestion pass, whose hook
 //!   sightings are folded into that version's record of
 //!   `state/contract.json`, as the window folds them (AD-56); the record
-//!   must exist already (`officina board --json` starts it).
+//!   must exist already (`officina board --json` starts it);
+//! - `{"at": <ms>}`: the steps after it run at that time instead of
+//!   `now_ms`;
+//! - `{"confirm": {"key", "verdict", "routine", "file_under"}}`: the author
+//!   confirms the row of that key with the proposal the view shows now,
+//!   which must be confirmed (AD-49);
+//! - `{"dry_run": ["finished" | "to_resume" | "unsure" | "timeout" |
+//!   "invalid", ...]}`: a dry run started and driven through the window's
+//!   triage state, each case answered in turn as the list says, one call
+//!   per spacing, no process started (AD-52);
+//! - `{"refused_call": "<refusal>"}`: one call refused for that cause, as
+//!   the runner records it (D-65).
 //!
 //! Exit 0, 1 when a step fails, 64 on usage.
 
@@ -25,12 +36,17 @@ use std::path::Path;
 use std::process::ExitCode;
 
 use officina_core::agents::parse_agents;
-use officina_core::registry::confirm::AuthorAction;
+use officina_core::registry::confirm::{AuthorAction, FileUnder, ItemOutcome};
 use officina_core::registry::fold::AgentsSnapshot;
+use officina_core::registry::triage_call::{CALL_SPACING_MS, CallAnswer, CallUsage, TriageCase};
+use officina_core::registry::types::{
+    ModelVerdict, TriageOutcome, TriagePurpose, TriageRefusal, Verdict,
+};
 use officina_host::collector::record_hook_fields;
 use officina_host::registry::RegistryPaths;
 use officina_host::registry::ingest::IngestContext;
 use officina_host::registry::store::{Writer, open_writer};
+use officina_host::registry::triage::{CallResult, Triage};
 use serde::Deserialize;
 
 const USAGE: &str = "usage: registry_fixture <officina home> <steps.json>";
@@ -51,6 +67,62 @@ enum Step {
     Copy,
     Damage,
     HookFields(String),
+    At(i64),
+    Confirm(Confirmation),
+    DryRun(Vec<String>),
+    RefusedCall(TriageRefusal),
+}
+
+/// A row the author confirms, as the window sends it, the proposal aside:
+/// the fixture takes the one the view shows.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Confirmation {
+    key: String,
+    verdict: Verdict,
+    #[serde(default)]
+    routine: bool,
+    #[serde(default)]
+    file_under: Option<FileUnder>,
+}
+
+/// One call's result for a dry run case, answered `answer` at `at_ms`.
+fn dry_run_result(
+    case_key: String,
+    case: &TriageCase,
+    answer: &str,
+    at_ms: i64,
+) -> Result<CallResult, String> {
+    let (outcome, verdict) = match answer {
+        "timeout" => (TriageOutcome::Timeout, None),
+        "invalid" => (TriageOutcome::Invalid, None),
+        verdict => (
+            TriageOutcome::Answer,
+            Some(
+                ModelVerdict::from_code(verdict)
+                    .ok_or_else(|| format!("unknown answer {verdict}"))?,
+            ),
+        ),
+    };
+    Ok(CallResult {
+        purpose: TriagePurpose::DryRun,
+        case_key,
+        input_hash: case.input_hash(),
+        started_at_ms: at_ms,
+        duration_ms: 2_400,
+        outcome,
+        refusal: None,
+        answer: verdict.map(|verdict| CallAnswer {
+            verdict,
+            reason: "fixture".into(),
+        }),
+        usage: CallUsage {
+            input_tokens: Some(4_500),
+            output_tokens: Some(380),
+            cost_microusd: Some(1_100),
+        },
+        detail: None,
+    })
 }
 
 fn writer(home: &Path, now_ms: i64) -> Result<Writer, String> {
@@ -60,7 +132,7 @@ fn writer(home: &Path, now_ms: i64) -> Result<Writer, String> {
 }
 
 fn run(home: &Path, script: Script) -> Result<(), String> {
-    let now_ms = script.now_ms;
+    let mut now_ms = script.now_ms;
     let events = home.join("events");
     let mut writer = writer(home, now_ms)?;
     let mut snapshot: Option<AgentsSnapshot> = None;
@@ -104,6 +176,72 @@ fn run(home: &Path, script: Script) -> Result<(), String> {
             Step::Copy => {
                 writer
                     .copy_if_due(now_ms)
+                    .map_err(|e| failed(e.to_string()))?;
+            }
+            Step::At(at) => now_ms = at,
+            Step::Confirm(item) => {
+                let view = writer
+                    .view(None, &events, now_ms)
+                    .map_err(|e| failed(e.to_string()))?;
+                let row = view
+                    .triage
+                    .iter()
+                    .find(|row| row.key == item.key)
+                    .ok_or_else(|| failed(format!("no row {}", item.key)))?;
+                let answers = writer
+                    .confirm_triage(
+                        &[officina_core::registry::confirm::ConfirmItem {
+                            key: item.key.clone(),
+                            shown: row.proposal,
+                            verdict: item.verdict,
+                            routine: item.routine,
+                            file_under: item.file_under,
+                        }],
+                        now_ms,
+                    )
+                    .map_err(|e| failed(e.to_string()))?;
+                if !matches!(answers[0].outcome, ItemOutcome::Confirmed { .. }) {
+                    return Err(failed(format!("{} not confirmed: {answers:?}", item.key)));
+                }
+            }
+            Step::DryRun(answers) => {
+                let mut triage = Triage::default();
+                triage
+                    .start_dry_run(&writer, now_ms)
+                    .map_err(|e| failed(e.to_string()))?
+                    .map_err(|e| failed(e.to_string()))?;
+                let mut at = now_ms;
+                for answer in &answers {
+                    let next = triage
+                        .next_call(&mut writer, at)
+                        .map_err(|e| failed(e.to_string()))?
+                        .ok_or_else(|| failed("the dry run has fewer cases than answers".into()))?;
+                    let result = dry_run_result(next.case_key.clone(), &next.case, answer, at)
+                        .map_err(failed)?;
+                    triage
+                        .take_result(&mut writer, &result, at + 2_400)
+                        .map_err(|e| failed(e.to_string()))?;
+                    at += CALL_SPACING_MS;
+                }
+                if triage.running() {
+                    return Err(failed("the dry run has more cases than answers".into()));
+                }
+            }
+            Step::RefusedCall(cause) => {
+                let result = CallResult {
+                    purpose: TriagePurpose::DryRun,
+                    case_key: "confirmation:0".into(),
+                    input_hash: TriageCase::default().input_hash(),
+                    started_at_ms: now_ms,
+                    duration_ms: 0,
+                    outcome: TriageOutcome::Refused,
+                    refusal: Some(cause),
+                    answer: None,
+                    usage: CallUsage::default(),
+                    detail: None,
+                };
+                writer
+                    .record_call(&result)
                     .map_err(|e| failed(e.to_string()))?;
             }
             Step::Damage => {
