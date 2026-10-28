@@ -278,6 +278,7 @@ struct RefreshPlan<C> {
     recompute_wanted: bool,
     relay_wanted: bool,
     credentials_wanted: bool,
+    retention_wanted: bool,
     last_spawn: Option<Instant>,
     follow_up_at: Option<Instant>,
     last_retention: Instant,
@@ -299,6 +300,7 @@ impl<C: Fn() -> Instant> RefreshPlan<C> {
             recompute_wanted: true,
             relay_wanted: true,
             credentials_wanted: true,
+            retention_wanted: false,
             last_spawn: None,
             follow_up_at: None,
             last_retention: now,
@@ -375,6 +377,13 @@ impl<C: Fn() -> Instant> RefreshPlan<C> {
         self.credentials_wanted = true;
     }
 
+    /// `no_excerpts` was just turned on: the pass that clears the stored
+    /// excerpts runs at the next tick, not up to an hour later (D-85); the
+    /// view shows none meanwhile.
+    fn excerpts_turned_off(&mut self) {
+        self.retention_wanted = true;
+    }
+
     /// What runs now.
     fn due(&mut self) -> Due {
         let now = (self.clock)();
@@ -402,7 +411,9 @@ impl<C: Fn() -> Instant> RefreshPlan<C> {
             due.agents = true;
             due.contract = std::mem::take(&mut self.contract_wanted);
         }
-        if now.duration_since(self.last_retention) >= RETENTION_EVERY {
+        if std::mem::take(&mut self.retention_wanted)
+            || now.duration_since(self.last_retention) >= RETENTION_EVERY
+        {
             self.last_retention = now;
             due.retention = true;
         }
@@ -661,12 +672,16 @@ fn run<E: Emit>(
             Err(RecvTimeoutError::Timeout) => {}
         }
         if watched.poll(&mut plan) {
+            let had_excerpts = !collector.no_excerpts();
             collector.reload_floor();
             if let Ok(mut paths) = outputs.paths.write() {
                 paths.clone_from(collector.paths());
             }
             watched = WatchedPaths::new(collector);
             plan.floor_changed();
+            if had_excerpts && collector.no_excerpts() {
+                plan.excerpts_turned_off();
+            }
         }
         let due = plan.due();
         // Before the session list and the board read anything (D-78).
@@ -787,6 +802,7 @@ fn model_env(collector: &Collector) -> ModelEnv {
     ModelEnv {
         unavailable: unavailable(path.as_deref(), collector.no_excerpts()),
         claude_stamp: claude.and_then(binary_stamp),
+        no_excerpts: collector.no_excerpts(),
     }
 }
 
@@ -1172,6 +1188,22 @@ mod tests {
         advance(&now, Duration::from_secs(1));
         plan.session_files_changed();
         assert_eq!(plan.due(), agents_and_board(), "checked once");
+    }
+
+    /// Security audit L4: `no_excerpts` turned on brings the pass forward
+    /// to the next tick, once, without moving the hourly one.
+    #[test]
+    fn excerpts_turned_off_runs_the_pass_at_once() {
+        let (mut plan, now) = started();
+        advance(&now, TICK);
+        assert!(!plan.due().retention);
+        plan.excerpts_turned_off();
+        assert!(plan.due().retention);
+        assert!(!plan.due().retention, "once");
+        advance(&now, RETENTION_EVERY - TICK);
+        assert!(!plan.due().retention, "the hour counts from the pass run");
+        advance(&now, TICK);
+        assert!(plan.due().retention);
     }
 
     #[test]

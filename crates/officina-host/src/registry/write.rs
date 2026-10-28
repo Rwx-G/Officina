@@ -443,15 +443,15 @@ impl Writer {
                 .exclude()
                 .map(|path| path.display().to_string()),
         };
-        Ok(read::view(
-            &self.conn,
+        let ctx = read::ViewContext {
             report,
             board,
             events_dir,
-            DryRunState::default(),
-            self.model_env.unavailable,
-            now_ms,
-        )?)
+            dry_run: DryRunState::default(),
+            unavailable: self.model_env.unavailable,
+            no_excerpts: self.model_env.no_excerpts,
+        };
+        Ok(read::view(&self.conn, ctx, now_ms)?)
     }
     /// Runs one author action at `now_ms` in one transaction, as every
     /// write is, with `synchronous = FULL` (AD-39): the core plans it from

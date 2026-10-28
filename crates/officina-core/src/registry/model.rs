@@ -101,6 +101,9 @@ pub struct ModelFacts {
 pub struct ModelEnv {
     pub unavailable: Option<TriageRefusal>,
     pub claude_stamp: Option<BinaryStamp>,
+    /// `no_excerpts`, from the environment or the window's floor: the view
+    /// shows no excerpt while it is on, before the next pass clears them.
+    pub no_excerpts: bool,
 }
 
 /// Why turning the model on was refused (FR-10 as amended, AD-50, D-69):

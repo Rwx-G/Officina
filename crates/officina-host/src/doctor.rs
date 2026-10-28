@@ -20,7 +20,7 @@ use officina_core::relay::gate::gated_tools;
 use crate::claude;
 use crate::collector::{Collector, ContractStore};
 use crate::files::{now_ms, read_recent_events};
-use crate::paths::{ENV_FLOOR, env_path};
+use crate::paths::{ENV_FLOOR, Paths, env_path};
 use crate::registry::RegistryPaths;
 use crate::registry::store::{
     self as registry_store, Location, daily_copies, onedrive_roots_from_env, quarantined,
@@ -28,6 +28,7 @@ use crate::registry::store::{
 use crate::relay::doctor::{self as relay_doctor, RelayDoctor};
 use crate::relay::gate::GATE_EVENT;
 use crate::relay::home::RelayHome;
+use crate::writers::hook_keeps_excerpts;
 
 /// Hook events the hook records in the event buffer (framing principle 5).
 /// Any other event the hook receives is the gate's or ignored.
@@ -814,6 +815,9 @@ pub fn check_triage(
 
 /// The floor file, if any, loaded without error.
 fn check_floor(collector: &Collector) -> Check {
+    if let Some(warning) = no_excerpts_unseen_by_the_hook(collector) {
+        return warning;
+    }
     match (&collector.floor().path, &collector.floor().error) {
         (None, _) => check(
             Level::Ok,
@@ -833,6 +837,35 @@ fn check_floor(collector: &Collector) -> Check {
     }
 }
 
+/// The warning for a floor that sets `no_excerpts` the hook does not read
+/// (security audit L3): the hook finds its floor through `OFFICINA_FLOOR`,
+/// else `<officina home>/floor.toml`, never through `--floor`, so a floor
+/// given only on a command line leaves excerpts in the event files.
+fn no_excerpts_unseen_by_the_hook(collector: &Collector) -> Option<Check> {
+    let floor = collector.floor();
+    let path = floor.path.as_deref()?;
+    if !floor.file.as_ref().is_some_and(|f| f.no_excerpts) {
+        return None;
+    }
+    let default_floor = collector.paths().officina_home.join("floor.toml");
+    let hook_paths = Paths {
+        floor_file: env_path(ENV_FLOOR)
+            .or_else(|| default_floor.is_file().then_some(default_floor)),
+        ..collector.paths().clone()
+    };
+    hook_keeps_excerpts(&hook_paths).then(|| {
+        check(
+            Level::Warn,
+            "floor",
+            format!(
+                "{} sets no_excerpts, but the hook does not read it and keeps writing excerpts to the event files: it reads OFFICINA_FLOOR, else {}; set OFFICINA_FLOOR to this file, or OFFICINA_NO_EXCERPTS=1",
+                path.display(),
+                collector.paths().officina_home.join("floor.toml").display()
+            ),
+        )
+    })
+}
+
 /// Exit code of `officina doctor`: 1 when any check failed.
 pub fn exit_code(checks: &[Check]) -> i32 {
     i32::from(checks.iter().any(|c| c.level == Level::Fail))
@@ -843,7 +876,7 @@ mod tests {
     use super::*;
     use crate::collector::LoadedFloor;
     use crate::files::{append_line, event_file_for};
-    use crate::paths::Paths;
+
     use officina_core::relay::gate::gated_tools_matcher;
     use std::path::PathBuf;
 
@@ -903,6 +936,36 @@ mod tests {
         let floor = checks.last().unwrap();
         assert_eq!((floor.title.as_str(), floor.level), ("floor", Level::Fail));
         assert_eq!(floor.detail, "invalid floor file");
+    }
+
+    /// Security audit L3: a floor that sets `no_excerpts` the hook cannot
+    /// find warns; the same floor at the place the hook reads does not.
+    #[test]
+    fn a_no_excerpts_floor_the_hook_cannot_see_warns() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths {
+            officina_home: dir.path().join("officina"),
+            claude_config_dir: dir.path().join("config"),
+            claude_config_override: None,
+            floor_file: None,
+        };
+        std::fs::create_dir_all(&paths.officina_home).unwrap();
+        let text = "schema = 1\nno_excerpts = true\n";
+        let elsewhere = dir.path().join("officina.toml");
+        std::fs::write(&elsewhere, text).unwrap();
+        let floor = |path: PathBuf| LoadedFloor {
+            path: Some(path),
+            file: Some(parse_floor(text).unwrap()),
+            ..Default::default()
+        };
+        let collector = Collector::from_parts(paths.clone(), floor(elsewhere), None);
+        let line = check_floor(&collector);
+        assert_eq!(line.level, Level::Warn, "{line:?}");
+        assert!(line.detail.contains("OFFICINA_FLOOR"), "{line:?}");
+        let default_floor = paths.officina_home.join("floor.toml");
+        std::fs::write(&default_floor, text).unwrap();
+        let collector = Collector::from_parts(paths, floor(default_floor), None);
+        assert_eq!(check_floor(&collector).level, Level::Ok);
     }
 
     #[test]

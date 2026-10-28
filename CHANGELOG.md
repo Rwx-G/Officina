@@ -467,6 +467,13 @@ project uses [Semantic Versioning](https://semver.org/).
   `finished` (v0.3), counted apart: each is confirmed on its own row, so
   one click never archives a subject, and clears its excerpts, on text a
   session read.
+- `no_excerpts` hides every excerpt as soon as it is on (v0.3): the
+  Subjects view, the Triage panel and `officina subjects --json` show none,
+  and the window runs the pass that clears them at once when its floor
+  turns it on, instead of at the next hourly pass. `officina doctor
+  --floor <file>` warns when that file sets `no_excerpts` the hook cannot
+  see, since the hook reads only `OFFICINA_FLOOR` or
+  `~/.officina/floor.toml`.
 - A damaged registry is restored from the copy whose name carries the
   newest UTC day (v0.3), never from the newest modification time, which any
   process can set; a file of another name under `registry/backup/` is never

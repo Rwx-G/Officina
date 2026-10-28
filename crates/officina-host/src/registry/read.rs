@@ -148,26 +148,10 @@ impl Reader {
         card_subjects(&self.conn)
     }
 
-    /// The registry as the Subjects view shows it (AD-53, AD-54), with the
-    /// lag behind the event files of `events_dir`, the live cards of
-    /// `board`, and why the model cannot be called, when it cannot.
-    pub fn view(
-        &self,
-        report: RegistryReport,
-        board: Option<&Board>,
-        events_dir: &Path,
-        unavailable: Option<TriageRefusal>,
-        now_ms: i64,
-    ) -> rusqlite::Result<RegistryView> {
-        view(
-            &self.conn,
-            report,
-            board,
-            events_dir,
-            DryRunState::default(),
-            unavailable,
-            now_ms,
-        )
+    /// The registry as the Subjects view shows it (AD-53, AD-54), in `ctx`:
+    /// a reader runs no dry run, so `ctx.dry_run` is the default.
+    pub fn view(&self, ctx: ViewContext, now_ms: i64) -> rusqlite::Result<RegistryView> {
+        view(&self.conn, ctx, now_ms)
     }
 
     /// The triage model's setting, pause, stored answers and last calls
@@ -287,15 +271,25 @@ pub(crate) fn ingestion_view(
     Ok(view)
 }
 
-/// The registry as the Subjects view shows it, with what the window's
-/// collector knows of dry runs and of the model's availability.
+/// What a view is built with besides the registry: its state, the board
+/// whose live cards it joins, the event files whose lag it shows, and what
+/// the window's collector knows of dry runs, of the model's availability
+/// and of `no_excerpts`.
+#[derive(Debug, Clone)]
+pub struct ViewContext<'a> {
+    pub report: RegistryReport,
+    pub board: Option<&'a Board>,
+    pub events_dir: &'a Path,
+    pub dry_run: DryRunState,
+    pub unavailable: Option<TriageRefusal>,
+    /// No excerpt is shown while it is on (D-85).
+    pub no_excerpts: bool,
+}
+
+/// The registry as the Subjects view shows it, in `ctx`.
 pub(crate) fn view(
     conn: &Connection,
-    report: RegistryReport,
-    board: Option<&Board>,
-    events_dir: &Path,
-    dry_run: DryRunState,
-    unavailable: Option<TriageRefusal>,
+    ctx: ViewContext,
     now_ms: i64,
 ) -> rusqlite::Result<RegistryView> {
     // One read transaction, so the subjects, sessions and excerpts come from
@@ -309,22 +303,23 @@ pub(crate) fn view(
     let evidence = EvidenceInput {
         calls: triage_calls_since(&snapshot, now_ms - COUNT_WINDOW_MS)?,
         latest_evaluation: latest_evaluation(&snapshot)?,
-        dry_run,
+        dry_run: ctx.dry_run,
         verdicts: verdict_records(&snapshot)?,
         auto_archive: auto_archive_setting(&snapshot),
     };
     Ok(build_view(
         &ViewInput {
-            registry: report,
-            ingestion: ingestion_view(&snapshot, events_dir)?,
+            registry: ctx.report,
+            ingestion: ingestion_view(&snapshot, ctx.events_dir)?,
             subjects: &subjects,
             sessions: &sessions,
             excerpts: &excerpts,
             confirmations: &confirmations,
-            model: &model_facts(&snapshot, unavailable)?,
-            board,
+            model: &model_facts(&snapshot, ctx.unavailable)?,
+            board: ctx.board,
             restore_notice: restore_notice(&snapshot),
             evidence: &evidence,
+            no_excerpts: ctx.no_excerpts,
         },
         now_ms,
     ))

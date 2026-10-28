@@ -256,23 +256,17 @@ impl WindowRegistry {
     pub fn view(&mut self, board: Option<&Board>, events_dir: &Path, now_ms: i64) -> RegistryView {
         let report = self.report();
         let dry_run = self.triage.state();
+        let ctx = read::ViewContext {
+            report: report.clone(),
+            board,
+            events_dir,
+            dry_run,
+            unavailable: self.model_env.unavailable,
+            no_excerpts: self.model_env.no_excerpts,
+        };
         let read = match &self.slot {
-            Slot::Writable(writer) => read::view(
-                &writer.conn,
-                report.clone(),
-                board,
-                events_dir,
-                dry_run,
-                self.model_env.unavailable,
-                now_ms,
-            ),
-            Slot::ReadOnly(reader) => reader.view(
-                report.clone(),
-                board,
-                events_dir,
-                self.model_env.unavailable,
-                now_ms,
-            ),
+            Slot::Writable(writer) => read::view(&writer.conn, ctx, now_ms),
+            Slot::ReadOnly(reader) => reader.view(ctx, now_ms),
             Slot::Unavailable(_) | Slot::Network => return unread_view(report, now_ms),
         };
         match read {

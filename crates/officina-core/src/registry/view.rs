@@ -404,6 +404,9 @@ pub struct ViewInput<'a> {
     pub board: Option<&'a Board>,
     pub restore_notice: Option<RestoreNotice>,
     pub evidence: &'a EvidenceInput,
+    /// `no_excerpts` is on: no excerpt is shown, whatever the registry
+    /// still holds until the next pass clears it (D-85).
+    pub no_excerpts: bool,
 }
 
 fn end_view(record: &SessionRecord) -> Option<EndView> {
@@ -643,6 +646,7 @@ pub fn unread_view(report: RegistryReport, now_ms: i64) -> RegistryView {
             board: None,
             restore_notice: None,
             evidence: &EvidenceInput::default(),
+            no_excerpts: false,
         },
         now_ms,
     )
@@ -715,7 +719,7 @@ pub fn routine_candidates(subjects: &[SubjectRecord]) -> Vec<RoutineCandidate> {
 ///         ingestion: IngestionView::default(),
 ///         subjects: &[], sessions: &[], excerpts: &[], confirmations: &[],
 ///         model: &Default::default(), board: None, restore_notice: None,
-///         evidence: &Default::default(),
+///         evidence: &Default::default(), no_excerpts: false,
 ///     },
 ///     1_000,
 /// );
@@ -723,8 +727,12 @@ pub fn routine_candidates(subjects: &[SubjectRecord]) -> Vec<RoutineCandidate> {
 /// ```
 pub fn build_view(input: &ViewInput, now_ms: i64) -> RegistryView {
     let cards = cards_by_session(input.board);
-    let excerpts: BTreeMap<&str, &ExcerptRecord> = input
-        .excerpts
+    let shown_excerpts: &[ExcerptRecord] = if input.no_excerpts {
+        &[]
+    } else {
+        input.excerpts
+    };
+    let excerpts: BTreeMap<&str, &ExcerptRecord> = shown_excerpts
         .iter()
         .map(|e| (e.session_id.as_str(), e))
         .collect();
@@ -952,6 +960,7 @@ mod tests {
                 board: None,
                 restore_notice: None,
                 evidence: &EvidenceInput::default(),
+                no_excerpts: false,
             },
             NOW,
         )
@@ -1014,6 +1023,7 @@ mod tests {
                     board: None,
                     restore_notice: None,
                     evidence: &EvidenceInput::default(),
+                    no_excerpts: false,
                 }
             },
             NOW,
@@ -1091,6 +1101,7 @@ mod tests {
                     board: None,
                     restore_notice: Some(notice.clone()),
                     evidence: &EvidenceInput::default(),
+                    no_excerpts: false,
                 },
                 now,
             )
@@ -1151,6 +1162,7 @@ mod tests {
                 board: None,
                 restore_notice: None,
                 evidence: &EvidenceInput::default(),
+                no_excerpts: false,
             },
             NOW,
         );
@@ -1256,6 +1268,7 @@ mod tests {
                     board: None,
                     restore_notice: None,
                     evidence: &EvidenceInput::default(),
+                    no_excerpts: false,
                 },
                 NOW,
             )

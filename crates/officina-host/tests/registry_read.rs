@@ -7,6 +7,7 @@ mod common;
 use common::registry::{Home, NOW, day_file, line};
 use officina_core::registry::fold::FactWrite;
 use officina_core::registry::types::{FactValue, HookEnd, HookStart, SessionFact, Source};
+use officina_host::registry::read::ViewContext;
 use officina_host::registry::store::open_reader;
 
 /// A plausible value for each fact, so a new fact fails to compile here
@@ -142,8 +143,62 @@ fn pending_bytes_count_a_rewritten_file_whole() {
     };
     let view = open_reader(&home.home, &[])
         .unwrap()
-        .view(ready, None, &home.events, None, NOW)
+        .view(context(ready, &home.events, false), NOW)
         .unwrap();
     assert_eq!(view.ingestion.pending_bytes, rewritten.len() as u64);
     assert_eq!(view.ingestion.incomplete_files, 1);
+}
+
+fn context(
+    report: officina_core::registry::types::RegistryReport,
+    events_dir: &std::path::Path,
+    no_excerpts: bool,
+) -> ViewContext<'_> {
+    ViewContext {
+        report,
+        board: None,
+        events_dir,
+        dry_run: Default::default(),
+        unavailable: None,
+        no_excerpts,
+    }
+}
+
+/// Security audit L4, D-85: with `no_excerpts` on, a view read before the
+/// next pass clears the excerpts shows none, on the subjects and on the
+/// triage rows alike; with it off, the same registry shows them.
+#[test]
+fn no_excerpts_hides_every_excerpt_when_the_view_is_read() {
+    use common::registry::{answer, prompt};
+    use officina_core::registry::types::{RegistryReport, RegistryState};
+    let home = Home::new();
+    home.append(
+        &day_file(NOW),
+        &[
+            prompt("s1", NOW - 9, "C:/work/api", "private prompt"),
+            answer("s1", NOW - 5, "C:/work/api", "private answer", None),
+            line("SessionEnd", "s1", NOW - 4, "C:/work/api"),
+        ],
+    );
+    let mut writer = home.writer(NOW);
+    writer.ingest(&home.ctx(), NOW).unwrap();
+    drop(writer);
+    let ready = RegistryReport {
+        state: RegistryState::Ready,
+        detail: None,
+        exclude_from_sync: None,
+    };
+    let reader = open_reader(&home.home, &[]).unwrap();
+    let shown = reader
+        .view(context(ready.clone(), &home.events, false), NOW)
+        .unwrap();
+    let text = serde_json::to_string(&shown).unwrap();
+    assert!(text.contains("private prompt") && text.contains("private answer"));
+    assert!(shown.triage.iter().any(|row| row.excerpts.is_some()));
+    let hidden = reader
+        .view(context(ready, &home.events, true), NOW)
+        .unwrap();
+    let text = serde_json::to_string(&hidden).unwrap();
+    assert!(!text.contains("private"), "{text}");
+    assert_eq!(hidden.triage.len(), shown.triage.len(), "the rows stay");
 }

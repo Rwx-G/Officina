@@ -1500,6 +1500,7 @@ mod model {
             writer.set_model_env(ModelEnv {
                 unavailable: Some(*cause),
                 claude_stamp: None,
+                no_excerpts: false,
             });
             assert_eq!(
                 writer.set_triage_model(true, NOW).unwrap(),
@@ -1557,6 +1558,7 @@ mod model {
         writer.set_model_env(ModelEnv {
             unavailable: None,
             claude_stamp: Some(stamp.clone()),
+            no_excerpts: false,
         });
         let mut triage = Triage::default();
         let mut at = NOW;
@@ -1645,6 +1647,7 @@ mod model {
         writer.set_model_env(ModelEnv {
             unavailable: None,
             claude_stamp: Some(stamp(1)),
+            no_excerpts: false,
         });
         let mut triage = Triage::default();
         let mut at = NOW;
@@ -1660,6 +1663,7 @@ mod model {
         writer.set_model_env(ModelEnv {
             unavailable: None,
             claude_stamp: Some(stamp(2)),
+            no_excerpts: false,
         });
         assert!(
             triage
@@ -1923,6 +1927,7 @@ mod model {
         writer.set_model_env(ModelEnv {
             unavailable: Some(TriageRefusal::NoExcerpts),
             claude_stamp: None,
+            no_excerpts: false,
         });
         let shown = view(&writer, &home, NOW + MINUTE);
         assert_eq!(shown.model.unavailable, Some(TriageRefusal::NoExcerpts));
