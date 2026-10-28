@@ -3,7 +3,7 @@
 //! into core records.
 
 use officina_core::registry::types::{
-    EventFileRecord, ExcerptRecord, RestoreNotice, SessionRow, SettingKey, Source,
+    EventFileRecord, ExcerptRecord, RestoreNotice, SessionRow, SettingKey, Source, Sourced,
 };
 use rusqlite::Connection;
 use rusqlite::types::ValueRef;
@@ -113,19 +113,39 @@ pub(crate) fn event_files(conn: &Connection) -> rusqlite::Result<Vec<EventFileRe
     .collect()
 }
 
+/// `subject_id`, `subject_src` and `subject_at_ms` as one value: `None`
+/// when the session was never filed.
+fn filing(
+    subject_id: Option<i64>,
+    src: Option<String>,
+    at_ms: Option<i64>,
+) -> Option<Sourced<Option<i64>>> {
+    Some(Sourced {
+        value: subject_id,
+        src: Source::from_code(&src?)?,
+        at_ms: at_ms?,
+    })
+}
+
+const SESSION_COLUMNS: &str =
+    "session_id, project, first_seen_ms, last_seen_ms, subject_id, subject_src, subject_at_ms";
+
+fn session_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SessionRow> {
+    Ok(SessionRow {
+        session_id: row.get(0)?,
+        project: row.get(1)?,
+        first_seen_ms: row.get(2)?,
+        last_seen_ms: row.get(3)?,
+        subject: filing(row.get(4)?, row.get(5)?, row.get(6)?),
+    })
+}
+
 /// Every `session` row, by session id.
 pub(crate) fn sessions(conn: &Connection) -> rusqlite::Result<Vec<SessionRow>> {
-    conn.prepare_cached(
-        "SELECT session_id, project, first_seen_ms, last_seen_ms FROM session ORDER BY session_id",
-    )?
-    .query_map([], |row| {
-        Ok(SessionRow {
-            session_id: row.get(0)?,
-            project: row.get(1)?,
-            first_seen_ms: row.get(2)?,
-            last_seen_ms: row.get(3)?,
-        })
-    })?
+    conn.prepare_cached(&format!(
+        "SELECT {SESSION_COLUMNS} FROM session ORDER BY session_id"
+    ))?
+    .query_map([], session_row)?
     .collect()
 }
 

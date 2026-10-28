@@ -6,6 +6,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::agents::{LifecycleState, LiveStatus, SessionKind};
+
 closed_enum! {
     #[serde(rename_all = "snake_case")]
     /// Where a stored fact came from (the PRD glossary's provenance).
@@ -196,6 +198,233 @@ pub struct RegistryReport {
     pub exclude_from_sync: Option<String>,
 }
 
+closed_enum! {
+    #[serde(rename_all = "snake_case")]
+    /// A fact the registry keeps about a session, one `session_fact` row
+    /// each (AD-40): its latest value, where it came from and when. Stored
+    /// as text without a `CHECK`, so a new fact needs no migration (D-88).
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+    pub enum SessionFact {
+        /// `interactive` or `background`, from `claude agents`.
+        Kind,
+        /// The session's name, from `claude agents`.
+        Name,
+        /// The working directory, from `claude agents` or a hook line.
+        Cwd,
+        /// The `claude` process id: `pid` in `claude agents`, `CLAUDE_PID`
+        /// in a hook line (E14).
+        ClaudePid,
+        /// The background session id, the argument of `claude attach`.
+        BackgroundId,
+        /// The live status `claude agents` last reported.
+        Status,
+        /// The background lifecycle state `claude agents` last reported.
+        State,
+        /// When `claude agents` last began to list the session: it was seen
+        /// live (AD-47).
+        Listed,
+        /// The last `SessionStart`: its source and process ([`HookStart`]).
+        Started,
+        /// The time of the last `UserPromptSubmit`.
+        LastPromptAt,
+        /// The time of the last `Stop`.
+        LastStopAt,
+        /// The hook's end: the last `SessionEnd`, its reason and process
+        /// ([`HookEnd`]).
+        Ended,
+        /// The session left `claude agents` without a `SessionEnd`, as
+        /// Officina's rules inferred it (D-78): a fact apart from the hook's
+        /// end.
+        Interrupted,
+        /// The session that replaced this one in the same process after
+        /// `/clear` or `/resume` (D-52).
+        Successor,
+    }
+}
+
+/// A `session_fact` value as SQLite stores it (`value ANY`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum FactValue {
+    Integer(i64),
+    Text(String),
+}
+
+/// One `session_fact` row. `fact` is the stored text, so a row naming a
+/// fact this build does not know is still read, and counted.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FactRow {
+    pub session_id: String,
+    pub fact: String,
+    pub value: FactValue,
+    pub src: Source,
+    pub at_ms: i64,
+}
+
+/// The value of the [`SessionFact::Started`] fact: what the last
+/// `SessionStart` said.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HookStart {
+    /// `SessionStart.source` as Claude Code sent it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    /// The line's `claude_pid`, absent from a line written by a v0.1 hook.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub claude_pid: Option<u32>,
+}
+
+/// The value of the [`SessionFact::Ended`] fact: what the last `SessionEnd`
+/// said.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HookEnd {
+    /// `SessionEnd.reason` as Claude Code sent it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    /// The line's `claude_pid`, absent from a line written by a v0.1 hook.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub claude_pid: Option<u32>,
+}
+
+/// How a session ended (AD-47, D-78), when it is ended.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Ending {
+    /// An interactive session's `SessionEnd`, with its reason.
+    SessionEnd { reason: Option<String> },
+    /// An interactive session that left `claude agents` without a
+    /// `SessionEnd`.
+    Interrupted,
+    /// A background session whose state is `done`, `failed` or `stopped`.
+    State { state: LifecycleState },
+}
+
+/// A session as the registry holds it (FR-3, AD-40): its row, and each
+/// fact pivoted into its field with its source and time.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionRecord {
+    pub session_id: String,
+    pub project: String,
+    pub first_seen_ms: i64,
+    pub last_seen_ms: i64,
+    /// The subject the session is filed under (`None` inside: unfiled
+    /// since that time), with who filed it and when; `None` when it was
+    /// never filed.
+    pub subject: Option<Sourced<Option<i64>>>,
+    pub kind: Option<Sourced<SessionKind>>,
+    pub name: Option<Sourced<String>>,
+    pub cwd: Option<Sourced<String>>,
+    pub claude_pid: Option<Sourced<u32>>,
+    pub background_id: Option<Sourced<String>>,
+    pub status: Option<Sourced<LiveStatus>>,
+    pub state: Option<Sourced<LifecycleState>>,
+    /// The fact's value is its time, like `at_ms`.
+    pub listed: Option<Sourced<i64>>,
+    pub started: Option<Sourced<HookStart>>,
+    pub last_prompt_at: Option<Sourced<i64>>,
+    pub last_stop_at: Option<Sourced<i64>>,
+    pub ended: Option<Sourced<HookEnd>>,
+    /// The fact's value is its time, like `at_ms`.
+    pub interrupted: Option<Sourced<i64>>,
+    pub successor: Option<Sourced<String>>,
+    /// Rows this build could not read: a fact name it does not know (a
+    /// newer Officina wrote it), or a value of another type. Counted so a
+    /// downgrade shows them instead of dropping them.
+    pub unknown_facts: u32,
+}
+
+/// The documented `SessionEnd` reason of a session that never ran in a
+/// terminal the author drove (E2: `other` for `-p`).
+pub const NON_INTERACTIVE_END_REASON: &str = "other";
+
+impl SessionRecord {
+    /// The latest sign of life (D-77): a `UserPromptSubmit`, or the time
+    /// `claude agents` began to list the session again.
+    pub fn sign_of_life_ms(&self) -> Option<i64> {
+        let prompt = self.last_prompt_at.as_ref().map(|p| p.value);
+        let listed = self.listed.as_ref().map(|l| l.at_ms);
+        prompt.max(listed)
+    }
+
+    /// True when `claude agents` reports the session as a background one.
+    pub fn is_background(&self) -> bool {
+        self.kind
+            .as_ref()
+            .is_some_and(|k| k.value == SessionKind::Background)
+    }
+
+    /// The hook's end, unless a later sign of life reopened it (D-77).
+    fn hook_end(&self) -> Option<&Sourced<HookEnd>> {
+        let life = self.sign_of_life_ms();
+        self.ended
+            .as_ref()
+            .filter(|end| life.is_none_or(|life| life <= end.at_ms))
+    }
+
+    /// How the session ended, when it did (AD-47, D-78): a background
+    /// session by its state; any other by its `SessionEnd`, which always
+    /// beats `interrupted` whatever the times, else by `interrupted`; in
+    /// both cases only until a later sign of life (D-77).
+    pub fn ending(&self) -> Option<Sourced<Ending>> {
+        if self.is_background() {
+            return self.state.as_ref().and_then(|state| {
+                matches!(
+                    state.value,
+                    LifecycleState::Done | LifecycleState::Failed | LifecycleState::Stopped
+                )
+                .then(|| Sourced {
+                    value: Ending::State { state: state.value },
+                    src: state.src,
+                    at_ms: state.at_ms,
+                })
+            });
+        }
+        if let Some(end) = self.hook_end() {
+            return Some(Sourced {
+                value: Ending::SessionEnd {
+                    reason: end.value.reason.clone(),
+                },
+                src: end.src,
+                at_ms: end.at_ms,
+            });
+        }
+        let life = self.sign_of_life_ms();
+        self.interrupted
+            .as_ref()
+            .filter(|cut| life.is_none_or(|life| life <= cut.at_ms))
+            .map(|cut| Sourced {
+                value: Ending::Interrupted,
+                src: cut.src,
+                at_ms: cut.at_ms,
+            })
+    }
+
+    /// True when the session is ended (AD-47).
+    pub fn is_ended(&self) -> bool {
+        self.ending().is_some()
+    }
+
+    /// True when another session replaced this one in its process (AD-47):
+    /// it gives no triage row of its own.
+    pub fn is_superseded(&self) -> bool {
+        self.successor.is_some()
+    }
+
+    /// True when a `UserPromptSubmit` was seen.
+    pub fn saw_prompt(&self) -> bool {
+        self.last_prompt_at.is_some()
+    }
+
+    /// True for a run that was never seen in `claude agents` and ended with
+    /// [`NON_INTERACTIVE_END_REASON`] (FR-3 as amended, AD-47): recorded,
+    /// never filed by rule or triaged. A session seen live never is.
+    pub fn is_non_interactive(&self) -> bool {
+        self.listed.is_none()
+            && matches!(
+                self.ending().map(|e| e.value),
+                Some(Ending::SessionEnd { reason: Some(reason) }) if reason == NON_INTERACTIVE_END_REASON
+            )
+    }
+}
+
 /// One `session` row.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionRow {
@@ -204,6 +433,9 @@ pub struct SessionRow {
     pub project: String,
     pub first_seen_ms: i64,
     pub last_seen_ms: i64,
+    /// `subject_id`, `subject_src` and `subject_at_ms`: a column, not a
+    /// fact, since queries filter on it (AD-40).
+    pub subject: Option<Sourced<Option<i64>>>,
 }
 
 /// One `session_excerpt` row (AD-40, FR-4).
@@ -268,12 +500,13 @@ mod tests {
     /// Runs `check` once per enum of this file, giving it the enum's `ALL`,
     /// `code` and `from_code`; returns how many enums it ran on.
     fn each_enum(check: &dyn Fn(&dyn EnumUnderTest)) -> usize {
-        let enums: [&dyn EnumUnderTest; 11] = [
+        let enums: [&dyn EnumUnderTest; 12] = [
             &Closed(
                 RegistryState::ALL,
                 RegistryState::code,
                 RegistryState::from_code,
             ),
+            &Closed(SessionFact::ALL, SessionFact::code, SessionFact::from_code),
             &Closed(Source::ALL, Source::code, Source::from_code),
             &Closed(
                 ProposalSource::ALL,

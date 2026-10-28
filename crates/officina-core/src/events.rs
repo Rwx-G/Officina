@@ -15,6 +15,9 @@ pub const EXCERPT_CHARS: usize = 280;
 pub const SESSION_END_REASONS: [&str; 5] =
     ["clear", "resume", "logout", "prompt_input_exit", "other"];
 
+/// Documented values of `SessionStart.source` (research notes E2).
+pub const SESSION_START_SOURCES: [&str; 5] = ["startup", "resume", "clear", "compact", "fork"];
+
 /// One line of the event buffer.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EventLine {

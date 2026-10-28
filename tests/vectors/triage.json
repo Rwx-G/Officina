@@ -1,0 +1,352 @@
+{
+  "schema": 1,
+  "fold": [
+    {
+      "name": "a hook line records the facts the rules read",
+      "steps": [
+        {"events": [
+          {"v": 1, "ts": 1793102400000, "event": "SessionStart", "session_id": "s1", "cwd": "C:/work/api", "source": "startup", "claude_pid": 4100},
+          {"v": 1, "ts": 1793102410000, "event": "UserPromptSubmit", "session_id": "s1", "cwd": "C:/work/api", "prompt": "fix the build", "claude_pid": 4100},
+          {"v": 1, "ts": 1793102415000, "event": "Notification", "session_id": "s1", "cwd": "C:/work/api", "notification_type": "permission_prompt", "claude_pid": 4100},
+          {"v": 1, "ts": 1793102420000, "event": "Stop", "session_id": "s1", "cwd": "C:/work/api/crates", "last_message": "Fixed.", "claude_pid": 4100},
+          {"v": 1, "ts": 1793102430000, "event": "SessionEnd", "session_id": "s1", "cwd": "C:/work/api/crates", "reason": "prompt_input_exit", "claude_pid": 4100}
+        ]}
+      ],
+      "expect": [
+        {"session_id": "s1", "project": "api",
+         "facts": {"cwd": ["C:/work/api/crates", "hook"], "claude_pid": [4100, "hook"], "started": [{"source": "startup", "claude_pid": 4100}, "hook"], "last_prompt_at": [1793102410000, "hook"], "last_stop_at": [1793102420000, "hook"], "ended": [{"reason": "prompt_input_exit", "claude_pid": 4100}, "hook"]},
+         "ended": {"kind": "session_end", "reason": "prompt_input_exit"}, "superseded": false, "non_interactive": false}
+      ]
+    },
+    {
+      "name": "a run never seen in claude agents that ended with other is non-interactive",
+      "steps": [
+        {"events": [
+          {"v": 1, "ts": 1793102400000, "event": "SessionStart", "session_id": "p1", "cwd": "C:/work/api", "source": "startup"},
+          {"v": 1, "ts": 1793102401000, "event": "UserPromptSubmit", "session_id": "p1", "cwd": "C:/work/api", "prompt": "summarise the log"},
+          {"v": 1, "ts": 1793102405000, "event": "Stop", "session_id": "p1", "cwd": "C:/work/api", "last_message": "Summary."},
+          {"v": 1, "ts": 1793102406000, "event": "SessionEnd", "session_id": "p1", "cwd": "C:/work/api", "reason": "other"}
+        ]}
+      ],
+      "expect": [
+        {"session_id": "p1", "project": "api",
+         "facts": {"cwd": ["C:/work/api", "hook"], "started": [{"source": "startup"}, "hook"], "last_prompt_at": [1793102401000, "hook"], "last_stop_at": [1793102405000, "hook"], "ended": [{"reason": "other"}, "hook"]},
+         "ended": {"kind": "session_end", "reason": "other"}, "superseded": false, "non_interactive": true}
+      ]
+    },
+    {
+      "name": "a session seen live is never non-interactive",
+      "steps": [
+        {"agents": {"now_ms": 1793102400000, "records": [
+          {"pid": 4100, "sessionId": "s1", "kind": "interactive", "cwd": "C:/work/api", "name": "api", "status": "busy", "startedAt": 1793102340000}
+        ]}},
+        {"events": [
+          {"v": 1, "ts": 1793102420000, "event": "SessionEnd", "session_id": "s1", "cwd": "C:/work/api", "reason": "other", "claude_pid": 4100}
+        ]}
+      ],
+      "expect": [
+        {"session_id": "s1", "project": "api",
+         "facts": {"kind": ["interactive", "agents"], "name": ["api", "agents"], "cwd": ["C:/work/api", "hook"], "claude_pid": [4100, "hook"], "status": ["busy", "agents"], "listed": [1793102400000, "agents"], "ended": [{"reason": "other", "claude_pid": 4100}, "hook"]},
+         "ended": {"kind": "session_end", "reason": "other"}, "superseded": false, "non_interactive": false}
+      ]
+    },
+    {
+      "name": "facts from claude agents carry source agents, waitingFor is not kept",
+      "steps": [
+        {"agents": {"now_ms": 1793102400000, "records": [
+          {"pid": 4300, "id": "bg01", "sessionId": "b1", "kind": "background", "cwd": "C:/work/web", "name": "nightly", "status": "busy", "state": "working", "startedAt": 1793102340000},
+          {"pid": 4304, "id": "bg04", "sessionId": "b4", "kind": "background", "cwd": "C:/work/web", "name": "migrate", "status": "waiting", "state": "blocked", "waitingFor": "permission prompt", "startedAt": 1793102340000}
+        ]}}
+      ],
+      "expect": [
+        {"session_id": "b1", "project": "web",
+         "facts": {"kind": ["background", "agents"], "name": ["nightly", "agents"], "cwd": ["C:/work/web", "agents"], "claude_pid": [4300, "agents"], "background_id": ["bg01", "agents"], "status": ["busy", "agents"], "state": ["working", "agents"], "listed": [1793102400000, "agents"]},
+         "ended": null, "superseded": false, "non_interactive": false},
+        {"session_id": "b4", "project": "web",
+         "facts": {"kind": ["background", "agents"], "name": ["migrate", "agents"], "cwd": ["C:/work/web", "agents"], "claude_pid": [4304, "agents"], "background_id": ["bg04", "agents"], "status": ["waiting", "agents"], "state": ["blocked", "agents"], "listed": [1793102400000, "agents"]},
+         "ended": null, "superseded": false, "non_interactive": false}
+      ]
+    },
+    {
+      "name": "a session first seen in claude agents gets one record",
+      "steps": [
+        {"agents": {"now_ms": 1793102400000, "records": [
+          {"pid": 4100, "sessionId": "s1", "kind": "interactive", "cwd": "C:/work/api", "name": "api", "status": "idle", "startedAt": 1793102340000}
+        ]}},
+        {"events": [
+          {"v": 1, "ts": 1793102405000, "event": "UserPromptSubmit", "session_id": "s1", "cwd": "C:/work/api", "prompt": "add a test", "claude_pid": 4100}
+        ]}
+      ],
+      "expect": [
+        {"session_id": "s1", "project": "api",
+         "facts": {"kind": ["interactive", "agents"], "name": ["api", "agents"], "cwd": ["C:/work/api", "hook"], "claude_pid": [4100, "hook"], "status": ["idle", "agents"], "listed": [1793102400000, "agents"], "last_prompt_at": [1793102405000, "hook"]},
+         "ended": null, "superseded": false, "non_interactive": false}
+      ]
+    },
+    {
+      "name": "a background session is ended by done, failed or stopped",
+      "steps": [
+        {"agents": {"now_ms": 1793102400000, "records": [
+          {"pid": 4301, "id": "bg01", "sessionId": "b1", "kind": "background", "cwd": "C:/work/web", "name": "report", "status": "idle", "state": "done", "startedAt": 1793102340000},
+          {"pid": 4302, "id": "bg02", "sessionId": "b2", "kind": "background", "cwd": "C:/work/web", "name": "linkcheck", "status": "idle", "state": "failed", "startedAt": 1793102340000},
+          {"id": "bg03", "sessionId": "b3", "kind": "background", "cwd": "C:/work/web", "name": "cleanup", "state": "stopped", "startedAt": 1793102340000}
+        ]}}
+      ],
+      "expect": [
+        {"session_id": "b1",
+         "facts": {"kind": ["background", "agents"], "name": ["report", "agents"], "cwd": ["C:/work/web", "agents"], "claude_pid": [4301, "agents"], "background_id": ["bg01", "agents"], "status": ["idle", "agents"], "state": ["done", "agents"], "listed": [1793102400000, "agents"]},
+         "ended": {"kind": "state", "state": "done"}, "superseded": false, "non_interactive": false},
+        {"session_id": "b2",
+         "facts": {"kind": ["background", "agents"], "name": ["linkcheck", "agents"], "cwd": ["C:/work/web", "agents"], "claude_pid": [4302, "agents"], "background_id": ["bg02", "agents"], "status": ["idle", "agents"], "state": ["failed", "agents"], "listed": [1793102400000, "agents"]},
+         "ended": {"kind": "state", "state": "failed"}, "superseded": false, "non_interactive": false},
+        {"session_id": "b3",
+         "facts": {"kind": ["background", "agents"], "name": ["cleanup", "agents"], "cwd": ["C:/work/web", "agents"], "background_id": ["bg03", "agents"], "state": ["stopped", "agents"], "listed": [1793102400000, "agents"]},
+         "ended": {"kind": "state", "state": "stopped"}, "superseded": false, "non_interactive": false}
+      ]
+    },
+    {
+      "name": "background done then working is alive again",
+      "steps": [
+        {"agents": {"now_ms": 1793102400000, "records": [
+          {"pid": 4301, "id": "bg01", "sessionId": "b1", "kind": "background", "cwd": "C:/work/web", "name": "report", "status": "idle", "state": "done", "startedAt": 1793102340000}
+        ]}},
+        {"agents": {"now_ms": 1793102460000, "records": [
+          {"pid": 4301, "id": "bg01", "sessionId": "b1", "kind": "background", "cwd": "C:/work/web", "name": "report", "status": "busy", "state": "working", "startedAt": 1793102340000}
+        ]}}
+      ],
+      "expect": [
+        {"session_id": "b1",
+         "facts": {"kind": ["background", "agents"], "name": ["report", "agents"], "cwd": ["C:/work/web", "agents"], "claude_pid": [4301, "agents"], "background_id": ["bg01", "agents"], "status": ["busy", "agents"], "state": ["working", "agents"], "listed": [1793102400000, "agents"]},
+         "ended": null, "superseded": false, "non_interactive": false}
+      ]
+    },
+    {
+      "name": "gone from claude agents without a SessionEnd is interrupted",
+      "steps": [
+        {"agents": {"now_ms": 1793102400000, "records": [
+          {"pid": 4100, "sessionId": "s1", "kind": "interactive", "cwd": "C:/work/api", "name": "api", "status": "idle", "startedAt": 1793102340000}
+        ]}},
+        {"agents": {"now_ms": 1793102415000, "records": []}}
+      ],
+      "expect": [
+        {"session_id": "s1",
+         "facts": {"kind": ["interactive", "agents"], "name": ["api", "agents"], "cwd": ["C:/work/api", "agents"], "claude_pid": [4100, "agents"], "status": ["idle", "agents"], "listed": [1793102400000, "agents"], "interrupted": [1793102415000, "rules"]},
+         "ended": {"kind": "interrupted"}, "superseded": false, "non_interactive": false}
+      ]
+    },
+    {
+      "name": "vanished first, then a SessionEnd with an earlier ts: the SessionEnd wins",
+      "steps": [
+        {"agents": {"now_ms": 1793102400000, "records": [
+          {"pid": 4100, "sessionId": "s1", "kind": "interactive", "cwd": "C:/work/api", "name": "api", "status": "idle", "startedAt": 1793102340000}
+        ]}},
+        {"agents": {"now_ms": 1793102430000, "records": []}},
+        {"events": [
+          {"v": 1, "ts": 1793102420000, "event": "SessionEnd", "session_id": "s1", "cwd": "C:/work/api", "reason": "prompt_input_exit", "claude_pid": 4100}
+        ]}
+      ],
+      "expect": [
+        {"session_id": "s1",
+         "facts": {"kind": ["interactive", "agents"], "name": ["api", "agents"], "cwd": ["C:/work/api", "hook"], "claude_pid": [4100, "hook"], "status": ["idle", "agents"], "listed": [1793102400000, "agents"], "interrupted": [1793102430000, "rules"], "ended": [{"reason": "prompt_input_exit", "claude_pid": 4100}, "hook"]},
+         "ended": {"kind": "session_end", "reason": "prompt_input_exit"}, "superseded": false, "non_interactive": false}
+      ]
+    },
+    {
+      "name": "a SessionEnd ingested before the vanishing keeps the real end",
+      "steps": [
+        {"agents": {"now_ms": 1793102400000, "records": [
+          {"pid": 4100, "sessionId": "s1", "kind": "interactive", "cwd": "C:/work/api", "name": "api", "status": "idle", "startedAt": 1793102340000}
+        ]}},
+        {"events": [
+          {"v": 1, "ts": 1793102410000, "event": "SessionEnd", "session_id": "s1", "cwd": "C:/work/api", "reason": "logout", "claude_pid": 4100}
+        ]},
+        {"agents": {"now_ms": 1793102415000, "records": []}}
+      ],
+      "expect": [
+        {"session_id": "s1",
+         "facts": {"kind": ["interactive", "agents"], "name": ["api", "agents"], "cwd": ["C:/work/api", "hook"], "claude_pid": [4100, "hook"], "status": ["idle", "agents"], "listed": [1793102400000, "agents"], "ended": [{"reason": "logout", "claude_pid": 4100}, "hook"]},
+         "ended": {"kind": "session_end", "reason": "logout"}, "superseded": false, "non_interactive": false}
+      ]
+    },
+    {
+      "name": "ended, then listed live by claude agents",
+      "steps": [
+        {"events": [
+          {"v": 1, "ts": 1793102400000, "event": "UserPromptSubmit", "session_id": "s1", "cwd": "C:/work/api", "prompt": "deploy", "claude_pid": 4100},
+          {"v": 1, "ts": 1793102410000, "event": "SessionEnd", "session_id": "s1", "cwd": "C:/work/api", "reason": "prompt_input_exit", "claude_pid": 4100}
+        ]},
+        {"agents": {"now_ms": 1793102460000, "records": [
+          {"pid": 4100, "sessionId": "s1", "kind": "interactive", "cwd": "C:/work/api", "name": "api", "status": "idle", "startedAt": 1793102340000}
+        ]}}
+      ],
+      "expect": [
+        {"session_id": "s1",
+         "facts": {"kind": ["interactive", "agents"], "name": ["api", "agents"], "cwd": ["C:/work/api", "hook"], "claude_pid": [4100, "hook"], "status": ["idle", "agents"], "listed": [1793102460000, "agents"], "last_prompt_at": [1793102400000, "hook"], "ended": [{"reason": "prompt_input_exit", "claude_pid": 4100}, "hook"]},
+         "ended": null, "superseded": false, "non_interactive": false}
+      ]
+    },
+    {
+      "name": "ended, then a newer prompt",
+      "steps": [
+        {"events": [
+          {"v": 1, "ts": 1793102400000, "event": "UserPromptSubmit", "session_id": "s1", "cwd": "C:/work/api", "prompt": "deploy", "claude_pid": 4100},
+          {"v": 1, "ts": 1793102410000, "event": "SessionEnd", "session_id": "s1", "cwd": "C:/work/api", "reason": "other", "claude_pid": 4100},
+          {"v": 1, "ts": 1793102420000, "event": "UserPromptSubmit", "session_id": "s1", "cwd": "C:/work/api", "prompt": "and verify", "claude_pid": 4100}
+        ]}
+      ],
+      "expect": [
+        {"session_id": "s1",
+         "facts": {"cwd": ["C:/work/api", "hook"], "claude_pid": [4100, "hook"], "last_prompt_at": [1793102420000, "hook"], "ended": [{"reason": "other", "claude_pid": 4100}, "hook"]},
+         "ended": null, "superseded": false, "non_interactive": false}
+      ]
+    },
+    {
+      "name": "SessionStart with source resume for a known id continues its record",
+      "steps": [
+        {"events": [
+          {"v": 1, "ts": 1793102400000, "event": "SessionStart", "session_id": "s1", "cwd": "C:/work/api", "source": "startup", "claude_pid": 4100},
+          {"v": 1, "ts": 1793102405000, "event": "UserPromptSubmit", "session_id": "s1", "cwd": "C:/work/api", "prompt": "plan the migration", "claude_pid": 4100},
+          {"v": 1, "ts": 1793102410000, "event": "SessionEnd", "session_id": "s1", "cwd": "C:/work/api", "reason": "prompt_input_exit", "claude_pid": 4100},
+          {"v": 1, "ts": 1793106000000, "event": "SessionStart", "session_id": "s1", "cwd": "C:/work/api", "source": "resume", "claude_pid": 5200},
+          {"v": 1, "ts": 1793106010000, "event": "UserPromptSubmit", "session_id": "s1", "cwd": "C:/work/api", "prompt": "carry on", "claude_pid": 5200}
+        ]}
+      ],
+      "expect": [
+        {"session_id": "s1", "project": "api",
+         "facts": {"cwd": ["C:/work/api", "hook"], "claude_pid": [5200, "hook"], "started": [{"source": "resume", "claude_pid": 5200}, "hook"], "last_prompt_at": [1793106010000, "hook"], "ended": [{"reason": "prompt_input_exit", "claude_pid": 4100}, "hook"]},
+         "ended": null, "superseded": false, "non_interactive": false}
+      ]
+    },
+    {
+      "name": "clear links its successor whichever line comes first",
+      "steps": [
+        {"events": [
+          {"v": 1, "ts": 1793102400000, "event": "UserPromptSubmit", "session_id": "s1", "cwd": "C:/work/api", "prompt": "first task", "claude_pid": 4100},
+          {"v": 1, "ts": 1793102410500, "event": "SessionStart", "session_id": "s2", "cwd": "C:/work/api", "source": "clear", "claude_pid": 4100},
+          {"v": 1, "ts": 1793102410000, "event": "SessionEnd", "session_id": "s1", "cwd": "C:/work/api", "reason": "clear", "claude_pid": 4100},
+          {"v": 1, "ts": 1793102420000, "event": "UserPromptSubmit", "session_id": "s2", "cwd": "C:/work/api", "prompt": "second task", "claude_pid": 4100}
+        ]}
+      ],
+      "expect": [
+        {"session_id": "s1",
+         "facts": {"cwd": ["C:/work/api", "hook"], "claude_pid": [4100, "hook"], "last_prompt_at": [1793102400000, "hook"], "ended": [{"reason": "clear", "claude_pid": 4100}, "hook"], "successor": ["s2", "hook"]},
+         "ended": {"kind": "session_end", "reason": "clear"}, "superseded": true, "non_interactive": false},
+        {"session_id": "s2",
+         "facts": {"cwd": ["C:/work/api", "hook"], "claude_pid": [4100, "hook"], "started": [{"source": "clear", "claude_pid": 4100}, "hook"], "last_prompt_at": [1793102420000, "hook"]},
+         "ended": null, "superseded": false, "non_interactive": false}
+      ]
+    },
+    {
+      "name": "resume in the same process links to the resumed conversation",
+      "steps": [
+        {"events": [
+          {"v": 1, "ts": 1793095200000, "event": "SessionStart", "session_id": "s3", "cwd": "C:/work/api", "source": "startup", "claude_pid": 3900},
+          {"v": 1, "ts": 1793095400000, "event": "SessionEnd", "session_id": "s3", "cwd": "C:/work/api", "reason": "prompt_input_exit", "claude_pid": 3900},
+          {"v": 1, "ts": 1793102400000, "event": "UserPromptSubmit", "session_id": "s1", "cwd": "C:/work/api", "prompt": "look at the logs", "claude_pid": 4100},
+          {"v": 1, "ts": 1793102410000, "event": "SessionEnd", "session_id": "s1", "cwd": "C:/work/api", "reason": "resume", "claude_pid": 4100},
+          {"v": 1, "ts": 1793102410200, "event": "SessionStart", "session_id": "s3", "cwd": "C:/work/api", "source": "resume", "claude_pid": 4100},
+          {"v": 1, "ts": 1793102412000, "event": "UserPromptSubmit", "session_id": "s3", "cwd": "C:/work/api", "prompt": "where were we", "claude_pid": 4100}
+        ]}
+      ],
+      "expect": [
+        {"session_id": "s1",
+         "facts": {"cwd": ["C:/work/api", "hook"], "claude_pid": [4100, "hook"], "last_prompt_at": [1793102400000, "hook"], "ended": [{"reason": "resume", "claude_pid": 4100}, "hook"], "successor": ["s3", "hook"]},
+         "ended": {"kind": "session_end", "reason": "resume"}, "superseded": true, "non_interactive": false},
+        {"session_id": "s3",
+         "facts": {"cwd": ["C:/work/api", "hook"], "claude_pid": [4100, "hook"], "started": [{"source": "resume", "claude_pid": 4100}, "hook"], "last_prompt_at": [1793102412000, "hook"], "ended": [{"reason": "prompt_input_exit", "claude_pid": 3900}, "hook"]},
+         "ended": null, "superseded": false, "non_interactive": false}
+      ]
+    },
+    {
+      "name": "compact keeps the session and fork starts a new one; neither links",
+      "steps": [
+        {"events": [
+          {"v": 1, "ts": 1793102340000, "event": "SessionStart", "session_id": "s1", "cwd": "C:/work/api", "source": "startup", "claude_pid": 4100},
+          {"v": 1, "ts": 1793102400000, "event": "SessionStart", "session_id": "s1", "cwd": "C:/work/api", "source": "compact", "claude_pid": 4100},
+          {"v": 1, "ts": 1793102405000, "event": "SessionStart", "session_id": "s4", "cwd": "C:/work/api", "source": "fork", "claude_pid": 4100}
+        ]}
+      ],
+      "expect": [
+        {"session_id": "s1",
+         "facts": {"cwd": ["C:/work/api", "hook"], "claude_pid": [4100, "hook"], "started": [{"source": "compact", "claude_pid": 4100}, "hook"]},
+         "ended": null, "superseded": false, "non_interactive": false},
+        {"session_id": "s4",
+         "facts": {"cwd": ["C:/work/api", "hook"], "claude_pid": [4100, "hook"], "started": [{"source": "fork", "claude_pid": 4100}, "hook"]},
+         "ended": null, "superseded": false, "non_interactive": false}
+      ]
+    },
+    {
+      "name": "a start outside the window links nothing",
+      "steps": [
+        {"events": [
+          {"v": 1, "ts": 1793102400000, "event": "SessionEnd", "session_id": "s1", "cwd": "C:/work/api", "reason": "clear", "claude_pid": 4100},
+          {"v": 1, "ts": 1793102461000, "event": "SessionStart", "session_id": "s2", "cwd": "C:/work/api", "source": "clear", "claude_pid": 4100}
+        ]}
+      ],
+      "expect": [
+        {"session_id": "s1",
+         "facts": {"cwd": ["C:/work/api", "hook"], "claude_pid": [4100, "hook"], "ended": [{"reason": "clear", "claude_pid": 4100}, "hook"]},
+         "ended": {"kind": "session_end", "reason": "clear"}, "superseded": false, "non_interactive": false},
+        {"session_id": "s2",
+         "facts": {"cwd": ["C:/work/api", "hook"], "claude_pid": [4100, "hook"], "started": [{"source": "clear", "claude_pid": 4100}, "hook"]},
+         "ended": null, "superseded": false, "non_interactive": false}
+      ]
+    },
+    {
+      "name": "lines without claude_pid link nothing",
+      "steps": [
+        {"events": [
+          {"v": 1, "ts": 1793102400000, "event": "SessionEnd", "session_id": "s1", "cwd": "C:/work/api", "reason": "clear"},
+          {"v": 1, "ts": 1793102401000, "event": "SessionStart", "session_id": "s2", "cwd": "C:/work/api", "source": "clear"}
+        ]}
+      ],
+      "expect": [
+        {"session_id": "s1",
+         "facts": {"cwd": ["C:/work/api", "hook"], "ended": [{"reason": "clear"}, "hook"]},
+         "ended": {"kind": "session_end", "reason": "clear"}, "superseded": false, "non_interactive": false},
+        {"session_id": "s2",
+         "facts": {"cwd": ["C:/work/api", "hook"], "started": [{"source": "clear"}, "hook"]},
+         "ended": null, "superseded": false, "non_interactive": false}
+      ]
+    },
+    {
+      "name": "a record naming a superseded session goes to its chain head",
+      "steps": [
+        {"agents": {"now_ms": 1793102400000, "records": [
+          {"pid": 4100, "sessionId": "s1", "kind": "interactive", "cwd": "C:/work/api", "name": "api", "status": "idle", "startedAt": 1793102340000}
+        ]}},
+        {"events": [
+          {"v": 1, "ts": 1793102410000, "event": "SessionEnd", "session_id": "s1", "cwd": "C:/work/api", "reason": "clear", "claude_pid": 4100},
+          {"v": 1, "ts": 1793102410200, "event": "SessionStart", "session_id": "s2", "cwd": "C:/work/api", "source": "clear", "claude_pid": 4100},
+          {"v": 1, "ts": 1793102412000, "event": "UserPromptSubmit", "session_id": "s2", "cwd": "C:/work/api", "prompt": "next task", "claude_pid": 4100}
+        ]},
+        {"agents": {"now_ms": 1793102415000, "records": [
+          {"pid": 4100, "sessionId": "s1", "kind": "interactive", "cwd": "C:/work/api", "name": "api", "status": "busy", "startedAt": 1793102340000}
+        ]}}
+      ],
+      "expect": [
+        {"session_id": "s1",
+         "facts": {"kind": ["interactive", "agents"], "name": ["api", "agents"], "cwd": ["C:/work/api", "hook"], "claude_pid": [4100, "hook"], "status": ["idle", "agents"], "listed": [1793102400000, "agents"], "ended": [{"reason": "clear", "claude_pid": 4100}, "hook"], "successor": ["s2", "hook"]},
+         "ended": {"kind": "session_end", "reason": "clear"}, "superseded": true, "non_interactive": false},
+        {"session_id": "s2",
+         "facts": {"kind": ["interactive", "agents"], "name": ["api", "agents"], "cwd": ["C:/work/api", "hook"], "claude_pid": [4100, "hook"], "status": ["busy", "agents"], "listed": [1793102415000, "agents"], "started": [{"source": "clear", "claude_pid": 4100}, "hook"], "last_prompt_at": [1793102412000, "hook"]},
+         "ended": null, "superseded": false, "non_interactive": false}
+      ]
+    },
+    {
+      "name": "a session gone while the window was closed is interrupted at the first refresh",
+      "steps": [
+        {"agents": {"now_ms": 1793102400000, "records": [
+          {"pid": 4100, "sessionId": "s1", "kind": "interactive", "cwd": "C:/work/api", "name": "api", "status": "idle", "startedAt": 1793102340000}
+        ]}},
+        "restart",
+        {"agents": {"now_ms": 1793106000000, "records": []}}
+      ],
+      "expect": [
+        {"session_id": "s1",
+         "facts": {"kind": ["interactive", "agents"], "name": ["api", "agents"], "cwd": ["C:/work/api", "agents"], "claude_pid": [4100, "agents"], "status": ["idle", "agents"], "listed": [1793102400000, "agents"], "interrupted": [1793106000000, "rules"]},
+         "ended": {"kind": "interrupted"}, "superseded": false, "non_interactive": false}
+      ]
+    }
+  ]
+}
