@@ -573,36 +573,36 @@ fn refuse(
 /// What each [`SYSTEM_ENV`] variable of a launch is: a value, or removed.
 pub type SystemEnv = Vec<(&'static str, Option<String>)>;
 
+/// The `PATH` a launch gets off Windows (Linux is v1): the system folders
+/// only an administrator writes.
+pub const PATH_OFF_WINDOWS: &str = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
+
 /// The [`SYSTEM_ENV`] variables a launch gets (D-173): from the environment
 /// Windows builds from the registry for the user, a name it lacks removed;
 /// when it cannot be built, a `PATH` of the system and Windows folders only.
-/// Never the caller's. Off Windows (Linux is v1) nothing is set.
+/// Off Windows, [`PATH_OFF_WINDOWS`] and nothing else. Never the caller's.
 pub fn system_env() -> SystemEnv {
     #[cfg(windows)]
-    {
-        let found = crate::platform::windows::registry_environment().unwrap_or_else(|_| {
-            let system = system_dir().unwrap_or_default();
-            let windows = system.parent().map(Path::to_path_buf).unwrap_or_default();
-            vec![(
-                "PATH".to_owned(),
-                format!("{};{}", system.display(), windows.display()),
-            )]
-        });
-        SYSTEM_ENV
-            .iter()
-            .map(|name| {
-                let value = found
-                    .iter()
-                    .find(|(key, _)| key.eq_ignore_ascii_case(name))
-                    .map(|(_, value)| value.clone());
-                (*name, value)
-            })
-            .collect()
-    }
+    let found = crate::platform::windows::registry_environment().unwrap_or_else(|_| {
+        let system = system_dir().unwrap_or_default();
+        let windows = system.parent().map(Path::to_path_buf).unwrap_or_default();
+        vec![(
+            "PATH".to_owned(),
+            format!("{};{}", system.display(), windows.display()),
+        )]
+    });
     #[cfg(not(windows))]
-    {
-        Vec::new()
-    }
+    let found = vec![("PATH".to_owned(), PATH_OFF_WINDOWS.to_owned())];
+    SYSTEM_ENV
+        .iter()
+        .map(|name| {
+            let value = found
+                .iter()
+                .find(|(key, _)| key.eq_ignore_ascii_case(name))
+                .map(|(_, value)| value.clone());
+            (*name, value)
+        })
+        .collect()
 }
 
 /// The command for a launch (AD-30): the program itself, its arguments as a
