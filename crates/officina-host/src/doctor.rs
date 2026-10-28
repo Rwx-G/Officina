@@ -9,7 +9,7 @@ use std::path::Path;
 use officina_core::contract::check_agents;
 use officina_core::floor::{Autonomy, parse_floor};
 use officina_core::quota::STALE_AFTER_MS;
-use officina_core::relay::gate::SHELL_TOOLS;
+use officina_core::relay::gate::gated_tools;
 
 use crate::claude;
 use crate::collector::Collector;
@@ -37,13 +37,14 @@ pub struct Registration {
     pub tools: Vec<&'static str>,
 }
 
-/// The gate's registration (AD-26, D-18 as amended by D-171): `PreToolUse`
-/// for every shell tool of `SHELL_TOOLS` and no other, so no other tool call
-/// pays for a process start (E9).
+/// The gate's registration (AD-26, D-18 as amended by D-171 and D-173):
+/// `PreToolUse` for every shell tool of `SHELL_TOOLS` and file tool of
+/// `FILE_TOOLS` and no other, so no other tool call pays for a process
+/// start (E9).
 pub fn gate_registration() -> Registration {
     Registration {
         event: GATE_EVENT,
-        tools: SHELL_TOOLS.iter().map(|(name, _)| *name).collect(),
+        tools: gated_tools(),
     }
 }
 
@@ -467,7 +468,7 @@ mod tests {
     use crate::collector::LoadedFloor;
     use crate::files::{append_line, event_file_for};
     use crate::paths::Paths;
-    use officina_core::relay::gate::shell_tools_matcher;
+    use officina_core::relay::gate::gated_tools_matcher;
     use std::path::PathBuf;
 
     fn summary(checks: &[Check]) -> Vec<(&str, Level, bool)> {
@@ -587,7 +588,7 @@ mod tests {
             let pre_tool_use = &block["hooks"][GATE_EVENT];
             assert_eq!(!pre_tool_use.is_null(), expected, "{floor:?}");
             if expected {
-                assert_eq!(pre_tool_use[0]["matcher"], shell_tools_matcher());
+                assert_eq!(pre_tool_use[0]["matcher"], gated_tools_matcher());
             }
         }
     }
@@ -617,10 +618,10 @@ mod tests {
                 "{missing:?}"
             );
         }
-        let names: Vec<&str> = SHELL_TOOLS.iter().map(|(name, _)| *name).collect();
+        let names = gated_tools();
         let reversed: Vec<&str> = names.iter().rev().copied().collect();
         for present in [
-            shell_tools_matcher(),
+            gated_tools_matcher(),
             format!("Write|{}", reversed.join("|")),
             format!("Edit | {}", names.join(" | ")),
         ] {
@@ -630,22 +631,30 @@ mod tests {
             );
         }
         let other_hook_beside = serde_json::json!({"hooks": {GATE_EVENT: [
-            {"matcher": shell_tools_matcher(), "hooks": [{"type": "command", "command": "python guard.py"}]},
-            {"matcher": shell_tools_matcher(), "hooks": [{"type": "command", "command": "officina hook"}]}
+            {"matcher": gated_tools_matcher(), "hooks": [{"type": "command", "command": "python guard.py"}]},
+            {"matcher": gated_tools_matcher(), "hooks": [{"type": "command", "command": "officina hook"}]}
         ]}});
         assert!(missing_hook_events(&other_hook_beside, &gate).is_empty());
     }
 
-    /// D-171: the printed matcher names every tool of the constant, each
-    /// once, and the printed block counts as registered.
+    /// D-171, D-173: the printed matcher names every shell and file tool of
+    /// the constants, each once, and the printed block counts as registered.
     #[test]
-    fn block_matcher_names_every_shell_tool() {
+    fn block_matcher_names_every_gated_tool() {
         let required = registrations(true);
         let block: serde_json::Value =
             serde_json::from_str(&hooks_block(&PathBuf::from("/opt/officina"), &required)).unwrap();
         let matcher = block["hooks"][GATE_EVENT][0]["matcher"].as_str().unwrap();
         let mut named: Vec<&str> = matcher.split('|').collect();
-        let mut expected: Vec<&str> = SHELL_TOOLS.iter().map(|(name, _)| *name).collect();
+        let mut expected: Vec<&str> = officina_core::relay::gate::SHELL_TOOLS
+            .iter()
+            .map(|(name, _)| *name)
+            .chain(
+                officina_core::relay::gate::FILE_TOOLS
+                    .iter()
+                    .map(|(name, _)| *name),
+            )
+            .collect();
         named.sort_unstable();
         expected.sort_unstable();
         assert_eq!(named, expected);
@@ -659,7 +668,7 @@ mod tests {
     fn a_matcher_naming_bash_only_is_missing_powershell_and_monitor() {
         let gate = [gate_registration()];
         let group = |matcher: &str| serde_json::json!({"matcher": matcher, "hooks": [{"type": "command", "command": "officina.exe hook"}]});
-        let names: Vec<&str> = SHELL_TOOLS.iter().map(|(name, _)| *name).collect();
+        let names = gated_tools();
         let (first, others) = names.split_first().unwrap();
         let only_first = serde_json::json!({"hooks": {GATE_EVENT: [group(first)]}});
         assert_eq!(

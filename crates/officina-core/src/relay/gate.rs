@@ -1,7 +1,9 @@
-//! The gate's decision (AD-26 steps 2 to 5, D-12 to D-17): in a guarded
-//! repository, deny a `Bash` command that would start a guarded program,
-//! hide its program, redirect Officina's home or touch Officina's own files;
-//! otherwise, and always outside a guarded repository, decide nothing.
+//! The gate's decision (AD-26 steps 2 to 5, D-12 to D-17, D-173): in a
+//! guarded repository, deny a `Bash` command that would start a guarded
+//! program, hide its program, redirect Officina's home or environment or
+//! touch Officina's own files; otherwise, and always outside a guarded
+//! repository, decide nothing. Once the relay guards a project, deny a file
+//! tool's write under the Officina home, from any project.
 //! [`containment`] combines the floor, the approved snapshot and the
 //! known-projects record into what is guarded, so that no file a session can
 //! write lifts containment alone. The host reads those files and the payload
@@ -41,6 +43,13 @@ pub const HOME_REDIRECTION_NAMES: &[&str] = &[
     "OFFICINA_*",
 ];
 
+/// Variables that decide which program `officina` and the programs it
+/// starts run, or what reaches WSL, when assigned in the same command as an
+/// `officina` call (D-173): belt and braces to `officina run` taking them
+/// from the registry and resolving `git` there. A trailing `*` is a prefix;
+/// names compare without case.
+pub const OFFICINA_ENVIRONMENT_NAMES: &[&str] = &["PATH", "PATHEXT", "WSLENV", "ComSpec", "GIT_*"];
+
 /// Longest deny reason, in bytes (AD-26).
 pub const MAX_REASON_BYTES: usize = 2048;
 
@@ -70,6 +79,9 @@ closed_enum! {
         Dynamic,
         /// `officina` runs with its home or floor variables reassigned (D-12).
         HomeRedirection,
+        /// `officina` runs with a variable of [`OFFICINA_ENVIRONMENT_NAMES`]
+        /// reassigned (D-173).
+        OfficinaEnvironment,
         /// The text names an `OFFICINA_` variable.
         OfficinaVariable,
         /// The text names Officina's relay or journal directory (D-13).
@@ -77,6 +89,9 @@ closed_enum! {
         /// A PowerShell tool call in a guarded project: Officina reads Bash
         /// commands only (D-171).
         PowershellInGuardedProject,
+        /// A file tool writing under the Officina home while the relay
+        /// guards a project (D-173).
+        RelayStateWrite,
     }
 }
 
@@ -104,6 +119,36 @@ pub const SHELL_TOOLS: &[(&str, ToolRule)] = &[
     ("Monitor", ToolRule::Lexed),
 ];
 
+/// Every Claude Code tool that writes a file, with the `tool_input` field
+/// naming it (D-173): once the relay guards a project, the gate denies any
+/// of them aimed under the Officina home, whose relay state and journal only
+/// Officina writes. Doctor builds the `PreToolUse` matcher from this list
+/// and [`SHELL_TOOLS`].
+pub const FILE_TOOLS: &[(&str, &str)] = &[
+    ("Write", "file_path"),
+    ("Edit", "file_path"),
+    ("MultiEdit", "file_path"),
+    ("NotebookEdit", "notebook_path"),
+];
+
+/// The `tool_input` field naming the file `tool` writes, for a tool of
+/// [`FILE_TOOLS`] named exactly as Claude Code names it.
+pub fn file_tool_field(tool: &str) -> Option<&'static str> {
+    FILE_TOOLS
+        .iter()
+        .find(|(name, _)| *name == tool)
+        .map(|(_, field)| *field)
+}
+
+/// Every tool the gate decides: [`SHELL_TOOLS`], then [`FILE_TOOLS`].
+pub fn gated_tools() -> Vec<&'static str> {
+    SHELL_TOOLS
+        .iter()
+        .map(|(name, _)| *name)
+        .chain(FILE_TOOLS.iter().map(|(name, _)| *name))
+        .collect()
+}
+
 /// The rule of `tool`, named exactly as Claude Code names it; `None` for a
 /// tool that runs no shell command.
 pub fn tool_rule(tool: &str) -> Option<ToolRule> {
@@ -113,19 +158,83 @@ pub fn tool_rule(tool: &str) -> Option<ToolRule> {
         .map(|(_, rule)| *rule)
 }
 
-/// The `PreToolUse` matcher naming every tool of [`SHELL_TOOLS`].
+/// The `PreToolUse` matcher naming every tool of [`gated_tools`].
 ///
 /// ```
-/// use officina_core::relay::gate::{SHELL_TOOLS, shell_tools_matcher};
-/// let matcher = shell_tools_matcher();
-/// assert_eq!(matcher.split('|').count(), SHELL_TOOLS.len());
+/// use officina_core::relay::gate::{FILE_TOOLS, SHELL_TOOLS, gated_tools_matcher};
+/// let matcher = gated_tools_matcher();
+/// assert_eq!(matcher.split('|').count(), SHELL_TOOLS.len() + FILE_TOOLS.len());
 /// ```
-pub fn shell_tools_matcher() -> String {
-    SHELL_TOOLS
-        .iter()
-        .map(|(name, _)| *name)
-        .collect::<Vec<_>>()
-        .join("|")
+pub fn gated_tools_matcher() -> String {
+    gated_tools().join("|")
+}
+
+/// The gate's decision for a file tool's write (D-173): denied when the
+/// relay guards a project (`relay_guards`) and `target` lies in the Officina
+/// home `home`, the folder itself or anything under it, whatever project the
+/// call comes from. The host resolves both paths by handle first (8.3 names,
+/// junctions, links, `subst`), so they compare as written here.
+///
+/// ```
+/// use officina_core::relay::gate::{DenyKind, decide_file_write};
+/// let home = "C:/Users/user01/.officina";
+/// let deny = decide_file_write(r"C:\Users\user01\.officina\relay\stopped", home, true).unwrap();
+/// assert_eq!(deny.kind, DenyKind::RelayStateWrite);
+/// assert_eq!(decide_file_write("C:/Users/user01/notes.md", home, true), None);
+/// assert_eq!(decide_file_write("C:/Users/user01/.officina/x", home, false), None);
+/// ```
+pub fn decide_file_write(target: &str, home: &str, relay_guards: bool) -> Option<Deny> {
+    if !relay_guards {
+        return None;
+    }
+    let target = file_path_text(target);
+    let home = file_path_text(home);
+    let home = home.trim_end_matches('/');
+    let inside = !home.is_empty()
+        && (target == home || target.starts_with(home) && target[home.len()..].starts_with('/'));
+    inside.then_some(Deny {
+        kind: DenyKind::RelayStateWrite,
+        matched: None,
+    })
+}
+
+/// A file path folded for [`decide_file_write`]: [`normalise_cwd`]'s form,
+/// with the device namespace's UNC spelling (`\\?\UNC\host\share`) as
+/// the plain one (`//host/share`), repeated slashes and `.` segments
+/// dropped, `..` applied, and each segment's trailing dots and spaces
+/// dropped: what Windows does to a path before it opens the file.
+fn file_path_text(path: &str) -> String {
+    let slashed = path.replace('\\', "/");
+    let unc = ["//?/unc/", "//./unc/"].iter().find_map(|prefix| {
+        slashed
+            .get(..prefix.len())
+            .filter(|head| head.eq_ignore_ascii_case(prefix))
+            .map(|_| format!("//{}", &slashed[prefix.len()..]))
+    });
+    let normal = normalise_cwd(unc.as_deref().unwrap_or(&slashed));
+    let (root, rest) = match normal.strip_prefix("//") {
+        Some(rest) => ("//", rest),
+        None => ("", normal.as_str()),
+    };
+    let mut segments: Vec<&str> = Vec::new();
+    for segment in rest.split('/') {
+        let segment = if segment.chars().all(|c| c == '.') {
+            segment
+        } else {
+            segment.trim_end_matches(['.', ' '])
+        };
+        match segment {
+            "" | "." => {}
+            // Never above the drive or the host.
+            ".." => {
+                if segments.len() > 1 {
+                    segments.pop();
+                }
+            }
+            other => segments.push(other),
+        }
+    }
+    format!("{root}{}", segments.join("/"))
 }
 
 /// The gate's decision for one tool call (AD-26, D-171): the rule of `tool`
@@ -212,7 +321,7 @@ pub fn decide(
     if !lexed.dynamic.is_empty() {
         return Deny::new(DenyKind::Dynamic, None);
     }
-    if let Some(deny) = home_redirection(&lexed) {
+    if let Some(deny) = reassigned(&lexed) {
         return Some(deny);
     }
     let prefix = shell::fold(OFFICINA_VARIABLE_PREFIX);
@@ -256,7 +365,29 @@ pub fn guarded_match(program: &Program, guarded_programs: &[String]) -> Option<S
     })
 }
 
-fn home_redirection(lexed: &Lexed) -> Option<Deny> {
+/// A variable of `names` assigned in `lexed`, as the deny of `kind`
+/// reports it: by name, or a computed name, which could be any. A scanned
+/// interpreter can set a variable in its own syntax (`$env:HOME`, `set
+/// HOME=`, `os.environ['HOME']`): the name is enough.
+fn assigned(lexed: &Lexed, names: &[&str], kind: DenyKind) -> Option<Deny> {
+    let listed = |name: &str| names.iter().any(|entry| shell::name_matches(entry, name));
+    for assignment in &lexed.assignments {
+        match assignment {
+            Assignment::Name(name) if listed(name) => return Deny::new(kind, Some(name.clone())),
+            Assignment::Computed => return Deny::new(kind, None),
+            Assignment::Name(_) => {}
+        }
+    }
+    lexed
+        .programs
+        .iter()
+        .find(|p| p.origin == Origin::Scanned && listed(&p.written))
+        .and_then(|p| Deny::new(kind, Some(p.written.clone())))
+}
+
+/// D-12 and D-173: in a command calling `officina`, a home or floor
+/// variable reassigned, then one of its environment's.
+fn reassigned(lexed: &Lexed) -> Option<Deny> {
     // The name is derived only for words that can hold it: folding every
     // program of a long line would cost the gate its budget (AD-28).
     let officina = lexed.programs.iter().any(|p| {
@@ -266,27 +397,13 @@ fn home_redirection(lexed: &Lexed) -> Option<Deny> {
     if !officina {
         return None;
     }
-    let home_name = |name: &str| {
-        HOME_REDIRECTION_NAMES
-            .iter()
-            .any(|entry| shell::name_matches(entry, name))
-    };
-    for assignment in &lexed.assignments {
-        match assignment {
-            Assignment::Name(name) if home_name(name) => {
-                return Deny::new(DenyKind::HomeRedirection, Some(name.clone()));
-            }
-            Assignment::Computed => return Deny::new(DenyKind::HomeRedirection, None),
-            Assignment::Name(_) => {}
-        }
-    }
-    // A scanned interpreter can set a variable in its own syntax
-    // (`$env:HOME`, `set HOME=`, `os.environ['HOME']`): the name is enough.
-    lexed
-        .programs
-        .iter()
-        .find(|p| p.origin == Origin::Scanned && home_name(&p.written))
-        .and_then(|p| Deny::new(DenyKind::HomeRedirection, Some(p.written.clone())))
+    assigned(lexed, HOME_REDIRECTION_NAMES, DenyKind::HomeRedirection).or_else(|| {
+        assigned(
+            lexed,
+            OFFICINA_ENVIRONMENT_NAMES,
+            DenyKind::OfficinaEnvironment,
+        )
+    })
 }
 
 /// The protected directories of a home (D-13): `<home>/relay` and
@@ -476,12 +593,25 @@ pub enum Offer<'a> {
 /// and where, the pointer to [`LIST_COMMAND`], then the actions to use
 /// instead as `officina run <name> <param>=<...>`, unavailable classes
 /// marked; at most [`MAX_REASON_BYTES`], cut on a character boundary.
+///
+/// A file write (D-173) is refused from any project: its reason names no
+/// project and offers no action when `project` is empty.
 pub fn deny_reason(deny: &Deny, project: &str, offer: Offer<'_>) -> String {
-    let mut text = format!(
-        "Officina refused this command in the guarded project {}: {}. Run `{LIST_COMMAND}` to see the actions you may use and their allowed values.",
-        quoted(project),
-        why(deny)
-    );
+    let mut text = if deny.kind == DenyKind::RelayStateWrite {
+        format!(
+            "Officina refused this file write: {}. Run `{LIST_COMMAND}` to see the actions you may use and their allowed values.",
+            why(deny)
+        )
+    } else {
+        format!(
+            "Officina refused this command in the guarded project {}: {}. Run `{LIST_COMMAND}` to see the actions you may use and their allowed values.",
+            quoted(project),
+            why(deny)
+        )
+    };
+    if deny.kind == DenyKind::RelayStateWrite && project.is_empty() {
+        return cut(text, MAX_REASON_BYTES);
+    }
     match offer {
         Offer::Approved([]) => text.push_str("\nThis project has no relay action."),
         Offer::Approved(actions) => {
@@ -695,6 +825,17 @@ pub fn containment(
 }
 
 impl Containment {
+    /// True when any source guards a project: what makes file writes under
+    /// the Officina home denied, from any project (D-173).
+    pub fn guards_any(&self) -> bool {
+        self.sources.iter().any(|source| {
+            source
+                .projects
+                .iter()
+                .any(|project| project.autonomy == Autonomy::Guarded)
+        })
+    }
+
     /// The guarded project of the first directory any source guards (D-16:
     /// the session's project root or the call's `cwd`), sources in order.
     pub fn guarded_project(&self, dirs: &[&str]) -> Option<&ProjectRoot> {
@@ -737,6 +878,10 @@ fn why(deny: &Deny) -> String {
             "`{OFFICINA_PROGRAM}` would run with {} reassigned, which can point it at another home or floor",
             matched.map_or_else(|| "a computed variable".to_owned(), |m| format!("`{m}`"))
         ),
+        DenyKind::OfficinaEnvironment => format!(
+            "`{OFFICINA_PROGRAM}` would run with {} reassigned, which decides which programs it and its actions start; `{OFFICINA_PROGRAM} run` takes them from the registry",
+            matched.map_or_else(|| "a computed variable".to_owned(), |m| format!("`{m}`"))
+        ),
         DenyKind::OfficinaVariable => format!(
             "the command names an `{OFFICINA_VARIABLE_PREFIX}` variable, one of Officina's own settings"
         ),
@@ -745,6 +890,9 @@ fn why(deny: &Deny) -> String {
         }
         DenyKind::PowershellInGuardedProject => {
             "Officina reads Bash commands only, so the PowerShell tool is refused in a guarded project; run the command with the Bash tool".to_owned()
+        }
+        DenyKind::RelayStateWrite => {
+            "the file lies in Officina's home, whose relay state and journal only Officina writes; the author edits Officina's files outside a session".to_owned()
         }
     }
 }
@@ -1176,6 +1324,62 @@ mod tests {
         assert!(!names_protected_dir("cat x.officina/relay", &default));
     }
 
+    /// D-173: each file tool is named in the matcher with its field, and
+    /// none of them is a shell tool.
+    #[test]
+    fn every_file_tool_is_gated_by_its_field() {
+        let matcher = gated_tools_matcher();
+        for (tool, field) in FILE_TOOLS {
+            assert_eq!(file_tool_field(tool), Some(*field), "{tool}");
+            assert_eq!(tool_rule(tool), None, "{tool}");
+            assert!(matcher.split('|').any(|name| name == *tool), "{tool}");
+        }
+        assert_eq!(file_tool_field("Read"), None);
+        assert_eq!(file_tool_field("write"), None, "named exactly");
+    }
+
+    /// D-173: every name of the environment constant, assigned next to an
+    /// `officina` call in a guarded project, is denied by name.
+    #[test]
+    fn every_officina_environment_name_is_denied() {
+        let list = vec!["ssh".to_owned()];
+        for name in OFFICINA_ENVIRONMENT_NAMES {
+            let variable = name.replace('*', "DIR");
+            for command in [
+                format!("{variable}=C:/shim officina run probe host=web01"),
+                format!("export {variable}=C:/shim; officina run --list"),
+            ] {
+                let deny = decide(&command, &list, &[], true).unwrap();
+                assert_eq!(deny.kind, DenyKind::OfficinaEnvironment, "{command}");
+                assert_eq!(deny.matched.as_deref(), Some(variable.as_str()));
+                assert_eq!(decide(&command, &list, &[], false), None);
+            }
+            let other = format!("{variable}=C:/shim make test");
+            assert_eq!(decide(&other, &list, &[], true), None, "{other}");
+        }
+        let reason = deny_reason(
+            &deny(DenyKind::OfficinaEnvironment, Some("PATH")),
+            "lab",
+            Offer::Approved(&[]),
+        );
+        assert!(reason.contains("`PATH`"), "{reason}");
+    }
+
+    /// D-173: a file write's reason names no project outside one, and still
+    /// points at the list command.
+    #[test]
+    fn a_file_write_reason_names_no_project_outside_one() {
+        let write = deny(DenyKind::RelayStateWrite, None);
+        let reason = deny_reason(&write, "", Offer::Approved(&[]));
+        assert!(
+            reason.starts_with("Officina refused this file write"),
+            "{reason}"
+        );
+        assert!(reason.contains(LIST_COMMAND), "{reason}");
+        assert!(!reason.contains("guarded project"), "{reason}");
+        assert!(!reason.contains("no relay action"), "{reason}");
+    }
+
     /// D-171: every shell tool has a rule, applied by `decide_call`; the
     /// match is exhaustive, so a new rule does not compile without a case.
     #[test]
@@ -1185,7 +1389,7 @@ mod tests {
         for (tool, rule) in SHELL_TOOLS {
             assert_eq!(tool_rule(tool), Some(*rule), "{tool}");
             assert!(
-                shell_tools_matcher().split('|').any(|name| name == *tool),
+                gated_tools_matcher().split('|').any(|name| name == *tool),
                 "{tool} is in the matcher"
             );
             let guarded = decide_call(tool, Some("ssh host01"), &list, &[], true).map(|d| d.kind);

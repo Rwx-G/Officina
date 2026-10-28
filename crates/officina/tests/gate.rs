@@ -293,6 +293,106 @@ fn non_bash_tool_gets_no_decision() {
     assert!(gate_denied(&env).is_empty() && gate_errors(&env).is_empty());
 }
 
+/// A file tool's payload, from the verified `Read` fixture: `tool` writing
+/// `path`, the shell in `cwd`.
+fn file_write(tool: &str, path: &std::path::Path, cwd: &str) -> serde_json::Value {
+    let mut payload = fixture("read-file.json");
+    let field = officina_core::relay::gate::file_tool_field(tool).unwrap();
+    payload["tool_name"] = tool.into();
+    payload["tool_input"] = serde_json::json!({ field: path.to_string_lossy(), "content": "{}" });
+    payload["cwd"] = cwd.into();
+    payload
+}
+
+/// AC 6 of story 2.14 (D-173): once the relay guards a project, a file tool
+/// writing under the Officina home is denied, from a free project too, and
+/// the journal names the file; the approval it would have forged is absent.
+#[test]
+fn write_into_the_relay_dir_is_denied() {
+    let env = approved_env();
+    let forged = env
+        .relay_home()
+        .approvals_dir()
+        .join("0123456789abcdef-1.approved.json");
+    for (cwd, project_dir) in [
+        (r"C:\path\to\Supervision", Some(GUARDED_ROOT)),
+        (r"C:\path\to\Notes", Some(FREE_ROOT)),
+        (r"C:\path\to\Elsewhere", None),
+    ] {
+        let reason = denied(&env, &file_write("Write", &forged, cwd), project_dir);
+        assert!(
+            reason.starts_with("Officina refused this file write"),
+            "{reason}"
+        );
+        assert!(reason.contains(LIST_COMMAND), "{reason}");
+    }
+    assert!(!forged.exists());
+    let journaled = gate_denied(&env);
+    assert_eq!(journaled.len(), 3);
+    assert!(
+        journaled
+            .iter()
+            .all(|d| d.deny == DenyKind::RelayStateWrite)
+    );
+    assert_eq!(journaled[0].project, "supervision");
+    assert_eq!(journaled[1].project, "", "a free project names none");
+    assert!(
+        journaled[0]
+            .command_excerpt
+            .as_deref()
+            .is_some_and(|e| e.contains("approved.json")),
+        "{journaled:?}"
+    );
+}
+
+/// AC 6 of story 2.14: every file tool is gated; the journal and the stop
+/// flag are relay state like the approvals.
+#[test]
+fn edit_of_the_journal_is_denied() {
+    let env = approved_env();
+    let home = env.relay_home();
+    let journal = home.journal_dir().join("2026-10-28.jsonl");
+    let stopped = home.stopped_file();
+    for (tool, _) in officina_core::relay::gate::FILE_TOOLS {
+        for target in [&journal, &stopped] {
+            denied(
+                &env,
+                &file_write(tool, target, r"C:\path\to\Supervision"),
+                Some(GUARDED_ROOT),
+            );
+        }
+    }
+}
+
+/// AC 6 of story 2.14: a write elsewhere, and any write while the relay
+/// guards nothing, get no decision.
+#[test]
+fn write_elsewhere_gets_no_decision() {
+    let env = approved_env();
+    not_decided(
+        &env,
+        &file_write(
+            "Write",
+            std::path::Path::new(r"C:\path\to\Supervision\site.yml"),
+            r"C:\path\to\Supervision",
+        ),
+        Some(GUARDED_ROOT),
+    );
+    let free = TestEnv::new();
+    free.write_floor(&FLOOR.replace(
+        "actions = [\"check\", \"apply\"]\n",
+        "autonomy = \"free\"\nactions = [\"check\", \"apply\"]\n",
+    ));
+    free.approve();
+    let flag = free.relay_home().stopped_file();
+    not_decided(
+        &free,
+        &file_write("Write", &flag, r"C:\path\to\Supervision"),
+        Some(GUARDED_ROOT),
+    );
+    assert!(gate_denied(&env).is_empty() && gate_denied(&free).is_empty());
+}
+
 #[test]
 fn every_default_guarded_program_is_denied() {
     let env = approved_env();

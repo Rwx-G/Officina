@@ -1,9 +1,9 @@
-//! The gate in the hook (AD-26, AD-28, D-13 to D-17, D-171): reads a
-//! `PreToolUse` payload of a shell tool, the relay floor (phase 1 only), the
-//! approved snapshot and, when one of them fails, the known-projects record;
-//! decides by the tool's rule; journals each deny and each fault; and returns
-//! the JSON Claude Code honours in every mode (E12, E15). It spawns nothing
-//! and compiles no pattern.
+//! The gate in the hook (AD-26, AD-28, D-13 to D-17, D-171, D-173): reads a
+//! `PreToolUse` payload of a shell or file tool, the relay floor (phase 1
+//! only), the approved snapshot and, when one of them fails, the
+//! known-projects record; decides by the tool's rule; journals each deny and
+//! each fault; and returns the JSON Claude Code honours in every mode (E12,
+//! E15). It spawns nothing and compiles no pattern.
 //!
 //! It is containment, not the authority: an internal fault gives no
 //! decision (fail open, AD-28), while an input it cannot read makes it
@@ -18,8 +18,8 @@ use officina_core::floor::{parse_floor, requests_no_excerpts};
 use officina_core::quota::normalise_path;
 use officina_core::relay::HOME_DIR_NAME;
 use officina_core::relay::gate::{
-    Deny, FloorInput, SnapshotInput, ToolRule, containment, decide_call, deny_reason,
-    protected_dirs, tool_rule,
+    Deny, FloorInput, Offer, SnapshotInput, ToolRule, containment, decide_call, decide_file_write,
+    deny_reason, file_tool_field, protected_dirs, tool_rule,
 };
 use officina_core::relay::journal::{
     COMMAND_EXCERPT_CHARS, GateDenied, GateError, GateFault, JournalEntry,
@@ -57,39 +57,70 @@ impl GateEnv {
     }
 }
 
-/// A shell tool's call as the payload carries it (E15, D-171).
+/// A gated tool's call as the payload carries it (E15, D-171, D-173).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ShellCall {
-    /// The tool, one of `SHELL_TOOLS`.
+pub struct ToolCall {
+    /// The tool, one of `SHELL_TOOLS` or `FILE_TOOLS`.
     pub tool: String,
-    /// `tool_input.command`; a lexed tool's call always has one.
+    /// A shell tool's `tool_input.command`; a lexed tool's call always has
+    /// one.
     pub command: Option<String>,
+    /// The file a file tool writes, as its `tool_input` names it.
+    pub target: Option<String>,
     /// The shell's working directory, which follows `cd` (E15).
     pub cwd: Option<String>,
     pub session_id: Option<String>,
 }
 
-impl ShellCall {
-    /// The call, when the payload is a shell tool's (AD-26 step 1, D-171):
-    /// a lexed tool's needs a command, a tool refused whole does not.
-    /// Anything else gets no decision.
-    pub fn from_payload(payload: &serde_json::Value) -> Option<ShellCall> {
+impl ToolCall {
+    /// The call, when the payload is a gated tool's (AD-26 step 1, D-171,
+    /// D-173): a lexed tool's needs a command, a tool refused whole does
+    /// not, a file tool's needs the file it writes. Anything else gets no
+    /// decision.
+    pub fn from_payload(payload: &serde_json::Value) -> Option<ToolCall> {
         let text = |value: Option<&serde_json::Value>| {
             value.and_then(serde_json::Value::as_str).map(str::to_owned)
         };
         let tool = text(payload.get("tool_name"))?;
-        let command = text(payload.get("tool_input").and_then(|i| i.get("command")));
-        match tool_rule(&tool)? {
-            ToolRule::Lexed if command.is_none() => return None,
-            ToolRule::Lexed | ToolRule::DeniedInGuardedProject => {}
-        }
-        Some(ShellCall {
+        let input = payload.get("tool_input");
+        let (command, target) = match file_tool_field(&tool) {
+            Some(field) => (None, Some(text(input.and_then(|i| i.get(field)))?)),
+            None => {
+                let command = text(input.and_then(|i| i.get("command")));
+                match tool_rule(&tool)? {
+                    ToolRule::Lexed if command.is_none() => return None,
+                    ToolRule::Lexed | ToolRule::DeniedInGuardedProject => {}
+                }
+                (command, None)
+            }
+        };
+        Some(ToolCall {
             tool,
             command,
+            target,
             cwd: text(payload.get("cwd")),
             session_id: text(payload.get("session_id")),
         })
     }
+
+    /// What a gate line quotes: the command, or the file written.
+    fn quoted(&self) -> Option<&str> {
+        self.command.as_deref().or(self.target.as_deref())
+    }
+}
+
+/// A file tool's target as an absolute path: a relative one is taken from
+/// the call's `cwd`, then made absolute as Windows would (`..` applied).
+pub fn absolute_target(target: &str, cwd: Option<&str>) -> String {
+    let path = std::path::Path::new(target);
+    let joined = match cwd {
+        Some(cwd) if path.is_relative() => std::path::Path::new(cwd).join(path),
+        _ => path.to_path_buf(),
+    };
+    std::path::absolute(&joined)
+        .unwrap_or(joined)
+        .to_string_lossy()
+        .into_owned()
 }
 
 /// A deny and what the session is told.
@@ -122,8 +153,9 @@ fn is_default_home(home: &RelayHome) -> bool {
 }
 
 /// Reads the gate's inputs and decides for `call` (AD-26 steps 2 to 5,
-/// D-14 to D-16). `project_dir` is `CLAUDE_PROJECT_DIR`.
-pub fn evaluate(home: &RelayHome, call: &ShellCall, project_dir: Option<&str>) -> Evaluation {
+/// D-14 to D-16, D-173). `project_dir` is `CLAUDE_PROJECT_DIR`. A file
+/// tool's write is decided from any project once the relay guards one.
+pub fn evaluate(home: &RelayHome, call: &ToolCall, project_dir: Option<&str>) -> Evaluation {
     let approved = home.read_approved();
     let floor_path = home.relay_floor(&approved);
     let floor_path_text = floor_path.to_string_lossy();
@@ -187,6 +219,30 @@ pub fn evaluate(home: &RelayHome, call: &ShellCall, project_dir: Option<&str>) -
         _ => floor_text.as_deref().is_ok_and(requests_no_excerpts),
     };
     let dirs: Vec<&str> = project_dir.into_iter().chain(call.cwd.as_deref()).collect();
+    if let Some(target) = &call.target {
+        let project = contained.guarded_project(&dirs);
+        let name = project.map(|p| p.name.clone()).unwrap_or_default();
+        let deny = decide_file_write(
+            &absolute_target(target, call.cwd.as_deref()),
+            &home.officina_home().to_string_lossy(),
+            contained.guards_any(),
+        )
+        .map(|deny| GateDeny {
+            reason: deny_reason(
+                &deny,
+                &name,
+                project.map_or(Offer::Approved(&[]), |p| contained.offer_for(&p.name)),
+            ),
+            project: name.clone(),
+            deny,
+        });
+        return Evaluation {
+            deny,
+            project: project.map(|p| p.name.clone()),
+            faults,
+            floor_no_excerpts,
+        };
+    }
     let Some(project) = contained.guarded_project(&dirs) else {
         return Evaluation {
             faults,
@@ -246,7 +302,7 @@ fn panic_text(payload: &(dyn std::any::Any + Send)) -> String {
 /// stays locked loses the lines, never the decision (AD-32).
 pub fn answer_with(
     home: &RelayHome,
-    call: &ShellCall,
+    call: &ToolCall,
     env: &GateEnv,
     now_ms: i64,
     decide: impl FnOnce() -> io::Result<Evaluation>,
@@ -263,8 +319,7 @@ pub fn answer_with(
         }
     };
     let command_excerpt = call
-        .command
-        .as_deref()
+        .quoted()
         .filter(|_| !env.excerpts_off && !evaluation.floor_no_excerpts)
         .map(|command| excerpt(command, COMMAND_EXCERPT_CHARS));
     let mut lines = Vec::new();
@@ -290,13 +345,7 @@ pub fn answer_with(
     evaluation.deny.map(|deny| deny_json(&deny.reason))
 }
 
-fn journal_fault(
-    home: &RelayHome,
-    call: &ShellCall,
-    cause: GateFault,
-    detail: String,
-    now_ms: i64,
-) {
+fn journal_fault(home: &RelayHome, call: &ToolCall, cause: GateFault, detail: String, now_ms: i64) {
     let line = JournalEntry::GateError(GateError {
         project: None,
         session_id: call.session_id.clone(),
@@ -308,14 +357,14 @@ fn journal_fault(
 }
 
 /// The gate for one `PreToolUse` payload: `None` is no decision, which
-/// prints nothing. Not a shell tool's call: no decision, no line.
+/// prints nothing. Not a gated tool's call: no decision, no line.
 pub fn answer(
     home: &RelayHome,
     payload: &serde_json::Value,
     env: &GateEnv,
     now_ms: i64,
 ) -> Option<String> {
-    let call = ShellCall::from_payload(payload)?;
+    let call = ToolCall::from_payload(payload)?;
     answer_with(home, &call, env, now_ms, || {
         Ok(evaluate(home, &call, env.project_dir.as_deref()))
     })
@@ -326,10 +375,11 @@ mod tests {
     use super::*;
     use officina_core::relay::journal::JournalLine;
 
-    fn call() -> ShellCall {
-        ShellCall {
+    fn call() -> ToolCall {
+        ToolCall {
             tool: "Bash".to_owned(),
             command: Some("ssh host01".to_owned()),
+            target: None,
             cwd: Some(r"C:\path\to\Lab".to_owned()),
             session_id: Some("00000000-0000-0000-0000-000000000001".to_owned()),
         }
@@ -415,15 +465,27 @@ mod tests {
     }
 
     #[test]
-    fn only_shell_tool_calls_are_gated() {
-        use officina_core::relay::gate::SHELL_TOOLS;
+    fn only_gated_tool_calls_are_gated() {
+        use officina_core::relay::gate::{FILE_TOOLS, SHELL_TOOLS};
+        for (tool, field) in FILE_TOOLS {
+            let with = serde_json::json!({"tool_name": tool, "tool_input": {*field: "C:/x/a.txt"}, "cwd": "C:/x"});
+            let call = ToolCall::from_payload(&with).unwrap();
+            assert_eq!(call.target.as_deref(), Some("C:/x/a.txt"), "{tool}");
+            assert_eq!(call.command, None, "{tool}");
+            let without = serde_json::json!({"tool_name": tool, "tool_input": {"content": "x"}});
+            assert_eq!(
+                ToolCall::from_payload(&without),
+                None,
+                "{tool}: no file, no decision"
+            );
+        }
         for (tool, rule) in SHELL_TOOLS {
             let with = serde_json::json!({"tool_name": tool, "tool_input": {"command": "ls"}, "cwd": "C:/x"});
-            let call = ShellCall::from_payload(&with).unwrap();
+            let call = ToolCall::from_payload(&with).unwrap();
             assert_eq!(call.command.as_deref(), Some("ls"), "{tool}");
             let without =
                 serde_json::json!({"tool_name": tool, "tool_input": {"url": "wss://example.com"}});
-            let gated = ShellCall::from_payload(&without).is_some();
+            let gated = ToolCall::from_payload(&without).is_some();
             match rule {
                 ToolRule::Lexed => assert!(!gated, "{tool}: no command, no decision"),
                 ToolRule::DeniedInGuardedProject => assert!(gated, "{tool}: refused whole"),
@@ -435,7 +497,7 @@ mod tests {
             serde_json::json!({"tool_name": "bash", "tool_input": {"command": "ls"}}),
             serde_json::json!({"tool_input": {"command": "ls"}}),
         ] {
-            assert_eq!(ShellCall::from_payload(&other), None, "{other}");
+            assert_eq!(ToolCall::from_payload(&other), None, "{other}");
         }
     }
 }

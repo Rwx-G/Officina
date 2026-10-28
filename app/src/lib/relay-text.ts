@@ -38,9 +38,11 @@ export const DENY_TEXT: Record<DenyKind, string> = {
   encoded_command: "encoded command",
   dynamic: "dynamic command name",
   home_redirection: "home redirected",
+  officina_environment: "officina's environment changed",
   officina_variable: "names an OFFICINA_ variable",
   protected_dir: "names the relay's files",
   powershell_in_guarded_project: "PowerShell in a guarded project",
+  relay_state_write: "writes Officina's files",
 };
 
 export const GATE_FAULT_TEXT: Record<GateFault, string> = {

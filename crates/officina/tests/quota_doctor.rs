@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 
 use common::{TestEnv, fingerprint, now_ms, printed_hooks_block};
 use officina_core::board::Board;
-use officina_core::relay::gate::{SHELL_TOOLS, shell_tools_matcher};
+use officina_core::relay::gate::{gated_tools, gated_tools_matcher};
 use officina_host::collector::{Collector, LoadedFloor};
 use officina_host::paths::Paths;
 use officina_host::watch::{CollectorMsg, spawn};
@@ -116,7 +116,7 @@ fn doctor_with_a_guarded_project_requires_pre_tool_use() {
     let block = printed_hooks_block(&out.stdout);
     assert_eq!(
         block["hooks"]["PreToolUse"][0]["matcher"],
-        shell_tools_matcher()
+        gated_tools_matcher()
     );
 
     std::fs::write(&settings, block.to_string()).unwrap();
@@ -124,16 +124,16 @@ fn doctor_with_a_guarded_project_requires_pre_tool_use() {
     assert!(text.contains("[ok  ] hooks"), "{text}");
 }
 
-/// D-171: a `PreToolUse` registration merged before story 2.12, naming one
-/// shell tool, is reported with the tools it leaves out; pasting the block
-/// doctor prints then covers every one.
+/// D-171, D-173: a `PreToolUse` registration merged before stories 2.12
+/// and 2.14, naming one gated tool, is reported with the tools it leaves
+/// out; pasting the block doctor prints then covers every one.
 #[test]
-fn doctor_with_a_guarded_project_requires_every_shell_tool() {
+fn doctor_with_a_guarded_project_requires_every_gated_tool() {
     let env = TestEnv::new();
     env.write_agents("[]");
     env.write_floor("schema = 2\n[[project]]\nname = \"lab\"\npath = \"Lab\"\n");
     let full = printed_hooks_block(&env.run(&["doctor"], b"").stdout);
-    let names: Vec<&str> = SHELL_TOOLS.iter().map(|(name, _)| *name).collect();
+    let names = gated_tools();
     let (first, others) = names.split_first().unwrap();
     let mut partial = full.clone();
     partial["hooks"]["PreToolUse"][0]["matcher"] = (*first).into();

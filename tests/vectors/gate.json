@@ -427,6 +427,28 @@
     {"name": "limit: a glob naming the relay", "command": "cat ~/.offic*/relay/approved.json", "cwd_guarded": true, "expect": "none", "limit": true},
     {"name": "limit: a brace naming the relay", "command": "cat ~/.officina/rel{ay,}/approved.json", "cwd_guarded": true, "expect": "none", "limit": true},
     {"name": "limit: the relay reached in two steps", "command": "cd ~/.officina && cat relay/approved.json", "cwd_guarded": true, "expect": "none", "limit": true},
-    {"name": "limit: BASH_ENV names a startup file for non-interactive subshells", "command": "BASH_ENV=./rc.sh bash -c :", "cwd_guarded": true, "expect": "none", "limit": true}
+    {"name": "limit: BASH_ENV names a startup file for non-interactive subshells", "command": "BASH_ENV=./rc.sh bash -c :", "cwd_guarded": true, "expect": "none", "limit": true},
+
+    {"name": "D-173: PATH put in front of officina, a git shim first", "command": "PATH=/c/shim:$PATH officina run verify group=lab-web", "cwd_guarded": true, "expect": "officina_environment", "matched": "PATH"},
+    {"name": "D-173: PATH in lowercase, which Windows reads anyway", "command": "path=C:/shim officina.exe run verify group=lab-web", "cwd_guarded": true, "expect": "officina_environment", "matched": "path"},
+    {"name": "D-173: PATHEXT through env", "command": "env PATHEXT=.SHIM officina run --list", "cwd_guarded": true, "expect": "officina_environment", "matched": "PATHEXT"},
+    {"name": "D-173: WSLENV exported before officina", "command": "export WSLENV=PATH/l; officina run remote", "cwd_guarded": true, "expect": "officina_environment", "matched": "WSLENV"},
+    {"name": "D-173: ComSpec pointing at another shell", "command": "ComSpec=C:/shim/cmd.exe officina run status", "cwd_guarded": true, "expect": "officina_environment", "matched": "ComSpec"},
+    {"name": "D-173: GIT_DIR pointing the fingerprint elsewhere", "command": "GIT_DIR=C:/elsewhere/.git officina run verify group=lab-web", "cwd_guarded": true, "expect": "officina_environment", "matched": "GIT_DIR"},
+    {"name": "D-173: a home redirection is reported before the environment", "command": "PATH=/c/shim HOME=/tmp officina run verify", "cwd_guarded": true, "expect": "home_redirection", "matched": "HOME"},
+    {"name": "D-173: PATH set for another program than officina", "command": "PATH=/c/tools:$PATH make test", "cwd_guarded": true, "expect": "none"},
+    {"name": "D-173: PATH before officina outside a guarded project", "command": "PATH=/c/shim officina run verify group=lab-web", "cwd_guarded": false, "expect": "none"},
+
+    {"name": "D-173: Write into the relay folder", "tool": "Write", "target": "C:/Users/user01/.officina/relay/approvals/0123456789abcdef-1.approved.json", "cwd_guarded": true, "expect": "relay_state_write"},
+    {"name": "D-173: Edit of the journal, from any project", "tool": "Edit", "target": "C:\\Users\\user01\\.officina\\journal\\2026-10-28.jsonl", "cwd_guarded": true, "expect": "relay_state_write"},
+    {"name": "D-173: MultiEdit of the floor in the home", "tool": "MultiEdit", "target": "c:/USERS/user01/.Officina/floor.toml", "cwd_guarded": true, "expect": "relay_state_write"},
+    {"name": "D-173: NotebookEdit under the home", "tool": "NotebookEdit", "target": "C:/Users/user01/.officina/relay/notes.ipynb", "cwd_guarded": true, "expect": "relay_state_write"},
+    {"name": "D-173: the device namespace spelling", "tool": "Write", "target": "\\\\?\\C:\\Users\\user01\\.officina\\relay\\stopped", "cwd_guarded": true, "expect": "relay_state_write"},
+    {"name": "D-173: the Git Bash spelling", "tool": "Write", "target": "/c/Users/user01/.officina/relay/approved.json", "cwd_guarded": true, "expect": "relay_state_write"},
+    {"name": "D-173: dot dot back into the home", "tool": "Write", "target": "C:/Users/user01/work/../.officina/./relay//approved.json", "cwd_guarded": true, "expect": "relay_state_write"},
+    {"name": "D-173: a trailing dot Windows drops", "tool": "Write", "target": "C:/Users/user01/.officina./relay/approved.json", "cwd_guarded": true, "expect": "relay_state_write"},
+    {"name": "D-173: a sibling folder named alike", "tool": "Write", "target": "C:/Users/user01/.officina2/relay/approved.json", "cwd_guarded": true, "expect": "none"},
+    {"name": "D-173: a write elsewhere", "tool": "Write", "target": "C:/Users/user01/work/Lab/site.yml", "cwd_guarded": true, "expect": "none"},
+    {"name": "D-173: a write under the home while the relay guards nothing", "tool": "Write", "target": "C:/Users/user01/.officina/relay/stopped", "cwd_guarded": false, "expect": "none"}
   ]
 }

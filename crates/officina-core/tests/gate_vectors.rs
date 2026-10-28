@@ -1,7 +1,8 @@
 //! Replays the hand-written gate vector set (AD-26, AD-27, D-10 to D-13,
-//! D-171) through `gate::decide_call`, refuses a set that no longer
-//! exercises every lexer constant, shell tool, default guarded program,
-//! home-redirection name and deny kind, and holds the honest limits to "no
+//! D-171, D-173) through `gate::decide_call`, or `gate::decide_file_write`
+//! for a file tool, refuses a set that no longer exercises every lexer
+//! constant, shell and file tool, default guarded program, home-redirection
+//! and environment name and deny kind, and holds the honest limits to "no
 //! decision".
 
 use std::collections::HashSet;
@@ -9,7 +10,8 @@ use std::collections::HashSet;
 use officina_core::floor::parse_floor;
 use officina_core::relay::catalogue::{DEFAULT_GUARDED_PROGRAMS, guarded_programs};
 use officina_core::relay::gate::{
-    DenyKind, HOME_REDIRECTION_NAMES, SHELL_TOOLS, decide_call, guarded_match, protected_dirs,
+    DenyKind, FILE_TOOLS, HOME_REDIRECTION_NAMES, OFFICINA_ENVIRONMENT_NAMES, SHELL_TOOLS,
+    decide_call, decide_file_write, file_tool_field, guarded_match, protected_dirs,
 };
 use officina_core::relay::shell::{
     self, Builtin, CMD_COMMAND_SWITCHES, CMD_DELAYED_EXPANSION_SWITCH, COMMAND_QUERY_OPTIONS,
@@ -39,10 +41,17 @@ struct Case {
     /// The tool that runs the command; the Bash tool when absent (D-171).
     #[serde(default)]
     tool: Option<String>,
+    /// What a shell tool runs; empty for a file tool.
+    #[serde(default)]
     command: String,
+    /// The file a file tool writes, resolved as the host would (D-173).
+    #[serde(default)]
+    target: Option<String>,
     /// The effective list; the default one when absent.
     #[serde(default)]
     guarded_programs: Option<Vec<String>>,
+    /// For a shell tool, the call lies in a guarded project; for a file
+    /// tool, the relay guards any project.
     cwd_guarded: bool,
     /// `"none"` or a deny kind.
     expect: String,
@@ -96,13 +105,20 @@ fn every_case_matches() {
             case.name
         );
         let list = case.guarded_programs.as_ref().unwrap_or(&default);
-        let decision = decide_call(
-            case.tool(),
-            Some(&case.command),
-            list,
-            &dirs,
-            case.cwd_guarded,
-        );
+        let decision = match (file_tool_field(case.tool()), &case.target) {
+            (Some(_), Some(target)) => decide_file_write(target, &set.home, case.cwd_guarded),
+            (None, None) => decide_call(
+                case.tool(),
+                Some(&case.command),
+                list,
+                &dirs,
+                case.cwd_guarded,
+            ),
+            _ => panic!(
+                "case {}: a target goes with a file tool, and only",
+                case.name
+            ),
+        };
         let kind = decision.as_ref().map(|d| d.kind);
         let matched_ok = case
             .matched
@@ -233,7 +249,11 @@ fn every_constant_appears_in_a_case() {
         missing.join("\n")
     );
 
-    for (tool, _) in SHELL_TOOLS {
+    for tool in SHELL_TOOLS
+        .iter()
+        .map(|(tool, _)| tool)
+        .chain(FILE_TOOLS.iter().map(|(tool, _)| tool))
+    {
         assert!(
             set.cases.iter().any(|c| c.tool() == *tool),
             "no case runs through the {tool} tool"
@@ -277,5 +297,18 @@ fn every_constant_appears_in_a_case() {
                     .is_some_and(|m| shell::name_matches(name, m))
         });
         assert!(covered, "no case denies a home redirection through {name}");
+    }
+    for name in OFFICINA_ENVIRONMENT_NAMES {
+        let covered = expected.iter().any(|(case, kind)| {
+            *kind == Some(DenyKind::OfficinaEnvironment)
+                && case
+                    .matched
+                    .as_deref()
+                    .is_some_and(|m| shell::name_matches(name, m))
+        });
+        assert!(
+            covered,
+            "no case denies an officina environment through {name}"
+        );
     }
 }
