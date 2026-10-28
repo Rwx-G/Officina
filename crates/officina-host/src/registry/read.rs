@@ -128,6 +128,12 @@ impl Reader {
         subjects(&self.conn)
     }
 
+    /// Every `confirmation` row, as far as deciding what needs a verdict
+    /// reads it, by id.
+    pub fn confirmations(&self) -> rusqlite::Result<Vec<ConfirmationRecord>> {
+        confirmations(&self.conn)
+    }
+
     /// The subject of each filed session, by session id: what a board card
     /// shows (AD-54).
     pub fn card_subjects(&self) -> rusqlite::Result<BTreeMap<String, SubjectRef>> {

@@ -23,10 +23,12 @@ use std::time::{Duration, Instant};
 
 use officina_core::board::Board;
 use officina_core::ipc::IpcErrorCode;
-use officina_core::registry::confirm::{AuthorAction, SubjectOrigin};
+use officina_core::registry::confirm::{
+    AuthorAction, ConfirmItem, FileUnder, ItemOutcome, SubjectOrigin,
+};
 use officina_core::registry::retention::EXCERPT_TTL_MS;
 use officina_core::registry::types::{
-    AuthorRefusal, Ending, RegistryState, SessionRecord, SettingKey, Source,
+    AuthorRefusal, Ending, RegistryState, SessionRecord, SettingKey, Source, Verdict,
 };
 use officina_core::registry::view::RegistryView;
 use officina_core::relay::journal::{CatalogueApproved, JournalEntry};
@@ -1381,5 +1383,99 @@ fn author_action_emits_a_new_view() {
         .expect("a view after the refused action");
     assert_eq!(again.subjects.len(), 1);
     assert!(refused.recv_timeout(AUTHOR_WAIT).unwrap().is_err());
+    stop(handle);
+}
+
+/// The hook lines of one session that saw a prompt, an answer and an end,
+/// from `at` on.
+fn ended_session(env: &common::TestEnv, session: &str, at: i64) {
+    let cwd = "C:/work/api";
+    for (offset, payload) in [
+        serde_json::json!({"hook_event_name": "SessionStart", "session_id": session, "cwd": cwd, "source": "startup"}),
+        serde_json::json!({"hook_event_name": "UserPromptSubmit", "session_id": session, "cwd": cwd, "prompt": format!("work of {session}")}),
+        serde_json::json!({"hook_event_name": "Stop", "session_id": session, "cwd": cwd, "last_assistant_message": "Done."}),
+        serde_json::json!({"hook_event_name": "SessionEnd", "session_id": session, "cwd": cwd, "reason": "prompt_input_exit"}),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        hook_line(env, payload, at + offset as i64 * 60_000);
+    }
+}
+
+/// Journey 5, PRD section 7 Memory (story 3.7 AC 4): a subject and a
+/// confirmation are made, the window is stopped, and three days of event
+/// files in which sessions end are written while it is closed; at the next
+/// start every one of those sessions is in the registry, ended, and the
+/// subject and the confirmation made before the stop are still there.
+#[test]
+fn a_closed_weekend_loses_no_session_subject_or_verdict() {
+    let env = common::TestEnv::new();
+    let now = officina_host::files::now_ms();
+    env.write_agents("[]");
+    ended_session(&env, "s-friday", now - 4 * DAY_MS);
+    let (handle, emitted, _) = watch_all(&env, |_| {});
+    let view = until(&emitted.registries, |v| {
+        v.triage.iter().any(|r| r.key == "session:s-friday")
+    });
+    let row = view
+        .triage
+        .iter()
+        .find(|r| r.key == "session:s-friday")
+        .unwrap();
+    let confirm = AuthorCommand::Confirm(vec![ConfirmItem {
+        key: row.key.clone(),
+        shown: row.proposal,
+        verdict: Verdict::ToResume,
+        routine: false,
+        file_under: Some(FileUnder::New {
+            name: "friday work".into(),
+        }),
+    }]);
+    match ask(&handle, confirm, AUTHOR_WAIT)
+        .recv_timeout(AUTHOR_WAIT)
+        .unwrap()
+    {
+        Ok(AuthorAnswer::Confirmed(answers)) => assert!(
+            matches!(answers[0].outcome, ItemOutcome::Confirmed { .. }),
+            "{answers:?}"
+        ),
+        other => panic!("{other:?}"),
+    }
+    ask(
+        &handle,
+        create("monday plan", SubjectOrigin::Project("api".into())),
+        AUTHOR_WAIT,
+    )
+    .recv_timeout(AUTHOR_WAIT)
+    .unwrap()
+    .unwrap();
+    stop(handle);
+
+    let weekend: Vec<String> = (1..=3).map(|d| format!("s-day-{d}")).collect();
+    for (d, session) in weekend.iter().enumerate() {
+        ended_session(&env, session, now - (d as i64 + 1) * DAY_MS);
+    }
+    let (handle, emitted, _) = watch_all(&env, |_| {});
+    let view = until(&emitted.registries, |v| {
+        v.registry.state == RegistryState::Ready
+    });
+    let records = open_reader(&env.officina_home(), &[])
+        .unwrap()
+        .session_records()
+        .unwrap();
+    for session in &weekend {
+        let found = record(&records, session).unwrap_or_else(|| panic!("{session} lost"));
+        assert!(found.is_ended(), "{session} not ended");
+    }
+    assert_eq!(subject_names(&env), ["friday work", "monday plan"]);
+    let reader = open_reader(&env.officina_home(), &[]).unwrap();
+    let confirmations = reader.confirmations().unwrap();
+    assert_eq!(confirmations.len(), 1, "the verdict made before the stop");
+    assert_eq!(confirmations[0].session_id.as_deref(), Some("s-friday"));
+    assert!(
+        view.triage.iter().all(|r| r.key != "session:s-friday"),
+        "its row stays answered"
+    );
     stop(handle);
 }

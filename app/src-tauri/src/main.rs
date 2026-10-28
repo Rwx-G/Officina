@@ -126,7 +126,7 @@ async fn ask(state: State<'_, AppState>, command: AuthorCommand) -> Result<Autho
 async fn act(state: State<'_, AppState>, action: AuthorAction) -> Result<Option<i64>, IpcError> {
     match ask(state, AuthorCommand::Act(action)).await? {
         AuthorAnswer::Done { created } => Ok(created),
-        AuthorAnswer::Archived(_) => {
+        AuthorAnswer::Archived(_) | AuthorAnswer::Confirmed(_) => {
             Err(IpcError::internal("the collector answered another request"))
         }
     }
@@ -166,7 +166,7 @@ fn get_registry(state: State<'_, AppState>) -> Option<RegistryView> {
 async fn list_archived(state: State<'_, AppState>) -> Result<Vec<SubjectView>, IpcError> {
     match ask(state, AuthorCommand::ListArchived).await? {
         AuthorAnswer::Archived(listed) => Ok(listed),
-        AuthorAnswer::Done { .. } => {
+        AuthorAnswer::Done { .. } | AuthorAnswer::Confirmed(_) => {
             Err(IpcError::internal("the collector answered another request"))
         }
     }

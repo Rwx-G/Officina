@@ -13,7 +13,7 @@ use std::time::{Duration, Instant, SystemTime};
 use officina_core::board::Board;
 use officina_core::dates::event_file_name;
 use officina_core::ipc::IpcError;
-use officina_core::registry::confirm::AuthorAction;
+use officina_core::registry::confirm::{AuthorAction, ConfirmItem, ItemAnswer};
 use officina_core::registry::retention::PASS_INTERVAL_MS;
 use officina_core::registry::view::{RegistryView, SubjectView};
 use officina_core::relay::view::RelayView;
@@ -70,6 +70,8 @@ pub enum AuthorCommand {
     ListArchived,
     /// An action on subjects and sessions, written in one transaction.
     Act(AuthorAction),
+    /// Triage rows confirmed in one transaction, answered per item (AD-49).
+    Confirm(Vec<ConfirmItem>),
 }
 
 /// What the collector answers to an author request.
@@ -80,6 +82,8 @@ pub enum AuthorAnswer {
         created: Option<i64>,
     },
     Archived(Vec<SubjectView>),
+    /// What became of each confirmed item, in the order sent.
+    Confirmed(Vec<ItemAnswer>),
 }
 
 /// The collector's answer, or why there is none to give.
@@ -714,6 +718,12 @@ fn answer_author<E: Emit>(
             report_registry(collector, registry);
             publish_both(collector, registry, outputs, true);
             done.map(|created| AuthorAnswer::Done { created })
+        }
+        AuthorCommand::Confirm(items) => {
+            let answered = registry.confirm(&items, now_ms());
+            report_registry(collector, registry);
+            publish_both(collector, registry, outputs, true);
+            answered.map(AuthorAnswer::Confirmed)
         }
     };
     let _ = request.reply.send(reply);
