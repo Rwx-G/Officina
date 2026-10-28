@@ -986,6 +986,25 @@ fn unavailable_registry_keeps_the_board_and_deletes_nothing() {
             .is_some()
     );
     assert!(old.exists(), "nothing is deleted");
+    // An author action is answered with why nothing can be written, and
+    // the Subjects view says why it is empty.
+    let refused = ask(
+        &handle,
+        create("rollout", SubjectOrigin::Project("api".into())),
+        AUTHOR_WAIT,
+    )
+    .recv_timeout(AUTHOR_WAIT)
+    .unwrap()
+    .unwrap_err();
+    assert_eq!(
+        refused.code,
+        IpcErrorCode::RegistryUnavailable,
+        "{refused:?}"
+    );
+    assert!(refused.message.contains("unavailable"), "{refused:?}");
+    let view = handle.registry.read().unwrap().clone().unwrap();
+    assert_eq!(view.registry.state, RegistryState::Unavailable);
+    assert!(view.registry.detail.is_some() && view.subjects.is_empty());
     stop(handle);
 }
 
