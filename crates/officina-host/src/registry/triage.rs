@@ -22,8 +22,9 @@ use officina_core::registry::model::{
     BinaryStamp, ModelPause, answer_still_wanted, case_key, may_send, pause_due, queue,
 };
 use officina_core::registry::triage_call::{
-    Budget, CALL_TIMEOUT_MS, CallAnswer, CallRecord, CallUsage, ModelOutputError, STDOUT_CAP_BYTES,
-    TriageCase, WORKDIR_NAME, argv, budget, prompt, read_output, refusal_for_binary, triage_env,
+    Budget, CALL_SPACING_MS, CALL_TIMEOUT_MS, CallAnswer, CallRecord, CallUsage, ModelOutputError,
+    STDOUT_CAP_BYTES, TriageCase, WORKDIR_NAME, argv, budget, prompt, read_output,
+    refusal_for_binary, triage_env,
 };
 use officina_core::registry::types::{SettingKey, Source};
 use officina_core::registry::types::{TriageOutcome, TriagePurpose, TriageRefusal};
@@ -489,6 +490,10 @@ struct DryRun {
 pub struct Triage {
     dry_run: Option<DryRun>,
     last_stop: Option<DryRunStop>,
+    /// The queue is read again no sooner than this: a call may start only
+    /// one spacing after the last one anyway (AD-52), and reading the
+    /// registry's rows on every tick would cost the collector for nothing.
+    proposals_after_ms: i64,
 }
 
 /// One case to send: the purpose, its key and what is sent.
@@ -554,6 +559,10 @@ impl Triage {
         now_ms: i64,
     ) -> Result<Option<NextCall>, RegistryError> {
         let Some(run) = &mut self.dry_run else {
+            if now_ms < self.proposals_after_ms {
+                return Ok(None);
+            }
+            self.proposals_after_ms = now_ms + CALL_SPACING_MS;
             return writer.next_proposal(now_ms);
         };
         if run.out.is_some() {

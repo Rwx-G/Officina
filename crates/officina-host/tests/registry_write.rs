@@ -1948,6 +1948,127 @@ mod model {
         );
     }
 
+    /// The answer of a call taken by `next`, as the runner returns it.
+    fn answered(next: &officina_host::registry::triage::NextCall, at: i64) -> CallResult {
+        CallResult {
+            purpose: TriagePurpose::Proposal,
+            case_key: next.case_key.clone(),
+            input_hash: next.case.input_hash(),
+            started_at_ms: at,
+            duration_ms: 3_000,
+            outcome: TriageOutcome::Answer,
+            refusal: None,
+            answer: Some(CallAnswer {
+                verdict: ModelVerdict::Finished,
+                reason: "Done.".into(),
+            }),
+            usage: CallUsage::default(),
+            detail: None,
+        }
+    }
+
+    /// AD-52 (adversarial pass): while the budget is spent, nothing is sent
+    /// and the rows stay pending; once the hour has passed, they go.
+    #[test]
+    fn proposals_wait_while_the_budget_is_spent() {
+        let (home, mut writer) = enabled(&["s1"]);
+        for i in 0..60 {
+            writer
+                .record_call(&CallResult {
+                    purpose: TriagePurpose::DryRun,
+                    case_key: format!("confirmation:{i}"),
+                    input_hash: "h".into(),
+                    started_at_ms: NOW - 30 * MINUTE + i,
+                    duration_ms: 1,
+                    outcome: TriageOutcome::Answer,
+                    refusal: None,
+                    answer: None,
+                    usage: CallUsage::default(),
+                    detail: None,
+                })
+                .unwrap();
+        }
+        let mut triage = Triage::default();
+        assert!(triage.next_call(&mut writer, NOW).unwrap().is_none());
+        assert_eq!(view(&writer, &home, NOW).model.pending, 1, "still pending");
+        assert!(
+            triage
+                .next_call(&mut writer, NOW + 31 * MINUTE)
+                .unwrap()
+                .is_some(),
+            "the hour has passed"
+        );
+    }
+
+    /// AD-52 (adversarial pass): the queue is read at most once per call
+    /// spacing, so a refusal, which spends no budget, does not make the
+    /// collector read the registry on every tick, and the next row waits
+    /// one spacing.
+    #[test]
+    fn the_queue_is_read_once_per_spacing() {
+        let (_home, mut writer) = enabled(&["s1", "s2"]);
+        let mut triage = Triage::default();
+        fail_next(&mut triage, &mut writer, NOW, TriageOutcome::Refused);
+        assert!(
+            triage.next_call(&mut writer, NOW + 1).unwrap().is_none(),
+            "read again within the spacing"
+        );
+        assert!(
+            triage
+                .next_call(&mut writer, NOW + CALL_SPACING_MS)
+                .unwrap()
+                .is_some()
+        );
+    }
+
+    /// AD-52, D-68 (adversarial pass): an answer to a case whose excerpts
+    /// changed while the call was out is not stored, and the row is
+    /// queued again on its new case.
+    #[test]
+    fn an_answer_to_a_case_that_changed_meanwhile_is_dropped() {
+        let (home, mut writer) = enabled(&["s1"]);
+        let mut triage = Triage::default();
+        let next = triage.next_call(&mut writer, NOW).unwrap().unwrap();
+        home.append(
+            &day_file(NOW),
+            &[answer(
+                "s1",
+                NOW + 500,
+                CWD,
+                "Actually, one test still fails.",
+                None,
+            )],
+        );
+        writer.ingest(&home.ctx(), NOW + 1_000).unwrap();
+        triage
+            .take_result(&mut writer, &answered(&next, NOW), NOW + 3_000)
+            .unwrap();
+        assert_eq!(answer_count(&home, "s1"), 0);
+        let row = view(&writer, &home, NOW + 4_000).triage.remove(0);
+        assert_eq!(row.proposal.source, ProposalSource::Rules);
+        assert!(row.model_pending, "queued again on its new case");
+    }
+
+    /// AD-52 (adversarial pass): an answer that comes back after the author
+    /// turned the model off is recorded as a call and never stored.
+    #[test]
+    fn an_answer_after_the_model_was_turned_off_is_dropped() {
+        let (home, mut writer) = enabled(&["s1"]);
+        let mut triage = Triage::default();
+        let next = triage.next_call(&mut writer, NOW).unwrap().unwrap();
+        writer
+            .set_triage_model(false, NOW + 1_000)
+            .unwrap()
+            .unwrap();
+        triage
+            .take_result(&mut writer, &answered(&next, NOW), NOW + 3_000)
+            .unwrap();
+        assert_eq!(answer_count(&home, "s1"), 0);
+        writer.set_triage_model(true, NOW + 4_000).unwrap().unwrap();
+        let row = view(&writer, &home, NOW + 5_000).triage.remove(0);
+        assert_eq!(row.proposal.source, ProposalSource::Rules);
+    }
+
     /// AD-52, D-68: an answer that comes back after the author confirmed
     /// its row is recorded as a call and never stored.
     #[test]
