@@ -114,3 +114,36 @@ fn session_record_round_trips_with_each_source() {
         (Some(7), Source::Author, NOW + 99)
     );
 }
+
+/// Adversarial pass (D-84): a file rewritten shorter than its offset while
+/// the window was closed is read again from its start, so all of it is
+/// pending, not the difference against the old offset.
+#[test]
+fn pending_bytes_count_a_rewritten_file_whole() {
+    use officina_core::registry::types::{RegistryReport, RegistryState};
+    let home = Home::new();
+    let today = day_file(NOW);
+    home.append(
+        &today,
+        &[
+            line("Stop", "s1", NOW - 3, "C:/work/api"),
+            line("Stop", "s2", NOW - 2, "C:/work/api"),
+        ],
+    );
+    let mut writer = home.writer(NOW);
+    writer.ingest(&home.ctx(), NOW).unwrap();
+    drop(writer);
+    let rewritten = line("Stop", "s3", NOW - 1, "C:/work/api");
+    std::fs::write(home.events.join(&today), &rewritten).unwrap();
+    let ready = RegistryReport {
+        state: RegistryState::Ready,
+        detail: None,
+        exclude_from_sync: None,
+    };
+    let view = open_reader(&home.home, &[])
+        .unwrap()
+        .view(ready, None, &home.events, NOW)
+        .unwrap();
+    assert_eq!(view.ingestion.pending_bytes, rewritten.len() as u64);
+    assert_eq!(view.ingestion.incomplete_files, 1);
+}

@@ -230,9 +230,11 @@ pub(crate) fn ingestion_view(
             continue;
         }
         view.incomplete_files += 1;
-        view.pending_bytes += meta
-            .len()
-            .saturating_sub(row.map_or(0, |row| row.ingested_bytes));
+        let offset = row.map_or(0, |row| row.ingested_bytes);
+        // Shorter than its offset, the file was rewritten: the window reads
+        // it again from its start (D-84).
+        let read_from = if meta.len() < offset { 0 } else { offset };
+        view.pending_bytes += meta.len() - read_from;
     }
     Ok(view)
 }
