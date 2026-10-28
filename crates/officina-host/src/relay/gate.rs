@@ -399,23 +399,20 @@ fn panic_text(payload: &(dyn std::any::Any + Send)) -> String {
 }
 
 /// Runs `decide` for `call`, journals what it concluded, and returns the
-/// deny JSON when there is one. A panic or an error inside `decide` gives no
-/// decision and a `gate_error` line (AD-28); the command excerpt is then
-/// left out, since the floor's `no_excerpts` is unknown. A journal that
-/// stays locked loses the lines, never the decision (AD-32).
+/// deny JSON when there is one. `decide` reads no input it cannot turn into
+/// a stricter gate ([`evaluate`]), so its only internal fault is a panic,
+/// which gives no decision and a `gate_error` line (AD-28); the command
+/// excerpt is then left out, since the floor's `no_excerpts` is unknown. A
+/// journal that stays locked loses the lines, never the decision (AD-32).
 pub fn answer_with(
     home: &RelayHome,
     call: &ToolCall,
     env: &GateEnv,
     now_ms: i64,
-    decide: impl FnOnce() -> io::Result<Evaluation>,
+    decide: impl FnOnce() -> Evaluation,
 ) -> Option<String> {
     let evaluation = match catch_unwind(AssertUnwindSafe(decide)) {
-        Ok(Ok(evaluation)) => evaluation,
-        Ok(Err(e)) => {
-            journal_fault(home, call, GateFault::Io, e.to_string(), now_ms);
-            return None;
-        }
+        Ok(evaluation) => evaluation,
         Err(payload) => {
             journal_fault(home, call, GateFault::Panic, panic_text(&*payload), now_ms);
             return None;
@@ -469,7 +466,7 @@ pub fn answer(
 ) -> Option<String> {
     let call = ToolCall::from_payload(payload)?;
     answer_with(home, &call, env, now_ms, || {
-        Ok(evaluate(home, &call, env.project_dir.as_deref()))
+        evaluate(home, &call, env.project_dir.as_deref())
     })
 }
 
@@ -725,7 +722,7 @@ mod tests {
             &call(),
             &GateEnv::default(),
             crate::files::now_ms(),
-            || -> io::Result<Evaluation> { panic!("the gate broke") },
+            || -> Evaluation { panic!("the gate broke") },
         );
         assert_eq!(answer, None);
         let errors = gate_errors(&home);
@@ -734,28 +731,6 @@ mod tests {
         assert_eq!(errors[0].detail, "the gate broke");
         assert_eq!(errors[0].command_excerpt, None);
         assert_eq!(errors[0].session_id, call().session_id);
-    }
-
-    #[test]
-    fn io_error_gives_no_decision() {
-        let dir = tempfile::tempdir().unwrap();
-        let home = RelayHome::new(dir.path(), None);
-        let answer = answer_with(
-            &home,
-            &call(),
-            &GateEnv::default(),
-            crate::files::now_ms(),
-            || Err(io::Error::other("disk gone")),
-        );
-        assert_eq!(answer, None);
-        let errors = gate_errors(&home);
-        assert_eq!(
-            errors
-                .iter()
-                .map(|e| (e.cause, e.detail.as_str()))
-                .collect::<Vec<_>>(),
-            [(GateFault::Io, "disk gone")]
-        );
     }
 
     #[test]
@@ -775,7 +750,7 @@ mod tests {
             }),
             ..Evaluation::default()
         };
-        let answer = answer_with(&home, &call(), &GateEnv::default(), 1, || Ok(deny));
+        let answer = answer_with(&home, &call(), &GateEnv::default(), 1, || deny);
         assert_eq!(answer, Some(deny_json("no")));
         let none = answer_with(&home, &call(), &GateEnv::default(), 1, || {
             panic!("and the journal is gone too")

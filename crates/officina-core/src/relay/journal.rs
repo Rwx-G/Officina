@@ -352,8 +352,6 @@ closed_enum! {
         /// The floor and the snapshot both failed and the known-projects
         /// record cannot be read either: nothing is guarded.
         KnownProjectsUnreadable,
-        /// An error inside the gate: no decision (AD-28).
-        Io,
         /// A panic inside the gate: no decision (AD-28).
         Panic,
     }

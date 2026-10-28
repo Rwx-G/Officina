@@ -5,4 +5,4 @@
  * not read, which made it stricter, or an internal fault, which made it
  * decide nothing. Also the journal's `cause` vocabulary.
  */
-export type GateFault = "approved_unreadable" | "approved_missing" | "floor_unreadable" | "floor_invalid" | "floor_missing" | "known_projects_unreadable" | "io" | "panic";
+export type GateFault = "approved_unreadable" | "approved_missing" | "floor_unreadable" | "floor_invalid" | "floor_missing" | "known_projects_unreadable" | "panic";

@@ -57,7 +57,6 @@ export const GATE_FAULT_TEXT: Record<GateFault, string> = {
   floor_invalid: "relay floor invalid",
   floor_missing: "relay floor missing",
   known_projects_unreadable: "known projects unreadable",
-  io: "internal error",
   panic: "internal panic",
 };
 
