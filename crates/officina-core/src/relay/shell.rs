@@ -521,8 +521,8 @@ pub enum Assignment {
     Computed,
 }
 
-/// One use of a lexer constant, recorded so the vector set's coverage test
-/// can prove every entry is exercised by a case (AC 9).
+/// One use of a lexer constant, recorded in tests so the vector set's
+/// coverage test can prove every entry is exercised by a case (AC 9).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Seen {
     Separator(&'static str),
@@ -576,7 +576,9 @@ pub struct Lexed {
     pub values: String,
     /// Bytes visited, all levels together.
     pub steps: u64,
-    /// The lexer constants used, for coverage.
+    /// The lexer constants used, for the vector set's coverage test: in
+    /// tests only, so the gate's hot path records none (AD-28 budget).
+    #[cfg(test)]
     pub trace: Vec<Seen>,
 }
 
@@ -2166,11 +2168,16 @@ impl Recorder<'_> {
             .is_some_and(|root| self.frame.depth <= root)
     }
 
+    #[cfg(test)]
     fn trace(&mut self, seen: Seen) {
         if self.frame.latent.is_none() {
             self.out.trace.push(seen);
         }
     }
+
+    /// Outside tests the trace is not recorded: nothing reads it.
+    #[cfg(not(test))]
+    fn trace(&mut self, _seen: Seen) {}
 
     fn program(&mut self, written: &str, origin: Origin) {
         if !self.in_latent_root() {
@@ -3122,6 +3129,111 @@ fn count(text: &str, needle: char) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every lexer constant is used by a case of the gate vector set
+    /// (story 2.3 AC 9). The trace it reads is recorded in tests only, so
+    /// this check lives where it exists; `tests/gate_vectors.rs` replays the
+    /// same file for the decisions.
+    #[test]
+    fn every_constant_appears_in_a_vector_case() {
+        #[derive(serde::Deserialize)]
+        struct VectorSet {
+            cases: Vec<Case>,
+        }
+        #[derive(serde::Deserialize)]
+        struct Case {
+            #[serde(default)]
+            command: String,
+        }
+        let set: VectorSet =
+            serde_json::from_str(include_str!("../../../../tests/vectors/gate.json")).unwrap();
+        let mut seen: std::collections::HashSet<Seen> = std::collections::HashSet::new();
+        for case in &set.cases {
+            if let Ok(lexed) = lex(&case.command) {
+                seen.extend(lexed.trace);
+            }
+        }
+        let mut missing: Vec<String> = Vec::new();
+        let mut need = |entry: Seen| {
+            if !seen.contains(&entry) {
+                missing.push(format!("{entry:?}"));
+            }
+        };
+        for s in SEPARATORS {
+            need(Seen::Separator(s));
+        }
+        for w in RESERVED_WORDS {
+            need(Seen::Reserved(w));
+        }
+        for r in REDIRECTIONS {
+            need(Seen::Redirection(r));
+        }
+        for wrapper in WRAPPERS {
+            need(Seen::Wrapper(wrapper.name));
+            for option in wrapper.value_options {
+                need(Seen::WrapperOption {
+                    wrapper: wrapper.name,
+                    option,
+                });
+            }
+        }
+        ENV_SPLIT_OPTIONS
+            .iter()
+            .for_each(|o| need(Seen::EnvSplit(o)));
+        COMMAND_QUERY_OPTIONS
+            .iter()
+            .for_each(|o| need(Seen::CommandQuery(o)));
+        XARGS_REPLACE_OPTIONS
+            .iter()
+            .for_each(|o| need(Seen::XargsReplace(o)));
+        WATCH_EXEC_OPTIONS
+            .iter()
+            .for_each(|o| need(Seen::WatchExec(o)));
+        FIND_EXEC_ACTIONS
+            .iter()
+            .for_each(|a| need(Seen::FindAction(a)));
+        FIND_EXEC_TERMINATORS
+            .iter()
+            .for_each(|t| need(Seen::FindTerminator(t)));
+        SHELL_INTERPRETERS.iter().for_each(|s| need(Seen::Shell(s)));
+        SHELL_VALUE_OPTIONS
+            .iter()
+            .for_each(|o| need(Seen::ShellOption(o)));
+        need(Seen::ShellCommandLetter);
+        need(Seen::ShellStdinLetter);
+        for interpreter in SCRIPT_INTERPRETERS {
+            need(Seen::Script(interpreter.name));
+            for flag in interpreter
+                .program_flags
+                .iter()
+                .chain(interpreter.value_options)
+            {
+                need(Seen::ScriptFlag {
+                    interpreter: interpreter.name,
+                    flag,
+                });
+            }
+        }
+        STDIN_PATHS.iter().for_each(|p| need(Seen::StdinPath(p)));
+        need(Seen::Cmd);
+        for switch in CMD_COMMAND_SWITCHES
+            .iter()
+            .chain([&CMD_DELAYED_EXPANSION_SWITCH])
+        {
+            need(Seen::CmdSwitch(switch));
+        }
+        POWERSHELL_INTERPRETERS
+            .iter()
+            .for_each(|p| need(Seen::PowerShell(p)));
+        encoded_command_spellings().for_each(|s| need(Seen::EncodedSpelling(s)));
+        LAUNCHERS.iter().for_each(|l| need(Seen::Launcher(l.name)));
+        Builtin::ALL.iter().for_each(|b| need(Seen::Builtin(*b)));
+        assert!(
+            missing.is_empty(),
+            "lexer constants no case exercises:\n{}",
+            missing.join("\n")
+        );
+    }
 
     fn names(command: &str) -> Vec<String> {
         lex(command)

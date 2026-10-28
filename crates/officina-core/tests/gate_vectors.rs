@@ -1,9 +1,9 @@
 //! Replays the hand-written gate vector set (AD-26, AD-27, D-10 to D-13,
 //! D-171, D-173) through `gate::decide_call`, or `gate::decide_file_write`
-//! for a file tool, refuses a set that no longer exercises every lexer
-//! constant, shell and file tool, default guarded program, home-redirection
-//! and environment name and deny kind, and holds the honest limits to "no
-//! decision".
+//! for a file tool, refuses a set that no longer exercises every shell and
+//! file tool, default guarded program, home-redirection and environment
+//! name and deny kind (the lexer constants are checked in `relay::shell`'s
+//! unit tests), and holds the honest limits to "no decision".
 
 use std::collections::HashSet;
 
@@ -13,13 +13,7 @@ use officina_core::relay::gate::{
     DenyKind, FILE_TOOLS, HOME_REDIRECTION_NAMES, OFFICINA_ENVIRONMENT_NAMES, SHELL_TOOLS,
     decide_call, decide_file_write, file_tool_field, guarded_match, protected_dirs,
 };
-use officina_core::relay::shell::{
-    self, Builtin, CMD_COMMAND_SWITCHES, CMD_DELAYED_EXPANSION_SWITCH, COMMAND_QUERY_OPTIONS,
-    ENV_SPLIT_OPTIONS, FIND_EXEC_ACTIONS, FIND_EXEC_TERMINATORS, LAUNCHERS,
-    POWERSHELL_INTERPRETERS, REDIRECTIONS, RESERVED_WORDS, SCRIPT_INTERPRETERS, SEPARATORS,
-    SHELL_INTERPRETERS, SHELL_VALUE_OPTIONS, STDIN_PATHS, Seen, WATCH_EXEC_OPTIONS, WRAPPERS,
-    XARGS_REPLACE_OPTIONS, encoded_command_spellings,
-};
+use officina_core::relay::shell;
 use serde::Deserialize;
 
 const VECTORS: &str = include_str!("../../../tests/vectors/gate.json");
@@ -159,96 +153,13 @@ fn limits_are_flagged() {
     );
 }
 
+/// Every shell and file tool, deny kind, default guarded program and
+/// home-redirection and environment name has a case. The lexer constants
+/// are covered by `relay::shell::tests::every_constant_appears_in_a_vector_case`,
+/// where the lexer records what it used.
 #[test]
 fn every_constant_appears_in_a_case() {
     let set = load();
-    let mut seen: HashSet<Seen> = HashSet::new();
-    for case in &set.cases {
-        if let Ok(lexed) = shell::lex(&case.command) {
-            seen.extend(lexed.trace);
-        }
-    }
-    let mut missing: Vec<String> = Vec::new();
-    let mut need = |entry: Seen| {
-        if !seen.contains(&entry) {
-            missing.push(format!("{entry:?}"));
-        }
-    };
-    for s in SEPARATORS {
-        need(Seen::Separator(s));
-    }
-    for w in RESERVED_WORDS {
-        need(Seen::Reserved(w));
-    }
-    for r in REDIRECTIONS {
-        need(Seen::Redirection(r));
-    }
-    for wrapper in WRAPPERS {
-        need(Seen::Wrapper(wrapper.name));
-        for option in wrapper.value_options {
-            need(Seen::WrapperOption {
-                wrapper: wrapper.name,
-                option,
-            });
-        }
-    }
-    ENV_SPLIT_OPTIONS
-        .iter()
-        .for_each(|o| need(Seen::EnvSplit(o)));
-    COMMAND_QUERY_OPTIONS
-        .iter()
-        .for_each(|o| need(Seen::CommandQuery(o)));
-    XARGS_REPLACE_OPTIONS
-        .iter()
-        .for_each(|o| need(Seen::XargsReplace(o)));
-    WATCH_EXEC_OPTIONS
-        .iter()
-        .for_each(|o| need(Seen::WatchExec(o)));
-    FIND_EXEC_ACTIONS
-        .iter()
-        .for_each(|a| need(Seen::FindAction(a)));
-    FIND_EXEC_TERMINATORS
-        .iter()
-        .for_each(|t| need(Seen::FindTerminator(t)));
-    SHELL_INTERPRETERS.iter().for_each(|s| need(Seen::Shell(s)));
-    SHELL_VALUE_OPTIONS
-        .iter()
-        .for_each(|o| need(Seen::ShellOption(o)));
-    need(Seen::ShellCommandLetter);
-    need(Seen::ShellStdinLetter);
-    for interpreter in SCRIPT_INTERPRETERS {
-        need(Seen::Script(interpreter.name));
-        for flag in interpreter
-            .program_flags
-            .iter()
-            .chain(interpreter.value_options)
-        {
-            need(Seen::ScriptFlag {
-                interpreter: interpreter.name,
-                flag,
-            });
-        }
-    }
-    STDIN_PATHS.iter().for_each(|p| need(Seen::StdinPath(p)));
-    need(Seen::Cmd);
-    for switch in CMD_COMMAND_SWITCHES
-        .iter()
-        .chain([&CMD_DELAYED_EXPANSION_SWITCH])
-    {
-        need(Seen::CmdSwitch(switch));
-    }
-    POWERSHELL_INTERPRETERS
-        .iter()
-        .for_each(|p| need(Seen::PowerShell(p)));
-    encoded_command_spellings().for_each(|s| need(Seen::EncodedSpelling(s)));
-    LAUNCHERS.iter().for_each(|l| need(Seen::Launcher(l.name)));
-    Builtin::ALL.iter().for_each(|b| need(Seen::Builtin(*b)));
-    assert!(
-        missing.is_empty(),
-        "lexer constants no case exercises:\n{}",
-        missing.join("\n")
-    );
-
     for tool in SHELL_TOOLS
         .iter()
         .map(|(tool, _)| tool)
