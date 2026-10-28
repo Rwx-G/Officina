@@ -143,9 +143,16 @@ impl TestEnv {
 }
 
 /// The fake tool's path as a floor writes it: forward slashes, so it needs
-/// no escaping in a TOML string and stays a Windows absolute path.
+/// no escaping in a TOML string. A `native` program is a Windows absolute
+/// path (AD-22; Linux is v1), which the fake tool's own path is not off
+/// Windows: there floors name a Windows path that never starts, so their
+/// actions stay valid for the tests that only read the catalogue.
 pub fn fake_tool_path() -> String {
-    FAKE_TOOL.replace('\\', "/")
+    if cfg!(windows) {
+        FAKE_TOOL.replace('\\', "/")
+    } else {
+        "C:/path/to/officina-fake-tool.exe".to_owned()
+    }
 }
 
 pub fn run_with(mut cmd: Command, stdin: &[u8]) -> Output {

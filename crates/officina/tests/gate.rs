@@ -486,6 +486,22 @@ fn nothing_readable_gives_no_decision() {
     );
 }
 
+/// Every action of the floor these tests approve is valid on every OS: an
+/// action dropped as invalid leaves the deny reason nothing to offer, which
+/// is how `reason_lists_approved_actions` failed on Linux, where the fake
+/// tool's own path is no `native` program.
+#[test]
+fn the_test_floor_is_valid_on_every_os() {
+    let env = guarded_env();
+    let floor = officina_host::relay::home::load_relay_floor(&env.floor_file()).unwrap();
+    assert_eq!(floor.catalogue.issues, []);
+    assert_eq!(
+        floor.catalogue.actions.len(),
+        floor.floor.actions.len(),
+        "no action dropped"
+    );
+}
+
 #[test]
 fn reason_lists_approved_actions() {
     let env = approved_env();
