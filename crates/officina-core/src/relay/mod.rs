@@ -28,6 +28,7 @@ macro_rules! closed_enum {
 pub mod argv;
 pub mod catalogue;
 pub mod gate;
+pub mod journal;
 pub mod params;
 pub mod shell;
 

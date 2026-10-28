@@ -45,6 +45,9 @@ project uses [Semantic Versioning](https://semver.org/).
   Officina's home, and any mention of an `OFFICINA_` setting or of Officina's
   own files. Outside a guarded repository it decides nothing. The documented
   limits of a text match are recorded in the architecture.
+- Relay journal (`~/.officina/journal/YYYY-MM-DD.jsonl`): every gate deny,
+  gate error and catalogue approval leaves one line, written under a lock
+  file so lines never interleave; command excerpts follow `no_excerpts`.
 
 ### Changed
 
