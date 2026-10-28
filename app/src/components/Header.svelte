@@ -101,10 +101,15 @@
   {/if}
 
   <div class="tools">
-    {#if contract?.held === true}
+    {#if contract?.held === true && contract.hook_missing.length === 0}
       <span class="contract" data-testid="contract" title="Claude Code {contract.claude_version ?? ''}">contract held</span>
     {:else if contract?.held === false}
       <span class="contract broken" data-testid="contract">contract broken: {contract.missing.join(", ")}</span>
+    {/if}
+    {#if contract && contract.hook_missing.length > 0}
+      <span class="contract broken" data-testid="contract-hook" title="Claude Code {contract.claude_version ?? ''}"
+        >hook fields missing: {contract.hook_missing.join(", ")}</span
+      >
     {/if}
     {#if relay?.inUse}
       <button

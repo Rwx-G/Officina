@@ -13,7 +13,11 @@
 //! - `{"author": <AuthorAction>}`: one author action, which must succeed;
 //! - `"copy"`: the daily copy, as the hourly pass takes it;
 //! - `"damage"`: the database overwritten with bytes that are no database,
-//!   then opened again, so the window's restore runs from the copy (D-93).
+//!   then opened again, so the window's restore runs from the copy (D-93);
+//! - `{"hook_fields": "<claude version>"}`: one ingestion pass, whose hook
+//!   sightings are folded into that version's record of
+//!   `state/contract.json`, as the window folds them (AD-56); the record
+//!   must exist already (`officina board --json` starts it).
 //!
 //! Exit 0, 1 when a step fails, 64 on usage.
 
@@ -23,6 +27,7 @@ use std::process::ExitCode;
 use officina_core::agents::parse_agents;
 use officina_core::registry::confirm::AuthorAction;
 use officina_core::registry::fold::AgentsSnapshot;
+use officina_host::collector::record_hook_fields;
 use officina_host::registry::RegistryPaths;
 use officina_host::registry::ingest::IngestContext;
 use officina_host::registry::store::{Writer, open_writer};
@@ -45,6 +50,7 @@ enum Step {
     Author(AuthorAction),
     Copy,
     Damage,
+    HookFields(String),
 }
 
 fn writer(home: &Path, now_ms: i64) -> Result<Writer, String> {
@@ -58,19 +64,27 @@ fn run(home: &Path, script: Script) -> Result<(), String> {
     let events = home.join("events");
     let mut writer = writer(home, now_ms)?;
     let mut snapshot: Option<AgentsSnapshot> = None;
+    let ctx = IngestContext {
+        events_dir: &events,
+        officina_home: home,
+        projects: &[],
+        no_excerpts: false,
+    };
     for (index, step) in script.steps.into_iter().enumerate() {
         let failed = |error: String| format!("step {index}: {error}");
         match step {
             Step::Ingest => {
-                let ctx = IngestContext {
-                    events_dir: &events,
-                    officina_home: home,
-                    projects: &[],
-                    no_excerpts: false,
-                };
                 writer
                     .ingest(&ctx, now_ms)
                     .map_err(|e| failed(e.to_string()))?;
+            }
+            Step::HookFields(version) => {
+                let report = writer
+                    .ingest(&ctx, now_ms)
+                    .map_err(|e| failed(e.to_string()))?;
+                let contract = home.join("state").join("contract.json");
+                record_hook_fields(&contract, &version, &report.hook_sightings)
+                    .ok_or_else(|| failed(format!("no contract record for {version}")))?;
             }
             Step::Agents(records) => {
                 let text = serde_json::to_string(&records).map_err(|e| failed(e.to_string()))?;

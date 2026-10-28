@@ -825,3 +825,47 @@ for (const [name, scenario] of Object.entries(registryScenarios)) {
   rmSync(tmp, { recursive: true, force: true });
   console.log(`fixture ${name}: exit ${view.status}`);
 }
+
+// Story 3.8 (AD-56, D-71): the contract canary of the hook fields. The real
+// `officina board --json` starts the running version's record, the real
+// `officina hook` records a `Stop` whose payload lacks a field the board
+// reads, the window's ingestion (through `registry_fixture`) folds it into
+// the record, and the board printed after names the field.
+{
+  const name = "contract-hook-missing";
+  const tmp = mkdtempSync(join(tmpdir(), `officina-fixture-${name}-`));
+  const home = join(tmp, "home");
+  const officinaHome = join(tmp, "officina");
+  mkdirSync(join(home, ".claude", "sessions"), { recursive: true });
+  mkdirSync(join(officinaHome, "events"), { recursive: true });
+  const fixture = join(tmp, "agents.json");
+  writeFileSync(fixture, JSON.stringify(busyAgents.slice(2, 4)));
+  const env = {
+    SYSTEMROOT: process.env.SYSTEMROOT ?? "",
+    USERPROFILE: home,
+    HOME: home,
+    OFFICINA_HOME: officinaHome,
+    OFFICINA_CLAUDE_BIN: fakeClaude,
+    FAKE_CLAUDE_FIXTURE: fixture,
+    FAKE_CLAUDE_MODE: "ok",
+  };
+  const first = officinaJson(["board", "--json"], env);
+  if (first.status !== 0) throw new Error(`${name}: officina board exited ${first.status}: ${first.stderr}`);
+  const version = JSON.parse(first.stdout).contract.claude_version;
+  if (!version) throw new Error(`${name}: the first board knows no claude version`);
+  // A Stop whose payload lacks the answer, with every other field there.
+  const stop = { hook_event_name: "Stop", session_id: sid(3), cwd: work("web-portal") };
+  const hook = spawnSync(officina, ["hook"], { env, input: JSON.stringify(stop), encoding: "utf8" });
+  if (hook.status !== 0) throw new Error(`${name}: officina hook exited ${hook.status}`);
+  const steps = join(tmp, "steps.json");
+  writeFileSync(steps, JSON.stringify({ now_ms: Date.now(), steps: [{ hook_fields: version }] }));
+  execFileSync(registryFixture, [officinaHome, steps], { stdio: ["ignore", "ignore", "inherit"] });
+  const board = officinaJson(["board", "--json"], env);
+  if (board.status !== 0) throw new Error(`${name}: officina board exited ${board.status}: ${board.stderr}`);
+  if (JSON.parse(board.stdout).contract.hook_missing.length === 0) {
+    throw new Error(`${name}: expected a missing hook field: ${board.stdout}`);
+  }
+  writeFileSync(join(outDir, `${name}.json`), board.stdout);
+  rmSync(tmp, { recursive: true, force: true });
+  console.log(`fixture ${name}: exit ${board.status}`);
+}

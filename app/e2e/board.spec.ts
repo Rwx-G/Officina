@@ -171,11 +171,25 @@ test.describe("degraded states", () => {
     const board = loadBoard("busy");
     board.diagnostics.corrupt_event_lines = 3;
     board.diagnostics.floor_error = "officina.toml: unknown field `colour`";
-    board.contract = { claude_version: "9.9.9", held: false, missing: ["sessionId"] };
+    board.contract = { claude_version: "9.9.9", held: false, missing: ["sessionId"], hook_missing: [] };
     await openBoard(page, board);
     await expect(page.getByTestId("diagnostics")).toContainText("3 unreadable event lines");
     await expect(page.getByTestId("floor-error")).toContainText("unknown field `colour`");
     await expect(page.getByTestId("contract")).toHaveText("contract broken: sessionId");
+  });
+
+  // Story 3.8 AC 4: the board `officina board --json` printed once the
+  // window's ingestion recorded a `Stop` whose payload lacked a field.
+  test("the contract chip names missing hook fields", async ({ page }) => {
+    const board = loadBoard("contract-hook-missing");
+    const missing = board.contract.hook_missing;
+    expect(missing.length).toBeGreaterThan(0);
+    await openBoard(page, board);
+    await expect(page.getByTestId("contract-hook")).toHaveText(`hook fields missing: ${missing.join(", ")}`);
+    await expect(page.getByTestId("contract")).toHaveCount(0);
+    await openBoard(page, loadBoard("busy"));
+    await expect(page.getByTestId("contract-hook")).toHaveCount(0);
+    await expect(page.getByTestId("contract")).toHaveText("contract held");
   });
 
   test("an unavailable registry is reported and the board still shows sessions", async ({ page }) => {

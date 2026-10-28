@@ -17,7 +17,8 @@ export type Scenario =
   | "approvals"
   | "registry-unavailable"
   | "subjects-board"
-  | "triage-board";
+  | "triage-board"
+  | "contract-hook-missing";
 
 /** Registry views printed by `officina subjects --json` after the
  *  `registry_fixture` example wrote the registry (stories 3.5 and 3.7,
