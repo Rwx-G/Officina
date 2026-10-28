@@ -481,3 +481,76 @@ fn unreadable_registry_leaves_subjects_null_with_the_reason() {
             .is_some()
     );
 }
+
+/// AD-68, D-99: the floor's projects in file order, each with its colour
+/// and priority, the threshold in ms; a project the session list never
+/// names is listed too.
+#[test]
+fn floor_projects_are_printed_in_file_order() {
+    let env = TestEnv::new();
+    sessions_in_and_out_of_a_project(&env, now_ms());
+    let floor = "schema = 1\n\n[alert]\nafter_minutes = 25\n\n[[project]]\nname = \"zeta\"\npath = \"Zeta\"\ncolor = \"plum\"\npriority = \"high\"\n\n[[project]]\nname = \"api\"\npath = \"Api\"\ncolor = \"blue\"\n";
+    let board = board_with_floor(&env, "officina.toml", floor);
+    assert_eq!(
+        board["floor_projects"],
+        serde_json::json!([
+            {"name": "zeta", "color": "plum", "priority": "high"},
+            {"name": "api", "color": "blue", "priority": "normal"}
+        ])
+    );
+    assert_eq!(board["alert_after_ms"], 25 * 60_000);
+    assert_eq!(
+        board["columns"]["your_turn"][0]["project"],
+        board["floor_projects"][1]
+    );
+}
+
+/// D-99: a floor ignored for an error lists no project, and the threshold
+/// is the default.
+#[test]
+fn an_ignored_floor_prints_no_floor_projects() {
+    let env = TestEnv::new();
+    sessions_in_and_out_of_a_project(&env, now_ms());
+    let floor = env.root.path().join("work").join("broken.toml");
+    std::fs::write(
+        &floor,
+        "schema = 1\nunknown_key = 1\n[[project]]\nname = \"api\"\npath = \"Api\"\n",
+    )
+    .unwrap();
+    let out = env.run(
+        &["board", "--json", "--floor", floor.to_str().unwrap()],
+        b"",
+    );
+    let board: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert!(!board["diagnostics"]["floor_error"].is_null());
+    assert_eq!(board["floor_projects"], serde_json::json!([]));
+    assert_eq!(
+        board["alert_after_ms"],
+        i64::from(officina_core::floor::ALERT_AFTER_MINUTES_DEFAULT) * 60_000
+    );
+}
+
+/// D-182: a card carries the head and the tail of a long answer, as the
+/// hook recorded them.
+#[test]
+fn cards_print_the_answer_tail() {
+    let env = TestEnv::new();
+    let now = now_ms();
+    env.write_agents(&agents_fixture(now));
+    let long = format!("{}{}", "a".repeat(400), "the end");
+    let stop = serde_json::json!({
+        "hook_event_name": "Stop",
+        "session_id": "00000000-0000-0000-0000-000000000002",
+        "last_assistant_message": long,
+    });
+    env.run(&["hook"], stop.to_string().as_bytes());
+    let (_, board) = board(&env);
+    let card = &board["columns"]["your_turn"][0];
+    assert!(card["last_message"].as_str().unwrap().starts_with("aaa"));
+    assert!(
+        card["last_message_tail"]
+            .as_str()
+            .unwrap()
+            .ends_with("the end")
+    );
+}

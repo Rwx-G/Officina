@@ -8,6 +8,13 @@ project uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Floor keys of the scene (v0.4, in progress): `[[project]] priority`
+  (`normal` by default, or `high`) and `[alert] after_minutes` (1 to 1440,
+  10 by default), valid in either schema. They authorise nothing, so they
+  stay out of the relay's canonical catalogue; a bad value keeps the
+  default and `officina doctor` warns with the key and its line. The
+  project colour `plum` joins the palette, so a project without a colour
+  may get it.
 - `officina hook`: records Claude Code hook events into a local, append-only
   buffer, always exits 0, p95 around 20 ms.
 - `officina quota write [--tee]`: records the account's rate limits from a
@@ -271,6 +278,12 @@ project uses [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- The board contract (`officina board --json`, v0.4) is schema 4: it lists
+  the floor's projects in file order (`floor_projects`, each with its colour
+  and priority, as a card inside it carries them), carries the alert
+  threshold in ms (`alert_after_ms`), each project's `priority`, and each
+  card's answer tail (`last_message_tail`), from the same `Stop` line as its
+  head.
 - `officina board --json` reads the `claude` version (v0.3), so it keeps
   the running version's contract record current and shows its missing hook
   fields.

@@ -928,13 +928,31 @@ fn check_floor(collector: &Collector) -> Check {
             "floor",
             "none: projects are derived from each session's folder",
         ),
-        (Some(p), None) => check(
+        (Some(p), None) if collector.floor().view_issues.is_empty() => check(
             Level::Ok,
             "floor",
             format!(
                 "{} ({} projects)",
                 p.display(),
                 collector.floor().projects.len()
+            ),
+        ),
+        // A view key with a bad value keeps its default: the board works,
+        // and the author is told where to look (AD-168).
+        (Some(p), None) => check(
+            Level::Warn,
+            "floor",
+            format!(
+                "{} ({} projects); {}",
+                p.display(),
+                collector.floor().projects.len(),
+                collector
+                    .floor()
+                    .view_issues
+                    .iter()
+                    .map(|issue| format!("line {}: `{}`: {}", issue.line, issue.key, issue.message))
+                    .collect::<Vec<_>>()
+                    .join("; ")
             ),
         ),
         (Some(_), Some(e)) => check(Level::Fail, "floor", e.clone()),

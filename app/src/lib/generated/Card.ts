@@ -12,7 +12,13 @@ export type Card = { key: string, column: Column, badge: Badge | null, kind: Ses
 /**
  * Background session id, the argument of `claude attach`.
  */
-background_id: string | null, pid: number | null, cwd: string | null, waiting_for: string | null, last_prompt: string | null, last_message: string | null, last_event_at_ms: number | null, started_at_ms: number | null, 
+background_id: string | null, pid: number | null, cwd: string | null, waiting_for: string | null, last_prompt: string | null, last_message: string | null, 
+/**
+ * The end of the answer `last_message` starts, when the hook could not
+ * keep it whole (D-182): from the same `Stop` line, so head and tail
+ * always come from one answer.
+ */
+last_message_tail: string | null, last_event_at_ms: number | null, started_at_ms: number | null, 
 /**
  * True when a click can open `claude attach` for this card.
  */

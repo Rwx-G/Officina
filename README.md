@@ -156,9 +156,15 @@ name = "work"
 [[project]]
 name = "api"
 path = "Api"            # relative to this file, or absolute
-color = "blue"          # green, blue or terracotta
+color = "blue"          # green, blue, terracotta or plum
 autonomy = "free"       # "free" or "guarded"; a schema 2 project without it is guarded
+priority = "high"       # optional: "normal" (default) or "high" (v0.4)
+
+[alert]                 # optional (v0.4)
+after_minutes = 10      # 1 to 1440, default 10
 ```
+
+`priority` and `[alert] after_minutes` only change what the window shows (v0.4, in progress): a session of a `high` project that waits for you is in alert at once, and any session that waits for you longer than `after_minutes` is in alert. They authorise nothing, so changing them never asks for the relay's approval again. A value the floor does not accept keeps the default, and `officina doctor` names the key and its line.
 
 Sessions outside every declared project go to `other`; none is hidden. A v0.1 floor (`schema = 1`) still loads, with every project `free`; the relay keys below need `schema = 2`.
 

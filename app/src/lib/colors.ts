@@ -6,6 +6,7 @@ export const PROJECT_COLORS: Record<ProjectColor, string> = {
   green: "var(--color-project-green)",
   blue: "var(--color-project-blue)",
   terracotta: "var(--color-project-terracotta)",
+  plum: "var(--color-project-plum)",
 };
 
 export function projectColor(color: ProjectColor | null): string {

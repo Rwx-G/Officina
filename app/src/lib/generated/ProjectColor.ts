@@ -5,4 +5,4 @@
  * to a CSS variable through an exhaustive record, so a new variant here fails
  * the frontend type check until it has a colour.
  */
-export type ProjectColor = "green" | "blue" | "terracotta";
+export type ProjectColor = "green" | "blue" | "terracotta" | "plum";

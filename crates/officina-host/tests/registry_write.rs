@@ -386,6 +386,7 @@ fn create_takes_the_project_of_the_selected_sessions() {
         name: "billing".into(),
         path: "c:/work/api".into(),
         color: None,
+        priority: Default::default(),
     }];
     let mut writer = home.writer(NOW);
     writer

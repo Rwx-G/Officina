@@ -10,15 +10,17 @@ use serde::{Deserialize, Serialize};
 
 use crate::agents::{AgentRecord, LifecycleState, LiveStatus, SessionKind};
 use crate::events::EventLine;
-use crate::floor::ProjectColor;
+use crate::floor::{ALERT_AFTER_MINUTES_DEFAULT, Priority, ProjectColor};
 use crate::quota::{QuotaFile, QuotaWindow};
 use crate::registry::types::{RegistryReport, SubjectRef};
 use crate::relay::approvals::ApprovalView;
 
 /// Version of the board JSON contract. 2: approval requests (AD-35). 3:
 /// the registry's state (v0.3, AD-54); later v0.3 stories extend the board
-/// under this number, since no release ships in between (P-13).
-pub const BOARD_SCHEMA: u32 = 3;
+/// under this number, since no release ships in between (P-13). 4: the
+/// scene's inputs (v0.4, AD-68), extended under this number by the later
+/// v0.4 stories (P-22 as amended by D-461).
+pub const BOARD_SCHEMA: u32 = 4;
 
 /// Sessions that ended, failed or finished are listed for this long.
 pub const DONE_WINDOW_MS: i64 = 24 * 60 * 60 * 1000;
@@ -94,12 +96,14 @@ pub struct Placement {
     pub badge: Option<Badge>,
 }
 
-/// The project a card belongs to.
+/// The project a card belongs to, or one the floor declares.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct ProjectView {
     pub name: String,
     pub color: Option<ProjectColor>,
+    /// From the floor (AD-168); `normal` for a project it does not declare.
+    pub priority: Priority,
 }
 
 /// One session on the board.
@@ -120,6 +124,10 @@ pub struct Card {
     pub waiting_for: Option<String>,
     pub last_prompt: Option<String>,
     pub last_message: Option<String>,
+    /// The end of the answer `last_message` starts, when the hook could not
+    /// keep it whole (D-182): from the same `Stop` line, so head and tail
+    /// always come from one answer.
+    pub last_message_tail: Option<String>,
     #[cfg_attr(feature = "ts", ts(type = "number | null"))]
     pub last_event_at_ms: Option<i64>,
     #[cfg_attr(feature = "ts", ts(type = "number | null"))]
@@ -254,6 +262,14 @@ pub struct Board {
     pub diagnostics: Diagnostics,
     #[cfg_attr(feature = "ts", ts(type = "number"))]
     pub done_window_ms: i64,
+    /// The floor's projects in file order (AD-68, D-99), each as a card of
+    /// a session inside it would carry it; empty without a floor, or when
+    /// the floor was ignored.
+    pub floor_projects: Vec<ProjectView>,
+    /// The escalation threshold of the alert, from the floor (AD-168), so
+    /// no frontend constant repeats it.
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub alert_after_ms: i64,
 }
 
 /// A declared project, path already resolved and normalised.
@@ -262,6 +278,20 @@ pub struct ProjectRule {
     pub name: String,
     pub path: String,
     pub color: Option<ProjectColor>,
+    pub priority: Priority,
+}
+
+impl ProjectRule {
+    /// The view of this declared project: the one constructor both a card
+    /// inside it and `Board::floor_projects` use (D-99), so an office's
+    /// colour and priority always equal its cards'.
+    pub fn view(&self) -> ProjectView {
+        ProjectView {
+            name: self.name.clone(),
+            color: Some(self.color.unwrap_or_else(|| derived_color(&self.name))),
+            priority: self.priority,
+        }
+    }
 }
 
 /// Everything `build_board` needs. Gathered by the host.
@@ -285,6 +315,9 @@ pub struct BoardInput {
     /// The subject of each filed session, by session id, from the registry
     /// (AD-54); empty when it could not be read.
     pub subjects: BTreeMap<String, SubjectRef>,
+    /// The floor's `[alert] after_minutes`, already validated; `None`
+    /// without a floor, which gives [`ALERT_AFTER_MINUTES_DEFAULT`].
+    pub alert_after_minutes: Option<u32>,
 }
 
 /// Events of one session, reduced to what a card shows.
@@ -296,6 +329,8 @@ pub struct SessionEvents {
     pub last_blocking_notification_at_ms: Option<i64>,
     pub last_prompt: Option<String>,
     pub last_message: Option<String>,
+    /// The tail of the answer `last_message` holds the head of.
+    pub last_message_tail: Option<String>,
     pub cwd: Option<String>,
     /// Reason of the last `SessionEnd`, if the session ended.
     pub end_reason: Option<String>,
@@ -350,8 +385,11 @@ pub fn group_events(events: &[EventLine]) -> BTreeMap<String, SessionEvents> {
             }
             "Stop" => {
                 entry.last_stop_at_ms = Some(event.ts);
+                // The tail goes with its head, absent included: a short
+                // answer never shows an older answer's end (D-182).
                 if event.last_message.is_some() {
                     entry.last_message.clone_from(&event.last_message);
+                    entry.last_message_tail.clone_from(&event.last_message_tail);
                 }
             }
             "Notification" => {
@@ -492,12 +530,17 @@ pub fn project_for(cwd: Option<&str>, projects: &[ProjectRule]) -> ProjectView {
         return ProjectView {
             name: UNKNOWN_PROJECT.into(),
             color: None,
+            priority: Priority::default(),
         };
     };
     if projects.is_empty() {
         let name = folder_name(cwd).to_owned();
         let color = Some(derived_color(&name));
-        return ProjectView { name, color };
+        return ProjectView {
+            name,
+            color,
+            priority: Priority::default(),
+        };
     }
     let normalised = crate::quota::normalise_path(cwd);
     projects
@@ -513,11 +556,9 @@ pub fn project_for(cwd: Option<&str>, projects: &[ProjectRule]) -> ProjectView {
             ProjectView {
                 name: OTHER_PROJECT.into(),
                 color: None,
+                priority: Priority::default(),
             },
-            |p| ProjectView {
-                name: p.name.clone(),
-                color: Some(p.color.unwrap_or_else(|| derived_color(&p.name))),
-            },
+            ProjectRule::view,
         )
 }
 
@@ -582,6 +623,7 @@ fn new_card(
         waiting_for: facts.waiting_for,
         last_prompt: excerpt(&events.last_prompt),
         last_message: excerpt(&events.last_message),
+        last_message_tail: excerpt(&events.last_message_tail),
         last_event_at_ms: facts.last_event_at_ms,
         started_at_ms: facts.started_at_ms,
         attach_available: facts.attach_available,
@@ -768,6 +810,12 @@ pub fn build_board(input: &BoardInput, now_ms: i64) -> Board {
             registry: input.registry.clone(),
         },
         done_window_ms: DONE_WINDOW_MS,
+        floor_projects: input.projects.iter().map(ProjectRule::view).collect(),
+        alert_after_ms: i64::from(
+            input
+                .alert_after_minutes
+                .unwrap_or(ALERT_AFTER_MINUTES_DEFAULT),
+        ) * 60_000,
     }
 }
 
@@ -1112,11 +1160,13 @@ mod tests {
                 name: "work".into(),
                 path: "c:/work".into(),
                 color: None,
+                priority: Priority::Normal,
             },
             ProjectRule {
                 name: "api".into(),
                 path: "c:/work/api".into(),
                 color: Some(ProjectColor::Blue),
+                priority: Priority::Normal,
             },
         ];
         assert_eq!(project_for(Some(r"C:\Work\Api\src"), &rules).name, "api");
@@ -1154,6 +1204,7 @@ mod tests {
             name: "api".into(),
             path: "c:/work/api".into(),
             color: Some(ProjectColor::Blue),
+            priority: Priority::Normal,
         }];
         let mut listed_prompt = event(10, "live", "UserPromptSubmit");
         listed_prompt.prompt = Some("deploy".into());
@@ -1470,6 +1521,180 @@ values = [\"web01\"]
         assert_eq!(group_events(&with), group_events(&base));
         let only_subagents: Vec<EventLine> = with[2..].to_vec();
         assert!(group_events(&only_subagents).is_empty());
+    }
+
+    fn rule(
+        name: &str,
+        path: &str,
+        color: Option<ProjectColor>,
+        priority: Priority,
+    ) -> ProjectRule {
+        ProjectRule {
+            name: name.into(),
+            path: path.into(),
+            color,
+            priority,
+        }
+    }
+
+    /// AD-168, D-99: a card carries its project's priority, the same view
+    /// the floor's project list holds.
+    #[test]
+    fn a_card_carries_its_project_priority() {
+        for priority in Priority::ALL {
+            let input = BoardInput {
+                agents: Some(vec![record(
+                    r#"{"pid":7,"sessionId":"s","kind":"interactive","status":"waiting","cwd":"C:/work/api/src","startedAt":1}"#,
+                )]),
+                projects: vec![rule("api", "c:/work/api", None, *priority)],
+                ..Default::default()
+            };
+            let board = build_board(&input, 10);
+            assert_eq!(board.columns.needs_you[0].project.priority, *priority);
+            assert_eq!(board.floor_projects[0], board.columns.needs_you[0].project);
+        }
+        let derived = build_board(
+            &BoardInput {
+                agents: Some(vec![record(
+                    r#"{"pid":7,"sessionId":"s","kind":"interactive","status":"idle","cwd":"C:/work/api","startedAt":1}"#,
+                )]),
+                ..Default::default()
+            },
+            10,
+        );
+        assert_eq!(
+            derived.columns.your_turn[0].project.priority,
+            Priority::Normal
+        );
+    }
+
+    /// AD-168: the threshold travels in the board, in ms, the default
+    /// without a floor value.
+    #[test]
+    fn the_board_carries_the_alert_threshold() {
+        assert_eq!(
+            build_board(&BoardInput::default(), 10).alert_after_ms,
+            i64::from(ALERT_AFTER_MINUTES_DEFAULT) * 60_000
+        );
+        let input = BoardInput {
+            alert_after_minutes: Some(25),
+            ..Default::default()
+        };
+        assert_eq!(build_board(&input, 10).alert_after_ms, 25 * 60_000);
+    }
+
+    /// AD-68, D-99: the floor's projects in file order, a repeated name
+    /// passed through, with no session needed.
+    #[test]
+    fn floor_projects_keep_file_order() {
+        let input = BoardInput {
+            projects: vec![
+                rule(
+                    "zeta",
+                    "c:/work/zeta",
+                    Some(ProjectColor::Plum),
+                    Priority::High,
+                ),
+                rule("alpha", "c:/work/alpha", None, Priority::Normal),
+                rule("zeta", "c:/work/zeta-two", None, Priority::Normal),
+            ],
+            ..Default::default()
+        };
+        let board = build_board(&input, 10);
+        let names: Vec<&str> = board
+            .floor_projects
+            .iter()
+            .map(|p| p.name.as_str())
+            .collect();
+        assert_eq!(names, ["zeta", "alpha", "zeta"]);
+        assert_eq!(board.floor_projects[0].color, Some(ProjectColor::Plum));
+        assert_eq!(board.floor_projects[0].priority, Priority::High);
+        assert_eq!(board.floor_projects[1].color, Some(derived_color("alpha")));
+    }
+
+    /// D-99: the floor's view of a project equals the project a card of a
+    /// `cwd` inside it carries.
+    #[test]
+    fn floor_project_equals_the_card_project_of_a_cwd_inside() {
+        let rules = vec![
+            rule("api", "c:/work/api", None, Priority::High),
+            rule(
+                "docs",
+                "c:/work/docs",
+                Some(ProjectColor::Green),
+                Priority::Normal,
+            ),
+        ];
+        for (index, cwd) in ["C:/work/api/src/deep", r"C:\Work\Docs"].iter().enumerate() {
+            let view = project_for(Some(cwd), &rules);
+            assert_eq!(view, rules[index].view(), "{cwd}");
+        }
+    }
+
+    #[test]
+    fn floor_projects_are_empty_without_projects() {
+        assert!(
+            build_board(&BoardInput::default(), 10)
+                .floor_projects
+                .is_empty()
+        );
+    }
+
+    fn stop(ts: i64, head: Option<&str>, tail: Option<&str>) -> EventLine {
+        let mut line = event(ts, "s", "Stop");
+        line.last_message = head.map(str::to_owned);
+        line.last_message_tail = tail.map(str::to_owned);
+        line
+    }
+
+    fn listed_with(events: Vec<EventLine>, no_excerpts: bool) -> Card {
+        let input = BoardInput {
+            agents: Some(vec![record(
+                r#"{"pid":7,"sessionId":"s","kind":"interactive","status":"idle","cwd":"C:/work/api","startedAt":1}"#,
+            )]),
+            events,
+            no_excerpts,
+            ..Default::default()
+        };
+        build_board(&input, 10).columns.your_turn[0].clone()
+    }
+
+    /// D-182: a card carries the answer's tail beside its head, and
+    /// `no_excerpts` withholds both.
+    #[test]
+    fn cards_carry_the_answer_tail_and_withhold_it_without_excerpts() {
+        let lines = vec![stop(5, Some("head…"), Some("…tail"))];
+        let card = listed_with(lines.clone(), false);
+        assert_eq!(card.last_message.as_deref(), Some("head…"));
+        assert_eq!(card.last_message_tail.as_deref(), Some("…tail"));
+        let hidden = listed_with(lines, true);
+        assert_eq!(
+            (hidden.last_message, hidden.last_message_tail),
+            (None, None)
+        );
+    }
+
+    /// D-182: a later short answer, whole in its head, clears an older
+    /// answer's tail; a `Stop` without an answer keeps both.
+    #[test]
+    fn a_short_answer_clears_an_older_tail() {
+        let card = listed_with(
+            vec![
+                stop(5, Some("long head…"), Some("…old tail")),
+                stop(9, Some("short"), None),
+            ],
+            false,
+        );
+        assert_eq!(card.last_message.as_deref(), Some("short"));
+        assert_eq!(card.last_message_tail, None);
+        let kept = listed_with(
+            vec![
+                stop(5, Some("long head…"), Some("…old tail")),
+                stop(9, None, None),
+            ],
+            false,
+        );
+        assert_eq!(kept.last_message_tail.as_deref(), Some("…old tail"));
     }
 
     #[test]

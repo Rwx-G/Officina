@@ -218,6 +218,7 @@ mod tests {
             project: ProjectView {
                 name: "p".into(),
                 color: None,
+                priority: Default::default(),
             },
             session_id: None,
             background_id: id.map(Into::into),
@@ -226,6 +227,7 @@ mod tests {
             waiting_for: None,
             last_prompt: None,
             last_message: None,
+            last_message_tail: None,
             last_event_at_ms: None,
             started_at_ms: None,
             attach_available: true,

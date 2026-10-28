@@ -12,7 +12,7 @@ use officina_core::board::{Board, BoardInput, ContractView, ProjectRule, Stalene
 use officina_core::contract::{
     HookSightings, check_agents, hook_missing_after, hook_not_observed_after,
 };
-use officina_core::floor::{FloorFile, parse_floor, resolve_project_path};
+use officina_core::floor::{FloorFile, ViewIssue, parse_floor, resolve_project_path};
 use officina_core::quota::{QuotaFile, parse_quota_file};
 use officina_core::registry::types::{RegistryReport, SubjectRef};
 use serde::{Deserialize, Serialize};
@@ -46,6 +46,9 @@ pub struct LoadedFloor {
     pub file: Option<FloorFile>,
     pub projects: Vec<ProjectRule>,
     pub error: Option<String>,
+    /// View keys whose value the floor refuses, the default in force
+    /// (AD-168): doctor prints each with its line.
+    pub view_issues: Vec<ViewIssue>,
 }
 
 /// Loads and resolves the floor file, if any.
@@ -77,10 +80,12 @@ pub fn load_floor(path: Option<&Path>) -> LoadedFloor {
             name: p.name.clone(),
             path: resolve_project_path(&floor_dir, &p.path),
             color: p.color,
+            priority: FloorFile::priority_of(p),
         })
         .collect();
     LoadedFloor {
         path: Some(path.to_path_buf()),
+        view_issues: file.view_issues(&content),
         file: Some(file),
         projects,
         error: None,
@@ -529,6 +534,7 @@ impl Collector {
             approvals: board_approvals(&self.relay, now_ms, &mut |dir| self.trees.fingerprint(dir)),
             registry: self.registry.clone(),
             subjects: self.subjects.clone(),
+            alert_after_minutes: floor_file.map(FloorFile::alert_after_minutes),
         };
         let mut board = build_board(&input, now_ms);
         board.diagnostics.floor_error.clone_from(&self.floor.error);

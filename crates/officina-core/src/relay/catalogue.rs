@@ -3732,6 +3732,28 @@ mod tests {
         }
     }
 
+    /// D-466: the view keys authorise nothing, so adding or changing them
+    /// leaves the canonical catalogue, and an approval, as they were.
+    #[test]
+    fn priority_and_alert_keys_do_not_change_the_canonical_hash() {
+        let content = floor_with(&[VALID_PROBE]);
+        let plain = load(&content, "C:/Work/officina.toml").unwrap();
+        let with_view_keys = content.replacen(
+            "[[project]]\n",
+            "[alert]\nafter_minutes = 3\n\n[[project]]\npriority = \"high\"\n",
+            1,
+        );
+        assert_ne!(with_view_keys, content, "the keys were added");
+        let viewed = load(&with_view_keys, "C:/Work/officina.toml").unwrap();
+        assert_eq!(
+            crate::floor::FloorFile::priority_of(&viewed.floor.projects[0]),
+            crate::floor::Priority::High
+        );
+        assert_eq!(viewed.floor.alert_after_minutes(), 3);
+        assert_eq!(viewed.canonical, plain.canonical);
+        assert_eq!(viewed.hash, plain.hash);
+    }
+
     #[test]
     fn notices_do_not_change_the_hash() {
         let content = notice_fixture(NoticeKind::RemoteCommandValue);

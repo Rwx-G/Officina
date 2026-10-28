@@ -3,6 +3,7 @@ import type { ApprovalView } from "./ApprovalView";
 import type { Columns } from "./Columns";
 import type { ContractView } from "./ContractView";
 import type { Diagnostics } from "./Diagnostics";
+import type { ProjectView } from "./ProjectView";
 import type { QuotaView } from "./QuotaView";
 import type { Staleness } from "./Staleness";
 
@@ -19,4 +20,15 @@ waiting_count: number, columns: Columns,
  * The pending approval requests Needs you lists first, oldest first
  * (AD-35).
  */
-approvals: Array<ApprovalView>, quota: QuotaView, contract: ContractView, diagnostics: Diagnostics, done_window_ms: number, };
+approvals: Array<ApprovalView>, quota: QuotaView, contract: ContractView, diagnostics: Diagnostics, done_window_ms: number, 
+/**
+ * The floor's projects in file order (AD-68, D-99), each as a card of
+ * a session inside it would carry it; empty without a floor, or when
+ * the floor was ignored.
+ */
+floor_projects: Array<ProjectView>, 
+/**
+ * The escalation threshold of the alert, from the floor (AD-168), so
+ * no frontend constant repeats it.
+ */
+alert_after_ms: number, };

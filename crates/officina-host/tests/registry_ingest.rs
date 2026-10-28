@@ -403,6 +403,7 @@ fn projects(name: &str) -> Vec<ProjectRule> {
         name: name.to_owned(),
         path: "c:/work/api".to_owned(),
         color: None,
+        priority: Default::default(),
     }]
 }
 

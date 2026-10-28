@@ -19,6 +19,7 @@
   --color-project-green: #3f8f6b;
   --color-project-blue: #4c6fbf;
   --color-project-terracotta: #c0603c;
+  --color-project-plum: #8a5a9e;
   --color-project-none: #9a8e7a;
   /* A stopped relay (AD-35): terracotta, never amber, which marks what
      waits on the author. */

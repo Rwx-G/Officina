@@ -26,6 +26,19 @@ pub const RELAY_KEYS: [&str; 5] = [
     "project.actions",
 ];
 
+/// Keys valid in every schema that only change what the window shows:
+/// they authorise nothing, so they stay out of the relay's canonical
+/// catalogue and its approval (AD-168, D-466). A dotted key names a key of
+/// every `[[project]]` table. Asserted against [`FloorFile`] by a test.
+pub const VIEW_KEYS: [&str; 2] = ["alert", "project.priority"];
+
+/// The escalation threshold when the floor sets none or an invalid one
+/// (AD-168).
+pub const ALERT_AFTER_MINUTES_DEFAULT: u32 = 10;
+
+/// The thresholds `[alert] after_minutes` accepts, a day at most.
+pub const ALERT_AFTER_MINUTES_RANGE: std::ops::RangeInclusive<u32> = 1..=1440;
+
 /// Project colours of the framing's palette. The frontend maps every variant
 /// to a CSS variable through an exhaustive record, so a new variant here fails
 /// the frontend type check until it has a colour.
@@ -36,12 +49,28 @@ pub enum ProjectColor {
     Green,
     Blue,
     Terracotta,
+    Plum,
 }
 
 impl ProjectColor {
     /// Every variant, in palette order. Used to assign colours to projects
     /// derived from `cwd`, so the same folder name always gets the same colour.
-    pub const ALL: [ProjectColor; 3] = [Self::Green, Self::Blue, Self::Terracotta];
+    pub const ALL: [ProjectColor; 4] = [Self::Green, Self::Blue, Self::Terracotta, Self::Plum];
+}
+
+closed_enum! {
+    #[serde(rename_all = "lowercase")]
+    /// How much a project's waits matter (FR-10, AD-168): a waiting session
+    /// of a `high` project is in alert at once.
+    #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+    #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+    pub enum Priority {
+        /// The default.
+        #[default]
+        Normal,
+        /// Waits escalate to an alert at once.
+        High,
+    }
 }
 
 closed_enum! {
@@ -73,6 +102,32 @@ pub struct ProjectEntry {
     /// Names of catalogue actions this project may run.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub actions: Option<Vec<String>>,
+    /// As written, with its position, so a bad value is a view issue with
+    /// its line rather than a refused floor (AD-168); read it through
+    /// [`FloorFile::priority_of`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub priority: Option<toml::Spanned<toml::Value>>,
+}
+
+/// The `[alert]` table (AD-168).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AlertTable {
+    /// As written, with its position; read it through
+    /// [`FloorFile::alert_after_minutes`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub after_minutes: Option<toml::Spanned<toml::Value>>,
+}
+
+/// A view key whose value is not one it accepts: the default stays in force
+/// and doctor prints the key and its line (AD-168).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ViewIssue {
+    /// The key as the floor writes it, e.g. `priority` or `after_minutes`.
+    pub key: &'static str,
+    /// 1-based line of the value.
+    pub line: u32,
+    pub message: String,
 }
 
 /// Content of `officina.toml`.
@@ -102,6 +157,33 @@ pub struct FloorFile {
     /// actions.
     #[serde(default, rename = "credential", skip_serializing_if = "Vec::is_empty")]
     pub credentials: Vec<toml::Spanned<toml::Value>>,
+    /// The escalation threshold of the alert (AD-168).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub alert: Option<AlertTable>,
+}
+
+/// The priority a value names, if it names one.
+fn priority_value(value: &toml::Value) -> Option<Priority> {
+    value.as_str().and_then(Priority::from_code)
+}
+
+/// The threshold a value names, if it is an integer in
+/// [`ALERT_AFTER_MINUTES_RANGE`].
+fn after_minutes_value(value: &toml::Value) -> Option<u32> {
+    value
+        .as_integer()
+        .and_then(|n| u32::try_from(n).ok())
+        .filter(|n| ALERT_AFTER_MINUTES_RANGE.contains(n))
+}
+
+/// 1-based line of a byte offset.
+fn line_at(content: &str, offset: usize) -> u32 {
+    let end = offset.min(content.len());
+    let newlines = content.as_bytes()[..end]
+        .iter()
+        .filter(|b| **b == b'\n')
+        .count();
+    u32::try_from(newlines + 1).unwrap_or(u32::MAX)
 }
 
 impl FloorFile {
@@ -114,6 +196,68 @@ impl FloorFile {
             return Autonomy::Free;
         }
         project.autonomy.unwrap_or(Autonomy::Guarded)
+    }
+
+    /// The priority of `project`: [`Priority::Normal`] when the key is
+    /// absent or its value is not one [`Priority`] names, which
+    /// [`FloorFile::view_issues`] reports.
+    pub fn priority_of(project: &ProjectEntry) -> Priority {
+        project
+            .priority
+            .as_ref()
+            .and_then(|v| priority_value(v.get_ref()))
+            .unwrap_or_default()
+    }
+
+    /// The escalation threshold in minutes: [`ALERT_AFTER_MINUTES_DEFAULT`]
+    /// when `[alert] after_minutes` is absent or invalid, which
+    /// [`FloorFile::view_issues`] reports.
+    pub fn alert_after_minutes(&self) -> u32 {
+        self.alert
+            .as_ref()
+            .and_then(|a| a.after_minutes.as_ref())
+            .and_then(|v| after_minutes_value(v.get_ref()))
+            .unwrap_or(ALERT_AFTER_MINUTES_DEFAULT)
+    }
+
+    /// The view keys whose value is refused, with their line in `content`,
+    /// the text this floor was parsed from (AD-168).
+    pub fn view_issues(&self, content: &str) -> Vec<ViewIssue> {
+        let priorities = self.projects.iter().filter_map(|p| {
+            let value = p.priority.as_ref()?;
+            priority_value(value.get_ref())
+                .is_none()
+                .then(|| ViewIssue {
+                    key: "priority",
+                    line: line_at(content, value.span().start),
+                    message: format!(
+                        "project `{}`: priority is one of {}; it stays {}",
+                        p.name,
+                        Priority::ALL
+                            .iter()
+                            .map(|v| format!("\"{}\"", v.code()))
+                            .collect::<Vec<_>>()
+                            .join(", "),
+                        Priority::default().code()
+                    ),
+                })
+        });
+        let threshold = self
+            .alert
+            .as_ref()
+            .and_then(|a| a.after_minutes.as_ref())
+            .filter(|v| after_minutes_value(v.get_ref()).is_none())
+            .map(|value| ViewIssue {
+                key: "after_minutes",
+                line: line_at(content, value.span().start),
+                message: format!(
+                    "[alert] after_minutes is a whole number of minutes from {} to {}; {} applies",
+                    ALERT_AFTER_MINUTES_RANGE.start(),
+                    ALERT_AFTER_MINUTES_RANGE.end(),
+                    ALERT_AFTER_MINUTES_DEFAULT
+                ),
+            });
+        priorities.chain(threshold).collect()
     }
 }
 
@@ -438,14 +582,135 @@ program = "C:/path/to/tool.exe"
                 color: Some(ProjectColor::Blue),
                 autonomy: Some(Autonomy::Guarded),
                 actions: Some(vec!["x".to_owned()]),
+                priority: Some(toml::Spanned::new(0..0, toml::Value::from("high"))),
             }],
             actions: vec![toml::Spanned::new(0..0, action.clone())],
             credentials: vec![toml::Spanned::new(0..0, action)],
+            alert: Some(AlertTable {
+                after_minutes: Some(toml::Spanned::new(0..0, toml::Value::from(10))),
+            }),
         };
         let v0_1 = serialized_keys(&parse_floor(V0_1_FLOOR).unwrap());
-        let relay: BTreeSet<String> = serialized_keys(&full).difference(&v0_1).cloned().collect();
+        let view: BTreeSet<String> = VIEW_KEYS.iter().map(|k| (*k).to_owned()).collect();
+        let added: BTreeSet<String> = serialized_keys(&full).difference(&v0_1).cloned().collect();
+        let relay: BTreeSet<String> = added.difference(&view).cloned().collect();
         let constant: BTreeSet<String> = RELAY_KEYS.iter().map(|k| (*k).to_owned()).collect();
         assert_eq!(relay, constant);
+        assert!(
+            view.is_subset(&added),
+            "every view key is a field of the type"
+        );
+    }
+
+    /// A floor of `schema` with one project carrying `priority` (raw TOML)
+    /// and, when given, an `[alert]` table holding `after_minutes`.
+    fn view_floor(schema: u32, priority: Option<&str>, after: Option<&str>) -> String {
+        let mut text = format!("schema = {schema}\n[[project]]\nname = \"api\"\npath = \"api\"\n");
+        if let Some(value) = priority {
+            text.push_str(&format!("priority = {value}\n"));
+        }
+        if let Some(value) = after {
+            text.push_str(&format!("[alert]\nafter_minutes = {value}\n"));
+        }
+        text
+    }
+
+    #[test]
+    fn priority_defaults_to_normal() {
+        let floor = parse_floor(&view_floor(1, None, None)).unwrap();
+        assert_eq!(FloorFile::priority_of(&floor.projects[0]), Priority::Normal);
+        assert!(floor.view_issues(&view_floor(1, None, None)).is_empty());
+    }
+
+    #[test]
+    fn priority_high_is_read() {
+        for schema in [FLOOR_SCHEMA_V1, FLOOR_SCHEMA] {
+            for priority in Priority::ALL {
+                let text = view_floor(schema, Some(&format!("\"{}\"", priority.code())), None);
+                let floor = parse_floor(&text).unwrap();
+                assert_eq!(FloorFile::priority_of(&floor.projects[0]), *priority);
+                assert!(floor.view_issues(&text).is_empty(), "{text}");
+            }
+        }
+    }
+
+    #[test]
+    fn an_unknown_priority_is_an_issue_and_stays_normal() {
+        for bad in ["\"urgent\"", "\"HIGH\"", "3", "true"] {
+            let text = view_floor(FLOOR_SCHEMA, Some(bad), None);
+            let floor = parse_floor(&text).unwrap();
+            assert_eq!(
+                FloorFile::priority_of(&floor.projects[0]),
+                Priority::Normal,
+                "{bad}"
+            );
+            let issues = floor.view_issues(&text);
+            assert_eq!(issues.len(), 1, "{bad}");
+            assert_eq!((issues[0].key, issues[0].line), ("priority", 5), "{bad}");
+            assert!(issues[0].message.contains("api"), "{}", issues[0].message);
+        }
+    }
+
+    #[test]
+    fn alert_threshold_defaults_to_ten_minutes() {
+        let floor = parse_floor(&view_floor(1, None, None)).unwrap();
+        assert_eq!(floor.alert_after_minutes(), ALERT_AFTER_MINUTES_DEFAULT);
+        let empty_table = "schema = 1\n[alert]\n";
+        assert_eq!(
+            parse_floor(empty_table).unwrap().alert_after_minutes(),
+            ALERT_AFTER_MINUTES_DEFAULT
+        );
+        for minutes in [
+            *ALERT_AFTER_MINUTES_RANGE.start(),
+            25,
+            *ALERT_AFTER_MINUTES_RANGE.end(),
+        ] {
+            let text = view_floor(FLOOR_SCHEMA, None, Some(&minutes.to_string()));
+            let floor = parse_floor(&text).unwrap();
+            assert_eq!(floor.alert_after_minutes(), minutes);
+            assert!(floor.view_issues(&text).is_empty());
+        }
+    }
+
+    #[test]
+    fn alert_threshold_out_of_range_is_an_issue() {
+        let below = ALERT_AFTER_MINUTES_RANGE.start() - 1;
+        let above = ALERT_AFTER_MINUTES_RANGE.end() + 1;
+        for bad in [
+            below.to_string(),
+            above.to_string(),
+            "-5".to_owned(),
+            "2.5".to_owned(),
+            "\"10\"".to_owned(),
+        ] {
+            let text = view_floor(FLOOR_SCHEMA, None, Some(&bad));
+            let floor = parse_floor(&text).unwrap();
+            assert_eq!(
+                floor.alert_after_minutes(),
+                ALERT_AFTER_MINUTES_DEFAULT,
+                "{bad}"
+            );
+            let issues = floor.view_issues(&text);
+            assert_eq!(issues.len(), 1, "{bad}");
+            assert_eq!(
+                (issues[0].key, issues[0].line),
+                ("after_minutes", 6),
+                "{bad}"
+            );
+        }
+        assert!(
+            parse_floor("schema = 1\n[alert]\nafter = 3\n").is_err(),
+            "an unknown key in [alert]"
+        );
+    }
+
+    #[test]
+    fn plum_is_a_project_colour() {
+        assert!(ProjectColor::ALL.contains(&ProjectColor::Plum));
+        let floor =
+            parse_floor("schema = 1\n[[project]]\nname = \"a\"\npath = \"a\"\ncolor = \"plum\"\n")
+                .unwrap();
+        assert_eq!(floor.projects[0].color, Some(ProjectColor::Plum));
     }
 
     #[test]
