@@ -50,6 +50,57 @@ fn appends_one_line_per_event_silently() {
     assert_eq!(lines[3]["last_message"], "Done.");
 }
 
+/// A payload of `event` holding every field of its `HOOK_FIELDS` entry,
+/// each taken from the complete redacted payload above.
+fn complete(event: &str) -> serde_json::Value {
+    let full: serde_json::Value = serde_json::from_str(&payload(event)).unwrap();
+    let mut complete = serde_json::json!({"hook_event_name": event});
+    for field in officina_core::contract::hook_fields(event) {
+        complete[*field] = full[*field].clone();
+    }
+    complete
+}
+
+/// Story 3.8 AC 2 (AD-45, AD-56): each field of `HOOK_FIELDS` removed in
+/// turn from a complete payload of its event is recorded as `absent` on the
+/// event line; a complete payload records none.
+#[test]
+fn payload_missing_a_field_records_absent() {
+    let env = TestEnv::new();
+    let mut expected = Vec::new();
+    for (event, fields) in officina_core::contract::HOOK_FIELDS {
+        let out = env.run(&["hook"], complete(event).to_string().as_bytes());
+        assert!(out.status.success(), "{event}");
+        expected.push((event.to_string(), None));
+        for field in *fields {
+            let mut lacking = complete(event);
+            lacking.as_object_mut().unwrap().remove(*field);
+            let out = env.run(&["hook"], lacking.to_string().as_bytes());
+            assert!(
+                out.status.success() && out.stdout.is_empty() && out.stderr.is_empty(),
+                "{event} without {field}"
+            );
+            expected.push((event.to_string(), Some(serde_json::json!([field]))));
+        }
+    }
+    let recorded: Vec<(String, Option<serde_json::Value>)> = read_events(&env)
+        .into_iter()
+        .map(|line| {
+            (
+                line["event"].as_str().unwrap().to_owned(),
+                line.get("absent").cloned(),
+            )
+        })
+        .collect();
+    assert_eq!(recorded, expected);
+    for event in EVENTS {
+        assert!(
+            !officina_core::contract::hook_fields(event).is_empty(),
+            "{event} has no HOOK_FIELDS entry"
+        );
+    }
+}
+
 #[test]
 fn bad_input_and_unwritable_home_exit_0_silently() {
     let env = TestEnv::new();

@@ -723,6 +723,25 @@ mod tests {
         }
     }
 
+    /// AD-56, D-44: the canary checks the payload of every event the hook
+    /// buffers, and names no event it does not.
+    #[test]
+    fn every_buffered_event_has_hook_fields() {
+        use officina_core::contract::{HOOK_FIELDS, hook_fields};
+        for event in BUFFERED_EVENTS {
+            assert!(
+                !hook_fields(event).is_empty(),
+                "{event} has no HOOK_FIELDS entry"
+            );
+        }
+        for (event, _) in HOOK_FIELDS {
+            assert!(
+                BUFFERED_EVENTS.contains(event),
+                "{event} is not a buffered event"
+            );
+        }
+    }
+
     #[test]
     fn partially_registered_hooks_are_reported() {
         let settings = serde_json::json!({"hooks": {
