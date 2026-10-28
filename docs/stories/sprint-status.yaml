@@ -99,7 +99,7 @@ stories:
   - {id: "4.8", file: story-4.8-scene-targets-keyboard-file-and-strip.md, slice: A, status: review}
   - {id: "4.9", file: story-4.9-alert-room-and-beacon.md, slice: A, status: review}
   - {id: "4.10", file: story-4.10-walking.md, slice: A, status: review}  # AD-71 walking run (D-515) is story 4.14's
-  - {id: "4.11", file: story-4.11-focus-mode-and-keys.md, slice: A, status: approved}
+  - {id: "4.11", file: story-4.11-focus-mode-and-keys.md, slice: A, status: review}
   - {id: "4.12", file: story-4.12-subagents.md, slice: B, status: approved}
   # 4.13: code done; AC 5's dark baselines wait for the CI snapshot run and the owner's comparison with the prototype's dark render (D-508).
   - {id: "4.13", file: story-4.13-dark-theme.md, slice: B, status: in-progress}
