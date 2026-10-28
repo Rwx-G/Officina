@@ -59,7 +59,7 @@ stories:
   - {id: "3.4", file: story-3.4-subjects-and-filing.md, slice: A, status: review}
   - {id: "3.5", file: story-3.5-subjects-view.md, slice: A, status: review}
   - {id: "3.6", file: story-3.6-verdicts-and-proposals.md, slice: A, status: review}
-  - {id: "3.7", file: story-3.7-triage-panel.md, slice: A, status: approved}
+  - {id: "3.7", file: story-3.7-triage-panel.md, slice: A, status: review}
   - {id: "3.8", file: story-3.8-hook-fields-canary.md, slice: A, status: approved}
   - {id: "3.9", file: story-3.9-triage-call-and-dry-run.md, slice: B, status: approved}
   - {id: "3.10", file: story-3.10-measured-error-and-auto-archive.md, slice: B, status: approved}
