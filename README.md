@@ -372,6 +372,16 @@ The window ingests the event files into the registry before it shows its first b
 
 These bounds are applied while the window runs and when it starts. While it is closed, or while its registry is read-only or unavailable, nothing expires and event files are kept; nothing is lost, they are ingested at the next start. `officina doctor` warns when more than seven event files wait. While the registry cannot be used, the Board view says why and keeps working from Claude Code's sessions.
 
+### What a session record holds
+
+Each session is recorded once, under its session id, whichever sees it first: `claude agents` or one of its hook events. Beside its project and when it was first and last seen, the record holds facts, and **each fact says where it came from and when**: `agents` for what `claude agents` reported, `hook` for what an event line said, `rules` for what Officina inferred. A fact keeps its latest value only, never a history.
+
+- From `claude agents`: what it reports about the session (kind, name, folder, process, status and state, and when it began to list it), never what the session waits for, which only the board shows. A refresh writes only what changed.
+- From the hook: the folder and process of each line, the last start and its source, the times of the last prompt and of the last answer, and the end with its reason.
+- From the rules: `interrupted`, when a session left `claude agents` without an end, including one that died while the window was closed, found at the window's first refresh.
+
+A session is ended by its end (`SessionEnd`), which always wins over `interrupted`, or by `interrupted`; a background session by its state `done`, `failed` or `stopped` (a `done` one is idle, ended for triage). Listed again by `claude agents`, or sent a prompt newer than its end, it is no longer ended. `claude --resume <id>` keeps the session id, so a resumed conversation continues its own record. `/clear` and `/resume` within one `claude` process link the session they end to the one they start (within a minute, same process); when `claude agents` still names the ended one, what it reports goes to the new one. A run never seen in `claude agents` that ended with `other` (as `claude -p` does) is recorded as non-interactive.
+
 ## Command line
 
 | Command | Purpose |

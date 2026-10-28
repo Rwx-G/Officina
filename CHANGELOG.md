@@ -141,6 +141,16 @@ project uses [Semantic Versioning](https://semver.org/).
   database written by an older version is copied, then migrated.
   `officina doctor` reports its location, version, integrity, copies,
   quarantine and last restore, and never creates it.
+- Session records (v0.3, in progress): the window records each session
+  once, whichever of `claude agents` and the hook sees it first, with each
+  fact's latest value, its source (`agents`, `hook`, `rules`) and its time.
+  A refresh of `claude agents` writes only what changed and never stores
+  `waitingFor`. A session gone from `claude agents` without a `SessionEnd`,
+  also while the window was closed, is `interrupted`; a `SessionEnd`
+  always wins over it, and a session listed again or sent a newer prompt
+  is no longer ended. `/clear` and `/resume` in the same process link the
+  session to its successor, and a run never seen in `claude agents` that
+  ended with `other` is recorded as non-interactive.
 
 ### Changed
 
