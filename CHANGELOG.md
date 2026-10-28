@@ -70,9 +70,9 @@ project uses [Semantic Versioning](https://semver.org/).
   project with the same parameters, under the same approved catalogue and on
   the same code, in the last 30 minutes, the journal of the day before
   included; otherwise `officina run` refuses with `check_required` and names
-  the check. In a git work tree the code is bound by a fingerprint of `HEAD`,
-  the diff to it, the untracked files git does not ignore and the tracked
-  files flagged to hide their edits (by content up to 1 MiB, by size beyond).
+  the check. In a git work tree the code is bound by the tree fingerprint
+  (see Security): the content of the tracked and unignored files, read and
+  hashed by Officina.
 - Relay gate in `officina hook`: in a guarded repository, Claude Code's
   `PreToolUse` for a shell tool gets a deny that holds in every permission mode,
   bypass included, for a guarded program (remote shells and copies, Ansible,
@@ -83,7 +83,8 @@ project uses [Semantic Versioning](https://semver.org/).
   Officina's own files; the reason lists the actions the session may run
   instead. Elsewhere it prints nothing. It costs a few milliseconds per
   shell tool call. Its limits as a text match are recorded in the
-  architecture.
+  architecture, and a test checks its lexer against Git Bash's own parse of
+  every command of its vector set and of variants built from its constants.
 - Stop and resume the relay from the window's header: while stopped,
   `officina run` refuses every action and a terracotta "relay stopped" chip
   and a board banner say so; the gate keeps guarding.
@@ -103,11 +104,12 @@ project uses [Semantic Versioning](https://semver.org/).
   and whether it differs from the floor doctor reads, the catalogue's issues
   with their lines, the approval state, the projects with their actions and
   the guarded programs in effect, whether each action's program resolves (a
-  WSL action's tools and program probed inside its distro), and warnings for
-  a timeout that can outlive the Bash tool's cap, an action naming a check
-  its project does not list, a project with actions naming a check outside
-  a git work tree, unreadable journal lines and gate errors of the last 24
-  hours. For each guarded project it prints the `CLAUDE.md`
+  WSL action's tools and program probed inside its distro), whether each
+  project's files bind, the decisions the window did not make, and warnings
+  for a timeout that can outlive the Bash tool's cap, an action naming a
+  check its project does not list, a project with actions that bind files
+  outside a git work tree, unreadable journal lines and gate errors of the
+  last 24 hours. For each guarded project it prints the `CLAUDE.md`
   paragraph to paste, generated from the approved catalogue.
 - HTTP read actions (`kind = "http"`, `GET` or `HEAD`) on a URL template
   whose placeholders fill a whole path segment or query value,
@@ -139,18 +141,20 @@ project uses [Semantic Versioning](https://semver.org/).
   every other event is recorded as before, and `PreToolUse` payloads are
   never written to the event buffer.
 - `officina doctor` requires the `PreToolUse` hook, its matcher naming the
-  shell tools only, once the relay guards a project, and prints it in the
-  block to paste; workstations without one keep the five v0.1 hooks and pay
-  nothing per shell tool call. A program of the catalogue that does not resolve, or a relay
-  floor that cannot be read, also makes it exit 1.
+  shell tools and the file tools the gate decides, once the relay guards a
+  project, and prints it in the block to paste; workstations without one
+  keep the five v0.1 hooks and pay nothing per tool call. A program of the
+  catalogue that does not resolve, files that cannot be bound, an
+  unacknowledged anomaly or a relay floor that cannot be read also makes it
+  exit 1.
 - Floor files accept schema 2, where a project without `autonomy` is
   guarded. A schema 1 floor still loads with every project `free`, and the
   relay's keys in it are an error naming `schema = 2`.
 - Approval journal lines name their project and action, and a request says
   whether its action has a dry run; lines written before still read.
-- The canonical catalogue is format 2: it covers credentials and HTTP
-  actions, so a catalogue approved before shows as changed once and is
-  approved again.
+- The canonical catalogue is format 3: it covers credentials, HTTP actions
+  and `forwarded_values`, so a catalogue approved before shows as changed
+  once and is approved again.
 - The board contract (`officina board --json`) is schema 2: it carries the
   pending approval requests, and `waiting_count` counts the approvable ones
   beside the sessions that wait.
@@ -177,7 +181,8 @@ project uses [Semantic Versioning](https://semver.org/).
   boundary.
 - `officina.exe`, which sessions call, contains no code that approves a
   catalogue or stops the relay; only the window does. CI builds the shipped
-  binary alone and searches it, with a positive control on the window.
+  binary alone and searches it, with a positive control on the window, and
+  the release workflow searches the very files it packages.
 - `officina run` fails closed: anything unreadable, unapproved or changed is
   a refusal. It never starts a shell: a parameter value fills exactly one
   argument, and a value starting with `-`, holding a control, bidirectional
@@ -263,8 +268,10 @@ project uses [Semantic Versioning](https://semver.org/).
   hold whitespace, shell or template characters drops the action with the
   issue `forwarded_pattern`, unless it sets `forwarded_values = "accepted"`;
   the probe also tries values as short and as long as the pattern accepts,
-  so a pattern that needs a long value (`.{5,}`) is caught. The catalogue
-  format moves to 3, so the catalogue is approved once again.
+  so a pattern that needs a long value (`.{5,}`) is caught.
+  `forwarded_values` is part of the canonical catalogue (see Changed).
+- A request file's dry-run id names a kept output only when it is a run
+  id, so a forged request cannot make the window read another file.
 - The window's Content Security Policy allows no inline style; Vite inlines
   no asset as a `data:` URI, which the font policy refused.
 

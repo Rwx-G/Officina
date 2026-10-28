@@ -5,7 +5,7 @@
 mod common;
 
 use common::TestEnv;
-use officina_core::relay::catalogue::{DEFAULT_GUARDED_PROGRAMS, NoticeKind};
+use officina_core::relay::catalogue::{CANONICAL_FORMAT, DEFAULT_GUARDED_PROGRAMS, NoticeKind};
 use officina_core::relay::gate::{FILE_TOOLS, SHELL_TOOLS, ToolRule, gated_tools};
 use officina_core::relay::run::TREE_BINDING_REFUSALS;
 
@@ -253,4 +253,33 @@ fn readme_scopes_the_network_to_http_actions() {
         })
         .collect();
     assert_eq!(openers, ["crates/officina-host/src/relay/http.rs"]);
+}
+
+/// Story 2.16 AC 2 (story 2.10 AC 8): `[Unreleased]` states the canonical
+/// catalogue's format as the code has it, and only that one.
+#[test]
+fn changelog_states_the_current_catalogue_format() {
+    let changelog =
+        std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../CHANGELOG.md"))
+            .unwrap();
+    let unreleased = changelog
+        .split("\n## [")
+        .find(|section| section.starts_with("Unreleased]"))
+        .expect("the CHANGELOG has an [Unreleased] section");
+    let stated: Vec<u32> = unreleased
+        .split("format ")
+        .skip(1)
+        .filter_map(|rest| {
+            let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+            digits.parse().ok()
+        })
+        .collect();
+    assert!(
+        !stated.is_empty(),
+        "[Unreleased] states no catalogue format"
+    );
+    assert!(
+        stated.iter().all(|format| *format == CANONICAL_FORMAT),
+        "[Unreleased] states the formats {stated:?}, the code {CANONICAL_FORMAT}"
+    );
 }
