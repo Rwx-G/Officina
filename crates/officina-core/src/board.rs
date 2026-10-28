@@ -880,6 +880,119 @@ mod tests {
         assert!(without.columns.all().all(|c| c.subject.is_none()));
     }
 
+    /// AD-55, D-61: rows to sort block no session, so they leave
+    /// `waiting_count`, and with it the window title and the taskbar
+    /// overlay, as they were: a board built with the registry input of a
+    /// registry holding rows to sort counts what one without it counts.
+    #[test]
+    fn rows_to_sort_leave_waiting_count_unchanged() {
+        use crate::registry::proposal::ModelInput;
+        use crate::registry::types::{
+            HookEnd, RegistryReport, RegistryState, SessionRecord, Source, Sourced, SubjectRecord,
+            SubjectStatus,
+        };
+        use crate::registry::verdict::{VerdictInput, rows};
+
+        fn sourced<T>(value: T, at_ms: i64) -> Option<Sourced<T>> {
+            Some(Sourced {
+                value,
+                src: Source::Hook,
+                at_ms,
+            })
+        }
+        let mut events = Vec::new();
+        let mut sessions = Vec::new();
+        for (i, sid) in ["done-a", "done-b", "loose"].into_iter().enumerate() {
+            let at = 100 * (i as i64 + 1);
+            let mut prompt = event(at, sid, "UserPromptSubmit");
+            prompt.prompt = Some("tidy up".into());
+            let mut end = event(at + 50, sid, "SessionEnd");
+            end.reason = Some("prompt_input_exit".into());
+            events.extend([prompt, event(at + 10, sid, "Stop"), end]);
+            sessions.push(SessionRecord {
+                session_id: sid.to_owned(),
+                project: "api".to_owned(),
+                subject: (sid != "loose").then_some(Sourced {
+                    value: Some(1),
+                    src: Source::Author,
+                    at_ms: 1,
+                }),
+                last_prompt_at: sourced(at, at),
+                last_stop_at: sourced(at + 10, at + 10),
+                ended: sourced(
+                    HookEnd {
+                        reason: Some("prompt_input_exit".into()),
+                        claude_pid: None,
+                    },
+                    at + 50,
+                ),
+                ..SessionRecord::default()
+            });
+        }
+        let subjects = [SubjectRecord {
+            id: 1,
+            project: "api".into(),
+            name: "cleanup".into(),
+            status: Sourced {
+                value: SubjectStatus::Active,
+                src: Source::Author,
+                at_ms: 1,
+            },
+            created_at_ms: 1,
+            routine: false,
+            merged_into: None,
+        }];
+        let to_sort = rows(&VerdictInput {
+            subjects: &subjects,
+            sessions: &sessions,
+            confirmations: &[],
+            model: &ModelInput::default(),
+        });
+        assert_eq!(
+            to_sort.len(),
+            2,
+            "positive control: a subject and an unfiled session"
+        );
+
+        let waiting = record(
+            r#"{"pid":7,"sessionId":"w","kind":"interactive","status":"waiting","waitingFor":"permission prompt","cwd":"C:/work/api","startedAt":1}"#,
+        );
+        let without = BoardInput {
+            agents: Some(vec![waiting]),
+            events,
+            ..Default::default()
+        };
+        let with = BoardInput {
+            registry: Some(RegistryReport {
+                state: RegistryState::Ready,
+                detail: None,
+                exclude_from_sync: None,
+            }),
+            subjects: BTreeMap::from([
+                (
+                    "done-a".to_owned(),
+                    SubjectRef {
+                        id: 1,
+                        name: "cleanup".into(),
+                    },
+                ),
+                (
+                    "done-b".to_owned(),
+                    SubjectRef {
+                        id: 1,
+                        name: "cleanup".into(),
+                    },
+                ),
+            ]),
+            ..without.clone()
+        };
+        let now = UNLISTED_GRACE_MS + 1_000;
+        let (plain, sorted) = (build_board(&without, now), build_board(&with, now));
+        assert_eq!(plain.waiting_count, 1);
+        assert_eq!(sorted.waiting_count, plain.waiting_count);
+        assert_eq!(sorted.columns.needs_you, plain.columns.needs_you);
+    }
+
     #[test]
     fn live_status_overrides_stale_notification() {
         let mut n = event(10, "s", "Notification");
