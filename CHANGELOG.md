@@ -8,6 +8,19 @@ project uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Moving an ended card (v0.4, story 4.15): a To resume or Done card can be
+  dragged onto Done, back onto To resume, or onto a Discard target shown
+  while it is dragged, for a session that was never real work; its menu
+  does the same from the keyboard. Each is the author's verdict, recorded
+  in the registry and covering only what the session did before it; a note
+  offers Undo. Discarded sessions leave the board and the scene and are
+  listed, with Restore, beside the archived subjects.
+- The window's minimum size, 1140 x 820: the header on two lines and the
+  scene's base floor whole at its smallest scale (story 4.15).
+- Short fades and slides (about 160 ms) when views, modes, cards, menus,
+  panels, the alert band and the header's chips come and go; none under
+  reduced motion (story 4.15).
+
 - Scene mode (v0.4, in progress): the Sessions view draws the company,
   furnished, scaled to the window, every live session an employee placed
   at once at its place (reception, the decision office's queue with its
@@ -337,6 +350,19 @@ project uses [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- Sober corners: controls round 4 px and surfaces 6 px, from one radius
+  family in `app.css`; pills are kept for count badges (story 4.15).
+- One header in every view and mode: the same quota gauges (150 px wide,
+  two lines), buttons and chips at the same places; the Walking toggle is
+  shown everywhere; "Pin on top" reads "Pin". To resume and Done are
+  counted in the header, opening Board mode on their column, instead of
+  under the scene (story 4.15).
+- Wide screens: a board column shows cards side by side when it has the
+  room; the Subjects and Relay views keep to a reading width, centred; the
+  session file docks beside the scene when the window leaves room for it
+  (story 4.15).
+- No shadow under the scene's floor (story 4.15).
+
 - `officina doctor` prints complete blocks to paste, never fragments to
   merge by hand. For the hooks, the whole `"hooks"` key of the user
   settings with Officina's registrations merged in: every hook already
@@ -617,6 +643,11 @@ project uses [Semantic Versioning](https://semver.org/).
   processes it starts keep their own state.
 
 ### Fixed
+
+- Archiving a subject in the Subjects view left its ended session in To
+  resume: the board now reads the subject's status, so the session moves
+  to Done, tagged "subject archived", and comes back if the subject is
+  reopened (story 4.15).
 
 - `officina doctor` no longer prints a statusline that tees Officina's
   `quota write` into itself when the existing statusline already runs it.
