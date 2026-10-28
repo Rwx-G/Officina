@@ -102,6 +102,12 @@ required-features = ["window-authority"]
 name = "registry_fixture"
 required-features = ["window-authority"]
 
+# One real triage call, the workstation gate of story 3.9 (AD-58), run by
+# the owner by hand; never by a test, never part of a shipped binary.
+[[example]]
+name = "triage_probe"
+required-features = ["window-authority"]
+
 [target."cfg(windows)".dependencies]
 windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_System_Diagnostics_ToolHelp", "Win32_System_Threading", "Win32_System_JobObjects", "Win32_System_SystemInformation", "Win32_Security_Credentials", "Win32_System_Registry", "Win32_System_Environment", "Win32_Storage_FileSystem"] }
 
