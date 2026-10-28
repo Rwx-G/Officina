@@ -1,9 +1,11 @@
-// The alert band's words (FR-10, AD-175): which session it names and why.
-// Core decides who is in alert (`Card.scene`, AD-167); this module only
-// words it, from the board and the store's clock tick, outside the scene.
+// The alert band's words (FR-10, AD-175): which session it names and why,
+// and the first alerted card the beacon breathes for. Core decides who is
+// in alert (`Card.scene`, AD-167); this module only words it, from the
+// board and the store's clock tick, and picks the beacon's card.
 import type { AlertCause } from "./generated/AlertCause";
 import type { Board } from "./generated/Board";
 import type { Card } from "./generated/Card";
+import { haloEnteredAt, type HaloPair } from "./halo";
 
 /** How each alert cause is told; a waited alert adds its minutes. */
 export const CAUSE_TEXT: Record<AlertCause, string> = {
@@ -32,6 +34,15 @@ export interface AlertSummary {
 export function alertedCards(board: Board): Card[] {
   const { needs_you, your_turn, working, to_resume, done } = board.columns;
   return [...needs_you, ...your_turn, ...working, ...to_resume, ...done].filter((card) => card.scene?.alert);
+}
+
+/** What the alert room's beacon breathes for (AD-175, D-474): the first
+ *  alerted card in board order, keyed on when its wait began, or on when
+ *  its halo counts from when that start is unknown; `null` with no alert. */
+export function beaconPair(board: Board): HaloPair | null {
+  const first = alertedCards(board)[0];
+  if (!first) return null;
+  return { key: first.key, enteredAt: first.scene?.waiting_since_ms ?? haloEnteredAt(first) };
 }
 
 /** What the band shows for `board`, or `null` when nobody is in alert. */

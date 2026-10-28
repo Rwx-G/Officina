@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { BoardStore, COPIED_VISIBLE_MS, OUTCOME_VISIBLE_MS } from "./board.svelte";
 import { startAll } from "./lifecycle";
+import { beaconPair } from "./alert";
 import { haloMemo } from "./halo";
 import * as ipc from "./ipc";
 import { fixturesOf } from "../../e2e/fixture-index";
@@ -168,6 +169,54 @@ describe("BoardStore halo timings", () => {
     const reads = now.mock.calls.length;
     expect(haloMemo.timing(waiter.key, enteredAt)).toEqual(timing);
     expect(now).toHaveBeenCalledTimes(reads);
+    stop();
+  });
+
+  it("the beacon's halo timing is kept while its card is in alert", async () => {
+    const board = boardWithWaits();
+    const base = board.columns.needs_you[0]!;
+    // In alert, its data gone unknown (D-494): no longer waiting by its
+    // column or its zone, still the beacon's card.
+    const alerted: Card = {
+      ...base,
+      column: "working",
+      scene: { zone: "unknown", waiting_since_ms: board.generated_at_ms - 60_000, alert: "waited", approval: false },
+    };
+    const withAlert: Board = {
+      ...board,
+      alert_count: 1,
+      columns: { ...board.columns, needs_you: [], working: [...board.columns.working, alerted] },
+    };
+    const cleared: Board = {
+      ...withAlert,
+      alert_count: 0,
+      columns: { ...withAlert.columns, working: [...board.columns.working, { ...alerted, scene: { ...alerted.scene!, zone: "office", alert: null } }] },
+    };
+    let push: (board: Board) => void = () => {};
+    vi.mocked(ipc.onBoard).mockImplementationOnce(async (handler) => {
+      push = handler;
+      return unlisten;
+    });
+    vi.mocked(ipc.getBoard).mockResolvedValueOnce(withAlert);
+    const now = vi.spyOn(Date, "now").mockReturnValue(board.generated_at_ms);
+    const store = new BoardStore();
+    const stop = await store.start();
+    const beacon = beaconPair(withAlert)!;
+    expect(beacon.key).toBe(alerted.key);
+    const timing = haloMemo.timing(beacon.key, beacon.enteredAt);
+
+    // The same alert on the next board: the timing is kept, not read anew.
+    now.mockReturnValue(board.generated_at_ms + 60_000);
+    push(structuredClone(withAlert));
+    let reads = now.mock.calls.length;
+    expect(haloMemo.timing(beacon.key, beacon.enteredAt)).toEqual(timing);
+    expect(now).toHaveBeenCalledTimes(reads);
+
+    // Its alert cleared: dropped, so a later alert is a new one.
+    push(cleared);
+    reads = now.mock.calls.length;
+    haloMemo.timing(beacon.key, beacon.enteredAt);
+    expect(now).toHaveBeenCalledTimes(reads + 1);
     stop();
   });
 

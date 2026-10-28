@@ -4,6 +4,7 @@
 // at first sight, and kept while the key waits, so a re-render, a remount or
 // a mode switch never restarts the breathing.
 import type { Action } from "svelte/action";
+import type { Card } from "./generated/Card";
 
 /** One direction of the breath, `from` to `to` or back. */
 export const HALO_HALF_MS = 2_000;
@@ -84,6 +85,11 @@ export interface HaloPair {
   /** When the wait began: `last_event_at_ms`, else `started_at_ms`, else
    *  `null` for first sight. */
   enteredAt: number | null;
+}
+
+/** When `card`'s wait began, as a halo counts it. */
+export function haloEnteredAt(card: Card): number | null {
+  return card.last_event_at_ms ?? card.started_at_ms;
 }
 
 const PROPERTIES = ["--halo-delay", "--halo-count", "--halo-half"] as const;

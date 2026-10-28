@@ -10,8 +10,8 @@
 // and `updateSnap`.
 import type { ProjectColor } from "../generated/ProjectColor";
 import { projector } from "./geometry";
-import { buildStatics, paint, type OfficeUse, type Static } from "./furniture";
-import type { Employee, SceneLayout } from "./layout";
+import { ALERT_PAINTS, buildStatics, paint, type OfficeUse, type Static } from "./furniture";
+import { alertLit, type Employee, type SceneLayout } from "./layout";
 import { allSpots, restPoint, type Spot } from "./places";
 import { badgeMarkup, createRig, lookOf, marksMarkup, setPose, ticketMarkup, underMarkup, write, type Rig } from "./rig";
 
@@ -82,6 +82,10 @@ export class SceneObjects {
   #deskColours: (ProjectColor | null)[] = [];
   #decisionTops: Element[] = [];
   #queueOn: boolean | null = null;
+  /** The alert room's lit parts, by what `ALERT_PAINTS` paints them. */
+  #alertParts: { part: keyof typeof ALERT_PAINTS; node: Element }[] = [];
+  #beams: Element[] = [];
+  #alertOn: boolean | null = null;
   #figures = new Map<string, Figure>();
   #created = 0;
   #spots = new Map<string, Spot>();
@@ -109,6 +113,7 @@ export class SceneObjects {
     }
     this.#applyDesks(layout);
     this.#applyQueue(layout);
+    this.#applyAlert(layout);
     this.#applyFigures(layout, colours, snap);
     this.#reorder();
   }
@@ -153,6 +158,15 @@ export class SceneObjects {
     }
     this.#decisionTops = [...this.#root.querySelectorAll('[data-partition="decision"] [data-top]')];
     this.#queueOn = null;
+    const parts = (part: keyof typeof ALERT_PAINTS, selector: string) => [...this.#root.querySelectorAll(selector)].map((node) => ({ part, node }));
+    this.#alertParts = [
+      ...parts("lamp", "[data-beacon-lamp]"),
+      ...parts("panel", "[data-status-panel]"),
+      ...parts("mark", "[data-status-mark]"),
+      ...parts("partition", '[data-partition="alert"] [data-top]'),
+    ];
+    this.#beams = [...this.#root.querySelectorAll("[data-beacon-beam]")];
+    this.#alertOn = null;
   }
 
   #applyDesks(layout: SceneLayout): void {
@@ -206,6 +220,19 @@ export class SceneObjects {
     for (const top of this.#decisionTops) top.setAttribute("fill", paint(on ? "color-attention" : "scene-part-t"));
   }
 
+  /** The alert room lights while someone stands in it (AD-175): the
+   *  beacon's lamp and static beam, the status board, the partitions. */
+  #applyAlert(layout: SceneLayout): void {
+    const on = alertLit(layout);
+    if (on === this.#alertOn) return;
+    this.#alertOn = on;
+    for (const { part, node } of this.#alertParts) node.setAttribute("fill", paint(ALERT_PAINTS[part][on ? "lit" : "quiet"]));
+    for (const beam of this.#beams) {
+      if (on) beam.removeAttribute("display");
+      else beam.setAttribute("display", "none");
+    }
+  }
+
   #applyFigures(layout: SceneLayout, colours: ReadonlyMap<string, ProjectColor | null>, snap: number): void {
     const p = projector(layout.columns);
     const placed = layout.employees.filter((e): e is Employee & { spot: string; at: NonNullable<Employee["at"]> } => e.spot !== null && e.at !== null);
@@ -237,7 +264,8 @@ export class SceneObjects {
       const y = Math.round(e.at.y * snap) / snap;
       write(rig, "transform", rig.node, "transform", `translate(${x} ${y})`);
       setPose(rig, e.pose, e.facing, e.marks.hand);
-      const marks = marksMarkup(e.marks, e.pose, e.facing, e.zone === "alert", colour);
+      // An unknown employee keeps its alert (D-494), and its ticket's colour.
+      const marks = marksMarkup(e.marks, e.pose, e.facing, e.alert !== null, colour);
       if (rig.cache.get("marks") !== marks) {
         rig.cache.set("marks", marks);
         rig.marks.innerHTML = marks;

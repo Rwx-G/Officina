@@ -9,6 +9,8 @@ import { existsSync } from "node:fs";
 import { expect, test, type Page } from "@playwright/test";
 import { SCREENSHOT_MAX_DIFF_RATIO, loadBoard, openScene, sceneSettled } from "./fixtures";
 import { fixturesOf } from "./fixture-index";
+import { beaconPair } from "../src/lib/alert";
+import { HALO_BREATHING_MS, HALO_CYCLE_MS } from "../src/lib/halo";
 import { MIN_SCALE } from "../src/lib/scene/geometry";
 import { layoutScene, liveCards, type SceneLayout } from "../src/lib/scene/layout";
 import { STORAGE_KEY, emptyMemory, type SceneMemory } from "../src/lib/scene/memory";
@@ -72,6 +74,21 @@ async function reopenScene(page: Page, board: Board): Promise<void> {
   await page.reload();
   await sceneSettled(page);
 }
+
+/** The running animations inside the scene. */
+function runningInScene(page: Page): Promise<number> {
+  return page.evaluate(
+    () =>
+      document.getAnimations().filter((a) => {
+        const target = (a.effect as KeyframeEffect | null)?.target;
+        return a.playState === "running" && target instanceof Element && target.closest("[data-testid=scene]") !== null;
+      }).length,
+  );
+}
+
+/** How long the beacon has left to breathe at first sight, in the case
+ *  that waits for its end in real time. */
+const BEACON_LEFT_MS = 6_000;
 
 const POSE_PART = { standing: "stand", "seated-facing": "seated-facing", "seated-working": "seated-working" } as const;
 
@@ -197,6 +214,30 @@ test.describe("scene", () => {
   test("nothing in the scene changes while the payloads are unchanged", async ({ page }) => {
     const board = loadBoard("scene-c");
     await openScene(page, board);
+    await expectNothingChanges(page, board);
+  });
+
+  // FR-3, FR-9 (story 4.9): with the alert room lit, once the beacon's two
+  // minutes have passed, nothing animates for as long as the alert lasts.
+  // Its wait is dated to end its breathing a few seconds after first sight
+  // (D-101), so the case sees it breathe, then stop.
+  test("nothing in the scene changes while the payloads are unchanged, the alert room lit", async ({ page }) => {
+    const generated = loadBoard("scene-alert");
+    const board = structuredClone(generated);
+    const beacon = beaconPair(board)!;
+    const card = liveCards(board).find((c) => c.key === beacon.key)!;
+    card.scene = { ...card.scene!, waiting_since_ms: board.generated_at_ms - HALO_BREATHING_MS + BEACON_LEFT_MS };
+    await openScene(page, board);
+    await expect(scene(page).locator("[data-beacon]")).toHaveAttribute("data-beacon", beacon.key);
+    await expect.poll(() => runningInScene(page)).toBeGreaterThan(0);
+    await expect.poll(() => runningInScene(page), { timeout: BEACON_LEFT_MS + 3 * HALO_CYCLE_MS }).toBe(0);
+    await expectNothingChanges(page, board);
+    expect(await runningInScene(page)).toBe(0);
+  });
+
+  /** Watches the scene through the store's ticks and an identical payload:
+   *  no mutation; then a changed payload writes. */
+  async function expectNothingChanges(page: Page, board: Board): Promise<void> {
     await scene(page).evaluate((root) => {
       const records: MutationRecord[] = [];
       new MutationObserver((list) => records.push(...list)).observe(root, {
@@ -216,7 +257,7 @@ test.describe("scene", () => {
     // A changed payload writes.
     await push(page, startsWorking(board, liveCards(board).find((c) => c.scene?.zone === "lounge")!.key));
     await expect.poll(records).toBeGreaterThan(0);
-  });
+  }
 
   // D-185: the gauges' text changes with the store's tick; their width and
   // the header's height do not, so the scene keeps its scale.

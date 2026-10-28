@@ -4,6 +4,7 @@
   // the store's clock (AD-64); the layout is derived from the board, and its
   // memory committed after each layout without re-running it (D-184).
   import type { Snippet } from "svelte";
+  import { beaconPair } from "../../lib/alert";
   import type { Board } from "../../lib/generated/Board";
   import type { ProjectColor } from "../../lib/generated/ProjectColor";
   import { fitScale } from "../../lib/scene/geometry";
@@ -27,6 +28,7 @@
   $effect(() => memory.commit(layout.memory));
 
   let cards = $derived(new Map(liveCards(board).map((card) => [card.key, card])));
+  let beacon = $derived(beaconPair(board));
   let colours = $derived(new Map<string, ProjectColor | null>(liveCards(board).map((card) => [card.project.name, card.project.color])));
 
   /** The sessions area's client size, the scrollbar's room left out. */
@@ -71,7 +73,7 @@
   <p class="summary" data-testid="scene-summary">{layout.summary}</p>
   <div class="stack" style:width="{layout.canvas.w}px" style:height="{layout.canvas.h}px" style:transform="scale({scale})">
     <SceneFloor {layout} />
-    <SceneHalos {layout} {cards} />
+    <SceneHalos {layout} {cards} {beacon} />
     <SceneObjects {layout} {colours} snap={scale * pixelRatio} />
     <SceneOverlay {layout} {cards} />
     {#if targets}

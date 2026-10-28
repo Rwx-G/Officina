@@ -9,6 +9,7 @@ import type { ProjectColor } from "../generated/ProjectColor";
 import { PROJECT_COLORS, projectColor } from "../colors";
 import {
   BASE_COLUMNS,
+  BEACON,
   CORR_Y,
   FLOOR_DEPTH,
   HW,
@@ -49,6 +50,7 @@ export const PAINTS = [
   "scene-room",
   "scene-room-edge",
   "scene-room-vacant",
+  "scene-alert-floor",
   "scene-wall-l",
   "scene-wall-r",
   "scene-wall-top",
@@ -448,8 +450,12 @@ function chair(x: number, y: number, colour: string): string {
 
 // ------------------------------------------------------------ floor layer
 
+/** The alert room's floor and its hazard outline, which `SceneFloor.svelte`
+ *  paints by the room's state (AD-175). */
+export type AlertPart = "floor" | "hazard";
+
 export type FloorShape =
-  | { kind: "polygon"; points: string; fill: string; stroke?: string; strokeWidth?: number; opacity?: number }
+  | { kind: "polygon"; points: string; fill: string; stroke?: string; strokeWidth?: number; opacity?: number; dash?: string; alert?: AlertPart }
   | { kind: "line"; x1: number; y1: number; x2: number; y2: number; stroke: string; strokeWidth: number; opacity?: number; round?: boolean }
   | { kind: "ellipse"; cx: number; cy: number; rx: number; ry: number; fill: string; stroke?: string; strokeWidth?: number; dash?: string; opacity?: number }
   | { kind: "circle"; cx: number; cy: number; r: number; fill: string; stroke?: string; strokeWidth?: number };
@@ -602,8 +608,19 @@ function backWallColumn(p: Projector, column: number): FloorShape[] {
   return [...wallWindow(p, "r", gx + 0.9, gx + 2.7, 1.25, 2.65), ...wallFrame(p, "r", gx + 3.4, gx + 4.15, 1.5, 2.35, 13 + column)];
 }
 
+/** The alert room's hazard outline: `inset` tiles inside its floor, drawn
+ *  while the room is lit (the prototype v2's `.hazard`). */
+export const HAZARD = {
+  inset: 0.12,
+  stroke: { stroke: paint("color-alert"), strokeWidth: 4, dash: "10 8", opacity: 0.85 },
+} as const;
+
+/** The paints of the alert room's floor while it is lit. */
+export const ALERT_FLOOR = { fill: paint("scene-alert-floor"), stroke: paint("color-alert") } as const;
+
 /** Layer 1 for a floor of `columns` columns: ground, slab, walls and what
- *  hangs on them, the corridor, room floors and seams, rugs, spot marks. */
+ *  hangs on them, the corridor, room floors and seams, rugs, the alert
+ *  room's hazard outline, spot marks. */
 export function floorShapes(columns: number): FloorShape[] {
   const p = projector(columns);
   const fx = floorWidth(columns);
@@ -633,13 +650,15 @@ export function floorShapes(columns: number): FloorShape[] {
   out.push(...wallClock(p));
   const cells: Cell[] = [...Object.values(SHARED_CELLS), ...officeCells(columns)];
   for (const cell of cells) {
-    out.push(polygon(room(p, cell, 0, 0, R, R), paint("scene-room"), { stroke: paint("scene-room-edge"), strokeWidth: 2 }));
+    const alert = cell === SHARED_CELLS.alert ? { alert: "floor" as const } : {};
+    out.push(polygon(room(p, cell, 0, 0, R, R), paint("scene-room"), { stroke: paint("scene-room-edge"), strokeWidth: 2, ...alert }));
     out.push(...seams(p, cell));
   }
   out.push(polygon(room(p, SHARED_CELLS.reception, -0.05, 0.95, 0.9, 2.25), paint("scene-metal-2"), { opacity: 0.35 }));
   out.push(...rug(p, SHARED_CELLS.decision, 0.95, 2.2, 3.85, 3.15, "scene-rug"));
   for (const s of sharedSpots("decision").filter((s) => !s.corridor)) out.push(spotMark(p, s.gx, s.gy));
   out.push(...rug(p, SHARED_CELLS.lounge, 1.35, 1.5, 3.0, 2.95, "scene-rug-2"));
+  out.push(polygon(room(p, SHARED_CELLS.alert, HAZARD.inset, HAZARD.inset, R - HAZARD.inset, R - HAZARD.inset), "none", { ...HAZARD.stroke, alert: "hazard" }));
   for (const s of sharedSpots("alert")) out.push(spotMark(p, s.gx, s.gy));
   return out;
 }
@@ -764,25 +783,40 @@ function decisionStatics(p: Projector): Static[] {
   return out;
 }
 
-/** The alert room drawn as an ordinary room: its beacon and status board
- *  unlit (their lit state is story 4.9's), and a plant. */
+/** The paints of the alert room's parts that light, quiet then lit
+ *  (AD-175). `objects.ts` writes them when the room's state changes. */
+export const ALERT_PAINTS = {
+  lamp: { quiet: "scene-screen-off", lit: "color-alert" },
+  panel: { quiet: "scene-screen-off", lit: "color-alert" },
+  mark: { quiet: "scene-wall-top", lit: "color-on-alert" },
+  partition: { quiet: "scene-part-t", lit: "color-alert" },
+} as const satisfies Record<string, { quiet: Paint; lit: Paint }>;
+
+/** The beam's opacity while lit: drawn static, the prototype's rotation
+ *  left out, since FR-9 forbids an animation as long as the alert (D-474). */
+export const BEAM_OPACITY = 0.22;
+
+/** The alert room: its beacon and status board, drawn quiet, their lit
+ *  parts marked for `objects.ts`, and a plant. The beacon's glow is layer
+ *  2's. */
 function alertStatics(p: Projector): Static[] {
   const cell = SHARED_CELLS.alert;
   const out: Static[] = [];
-  const [bx, by] = local(cell, 0.5, 0.5);
+  const [bx, by] = local(cell, BEACON.lx, BEACON.ly);
   let s = box(p, bx - 0.2, by - 0.2, 0.4, 0.4, 0, 0.08, METAL) + box(p, bx - 0.04, by - 0.04, 0.08, 0.08, 0.08, 1.75, METAL);
-  const [x, y] = at(p, bx, by, 2.0);
+  const [x, y] = at(p, bx, by, BEACON.z);
+  s += `<path data-beacon-beam display="none" fill="${paint("color-alert")}" opacity="${BEAM_OPACITY}" d="M${r1(x)} ${r1(y)} L${r1(x + 60)} ${r1(y - 16)} L${r1(x + 60)} ${r1(y + 16)} Z"/>`;
   s += `<rect fill="${paint("scene-metal")}" x="${r1(x - 9)}" y="${r1(y + 2)}" width="18" height="6" rx="2"/>`;
-  s += `<path fill="${paint("scene-screen-off")}" stroke="${paint("scene-metal")}" stroke-width="1.2" d="M${r1(x - 8)} ${r1(y + 3)} L${r1(x - 8)} ${r1(y - 4)} A8 8 0 0 1 ${r1(x + 8)} ${r1(y - 4)} L${r1(x + 8)} ${r1(y + 3)} Z"/>`;
+  s += `<path data-beacon-lamp fill="${paint(ALERT_PAINTS.lamp.quiet)}" stroke="${paint("scene-metal")}" stroke-width="1.2" d="M${r1(x - 8)} ${r1(y + 3)} L${r1(x - 8)} ${r1(y - 4)} A8 8 0 0 1 ${r1(x + 8)} ${r1(y - 4)} L${r1(x + 8)} ${r1(y + 3)} Z"/>`;
   s += `<ellipse fill="${SURFACE}" cx="${r1(x - 3)}" cy="${r1(y - 6)}" rx="2" ry="3" opacity="0.6"/>`;
   out.push({ markup: s, depth: bx + by });
   const [sx, sy] = local(cell, 3.3, 0.35);
   let board = box(p, sx - 0.05, sy - 0.05, 0.1, 0.1, 0, 1.1, METAL) + box(p, sx + 0.75, sy - 0.05, 0.1, 0.1, 0, 1.1, METAL);
   board += box(p, sx - 0.1, sy, 1.0, 0.08, 1.0, 0.75, METAL);
-  board += poly([at(p, sx - 0.02, sy + 0.09, 1.07), at(p, sx + 0.82, sy + 0.09, 1.07), at(p, sx + 0.82, sy + 0.09, 1.68), at(p, sx - 0.02, sy + 0.09, 1.68)], paint("scene-screen-off"));
+  board += poly([at(p, sx - 0.02, sy + 0.09, 1.07), at(p, sx + 0.82, sy + 0.09, 1.07), at(p, sx + 0.82, sy + 0.09, 1.68), at(p, sx - 0.02, sy + 0.09, 1.68)], paint(ALERT_PAINTS.panel.quiet), " data-status-panel");
   // The "!" drawn, not written: no text node in this layer.
   const [tx, ty] = at(p, sx + 0.4, sy + 0.09, 1.22);
-  board += `<rect fill="${paint("scene-wall-top")}" x="${r1(tx - 1.6)}" y="${r1(ty - 12)}" width="3.2" height="8.5" rx="1.4"/><circle fill="${paint("scene-wall-top")}" cx="${r1(tx)}" cy="${r1(ty - 1)}" r="1.8"/>`;
+  board += `<g data-status-mark fill="${paint(ALERT_PAINTS.mark.quiet)}"><rect x="${r1(tx - 1.6)}" y="${r1(ty - 12)}" width="3.2" height="8.5" rx="1.4"/><circle cx="${r1(tx)}" cy="${r1(ty - 1)}" r="1.8"/></g>`;
   out.push({ markup: board, depth: sx + 0.4 + sy + 0.05 });
   addPlant(out, p, "snake", local(cell, 4.0, 3.95), 301);
   return out;

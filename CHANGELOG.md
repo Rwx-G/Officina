@@ -27,6 +27,12 @@ project uses [Semantic Versioning](https://semver.org/).
   in alert; the title
   adds the alert count, and "data unknown" while an alert is the last one
   known. `--color-alert` and `--color-on-alert` join the tokens.
+- The alert room (v0.4, in progress): while someone stands in it, its floor,
+  hazard outline, partitions, status board and plaque take the alert
+  colour, the beacon is lit with a static beam, and its glow breathes for
+  two minutes then rests (steady under reduced motion); a halo in the room
+  takes the alert colour. An office whose project is marked high priority
+  carries a "high priority" pill above its plaque.
 - Floor keys of the scene (v0.4, in progress): `[[project]] priority`
   (`normal` by default, or `high`) and `[alert] after_minutes` (1 to 1440,
   10 by default), valid in either schema. They authorise nothing, so they

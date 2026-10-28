@@ -64,6 +64,7 @@ const LIGHT_PAIRS: [string, string, number][] = [
   ["--figure-legs", "--scene-room", 3],
   ["--figure-legs", "--scene-rug-2", 3],
   ["--figure-tunic", "--scene-alert-floor", 3],
+  ["--figure-legs", "--scene-alert-floor", 3],
   ["--figure-tunic", "--scene-sofa-t", 3],
   ["--figure-tunic", "--scene-rug", 3],
 ];

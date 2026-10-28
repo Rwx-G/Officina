@@ -420,8 +420,18 @@ export function layoutScene(input: SceneInput, memory: SceneMemory): SceneLayout
     alert: (n) => (n > 0 ? "alert" : "quiet"),
     lounge: () => "quiet",
   };
+  // The alert room counts whoever stands in it: an unknown employee kept
+  // at its last place there keeps its alert (D-494), so the room stays lit.
+  const alertSpots = new Set(sharedSpots("alert").map((s) => s.id));
+  const inAlertRoom = (e: Employee) => e.group === "alert" || (e.spot !== null && alertSpots.has(e.spot));
+  const occupies: Record<SharedZone, (e: Employee) => boolean> = {
+    reception: (e) => e.zone === "reception",
+    decision: (e) => e.zone === "decision",
+    alert: (e) => e.zone === "alert" || (e.zone === "unknown" && inAlertRoom(e)),
+    lounge: (e) => e.zone === "lounge",
+  };
   const rooms: Room[] = (Object.keys(SHARED_CELLS) as SharedZone[]).map((zone) => {
-    const n = count((e) => e.zone === zone);
+    const n = count(occupies[zone]);
     return {
       id: zone,
       kind: zone,
@@ -520,6 +530,11 @@ export function layoutScene(input: SceneInput, memory: SceneMemory): SceneLayout
       last: nextLast,
     },
   };
+}
+
+/** The alert room's state (AD-175): lit while someone stands in it. */
+export function alertLit(layout: SceneLayout): boolean {
+  return layout.rooms.some((room) => room.kind === "alert" && room.plaque.state === "alert");
 }
 
 export type Direction = "up" | "down" | "left" | "right";

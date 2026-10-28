@@ -181,6 +181,18 @@ export const PLAQUE_ALONG: Record<RoomKind, number> = {
 /** The "high priority" pill, stacked above its office's plaque: beside it,
  *  as in the prototype, it met the desk targets of the office below. */
 export const PRIORITY_PILL = { gap: 3, cap: 110, h: 25 } as const;
+/** The alert room's beacon (AD-175): its post at room-local (`lx`, `ly`)
+ *  in tiles, its lamp `z` units up, and its glow, an ellipse of `rx` by
+ *  `ry` logical px centred on the lamp. The post is layer 3's, the glow
+ *  layer 2's: both read this one point. */
+export const BEACON = { lx: 0.5, ly: 0.5, z: 2.0, glow: { rx: 34, ry: 26 } } as const;
+
+/** The beacon's lamp on screen. */
+export function beaconPoint(columns: number): Point {
+  const { gx, gy } = roomOrigin(SHARED_CELLS.alert);
+  return projector(columns)(gx + BEACON.lx, gy + BEACON.ly, BEACON.z);
+}
+
 /** The "Entrance and exit" sign above the door, at grid (0, gy, z). */
 export const ENTRANCE_SIGN = { gy: M + 1.6, z: 2.75 } as const;
 

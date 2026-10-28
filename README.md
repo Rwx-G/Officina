@@ -493,7 +493,8 @@ The window's first view is now called **Sessions**; it has two modes, **Board** 
 - **The decision office**: everything that waits on you, queued in board order with its number on a ticket and a breathing halo (an amber ticket without a number for a wait on a relay approval alone); its register in the corner lists them.
 - **The offices**, one per project in the floor file's order, then by first appearance, kept until the window restarts: a working session sits at its desk, back turned, screen lit. A session keeps its desk while it is away; the empty chair then shows its number. Beyond four desks a session stands by the office's plaque.
 - **The lounge**: your turn, a raised hand and the desk's number.
-- **The alert room**: drawn, and filled as the alert says (above).
+- **The alert room**: every session in alert (below), in board order, with a halo in the alert colour. While anyone stands in it the room lights up: its floor, its hazard outline, its status board and its plaque turn to the alert colour, and its beacon lights, its glow breathing for two minutes and then steady, so nothing moves for as long as the alert lasts. A session whose data goes unknown keeps its place there, and the room stays lit.
+- **High priority**: the office of a project marked `priority = "high"` carries a "high priority" pill above its plaque.
 - **More offices**, when there are more than eight projects: the projects beyond the seventh share it.
 
 Nothing moves while nothing changes: a changed board places each employee at its new place at once, a halo breathes for two minutes then rests, and nothing in the scene reads the clock. Missing data leaves an employee where it was, with a question mark. The floor grows a column for a fifth and a seventh project, up to eight offices; below the size at which every employee stays at least 44 px wide, the sessions area scrolls instead of shrinking it.

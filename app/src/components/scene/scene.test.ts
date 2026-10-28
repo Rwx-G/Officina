@@ -2,6 +2,10 @@ import { afterEach, describe, expect, it } from "vitest";
 import { cleanup, render } from "@testing-library/svelte";
 import Scene from "./Scene.svelte";
 import type { Board } from "../../lib/generated/Board";
+import type { Card } from "../../lib/generated/Card";
+import { beaconPair } from "../../lib/alert";
+import { HALO_BREATHING_MS, haloMemo } from "../../lib/halo";
+import { paint } from "../../lib/scene/furniture";
 import { layoutScene } from "../../lib/scene/layout";
 import { emptyMemory } from "../../lib/scene/memory";
 import { board, card, fixtureBoards, project } from "../../lib/scene/testing";
@@ -66,5 +70,41 @@ describe("Scene", () => {
       expect(halos.sort(), name).toEqual(expected.sort());
       unmount();
     }
+  });
+
+  it("a halo in the alert room uses the alert colour", () => {
+    const b = board([card("queued", "decision"), card("alerted", "alert", { started: 1 })]);
+    const { container } = render(Scene, { board: b });
+    const colour = (key: string) => container.querySelector<HTMLElement>(`[data-halo="${key}"]`)!.style.getPropertyValue("--halo-colour");
+    expect(colour("alerted")).toBe(paint("color-alert"));
+    expect(colour("queued")).toBe(paint("color-attention"));
+  });
+
+  it("the beacon is keyed on the first alerted card", () => {
+    // The memo's clock: the scene's modules read none (AD-64).
+    const now = haloMemo.now();
+    /** An alerted card whose wait began `sinceMs` ago, its last event long
+     *  before: only a beacon keyed on the wait's start breathes. */
+    const alerted = (key: string, sinceMs: number | null, started: number): Card => {
+      const c = card(key, "alert", { started, alert: "priority" });
+      return { ...c, last_event_at_ms: now - 10 * HALO_BREATHING_MS, scene: { ...c.scene!, waiting_since_ms: sinceMs === null ? null : now - sinceMs } };
+    };
+    const first = alerted("first", 1_000, 1);
+    const b = board([card("queued", "decision"), first, alerted("second", 2_000, 2)]);
+    expect(beaconPair(b)).toEqual({ key: "first", enteredAt: first.scene!.waiting_since_ms });
+    const { container, unmount } = render(Scene, { board: b });
+    const beacons = container.querySelectorAll<HTMLElement>("[data-beacon]");
+    expect(beacons).toHaveLength(1);
+    expect(beacons[0]!.getAttribute("data-beacon")).toBe("first");
+    const timing = haloMemo.timing("first", first.scene!.waiting_since_ms);
+    expect(timing.iterations).toBeGreaterThan(0);
+    expect(beacons[0]!.style.getPropertyValue("--halo-count")).toBe(String(timing.iterations));
+    unmount();
+    // The start unknown: the beacon counts from when the card's halo does.
+    const unknownStart = alerted("unknown-start", null, 1);
+    expect(beaconPair(board([unknownStart]))).toEqual({ key: "unknown-start", enteredAt: unknownStart.last_event_at_ms });
+    // No one in alert: no beacon.
+    const quiet = render(Scene, { board: board([card("queued", "decision")]) });
+    expect(quiet.container.querySelector("[data-beacon]")).toBeNull();
   });
 });

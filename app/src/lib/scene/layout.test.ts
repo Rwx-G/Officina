@@ -17,7 +17,7 @@ import {
   projector,
   type SharedZone,
 } from "./geometry";
-import { MAX_NUMBER, layoutScene, liveCards, nearestTarget, zoneOf, type Direction, type Pose, type SceneLayout } from "./layout";
+import { MAX_NUMBER, alertLit, layoutScene, liveCards, nearestTarget, zoneOf, type Direction, type Pose, type SceneLayout } from "./layout";
 import { emptyMemory, type SceneMemory } from "./memory";
 import { CAPACITY, allSpots, officeSpots, restPoint, sharedSpots } from "./places";
 import { approval, board, card, fixtureBoards, project } from "./testing";
@@ -217,6 +217,57 @@ describe("layoutScene: offices", () => {
     const after = lay(board(cards.slice(0, 1)), l.memory);
     expect(after.rooms.find((r) => r.kind === "more")).toMatchObject({ plaque: { state: "dimmed" } });
     expect(after.targets.find((t) => t.id === "group:more")?.keys).toEqual([]);
+  });
+});
+
+describe("layoutScene: the alert room and priorities", () => {
+  const alertRoom = (l: SceneLayout) => l.rooms.find((r) => r.kind === "alert")!;
+
+  it("the alert room's state follows its occupants", () => {
+    const [empty, occupied, kept, cleared] = run(
+      board([card("d", "decision"), card("o", "office", { started: 1 })]),
+      board([card("d", "decision"), card("a", "alert", { started: 2 }), card("b", "alert", { started: 3 })]),
+      // The data goes stale: `a` keeps its last place, and its alert (D-494).
+      board([card("d", "decision"), card("a", "unknown", { started: 2, alert: "waited" }), card("b", "office", { started: 3 })]),
+      board([card("d", "decision"), card("a", "office", { started: 2 }), card("b", "office", { started: 3 })]),
+    );
+    expect(alertRoom(empty!).plaque).toMatchObject({ state: "quiet", count: 0 });
+    expect(alertLit(empty!)).toBe(false);
+    expect(alertRoom(occupied!).plaque).toMatchObject({ state: "alert", count: 2 });
+    expect(alertLit(occupied!)).toBe(true);
+    // An unknown employee standing in the room keeps it lit, and counts.
+    expect(employee(kept!, "a").spot).toBe(employee(occupied!, "a").spot);
+    expect(sharedSpots("alert").map((s) => s.id)).toContain(employee(kept!, "a").spot);
+    expect(alertRoom(kept!).plaque).toMatchObject({ state: "alert", count: 1 });
+    expect(alertRoom(cleared!).plaque).toMatchObject({ state: "quiet", count: 0 });
+    expect(alertLit(cleared!)).toBe(false);
+    // An unknown employee elsewhere leaves the room quiet.
+    const elsewhere = lay(board([card("u", "unknown", { alert: "waited" })]));
+    expect(employee(elsewhere, "u").spot).not.toBeNull();
+    expect(alertRoom(elsewhere).plaque.state).toBe("quiet");
+    // Beyond its spots, the room's group counts too.
+    const full = Array.from({ length: CAPACITY.alert + 1 }, (_, i) => card(`a${i}`, "alert", { started: i }));
+    const crowded = lay(board(full));
+    expect(alertRoom(crowded).plaque).toMatchObject({ state: "alert", count: full.length, more: 1 });
+  });
+
+  it("a high-priority office carries its pill", () => {
+    const l = lay(
+      board([card("h", "office", { project: "urgent" }), card("n", "office", { project: "calm", started: 1 })], {
+        floor_projects: [project("urgent", "high"), project("calm")],
+      }),
+    );
+    const pill = (name: string) => l.rooms.find((r) => r.project?.name === name)!.plaque.highPriority;
+    expect(pill("urgent")).toBe(true);
+    expect(pill("calm")).toBe(false);
+    // Shared rooms never carry one.
+    expect(l.rooms.filter((r) => r.slot === null).every((r) => !r.plaque.highPriority)).toBe(true);
+    // More offices carries it when one of its projects is high priority.
+    const cards = projects(MAX_OFFICES + 1);
+    const last = cards.at(-1)!.project.name;
+    const over = lay(board(cards, { floor_projects: cards.map((c) => project(c.project.name, c.project.name === last ? "high" : "normal")) }));
+    expect(over.rooms.find((r) => r.kind === "more")!.plaque.highPriority).toBe(true);
+    expect(over.rooms.filter((r) => r.kind === "office").every((r) => !r.plaque.highPriority)).toBe(true);
   });
 });
 

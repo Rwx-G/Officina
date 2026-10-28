@@ -3,6 +3,7 @@
 import type { Board } from "./generated/Board";
 import type { Card } from "./generated/Card";
 import type { FocusOutcome } from "./generated/FocusOutcome";
+import { beaconPair } from "./alert";
 import { haloMemo } from "./halo";
 import * as ipc from "./ipc";
 
@@ -75,13 +76,16 @@ export class BoardStore {
   /** Shows `board`, and forgets the halo timings of the sessions it no
    *  longer has waiting: one that waits again later breathes again. A
    *  session waiting on a relay approval alone is still Working, but its
-   *  scene halo breathes in the decision office (D-464). */
+   *  scene halo breathes in the decision office (D-464). The beacon's card
+   *  keeps its timing while it is in alert, its zone unknown included
+   *  (D-494). */
   #show(board: Board): void {
     const { needs_you, your_turn, working } = board.columns;
     const waiting = [...needs_you, ...your_turn, ...working].filter(
       (card) => card.column === "needs_you" || card.scene?.zone === "decision" || card.scene?.zone === "alert",
     );
-    haloMemo.retain(waiting.map((card) => card.key));
+    const beacon = beaconPair(board);
+    haloMemo.retain([...waiting.map((card) => card.key), ...(beacon ? [beacon.key] : [])]);
     this.board = board;
   }
 
