@@ -84,7 +84,7 @@
             ? `, approved ${clock(relay.approved_at_ms, nowMs)}`
             : ""}.
         </p>
-        <CatalogueTable catalogue={relay.catalogue} />
+        <CatalogueTable catalogue={relay.catalogue} credentials={relay.credentials} />
       {:else}
         <p class="muted" data-testid="catalogue-none">Nothing is approved: <code>officina run</code> refuses every action.</p>
       {/if}

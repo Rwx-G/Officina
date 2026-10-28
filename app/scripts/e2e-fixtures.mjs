@@ -369,7 +369,39 @@ values = ["web01", "db01"]
 [[project]]
 name = "infra-scripts"
 path = "${project.replaceAll("\\", "/")}"
-actions = ["check", "apply", "probe"]
+actions = ["check", "apply", "probe", "health", "status-page"]
+
+[[credential]]
+name = "monitoring"
+hosts = ["monitoring.example.com"]
+header = "Authorization"
+scheme = "Bearer"
+
+[[credential]]
+name = "backup"
+hosts = ["backup.example.com"]
+header = "X-Api-Key"
+scheme = "Token"
+
+[[action]]
+name = "health"
+description = "Read one check of the monitoring API"
+class = "free"
+kind = "http"
+method = "GET"
+url = "https://monitoring.example.com/api/{check}?verbose=1"
+credential = "monitoring"
+
+[action.params.check]
+values = ["health", "ready"]
+
+[[action]]
+name = "status-page"
+description = "Is the local status page up"
+class = "free"
+kind = "http"
+method = "HEAD"
+url = "http://127.0.0.1:9/status"
 
 [[action]]
 name = "check"
@@ -421,6 +453,9 @@ values = ["web01", "db01"]
   relayRun(["probe", "host=db01"], 3);
   relayRun(["apply", "group=lab-db"], 126);
   relayRun(["probe", "host=<b>web02</b>"], 126);
+  // A real HTTP run with no response (nothing listens on that local port);
+  // `health` is never run here: its credential would read the real store.
+  relayRun(["status-page"], 127);
 
   const hook = (command) => {
     const payload = {

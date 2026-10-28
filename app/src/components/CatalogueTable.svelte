@@ -6,12 +6,21 @@
   // rendered as text only.
   import type { CanonicalCatalogue } from "../lib/generated/CanonicalCatalogue";
   import type { CanonicalParam } from "../lib/generated/CanonicalParam";
+  import type { CredentialView } from "../lib/generated/CredentialView";
   import ActionRuns from "./ActionRuns.svelte";
 
   interface Props {
     catalogue: CanonicalCatalogue;
+    /** The approved credentials with what the window found in the
+     *  Credential Manager; never a secret. */
+    credentials?: CredentialView[];
   }
-  let { catalogue }: Props = $props();
+  let { catalogue, credentials = [] }: Props = $props();
+
+  function presence(present: boolean | null): string {
+    if (present === null) return "unchecked";
+    return present ? "present" : "missing";
+  }
 
   let actions = $derived(Object.entries(catalogue.actions));
   let projects = $derived(Object.entries(catalogue.projects));
@@ -81,6 +90,31 @@
   </tbody>
 </table>
 
+{#if credentials.length > 0}
+  <table class="catalogue" data-testid="catalogue-credential-table">
+    <thead>
+      <tr>
+        <th scope="col">Credential</th>
+        <th scope="col">Sent to</th>
+        <th scope="col">Actions</th>
+        <th scope="col">Credential Manager</th>
+      </tr>
+    </thead>
+    <tbody>
+      {#each credentials as credential (credential.name)}
+        <tr data-testid="catalogue-credential" data-name={credential.name}>
+          <td><strong>{credential.name}</strong></td>
+          <td>{credential.hosts.join(", ")}</td>
+          <td>{credential.actions.join(", ") || "(none)"}</td>
+          <td class="presence {presence(credential.present)}" data-testid="credential-presence">
+            {presence(credential.present)}
+          </td>
+        </tr>
+      {/each}
+    </tbody>
+  </table>
+{/if}
+
 <p class="muted" data-testid="catalogue-guarded-programs">
   Guarded programs: {catalogue.guarded_programs.join(", ") || "(none)"}
 </p>
@@ -108,6 +142,13 @@
   .muted {
     color: var(--color-text-muted);
     font-size: 13px;
+  }
+  .presence.missing {
+    color: var(--color-stopped-text);
+    font-weight: 600;
+  }
+  .presence.unchecked {
+    color: var(--color-text-muted);
   }
   code {
     font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;

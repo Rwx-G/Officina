@@ -149,6 +149,66 @@ test.describe("Relay view", () => {
     expect(await page.evaluate(() => (window as unknown as { __officinaXss?: number }).__officinaXss)).toBeUndefined();
   });
 
+  test("HTTP actions show their method and URL template", async ({ page }) => {
+    const relay = loadRelay("relay-activity");
+    await openRelayView(page, relay);
+    for (const [name, action] of Object.entries(relay.catalogue!.actions)) {
+      if (!action.http) continue;
+      const row = page.locator(`[data-testid="catalogue-action"][data-name="${name}"]`);
+      await expect(row.getByTestId("http-method")).toHaveText(action.http.method);
+      await expect(row.getByTestId("http-url")).toHaveText(action.http.url);
+      if (action.http.credential) {
+        await expect(row.getByTestId("http-credential")).toHaveText(action.http.credential);
+      }
+    }
+    const http = relay.recent.find((e) => e.event.kind === "run" && e.event.started.method)!;
+    expect(http).toBeDefined();
+    const row = page.getByTestId("recent-entry").nth(relay.recent.indexOf(http));
+    await expect(row.getByTestId("recent-outcome")).toHaveText(activityRow(http).outcome);
+  });
+
+  test("credential status shows present, missing and unchecked", async ({ page }) => {
+    const relay = loadRelay("relay-activity");
+    expect(relay.credentials.length).toBeGreaterThanOrEqual(2);
+    await openRelayView(page, relay);
+    const cells = page.getByTestId("credential-presence");
+    await expect(cells).toHaveCount(relay.credentials.length);
+    for (let i = 0; i < relay.credentials.length; i++) await expect(cells.nth(i)).toHaveText("unchecked");
+
+    // The window's collector fills presence (D-41); `relay --json` never does.
+    const checked = {
+      ...relay,
+      credentials: relay.credentials.map((c, i) => ({ ...c, present: i === 0 })),
+    };
+    await page.evaluate(async (view) => window.__officinaPushRelay?.(view), checked);
+    await expect(cells.nth(0)).toHaveText("present");
+    await expect(cells.nth(1)).toHaveText("missing");
+    for (const credential of relay.credentials) {
+      const row = page.locator(`[data-testid="catalogue-credential"][data-name="${credential.name}"]`);
+      await expect(row).toContainText(credential.hosts.join(", "));
+    }
+  });
+
+  test("credential and URL text renders as text", async ({ page }) => {
+    const relay = loadRelay("relay-activity");
+    const hostile = `<img src=x onerror="window.__officinaXss = 1"><b>x</b>`;
+    // A view no floor could produce (validation refuses such names), pushed
+    // to prove the window renders whatever it receives as text.
+    const forged = structuredClone(relay);
+    const name = Object.keys(forged.catalogue!.actions).find((n) => forged.catalogue!.actions[n]!.http)!;
+    forged.catalogue!.actions[name]!.http!.url = `https://example.com/${hostile}`;
+    forged.catalogue!.actions[name]!.http!.credential = hostile;
+    forged.credentials[0]!.name = hostile;
+    forged.credentials[0]!.hosts = [hostile];
+    await openRelayView(page, forged);
+    const view = page.getByTestId("relay-view");
+    await expect(view.getByTestId("catalogue-credential").first()).toContainText(hostile);
+    await expect(view.locator(`[data-testid="catalogue-action"][data-name="${name}"]`)).toContainText(hostile);
+    await expect(view.locator("img")).toHaveCount(0);
+    await expect(view.locator("b, i")).toHaveCount(0);
+    expect(await page.evaluate(() => (window as unknown as { __officinaXss?: number }).__officinaXss)).toBeUndefined();
+  });
+
   test("the Relay view's stop toggle calls set_relay_stopped", async ({ page }) => {
     await openRelayView(page, loadRelay("relay-activity"));
     const stop = page.getByTestId("relay-view-stop");

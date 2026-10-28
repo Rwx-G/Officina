@@ -150,6 +150,28 @@
       </ul>
     {/if}
 
+    {#if diff.credentials.added.length + diff.credentials.removed.length + diff.credentials.changed.length > 0}
+      <h3>Credentials</h3>
+      <ul class="changes">
+        {#each diff.credentials.added as name (name)}
+          {@const credential = pending.current.credentials?.[name]}
+          <li data-testid="credential-added" data-name={name}>
+            <strong>{name}</strong> added{#if credential}: header <code>{credential.header}</code>, scheme
+              <code>{credential.scheme}</code>, sent to {credential.hosts.join(", ")}{/if}
+          </li>
+        {/each}
+        {#each diff.credentials.changed as entry (entry.name)}
+          <li data-testid="credential-changed" data-name={entry.name}>
+            <strong>{entry.name}</strong> changed
+            {@render fieldChanges(entry.fields)}
+          </li>
+        {/each}
+        {#each diff.credentials.removed as name (name)}
+          <li data-testid="credential-removed" data-name={name}><strong>{name}</strong> removed</li>
+        {/each}
+      </ul>
+    {/if}
+
     {#if showIssues && relay.issues.length > 0}
       <h3>Not part of the catalogue</h3>
       <ul class="changes" data-testid="catalogue-issues">

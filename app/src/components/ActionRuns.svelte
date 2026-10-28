@@ -1,8 +1,9 @@
 <script lang="ts">
   // What one catalogue action starts, as text chips: the runner, the
   // program, then one chip per argument template, so a crafted template
-  // cannot pass for two. Catalogue text comes from a floor a session may
-  // have edited: it is rendered as text only.
+  // cannot pass for two; for an HTTP action, its method, its URL template
+  // and the credential it sends. Catalogue text comes from a floor a session
+  // may have edited: it is rendered as text only.
   import type { CanonicalAction } from "../lib/generated/CanonicalAction";
 
   interface Props {
@@ -11,11 +12,21 @@
   let { action }: Props = $props();
 </script>
 
-<span class="runs">
-  {action.runner}{action.distro ? ` ${action.distro}` : ""}:
-  <code class="chip">{action.program}</code>
-  {#each action.args as arg, i (i)}<code class="chip">{arg}</code>{/each}
-</span>
+{#if action.http}
+  <span class="runs" data-testid="action-http">
+    <code class="chip" data-testid="http-method">{action.http.method}</code>
+    <code class="chip" data-testid="http-url">{action.http.url}</code>
+    {#if action.http.credential}
+      with credential <code class="chip" data-testid="http-credential">{action.http.credential}</code>
+    {/if}
+  </span>
+{:else}
+  <span class="runs">
+    {action.runner}{action.distro ? ` ${action.distro}` : ""}:
+    <code class="chip">{action.program}</code>
+    {#each action.args as arg, i (i)}<code class="chip">{arg}</code>{/each}
+  </span>
+{/if}
 
 <style>
   code {
