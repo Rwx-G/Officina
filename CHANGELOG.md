@@ -109,6 +109,13 @@ project uses [Semantic Versioning](https://semver.org/).
   a git work tree, unreadable journal lines and gate errors of the last 24
   hours. For each guarded project it prints the `CLAUDE.md`
   paragraph to paste, generated from the approved catalogue.
+- Relay view in the window, behind a Board/Relay switch in the header once
+  the relay is in use: the stop toggle, a pending catalogue change with
+  Approve, the floor's issues with their lines, the approved catalogue
+  (class, projects, command, parameters and limits per action), the recent
+  activity (time, project, action, parameters, outcome, duration, abandoned
+  runs marked), and the unreadable journal lines and gate errors of the last
+  24 hours, all rendered as text.
 - The window follows floor edits without a restart: project names and
   colours, a moved config dir (sessions, quota, attach) and the relay's
   state, which it also rebuilds when the relay's files or today's journal
@@ -131,8 +138,9 @@ project uses [Semantic Versioning](https://semver.org/).
 - The board contract (`officina board --json`) is schema 2: it carries the
   pending approval requests, and `waiting_count` counts the approvable ones
   beside the sessions that wait.
-- The window deletes approval files older than 24 hours and kept check
-  outputs older than 7 days on its hourly pass.
+- The window deletes approval files older than 24 hours, kept check
+  outputs older than 7 days and journal files older than 90 days on its
+  startup and hourly pass; `officina run` and the gate never delete.
 
 ### Security
 

@@ -290,9 +290,24 @@ Requests show first in **Needs you**, oldest first, with an amber border: the pr
 
 `officina relay --json` prints the relay's state once, without writing anything: whether it is stopped, the approved catalogue, a pending change with its diff, the floor's catalogue issues with their lines, and the last 50 journal entries with each run's start and end paired. A run with no end line 60 s past its timeout reads "abandoned" (its `officina run` was killed). The window reads the same contract.
 
+### The Relay view
+
+Once the relay is in use, the header gains a **Board** / **Relay** switch; the chips and **Stop relay** stay in the header in both views. The Relay view reads the same contract as `officina relay --json` and shows, in order:
+
+- whether the relay runs or is stopped, with its own **Stop relay** button, the relay floor, and why that floor or the approved catalogue cannot be read, when one cannot;
+- a pending catalogue change with its diff and **Approve this catalogue**, as on the board's banner;
+- the floor's issues with their lines;
+- the approved catalogue: each action's class, the projects that list it, what it starts, its parameters and limits; then the projects and the guarded programs;
+- the recent activity, newest first: time, project, action, parameters, outcome (an exit code, a timeout, a refusal and its reason, a gate deny with the command's excerpt, a gate error) and duration, and "abandoned" for a run whose end never came;
+- the number of unreadable journal lines and of gate errors in the last 24 hours.
+
+Approval requests are not listed there: you decide them on their cards in Needs you. Everything the view shows is rendered as text, never as markup.
+
+The journal keeps 90 days of history (`JOURNAL_RETENTION_DAYS`): the window deletes older day files when it starts and then every hour. `officina run` and the gate never delete a journal file.
+
 ### What works today
 
-Usable today: declare a catalogue, approve it in the window, let sessions run its `free` and `after-check` actions with `officina run` and its `human` actions after your click in Needs you, contained by the gate, journaled, stoppable from the window, and checked by `officina doctor`, which prints each guarded project's `CLAUDE.md` paragraph. The Relay view and HTTP actions arrive with the rest of v0.2.
+Usable today: declare a catalogue, approve it in the window, let sessions run its `free` and `after-check` actions with `officina run` and its `human` actions after your click in Needs you, contained by the gate, journaled, stoppable from the window, audited in the Relay view, and checked by `officina doctor`, which prints each guarded project's `CLAUDE.md` paragraph. HTTP actions arrive with the rest of v0.2.
 
 ## Command line
 
