@@ -233,6 +233,7 @@ mod tests {
             attach_available: true,
             subject: None,
             scene: None,
+            settled: None,
         }
     }
 

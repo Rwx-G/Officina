@@ -22,6 +22,8 @@ export type Scenario =
   | "triage-board"
   | "evidence-board"
   | "model-board"
+  | "settle-before-board"
+  | "settle-after-board"
   | "contract-hook-missing"
   | "scene-a"
   | "scene-b"
@@ -42,7 +44,9 @@ export type RegistryScenario =
   | "triage"
   | "evidence"
   | "model"
-  | "model-paused";
+  | "model-paused"
+  | "settle-before"
+  | "settle-after";
 
 export type RelayScenario =
   | "relay-clean"

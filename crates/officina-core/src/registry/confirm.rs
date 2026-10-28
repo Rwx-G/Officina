@@ -15,7 +15,7 @@ use super::proposal::{ModelInput, Proposal, cut_mid_turn};
 use super::retention::EXCERPT_TTL_MS;
 use super::types::{
     AuthorRefusal, ConfirmRefusal, ConfirmationRecord, Ending, ExcerptRecord, NotNeeded, RowKind,
-    SessionRecord, SubjectRecord, SubjectStatus, Verdict,
+    SessionRecord, Settlement, SubjectRecord, SubjectStatus, Verdict,
 };
 use super::verdict::{Row, VerdictInput, anchor, rows};
 
@@ -69,6 +69,13 @@ pub enum AuthorAction {
     Reopen {
         subject: i64,
     },
+    /// The author's verdict on one ended session from the board (story
+    /// 4.15, D-536), or `None` to take it back. It changes no subject: a
+    /// subject's own verdict stays its triage row's.
+    Settle {
+        session: String,
+        settlement: Option<Settlement>,
+    },
 }
 
 impl AuthorAction {
@@ -95,6 +102,7 @@ impl AuthorAction {
             AuthorAction::Merge { source, target } => (Vec::new(), vec![*source, *target]),
             AuthorAction::File { sessions, subject } => (sessions.clone(), vec![*subject]),
             AuthorAction::Unfile { sessions } => (sessions.clone(), Vec::new()),
+            AuthorAction::Settle { session, .. } => (vec![session.clone()], Vec::new()),
         }
     }
 }
@@ -152,6 +160,9 @@ pub struct Plan {
     /// Truncate the WAL after the commit, so cleared text leaves the log
     /// (AD-44).
     pub checkpoint: bool,
+    /// Each session whose board verdict is recorded, or taken back
+    /// (`None`).
+    pub settle: Vec<(String, Option<Settlement>)>,
 }
 
 /// `name` as a subject of `project` stores it (D-57): trimmed, 1 to
@@ -393,6 +404,16 @@ pub fn plan(action: &AuthorAction, ctx: &AuthorContext) -> Result<Plan, AuthorRe
                 ..Plan::default()
             })
         }
+        AuthorAction::Settle {
+            session,
+            settlement,
+        } => Ok(Plan {
+            settle: named(ctx, std::slice::from_ref(session))?
+                .iter()
+                .map(|s| (s.session_id.clone(), *settlement))
+                .collect(),
+            ..Plan::default()
+        }),
     }
 }
 
@@ -862,6 +883,38 @@ mod tests {
             }),
             ..SessionRecord::default()
         }
+    }
+
+    /// Story 4.15: settling a session writes its board verdict, or takes
+    /// it back, and nothing else; an unknown session is refused.
+    #[test]
+    fn settling_a_session_writes_only_its_verdict() {
+        let subjects = [subject(1, "Rollout", SubjectStatus::Archived)];
+        let sessions = [session("s", Some(1), 10, Some(20))];
+        let ctx = AuthorContext {
+            subjects: &subjects,
+            sessions: &sessions,
+            known_projects: PROJECTS,
+        };
+        for settlement in Settlement::ALL.iter().copied().map(Some).chain([None]) {
+            let action = AuthorAction::Settle {
+                session: "s".to_owned(),
+                settlement,
+            };
+            assert_eq!(action.involved(), (vec!["s".to_owned()], Vec::new()));
+            assert_eq!(
+                plan(&action, &ctx),
+                Ok(Plan {
+                    settle: vec![("s".to_owned(), settlement)],
+                    ..Plan::default()
+                })
+            );
+        }
+        let unknown = AuthorAction::Settle {
+            session: "gone".to_owned(),
+            settlement: Some(Settlement::Done),
+        };
+        assert_eq!(plan(&unknown, &ctx), Err(AuthorRefusal::UnknownSession));
     }
 
     fn excerpt(id: &str, at: i64) -> ExcerptRecord {

@@ -5,7 +5,7 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use officina_core::board::Board;
+use officina_core::board::{Board, SessionSettlement};
 use officina_core::dates::dated_file_day;
 use officina_core::registry::confirm::TriageContext;
 use officina_core::registry::dry_run::{DryRunState, Evaluation, Tally};
@@ -19,17 +19,18 @@ use officina_core::registry::proposal::{ModelInput, Proposal};
 use officina_core::registry::rates::VerdictRecord;
 use officina_core::registry::triage_call::{COUNT_WINDOW_MS, CallRecord};
 use officina_core::registry::types::ModelVerdict;
+use officina_core::registry::types::SessionFact;
 use officina_core::registry::types::{
     ConfirmationRecord, EventFileRecord, ExcerptRecord, FactRow, FactValue, RegistryReport,
-    RestoreNotice, SessionRecord, SessionRow, SettingKey, Source, Sourced, SubjectRecord,
-    SubjectRef, SubjectStatus, TriageOutcome, TriagePurpose, TriageRefusal, Verdict,
+    RestoreNotice, SessionRecord, SessionRow, SettingKey, Settlement, Source, Sourced,
+    SubjectRecord, SubjectRef, SubjectStatus, TriageOutcome, TriagePurpose, TriageRefusal, Verdict,
 };
 #[cfg(feature = "window-authority")]
-use officina_core::registry::types::{HookEnd, HookStart, SessionFact};
+use officina_core::registry::types::{HookEnd, HookStart};
 use officina_core::registry::verdict::{Row, VerdictInput, rows};
 use officina_core::registry::view::{
-    AutoArchiveSetting, EvidenceInput, IngestionView, RegistryView, SubjectView, ViewInput,
-    archived_subjects, build_view,
+    AutoArchiveSetting, DiscardedSession, EvidenceInput, IngestionView, RegistryView, SubjectView,
+    ViewInput, archived_subjects, build_view,
 };
 use rusqlite::types::ValueRef;
 use rusqlite::{Connection, OptionalExtension};
@@ -213,6 +214,17 @@ impl Reader {
         card_subjects(&self.conn)
     }
 
+    /// What settles each ended session, by session id: what moves a board
+    /// card out of To resume (story 4.15).
+    pub fn card_settlements(&self) -> rusqlite::Result<BTreeMap<String, SessionSettlement>> {
+        card_settlements(&self.conn)
+    }
+
+    /// The sessions the author discarded from the board, the latest first.
+    pub fn discarded(&self) -> rusqlite::Result<Vec<DiscardedSession>> {
+        discarded(&self.conn)
+    }
+
     /// The registry as the Subjects view shows it (AD-53, AD-54), in `ctx`:
     /// a reader runs no dry run, so `ctx.dry_run` is the default.
     pub fn view(&self, ctx: ViewContext, now_ms: i64) -> rusqlite::Result<RegistryView> {
@@ -286,6 +298,72 @@ pub(crate) fn card_subjects(conn: &Connection) -> rusqlite::Result<BTreeMap<Stri
             },
         ))
     })?
+    .collect()
+}
+
+/// What settles each session the board may show in To resume, by session
+/// id (story 4.15, D-536): the author's board verdict and its time, and
+/// when the subject it is filed under was archived. One query, run with
+/// [`card_subjects`] on every registry report, so it reads only the rows
+/// that settle something.
+pub(crate) fn card_settlements(
+    conn: &Connection,
+) -> rusqlite::Result<BTreeMap<String, SessionSettlement>> {
+    conn.prepare_cached(
+        "SELECT session.session_id, fact.value, fact.at_ms, subject.status_at_ms
+         FROM session
+         LEFT JOIN session_fact AS fact
+             ON fact.session_id = session.session_id AND fact.fact = ?1
+         LEFT JOIN subject ON subject.id = session.subject_id AND subject.status = ?2
+         WHERE fact.session_id IS NOT NULL OR subject.id IS NOT NULL",
+    )?
+    .query_map(
+        [SessionFact::Settled.code(), SubjectStatus::Archived.code()],
+        |row| {
+            let value: Option<String> = row.get(1)?;
+            let at_ms: Option<i64> = row.get(2)?;
+            Ok((
+                row.get(0)?,
+                SessionSettlement {
+                    settled: value.as_deref().and_then(Settlement::from_code).zip(at_ms),
+                    subject_archived_at_ms: row.get(3)?,
+                },
+            ))
+        },
+    )?
+    .collect()
+}
+
+/// The sessions the author discarded from the board, the latest first
+/// (story 4.15), with the name `claude agents` gave and the latest prompt
+/// the registry still keeps.
+pub(crate) fn discarded(conn: &Connection) -> rusqlite::Result<Vec<DiscardedSession>> {
+    conn.prepare_cached(
+        "SELECT fact.session_id, session.project, name.value, excerpt.prompt, fact.at_ms
+         FROM session_fact AS fact
+         JOIN session ON session.session_id = fact.session_id
+         LEFT JOIN session_fact AS name
+             ON name.session_id = fact.session_id AND name.fact = ?3
+         LEFT JOIN session_excerpt AS excerpt ON excerpt.session_id = fact.session_id
+         WHERE fact.fact = ?1 AND fact.value = ?2
+         ORDER BY fact.at_ms DESC, fact.session_id",
+    )?
+    .query_map(
+        [
+            SessionFact::Settled.code(),
+            Settlement::Discarded.code(),
+            SessionFact::Name.code(),
+        ],
+        |row| {
+            Ok(DiscardedSession {
+                session_id: row.get(0)?,
+                project: row.get(1)?,
+                name: row.get(2)?,
+                prompt: row.get(3)?,
+                discarded_at_ms: row.get(4)?,
+            })
+        },
+    )?
     .collect()
 }
 

@@ -141,11 +141,20 @@ fn subject_row(
 }
 
 /// The row of an unfiled `session`, when it needs a verdict and a subject:
-/// ended, interactive, prompted and not replaced in its process (AD-47,
-/// D-75).
+/// ended, interactive, prompted, not replaced in its process (AD-47,
+/// D-75) and not settled by the author since it ended (D-537).
 fn unfiled_row(session: &SessionRecord, input: &VerdictInput) -> Option<Row> {
     let end = session.ending()?;
     if session.is_non_interactive() || !session.saw_prompt() || session.is_superseded() {
+        return None;
+    }
+    // The author settled it from the board after this end (D-537): that
+    // answers it as a confirmation would.
+    if session
+        .settled
+        .as_ref()
+        .is_some_and(|settled| settled.at_ms >= end.at_ms)
+    {
         return None;
     }
     if answered(
@@ -313,6 +322,38 @@ mod tests {
         let found = of(&subjects, &sessions, &[]);
         assert_eq!(found[0].session_id.as_deref(), Some("prompted"));
         assert_eq!(found[0].at_ms, 400);
+    }
+
+    /// D-537: an unfiled session the author settled from the board after
+    /// it ended needs no triage row; one settled before it lived and ended
+    /// again needs one, as a confirmation would.
+    #[test]
+    fn a_board_verdict_answers_an_unfiled_row_for_the_end_it_followed() {
+        use crate::registry::types::Settlement;
+        let settled = |at_ms: i64, settlement: Settlement| {
+            let mut found = session("u", None, Some(100), Some(200));
+            found.settled = Some(Sourced {
+                value: settlement,
+                src: Source::Author,
+                at_ms,
+            });
+            found
+        };
+        assert_eq!(
+            of(&[], &[session("u", None, Some(100), Some(200))], &[]).len(),
+            1
+        );
+        for settlement in Settlement::ALL {
+            assert!(
+                of(&[], &[settled(200, *settlement)], &[]).is_empty(),
+                "{settlement:?}"
+            );
+            assert_eq!(
+                of(&[], &[settled(199, *settlement)], &[]).len(),
+                1,
+                "{settlement:?}"
+            );
+        }
     }
 
     #[test]

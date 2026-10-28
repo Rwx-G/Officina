@@ -950,6 +950,53 @@ function resolveSubjects(steps) {
   });
 }
 
+// The author's verdicts on ended sessions (story 4.15): five sessions that
+// ended in the last hours with a prompt, so each is a To resume card. In
+// `settle-before`, one's subject is archived (the owner's item 7: it leaves
+// To resume for Done) and another's archived then reopened (it comes
+// back); `settle-after` then discards the ten-second hook test and marks
+// one done from the board.
+const settleEvents = [
+  [201, "billing-api", 40 * MIN, "try the hook"],
+  [202, "billing-api", 3 * HOUR, "Export invoices as CSV"],
+  [203, "web-portal", 2 * HOUR, "Bump the chart library"],
+  [204, "web-portal", 90 * MIN, "Fix the date picker"],
+  [205, "docs-site", 4 * HOUR, "Draft the release notes"],
+].flatMap(([n, project, ago, prompt]) => [
+  prompted(n, project, now - ago, prompt),
+  ended(n, project, now - ago + (n === 201 ? 10_000 : 20 * MIN), "prompt_input_exit"),
+]).map((e) => ({ v: 1, ...e }));
+const settleBeforeSteps = [
+  "ingest",
+  create("invoice export", { sessions: [sid(202)] }),
+  create("release notes", { sessions: [sid(205)] }),
+  { author: { kind: "archive", subject: "SUBJECT(invoice export)", routine: false } },
+  { author: { kind: "archive", subject: "SUBJECT(release notes)", routine: false } },
+  { author: { kind: "reopen", subject: "SUBJECT(release notes)" } },
+];
+const settleAfterSteps = [
+  ...settleBeforeSteps,
+  { author: { kind: "settle", session: sid(201), settlement: "discarded" } },
+  { author: { kind: "settle", session: sid(203), settlement: "done" } },
+];
+const placedIn = (board, n) => {
+  const found = Object.entries(board.columns).find(([, cards]) => cards.some((c) => c.session_id === sid(n)));
+  if (!found) return null;
+  const card = found[1].find((c) => c.session_id === sid(n));
+  return `${found[0]}:${card.settled ?? "-"}`;
+};
+const settleBeforeChecks = (printed, board) => [
+  [placedIn(board, 202) === "done:subject_archived", "an archived subject's session in Done"],
+  [placedIn(board, 205) === "to_resume:-", "a reopened subject's session back in To resume"],
+  [[201, 203, 204].every((n) => placedIn(board, n) === "to_resume:-"), "three sessions to resume"],
+];
+const settleAfterChecks = (printed, board) => [
+  [placedIn(board, 201) === null, "the discarded session off the board"],
+  [placedIn(board, 203) === "done:marked_done", "a session marked done in Done"],
+  [placedIn(board, 204) === "to_resume:-", "the untouched session still to resume"],
+  [!printed.triage.some((r) => r.session_id === sid(201) || r.session_id === sid(203)), "no triage row for a settled session"],
+];
+
 // `board: true` writes the scenario's board too, for the specs that open
 // it; every scenario's board is still printed for its checks.
 const registryScenarios = {
@@ -961,6 +1008,8 @@ const registryScenarios = {
   triage: { steps: triageSteps, events: triageEvents, agents: triageAgents, checks: triageChecks, board: true },
   evidence: { steps: evidenceSteps, events: evidenceEvents, agents: [], checks: evidenceChecks, board: true },
   model: { steps: modelSteps, events: modelEvents, agents: [], checks: modelOpenChecks, board: true },
+  "settle-before": { steps: settleBeforeSteps, events: settleEvents, agents: [], checks: settleBeforeChecks, board: true },
+  "settle-after": { steps: settleAfterSteps, events: settleEvents, agents: [], checks: settleAfterChecks, board: true },
   "model-paused": {
     steps: [
       ...modelSteps,

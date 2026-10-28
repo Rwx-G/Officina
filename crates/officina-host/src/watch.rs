@@ -16,7 +16,7 @@ use officina_core::ipc::IpcError;
 use officina_core::registry::confirm::{AuthorAction, ConfirmItem, ItemAnswer};
 use officina_core::registry::model::{ModelEnv, unavailable};
 use officina_core::registry::retention::PASS_INTERVAL_MS;
-use officina_core::registry::view::{RegistryView, SubjectView};
+use officina_core::registry::view::{DiscardedSession, RegistryView, SubjectView};
 use officina_core::relay::view::RelayView;
 
 use crate::collector::Collector;
@@ -72,6 +72,8 @@ pub enum AuthorCommand {
     /// The archived subjects, read on the collector's connection, so the
     /// window holds one connection.
     ListArchived,
+    /// The sessions the author discarded from the board (story 4.15).
+    ListDiscarded,
     /// An action on subjects and sessions, written in one transaction.
     Act(AuthorAction),
     /// Triage rows confirmed in one transaction, answered per item (AD-49).
@@ -96,6 +98,14 @@ impl AuthorAnswer {
     pub fn into_done(self) -> Result<Option<i64>, IpcError> {
         match self {
             AuthorAnswer::Done { created } => Ok(created),
+            other => Err(other.unexpected()),
+        }
+    }
+
+    /// The discarded sessions, for `ListDiscarded`'s answer.
+    pub fn into_discarded(self) -> Result<Vec<DiscardedSession>, IpcError> {
+        match self {
+            AuthorAnswer::Discarded(listed) => Ok(listed),
             other => Err(other.unexpected()),
         }
     }
@@ -133,6 +143,7 @@ pub enum AuthorAnswer {
         created: Option<i64>,
     },
     Archived(Vec<SubjectView>),
+    Discarded(Vec<DiscardedSession>),
     /// What became of each confirmed item, in the order sent.
     Confirmed(Vec<ItemAnswer>),
     /// A dry run is queued, with this many cases; its progress shows in the
@@ -690,8 +701,10 @@ fn ingest(collector: &mut Collector, registry: &mut WindowRegistry) {
 fn report_registry(collector: &mut Collector, registry: &mut WindowRegistry) {
     // The subjects first: a read that fails there shows in the report.
     let subjects = registry.card_subjects();
+    let settlements = registry.card_settlements();
     collector.set_registry(registry.report());
     collector.set_subjects(subjects);
+    collector.set_settlements(settlements);
 }
 
 /// Folds the session list the collector just received into the window's
@@ -857,7 +870,10 @@ fn answer_author<E: Emit>(
     // One time for the whole request, so what it writes and the views it
     // publishes agree.
     let now = now_ms();
-    let writes = !matches!(request.command, AuthorCommand::ListArchived);
+    let writes = !matches!(
+        request.command,
+        AuthorCommand::ListArchived | AuthorCommand::ListDiscarded
+    );
     let reply = match request.command {
         AuthorCommand::ListArchived => {
             let board = outputs.board.current();
@@ -865,6 +881,7 @@ fn answer_author<E: Emit>(
                 .archived(board.as_ref())
                 .map(AuthorAnswer::Archived)
         }
+        AuthorCommand::ListDiscarded => registry.discarded().map(AuthorAnswer::Discarded),
         AuthorCommand::Act(action) => registry
             .act(&action, now)
             .map(|created| AuthorAnswer::Done { created }),

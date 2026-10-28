@@ -15,7 +15,8 @@ use officina_core::board::Board;
 use officina_core::focus::FocusOutcome;
 use officina_core::ipc::{IpcError, IpcErrorCode};
 use officina_core::registry::confirm::{AuthorAction, ConfirmItem, ItemAnswer, SubjectOrigin};
-use officina_core::registry::view::{RegistryView, SubjectView};
+use officina_core::registry::types::Settlement;
+use officina_core::registry::view::{DiscardedSession, RegistryView, SubjectView};
 use officina_core::relay::view::RelayView;
 use officina_host::collector::Collector;
 use officina_host::files::now_ms;
@@ -259,6 +260,35 @@ async fn reopen_subject(state: State<'_, AppState>, subject: i64) -> Result<(), 
         .map(|_| ())
 }
 
+/// Records the author's verdict on one ended session from the board, or
+/// takes it back with `null` (story 4.15, D-536): Done moves its card to
+/// Done, Discarded takes it off the board and the scene.
+#[tauri::command]
+async fn settle_session(
+    state: State<'_, AppState>,
+    session: String,
+    settlement: Option<Settlement>,
+) -> Result<(), IpcError> {
+    act(
+        state,
+        AuthorAction::Settle {
+            session,
+            settlement,
+        },
+    )
+    .await
+    .map(|_| ())
+}
+
+/// The sessions the author discarded from the board, the latest first,
+/// read on the collector's connection (story 4.15).
+#[tauri::command]
+async fn list_discarded(state: State<'_, AppState>) -> Result<Vec<DiscardedSession>, IpcError> {
+    ask(state, AuthorCommand::ListDiscarded)
+        .await?
+        .into_discarded()
+}
+
 /// Confirms triage rows in one transaction (AD-49): each item carries the
 /// row's key and the proposal the window showed, and is answered on its
 /// own, confirmed, filed without its verdict (D-60) or refused with why.
@@ -491,7 +521,9 @@ fn main() {
             confirm_triage,
             evaluate_triage_model,
             set_triage_model,
-            set_auto_archive
+            set_auto_archive,
+            settle_session,
+            list_discarded
         ])
         .run(tauri::generate_context!())
         .expect("failed to run the Officina window");

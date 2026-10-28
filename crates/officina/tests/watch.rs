@@ -21,7 +21,7 @@ use std::sync::mpsc::Receiver;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use officina_core::board::Board;
+use officina_core::board::{Board, Column, Settled};
 use officina_core::ipc::IpcErrorCode;
 use officina_core::registry::confirm::{
     AuthorAction, ConfirmItem, FileUnder, ItemOutcome, SubjectOrigin,
@@ -30,7 +30,7 @@ use officina_core::registry::proposal::Proposal;
 use officina_core::registry::retention::EXCERPT_TTL_MS;
 use officina_core::registry::types::{
     AuthorRefusal, Ending, ModelVerdict, ProposalSource, ReasonCode, RegistryState, SessionRecord,
-    SettingKey, Source, Verdict,
+    SettingKey, Settlement, Source, Verdict,
 };
 use officina_core::registry::view::RegistryView;
 use officina_core::relay::journal::{CatalogueApproved, JournalEntry};
@@ -1262,6 +1262,123 @@ fn author_request_is_answered_by_the_collector_thread() {
         }
         other => panic!("{other:?}"),
     }
+    stop(handle);
+}
+
+/// Where the board shows `session`: its column and why it is settled.
+fn placed(board: &Board, session: &str) -> Option<(Column, Option<Settled>)> {
+    board
+        .columns
+        .all()
+        .find(|card| card.session_id.as_deref() == Some(session))
+        .map(|card| (card.column, card.settled))
+}
+
+/// Story 4.15, the owner's item 7 then item 3, end to end through the
+/// collector thread: a session that ended with a prompt sits in To resume;
+/// archiving its subject moves it to Done, reopening brings it back;
+/// discarding it takes it off the board and lists it, restoring brings it
+/// back; marking it done moves it to Done. Each step reaches the next
+/// board the action publishes.
+#[test]
+fn author_verdicts_move_an_ended_session_on_the_board() {
+    let env = common::TestEnv::new();
+    let now = officina_host::files::now_ms();
+    env.write_agents(&listed_session("s-old", now));
+    let (handle, emitted, _) = watch_all(&env, |_| {});
+    until(&emitted.boards, |b| shows(b, "s-old"));
+    records_once(&env, |r| record(r, "s-old").is_some());
+    std::thread::sleep(SETTLE);
+    let prompt = serde_json::json!({"hook_event_name": "UserPromptSubmit", "session_id": "s-old",
+        "cwd": "C:/work/api", "prompt": "try the hook"});
+    hook_line(&env, prompt, officina_host::files::now_ms());
+    hook_line(
+        &env,
+        serde_json::json!({"hook_event_name": "SessionEnd", "session_id": "s-old", "cwd": "C:/work/api",
+            "reason": "prompt_input_exit"}),
+        officina_host::files::now_ms(),
+    );
+    env.write_agents("[]");
+    until(&emitted.boards, |b| {
+        placed(b, "s-old") == Some((Column::ToResume, None))
+    });
+    records_once(&env, |r| {
+        record(r, "s-old").is_some_and(SessionRecord::is_ended)
+    });
+
+    let run = |command: AuthorCommand| {
+        ask(&handle, command, AUTHOR_WAIT)
+            .recv_timeout(AUTHOR_WAIT)
+            .unwrap()
+            .unwrap()
+    };
+    let subject = match run(create(
+        "hook test",
+        SubjectOrigin::Sessions(vec!["s-old".into()]),
+    )) {
+        AuthorAnswer::Done { created: Some(id) } => id,
+        other => panic!("{other:?}"),
+    };
+    run(AuthorCommand::Act(AuthorAction::Archive {
+        subject,
+        routine: false,
+    }));
+    until(&emitted.boards, |b| {
+        placed(b, "s-old") == Some((Column::Done, Some(Settled::SubjectArchived)))
+    });
+    run(AuthorCommand::Act(AuthorAction::Reopen { subject }));
+    until(&emitted.boards, |b| {
+        placed(b, "s-old") == Some((Column::ToResume, None))
+    });
+
+    let settle = |settlement| {
+        AuthorCommand::Act(AuthorAction::Settle {
+            session: "s-old".into(),
+            settlement,
+        })
+    };
+    run(settle(Some(Settlement::Discarded)));
+    until(&emitted.boards, |b| placed(b, "s-old").is_none());
+    match run(AuthorCommand::ListDiscarded) {
+        AuthorAnswer::Discarded(listed) => {
+            assert_eq!(listed.len(), 1);
+            // Its name from `claude agents`; no prompt, since archiving the
+            // subject cleared its excerpts (FR-4).
+            assert_eq!(
+                (
+                    listed[0].session_id.as_str(),
+                    listed[0].name.as_deref(),
+                    listed[0].prompt.as_deref()
+                ),
+                ("s-old", Some("api"), None)
+            );
+        }
+        other => panic!("{other:?}"),
+    }
+    run(settle(None));
+    until(&emitted.boards, |b| {
+        placed(b, "s-old") == Some((Column::ToResume, None))
+    });
+    run(settle(Some(Settlement::Done)));
+    until(&emitted.boards, |b| {
+        placed(b, "s-old") == Some((Column::Done, Some(Settled::MarkedDone)))
+    });
+    match run(AuthorCommand::ListDiscarded) {
+        AuthorAnswer::Discarded(listed) => assert!(listed.is_empty()),
+        other => panic!("{other:?}"),
+    }
+    let unknown = ask(
+        &handle,
+        AuthorCommand::Act(AuthorAction::Settle {
+            session: "never-seen".into(),
+            settlement: Some(Settlement::Done),
+        }),
+        AUTHOR_WAIT,
+    )
+    .recv_timeout(AUTHOR_WAIT)
+    .unwrap()
+    .unwrap_err();
+    assert_eq!(unknown.refusal, Some(AuthorRefusal::UnknownSession));
     stop(handle);
 }
 

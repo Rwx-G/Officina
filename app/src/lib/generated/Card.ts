@@ -4,6 +4,7 @@ import type { Column } from "./Column";
 import type { ProjectView } from "./ProjectView";
 import type { SceneState } from "./SceneState";
 import type { SessionKindView } from "./SessionKindView";
+import type { Settled } from "./Settled";
 import type { SubjectRef } from "./SubjectRef";
 
 /**
@@ -35,4 +36,9 @@ subject: SubjectRef | null,
  * Where the scene places a live card (AD-167); `None` for To resume
  * and Done, which the scene does not draw.
  */
-scene: SceneState | null, };
+scene: SceneState | null, 
+/**
+ * Why an ended card sits in Done although Claude Code did not say it
+ * finished (story 4.15): the author's verdict; `None` otherwise.
+ */
+settled: Settled | null, };

@@ -5,11 +5,13 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { Board } from "./generated/Board";
 import type { ConfirmItem } from "./generated/ConfirmItem";
+import type { DiscardedSession } from "./generated/DiscardedSession";
 import type { FocusOutcome } from "./generated/FocusOutcome";
 import type { IpcError } from "./generated/IpcError";
 import type { ItemAnswer } from "./generated/ItemAnswer";
 import type { RegistryView } from "./generated/RegistryView";
 import type { RelayView } from "./generated/RelayView";
+import type { Settlement } from "./generated/Settlement";
 import type { SubjectOrigin } from "./generated/SubjectOrigin";
 import type { SubjectView } from "./generated/SubjectView";
 
@@ -108,6 +110,17 @@ export function archiveSubject(subject: number, routine: boolean): Promise<void>
 /** Reopens an archived subject as `to_resume` (AD-48). */
 export function reopenSubject(subject: number): Promise<void> {
   return invoke("reopen_subject", { subject });
+}
+
+/** Records the author's verdict on one ended session from the board, or
+ *  takes it back with `null` (story 4.15): the next board shows it. */
+export function settleSession(session: string, settlement: Settlement | null): Promise<void> {
+  return invoke("settle_session", { session, settlement });
+}
+
+/** The sessions the author discarded from the board, the latest first. */
+export function listDiscarded(): Promise<DiscardedSession[]> {
+  return invoke<DiscardedSession[]>("list_discarded");
 }
 
 /** Confirms triage rows in one batch (AD-49): each item carries the row's

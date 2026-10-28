@@ -17,7 +17,8 @@ use crate::agents::{AgentRecord, LifecycleState, LiveStatus, SessionKind};
 use crate::events::EventLine;
 
 use super::types::{
-    FactRow, FactValue, HookEnd, HookStart, SessionFact, SessionRecord, SessionRow, Source, Sourced,
+    FactRow, FactValue, HookEnd, HookStart, SessionFact, SessionRecord, SessionRow, Settlement,
+    Source, Sourced,
 };
 
 /// How long after a `SessionEnd` of `clear` or `resume` the `SessionStart`
@@ -124,6 +125,9 @@ fn apply_row(record: &mut SessionRecord, row: &FactRow) -> bool {
             .map(|v| record.ended = sourced(row, v)),
         SessionFact::Interrupted => integer.map(|v| record.interrupted = sourced(row, v)),
         SessionFact::Successor => text.map(|v| record.successor = sourced(row, v.to_owned())),
+        SessionFact::Settled => text
+            .and_then(from_wire_name::<Settlement>)
+            .map(|v| record.settled = sourced(row, v)),
     };
     slot_set.is_some()
 }

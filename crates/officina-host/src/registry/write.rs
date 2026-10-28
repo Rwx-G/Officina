@@ -22,7 +22,8 @@ use officina_core::registry::rates::{
 pub use officina_core::registry::types::AuthorRefusal;
 use officina_core::registry::types::{
     EventFileRecord, ExcerptRecord, FactValue, ProposalSource, RegistryReport, RegistryState,
-    SessionRecord, SessionRow, SettingKey, Source, SubjectRecord, SubjectStatus, Verdict,
+    SessionFact, SessionRecord, SessionRow, SettingKey, Source, SubjectRecord, SubjectStatus,
+    Verdict,
 };
 use officina_core::registry::verdict::auto_archivable;
 use officina_core::registry::view::{AutoArchiveSetting, RegistryView};
@@ -223,6 +224,29 @@ fn apply_plan(conn: &Connection, plan: &Plan, now_ms: i64) -> rusqlite::Result<O
     }
     if let Some(subject) = plan.stamp_reopen {
         stamp_reopen(conn, subject, now_ms)?;
+    }
+    // The author's word replaces the stored one whatever its time, unlike
+    // an observation (`write_fact`): an undo in the same millisecond holds.
+    for (session_id, settlement) in &plan.settle {
+        match settlement {
+            Some(settlement) => conn
+                .prepare_cached(
+                    "INSERT INTO session_fact (session_id, fact, value, src, at_ms)
+                     VALUES (?1, ?2, ?3, ?4, ?5)
+                     ON CONFLICT (session_id, fact) DO UPDATE SET value = excluded.value,
+                         src = excluded.src, at_ms = excluded.at_ms",
+                )?
+                .execute(rusqlite::params![
+                    session_id,
+                    SessionFact::Settled.code(),
+                    settlement.code(),
+                    author,
+                    now_ms
+                ])?,
+            None => conn
+                .prepare_cached("DELETE FROM session_fact WHERE session_id = ?1 AND fact = ?2")?
+                .execute(rusqlite::params![session_id, SessionFact::Settled.code()])?,
+        };
     }
     if let Some(subject) = plan.prune.and_then(resolve) {
         prune_excerpts(conn, subject)?;

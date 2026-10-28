@@ -261,6 +261,25 @@ closed_enum! {
         /// The session that replaced this one in the same process after
         /// `/clear` or `/resume` (D-52).
         Successor,
+        /// The author's own verdict on the ended session, given from the
+        /// board ([`Settlement`], story 4.15): an author action, never
+        /// inferred, and it covers only what happened before it.
+        Settled,
+    }
+}
+
+closed_enum! {
+    #[serde(rename_all = "snake_case")]
+    /// What the author settled about an ended session from the board
+    /// (story 4.15, D-536): the value of [`SessionFact::Settled`].
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+    #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+    pub enum Settlement {
+        /// The work is done: the card leaves To resume for Done.
+        Done,
+        /// It was never real work (a test, a mistake): the card leaves the
+        /// board and the scene, and the archived list can restore it.
+        Discarded,
     }
 }
 
@@ -347,6 +366,8 @@ pub struct SessionRecord {
     /// The fact's value is its time, like `at_ms`.
     pub interrupted: Option<Sourced<i64>>,
     pub successor: Option<Sourced<String>>,
+    /// The author's verdict from the board, and when it was given.
+    pub settled: Option<Sourced<Settlement>>,
     /// Rows this build could not read: a fact name it does not know (a
     /// newer Officina wrote it), or a value of another type. Counted so a
     /// downgrade shows them instead of dropping them.
@@ -661,7 +682,7 @@ mod tests {
     /// Runs `check` once per enum of this file, giving it the enum's `ALL`,
     /// `code` and `from_code`; returns how many enums it ran on.
     fn each_enum(check: &dyn Fn(&dyn EnumUnderTest)) -> usize {
-        let enums: [&dyn EnumUnderTest; 16] = [
+        let enums: [&dyn EnumUnderTest; 17] = [
             &Closed(
                 TriageRefusal::ALL,
                 TriageRefusal::code,
@@ -684,6 +705,7 @@ mod tests {
                 AuthorRefusal::from_code,
             ),
             &Closed(SessionFact::ALL, SessionFact::code, SessionFact::from_code),
+            &Closed(Settlement::ALL, Settlement::code, Settlement::from_code),
             &Closed(Source::ALL, Source::code, Source::from_code),
             &Closed(
                 ProposalSource::ALL,

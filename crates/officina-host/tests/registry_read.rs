@@ -41,6 +41,7 @@ fn value_for(fact: SessionFact) -> FactValue {
         | SessionFact::LastStopAt
         | SessionFact::Interrupted => FactValue::Integer(NOW - 5),
         SessionFact::Successor => FactValue::Text("s2".into()),
+        SessionFact::Settled => FactValue::Text("discarded".into()),
     }
 }
 

@@ -12,7 +12,7 @@ use crate::agents::{AgentRecord, LifecycleState, LiveStatus, SessionKind};
 use crate::events::EventLine;
 use crate::floor::{ALERT_AFTER_MINUTES_DEFAULT, Priority, ProjectColor};
 use crate::quota::{QuotaFile, QuotaWindow};
-use crate::registry::types::{RegistryReport, SubjectRef};
+use crate::registry::types::{RegistryReport, Settlement, SubjectRef};
 use crate::relay::approvals::ApprovalView;
 use crate::scene::{SceneFacts, SceneState};
 
@@ -143,6 +143,32 @@ pub struct Card {
     /// Where the scene places a live card (AD-167); `None` for To resume
     /// and Done, which the scene does not draw.
     pub scene: Option<SceneState>,
+    /// Why an ended card sits in Done although Claude Code did not say it
+    /// finished (story 4.15): the author's verdict; `None` otherwise.
+    pub settled: Option<Settled>,
+}
+
+/// Why the author's verdict, not Claude Code, put an ended card in Done
+/// (story 4.15, D-536, D-538).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(rename_all = "snake_case")]
+pub enum Settled {
+    /// The author marked the session done from the board.
+    MarkedDone,
+    /// The author archived the subject the session is filed under, from
+    /// the Subjects view or a triage confirmation.
+    SubjectArchived,
+}
+
+/// What the registry says settles one ended session (story 4.15): the
+/// author's own verdict from the board and when it was given, and when its
+/// subject was archived, if it is. Each covers only what the session did
+/// before it (D-538).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SessionSettlement {
+    pub settled: Option<(Settlement, i64)>,
+    pub subject_archived_at_ms: Option<i64>,
 }
 
 /// Session kind as shown on a card.
@@ -326,6 +352,9 @@ pub struct BoardInput {
     /// The subject of each filed session, by session id, from the registry
     /// (AD-54); empty when it could not be read.
     pub subjects: BTreeMap<String, SubjectRef>,
+    /// What settles each ended session the registry knows of, by session
+    /// id (story 4.15); empty when it could not be read.
+    pub settlements: BTreeMap<String, SessionSettlement>,
     /// The floor's `[alert] after_minutes`, already validated; `None`
     /// without a floor, which gives [`ALERT_AFTER_MINUTES_DEFAULT`].
     pub alert_after_minutes: Option<u32>,
@@ -652,7 +681,43 @@ fn new_card(
         attach_available: facts.attach_available,
         subject,
         scene: None,
+        settled: None,
     }
+}
+
+/// Applies the author's verdicts to an ended card (story 4.15, D-536,
+/// D-538): discarded, it leaves the board; marked done, or its subject
+/// archived, a To resume card moves to Done. A verdict covers only what the
+/// session did before it, so a session that lived again after it is placed
+/// by its sources alone; a live card always is, whatever the registry says.
+fn settle(mut card: Card, input: &BoardInput) -> Option<Card> {
+    if !matches!(card.column, Column::ToResume | Column::Done) {
+        return Some(card);
+    }
+    let Some(found) = card
+        .session_id
+        .as_ref()
+        .and_then(|sid| input.settlements.get(sid))
+    else {
+        return Some(card);
+    };
+    let covers = |at_ms: i64| card.last_event_at_ms.is_none_or(|last| at_ms >= last);
+    let by_author = found.settled.filter(|&(_, at_ms)| covers(at_ms));
+    let settled = match by_author {
+        Some((Settlement::Discarded, _)) => return None,
+        Some((Settlement::Done, _)) => Some(Settled::MarkedDone),
+        None => found
+            .subject_archived_at_ms
+            .filter(|&at_ms| covers(at_ms))
+            .map(|_| Settled::SubjectArchived),
+    };
+    if let Some(settled) = settled {
+        if card.column == Column::ToResume || settled == Settled::MarkedDone {
+            card.settled = Some(settled);
+        }
+        card.column = Column::Done;
+    }
+    Some(card)
 }
 
 /// The card of a session `claude agents` lists. `None` when the record has
@@ -770,9 +835,12 @@ pub fn build_board(input: &BoardInput, now_ms: i64) -> Board {
         let Some(card) = listed_card(record, events, input) else {
             continue;
         };
-        card_events.insert(card.key.clone(), events);
         listed.extend(own);
-        listed.extend(same_process);
+        listed.extend(same_process.iter().copied());
+        let Some(card) = settle(card, input) else {
+            continue;
+        };
+        card_events.insert(card.key.clone(), events);
         if on_board(&card, now_ms) {
             columns.get_mut(card.column).push(card);
         }
@@ -785,8 +853,9 @@ pub fn build_board(input: &BoardInput, now_ms: i64) -> Board {
             if listed.contains(sid.as_str()) {
                 continue;
             }
-            if let Some(card) =
-                unlisted_card(sid, events, input, now_ms).filter(|c| on_board(c, now_ms))
+            if let Some(card) = unlisted_card(sid, events, input, now_ms)
+                .and_then(|card| settle(card, input))
+                .filter(|c| on_board(c, now_ms))
             {
                 card_events.insert(card.key.clone(), events);
                 columns.get_mut(card.column).push(card);
@@ -1181,6 +1250,129 @@ mod tests {
         assert_eq!(classify_unlisted(&g["s"], 1 + UNLISTED_GRACE_MS - 1), None);
         let no_prompt = group_events(&[event(1, "s", "SessionStart")]);
         assert_eq!(classify_unlisted(&no_prompt["s"], now), None);
+    }
+
+    /// Story 4.15: the board read with what the registry settled. Three
+    /// ended sessions (`a` at 20, `b` at 30, `c` at 40), one live (`l`).
+    fn settled_board(settlements: &[(&str, SessionSettlement)]) -> Board {
+        let ended = |sid: &str, at: i64| {
+            let mut end = event(at, sid, "SessionEnd");
+            end.reason = Some("prompt_input_exit".into());
+            [event(at - 5, sid, "UserPromptSubmit"), end]
+        };
+        let input = BoardInput {
+            agents: Some(parse_agents(
+                r#"[{"pid":1,"sessionId":"l","kind":"interactive","status":"busy","startedAt":1}]"#,
+            )
+            .unwrap()),
+            events: [ended("a", 20), ended("b", 30), ended("c", 40)]
+                .into_iter()
+                .flatten()
+                .chain([event(41, "l", "UserPromptSubmit")])
+                .collect(),
+            settlements: settlements
+                .iter()
+                .map(|(sid, s)| ((*sid).to_owned(), *s))
+                .collect(),
+            ..Default::default()
+        };
+        build_board(&input, 100)
+    }
+
+    fn sids(cards: &[Card]) -> Vec<&str> {
+        cards
+            .iter()
+            .filter_map(|c| c.session_id.as_deref())
+            .collect()
+    }
+
+    fn by_author(settlement: Settlement, at_ms: i64) -> SessionSettlement {
+        SessionSettlement {
+            settled: Some((settlement, at_ms)),
+            subject_archived_at_ms: None,
+        }
+    }
+
+    fn archived(at_ms: i64) -> SessionSettlement {
+        SessionSettlement {
+            settled: None,
+            subject_archived_at_ms: Some(at_ms),
+        }
+    }
+
+    /// Item 7 of the owner's feedback: archiving a subject in the Subjects
+    /// view left its ended session in To resume, since the board never
+    /// read the subject's status. It is now in Done, marked as archived.
+    #[test]
+    fn an_archived_subject_takes_its_ended_session_out_of_to_resume() {
+        let before = settled_board(&[]);
+        assert_eq!(sids(&before.columns.to_resume), ["c", "b", "a"]);
+        let after = settled_board(&[("b", archived(50))]);
+        assert_eq!(sids(&after.columns.to_resume), ["c", "a"]);
+        assert_eq!(sids(&after.columns.done), ["b"]);
+        assert_eq!(
+            after.columns.done[0].settled,
+            Some(Settled::SubjectArchived)
+        );
+    }
+
+    #[test]
+    fn the_author_marks_done_or_discards_an_ended_session() {
+        let board = settled_board(&[
+            ("a", by_author(Settlement::Done, 60)),
+            ("b", by_author(Settlement::Discarded, 60)),
+        ]);
+        assert_eq!(sids(&board.columns.to_resume), ["c"]);
+        assert_eq!(sids(&board.columns.done), ["a"]);
+        assert_eq!(board.columns.done[0].settled, Some(Settled::MarkedDone));
+        assert!(
+            board
+                .columns
+                .all()
+                .all(|c| c.session_id.as_deref() != Some("b"))
+        );
+    }
+
+    /// The author's own verdict wins over the subject's: discarded, the
+    /// session is gone even when its subject is archived.
+    #[test]
+    fn the_author_verdict_wins_over_the_archived_subject() {
+        let board = settled_board(&[(
+            "a",
+            SessionSettlement {
+                settled: Some((Settlement::Discarded, 60)),
+                subject_archived_at_ms: Some(60),
+            },
+        )]);
+        assert!(
+            board
+                .columns
+                .all()
+                .all(|c| c.session_id.as_deref() != Some("a"))
+        );
+    }
+
+    /// D-538: a verdict covers what the session did before it. Given before
+    /// the session's last event, it no longer holds, so the session is
+    /// placed by its sources; a live session always is.
+    #[test]
+    fn a_verdict_older_than_the_last_event_and_a_live_card_are_ignored() {
+        let board = settled_board(&[
+            ("c", by_author(Settlement::Discarded, 39)),
+            ("b", archived(29)),
+            ("l", by_author(Settlement::Discarded, 99)),
+        ]);
+        assert_eq!(sids(&board.columns.to_resume), ["c", "b", "a"]);
+        assert_eq!(sids(&board.columns.working), ["l"]);
+        assert!(board.columns.all().all(|c| c.settled.is_none()));
+    }
+
+    /// Taking a verdict back (no settlement) puts the card back where its
+    /// sources place it.
+    #[test]
+    fn no_settlement_leaves_the_card_where_its_sources_place_it() {
+        let board = settled_board(&[("a", SessionSettlement::default())]);
+        assert_eq!(sids(&board.columns.to_resume), ["c", "b", "a"]);
     }
 
     #[test]

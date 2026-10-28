@@ -69,6 +69,7 @@ function card(overrides: Partial<Card> = {}): Card {
     attach_available: false,
     subject: null,
     scene: null,
+    settled: null,
     ...overrides,
   };
 }

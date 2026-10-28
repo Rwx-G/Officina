@@ -27,6 +27,8 @@
     "allow-confirm-triage",
     "allow-evaluate-triage-model",
     "allow-set-triage-model",
-    "allow-set-auto-archive"
+    "allow-set-auto-archive",
+    "allow-settle-session",
+    "allow-list-discarded"
   ]
 }

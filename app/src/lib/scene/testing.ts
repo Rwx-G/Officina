@@ -56,6 +56,7 @@ export function card(key: string, zone: Zone, o: CardOptions = {}): Card {
     started_at_ms: o.started === undefined ? 0 : o.started,
     attach_available: false,
     subject: null,
+    settled: null,
     scene: {
       zone,
       waiting_since_ms: null,

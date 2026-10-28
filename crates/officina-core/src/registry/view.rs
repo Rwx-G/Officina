@@ -302,6 +302,21 @@ pub struct SessionView {
     pub card: Option<LiveCard>,
 }
 
+/// A session the author discarded from the board, as the archived list
+/// shows it, with a way to restore it (story 4.15, D-536): its name when
+/// `claude agents` gave one, else its latest prompt, untrusted text shown as
+/// text.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct DiscardedSession {
+    pub session_id: String,
+    pub project: String,
+    pub name: Option<String>,
+    pub prompt: Option<String>,
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub discarded_at_ms: i64,
+}
+
 /// The latest excerpts a subject keeps.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]

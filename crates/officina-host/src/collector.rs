@@ -8,7 +8,9 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use officina_core::agents::{AgentRecord, parse_agents};
-use officina_core::board::{Board, BoardInput, ContractView, ProjectRule, Staleness, build_board};
+use officina_core::board::{
+    Board, BoardInput, ContractView, ProjectRule, SessionSettlement, Staleness, build_board,
+};
 use officina_core::contract::{
     HookSightings, check_agents, hook_missing_after, hook_not_observed_after,
 };
@@ -227,6 +229,8 @@ pub struct Collector {
     registry: Option<RegistryReport>,
     /// The subject of each filed session, from the same holder (AD-54).
     subjects: BTreeMap<String, SubjectRef>,
+    /// What settles each ended session, from the same holder (story 4.15).
+    settlements: BTreeMap<String, SessionSettlement>,
     /// What the ingested event lines said about the hook payloads, kept
     /// until the running version and its record are known (AD-56).
     hook_sightings: HookSightings,
@@ -287,6 +291,7 @@ impl Collector {
             known_projects: KnownProjectsKeeper::default(),
             registry: None,
             subjects: BTreeMap::new(),
+            settlements: BTreeMap::new(),
             hook_sightings: HookSightings::default(),
             triage_base_env: std::sync::Arc::new(Vec::new()),
             last_scene: RefCell::new(BTreeMap::new()),
@@ -316,6 +321,13 @@ impl Collector {
     /// not be read.
     pub fn set_subjects(&mut self, subjects: BTreeMap<String, SubjectRef>) {
         self.subjects = subjects;
+    }
+
+    /// Records what settles each ended session, which moves the next
+    /// board's cards out of To resume (story 4.15); empty when the registry
+    /// could not be read.
+    pub fn set_settlements(&mut self, settlements: BTreeMap<String, SessionSettlement>) {
+        self.settlements = settlements;
     }
 
     /// True when no prompt or answer text may be kept: the environment or
@@ -540,6 +552,7 @@ impl Collector {
             approvals: board_approvals(&self.relay, now_ms, &mut |dir| self.trees.fingerprint(dir)),
             registry: self.registry.clone(),
             subjects: self.subjects.clone(),
+            settlements: self.settlements.clone(),
             alert_after_minutes: floor_file.map(FloorFile::alert_after_minutes),
             previous_scene: self.last_scene.borrow().clone(),
         };

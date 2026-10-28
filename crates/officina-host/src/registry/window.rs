@@ -8,14 +8,14 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use officina_core::agents::AgentRecord;
-use officina_core::board::{Board, ProjectRule};
+use officina_core::board::{Board, ProjectRule, SessionSettlement};
 use officina_core::ipc::{IpcError, IpcErrorCode};
 use officina_core::registry::confirm::{AuthorAction, ConfirmItem, ItemAnswer};
 use officina_core::registry::dry_run::DryRunState;
 use officina_core::registry::fold::{AgentsChanges, AgentsSnapshot};
 use officina_core::registry::model::{EnableRefusal, ModelEnv};
 use officina_core::registry::types::{RegistryReport, RegistryState, SubjectRef};
-use officina_core::registry::view::{RegistryView, SubjectView, unread_view};
+use officina_core::registry::view::{DiscardedSession, RegistryView, SubjectView, unread_view};
 
 use super::ingest::{IngestContext, IngestReport};
 use super::read::{self, Reader};
@@ -101,6 +101,13 @@ impl WindowRegistry {
     /// [`WindowRegistry::failed`] says, so the report names it.
     pub fn card_subjects(&mut self) -> BTreeMap<String, SubjectRef> {
         self.on_writer(|writer| Ok(read::card_subjects(&writer.conn)?))
+            .unwrap_or_default()
+    }
+
+    /// What settles each ended session, by session id, while the registry
+    /// is writable; empty otherwise (story 4.15), as [`Self::card_subjects`].
+    pub fn card_settlements(&mut self) -> BTreeMap<String, SessionSettlement> {
+        self.on_writer(|writer| Ok(read::card_settlements(&writer.conn)?))
             .unwrap_or_default()
     }
 
@@ -241,6 +248,25 @@ impl WindowRegistry {
         let read = match &self.slot {
             Slot::Writable(writer) => read::archived(&writer.conn, board),
             Slot::ReadOnly(reader) => reader.archived(board),
+            Slot::Unavailable(_) | Slot::Network => return Err(self.not_writable()),
+        };
+        match read {
+            Ok(listed) => {
+                self.last_error = None;
+                Ok(listed)
+            }
+            Err(error) => {
+                Err(self.access_failed(&RegistryError::from(error), IpcErrorCode::ReadFailed))
+            }
+        }
+    }
+
+    /// The sessions the author discarded from the board, the latest first
+    /// (story 4.15), for the archived list's Restore.
+    pub fn discarded(&mut self) -> Result<Vec<DiscardedSession>, IpcError> {
+        let read = match &self.slot {
+            Slot::Writable(writer) => read::discarded(&writer.conn),
+            Slot::ReadOnly(reader) => reader.discarded(),
             Slot::Unavailable(_) | Slot::Network => return Err(self.not_writable()),
         };
         match read {

@@ -24,6 +24,8 @@ const COMMANDS: &[&str] = &[
     "evaluate_triage_model",
     "set_triage_model",
     "set_auto_archive",
+    "settle_session",
+    "list_discarded",
 ];
 
 fn main() {

@@ -2,6 +2,7 @@
 // the app and the e2e tests, which type-check under different tsconfigs.
 import type { Board } from "./lib/generated/Board";
 import type { AuthorRefusal } from "./lib/generated/AuthorRefusal";
+import type { DiscardedSession } from "./lib/generated/DiscardedSession";
 import type { FocusOutcome } from "./lib/generated/FocusOutcome";
 import type { ItemOutcome } from "./lib/generated/ItemOutcome";
 import type { RegistryView } from "./lib/generated/RegistryView";
@@ -23,6 +24,8 @@ declare global {
     __officinaRegistry?: RegistryView | null;
     /** What `list_archived` answers. */
     __officinaArchived?: SubjectView[];
+    /** What `list_discarded` answers (story 4.15). */
+    __officinaDiscarded?: DiscardedSession[];
     /** Author commands the backend refuses, with the rule that refuses. */
     __officinaRefuse?: Record<string, AuthorRefusal>;
     /** Sets the registry view and emits `registry://updated`. */

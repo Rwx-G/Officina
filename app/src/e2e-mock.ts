@@ -20,6 +20,7 @@ const AUTHOR_COMMANDS = [
   "file_sessions",
   "archive_subject",
   "reopen_subject",
+  "settle_session",
 ];
 
 export function installE2eMock(): void {
@@ -59,6 +60,8 @@ export function installE2eMock(): void {
           return window.__officinaRegistry ?? null;
         case "list_archived":
           return window.__officinaArchived ?? [];
+        case "list_discarded":
+          return window.__officinaDiscarded ?? [];
         case "confirm_triage":
           return confirmTriage((args as { items: ConfirmItem[] }).items);
         case "evaluate_triage_model":
