@@ -52,6 +52,12 @@ project uses [Semantic Versioning](https://semver.org/).
   default and `officina doctor` warns with the key and its line. The
   project colour `plum` joins the palette, so a project without a colour
   may get it.
+- Dark theme (v0.4, in progress): the whole window, board and scene alike,
+  follows the system's dark or light theme, and a header control cycles
+  Auto, Light and Dark, kept for the next start and applied before the
+  window draws. The header logo follows the theme. An alert never changes
+  it. The colours the error banner, the broken-contract text, the column
+  washes and the session file's shadow hard-coded are tokens now.
 - `officina hook`: records Claude Code hook events into a local, append-only
   buffer, always exits 0, p95 around 20 ms.
 - `officina quota write [--tee]`: records the account's rate limits from a

@@ -515,6 +515,10 @@ While anyone is in alert, a band under the header, in every view, names the firs
 
 When Claude Code's session list cannot be read, Officina keeps the last known alerts rather than clearing them: the band ends with "Last known state: data unknown." and the title says "data unknown", until fresh data places each session again.
 
+### Light and dark
+
+The whole window, board and scene alike, follows Windows' light or dark theme. The theme control at the right of the header's buttons cycles **Auto** (the system's theme, shown in brackets), **Light** and **Dark**; your choice is kept for the next start and applied before the window draws, so a dark window never flashes light. The header logo follows the theme. An alert never changes it.
+
 ## Command line
 
 | Command | Purpose |
