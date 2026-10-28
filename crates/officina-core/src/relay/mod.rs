@@ -39,6 +39,10 @@ pub(crate) mod fixtures {
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+/// At the crate root since v0.3 (D-42); re-exported so the relay's call
+/// sites keep their paths.
+pub use crate::{closed_enum, sha256_hex};
+
 /// The Officina home's directory name under the user's home, when
 /// `OFFICINA_HOME` does not set another one (AD-7).
 pub const HOME_DIR_NAME: &str = ".officina";
@@ -92,30 +96,8 @@ impl StreamHash {
 
     /// The hash of every byte so far, lowercase hex. The stream can go on.
     pub fn hex(&self) -> String {
-        hex(&self.0.clone().finalize())
+        crate::hex(&self.0.clone().finalize())
     }
-}
-
-fn hex(digest: &[u8]) -> String {
-    use std::fmt::Write;
-    digest
-        .iter()
-        .fold(String::with_capacity(64), |mut hex, byte| {
-            let _ = write!(hex, "{byte:02x}");
-            hex
-        })
-}
-
-/// SHA-256 of `bytes`, lowercase hex.
-///
-/// ```
-/// assert_eq!(
-///     officina_core::relay::sha256_hex(b""),
-///     "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-/// );
-/// ```
-pub fn sha256_hex(bytes: &[u8]) -> String {
-    hex(&Sha256::digest(bytes))
 }
 
 #[cfg(test)]

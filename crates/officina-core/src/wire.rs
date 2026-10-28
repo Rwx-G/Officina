@@ -33,7 +33,7 @@ const fn same(a: &str, b: &str) -> bool {
 }
 
 /// How many bytes `variant` takes once spelled in `case`.
-pub(crate) const fn len(variant: &str, case: &str) -> usize {
+pub const fn len(variant: &str, case: &str) -> usize {
     let bytes = variant.as_bytes();
     let mut n = bytes.len();
     if separator(case).is_some() {
@@ -49,7 +49,7 @@ pub(crate) const fn len(variant: &str, case: &str) -> usize {
 }
 
 /// `variant` spelled in `case`, `N` being [`len`] of the same arguments.
-pub(crate) const fn spell<const N: usize>(variant: &str, case: &str) -> [u8; N] {
+pub const fn spell<const N: usize>(variant: &str, case: &str) -> [u8; N] {
     let bytes = variant.as_bytes();
     let separator = separator(case);
     let upper = same(case, "UPPERCASE");
@@ -77,7 +77,7 @@ pub(crate) const fn spell<const N: usize>(variant: &str, case: &str) -> [u8; N] 
 
 /// The spelled bytes as text; a variant name is ASCII, so this cannot fail
 /// once the build passes.
-pub(crate) const fn text(bytes: &'static [u8]) -> &'static str {
+pub const fn text(bytes: &'static [u8]) -> &'static str {
     match core::str::from_utf8(bytes) {
         Ok(text) => text,
         Err(_) => panic!("closed_enum!: a variant name that is not ASCII"),
