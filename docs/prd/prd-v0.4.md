@@ -2,14 +2,17 @@
 title: "PRD: Officina v0.4 - The Scene"
 author: Rwx-G
 date: 2026-10-28
-status: approved 2026-10-28 (owner delegated design decisions), with the amendments of ../architecture-v0.4.md section 5 applied
+status: approved 2026-10-28 (owner delegated design decisions), with the amendments of ../architecture-v0.4.md section 5 applied; reworked 2026-10-28 after the owner approved the interactive scene prototype v2 (Change Log)
 inputs:
   - (framing, not published)
   - (requirement challenge, not published)
+  - (interactive scene prototype v2, not published: _bmad-output/planning-artifacts/design/prototype/interactive/, git-ignored)
   - prd/prd-v0.1.md
   - prd/prd-v0.2.md
   - prd/prd-v0.3.md
   - architecture-spine.md
+  - https://code.claude.com/docs/en/hooks
+  - https://v2.tauri.app/reference/javascript/api/namespacewindow/
 ---
 
 # PRD: Officina v0.4 - The Scene
@@ -19,53 +22,80 @@ inputs:
 Scopes v0.4, Epic 4: the workshop the framing promised (need 1, principle 10,
 section 8). v0.1 to v0.3 hold: the scene is a new way to look at the board,
 relay and registry data, never a new source of truth. Revised after a
-requirement challenge: a static mock comes first and fixes the visual
-language; every waiting session is visible and actionable; the layout never
-moves without a state change; the board stays the default until the scene
-has proven itself in use.
+requirement challenge: a visual reference comes first; every waiting session
+is visible and actionable; nothing moves without a state change; the board
+stays the default until the scene has proven itself in use.
+
+Reworked on 2026-10-28 after two rounds on an interactive prototype the owner
+approved ("v2 is better, we can go with it; it will surely need adjusting over
+time, but the base is better"): the workshop becomes a small company with a
+reception, a decision office, one office per project, an alert room and a
+lounge; employees walk along corridors; a blocked session on an important
+project raises an alert, in the window and on the taskbar button; sub-agents
+appear beside their lead when Claude Code's signals allow it. The scene still
+shows only what Officina really sees (FR-13).
 
 ## 1. Vision
 
 The board answers "who needs me" in two seconds; the scene makes the same
-answer pleasant to live with all day. Each session is an employee of the
-workshop; **where an employee stands says what they are doing**. Nothing moves
-unless a state changed; the only animation worth noticing is the amber halo of
-someone newly waiting for the author, and even that settles after two
-minutes.
+answer pleasant to live with all day. Each session is an employee of a small
+company; **where an employee stands says what they are doing**: at reception
+before its first prompt, at its desk while it works, queued at the decision
+office while it waits for the author, in the lounge when its round is
+finished, in the alert room when it is really blocked on something that
+matters. Employees walk from one place to the next when, and only when, their
+state changes; then everything is still. The only motion worth noticing is the
+amber halo of someone newly waiting, and it settles after two minutes.
 
 ## 2. Target User
 
 ### 2.1 Jobs To Be Done
 
-- **J1 - Glance.** On a second screen I see how many are waiting in the
-  antechamber and who works where, without reading.
+- **J1 - Glance.** On a second screen I see how many queue at the decision
+  office, whether anyone is in the alert room, and who works where, without
+  reading.
 - **J2 - Act from the scene.** Clicking an employee shows their file and offers
   the same actions as a board card.
 - **J3 - Stay focused.** One gesture hides the scene and leaves only what
   waits for me; nothing moves.
 - **J4 - Day and night.** The workshop follows the system theme.
+- **J5 - Be warned without being interrupted.** With the window behind my
+  editor, the taskbar button tells me how many wait and turns red when one is
+  really blocked; no toast, no sound.
 
 ### 2.2 Key User Journeys
 
-1. **Morning.** Three project workshops with employees at their desks; two in
-   the antechamber; the to-resume shelf holds two subject folders; the relay
-   lamp is off.
-2. **Act.** A click on an employee in the antechamber opens the file; "Bring to
-   front" brings the editor window forward.
-3. **Busy hour.** Five sessions wait: all five sit in the antechamber in board
-   order, the oldest first; keys 1 to 5 act on them as on the board.
-4. **Focus.** The focus key hides the scene; the list of Needs you and Your
+1. **Morning.** Three project offices with employees at their desks; one new
+   session waits at reception for its first prompt; two queue at the decision
+   office; one finished its round and sits in the lounge, its desk keeping an
+   empty chair with its number.
+2. **Act.** A click on the first employee of the queue opens the file; "Bring
+   to front" brings the editor window forward. The author answers in that
+   terminal; the employee walks back to its desk.
+3. **Busy hour.** Five sessions wait: all five queue in board order, the
+   oldest first, numbered; keys 1 to 5 act on them as on the board.
+4. **Alert.** A session of a project marked high priority hits a permission
+   prompt: it walks to the alert room, the header band names it, the beacon
+   turns on, the taskbar badge turns red and the button flashes once. Another
+   session that has waited ten minutes joins it.
+5. **Focus.** The focus key hides the scene; the list of Needs you and Your
    turn sessions remains, Working shown as a count.
 
 ## 3. Glossary
 
-- **Scene** - the isometric drawing of the workshop, generated by code from
-  the board, relay and registry payloads; no third-party artwork.
-- **Room** - an area with a role: the antechamber (Needs you), one workshop per
-  project (Working and Your turn), the to-resume shelf, the archive; beyond 8
-  projects, 'More workshops'.
-- **Employee** - the figure of one live session, drawn in neutral tokens with a
-  collar in its project colour.
+- **Scene** - the dimetric drawing of the company, generated by code from the
+  board, relay and registry payloads; no third-party artwork.
+- **Zone** - a room with a role: reception (arriving), the decision office
+  (Needs you and pending approvals), one office per project (Working), the
+  alert room (alerted waits), the lounge (Your turn). Beyond 8 projects, the
+  eighth office is 'More offices'.
+- **Employee** - the figure of one live session, a lead wearing a cap in its
+  project colour; a **sub-agent** is a smaller figure without a cap beside its
+  lead (FR-12).
+- **Walk** - an employee's move between two places along the corridors, with a
+  walk cycle; **glide** is the "walking off" alternative.
+- **Alert** - a waiting session on a high-priority project, or waiting for at
+  least the escalation threshold (FR-10).
 - **File** - the side panel describing one employee, with actions.
 - **Sessions area** - the part of the window showing sessions, in one of three
   modes: Board, Scene, Focus. Subjects, Triage and Relay remain separate
@@ -73,112 +103,196 @@ minutes.
 
 ## 4. Features
 
-### 4.0 Slice 0: the static mock
+### 4.0 Slice 0: the visual reference and the checks
 
-#### FR-0: Visual language fixed first
-Before any scene code, a static SVG mock rendered from three real `board
---json` fixtures (1 project and 2 sessions; 4 projects and 10 sessions; 8
-projects, 12 sessions and 5 Needs you), in light and dark themes, fixes: tile
-size, employee height and construction from tokens, the cue distinguishing
-Working from Your turn that survives greyscale, room plaques, the antechamber
-rows, the shelf, the minimum window size and the scaling rule. The mock is
-published for the owner; the stories implement it. Approved mock: tile 72 x 36
-logical px, logical canvas 1061 x 672, figure 24 x 58 with a 48 x 48 hit area,
-plaques capped at 140 px, scale clamped to [44/48, 1.6], minimum sessions area
-973 x 616 CSS px, below which the scene scrolls.
+#### FR-0: Visual language and checks first
+The interactive prototype v2 approved on 2026-10-28 fixes the visual language:
+zones and their furniture, the figure rig and its poses, the walk cycle, the
+lead's cap and the sub-agent figure, tickets and badges, the alert band and
+beacon, the taskbar badge, and the light and dark tokens. Its numbers are
+ported, not retyped, and are adjusted by constant edits as use requires.
+Before the stories that depend on them, three checks run on the workstation
+and are recorded in the research notes: what `SubagentStart` and
+`SubagentStop` carry (FR-12); the taskbar overlay badge and attention request
+from the real window on Windows 11 (FR-11); the CPU cost of walking (FR-9). A
+failed check changes the FR it names first.
 
 ### 4.1 The scene
 
-#### FR-1: Rooms with stable places
-Workshops take slots in floor-file order, then in order of first appearance;
-the order is remembered on the machine, so a project with a session at the
-next start keeps its slot. An empty workshop keeps its slot, dimmed, until
-restart. Nothing reorders by activity. Beyond 8 projects, the eighth slot
-becomes 'More workshops', which lists the remaining projects' employees by
-name. The to-resume shelf shows subjects to resume (v0.3) as folders; the
-archive shows the count of archived subjects. Until the registry ships, the
-shelf shows the board's To resume column and the cabinet counts the board's
-Done sessions of the last 24 hours.
+#### FR-1: Zones with stable places
+The floor has a reception, a decision office, an alert room, a lounge and one
+office per project. Offices take slots in floor-file order, then in order of
+first appearance; the order is remembered on the machine, so a project with a
+session at the next start keeps its office. Four offices fit the base floor;
+the fifth to eighth projects each add an office, in a column of two added to
+the right, and the floor never shrinks until restart. An empty office keeps
+its slot, dimmed, until restart. Nothing reorders by activity. Beyond 8
+projects, the eighth office becomes 'More offices', which lists the remaining
+projects' employees by name. Every room is furnished; the furniture of each
+office varies by a seed derived from its slot, the same on every start.
 
 #### FR-2: Every waiting session is visible
-Every Needs you session sits in the antechamber in board order, oldest first,
-wearing its number, so keys 1 to 9 match the board: rows of three, up to nine
-figures. A register beside the antechamber names them in the same order;
-beyond nine, it names the others, each focusable and actionable. A waiting
-session keeps its desk, which shows its number. Working employees sit at their
-desk with their back turned and their screen lit; Your turn employees face the
-author with a raised hand inside an amber ring (outlined, as on the board); an
-unknown state shows a question mark.
+Every Needs you session queues at the decision office in board order, oldest
+first, wearing its number, so keys 1 to 9 match the board; a session whose
+relay approval is pending queues after them, with an unnumbered approval
+ticket. Beyond the queue's places, the register beside the office names the
+others, each focusable and actionable. In v0.4 the decider is the author: the
+office's plaque reads "Decisions: you". A waiting session keeps its desk, whose
+empty chair shows its number. Working employees sit at their desk with their
+back turned and their screen lit; Your turn employees sit in the lounge facing
+the author with a raised hand inside an amber ring, wearing their desk number,
+which the empty chair at their desk repeats; a session at reception stands
+with its back turned toward the counter. Missing or stale data shows as a
+question mark on an employee that stays where it was: never moved to the
+lounge, never shown as done or idle.
 
 #### FR-3: Only state changes move
 An employee changes place or pose only when its own state changes, or when a
-seat ahead of it in the antechamber frees up, so board order holds. No idle
-motion, no sound. The halo of a newly waiting employee breathes for 2 minutes,
-all halos in one shared phase, then stays steady; under
-`prefers-reduced-motion` halos are steady from the start; focus mode has no
-halo. Waiting is carried by place and by the attention border colour, never by
-the halo alone.
+place ahead of it in a queue frees up, so board order holds. A change of
+place is a walk along the corridors, with a natural walk cycle; with walking
+off, the employee glides to its new place in under 400 ms; under the system's
+reduced-motion setting it is placed at once. Once everyone has arrived,
+nothing moves: no idle motion, no sound. The halo of a newly waiting employee
+breathes for 2 minutes, all halos in one shared phase, then stays steady;
+under reduced motion halos are steady from the start; focus mode has no halo.
+Waiting is carried by place and by the attention colour, never by the halo
+alone.
 
-#### FR-4: Instruments
-The relay lamp sits at the workshop door (unlit: relay stopped; blue: running,
-nothing pending; amber with the count: an approval or a catalogue change
-waits; drawn only when the relay exists). The quota windows appear as two
-labelled dials on the wall, "5 h" and "week", each with its value and
-explanation in text on hover and focus, mirroring the header gauges.
+#### FR-4: Instruments in the header
+The scene draws no instruments. The quota gauges (v0.1) and the relay chip and
+approvals pill (v0.2) stay in the header, visible in every mode. Under the
+scene, one line counts the sessions to resume and the sessions done in the
+board's window, each count opening Board mode.
 
 #### FR-5: Files and actions
 Clicking or keyboard-activating an employee opens their file: name, project,
-subject, state, waiting reason, last prompt, last answer head and tail, and
-the card's actions. Escape closes it.
+subject, state, zone, waiting reason and since when, the alert's cause, last
+prompt, last answer head and tail, the sub-agents beside it, and the card's
+actions. Escape closes it.
 
 #### FR-6: Keyboard and accessibility rules
-Tab order: antechamber in board order, workshops by slot, desks front to back,
-shelf, archive, instruments. Arrow keys move within a room; Enter opens the
-file with Bring to front focused, so Enter twice does what Enter does on a
-board card; keys 1 to 9 act as on the board. Each figure has an unoccluded
-hit area of at least 44 by 44 px and an accessible name stating its session,
-project and state. Identity never rests on colour alone. Contrast targets of
-the tokens hold in both themes.
+Tab order: reception, the decision office's queue in board order, the
+register, the alert room, offices by slot with desks front to back, the
+lounge, More offices, the line under the scene. Arrow keys move within a zone;
+Enter opens the file with Bring to front focused, so Enter twice does what
+Enter does on a board card; keys 1 to 9 act as on the board. Each employee has
+an unoccluded hit area of at least 44 by 44 px at its place and an accessible
+name stating its session, project, zone and state. A walking employee is
+reached at the place it walks to. Identity never rests on colour alone.
+Contrast targets of the tokens hold in both themes.
 
 ### 4.2 Modes and themes
 
 #### FR-7: Modes of the sessions area
 Board, Scene and Focus, switched by `m` (Board and Scene), `f` (Focus on,
 then back to the previous mode) and a header control; these keys act in the
-sessions area only, the choice remembered per machine. Board stays the
-default; Scene becomes the default only after the success metric of section 7
-is met. Focus lists Needs you and Your turn, with Working as a count, and no
-animation.
+sessions area only, the choice remembered per machine. A second header control
+turns walking off and on, remembered per machine, on by default. Board stays
+the default; Scene becomes the default only after the owner has chosen it for
+10 working days (section 7). Focus lists Needs you and Your turn, with Working
+as a count, and no animation.
 
 #### FR-8: Dark theme
 A dark palette derived from the framing's tokens (same roles, contrasts
-recomputed), following the system theme, with a manual override.
+recomputed), following the system theme, with a manual override. An alert
+never changes the theme.
 
 #### FR-9: Performance
-The halo animates only `opacity`, on its own compositing layer; the scene
-re-renders only when its input payload changed; no timer drives drawing.
-Measured on the workstation over 10 minutes with 10 employees and 5 waiting,
-in % of the machine as v0.1 measures idle CPU, with the core count and display
-refresh rate recorded: under 1 %; above it, halos are steady from the start.
-The board halo follows the same rules, two-minute limit included.
+The halo animates only `opacity`, on its own compositing layer. The scene
+re-renders only when its input payload changed, and a frame loop runs only
+while an employee walks, glides or fades; when every employee has arrived it
+stops. No CSS animation runs inside a figure. Measured on the workstation over
+10 minutes with 10 employees and 5 waiting, plus a replay of state changes at
+a busy day's rate, in % of the machine as v0.1 measures idle CPU, with the
+core count and display refresh rate recorded: under 1 %. Above it, halos are
+steady from the start; if walking alone exceeds it, walking ships off by
+default and stays available. The board halo follows the same rules, two-minute
+limit included.
+
+### 4.3 Alerts, the taskbar and sub-agents
+
+#### FR-10: Alert
+The floor file gains a per-project priority (`priority = "high"`, default
+normal) and an escalation threshold in minutes (default 10). A waiting session
+(Needs you, or a pending relay approval) is in alert when its project is high
+priority, or when it has waited at least the threshold since it started
+waiting; a wait whose start is unknown never escalates by time. An alerted
+session walks to the alert room, keeps its number, and leaves it when it stops
+waiting. While anyone is in alert, a band under the header, in every view and
+mode, names the first alerted session, its project, its reason and cause, and
+how many more; the alert room's beacon is lit. The theme never changes. Your
+turn sessions never raise an alert.
+
+#### FR-11: Taskbar, no toast
+Officina shows no OS notification. The taskbar button carries an overlay badge
+with the waiting count (sessions and approvals, as the title counts them,
+"9+" above nine), amber, red while anyone is in alert; with nothing waiting it
+carries none. The button flashes when a session newly enters alert, until the
+window is focused. All of it through Tauri 2's built-in window API, with no
+new dependency (verified, architecture AD-174).
+
+#### FR-12: Sub-agents, only on confirmed signals
+If the Slice 0 check confirms that Claude Code's `SubagentStart` and
+`SubagentStop` hook events identify the session that spawned the sub-agent,
+the doctor's hooks block gains both events, and each running sub-agent is a
+smaller figure without a cap standing beside its lead's desk, from its start
+to its stop. If the check fails, nothing is drawn for sub-agents and nothing
+is guessed from other data.
+
+#### FR-13: What the scene shows, and from where
+v0.4 shows only what Officina sees: the board's columns and badges (from
+`claude agents` and the hook events `SessionStart`, `UserPromptSubmit`,
+`Notification` `permission_prompt` and `elicitation_dialog`, `Stop`,
+`SessionEnd`), the relay's pending approvals, and, if FR-12 holds,
+`SubagentStart` and `SubagentStop`. `PreToolUse` is not recorded (the hook
+sees it only for gated tools, and recording every tool call costs a process
+start per call), so a working screen is lit steadily, never per tool. The
+scene never classifies: it places the board's sessions. No orchestrator
+figure, no briefing at reception, no helpers in v0.4.
 
 ## 5. Non-Goals (Explicit)
 
-- The orchestrator's room and the meeting room (drawn in v0.5).
-- Several floors at once; sound, voice, customisation, image avatars.
+- The orchestrator figure, its briefing at reception, its screens and
+  whiteboard, and answers it proposes (v0.5); the critic and research helpers
+  (v0.7).
+- Desktop notifications, toasts, sound; any theme change on an alert.
+- Per-tool screen activity (FR-13).
+- Several floors at once; customisation, image avatars, voice.
 
 ## 6. MVP Scope
 
 ### 6.1.1 Delivery order
-- Slice 0: FR-0 mock.
-- Slice A: FR-1, FR-2, FR-3, FR-5, FR-6, FR-7, FR-9.
-- Slice B: FR-4 instruments, FR-8 dark theme.
+- Slice 0: FR-0 (the approved prototype and the three checks).
+- Slice A: FR-1 to FR-7, FR-9, FR-10, FR-11, FR-13.
+- Slice B: FR-8 dark theme, FR-12 sub-agents (only if its check passed).
 
 ## 7. Success Metrics
 
 | Metric | Target | How measured |
 |---|---|---|
-| Truthful motion | no change in the scene while payloads are unchanged | e2e: clock installed and advanced 150 s, the same board pushed again, a mutation observer on the scene element: zero mutations; a changed board then produces some |
-| Idle CPU | under 1 % with 10 employees and 5 halos | workstation, AD-71 protocol, both units recorded |
+| Truthful motion | once every employee has arrived, no change in the scene while payloads are unchanged | e2e: clock installed, the scene settled, advanced 150 s, the same board pushed again, a mutation observer on the scene element: zero mutations; a changed board then produces some |
+| Stable figures | a walking employee keeps one node, one pose and one view per frame, a continuous position, and no CSS animation inside a figure | e2e frame stepping on a walk, as the prototype's flicker check |
+| Idle CPU | under 1 % with 10 employees, 5 halos and a busy day's walks | workstation, AD-71 protocol as amended, both units recorded |
+| Alert | an alert reaches the band and the taskbar badge within 1 s of its threshold, with no `claude` spawn | core vectors and a host test on the recompute; manual check of the badge and flash recorded |
 | Readability | on 5 fixtures, Needs you count and oldest waiting name read in under 2 s, as on the board | manual check recorded; e2e asserts both are present in the scene's text alternative |
 | Adoption | Scene chosen for 10 working days before it becomes the default | owner's use |
+
+## 8. Change Log
+
+- 2026-10-28 created and approved, with the architecture's section 5
+  amendments applied.
+- 2026-10-28 reworked after the owner approved the interactive scene prototype
+  v2 (epic-4-decisions.md D-460 to D-485; architecture-v0.4.md AD-167 to
+  AD-178 and the amendments of AD-59 to AD-72). Changed: section 0, section 1,
+  J1, journeys 1 to 4, the glossary (Zone, Walk, Alert replace Room and the
+  antechamber), FR-0 (the prototype replaces the static mock; three checks),
+  FR-1 (zones, offices per project, growth by column), FR-2 (the decision
+  office queue, the lounge, unknown in place), FR-3 (walking, walking off,
+  reduced motion), FR-4 (instruments stay in the header; the dials, the lamp,
+  the shelf and the cabinet leave the scene), FR-5, FR-6, FR-7 (walking
+  control), FR-8 (no theme change on alert), FR-9 (walking measured; a frame
+  loop only while someone moves), section 5, section 6, section 7. Added: J5,
+  journey 4, FR-10 (alert), FR-11 (taskbar), FR-12 (sub-agents, conditional),
+  FR-13 (signals). Moved: the orchestrator figure and the permissions design
+  to v0.5 (prd-v0.5.md section 9), the critic and research helpers to v0.7
+  (prd-v0.7.md section 9).
