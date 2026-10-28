@@ -33,12 +33,13 @@ use officina_core::relay::classes::{self, CHECK_VALID_MS, WAIT_RANGE_S};
 use officina_core::relay::credential::{cmdkey_line, target};
 use officina_core::relay::gate::{LIST_COMMAND, SHELL_TOOLS, ToolRule};
 use officina_core::relay::http::MAX_HTTP_TIMEOUT_S;
-use officina_core::relay::journal::JournalEntry;
+use officina_core::relay::journal::{JournalEntry, RefusalReason};
 use officina_core::relay::run::{BASH_TOOL_MAX_TIMEOUT_MS, one_line};
 use officina_core::relay::view::GATE_ERRORS_WINDOW_MS;
 
 use super::credential::{CredentialStore, StoreError, SystemCredentialStore};
 use super::home::{ApprovedState, RelayHome, load_relay_floor};
+use super::tree::TreeError;
 use super::{journal, tree};
 use crate::doctor::{Check, Level, check};
 
@@ -783,8 +784,18 @@ fn check_listing_checks(catalogue: &CanonicalCatalogue) -> Vec<Check> {
     checks
 }
 
-/// D-22, D-170: the projects with an action naming a check, and whether
-/// their code binds through a git fingerprint.
+/// The code `officina run` refuses with, as the journal writes it.
+fn refusal_code(reason: RefusalReason) -> String {
+    serde_json::to_value(reason)
+        .ok()
+        .and_then(|v| v.as_str().map(str::to_owned))
+        .unwrap_or_default()
+}
+
+/// D-22, D-170, D-173: the projects with an action naming a check, and
+/// whether their files bind: the fingerprint, with the `git` Git for Windows
+/// records in the registry. A git work tree whose files cannot be bound
+/// fails, since those actions then refuse; a folder outside git warns.
 fn tree_checks(catalogue: &CanonicalCatalogue, dirs: &BTreeMap<String, String>) -> Vec<Check> {
     catalogue
         .projects
@@ -800,27 +811,36 @@ fn tree_checks(catalogue: &CanonicalCatalogue, dirs: &BTreeMap<String, String>) 
         .map(|(name, project)| {
             let dir = dirs.get(name).unwrap_or(&project.path);
             let title = format!("relay tree {name}");
+            let refuses = |reason: RefusalReason, why: &TreeError| {
+                check(
+                    Level::Fail,
+                    &title,
+                    format!(
+                        "{dir} lies in a git work tree whose files cannot be bound ({why}): its actions naming a check refuse {}",
+                        refusal_code(reason)
+                    ),
+                )
+            };
             match tree::fingerprint(Path::new(dir)) {
-                Some(found) if found.untracked_by_size > 0 => check(
+                Ok(Some(found)) => check(
                     Level::Ok,
                     &title,
                     format!(
-                        "{dir} is a git work tree: its actions naming a check bind its code ({} files over 1 MiB by size only)",
-                        found.untracked_by_size
+                        "{dir} is a git work tree: its actions naming a check bind its {} tracked and unignored files, listed by {}",
+                        found.files,
+                        found.git.as_deref().unwrap_or("git")
                     ),
                 ),
-                Some(_) => check(
-                    Level::Ok,
-                    &title,
-                    format!("{dir} is a git work tree: its actions naming a check bind its code"),
-                ),
-                None => check(
+                Ok(None) => check(
                     Level::Warn,
                     &title,
                     format!(
-                        "{dir} is not in a git work tree, or git cannot run there: its actions naming a check bind their parameters only, not the code their check ran on"
+                        "{dir} is not in a git work tree: its actions naming a check bind their parameters only, not the files their check ran on"
                     ),
                 ),
+                Err(e @ TreeError::GitUnavailable(_)) => refuses(RefusalReason::GitUnavailable, &e),
+                Err(e @ TreeError::TooLarge(_)) => refuses(RefusalReason::TreeTooLarge, &e),
+                Err(e @ TreeError::Unreadable(_)) => refuses(RefusalReason::TreeUnreadable, &e),
             }
         })
         .collect()

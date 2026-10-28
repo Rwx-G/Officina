@@ -12,7 +12,6 @@ use officina_core::board::{Board, BoardInput, ContractView, ProjectRule, Stalene
 use officina_core::contract::check_agents;
 use officina_core::floor::{FloorFile, parse_floor, resolve_project_path};
 use officina_core::quota::{QuotaFile, parse_quota_file};
-use officina_core::relay::journal::TreeFingerprint;
 use serde::{Deserialize, Serialize};
 
 use crate::claude;
@@ -21,7 +20,7 @@ use crate::paths::{ENV_FLOOR, Paths, env_path, excerpts_disabled_by_env};
 use crate::relay::approvals::board_approvals;
 use crate::relay::credential::OwnedStore;
 use crate::relay::home::RelayHome;
-use crate::relay::tree;
+use crate::relay::tree::{self, TreeResult};
 
 /// How long the window trusts a project's tree fingerprint before it runs
 /// `git` again for an approval card's dry run (D-170): boards are rebuilt on
@@ -120,7 +119,7 @@ pub struct Collector {
     contract: ContractView,
     /// Tree fingerprints of the projects with a pending dry run, by folder,
     /// with when they were taken (D-170).
-    trees: RefCell<BTreeMap<PathBuf, (Instant, Option<TreeFingerprint>)>>,
+    trees: RefCell<BTreeMap<PathBuf, (Instant, TreeResult)>>,
 }
 
 impl Collector {
@@ -297,7 +296,7 @@ impl Collector {
 
     /// The tree fingerprint of `dir`, taken again once [`TREE_RECHECK`] has
     /// passed.
-    fn tree_of(&self, dir: &Path) -> Option<TreeFingerprint> {
+    fn tree_of(&self, dir: &Path) -> TreeResult {
         let mut trees = self.trees.borrow_mut();
         if let Some((at, found)) = trees.get(dir)
             && at.elapsed() < TREE_RECHECK

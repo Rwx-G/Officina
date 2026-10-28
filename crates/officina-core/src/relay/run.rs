@@ -222,6 +222,38 @@ impl Refusal {
         )
     }
 
+    /// The project is a git work tree and no `git` is installed where Git
+    /// for Windows records it, so its files cannot be bound (D-173).
+    pub fn git_unavailable(project: &str, why: &str) -> Refusal {
+        Refusal::new(
+            RefusalReason::GitUnavailable,
+            &format!(
+                "the project is a git work tree and {why}, so its files cannot be bound; the author checks it with `officina doctor`"
+            ),
+            Some(project),
+        )
+    }
+
+    /// The work tree is past a limit of the fingerprint (D-173).
+    pub fn tree_too_large(project: &str, why: &str) -> Refusal {
+        Refusal::new(
+            RefusalReason::TreeTooLarge,
+            &format!("the project's work tree is too large to bind: {why}"),
+            Some(project),
+        )
+    }
+
+    /// A file of the work tree cannot be read (D-173).
+    pub fn tree_unreadable(project: &str, why: &str) -> Refusal {
+        Refusal::new(
+            RefusalReason::TreeUnreadable,
+            &format!(
+                "a file of the project's work tree cannot be read, so its content cannot be bound: {why}"
+            ),
+            Some(project),
+        )
+    }
+
     /// The code changed since the dry run the approval was given for; the
     /// approval stays for a later call on the same code (D-170).
     pub fn check_not_satisfied(project: &str, check: &str) -> Refusal {
@@ -895,7 +927,8 @@ program = \"C:/path/to/tool.exe\"
         let now = 1_793_102_400_000;
         let tree = TreeFingerprint {
             sha256: crate::relay::sha256_hex(b"tree"),
-            untracked_by_size: 0,
+            files: 0,
+            git: None,
         };
         let refusal = check_step(&apply, &group, &[], Some(&tree), now).unwrap_err();
         assert_eq!(refusal.reason, RefusalReason::CheckRequired);

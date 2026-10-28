@@ -43,6 +43,7 @@ use super::credential::{CredentialStore, Secret, SystemCredentialStore};
 use super::home::{ApprovedState, RelayHome, load_relay_floor, system_dir};
 use super::http::{self, HttpOutcome};
 use super::journal::JournalLock;
+use super::tree::TreeError;
 use super::{approvals, journal, tree};
 use crate::files::now_ms;
 
@@ -230,10 +231,22 @@ pub fn run_with(
         Ok(plan) => plan,
         Err(refusal) => return refuse(home, &refusal, action, params, session_id),
     };
-    let tree = plan
-        .binds_tree
-        .then(|| tree::fingerprint(Path::new(&plan.project_dir)))
-        .flatten();
+    let tree = if plan.binds_tree {
+        match tree::fingerprint(Path::new(&plan.project_dir)) {
+            Ok(found) => found,
+            Err(e) => {
+                return refuse(
+                    home,
+                    &tree_refusal(&plan.project, &e),
+                    action,
+                    params,
+                    session_id,
+                );
+            }
+        }
+    } else {
+        None
+    };
     let mut check_run_id = None;
     if plan.check.is_some() {
         let now = now_ms();
@@ -290,6 +303,16 @@ pub fn run_with(
         secret,
         out,
     )
+}
+
+/// The refusal for a work tree that cannot be bound (D-173).
+fn tree_refusal(project: &str, error: &TreeError) -> Refusal {
+    let why = error.to_string();
+    match error {
+        TreeError::GitUnavailable(_) => Refusal::git_unavailable(project, &why),
+        TreeError::TooLarge(_) => Refusal::tree_too_large(project, &why),
+        TreeError::Unreadable(_) => Refusal::tree_unreadable(project, &why),
+    }
 }
 
 /// The secret of the credential an HTTP action's plan carries, read from
@@ -434,10 +457,14 @@ fn consume(caller: &Caller<'_>, planned: &RunPlan, bound: Bound<'_>, id: &str) -
     if fresh.catalogue_hash != planned.catalogue_hash {
         return Consumed::Refused(Refusal::catalogue_changed_since_request(&fresh.project));
     }
-    if let Some(check) = &fresh.check
-        && tree::fingerprint(Path::new(&fresh.project_dir)).as_ref() != bound.tree
-    {
-        return Consumed::Refused(Refusal::check_not_satisfied(&fresh.project, check));
+    if let Some(check) = &fresh.check {
+        match tree::fingerprint(Path::new(&fresh.project_dir)) {
+            Err(e) => return Consumed::Refused(tree_refusal(&fresh.project, &e)),
+            Ok(current) if current.as_ref() != bound.tree => {
+                return Consumed::Refused(Refusal::check_not_satisfied(&fresh.project, check));
+            }
+            Ok(_) => {}
+        }
     }
     let secret = match read_secret(&fresh, caller.store) {
         Ok(secret) => secret,

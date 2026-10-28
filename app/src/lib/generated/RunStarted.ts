@@ -29,8 +29,8 @@ url?: string | null,
  */
 credential?: string | null, catalogue_hash: string, approval_id?: string | null, 
 /**
- * The tree it started on, for check and `after-check` actions in a git
- * work tree; absent otherwise (D-22).
+ * The files it started on, for an action that binds its work tree in a
+ * git work tree; absent otherwise (D-22, D-173).
  */
 tree?: TreeFingerprint | null, 
 /**

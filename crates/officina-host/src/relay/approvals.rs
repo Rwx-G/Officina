@@ -21,6 +21,7 @@ use officina_core::relay::catalogue::project_dirs;
 use officina_core::relay::journal::TreeFingerprint;
 
 use super::home::{ApprovedState, RelayHome, load_relay_floor, system_dir};
+use super::tree::TreeResult;
 use crate::files::atomic_write;
 
 /// Every readable file of `relay/approvals/`. A file that does not parse
@@ -203,12 +204,13 @@ impl ContextSources {
 /// from the approved catalogue with the relay floor's project folders and
 /// the system directory, with its dry run's kept output and whether the
 /// project's code is still the one it ran on. `fingerprint` computes a
-/// folder's tree, so the window can cache it. Nothing is read beyond the
+/// folder's tree, so the window can cache it; a tree it cannot compute is
+/// left out, which the card shows as unknown. Nothing is read beyond the
 /// approvals folder when no request is there.
 pub fn board_approvals(
     home: &RelayHome,
     now_ms: i64,
-    fingerprint: &mut dyn FnMut(&Path) -> Option<TreeFingerprint>,
+    fingerprint: &mut dyn FnMut(&Path) -> TreeResult,
 ) -> Vec<ApprovalView> {
     let files = read_files(home);
     if files.requests.is_empty() {
@@ -236,8 +238,9 @@ pub fn board_approvals(
         });
         if let Some(dir) = project_dir
             && !trees.contains_key(&request.project)
+            && let Ok(found) = fingerprint(Path::new(&dir))
         {
-            trees.insert(request.project.clone(), fingerprint(Path::new(&dir)));
+            trees.insert(request.project.clone(), found);
         }
     }
     dry_runs.trees = trees;

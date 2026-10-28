@@ -28,6 +28,11 @@ workspace = true
 # Enabled by the window; the `officina` binary enables it only for its
 # tests, so the shipped exe a session can call holds no authority (P-5).
 window-authority = []
+# Lets the tests of the `officina` crate point the relay's `git` resolution
+# elsewhere through `OFFICINA_TEST_GIT` (story 2.14). Enabled only by that
+# crate's dev-dependencies: the exe a session can call never reads it, which
+# the CI step that searches its feature graph checks.
+test-seams = []
 
 [[test]]
 name = "authority"
@@ -44,7 +49,7 @@ name = "approve_fixture"
 required-features = ["window-authority"]
 
 [target."cfg(windows)".dependencies]
-windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_System_Diagnostics_ToolHelp", "Win32_System_Threading", "Win32_System_JobObjects", "Win32_System_SystemInformation", "Win32_Security_Credentials"] }
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_System_Diagnostics_ToolHelp", "Win32_System_Threading", "Win32_System_JobObjects", "Win32_System_SystemInformation", "Win32_Security_Credentials", "Win32_System_Registry"] }
 
 [dev-dependencies]
 tempfile = "3.27.0"

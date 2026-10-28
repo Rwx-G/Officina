@@ -124,23 +124,23 @@ impl JournalEntry {
     }
 }
 
-/// The working tree a check or `after-check` run started on (AD-33, D-22):
-/// SHA-256 over `HEAD` (or the "no HEAD" marker), the diff to it and the
-/// untracked files, computed by the host. Two runs on the same code carry
-/// equal fingerprints.
+/// What the tracked and unignored files of a work tree held when a check, an
+/// `after-check` action or a `human` action's request ran (AD-33, D-173):
+/// SHA-256 over each file's path and the hash of its bytes, which the host
+/// reads itself. Two runs on the same files carry equal fingerprints.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct TreeFingerprint {
     /// Lowercase hex.
     pub sha256: String,
-    /// Files over the content limit bound by their size only: untracked
-    /// ones, or any file of a work tree without a commit (D-22).
-    #[serde(default, skip_serializing_if = "is_zero_u32")]
-    pub untracked_by_size: u32,
-}
-
-fn is_zero_u32(value: &u32) -> bool {
-    *value == 0
+    /// How many files it binds. Absent from lines written before it existed.
+    #[serde(default)]
+    pub files: u32,
+    /// The `git` that listed them, resolved from Git for Windows' install
+    /// location, never `PATH` (D-173). Absent from lines written before it
+    /// existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub git: Option<String>,
 }
 
 /// `officina run` is about to start a program (AD-29 step 7).
@@ -171,8 +171,8 @@ pub struct RunStarted {
     pub catalogue_hash: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub approval_id: Option<String>,
-    /// The tree it started on, for check and `after-check` actions in a git
-    /// work tree; absent otherwise (D-22).
+    /// The files it started on, for an action that binds its work tree in a
+    /// git work tree; absent otherwise (D-22, D-173).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tree: Option<TreeFingerprint>,
     /// The action's timeout, so a reader can tell a run still going from an
@@ -276,6 +276,15 @@ closed_enum! {
         UnknownParameter,
         /// A value breaks a rule of AD-30 or the parameter's own.
         InvalidValue,
+        /// The project is a git work tree, and no `git` is installed where
+        /// Git for Windows records it: its files cannot be bound (D-173).
+        GitUnavailable,
+        /// The work tree holds a file, or more files or bytes, than the
+        /// fingerprint reads (D-173).
+        TreeTooLarge,
+        /// A file of the work tree cannot be read, so its content cannot be
+        /// bound (D-173).
+        TreeUnreadable,
         /// An `after-check` action, or a `human` action naming its dry run,
         /// without a successful run of its check, with the same parameters
         /// on the same code, in the last 30 minutes (AD-33, D-170).
@@ -471,7 +480,8 @@ mod tests {
                 approval_id: None,
                 tree: Some(TreeFingerprint {
                     sha256: crate::relay::sha256_hex(b"tree"),
-                    untracked_by_size: 1,
+                    files: 3,
+                    git: Some(r"C:\Program Files\Git\cmd\git.exe".into()),
                 }),
                 timeout_s: Some(540),
             }),

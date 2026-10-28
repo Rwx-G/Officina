@@ -83,10 +83,15 @@ impl Relay {
         relay
     }
 
-    /// A relay whose project is a git work tree with one commit; `None`,
-    /// with the reason printed, without `git` (D-23).
+    /// A relay whose project is a git work tree with one commit, which
+    /// `officina run` lists with the `git` Git for Windows records (D-173);
+    /// `None`, with the reason printed, without either (D-23).
     fn in_git(test: &str) -> Option<Relay> {
         let git_dir = git_dir_or_skip(test)?;
+        if officina_host::relay::tree::resolve_git().is_none() {
+            println!("skipped {test}: Git for Windows records no install folder here");
+            return None;
+        }
         let mut relay = Relay::new();
         git(&git_dir, &relay.lab(), &["init", "-q"]);
         std::fs::write(relay.lab().join("site.yml"), "- hosts: lab\n").unwrap();

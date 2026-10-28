@@ -1,12 +1,12 @@
-//! The tree fingerprint of check and `after-check` runs (story 2.6, AD-33,
-//! D-22, D-23), on temporary repositories built with `git init`. Each test
-//! skips with a printed reason on a machine without `git`.
+//! The tree fingerprint (stories 2.6 and 2.14, AD-33, D-22, D-23, D-173), on
+//! temporary repositories built with `git init`. Each test skips with a
+//! printed reason on a machine without `git`.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use officina_core::relay::journal::TreeFingerprint;
-use officina_host::relay::tree::{UNTRACKED_CONTENT_LIMIT, fingerprint_with};
+use officina_host::relay::tree::fingerprint_with;
 
 const GIT_EXE: &str = if cfg!(windows) { "git.exe" } else { "git" };
 
@@ -90,7 +90,9 @@ impl Repo {
     }
 
     fn fingerprint(&self) -> TreeFingerprint {
-        fingerprint_with(&self.git, &self.root).expect("a work tree has a fingerprint")
+        fingerprint_with(&self.git, &self.root)
+            .unwrap()
+            .expect("a work tree has a fingerprint")
     }
 }
 
@@ -110,10 +112,15 @@ fn same_tree_same_fingerprint() {
     let first = repo.fingerprint();
     assert_eq!(first, repo.fingerprint());
     assert_eq!(first.sha256.len(), 64);
-    assert_eq!(first.untracked_by_size, 0);
+    assert_eq!(first.files, 2);
+    assert_eq!(
+        first.git.as_deref(),
+        Some(repo.git.to_string_lossy().as_ref()),
+        "the record names the git that listed the files"
+    );
     let sub = repo.root.join("notes");
     assert_eq!(
-        fingerprint_with(&repo.git, &sub),
+        fingerprint_with(&repo.git, &sub).unwrap(),
         Some(first),
         "a project in a subfolder binds the whole work tree"
     );
@@ -129,7 +136,11 @@ fn tracked_edit_changes_it() {
     repo.git(&["add", "playbook.yml"]);
     assert_eq!(edited, repo.fingerprint(), "staging changes nothing");
     repo.git(&["commit", "-q", "-m", "second"]);
-    assert_ne!(edited, repo.fingerprint(), "a new HEAD does");
+    assert_eq!(
+        edited,
+        repo.fingerprint(),
+        "a commit of the same content changes nothing: the files bind, not history"
+    );
 }
 
 #[test]
@@ -141,24 +152,6 @@ fn same_size_untracked_edit_changes_it() {
     assert_ne!(before, repo.fingerprint());
     repo.write("vars.yml", b"group: aaaa\n");
     assert_eq!(before, repo.fingerprint());
-}
-
-#[test]
-fn untracked_file_over_1_mib_is_bound_by_size() {
-    let repo = repo!("untracked_file_over_1_mib_is_bound_by_size", true);
-    let len = usize::try_from(UNTRACKED_CONTENT_LIMIT).unwrap() + 1;
-    repo.write("dump.bin", &vec![b'a'; len]);
-    let before = repo.fingerprint();
-    assert_eq!(before.untracked_by_size, 1, "the record says so");
-    repo.write("dump.bin", &vec![b'b'; len]);
-    assert_eq!(before, repo.fingerprint(), "same size: bound by size only");
-    repo.write("dump.bin", &vec![b'b'; len + 1]);
-    assert_ne!(before, repo.fingerprint());
-    repo.write("dump.bin", &vec![b'a'; len - 1]);
-    let at_limit = repo.fingerprint();
-    assert_eq!(at_limit.untracked_by_size, 0, "up to the limit: by content");
-    repo.write("dump.bin", &vec![b'b'; len - 1]);
-    assert_ne!(at_limit, repo.fingerprint());
 }
 
 /// Adversarial pass: `assume-unchanged` and `skip-worktree` hide a tracked
@@ -292,7 +285,9 @@ fn git_variables_child() {
     ) else {
         return;
     };
-    let found = fingerprint_with(Path::new(&git), Path::new(&repo)).unwrap();
+    let found = fingerprint_with(Path::new(&git), Path::new(&repo))
+        .unwrap()
+        .unwrap();
     println!("fingerprint={}", found.sha256);
 }
 
@@ -304,16 +299,15 @@ fn outside_git_it_is_absent() {
     let dir = tempfile::tempdir().unwrap();
     let plain = dir.path().join("Notes");
     std::fs::create_dir_all(&plain).unwrap();
-    assert_eq!(fingerprint_with(&git, &plain), None, "not a work tree");
+    assert_eq!(fingerprint_with(&git, &plain), Ok(None), "not a work tree");
     let repo = Repo::new(git, true);
-    assert_eq!(
-        fingerprint_with(&repo.root.join(".git"), &repo.root),
-        None,
-        "git cannot run"
+    assert!(
+        fingerprint_with(&repo.root.join(".git"), &repo.root).is_err(),
+        "a git that cannot start cannot bind a work tree"
     );
     assert_eq!(
         fingerprint_with(&repo.git, &repo.root.join(".git")),
-        None,
+        Ok(None),
         "inside the git directory is no work tree"
     );
 }

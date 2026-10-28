@@ -26,6 +26,7 @@ use officina_core::relay::journal::{
 };
 use officina_core::relay::sha256_hex;
 use officina_host::relay::journal::JournalLock;
+use officina_host::relay::tree::{ENV_TEST_GIT, TREE_LIMITS};
 
 /// The relay floor of most tests: a guarded project and a free one, both
 /// real folders, every action's program the fake tool. `{project}`,
@@ -365,12 +366,14 @@ fn free_project_listing_the_action_is_served() {
 type During = Box<dyn FnOnce(&Relay, &str)>;
 
 /// One refusal code's scenario: the relay, where the call runs, with what,
-/// the `PATH` it gets (`git` for a tree) and what happens while it waits.
+/// the variables it gets, a file held open while it runs, and what happens
+/// while it waits.
 struct Scenario {
     relay: Relay,
     dir: PathBuf,
     args: Vec<&'static str>,
-    path: Option<PathBuf>,
+    env: Vec<(&'static str, String)>,
+    held: Option<std::fs::File>,
     during: Option<During>,
 }
 
@@ -413,21 +416,62 @@ fn run_waiting(relay: &Relay, cmd: Command, during: During) -> Output {
 /// so a new refusal code does not compile without its scenario; `None`, with
 /// the reason printed, when this machine cannot play it (D-23).
 fn scenario(reason: RefusalReason) -> Option<Scenario> {
-    if reason == RefusalReason::CheckNotSatisfied {
-        let git = GitRelay::new("every_refusal_code (check_not_satisfied)")?;
-        checked(&git, "lab-web");
-        let during: During = Box::new(|relay: &Relay, id: &str| {
-            std::fs::write(relay.project().join("playbook.yml"), "- hosts: all\n").unwrap();
-            officina_host::relay::authority::decide_approval(&relay.env.relay_home(), id, true)
+    let in_git = |git: GitRelay, args: Vec<&'static str>| Scenario {
+        dir: git.relay.project(),
+        args,
+        env: Vec::new(),
+        held: None,
+        during: None,
+        relay: git.relay,
+    };
+    let verify = || vec!["verify", "group=lab-web"];
+    match reason {
+        RefusalReason::CheckNotSatisfied => {
+            let git = GitRelay::new("every_refusal_code (check_not_satisfied)")?;
+            checked(&git, "lab-web");
+            let during: During = Box::new(|relay: &Relay, id: &str| {
+                std::fs::write(relay.project().join("playbook.yml"), "- hosts: all\n").unwrap();
+                officina_host::relay::authority::decide_approval(&relay.env.relay_home(), id, true)
+                    .unwrap();
+            });
+            return Some(Scenario {
+                during: Some(during),
+                ..in_git(
+                    git,
+                    vec!["apply-sensitive", "group=lab-web", "--wait", "30"],
+                )
+            });
+        }
+        RefusalReason::GitUnavailable => {
+            let git = GitRelay::new("every_refusal_code (git_unavailable)")?;
+            return Some(Scenario {
+                env: vec![(ENV_TEST_GIT, String::new())],
+                ..in_git(git, verify())
+            });
+        }
+        RefusalReason::TreeTooLarge => {
+            let git = GitRelay::new("every_refusal_code (tree_too_large)")?;
+            std::fs::File::create(git.relay.project().join("dump.bin"))
+                .unwrap()
+                .set_len(TREE_LIMITS.file_bytes + 1)
                 .unwrap();
-        });
-        return Some(Scenario {
-            dir: git.relay.project(),
-            args: vec!["apply-sensitive", "group=lab-web", "--wait", "30"],
-            path: Some(git.git_dir),
-            during: Some(during),
-            relay: git.relay,
-        });
+            return Some(in_git(git, verify()));
+        }
+        RefusalReason::TreeUnreadable => {
+            use std::os::windows::fs::OpenOptionsExt;
+            let git = GitRelay::new("every_refusal_code (tree_unreadable)")?;
+            let held = std::fs::File::options()
+                .read(true)
+                .write(true)
+                .share_mode(0)
+                .open(git.relay.project().join("playbook.yml"))
+                .unwrap();
+            return Some(Scenario {
+                held: Some(held),
+                ..in_git(git, verify())
+            });
+        }
+        _ => {}
     }
     let relay = match reason {
         RefusalReason::NotApproved => {
@@ -486,7 +530,10 @@ fn scenario(reason: RefusalReason) -> Option<Scenario> {
             (project, human("1"))
         }
         RefusalReason::ApprovalPending => (project, human("1")),
-        RefusalReason::CheckNotSatisfied => unreachable!("built above"),
+        RefusalReason::CheckNotSatisfied
+        | RefusalReason::GitUnavailable
+        | RefusalReason::TreeTooLarge
+        | RefusalReason::TreeUnreadable => unreachable!("built above"),
         // These need a credential store, which a CLI test never touches: the
         // real one is the author's. They are proved with a fake store by
         // `crates/officina-host/tests/relay_http.rs::{
@@ -502,7 +549,8 @@ fn scenario(reason: RefusalReason) -> Option<Scenario> {
         relay,
         dir,
         args,
-        path: None,
+        env: Vec::new(),
+        held: None,
         during,
     })
 }
@@ -517,8 +565,8 @@ fn every_refusal_code_exits_126_with_one_journal_line() {
         let started_before = relay.started().len();
         let launches_before = relay.launches().len();
         let mut cmd = relay.command(&scenario.dir, &scenario.args);
-        if let Some(path) = &scenario.path {
-            cmd.env("PATH", path);
+        for (key, value) in &scenario.env {
+            cmd.env(key, value);
         }
         let out = match scenario.during {
             Some(during) => run_waiting(relay, cmd, during),
@@ -529,6 +577,7 @@ fn every_refusal_code_exits_126_with_one_journal_line() {
         assert_eq!(refused.len(), 1, "{reason:?}");
         assert_eq!(refused[0].action, scenario.args[0]);
         assert_eq!(relay.started().len(), started_before, "{reason:?}");
+        drop(scenario.held);
     }
 }
 
@@ -1328,17 +1377,21 @@ fn concurrent_runs_each_journal_one_start_and_one_end() {
 
 // ---- story 2.6: after-check and the tree fingerprint ----
 
-/// A relay whose guarded project is a git work tree with one commit, and
-/// whose commands get `git` on their `PATH` (D-23). `None`, with the reason
-/// printed, on a machine without `git`.
+/// A relay whose guarded project is a git work tree with one commit, built
+/// with the test's own `git` (D-23); `officina run` lists it with the `git`
+/// Git for Windows records in the registry (D-173). `None`, with the reason
+/// printed, on a machine without either.
 struct GitRelay {
     relay: Relay,
-    git_dir: PathBuf,
 }
 
 impl GitRelay {
     fn new(test: &str) -> Option<GitRelay> {
         let git_dir = git_dir_or_skip(test)?;
+        if officina_host::relay::tree::resolve_git().is_none() {
+            println!("skipped {test}: Git for Windows records no install folder here");
+            return None;
+        }
         let relay = Relay::new();
         let project = relay.project();
         git(&git_dir, &project, &["init", "-q"]);
@@ -1346,21 +1399,16 @@ impl GitRelay {
         std::fs::write(project.join("playbook.yml"), "- hosts: lab\n").unwrap();
         git(&git_dir, &project, &["add", "playbook.yml"]);
         git(&git_dir, &project, &["commit", "-q", "-m", "first"]);
-        Some(GitRelay { relay, git_dir })
+        Some(GitRelay { relay })
     }
 
     fn run(&self, args: &[&str]) -> Output {
-        let mut cmd = self.relay.command(&self.relay.project(), args);
-        cmd.env("PATH", &self.git_dir);
-        common::run_with(cmd, b"")
+        common::run_with(self.relay.command(&self.relay.project(), args), b"")
     }
 
     /// The fingerprint `officina run` should record now.
     fn tree(&self) -> Option<TreeFingerprint> {
-        officina_host::relay::tree::fingerprint_with(
-            &self.git_dir.join("git.exe"),
-            &self.relay.project(),
-        )
+        officina_host::relay::tree::fingerprint(&self.relay.project()).unwrap()
     }
 }
 
@@ -1456,6 +1504,52 @@ fn apply_after_an_untracked_edit_is_refused() {
     std::fs::write(&vars, "group: bbbb\n").unwrap();
     let out = git.run(&["apply", "group=lab-web"]);
     assert_check_required(&git, &out, before);
+}
+
+/// AC 1 of story 2.14 (D-173): without the `git` Git for Windows records,
+/// an action that binds a git work tree refuses `git_unavailable`; an action
+/// that binds nothing, and a check outside git, still run.
+#[test]
+fn git_unavailable_refuses_actions_that_need_a_fingerprint() {
+    let Some(git) = GitRelay::new("git_unavailable_refuses_actions_that_need_a_fingerprint") else {
+        return;
+    };
+    let without_git = |relay: &Relay, dir: &Path, args: &[&str], value: &str| {
+        let mut cmd = relay.command(dir, args);
+        cmd.env(ENV_TEST_GIT, value);
+        common::run_with(cmd, b"")
+    };
+    let missing = git.relay.outside().join("no-git.exe");
+    for value in [String::new(), slashed(&missing)] {
+        let out = without_git(
+            &git.relay,
+            &git.relay.project(),
+            &["verify", "group=lab-web"],
+            &value,
+        );
+        assert_refused(&git.relay, &out, RefusalReason::GitUnavailable);
+        assert!(
+            stderr_lines(&out)[0].contains("git work tree"),
+            "{:?}",
+            stderr_lines(&out)
+        );
+    }
+    let probe = without_git(
+        &git.relay,
+        &git.relay.project(),
+        &["probe", "host=web01"],
+        "",
+    );
+    assert_eq!(probe.status.code(), Some(0), "{:?}", stderr_lines(&probe));
+
+    let plain = Relay::new();
+    let out = without_git(&plain, &plain.project(), &["verify", "group=lab-web"], "");
+    assert_eq!(out.status.code(), Some(0), "{:?}", stderr_lines(&out));
+    assert_eq!(
+        plain.started()[0].tree,
+        None,
+        "outside git, nothing to bind"
+    );
 }
 
 /// Seeds a successful check of `verify group=lab-web` on the current tree,

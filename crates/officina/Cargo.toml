@@ -31,9 +31,10 @@ serde_json.workspace = true
 
 [dev-dependencies]
 officina-core.workspace = true
-# Tests play the window (approve the catalogue) through the authority; the
-# binary built alone (`-p officina`), as the release builds it, has none.
-officina-host = { workspace = true, features = ["window-authority"] }
+# Tests play the window (approve the catalogue) through the authority, and
+# point `git` resolution elsewhere; the binary built alone (`-p officina`),
+# as the release builds it, has neither.
+officina-host = { workspace = true, features = ["window-authority", "test-seams"] }
 tempfile = "3.27.0"
 
 [lints]

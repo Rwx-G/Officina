@@ -146,6 +146,67 @@ pub fn system_directory() -> io::Result<PathBuf> {
         buf.resize(len, 0);
     }
 }
+
+/// A registry hive the relay reads (D-173).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Hive {
+    /// `HKEY_LOCAL_MACHINE`: only an administrator writes it.
+    LocalMachine,
+    /// `HKEY_CURRENT_USER`: the user's, so a session's too.
+    CurrentUser,
+}
+
+/// The `REG_SZ` value `value` of `key` under `hive`, from the registry's
+/// 64-bit view; `None` when the key or value is missing, or of another type.
+pub fn registry_string(hive: Hive, key: &str, value: &str) -> Option<String> {
+    use windows_sys::Win32::Foundation::{ERROR_MORE_DATA, ERROR_SUCCESS};
+    use windows_sys::Win32::System::Registry::{
+        HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, RRF_RT_REG_SZ, RegGetValueW,
+    };
+    let root = match hive {
+        Hive::LocalMachine => HKEY_LOCAL_MACHINE,
+        Hive::CurrentUser => HKEY_CURRENT_USER,
+    };
+    let key: Vec<u16> = key.encode_utf16().chain(std::iter::once(0)).collect();
+    let value: Vec<u16> = value.encode_utf16().chain(std::iter::once(0)).collect();
+    let mut buf = vec![0u16; 260];
+    loop {
+        let mut bytes = u32::try_from(buf.len() * 2).unwrap_or(u32::MAX);
+        // SAFETY: `key` and `value` are NUL-terminated UTF-16 strings that
+        // outlive the call; `buf` holds `bytes` bytes, the size passed, and
+        // the call writes at most that many; the type pointer may be null.
+        let status = unsafe {
+            RegGetValueW(
+                root,
+                key.as_ptr(),
+                value.as_ptr(),
+                RRF_RT_REG_SZ,
+                std::ptr::null_mut(),
+                buf.as_mut_ptr().cast(),
+                &mut bytes,
+            )
+        };
+        match status {
+            ERROR_SUCCESS => {
+                let units = usize::try_from(bytes).unwrap_or(0) / 2;
+                buf.truncate(units.min(buf.len()));
+                let end = buf.iter().position(|unit| *unit == 0).unwrap_or(buf.len());
+                return Some(String::from_utf16_lossy(&buf[..end]));
+            }
+            // Too small: `bytes` is the size needed, which a value changed
+            // meanwhile can still outgrow, so the loop asks again.
+            ERROR_MORE_DATA => {
+                let needed = usize::try_from(bytes).unwrap_or(0) / 2 + 1;
+                if needed <= buf.len() {
+                    return None;
+                }
+                buf.resize(needed, 0);
+            }
+            _ => return None,
+        }
+    }
+}
+
 /// The blob of the generic credential `target` in the Windows Credential
 /// Manager (`CredReadW`, `CRED_TYPE_GENERIC`), copied out and freed with
 /// `CredFree`; `None` when no such credential exists (AD-36). The bytes are

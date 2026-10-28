@@ -126,7 +126,8 @@ mod tests {
     fn tree(text: &str) -> TreeFingerprint {
         TreeFingerprint {
             sha256: crate::relay::sha256_hex(text.as_bytes()),
-            untracked_by_size: 0,
+            files: 0,
+            git: None,
         }
     }
 
@@ -286,8 +287,8 @@ mod tests {
                 NOW
             ));
         }
-        let size_bound = TreeFingerprint {
-            untracked_by_size: 1,
+        let other_git = TreeFingerprint {
+            git: Some("C:/path/to/other/git.exe".to_owned()),
             ..tree("a")
         };
         assert!(!check_satisfied(
@@ -296,7 +297,7 @@ mod tests {
             "verify",
             &params("lab-web"),
             HASH,
-            Some(&size_bound),
+            Some(&other_git),
             NOW
         ));
         let mut outside_git = lines.clone();

@@ -993,7 +993,8 @@ values = [\"web01\"]
         fn fingerprint(text: &str) -> TreeFingerprint {
             TreeFingerprint {
                 sha256: crate::relay::sha256_hex(text.as_bytes()),
-                untracked_by_size: 0,
+                files: 0,
+                git: None,
             }
         }
 
