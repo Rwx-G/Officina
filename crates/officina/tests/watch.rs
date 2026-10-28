@@ -26,9 +26,11 @@ use officina_core::ipc::IpcErrorCode;
 use officina_core::registry::confirm::{
     AuthorAction, ConfirmItem, FileUnder, ItemOutcome, SubjectOrigin,
 };
+use officina_core::registry::proposal::Proposal;
 use officina_core::registry::retention::EXCERPT_TTL_MS;
 use officina_core::registry::types::{
-    AuthorRefusal, Ending, RegistryState, SessionRecord, SettingKey, Source, Verdict,
+    AuthorRefusal, Ending, ModelVerdict, ProposalSource, ReasonCode, RegistryState, SessionRecord,
+    SettingKey, Source, Verdict,
 };
 use officina_core::registry::view::RegistryView;
 use officina_core::relay::journal::{CatalogueApproved, JournalEntry};
@@ -1004,6 +1006,28 @@ fn unavailable_registry_keeps_the_board_and_deletes_nothing() {
         "{refused:?}"
     );
     assert!(refused.message.contains("unavailable"), "{refused:?}");
+    // So is a triage confirmation (story 3.7).
+    let confirm = AuthorCommand::Confirm(vec![ConfirmItem {
+        key: "subject:1".into(),
+        shown: Proposal {
+            verdict: ModelVerdict::ToResume,
+            source: ProposalSource::Rules,
+            reason: ReasonCode::DefaultToResume,
+            call_id: None,
+        },
+        verdict: Verdict::Finished,
+        routine: false,
+        file_under: None,
+    }]);
+    let refused = ask(&handle, confirm, AUTHOR_WAIT)
+        .recv_timeout(AUTHOR_WAIT)
+        .unwrap()
+        .unwrap_err();
+    assert_eq!(
+        refused.code,
+        IpcErrorCode::RegistryUnavailable,
+        "{refused:?}"
+    );
     let view = handle.registry.read().unwrap().clone().unwrap();
     assert_eq!(view.registry.state, RegistryState::Unavailable);
     assert!(view.registry.detail.is_some() && view.subjects.is_empty());
