@@ -506,7 +506,10 @@ fn text_beyond_the_hooks_bounds_never_reaches_the_registry() {
     let home = Home::new();
     let oversized = prompt("big", NOW - 9, CWD, &"x".repeat(MAX_LINE_BYTES));
     let long = prompt("s1", NOW - 5, CWD, &"y".repeat(3 * EXCERPT_CHARS));
-    assert!(long.len() < MAX_LINE_BYTES, "the second line fits the hook's bound");
+    assert!(
+        long.len() < MAX_LINE_BYTES,
+        "the second line fits the hook's bound"
+    );
     home.append(&day_file(NOW), &[oversized, long]);
     let mut writer = home.writer(NOW);
     let report = writer.ingest(&home.ctx(), NOW).unwrap();
