@@ -287,7 +287,7 @@ fn execute(
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> i32 {
-    let run_id = format!("{:x}-{:x}", now_ms(), std::process::id());
+    let run_id = officina_core::relay::approvals::run_id(now_ms(), std::process::id());
     let start = start_line(
         &run_id,
         plan,

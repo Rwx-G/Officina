@@ -281,6 +281,27 @@ fn run_never_deletes_approval_files() {
     assert_eq!(requests, 2, "the old request and the new one");
 }
 
+/// Story 2.16 AC 6 (D-175): a request file names its dry run's id, and any
+/// process can write it; an id that is no run id, an absolute path to
+/// another `.txt` file say, reads nothing, while a run's own id still
+/// reads its kept output.
+#[test]
+fn a_dry_run_id_that_is_no_run_id_reads_nothing() {
+    use officina_host::relay::approvals::{keep_output, read_output};
+    let test = TestHome::new();
+    let home = test.relay(None);
+    let elsewhere = test.root.join("notes");
+    test.write(&elsewhere.with_extension("txt"), "not a dry run's output");
+    let named = elsewhere.to_string_lossy().into_owned();
+    match read_output(&home, &named) {
+        Some(Err(why)) => assert!(why.contains("no valid dry run"), "{why}"),
+        other => panic!("{other:?}"),
+    }
+    let run = officina_core::relay::approvals::run_id(now_ms(), std::process::id());
+    keep_output(&home, &run, b"PLAY [lab]").unwrap();
+    assert_eq!(read_output(&home, &run), Some(Ok("PLAY [lab]".to_owned())));
+}
+
 /// Story 2.15 AC 6 (D-15): a known-projects record the window cannot write
 /// is journaled as a gate error, once and not once per pass, which the
 /// relay view lists; a write that succeeds again ends it.
