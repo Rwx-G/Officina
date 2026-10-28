@@ -49,29 +49,31 @@ Findings of the implementation, all decided:
 
 ## Evidence
 
-Figures from the full local gate on `f4dff05`, the last code commit (this
-report and the README assets add no case CI runs), Rust 1.99.1, Windows 11
-host; `core-linux` in a `rust:1-bookworm` container.
+Figures from the full local gate on `3b22c23`, the last code commit, Rust
+1.99.1, Windows 11 host; `core-linux` in a `rust:1-bookworm` container.
 
 | Gate | Result |
 |---|---|
 | `cargo fmt --check`; clippy `-D warnings`, workspace with `officina-core/ts` | clean |
-| Rust unit, integration, CLI end to end, doc tests, vector sets, TypeScript bindings drift | 1,073 passed, 0 failed, 11 ignored (the release-only perf, stress, crash and lexer tests below) |
-| Perf, release (hook own cost, gate own cost, gate in process, appends) | 5 passed; hook own cost 1.7 ms (bound 150 ms with CI's budget); gate own cost within its 15 ms bound; gate in process p95 4.2 ms (a workstation check, not asserted) |
+| Rust unit, integration, CLI end to end, doc tests, vector sets, TypeScript bindings drift | 1,076 passed, 0 failed, 11 ignored (the release-only perf, stress, crash and lexer tests below) |
+| Perf, release (hook own cost, gate own cost, gate in process, appends) | 5 passed; hook own cost 3.2 ms (bound 150 ms with CI's budget); gate own cost 4.7 ms (bound 15 ms); gate in process p95 3.6 ms (a workstation check, not asserted) |
 | Lexer against Git Bash; approvals stress; crash (release) | pass |
 | `officina.exe` built alone: no authority or registry writer marker; both in `officina-app.exe` | pass |
 | Registry dependencies, no bundled roots | pass |
 | Frontend: svelte-check, ESLint, Vitest | 0 errors, clean, 253 passed in 24 files |
 | e2e fixtures from the real CLI, Playwright `--repeat-each=3` | 783 passed, 6 skipped (the light and dark baseline cases, `test.fixme` until D-508), three times each |
 | `cargo deny` (0.19.4), `pnpm audit` (11.5.3) | `cargo deny` ok (advisories, bans, licenses, sources); `pnpm audit` 1 low, ignored with its dated reason |
-| `core-linux` in `rust:1-bookworm` | fmt and clippy clean, 941 passed, 0 failed, 9 ignored (no Rust change since) |
+| `core-linux` in `rust:1-bookworm` | fmt and clippy clean, 944 passed, 0 failed, 9 ignored |
 | Zero write under the Claude config dir | `quota_doctor.rs::no_command_writes_under_the_claude_config_dir` |
 
 Stability: one failure across the Playwright runs of the epic's closing
 work, `scene.spec.ts > a changed board places the figure at its
 new place at once`, not reproduced in 1,057 further runs (story 4.10 Debug
 Log); a single `ERR_CONNECTION_REFUSED` from the preview server, under a
-Linux build running in parallel, not seen again.
+Linux build running in parallel, not seen again; and one perf run where
+the gate's own cost read 23.7 ms against its 15 ms bound while the empty
+process it is compared with measured 29.6 ms against 12.3 ms for the
+binary without the gate, process-start noise: the next run read 4.7 ms.
 
 ## Story status
 
