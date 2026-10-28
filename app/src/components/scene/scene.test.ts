@@ -1,12 +1,14 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanup, render } from "@testing-library/svelte";
 import Scene from "./Scene.svelte";
+import { BoardStore } from "../../lib/board.svelte";
 import type { Board } from "../../lib/generated/Board";
 import type { Card } from "../../lib/generated/Card";
 import { beaconPair } from "../../lib/alert";
 import { HALO_BREATHING_MS, haloMemo } from "../../lib/halo";
 import { paint } from "../../lib/scene/furniture";
-import { layoutScene } from "../../lib/scene/layout";
+import { layoutScene, type SceneLayout } from "../../lib/scene/layout";
+import * as memory from "../../lib/scene/memory";
 import { emptyMemory } from "../../lib/scene/memory";
 import { board, card, fixtureBoards, project } from "../../lib/scene/testing";
 
@@ -22,23 +24,40 @@ function waitingBoard(): Board {
   return found.board;
 }
 
+function renderScene(b: Board) {
+  return render(Scene, { board: b, store: new BoardStore(), onBoard: () => {} });
+}
+
+/** Renders `b` and returns the layout the scene drew it from: the one the
+ *  run's memory gives, as `Scene.svelte` lays it out. */
+function renderWithLayout(b: Board): { container: HTMLElement; layout: SceneLayout; unmount: () => void } {
+  const layout = layoutScene({ board: b }, memory.load(b));
+  const { container, unmount } = renderScene(b);
+  return { container, layout, unmount };
+}
+
+const buttonsOf = (container: HTMLElement) => [...container.querySelectorAll<HTMLButtonElement>('[data-layer="targets"] button')];
+
 describe("Scene", () => {
   it("layers 1 to 4 are hidden from assistive technology and ignore the pointer", () => {
-    const { getByTestId } = render(Scene, { board: waitingBoard() });
+    const { getByTestId } = renderScene(waitingBoard());
     const scene = getByTestId("scene");
     expect(scene.getAttribute("tabindex")).toBe("-1");
     expect(scene.hasAttribute("role")).toBe(false);
     expect(scene.getAttribute("data-moving")).toBe("0");
-    const layers = [...scene.querySelectorAll("[data-layer]")];
-    expect(layers.map((l) => l.getAttribute("data-layer"))).toEqual(["floor", "halos", "objects", "overlay"]);
+    const all = [...scene.querySelectorAll("[data-layer]")];
+    expect(all.map((l) => l.getAttribute("data-layer"))).toEqual(["floor", "halos", "objects", "overlay", "targets"]);
+    const layers = all.slice(0, -1);
     for (const layer of layers) {
       expect(layer.getAttribute("aria-hidden"), layer.getAttribute("data-layer")!).toBe("true");
       expect((layer as HTMLElement).style.pointerEvents, layer.getAttribute("data-layer")!).toBe("none");
     }
+    // Layer 5 carries the names (AD-59).
+    expect(all.at(-1)!.hasAttribute("aria-hidden")).toBe(false);
     // The text alternative is inside the scene element, outside the layers.
     const summary = getByTestId("scene-summary");
     expect(scene.contains(summary)).toBe(true);
-    expect(layers.some((l) => l.contains(summary))).toBe(false);
+    expect(all.some((l) => l.contains(summary))).toBe(false);
     expect(summary.textContent).toMatch(/need/);
   });
 
@@ -46,7 +65,7 @@ describe("Scene", () => {
     const markup = '<img src="x" onerror="globalThis.__pwned = 1"><b>bold</b>';
     const waiting = card(markup, "decision", { project: markup });
     const b = board([waiting], { floor_projects: [project(markup)] });
-    const { getByTestId } = render(Scene, { board: b });
+    const { getByTestId } = renderScene(b);
     const scene = getByTestId("scene");
     expect(scene.querySelector("img, b, script")).toBeNull();
     // The scene's memory lives for the run, here this file's: the project
@@ -58,12 +77,16 @@ describe("Scene", () => {
     const objects = scene.querySelector('[data-layer="objects"]')!;
     const walker = document.createTreeWalker(objects, NodeFilter.SHOW_TEXT);
     for (let n = walker.nextNode(); n; n = walker.nextNode()) expect(n.textContent!.trim()).toMatch(/^\d*$/);
+    // Targets and their name tags carry the name as text.
+    const target = buttonsOf(scene).find((b) => b.dataset.key === waiting.key)!;
+    expect(target.getAttribute("aria-label")).toContain(markup);
+    expect(target.querySelector("[data-tag]")!.textContent).toContain(markup);
     expect((globalThis as { __pwned?: number }).__pwned).toBeUndefined();
   });
 
   it("one halo per employee in the decision office or the alert room", () => {
     for (const { name, board: b } of fixtureBoards()) {
-      const { container, unmount } = render(Scene, { board: b });
+      const { container, unmount } = renderScene(b);
       const layout = layoutScene({ board: b }, emptyMemory(b.floor));
       const expected = layout.employees.filter((e) => (e.zone === "decision" || e.zone === "alert") && e.at !== null).map((e) => e.key);
       const halos = [...container.querySelectorAll("[data-halo]")].map((h) => h.getAttribute("data-halo"));
@@ -74,7 +97,7 @@ describe("Scene", () => {
 
   it("a halo in the alert room uses the alert colour", () => {
     const b = board([card("queued", "decision"), card("alerted", "alert", { started: 1 })]);
-    const { container } = render(Scene, { board: b });
+    const { container } = renderScene(b);
     const colour = (key: string) => container.querySelector<HTMLElement>(`[data-halo="${key}"]`)!.style.getPropertyValue("--halo-colour");
     expect(colour("alerted")).toBe(paint("color-alert"));
     expect(colour("queued")).toBe(paint("color-attention"));
@@ -92,7 +115,7 @@ describe("Scene", () => {
     const first = alerted("first", 1_000, 1);
     const b = board([card("queued", "decision"), first, alerted("second", 2_000, 2)]);
     expect(beaconPair(b)).toEqual({ key: "first", enteredAt: first.scene!.waiting_since_ms });
-    const { container, unmount } = render(Scene, { board: b });
+    const { container, unmount } = renderScene(b);
     const beacons = container.querySelectorAll<HTMLElement>("[data-beacon]");
     expect(beacons).toHaveLength(1);
     expect(beacons[0]!.getAttribute("data-beacon")).toBe("first");
@@ -111,7 +134,60 @@ describe("Scene", () => {
     expect(beaconPair(late)).toEqual({ key: "waited", enteredAt: now - 1_000 });
     expect(haloMemo.timing("waited", now - 1_000).iterations).toBeGreaterThan(0);
     // No one in alert: no beacon.
-    const quiet = render(Scene, { board: board([card("queued", "decision")]) });
+    const quiet = renderScene(board([card("queued", "decision")]));
     expect(quiet.container.querySelector("[data-beacon]")).toBeNull();
+  });
+
+  it("one button per target with its accessible name", () => {
+    for (const { name, board: b } of fixtureBoards()) {
+      const { container, layout, unmount } = renderWithLayout(b);
+      const buttons = buttonsOf(container);
+      expect(buttons.length, name).toBe(layout.targets.length);
+      for (const target of layout.targets) {
+        const button = buttons.find((x) => x.dataset.target === target.id);
+        expect(button, `${name} ${target.id}`).toBeDefined();
+        expect(button!.getAttribute("aria-label"), target.id).toBe(target.label);
+        expect(button!.type).toBe("button");
+        if (target.kind === "figure") expect(button!.dataset.key, target.id).toBe(target.keys[0]);
+        else expect(button!.hasAttribute("data-key"), target.id).toBe(false);
+        // At its rectangle, in logical px under the shared transform.
+        expect([button!.style.left, button!.style.top, button!.style.width, button!.style.height], target.id).toEqual(
+          [target.rect.x, target.rect.y, target.rect.w, target.rect.h].map((v) => `${v}px`),
+        );
+      }
+      unmount();
+    }
+  });
+
+  it("DOM order equals the layout's tab order", () => {
+    for (const { name, board: b } of fixtureBoards()) {
+      const { container, layout, unmount } = renderWithLayout(b);
+      expect(buttonsOf(container).map((x) => x.dataset.target), name).toEqual(layout.targets.map((t) => t.id));
+      // No target takes a tab index of its own: DOM order is the order.
+      for (const button of buttonsOf(container)) expect(button.hasAttribute("tabindex")).toBe(false);
+      unmount();
+    }
+  });
+
+  it("the name tag is in the button before any hover and ignores the pointer", () => {
+    for (const { name, board: b } of fixtureBoards()) {
+      const { container, layout, unmount } = renderWithLayout(b);
+      for (const button of buttonsOf(container)) {
+        const tag = button.querySelector<HTMLElement>("[data-tag]");
+        expect(tag, `${name} ${button.dataset.target}`).not.toBeNull();
+        expect(tag!.textContent).toBe(layout.targets.find((t) => t.id === button.dataset.target)!.tag);
+        expect(tag!.style.pointerEvents).toBe("none");
+        expect(tag!.getAttribute("aria-hidden")).toBe("true");
+      }
+      unmount();
+    }
+  });
+
+  it("the line under the scene is outside the scene element, right after it", () => {
+    const { getByTestId } = renderScene(waitingBoard());
+    const scene = getByTestId("scene");
+    const strip = getByTestId("scene-strip");
+    expect(scene.contains(strip)).toBe(false);
+    expect(scene.compareDocumentPosition(strip) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 });

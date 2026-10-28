@@ -279,6 +279,19 @@ export function moreOfficesTarget(columns: number, cell: Cell): Rect {
   return { x: centre.x - w / 2, y: centre.y - h / 2, w, h };
 }
 
+/** The line under the scene (AD-177): drawn in the canvas's empty
+ *  bottom-left corner, below the floor's front-left edge, instead of below
+ *  the canvas, so it takes no height from eight projects (D-525). `w` is
+ *  the most width it may take; its buttons are `TARGET_CSS_MIN` CSS px
+ *  high, which is `h` at the minimum scale and less above it. */
+export const STRIP = { w: 360, h: TARGET_MIN } as const;
+
+/** The room the line under the scene may take, in logical px. */
+export function stripRect(columns: number): Rect {
+  const { h } = canvas(columns);
+  return { x: PAD.left, y: h - PAD.bottom - STRIP.h, w: STRIP.w, h: STRIP.h };
+}
+
 /** True when two rectangles share interior area; touching edges do not. */
 export function intersects(a: Rect, b: Rect): boolean {
   return a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;

@@ -5,7 +5,13 @@ import ApprovalCard from "./ApprovalCard.svelte";
 import Gauge from "./Gauge.svelte";
 import { tick } from "svelte";
 import SessionCard from "./SessionCard.svelte";
+import SessionFile from "./SessionFile.svelte";
+import SceneStrip from "./scene/SceneStrip.svelte";
 import StableLabel from "./StableLabel.svelte";
+import { OUTCOME_TEXT, outcomeText, type OutcomeKind } from "../lib/outcome";
+import { SIGN_WORDS, ZONE_WORDS } from "../lib/scene/text";
+import { hours } from "../lib/time";
+import type { FocusOutcome } from "../lib/generated/FocusOutcome";
 import SubjectPicker, { type PickerChoice } from "./SubjectPicker.svelte";
 import TriagePanel from "./TriagePanel.svelte";
 import TriageRow from "./TriageRow.svelte";
@@ -15,7 +21,7 @@ import * as ipc from "../lib/ipc";
 import { RegistryStore, refusalText } from "../lib/registry.svelte";
 import { AUTHOR_REFUSAL_TEXT, LIVE_STATE_TEXT, REASON_TEXT } from "../lib/registry-text";
 import { RELAY_TOGGLE_TEXT } from "../lib/relay-text";
-import { alertedCards, CAUSE_TEXT, causeText, LAST_KNOWN } from "../lib/alert";
+import { alertedCards, CAUSE_TEXT, causeText, LAST_KNOWN, waitText } from "../lib/alert";
 import type { ApprovalView } from "../lib/generated/ApprovalView";
 import type { Board } from "../lib/generated/Board";
 import { fixturesOf } from "../../e2e/fixture-index";
@@ -665,5 +671,186 @@ describe("AlertBand", () => {
     expect(board.alert_count).toBe(0);
     const { queryByTestId } = render(AlertBand, { board, nowMs: board.generated_at_ms });
     expect(queryByTestId("alert-band")).toBeNull();
+  });
+});
+
+describe("SessionFile", () => {
+  /** A board holding `cards`, from a fixture board's shape. */
+  function boardOf(cards: Card[], approvals: ApprovalView[] = []): Board {
+    const base = fixturesOf<Board>("board")[0]!.data;
+    const columns: Board["columns"] = { needs_you: [], your_turn: [], working: [], to_resume: [], done: [] };
+    for (const c of cards) columns[c.column].push(c);
+    return { ...base, columns, approvals, generated_at_ms: NOW };
+  }
+
+  function file(c: Card, approvals: ApprovalView[] = [], s: BoardStore = store()) {
+    return render(SessionFile, {
+      form: { kind: "file", card: c, back: false },
+      board: boardOf([c], approvals),
+      store: s,
+      onClose: () => {},
+      onOpen: () => {},
+      onBoard: () => {},
+    });
+  }
+
+  const waiting = (overrides: Partial<Card> = {}) =>
+    card({ scene: { zone: "decision", waiting_since_ms: NOW - 12 * 60_000, alert: null, approval: false }, ...overrides });
+
+  it("SessionFile renders session text as text", () => {
+    const hostile = `<img src=x onerror="window.__officinaXss = 1"><b>x</b>`;
+    const c = waiting({
+      name: hostile,
+      project: { name: hostile, color: null, priority: "high" },
+      last_prompt: hostile,
+      last_message: hostile,
+      last_message_tail: hostile,
+      waiting_for: hostile,
+      subject: { id: 1, name: hostile },
+    });
+    const { container, getByRole, getByTestId } = file(c);
+    expect(container.querySelector("img, b")).toBeNull();
+    expect(getByRole("heading").textContent).toBe(hostile);
+    for (const id of ["file-project", "file-waiting-for", "file-subject", "file-prompt", "file-answer", "file-answer-tail"]) {
+      expect(getByTestId(id).textContent, id).toContain(hostile);
+    }
+    expect((window as { __officinaXss?: number }).__officinaXss).toBeUndefined();
+  });
+
+  it("SessionFile is a dialog labelled by the session name", () => {
+    const { getByRole, getByTestId } = file(waiting());
+    const dialog = getByRole("dialog");
+    expect(dialog.hasAttribute("aria-modal")).toBe(false);
+    const title = document.getElementById(dialog.getAttribute("aria-labelledby")!);
+    expect(title?.textContent).toBe("billing-api");
+    expect(document.activeElement).toBe(getByTestId("bring-to-front"));
+  });
+
+  it("SessionFile omits the subject line without a subject", () => {
+    expect(file(waiting()).queryByTestId("file-subject")).toBeNull();
+    cleanup();
+    expect(file(waiting({ subject: { id: 3, name: "release 1.2" } })).getByTestId("file-subject").textContent).toBe("release 1.2");
+  });
+
+  it('SessionFile shows "since unknown" without a wait start', () => {
+    const unknownStart = waiting({ scene: { zone: "decision", waiting_since_ms: null, alert: null, approval: false } });
+    expect(file(unknownStart).getByTestId("file-since").textContent!.trim()).toBe("since unknown");
+    cleanup();
+    expect(file(waiting()).getByTestId("file-since").textContent).toContain("(12 min)");
+    cleanup();
+    // Not waiting: no wait line at all.
+    const working = card({ column: "working", waiting_for: null, scene: { zone: "office", waiting_since_ms: null, alert: null, approval: false } });
+    expect(file(working).queryByTestId("file-since")).toBeNull();
+  });
+
+  it("SessionFile shows its project's priority, its number and the zone", () => {
+    const c = waiting({ project: { name: "billing-api", color: "green", priority: "high" } });
+    const { getByTestId } = file(c);
+    expect(getByTestId("file-project").textContent).toContain(SIGN_WORDS.highPriority);
+    expect(getByTestId("file-number").textContent).toBe("1");
+    expect(getByTestId("file-zone").textContent).toBe(ZONE_WORDS.decision);
+  });
+
+  it("SessionFile states an alert's cause, last known on unknown data", () => {
+    const alerted = waiting({ scene: { zone: "alert", waiting_since_ms: NOW - 12 * 60_000, alert: "waited", approval: false } });
+    expect(file(alerted).getByTestId("file-alert").textContent!.trim()).toBe(causeText(alerted, NOW));
+    cleanup();
+    const unknown = { ...alerted, scene: { ...alerted.scene!, zone: "unknown" as const } };
+    expect(file(unknown).getByTestId("file-alert").textContent!.trim()).toBe(`${causeText(unknown, NOW)}, last known`);
+  });
+
+  it("SessionFile shows a pending approval and opens Board on it", async () => {
+    const c = card({ column: "working", waiting_for: null, scene: { zone: "decision", waiting_since_ms: NOW - 5 * 60_000, alert: null, approval: true } });
+    const request: ApprovalView = {
+      id: "r1",
+      project: c.project.name,
+      action: "restart",
+      description: "Restart the service",
+      argv: [],
+      http: null,
+      valid: true,
+      invalid_reason: null,
+      session_id: c.session_id,
+      session_name: c.name,
+      requested_at_ms: NOW - 5 * 60_000,
+      expires_at_ms: NOW + 60_000,
+      dry_run: null,
+      binding: null,
+      bound_files: null,
+      files_unchanged: null,
+    };
+    const onBoard = vi.fn();
+    const { getByTestId } = render(SessionFile, {
+      form: { kind: "file", card: c, back: false },
+      board: boardOf([c], [request]),
+      store: store(),
+      onClose: () => {},
+      onOpen: () => {},
+      onBoard,
+    });
+    expect(getByTestId("file-approval").textContent).toContain("restart");
+    expect(getByTestId("file-waiting-for").textContent).toBe(waitText(c));
+    expect(getByTestId("file-since").textContent).toContain("(5 min)");
+    await fireEvent.click(getByTestId("open-in-board"));
+    expect(onBoard).toHaveBeenCalledTimes(1);
+  });
+
+  it("SessionCard and SessionFile word outcomes alike", () => {
+    for (const kind of Object.keys(OUTCOME_TEXT) as OutcomeKind[]) {
+      const outcome = (
+        kind === "candidates" ? { outcome: kind, detail: ["one", "two"] } : kind === "failed" ? { outcome: kind, detail: "boom" } : { outcome: kind }
+      ) as FocusOutcome;
+      const s = store();
+      s.outcomes = { [card().key]: { outcome, atMs: NOW } };
+      const cardText = render(SessionCard, { card: card(), store: s }).getByTestId("focus-outcome").textContent;
+      cleanup();
+      const fileText = file(waiting(), [], s).getByTestId("focus-outcome").textContent;
+      cleanup();
+      expect(cardText, kind).toBe(fileText);
+      expect(cardText, kind).toContain(outcomeText(outcome));
+    }
+  });
+
+  it("the list form lists its sessions, each a button that opens its file", async () => {
+    const first = waiting({ key: "a", name: "first" });
+    const second = waiting({ key: "b", name: "second" });
+    const onOpen = vi.fn();
+    const { getAllByRole, getByRole } = render(SessionFile, {
+      form: { kind: "list", title: "Lounge", cards: [first, second], focusKey: "b" },
+      board: boardOf([first, second]),
+      store: store(),
+      onClose: () => {},
+      onOpen,
+      onBoard: () => {},
+    });
+    const rows = getAllByRole("button").filter((b) => b.dataset.row !== undefined);
+    expect(rows.map((r) => r.dataset.row)).toEqual(["a", "b"]);
+    expect(document.activeElement).toBe(rows[1]);
+    expect(getByRole("heading").textContent).toBe("Lounge");
+    await fireEvent.click(rows[0]!);
+    expect(onOpen).toHaveBeenCalledWith("a");
+  });
+});
+
+describe("SceneStrip", () => {
+  it("SceneStrip words the Done window from the board", async () => {
+    for (const board of fixturesOf<Board>("board").map((f) => f.data)) {
+      const onBoard = vi.fn();
+      const { getByTestId } = render(SceneStrip, {
+        toResume: board.columns.to_resume.length,
+        done: board.columns.done.length,
+        doneWindowMs: board.done_window_ms,
+        onBoard,
+      });
+      expect(getByTestId("strip-to-resume").textContent).toBe(`${board.columns.to_resume.length} to resume`);
+      expect(getByTestId("strip-done").textContent).toBe(`${board.columns.done.length} done in ${hours(board.done_window_ms)}`);
+      await fireEvent.click(getByTestId("strip-to-resume"));
+      await fireEvent.click(getByTestId("strip-done"));
+      expect(onBoard).toHaveBeenCalledTimes(2);
+      cleanup();
+    }
+    // Another window, another word: nothing is fixed at 24 h.
+    const { getByTestId } = render(SceneStrip, { toResume: 0, done: 1, doneWindowMs: 12 * 3_600_000, onBoard: () => {} });
+    expect(getByTestId("strip-done").textContent).toBe("1 done in 12 h");
   });
 });

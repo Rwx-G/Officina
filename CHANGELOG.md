@@ -18,6 +18,18 @@ project uses [Semantic Versioning](https://semver.org/).
   mode the header keeps to one line, so eight projects fit a maximised
   Full HD window. The scene's light materials, figure and people colours
   join the tokens.
+- Acting from the scene (v0.4, in progress): every employee is a button
+  with its name on hover and keyboard focus. It opens the session's file,
+  a side panel that resizes nothing: project and priority, number, place,
+  state and what it waits on, since when (or "since unknown"), the alert's
+  cause ("last known" on unknown data), subject, last prompt and answer,
+  a pending relay request with "Open in Board", and the board card's
+  actions with the same outcomes, Bring to front focused. Escape closes it
+  and returns to the employee. Tab walks the rooms in order, arrows move
+  within a room, digits 1 to 9 bring Needs you sessions to front as on the
+  board; the register, an office's chip, a full room and More offices list
+  their sessions, each opening its file. A line in the scene's empty
+  corner counts the sessions to resume and done, each opening Board mode.
 - The alert (v0.4, in progress): a band under the header, in every view,
   names the first session in alert, its project, what it waits on and why
   (a high-priority project, or waiting N minutes), and how many more; no

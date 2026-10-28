@@ -3,24 +3,34 @@
   // box, scaled as one to the sessions area. It reads the board only, never
   // the store's clock (AD-64); the layout is derived from the board, and its
   // memory committed after each layout without re-running it (D-184).
-  import type { Snippet } from "svelte";
+  // Beside the scene element, outside it (AD-177, D-111): the line under the
+  // scene, in the canvas's empty bottom-left corner, and the file panel,
+  // which this component opens, closes and returns focus from (AD-63).
+  import { tick } from "svelte";
+  import type { BoardStore } from "../../lib/board.svelte";
   import { beaconPair } from "../../lib/alert";
   import type { Board } from "../../lib/generated/Board";
+  import type { Card } from "../../lib/generated/Card";
   import type { ProjectColor } from "../../lib/generated/ProjectColor";
-  import { fitScale } from "../../lib/scene/geometry";
-  import { layoutScene, liveCards, type SceneLayout } from "../../lib/scene/layout";
+  import { fitScale, stripRect } from "../../lib/scene/geometry";
+  import { layoutScene, liveCards, type Target } from "../../lib/scene/layout";
   import * as memory from "../../lib/scene/memory";
+  import SessionFile, { type FileForm } from "../SessionFile.svelte";
   import SceneFloor from "./SceneFloor.svelte";
   import SceneHalos from "./SceneHalos.svelte";
   import SceneObjects from "./SceneObjects.svelte";
   import SceneOverlay from "./SceneOverlay.svelte";
+  import SceneStrip from "./SceneStrip.svelte";
+  import SceneTargets from "./SceneTargets.svelte";
 
   interface Props {
     board: Board;
-    /** Layer 5, story 4.8's targets. */
-    targets?: Snippet<[SceneLayout]>;
+    /** What the file's actions act through, as the board cards do. */
+    store: BoardStore;
+    /** Switches the Sessions view to Board mode. */
+    onBoard: () => void;
   }
-  let { board, targets }: Props = $props();
+  let { board, store, onBoard }: Props = $props();
 
   // `load` reads storage once, before the first layout, and returns the
   // committed memory after that.
@@ -39,6 +49,7 @@
   let height = $derived(Math.floor(layout.canvas.h * scale));
   // A whole-pixel offset keeps the snapped figures on device pixels.
   let left = $derived(Math.max(0, Math.floor((area.w - width) / 2)));
+  let strip = $derived(stripRect(layout.columns));
 
   /** Follows the size of the element holding the scene. */
   function fit(node: HTMLElement) {
@@ -54,35 +65,136 @@
     observer.observe(holder);
     return { destroy: () => observer.disconnect() };
   }
+
+  // ------------------------------------------------------------ the file
+
+  /** What the file panel holds: a session's file, by key, opened from a
+   *  figure or from a group's list; or a group's list, by its target. */
+  type Open = { kind: "file"; key: string; from: string | null } | { kind: "list"; target: string; focusKey: string | null };
+  let open = $state<Open | null>(null);
+
+  let sceneElement: HTMLElement;
+  let targetsLayer: ReturnType<typeof SceneTargets>;
+
+  /** Every card of the board by key: a file follows its card into any
+   *  column, and closes only when the card leaves the board (D-111). */
+  let allCards = $derived(new Map<string, Card>(Object.values(board.columns).flatMap((list: Card[]) => list.map((c) => [c.key, c] as const))));
+
+  let form = $derived.by<FileForm | null>(() => {
+    if (!open) return null;
+    if (open.kind === "file") {
+      const card = allCards.get(open.key);
+      return card ? { kind: "file", card, back: open.from !== null } : null;
+    }
+    const opened = open;
+    const target = layout.targets.find((t) => t.id === opened.target);
+    if (!target) return null;
+    const room = layout.rooms.find((r) => r.id === target.group);
+    return {
+      kind: "list",
+      title: room?.plaque.text ?? target.label,
+      cards: target.keys.flatMap((key) => allCards.get(key) ?? []),
+      focusKey: opened.focusKey,
+    };
+  });
+  /** Remounts the panel, which focuses its first control, on each new
+   *  file or list, never on a board update of the one shown. */
+  let formId = $derived(open === null ? "" : open.kind === "file" ? `file:${open.key}` : `list:${open.target}`);
+
+  // The card left the board, or the group emptied: the panel closes, and
+  // focus, which it held or which nothing holds, goes to the scene element.
+  $effect(() => {
+    if (open !== null && form === null) {
+      open = null;
+      if (document.activeElement === null || document.activeElement === document.body) sceneElement.focus();
+    }
+  });
+
+  function activate(target: Target): void {
+    open = target.kind === "figure" ? { kind: "file", key: target.keys[0]!, from: null } : { kind: "list", target: target.id, focusKey: null };
+  }
+
+  /** The target that now represents `key`: its figure, else its group. */
+  function representing(key: string): string | null {
+    const holding = layout.targets.filter((t) => t.keys.includes(key));
+    return (holding.find((t) => t.kind === "figure") ?? holding[0])?.id ?? null;
+  }
+
+  /** Escape: from a listed file to its list, else closed, focus on the
+   *  target that now represents what was shown, else the scene element. */
+  async function back(): Promise<void> {
+    const was = open;
+    if (!was) return;
+    if (was.kind === "file" && was.from !== null && layout.targets.some((t) => t.id === was.from)) {
+      open = { kind: "list", target: was.from, focusKey: was.key };
+      return;
+    }
+    open = null;
+    const id = was.kind === "file" ? representing(was.key) : was.target;
+    await tick();
+    if (id === null || !targetsLayer.focusTarget(id)) sceneElement.focus();
+  }
+
+  function onKey(event: KeyboardEvent): void {
+    if (event.key !== "Escape" || open === null || event.ctrlKey || event.altKey || event.metaKey) return;
+    event.preventDefault();
+    void back();
+  }
 </script>
 
-<!-- `data-scale` is written with the transform, in the same update (D-185);
-     `data-moving` is story 4.10's mover's, "0" while nothing walks. -->
-<div
-  class="scene"
-  data-testid="scene"
-  tabindex="-1"
-  data-scale={scale}
-  data-columns={layout.columns}
-  data-moving="0"
-  style:width="{width}px"
-  style:height="{height}px"
-  style:margin-left="{left}px"
-  use:fit
->
-  <p class="summary" data-testid="scene-summary">{layout.summary}</p>
-  <div class="stack" style:width="{layout.canvas.w}px" style:height="{layout.canvas.h}px" style:transform="scale({scale})">
-    <SceneFloor {layout} />
-    <SceneHalos {layout} {cards} {beacon} />
-    <SceneObjects {layout} {colours} snap={scale * pixelRatio} />
-    <SceneOverlay {layout} {cards} />
-    {#if targets}
-      <div class="targets">{@render targets(layout)}</div>
-    {/if}
+<svelte:window onkeydown={onKey} />
+
+<!-- The sessions area's scroller: below the minimum area it scrolls, the
+     line under the scene with it; the file panel stays at its right edge. -->
+<div class="area" data-testid="scene-area">
+  <!-- `data-scale` is written with the transform, in the same update (D-185);
+       `data-moving` is story 4.10's mover's, "0" while nothing walks. -->
+  <div
+    class="scene"
+    data-testid="scene"
+    tabindex="-1"
+    data-scale={scale}
+    data-columns={layout.columns}
+    data-moving="0"
+    style:width="{width}px"
+    style:height="{height}px"
+    style:margin-left="{left}px"
+    bind:this={sceneElement}
+    use:fit
+  >
+    <p class="summary" data-testid="scene-summary">{layout.summary}</p>
+    <div class="stack" style:width="{layout.canvas.w}px" style:height="{layout.canvas.h}px" style:transform="scale({scale})">
+      <SceneFloor {layout} />
+      <SceneHalos {layout} {cards} {beacon} />
+      <SceneObjects {layout} {colours} snap={scale * pixelRatio} />
+      <SceneOverlay {layout} {cards} />
+      <SceneTargets {layout} onActivate={activate} bind:this={targetsLayer} />
+    </div>
+  </div>
+  <div
+    class="strip"
+    style:left="{left + strip.x * scale}px"
+    style:top="{(strip.y + strip.h) * scale}px"
+    style:max-width="{strip.w * scale}px"
+  >
+    <SceneStrip toResume={board.columns.to_resume.length} done={board.columns.done.length} doneWindowMs={board.done_window_ms} {onBoard} />
   </div>
 </div>
+{#if form}
+  {#key formId}
+    <SessionFile {form} {board} {store} onClose={() => void back()} onOpen={(key) => (open = { kind: "file", key, from: open?.kind === "list" ? open.target : null })} {onBoard} />
+  {/key}
+{/if}
 
 <style>
+  .area {
+    position: absolute;
+    inset: 0;
+    overflow: auto;
+    /* The scrollbar's room is kept, so the scene's own scale never decides
+       whether the area scrolls. */
+    scrollbar-gutter: stable;
+  }
   .scene {
     position: relative;
     overflow: hidden;
@@ -97,6 +209,11 @@
   .stack > :global(*) {
     position: absolute;
     inset: 0;
+  }
+  /* Its bottom edge on the room's: it grows upward, below the floor. */
+  .strip {
+    position: absolute;
+    transform: translateY(-100%);
   }
   /* Visually hidden, read by assistive technology (AD-63). */
   .summary {

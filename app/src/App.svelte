@@ -116,7 +116,7 @@
       <main class="loading" data-testid="loading">Asking Claude Code for its sessions...</main>
     {:else if scene}
       <main class="sessions-area" data-testid="sessions-area">
-        <Scene {board} />
+        <Scene {board} {store} onBoard={() => windowView.setBase("board")} />
       </main>
     {:else if columns}
       <main class="board">
@@ -173,10 +173,9 @@
   .fill > .sessions-area {
     flex: 1 1 0;
     min-height: 50vh;
-    overflow: auto;
-    /* The scrollbar's room is kept, so the scene's own scale never decides
-       whether the area scrolls. */
-    scrollbar-gutter: stable;
+    /* The scene scrolls inside it; the file panel overlays its right edge. */
+    position: relative;
+    overflow: hidden;
   }
   .board {
     display: grid;

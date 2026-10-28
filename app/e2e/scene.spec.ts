@@ -7,14 +7,20 @@
 // from `layoutScene`, imported, never retyped.
 import { existsSync } from "node:fs";
 import { expect, test, type Page } from "@playwright/test";
-import { SCREENSHOT_MAX_DIFF_RATIO, loadBoard, openScene, sceneSettled } from "./fixtures";
+import { SCREENSHOT_MAX_DIFF_RATIO, calls, loadBoard, openScene, sceneSettled } from "./fixtures";
 import { fixturesOf } from "./fixture-index";
 import { beaconPair } from "../src/lib/alert";
 import { HALO_BREATHING_MS, HALO_CYCLE_MS } from "../src/lib/halo";
-import { MIN_SCALE } from "../src/lib/scene/geometry";
-import { layoutScene, liveCards, type SceneLayout } from "../src/lib/scene/layout";
+import { MIN_SCALE, TARGET_CSS_MIN, stripRect } from "../src/lib/scene/geometry";
+import { layoutScene, liveCards, nearestTarget, type Direction, type SceneLayout, type Target } from "../src/lib/scene/layout";
 import { STORAGE_KEY, emptyMemory, type SceneMemory } from "../src/lib/scene/memory";
+import { ZONE_WORDS } from "../src/lib/scene/text";
+import { causeText } from "../src/lib/alert";
+import { outcomeText } from "../src/lib/outcome";
+import { hours } from "../src/lib/time";
 import type { Board } from "../src/lib/generated/Board";
+import type { Card } from "../src/lib/generated/Card";
+import type { FocusOutcome } from "../src/lib/generated/FocusOutcome";
 
 const scene = (page: Page) => page.getByTestId("scene");
 
@@ -103,6 +109,57 @@ function startsWorking(board: Board, key: string): Board {
   next.columns.working.push({ ...moved!, column: "working", waiting_for: null, scene: { ...moved!.scene!, zone: "office", alert: null, approval: false } });
   next.waiting_count = next.columns.needs_you.length;
   return next;
+}
+
+interface Box {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+/** The targets' and the strip buttons' boxes relative to the scene
+ *  element, in CSS px, read in one evaluation so no scroll falls between. */
+function boxes(page: Page): Promise<{ scene: Box; targets: { id: string; box: Box }[]; strip: Box[] }> {
+  return scene(page).evaluate((root) => {
+    const origin = root.getBoundingClientRect();
+    const rel = (el: Element) => {
+      const r = el.getBoundingClientRect();
+      return { x: r.left - origin.left, y: r.top - origin.top, w: r.width, h: r.height };
+    };
+    return {
+      scene: { x: 0, y: 0, w: origin.width, h: origin.height },
+      targets: Array.from(root.querySelectorAll("[data-target]")).map((el) => ({ id: el.getAttribute("data-target")!, box: rel(el) })),
+      strip: Array.from(document.querySelectorAll("[data-testid=scene-strip] button")).map(rel),
+    };
+  });
+}
+
+const meets = (a: Box, b: Box) => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+/** A CSS box compared with a minimum, with D-104's rounding allowance. */
+const atLeast = (value: number, min: number) => value >= min - 0.01;
+
+/** The line under the scene sits in its corner of the canvas (`stripRect`
+ *  at the scene's scale), inside the scene's box, over no target. */
+async function expectStripInCorner(page: Page): Promise<void> {
+  const scale = Number(await scene(page).getAttribute("data-scale"));
+  const room = stripRect(Number(await scene(page).getAttribute("data-columns")));
+  const { scene: box, targets, strip } = await boxes(page);
+  expect(strip.length).toBe(2);
+  for (const b of strip) {
+    expect(atLeast(b.h, TARGET_CSS_MIN), `strip button ${b.h} px high`).toBe(true);
+    expect(b.x).toBeGreaterThanOrEqual(room.x * scale - 0.5);
+    expect(b.x + b.w).toBeLessThanOrEqual((room.x + room.w) * scale + 0.5);
+    expect(b.y).toBeGreaterThanOrEqual(room.y * scale - 0.5);
+    expect(b.y + b.h).toBeLessThanOrEqual(Math.min((room.y + room.h) * scale, box.h) + 0.5);
+    for (const t of targets) expect(meets(b, t.box), `the strip meets ${t.id}`).toBe(false);
+  }
+}
+
+async function expectTargetsAtLeastMinimum(page: Page): Promise<void> {
+  for (const { id, box } of (await boxes(page)).targets) {
+    expect(atLeast(box.w, TARGET_CSS_MIN) && atLeast(box.h, TARGET_CSS_MIN), `${id} is ${box.w} x ${box.h}`).toBe(true);
+  }
 }
 
 test.describe("the scene draws every live session of each fixture", () => {
@@ -362,6 +419,10 @@ test.describe("scene", () => {
       });
       expect(area.sw, "the sessions area scrolls sideways").toBeLessThanOrEqual(area.cw);
       expect(area.sh, "the sessions area scrolls down").toBeLessThanOrEqual(area.ch);
+      // The line under the scene takes no height of its own (D-525): it is
+      // inside the scene's box, over no target.
+      await expectStripInCorner(page);
+      await expectTargetsAtLeastMinimum(page);
     });
   }
 
@@ -382,4 +443,572 @@ test.describe("scene", () => {
       });
     }
   });
+});
+
+// ------------------------------------------------------------ acting from the scene (story 4.8)
+
+const targetById = (page: Page, id: string) => scene(page).locator(`[data-target=${JSON.stringify(id)}]`);
+const figureOf = (page: Page, key: string) => scene(page).locator(`[data-layer="targets"] [data-key=${JSON.stringify(key)}]`);
+const sessionFile = (page: Page) => page.getByTestId("session-file");
+const rowOf = (page: Page, key: string) => sessionFile(page).locator(`[data-row=${JSON.stringify(key)}]`);
+const focusedTarget = (page: Page) => page.evaluate(() => document.activeElement?.getAttribute("data-target") ?? null);
+const focusedTestId = (page: Page) => page.evaluate(() => document.activeElement?.getAttribute("data-testid") ?? null);
+const focusCalls = async (page: Page) => (await calls(page)).filter((c) => c.cmd === "focus").map((c) => (c.args as { key: string }).key);
+const cardOf = (board: Board, key: string): Card => Object.values(board.columns).flat().find((c) => c.key === key)!;
+const ARROW_KEYS: Record<Direction, string> = { up: "ArrowUp", down: "ArrowDown", left: "ArrowLeft", right: "ArrowRight" };
+
+/** Counts every write inside the scene element from now on. */
+async function observeScene(page: Page): Promise<() => Promise<number>> {
+  await scene(page).evaluate((root) => {
+    const records: MutationRecord[] = [];
+    new MutationObserver((list) => records.push(...list)).observe(root, { subtree: true, childList: true, attributes: true, characterData: true });
+    (window as unknown as { __actRecords: MutationRecord[] }).__actRecords = records;
+  });
+  return () => page.evaluate(() => (window as unknown as { __actRecords: MutationRecord[] }).__actRecords.length);
+}
+
+/** The group target of the room `room` picks, from the layout. */
+function groupTarget(layout: SceneLayout, room: (kind: string, id: string) => boolean): Target {
+  const found = layout.targets.find((t) => t.kind === "group" && t.keys.length > 0 && layout.rooms.some((r) => r.id === t.group && room(r.kind, r.id)));
+  if (!found) throw new Error("no such group in this layout");
+  return found;
+}
+
+/** scene-overflow with someone at reception and someone in the alert room,
+ *  so every room of AD-63's tab order holds a target. */
+function everyZone(): Board {
+  const board = structuredClone(loadBoard("scene-overflow"));
+  const resting = board.columns.your_turn.find((c) => c.scene?.zone === "lounge")!;
+  resting.scene = { ...resting.scene!, zone: "reception" };
+  const first = board.columns.needs_you[0]!;
+  first.scene = { ...first.scene!, zone: "alert", alert: "priority" };
+  board.alert_count = 1;
+  return board;
+}
+
+/** scene-overflow with every Working session in the lounge. */
+function fullLounge(): Board {
+  const board = structuredClone(loadBoard("scene-overflow"));
+  for (const c of board.columns.working.splice(0)) board.columns.your_turn.push({ ...c, column: "your_turn", scene: { ...c.scene!, zone: "lounge" } });
+  return board;
+}
+
+/** The list form shows `keys` in that order, each a row button. */
+async function expectList(page: Page, keys: string[]): Promise<void> {
+  await expect(sessionFile(page)).toHaveAttribute("data-form", "list");
+  const rows = await sessionFile(page).locator("[data-row]").evaluateAll((all) => all.map((r) => r.getAttribute("data-row")));
+  expect(rows).toEqual(keys);
+}
+
+test.describe("acting from the scene", () => {
+  test("hovering and focusing targets changes nothing in the scene", async ({ page }) => {
+    const board = loadBoard("scene-c");
+    await openScene(page, board);
+    const records = await observeScene(page);
+    const targets = scene(page).locator("[data-target]");
+    const count = await targets.count();
+    expect(count).toBe(layouts(board)[0]!.targets.length);
+    for (let i = 0; i < count; i++) {
+      const target = targets.nth(i);
+      await expect(target.locator("[data-tag]")).toBeHidden();
+      await target.hover();
+      await expect(target.locator("[data-tag]")).toBeVisible();
+    }
+    await scene(page).focus();
+    for (let i = 0; i < count; i++) {
+      await page.keyboard.press("Tab");
+      await expect(targets.nth(i)).toBeFocused();
+      await expect(targets.nth(i).locator("[data-tag]")).toBeVisible();
+    }
+    expect(await records()).toBe(0);
+  });
+
+  test("Tab walks reception, the queue, the register, the alert room, the offices, the lounge and More offices in that order", async ({ page }) => {
+    const board = everyZone();
+    await openScene(page, board);
+    const [layout] = layouts(board);
+    await scene(page).focus();
+    const walked: (string | null)[] = [];
+    for (let i = 0; i < layout!.targets.length; i++) {
+      await page.keyboard.press("Tab");
+      walked.push(await focusedTarget(page));
+    }
+    expect(walked).toEqual(layout!.targets.map((t) => t.id));
+    const rooms = layout!.targets.map((t) => t.group).filter((room, i, all) => room !== all[i - 1]);
+    const offices = layout!.rooms.filter((r) => r.kind === "office" && layout!.targets.some((t) => t.group === r.id)).map((r) => r.id);
+    expect(rooms).toEqual(["reception", "decision", "alert", ...offices, "lounge", "more"]);
+    // The register's group comes right after the queue's figures (D-103).
+    const decision = layout!.targets.filter((t) => t.group === "decision");
+    expect(decision.map((t) => t.kind)).toEqual([...decision.slice(0, -1).map(() => "figure"), "group"]);
+    // The line under the scene follows the scene element (AD-63).
+    await page.keyboard.press("Tab");
+    expect(await focusedTestId(page)).toBe("strip-to-resume");
+  });
+
+  test("a focused target shows the two-tone ring", async ({ page }) => {
+    await openScene(page, loadBoard("scene-c"));
+    await scene(page).focus();
+    await page.keyboard.press("Tab");
+    const ring = await page.evaluate(() => {
+      const target = document.activeElement as HTMLElement;
+      const probe = document.createElement("span");
+      document.body.append(probe);
+      probe.style.color = "var(--color-working)";
+      const working = getComputedStyle(probe).color;
+      probe.style.color = "var(--color-surface)";
+      const surface = getComputedStyle(probe).color;
+      probe.remove();
+      const s = getComputedStyle(target);
+      return { target: target.dataset.target, visible: target.matches(":focus-visible"), style: s.outlineStyle, width: s.outlineWidth, colour: s.outlineColor, offset: s.outlineOffset, shadow: s.boxShadow, working, surface };
+    });
+    expect(ring.target).toBeTruthy();
+    expect(ring.visible).toBe(true);
+    expect([ring.style, ring.width, ring.colour, ring.offset]).toEqual(["solid", "3px", ring.working, "2px"]);
+    expect(ring.shadow).toBe(`${ring.surface} 0px 0px 0px 2px`);
+  });
+
+  test("a figure's target is at its new place as soon as the board changes", async ({ page }) => {
+    const board = loadBoard("scene-c");
+    await openScene(page, board);
+    const mover = liveCards(board).find((c) => c.scene?.zone === "lounge")!;
+    const next = startsWorking(board, mover.key);
+    const [before, after] = layouts(board, next);
+    const targetOf = (layout: SceneLayout) => layout.targets.find((t) => t.kind === "figure" && t.keys[0] === mover.key)!;
+    expect(targetOf(after!).rect).not.toEqual(targetOf(before!).rect);
+    const scale = Number(await scene(page).getAttribute("data-scale"));
+    const offset = async () => {
+      const box = (await boxes(page)).targets.find((t) => t.id === targetOf(after!).id)!.box;
+      const want = targetOf(after!).rect;
+      return Math.abs(box.x - want.x * scale) + Math.abs(box.y - want.y * scale);
+    };
+    expect(await offset()).toBeGreaterThan(1);
+    await push(page, next);
+    await expect.poll(offset).toBeLessThan(0.5);
+    await expect(scene(page)).toHaveAttribute("data-moving", "0");
+  });
+
+  test("clicking a figure opens its file with Bring to front focused", async ({ page }) => {
+    const board = loadBoard("scene-c");
+    await openScene(page, board);
+    const scale = await scene(page).getAttribute("data-scale");
+    const first = board.columns.needs_you[0]!;
+    await figureOf(page, first.key).click();
+    await expect(page.getByRole("dialog", { name: first.name })).toBeVisible();
+    await expect(page.getByTestId("bring-to-front")).toBeFocused();
+    await expect(page.getByTestId("file-number")).toHaveText("1");
+    await expect(page.getByTestId("file-zone")).toHaveText(ZONE_WORDS.decision);
+    await expect(page.getByTestId("file-waiting-for")).toHaveText(first.waiting_for!);
+    // At the sessions area's right edge, 420 px wide, the scene unscaled.
+    const file = (await sessionFile(page).boundingBox())!;
+    const area = (await page.getByTestId("sessions-area").boundingBox())!;
+    expect(file.width).toBe(420);
+    expect(Math.abs(file.x + file.width - (area.x + area.width))).toBeLessThan(1);
+    expect(await scene(page).getAttribute("data-scale")).toBe(scale);
+    expect(await scene(page).evaluate((s, f) => s.contains(document.querySelector(f)), "[data-testid=session-file]")).toBe(false);
+  });
+
+  test("Enter then Enter brings the session to front as a board card does", async ({ page }) => {
+    const board = loadBoard("scene-c");
+    await openScene(page, board);
+    const first = board.columns.needs_you[0]!;
+    await figureOf(page, first.key).focus();
+    await page.keyboard.press("Enter");
+    await expect(page.getByTestId("bring-to-front")).toBeFocused();
+    await page.keyboard.press("Enter");
+    await expect.poll(() => focusCalls(page)).toEqual([first.key]);
+    await expect(page.getByTestId("focus-outcome")).toContainText(outcomeText({ outcome: "focused" }));
+    // Space opens a file too, and brings nothing to front by itself.
+    const second = board.columns.needs_you[1]!;
+    await figureOf(page, second.key).focus();
+    await page.keyboard.press("Space");
+    await expect(page.getByRole("dialog", { name: second.name })).toBeVisible();
+    await expect(page.getByTestId("bring-to-front")).toBeFocused();
+    expect(await focusCalls(page)).toEqual([first.key]);
+  });
+
+  test("Escape closes the file and returns focus to the figure", async ({ page }) => {
+    const board = loadBoard("scene-c");
+    await openScene(page, board);
+    const first = board.columns.needs_you[0]!;
+    await figureOf(page, first.key).click();
+    await expect(page.getByTestId("bring-to-front")).toBeFocused();
+    await page.keyboard.press("Escape");
+    await expect(sessionFile(page)).toHaveCount(0);
+    await expect(figureOf(page, first.key)).toBeFocused();
+    // The file follows its card into another column; Escape then finds the
+    // target that now represents it, at its desk.
+    await figureOf(page, first.key).click();
+    const working = startsWorking(board, first.key);
+    await push(page, working);
+    await expect(page.getByTestId("file-zone")).toHaveText(ZONE_WORDS.office);
+    await page.keyboard.press("Escape");
+    await expect(figureOf(page, first.key)).toBeFocused();
+    // A card the scene no longer draws: focus goes to the scene element.
+    await figureOf(page, first.key).click();
+    const ended = structuredClone(working);
+    const at = ended.columns.working.findIndex((c) => c.key === first.key);
+    const [card] = ended.columns.working.splice(at, 1);
+    ended.columns.to_resume.unshift({ ...card!, column: "to_resume", scene: null });
+    await push(page, ended);
+    await expect(page.getByTestId("file-zone")).toHaveCount(0);
+    await expect(page.getByRole("dialog", { name: first.name })).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(sessionFile(page)).toHaveCount(0);
+    await expect(scene(page)).toBeFocused();
+  });
+
+  test("the file offers the card's actions with their outcomes", async ({ page }) => {
+    const board = loadBoard("busy");
+    const [layout] = layouts(board);
+    const placed = new Set(layout!.employees.filter((e) => e.spot !== null).map((e) => e.key));
+    const attach = liveCards(board).find((c) => c.attach_available && placed.has(c.key))!;
+    const other = liveCards(board).find((c) => c.key !== attach.key && placed.has(c.key))!;
+    const candidates: FocusOutcome = { outcome: "candidates", detail: ["Terminal - first", "Terminal - second"] };
+    await openScene(page, board, null, null, { [other.key]: candidates });
+    await figureOf(page, attach.key).click();
+    await expect(page.getByTestId("copy-attach")).toHaveAccessibleName("Copy attach command");
+    await page.getByTestId("bring-to-front").click();
+    await expect(page.getByTestId("focus-outcome")).toContainText(outcomeText({ outcome: "focused" }));
+    await page.getByRole("button", { name: "Wrong window?" }).click();
+    await expect.poll(async () => (await calls(page)).filter((c) => c.cmd === "report_wrong_window").length).toBe(1);
+    await expect(page.getByTestId("focus-outcome")).toHaveCount(0);
+    await page.keyboard.press("Escape");
+    await figureOf(page, other.key).click();
+    await page.getByTestId("bring-to-front").click();
+    const outcome = page.getByTestId("focus-outcome");
+    await expect(outcome).toContainText(outcomeText(candidates));
+    for (const title of (candidates as { detail: string[] }).detail) await expect(outcome).toContainText(title);
+    expect(await focusCalls(page)).toEqual([attach.key, other.key]);
+  });
+
+  test("the file of an approval-only wait opens Board mode on its approval", async ({ page }) => {
+    const board = loadBoard("scene-c");
+    const waiting = liveCards(board).find((c) => c.scene?.approval)!;
+    const request = board.approvals.find((a) => a.session_id === waiting.session_id)!;
+    await openScene(page, board);
+    await figureOf(page, waiting.key).click();
+    await expect(page.getByTestId("file-approval")).toContainText(request.action);
+    await expect(page.getByTestId("file-since")).not.toContainText("unknown");
+    await expect(page.getByTestId("file-number")).toHaveCount(0);
+    await page.getByTestId("open-in-board").click();
+    await expect(page.locator(`[data-testid=approval-card][data-id=${JSON.stringify(request.id)}]`)).toBeVisible();
+    await expect(page.getByRole("radio", { name: "Board" })).toBeChecked();
+    await expect(scene(page)).toHaveCount(0);
+  });
+
+  test("the file of an alerted session states its cause", async ({ page }) => {
+    const board = loadBoard("scene-alert");
+    await openScene(page, board);
+    const alerted = liveCards(board).filter((c) => c.scene?.alert);
+    expect(new Set(alerted.map((c) => c.scene!.alert)).size).toBeGreaterThan(1);
+    for (const card of alerted) {
+      await figureOf(page, card.key).click();
+      await expect(page.getByTestId("file-zone")).toHaveText(ZONE_WORDS.alert);
+      await expect(page.getByTestId("file-alert")).toHaveText(causeText(card, board.generated_at_ms));
+      await page.keyboard.press("Escape");
+    }
+  });
+
+  test("the file of an unknown session that keeps an alert says last known", async ({ page }) => {
+    const board = loadBoard("scene-alert");
+    await openScene(page, board);
+    const card = liveCards(board).find((c) => c.scene?.alert)!;
+    await figureOf(page, card.key).click();
+    await expect(page.getByTestId("file-alert")).not.toContainText("last known");
+    const stale = structuredClone(board);
+    stale.stale = { since_ms: board.generated_at_ms, error: "agents snapshot failed" };
+    for (const c of liveCards(stale)) c.scene = c.scene && { ...c.scene, zone: "unknown" };
+    await push(page, stale);
+    await expect(page.getByTestId("file-zone")).toHaveText(ZONE_WORDS.unknown);
+    await expect(page.getByTestId("file-alert")).toHaveText(`${causeText(card, board.generated_at_ms)}, last known`);
+  });
+
+  test("opening and closing the file changes nothing in the scene", async ({ page }) => {
+    const board = loadBoard("scene-c");
+    await openScene(page, board);
+    const records = await observeScene(page);
+    for (const card of board.columns.needs_you) {
+      await figureOf(page, card.key).click();
+      await expect(page.getByRole("dialog", { name: card.name })).toBeVisible();
+      await page.keyboard.press("Escape");
+      await expect(sessionFile(page)).toHaveCount(0);
+    }
+    await figureOf(page, board.columns.needs_you[0]!.key).focus();
+    await page.keyboard.press("Enter");
+    await page.keyboard.press("Escape");
+    expect(await records()).toBe(0);
+  });
+
+  test("the file closes when its session leaves the board", async ({ page }) => {
+    const board = loadBoard("scene-c");
+    await openScene(page, board);
+    const first = board.columns.needs_you[0]!;
+    await figureOf(page, first.key).click();
+    await expect(page.getByTestId("bring-to-front")).toBeFocused();
+    const without = structuredClone(board);
+    without.columns.needs_you = without.columns.needs_you.filter((c) => c.key !== first.key);
+    without.waiting_count -= 1;
+    await push(page, without);
+    await expect(sessionFile(page)).toHaveCount(0);
+    await expect(scene(page)).toBeFocused();
+    // The key comes back: its file stays closed.
+    await push(page, board);
+    await expect(figureOf(page, first.key)).toHaveCount(1);
+    await expect(sessionFile(page)).toHaveCount(0);
+  });
+
+  test("the register lists the waiting beyond the queue, each opening its file", async ({ page }) => {
+    const board = loadBoard("scene-overflow");
+    await openScene(page, board);
+    const [layout] = layouts(board);
+    const register = groupTarget(layout!, (kind) => kind === "decision");
+    const queued = layout!.targets.filter((t) => t.group === "decision" && t.kind === "figure").flatMap((t) => t.keys);
+    expect([...queued, ...register.keys]).toEqual(board.columns.needs_you.map((c) => c.key));
+    await targetById(page, register.id).click();
+    await expectList(page, register.keys);
+    for (const key of register.keys) {
+      await rowOf(page, key).click();
+      await expect(page.getByRole("dialog", { name: cardOf(board, key).name })).toBeVisible();
+      await expect(page.getByTestId("bring-to-front")).toBeFocused();
+      await page.keyboard.press("Escape");
+      await expect(rowOf(page, key)).toBeFocused();
+    }
+  });
+
+  test("a chip lists the office's sessions without a desk", async ({ page }) => {
+    const board = loadBoard("scene-overflow");
+    await openScene(page, board);
+    const [layout] = layouts(board);
+    const chip = groupTarget(layout!, (kind) => kind === "office");
+    for (const key of chip.keys) expect(layout!.desks.some((d) => d.key === key), key).toBe(false);
+    await targetById(page, chip.id).click();
+    await expectList(page, chip.keys);
+    await rowOf(page, chip.keys[0]!).click();
+    await expect(page.getByRole("dialog", { name: cardOf(board, chip.keys[0]!).name })).toBeVisible();
+  });
+
+  test("More offices lists the extra projects' sessions", async ({ page }) => {
+    const board = loadBoard("scene-overflow");
+    await openScene(page, board);
+    const [layout] = layouts(board);
+    const more = groupTarget(layout!, (kind) => kind === "more");
+    const room = layout!.rooms.find((r) => r.id === more.group)!;
+    expect(more.keys.map((k) => cardOf(board, k).project.name).every((p) => room.projects.includes(p))).toBe(true);
+    // Their sessions at work: the waiting queue and the lounge hold the others.
+    const atWork = liveCards(board).filter((c) => room.projects.includes(c.project.name) && c.scene?.zone === "office");
+    expect(more.keys).toEqual(atWork.map((c) => c.key));
+    await targetById(page, more.id).click();
+    await expectList(page, more.keys);
+    await expect(sessionFile(page).getByRole("heading")).toHaveText(room.plaque.text);
+  });
+
+  test("a full lounge lists the rest", async ({ page }) => {
+    const board = fullLounge();
+    await openScene(page, board);
+    const [layout] = layouts(board);
+    const lounge = groupTarget(layout!, (kind) => kind === "lounge");
+    const seated = layout!.targets.filter((t) => t.group === lounge.group && t.kind === "figure").flatMap((t) => t.keys);
+    const inLounge = liveCards(board).filter((c) => c.scene?.zone === "lounge").map((c) => c.key);
+    expect([...seated, ...lounge.keys].sort()).toEqual([...inLounge].sort());
+    await targetById(page, lounge.id).click();
+    await expectList(page, lounge.keys);
+  });
+
+  test("Escape steps back from a listed file to the list, then to the group", async ({ page }) => {
+    const board = loadBoard("scene-overflow");
+    await openScene(page, board);
+    const [layout] = layouts(board);
+    const register = groupTarget(layout!, (kind) => kind === "decision");
+    const key = register.keys[1]!;
+    await targetById(page, register.id).click();
+    await rowOf(page, key).click();
+    await expect(sessionFile(page)).toHaveAttribute("data-form", "file");
+    await expect(page.getByTestId("file-close")).toHaveText("Back to the list");
+    await page.keyboard.press("Escape");
+    await expectList(page, register.keys);
+    await expect(rowOf(page, key)).toBeFocused();
+    await page.keyboard.press("Escape");
+    await expect(sessionFile(page)).toHaveCount(0);
+    await expect(targetById(page, register.id)).toBeFocused();
+  });
+
+  test("list rows are 44 px or more", async ({ page }) => {
+    const board = loadBoard("scene-overflow");
+    await openScene(page, board);
+    const groups = layouts(board)[0]!.targets.filter((t) => t.kind === "group" && t.keys.length > 0);
+    expect(groups.length).toBeGreaterThan(2);
+    for (const group of groups) {
+      await targetById(page, group.id).click();
+      const rows = sessionFile(page).locator("[data-row]");
+      await expect(rows).toHaveCount(group.keys.length);
+      for (const box of await rows.evaluateAll((all) => all.map((r) => r.getBoundingClientRect().toJSON() as DOMRect))) {
+        expect(atLeast(box.width, TARGET_CSS_MIN) && atLeast(box.height, TARGET_CSS_MIN), `${group.id}: ${box.width} x ${box.height}`).toBe(true);
+      }
+      await page.keyboard.press("Escape");
+      await expect(targetById(page, group.id)).toBeFocused();
+    }
+  });
+
+  test("arrows move within a zone, stop at its edge and do not scroll the area", async ({ page }) => {
+    await page.setViewportSize({ width: 1000, height: 760 });
+    const board = loadBoard("scene-overflow");
+    await openScene(page, board);
+    const [layout] = layouts(board);
+    await page.evaluate(() => {
+      const seen: boolean[] = [];
+      (window as unknown as { __arrows: boolean[] }).__arrows = seen;
+      addEventListener("keydown", (e) => e.key.startsWith("Arrow") && seen.push(e.defaultPrevented));
+    });
+    const scroll = () => scene(page).evaluate((s) => ({ top: s.parentElement!.scrollTop, left: s.parentElement!.scrollLeft }));
+    const office = layout!.rooms.find((r) => r.kind === "office" && layout!.targets.filter((t) => t.group === r.id).length > 2)!;
+    let moves = 0;
+    let edges = 0;
+    for (const target of layout!.targets.filter((t) => t.group === "decision" || t.group === office.id)) {
+      for (const direction of Object.keys(ARROW_KEYS) as Direction[]) {
+        await targetById(page, target.id).focus();
+        const before = await scroll();
+        await page.keyboard.press(ARROW_KEYS[direction]);
+        const expected = nearestTarget(layout!.targets, target.id, direction);
+        expect(await focusedTarget(page), `${direction} from ${target.id}`).toBe(expected ?? target.id);
+        if (expected === null) {
+          edges++;
+          expect(await scroll(), `${direction} from ${target.id}`).toEqual(before);
+        } else {
+          moves++;
+          expect(layout!.targets.find((t) => t.id === expected)!.group).toBe(target.group);
+        }
+      }
+    }
+    expect(moves).toBeGreaterThan(0);
+    expect(edges).toBeGreaterThan(0);
+    const prevented = await page.evaluate(() => (window as unknown as { __arrows: boolean[] }).__arrows);
+    expect(prevented.length).toBe(moves + edges);
+    expect(prevented.every(Boolean)).toBe(true);
+  });
+
+  test("keys 1 to 9 bring the nth waiting session to front from the scene, in the alert room too", async ({ page }) => {
+    const board = loadBoard("scene-alert");
+    const waiting = board.columns.needs_you;
+    expect(waiting.length).toBeGreaterThan(1);
+    expect(waiting.every((c) => c.scene?.zone === "alert")).toBe(true);
+    await openScene(page, board);
+    // With a target focused, then with the file open.
+    await figureOf(page, waiting[1]!.key).focus();
+    await page.keyboard.press("1");
+    await figureOf(page, waiting[0]!.key).click();
+    await page.keyboard.press("2");
+    await expect.poll(() => focusCalls(page)).toEqual([waiting[0]!.key, waiting[1]!.key]);
+    // A digit with no session behind it does nothing.
+    await page.keyboard.press(String(waiting.length + 1));
+    expect(await focusCalls(page)).toEqual([waiting[0]!.key, waiting[1]!.key]);
+  });
+
+  test("every target is 44 px or more and topmost at its centre", async ({ page }) => {
+    await openScene(page, loadBoard("scene-c"));
+    for (const name of ["scene-c", "scene-overflow"] as const) {
+      for (const [width, height] of [[1000, 760], [1400, 900]] as const) {
+        await page.setViewportSize({ width, height });
+        const board = loadBoard(name);
+        await reopenScene(page, board);
+        const ids = layouts(board)[0]!.targets.map((t) => t.id);
+        await expect(scene(page).locator("[data-target]")).toHaveCount(ids.length);
+        for (const id of ids) {
+          const target = targetById(page, id);
+          await target.scrollIntoViewIfNeeded();
+          const box = (await target.boundingBox())!;
+          expect(atLeast(box.width, TARGET_CSS_MIN) && atLeast(box.height, TARGET_CSS_MIN), `${name} ${width} x ${height} ${id}`).toBe(true);
+          const topmost = await target.evaluate((el) => {
+            const r = el.getBoundingClientRect();
+            return document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2) === el;
+          });
+          expect(topmost, `${name} ${width} x ${height} ${id}`).toBe(true);
+        }
+        await expectStripInCorner(page);
+      }
+    }
+  });
+
+  test("the line under the scene counts To resume and Done and opens Board mode", async ({ page }) => {
+    const board = loadBoard("busy");
+    expect(board.columns.to_resume.length).toBeGreaterThan(0);
+    await openScene(page, board);
+    await expect(scene(page).getByTestId("scene-strip")).toHaveCount(0);
+    await expect(page.getByTestId("strip-to-resume")).toHaveText(`${board.columns.to_resume.length} to resume`);
+    await expect(page.getByTestId("strip-done")).toHaveText(`${board.columns.done.length} done in ${hours(board.done_window_ms)}`);
+    await expectStripInCorner(page);
+    await page.getByTestId("scene-strip").evaluate((root) => {
+      const records: MutationRecord[] = [];
+      new MutationObserver((list) => records.push(...list)).observe(root, { subtree: true, childList: true, attributes: true, characterData: true });
+      (window as unknown as { __stripRecords: MutationRecord[] }).__stripRecords = records;
+    });
+    const stripRecords = () => page.evaluate(() => (window as unknown as { __stripRecords: MutationRecord[] }).__stripRecords.length);
+    // Another board with the same counts: the strip is not written.
+    const renamed = structuredClone(board);
+    renamed.columns.needs_you[0]!.name = "renamed-session";
+    await push(page, renamed);
+    await expect(page.getByTestId("scene-summary")).toContainText("renamed-session");
+    expect(await stripRecords()).toBe(0);
+    // One more Done: it is.
+    const more = structuredClone(renamed);
+    more.columns.done.push({ ...more.columns.done[0]!, key: `${more.columns.done[0]!.key}-again`, session_id: null });
+    await push(page, more);
+    await expect(page.getByTestId("strip-done")).toHaveText(`${more.columns.done.length} done in ${hours(board.done_window_ms)}`);
+    expect(await stripRecords()).toBeGreaterThan(0);
+    await page.getByTestId("strip-done").click();
+    await expect(page.getByTestId("column-done")).toBeVisible();
+    await page.keyboard.press("m");
+    await sceneSettled(page);
+    await page.getByTestId("strip-to-resume").click();
+    await expect(page.getByTestId("column-to_resume")).toBeVisible();
+  });
+
+  test("session text renders as text in the scene and the file", async ({ page }) => {
+    const markup = '<img src="x" onerror="window.__pwned = 1"><b>bold</b>';
+    const board = structuredClone(loadBoard("scene-overflow"));
+    const queued = board.columns.needs_you[0]!;
+    const listed = board.columns.needs_you.at(-1)!;
+    queued.name = `${markup} queued`;
+    listed.name = `${markup} listed`;
+    const project = queued.project.name;
+    const renamed = `${markup} project`;
+    board.floor_projects = board.floor_projects.map((p) => (p.name === project ? { ...p, name: renamed } : p));
+    for (const c of Object.values(board.columns).flat()) if (c.project.name === project) c.project = { ...c.project, name: renamed };
+    await openScene(page, board);
+    const [layout] = layouts(board);
+    const figure = figureOf(page, queued.key);
+    expect(await figure.getAttribute("aria-label")).toContain(queued.name);
+    await expect(figure.locator("[data-tag]")).toContainText(queued.name);
+    await expect(page.getByTestId("register")).toContainText(queued.name);
+    await expect(scene(page).locator("[data-plaque]").filter({ hasText: renamed })).toHaveCount(1);
+    await figure.click();
+    await expect(page.getByRole("dialog", { name: queued.name })).toBeVisible();
+    await expect(page.getByTestId("file-project")).toContainText(renamed);
+    await page.keyboard.press("Escape");
+    const register = groupTarget(layout!, (kind) => kind === "decision");
+    expect(register.keys).toContain(listed.key);
+    expect(await targetById(page, register.id).getAttribute("aria-label")).toContain(listed.name);
+    await targetById(page, register.id).click();
+    await expect(rowOf(page, listed.key)).toContainText(listed.name);
+    await rowOf(page, listed.key).click();
+    await expect(page.getByRole("dialog", { name: listed.name })).toBeVisible();
+    const parsed = await page.evaluate(() => ({
+      images: document.querySelectorAll("img[onerror]").length,
+      bold: Array.from(document.querySelectorAll("b")).filter((b) => b.textContent === "bold").length,
+      pwned: (window as { __pwned?: number }).__pwned,
+    }));
+    expect(parsed).toEqual({ images: 0, bold: 0, pwned: undefined });
+  });
+});
+
+test.describe("the text alternative names the waiting count and the oldest waiting session", () => {
+  for (const { name, data: board } of fixturesOf<Board>("board").filter((f) => f.data.columns.needs_you.length > 0)) {
+    test(name, async ({ page }) => {
+      await openScene(page, board);
+      const waiting = board.columns.needs_you;
+      const summary = page.getByTestId("scene-summary");
+      await expect(summary).toContainText(`${waiting.length} ${waiting.length === 1 ? "needs" : "need"} you`);
+      // Needs you is in board order, oldest first: its first card.
+      await expect(summary).toContainText(`Oldest: ${waiting[0]!.name}`);
+    });
+  }
 });

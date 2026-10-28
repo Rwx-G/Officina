@@ -138,8 +138,9 @@ export async function openScene(
   board: Board,
   relay: RelayView | null = null,
   registry: RegistryView | null = null,
+  focus: Record<string, FocusOutcome> = {},
 ): Promise<void> {
-  await load(page, board, {}, relay, registry, { [VIEW_STORAGE_KEY]: serialiseViewState({ v: 1, base: "scene" }) });
+  await load(page, board, focus, relay, registry, { [VIEW_STORAGE_KEY]: serialiseViewState({ v: 1, base: "scene" }) });
   await sceneSettled(page);
 }
 

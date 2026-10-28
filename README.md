@@ -499,6 +499,14 @@ The window's first view is now called **Sessions**; it has two modes, **Board** 
 
 Nothing moves while nothing changes: a changed board places each employee at its new place at once, a halo breathes for two minutes then rests, and nothing in the scene reads the clock. Missing data leaves an employee where it was, with a question mark. The floor grows a column for a fifth and a seventh project, up to eight offices; below the size at which every employee stays at least 44 px wide, the sessions area scrolls instead of shrinking it.
 
+### Acting from the scene
+
+Every employee is a button: hover it or tab to it and its name shows above it. Click it, or press Enter or Space, and its **file** opens at the right edge of the sessions area, over the scene without resizing it: the project (and "high priority" when the floor file says so), its number when it is one of the first nine waiting, where it is, its state with what it waits on, since when it waits ("since unknown" when Officina did not see the wait start), why it is in alert ("last known" while the data is unknown), its subject, its last prompt and the head and tail of its last answer. The file's actions are the board card's, with the same outcomes: **Bring to front** (it has the focus, so Enter then Enter brings a session forward from the keyboard), "Wrong window?", and "Copy attach command" for a background session. A session waiting on a relay approval shows the request and an **Open in Board** button: approvals are approved on their cards, with the pointer. Escape closes the file and puts the focus back on the employee, wherever it now stands; the file closes by itself when the session leaves the board.
+
+Tab walks reception, the decision office's queue and its register, the alert room, the offices, the lounge and More offices, in that order; the arrow keys move between the employees of one room and stop at its edge. Digit keys 1 to 9 bring the nth Needs you session to front, as on the board, alerted ones included. Where a room holds more than its places (the register's "+N more", an office's "+n" chip, a full lounge, reception or alert room, More offices), its button opens a list of those sessions in board order; each row opens that session's file, and Escape steps back to the list, then to the room's button.
+
+Ended sessions leave the scene. The line in the scene's bottom-left corner counts them, "N to resume" and "N done in 24 h" (the board's Done window), and either opens Board mode, where they are. The quota gauges and the relay's state stay in the header, in every mode.
+
 ### The alert
 
 A session that waits for you is **in alert** when its project is marked `priority = "high"` in the floor file, or when it has waited for you at least `[alert] after_minutes` (10 by default). A wait whose start Officina did not see, and a session that waits on a relay approval alone, never escalate by time; a high-priority project still alerts at once.
