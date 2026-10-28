@@ -281,6 +281,22 @@ async fn set_auto_archive(state: State<'_, AppState>, on: bool) -> Result<(), Ip
     }
 }
 
+/// Turns the triage model on, only while it can be called and its enable
+/// gate holds, which also lifts a pause, or off (FR-10 as amended, AD-50,
+/// D-69, D-81): a refusal says why, and the registry view says why the
+/// toggle is disabled.
+#[tauri::command]
+async fn set_triage_model(state: State<'_, AppState>, on: bool) -> Result<(), IpcError> {
+    match ask(state, AuthorCommand::SetTriageModel(on)).await? {
+        AuthorAnswer::Done { .. } => Ok(()),
+        AuthorAnswer::Archived(_)
+        | AuthorAnswer::Confirmed(_)
+        | AuthorAnswer::Evaluating { .. } => {
+            Err(IpcError::internal("the collector answered another request"))
+        }
+    }
+}
+
 /// Queues a dry run of the triage model on the author's past
 /// confirmations (AD-52, D-92): answered once queued, with how many cases
 /// it holds; its progress and its result come in the registry view, never
@@ -506,6 +522,7 @@ fn main() {
             reopen_subject,
             confirm_triage,
             evaluate_triage_model,
+            set_triage_model,
             set_auto_archive
         ])
         .run(tauri::generate_context!())
