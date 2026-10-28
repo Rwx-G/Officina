@@ -7,7 +7,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use officina_core::contract::check_agents;
-use officina_core::dates::{DAY_MS, dated_file_day, day_start_ms, utc_date};
+use officina_core::dates::{DAY_MS, dated_file_day, day_start_ms, utc_date, utc_day_text};
 use officina_core::floor::{Autonomy, parse_floor};
 use officina_core::quota::STALE_AFTER_MS;
 use officina_core::registry::model::PAUSE_AFTER_FAILED_CALLS;
@@ -21,7 +21,7 @@ use officina_core::relay::gate::gated_tools;
 use crate::claude;
 use crate::collector::{Collector, ContractStore};
 use crate::files::{now_ms, read_recent_events};
-use crate::paths::{ENV_FLOOR, Paths, env_path};
+use crate::paths::{ENV_FLOOR, Paths, env_path, events_dir_of};
 use crate::registry::RegistryPaths;
 use crate::registry::store::{
     self as registry_store, Location, daily_copies, onedrive_roots_from_env, quarantined,
@@ -634,19 +634,19 @@ pub fn check_registry(officina_home: &Path, onedrive_roots: &[PathBuf], now: i64
             ),
             Some(newest) => {
                 let age = (day_start_ms(utc_date(now)) - day_start_ms(newest.day)) / DAY_MS;
-                let (y, m, d) = newest.day;
                 check(
                     Level::Ok,
                     "registry copies",
                     format!(
-                        "{} daily copies, the newest from {y:04}-{m:02}-{d:02} ({age} days old)",
-                        copies.len()
+                        "{} daily copies, the newest from {} ({age} days old)",
+                        copies.len(),
+                        utc_day_text(day_start_ms(newest.day))
                     ),
                 )
             }
         });
     }
-    let waiting = fs::read_dir(officina_home.join("events"))
+    let waiting = fs::read_dir(events_dir_of(officina_home))
         .into_iter()
         .flatten()
         .flatten()
@@ -694,13 +694,13 @@ pub fn check_registry(officina_home: &Path, onedrive_roots: &[PathBuf], now: i64
     }
     if let Some(notice) = opened.as_ref().ok().and_then(|r| r.restore_notice()) {
         let recent = now - notice.restored_at_ms < RESTORE_NOTICE_MS;
-        let (y, m, d) = utc_date(notice.restored_at_ms);
         checks.push(check(
             if recent { Level::Warn } else { Level::Ok },
             "registry restore",
             format!(
-                "restored from {} on {y:04}-{m:02}-{d:02}: author actions taken after that copy are lost, events were ingested again",
-                notice.copy
+                "restored from {} on {}: author actions taken after that copy are lost, events were ingested again",
+                notice.copy,
+                utc_day_text(notice.restored_at_ms)
             ),
         ));
     }
@@ -762,11 +762,11 @@ pub fn check_triage(
     };
     let (level, state) = if facts.on() && facts.paused() {
         let since = facts.pause.as_ref().map_or(0, |p| p.at_ms);
-        let (y, m, d) = utc_date(since);
         (
             Level::Warn,
             format!(
-                "paused since {y:04}-{m:02}-{d:02}: its last {PAUSE_AFTER_FAILED_CALLS} proposal calls failed in a row; turn it on again in the Triage panel to lift the pause, or a new claude lifts it"
+                "paused since {}: its last {PAUSE_AFTER_FAILED_CALLS} proposal calls failed in a row; turn it on again in the Triage panel to lift the pause, or a new claude lifts it",
+                utc_day_text(since)
             ),
         )
     } else if facts.on() {
@@ -796,8 +796,9 @@ pub fn check_triage(
     match calls {
         Ok(view) => {
             detail.push_str(&format!(
-                "; today {}; last 30 days {}",
+                "; today {}; last {} days {}",
                 counted(&view.today),
+                COUNT_WINDOW_MS / DAY_MS,
                 counted(&view.last_30_days)
             ));
             for refusal in &view.refusals {
@@ -811,10 +812,12 @@ pub fn check_triage(
         Err(e) => detail.push_str(&format!("; its calls cannot be read: {e}")),
     }
     if let Ok(Some(latest)) = reader.latest_evaluation() {
-        let (y, m, d) = utc_date(latest.at_ms);
         detail.push_str(&format!(
-            "; latest dry run {y:04}-{m:02}-{d:02}: {} cases, model right {}, default right {}",
-            latest.tally.cases, latest.tally.model_correct, latest.tally.default_correct
+            "; latest dry run {}: {} cases, model right {}, default right {}",
+            utc_day_text(latest.at_ms),
+            latest.tally.cases,
+            latest.tally.model_correct,
+            latest.tally.default_correct
         ));
     }
     checks.push(check(level, "triage model", detail));
