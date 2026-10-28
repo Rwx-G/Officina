@@ -67,6 +67,12 @@ jobs:
           OFFICINA_HOOK_P95_BUDGET_MS: "150"
           OFFICINA_GATE_OWN_COST_BUDGET_MS: "15"
         run: cargo test --locked --release -p officina --test perf -- --ignored --nocapture
+      - name: The gate's lexer against Git Bash's own parse
+        # Story 2.16 AC 4: Git Bash pretty-prints each command of gate.json
+        # and of the variants built from the gate's constants, running none;
+        # a guarded program bash reads that the lexer misses fails the step.
+        # Without Git Bash the test says so and passes.
+        run: cargo test --locked -p officina --test lexer_differential -- --ignored --nocapture
       - name: An approval runs once under concurrency
         # AD-33, AD-37: two runs using one approval at once, exactly one wins.
         run: cargo test --locked --release -p officina-host --test approvals_stress -- --ignored

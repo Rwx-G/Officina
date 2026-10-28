@@ -394,6 +394,7 @@ Tests:
 ```bash
 cargo test --workspace --features officina-core/ts      # unit, CLI end to end, vector set, TS bindings drift
 cargo test --release -p officina --test perf -- --ignored   # hook and gate latency, concurrent appends
+cargo test -p officina --test lexer_differential -- --ignored   # the gate's lexer against Git Bash's own parse
 cd app && pnpm check && pnpm lint && pnpm test           # types, lint, component tests
 pnpm e2e:fixtures && pnpm e2e                            # Playwright on boards produced by the real CLI
 ```
