@@ -788,3 +788,30 @@ fn an_anomaly_fails_doctor_until_acknowledged() {
     }
     assert_eq!(doctor.report(&[]).line("relay anomalies").tag, "ok");
 }
+
+/// AC 1 of story 2.14 (D-173): without the `git` Git for Windows records,
+/// a git work tree with actions that bind their files fails doctor, with
+/// the reason and the refusal those actions give.
+#[test]
+fn doctor_fails_a_git_tree_it_cannot_bind() {
+    let Some(git_dir) = git_dir_or_skip("doctor_fails_a_git_tree_it_cannot_bind") else {
+        return;
+    };
+    let doctor = Doctor::new();
+    git(&git_dir, &doctor.lab(), &["init", "-q"]);
+    std::fs::write(doctor.lab().join("site.yml"), "- hosts: lab\n").unwrap();
+    git(&git_dir, &doctor.lab(), &["add", "site.yml"]);
+    git(&git_dir, &doctor.lab(), &["commit", "-q", "-m", "first"]);
+    doctor.write(&with_checked_lab());
+    doctor.env.approve();
+    let mut cmd = doctor.env.officina(&["doctor"]);
+    cmd.env(officina_host::relay::tree::ENV_TEST_GIT, "");
+    let report = Report::parse(&common::run_with(cmd, b""));
+    let tree = report.line("relay tree lab");
+    assert_eq!(tree.tag, "FAIL", "{}", report.text);
+    assert!(
+        tree.detail.contains("no git is installed") && tree.detail.contains("git_unavailable"),
+        "{tree:?}"
+    );
+    assert_eq!(report.code, Some(1));
+}
