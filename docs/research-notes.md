@@ -357,8 +357,22 @@ at each step and writes its report; Windows 10.0.26200.9711, Tauri 2.12.5,
   100 %, so the larger images are scaled down and blur; at 16 px, one-pixel
   strokes are too thin. Outcome: epic-4-decisions.md D-523 (one size, 16 px
   times the display scale; digits at twice the font's cell; a `!` mark on
-  the alert badge). Run 2 of the probe, on that design, is the owner's and
-  is recorded here when made.
+  the alert badge).
+
+Run 2 on 2026-10-28, the D-523 design, same machine, Windows build, Tauri
+version, 100 % scaling and light taskbar (the probe's report says "run 1":
+it was written beside another build of the probe):
+
+| Badge (D-523 design) | Size | Readable | Alert colour distinct from amber |
+|---|---|---|---|
+| waiting, cycling 1, 9 and 9+ | 16 px | at a glance | - |
+| alert, `!` | 16 px | at a glance | clearly |
+
+- Request while another window had focus: the button flashed until he
+  clicked it (back after 2 s). Request while focused: nothing changed.
+- **Pass** at 100 % with a light taskbar: story 4.5 keeps the D-523 badge.
+  Not run, as information only, not blocking: a dark taskbar, and 150 %
+  scaling (D-520: not the owner's screen).
 
 ## E7. Configuration directory
 

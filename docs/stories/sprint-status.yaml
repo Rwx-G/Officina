@@ -86,14 +86,13 @@ version: v0.4
 # Implemented after v0.2 and v0.3; each seam has one owning story (epic-4-decisions.md D-98, story numbers read through D-460's and D-498's maps).
 # 4.14 closes the PRD with the workstation checks (owner rule, epic-2-decisions.md P-7, epic-4-decisions.md P-21).
 stories:
-  # 4.1: tooling done (D-518); gates 1, 2, 4 and 5's entries are the owner's (Completion Notes).
+  # 4.1: tooling done (D-518); gate 2 passed (E80); gates 1, 4 and 5's entries are the owner's (Completion Notes).
   - {id: "4.1", file: story-4.1-workstation-checks.md, slice: "0", status: in-progress}
   - {id: "4.2", file: story-4.2-floor-keys-payloads-and-scene-fixtures.md, slice: A, status: review}
   # 4.3: code done; AC 2's gate 4 case waits for the owner's gate 4 entry (story 4.1).
   - {id: "4.3", file: story-4.3-scene-state-in-core.md, slice: A, status: in-progress}
   - {id: "4.4", file: story-4.4-halo-memo-and-board-halo.md, slice: A, status: review}
-  # 4.5: code done; AC 10 waits for gate 2 (story 4.1), which picks the badge's size.
-  - {id: "4.5", file: story-4.5-alert-band-title-and-taskbar.md, slice: A, status: in-progress}
+  - {id: "4.5", file: story-4.5-alert-band-title-and-taskbar.md, slice: A, status: review}
   - {id: "4.6", file: story-4.6-scene-geometry-spots-and-layout.md, slice: A, status: review}
   - {id: "4.7", file: story-4.7-scene-drawn-in-place-and-scene-mode.md, slice: A, status: approved}
   - {id: "4.8", file: story-4.8-scene-targets-keyboard-file-and-strip.md, slice: A, status: approved}

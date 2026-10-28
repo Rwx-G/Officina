@@ -1,6 +1,6 @@
 # Story 4.5: The alert band, the window title, and the taskbar badge
 
-**Status:** In progress (code and tests done; AC 10 waits for gate 2, story 4.1, which picks the badge's size)
+**Status:** Review
 
 ## Story
 
@@ -28,7 +28,7 @@ so that I know when to look without a toast, a sound or a theme change, from the
 - [x] `AlertBand.svelte` in `App.svelte` above the banners; wording function with the unknown mark (AC 1, 3)
 - [x] `app/src-tauri/src/taskbar.rs`: overlay choice from a board, title, `alerts_to_announce`, colour test; `main.rs` wiring (AC 5-9)
 - [x] `app/e2e/alert.spec.ts`; Vitest cases (AC 1, 3, 4)
-- [ ] Check story 4.1's gate 2 entry before closing (AC 10) (open: the owner's gate 2)
+- [x] Check story 4.1's gate 2 entry before closing (AC 10)
 - [x] Update `CHANGELOG.md` and the README (AC 11)
 
 ## Dev Notes
@@ -71,7 +71,7 @@ so that I know when to look without a toast, a sound or a theme change, from the
 - AC 7: `taskbar.rs::tests::{the_title_counts_alerts, the_title_marks_a_last_known_alert}`.
 - AC 8: `taskbar.rs::tests::{a_new_alerted_key_is_announced, a_known_key_is_not_announced_again, a_key_that_leaves_and_returns_is_announced_again, the_first_board_with_alerts_is_announced, a_key_kept_alerted_while_unknown_is_not_announced}`; the flash on the real window is gate 2 and story 4.14 (owner).
 - AC 9: the diff: no dependency, no capability.
-- AC 10: gate 2's run 1 is recorded (E80) and decided (D-523); the badge follows it; open until run 2 on the new design (owner).
+- AC 10: gate 2 (research notes E80): run 1 decided the badge's redraw (D-523), run 2 passed on it at 100 % with a light taskbar (both badges readable at a glance at 16 px, the alert colour clearly distinct, the flash until focus).
 - AC 11: `CHANGELOG.md` Added; README "The scene (v0.4, in progress)", "The alert"; `readme.rs` green.
 
 ## File List
@@ -86,3 +86,4 @@ so that I know when to look without a toast, a sound or a theme change, from the
 - 2026-10-28 created as story 4.8 with the scene v2 rework (D-460)
 - 2026-10-28 renumbered 4.5 and narrowed after the plan challenge (D-494, D-496, D-497): the band, the title and the taskbar ship right after story 4.3, needing core only; the alert tokens move here; the alert room and the beacon move to story 4.9; the last known alert on unknown data is marked in the band and the title; the approval-only wait raises no band by time
 - 2026-10-28 implemented: the alert band, the alert tokens, the taskbar badge's alert colour, the title's alert count and the flash on a new alert. Status in progress until gate 2 picks the badge's size
+- 2026-10-28 gate 2 passed on the D-523 badge (E80). Status review
