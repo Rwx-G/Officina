@@ -1,6 +1,6 @@
 # Story 4.9: The alert room and its beacon
 
-**Status:** Approved
+**Status:** Review
 
 ## Story
 
@@ -22,13 +22,13 @@ so that an alert reads in the scene as clearly as in the band, without anything 
 
 ## Tasks
 
-- [ ] Room state and the high-priority pill in `layout.ts`; their Vitest cases (AC 1, 4)
-- [ ] The alert room's drawing in `SceneFloor.svelte`, `objects.ts` and `furniture.ts` (floor, hazard outline, status board, static beam); plaque state in `Plaque.svelte` (AC 1, 4)
-- [ ] The beacon glow and the alert halo colour in `SceneHalos.svelte` (AC 2, 3)
-- [ ] `lib/board.svelte.ts`: the beacon's key in `retain` (AC 6)
-- [ ] Tokens and contrast pairs (AC 7)
-- [ ] `alert.spec.ts` and `scene.spec.ts` cases (AC 1, 2, 4, 5, 8)
-- [ ] Update `CHANGELOG.md` and the README (AC 9)
+- [x] Room state and the high-priority pill in `layout.ts`; their Vitest cases (AC 1, 4)
+- [x] The alert room's drawing in `SceneFloor.svelte`, `objects.ts` and `furniture.ts` (floor, hazard outline, status board, static beam); plaque state in `Plaque.svelte` (AC 1, 4)
+- [x] The beacon glow and the alert halo colour in `SceneHalos.svelte` (AC 2, 3)
+- [x] `lib/board.svelte.ts`: the beacon's key in `retain` (AC 6)
+- [x] Tokens and contrast pairs (AC 7)
+- [x] `alert.spec.ts` and `scene.spec.ts` cases (AC 1, 2, 4, 5, 8)
+- [x] Update `CHANGELOG.md` and the README (AC 9)
 
 ## Dev Notes
 
@@ -47,10 +47,60 @@ so that an alert reads in the scene as clearly as in the band, without anything 
 
 ### Debug Log
 
+- The room's state (AC 1) is the alert room's plaque state, which story 4.6 already gave as `alert` or `quiet`; `layout.ts` adds `alertLit(layout)`, read by layers 1 to 3, rather than a second field. What changed is who counts: the alert room counts whoever stands in it, its spots or its group, so an unknown employee kept there (D-494, Dev Notes) keeps the room lit and counts. The other shared rooms still count by zone: no decision says an unknown keeps its waiting amber.
+- Departure, flagged for the owner (D-474 read literally). Keyed on `waiting_since_ms`, the beacon of a wait escalated by time never breathes: by the time it alerts, the wait is at least `[alert] after_minutes` old (1 minute at the least, 10 by default), past the two minutes. It breathes for a high-priority project's fresh wait, and for a threshold under two minutes for what is left of them. Implemented as written; keying the beacon on the alert's own start (the wait's start plus the floor's threshold) would need the threshold on the board.
+- The beacon's key is the card's own key, not a namespaced one: its pair `(key, waiting_since_ms)` shares the memo entry of that card's halo when both start at the same moment, which keeps them in one phase. `beaconPair` lives in `lib/alert.ts` beside `alertedCards`, so the beacon's card is the band's first card; `haloEnteredAt` in `lib/halo.ts` is the halo's start, shared by the scene halo and the beacon's fallback.
+- AC 6: `BoardStore` adds the beacon's key to the waiting keys it retains. The case that needs it is an alerted card whose zone went unknown and whose column is not Needs you: the waiting rule alone dropped its timing.
+- Lit state ported from the prototype v2 beyond AC 1's list: the alert room's partition tops take `--color-alert` (`.alert-on .pt-alert`). The status board: its panel takes `--color-alert` and its "!" `--color-on-alert`, as the prototype does; AC 1's "mark" is read as the board's sign, since an "!" in `--color-alert` on an alert panel would vanish.
+- The beam: drawn in layer 3 at the prototype's 0.22 opacity, shown while lit, never rotated (D-474). The glow: the prototype's ellipse (34 by 26 logical px on the lamp), a radial gradient of `--color-alert` at 90 % to transparent, resting at the prototype's lit opacity 0.55, set as the element's own `--halo-rest` so `halo-breathe` ends there and reduced motion holds it there. Its point is `geometry.ts`'s `BEACON`, read by the post in layer 3 and the glow in layer 2.
+- AC 3: the halo's gradient reads `--halo-colour`, set per halo from `paint()`, so Vitest reads the colour from the element.
+- AC 7: no material token is new. The prototype's beacon, status board and hazard paint with `--scene-screen-off`, `--scene-metal`, `--scene-wall-top`, `--color-alert` and `--color-on-alert`, all in `app.css`; `--scene-alert-floor` (light `#fbe6dd`) was already there from story 4.7 and joins `PAINTS`. The contrast pairs gain trousers on the alert floor; tunic on it was already held.
+- AC 4: story 4.7 already drew the pill in layer 4 at `PRIORITY_PILL`, above the plaque (D-524 over the AC's "beside"); this story adds its proofs.
+- AC 8 is a second case beside the `scene-c` one, sharing its body: the beacon's wait is dated to end its breathing a few seconds after first sight (D-101), the case sees it run, waits in real time for it to stop (the installed clock does not drive CSS animations), then watches. About 8 s.
+- Adversarial pass: an unknown employee in the alert room kept an amber ticket (story 4.7 coloured the ticket by zone); `objects.ts` now colours it by the employee's alert, which D-494 keeps (`alert.spec.ts > missing data keeps the alert room lit`). The lit parts' markers are `data-beacon-lamp`, `data-beacon-beam`, `data-status-panel` and `data-status-mark`: a first `data-mark` collided with the figures' marks.
+
 ### Completion Notes
 
+AC to test:
+
+- AC 1: Vitest `app/src/lib/scene/layout.test.ts > the alert room's state follows its occupants` (occupied, an unknown kept there, emptied, an unknown elsewhere, the group); Playwright `app/e2e/alert.spec.ts > the alert room lights up while occupied and goes quiet when it empties`, and `> missing data keeps the alert room lit`.
+- AC 2: Playwright `alert.spec.ts > the beacon glow animates opacity only and stops after two minutes`, `> under reduced motion the beacon is steady`; Vitest `app/src/components/scene/scene.test.ts > the beacon is keyed on the first alerted card`.
+- AC 3: Vitest `scene.test.ts > a halo in the alert room uses the alert colour`; also asserted on the real boards in `alert.spec.ts`'s threshold and approval-only cases.
+- AC 4: Vitest `layout.test.ts > a high-priority office carries its pill` (offices, shared rooms, More offices); Playwright `alert.spec.ts > a high-priority office carries its pill`.
+- AC 5: Playwright `alert.spec.ts > a wait that reaches the threshold moves to the alert room`, `> an approval-only wait on a normal project stays in the queue`.
+- AC 6: Vitest `app/src/lib/board.test.ts > the beacon's halo timing is kept while its card is in alert` (fails with the retain change removed).
+- AC 7: Vitest `app/src/tokens.test.ts > every role pair meets its contrast target in the light theme`.
+- AC 8: Playwright `app/e2e/scene.spec.ts > nothing in the scene changes while the payloads are unchanged, the alert room lit`.
+- AC 9: `CHANGELOG.md` `[Unreleased]` Added, README "The scene (v0.4, in progress)": the alert room and high priority.
+
+Gates run: `pnpm check`, `pnpm lint`, `pnpm test` (194), `pnpm build`, `cargo test -p officina-app`, the whole Playwright suite with `--repeat-each=3` (570 passed, 3 skipped: the baseline case of story 4.7, D-508).
+
+Open: the beacon of a time-escalated wait is steady from the start (Debug Log); the owner decides whether D-474 keys on the wait or on the alert. The dark values of the new parts are story 4.13's.
+
 ## File List
+
+- `CHANGELOG.md` (modified)
+- `README.md` (modified)
+- `app/e2e/alert.spec.ts` (modified)
+- `app/e2e/scene.spec.ts` (modified)
+- `app/src/components/scene/Scene.svelte` (modified)
+- `app/src/components/scene/SceneFloor.svelte` (modified)
+- `app/src/components/scene/SceneHalos.svelte` (modified)
+- `app/src/components/scene/scene.test.ts` (modified)
+- `app/src/lib/alert.ts` (modified)
+- `app/src/lib/board.svelte.ts` (modified)
+- `app/src/lib/board.test.ts` (modified)
+- `app/src/lib/halo.ts` (modified)
+- `app/src/lib/scene/furniture.ts` (modified)
+- `app/src/lib/scene/geometry.ts` (modified)
+- `app/src/lib/scene/layout.test.ts` (modified)
+- `app/src/lib/scene/layout.ts` (modified)
+- `app/src/lib/scene/objects.ts` (modified)
+- `app/src/tokens.test.ts` (modified)
+- `docs/stories/sprint-status.yaml` (modified)
+- `docs/stories/story-4.9-alert-room-and-beacon.md` (modified)
 
 ## Change Log
 
 - 2026-10-28 created after the plan challenge (D-497), from the alert room and beacon parts of the former story 4.8
+- 2026-10-28 implemented: the alert room lit while occupied, the beacon's glow, the alert halo, the pill's proofs; moved to Review
