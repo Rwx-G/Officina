@@ -46,6 +46,7 @@ pub const SELF_DISABLE_MIN_CASES: u32 = 20;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VerdictRecord {
     pub id: i64,
+    pub subject_id: i64,
     pub proposal: Proposal,
     pub verdict: Verdict,
     /// Given by auto-archive, not by the author (FR-12).
@@ -336,6 +337,7 @@ mod tests {
     ) -> VerdictRecord {
         VerdictRecord {
             id,
+            subject_id: id,
             proposal: proposal(source, proposed),
             verdict,
             auto: false,

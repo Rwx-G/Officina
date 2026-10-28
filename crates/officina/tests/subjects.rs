@@ -493,3 +493,49 @@ fn multi_session_subject_needs_one_verdict() {
     assert_eq!(row["key"], format!("subject:{rollout}"));
     assert_eq!(row["session_id"], "s-cleared");
 }
+
+/// Story 3.10 AC 7 (FR-13, P-10, D-55): subjects archived with the routine
+/// box are printed as candidates for the v0.7 catalogue, the latest first;
+/// a plainly archived one and a merged source are not.
+#[test]
+fn routine_candidates_are_printed() {
+    let env = TestEnv::new();
+    let now = now_ms();
+    for session in ["s-1", "s-2", "s-3", "s-4"] {
+        hook(
+            &env,
+            serde_json::json!({"hook_event_name": "UserPromptSubmit", "session_id": session,
+                "cwd": "C:/work/api", "prompt": "rotate the logs"}),
+        );
+    }
+    env.write_agents("[]");
+    let mut writer = window(&env, now);
+    let mut create = |name: &str, session: &str| {
+        writer
+            .create_subject(name, SubjectOrigin::Sessions(vec![session.into()]), now)
+            .unwrap()
+    };
+    let older = create("log rotation", "s-1");
+    let plain = create("one-off fix", "s-2");
+    let source = create("cert renewal draft", "s-3");
+    let target = create("cert renewal", "s-4");
+    writer.archive_subject(older, true, now + 1_000).unwrap();
+    writer.archive_subject(plain, false, now + 2_000).unwrap();
+    writer.merge_subjects(source, target, now + 3_000).unwrap();
+    writer.archive_subject(target, true, now + 4_000).unwrap();
+    drop(writer);
+    let (code, view) = subjects(&env);
+    assert_eq!(code, Some(0));
+    let listed: Vec<(i64, &str)> = view["routine_candidates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| {
+            (
+                c["subject"]["id"].as_i64().unwrap(),
+                c["subject"]["name"].as_str().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(listed, [(target, "cert renewal"), (older, "log rotation")]);
+}

@@ -934,6 +934,7 @@ fn verdict_records(case: &RatesCase) -> Vec<VerdictRecord> {
         .flat_map(|c| {
             (0..c.times.unwrap_or(1)).map(move |k| VerdictRecord {
                 id: c.id + k,
+                subject_id: c.id + k,
                 proposal: Proposal {
                     verdict: c.proposed.0,
                     source: c.proposed.1,

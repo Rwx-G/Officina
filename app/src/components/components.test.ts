@@ -408,6 +408,15 @@ function registryWith(rows: Row[]): RegistryStore {
         refusals: [],
       },
     },
+    rates: [],
+    gates: {
+      auto_archive: { state: "not_enough_cases", cases: 0, needed: 50 },
+      model_enable: { state: "no_dry_run", cases: 0, needed: 30 },
+      model_self_disable: { state: "holds", cases: 0, needed: 20 },
+    },
+    auto_archive: { on: false, src: null, at_ms: null, reason: null },
+    recent_auto_archives: [],
+    routine_candidates: [],
     thresholds: {
       restore_notice_ms: 1,
       excerpt_ttl_ms: 1,
@@ -418,6 +427,13 @@ function registryWith(rows: Row[]): RegistryStore {
       calls_per_hour: 60,
       calls_per_day: 300,
       count_window_ms: 1,
+      rate_window: 50,
+      auto_count_after_ms: 1,
+      auto_archive_min_cases: 50,
+      auto_archive_flip_percent: 2,
+      model_gate_max_age_ms: 1,
+      model_gate_min_cases: 30,
+      self_disable_min_cases: 20,
     },
   };
   const store = new RegistryStore();

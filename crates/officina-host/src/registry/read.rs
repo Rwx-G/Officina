@@ -11,18 +11,19 @@ use officina_core::registry::dry_run::{DryRunState, Evaluation, Tally};
 use officina_core::registry::fold::pivot;
 #[cfg(feature = "window-authority")]
 use officina_core::registry::fold::{Mark, MarkQuery};
-use officina_core::registry::proposal::ModelInput;
+use officina_core::registry::proposal::{ModelInput, Proposal};
+use officina_core::registry::rates::VerdictRecord;
 use officina_core::registry::triage_call::{COUNT_WINDOW_MS, CallRecord};
 use officina_core::registry::types::{
     ConfirmationRecord, EventFileRecord, ExcerptRecord, FactRow, FactValue, RegistryReport,
     RestoreNotice, SessionRecord, SessionRow, SettingKey, Source, Sourced, SubjectRecord,
-    SubjectRef, SubjectStatus, TriageOutcome, TriagePurpose, TriageRefusal,
+    SubjectRef, SubjectStatus, TriageOutcome, TriagePurpose, TriageRefusal, Verdict,
 };
 #[cfg(feature = "window-authority")]
 use officina_core::registry::types::{HookEnd, HookStart, SessionFact};
 use officina_core::registry::view::{
-    EvidenceInput, IngestionView, RegistryView, SubjectView, ViewInput, archived_subjects,
-    build_view,
+    AutoArchiveSetting, EvidenceInput, IngestionView, RegistryView, SubjectView, ViewInput,
+    archived_subjects, build_view,
 };
 use rusqlite::Connection;
 #[cfg(feature = "window-authority")]
@@ -296,6 +297,8 @@ pub(crate) fn view(
         calls: triage_calls_since(&snapshot, now_ms - COUNT_WINDOW_MS)?,
         latest_evaluation: latest_evaluation(&snapshot)?,
         dry_run,
+        verdicts: verdict_records(&snapshot)?,
+        auto_archive: auto_archive_setting(&snapshot),
     };
     Ok(build_view(
         &ViewInput {
@@ -721,8 +724,7 @@ pub(crate) fn evaluable_confirmations(
 ) -> rusqlite::Result<Vec<officina_core::registry::dry_run::EvaluableConfirmation>> {
     use officina_core::registry::confirm::ConfirmationInput;
     use officina_core::registry::dry_run::EvaluableConfirmation;
-    use officina_core::registry::proposal::Proposal;
-    use officina_core::registry::types::{ModelVerdict, ProposalSource, ReasonCode, Verdict};
+    use officina_core::registry::types::{ModelVerdict, ProposalSource, ReasonCode};
     conn.prepare_cached(
         "SELECT c.id, c.confirmed_at_ms, c.proposed_verdict, c.proposed_source, c.proposed_reason,
              c.call_id, c.verdict, i.confirmation_id, i.prompt, i.answer_head, i.answer_tail,
@@ -775,4 +777,41 @@ pub(crate) fn last_call_for(
     })?
     .next()
     .transpose()
+}
+
+/// Every confirmation as the rates read it (AD-50), by id.
+pub(crate) fn verdict_records(conn: &Connection) -> rusqlite::Result<Vec<VerdictRecord>> {
+    use officina_core::registry::types::{ModelVerdict, ProposalSource, ReasonCode};
+    conn.prepare_cached(
+        "SELECT id, subject_id, proposed_verdict, proposed_source, proposed_reason, call_id,
+             verdict, auto, confirmed_at_ms, reopened_at_ms
+         FROM confirmation ORDER BY id",
+    )?
+    .query_map([], |row| {
+        Ok(VerdictRecord {
+            id: row.get(0)?,
+            subject_id: row.get(1)?,
+            proposal: Proposal {
+                verdict: code_of(row, 2, ModelVerdict::from_code)?,
+                source: code_of(row, 3, ProposalSource::from_code)?,
+                reason: code_of(row, 4, ReasonCode::from_code)?,
+                call_id: row.get(5)?,
+            },
+            verdict: code_of(row, 6, Verdict::from_code)?,
+            auto: row.get::<_, i64>(7)? == 1,
+            confirmed_at_ms: row.get(8)?,
+            reopened_at_ms: row.get(9)?,
+        })
+    })?
+    .collect()
+}
+
+/// The auto-archive setting, with who set it and when, when one is
+/// recorded and readable (D-69).
+pub(crate) fn auto_archive_setting(conn: &Connection) -> Option<(AutoArchiveSetting, Source, i64)> {
+    settings(conn)
+        .ok()?
+        .into_iter()
+        .find(|row| row.key == SettingKey::AutoArchive)
+        .and_then(|row| Some((serde_json::from_str(&row.value).ok()?, row.src, row.at_ms)))
 }

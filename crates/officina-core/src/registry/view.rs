@@ -13,6 +13,11 @@ use super::dry_run::{DRY_RUN_MAX_CASES, DryRunProgress, DryRunState, DryRunStop,
 use super::filing::excerpt_time;
 use super::fold::SUPERSESSION_WINDOW_MS;
 use super::proposal::{ModelInput, Proposal};
+use super::rates::{
+    AUTO_ARCHIVE_FLIP_PERCENT, AUTO_ARCHIVE_MIN_CASES, AUTO_COUNT_AFTER_MS, GateState, Gates,
+    MODEL_GATE_MAX_AGE_MS, MODEL_GATE_MIN_CASES, RATE_WINDOW, SELF_DISABLE_MIN_CASES, SourceRate,
+    VerdictRecord, gates, rates,
+};
 use super::retention::EXCERPT_TTL_MS;
 use super::triage_call::{
     CALL_SPACING_MS, CALLS_PER_DAY, CALLS_PER_HOUR, COUNT_WINDOW_MS, CallRecord, CallsView,
@@ -66,7 +71,69 @@ pub struct RegistryView {
     pub restore_notice: Option<RestoreNotice>,
     /// The triage model's state and evidence (FR-10, AD-52).
     pub model: ModelView,
+    /// Each proposal source's measured error (FR-11, AD-50).
+    pub rates: Vec<SourceRate>,
+    /// The three gates, with their reasons (AD-50).
+    pub gates: Gates,
+    /// The auto-archive switch, and why it last changed (FR-12, D-69).
+    pub auto_archive: AutoArchiveView,
+    /// The subjects auto-archived over the last [`AUTO_COUNT_AFTER_MS`],
+    /// the latest first, which the author may reopen (D-70).
+    pub recent_auto_archives: Vec<AutoArchived>,
+    /// The subjects archived as routine, merged ones excepted: candidates
+    /// for the v0.7 catalogue (FR-13, D-55).
+    pub routine_candidates: Vec<RoutineCandidate>,
     pub thresholds: Thresholds,
+}
+
+/// The value of the [`SettingKey::AutoArchive`] setting (D-69): whether it
+/// is on, and the gate state that turned it off, when rules did.
+///
+/// [`SettingKey::AutoArchive`]: super::types::SettingKey::AutoArchive
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AutoArchiveSetting {
+    pub on: bool,
+    #[serde(default)]
+    pub reason: Option<GateState>,
+}
+
+/// The auto-archive switch as the window shows it (FR-12, AD-55).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct AutoArchiveView {
+    pub on: bool,
+    /// Who changed it last: the author, or `rules` when its gate broke.
+    pub src: Option<Source>,
+    #[cfg_attr(feature = "ts", ts(type = "number | null"))]
+    pub at_ms: Option<i64>,
+    /// The gate state that turned it off, when rules did.
+    pub reason: Option<GateState>,
+}
+
+/// One subject auto-archive archived (D-70).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct AutoArchived {
+    pub subject: SubjectRef,
+    pub project: String,
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub archived_at_ms: i64,
+    /// When the subject was reopened after it, by the author or a session
+    /// alive again: a flip of the `state` source (D-77).
+    #[cfg_attr(feature = "ts", ts(type = "number | null"))]
+    pub reopened_at_ms: Option<i64>,
+    /// True while the subject is still archived: it can be reopened.
+    pub archived: bool,
+}
+
+/// A subject archived as "routine, could have run alone" (FR-13).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct RoutineCandidate {
+    pub subject: SubjectRef,
+    pub project: String,
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub archived_at_ms: i64,
 }
 
 /// The triage model as the Triage panel's evidence shows it (FR-10, AD-52,
@@ -93,6 +160,10 @@ pub struct EvidenceInput {
     pub calls: Vec<CallRecord>,
     pub latest_evaluation: Option<Evaluation>,
     pub dry_run: DryRunState,
+    /// Every confirmation, as the rates read it.
+    pub verdicts: Vec<VerdictRecord>,
+    /// The auto-archive setting, with who set it and when.
+    pub auto_archive: Option<(AutoArchiveSetting, Source, i64)>,
 }
 
 /// How far the registry lags behind the event files (AD-53, D-84).
@@ -129,6 +200,15 @@ pub struct Thresholds {
     pub calls_per_day: u32,
     #[cfg_attr(feature = "ts", ts(type = "number"))]
     pub count_window_ms: i64,
+    pub rate_window: u32,
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub auto_count_after_ms: i64,
+    pub auto_archive_min_cases: u32,
+    pub auto_archive_flip_percent: u32,
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub model_gate_max_age_ms: i64,
+    pub model_gate_min_cases: u32,
+    pub self_disable_min_cases: u32,
 }
 
 /// One subject that is not archived.
@@ -503,6 +583,62 @@ pub fn unread_view(report: RegistryReport, now_ms: i64) -> RegistryView {
     )
 }
 
+/// The subjects auto-archived over the last [`AUTO_COUNT_AFTER_MS`] at
+/// `now_ms`, the latest first (D-70).
+fn recent_auto_archives(
+    verdicts: &[VerdictRecord],
+    subjects: &BTreeMap<i64, &SubjectRecord>,
+    now_ms: i64,
+) -> Vec<AutoArchived> {
+    let mut recent: Vec<AutoArchived> = verdicts
+        .iter()
+        .filter(|v| v.auto && now_ms - v.confirmed_at_ms < AUTO_COUNT_AFTER_MS)
+        .filter_map(|v| {
+            let subject = subjects.get(&v.subject_id)?;
+            Some(AutoArchived {
+                subject: SubjectRef {
+                    id: subject.id,
+                    name: subject.name.clone(),
+                },
+                project: subject.project.clone(),
+                archived_at_ms: v.confirmed_at_ms,
+                reopened_at_ms: v.reopened_at_ms,
+                archived: subject.status.value == SubjectStatus::Archived
+                    && subject.merged_into.is_none(),
+            })
+        })
+        .collect();
+    recent.sort_by(|a, b| {
+        b.archived_at_ms
+            .cmp(&a.archived_at_ms)
+            .then_with(|| a.subject.id.cmp(&b.subject.id))
+    });
+    recent
+}
+
+/// The subjects archived as routine, merged sources excepted (FR-13,
+/// D-55), the latest archived first.
+pub fn routine_candidates(subjects: &[SubjectRecord]) -> Vec<RoutineCandidate> {
+    let mut found: Vec<RoutineCandidate> = subjects
+        .iter()
+        .filter(|s| s.routine && is_listed_archived(s))
+        .map(|s| RoutineCandidate {
+            subject: SubjectRef {
+                id: s.id,
+                name: s.name.clone(),
+            },
+            project: s.project.clone(),
+            archived_at_ms: s.status.at_ms,
+        })
+        .collect();
+    found.sort_by(|a, b| {
+        b.archived_at_ms
+            .cmp(&a.archived_at_ms)
+            .then_with(|| a.subject.id.cmp(&b.subject.id))
+    });
+    found
+}
+
 /// Builds the view (AD-54).
 ///
 /// ```
@@ -613,6 +749,24 @@ pub fn build_view(input: &ViewInput, now_ms: i64) -> RegistryView {
             last_stop: input.evidence.dry_run.last_stop,
             calls: count_calls(&input.evidence.calls, now_ms),
         },
+        rates: rates(&input.evidence.verdicts, now_ms),
+        gates: gates(
+            &input.evidence.verdicts,
+            input.evidence.latest_evaluation.as_ref(),
+            now_ms,
+        ),
+        auto_archive: input
+            .evidence
+            .auto_archive
+            .map(|(setting, src, at_ms)| AutoArchiveView {
+                on: setting.on,
+                src: Some(src),
+                at_ms: Some(at_ms),
+                reason: setting.reason,
+            })
+            .unwrap_or_default(),
+        recent_auto_archives: recent_auto_archives(&input.evidence.verdicts, &by_id, now_ms),
+        routine_candidates: routine_candidates(input.subjects),
         thresholds: Thresholds {
             restore_notice_ms: RESTORE_NOTICE_MS,
             excerpt_ttl_ms: EXCERPT_TTL_MS,
@@ -623,6 +777,13 @@ pub fn build_view(input: &ViewInput, now_ms: i64) -> RegistryView {
             calls_per_hour: u32::try_from(CALLS_PER_HOUR).unwrap_or(u32::MAX),
             calls_per_day: u32::try_from(CALLS_PER_DAY).unwrap_or(u32::MAX),
             count_window_ms: COUNT_WINDOW_MS,
+            rate_window: u32::try_from(RATE_WINDOW).unwrap_or(u32::MAX),
+            auto_count_after_ms: AUTO_COUNT_AFTER_MS,
+            auto_archive_min_cases: AUTO_ARCHIVE_MIN_CASES,
+            auto_archive_flip_percent: AUTO_ARCHIVE_FLIP_PERCENT,
+            model_gate_max_age_ms: MODEL_GATE_MAX_AGE_MS,
+            model_gate_min_cases: MODEL_GATE_MIN_CASES,
+            self_disable_min_cases: SELF_DISABLE_MIN_CASES,
         },
     }
 }
@@ -1053,5 +1214,35 @@ mod tests {
         assert_eq!(alive.to_sort, 1, "a prompt after its end: alive again");
         assert_eq!(alive.triage[0].key, "session:loose");
         assert_eq!(unread_view(ready(), NOW).to_sort, 0);
+    }
+
+    /// FR-13, D-55: subjects archived with the routine box are candidates,
+    /// the latest first; a merged source, though archived, is not, and
+    /// neither is an open or a plainly archived subject.
+    #[test]
+    fn routine_candidates_exclude_merged_sources() {
+        let routine = |id, at| SubjectRecord {
+            routine: true,
+            ..subject(id, SubjectStatus::Archived, at)
+        };
+        let mut merged = routine(3, NOW);
+        merged.merged_into = Some(1);
+        let open_routine = SubjectRecord {
+            routine: true,
+            ..subject(5, SubjectStatus::ToResume, NOW)
+        };
+        let subjects = [
+            routine(1, NOW - 20),
+            subject(2, SubjectStatus::Archived, NOW),
+            merged,
+            routine(4, NOW - 10),
+            open_routine,
+        ];
+        let listed: Vec<i64> = view(&subjects, &[])
+            .routine_candidates
+            .iter()
+            .map(|c| c.subject.id)
+            .collect();
+        assert_eq!(listed, [4, 1]);
     }
 }
