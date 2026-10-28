@@ -200,10 +200,10 @@ impl ContextSources {
     }
 }
 
-/// The pending requests Needs you lists (AD-35, D-27, D-170), each rebuilt
-/// from the approved catalogue with the relay floor's project folders and
-/// the system directory, with its dry run's kept output and whether the
-/// project's code is still the one it ran on. `fingerprint` computes a
+/// The pending requests Needs you lists (AD-35, D-27, D-170, D-173), each
+/// rebuilt from the approved catalogue with the relay floor's project
+/// folders and the system directory, with its dry run's kept output and
+/// whether the project's files are still the ones it is bound to. `fingerprint` computes a
 /// folder's tree, so the window can cache it; a tree it cannot compute is
 /// left out, which the card shows as unknown. Nothing is read beyond the
 /// approvals folder when no request is there.
@@ -222,14 +222,16 @@ pub fn board_approvals(
     let mut dry_runs = DryRunInputs::default();
     let mut trees: BTreeMap<String, Option<TreeFingerprint>> = BTreeMap::new();
     for (id, request) in &files.requests {
-        let Some(run_id) = &request.check_run_id else {
-            continue;
-        };
         if files.decided(id) || !is_live(request.created_at_ms, now_ms) {
             continue;
         }
-        if let Some(output) = read_output(home, run_id) {
+        if let Some(run_id) = &request.check_run_id
+            && let Some(output) = read_output(home, run_id)
+        {
             dry_runs.outputs.insert(run_id.clone(), output);
+        }
+        if request.tree.is_none() {
+            continue;
         }
         let project_dir = dirs.get(&request.project).cloned().or_else(|| {
             ctx.approved

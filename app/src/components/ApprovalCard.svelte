@@ -7,6 +7,7 @@
   import type { ApprovalView } from "../lib/generated/ApprovalView";
   import type { BoardStore } from "../lib/board.svelte";
   import { isPointerClick } from "../lib/relay.svelte";
+  import { bindingText } from "../lib/relay-text";
   import { ago, duration } from "../lib/time";
 
   interface Props {
@@ -18,6 +19,7 @@
   let error = $derived(store.approvalErrors[approval.id]);
   let busy = $derived(store.deciding[approval.id] === true);
   let dryRun = $derived(approval.dry_run);
+  let binding = $derived(bindingText(approval));
 
   function decide(event: MouseEvent, approve: boolean): void {
     if (!isPointerClick(event)) return;
@@ -65,14 +67,14 @@
         {:else}
           <p class="missing" data-testid="dry-run-missing">{dryRun.missing}</p>
         {/if}
-        {#if dryRun.files_unchanged === true}
-          <p class="unchanged" data-testid="files-unchanged">tracked and unignored files unchanged since the dry run</p>
-        {:else if dryRun.files_unchanged === false}
-          <p class="changed" data-testid="files-changed">
-            tracked or unignored files changed since the dry run: the run will refuse this approval
-          </p>
-        {/if}
       </section>
+    {/if}
+    {#if binding}
+      <p class="binding" class:changed={binding.changed} data-testid="binding">
+        {binding.text}{#if approval.bound_files !== null}<span class="count" data-testid="bound-files">
+            ({approval.bound_files} files)</span
+          >{/if}
+      </p>
     {/if}
   {:else}
     <p class="reason" data-testid="invalid-reason">
@@ -210,10 +212,12 @@
     overflow-wrap: anywhere;
     unicode-bidi: isolate;
   }
-  .unchanged,
-  .changed {
+  .binding {
     margin: 0;
     font-size: 12.5px;
+  }
+  .count {
+    color: var(--color-text-muted);
   }
   .changed {
     color: var(--color-stopped-text);

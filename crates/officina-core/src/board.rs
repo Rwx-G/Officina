@@ -1164,7 +1164,7 @@ values = [\"web01\"]
                 dry_run.output.as_deref(),
                 Some("TASK [restart] changed: [web01]\n")
             );
-            assert_eq!(dry_run.files_unchanged, Some(true));
+            assert_eq!(board.approvals[0].files_unchanged, Some(true));
             let plain = board_of(
                 &files(vec![request(
                     &approved,

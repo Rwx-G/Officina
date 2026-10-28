@@ -804,3 +804,73 @@ fn an_approval_is_not_consumed_after_a_tree_change() {
     );
     assert!(Path::new(&relay.approvals_dir()).is_dir());
 }
+
+/// AC 5 of story 2.14 (D-173): a `human` action that names no check is
+/// bound to its project's files all the same: the request records them, and
+/// the approved run starts on them.
+#[test]
+fn a_human_action_without_check_is_bound_to_its_tree() {
+    let Some(relay) = Relay::in_git("a_human_action_without_check_is_bound_to_its_tree") else {
+        return;
+    };
+    let child = relay.spawn(&["restart", "service=web01", "--wait", "30"]);
+    let id = relay.next_request(&[]);
+    let request = relay.request(&id);
+    let bound = request.tree.clone().expect("the request binds the tree");
+    assert_eq!(request.check_run_id, None, "no dry run");
+    assert_eq!(
+        Some(&bound),
+        officina_host::relay::tree::fingerprint(&relay.lab())
+            .unwrap()
+            .as_ref()
+    );
+    relay.decide(&id, true);
+    let out = child.wait_with_output().unwrap();
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    let started = relay
+        .entries()
+        .into_iter()
+        .find_map(|e| match e {
+            JournalEntry::RunStarted(s) => Some(s),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(
+        started.tree,
+        Some(bound),
+        "it ran on the files it was asked for"
+    );
+    assert_eq!(started.approval_id.as_deref(), Some(id.as_str()));
+
+    let outside = Relay::new();
+    outside.run(&RESTART);
+    let request = outside.request(&outside.ids(FileKind::Request).remove(0));
+    assert_eq!(request.tree, None, "outside git, nothing to bind");
+}
+
+/// AC 5 of story 2.14, the audits' second chain: the session edits the file
+/// a `human` action runs while its call waits; the author approves what the
+/// card showed, and the run refuses `tree_changed`, the approval left
+/// unconsumed for the files it was given for.
+#[test]
+fn an_edit_while_waiting_refuses_tree_changed() {
+    let Some(relay) = Relay::in_git("an_edit_while_waiting_refuses_tree_changed") else {
+        return;
+    };
+    let child = relay.spawn(&["restart", "service=web01", "--wait", "30"]);
+    let id = relay.next_request(&[]);
+    std::fs::write(relay.lab().join("site.yml"), "- hosts: everything\n").unwrap();
+    relay.decide(&id, true);
+    let out = child.wait_with_output().unwrap();
+    assert_refused(&out, RefusalReason::TreeChanged);
+    assert!(relay.launches().is_empty(), "nothing ran");
+    assert_eq!(relay.ids(FileKind::Approved), [id], "left unconsumed");
+    assert!(relay.ids(FileKind::Consumed).is_empty());
+    assert_eq!(relay.refusals().last(), Some(&RefusalReason::TreeChanged));
+
+    // Put back, the files are the ones the approval was given for again.
+    std::fs::write(relay.lab().join("site.yml"), "- hosts: lab\n").unwrap();
+    let out = relay.run(&["restart", "service=web01", "--wait", "1"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    assert_eq!(relay.launches().len(), 1);
+}

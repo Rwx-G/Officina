@@ -106,9 +106,9 @@ pub fn parse_file_name(name: &str) -> Option<(&str, FileKind)> {
 }
 
 /// What a request is about: the request key covers exactly this (AD-33,
-/// D-170). The dry run's run id and tree are present only for an action
-/// naming a check, so a request of any other action is keyed by AD-33's
-/// four fields.
+/// D-170, D-173). The dry run's run id is present only for an action naming
+/// a check; the tree for every request in a git work tree, so a request
+/// outside one is keyed by AD-33's four fields.
 #[derive(Debug, Clone, Copy, Serialize)]
 pub struct KeyInputs<'a> {
     pub project: &'a str,
@@ -159,7 +159,8 @@ pub struct ApprovalRequest {
     /// check (D-170).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub check_run_id: Option<String>,
-    /// The tree that check ran on (D-170).
+    /// The project's files when the request was made, the ones its check ran
+    /// on when it names one; absent outside a git work tree (D-170, D-173).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tree: Option<TreeFingerprint>,
 }
@@ -424,9 +425,8 @@ pub fn decidable<'f>(
     Ok(request)
 }
 
-/// The dry run a card shows (D-170): the check, its run, its kept output or
-/// why there is none, and whether the project's tracked and unignored files
-/// are still the ones it ran on.
+/// The dry run a card shows (D-170): the check, its run, and its kept
+/// output or why there is none.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct DryRunView {
@@ -435,10 +435,20 @@ pub struct DryRunView {
     pub output: Option<String>,
     /// Why there is no output, when there is none.
     pub missing: Option<String>,
-    /// True while the project's fingerprint equals the dry run's, false once
-    /// it differs (approving would then be refused at the run), absent when
-    /// unknown or outside git.
-    pub files_unchanged: Option<bool>,
+}
+
+/// What a request's files are bound to (D-170, D-173): what the run checks
+/// again before it uses the approval.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(rename_all = "snake_case")]
+pub enum TreeBinding {
+    /// The files the dry run ran on.
+    DryRun,
+    /// The files when the request was made, for an action naming no check.
+    Request,
+    /// None: the project is not a git work tree.
+    NotGitTree,
 }
 
 /// One pending request as Needs you shows it (AD-35, D-27).
@@ -463,6 +473,14 @@ pub struct ApprovalView {
     pub requested_at_ms: i64,
     pub expires_at_ms: i64,
     pub dry_run: Option<DryRunView>,
+    /// What the request's files are bound to; absent for an invalid request.
+    pub binding: Option<TreeBinding>,
+    /// How many tracked and unignored files the request binds.
+    pub bound_files: Option<u32>,
+    /// True while the project's fingerprint equals the request's, false once
+    /// it differs (approving would then be refused at the run), absent when
+    /// unknown or not bound.
+    pub files_unchanged: Option<bool>,
 }
 
 /// What the host found for the dry runs of the pending requests (D-170).
@@ -474,6 +492,15 @@ pub struct DryRunInputs {
     /// The current fingerprint of each project computed, by name: `None`
     /// outside a git work tree. A project absent here was not computed.
     pub trees: BTreeMap<String, Option<TreeFingerprint>>,
+}
+
+/// Whether the project's files are still the ones `request` is bound to,
+/// when both are known.
+fn files_unchanged(request: &ApprovalRequest, inputs: &DryRunInputs) -> Option<bool> {
+    match (&request.tree, inputs.trees.get(&request.project)) {
+        (Some(bound), Some(current)) => Some(current.as_ref() == Some(bound)),
+        _ => None,
+    }
 }
 
 fn dry_run_view(request: &ApprovalRequest, check: &str, inputs: &DryRunInputs) -> DryRunView {
@@ -489,16 +516,11 @@ fn dry_run_view(request: &ApprovalRequest, check: &str, inputs: &DryRunInputs) -
             ),
         ),
     };
-    let files_unchanged = match (&request.tree, inputs.trees.get(&request.project)) {
-        (Some(bound), Some(current)) => Some(current.as_ref() == Some(bound)),
-        _ => None,
-    };
     DryRunView {
         check: check.to_owned(),
         run_id,
         output,
         missing,
-        files_unchanged,
     }
 }
 
@@ -530,6 +552,15 @@ pub fn pending(
                 ),
                 Err(_) => (String::new(), Vec::new(), None, None),
             };
+            let binding =
+                rebuilt
+                    .as_ref()
+                    .ok()
+                    .map(|rebuilt| match (&request.tree, &rebuilt.check) {
+                        (None, _) => TreeBinding::NotGitTree,
+                        (Some(_), Some(_)) => TreeBinding::DryRun,
+                        (Some(_), None) => TreeBinding::Request,
+                    });
             ApprovalView {
                 id: id.clone(),
                 project: request.project.clone(),
@@ -544,6 +575,11 @@ pub fn pending(
                 requested_at_ms: request.created_at_ms,
                 expires_at_ms: request.created_at_ms + PENDING_MS,
                 dry_run,
+                binding,
+                bound_files: binding
+                    .filter(|b| *b != TreeBinding::NotGitTree)
+                    .and_then(|_| request.tree.as_ref().map(|t| t.files)),
+                files_unchanged: binding.and_then(|_| files_unchanged(request, dry_runs)),
             }
         })
         .collect();
@@ -968,15 +1004,16 @@ pattern = \"lab-[a-z]+\"
             (
                 dry_run.check.as_str(),
                 dry_run.output.as_deref(),
-                dry_run.files_unchanged
+                view.files_unchanged
             ),
             ("verify", Some("changed: 1\n"), Some(true))
         );
+        assert_eq!(view.binding, Some(TreeBinding::DryRun));
         inputs.trees.insert("lab".to_owned(), Some(tree("b")));
         inputs.outputs.clear();
         let view = &pending(&files_with(&[(id, request.clone())]), &ctx, &inputs, NOW)[0];
         let dry_run = view.dry_run.as_ref().unwrap();
-        assert_eq!(dry_run.files_unchanged, Some(false));
+        assert_eq!(view.files_unchanged, Some(false));
         assert!(dry_run.output.is_none() && dry_run.missing.is_some());
 
         let mut without = request;
@@ -987,6 +1024,79 @@ pattern = \"lab-[a-z]+\"
         let view = &pending(&files_with(&[(id, without)]), &ctx, &inputs, NOW)[0];
         assert!(!view.valid);
         assert!(view.invalid_reason.as_deref().unwrap().contains("dry run"));
+    }
+
+    /// D-173: a request names what its files are bound to: its dry run's,
+    /// its own when the action names no check, or none outside git; an
+    /// invalid request names nothing.
+    #[test]
+    fn a_request_states_its_binding() {
+        let approved = approved();
+        let dirs = dirs();
+        let ctx = ApprovalContext {
+            approved: Some(&approved),
+            project_dirs: &dirs,
+            system_dir: SYSTEM,
+        };
+        let argv = ["C:/path/to/tool.exe", "restart", "web01"];
+        let (outside_id, outside) = request(
+            &approved,
+            "restart",
+            &[("service", "web01")],
+            &argv,
+            NOW - MIN,
+        );
+        let mut bound = outside.clone();
+        bound.tree = Some(TreeFingerprint {
+            files: 7,
+            ..tree("a")
+        });
+        bound.created_at_ms = NOW - 2 * MIN;
+        bound.request_key = request_key(&bound.key_inputs());
+        let bound_id = request_id(&bound.request_key, bound.created_at_ms);
+        let mut inputs = DryRunInputs::default();
+        let files = files_with(&[(outside_id, outside), (bound_id, bound)]);
+        let views = pending(&files, &ctx, &inputs, NOW);
+        assert_eq!(
+            views
+                .iter()
+                .map(|v| (v.binding, v.bound_files, v.files_unchanged))
+                .collect::<Vec<_>>(),
+            [
+                (Some(TreeBinding::Request), Some(7), None),
+                (Some(TreeBinding::NotGitTree), None, None),
+            ],
+            "oldest first; the current files not computed yet"
+        );
+        inputs.trees.insert(
+            "lab".to_owned(),
+            Some(TreeFingerprint {
+                files: 7,
+                ..tree("a")
+            }),
+        );
+        assert_eq!(
+            pending(&files, &ctx, &inputs, NOW)[0].files_unchanged,
+            Some(true)
+        );
+        inputs.trees.insert("lab".to_owned(), None);
+        assert_eq!(
+            pending(&files, &ctx, &inputs, NOW)[0].files_unchanged,
+            Some(false),
+            "no longer a work tree"
+        );
+
+        let (id, mut forged) = request(
+            &approved,
+            "restart",
+            &[("service", "db01")],
+            &argv,
+            NOW - MIN,
+        );
+        forged.params = params(&[("service", "web01")]);
+        let view = &pending(&files_with(&[(id, forged)]), &ctx, &inputs, NOW)[0];
+        assert!(!view.valid);
+        assert_eq!((view.binding, view.files_unchanged), (None, None));
     }
 
     #[test]

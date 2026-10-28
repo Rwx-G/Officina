@@ -130,6 +130,9 @@ function approval(overrides: Partial<ApprovalView> = {}): ApprovalView {
     requested_at_ms: NOW - 3 * 60_000,
     expires_at_ms: NOW + 57 * 60_000,
     dry_run: null,
+    binding: "not_git_tree",
+    bound_files: null,
+    files_unchanged: null,
     ...overrides,
   };
 }
@@ -214,25 +217,56 @@ describe("ApprovalCard", () => {
 
   it("ApprovalCard shows the dry run as inert text", () => {
     const output = `TASK [restart] <script>window.__hit = 1</script>\nchanged: [web01]\n`;
-    const { container, getByTestId, queryByTestId, rerender } = render(ApprovalCard, {
-      approval: approval({
-        dry_run: { check: "check", run_id: "r1", output, missing: null, files_unchanged: true },
-      }),
+    const { container, getByTestId, rerender } = render(ApprovalCard, {
+      approval: approval({ dry_run: { check: "check", run_id: "r1", output, missing: null } }),
       store: store(),
     });
     expect(container.querySelector("script")).toBeNull();
     expect(getByTestId("dry-run-output").textContent).toBe(output);
-    expect(getByTestId("files-unchanged").textContent).toBe(
-      "tracked and unignored files unchanged since the dry run",
-    );
     rerender({
-      approval: approval({
-        dry_run: { check: "check", run_id: "r1", output: null, missing: "not kept", files_unchanged: false },
-      }),
+      approval: approval({ dry_run: { check: "check", run_id: "r1", output: null, missing: "not kept" } }),
       store: store(),
     });
     expect(getByTestId("dry-run-missing").textContent).toBe("not kept");
-    expect(queryByTestId("files-unchanged")).toBeNull();
-    expect(getByTestId("files-changed")).toBeTruthy();
+  });
+
+  // D-170, D-173: the card says what the files are bound to, never "tree
+  // unchanged": since the dry run, since the request, or not at all.
+  it("ApprovalCard states its binding", () => {
+    const line = (overrides: Partial<ApprovalView>): { text: string; changed: boolean } => {
+      const { getByTestId } = render(ApprovalCard, { approval: approval(overrides), store: store() });
+      const element = getByTestId("binding");
+      const result = { text: element.firstChild?.textContent?.trim() ?? "", changed: element.classList.contains("changed") };
+      cleanup();
+      return result;
+    };
+    const dryRun = { check: "check", run_id: "r1", output: "ok", missing: null };
+    expect(line({ binding: "dry_run", dry_run: dryRun, bound_files: 12, files_unchanged: true })).toEqual({
+      text: "tracked and unignored files unchanged since the dry run",
+      changed: false,
+    });
+    expect(line({ binding: "request", bound_files: 12, files_unchanged: true })).toEqual({
+      text: "tracked and unignored files unchanged since the request",
+      changed: false,
+    });
+    expect(line({ binding: "request", bound_files: 12, files_unchanged: false })).toEqual({
+      text: "tracked or unignored files changed since the request: the run will refuse this approval",
+      changed: true,
+    });
+    expect(line({ binding: "request", bound_files: 12, files_unchanged: null }).text).toBe(
+      "tracked and unignored files bound to the request",
+    );
+    expect(line({ binding: "not_git_tree" })).toEqual({ text: "no file binding: not a git tree", changed: false });
+    const counted = render(ApprovalCard, {
+      approval: approval({ binding: "request", bound_files: 12, files_unchanged: true }),
+      store: store(),
+    });
+    expect(counted.getByTestId("bound-files").textContent?.trim()).toBe("(12 files)");
+    cleanup();
+    const invalid = render(ApprovalCard, {
+      approval: approval({ valid: false, invalid_reason: "forged", argv: [], binding: null }),
+      store: store(),
+    });
+    expect(invalid.queryByTestId("binding")).toBeNull();
   });
 });

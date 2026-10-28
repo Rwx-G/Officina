@@ -96,8 +96,9 @@ pub struct RunPlan {
     /// The check it needs: an `after-check` action's (AD-33), or a `human`
     /// action's dry run (D-170).
     pub check: Option<String>,
-    /// True for an action naming a check and for any action named as a
-    /// check: their runs record the tree (D-22).
+    /// True for an action naming a check, any action named as a check, and
+    /// every `human` action: their runs record the tree, and a `human`
+    /// action's request is bound to it (D-22, D-173).
     pub binds_tree: bool,
     /// True for an action named as a check: its run keeps its output for the
     /// approval card (D-170).
@@ -250,6 +251,17 @@ impl Refusal {
             &format!(
                 "a file of the project's work tree cannot be read, so its content cannot be bound: {why}"
             ),
+            Some(project),
+        )
+    }
+
+    /// The tracked and unignored files changed since the request of a
+    /// `human` action naming no check; the approval stays for a call on the
+    /// files it was asked for (D-173).
+    pub fn tree_changed(project: &str) -> Refusal {
+        Refusal::new(
+            RefusalReason::TreeChanged,
+            "the project's tracked and unignored files changed since this approval was requested; run the same command again for a new request",
             Some(project),
         )
     }
@@ -429,6 +441,7 @@ pub fn plan(
         }
     })?;
     let names_a_check = validated.check.is_some();
+    let waits_for_the_author = matches!(validated.class, ActionClass::Human | ActionClass::Auto);
     let is_a_check = relay
         .catalogue
         .actions
@@ -444,7 +457,7 @@ pub fn plan(
         timeout_s: validated.timeout_s,
         max_output_kib: validated.max_output_kib,
         check: validated.check.clone(),
-        binds_tree: names_a_check || is_a_check,
+        binds_tree: names_a_check || is_a_check || waits_for_the_author,
         keeps_output: is_a_check,
     })
 }
@@ -742,6 +755,10 @@ mod tests {
             human.class,
             ActionClass::Human,
             "a human action plans (D-20 gone)"
+        );
+        assert!(
+            human.binds_tree && human.check.is_none(),
+            "a human action binds its tree, check or not (D-173)"
         );
 
         let run = plan(

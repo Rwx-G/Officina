@@ -363,7 +363,8 @@ impl Caller<'_> {
 }
 
 /// What a `human` action's request is bound to besides its parameters: the
-/// dry run it was made after and the tree that ran on (D-170).
+/// dry run it was made after, and the files, the ones the dry run ran on
+/// when there is one (D-170, D-173).
 #[derive(Clone, Copy)]
 struct Bound<'a> {
     check_run_id: Option<&'a str>,
@@ -443,10 +444,10 @@ enum Consumed {
 }
 
 /// Uses approval `id`, last before the spawn (AD-33): the checks of [`plan`]
-/// again, the approval made under the same catalogue, and for an action
-/// naming a check the tree still the dry run's (D-170), and an HTTP action's
-/// credential read (D-29); then the claim. Anything refused leaves the
-/// approval unconsumed.
+/// again, the approval made under the same catalogue, the files still the
+/// ones the request was bound to, its dry run's when it names a check
+/// (D-170, D-173), and an HTTP action's credential read (D-29); then the
+/// claim. Anything refused leaves the approval unconsumed.
 fn consume(caller: &Caller<'_>, planned: &RunPlan, bound: Bound<'_>, id: &str) -> Consumed {
     let fresh = match with_inputs(caller.home, caller.cwd, |inputs| {
         plan(inputs, &planned.action, caller.params)
@@ -457,11 +458,14 @@ fn consume(caller: &Caller<'_>, planned: &RunPlan, bound: Bound<'_>, id: &str) -
     if fresh.catalogue_hash != planned.catalogue_hash {
         return Consumed::Refused(Refusal::catalogue_changed_since_request(&fresh.project));
     }
-    if let Some(check) = &fresh.check {
+    if fresh.binds_tree {
         match tree::fingerprint(Path::new(&fresh.project_dir)) {
             Err(e) => return Consumed::Refused(tree_refusal(&fresh.project, &e)),
             Ok(current) if current.as_ref() != bound.tree => {
-                return Consumed::Refused(Refusal::check_not_satisfied(&fresh.project, check));
+                return Consumed::Refused(match &fresh.check {
+                    Some(check) => Refusal::check_not_satisfied(&fresh.project, check),
+                    None => Refusal::tree_changed(&fresh.project),
+                });
             }
             Ok(_) => {}
         }

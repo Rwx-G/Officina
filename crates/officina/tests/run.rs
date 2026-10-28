@@ -442,6 +442,18 @@ fn scenario(reason: RefusalReason) -> Option<Scenario> {
                 )
             });
         }
+        RefusalReason::TreeChanged => {
+            let git = GitRelay::new("every_refusal_code (tree_changed)")?;
+            let during: During = Box::new(|relay: &Relay, id: &str| {
+                std::fs::write(relay.project().join("playbook.yml"), "- hosts: all\n").unwrap();
+                officina_host::relay::authority::decide_approval(&relay.env.relay_home(), id, true)
+                    .unwrap();
+            });
+            return Some(Scenario {
+                during: Some(during),
+                ..in_git(git, vec!["approve-me", "group=lab-web", "--wait", "30"])
+            });
+        }
         RefusalReason::GitUnavailable => {
             let git = GitRelay::new("every_refusal_code (git_unavailable)")?;
             return Some(Scenario {
@@ -531,6 +543,7 @@ fn scenario(reason: RefusalReason) -> Option<Scenario> {
         }
         RefusalReason::ApprovalPending => (project, human("1")),
         RefusalReason::CheckNotSatisfied
+        | RefusalReason::TreeChanged
         | RefusalReason::GitUnavailable
         | RefusalReason::TreeTooLarge
         | RefusalReason::TreeUnreadable => unreachable!("built above"),

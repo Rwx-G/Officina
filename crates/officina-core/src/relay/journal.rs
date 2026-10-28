@@ -299,6 +299,10 @@ closed_enum! {
         /// The code changed since the dry run the approval was given for: the
         /// approval stays unconsumed (D-170).
         CheckNotSatisfied,
+        /// The tracked and unignored files of a `human` action naming no
+        /// check changed since its request: the approval stays unconsumed
+        /// (D-173).
+        TreeChanged,
         /// The credential an HTTP action names is not in the Credential
         /// Manager: nothing was sent, an approval stays unconsumed (D-29).
         CredentialMissing,

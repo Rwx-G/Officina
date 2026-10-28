@@ -2,12 +2,14 @@
 // vocabulary the view shows is mapped through an exhaustive `Record`, so a
 // variant added on the Rust side fails `pnpm check` until it has a text. No
 // relay rule is computed here: the entries come paired and dated from Rust.
+import type { ApprovalView } from "./generated/ApprovalView";
 import type { DenyKind } from "./generated/DenyKind";
 import type { GateFault } from "./generated/GateFault";
 import type { RecentEntry } from "./generated/RecentEntry";
 import type { RefusalReason } from "./generated/RefusalReason";
 import type { RunOutcome } from "./generated/RunOutcome";
 import type { RunState } from "./generated/RunState";
+import type { TreeBinding } from "./generated/TreeBinding";
 
 export const REFUSAL_TEXT: Record<RefusalReason, string> = {
   stopped: "the relay is stopped",
@@ -28,6 +30,7 @@ export const REFUSAL_TEXT: Record<RefusalReason, string> = {
   approval_unavailable: "request could not be written",
   approval_pending: "approval still pending",
   check_not_satisfied: "code changed since the dry run",
+  tree_changed: "files changed since the request",
   credential_missing: "credential not in the Credential Manager",
   credential_unreadable: "credential cannot be read",
 };
@@ -63,6 +66,33 @@ export const RUN_OUTCOME_TEXT: Record<RunOutcome, string> = {
   http: "http",
   connect_failed: "no response",
 };
+
+/** What a request's files are compared with before its run (D-173). */
+const BINDING_SINCE: Record<Exclude<TreeBinding, "not_git_tree">, string> = {
+  dry_run: "the dry run",
+  request: "the request",
+};
+
+/** What the card says of a request's files (D-170, D-173): bound and
+ *  unchanged, changed, bound but not checked yet, or not bound at all.
+ *  `changed` marks the line the run will refuse. Null for an invalid
+ *  request, which binds nothing. */
+export function bindingText(view: ApprovalView): { text: string; changed: boolean } | null {
+  const binding = view.binding;
+  if (binding === null) return null;
+  if (binding === "not_git_tree") return { text: "no file binding: not a git tree", changed: false };
+  const since = BINDING_SINCE[binding];
+  if (view.files_unchanged === true) {
+    return { text: `tracked and unignored files unchanged since ${since}`, changed: false };
+  }
+  if (view.files_unchanged === false) {
+    return {
+      text: `tracked or unignored files changed since ${since}: the run will refuse this approval`,
+      changed: true,
+    };
+  }
+  return { text: `tracked and unignored files bound to ${since}`, changed: false };
+}
 
 export const RUN_STATE_TEXT: Record<RunState, string> = {
   running: "running",

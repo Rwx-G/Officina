@@ -360,6 +360,9 @@ mod tests {
             requested_at_ms: 1,
             expires_at_ms: 2,
             dry_run: None,
+            binding: None,
+            bound_files: None,
+            files_unchanged: None,
         };
         let input = BoardInput {
             agents: Some(

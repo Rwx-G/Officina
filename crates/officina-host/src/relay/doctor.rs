@@ -792,20 +792,20 @@ fn refusal_code(reason: RefusalReason) -> String {
         .unwrap_or_default()
 }
 
-/// D-22, D-170, D-173: the projects with an action naming a check, and
-/// whether their files bind: the fingerprint, with the `git` Git for Windows
-/// records in the registry. A git work tree whose files cannot be bound
-/// fails, since those actions then refuse; a folder outside git warns.
+/// D-22, D-170, D-173: the projects with an action that binds its files (one
+/// naming a check, or a `human` action), and whether those files bind: the
+/// fingerprint, with the `git` Git for Windows records in the registry. A
+/// git work tree whose files cannot be bound fails, since those actions then
+/// refuse; a folder outside git warns.
 fn tree_checks(catalogue: &CanonicalCatalogue, dirs: &BTreeMap<String, String>) -> Vec<Check> {
     catalogue
         .projects
         .iter()
         .filter(|(_, project)| {
             project.actions.iter().any(|a| {
-                catalogue
-                    .actions
-                    .get(a)
-                    .is_some_and(|action| action.check.is_some())
+                catalogue.actions.get(a).is_some_and(|action| {
+                    action.check.is_some() || action.class == ActionClass::Human
+                })
             })
         })
         .map(|(name, project)| {
@@ -816,7 +816,7 @@ fn tree_checks(catalogue: &CanonicalCatalogue, dirs: &BTreeMap<String, String>) 
                     Level::Fail,
                     &title,
                     format!(
-                        "{dir} lies in a git work tree whose files cannot be bound ({why}): its actions naming a check refuse {}",
+                        "{dir} lies in a git work tree whose files cannot be bound ({why}): its actions naming a check and its human actions refuse {}",
                         refusal_code(reason)
                     ),
                 )
@@ -826,7 +826,7 @@ fn tree_checks(catalogue: &CanonicalCatalogue, dirs: &BTreeMap<String, String>) 
                     Level::Ok,
                     &title,
                     format!(
-                        "{dir} is a git work tree: its actions naming a check bind its {} tracked and unignored files, listed by {}",
+                        "{dir} is a git work tree: its actions naming a check and its human actions bind its {} tracked and unignored files, listed by {}",
                         found.files,
                         found.git.as_deref().unwrap_or("git")
                     ),
@@ -835,7 +835,7 @@ fn tree_checks(catalogue: &CanonicalCatalogue, dirs: &BTreeMap<String, String>) 
                     Level::Warn,
                     &title,
                     format!(
-                        "{dir} is not in a git work tree: its actions naming a check bind their parameters only, not the files their check ran on"
+                        "{dir} is not in a git work tree: its actions naming a check and its human actions bind their parameters only, not the files"
                     ),
                 ),
                 Err(e @ TreeError::GitUnavailable(_)) => refuses(RefusalReason::GitUnavailable, &e),
