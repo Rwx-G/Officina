@@ -233,6 +233,19 @@ describe("Gauge", () => {
     expect(getByText("--")).toBeTruthy();
     expect(getByText("reset, no new data")).toBeTruthy();
   });
+
+  it("on one header line it says the same, stale first, the whole line in its tooltip", () => {
+    const { getByText, getByRole } = render(Gauge, {
+      ...base,
+      compact: true,
+      window: { used_percentage: 62.4, resets_at: NOW / 1000 + 3600 },
+      writtenAtMs: NOW - 45 * 60_000,
+    });
+    expect(getByText("62 %")).toBeTruthy();
+    const line = getByText(/^stale, updated 45 min ago, resets at /);
+    expect(line.getAttribute("title")).toBe(line.textContent);
+    expect(getByRole("meter").getAttribute("aria-valuenow")).toBe("62");
+  });
 });
 
 /** What a card gets besides its approval: its own state and decision. */

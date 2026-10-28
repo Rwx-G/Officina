@@ -73,9 +73,15 @@ export class BoardStore {
   }
 
   /** Shows `board`, and forgets the halo timings of the sessions it no
-   *  longer has waiting: one that waits again later breathes again. */
+   *  longer has waiting: one that waits again later breathes again. A
+   *  session waiting on a relay approval alone is still Working, but its
+   *  scene halo breathes in the decision office (D-464). */
   #show(board: Board): void {
-    haloMemo.retain(board.columns.needs_you.map((card) => card.key));
+    const { needs_you, your_turn, working } = board.columns;
+    const waiting = [...needs_you, ...your_turn, ...working].filter(
+      (card) => card.column === "needs_you" || card.scene?.zone === "decision" || card.scene?.zone === "alert",
+    );
+    haloMemo.retain(waiting.map((card) => card.key));
     this.board = board;
   }
 

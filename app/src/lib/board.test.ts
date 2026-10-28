@@ -95,6 +95,9 @@ describe("BoardStore halo timings", () => {
     vi.restoreAllMocks();
   });
 
+  /** `card`'s scene state once it works in its office. */
+  const working = (card: Card): Card["scene"] => (card.scene ? { ...card.scene, zone: "office", alert: null, approval: false } : null);
+
   /** A real board (D-181) with at least two sessions waiting. */
   function boardWithWaits(): Board {
     const found = fixturesOf<Board>("board").find(({ data }) => data.columns.needs_you.length >= 2);
@@ -117,13 +120,13 @@ describe("BoardStore halo timings", () => {
     const entered = (c: Card) => c.last_event_at_ms ?? c.started_at_ms;
     const timings = [staying!, leaving!].map((c) => haloMemo.timing(c.key, entered(c)));
 
-    // The next board: one session answered, now Working.
+    // The next board: one session answered, now Working in its office.
     const next: Board = {
       ...board,
       columns: {
         ...board.columns,
         needs_you: board.columns.needs_you.filter((c) => c.key !== leaving!.key),
-        working: [...board.columns.working, { ...leaving!, column: "working" }],
+        working: [...board.columns.working, { ...leaving!, column: "working", scene: working(leaving!) }],
       },
     };
     now.mockReturnValue(board.generated_at_ms + 60_000);
@@ -134,6 +137,37 @@ describe("BoardStore halo timings", () => {
     // The one that left is a new wait if it comes back: seen anew.
     haloMemo.timing(leaving!.key, entered(leaving!));
     expect(now).toHaveBeenCalledTimes(reads + 1);
+    stop();
+  });
+
+  it("a session waiting on a relay approval alone keeps its halo timing", async () => {
+    const board = boardWithWaits();
+    const waiter = board.columns.needs_you[0]!;
+    let push: (board: Board) => void = () => {};
+    vi.mocked(ipc.onBoard).mockImplementationOnce(async (handler) => {
+      push = handler;
+      return unlisten;
+    });
+    vi.mocked(ipc.getBoard).mockResolvedValueOnce(board);
+    const now = vi.spyOn(Date, "now").mockReturnValue(board.generated_at_ms);
+    const store = new BoardStore();
+    const stop = await store.start();
+    const enteredAt = waiter.last_event_at_ms ?? waiter.started_at_ms;
+    const timing = haloMemo.timing(waiter.key, enteredAt);
+    // Still Working, its run blocked on an approval: the decision office.
+    const approvalOnly: Card = { ...waiter, column: "working", scene: { ...waiter.scene!, zone: "decision", approval: true } };
+    push({
+      ...board,
+      columns: {
+        ...board.columns,
+        needs_you: board.columns.needs_you.filter((c) => c.key !== waiter.key),
+        working: [...board.columns.working, approvalOnly],
+      },
+    });
+    now.mockReturnValue(board.generated_at_ms + 60_000);
+    const reads = now.mock.calls.length;
+    expect(haloMemo.timing(waiter.key, enteredAt)).toEqual(timing);
+    expect(now).toHaveBeenCalledTimes(reads);
     stop();
   });
 

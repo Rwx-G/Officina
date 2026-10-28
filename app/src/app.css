@@ -95,6 +95,8 @@
   --radius-card: 24px;
   --radius-pill: 999px;
   --target-min: 44px;
+  /* The header's quota gauges keep this width whatever their text (D-185). */
+  --gauge-width: 290px;
   /* The halo's opacity at rest: after breathing, and from the start under
      reduced motion. */
   --halo-rest: 0.8;

@@ -14,9 +14,9 @@ async function openRelayView(page: Page, relay: RelayView): Promise<void> {
 }
 
 test.describe("view toggle", () => {
-  test("the toggle switches between Board and Relay", async ({ page }) => {
+  test("the toggle switches between Sessions and Relay", async ({ page }) => {
     await openBoard(page, loadBoard("busy"), {}, loadRelay("relay-activity"));
-    const board = page.getByTestId("view-board");
+    const board = page.getByTestId("view-sessions");
     const relay = page.getByTestId("view-relay");
     await expect(board).toHaveAttribute("aria-pressed", "true");
     await expect(relay).toHaveAttribute("aria-pressed", "false");

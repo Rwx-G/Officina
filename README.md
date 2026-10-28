@@ -357,7 +357,7 @@ Adding credentials and HTTP actions, then `forwarded_values`, changed what an ap
 
 ### The Relay view
 
-Once the relay is in use, the header gains a **Board** / **Relay** switch; the chips and **Stop relay** stay in the header in both views. The Relay view reads the same contract as `officina relay --json` and shows, in order:
+Once the relay is in use, the header's view switch gains **Relay**; the chips and **Stop relay** stay in the header in both views. The Relay view reads the same contract as `officina relay --json` and shows, in order:
 
 - whether the relay runs or is stopped, with its own **Stop relay** button, the relay floor, and why that floor or the approved catalogue cannot be read, when one cannot;
 - the decisions this window did not make, when there are any: an approval file for a request you never decided, rejected, or approved for other values; a run journaled with such an approval; an approved catalogue you did not approve; a stop flag gone while you hold the relay stopped; and the record itself missing or unreadable. The window keeps a record of its own decisions (`relay/decisions.json`: each request's verdict and the request it was given for, the catalogue you approved, whether you hold the relay stopped) from the first time it opens, and `officina run` obeys it: it leaves unused an approval the record does not hold as approved for that very request (`approval_not_given`), runs no catalogue but the one the record names (`catalogue_unconfirmed`), stays stopped while the record holds it stopped even if the stop flag is deleted, and refuses everything while the record is missing or unreadable (`decision_record_unreadable`). Any program running as you can write a relay file, so these stop and show the cheap forgeries, not a session that rewrites the record consistently. Each stays listed, and fails `officina doctor`, until you **Acknowledge** it with a mouse click; acknowledging a missing or unreadable record starts a new one from the approved catalogue and the stop flag as they are, so check them first;
@@ -402,7 +402,7 @@ The window ingests the event files into the registry before it shows its first b
 - An event file is deleted once it is older than yesterday's and the registry and both daily copies hold it complete: normally on its third or fourth day.
 - Daily copies, set-aside databases and pre-migration copies are kept two, for two days.
 
-These bounds are applied while the window runs and when it starts. **While it is closed nothing expires**, and while its registry is read-only or unavailable nothing expires either and event files are kept, with the excerpts the hook wrote in them, for as long as that lasts, beyond 30 days included; nothing is lost, they are ingested at the next start. `officina doctor` warns when more than seven event files wait. While the registry cannot be used, the Board view says why and keeps working from Claude Code's sessions.
+These bounds are applied while the window runs and when it starts. **While it is closed nothing expires**, and while its registry is read-only or unavailable nothing expires either and event files are kept, with the excerpts the hook wrote in them, for as long as that lasts, beyond 30 days included; nothing is lost, they are ingested at the next start. `officina doctor` warns when more than seven event files wait. While the registry cannot be used, the Sessions view says why and keeps working from Claude Code's sessions.
 
 Officina itself writes nothing under the Claude config dir nor into `~/.claude.json`; the `claude` processes it starts (`claude agents`, `claude --version`, a triage call) keep their own state there like any session.
 
@@ -427,9 +427,9 @@ A subject is a named piece of work (a change, an incident, a migration) that own
 
 ### The Subjects view
 
-The window's header switches between **Board**, **Subjects** and, once the relay is in use, **Relay**. The Subjects view lists the `active` subjects, then those `to_resume`, each with its sessions and their live state from the board; a subject none of whose sessions runs shows its last prompt and the end of its last answer, so you find where you left it without opening a session. Below come the unfiled sessions by project (non-interactive runs counted, the ten most recent listed on demand) and, on demand, the archived subjects with **Reopen**.
+The window's header switches between **Sessions**, **Subjects** and, once the relay is in use, **Relay**. The Subjects view lists the `active` subjects, then those `to_resume`, each with its sessions and their live state from the board; a subject none of whose sessions runs shows its last prompt and the end of its last answer, so you find where you left it without opening a session. Below come the unfiled sessions by project (non-interactive runs counted, the ten most recent listed on demand) and, on demand, the archived subjects with **Reopen**.
 
-Tick sessions, wherever they are listed, to file them under a subject (those of their project are offered first), to unfile them, or to name a new subject, which takes their project. **New subject** also creates one in any project the registry knows. Each subject has **Rename**, **Merge** (its sessions move to the subject you pick, and it is archived) and **Archive**, which offers the "routine, could have run alone" box. The window asks the registry's one writer and waits ten seconds at most; a refused action says which rule refused it and changes nothing, and an action not run in time is never run later. Notes say when the registry lies in a synchronised folder (with the folder to exclude), when it was restored from a copy (for seven days, naming the copy), and why it cannot be read. Digit keys open Needs you sessions in the Board view only.
+Tick sessions, wherever they are listed, to file them under a subject (those of their project are offered first), to unfile them, or to name a new subject, which takes their project. **New subject** also creates one in any project the registry knows. Each subject has **Rename**, **Merge** (its sessions move to the subject you pick, and it is archived) and **Archive**, which offers the "routine, could have run alone" box. The window asks the registry's one writer and waits ten seconds at most; a refused action says which rule refused it and changes nothing, and an action not run in time is never run later. Notes say when the registry lies in a synchronised folder (with the folder to exclude), when it was restored from a copy (for seven days, naming the copy), and why it cannot be read. Digit keys open Needs you sessions in the Sessions view only.
 
 `officina subjects --json` prints the same view: the subjects that are not archived with their sessions (and their live board card), the latest excerpts, the unfiled sessions per project (non-interactive runs counted, the ten most recent listed), the rows that need a verdict, the measured error, the gates and the model's state, and how many event bytes wait for the window. It reads the registry read-only, works with the window closed, and exits 3 with the reason when the registry cannot be read. On the board, each card names its subject.
 
@@ -482,6 +482,21 @@ A call is refused before anything starts, and spends nothing, when `claude` reso
 ## The scene (v0.4, in progress)
 
 v0.4 draws the board's sessions as the employees of a small company. The parts that already ship:
+
+### Board and Scene
+
+The window's first view is now called **Sessions**; it has two modes, **Board** and **Scene**, chosen in the header's mode switch or with `m` (a held key switches once). **Board** stays the default until you have chosen Scene for ten working days; the mode you choose is kept for the next start. Digit keys 1 to 9 open the Needs you sessions in both modes. The alert band and the banners stay above the sessions area in both. In Scene mode the header keeps to one line, so the scene keeps its height.
+
+**Scene** draws the floor of a small company, furnished, scaled to fit the window, every live session an employee at its place:
+
+- **Reception**: a session just started, before its first prompt.
+- **The decision office**: everything that waits on you, queued in board order with its number on a ticket and a breathing halo (an amber ticket without a number for a wait on a relay approval alone); its register in the corner lists them.
+- **The offices**, one per project in the floor file's order, then by first appearance, kept until the window restarts: a working session sits at its desk, back turned, screen lit. A session keeps its desk while it is away; the empty chair then shows its number. Beyond four desks a session stands by the office's plaque.
+- **The lounge**: your turn, a raised hand and the desk's number.
+- **The alert room**: drawn, and filled as the alert says (above).
+- **More offices**, when there are more than eight projects: the projects beyond the seventh share it.
+
+Nothing moves while nothing changes: a changed board places each employee at its new place at once, a halo breathes for two minutes then rests, and nothing in the scene reads the clock. Missing data leaves an employee where it was, with a question mark. The floor grows a column for a fifth and a seventh project, up to eight offices; below the size at which every employee stays at least 44 px wide, the sessions area scrolls instead of shrinking it.
 
 ### The alert
 

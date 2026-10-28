@@ -8,6 +8,16 @@ project uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Scene mode (v0.4, in progress): the Sessions view draws the company,
+  furnished, scaled to the window, every live session an employee placed
+  at once at its place (reception, the decision office's queue with its
+  register, its project's office, the lounge, the alert room, More
+  offices), its halo breathing two minutes while it waits; nothing in it
+  moves or reads the clock between payloads. `m` and a header radio switch
+  between Board, still the default, and Scene; the choice is kept. In Scene
+  mode the header keeps to one line, so eight projects fit a maximised
+  Full HD window. The scene's light materials, figure and people colours
+  join the tokens.
 - The alert (v0.4, in progress): a band under the header, in every view,
   names the first session in alert, its project, what it waits on and why
   (a high-priority project, or waiting N minutes), and how many more; no
@@ -287,6 +297,10 @@ project uses [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- The window's first view is named **Sessions** (it was Board): Board is now
+  its default mode, beside Scene. Digit keys act in both modes. The quota
+  gauges keep one width whatever their text, the end of a line too long for
+  it in a tooltip, so their 30-second tick never moves the header.
 - The Needs you halo (v0.4) breathes for two minutes from the start of the
   wait, every halo in one phase shared with the clock, then stays steady; a
   wait already older at first sight is steady at once. It animates opacity

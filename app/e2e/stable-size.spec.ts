@@ -1,24 +1,28 @@
 // A control keeps its size whatever its state, so toggling it moves
 // nothing beside it. The toggles are found on the page, never listed: a
-// button with `aria-pressed`, a control whose label is a `StableLabel`, or a
-// slot marked `data-stable-slot`. Each scene fails when it shows a toggle no
+// button with `aria-pressed`, a radio, a control whose label is a
+// `StableLabel`, or a slot marked `data-stable-slot`. Each scene fails when it shows a toggle no
 // case below stands for, so a new toggle cannot go untested silently.
 import { expect, test, type Locator, type Page } from "@playwright/test";
-import { loadBoard, loadRegistry, loadRelay, openBoard } from "./fixtures";
+import { loadBoard, loadRegistry, loadRelay, openBoard, openScene } from "./fixtures";
 import type { RegistryView } from "../src/lib/generated/RegistryView";
 
 /** Sub-pixel rounding between two layouts, never a real move. */
 const TOLERANCE_PX = 0.5;
 
 /** What makes an element a toggle this spec must cover. */
-const TOGGLE = "[aria-pressed], [data-stable-slot], :has(> [data-stable-label])";
+const TOGGLE = '[aria-pressed], [role="radio"], [data-stable-slot], :has(> [data-stable-label])';
 
-type SceneName = "board" | "relay" | "subjects" | "triage";
+type SceneName = "board" | "sceneMode" | "relay" | "subjects" | "triage";
 
 const SCENES: Record<SceneName, (page: Page) => Promise<void>> = {
   board: async (page) => {
     await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
     await openBoard(page, loadBoard("busy"), {}, loadRelay("relay-clean"));
+  },
+  // The Sessions view's Scene mode: the header on one line (D-525).
+  sceneMode: async (page) => {
+    await openScene(page, loadBoard("busy"), loadRelay("relay-clean"));
   },
   relay: async (page) => {
     await openBoard(page, loadBoard("busy"), {}, loadRelay("relay-clean"));
@@ -53,6 +57,14 @@ const CASES: ToggleCase[] = [
   { name: "view switch", selector: '[data-testid="view-switch"] > button', scene: "board" },
   { name: "header relay toggle", selector: '[data-testid="relay-toggle"]', scene: "board" },
   { name: "pin on top", selector: '[data-testid="pin-toggle"]', scene: "board" },
+  {
+    name: "mode switch",
+    selector: '[data-testid="mode-switch"] [role="radio"]',
+    scene: "board",
+    // Choosing the other mode releases the chosen one. Scene mode lays the
+    // header on one line, which must move neither radio (D-517, D-525).
+    act: (page) => page.locator('[data-testid="mode-switch"] [aria-checked="false"]').click(),
+  },
   { name: "copy attach command", selector: '[data-testid="copy-attach"]', scene: "board" },
   { name: "Relay view stop toggle", selector: '[data-testid="relay-view-stop"]', scene: "relay" },
   { name: "triage verdict", selector: '[data-testid^="triage-verdict-"]', scene: "subjects" },
@@ -203,10 +215,11 @@ test.describe("controls keep their size whatever their state", () => {
   // header button. Every chip the header can show is shown at once, then
   // none; the boxes of the gauges and the buttons outside the status slot
   // are compared.
-  test("header status chips move neither the gauges nor the buttons", async ({ page }) => {
+  for (const mode of ["board", "scene"] as const) test(`header status chips move neither the gauges nor the buttons (${mode} mode)`, async ({ page }) => {
     const board = loadBoard("busy");
     const clean = loadRelay("relay-clean");
-    await openBoard(page, board, {}, clean);
+    if (mode === "board") await openBoard(page, board, {}, clean);
+    else await openScene(page, board, clean);
     const fixed = page.locator(
       'header [data-testid^="gauge-"], header button:not([data-testid="header-status"] button)',
     );

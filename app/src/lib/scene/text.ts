@@ -53,6 +53,19 @@ export function plaqueText(room: SharedZone | "more"): string {
   return ROOM_NAMES[room];
 }
 
+/** The scene's fixed signs: the door's, the high-priority pill's and the
+ *  register's heading. */
+export const SIGN_WORDS = {
+  entrance: "Entrance and exit",
+  highPriority: "high priority",
+  register: "Needs you, board order",
+} as const;
+
+/** The register's last row when it shows fewer sessions than wait there. */
+export function registerMore(hidden: number): string {
+  return `+${hidden} more`;
+}
+
 /** What a figure's words are built from. */
 export interface FigureFacts {
   card: Card;

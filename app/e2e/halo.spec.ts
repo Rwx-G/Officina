@@ -228,7 +228,7 @@ test.describe("board halo", () => {
     await realDelay(DRIFT_MS);
     await page.getByTestId("view-subjects").click();
     await expect(page.getByTestId("column-needs_you")).toHaveCount(0);
-    await page.getByTestId("view-board").click();
+    await page.getByTestId("view-sessions").click();
     await expect.poll(async () => (await runningHalos(page)).length).toBe(before.size);
     for (const halo of await runningHalos(page)) {
       const first = before.get(halo.key)!;

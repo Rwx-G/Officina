@@ -1,9 +1,11 @@
 <script lang="ts">
   import type { BoardStore } from "../lib/board.svelte";
   import type { RegistryStore } from "../lib/registry.svelte";
-  import type { RelayStore, WindowView } from "../lib/relay.svelte";
+  import type { RelayStore } from "../lib/relay.svelte";
+  import type { Base, WindowView } from "../lib/view.svelte";
   import { RELAY_TOGGLE_TEXT } from "../lib/relay-text";
   import Gauge from "./Gauge.svelte";
+  import ModeSwitch from "./ModeSwitch.svelte";
   import StableLabel from "./StableLabel.svelte";
   import logo from "../assets/logo.svg";
 
@@ -12,11 +14,14 @@
     relay?: RelayStore;
     /** Its rows to sort make the neutral "N to sort" chip (D-61). */
     registry?: RegistryStore;
-    /** The view shown, local window state (stories 2.9 and 3.5). */
+    /** The view shown, local window state (AD-66). */
     view?: WindowView;
     onView?: (view: WindowView) => void;
+    /** The Sessions view's mode; Scene lays the header out on one line. */
+    base?: Base;
+    onBase?: (base: Base) => void;
   }
-  let { store, relay, registry, view = "board", onView }: Props = $props();
+  let { store, relay, registry, view = "sessions", onView, base = "board", onBase }: Props = $props();
 
   // Triage blocks no session: the chip is neutral, never amber, and the
   // rows it counts stay out of the title and the overlay (AD-55).
@@ -29,7 +34,7 @@
   }
 
   const VIEWS: { id: WindowView; label: string }[] = [
-    { id: "board", label: "Board" },
+    { id: "sessions", label: "Sessions" },
     { id: "subjects", label: "Subjects" },
     { id: "relay", label: "Relay" },
   ];
@@ -40,9 +45,13 @@
   let board = $derived(store.board);
   let waiting = $derived(board?.waiting_count ?? 0);
   let contract = $derived(board?.contract);
+  // Scene mode keeps the sessions area tall enough for eight projects
+  // (D-525): one line, whatever view is shown, so switching views or
+  // modes leaves the brand, the switches and the buttons where they are.
+  let oneLine = $derived(base === "scene");
 </script>
 
-<header class="bar">
+<header class="bar" class:one-line={oneLine}>
   <div class="brand">
     <img src={logo} alt="" width="40" height="40" />
     <div>
@@ -66,6 +75,10 @@
     </div>
   {/if}
 
+  {#if onBase}
+    <ModeSwitch {base} {onBase} shown={view === "sessions"} />
+  {/if}
+
   {#if board}
     <div class="gauges">
       <Gauge
@@ -75,6 +88,7 @@
         writtenAtMs={board.quota.written_at_ms}
         staleAfterMs={board.quota.stale_after_ms}
         nowMs={store.nowMs}
+        compact={oneLine}
       />
       <Gauge
         label="Week"
@@ -83,13 +97,15 @@
         writtenAtMs={board.quota.written_at_ms}
         staleAfterMs={board.quota.stale_after_ms}
         nowMs={store.nowMs}
+        compact={oneLine}
       />
     </div>
   {/if}
 
-  <!-- The right side is a column: the fixed buttons, then the status line
-       of chips that come and go with the data. A chip appearing moves no
-       button, and nothing on the left of it, gauges included (D-517). -->
+  <!-- The right side holds the fixed buttons and the status line of chips
+       that come and go with the data: under the buttons, or beside them on
+       one line. A chip appearing moves no button, and nothing on the left
+       of it, gauges included (D-517). -->
   <div class="side">
     <div class="tools">
       {#if relay?.inUse}
@@ -158,6 +174,12 @@
     align-items: flex-start;
     gap: 14px 20px;
     padding: 14px 20px;
+  }
+  /* The same top and the same order as the Board header, so changing mode
+     leaves the brand, the switches, the gauges' corner and the buttons in
+     place; the tighter bottom is height given back to the scene. */
+  .one-line {
+    padding-bottom: 8px;
   }
   .brand {
     display: flex;
@@ -258,6 +280,23 @@
     align-items: center;
     gap: 6px 10px;
     min-height: 30px;
+  }
+  /* On one line the status sits before the buttons and takes what the line
+     leaves: its own width counts for nothing (`contain`), so a chip wraps
+     inside it rather than pushing the buttons to another line. */
+  .one-line .side {
+    flex-direction: row-reverse;
+    align-items: flex-start;
+    gap: 10px;
+  }
+  .one-line .tools {
+    flex: none;
+  }
+  .one-line .status {
+    flex: 1 1 0;
+    min-width: 0;
+    min-height: var(--target-min);
+    contain: inline-size;
   }
   .tool {
     min-height: var(--target-min);

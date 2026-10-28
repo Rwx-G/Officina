@@ -4,7 +4,7 @@
 // threshold, and no theme change. Boards are `officina board --json`
 // output (AD-17).
 import { expect, test, type Page } from "@playwright/test";
-import { loadBoard, loadRelay, openBoard } from "./fixtures";
+import { loadBoard, loadRelay, openBoard, openScene } from "./fixtures";
 import type { Board } from "../src/lib/generated/Board";
 
 const band = (page: Page) => page.getByTestId("alert-band");
@@ -20,16 +20,18 @@ function alerted(board: Board) {
   return [...needs_you, ...your_turn, ...working].filter((c) => c.scene?.alert);
 }
 
-/** Every `--color-*` custom property resolved on `:root`. */
+/** The theme's custom properties resolved on `:root`: the window's colours
+ *  and the scene's materials, figures and people. */
 function colourTokens(page: Page): Promise<Record<string, string>> {
   return page.evaluate(() => {
     const style = getComputedStyle(document.documentElement);
+    const families = ["--color-", "--scene-", "--figure-", "--skin-", "--hair-"];
     const out: Record<string, string> = {};
     for (const sheet of Array.from(document.styleSheets)) {
       for (const rule of Array.from(sheet.cssRules)) {
         if (!(rule instanceof CSSStyleRule)) continue;
         for (const name of Array.from(rule.style)) {
-          if (name.startsWith("--color-")) out[name] = style.getPropertyValue(name).trim();
+          if (families.some((family) => name.startsWith(family))) out[name] = style.getPropertyValue(name).trim();
         }
       }
     }
@@ -51,7 +53,17 @@ test.describe("alert band", () => {
 
   test("the band shows in every view and mode", async ({ page }) => {
     await openBoard(page, loadBoard("scene-alert"), {}, loadRelay("relay-clean"));
-    for (const view of ["subjects", "relay", "board"]) {
+    for (const view of ["subjects", "relay", "sessions"]) {
+      await page.getByTestId(`view-${view}`).click();
+      await expect(band(page)).toBeVisible();
+    }
+    // Scene mode: the band stays under the header, above the scene.
+    await page.getByTestId("mode-scene").click();
+    await expect(page.getByTestId("scene")).toBeVisible();
+    await expect(band(page)).toBeVisible();
+    const bandBox = (await band(page).boundingBox())!;
+    expect(bandBox.y + bandBox.height).toBeLessThanOrEqual((await page.getByTestId("scene").boundingBox())!.y);
+    for (const view of ["subjects", "relay", "sessions"]) {
       await page.getByTestId(`view-${view}`).click();
       await expect(band(page)).toBeVisible();
     }
@@ -73,9 +85,10 @@ test.describe("alert band", () => {
   });
 
   test("an alert changes no theme token", async ({ page }) => {
-    await openBoard(page, loadBoard("scene-c"));
+    await openScene(page, loadBoard("scene-c"));
     const calm = await colourTokens(page);
     expect(Object.keys(calm).length).toBeGreaterThan(5);
+    expect(Object.keys(calm).filter((name) => name.startsWith("--scene-")).length).toBeGreaterThan(5);
     await push(page, loadBoard("scene-alert"));
     await expect(band(page)).toBeVisible();
     expect(await colourTokens(page)).toEqual(calm);

@@ -38,9 +38,9 @@ async function authorCalls(page: Page): Promise<{ cmd: string; args: unknown }[]
 }
 
 test.describe("header", () => {
-  test("the header switches between Board and Subjects", async ({ page }) => {
+  test("the header switches between Sessions and Subjects", async ({ page }) => {
     await openBoard(page, loadBoard("subjects-board"), {}, null, loadRegistry("subjects"));
-    const board = page.getByTestId("view-board");
+    const board = page.getByTestId("view-sessions");
     const subjects = page.getByTestId("view-subjects");
     await expect(board).toHaveAttribute("aria-pressed", "true");
     await subjects.click();
@@ -59,8 +59,8 @@ test.describe("header", () => {
     await expect(page.getByTestId("subjects-view")).toBeVisible();
     await page.keyboard.press("1");
     expect((await calls(page)).filter((c) => c.cmd === "focus")).toHaveLength(0);
-    // Positive control: the same key focuses in the Board view.
-    await page.getByTestId("view-board").click();
+    // Positive control: the same key focuses in the Sessions view.
+    await page.getByTestId("view-sessions").click();
     await page.keyboard.press("1");
     expect((await calls(page)).filter((c) => c.cmd === "focus")).toEqual([
       { cmd: "focus", args: { key: board.columns.needs_you[0]!.key } },
