@@ -6,7 +6,7 @@
 //! `window-authority` feature: only the window writes.
 
 use std::fs;
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{BufRead, BufReader, Seek, SeekFrom};
 use std::path::Path;
 
 use officina_core::board::{ProjectRule, project_for};
@@ -17,8 +17,8 @@ use officina_core::registry::confirm::wake;
 use officina_core::registry::filing::filing_at_creation;
 use officina_core::registry::fold::{candidates_needed, line_facts, link_for_line};
 use officina_core::registry::ingestion::{
-    CHUNK_MAX_BYTES, CHUNK_MAX_LINES, ExcerptObservation, complete_once_read, excerpt_observation,
-    in_triage_workdir, line_too_long, partial_tail_is_corrupt, recorded_at,
+    ExcerptObservation, FileOpening, close_event_file, excerpt_observation, in_triage_workdir,
+    line_too_long, open_event_file, recorded_at, starts_a_chunk,
 };
 use officina_core::registry::retention::excerpt_expired;
 use officina_core::registry::types::{EventFileRecord, SessionRecord, Source};
@@ -76,13 +76,98 @@ fn event_file_names(dir: &Path) -> Vec<String> {
     names
 }
 
-/// The bytes of `path` from `offset` to its end.
-fn read_from(path: &Path, offset: u64) -> std::io::Result<Vec<u8>> {
+/// One complete line of an event file, its newline included: its bytes,
+/// or only its length when it is longer than the hook ever writes, so a
+/// line of any size costs no more memory than the hook's bound.
+#[derive(Debug, PartialEq, Eq)]
+enum RawLine {
+    Bytes(Vec<u8>),
+    TooLong(usize),
+}
+
+impl RawLine {
+    fn len(&self) -> usize {
+        match self {
+            RawLine::Bytes(bytes) => bytes.len(),
+            RawLine::TooLong(len) => *len,
+        }
+    }
+}
+
+/// Reads an event file from an offset, one complete line at a time, in
+/// the buffer's windows rather than the whole rest of the file at once
+/// (quality audit H3); what follows the last newline is the unfinished
+/// line, whose length [`LineReader::partial`] gives at the end.
+struct LineReader<R> {
+    input: R,
+    pending: Vec<u8>,
+    pending_len: usize,
+    too_long: bool,
+}
+
+impl<R: BufRead> LineReader<R> {
+    fn new(input: R) -> LineReader<R> {
+        LineReader {
+            input,
+            pending: Vec::new(),
+            pending_len: 0,
+            too_long: false,
+        }
+    }
+
+    /// The next complete line; `None` at the end of the input.
+    fn next_line(&mut self) -> std::io::Result<Option<RawLine>> {
+        loop {
+            let window = self.input.fill_buf()?;
+            if window.is_empty() {
+                return Ok(None);
+            }
+            let (taken, ends) = match window.iter().position(|b| *b == b'\n') {
+                Some(at) => (at + 1, true),
+                None => (window.len(), false),
+            };
+            self.pending_len += taken;
+            if !self.too_long && !line_too_long(self.pending_len) {
+                self.pending.extend_from_slice(&window[..taken]);
+            } else {
+                self.too_long = true;
+                self.pending.clear();
+            }
+            self.input.consume(taken);
+            if ends {
+                let line = if self.too_long {
+                    RawLine::TooLong(self.pending_len)
+                } else {
+                    RawLine::Bytes(std::mem::take(&mut self.pending))
+                };
+                self.pending.clear();
+                self.pending_len = 0;
+                self.too_long = false;
+                return Ok(Some(line));
+            }
+        }
+    }
+
+    /// The length of the unfinished line after the last newline read.
+    fn partial(&self) -> u64 {
+        self.pending_len as u64
+    }
+}
+
+/// The lines of `path` from `offset`, read as [`LineReader`] does.
+fn read_lines_from(path: &Path, offset: u64) -> std::io::Result<LineReader<BufReader<fs::File>>> {
     let mut file = fs::File::open(path)?;
     file.seek(SeekFrom::Start(offset))?;
-    let mut bytes = Vec::new();
-    file.read_to_end(&mut bytes)?;
-    Ok(bytes)
+    Ok(LineReader::new(BufReader::with_capacity(64 * 1024, file)))
+}
+
+/// The line `raw` holds: a line longer than the hook writes is corrupt
+/// whatever it holds.
+fn parse_raw(raw: &RawLine) -> ParsedLine {
+    match raw {
+        RawLine::Bytes(bytes) => parse_line(&bytes[..bytes.len() - 1]),
+        RawLine::TooLong(_) => ParsedLine::Corrupt,
+    }
 }
 
 /// Records the session of `session_id`, seen at `seen_ms` in `cwd`: the one
@@ -171,20 +256,6 @@ fn store_offset(conn: &Connection, row: &EventFileRecord) -> rusqlite::Result<()
     Ok(())
 }
 
-/// The complete lines of `bytes` (each with its `\n`), and the length of
-/// the unfinished line after them.
-fn complete_lines(bytes: &[u8]) -> (Vec<&[u8]>, usize) {
-    let mut lines = Vec::new();
-    let mut start = 0;
-    for (index, byte) in bytes.iter().enumerate() {
-        if *byte == b'\n' {
-            lines.push(&bytes[start..=index]);
-            start = index + 1;
-        }
-    }
-    (lines, bytes.len() - start)
-}
-
 impl Writer {
     /// One ingestion pass (AD-43, D-84): every incomplete event file of
     /// `ctx.events_dir`, oldest first.
@@ -197,7 +268,8 @@ impl Writer {
     }
 
     /// [`Writer::ingest`], calling `observe` after each line read inside a
-    /// chunk's transaction.
+    /// chunk's transaction. Where a file starts and how it ends are core's
+    /// [`open_event_file`] and [`close_event_file`]; this reads and writes.
     pub fn ingest_observed(
         &mut self,
         ctx: &IngestContext,
@@ -212,13 +284,10 @@ impl Writer {
                 .collect();
         let mut read_so_far = 0u64;
         for name in event_file_names(ctx.events_dir) {
-            let mut row = stored.remove(&name).unwrap_or_else(|| EventFileRecord {
+            let row = stored.remove(&name).unwrap_or_else(|| EventFileRecord {
                 name: name.clone(),
                 ..EventFileRecord::default()
             });
-            if row.complete_at_ms.is_some() {
-                continue;
-            }
             let path = ctx.events_dir.join(&name);
             // Only a file is read; one gone since the listing (an older
             // `board --json` deleting it) waits for nothing. Neither may stop
@@ -226,91 +295,103 @@ impl Writer {
             let Some(meta) = fs::metadata(&path).ok().filter(|m| m.is_file()) else {
                 continue;
             };
-            let mut changed = false;
-            if meta.len() < row.ingested_bytes {
-                row.ingested_bytes = 0;
-                row.corrupt_lines = 0;
-                row.rewrites += 1;
+            let FileOpening::Read { mut row, rewritten } = open_event_file(&row, meta.len()) else {
+                continue;
+            };
+            if rewritten {
                 report.rewritten.push(name.clone());
-                changed = true;
+                // Recorded before the read, so a file gone in between
+                // still counts its rewrite.
+                store_offset(&self.conn, &row)?;
             }
-            let bytes = match read_from(&path, row.ingested_bytes) {
-                Ok(bytes) => bytes,
+            let mut lines = match read_lines_from(&path, row.ingested_bytes) {
+                Ok(lines) => lines,
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
                 Err(e) => return Err(RegistryError::io(&path, e)),
             };
-            let (lines, partial) = complete_lines(&bytes);
-            for chunk in chunks(&lines) {
-                let tx = self
-                    .conn
-                    .transaction_with_behavior(TransactionBehavior::Immediate)?;
-                for raw in chunk {
-                    let parsed = if line_too_long(raw.len()) {
-                        ParsedLine::Corrupt
-                    } else {
-                        parse_line(&raw[..raw.len() - 1])
-                    };
-                    match parsed {
-                        ParsedLine::Event(mut line) => {
-                            line.ts = recorded_at(line.ts, &name, now_ms);
-                            report.hook_sightings.observe(&line);
-                            if apply(&tx, &line, ctx, now_ms)? {
-                                report.lines += 1;
-                            }
-                        }
-                        ParsedLine::Corrupt => {
-                            row.corrupt_lines += 1;
-                            report.corrupt_lines += 1;
-                        }
-                        ParsedLine::Blank | ParsedLine::OtherVersion => {}
-                    }
-                    row.ingested_bytes += raw.len() as u64;
-                    read_so_far += 1;
-                    observe(read_so_far);
+            let mut chunk: Vec<RawLine> = Vec::new();
+            let mut chunk_bytes = 0;
+            loop {
+                let next = lines.next_line().map_err(|e| RegistryError::io(&path, e))?;
+                let full = next
+                    .as_ref()
+                    .is_none_or(|line| starts_a_chunk(chunk.len(), chunk_bytes, line.len()));
+                if full && !chunk.is_empty() {
+                    self.apply_chunk(
+                        &chunk,
+                        &mut row,
+                        ctx,
+                        now_ms,
+                        &mut report,
+                        &mut read_so_far,
+                        observe,
+                    )?;
+                    chunk.clear();
+                    chunk_bytes = 0;
                 }
-                store_offset(&tx, &row)?;
-                tx.commit()?;
-                changed = false;
+                let Some(line) = next else {
+                    break;
+                };
+                chunk_bytes += line.len();
+                chunk.push(line);
             }
-            if partial > 0 && partial_tail_is_corrupt(&name, now_ms) {
-                row.ingested_bytes += partial as u64;
+            let closing = close_event_file(&name, lines.partial(), now_ms);
+            if closing.tail_corrupt {
+                row.ingested_bytes += lines.partial();
                 row.corrupt_lines += 1;
                 report.corrupt_lines += 1;
-                changed = true;
             }
-            let fully_read = partial == 0 || partial_tail_is_corrupt(&name, now_ms);
-            if fully_read && complete_once_read(&name, now_ms) {
+            if closing.complete {
                 row.complete_at_ms = Some(now_ms);
                 report.completed.push(name.clone());
-                changed = true;
             }
-            if changed {
+            if closing.tail_corrupt || closing.complete {
                 store_offset(&self.conn, &row)?;
             }
         }
         Ok(report)
     }
-}
 
-/// `lines` cut into chunks of at most [`CHUNK_MAX_LINES`] lines and
-/// [`CHUNK_MAX_BYTES`] bytes; a longer line is a chunk of its own.
-fn chunks<'a>(lines: &[&'a [u8]]) -> Vec<Vec<&'a [u8]>> {
-    let mut chunks: Vec<Vec<&[u8]>> = Vec::new();
-    let mut bytes = 0;
-    for line in lines {
-        let full = chunks.last().is_none_or(|last| {
-            last.len() >= CHUNK_MAX_LINES || bytes + line.len() > CHUNK_MAX_BYTES
-        });
-        if full {
-            chunks.push(Vec::new());
-            bytes = 0;
+    /// Applies one chunk in its own transaction (AD-43): each line, the
+    /// corrupt ones counted, then `row`'s new offset, committed together,
+    /// so a crash replays the chunk whole.
+    #[allow(clippy::too_many_arguments)] // The pass's state, threaded through one chunk.
+    fn apply_chunk(
+        &mut self,
+        chunk: &[RawLine],
+        row: &mut EventFileRecord,
+        ctx: &IngestContext,
+        now_ms: i64,
+        report: &mut IngestReport,
+        read_so_far: &mut u64,
+        observe: LineObserver<'_>,
+    ) -> Result<(), RegistryError> {
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        for raw in chunk {
+            match parse_raw(raw) {
+                ParsedLine::Event(mut line) => {
+                    line.ts = recorded_at(line.ts, &row.name, now_ms);
+                    report.hook_sightings.observe(&line);
+                    if apply(&tx, &line, ctx, now_ms)? {
+                        report.lines += 1;
+                    }
+                }
+                ParsedLine::Corrupt => {
+                    row.corrupt_lines += 1;
+                    report.corrupt_lines += 1;
+                }
+                ParsedLine::Blank | ParsedLine::OtherVersion => {}
+            }
+            row.ingested_bytes += raw.len() as u64;
+            *read_so_far += 1;
+            observe(*read_so_far);
         }
-        if let Some(last) = chunks.last_mut() {
-            last.push(line);
-        }
-        bytes += line.len();
+        store_offset(&tx, row)?;
+        tx.commit()?;
+        Ok(())
     }
-    chunks
 }
 
 /// Applies one event line; returns false for a line that records nothing:
@@ -377,30 +458,69 @@ fn apply(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use officina_core::events::MAX_LINE_BYTES;
 
+    const NL: u8 = 10;
+
+    fn lines_of(bytes: &[u8], window: usize) -> (Vec<RawLine>, u64) {
+        let mut reader = LineReader::new(BufReader::with_capacity(window, bytes));
+        let mut lines = Vec::new();
+        while let Some(line) = reader.next_line().unwrap() {
+            lines.push(line);
+        }
+        (lines, reader.partial())
+    }
+
+    fn with_newline(text: &str) -> Vec<u8> {
+        let mut bytes = text.as_bytes().to_vec();
+        bytes.push(NL);
+        bytes
+    }
+
+    /// Lines end at their newline whatever the read windows, and the
+    /// unfinished one after the last newline is left as its length.
     #[test]
-    fn lines_are_cut_at_their_newline_and_chunked_by_count_and_size() {
-        let (lines, partial) = complete_lines(b"a\nbc\n\nd");
-        assert_eq!(lines, [&b"a\n"[..], b"bc\n", b"\n"]);
-        assert_eq!(partial, 1);
-        assert_eq!(complete_lines(b"").0.len(), 0);
+    fn lines_are_cut_at_their_newline_whatever_the_windows() {
+        let input: Vec<u8> = [
+            with_newline("a"),
+            with_newline("bc"),
+            with_newline(""),
+            b"d".to_vec(),
+        ]
+        .concat();
+        for window in [1, 2, 3, 64 * 1024] {
+            let (lines, partial) = lines_of(&input, window);
+            assert_eq!(
+                lines,
+                [
+                    RawLine::Bytes(with_newline("a")),
+                    RawLine::Bytes(with_newline("bc")),
+                    RawLine::Bytes(with_newline(""))
+                ],
+                "window {window}"
+            );
+            assert_eq!(partial, 1);
+        }
+        assert_eq!(lines_of(b"", 8), (Vec::new(), 0));
+    }
 
-        let line = b"x\n".as_slice();
-        let many = vec![line; CHUNK_MAX_LINES + 1];
-        let cut = chunks(&many);
+    /// Security audit M2, quality audit H3: a line longer than the hook
+    /// writes is kept as its length only, and the next line is whole.
+    #[test]
+    fn an_overlong_line_is_kept_as_its_length() {
+        let input = [
+            with_newline(&"x".repeat(MAX_LINE_BYTES * 3)),
+            with_newline("ok"),
+        ]
+        .concat();
+        let (lines, partial) = lines_of(&input, 4096);
         assert_eq!(
-            cut.iter().map(Vec::len).collect::<Vec<_>>(),
-            [CHUNK_MAX_LINES, 1]
+            lines,
+            [
+                RawLine::TooLong(MAX_LINE_BYTES * 3 + 1),
+                RawLine::Bytes(with_newline("ok"))
+            ]
         );
-
-        let big = vec![b'y'; CHUNK_MAX_BYTES / 2 + 1];
-        let wide = [big.as_slice(), big.as_slice(), big.as_slice()];
-        assert_eq!(chunks(&wide).len(), 3, "a chunk stays within its bytes");
-        let huge = vec![b'z'; CHUNK_MAX_BYTES + 1];
-        assert_eq!(
-            chunks(&[huge.as_slice()]).len(),
-            1,
-            "a longer line is a chunk of its own"
-        );
+        assert_eq!(partial, 0);
     }
 }

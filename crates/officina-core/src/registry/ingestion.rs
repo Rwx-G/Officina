@@ -1,11 +1,16 @@
-//! How event lines enter the registry (AD-43, D-49, D-84, D-97): when a
-//! file is complete, when its unfinished last line counts as corrupt, which
-//! lines are left out, and what a line adds to its session's excerpts. The
-//! host reads the files and writes the rows.
+//! How event lines enter the registry (AD-43, D-49, D-84, D-97): where a
+//! pass starts reading a file and what it does once it reached the end
+//! ([`open_event_file`], [`close_event_file`]), which lines are left out,
+//! and what a line adds to its session's excerpts. The host reads the files
+//! and writes the rows.
+
+use serde::{Deserialize, Serialize};
 
 use crate::dates::{dated_file_day, day_start_ms, utc_date};
 use crate::events::{EXCERPT_CHARS, EventLine, MAX_LINE_BYTES, excerpt, tail_excerpt};
 use crate::quota::normalise_path;
+
+use super::types::EventFileRecord;
 
 /// A chunk, one transaction, holds at most this many lines (AD-43).
 pub const CHUNK_MAX_LINES: usize = 2000;
@@ -39,6 +44,78 @@ pub fn complete_once_read(name: &str, now_ms: i64) -> bool {
     dated_file_day(name).is_some_and(|day| now_ms >= day_start_ms(day) + DAY_MS + COMPLETE_GRACE_MS)
 }
 
+/// Where a pass starts on an event file whose stored row is `row` and whose
+/// length is now `file_len` (AD-43, D-84).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "kind")]
+pub enum FileOpening {
+    /// Found complete before: not read again.
+    Complete,
+    /// Read from `row`'s offset, as `row` now says. `rewritten` when the
+    /// file was shorter than its offset: its offset and corrupt count
+    /// restart from zero and its rewrites count one more (D-84).
+    Read {
+        row: EventFileRecord,
+        rewritten: bool,
+    },
+}
+
+/// How a pass opens an event file (AD-43, D-84).
+///
+/// ```
+/// use officina_core::registry::ingestion::{FileOpening, open_event_file};
+/// use officina_core::registry::types::EventFileRecord;
+/// let row = EventFileRecord { name: "2026-10-27.jsonl".into(), ingested_bytes: 100, ..Default::default() };
+/// let FileOpening::Read { row: shorter, rewritten } = open_event_file(&row, 40) else { panic!() };
+/// assert!(rewritten);
+/// assert_eq!((shorter.ingested_bytes, shorter.rewrites), (0, 1));
+/// ```
+pub fn open_event_file(row: &EventFileRecord, file_len: u64) -> FileOpening {
+    if row.complete_at_ms.is_some() {
+        return FileOpening::Complete;
+    }
+    let mut row = row.clone();
+    let rewritten = file_len < row.ingested_bytes;
+    if rewritten {
+        row.ingested_bytes = 0;
+        row.corrupt_lines = 0;
+        row.rewrites += 1;
+    }
+    FileOpening::Read { row, rewritten }
+}
+
+/// What a pass does once it read every complete line of an event file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FileClosing {
+    /// The unfinished last line counts as one corrupt line and is read
+    /// past (AD-43): the file is dated before yesterday.
+    pub tail_corrupt: bool,
+    /// The file is complete: fully read, dated before today and past the
+    /// grace (D-49).
+    pub complete: bool,
+}
+
+/// How a pass closes the event file `name`, read to its last newline with
+/// `partial_bytes` after it, at `now_ms` (AD-43, D-49): an unfinished line
+/// stays unread, unless the file is dated before yesterday; a file is
+/// complete once nothing is left unread and its grace has passed.
+///
+/// ```
+/// use officina_core::registry::ingestion::close_event_file;
+/// let now = 1_793_102_400_000; // 2026-10-27 12:00
+/// assert!(close_event_file("2026-10-25.jsonl", 7, now).tail_corrupt);
+/// assert!(!close_event_file("2026-10-26.jsonl", 7, now).complete, "a line may still end");
+/// assert!(close_event_file("2026-10-26.jsonl", 0, now).complete);
+/// ```
+pub fn close_event_file(name: &str, partial_bytes: u64, now_ms: i64) -> FileClosing {
+    let tail_corrupt = partial_bytes > 0 && partial_tail_is_corrupt(name, now_ms);
+    let fully_read = partial_bytes == 0 || tail_corrupt;
+    FileClosing {
+        tail_corrupt,
+        complete: fully_read && complete_once_read(name, now_ms),
+    }
+}
+
 /// True when an unfinished last line of the event file `name` is one
 /// corrupt line rather than a line still being written: the file is dated
 /// before yesterday (AD-43).
@@ -69,6 +146,22 @@ pub fn recorded_at(ts: i64, name: &str, now_ms: i64) -> i64 {
     let start = day_start_ms(day);
     let end = (start + DAY_MS + COMPLETE_GRACE_MS).min(now_ms);
     ts.min(end).max(start.min(end))
+}
+
+/// True when a line of `next_bytes` must open a new chunk rather than join
+/// one holding `lines` lines and `bytes` bytes (AD-43): a chunk holds at
+/// most [`CHUNK_MAX_LINES`] lines and [`CHUNK_MAX_BYTES`] bytes, and a
+/// longer line is a chunk of its own.
+///
+/// ```
+/// use officina_core::registry::ingestion::{CHUNK_MAX_BYTES, CHUNK_MAX_LINES, starts_a_chunk};
+/// assert!(!starts_a_chunk(0, 0, CHUNK_MAX_BYTES + 1), "an empty chunk takes any line");
+/// assert!(starts_a_chunk(CHUNK_MAX_LINES, 10, 1));
+/// assert!(starts_a_chunk(1, CHUNK_MAX_BYTES, 1));
+/// assert!(!starts_a_chunk(1, 10, 1));
+/// ```
+pub fn starts_a_chunk(lines: usize, bytes: usize, next_bytes: usize) -> bool {
+    lines > 0 && (lines >= CHUNK_MAX_LINES || bytes + next_bytes > CHUNK_MAX_BYTES)
 }
 
 /// True when `cwd` lies in `<officina_home>/triage/`, compared as

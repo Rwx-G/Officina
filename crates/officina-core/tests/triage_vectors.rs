@@ -23,7 +23,9 @@ use officina_core::registry::fold::{
     AgentsSnapshot, FactWrite, Mark, candidates_needed, fold_agents, line_facts, link_for_line,
     pivot, replaces,
 };
-use officina_core::registry::ingestion::{ExcerptObservation, excerpt_observation};
+use officina_core::registry::ingestion::{
+    ExcerptObservation, close_event_file, excerpt_observation, open_event_file, recorded_at,
+};
 use officina_core::registry::model::{
     LastCall, ModelFacts, ModelPause, ModelSetting, RowModel, StoredAnswer, case_key, case_of,
     row_model,
@@ -36,10 +38,10 @@ use officina_core::registry::triage_call::{
     read_output,
 };
 use officina_core::registry::types::{
-    AuthorRefusal, ConfirmRefusal, ConfirmationRecord, Ending, ExcerptRecord, FactRow, FactValue,
-    ModelVerdict, NotNeeded, ProposalSource, ReasonCode, RowKind, SessionFact, SessionRecord,
-    SessionRow, Source, Sourced, SubjectRecord, SubjectStatus, TriageOutcome, TriageRefusal,
-    Verdict,
+    AuthorRefusal, ConfirmRefusal, ConfirmationRecord, Ending, EventFileRecord, ExcerptRecord,
+    FactRow, FactValue, ModelVerdict, NotNeeded, ProposalSource, ReasonCode, RowKind, SessionFact,
+    SessionRecord, SessionRow, Source, Sourced, SubjectRecord, SubjectStatus, TriageOutcome,
+    TriageRefusal, Verdict,
 };
 use officina_core::registry::verdict::{VerdictInput, rows};
 use serde::Deserialize;
@@ -59,6 +61,63 @@ struct VectorSet {
     prompt: Vec<PromptCase>,
     model_output: Vec<ModelOutputCase>,
     rates: Vec<RatesCase>,
+    ingestion: Vec<IngestionCase>,
+}
+
+/// A case of the `ingestion` section (AD-43, D-49, D-84, security audit
+/// M1, quality audit H3): one of core's decisions on an event file, the
+/// expected answer as it serialises.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct IngestionCase {
+    name: String,
+    #[serde(default)]
+    open: Option<OpenStep>,
+    #[serde(default)]
+    close: Option<CloseStep>,
+    #[serde(default)]
+    recorded_at: Option<RecordedStep>,
+    expect: serde_json::Value,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OpenStep {
+    row: EventFileRecord,
+    file_len: u64,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CloseStep {
+    file: String,
+    partial_bytes: u64,
+    now_ms: i64,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RecordedStep {
+    ts: i64,
+    file: String,
+    now_ms: i64,
+}
+
+fn replay_ingestion(case: &IngestionCase) {
+    let found = match (&case.open, &case.close, &case.recorded_at) {
+        (Some(open), None, None) => {
+            serde_json::to_value(open_event_file(&open.row, open.file_len)).unwrap()
+        }
+        (None, Some(close), None) => serde_json::to_value(close_event_file(
+            &close.file,
+            close.partial_bytes,
+            close.now_ms,
+        ))
+        .unwrap(),
+        (None, None, Some(at)) => serde_json::json!(recorded_at(at.ts, &at.file, at.now_ms)),
+        _ => panic!("ingestion case {}: one step exactly", case.name),
+    };
+    assert_eq!(found, case.expect, "ingestion case: {}", case.name);
 }
 
 /// A case of the `rates` section (FR-11, FR-12, AD-50): confirmations and
@@ -1073,6 +1132,10 @@ fn every_case_matches() {
     assert!(!set.rates.is_empty());
     for case in &set.rates {
         replay_rates(case);
+    }
+    assert!(!set.ingestion.is_empty());
+    for case in &set.ingestion {
+        replay_ingestion(case);
     }
 }
 
