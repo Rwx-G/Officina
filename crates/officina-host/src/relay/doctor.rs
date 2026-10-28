@@ -8,8 +8,9 @@
 //! config dir nor in a project folder: the tree fingerprint runs `git`
 //! without optional locks (D-22), and the WSL probe only tests paths.
 //!
-//! Levels (D-31): an action whose program does not resolve fails, and so
-//! does a relay floor the relay cannot read while it is in use, as the
+//! Levels (D-31): an action whose program does not resolve fails, so does a
+//! credential an approved action uses that the Credential Manager lacks, and
+//! so does a relay floor the relay cannot read while it is in use, as the
 //! board's floor check does; catalogue issues, a pending change and every
 //! warning of D-32 warn. The gate's registration is the hooks check of
 //! [`crate::doctor`] (D-18). A workstation that does not use the relay gets
@@ -29,11 +30,14 @@ use officina_core::relay::catalogue::{
     SectionDiff, diff, relay_in_use,
 };
 use officina_core::relay::classes::{self, CHECK_VALID_MS, WAIT_RANGE_S};
+use officina_core::relay::credential::{cmdkey_line, target};
 use officina_core::relay::gate::{LIST_COMMAND, SHELL_TOOLS, ToolRule};
+use officina_core::relay::http::MAX_HTTP_TIMEOUT_S;
 use officina_core::relay::journal::JournalEntry;
 use officina_core::relay::run::{BASH_TOOL_MAX_TIMEOUT_MS, one_line};
 use officina_core::relay::view::GATE_ERRORS_WINDOW_MS;
 
+use super::credential::{CredentialStore, StoreError, SystemCredentialStore};
 use super::home::{ApprovedState, RelayHome, load_relay_floor};
 use super::{journal, tree};
 use crate::doctor::{Check, Level, check};
@@ -194,12 +198,16 @@ enum FloorLoad {
 /// use: nothing approved, no known-projects record, and no floor asking
 /// anything of the relay.
 pub fn checks(inputs: &RelayDoctor<'_>) -> Vec<Check> {
-    checks_with(inputs, &mut probe_wsl)
+    checks_with(inputs, &mut probe_wsl, &SystemCredentialStore)
 }
 
 type WslProbe<'p> = dyn FnMut(&Path, Option<&str>, &[&str]) -> Vec<(String, ToolProbe)> + 'p;
 
-fn checks_with(inputs: &RelayDoctor<'_>, probe: &mut WslProbe<'_>) -> Vec<Check> {
+fn checks_with(
+    inputs: &RelayDoctor<'_>,
+    probe: &mut WslProbe<'_>,
+    store: &dyn CredentialStore,
+) -> Vec<Check> {
     let home = inputs.home;
     let approved = home.read_approved();
     let record = home.read_known_projects();
@@ -245,6 +253,8 @@ fn checks_with(inputs: &RelayDoctor<'_>, probe: &mut WslProbe<'_>) -> Vec<Check>
             inputs.system_dir,
             probe,
         ));
+        let snapshot = approved.approved().map(|a| &a.canonical);
+        checks.extend(credential_checks(&relay.canonical, snapshot, store));
         checks.extend(timeout_checks(&relay.canonical.actions));
         checks.extend(check_listing_checks(&relay.canonical));
         checks.extend(tree_checks(&relay.canonical, &dirs));
@@ -538,7 +548,8 @@ fn program_checks(
 ) -> Vec<Check> {
     let mut checks = Vec::new();
     let mut by_distro: BTreeMap<Option<&str>, Vec<(&str, &str)>> = BTreeMap::new();
-    for (name, action) in actions {
+    // An HTTP action starts no program.
+    for (name, action) in actions.iter().filter(|(_, a)| a.http.is_none()) {
         match action.runner {
             Runner::Native => {
                 let title = format!("relay program {name}");
@@ -627,6 +638,72 @@ fn program_checks(
     checks
 }
 
+/// FR-14, D-31, D-38: each credential the floor declares is in the
+/// Credential Manager, or doctor prints the `cmdkey` line that stores it
+/// (`/pass` without a value, so `cmdkey` prompts and the secret never lands
+/// in the shell's history). Missing while an approved action uses it fails;
+/// otherwise it warns. Doctor never prints a secret: it only asks whether
+/// one is there.
+fn credential_checks(
+    current: &CanonicalCatalogue,
+    approved: Option<&CanonicalCatalogue>,
+    store: &dyn CredentialStore,
+) -> Vec<Check> {
+    current
+        .credentials
+        .keys()
+        .map(|name| {
+            let title = format!("relay credential {name}");
+            let stored = target(name);
+            let used: Vec<&str> = approved
+                .into_iter()
+                .flat_map(|catalogue| catalogue.actions.iter())
+                .filter(|(_, action)| {
+                    action
+                        .http
+                        .as_ref()
+                        .is_some_and(|http| http.credential.as_deref() == Some(name.as_str()))
+                })
+                .map(|(action, _)| action.as_str())
+                .collect();
+            let level = if used.is_empty() {
+                Level::Warn
+            } else {
+                Level::Fail
+            };
+            let users = if used.is_empty() {
+                "no approved action uses it yet".to_owned()
+            } else {
+                format!("the approved actions {} refuse until it is", used.join(", "))
+            };
+            match store.present(name) {
+                Ok(true) => check(
+                    Level::Ok,
+                    &title,
+                    format!("{stored} is in the Windows Credential Manager"),
+                ),
+                Ok(false) => {
+                    let mut missing = check(
+                        level,
+                        &title,
+                        format!(
+                            "{stored} is not in the Windows Credential Manager ({users}); store it with the line below, replacing <user>: cmdkey asks for the secret"
+                        ),
+                    );
+                    missing.paste = Some(cmdkey_line(name));
+                    missing
+                }
+                Err(StoreError::Unsupported) => check(
+                    Level::Warn,
+                    &title,
+                    format!("{stored} cannot be checked: {}", StoreError::Unsupported),
+                ),
+                Err(e) => check(level, &title, format!("{stored} cannot be read ({e}); {users}")),
+            }
+        })
+        .collect()
+}
+
 /// D-32, P-6: a run whose own deadline is at or past the Bash tool's cap can
 /// be killed by Claude Code first, and then reads abandoned in the journal;
 /// a `human` action can also wait up to the longest `--wait` before it
@@ -638,7 +715,10 @@ fn timeout_checks(actions: &BTreeMap<String, CanonicalAction>) -> Vec<Check> {
     actions
         .iter()
         .filter_map(|(name, action)| {
-            let timeout = u64::from(action.timeout_s);
+            let timeout = u64::from(match action.http {
+                Some(_) => action.timeout_s.min(MAX_HTTP_TIMEOUT_S),
+                None => action.timeout_s,
+            });
             let waits = action.class == ActionClass::Human;
             let detail = if timeout >= cap_s {
                 format!(
@@ -936,6 +1016,152 @@ mod tests {
 
     fn summary(checks: &[Check]) -> Vec<(String, Level)> {
         checks.iter().map(|c| (c.title.clone(), c.level)).collect()
+    }
+
+    /// The fake store of the unit tests: names with their secret; a name
+    /// mapped to `None` cannot be read.
+    struct FakeStore(BTreeMap<String, Option<String>>);
+
+    impl CredentialStore for FakeStore {
+        fn read(&self, name: &str) -> Result<Option<crate::relay::credential::Secret>, StoreError> {
+            match self.0.get(name) {
+                None => Ok(None),
+                Some(None) => Err(StoreError::Io("access denied".to_owned())),
+                Some(Some(secret)) => {
+                    Ok(Some(crate::relay::credential::Secret::new(secret.clone())))
+                }
+            }
+        }
+    }
+
+    const MARKER: &str = "marker-doctor-s3cret";
+
+    fn http_floor() -> RelayFloor {
+        load(
+            "schema = 2\n[[project]]\nname = \"lab\"\npath = \"Lab\"\nactions = [\"health\"]\n[[action]]\nname = \"health\"\nkind = \"http\"\nclass = \"free\"\nmethod = \"GET\"\nurl = \"https://monitoring.example.com/health\"\ncredential = \"monitoring\"\n[[credential]]\nname = \"monitoring\"\nhosts = [\"monitoring.example.com\"]\nheader = \"Authorization\"\nscheme = \"Bearer\"\n[[credential]]\nname = \"spare\"\nhosts = [\"example.com\"]\nheader = \"X-Api-Key\"\nscheme = \"Token\"\n",
+            FLOOR_PATH,
+        )
+        .unwrap()
+    }
+
+    fn store(entries: &[(&str, Option<&str>)]) -> FakeStore {
+        FakeStore(
+            entries
+                .iter()
+                .map(|(name, secret)| ((*name).to_owned(), secret.map(str::to_owned)))
+                .collect(),
+        )
+    }
+
+    #[test]
+    fn present_credential_is_ok() {
+        let relay = http_floor();
+        let checks = credential_checks(
+            &relay.canonical,
+            Some(&relay.canonical),
+            &store(&[("monitoring", Some(MARKER)), ("spare", Some(MARKER))]),
+        );
+        assert_eq!(
+            summary(&checks),
+            [
+                ("relay credential monitoring".to_owned(), Level::Ok),
+                ("relay credential spare".to_owned(), Level::Ok),
+            ]
+        );
+        assert!(checks[0].detail.contains("officina:monitoring"));
+    }
+
+    #[test]
+    fn missing_used_credential_fails_with_the_cmdkey_line() {
+        let relay = http_floor();
+        let checks = credential_checks(&relay.canonical, Some(&relay.canonical), &store(&[]));
+        let monitoring = &checks[0];
+        assert_eq!(monitoring.level, Level::Fail);
+        assert!(
+            monitoring.detail.contains("health"),
+            "{}",
+            monitoring.detail
+        );
+        assert_eq!(
+            monitoring.paste.as_deref(),
+            Some("cmdkey /generic:officina:monitoring /user:<user> /pass")
+        );
+        let unreadable = credential_checks(
+            &relay.canonical,
+            Some(&relay.canonical),
+            &store(&[("monitoring", None)]),
+        );
+        assert_eq!(unreadable[0].level, Level::Fail);
+        assert!(unreadable[0].detail.contains("access denied"));
+    }
+
+    #[test]
+    fn unused_missing_credential_warns() {
+        let relay = http_floor();
+        let used_elsewhere =
+            credential_checks(&relay.canonical, Some(&relay.canonical), &store(&[]));
+        assert_eq!(
+            used_elsewhere[1].level,
+            Level::Warn,
+            "spare is used by no action"
+        );
+        assert_eq!(
+            used_elsewhere[1].paste.as_deref(),
+            Some("cmdkey /generic:officina:spare /user:<user> /pass")
+        );
+        let nothing_approved = credential_checks(&relay.canonical, None, &store(&[]));
+        assert!(
+            nothing_approved.iter().all(|c| c.level == Level::Warn),
+            "{nothing_approved:?}"
+        );
+    }
+
+    #[test]
+    fn doctor_output_holds_no_secret() {
+        let relay = http_floor();
+        let dir = tempfile::tempdir().unwrap();
+        let home = RelayHome::new(dir.path(), Some(PathBuf::from(FLOOR_PATH)));
+        let inputs = RelayDoctor {
+            home: &home,
+            doctor_floor: None,
+            system_dir: None,
+            now_ms: 1_793_102_400_000,
+        };
+        let floor = dir.path().join("officina.toml");
+        std::fs::write(
+            &floor,
+            "schema = 2\n[[project]]\nname = \"lab\"\npath = \"Lab\"\nactions = [\"health\"]\n[[action]]\nname = \"health\"\nkind = \"http\"\nclass = \"free\"\nmethod = \"GET\"\nurl = \"https://monitoring.example.com/health\"\ncredential = \"monitoring\"\n[[credential]]\nname = \"monitoring\"\nhosts = [\"monitoring.example.com\"]\nheader = \"Authorization\"\nscheme = \"Bearer\"\n",
+        )
+        .unwrap();
+        let home = RelayHome::new(dir.path(), Some(floor));
+        let inputs = RelayDoctor {
+            home: &home,
+            ..inputs
+        };
+        for found in [
+            store(&[("monitoring", Some(MARKER))]),
+            store(&[("monitoring", None)]),
+            store(&[]),
+        ] {
+            let checks = checks_with(&inputs, &mut |_, _, _| Vec::new(), &found);
+            assert!(
+                checks
+                    .iter()
+                    .any(|c| c.title == "relay credential monitoring"),
+                "{checks:?}"
+            );
+            let printed = format!("{checks:?}");
+            assert!(!printed.contains(MARKER), "doctor printed the secret");
+        }
+        let direct = format!(
+            "{:?}",
+            credential_checks(
+                &relay.canonical,
+                Some(&relay.canonical),
+                &store(&[("monitoring", Some(MARKER)), ("spare", Some(MARKER))])
+            )
+        );
+        assert!(!direct.contains(MARKER));
     }
 
     #[test]
