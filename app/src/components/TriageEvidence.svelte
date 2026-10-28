@@ -2,9 +2,11 @@
   // The Triage panel's evidence (FR-10 to FR-12, AD-50, AD-52, AD-55,
   // journey 4): per proposal source, how often its finished was flipped;
   // the auto-archive switch, offered only while its gate holds, and the
-  // subjects it archived lately; the triage model, which stays off, scored
-  // by a dry run on the author's own past confirmations without proposing
-  // anything, with the calls made and why any was refused.
+  // subjects it archived lately; the triage model, scored by a dry run on
+  // the author's own past confirmations without proposing anything, its
+  // switch offered only while a recent dry run beat the default and the
+  // model can be called, its pause and how to lift it, with the calls made
+  // and why any was refused.
   import type { RegistryStore } from "../lib/registry.svelte";
   import {
     DRY_RUN_STOP_TEXT,
@@ -37,6 +39,22 @@
     (autoArchive?.on ?? false) || gate?.state === "holds",
   );
   let switching = $derived(store.inFlight["auto-archive"] ?? false);
+  let modelGate = $derived(view?.gates.model_enable ?? null);
+  /** The model can always be turned off; on, only while it can be called
+   *  and its enable gate holds. */
+  let modelToggleable = $derived(
+    (model?.enabled ?? false) || (model?.unavailable === null && modelGate?.state === "holds"),
+  );
+  let modelSwitching = $derived(store.inFlight["triage-model"] ?? false);
+
+  /** Like the auto-archive box: it shows what the registry holds, never the
+   *  click. */
+  function toggleModel(event: Event): void {
+    const input = event.currentTarget as HTMLInputElement;
+    const wanted = input.checked;
+    input.checked = model?.enabled ?? false;
+    void store.setTriageModel(wanted);
+  }
 
   /** The box shows what the registry holds, never the click: it goes back
    *  at once, and the next view moves it when the change was accepted. */
@@ -135,12 +153,57 @@
     </div>
     <p class="muted" data-testid="model-state">
       {#if model.enabled}
-        The model proposes a verdict where no rule settled one.
+        The model proposes a verdict where no rule settled one, one case per call; its reason shows as
+        text under a "model" label and decides nothing. {model.pending}
+        {model.pending === 1 ? "row waits" : "rows wait"} for it.
       {:else}
         The model is off: it proposes nothing. A dry run scores it on your own past confirmations, without
         proposing anything, and costs one call per case.
       {/if}
     </p>
+    <div class="switch">
+      <label>
+        <input
+          type="checkbox"
+          data-testid="model-toggle"
+          checked={model.enabled}
+          disabled={!modelToggleable || modelSwitching}
+          onchange={toggleModel}
+        />
+        Let the model propose where no rule settled a row
+      </label>
+      <p class="muted" data-testid="model-toggle-reason">
+        {#if model.unavailable}
+          Not offered: {TRIAGE_REFUSAL_TEXT[model.unavailable]}.
+        {:else if modelGate?.state === "holds"}
+          Offered: the latest dry run, on {modelGate.cases} cases, beat the default.
+        {:else if modelGate}
+          Not offered: {GATE_STATE_TEXT[modelGate.state]} ({modelGate.cases} of the {modelGate.needed} cases it
+          needs).
+        {/if}
+        {#if !model.enabled && model.src === "rules" && model.reason}
+          It turned itself off: {GATE_STATE_TEXT[model.reason]}.
+        {/if}
+      </p>
+      {#if model.enabled && model.paused_at_ms !== null}
+        <div class="paused" role="status" data-testid="model-paused">
+          <p>
+            Paused since {clock(model.paused_at_ms, nowMs)}: its last {view?.thresholds.pause_after_failed_calls}
+            calls failed in a row, so nothing is sent. Turn it on again to lift the pause; a new claude lifts it
+            too.
+          </p>
+          <button
+            class="tool"
+            data-testid="model-reenable"
+            disabled={modelSwitching}
+            onclick={() => store.setTriageModel(true)}>Turn it on again</button
+          >
+        </div>
+      {/if}
+      {#if store.errors["triage-model"]}
+        <p class="fault" role="alert" data-testid="model-toggle-error">{store.errors["triage-model"]}</p>
+      {/if}
+    </div>
     {#if store.errors["evaluate"]}
       <p class="fault" role="alert" data-testid="evaluate-error">{store.errors["evaluate"]}</p>
     {/if}
@@ -244,6 +307,15 @@
   .source,
   .name {
     font-weight: 600;
+  }
+  .paused {
+    margin-top: 6px;
+    padding: 8px 12px;
+    border-radius: 12px;
+    border: 1px solid var(--color-border);
+  }
+  .paused p {
+    margin: 0 0 6px;
   }
   .switch {
     margin: 8px 0;

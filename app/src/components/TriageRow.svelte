@@ -2,8 +2,11 @@
   // One row that needs a verdict (FR-9, AD-55): the proposal with its
   // source and reason, the excerpts it rests on, the verdict the author
   // sets, and for an unfiled row the subject it goes under. An empty
-  // subject is offered for archiving. A refusal shows on the row, which
-  // stays. Session and subject text renders as text.
+  // subject is offered for archiving. A row queued for the triage model says
+  // so; the model's reason, untrusted, shows as text under a "model" label;
+  // a call that gave no answer says why the default stands. A refusal shows
+  // on the row, which stays. Session, subject and model text renders as
+  // text.
   import type { TriageRow } from "../lib/generated/TriageRow";
   import type { Verdict } from "../lib/generated/Verdict";
   import type { RegistryStore } from "../lib/registry.svelte";
@@ -11,6 +14,8 @@
     PROPOSAL_SOURCE_TEXT,
     PROPOSED_VERDICT_TEXT,
     REASON_TEXT,
+    TRIAGE_OUTCOME_TEXT,
+    TRIAGE_REFUSAL_TEXT,
     VERDICT_TEXT,
   } from "../lib/registry-text";
   import SubjectPicker, { type PickerChoice } from "./SubjectPicker.svelte";
@@ -49,6 +54,7 @@
     <h3 class="title" data-testid="triage-title">{title}</h3>
     <span class="project">{row.project}</span>
     {#if row.kind === "unfiled_session"}<span class="tag">unfiled</span>{/if}
+    {#if row.model_pending}<span class="tag" data-testid="triage-model-pending">model pending</span>{/if}
     {#if inFlight}<span class="tag" data-testid="triage-in-flight">confirming...</span>{/if}
   </header>
 
@@ -61,6 +67,18 @@
     <span class="source" data-testid="triage-source">{PROPOSAL_SOURCE_TEXT[row.proposal.source]}</span>
   </p>
   <p class="reason" data-testid="triage-reason">{REASON_TEXT[row.proposal.reason]}</p>
+  {#if row.model_reason !== null}
+    <p class="model" data-testid="triage-model-reason">
+      <span class="label" data-testid="triage-model-label">model</span>
+      <span data-testid="triage-model-text">{row.model_reason}</span>
+    </p>
+  {/if}
+  {#if row.model_call}
+    <p class="muted" data-testid="triage-model-call">
+      The model gave no answer: {TRIAGE_OUTCOME_TEXT[row.model_call.outcome]}{#if row.model_call.refusal}
+        ({TRIAGE_REFUSAL_TEXT[row.model_call.refusal]}){/if}. The default stands.
+    </p>
+  {/if}
 
   {#if row.excerpts?.prompt || answerEnd}
     <div class="excerpts">
@@ -168,6 +186,17 @@
   }
   .empty {
     font-weight: 600;
+  }
+  .model {
+    color: var(--color-text-muted);
+  }
+  .model .label {
+    font-size: 12px;
+    font-weight: 700;
+    padding: 1px 8px;
+    margin-right: 6px;
+    border-radius: var(--radius-pill);
+    border: 1px solid var(--color-border);
   }
   .excerpts p {
     color: var(--color-text-muted);

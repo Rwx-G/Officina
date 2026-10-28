@@ -13,6 +13,7 @@ import type { ProposalSource } from "./generated/ProposalSource";
 import type { ReasonCode } from "./generated/ReasonCode";
 import type { RegistryState } from "./generated/RegistryState";
 import type { SubjectStatus } from "./generated/SubjectStatus";
+import type { TriageOutcome } from "./generated/TriageOutcome";
 import type { TriageRefusal } from "./generated/TriageRefusal";
 import type { Verdict } from "./generated/Verdict";
 
@@ -122,6 +123,16 @@ export const TRIAGE_REFUSAL_TEXT: Record<TriageRefusal, string> = {
   cmd_shim: "claude resolves to a .cmd or .bat shim, which the call refuses: install the native claude.exe",
   no_excerpts: "no_excerpts is set, so nothing may be sent",
   workdir_not_empty: "the empty folder the call runs in holds something",
+};
+
+/** How a model call that gave a row no answer ended (AD-51); `answer`
+ *  never shows, since an answer is a proposal. */
+export const TRIAGE_OUTCOME_TEXT: Record<TriageOutcome, string> = {
+  answer: "it answered",
+  refused: "the call was refused before it started",
+  failed: "the call failed",
+  timeout: "the call ran out of time",
+  invalid: "its answer was not a valid verdict",
 };
 
 /** How the last dry run ended (D-67). */

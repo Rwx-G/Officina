@@ -65,6 +65,8 @@ export function installE2eMock(): void {
           return evaluate();
         case "set_auto_archive":
           return setAutoArchive((args as { on: boolean }).on);
+        case "set_triage_model":
+          return setTriageModel((args as { on: boolean }).on);
         default:
           if (AUTHOR_COMMANDS.includes(cmd)) return author(cmd);
           return null;
@@ -138,6 +140,37 @@ async function setAutoArchive(on: boolean): Promise<void> {
   await window.__officinaPushRegistry?.({
     ...current,
     auto_archive: { on, src: "author", at_ms: current.generated_at_ms, reason: null },
+  });
+}
+
+/** Mirrors the collector's answer to `set_triage_model` (FR-10 as
+ *  amended, D-81): turning it on is refused while the model cannot be
+ *  called or its gate does not hold, and lifts a pause; the next view shows
+ *  the switch. */
+async function setTriageModel(on: boolean): Promise<void> {
+  const current = window.__officinaRegistry;
+  if (!current) return;
+  const refused = (message: string): Promise<void> => {
+    const error: IpcError = { code: "refused", message, refusal: null };
+    return Promise.reject(error);
+  };
+  if (on && current.model.unavailable !== null) {
+    return refused(`the triage model cannot be called: ${current.model.unavailable}`);
+  }
+  const gate = current.gates.model_enable.state;
+  if (on && gate !== "holds") {
+    return refused(`the triage model cannot be turned on: its gate does not hold (${gate})`);
+  }
+  await window.__officinaPushRegistry?.({
+    ...current,
+    model: {
+      ...current.model,
+      enabled: on,
+      src: "author",
+      at_ms: current.generated_at_ms,
+      reason: null,
+      paused_at_ms: on ? null : current.model.paused_at_ms,
+    },
   });
 }
 

@@ -123,6 +123,13 @@ export function evaluateTriageModel(): Promise<number> {
   return invoke<number>("evaluate_triage_model");
 }
 
+/** Turns the triage model on, refused while it cannot be called or its
+ *  enable gate does not hold, or off (FR-10 as amended); turning it on
+ *  lifts a pause (D-81). */
+export function setTriageModel(on: boolean): Promise<void> {
+  return invoke("set_triage_model", { on });
+}
+
 /** Turns auto-archive on, refused unless its gate holds, or off (FR-12). */
 export function setAutoArchive(on: boolean): Promise<void> {
   return invoke("set_auto_archive", { on });

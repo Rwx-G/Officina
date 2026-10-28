@@ -41,10 +41,9 @@ test.describe("Triage evidence", () => {
     await expect(evidence.getByTestId("dry-run-cost")).toHaveText(usd(tally.cost_microusd));
     expect(tally.unanswered).toBeGreaterThan(0);
     expect(tally.model_false_finished).toBeGreaterThan(0);
-    // The model stays off: no toggle before story 3.11, and no row is a
-    // model proposal.
+    // The model stays off, and no row is a model proposal.
     await expect(evidence.getByTestId("model-state")).toContainText("The model is off");
-    await expect(evidence.getByTestId("model-toggle")).toHaveCount(0);
+    await expect(evidence.getByTestId("model-toggle")).not.toBeChecked();
     expect(view.triage.every((row) => row.proposal.source !== "model")).toBe(true);
   });
 
@@ -202,5 +201,101 @@ test.describe("Measured error and auto-archive", () => {
     const again = page.locator(`[data-testid="auto-archived"][data-subject="${reopened.subject.id}"]`);
     await expect(again.getByTestId("auto-archive-reopened")).toBeVisible();
     await expect(again.getByTestId("auto-archive-reopen")).toHaveCount(0);
+  });
+});
+
+// Story 3.11: the model's switch (FR-10 as amended, AD-50, AD-55, D-69,
+// D-81) on the `evidence` fixture, whose dry run ran too few cases, and on
+// the `model` and `model-paused` fixtures, where a dry run the model won
+// opened the gate, the author turned the model on, and three failed calls
+// then paused it.
+test.describe("Model switch", () => {
+  async function openModel(page: Page, view: RegistryView): Promise<void> {
+    await openBoard(page, loadBoard("model-board"), {}, null, view);
+    await page.getByTestId("view-subjects").click();
+    await expect(page.getByTestId("triage-evidence")).toBeVisible();
+  }
+
+  test("the model toggle is offered only after a winning dry run under 7 days", async ({ page }) => {
+    const evidence = loadRegistry("evidence");
+    expect(evidence.gates.model_enable.state).toBe("dry_run_too_small");
+    await openEvidence(page, evidence);
+    await expect(page.getByTestId("model-toggle")).toBeDisabled();
+
+    const model = loadRegistry("model");
+    expect(model.gates.model_enable.state).toBe("holds");
+    const off: RegistryView = { ...model, model: { ...model.model, enabled: false } };
+    await page.evaluate((view) => window.__officinaPushRegistry?.(view), off);
+    const toggle = page.getByTestId("model-toggle");
+    await expect(toggle).toBeEnabled();
+    await expect(toggle).not.toBeChecked();
+    await toggle.click();
+    await expect
+      .poll(async () => (await calls(page)).filter((c) => c.cmd === "set_triage_model").map((c) => c.args))
+      .toEqual([{ on: true }]);
+    await expect(toggle).toBeChecked();
+
+    // A dry run over 7 days old closes the gate: off, it cannot be turned on.
+    const stale: RegistryView = {
+      ...off,
+      gates: { ...off.gates, model_enable: { ...off.gates.model_enable, state: "dry_run_too_old" } },
+    };
+    await page.evaluate((view) => window.__officinaPushRegistry?.(view), stale);
+    await expect(toggle).toBeDisabled();
+    await expect(page.getByTestId("model-toggle-reason")).toContainText(GATE_STATE_TEXT.dry_run_too_old);
+  });
+
+  test("a disabled toggle says why", async ({ page }) => {
+    const evidence = loadRegistry("evidence");
+    await openEvidence(page, evidence);
+    const reason = page.getByTestId("model-toggle-reason");
+    await expect(reason).toContainText(`Not offered: ${GATE_STATE_TEXT[evidence.gates.model_enable.state]}`);
+    // A shim: the model cannot be called, whatever the gate.
+    const model = loadRegistry("model");
+    const shim: RegistryView = { ...model, model: { ...model.model, enabled: false, unavailable: "cmd_shim" } };
+    await page.evaluate((view) => window.__officinaPushRegistry?.(view), shim);
+    await expect(page.getByTestId("model-toggle")).toBeDisabled();
+    await expect(reason).toContainText(TRIAGE_REFUSAL_TEXT.cmd_shim);
+    // It turned itself off: it says so, and the gate needs a newer dry run.
+    const disabled: RegistryView = {
+      ...model,
+      model: { ...model.model, enabled: false, src: "rules", reason: "worse_than_default" },
+      gates: { ...model.gates, model_enable: { ...model.gates.model_enable, state: "needs_newer_dry_run" } },
+    };
+    await page.evaluate((view) => window.__officinaPushRegistry?.(view), disabled);
+    await expect(page.getByTestId("model-toggle")).toBeDisabled();
+    await expect(reason).toContainText(`It turned itself off: ${GATE_STATE_TEXT.worse_than_default}`);
+    await expect(reason).toContainText(GATE_STATE_TEXT.needs_newer_dry_run);
+  });
+
+  test("a paused model says why and offers re-enabling", async ({ page }) => {
+    const view = loadRegistry("model-paused");
+    expect(view.model.paused_at_ms).not.toBeNull();
+    await openModel(page, view);
+    const paused = page.getByTestId("model-paused");
+    await expect(paused).toContainText(`its last ${view.thresholds.pause_after_failed_calls} calls failed in a row`);
+    await expect(page.getByTestId("model-toggle")).toBeChecked();
+    await paused.getByTestId("model-reenable").click();
+    await expect
+      .poll(async () => (await calls(page)).filter((c) => c.cmd === "set_triage_model").map((c) => c.args))
+      .toEqual([{ on: true }]);
+    await expect(page.getByTestId("model-paused")).toHaveCount(0);
+  });
+
+  test("a refused switch says why and stays as the registry holds it", async ({ page }) => {
+    const model = loadRegistry("model");
+    const off: RegistryView = { ...model, model: { ...model.model, enabled: false } };
+    await openModel(page, off);
+    // The gate broke in the backend after the window showed it holding.
+    const broken: RegistryView = {
+      ...off,
+      gates: { ...off.gates, model_enable: { ...off.gates.model_enable, state: "dry_run_too_old" } },
+    };
+    await page.evaluate((view) => {
+      window.__officinaRegistry = view;
+    }, broken);
+    await page.getByTestId("model-toggle").click();
+    await expect(page.getByTestId("model-toggle-error")).toContainText("its gate does not hold");
+    await expect(page.getByTestId("model-toggle")).not.toBeChecked();
   });
 });

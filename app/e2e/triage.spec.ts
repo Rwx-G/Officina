@@ -13,6 +13,7 @@ import {
   PROPOSAL_SOURCE_TEXT,
   PROPOSED_VERDICT_TEXT,
   REASON_TEXT,
+  TRIAGE_OUTCOME_TEXT,
 } from "../src/lib/registry-text";
 import type { ConfirmItem } from "../src/lib/generated/ConfirmItem";
 import type { RegistryView } from "../src/lib/generated/RegistryView";
@@ -331,5 +332,69 @@ test.describe("Triage panel", () => {
     await expect(rowOf(page, prompted).getByTestId("triage-prompt")).toHaveText(prompted.excerpts!.prompt!);
     await expect(page.getByTestId("triage-panel").locator("img")).toHaveCount(0);
     expect(await page.evaluate(() => (window as { __officinaXss?: number }).__officinaXss)).toBeUndefined();
+  });
+});
+
+// Story 3.11: rows and the triage model (AD-40, AD-52, D-87) on the `model`
+// fixture, where the model is on, the latest row was answered with a reason
+// that is markup, and the others wait for it; and on `model-paused`, where
+// three calls then gave no answer.
+test.describe("Model proposals on rows", () => {
+  async function openModel(page: Page, view: RegistryView): Promise<void> {
+    await openBoard(page, loadBoard("model-board"), {}, null, view);
+    await page.getByTestId("view-subjects").click();
+    await expect(page.getByTestId("triage-panel")).toBeVisible();
+  }
+
+  test("a queued row says model pending, then shows the model's proposal", async ({ page }) => {
+    const view = loadRegistry("model");
+    const pending = find(view, (r) => r.model_pending, "row pending for the model");
+    await openModel(page, view);
+    const row = rowOf(page, pending);
+    await expect(row.getByTestId("triage-model-pending")).toHaveText("model pending");
+    await expect(row.getByTestId("triage-source")).toHaveText(PROPOSAL_SOURCE_TEXT.rules);
+    // The answer comes with the next view: the model's proposal and reason.
+    const answered: RegistryView = {
+      ...view,
+      triage: view.triage.map((r) =>
+        r.key === pending.key
+          ? {
+              ...r,
+              model_pending: false,
+              model_reason: "The tests pass and the change shipped.",
+              proposal: { verdict: "finished", source: "model", reason: "model", call_id: 99 },
+              verdict: "finished",
+            }
+          : r,
+      ),
+    };
+    await page.evaluate((next) => window.__officinaPushRegistry?.(next), answered);
+    await expect(row.getByTestId("triage-model-pending")).toHaveCount(0);
+    await expect(row.getByTestId("triage-source")).toHaveText(PROPOSAL_SOURCE_TEXT.model);
+    await expect(row.getByTestId("triage-proposed")).toHaveText(PROPOSED_VERDICT_TEXT.finished);
+    await expect(row.getByTestId("triage-reason")).toHaveText(REASON_TEXT.model);
+    await expect(row.getByTestId("triage-model-text")).toHaveText("The tests pass and the change shipped.");
+  });
+
+  test("model text renders as text under a model label", async ({ page }) => {
+    const view = loadRegistry("model");
+    const answered = find(view, (r) => r.proposal.source === "model", "row the model answered");
+    expect(answered.model_reason).toContain("<img");
+    await openModel(page, view);
+    const row = rowOf(page, answered);
+    await expect(row.getByTestId("triage-model-label")).toHaveText("model");
+    await expect(row.getByTestId("triage-model-text")).toHaveText(answered.model_reason!);
+    await expect(row.locator("img")).toHaveCount(0);
+    expect(await page.evaluate(() => (window as unknown as { __officinaXss?: number }).__officinaXss)).toBeUndefined();
+  });
+
+  test("a call that gave no answer keeps the default and says why", async ({ page }) => {
+    const view = loadRegistry("model-paused");
+    const failed = find(view, (r) => r.model_call !== null, "row whose call gave no answer");
+    await openModel(page, view);
+    const row = rowOf(page, failed);
+    await expect(row.getByTestId("triage-source")).toHaveText(PROPOSAL_SOURCE_TEXT.rules);
+    await expect(row.getByTestId("triage-model-call")).toContainText(TRIAGE_OUTCOME_TEXT[failed.model_call!.outcome]);
+    await expect(row.getByTestId("triage-model-pending")).toHaveCount(0);
   });
 });

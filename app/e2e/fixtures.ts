@@ -19,18 +19,22 @@ export type Scenario =
   | "subjects-board"
   | "triage-board"
   | "evidence-board"
+  | "model-board"
+  | "model-paused-board"
   | "contract-hook-missing";
 
 /** Registry views printed by `officina subjects --json` after the
- *  `registry_fixture` example wrote the registry (stories 3.5, 3.7 and
- *  3.9, D-72). */
+ *  `registry_fixture` example wrote the registry (stories 3.5, 3.7, 3.9 and
+ *  3.11, D-72). */
 export type RegistryScenario =
   | "subjects"
   | "subjects-synced"
   | "subjects-restored"
   | "subjects-unavailable"
   | "triage"
-  | "evidence";
+  | "evidence"
+  | "model"
+  | "model-paused";
 
 export type RelayScenario =
   | "relay-clean"
