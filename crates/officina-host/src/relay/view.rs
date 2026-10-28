@@ -104,6 +104,7 @@ pub fn read_view_with(
     // author must be offered a new approval whatever the floor holds.
     let recorded = home
         .read_known_projects()
+        .valid()
         .is_some_and(|known| known.approved_hash.is_some());
     let gone = format!(
         "{} is gone while {} records an approval",

@@ -15,7 +15,9 @@ use officina_core::relay::journal::{GateError, GateFault};
 use officina_core::relay::view::RecentEvent;
 use officina_host::files::now_ms;
 use officina_host::relay::approvals::prune;
-use officina_host::relay::home::{ApprovedState, RelayFloorError, RelayHome, load_relay_floor};
+use officina_host::relay::home::{
+    ApprovedState, KnownProjectsState, RelayFloorError, RelayHome, load_relay_floor,
+};
 use officina_host::relay::known_projects::KnownProjectsKeeper;
 use officina_host::relay::view::read_view;
 
@@ -174,15 +176,40 @@ fn relay_floor_loads_or_says_why_not() {
 fn known_projects_are_read_back() {
     let dir = tempfile::tempdir().unwrap();
     let home = RelayHome::new(dir.path(), None);
-    assert_eq!(home.read_known_projects(), None);
+    assert_eq!(home.read_known_projects(), KnownProjectsState::Missing);
     std::fs::create_dir_all(home.relay_dir()).unwrap();
     std::fs::write(
         home.known_projects_file(),
         r#"{"schema":1,"approved_hash":null,"project_paths":["c:/work/lab"]}"#,
     )
     .unwrap();
-    let known = home.read_known_projects().unwrap();
+    let known = home.read_known_projects().valid().cloned().unwrap();
     assert_eq!(known.project_paths, ["c:/work/lab"]);
+}
+
+/// Story 2.16 AC 1: a record that exists but does not read is told apart
+/// from one never written, so the gate's fault says which.
+#[test]
+fn an_unreadable_known_projects_record_is_not_missing() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = RelayHome::new(dir.path(), None);
+    std::fs::create_dir_all(home.relay_dir()).unwrap();
+    for content in ["{}", "not json", r#"{"schema":99,"project_paths":[]}"#] {
+        std::fs::write(home.known_projects_file(), content).unwrap();
+        assert!(
+            matches!(
+                home.read_known_projects(),
+                KnownProjectsState::Unreadable(_)
+            ),
+            "{content}"
+        );
+    }
+    std::fs::remove_file(home.known_projects_file()).unwrap();
+    std::fs::create_dir_all(home.known_projects_file()).unwrap();
+    assert!(matches!(
+        home.read_known_projects(),
+        KnownProjectsState::Unreadable(_)
+    ));
 }
 
 // ---- story 2.8: approval files and kept outputs (AD-33, D-170) ----
@@ -350,5 +377,5 @@ fn a_known_projects_write_error_is_reported() {
 
     std::fs::remove_dir(home.known_projects_file()).unwrap();
     assert_eq!(keeper.keep(&home, now), None, "the write succeeds again");
-    assert!(home.read_known_projects().is_some());
+    assert!(home.read_known_projects().valid().is_some());
 }

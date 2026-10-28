@@ -201,7 +201,10 @@ fn checks_with(
 ) -> Vec<Check> {
     let home = inputs.home;
     let approved = home.read_approved();
+    // Only a valid record counts: an unreadable one holds no project to
+    // guard, and the gate reports it as a fault when it matters.
     let record = home.read_known_projects();
+    let record = record.valid();
     let floor_path = home.relay_floor(&approved);
     let load = if floor_path.exists() {
         match load_relay_floor(&floor_path) {

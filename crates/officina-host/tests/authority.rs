@@ -155,7 +155,7 @@ fn approval_records_known_projects() {
     home.write(&relay.default_floor(), FLOOR);
     let approved = approve_catalogue(&relay, &displayed(&relay.default_floor())).unwrap();
 
-    let known = relay.read_known_projects().unwrap();
+    let known = relay.read_known_projects().valid().cloned().unwrap();
     assert_eq!(known.approved_hash.as_deref(), Some(approved.hash.as_str()));
     let floor_dir = normalise_path(&relay.officina_home().to_string_lossy());
     assert_eq!(
