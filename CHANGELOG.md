@@ -492,6 +492,13 @@ project uses [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Smaller fixes from the Epic 3 audits (v0.3): a registry read that fails
+  is reported (doctor fails its triage line instead of calling the model
+  disabled, the board names the error instead of showing no subject); a
+  window command that times out says the next view shows whether the
+  change was made, never that nothing was; folder and subject names beside
+  other words are isolated, so a bidirectional control in a name cannot
+  reorder them; a triage call's usage out of range is read as unknown.
 - A dry run no longer shows a progress bar that never moves when the
   thread that makes the triage calls could not start or stopped (v0.3): it
   ends with what ran recorded and says why, and **Evaluate the model** is
@@ -500,7 +507,6 @@ project uses [Semantic Versioning](https://semver.org/).
   refused (v0.3), on the same inputs: fixing the cause (an empty work
   folder, a native `claude.exe`) no longer leaves those rows on the
   default until their session changes.
-
 - The window says when it cannot write `relay/known-projects.json`, the
   record a broken floor falls back to: one `known_projects_unwritable` gate
   error in the journal, listed in the Relay view and counted by
