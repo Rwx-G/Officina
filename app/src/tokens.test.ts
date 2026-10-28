@@ -309,7 +309,10 @@ function colourLiterals(source: string): string[] {
     if (n.type === "Declaration" && typeof n.value === "string" && cssValueHasColour(n.value)) {
       found.push(`${String(n.property)}: ${n.value}`);
     }
-    if ((n.type === "Attribute" || n.type === "StyleDirective") && Array.isArray(n.value)) {
+    // Class names and ARIA tokens are never colours, though some are named
+    // like the deprecated system colours (`role="menu"`).
+    const notColour = n.type === "Attribute" && /^(class|role|aria-.*)$/.test(String(n.name));
+    if ((n.type === "Attribute" || n.type === "StyleDirective") && !notColour && Array.isArray(n.value)) {
       for (const part of n.value as { type: string; data?: string }[]) {
         if (part.type === "Text" && part.data && attributeIsColour(part.data)) found.push(`${String(n.name)}="${part.data}"`);
       }
@@ -338,6 +341,7 @@ describe("colour literals", () => {
       "color: var(--color-text); background: transparent; border: 1px solid currentColor; fill: none; outline: inherit; white-space: pre-wrap; font-family: \"Red Hat\", sans-serif;",
     );
     expect(colourLiterals(clean)).toEqual([]);
+    expect(colourLiterals(`<div class="menu" role="menu" aria-haspopup="menu"></div>`)).toEqual([]);
   });
 
   it("no component hard-codes a colour", () => {

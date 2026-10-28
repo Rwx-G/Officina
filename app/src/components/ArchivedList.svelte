@@ -1,7 +1,8 @@
 <script lang="ts">
   // The archived subjects, on demand (FR-6, AD-54): each with its routine
   // mark and a Reopen, which makes it `to_resume` (AD-48). Merged subjects
-  // are not listed (D-55).
+  // are not listed (D-55). With them, the sessions discarded from the board,
+  // each with a Restore (story 4.15, D-536).
   import { subjectTarget, type RegistryStore } from "../lib/registry.svelte";
 
   interface Props {
@@ -10,6 +11,7 @@
   let { store }: Props = $props();
 
   let archived = $derived(store.archived);
+  let discarded = $derived(store.discarded ?? []);
   let listError = $derived(store.errors["archived"] ?? null);
 </script>
 
@@ -22,7 +24,7 @@
       disabled={store.inFlight["archived"] ?? false}
       onclick={() => store.loadArchived()}
     >
-      Show archived subjects
+      Show archived subjects and discarded sessions
     </button>
   {:else}
     {#if archived.length === 0}
@@ -46,7 +48,24 @@
         </li>
       {/each}
     </ul>
-    <button class="tool" onclick={() => (store.archived = null)}>Hide archived subjects</button>
+    <h3>Discarded sessions</h3>
+    {#if discarded.length === 0}
+      <p class="muted">No discarded session.</p>
+    {/if}
+    <ul>
+      {#each discarded as session (session.session_id)}
+        {@const target = `discarded:${session.session_id}` as const}
+        <li data-testid="discarded-session" data-session={session.session_id}>
+          <span class="name">{session.name ?? session.prompt ?? session.session_id}</span>
+          <span class="muted"><bdi>{session.project}</bdi></span>
+          <button class="tool" data-testid="restore-session" disabled={store.inFlight[target] ?? false} onclick={() => store.restore(session.session_id)}>
+            Restore
+          </button>
+          {#if store.errors[target]}<p class="fault" role="alert" data-testid="action-error">{store.errors[target]}</p>{/if}
+        </li>
+      {/each}
+    </ul>
+    <button class="tool" onclick={() => (store.archived = null)}>Hide archived subjects and discarded sessions</button>
   {/if}
   {#if listError}<p class="fault" role="alert">{listError}</p>{/if}
 </section>
@@ -61,6 +80,10 @@
   h2 {
     margin: 0 0 6px;
     font-size: 16px;
+  }
+  h3 {
+    margin: 10px 0 4px;
+    font-size: 14px;
   }
   ul {
     margin: 0 0 8px;

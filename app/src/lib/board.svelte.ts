@@ -6,6 +6,8 @@ import type { FocusOutcome } from "./generated/FocusOutcome";
 import { beaconPair } from "./alert";
 import { haloMemo } from "./halo";
 import * as ipc from "./ipc";
+import { refusalText } from "./registry.svelte";
+import { actionFor, doneText, undoOf, type SettleAction, type SettleTarget } from "./settle";
 
 export const OUTCOME_VISIBLE_MS = 10_000;
 /** A second focus of the same card within this delay is ignored: a held key
@@ -17,6 +19,23 @@ export const COPIED_VISIBLE_MS = 2_000;
  *  finds it expired whatever the timer's jitter. */
 const EXPIRY_SLACK_MS = 50;
 const CLOCK_TICK_MS = 30_000;
+
+/** What the last verdict from the board did, with the way back (D-542). */
+export interface SettleNote {
+  key: string;
+  text: string;
+  /** What puts the card back; `null` when the way back is elsewhere. */
+  undo: SettleAction | null;
+  failed: boolean;
+  /** Set when the verdict came from the card's menu: the note then takes
+   *  the focus, since the card the focus was on has moved (D-542). */
+  takeFocus: boolean;
+}
+
+/** Records `action` through the backend; the next board shows it. */
+function record(action: SettleAction): Promise<void> {
+  return action.kind === "settle" ? ipc.settleSession(action.session, action.settlement) : ipc.reopenSubject(action.subject);
+}
 
 export interface ShownOutcome {
   outcome: FocusOutcome;
@@ -35,6 +54,11 @@ export class BoardStore {
   approvalErrors = $state<Record<string, string>>({});
   /** Requests whose decision is on its way to the backend. */
   deciding = $state<Record<string, boolean>>({});
+
+  /** The last verdict given from the board, until the next or a dismiss. */
+  settleNote = $state<SettleNote | null>(null);
+  /** Cards whose verdict is on its way to the backend. */
+  settling = $state<Record<string, boolean>>({});
 
   /** The session cards keys 1 to 9 focus: approval cards are not among
    *  them, so no key ever lands on Approve (D-28). */
@@ -146,6 +170,44 @@ export class BoardStore {
       const { [id]: _done, ...rest } = this.deciding;
       this.deciding = rest;
     }
+  }
+
+  /** Sends `card` to `target` (story 4.15, D-542): the verdict is recorded
+   *  by the backend and the next board places the card; the note says
+   *  what was done and offers the way back, or says why nothing was. */
+  async settle(card: Card, target: SettleTarget, fromMenu: boolean): Promise<boolean> {
+    const action = actionFor(card, target);
+    if (!action || this.settling[card.key]) return false;
+    this.settling = { ...this.settling, [card.key]: true };
+    try {
+      await record(action);
+      this.settleNote = { key: card.key, text: doneText(card, target, action), undo: undoOf(card, action), failed: false, takeFocus: fromMenu };
+      return true;
+    } catch (error) {
+      this.settleNote = { key: card.key, text: `Not recorded: ${refusalText(error)}`, undo: null, failed: true, takeFocus: fromMenu };
+      return false;
+    } finally {
+      const { [card.key]: _done, ...rest } = this.settling;
+      this.settling = rest;
+    }
+  }
+
+  /** Puts back what the last verdict changed, then drops its note. */
+  async undoSettle(): Promise<boolean> {
+    const note = this.settleNote;
+    if (!note?.undo) return false;
+    try {
+      await record(note.undo);
+      this.settleNote = null;
+      return true;
+    } catch (error) {
+      this.settleNote = { ...note, text: `Not undone: ${refusalText(error)}`, undo: note.undo, failed: true };
+      return false;
+    }
+  }
+
+  dismissSettleNote(): void {
+    this.settleNote = null;
   }
 
   async toggleAlwaysOnTop(): Promise<void> {

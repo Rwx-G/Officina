@@ -3,6 +3,8 @@
   import type { Column } from "../lib/generated/Column";
   import type { ApprovalView } from "../lib/generated/ApprovalView";
   import type { BoardStore } from "../lib/board.svelte";
+  import { DROP_ATTRIBUTE, drag } from "../lib/drag.svelte";
+  import type { SettleTarget } from "../lib/settle";
   import ApprovalCard from "./ApprovalCard.svelte";
   import SessionCard from "./SessionCard.svelte";
 
@@ -24,9 +26,18 @@
     collapseAfter !== undefined && !expanded ? cards.slice(0, collapseAfter) : cards,
   );
   let hidden = $derived(cards.length - visible.length);
+  /** To resume and Done take a dragged ended card (D-542). */
+  let target = $derived<SettleTarget | null>(column === "to_resume" || column === "done" ? column : null);
 </script>
 
-<section class="column {column}" data-testid="column-{column}" aria-labelledby="title-{column}">
+<section
+  class="column {column}"
+  class:can-drop={target !== null && drag.takes(target)}
+  class:drop-over={target !== null && drag.over === target}
+  data-testid="column-{column}"
+  aria-labelledby="title-{column}"
+  {...target ? { [DROP_ATTRIBUTE]: target } : {}}
+>
   <header>
     <h2 id="title-{column}" tabindex="-1">{title}</h2>
     <span class="count" data-testid="count-{column}">{cards.length + approvals.length}</span>
@@ -65,6 +76,14 @@
     border-radius: var(--radius-surface);
     background: var(--color-column);
     border: 1px solid var(--color-border);
+  }
+  /* Outlines only, so a drag moves nothing (D-517). */
+  .column.can-drop {
+    outline: 2px dashed var(--color-working);
+    outline-offset: 2px;
+  }
+  .column.drop-over {
+    outline-style: solid;
   }
   .column.needs_you {
     background: var(--color-attention-wash);

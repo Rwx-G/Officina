@@ -5,6 +5,9 @@
   import { breathe } from "../lib/halo";
   import { outcomeText, visibleOutcome } from "../lib/outcome";
   import { ago, duration } from "../lib/time";
+  import { drag, draggable } from "../lib/drag.svelte";
+  import { targetsFor } from "../lib/settle";
+  import CardMenu from "./CardMenu.svelte";
   import StableLabel from "./StableLabel.svelte";
 
   interface Props {
@@ -15,19 +18,27 @@
   let { card, store, index }: Props = $props();
 
   const BADGE_TEXT = { unknown: "unknown", interrupted: "interrupted", stopped: "stopped", ended: "ended" } as const;
+  /** Why a card is in Done though Claude Code did not say it finished. */
+  const SETTLED_TEXT = { marked_done: "marked done", subject_archived: "subject archived" } as const;
 
   let shown = $derived(visibleOutcome(store.outcomes, card.key));
   let shownText = $derived(shown ? outcomeText(shown.outcome) : null);
   let since = $derived(card.last_event_at_ms ?? card.started_at_ms);
   let halo = $derived(card.column === "needs_you" ? { key: card.key, enteredAt: since } : null);
+  let movable = $derived(targetsFor(card).length > 0);
+  let dragged = $derived(drag.card?.key === card.key);
 </script>
 
 <article
   class="card {card.column}"
+  class:movable
+  class:dragged
   data-testid="card"
   data-key={card.key}
   style:--project={projectColor(card.project.color)}
+  style:transform={dragged ? `translate(${drag.dx}px, ${drag.dy}px)` : undefined}
   use:breathe={halo}
+  use:draggable={{ card, onDrop: (c, target) => void store.settle(c, target, false) }}
 >
   <button
     class="main"
@@ -38,6 +49,7 @@
       <span class="project"><span class="dot"></span>{card.project.name}</span>
       {#if index !== undefined && index < 9}<kbd aria-hidden="true">{index + 1}</kbd>{/if}
       {#if card.badge}<span class="badge" data-testid="badge">{BADGE_TEXT[card.badge]}</span>{/if}
+      {#if card.settled}<span class="badge settled" data-testid="settled">{SETTLED_TEXT[card.settled]}</span>{/if}
     </div>
     <div class="name">{card.name}</div>
     {#if card.subject}
@@ -72,6 +84,8 @@
       {/if}
     </div>
   {/if}
+
+  <CardMenu {card} busy={store.settling[card.key] === true} onChoose={(target) => void store.settle(card, target, true)} />
 
   {#if card.attach_available}
     <button class="link copy" data-testid="copy-attach" onclick={() => store.copyAttach(card)}>
@@ -123,6 +137,21 @@
   .card.to_resume {
     opacity: 0.86;
   }
+  /* An ended card that can go elsewhere: its menu sits at the top right,
+     where the head keeps room for it. */
+  .card.movable {
+    cursor: grab;
+  }
+  .card.movable .head {
+    padding-right: 30px;
+  }
+  /* Lifted while it is dragged. */
+  .card.dragged {
+    z-index: 10;
+    opacity: 1;
+    cursor: grabbing;
+    box-shadow: 0 10px 24px var(--color-shadow);
+  }
   .main {
     display: block;
     width: 100%;
@@ -139,11 +168,13 @@
   }
   .head {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
-    gap: 8px;
+    gap: 4px 8px;
   }
   .project {
     display: inline-flex;
+    white-space: nowrap;
     align-items: center;
     gap: 6px;
     font-size: 13px;
@@ -167,14 +198,20 @@
   }
   .badge {
     margin-left: auto;
+    white-space: nowrap;
     font-size: 12px;
     font-weight: 600;
     padding: 1px 9px;
     border-radius: var(--radius-control);
     background: var(--color-border);
   }
-  kbd + .badge {
+  kbd + .badge,
+  .badge + .badge {
     margin-left: 0;
+  }
+  .badge.settled {
+    background: var(--color-bg);
+    border: 1px solid var(--color-border);
   }
   .name {
     margin-top: 4px;

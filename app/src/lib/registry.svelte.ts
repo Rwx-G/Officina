@@ -5,6 +5,7 @@
 // confirmed, all dropped with the row. Nothing changes on screen until a
 // new view arrives from the collector.
 import type { ConfirmItem } from "./generated/ConfirmItem";
+import type { DiscardedSession } from "./generated/DiscardedSession";
 import type { FileUnder } from "./generated/FileUnder";
 import type { RegistryView } from "./generated/RegistryView";
 import type { SessionView } from "./generated/SessionView";
@@ -37,6 +38,7 @@ export type Target =
   | "selection"
   | "create"
   | "archived"
+  | `discarded:${string}`
   | "evaluate"
   | "auto-archive"
   | "triage-model";
@@ -71,6 +73,9 @@ export class RegistryStore {
   view = $state<RegistryView | null>(null);
   /** The archived subjects, once asked for; `null` until then. */
   archived = $state<SubjectView[] | null>(null);
+  /** The sessions discarded from the board, asked for with the archived
+   *  subjects (story 4.15). */
+  discarded = $state<DiscardedSession[] | null>(null);
   /** The sessions selected for a move, unfile or new subject. */
   selected = $state<string[]>([]);
   inFlight = $state<Record<string, boolean>>({});
@@ -205,11 +210,22 @@ export class RegistryStore {
     return this.#run("evaluate", () => ipc.evaluateTriageModel());
   }
 
-  /** Asks the collector for the archived subjects. */
+  /** Asks the collector for the archived subjects and the discarded
+   *  sessions. */
   async loadArchived(): Promise<void> {
     await this.#run("archived", async () => {
-      this.archived = await ipc.listArchived();
+      const [archived, discarded] = await Promise.all([ipc.listArchived(), ipc.listDiscarded()]);
+      this.archived = archived;
+      this.discarded = discarded;
     });
+  }
+
+  /** Takes back a session's discard (D-536): the next board places it by
+   *  its sources again. */
+  async restore(session: string): Promise<boolean> {
+    const done = await this.#run(`discarded:${session}`, () => ipc.settleSession(session, null));
+    if (done) await this.loadArchived();
+    return done;
   }
 
   /** Drops the choices, flight marks and refusals of rows the view no

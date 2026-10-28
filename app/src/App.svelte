@@ -9,6 +9,8 @@
   import { clock, hours } from "./lib/time";
   import Header from "./components/Header.svelte";
   import AlertBand from "./components/AlertBand.svelte";
+  import DiscardTarget from "./components/DiscardTarget.svelte";
+  import SettleNote from "./components/SettleNote.svelte";
   import BoardColumn from "./components/BoardColumn.svelte";
   import FocusList from "./components/FocusList.svelte";
   import RelayBanners from "./components/RelayBanners.svelte";
@@ -32,6 +34,26 @@
     heading?.focus();
     heading?.scrollIntoView({ block: "nearest" });
   }
+
+  /** After an undo, the focus goes back to the card where the board now
+   *  places it: on the board shown, or on the next one, which the
+   *  collector may publish after the answer; failing that, it stays on To
+   *  resume's heading. */
+  let refocus = $state<{ key: string; board: unknown } | null>(null);
+  function undone(key: string): void {
+    document.getElementById("title-to_resume")?.focus();
+    refocus = { key, board: store.board };
+  }
+  $effect(() => {
+    if (refocus === null || !store.board) return;
+    const { key, board } = refocus;
+    const last = store.board !== board;
+    void tick().then(() => {
+      const card = document.querySelector<HTMLElement>(`[data-testid="card"][data-key="${CSS.escape(key)}"] button.main`);
+      card?.focus();
+      if (card || last) refocus = null;
+    });
+  });
 
   // A workstation without the relay has no Relay view to show.
   let view = $derived<WindowView>(windowView.view === "relay" && !relay.inUse ? "sessions" : windowView.view);
@@ -174,7 +196,7 @@
         <BoardColumn
           column="done"
           title="Done"
-          hint="Background sessions that finished in the last {doneWindow}."
+          hint="Finished in the last {doneWindow}: background sessions done, and those you marked done or whose subject you archived."
           cards={columns.done}
           {store}
           collapseAfter={DONE_VISIBLE}
@@ -182,6 +204,8 @@
       </main>
     {/if}
   {/if}
+  <DiscardTarget />
+  <SettleNote {store} onUndone={undone} />
 </div>
 
 <style>
