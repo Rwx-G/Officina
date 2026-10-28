@@ -65,6 +65,9 @@ const CASES: ToggleCase[] = [
     // header on one line, which must move neither radio (D-517, D-525).
     act: (page) => page.locator('[data-testid="mode-switch"] [aria-checked="false"]').click(),
   },
+  // The theme control (AD-67, D-517), in both header layouts.
+  { name: "theme switch", selector: '[data-testid="theme-switch"]', scene: "board" },
+  { name: "theme switch on one line", selector: '[data-testid="theme-switch"]', scene: "sceneMode" },
   { name: "copy attach command", selector: '[data-testid="copy-attach"]', scene: "board" },
   { name: "Relay view stop toggle", selector: '[data-testid="relay-view-stop"]', scene: "relay" },
   { name: "triage verdict", selector: '[data-testid^="triage-verdict-"]', scene: "subjects" },

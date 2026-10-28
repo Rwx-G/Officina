@@ -7,7 +7,9 @@ import {
   defaultViewState,
   readViewState,
   serialiseViewState,
+  storedViewState,
 } from "./view.svelte";
+import { DEFAULT_THEME, THEME_CHOICES, applyTheme, nextTheme, resolveTheme } from "./theme";
 
 /** An in-memory storage. */
 function memoryStorage(initial: Record<string, string> = {}) {
@@ -36,7 +38,53 @@ describe("view state", () => {
     expect(readViewState(JSON.stringify({ v: 1, base: "focus" })).base).toBe(DEFAULT_BASE);
     expect(readViewState(JSON.stringify({ v: 1, base: 3 })).base).toBe(DEFAULT_BASE);
     expect(readViewState(JSON.stringify({ v: 1 })).base).toBe(DEFAULT_BASE);
-    expect(readViewState(serialiseViewState({ v: 1, base: OTHER }))).toEqual({ v: 1, base: OTHER });
+    const other = { ...defaultViewState(), base: OTHER };
+    expect(readViewState(serialiseViewState(other))).toEqual(other);
+  });
+
+  it("a stored view without theme reads as Auto", () => {
+    expect(DEFAULT_THEME).toBe("auto");
+    expect(defaultViewState().theme).toBe(DEFAULT_THEME);
+    for (const base of BASES) expect(readViewState(JSON.stringify({ v: 1, base })).theme).toBe(DEFAULT_THEME);
+    for (const theme of [null, 3, "sepia", "Dark", ""]) {
+      expect(readViewState(JSON.stringify({ v: 1, base: OTHER, theme })), String(theme)).toEqual({ ...defaultViewState(), base: OTHER });
+    }
+    // A valid theme is kept beside an invalid neighbour.
+    for (const theme of THEME_CHOICES) {
+      expect(readViewState(JSON.stringify({ v: 9, base: "nowhere", theme })), theme).toEqual({ ...defaultViewState(), theme });
+    }
+  });
+
+  it("the theme cycles Auto, Light, Dark, is applied to the root and stored with the mode", () => {
+    const storage = memoryStorage();
+    const store = new ViewStore(() => storage);
+    expect(store.theme).toBe(DEFAULT_THEME);
+    store.setBase(OTHER);
+    const seen: (string | null)[] = [];
+    for (let i = 0; i < THEME_CHOICES.length; i++) {
+      store.cycleTheme();
+      seen.push(document.documentElement.getAttribute("data-theme"));
+      const next = new ViewStore(() => storage);
+      expect(next.theme).toBe(store.theme);
+      expect(next.base).toBe(OTHER);
+    }
+    // From Auto: Light, Dark, then Auto, which leaves the attribute off so
+    // the system's scheme decides.
+    expect(seen).toEqual(["light", "dark", null]);
+    expect(store.theme).toBe("auto");
+    // A mode change keeps the theme.
+    store.cycleTheme();
+    store.setBase(DEFAULT_BASE);
+    expect(new ViewStore(() => storage).theme).toBe("light");
+    applyTheme(DEFAULT_THEME);
+  });
+
+  it("the resolved theme is the choice, or the system's scheme on Auto", () => {
+    for (const systemDark of [false, true]) {
+      expect(resolveTheme("auto", systemDark)).toBe(systemDark ? "dark" : "light");
+      expect(resolveTheme("light", systemDark)).toBe("light");
+      expect(resolveTheme("dark", systemDark)).toBe("dark");
+    }
   });
 
   it("Board is the default mode and Sessions the view at start", () => {
@@ -82,5 +130,12 @@ describe("view state", () => {
     store.toggleBase();
     expect(store.base).toBe(OTHER);
     expect(new ViewStore(() => null).base).toBe(DEFAULT_BASE);
+    // So does the theme, applied to the root; main.ts reads Auto.
+    expect(store.theme).toBe(DEFAULT_THEME);
+    store.cycleTheme();
+    expect(store.theme).toBe(nextTheme(DEFAULT_THEME));
+    expect(document.documentElement.getAttribute("data-theme")).toBe(store.theme);
+    expect(storedViewState(() => throwing)).toEqual(defaultViewState());
+    applyTheme(DEFAULT_THEME);
   });
 });

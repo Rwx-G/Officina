@@ -7,7 +7,10 @@
   import Gauge from "./Gauge.svelte";
   import ModeSwitch from "./ModeSwitch.svelte";
   import StableLabel from "./StableLabel.svelte";
+  import ThemeSwitch from "./ThemeSwitch.svelte";
+  import type { Theme, ThemeChoice } from "../lib/theme";
   import logo from "../assets/logo.svg";
+  import logoDark from "../assets/logo-dark.svg";
 
   interface Props {
     store: BoardStore;
@@ -20,8 +23,23 @@
     /** The Sessions view's mode; Scene lays the header out on one line. */
     base?: Base;
     onBase?: (base: Base) => void;
+    /** The theme control (AD-67); the logo follows the resolved theme. */
+    theme?: ThemeChoice;
+    resolvedTheme?: Theme;
+    onTheme?: () => void;
   }
-  let { store, relay, registry, view = "sessions", onView, base = "board", onBase }: Props = $props();
+  let {
+    store,
+    relay,
+    registry,
+    view = "sessions",
+    onView,
+    base = "board",
+    onBase,
+    theme = "auto",
+    resolvedTheme = "light",
+    onTheme,
+  }: Props = $props();
 
   // Triage blocks no session: the chip is neutral, never amber, and the
   // rows it counts stay out of the title and the overlay (AD-55).
@@ -53,7 +71,7 @@
 
 <header class="bar" class:one-line={oneLine}>
   <div class="brand">
-    <img src={logo} alt="" width="40" height="40" />
+    <img src={resolvedTheme === "dark" ? logoDark : logo} alt="" width="40" height="40" data-testid="header-logo" />
     <div>
       <h1>Officina</h1>
       <div class="floor">{board?.floor ?? "this workstation"}</div>
@@ -135,6 +153,9 @@
           current={store.alwaysOnTop ? "pinned" : "unpinned"}
         />
       </button>
+      {#if onTheme}
+        <ThemeSwitch {theme} resolved={resolvedTheme} onCycle={onTheme} />
+      {/if}
     </div>
     <div class="status" data-testid="header-status">
       {#if waiting > 0}

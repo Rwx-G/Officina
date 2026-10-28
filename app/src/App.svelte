@@ -77,6 +77,9 @@
     onView={(next) => (windowView.view = next)}
     base={windowView.base}
     onBase={(next) => windowView.setBase(next)}
+    theme={windowView.theme}
+    resolvedTheme={windowView.resolvedTheme}
+    onTheme={() => windowView.cycleTheme()}
   />
   <AlertBand {board} nowMs={store.nowMs} />
 

@@ -3,7 +3,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, type Page } from "@playwright/test";
 import { canvas, fitScale } from "../src/lib/scene/geometry";
-import { VIEW_STORAGE_KEY, serialiseViewState } from "../src/lib/view.svelte";
+import { VIEW_STORAGE_KEY, defaultViewState, serialiseViewState } from "../src/lib/view.svelte";
 import type { Board } from "../src/lib/generated/Board";
 import type { FocusOutcome } from "../src/lib/generated/FocusOutcome";
 import type { RegistryView } from "../src/lib/generated/RegistryView";
@@ -140,7 +140,7 @@ export async function openScene(
   registry: RegistryView | null = null,
   focus: Record<string, FocusOutcome> = {},
 ): Promise<void> {
-  await load(page, board, focus, relay, registry, { [VIEW_STORAGE_KEY]: serialiseViewState({ v: 1, base: "scene" }) });
+  await load(page, board, focus, relay, registry, { [VIEW_STORAGE_KEY]: serialiseViewState({ ...defaultViewState(), base: "scene" }) });
   await sceneSettled(page);
 }
 
