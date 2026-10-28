@@ -3,4 +3,15 @@
 /**
  * A `human` approval request and its decisions (AD-33).
  */
-export type ApprovalEvent = { approval_id: string, request_key: string, };
+export type ApprovalEvent = { approval_id: string, request_key: string, 
+/**
+ * The request's project and action (D-172), so approval metrics are
+ * computed from the journal alone. Absent from lines written before
+ * they existed.
+ */
+project?: string | null, action?: string | null, 
+/**
+ * On `approval_requested` only: true when the action names a check, its
+ * dry run (D-170, D-172).
+ */
+dry_run?: boolean | null, };

@@ -389,6 +389,17 @@ pub struct CatalogueApproved {
 pub struct ApprovalEvent {
     pub approval_id: String,
     pub request_key: String,
+    /// The request's project and action (D-172), so approval metrics are
+    /// computed from the journal alone. Absent from lines written before
+    /// they existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub action: Option<String>,
+    /// On `approval_requested` only: true when the action names a check, its
+    /// dry run (D-170, D-172).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dry_run: Option<bool>,
 }
 
 /// How a reader classifies one raw line.
@@ -515,7 +526,59 @@ mod tests {
         ApprovalEvent {
             approval_id: "0123456789abcdef-1".into(),
             request_key: "ab".into(),
+            project: Some("lab".into()),
+            action: Some("apply".into()),
+            dry_run: Some(true),
         }
+    }
+
+    /// D-172: a request line names its project, its action and whether the
+    /// action has a dry run; a decision line its project and action.
+    #[test]
+    fn approval_requested_names_its_action() {
+        let line = JournalLine::new(3, JournalEntry::ApprovalRequested(approval())).to_line();
+        let value: serde_json::Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(
+            (&value["project"], &value["action"], &value["dry_run"]),
+            (
+                &serde_json::json!("lab"),
+                &serde_json::json!("apply"),
+                &serde_json::json!(true)
+            )
+        );
+        let given = ApprovalEvent {
+            dry_run: None,
+            ..approval()
+        };
+        let line = JournalLine::new(3, JournalEntry::ApprovalGiven(given)).to_line();
+        let value: serde_json::Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(value["action"], "apply");
+        assert!(value.get("dry_run").is_none(), "{line}");
+    }
+
+    /// Lines written before D-172 parse, with the new fields absent, and the
+    /// line version does not move.
+    #[test]
+    fn older_approval_lines_still_parse() {
+        for kind in ["approval_requested", "approval_given", "approval_rejected"] {
+            let old = format!(
+                r#"{{"v":1,"ts":5,"kind":"{kind}","approval_id":"0123456789abcdef-1","request_key":"ab"}}"#
+            );
+            let ParsedLine::Line(line) = parse_line(&old) else {
+                panic!("{old}");
+            };
+            let event = match line.entry {
+                JournalEntry::ApprovalRequested(e)
+                | JournalEntry::ApprovalGiven(e)
+                | JournalEntry::ApprovalRejected(e) => e,
+                other => panic!("{other:?}"),
+            };
+            assert_eq!(
+                (event.project, event.action, event.dry_run),
+                (None, None, None)
+            );
+        }
+        assert_eq!(JOURNAL_LINE_VERSION, 1);
     }
 
     #[test]

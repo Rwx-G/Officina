@@ -594,6 +594,37 @@ fn every_request_and_decision_leaves_exactly_one_line() {
         "each line carries the request key"
     );
     assert_eq!(given[0].request_key, requested[0].request_key);
+    // Story 2.13 AC 5 (D-172): every line names its project and action; a
+    // request says whether the action has a dry run.
+    for event in requested.iter().chain(&given).chain(&rejected) {
+        assert_eq!(
+            (event.project.as_deref(), event.action.as_deref()),
+            (Some("lab"), Some("restart"))
+        );
+    }
+    assert!(requested.iter().all(|e| e.dry_run == Some(false)));
+    assert!(given.iter().chain(&rejected).all(|e| e.dry_run.is_none()));
+}
+
+/// Story 2.13 AC 5: a request of an action with a dry run says so.
+#[test]
+fn a_request_with_a_dry_run_says_so() {
+    let Some(relay) = Relay::in_git("a_request_with_a_dry_run_says_so") else {
+        return;
+    };
+    dry_run(&relay, "lab-web");
+    relay.run(&["apply-sensitive", "group=lab-web", "--wait", "1"]);
+    let requested: Vec<_> = relay
+        .entries()
+        .into_iter()
+        .filter_map(|e| match e {
+            JournalEntry::ApprovalRequested(e) => Some(e),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(requested.len(), 1);
+    assert_eq!(requested[0].dry_run, Some(true));
+    assert_eq!(requested[0].action.as_deref(), Some("apply-sensitive"));
 }
 
 // ---- AC 19 to 21: a dry run (D-170) ----

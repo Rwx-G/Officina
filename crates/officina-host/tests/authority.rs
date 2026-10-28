@@ -428,6 +428,9 @@ fn decide_approves_a_pending_request() {
         [JournalEntry::ApprovalGiven(ApprovalEvent {
             approval_id: id.clone(),
             request_key: request.request_key.clone(),
+            project: Some(request.project.clone()),
+            action: Some(request.action.clone()),
+            dry_run: None,
         })]
     );
 
@@ -440,6 +443,9 @@ fn decide_approves_a_pending_request() {
         JournalEntry::ApprovalRejected(ApprovalEvent {
             approval_id: other,
             request_key: other_request.request_key,
+            project: Some(other_request.project),
+            action: Some(other_request.action),
+            dry_run: None,
         })
     );
 }

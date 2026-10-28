@@ -124,6 +124,9 @@ pub fn decide_approval(home: &RelayHome, id: &str, approve: bool) -> Result<(), 
     let event = ApprovalEvent {
         approval_id: id.to_owned(),
         request_key: request.request_key.clone(),
+        project: Some(request.project.clone()),
+        action: Some(request.action.clone()),
+        dry_run: None,
     };
     let (kind, line) = if approve {
         (FileKind::Approved, JournalEntry::ApprovalGiven(event))

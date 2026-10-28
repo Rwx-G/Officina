@@ -494,6 +494,9 @@ fn create(caller: &Caller<'_>, plan: &RunPlan, bound: Bound<'_>, key: &str) -> R
     let line = JournalEntry::ApprovalRequested(ApprovalEvent {
         approval_id: id.clone(),
         request_key: key.to_owned(),
+        project: Some(plan.project.clone()),
+        action: Some(plan.action.clone()),
+        dry_run: Some(plan.check.is_some()),
     });
     if lock.append(&[line], now).is_err() {
         eprintln!("officina: the journal could not record approval request {id}");

@@ -723,6 +723,9 @@ mod tests {
                     let event = ApprovalEvent {
                         approval_id: "0123456789abcdef-1".to_owned(),
                         request_key: "ab".to_owned(),
+                        project: Some("lab".to_owned()),
+                        action: Some("probe".to_owned()),
+                        dry_run: None,
                     };
                     match kind {
                         JournalKind::ApprovalRequested => JournalEntry::ApprovalRequested(event),
