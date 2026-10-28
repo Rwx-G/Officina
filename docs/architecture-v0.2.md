@@ -92,7 +92,7 @@ The hash covers meaning, not text. `CanonicalCatalogue` (core) holds: `format: 1
 | `relay/stopped` | window | `{"since_ms":...}`, present means stopped |
 | `relay/approvals/<id>.request.json` | `officina run` | AD-33 |
 | `relay/approvals/<id>.approved.json`, `.rejected.json` | window | `decided_at_ms`, `request_key` |
-| `relay/approvals/<id>.consumed.json` | `officina run`, by rename | AD-33 |
+| `relay/approvals/<id>.consumed.json` | `officina run`, by exclusive create | AD-33 |
 | `journal/YYYY-MM-DD.jsonl`, `journal/.lock` | run, gate, window | AD-32 |
 
 "Window only" is held by AD-21 and by the gate denying commands that name these paths. It is not held against a process writing the files directly: accepted, PRD section 1.
@@ -205,6 +205,8 @@ The **tree fingerprint** closes the gap where a session checks, edits the playbo
 4. **Wait** for a decision, stat'ing every 250 ms, for `--wait` seconds (default 110, fits the Bash tool's 2 minutes; max 540), checking the stop flag each tick. Approved: consume and run. Rejected: refused. Timeout: refused "approval still pending; run the same command again to keep waiting".
 
 The wait makes journey 3 one click: the call is still open when the author approves, so the action starts within 250 ms instead of the author typing "go". Pending requests leave the board after 60 minutes; approval files older than 24 hours are deleted by the window; the journal keeps history.
+
+*Amendment, 2026-10-28 (story 2.15):* step 2's rename is not a single-use claim on Windows, where two callers that opened `<id>.approved.json` at once both rename it (story 2.8's Debug Log, caught by `approvals_stress.rs`). Consume claims instead: `create_new` on `<id>.consumed.json` (one caller only), the decision written into it, then the approved name removed; a crash in between leaves both names, which reads as used. The first claim wins, a concurrent `run` finds the claim taken: single use without a lock, as step 2 intends.
 
 ### AD-34: Stop flag
 

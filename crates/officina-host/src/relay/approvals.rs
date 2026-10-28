@@ -1,8 +1,9 @@
 //! The files of `relay/approvals/` and `relay/outputs/` (AD-25, AD-33,
 //! D-170): reading them for `officina run`, the window's board and its
 //! authority; a request written once with `create_new`; an approval used by
-//! renaming it, so two runs never use one; kept check outputs written under
-//! a temporary name then renamed; and the window's retention pass.
+//! claiming `<id>.consumed.json` with `create_new`, so two runs never use
+//! one; kept check outputs written under a temporary name then renamed; and
+//! the window's retention pass.
 //! `officina run` writes requests and consumes approvals but deletes
 //! nothing: only the window prunes.
 

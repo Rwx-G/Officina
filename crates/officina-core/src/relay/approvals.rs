@@ -54,7 +54,8 @@ closed_enum! {
         Approved,
         /// Written by the window.
         Rejected,
-        /// An approval `officina run` used, renamed from `Approved`.
+        /// An approval `officina run` used: claimed with `create_new`,
+        /// the `Approved` name removed after.
         Consumed,
     }
 }

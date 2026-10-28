@@ -1,5 +1,7 @@
 //! Single use without a lock (AD-33, AD-37 stress): an approval is used by
-//! renaming it, and of two runs that rename it at once exactly one wins.
+//! claiming `<id>.consumed.json` with `create_new`, and of two runs that
+//! claim it at once exactly one wins. A rename is not such a claim on
+//! Windows (story 2.8's Debug Log), which this test caught.
 //! Ignored by default: CI runs it in release with
 //! `cargo test --release -p officina-host --test approvals_stress -- --ignored`.
 
