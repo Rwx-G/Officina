@@ -919,7 +919,19 @@ pub fn check_triage(
 
 /// The floor file, if any, loaded without error.
 fn check_floor(collector: &Collector) -> Check {
-    if let Some(warning) = no_excerpts_unseen_by_the_hook(collector) {
+    let view_issues = || {
+        collector
+            .floor()
+            .view_issues
+            .iter()
+            .map(|issue| format!("line {}: `{}`: {}", issue.line, issue.key, issue.message))
+            .collect::<Vec<_>>()
+            .join("; ")
+    };
+    if let Some(mut warning) = no_excerpts_unseen_by_the_hook(collector) {
+        if !collector.floor().view_issues.is_empty() {
+            warning.detail = format!("{}; {}", warning.detail, view_issues());
+        }
         return warning;
     }
     match (&collector.floor().path, &collector.floor().error) {
@@ -946,13 +958,7 @@ fn check_floor(collector: &Collector) -> Check {
                 "{} ({} projects); {}",
                 p.display(),
                 collector.floor().projects.len(),
-                collector
-                    .floor()
-                    .view_issues
-                    .iter()
-                    .map(|issue| format!("line {}: `{}`: {}", issue.line, issue.key, issue.message))
-                    .collect::<Vec<_>>()
-                    .join("; ")
+                view_issues()
             ),
         ),
         (Some(_), Some(e)) => check(Level::Fail, "floor", e.clone()),
@@ -1080,10 +1086,24 @@ mod tests {
             file: Some(parse_floor(text).unwrap()),
             ..Default::default()
         };
-        let collector = Collector::from_parts(paths.clone(), floor(elsewhere), None);
+        let collector = Collector::from_parts(paths.clone(), floor(elsewhere.clone()), None);
         let line = check_floor(&collector);
         assert_eq!(line.level, Level::Warn, "{line:?}");
         assert!(line.detail.contains("OFFICINA_FLOOR"), "{line:?}");
+        // A view key's bad value is reported beside the excerpts warning,
+        // never hidden by it (AD-168).
+        let with_issue = LoadedFloor {
+            view_issues: vec![officina_core::floor::ViewIssue {
+                key: "priority",
+                line: 7,
+                message: "a bad value".into(),
+            }],
+            ..floor(elsewhere.clone())
+        };
+        let line = check_floor(&Collector::from_parts(paths.clone(), with_issue, None));
+        assert_eq!(line.level, Level::Warn, "{line:?}");
+        assert!(line.detail.contains("OFFICINA_FLOOR"), "{line:?}");
+        assert!(line.detail.contains("line 7: `priority`"), "{line:?}");
         let default_floor = paths.officina_home.join("floor.toml");
         std::fs::write(&default_floor, text).unwrap();
         let collector = Collector::from_parts(paths, floor(default_floor), None);
