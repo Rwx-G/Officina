@@ -18,6 +18,12 @@ README, not here.
   approved, ask for a raw `ssh` and check that the call is refused with the
   gate's reason; record it in `docs/research-notes.md` (E12 and E15 were
   `claude -p` and background sessions).
+- Story 2.12 AC 6: in the same kind of interactive session with the
+  PowerShell tool on (Windows, claude.ai account) and the `PreToolUse`
+  matcher doctor prints merged, ask for any command through PowerShell in
+  the guarded project and check that the call is refused with the gate's
+  reason pointing at the Bash tool; record the Claude Code version in
+  `docs/research-notes.md`.
 - Story 2.10 AC 10: with a guarded repository whose catalogue declares a WSL
   `ansible-playbook` check (`--check --diff`) and its `after-check` apply on
   a lab group, approved in the window and with doctor's `CLAUDE.md`
