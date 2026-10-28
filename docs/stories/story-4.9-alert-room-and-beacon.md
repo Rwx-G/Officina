@@ -104,3 +104,4 @@ Open: the beacon of a time-escalated wait is steady from the start (Debug Log); 
 
 - 2026-10-28 created after the plan challenge (D-497), from the alert room and beacon parts of the former story 4.8
 - 2026-10-28 implemented: the alert room lit while occupied, the beacon's glow, the alert halo, the pill's proofs; moved to Review
+- 2026-10-28 the beacon is keyed on when the alert began, not the wait (D-527), which answers the owner question the implementation raised

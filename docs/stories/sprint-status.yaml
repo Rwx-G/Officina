@@ -97,7 +97,6 @@ stories:
   # 4.7: code done; AC 8's light baselines wait for the CI snapshot run and the owner's comparison with the prototype's render (D-508).
   - {id: "4.7", file: story-4.7-scene-drawn-in-place-and-scene-mode.md, slice: A, status: in-progress}
   - {id: "4.8", file: story-4.8-scene-targets-keyboard-file-and-strip.md, slice: A, status: approved}
-  # 4.9: every AC proved; for the owner: keyed on waiting_since_ms (D-474), a time-escalated wait's beacon is steady from the start (Debug Log).
   - {id: "4.9", file: story-4.9-alert-room-and-beacon.md, slice: A, status: review}
   - {id: "4.10", file: story-4.10-walking.md, slice: A, status: approved}
   - {id: "4.11", file: story-4.11-focus-mode-and-keys.md, slice: A, status: approved}
