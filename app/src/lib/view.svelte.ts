@@ -25,6 +25,10 @@ export const BASES: readonly Base[] = ["board", "scene"];
 /** Board until the owner has chosen Scene for ten working days (D-481). */
 export const DEFAULT_BASE: Base = "board";
 
+/** Figures walk to their places (D-469); story 4.14's AD-71 walking run
+ *  turns this off if walking costs more than FR-9 allows (D-480, D-515). */
+export const DEFAULT_WALKING = true;
+
 export const VIEW_STORAGE_KEY = "officina.view.v1";
 
 export interface ViewState {
@@ -32,10 +36,11 @@ export interface ViewState {
   base: Base;
   /** Auto follows the system (AD-67). */
   theme: ThemeChoice;
+  walking: boolean;
 }
 
 export function defaultViewState(): ViewState {
-  return { v: 1, base: DEFAULT_BASE, theme: DEFAULT_THEME };
+  return { v: 1, base: DEFAULT_BASE, theme: DEFAULT_THEME, walking: DEFAULT_WALKING };
 }
 
 function isBase(value: unknown): value is Base {
@@ -57,11 +62,12 @@ export function readViewState(raw: string | null): ViewState {
   const fields = value as Record<string, unknown>;
   if (isBase(fields.base)) state.base = fields.base;
   if (isThemeChoice(fields.theme)) state.theme = fields.theme;
+  if (typeof fields.walking === "boolean") state.walking = fields.walking;
   return state;
 }
 
 export function serialiseViewState(state: ViewState): string {
-  return JSON.stringify({ v: state.v, base: state.base, theme: state.theme });
+  return JSON.stringify({ v: state.v, base: state.base, theme: state.theme, walking: state.walking });
 }
 
 /** A storage that may be missing or throw on every access. */
@@ -89,6 +95,8 @@ export class ViewStore {
   systemDark = $state(systemPrefersDark());
   /** The theme the window shows. */
   resolvedTheme = $derived(resolveTheme(this.theme, this.systemDark));
+  /** The header's Walking toggle, shown in Scene mode (AD-66). */
+  walking = $state(DEFAULT_WALKING);
 
   readonly #storage: ViewStorageGetter;
 
@@ -97,12 +105,16 @@ export class ViewStore {
     const stored = storedViewState(storage);
     this.base = stored.base;
     this.theme = stored.theme;
+    this.walking = stored.walking;
     globalThis.matchMedia?.(DARK_SCHEME_QUERY).addEventListener("change", (event) => (this.systemDark = event.matches));
   }
 
   #store(): void {
     try {
-      this.#storage()?.setItem(VIEW_STORAGE_KEY, serialiseViewState({ v: 1, base: this.base, theme: this.theme }));
+      this.#storage()?.setItem(
+        VIEW_STORAGE_KEY,
+        serialiseViewState({ v: 1, base: this.base, theme: this.theme, walking: this.walking }),
+      );
     } catch {
       // An unwritable storage keeps the choice for this run only.
     }
@@ -111,6 +123,12 @@ export class ViewStore {
   setBase(base: Base): void {
     if (base === this.base) return;
     this.base = base;
+    this.#store();
+  }
+
+  setWalking(walking: boolean): void {
+    if (walking === this.walking) return;
+    this.walking = walking;
     this.#store();
   }
 

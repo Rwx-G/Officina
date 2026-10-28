@@ -8,6 +8,7 @@
   import ModeSwitch from "./ModeSwitch.svelte";
   import StableLabel from "./StableLabel.svelte";
   import ThemeSwitch from "./ThemeSwitch.svelte";
+  import WalkingSwitch from "./WalkingSwitch.svelte";
   import type { Theme, ThemeChoice } from "../lib/theme";
   import logo from "../assets/logo.svg";
   import logoDark from "../assets/logo-dark.svg";
@@ -27,6 +28,9 @@
     theme?: ThemeChoice;
     resolvedTheme?: Theme;
     onTheme?: () => void;
+    /** The Walking toggle, in Scene mode only (AD-66). */
+    walking?: boolean;
+    onWalking?: (walking: boolean) => void;
   }
   let {
     store,
@@ -39,6 +43,8 @@
     theme = "auto",
     resolvedTheme = "light",
     onTheme,
+    walking = true,
+    onWalking,
   }: Props = $props();
 
   // Triage blocks no session: the chip is neutral, never amber, and the
@@ -126,6 +132,11 @@
        of it, gauges included (D-517). -->
   <div class="side">
     <div class="tools">
+      <!-- First of the right-aligned buttons: it grows the group to the
+           left, so the buttons after it keep their places (D-517). -->
+      {#if onWalking && base === "scene"}
+        <WalkingSwitch {walking} {onWalking} shown={view === "sessions"} />
+      {/if}
       {#if relay?.inUse}
         <button
           class="tool relay-toggle"

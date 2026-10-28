@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   BASES,
   DEFAULT_BASE,
+  DEFAULT_WALKING,
   VIEW_STORAGE_KEY,
   ViewStore,
   defaultViewState,
@@ -38,7 +39,7 @@ describe("view state", () => {
     expect(readViewState(JSON.stringify({ v: 1, base: "focus" })).base).toBe(DEFAULT_BASE);
     expect(readViewState(JSON.stringify({ v: 1, base: 3 })).base).toBe(DEFAULT_BASE);
     expect(readViewState(JSON.stringify({ v: 1 })).base).toBe(DEFAULT_BASE);
-    const other = { ...defaultViewState(), base: OTHER };
+    const other = { ...defaultViewState(), base: OTHER, walking: !DEFAULT_WALKING };
     expect(readViewState(serialiseViewState(other))).toEqual(other);
   });
 
@@ -85,6 +86,30 @@ describe("view state", () => {
       expect(resolveTheme("light", systemDark)).toBe("light");
       expect(resolveTheme("dark", systemDark)).toBe("dark");
     }
+  });
+
+  it("a stored view without walking reads as walking on", () => {
+    expect(DEFAULT_WALKING).toBe(true);
+    for (const base of BASES) expect(readViewState(JSON.stringify({ v: 1, base }))).toEqual({ ...defaultViewState(), base });
+    // An invalid value is the default; a valid one is kept.
+    for (const walking of ["no", 0, null, {}]) expect(readViewState(JSON.stringify({ v: 1, walking })).walking).toBe(true);
+    expect(readViewState(JSON.stringify({ v: 1, walking: false })).walking).toBe(false);
+  });
+
+  it("the walking setting is stored with the mode and the theme and read back", () => {
+    const storage = memoryStorage();
+    const store = new ViewStore(() => storage);
+    expect(store.walking).toBe(DEFAULT_WALKING);
+    store.setWalking(!DEFAULT_WALKING);
+    store.toggleBase();
+    store.cycleTheme();
+    const next = new ViewStore(() => storage);
+    expect([next.walking, next.base, next.theme]).toEqual([!DEFAULT_WALKING, OTHER, nextTheme(DEFAULT_THEME)]);
+    applyTheme(DEFAULT_THEME);
+    // An unchanged setting writes nothing.
+    const quiet = memoryStorage();
+    new ViewStore(() => quiet).setWalking(DEFAULT_WALKING);
+    expect(quiet.items.has(VIEW_STORAGE_KEY)).toBe(false);
   });
 
   it("Board is the default mode and Sessions the view at start", () => {
