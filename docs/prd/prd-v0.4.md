@@ -129,10 +129,9 @@ office per project. Offices take slots in floor-file order, then in order of
 first appearance; the order is remembered on the machine, so a project with a
 session at the next start keeps its office. Four offices fit the base floor;
 the fifth to eighth projects each add an office, in a column of two added to
-the right, and the floor never shrinks until restart (pending the Slice 0
-project count and the owner's answer: if four or fewer projects are typically
-live, the floor keeps four offices and the fourth becomes 'More offices' from
-the fifth project). An empty office keeps
+the right, and the floor never shrinks until restart; eight projects is the
+design target (the owner's answer, epic-4-decisions.md D-519). An empty
+office keeps
 its slot, dimmed, until restart. Nothing reorders by activity. Beyond 8
 projects, the eighth office becomes 'More offices', which lists the remaining
 projects' employees by name. Every room is furnished; the furniture of each
@@ -211,8 +210,9 @@ while an employee walks, glides or fades; when every employee has arrived it
 stops. No CSS animation runs inside a figure. Measured on the workstation over
 10 minutes with 10 employees and 5 waiting, plus a replay of state changes at
 a busy day's rate, with the core count and display refresh rate recorded:
-under 1 % of the machine, as v0.1 measures idle CPU, and under 8 % of one
-logical core, so the result holds on an 8-core machine too. When the window
+under 1 % of the machine, as v0.1 measures idle CPU; the share of one
+logical core is recorded beside it as information (epic-4-decisions.md
+D-515). When the window
 is hidden, walkers are placed at once rather than replayed. Above it, halos are
 steady from the start; if walking alone exceeds it, walking ships off by
 default and stays available. The board halo follows the same rules, two-minute
@@ -284,7 +284,7 @@ figure, no briefing at reception, no helpers in v0.4.
 |---|---|---|
 | Truthful motion | once every employee has arrived, no change in the scene while payloads are unchanged | e2e: clock installed, the scene settled, advanced 150 s, the same board pushed again, a mutation observer on the scene element: zero mutations; a changed board then produces some |
 | Stable figures | a walking employee keeps one node, one pose and one view per frame, a continuous position, and no CSS animation inside a figure | e2e frame stepping on a walk, as the prototype's flicker check |
-| Idle CPU | under 1 % of the machine and under 8 % of one core, with 10 employees, 5 halos and a busy day's walks | workstation, AD-71 protocol as amended, both units recorded |
+| Idle CPU | under 1 % of the machine, with 10 employees, 5 halos and a busy day's walks | workstation, AD-71 protocol as amended, both units recorded, the per-core one as information |
 | Alert | an alert reaches the band and the taskbar badge within 1 s of its threshold, with no `claude` spawn | core vectors and a host test on the recompute; manual check of the badge and flash recorded |
 | Readability | on 5 fixtures, Needs you count and oldest waiting name read in under 2 s, as on the board | manual check recorded; e2e asserts both are present in the scene's text alternative |
 | Adoption | Scene chosen for 10 working days before it becomes the default | owner's use |
@@ -316,3 +316,7 @@ figure, no briefing at reception, no helpers in v0.4.
   threshold in both units; a hidden window places walkers at once), FR-10
   (approval-only waits never escalate by time; the last known alert kept on
   stale data), section 7 (the CPU metric in both units).
+- 2026-10-28 amended with the owner's answers during implementation
+  (epic-4-decisions.md D-515, D-519): FR-1 (growth by columns confirmed,
+  eight projects the design target), FR-9 and section 7 (the threshold is
+  1 % of the machine; the per-core figure is information).
