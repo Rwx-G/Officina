@@ -22,6 +22,9 @@ pub struct Proposal {
     pub verdict: ModelVerdict,
     pub source: ProposalSource,
     pub reason: ReasonCode,
+    /// The triage call that answered a model proposal, which a confirmation
+    /// stores (D-63, D-88); `None` for every other source.
+    pub call_id: Option<i64>,
 }
 
 impl Proposal {
@@ -43,14 +46,24 @@ impl Proposal {
 }
 
 /// The triage model's part, a pure input (AD-52): whether it is enabled,
-/// and the verdict it answered for each session, by session id. Its runner
-/// and queue fill it (stories 3.9, 3.11); until then it is disabled.
+/// and what it answered for each session, by session id. Its runner and
+/// queue fill it (stories 3.9, 3.11); until then it is disabled.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ModelInput {
     pub enabled: bool,
     #[serde(default)]
-    pub answers: BTreeMap<String, ModelVerdict>,
+    pub answers: BTreeMap<String, ModelAnswer>,
+}
+
+/// A stored model answer as a proposal reads it: the verdict, and the call
+/// that gave it (`model_answer.call_id`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ModelAnswer {
+    pub verdict: ModelVerdict,
+    #[serde(default)]
+    pub call_id: Option<i64>,
 }
 
 /// True when the last `UserPromptSubmit` came after the last `Stop`, or
@@ -81,6 +94,7 @@ fn from_state(session: &SessionRecord) -> Option<Proposal> {
         verdict,
         source: ProposalSource::State,
         reason,
+        call_id: None,
     })
 }
 
@@ -102,21 +116,24 @@ pub fn propose(session: &SessionRecord, model: &ModelInput) -> Proposal {
             verdict: ModelVerdict::ToResume,
             source: ProposalSource::Rules,
             reason: ReasonCode::CutMidTurn,
+            call_id: None,
         };
     }
     if model.enabled
         && let Some(answer) = model.answers.get(&session.session_id)
     {
         return Proposal {
-            verdict: *answer,
+            verdict: answer.verdict,
             source: ProposalSource::Model,
             reason: ReasonCode::Model,
+            call_id: answer.call_id,
         };
     }
     Proposal {
         verdict: ModelVerdict::ToResume,
         source: ProposalSource::Rules,
         reason: ReasonCode::DefaultToResume,
+        call_id: None,
     }
 }
 
@@ -127,6 +144,7 @@ pub fn empty_subject() -> Proposal {
         verdict: ModelVerdict::Finished,
         source: ProposalSource::Rules,
         reason: ReasonCode::EmptySubject,
+        call_id: None,
     }
 }
 
@@ -168,10 +186,17 @@ mod tests {
         }
     }
 
-    fn model(enabled: bool, answer: ModelVerdict) -> ModelInput {
+    fn model(enabled: bool, verdict: ModelVerdict) -> ModelInput {
         ModelInput {
             enabled,
-            answers: [("s".to_owned(), answer)].into(),
+            answers: [(
+                "s".to_owned(),
+                ModelAnswer {
+                    verdict,
+                    call_id: Some(7),
+                },
+            )]
+            .into(),
         }
     }
 
@@ -260,7 +285,14 @@ mod tests {
         );
         let other = ModelInput {
             enabled: true,
-            answers: [("other".to_owned(), ModelVerdict::Finished)].into(),
+            answers: [(
+                "other".to_owned(),
+                ModelAnswer {
+                    verdict: ModelVerdict::Finished,
+                    call_id: None,
+                },
+            )]
+            .into(),
         };
         assert_eq!(
             propose(&session(), &other).reason,
@@ -276,6 +308,12 @@ mod tests {
             )
         );
         assert_eq!(unsure.definite(), None);
+        assert_eq!(
+            unsure.call_id,
+            Some(7),
+            "the call that answered travels with the proposal (D-63)"
+        );
+        assert_eq!(propose(&session(), &disabled).call_id, None);
         assert_eq!(
             propose(&session(), &model(true, ModelVerdict::ToResume)).definite(),
             Some(Verdict::ToResume)

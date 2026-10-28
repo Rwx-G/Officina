@@ -7,4 +7,9 @@ import type { ReasonCode } from "./ReasonCode";
  * A verdict proposal with where it came from and why (glossary,
  * Proposal).
  */
-export type Proposal = { verdict: ModelVerdict, source: ProposalSource, reason: ReasonCode, };
+export type Proposal = { verdict: ModelVerdict, source: ProposalSource, reason: ReasonCode, 
+/**
+ * The triage call that answered a model proposal, which a confirmation
+ * stores (D-63, D-88); `None` for every other source.
+ */
+call_id: number | null, };

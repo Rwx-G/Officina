@@ -532,6 +532,38 @@ closed_enum! {
     }
 }
 
+closed_enum! {
+    #[serde(rename_all = "snake_case")]
+    /// Why the registry refused one item of a triage confirmation (AD-49,
+    /// D-63): nothing was written for it, and the row shows why.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+    #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+    pub enum ConfirmRefusal {
+        /// No row with this key needs a verdict now: it was confirmed, a
+        /// session of it came alive again, or it was filed elsewhere.
+        RowGone,
+        /// The proposal computed now differs from the one the window showed:
+        /// the author decides on what was shown, never on what changed since.
+        ProposalChanged,
+        /// An unfiled row came without the subject to file it under.
+        NoSubject,
+    }
+}
+
+closed_enum! {
+    #[serde(rename_all = "snake_case")]
+    /// Why an unfiled row's session was filed but its verdict not applied
+    /// (D-60): the subject's own row now decides.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+    #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+    pub enum NotNeeded {
+        /// Another session of the subject saw a later prompt.
+        NotLatest,
+        /// A session of the subject is live.
+        LiveSession,
+    }
+}
+
 /// One `session` row.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionRow {
@@ -607,7 +639,13 @@ mod tests {
     /// Runs `check` once per enum of this file, giving it the enum's `ALL`,
     /// `code` and `from_code`; returns how many enums it ran on.
     fn each_enum(check: &dyn Fn(&dyn EnumUnderTest)) -> usize {
-        let enums: [&dyn EnumUnderTest; 13] = [
+        let enums: [&dyn EnumUnderTest; 15] = [
+            &Closed(
+                ConfirmRefusal::ALL,
+                ConfirmRefusal::code,
+                ConfirmRefusal::from_code,
+            ),
+            &Closed(NotNeeded::ALL, NotNeeded::code, NotNeeded::from_code),
             &Closed(
                 RegistryState::ALL,
                 RegistryState::code,

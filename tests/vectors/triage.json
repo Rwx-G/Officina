@@ -867,6 +867,186 @@
         "excerpts": [],
         "reopened": [[1, 1793102402000, 1793102404000]]
       }
+    },
+    {
+      "name": "a subject row confirmed finished archives it with the routine box, clears its excerpts and keeps one expiring copy",
+      "steps": [
+        {"events": [
+          {"v": 1, "ts": 1793102401000, "event": "UserPromptSubmit", "session_id": "s1", "cwd": "C:/work/api", "prompt": "plan the rollout"},
+          {"v": 1, "ts": 1793102402000, "event": "Stop", "session_id": "s1", "cwd": "C:/work/api", "last_message": "Planned."},
+          {"v": 1, "ts": 1793102403000, "event": "SessionEnd", "session_id": "s1", "cwd": "C:/work/api", "reason": "prompt_input_exit"},
+          {"v": 1, "ts": 1793102404000, "event": "UserPromptSubmit", "session_id": "s2", "cwd": "C:/work/api", "prompt": "ship the rollout"},
+          {"v": 1, "ts": 1793102405000, "event": "Stop", "session_id": "s2", "cwd": "C:/work/api", "last_message": "Shipped."},
+          {"v": 1, "ts": 1793102406000, "event": "SessionEnd", "session_id": "s2", "cwd": "C:/work/api", "reason": "prompt_input_exit"}
+        ]},
+        {"author": {"at_ms": 1793102407000, "action": {"kind": "create", "name": "rollout", "origin": {"sessions": ["s1", "s2"]}}}},
+        {"confirm": {"at_ms": 1793102408000, "items": [
+          {"key": "subject:1", "shown": {"verdict": "to_resume", "source": "rules", "reason": "default_to_resume", "call_id": null}, "verdict": "finished", "routine": true}
+        ], "answers": [
+          {"key": "subject:1", "outcome": {"kind": "confirmed", "subject": 1, "verdict": "finished"}}
+        ]}}
+      ],
+      "expect": {
+        "sessions": {"s1": {"filed": 1, "src": "author"}, "s2": {"filed": 1, "src": "author"}},
+        "subjects": [{"id": 1, "project": "api", "name": "rollout", "status": "archived", "status_src": "author", "status_at_ms": 1793102408000, "routine": true, "merged_into": null}],
+        "excerpts": [],
+        "confirmations": [
+          {"subject": 1, "session": "s2", "proposed": ["to_resume", "rules", "default_to_resume"], "call_id": null, "verdict": "finished",
+           "input": {"prompt": "ship the rollout", "answer_head": "Shipped.", "answer_tail": null, "end_reason": "prompt_input_exit", "cut_mid_turn": false, "expires_at_ms": 1795518004000}}
+        ]
+      }
+    },
+    {
+      "name": "a to_resume verdict sets the status and keeps the excerpts; the same row twice in a batch is confirmed once",
+      "steps": [
+        {"events": [
+          {"v": 1, "ts": 1793102401000, "event": "UserPromptSubmit", "session_id": "s1", "cwd": "C:/work/api", "prompt": "fix the build"},
+          {"v": 1, "ts": 1793102402000, "event": "Stop", "session_id": "s1", "cwd": "C:/work/api", "last_message": "Fixed."},
+          {"v": 1, "ts": 1793102403000, "event": "SessionEnd", "session_id": "s1", "cwd": "C:/work/api", "reason": "logout"}
+        ]},
+        {"author": {"at_ms": 1793102404000, "action": {"kind": "create", "name": "build", "origin": {"sessions": ["s1"]}}}},
+        {"confirm": {"at_ms": 1793102405000, "items": [
+          {"key": "subject:1", "shown": {"verdict": "to_resume", "source": "rules", "reason": "default_to_resume", "call_id": null}, "verdict": "to_resume"},
+          {"key": "subject:1", "shown": {"verdict": "to_resume", "source": "rules", "reason": "default_to_resume", "call_id": null}, "verdict": "to_resume"}
+        ], "answers": [
+          {"key": "subject:1", "outcome": {"kind": "confirmed", "subject": 1, "verdict": "to_resume"}},
+          {"key": "subject:1", "outcome": {"kind": "refused", "refusal": "row_gone"}}
+        ]}}
+      ],
+      "expect": {
+        "sessions": {"s1": {"filed": 1, "src": "author"}},
+        "subjects": [{"id": 1, "project": "api", "name": "build", "status": "to_resume", "status_src": "author", "status_at_ms": 1793102405000, "routine": false, "merged_into": null}],
+        "excerpts": ["s1"],
+        "confirmations": [
+          {"subject": 1, "session": "s1", "proposed": ["to_resume", "rules", "default_to_resume"], "call_id": null, "verdict": "to_resume",
+           "input": {"prompt": "fix the build", "answer_head": "Fixed.", "answer_tail": null, "end_reason": "logout", "cut_mid_turn": false, "expires_at_ms": 1795518001000}}
+        ]
+      }
+    },
+    {
+      "name": "a changed proposal, a missing subject, a row gone and a refused filing write nothing",
+      "steps": [
+        {"events": [
+          {"v": 1, "ts": 1793102401000, "event": "UserPromptSubmit", "session_id": "s1", "cwd": "C:/work/api", "prompt": "tidy the logs"},
+          {"v": 1, "ts": 1793102402000, "event": "Stop", "session_id": "s1", "cwd": "C:/work/api", "last_message": "Tidied."},
+          {"v": 1, "ts": 1793102403000, "event": "SessionEnd", "session_id": "s1", "cwd": "C:/work/api", "reason": "prompt_input_exit"}
+        ]},
+        {"author": {"at_ms": 1793102404000, "action": {"kind": "create", "name": "rollout", "origin": {"project": "api"}}}},
+        {"confirm": {"at_ms": 1793102405000, "items": [
+          {"key": "session:s1", "shown": {"verdict": "finished", "source": "state", "reason": "state_done", "call_id": null}, "verdict": "finished", "file_under": {"subject": {"id": 1}}},
+          {"key": "session:s1", "shown": {"verdict": "to_resume", "source": "rules", "reason": "default_to_resume", "call_id": null}, "verdict": "finished"},
+          {"key": "session:s9", "shown": {"verdict": "to_resume", "source": "rules", "reason": "default_to_resume", "call_id": null}, "verdict": "to_resume", "file_under": {"subject": {"id": 1}}},
+          {"key": "session:s1", "shown": {"verdict": "to_resume", "source": "rules", "reason": "default_to_resume", "call_id": null}, "verdict": "to_resume", "file_under": {"new": {"name": "ROLLOUT"}}}
+        ], "answers": [
+          {"key": "session:s1", "outcome": {"kind": "refused", "refusal": "proposal_changed"}},
+          {"key": "session:s1", "outcome": {"kind": "refused", "refusal": "no_subject"}},
+          {"key": "session:s9", "outcome": {"kind": "refused", "refusal": "row_gone"}},
+          {"key": "session:s1", "outcome": {"kind": "filing_refused", "refusal": "name_taken"}}
+        ]}}
+      ],
+      "expect": {
+        "sessions": {"s1": {"filed": null, "src": null}},
+        "subjects": [{"id": 1, "project": "api", "name": "rollout", "status": "active", "status_src": "author", "status_at_ms": 1793102404000, "routine": false, "merged_into": null}],
+        "excerpts": ["s1"],
+        "confirmations": []
+      }
+    },
+    {
+      "name": "an unfiled row is filed under the proposed subject or a new one, then decided",
+      "steps": [
+        {"events": [
+          {"v": 1, "ts": 1793102401000, "event": "UserPromptSubmit", "session_id": "s1", "cwd": "C:/work/api", "prompt": "rotate the keys"},
+          {"v": 1, "ts": 1793102402000, "event": "Stop", "session_id": "s1", "cwd": "C:/work/api", "last_message": "Rotated."},
+          {"v": 1, "ts": 1793102403000, "event": "SessionEnd", "session_id": "s1", "cwd": "C:/work/api", "reason": "prompt_input_exit"},
+          {"v": 1, "ts": 1793102404000, "event": "UserPromptSubmit", "session_id": "s2", "cwd": "C:/work/web", "prompt": "look at the layout"},
+          {"v": 1, "ts": 1793102405000, "event": "Stop", "session_id": "s2", "cwd": "C:/work/web", "last_message": "Two options."},
+          {"v": 1, "ts": 1793102406000, "event": "SessionEnd", "session_id": "s2", "cwd": "C:/work/web", "reason": "prompt_input_exit"}
+        ]},
+        {"author": {"at_ms": 1793102407000, "action": {"kind": "create", "name": "keys", "origin": {"project": "api"}}}},
+        {"confirm": {"at_ms": 1793102408000, "items": [
+          {"key": "session:s1", "shown": {"verdict": "to_resume", "source": "rules", "reason": "default_to_resume", "call_id": null}, "verdict": "finished", "file_under": {"subject": {"id": 1}}},
+          {"key": "session:s2", "shown": {"verdict": "to_resume", "source": "rules", "reason": "default_to_resume", "call_id": null}, "verdict": "to_resume", "file_under": {"new": {"name": "layout"}}}
+        ], "answers": [
+          {"key": "session:s1", "outcome": {"kind": "confirmed", "subject": 1, "verdict": "finished"}},
+          {"key": "session:s2", "outcome": {"kind": "confirmed", "subject": 2, "verdict": "to_resume"}}
+        ]}}
+      ],
+      "expect": {
+        "sessions": {"s1": {"filed": 1, "src": "author"}, "s2": {"filed": 2, "src": "author"}},
+        "subjects": [
+          {"id": 1, "project": "api", "name": "keys", "status": "archived", "status_src": "author", "status_at_ms": 1793102408000, "routine": false, "merged_into": null},
+          {"id": 2, "project": "web", "name": "layout", "status": "to_resume", "status_src": "author", "status_at_ms": 1793102408000, "routine": false, "merged_into": null}
+        ],
+        "excerpts": ["s2"],
+        "confirmations": [
+          {"subject": 1, "session": "s1", "proposed": ["to_resume", "rules", "default_to_resume"], "call_id": null, "verdict": "finished",
+           "input": {"prompt": "rotate the keys", "answer_head": "Rotated.", "answer_tail": null, "end_reason": "prompt_input_exit", "cut_mid_turn": false, "expires_at_ms": 1795518001000}},
+          {"subject": 2, "session": "s2", "proposed": ["to_resume", "rules", "default_to_resume"], "call_id": null, "verdict": "to_resume",
+           "input": {"prompt": "look at the layout", "answer_head": "Two options.", "answer_tail": null, "end_reason": "prompt_input_exit", "cut_mid_turn": false, "expires_at_ms": 1795518004000}}
+        ]
+      }
+    },
+    {
+      "name": "filed under a subject a later session or a live one decides, the verdict waits for the subject's own row",
+      "steps": [
+        {"events": [
+          {"v": 1, "ts": 1793102400500, "event": "UserPromptSubmit", "session_id": "s4", "cwd": "C:/work/api", "prompt": "check the alerts"},
+          {"v": 1, "ts": 1793102400600, "event": "Stop", "session_id": "s4", "cwd": "C:/work/api", "last_message": "Checked."},
+          {"v": 1, "ts": 1793102400700, "event": "SessionEnd", "session_id": "s4", "cwd": "C:/work/api", "reason": "prompt_input_exit"},
+          {"v": 1, "ts": 1793102401000, "event": "UserPromptSubmit", "session_id": "s1", "cwd": "C:/work/api", "prompt": "start the rollout"},
+          {"v": 1, "ts": 1793102402000, "event": "Stop", "session_id": "s1", "cwd": "C:/work/api", "last_message": "Started."},
+          {"v": 1, "ts": 1793102403000, "event": "SessionEnd", "session_id": "s1", "cwd": "C:/work/api", "reason": "prompt_input_exit"}
+        ]},
+        {"author": {"at_ms": 1793102404000, "action": {"kind": "create", "name": "rollout", "origin": {"project": "api"}}}},
+        {"events": [
+          {"v": 1, "ts": 1793102405000, "event": "UserPromptSubmit", "session_id": "s2", "cwd": "C:/work/api", "prompt": "finish the rollout"},
+          {"v": 1, "ts": 1793102406000, "event": "Stop", "session_id": "s2", "cwd": "C:/work/api", "last_message": "Finished."},
+          {"v": 1, "ts": 1793102407000, "event": "SessionEnd", "session_id": "s2", "cwd": "C:/work/api", "reason": "prompt_input_exit"}
+        ]},
+        {"author": {"at_ms": 1793102408000, "action": {"kind": "create", "name": "alerts", "origin": {"project": "api"}}}},
+        {"events": [
+          {"v": 1, "ts": 1793102409000, "event": "UserPromptSubmit", "session_id": "s3", "cwd": "C:/work/api", "prompt": "tune the alerts"}
+        ]},
+        {"author": {"at_ms": 1793102410000, "action": {"kind": "file", "sessions": ["s3"], "subject": 2}}},
+        {"confirm": {"at_ms": 1793102411000, "items": [
+          {"key": "session:s1", "shown": {"verdict": "to_resume", "source": "rules", "reason": "default_to_resume", "call_id": null}, "verdict": "finished", "file_under": {"subject": {"id": 1}}},
+          {"key": "session:s4", "shown": {"verdict": "to_resume", "source": "rules", "reason": "default_to_resume", "call_id": null}, "verdict": "finished", "file_under": {"subject": {"id": 2}}}
+        ], "answers": [
+          {"key": "session:s1", "outcome": {"kind": "verdict_not_needed", "subject": 1, "cause": "not_latest"}},
+          {"key": "session:s4", "outcome": {"kind": "verdict_not_needed", "subject": 2, "cause": "live_session"}}
+        ]}}
+      ],
+      "expect": {
+        "sessions": {"s1": {"filed": 1, "src": "author"}, "s2": {"filed": 1, "src": "rules"}, "s3": {"filed": 2, "src": "author"}, "s4": {"filed": 2, "src": "author"}},
+        "subjects": [
+          {"id": 1, "project": "api", "name": "rollout", "status": "active", "status_src": "author", "status_at_ms": 1793102404000, "routine": false, "merged_into": null},
+          {"id": 2, "project": "api", "name": "alerts", "status": "active", "status_src": "author", "status_at_ms": 1793102408000, "routine": false, "merged_into": null}
+        ],
+        "excerpts": ["s2", "s3", "s4"],
+        "confirmations": []
+      }
+    },
+    {
+      "name": "an empty subject's row archives it with no session and no input",
+      "steps": [
+        {"events": [
+          {"v": 1, "ts": 1793102401000, "event": "SessionStart", "session_id": "s0", "cwd": "C:/work/api", "source": "startup"}
+        ]},
+        {"author": {"at_ms": 1793102402000, "action": {"kind": "create", "name": "spare", "origin": {"project": "api"}}}},
+        {"confirm": {"at_ms": 1793102403000, "items": [
+          {"key": "subject:1", "shown": {"verdict": "finished", "source": "rules", "reason": "empty_subject", "call_id": null}, "verdict": "finished"}
+        ], "answers": [
+          {"key": "subject:1", "outcome": {"kind": "confirmed", "subject": 1, "verdict": "finished"}}
+        ]}}
+      ],
+      "expect": {
+        "sessions": {"s0": {"filed": null, "src": null}},
+        "subjects": [{"id": 1, "project": "api", "name": "spare", "status": "archived", "status_src": "author", "status_at_ms": 1793102403000, "routine": false, "merged_into": null}],
+        "excerpts": [],
+        "confirmations": [
+          {"subject": 1, "session": null, "proposed": ["finished", "rules", "empty_subject"], "call_id": null, "verdict": "finished", "input": null}
+        ]
+      }
     }
   ],
   "triage": [
@@ -923,7 +1103,7 @@
     },
     {
       "name": "the model answers where the default would, unsure included",
-      "model": {"enabled": true, "answers": {"s1": "finished", "s2": "unsure", "s3": "finished"}},
+      "model": {"enabled": true, "answers": {"s1": {"verdict": "finished", "call_id": 11}, "s2": {"verdict": "unsure", "call_id": 12}, "s3": {"verdict": "finished", "call_id": 13}}},
       "steps": [
         {"events": [
           {"v": 1, "ts": 1793102401000, "event": "UserPromptSubmit", "session_id": "s1", "cwd": "C:/work/api", "prompt": "rename the handler"},
@@ -941,13 +1121,13 @@
       ],
       "expect": [
         {"kind": "subject", "key": "subject:3", "subject": 3, "session": "s3", "proposal": ["to_resume", "rules", "cut_mid_turn"], "verdict": "to_resume", "proposed_subject": null, "choices": []},
-        {"kind": "subject", "key": "subject:2", "subject": 2, "session": "s2", "proposal": ["unsure", "model", "model"], "verdict": null, "proposed_subject": null, "choices": []},
-        {"kind": "subject", "key": "subject:1", "subject": 1, "session": "s1", "proposal": ["finished", "model", "model"], "verdict": "finished", "proposed_subject": null, "choices": []}
+        {"kind": "subject", "key": "subject:2", "subject": 2, "session": "s2", "proposal": ["unsure", "model", "model"], "call_id": 12, "verdict": null, "proposed_subject": null, "choices": []},
+        {"kind": "subject", "key": "subject:1", "subject": 1, "session": "s1", "proposal": ["finished", "model", "model"], "call_id": 11, "verdict": "finished", "proposed_subject": null, "choices": []}
       ]
     },
     {
       "name": "a disabled model leaves the default",
-      "model": {"enabled": false, "answers": {"s1": "finished"}},
+      "model": {"enabled": false, "answers": {"s1": {"verdict": "finished", "call_id": 11}}},
       "steps": [
         {"events": [
           {"v": 1, "ts": 1793102401000, "event": "UserPromptSubmit", "session_id": "s1", "cwd": "C:/work/api", "prompt": "rename the handler"},

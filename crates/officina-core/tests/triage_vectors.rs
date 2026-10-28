@@ -5,14 +5,18 @@
 //! (`tests/registry_ingest.rs`, `tests/registry_write.rs`), so the SQL and
 //! these rules cannot drift apart; the `triage` section's rows are computed
 //! here from the state the steps build, as the view computes them from the
-//! registry it reads.
+//! registry it reads, and the `confirm` section's triage confirmations are
+//! applied here as the writer applies them.
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use officina_core::agents::{LifecycleState, parse_agents};
 use officina_core::board::project_for;
 use officina_core::events::{EventLine, SESSION_END_REASONS, SESSION_START_SOURCES};
-use officina_core::registry::confirm::{AuthorAction, AuthorContext, Plan, Target, plan, wake};
+use officina_core::registry::confirm::{
+    AuthorAction, AuthorContext, ConfirmItem, ConfirmationInput, ItemAnswer, ItemOutcome, Plan,
+    Target, TriageContext, confirm_item, plan, wake,
+};
 use officina_core::registry::filing::{excerpts_to_clear, filing_at_creation};
 use officina_core::registry::fold::{
     AgentsSnapshot, FactWrite, Mark, candidates_needed, fold_agents, line_facts, link_for_line,
@@ -20,10 +24,11 @@ use officina_core::registry::fold::{
 };
 use officina_core::registry::ingestion::{ExcerptObservation, excerpt_observation};
 use officina_core::registry::proposal::ModelInput;
+use officina_core::registry::proposal::Proposal;
 use officina_core::registry::types::{
-    AuthorRefusal, ConfirmationRecord, Ending, ExcerptRecord, FactRow, FactValue, ModelVerdict,
-    ProposalSource, ReasonCode, RowKind, SessionFact, SessionRecord, SessionRow, Source, Sourced,
-    SubjectRecord, SubjectStatus, Verdict,
+    AuthorRefusal, ConfirmRefusal, ConfirmationRecord, Ending, ExcerptRecord, FactRow, FactValue,
+    ModelVerdict, NotNeeded, ProposalSource, ReasonCode, RowKind, SessionFact, SessionRecord,
+    SessionRow, Source, Sourced, SubjectRecord, SubjectStatus, Verdict,
 };
 use officina_core::registry::verdict::{VerdictInput, rows};
 use serde::Deserialize;
@@ -64,6 +69,9 @@ struct ExpectedRow {
     subject: Option<i64>,
     session: Option<String>,
     proposal: (ModelVerdict, ProposalSource, ReasonCode),
+    /// The call that answered a model proposal.
+    #[serde(default)]
+    call_id: Option<i64>,
     verdict: Option<Verdict>,
     proposed_subject: Option<i64>,
     choices: Vec<i64>,
@@ -106,12 +114,20 @@ enum Step {
         refused: Option<AuthorRefusal>,
     },
     /// A confirmation of `subject` at `at_ms`, on the row's `session` when
-    /// it had one, as story 3.7 records one.
+    /// it had one, written directly, for the cases about what a
+    /// confirmation answers.
     Confirmed {
         subject: i64,
         at_ms: i64,
         #[serde(default)]
         session: Option<String>,
+    },
+    /// The author confirms triage rows at `at_ms`, in one batch, and each
+    /// item is answered as `answers` says (AD-49).
+    Confirm {
+        at_ms: i64,
+        items: Vec<ConfirmItem>,
+        answers: Vec<ItemAnswer>,
     },
 }
 
@@ -139,6 +155,22 @@ struct ExpectedSubjects {
     /// Confirmations stamped reopened: subject, confirmed at, reopened at.
     #[serde(default)]
     reopened: Vec<(i64, i64, i64)>,
+    /// Every confirmation the author made, in the order written, with what
+    /// it copied; a case without the key does not compare them.
+    #[serde(default)]
+    confirmations: Option<Vec<ExpectedConfirmation>>,
+}
+
+/// A confirmation as the `confirm` section writes it (AD-49, P-11, D-88).
+#[derive(Deserialize, Debug, PartialEq)]
+#[serde(deny_unknown_fields)]
+struct ExpectedConfirmation {
+    subject: i64,
+    session: Option<String>,
+    proposed: (ModelVerdict, ProposalSource, ReasonCode),
+    call_id: Option<i64>,
+    verdict: Verdict,
+    input: Option<ConfirmationInput>,
 }
 
 #[derive(Deserialize, Debug, PartialEq)]
@@ -167,12 +199,14 @@ fn load() -> VectorSet {
     set
 }
 
-/// One confirmation, as far as reopening and the rows read it.
+/// One confirmation: what reopening and the rows read, and, for one the
+/// author made, the proposal it answered, its verdict and its input.
 struct Confirmation {
     subject: i64,
     session: Option<String>,
     at_ms: i64,
     reopened_at_ms: Option<i64>,
+    answered: Option<(Proposal, Verdict, Option<ConfirmationInput>)>,
 }
 
 /// The registry in memory, written as the host writes it: a session is
@@ -414,14 +448,7 @@ impl Registry {
 
     fn author(&mut self, action: &AuthorAction, at_ms: i64) -> Result<(), AuthorRefusal> {
         let sessions: Vec<SessionRecord> = self.records().into_values().collect();
-        let known_projects: Vec<String> = self
-            .rows
-            .values()
-            .map(|r| r.project.clone())
-            .chain(self.subjects.iter().map(|s| s.project.clone()))
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .collect();
+        let known_projects = self.known_projects();
         let planned = plan(
             action,
             &AuthorContext {
@@ -494,6 +521,83 @@ impl Registry {
         }
     }
 
+    fn confirmation_records(&self) -> Vec<ConfirmationRecord> {
+        self.confirmations
+            .iter()
+            .map(|c| ConfirmationRecord {
+                subject_id: c.subject,
+                session_id: c.session.clone(),
+                confirmed_at_ms: c.at_ms,
+                reopened_at_ms: c.reopened_at_ms,
+            })
+            .collect()
+    }
+
+    fn known_projects(&self) -> Vec<String> {
+        self.rows
+            .values()
+            .map(|r| r.project.clone())
+            .chain(self.subjects.iter().map(|s| s.project.clone()))
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect()
+    }
+
+    /// One item, as the writer applies it: the filing plan, then the
+    /// verdict on the subject, its excerpts and the confirmation.
+    fn confirm(&mut self, item: &ConfirmItem, at_ms: i64) -> ItemOutcome {
+        let sessions: Vec<SessionRecord> = self.records().into_values().collect();
+        let confirmations = self.confirmation_records();
+        let excerpts: Vec<ExcerptRecord> = self.excerpts.values().cloned().collect();
+        let known_projects = self.known_projects();
+        let model = ModelInput::default();
+        let context = TriageContext {
+            subjects: &self.subjects,
+            sessions: &sessions,
+            confirmations: &confirmations,
+            excerpts: &excerpts,
+            model: &model,
+            known_projects: &known_projects,
+        };
+        let planned = match confirm_item(item, &context) {
+            Ok(planned) => planned,
+            Err(outcome) => return outcome,
+        };
+        let before = self.subjects.len();
+        if let Some(filing) = &planned.filing {
+            self.apply(filing, at_ms);
+        }
+        let subject = match planned.subject {
+            Target::Existing(id) => id,
+            Target::Created => {
+                assert_eq!(self.subjects.len(), before + 1, "a subject was created");
+                self.subjects.last().unwrap().id
+            }
+        };
+        if let Ok(decision) = &planned.decision {
+            let found = self.subjects.iter_mut().find(|s| s.id == subject).unwrap();
+            found.status = Sourced {
+                value: decision.status,
+                src: Source::Author,
+                at_ms,
+            };
+            if let Some(routine) = decision.routine {
+                found.routine = routine;
+            }
+            for id in &decision.clear_excerpts {
+                self.excerpts.remove(id);
+            }
+            self.confirmations.push(Confirmation {
+                subject,
+                session: decision.session_id.clone(),
+                at_ms,
+                reopened_at_ms: None,
+                answered: Some((decision.proposal, decision.verdict, decision.input.clone())),
+            });
+        }
+        planned.outcome(subject)
+    }
+
     fn run(&mut self, steps: &[Step], case: &str) {
         for step in steps {
             match step {
@@ -518,7 +622,22 @@ impl Registry {
                     session: session.clone(),
                     at_ms: *at_ms,
                     reopened_at_ms: None,
+                    answered: None,
                 }),
+                Step::Confirm {
+                    at_ms,
+                    items,
+                    answers,
+                } => {
+                    let answered: Vec<ItemAnswer> = items
+                        .iter()
+                        .map(|item| ItemAnswer {
+                            key: item.key.clone(),
+                            outcome: self.confirm(item, *at_ms),
+                        })
+                        .collect();
+                    assert_eq!(&answered, answers, "{case}");
+                }
             }
         }
     }
@@ -527,16 +646,7 @@ impl Registry {
 /// The rows that need a verdict, in the `triage` section's terms.
 fn observed_rows(registry: &Registry, model: &ModelInput) -> Vec<ExpectedRow> {
     let sessions: Vec<SessionRecord> = registry.records().into_values().collect();
-    let confirmations: Vec<ConfirmationRecord> = registry
-        .confirmations
-        .iter()
-        .map(|c| ConfirmationRecord {
-            subject_id: c.subject,
-            session_id: c.session.clone(),
-            confirmed_at_ms: c.at_ms,
-            reopened_at_ms: c.reopened_at_ms,
-        })
-        .collect();
+    let confirmations = registry.confirmation_records();
     rows(&VerdictInput {
         subjects: &registry.subjects,
         sessions: &sessions,
@@ -554,6 +664,7 @@ fn observed_rows(registry: &Registry, model: &ModelInput) -> Vec<ExpectedRow> {
             row.proposal.source,
             row.proposal.reason,
         ),
+        call_id: row.proposal.call_id,
         verdict: row.proposal.definite(),
         proposed_subject: row.proposed_subject,
         choices: row.choices,
@@ -602,8 +713,9 @@ fn observed_sessions(registry: &Registry, expected: &[ExpectedSession]) -> Vec<E
         .collect()
 }
 
-/// What the registry holds, in the `filing` and `confirm` sections' terms.
-fn observed_subjects(registry: &Registry) -> ExpectedSubjects {
+/// What the registry holds, in the `filing` and `confirm` sections' terms;
+/// the confirmations only when `expected` lists them.
+fn observed_subjects(registry: &Registry, expected: &ExpectedSubjects) -> ExpectedSubjects {
     ExpectedSubjects {
         sessions: registry
             .records()
@@ -636,6 +748,23 @@ fn observed_subjects(registry: &Registry) -> ExpectedSubjects {
             .iter()
             .filter_map(|c| Some((c.subject, c.at_ms, c.reopened_at_ms?)))
             .collect(),
+        confirmations: expected.confirmations.as_ref().map(|_| {
+            registry
+                .confirmations
+                .iter()
+                .filter_map(|c| {
+                    let (proposal, verdict, input) = c.answered.clone()?;
+                    Some(ExpectedConfirmation {
+                        subject: c.subject,
+                        session: c.session.clone(),
+                        proposed: (proposal.verdict, proposal.source, proposal.reason),
+                        call_id: proposal.call_id,
+                        verdict,
+                        input,
+                    })
+                })
+                .collect()
+        }),
     }
 }
 
@@ -663,7 +792,7 @@ fn every_case_matches() {
             let mut registry = Registry::default();
             registry.run(&case.steps, &case.name);
             assert_eq!(
-                observed_subjects(&registry),
+                observed_subjects(&registry, &case.expect),
                 case.expect,
                 "{section} case: {}",
                 case.name
@@ -699,6 +828,9 @@ fn every_value_has_a_case() {
     let mut states = BTreeSet::new();
     let mut refusals = HashSet::new();
     let mut statuses = HashSet::new();
+    let mut confirm_refusals = HashSet::new();
+    let mut not_needed = HashSet::new();
+    let mut confirmed = HashSet::new();
     let steps = set
         .fold
         .iter()
@@ -727,8 +859,44 @@ fn every_value_has_a_case() {
                     .filter_map(|r| r.get("state")?.as_str().map(str::to_owned)),
             ),
             Step::Author { refused, .. } => refusals.extend(*refused),
+            Step::Confirm { answers, .. } => {
+                for answer in answers {
+                    match answer.outcome {
+                        ItemOutcome::Refused { refusal } => {
+                            confirm_refusals.insert(refusal);
+                        }
+                        ItemOutcome::VerdictNotNeeded { cause, .. } => {
+                            not_needed.insert(cause);
+                        }
+                        ItemOutcome::FilingRefused { refusal } => {
+                            refusals.insert(refusal);
+                        }
+                        ItemOutcome::Confirmed { verdict, .. } => {
+                            confirmed.insert(verdict);
+                        }
+                    }
+                }
+            }
             Step::Restart | Step::Confirmed { .. } => {}
         }
+    }
+    for refusal in ConfirmRefusal::ALL {
+        assert!(
+            confirm_refusals.contains(refusal),
+            "no confirm case refusing an item for {refusal:?}"
+        );
+    }
+    for cause in NotNeeded::ALL {
+        assert!(
+            not_needed.contains(cause),
+            "no confirm case whose verdict is not needed for {cause:?}"
+        );
+    }
+    for verdict in Verdict::ALL {
+        assert!(
+            confirmed.contains(verdict),
+            "no confirm case confirming {verdict:?}"
+        );
     }
     for case in set.filing.iter().chain(&set.confirm) {
         statuses.extend(case.expect.subjects.iter().map(|s| s.status));

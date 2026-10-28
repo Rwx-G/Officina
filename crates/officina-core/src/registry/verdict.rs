@@ -44,7 +44,7 @@ pub struct VerdictInput<'a> {
 
 /// The latest of `sessions` that saw a prompt: by its last prompt, then
 /// last seen, then id.
-fn anchor<'a>(sessions: &[&'a SessionRecord]) -> Option<&'a SessionRecord> {
+pub(crate) fn anchor<'a>(sessions: &[&'a SessionRecord]) -> Option<&'a SessionRecord> {
     sessions
         .iter()
         .filter_map(|s| Some((s.last_prompt_at.as_ref()?.value, *s)))

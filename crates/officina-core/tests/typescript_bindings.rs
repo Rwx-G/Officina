@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 use officina_core::board::Board;
 use officina_core::focus::FocusOutcome;
 use officina_core::ipc::IpcError;
-use officina_core::registry::confirm::SubjectOrigin;
+use officina_core::registry::confirm::{ConfirmItem, ItemAnswer, SubjectOrigin};
 use officina_core::registry::view::RegistryView;
 use officina_core::relay::view::RelayView;
 use ts_rs::{Config, TS};
@@ -52,6 +52,8 @@ fn export(dir: &Path) {
     RelayView::export_all(&cfg).unwrap();
     RegistryView::export_all(&cfg).unwrap();
     SubjectOrigin::export_all(&cfg).unwrap();
+    ConfirmItem::export_all(&cfg).unwrap();
+    ItemAnswer::export_all(&cfg).unwrap();
 }
 
 #[test]
