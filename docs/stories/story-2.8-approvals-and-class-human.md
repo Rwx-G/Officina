@@ -27,6 +27,10 @@ so that a shared system is touched only after one deliberate click, with the com
 15. `decide_approval` is declared in `build.rs`, allowed in the capability file, wrapped in `ipc.ts` and mocked in `e2e-mock.ts`; it sends `CollectorMsg::RelayChanged` (AD-35). Proof: `main.rs::tests::every_declared_command_is_allowed` (story 2.7) and the Playwright cases.
 16. The collector reads `relay/approvals/` for the board, and the window deletes approval files older than 24 hours on its hourly pass; `run` never deletes them (AD-33). Proof: host tests `crates/officina-host/tests/relay_home.rs::{approval_files_older_than_24_h_are_pruned, run_never_deletes_approval_files}`.
 17. Fixtures (D-25): `scripts/e2e-fixtures.mjs` produces an `approvals` board scenario from the real CLI, with the catalogue approved through the `approve_fixture` example and a pending request created by `officina run --wait 1`, plus one forged request file for the invalid card. Proof: CI fixture step and the Playwright cases.
+18. A `human` action may name a `check` (D-170): phase 2 accepts it, the canonical form already carries `check`, and the issue that limited `check` to `after-check` is narrowed to the classes that cannot use it. Proof: core `crates/officina-core/src/relay/catalogue.rs::tests::{human_action_may_name_a_check, free_action_naming_a_check_is_an_issue}`.
+19. `run` of a `human` action naming a check, with no successful matching check (after-check rule: project, check action, mapped parameters, catalogue hash, tree fingerprint, 30 minutes), refuses `check_required` and creates no request; with one, the request records `check_run_id` and the tree fingerprint, and both are part of the request key's inputs, so a later check gives a new request (D-170). Proof: CLI `crates/officina/tests/approvals.rs::{human_with_check_needs_the_check_first, request_records_the_check_run_and_tree, a_new_check_gives_a_new_request}`.
+20. Every check action `run` executes keeps its output (stdout then stderr, at most 256 KiB, a cut marker past it) at `relay/outputs/<run_id>.txt`, written with a temporary name then renamed; the window prunes files older than 7 days on its hourly pass. `ApprovalView` gains `dry_run` (the kept output of the request's `check_run_id`, or `missing` with a reason) and the card shows it under the argument chips as inert monospace text, with the line "tracked and unignored files unchanged since the dry run" while the fingerprint matches. Proof: CLI `approvals.rs::check_output_is_kept_and_capped`; host `relay_home.rs::kept_outputs_older_than_7_days_are_pruned`; core `board.rs::tests::approval_view_carries_the_dry_run_output`; Vitest `components.test.ts > ApprovalCard shows the dry run as inert text`; Playwright `approvals.spec.ts > an approval with a dry run shows its output`.
+21. Just before consuming an approval of a `human` action naming a check, `run` recomputes the tree fingerprint; when it differs from the request's, `run` refuses `check_not_satisfied`, leaves the approval file unconsumed and journals the refusal (D-170, D-29's spirit). Proof: CLI `approvals.rs::an_approval_is_not_consumed_after_a_tree_change`.
 
 ## Tasks
 
@@ -39,7 +43,8 @@ so that a shared system is touched only after one deliberate click, with the com
 - [ ] Approval file retention in the window's hourly pass (AC 16)
 - [ ] CI release step for `approvals_stress` (AC 6)
 - [ ] Tests: `approvals.rs`, `approvals_stress.rs`, `authority.rs`, Vitest, `app/e2e/approvals.spec.ts`; fixture scenario (AC 1-17)
-- [ ] Update `CHANGELOG.md` `[Unreleased]` and the README relay section (approvals) (D-34)
+- [ ] `human` with a `check`: catalogue rule, request binding to the check run and tree, kept check outputs and their pruning, `dry_run` on `ApprovalView` and the card, fingerprint recheck before consumption (AC 18-21, D-170)
+- [ ] Update `CHANGELOG.md` `[Unreleased]` and the README relay section (approvals, the dry run on the card, the `--check` caveat of D-170) (D-34)
 
 ## Dev Notes
 
@@ -72,3 +77,4 @@ so that a shared system is touched only after one deliberate click, with the com
 
 - 2026-10-27 created
 - 2026-10-27 reworked after review: D-27 (argv rebuilt, forged requests invalid), D-28 (pointer clicks only, Enter and Space tested), D-29 (burned approval), stress test CI step, stop through the authority of story 2.7, fixtures through the example (D-25)
+- 2026-10-28 AC 18-21 added (D-170): a `human` action with a dry run, its kept output on the card, and the tree binding at consumption, brought forward from the v0.8 requirement challenge
