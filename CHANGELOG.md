@@ -215,16 +215,22 @@ project uses [Semantic Versioning](https://semver.org/).
   over plain `http` is refused. `officina.exe` bundles no root certificate
   set; CI checks that `webpki-roots` stays out of its graph.
 - The tree fingerprint runs `git` with external diff tools, textconv
-  drivers, fsmonitor and the caller's `GIT_` variables out of the way, so a
-  repository's configuration runs nothing inside a relay run.
+  drivers, fsmonitor and `GIT_` variables out of the way, in the
+  environment Windows builds from the registry rather than the caller's,
+  so neither a repository's configuration nor a session's variables run
+  anything or move a rule inside a relay run.
 - The tree fingerprint no longer trusts the caller's `PATH` or git's stat
   cache: `git` is the one Git for Windows records in the registry, only
-  lists the tracked and unignored files, and Officina hashes each file's
-  bytes itself, so a shim on `PATH`, a restored modification time or a
-  clean filter cannot hide a change. A tree past 64 MiB per file, 20,000
-  files or 512 MiB, an unreadable file, and a git work tree without that
-  `git` refuse (`tree_too_large`, `tree_unreadable`, `git_unavailable`);
-  the journal names the `git` that listed the files.
+  lists the tracked files, a submodule's included, and the unignored ones,
+  and Officina hashes each file's bytes itself, with the content of the
+  repository's `info/exclude` and the global excludes file, so a shim on
+  `PATH`, a restored modification time, a clean filter, an edit inside a
+  submodule or a file added with the rule that ignores it cannot hide a
+  change. A tree past 64 MiB per file, 20,000 files or 512 MiB, an
+  unreadable file, a folder under a `.git` that `git` cannot read as a
+  work tree (a broken configuration, `core.bare`), and a git work tree
+  without that `git` refuse (`tree_too_large`, `tree_unreadable`,
+  `git_unavailable`); the journal names the `git` that listed the files.
 - Every `human` action in a git work tree is bound to its files, dry run or
   not: an edit while its call waits for the author makes the run refuse
   `tree_changed` and leaves the approval unused. The card says what the

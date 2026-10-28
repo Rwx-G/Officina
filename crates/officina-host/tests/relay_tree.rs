@@ -10,7 +10,7 @@ use std::process::Command;
 use common::git_support::{git_ok, git_or_skip, run_git};
 
 use officina_core::relay::journal::TreeFingerprint;
-use officina_host::relay::tree::fingerprint_with;
+use officina_host::relay::tree::{TreeError, fingerprint_with};
 
 /// A temporary work tree: `git init`, no line ending conversion, and
 /// optionally one commit holding `playbook.yml`.
@@ -266,9 +266,11 @@ fn outside_git_it_is_absent() {
         fingerprint_with(&repo.root.join(".git"), &repo.root).is_err(),
         "a git that cannot start cannot bind a work tree"
     );
-    assert_eq!(
-        fingerprint_with(&repo.git, &repo.root.join(".git")),
-        Ok(None),
-        "inside the git directory is no work tree"
+    assert!(
+        matches!(
+            fingerprint_with(&repo.git, &repo.root.join(".git")),
+            Err(TreeError::Unreadable(_))
+        ),
+        "inside the git directory is no work tree, and lies under a .git: refused (D-175)"
     );
 }

@@ -314,8 +314,9 @@ closed_enum! {
         /// The work tree holds a file, or more files or bytes, than the
         /// fingerprint reads (D-173).
         TreeTooLarge,
-        /// A file of the work tree cannot be read, so its content cannot be
-        /// bound (D-173).
+        /// The work tree cannot be read by `git` though a `.git` lies above
+        /// it, or a file of it cannot be read, so its files cannot be bound
+        /// (D-173, D-175).
         TreeUnreadable,
         /// An `after-check` action, or a `human` action naming its dry run,
         /// without a successful run of its check, with the same parameters

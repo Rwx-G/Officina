@@ -42,7 +42,7 @@ use officina_core::relay::run::{
 
 pub use args::{RunArgs, UsageError, parse_args};
 pub use officina_core::relay::run::{EXIT_NOT_STARTED, EXIT_REFUSED, EXIT_TIMEOUT};
-pub use spawn::{MACHINE_ENVIRONMENT_KEY, PATH_OFF_WINDOWS, command_for, launch_env};
+pub use spawn::command_for;
 
 use super::credential::{CredentialStore, Secret, SystemCredentialStore};
 use super::home::{ApprovedState, RelayHome, load_relay_floor, system_dir};

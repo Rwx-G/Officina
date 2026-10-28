@@ -284,12 +284,12 @@ impl Refusal {
         )
     }
 
-    /// A file of the work tree cannot be read (D-173).
+    /// The work tree, or a file of it, cannot be read (D-173, D-175).
     pub fn tree_unreadable(project: &str, why: &str) -> Refusal {
         Refusal::new(
             RefusalReason::TreeUnreadable,
             &format!(
-                "a file of the project's work tree cannot be read, so its content cannot be bound: {why}"
+                "the project's work tree, or a file of it, cannot be read, so its files cannot be bound: {why}"
             ),
             Some(project),
         )

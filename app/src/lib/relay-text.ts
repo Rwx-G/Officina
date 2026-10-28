@@ -28,7 +28,7 @@ export const REFUSAL_TEXT: Record<RefusalReason, string> = {
   invalid_value: "invalid value",
   git_unavailable: "no git to bind the files",
   tree_too_large: "work tree too large to bind",
-  tree_unreadable: "a file could not be read",
+  tree_unreadable: "work tree could not be read",
   check_required: "its check has not run",
   approval_rejected: "rejected in Officina",
   approval_unavailable: "request could not be written",
