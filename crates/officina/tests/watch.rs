@@ -1814,3 +1814,77 @@ fn a_re_instructed_auto_archived_session_counts_as_a_flip() {
     assert_eq!(off.auto_archive.src, Some(Source::Rules));
     stop(handle);
 }
+
+/// Story 3.11 AC 2 (AD-52): with the model on, the window's collector
+/// sends a row falling to the default to the `triage` thread on its own,
+/// records the fake's answer, and emits a view showing the model's
+/// proposal; the board never waits on it.
+#[test]
+fn the_collector_sends_a_default_row_to_the_enabled_model() {
+    use officina_core::registry::dry_run::Tally;
+    use officina_core::registry::types::{ModelVerdict, ProposalSource};
+    let env = common::TestEnv::new();
+    let now = officina_host::files::now_ms();
+    env.write_agents(&listed_session("s-live", now));
+    ended_session(&env, "s-pending", now - 2 * 3_600_000);
+    let events = env.events_dir();
+    let home = env.officina_home();
+    let mut writer = open_writer(&home, &[], now).writer().unwrap();
+    let ctx = IngestContext {
+        events_dir: &events,
+        officina_home: &home,
+        projects: &[],
+        no_excerpts: false,
+    };
+    writer.ingest(&ctx, now).unwrap();
+    writer
+        .record_evaluation(
+            &Tally {
+                cases: 30,
+                model_correct: 20,
+                default_correct: 10,
+                ..Tally::default()
+            },
+            now - 60_000,
+        )
+        .unwrap();
+    writer.set_triage_model(true, now).unwrap().unwrap();
+    drop(writer);
+    let bin = env.root.path().join("bin");
+    let triage_log = env.root.path().join("triage.log");
+    let sidecar = serde_json::json!({"fixture": env.fixture(), "log": env.fake_log(),
+        "mode": "triage", "triage_log": triage_log});
+    let fake = common::fake_claude_in(&bin, &sidecar);
+    let base = vec![(
+        "SYSTEMROOT".to_owned(),
+        std::env::var("SYSTEMROOT").unwrap_or_default(),
+    )];
+    let collector = Collector::from_parts(paths_of(&env, None), LoadedFloor::default(), Some(fake))
+        .with_credential_store(OwnedStore(Box::new(FakeStore::empty())))
+        .with_triage_base_env(base);
+    let (sink, emitted) = common::sink(|_| {});
+    let handle = spawn(collector, sink).unwrap();
+    until(&emitted.boards, |b| shows(b, "s-live"));
+    let answered = until(&emitted.registries, |v| {
+        v.triage
+            .iter()
+            .any(|r| r.key == "session:s-pending" && r.proposal.source == ProposalSource::Model)
+    });
+    let row = answered
+        .triage
+        .iter()
+        .find(|r| r.key == "session:s-pending")
+        .unwrap();
+    assert_eq!(
+        row.proposal.verdict,
+        ModelVerdict::Unsure,
+        "no token: unsure"
+    );
+    assert!(row.model_reason.is_some());
+    assert!(!row.model_pending);
+    assert_eq!(answered.model.calls.today.calls, 1);
+    let sent = std::fs::read_to_string(&triage_log).unwrap();
+    assert_eq!(sent.lines().count(), 1, "one case, one call");
+    assert!(sent.contains("work of s-pending"));
+    stop(handle);
+}
