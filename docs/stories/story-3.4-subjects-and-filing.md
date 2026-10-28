@@ -1,6 +1,6 @@
 # Story 3.4: Subjects and filing, `officina subjects --json`, subjects on the board
 
-**Status:** Approved
+**Status:** review
 
 ## Story
 
@@ -24,16 +24,16 @@ so that my sessions group themselves without guesswork and I can see a session's
 
 ## Tasks
 
-- [ ] `crates/officina-core/src/registry/filing.rs` and the author and alive-again transitions in `confirm.rs` (AC 1-3)
-- [ ] Constants for the two never-filed project names in `board.rs`, used by `project_for` and filing (AC 1, D-53)
-- [ ] Filing inside the creation function of story 3.2, for both paths (AC 1)
-- [ ] `crates/officina-host/src/registry/write.rs`: author actions, refusal enum with `ALL`, error type, excerpt clearing, checkpoint (AC 3-6)
-- [ ] `crates/officina-core/src/registry/view.rs`: `RegistryView`, builder from registry records and a `Board` (AC 7)
-- [ ] `officina subjects --json` in `crates/officina/src/main.rs`; host read path; `USAGE` (AC 8)
-- [ ] `Card.subject`, `BoardInput.subjects`, read-only fill in `board --json` and the collector; regenerate TypeScript (AC 9)
-- [ ] `filing` and `confirm` cases in `tests/vectors/triage.json` (AC 1-3, 5)
-- [ ] Tests: `registry_write.rs`, `subjects.rs`, `board.rs`, `watch.rs`, extend the zero-write test (AC 1-10)
-- [ ] Update `CHANGELOG.md` and the README (AC 11)
+- [x] `crates/officina-core/src/registry/filing.rs` and the author and alive-again transitions in `confirm.rs` (AC 1-3)
+- [x] Constants for the two never-filed project names in `board.rs`, used by `project_for` and filing (AC 1, D-53)
+- [x] Filing inside the creation function of story 3.2, for both paths (AC 1)
+- [x] `crates/officina-host/src/registry/write.rs`: author actions, refusal enum with `ALL`, error type, excerpt clearing, checkpoint (AC 3-6)
+- [x] `crates/officina-core/src/registry/view.rs`: `RegistryView`, builder from registry records and a `Board` (AC 7)
+- [x] `officina subjects --json` in `crates/officina/src/main.rs`; host read path; `USAGE` (AC 8)
+- [x] `Card.subject`, `BoardInput.subjects`, read-only fill in `board --json` and the collector; regenerate TypeScript (AC 9)
+- [x] `filing` and `confirm` cases in `tests/vectors/triage.json` (AC 1-3, 5)
+- [x] Tests: `registry_write.rs`, `subjects.rs`, `board.rs`, `watch.rs`, extend the zero-write test (AC 1-10)
+- [x] Update `CHANGELOG.md` and the README (AC 11)
 
 ## Dev Notes
 
@@ -57,11 +57,46 @@ so that my sessions group themselves without guesswork and I can see a session's
 
 ### Debug Log
 
+- **Decisions where the story is silent:**
+  - AC 1: filing runs in the one creation function `ingest::ensure_session` (D-79), on the event and the agents paths, with source `rules` and the time the session was first seen. `board::NEVER_FILED_PROJECTS` (`OTHER_PROJECT`, `UNKNOWN_PROJECT`) serves `project_for` and `filing::never_files`. Rules file every new id at first sight, before a `claude -p` run can be told from a session the author drives (AD-47 knows it only at its end): `SessionRecord::filed_subject` leaves out a filing by rule once the session reads non-interactive, so rules never file a run, derived and order-independent, while an author's filing of one counts (D-56).
+  - AC 2: a subject wakes on the ingestion path (a `UserPromptSubmit` newer than the end) and on the agents path (listed again, or a background state no longer ended), at the observation's time, source `rules`. D-58's stamp goes on the subject's latest confirmation and only when it carries none yet: the first reopen is the one AD-50's flip reads. A replayed line reads the session's final facts as its "before", so it never wakes a subject twice.
+  - AC 3: the refusal enum `AuthorRefusal` sits in core `registry::types`, since core's `confirm::plan` decides every refusal and the window shows its text (story 3.5); `registry::write` re-exports it beside `AuthorError { Refused(AuthorRefusal), Registry(RegistryError) }`, where only `RegistryError` carries the marker (D-57). Each action has its writer method, over `Writer::author(&AuthorAction)`; `AuthorAction` and `SubjectOrigin` are serde types, so the vector set drives the writer's own API. Creating from sessions files them in the same gesture; "a project the registry knows" is one of its sessions' or subjects'. Renaming an archived subject is refused like filing into one (reopen first). A merge moves the sessions that count under the source. Unfiling records source `author` with no subject.
+  - AC 4: every author action is one `IMMEDIATE` transaction on the writer's connection, whose `synchronous = FULL` covers every write (AD-39).
+  - AC 5: D-50 read with AC 1's limit: only an established session (`SessionRecord::is_established`: listed, or ended otherwise than a non-interactive run) replaces its subject's older excerpts, so a run filed at first sight never clears them. The rule (`filing::excerpts_to_clear`) runs when a filed session records excerpts, when its end establishes it, when it is first listed, and after a create, file or merge.
+  - AC 6: archive clears the excerpts of the sessions counting under the subject and runs `wal_checkpoint(TRUNCATE)`; a reader inside a transaction can make that truncate report busy, and the hourly pass truncates later.
+  - AC 7: `RegistryView` carries `registry` (state, detail, folder to exclude), `ingestion` (`pending_bytes`, `incomplete_files`, `rewritten_files`, `corrupt_lines`), `subjects` (active first, then `to_resume`, each by its latest activity, with `sessions` and `excerpts`), `unfiled`, `restore_notice` and `thresholds`; a session's end is `EndView { how: EndHow, reason, src, at_ms }`.
+  - AC 8: `officina subjects --json [--floor <path>]`; its logic is host `registry::commands`, so the binary stays a thin shell. With one schema version no older database can be written, so `subjects.rs` skips that state through `MIGRATIONS.split_last()` and `registry_store.rs::reader_reports_each_state` covers it; a newer one is written through `open_writer_with` and one more migration. A registry that opens but fails a query exits 3 with the error as `unavailable`.
+  - AC 9: the window refills `Card.subject` after each ingestion, refresh and hourly pass; author actions reach it with story 3.5's emission. `BOARD_SCHEMA` stays 3 (P-13).
+  - Vectors: the `filing` and `confirm` sections add the steps `author` and `confirmed` (a confirmation row as story 3.7 will write it, for D-58's stamp); the coverage test now iterates `SubjectStatus::ALL` and `AuthorRefusal::ALL`; the host replays both sections through the writer (`registry_write.rs::subject_vectors_hold_through_the_writer`).
+- **Adversarial pass** (a refusal halfway through an action, archived and merged targets, a replayed prompt, a `claude -p` run in a project with one active subject, hidden characters in names, a window closed while files are rewritten, a command line reading while the window writes): two real misses, each fixed in its own commit. `subjects --json` reported no pending byte for a file rewritten shorter than its offset, which the window reads again whole (`registry_read.rs::pending_bytes_count_a_rewritten_file_whole`). The view read the subjects, sessions and excerpts in three statements, so a window committing between them could file a session under a subject the first read did not hold, and the session dropped out of that print; the reads now share one read transaction, which never blocks the writer (the interleaving lies inside one call, so no deterministic test reaches it). Checked and holding: a refused action writes nothing (`every_author_refusal_has_a_case` compares before and after); merging into or out of an archived subject and reopening a merged one are refused; a replayed prompt wakes nothing; a run filed by rule neither counts nor clears excerpts (vector case); zero-width, bidi and tag characters are refused in names.
+- **Mutation checks:** dropping the establishment filter of the excerpt rule turns the vector case "a non-interactive run filed at first sight neither counts nor clears excerpts" red; counting a filing by rule on a run turns `view.rs::tests::non_interactive_runs_are_counted_and_bounded` red.
+- **Per-commit gates:** fmt; clippy on the workspace (`officina-core/ts`) and on the host without `window-authority`; `cargo build -p officina` alone; the tests of the crates touched; `pnpm check` for the bindings.
+- **Full gate at the end of story 3.4** (every job of `.github/workflows/ci.yml`, run locally with `--locked`, covering stories 3.3 and 3.4): `cargo fmt --check`; frontend install and build; clippy `--workspace --all-targets --features officina-core/ts` clean, and on the host without `window-authority`; `cargo test --workspace --features officina-core/ts` 785 passed, 0 failed, 8 ignored (TypeScript drift green); `perf.rs` alone in release 5 passed (hook own cost 6.5 ms, budget 30 ms; gate own cost 4.0 ms, budget 5 ms; in-process p95 4.3 ms); `approvals_stress` passed; the crash step 2 passed (helper built first; an uninterrupted pass of 200 000 lines now takes 5.7 s, the per-line facts and filing lookup included); "officina holds no authority" verbatim: both markers absent from `officina.exe`, present in `officina-app.exe`; "Registry dependencies" ok; "No bundled roots" ok; `pnpm check`, `lint`, `test` 35 passed; fixtures rebuilt from the real CLI (13, each card now with `subject`), Playwright 52 passed; `cargo deny --locked check` ok; `pnpm audit` 1 low, ignored with its reason (unchanged). The `core-linux` job replayed in a `rust:1-bookworm` container on the committed tree (1d4a9a1) with Rust 1.99.0: fmt, clippy clean, 682 passed, 0 failed, 8 ignored.
+
 ### Completion Notes
 
+- AC 1: the `filing` section of `tests/vectors/triage.json` (among its cases "a clear successor follows the normal rule" and "a resume of a known id keeps its subject"), replayed by `crates/officina-core/tests/triage_vectors.rs::every_case_matches` and through the writer by `crates/officina-host/tests/registry_write.rs::subject_vectors_hold_through_the_writer`; `crates/officina-core/src/registry/filing.rs::tests::a_new_session_joins_the_single_active_subject_of_its_project`; `crates/officina-host/tests/registry_ingest.rs::filing_runs_in_the_creating_transaction`; `crates/officina/tests/watch.rs::a_session_first_seen_in_agents_is_filed`.
+- AC 2: the `confirm` cases "to_resume subject, session listed live", "archived subject, newer prompt", "auto-archived subject, background done then working"; `registry_write.rs::alive_again_reactivates_and_stamps_the_reopen`.
+- AC 3: the `confirm` cases, one per transition and per refusal (`every_value_has_a_case` iterates `AuthorRefusal::ALL` and `SubjectStatus::ALL`); `registry_write.rs::{author_actions_round_trip, create_takes_the_project_of_the_selected_sessions, filing_into_an_archived_subject_is_refused, merge_moves_sessions_and_marks_the_source, name_rules_are_enforced, every_author_refusal_has_a_case}`; `crates/officina-core/src/registry/confirm.rs::tests::names_are_trimmed_bounded_clean_and_unique_ignoring_case`.
+- AC 4: `registry_write.rs::author_writes_carry_source_author_and_time`.
+- AC 5: `registry_write.rs::older_session_loses_its_excerpts_once_a_later_one_has_them` and the `filing` cases.
+- AC 6: `registry_write.rs::archive_clears_excerpts_from_the_file_and_the_wal` (byte search for a marker, with its positive control).
+- AC 7: `crates/officina-core/src/registry/view.rs::tests::{active_and_to_resume_come_first, sessions_join_live_cards_by_session_id, unfiled_are_grouped_by_project, non_interactive_runs_are_counted_and_bounded, restore_notice_shows_for_7_days, archived_are_left_out, a_subject_shows_the_latest_excerpts_of_its_sessions}`; `RegistryView` exported in `crates/officina-core/tests/typescript_bindings.rs::committed_bindings_match_the_rust_types`.
+- AC 8: `crates/officina/tests/subjects.rs::{prints_the_registry_view_with_the_window_closed, pending_bytes_show_the_lag_behind_a_closed_window, a_stale_board_still_exits_0, every_unreadable_state_exits_3_with_its_reason, usage_error_exits_64, subjects_json_changes_no_row}`; `crates/officina-host/tests/registry_read.rs::pending_bytes_count_a_rewritten_file_whole`; `USAGE` lists the command.
+- AC 9: `crates/officina-core/src/board.rs::tests::cards_carry_their_subject_by_session_id`; `crates/officina/tests/board.rs::{cards_carry_their_subject, unreadable_registry_leaves_subjects_null_with_the_reason}`; the bindings test; `BOARD_SCHEMA` 3.
+- AC 10: `crates/officina/tests/quota_doctor.rs::no_command_writes_under_the_claude_config_dir` runs `subjects --json`.
+- AC 11: `CHANGELOG.md` `[Unreleased]` Added; README "Subjects" and the command table; `readme.rs::readme_mentions_every_subcommand` covers `subjects --json`.
+
 ## File List
+
+- `crates/officina-core/src/board.rs`, `crates/officina-core/src/registry/{mod,types,filing,confirm,view}.rs`, `crates/officina-core/tests/{triage_vectors,typescript_bindings}.rs`, `tests/vectors/triage.json`
+- `crates/officina-host/Cargo.toml`, `crates/officina-host/src/{collector,focus,watch}.rs`, `crates/officina-host/src/registry/{mod,read,write,ingest,agents,window,commands}.rs`, `crates/officina-host/tests/{registry_write,registry_ingest,registry_read}.rs`
+- `crates/officina/src/main.rs`, `crates/officina/tests/{subjects,board,watch,quota_doctor}.rs`
+- `app/src/components/components.test.ts`, `app/src/lib/generated/{Card,SubjectRef,RegistryView,IngestionView,SubjectView,SessionView,UnfiledProject,ExcerptView,EndView,EndHow,LiveCard,Thresholds,RestoreNotice,Source,SubjectStatus}.ts`
+- `README.md`, `CHANGELOG.md`, `docs/stories/story-3.4-subjects-and-filing.md`, `docs/stories/sprint-status.yaml`
 
 ## Change Log
 
 - 2026-10-28 created
 - 2026-10-28 reworked after review: every new id follows the normal rule, resume keeps its id and subject, no filing through supersession (D-75); filing on both creation paths (D-79); alive again wakes the subject and stamps a reopen (D-77); `create_subject` takes a project (D-95); refusal enum split from the error type; non-interactive runs bounded (D-96); restore notice (D-93); `subjects --json` with the window closed and exit 0 on a stale board (D-82, D-97)
+- 2026-10-28 implemented: filing at creation on both paths, the author's subject actions with their refusals and source, alive again on the subject side, the latest excerpts per subject and archive's clearing, `RegistryView` and `officina subjects --json`, each card's subject; two adversarial fixes (pending bytes of a rewritten file, the view read from one snapshot). Full gate green. Status review
