@@ -9,9 +9,10 @@ use officina_core::relay::argv::{Launch, SYSTEM_ENV};
 use officina_core::relay::journal::RunOutcome;
 use officina_core::relay::run::{EXIT_NOT_STARTED, EXIT_TIMEOUT, RunPlan};
 
+use super::OUTPUT_GRACE;
 use super::journaling::{end_run, process_finished};
 use super::output::{Output, no_streams};
-use super::{OUTPUT_GRACE, WAIT_TICK};
+use crate::process::{Waited, hide_console, wait_until};
 use crate::relay::home::RelayHome;
 
 /// What each [`SYSTEM_ENV`] variable of a launch is: a value, or removed.
@@ -74,12 +75,7 @@ pub fn command_for(launch: &Launch, system: &[(&str, Option<String>)]) -> Comman
     for key in &launch.env_remove {
         command.env_remove(key);
     }
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        command.creation_flags(CREATE_NO_WINDOW);
-    }
+    hide_console(&mut command);
     command
 }
 
@@ -191,33 +187,30 @@ pub(super) fn spawn(
         end_run(home, err, run_id, line, output.kept());
     };
     let deadline = started + Duration::from_secs(u64::from(plan.timeout_s));
-    loop {
-        match child.try_wait() {
-            Ok(Some(status)) => {
-                output.drain(OUTPUT_GRACE);
-                // Windows always reports a code; elsewhere a signal has none.
-                let code = status.code().unwrap_or(1);
-                end(err, RunOutcome::Exited, Some(i64::from(code)), None);
-                tree.exit_with(code);
-                return code;
-            }
-            Ok(None) if Instant::now() < deadline => std::thread::sleep(WAIT_TICK),
-            Ok(None) => {
-                end(err, RunOutcome::Timeout, None, None);
-                let _ = writeln!(
-                    err,
-                    "officina: timeout: {} ran past its {} s; it and every process it started were stopped",
-                    plan.action, plan.timeout_s
-                );
-                tree.end(&mut child, EXIT_TIMEOUT);
-                return EXIT_TIMEOUT;
-            }
-            Err(e) => {
-                end(err, RunOutcome::Exited, None, Some(e.to_string()));
-                let _ = writeln!(err, "officina: lost track of {}: {e}", plan.action);
-                tree.end(&mut child, 1);
-                return 1;
-            }
+    match wait_until(&mut child, deadline) {
+        Waited::Exited(status) => {
+            output.drain(OUTPUT_GRACE);
+            // Windows always reports a code; elsewhere a signal has none.
+            let code = status.code().unwrap_or(1);
+            end(err, RunOutcome::Exited, Some(i64::from(code)), None);
+            tree.exit_with(code);
+            code
+        }
+        Waited::Deadline => {
+            end(err, RunOutcome::Timeout, None, None);
+            let _ = writeln!(
+                err,
+                "officina: timeout: {} ran past its {} s; it and every process it started were stopped",
+                plan.action, plan.timeout_s
+            );
+            tree.end(&mut child, EXIT_TIMEOUT);
+            EXIT_TIMEOUT
+        }
+        Waited::Lost(e) => {
+            end(err, RunOutcome::Exited, None, Some(e.to_string()));
+            let _ = writeln!(err, "officina: lost track of {}: {e}", plan.action);
+            tree.end(&mut child, 1);
+            1
         }
     }
 }

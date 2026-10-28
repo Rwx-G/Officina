@@ -42,6 +42,7 @@ use super::home::{ApprovedState, RelayHome, load_relay_floor};
 use super::tree::TreeError;
 use super::{journal, tree};
 use crate::doctor::{Check, Level, check};
+use crate::process::{Waited, hide_console, wait_until};
 
 /// The program the WSL probe runs inside the distro, by absolute path like
 /// the tools it probes (D-6): `test -x <path>` exits 0 when the path is an
@@ -102,12 +103,7 @@ pub fn wsl_probe_command(wsl: &Path, distro: Option<&str>, path: &str) -> Comman
     for key in WSL_REMOVED_ENV {
         command.env_remove(key);
     }
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        command.creation_flags(CREATE_NO_WINDOW);
-    }
+    hide_console(&mut command);
     command
 }
 
@@ -118,22 +114,15 @@ pub fn run_with_deadline(command: &mut Command, timeout: Duration) -> ProbeRun {
         Ok(child) => child,
         Err(e) => return ProbeRun::NotStarted(e.to_string()),
     };
-    let deadline = Instant::now() + timeout;
-    loop {
-        match child.try_wait() {
-            Ok(Some(status)) => return ProbeRun::Exited(status.code()),
-            Ok(None) if Instant::now() >= deadline => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return ProbeRun::TimedOut;
-            }
-            Ok(None) => std::thread::sleep(Duration::from_millis(50)),
-            Err(e) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return ProbeRun::NotStarted(e.to_string());
-            }
-        }
+    let waited = wait_until(&mut child, Instant::now() + timeout);
+    if !matches!(waited, Waited::Exited(_)) {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+    match waited {
+        Waited::Exited(status) => ProbeRun::Exited(status.code()),
+        Waited::Deadline => ProbeRun::TimedOut,
+        Waited::Lost(e) => ProbeRun::NotStarted(e.to_string()),
     }
 }
 

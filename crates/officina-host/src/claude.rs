@@ -7,6 +7,7 @@ use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant};
 
 use crate::paths::{ENV_CLAUDE_BIN, ENV_CLAUDE_CONFIG_DIR, user_home};
+use crate::process::{Waited, hide_console, wait_until};
 
 /// Deadline of one `claude agents` call.
 pub const AGENTS_TIMEOUT: Duration = Duration::from_secs(5);
@@ -82,12 +83,7 @@ fn command(binary: &Path, config_dir: Option<&Path>) -> Command {
     if let Some(dir) = config_dir {
         cmd.env(ENV_CLAUDE_CONFIG_DIR, dir);
     }
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        cmd.creation_flags(CREATE_NO_WINDOW);
-    }
+    hide_console(&mut cmd);
     cmd
 }
 
@@ -169,17 +165,13 @@ pub fn run(
     let stdout = read_on_thread(child.stdout.take(), STDOUT_CAP);
     let stderr = read_on_thread(child.stderr.take(), 64 * 1024);
 
-    let deadline = Instant::now() + timeout;
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break status,
-            Ok(None) if Instant::now() >= deadline => {
-                tree.kill(&mut child);
-                return Err(ClaudeError::Timeout(timeout.as_secs()));
-            }
-            Ok(None) => std::thread::sleep(Duration::from_millis(50)),
-            Err(e) => return Err(ClaudeError::Spawn(e.to_string())),
+    let status = match wait_until(&mut child, Instant::now() + timeout) {
+        Waited::Exited(status) => status,
+        Waited::Deadline => {
+            tree.kill(&mut child);
+            return Err(ClaudeError::Timeout(timeout.as_secs()));
         }
+        Waited::Lost(e) => return Err(ClaudeError::Spawn(e.to_string())),
     };
     let drained_by = Instant::now() + OUTPUT_GRACE;
     let remaining = || drained_by.saturating_duration_since(Instant::now());

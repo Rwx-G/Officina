@@ -151,12 +151,7 @@ fn git(program: &Path, dir: &Path, args: &[&str]) -> Result<(Option<i32>, Vec<u8
     for key in GIT_REMOVED_ENV {
         command.env_remove(key);
     }
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        command.creation_flags(CREATE_NO_WINDOW);
-    }
+    crate::process::hide_console(&mut command);
     let output = command.output().map_err(|e| e.to_string())?;
     Ok((output.status.code(), output.stdout))
 }

@@ -55,9 +55,6 @@ use request::{Bound, approval};
 /// The session that called, as Claude Code's Bash tool sets it (E13).
 pub const ENV_SESSION_ID: &str = "CLAUDE_CODE_SESSION_ID";
 
-/// How often a running action is polled against its deadline (AD-3).
-pub const WAIT_TICK: Duration = Duration::from_millis(50);
-
 /// How long the output pipes may stay open once the program has exited: a
 /// process it left running holds them, and is ended with the job when
 /// `officina run` exits.

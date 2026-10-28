@@ -8,6 +8,7 @@ pub mod files;
 pub mod focus;
 pub mod paths;
 pub mod platform;
+pub mod process;
 pub mod relay;
 pub mod watch;
 pub mod writers;
