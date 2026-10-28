@@ -2,7 +2,7 @@
 title: "PRD: Officina v0.5 - The Orchestrator"
 author: Rwx-G
 date: 2026-10-28
-status: approved 2026-10-28 (owner delegated design decisions), with the amendments of ../architecture-v0.5.md section 4 applied; addendum of section 9 (2026-10-28: scene v2, orchestrator answers, permissions design)
+status: approved 2026-10-28 (owner delegated design decisions), with the amendments of ../architecture-v0.5.md section 4 applied; addendum of section 9 (2026-10-28: scene v2, orchestrator answers, permissions design), items 2 and 10 amended the same day after the Epic 4 plan challenge (epic-4-decisions.md D-504, D-505, D-511)
 inputs:
   - (framing, not published)
   - (requirement challenge, not published)
@@ -640,9 +640,15 @@ section 6 says how, and `epic-5-decisions.md` D-486 to D-491 say why. Stories
 5.1, 5.2, 5.4, 5.12, 5.13, 5.15 and 5.18 are reworked against it before Epic 5
 starts.
 
+Items 3 to 10 answer the owner's own requests of 2026-10-28 (the orchestrator
+deciding alone under the project's rules; "I want to reproduce how auto mode
+works"); a requirement challenge that called them unrequested was rejected on
+that ground (epic-4-decisions.md D-505).
+
 1. **FR-13, the orchestrator in the decision office.** The orchestrator's
    figure takes v0.4's decision office, at the decider's desk; there is no
-   eighth cell, and offices keep v0.4's eight. Its two screens show the
+   extra cell, and offices keep v0.4's (eight with growth, else four;
+   epic-4-decisions.md D-506). Its two screens show the
    Orchestrator view's counts (pending proposals, the queue) and its
    whiteboard the names of the four latest proposals, all redrawn only when
    their payload changes. The plaque reads "Orchestrator" while its session
@@ -650,13 +656,19 @@ starts.
    turned when busy, facing otherwise, never ringed, never a raised hand.
    Absent, its chair is empty and its file offers Start, keyboard-reachable.
    Proposals stay neutral (not amber, not in the title or the overlay).
-2. **Briefing at reception.** When a work order launches (FR-4's click, or
-   v0.7's governor) and the orchestrator is live, the new session appears at
-   reception and the orchestrator walks to the counter, stays while the
-   launched session is bound to its work order (FR-4), then walks back. No
-   other event moves it. Decisions stay where FR-7 to FR-9 put them: the
-   orchestrator decides nothing that acts, and Needs you sessions queue for
-   the author as in v0.4.
+2. **Briefing at the reception counter.** A launched work order gets its
+   prompt at launch, so its session never waits at reception by itself; the
+   briefing is a detour drawn on a real fact (amended 2026-10-28,
+   epic-4-decisions.md D-504). When a work order launched by FR-4's click or
+   by v0.7's governor binds to its session (FR-4) while the orchestrator is
+   live, the new session's employee walks to the reception counter, the
+   orchestrator walks to the other side of it, both stay for a short
+   briefing (1.6 s), then the employee walks on to its place and the
+   orchestrator back to its desk. It plays once per work order, and not on
+   the first layout of a run, with walking off or under reduced motion. No
+   other event moves the orchestrator. Decisions stay where FR-7 to FR-9 put
+   them: the orchestrator decides nothing that acts, and Needs you sessions
+   queue for the author as in v0.4.
 3. **The orchestrator may answer an idle session** through FR-6's resume
    path. `officina mcp` gains `propose_answer {session_id, text, rationale}`:
    a background session in Your turn, live and not waiting on a question,
@@ -710,6 +722,8 @@ starts.
     `updatedPermissions` (it would write Claude Code settings),
     `updatedInput` or `interrupt`. With no decision before its deadline it
     exits 0 with no output and Claude Code's normal prompt takes over;
-    `onFailure` stays unset so a failure also falls back to the prompt. A
+    `onFailure` stays unset so a failure also falls back to the prompt. When
+    the window is not running, the hook exits at once, so no prompt waits
+    for a window that cannot answer (epic-4-decisions.md D-511). A
     `PermissionDenied` hook journals auto-mode denials, reason only. Doctor
     prints both registrations. Slice D ships as v0.5.x and does not hold v0.6.
