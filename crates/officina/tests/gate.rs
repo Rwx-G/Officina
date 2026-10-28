@@ -8,7 +8,7 @@ use std::process::Output;
 
 use common::relay::Relay;
 use common::{TestEnv, read_events};
-use officina_core::relay::catalogue::DEFAULT_GUARDED_PROGRAMS;
+use officina_core::relay::catalogue::{DEFAULT_GUARDED_PROGRAMS, IssueKind};
 use officina_core::relay::gate::{DenyKind, LIST_COMMAND};
 use officina_core::relay::journal::{
     COMMAND_EXCERPT_CHARS, GateDenied, GateError, GateFault, JournalEntry,
@@ -755,13 +755,41 @@ fn deny_stands_when_the_journal_lock_is_held() {
     );
 }
 
+/// Story 2.4 AC 13 (AD-28): the gate reads the floor's phase 1 and compiles
+/// no pattern. An action whose pattern does not compile is dropped by phase
+/// 2, yet the gate still offers it by the name the floor declares while the
+/// catalogue awaits approval: a gate that compiled patterns and acted on
+/// them would leave it out. Once approved, it changes no decision.
 #[test]
 fn invalid_pattern_does_not_affect_the_decision() {
+    let broken = "\n[[action]]\nname = \"broken\"\nclass = \"free\"\nprogram = \"{tool}\"\nargs = [\"{p}\"]\n\n[action.params.p]\npattern = \"(unclosed\"\n";
+    let floor = format!(
+        "{}{broken}",
+        FLOOR.replacen(
+            "actions = [\"check\", \"apply\"]",
+            "actions = [\"check\", \"apply\", \"broken\"]",
+            1
+        )
+    );
+    let with_invalid = Relay::unapproved(&floor).env;
+    let phase_2 = officina_host::relay::home::load_relay_floor(&with_invalid.floor_file()).unwrap();
+    assert!(
+        !phase_2.catalogue.actions.contains_key("broken")
+            && phase_2
+                .catalogue
+                .issues
+                .iter()
+                .any(|i| i.kind == IssueKind::PatternInvalid),
+        "positive control: phase 2 drops the action for its pattern"
+    );
+    let reason = denied(
+        &with_invalid,
+        &fixture("bash-guarded-program.json"),
+        Some(GUARDED_ROOT),
+    );
+    assert!(reason.contains("check, apply, broken"), "{reason}");
+
     let plain = approved_env();
-    let with_invalid = guarded_env();
-    with_invalid.write_floor(&format!(
-        "{FLOOR}\n[[action]]\nname = \"broken\"\nclass = \"free\"\nprogram = \"{{tool}}\"\nargs = [\"{{p}}\"]\n\n[action.params.p]\npattern = \"(unclosed\"\n"
-    ));
     with_invalid.approve();
     for payload in [
         fixture("bash-guarded-program.json"),
