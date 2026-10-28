@@ -4,9 +4,10 @@
 //! [`crate::relay::doctor`], after the v0.1 ones.
 
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use officina_core::contract::check_agents;
+use officina_core::dates::{day_start_ms, utc_date};
 use officina_core::floor::{Autonomy, parse_floor};
 use officina_core::quota::STALE_AFTER_MS;
 use officina_core::relay::gate::gated_tools;
@@ -15,6 +16,11 @@ use crate::claude;
 use crate::collector::Collector;
 use crate::files::{now_ms, read_recent_events};
 use crate::paths::{ENV_FLOOR, env_path};
+use crate::registry::RegistryPaths;
+use crate::registry::store::{
+    self as registry_store, Location, ReaderState, daily_copies, onedrive_roots_from_env,
+    quarantined,
+};
 use crate::relay::doctor::{self as relay_doctor, RelayDoctor};
 use crate::relay::gate::GATE_EVENT;
 use crate::relay::home::RelayHome;
@@ -278,6 +284,11 @@ pub fn run(collector: &Collector, exe: &Path) -> Vec<Check> {
     checks.extend(check_hook_activity(&paths.events_dir(), now));
     checks.push(check_quota(collector, &user_settings, exe, now));
     checks.push(check_officina_home(&paths.officina_home));
+    checks.extend(check_registry(
+        &paths.officina_home,
+        &onedrive_roots_from_env(),
+        now,
+    ));
     checks.push(check_floor(collector));
     let system_dir = crate::relay::home::system_dir();
     checks.extend(relay_doctor::checks(&RelayDoctor {
@@ -436,6 +447,134 @@ fn check_officina_home(home: &Path) -> Check {
     }
 }
 
+/// How long a restore stays a warning: as long as the view shows it (D-93).
+const RESTORE_NOTICE_MS: i64 = 7 * 86_400_000;
+
+/// The registry (FR-1 as amended, AD-53's doctor line, D-47, D-91): where
+/// it lies, its version, `quick_check`, its daily copies, a quarantine and
+/// the last restore. Doctor opens it read-only and never creates it; on a
+/// network folder it does not open it at all.
+pub fn check_registry(officina_home: &Path, onedrive_roots: &[PathBuf], now: i64) -> Vec<Check> {
+    let paths = RegistryPaths::new(officina_home);
+    let dir = paths.dir().display().to_string();
+    let mut checks = Vec::new();
+    match registry_store::locate(officina_home, onedrive_roots) {
+        Location::Network => {
+            return vec![check(
+                Level::Fail,
+                "registry location",
+                format!(
+                    "{dir} is on a network folder, where SQLite's WAL does not work: the registry is not opened there; set OFFICINA_HOME to a local folder (the board keeps working)"
+                ),
+            )];
+        }
+        Location::Synced { exclude } => checks.push(check(
+            Level::Warn,
+            "registry location",
+            format!(
+                "{dir} is in a folder a sync client manages, which may write an older copy back: exclude {} from the client",
+                exclude.display()
+            ),
+        )),
+        Location::Local => checks.push(check(Level::Ok, "registry location", dir.clone())),
+    }
+    let opened = registry_store::open_reader(officina_home, onedrive_roots);
+    let state = match &opened {
+        Ok(reader) => match reader.user_version() {
+            Ok(version) => check(Level::Ok, "registry", format!("schema version {version}")),
+            Err(e) => check(Level::Fail, "registry", format!("cannot be read: {e}")),
+        },
+        Err(failure) => {
+            let detail = failure.detail.as_deref().unwrap_or_default();
+            match failure.state {
+                ReaderState::Absent => check(
+                    Level::Ok,
+                    "registry",
+                    "absent: the window creates it when it starts",
+                ),
+                ReaderState::Older => check(
+                    Level::Warn,
+                    "registry",
+                    "written by an older Officina: the window copies it, then migrates it, when it starts",
+                ),
+                ReaderState::Newer => check(
+                    Level::Warn,
+                    "registry",
+                    "written by a newer Officina: the window opens it read-only, ingests nothing and deletes nothing",
+                ),
+                ReaderState::Unavailable => {
+                    check(Level::Fail, "registry", format!("cannot be read: {detail}"))
+                }
+                ReaderState::Ready | ReaderState::Network => {
+                    check(Level::Fail, "registry", format!("not read: {detail}"))
+                }
+            }
+        }
+    };
+    checks.push(state);
+    if let Ok(reader) = &opened {
+        checks.push(match reader.quick_check() {
+            Ok(findings) if registry_store::passed(&findings) => {
+                check(Level::Ok, "registry integrity", "quick_check passed")
+            }
+            Ok(findings) => check(
+                Level::Fail,
+                "registry integrity",
+                format!(
+                    "quick_check failed: {}; the window sets it aside and restores the newest valid copy when it starts",
+                    findings.join("; ")
+                ),
+            ),
+            Err(e) => check(Level::Fail, "registry integrity", e.to_string()),
+        });
+        let copies = daily_copies(&paths);
+        checks.push(match copies.first() {
+            None => check(
+                Level::Warn,
+                "registry copies",
+                "no daily copy yet: the window takes one each day it runs",
+            ),
+            Some(newest) => {
+                let age = (day_start_ms(utc_date(now)) - day_start_ms(newest.day)) / 86_400_000;
+                let (y, m, d) = newest.day;
+                check(
+                    Level::Ok,
+                    "registry copies",
+                    format!(
+                        "{} daily copies, the newest from {y:04}-{m:02}-{d:02} ({age} days old)",
+                        copies.len()
+                    ),
+                )
+            }
+        });
+    }
+    let set_aside = quarantined(&paths);
+    if !set_aside.is_empty() {
+        checks.push(check(
+            Level::Warn,
+            "registry quarantine",
+            format!(
+                "{} damaged registries set aside under {}",
+                set_aside.len(),
+                paths.quarantine_dir().display()
+            ),
+        ));
+    }
+    if let Some(notice) = opened.as_ref().ok().and_then(|r| r.restore_notice()) {
+        let recent = now - notice.restored_at_ms < RESTORE_NOTICE_MS;
+        let (y, m, d) = utc_date(notice.restored_at_ms);
+        checks.push(check(
+            if recent { Level::Warn } else { Level::Ok },
+            "registry restore",
+            format!(
+                "restored from {} on {y:04}-{m:02}-{d:02}: author actions taken after that copy are lost, events were ingested again",
+                notice.copy
+            ),
+        ));
+    }
+    checks
+}
+
 /// The floor file, if any, loaded without error.
 fn check_floor(collector: &Collector) -> Check {
     match (&collector.floor().path, &collector.floor().error) {
@@ -506,8 +645,14 @@ mod tests {
                 ("event buffer", Level::Warn, false),
                 ("quota", Level::Warn, true),
                 ("officina home", Level::Ok, false),
+                ("registry location", Level::Ok, false),
+                ("registry", Level::Ok, false),
                 ("floor", Level::Ok, false),
             ]
+        );
+        assert!(
+            !RegistryPaths::new(&paths.officina_home).dir().exists(),
+            "doctor never creates the registry"
         );
 
         let broken_floor = LoadedFloor {
@@ -712,6 +857,171 @@ mod tests {
         ] {
             assert!(!runs_officina_hook(near_miss), "{near_miss}");
         }
+    }
+
+    const NOW: i64 = 1_793_102_400_000;
+    const DAY: i64 = 86_400_000;
+
+    /// A registry of schema 1 at `version` under `home`, written without the
+    /// window's writer, which this test build may not hold.
+    fn registry_at(home: &Path, version: i64) -> rusqlite::Connection {
+        let paths = RegistryPaths::new(home);
+        fs::create_dir_all(paths.dir()).unwrap();
+        let conn = rusqlite::Connection::open(paths.database()).unwrap();
+        conn.execute_batch(crate::registry::schema::MIGRATIONS[0])
+            .unwrap();
+        conn.pragma_update(None, "user_version", version).unwrap();
+        conn
+    }
+
+    fn registry_line<'a>(checks: &'a [Check], title: &str) -> &'a Check {
+        checks
+            .iter()
+            .find(|c| c.title == title)
+            .unwrap_or_else(|| panic!("no {title} line in {checks:?}"))
+    }
+
+    #[test]
+    fn registry_in_a_synced_folder_warns_and_names_it() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join(".SynologyWorkingDirectory"), b"").unwrap();
+        let home = dir.path().join("officina");
+        let checks = check_registry(&home, &[], NOW);
+        let line = registry_line(&checks, "registry location");
+        assert_eq!(line.level, Level::Warn);
+        assert!(
+            line.detail
+                .contains(&RegistryPaths::new(&home).dir().display().to_string()),
+            "{}",
+            line.detail
+        );
+        assert!(!RegistryPaths::new(&home).dir().exists());
+
+        let onedrive = tempfile::tempdir().unwrap();
+        let checks = check_registry(
+            &onedrive.path().join("officina"),
+            &[onedrive.path().to_path_buf()],
+            NOW,
+        );
+        assert_eq!(
+            registry_line(&checks, "registry location").level,
+            Level::Warn
+        );
+
+        let network = check_registry(
+            Path::new(r"\\localhost\officina-missing-share\home"),
+            &[],
+            NOW,
+        );
+        assert_eq!(
+            summary(&network),
+            [("registry location", Level::Fail, false)]
+        );
+    }
+
+    #[test]
+    fn newer_registry_warns() {
+        let dir = tempfile::tempdir().unwrap();
+        drop(registry_at(
+            dir.path(),
+            crate::registry::schema::SCHEMA_VERSION + 1,
+        ));
+        let checks = check_registry(dir.path(), &[], NOW);
+        let line = registry_line(&checks, "registry");
+        assert_eq!(line.level, Level::Warn);
+        assert!(line.detail.contains("newer"), "{}", line.detail);
+        assert!(checks.iter().all(|c| c.title != "registry integrity"));
+
+        rusqlite::Connection::open(RegistryPaths::new(dir.path()).database())
+            .unwrap()
+            .pragma_update(
+                None,
+                "user_version",
+                crate::registry::schema::SCHEMA_VERSION,
+            )
+            .unwrap();
+        let checks = check_registry(dir.path(), &[], NOW);
+        assert_eq!(registry_line(&checks, "registry").level, Level::Ok);
+    }
+
+    #[test]
+    fn failed_quick_check_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        drop(registry_at(
+            dir.path(),
+            crate::registry::schema::SCHEMA_VERSION,
+        ));
+        let db = RegistryPaths::new(dir.path()).database();
+        let mut bytes = fs::read(&db).unwrap();
+        let page = usize::from(u16::from_be_bytes([bytes[16], bytes[17]]));
+        bytes[page..2 * page].fill(0xFF);
+        fs::write(&db, &bytes).unwrap();
+        let checks = check_registry(dir.path(), &[], NOW);
+        assert_eq!(registry_line(&checks, "registry").level, Level::Ok);
+        assert_eq!(
+            registry_line(&checks, "registry integrity").level,
+            Level::Fail
+        );
+        assert_eq!(exit_code(&checks), 1);
+        assert_eq!(fs::read(&db).unwrap(), bytes, "doctor changed nothing");
+    }
+
+    #[test]
+    fn copies_quarantine_and_restore_are_reported() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = RegistryPaths::new(dir.path());
+        let conn = registry_at(dir.path(), crate::registry::schema::SCHEMA_VERSION);
+        let notice =
+            serde_json::json!({"copy": "registry-2026-10-25.db", "restored_at_ms": NOW - DAY});
+        conn.execute(
+            "INSERT INTO setting (key, value, src, at_ms) VALUES ('restore_notice', ?1, 'rules', ?2)",
+            rusqlite::params![notice.to_string(), NOW - DAY],
+        )
+        .unwrap();
+        drop(conn);
+        let checks = check_registry(dir.path(), &[], NOW);
+        assert_eq!(
+            registry_line(&checks, "registry copies").level,
+            Level::Warn,
+            "no copy yet"
+        );
+        assert!(checks.iter().all(|c| c.title != "registry quarantine"));
+
+        fs::create_dir_all(paths.backup_dir()).unwrap();
+        for name in [
+            "registry-2026-10-25.db",
+            "registry-2026-10-26.db",
+            "pre-v2-2026-10-20.db",
+        ] {
+            fs::write(paths.backup_dir().join(name), b"").unwrap();
+        }
+        fs::create_dir_all(paths.quarantine_dir().join((NOW - DAY).to_string())).unwrap();
+        let checks = check_registry(dir.path(), &[], NOW);
+        let copies = registry_line(&checks, "registry copies");
+        assert_eq!(copies.level, Level::Ok);
+        assert!(
+            copies.detail.starts_with("2 daily copies")
+                && copies.detail.contains("2026-10-26 (1 days old)"),
+            "{}",
+            copies.detail
+        );
+        let quarantine = registry_line(&checks, "registry quarantine");
+        assert_eq!(quarantine.level, Level::Warn);
+        assert!(
+            quarantine.detail.starts_with("1 damaged"),
+            "{}",
+            quarantine.detail
+        );
+        let restore = registry_line(&checks, "registry restore");
+        assert_eq!(restore.level, Level::Warn);
+        assert!(
+            restore.detail.contains("registry-2026-10-25.db")
+                && restore.detail.contains("2026-10-26"),
+            "{}",
+            restore.detail
+        );
+        let later = check_registry(dir.path(), &[], NOW + 7 * DAY);
+        assert_eq!(registry_line(&later, "registry restore").level, Level::Ok);
     }
 
     #[test]
