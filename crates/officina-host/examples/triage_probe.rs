@@ -27,7 +27,7 @@ use officina_core::registry::triage_call::{TriageCase, prompt, read_output};
 use officina_core::registry::types::TriagePurpose;
 use officina_host::claude::{resolve_claude, version};
 use officina_host::paths::{ENV_CLAUDE_CONFIG_DIR, env_path, user_home};
-use officina_host::registry::triage::{CallLimits, TriageJob, command_for, refusal};
+use officina_host::registry::triage::{CallLimits, TriageJob, command_for, refusal, workdir};
 
 /// E16's measured input tokens for one short case, cached system prompt
 /// included.
@@ -92,6 +92,10 @@ fn main() -> ExitCode {
         "version: {}",
         version(&claude, job.config_dir.as_deref()).unwrap_or_else(|e| e.to_string())
     );
+    if let Err(e) = std::fs::create_dir_all(workdir(&home)) {
+        eprintln!("triage_probe: the work folder could not be created: {e}");
+        return ExitCode::FAILURE;
+    }
     if let Some(refused) = refusal(&job) {
         eprintln!("triage_probe: refused before starting: {}", refused.code());
         return ExitCode::FAILURE;

@@ -7,12 +7,11 @@
 
 use std::collections::VecDeque;
 use std::hash::{BuildHasher, Hasher};
-use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use officina_core::registry::dry_run::{
     DryRunCase, DryRunProgress, DryRunState, DryRunStop, Tally, dry_run_cases,
@@ -34,14 +33,13 @@ use rusqlite::TransactionBehavior;
 use super::read;
 use super::store::Writer;
 use super::write::{RegistryError, write_setting};
-use crate::process::{Waited, hide_console, wait_until};
+use crate::process::{RunError, RunLimits, hide_console, run_contained};
 
 /// How long the output pipes may stay open once the child exited and its
-/// job was ended: what it wrote is drained by then.
+/// job was ended. Longer than `claude agents`' grace: the call runs on the
+/// `triage` thread, which nothing waits on, and its tree is already ended,
+/// so the pipes close as soon as the reader threads are scheduled.
 const OUTPUT_GRACE: Duration = Duration::from_secs(2);
-
-/// How much of stderr a failed call keeps, for its detail.
-const STDERR_KEPT: usize = 4 * 1024;
 
 /// How many nonces are drawn before a case is given up (D-87's "host draws
 /// again"): one 16-digit nonce in an excerpt is chance; several in a row
@@ -124,8 +122,8 @@ pub fn workdir(officina_home: &Path) -> PathBuf {
 }
 
 /// Why `job` must not start anything (AD-51, D-65): no `claude`, a `.cmd`
-/// or `.bat` shim, `no_excerpts`, or a work folder that is not empty. The
-/// folder is created when it is missing.
+/// or `.bat` shim, `no_excerpts`, or a work folder that is not empty. Reads
+/// only; [`run_call`] creates the folder first when it is missing.
 pub fn refusal(job: &TriageJob) -> Option<TriageRefusal> {
     let Some(claude) = &job.claude else {
         return Some(TriageRefusal::ClaudeNotFound);
@@ -140,9 +138,8 @@ pub fn refusal(job: &TriageJob) -> Option<TriageRefusal> {
     if job.no_excerpts {
         return Some(TriageRefusal::NoExcerpts);
     }
-    let dir = workdir(&job.officina_home);
-    let _ = std::fs::create_dir_all(&dir);
-    let occupied = std::fs::read_dir(&dir).is_ok_and(|mut entries| entries.next().is_some());
+    let occupied = std::fs::read_dir(workdir(&job.officina_home))
+        .is_ok_and(|mut entries| entries.next().is_some());
     occupied.then_some(TriageRefusal::WorkdirNotEmpty)
 }
 
@@ -179,67 +176,6 @@ fn draw_nonce() -> String {
 /// collision; `None` when every draw collided.
 fn prompt_for(case: &TriageCase) -> Option<String> {
     (0..NONCE_DRAWS).find_map(|_| prompt(case, &draw_nonce()).ok())
-}
-
-/// Reads `pipe` to its end on a thread of its own, keeping the first
-/// `keep` bytes and discarding the rest, so a child writing more never
-/// blocks on a full pipe (D-97); sends what it kept and whether more came.
-fn drain(pipe: Option<impl Read + Send + 'static>, keep: usize) -> Receiver<(Vec<u8>, bool)> {
-    let (sender, receiver) = mpsc::channel();
-    std::thread::spawn(move || {
-        let mut kept = Vec::new();
-        let mut over = false;
-        if let Some(mut pipe) = pipe {
-            let mut chunk = [0u8; 8192];
-            loop {
-                match pipe.read(&mut chunk) {
-                    Ok(0) | Err(_) => break,
-                    Ok(n) => {
-                        let room = keep.saturating_sub(kept.len());
-                        kept.extend_from_slice(&chunk[..n.min(room)]);
-                        over |= n > room;
-                    }
-                }
-            }
-        }
-        let _ = sender.send((kept, over));
-    });
-    receiver
-}
-
-/// The call's process tree (D-64): its own kill-on-close job, assigned
-/// right after the spawn; the window never joins a job. Off Windows the
-/// child alone is killed (Linux is v1).
-struct CallJob {
-    #[cfg(windows)]
-    job: Option<crate::platform::windows::Job>,
-}
-
-impl CallJob {
-    fn around(child: &Child) -> CallJob {
-        #[cfg(windows)]
-        {
-            let job = crate::platform::windows::Job::new(true)
-                .ok()
-                .filter(|job| job.assign(child).is_ok());
-            CallJob { job }
-        }
-        #[cfg(not(windows))]
-        {
-            let _ = child;
-            CallJob {}
-        }
-    }
-
-    /// Ends whatever the call left running, and the child itself.
-    fn end(&self, child: &mut Child) {
-        #[cfg(windows)]
-        if let Some(job) = &self.job {
-            let _ = job.terminate(1);
-        }
-        let _ = child.kill();
-        let _ = child.wait();
-    }
 }
 
 /// What the child came to.
@@ -281,28 +217,18 @@ pub fn command_for(job: &TriageJob, claude: &Path) -> Command {
     command
 }
 
-/// Starts the child, writes the prompt on its stdin, drains its output and
-/// waits for it against the job's deadline.
+/// Runs the child through [`run_contained`] (its own kill-on-close job,
+/// D-64), the prompt on its stdin, and reads its answer.
 fn spawn_and_wait(job: &TriageJob, claude: &Path, prompt: String) -> Ran {
-    let started = Instant::now();
-    let mut child = match command_for(job, claude).spawn() {
-        Ok(child) => child,
-        Err(e) => return failed(format!("claude could not start: {e}")),
+    let limits = RunLimits {
+        timeout: job.limits.timeout,
+        stdout_cap: job.limits.stdout_cap,
+        grace: OUTPUT_GRACE,
+        owns_tree: true,
     };
-    let tree = CallJob::around(&child);
-    // On a thread: a child that never reads its stdin must not hold the
-    // runner on a full pipe.
-    if let Some(mut stdin) = child.stdin.take() {
-        std::thread::spawn(move || {
-            let _ = stdin.write_all(prompt.as_bytes());
-        });
-    }
-    let stdout = drain(child.stdout.take(), job.limits.stdout_cap);
-    let stderr = drain(child.stderr.take(), STDERR_KEPT);
-    let status = match wait_until(&mut child, started + job.limits.timeout) {
-        Waited::Exited(status) => status,
-        Waited::Deadline => {
-            tree.end(&mut child);
+    let ran = match run_contained(command_for(job, claude), Some(prompt.into_bytes()), &limits) {
+        Ok(ran) => ran,
+        Err(RunError::Timeout(_)) => {
             return Ran {
                 outcome: TriageOutcome::Timeout,
                 answer: None,
@@ -313,36 +239,19 @@ fn spawn_and_wait(job: &TriageJob, claude: &Path, prompt: String) -> Ran {
                 )),
             };
         }
-        Waited::Lost(e) => {
-            tree.end(&mut child);
-            return failed(format!("lost track of claude: {e}"));
-        }
+        Err(error) => return failed(format!("claude {error}")),
     };
-    // The call starts no child (E16); one it left anyway would hold the
-    // pipes open, so the job ends it before the output is read.
-    tree.end(&mut child);
-    let Ok((out, over)) = stdout.recv_timeout(OUTPUT_GRACE) else {
-        return failed("claude exited but its output stayed open");
-    };
-    let (err, _) = stderr.recv_timeout(OUTPUT_GRACE).unwrap_or_default();
-    let (answer, usage) = if over {
+    let (answer, usage) = if ran.stdout_over {
         (Err(ModelOutputError::TooLarge), CallUsage::default())
     } else {
-        read_output(&out)
+        read_output(&ran.stdout)
     };
-    if !status.success() {
-        let stderr: String = String::from_utf8_lossy(&err).chars().take(500).collect();
+    if !ran.status.success() {
         return Ran {
             outcome: TriageOutcome::Failed,
             answer: None,
             usage,
-            detail: Some(format!(
-                "claude exited with {}: {}",
-                status
-                    .code()
-                    .map_or_else(|| "a signal".to_owned(), |c| c.to_string()),
-                stderr.trim()
-            )),
+            detail: Some(format!("claude {}", ran.failure())),
         };
     }
     match answer {
@@ -378,17 +287,21 @@ pub fn run_call(job: &TriageJob, now_ms: &dyn Fn() -> i64) -> CallResult {
         usage: ran.usage,
         detail: ran.detail,
     };
-    if let Some(refused) = refusal(job) {
-        let ran = Ran {
-            outcome: TriageOutcome::Refused,
-            answer: None,
-            usage: CallUsage::default(),
-            detail: Some(refused.code().to_owned()),
-        };
-        return result(ran, Some(refused));
-    }
-    let Some(claude) = job.claude.as_deref() else {
-        return result(failed("claude not found"), None);
+    // A folder that cannot be created is left to the spawn, which fails
+    // with the reason in the call's detail.
+    let _ = std::fs::create_dir_all(workdir(&job.officina_home));
+    let claude = match (refusal(job), job.claude.as_deref()) {
+        (None, Some(claude)) => claude,
+        (refused, _) => {
+            let refused = refused.unwrap_or(TriageRefusal::ClaudeNotFound);
+            let ran = Ran {
+                outcome: TriageOutcome::Refused,
+                answer: None,
+                usage: CallUsage::default(),
+                detail: Some(refused.code().to_owned()),
+            };
+            return result(ran, Some(refused));
+        }
     };
     let ran = match prompt_for(&job.case) {
         Some(text) => spawn_and_wait(job, claude, text),

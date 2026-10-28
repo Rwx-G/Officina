@@ -10,6 +10,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::agents::is_cmd_shim;
 use crate::dates::{day_start_ms, utc_date};
 use crate::relay::params::is_forbidden_format;
 
@@ -164,23 +165,17 @@ pub fn triage_env(base: &[(String, String)], config_dir: Option<&str>) -> Vec<(S
 }
 
 /// The refusal a `claude` binary at `binary` earns before anything starts
-/// (AD-51): a `.cmd` or `.bat` shim, which only `cmd.exe` runs. Windows
-/// drops trailing dots and spaces from a file name, so `claude.cmd.` is a
-/// shim too.
+/// (AD-51): a shim, as [`is_cmd_shim`] tells it for every call Officina
+/// makes.
 ///
 /// ```
 /// use officina_core::registry::triage_call::refusal_for_binary;
 /// use officina_core::registry::types::TriageRefusal;
 /// assert_eq!(refusal_for_binary("C:/npm/claude.CMD"), Some(TriageRefusal::CmdShim));
-/// assert_eq!(refusal_for_binary("C:/npm/claude.bat. "), Some(TriageRefusal::CmdShim));
 /// assert_eq!(refusal_for_binary("C:/bin/claude.exe"), None);
 /// ```
 pub fn refusal_for_binary(binary: &str) -> Option<TriageRefusal> {
-    let name = binary.rsplit(['/', '\\']).next().unwrap_or(binary);
-    let name = name.trim_end_matches(['.', ' ']);
-    let extension = name.rsplit_once('.').map(|(_, ext)| ext)?;
-    (extension.eq_ignore_ascii_case("cmd") || extension.eq_ignore_ascii_case("bat"))
-        .then_some(TriageRefusal::CmdShim)
+    is_cmd_shim(binary).then_some(TriageRefusal::CmdShim)
 }
 
 /// One case sent to the model: what a confirmation keeps of a session
