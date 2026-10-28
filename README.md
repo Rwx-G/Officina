@@ -190,7 +190,26 @@ The gate runs inside `officina hook` as a `PreToolUse` hook on `Bash`. Once the 
 
 A refusal holds in every permission mode, bypass included: the session sees why, and the actions it may run instead. A repository counts as guarded when the current floor or the approved catalogue says so, so a session cannot lift containment by editing the floor, and when it is the session's root or the shell's current folder, so `cd ..` does not leave it. If the approved catalogue or the floor cannot be read, the gate gets stricter, not looser. Each refusal, and each such fault, is one line in `~/.officina/journal/YYYY-MM-DD.jsonl`, with the first 280 characters of the command unless excerpts are off.
 
-Today the floor's catalogue is parsed, validated and hashed, and the gate refuses guarded commands; running actions and the approval banner in the window arrive with the rest of v0.2.
+Sessions run the approved actions themselves, from anywhere inside the project's folder:
+
+```bash
+officina run --list                                   # this project's actions and what each parameter accepts
+officina run check group=lab-web playbook=alerting.yml
+```
+
+`officina run` checks, in this order, that the relay is not stopped, that the floor still holds the approved catalogue, that the folder is in an approved project (free or guarded), that the project lists the action, and that every parameter is declared, given once and accepted. It then starts the program as an argument vector, never through a shell, in the project's folder, with the action's `env`; a `wsl` action goes through the system's own `wsl.exe` with `--exec`. Output streams through as it arrives, up to `max_output_kib`, after which a last line says how much was dropped. At `timeout_s` the program and every process it started are stopped, and they also stop if `officina run` itself is killed. Each run leaves a start line and an end line in the journal (exit code, duration, byte counts and SHA-256 of each stream, never the output); each refusal leaves one line.
+
+| Exit code | Meaning |
+|---|---|
+| the program's own | it ran (any code, full Windows values included) |
+| 126 | refused: one stderr line `officina: refused: <why> (<code>)` |
+| 124 | stopped at its timeout |
+| 127 | the program could not start |
+| 64 | usage error |
+
+A program can exit 126 or 124 itself: the stderr line and the journal tell them apart. `after-check` and `human` actions are refused as not available in this build yet.
+
+Today the catalogue is parsed, validated and hashed, the gate refuses guarded commands and `officina run` runs `free` actions; the other classes and the approval banner in the window arrive with the rest of v0.2.
 
 ## Command line
 
@@ -200,6 +219,8 @@ Today the floor's catalogue is parsed, validated and hashed, and the gate refuse
 | `officina board --json` | print the board once (exit 3 when the session list could not be refreshed) |
 | `officina hook` | record one hook payload from stdin, or answer the relay gate for a `Bash` call (run by Claude Code) |
 | `officina quota write [--tee]` | record the rate limits from a statusline payload (run by your statusline) |
+| `officina run <action> [name=value ...]` | run an approved relay action from its project (run by sessions) |
+| `officina run --list` | list the actions of the current folder's project |
 
 ## Roadmap
 

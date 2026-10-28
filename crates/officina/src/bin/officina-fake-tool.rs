@@ -11,9 +11,11 @@
 //!   included), `bytes:<n>` (writes `n` bytes on stdout and `n` on stderr,
 //!   see `tests/common/fake_output.rs`), `sleep:<s>` (seconds, then exit 0),
 //!   `tree` (starts a copy of itself that appends a byte to
-//!   `FAKE_TOOL_HEARTBEAT` every 100 ms, then sleeps); unset, exit 0. The
-//!   heartbeat ends by itself after a while, or as soon as a file named like
-//!   the heartbeat plus `.stop` exists, which tests create to clean up a
+//!   `FAKE_TOOL_HEARTBEAT` every 100 ms, then sleeps), `orphan` (starts the
+//!   same heartbeat with its own stdout and stderr, then exits 0 at once, as
+//!   a program that leaves a daemon behind); unset, exit 0. The heartbeat
+//!   ends by itself after a while, or as soon as a file named like the
+//!   heartbeat plus `.stop` exists, which tests create to clean up a
 //!   grandchild nothing else ends.
 
 use std::collections::BTreeMap;
@@ -120,7 +122,8 @@ fn main() {
             let seconds: f64 = value.parse().unwrap_or(0.0);
             std::thread::sleep(Duration::from_secs_f64(seconds.max(0.0)));
         }
-        "tree" => {
+        "tree" | "orphan" => {
+            // The grandchild inherits this process's stdout and stderr.
             if let Ok(me) = std::env::current_exe() {
                 let _ = std::process::Command::new(me)
                     .env("FAKE_TOOL_MODE", HEARTBEAT_MODE)
@@ -128,7 +131,9 @@ fn main() {
                     .stdin(std::process::Stdio::null())
                     .spawn();
             }
-            std::thread::sleep(TREE_LIFETIME);
+            if name == "tree" {
+                std::thread::sleep(TREE_LIFETIME);
+            }
         }
         _ => {}
     }

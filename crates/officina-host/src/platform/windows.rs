@@ -1,18 +1,150 @@
-//! Win32 calls for the focus action (AD-15). The only module of the workspace
-//! allowed `unsafe`; every block carries its safety argument. Decisions (which
-//! window, which arguments) are made by pure functions in `officina_core::focus`.
+//! Win32 calls for the focus action (AD-15) and for the relay's process tree
+//! (AD-30, AD-31). The only module of the workspace allowed `unsafe`; every
+//! block carries its safety argument. Decisions (which window, which
+//! arguments) are made by pure functions in `officina_core`.
 
 #![allow(unsafe_code)] // raw Win32 bindings; each block states its invariant
 
 use std::collections::HashMap;
+use std::io;
+use std::os::windows::io::AsRawHandle;
+use std::path::PathBuf;
 
-use windows_sys::Win32::Foundation::{CloseHandle, FILETIME, HWND, INVALID_HANDLE_VALUE, LPARAM};
+use windows_sys::Win32::Foundation::{
+    CloseHandle, FILETIME, HANDLE, HWND, INVALID_HANDLE_VALUE, LPARAM,
+};
 use windows_sys::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW, TH32CS_SNAPPROCESS,
 };
-use windows_sys::Win32::System::Threading::{
-    GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+use windows_sys::Win32::System::JobObjects::{
+    AssignProcessToJobObject, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
+    SetInformationJobObject, TerminateJobObject,
 };
+
+// windows-sys declares CreateJobObjectW only with its `Win32_Security`
+// feature, for the type of the security attributes pointer. Officina always
+// passes null there, so the one function is declared here rather than
+// enabling a feature the architecture addendum does not list.
+#[link(name = "kernel32")]
+unsafe extern "system" {
+    fn CreateJobObjectW(attributes: *const std::ffi::c_void, name: *const u16) -> HANDLE;
+}
+use windows_sys::Win32::System::SystemInformation::GetSystemDirectoryW;
+use windows_sys::Win32::System::Threading::{
+    GetCurrentProcess, GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+};
+
+/// A job object: every process assigned to it, and every process those
+/// start afterwards, ends together when the job is terminated.
+#[derive(Debug)]
+pub struct Job(HANDLE);
+
+impl Job {
+    /// A new, unnamed job. With `kill_on_close`, closing its last handle
+    /// ends every process in it: when the process holding the handle dies,
+    /// killed or not, its tree dies too (AD-31).
+    pub fn new(kill_on_close: bool) -> io::Result<Job> {
+        // SAFETY: both arguments may be null (default security, no name);
+        // the returned handle is checked and owned by the Job, which closes
+        // it once on drop.
+        let handle = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
+        if handle.is_null() {
+            return Err(io::Error::last_os_error());
+        }
+        let job = Job(handle);
+        if kill_on_close {
+            // SAFETY: the struct is plain data, for which all zeroes is a
+            // valid value (no limits set).
+            let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { std::mem::zeroed() };
+            limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+            let size = u32::try_from(std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>())
+                .unwrap_or(u32::MAX);
+            // SAFETY: `job.0` is a valid job handle, and the pointer and size
+            // describe `limits`, which lives for the call.
+            let ok = unsafe {
+                SetInformationJobObject(
+                    job.0,
+                    JobObjectExtendedLimitInformation,
+                    std::ptr::from_ref(&limits).cast(),
+                    size,
+                )
+            };
+            if ok == 0 {
+                return Err(io::Error::last_os_error());
+            }
+        }
+        Ok(job)
+    }
+
+    /// Puts this process in the job, so every child it starts afterwards is
+    /// in it from its first instruction: no race between a spawn and its
+    /// assignment. A process already in a job nests (Windows 8 and later).
+    pub fn assign_current_process(&self) -> io::Result<()> {
+        // SAFETY: GetCurrentProcess returns a pseudo-handle that needs no
+        // closing; `self.0` is a valid job handle.
+        let ok = unsafe { AssignProcessToJobObject(self.0, GetCurrentProcess()) };
+        if ok == 0 {
+            Err(io::Error::last_os_error())
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Puts a started child in the job. Whatever the child started before
+    /// this call is not in it.
+    pub fn assign(&self, child: &std::process::Child) -> io::Result<()> {
+        // SAFETY: the child's handle stays valid while `child` is borrowed;
+        // `self.0` is a valid job handle.
+        let ok = unsafe { AssignProcessToJobObject(self.0, child.as_raw_handle()) };
+        if ok == 0 {
+            Err(io::Error::last_os_error())
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Ends every process in the job with `exit_code`, the caller included
+    /// when it is in the job.
+    pub fn terminate(&self, exit_code: u32) -> io::Result<()> {
+        // SAFETY: `self.0` is a valid job handle.
+        let ok = unsafe { TerminateJobObject(self.0, exit_code) };
+        if ok == 0 {
+            Err(io::Error::last_os_error())
+        } else {
+            Ok(())
+        }
+    }
+}
+
+impl Drop for Job {
+    fn drop(&mut self) {
+        // SAFETY: the handle came from CreateJobObjectW and is closed once.
+        unsafe { CloseHandle(self.0) };
+    }
+}
+
+/// The Windows system directory (`C:\Windows\System32`), from the system
+/// itself: never `PATH` or `%SystemRoot%`, which a session can set (AD-30).
+pub fn system_directory() -> io::Result<PathBuf> {
+    let mut buf = vec![0u16; 260];
+    loop {
+        let capacity = u32::try_from(buf.len()).unwrap_or(u32::MAX);
+        // SAFETY: `buf` holds `capacity` u16, the size passed to the call,
+        // which writes at most that many.
+        let len = unsafe { GetSystemDirectoryW(buf.as_mut_ptr(), capacity) };
+        let len = usize::try_from(len).unwrap_or(0);
+        if len == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        if len < buf.len() {
+            buf.truncate(len);
+            return Ok(PathBuf::from(String::from_utf16_lossy(&buf)));
+        }
+        // Too small: `len` is the size needed, terminator included.
+        buf.resize(len, 0);
+    }
+}
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     EnumWindows, FLASHW_ALL, FLASHW_TIMERNOFG, FLASHWINFO, FlashWindowEx, GW_OWNER,
     GetForegroundWindow, GetWindow, GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId,

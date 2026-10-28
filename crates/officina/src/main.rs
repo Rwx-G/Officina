@@ -1,10 +1,12 @@
 //! `officina`: the console binary. Claude Code runs `hook` and `quota write`;
-//! the author runs `doctor` and `board --json`. Arguments are parsed by hand
-//! (AD-16): four subcommands do not justify a parser in the hook's image.
+//! sessions run `run`; the author runs `doctor` and `board --json`.
+//! Arguments are parsed by hand (AD-16, AD-29): a few subcommands do not
+//! justify a parser in the hook's image.
 //!
 //! Exit codes never use 2: Claude Code reads a hook exiting 2 as "block",
 //! so a mistyped hook command must not be able to stop sessions. Usage errors
-//! exit 64 (EX_USAGE), runtime failures 1, a stale board 3.
+//! exit 64 (EX_USAGE), runtime failures 1, a stale board 3; `run` passes the
+//! program's code through and uses 126, 124 and 127 as a shell does.
 
 use std::io::{Read, Write};
 use std::path::PathBuf;
@@ -16,6 +18,7 @@ use officina_host::files::now_ms;
 use officina_host::paths::Paths;
 use officina_host::relay::gate::{self, GATE_EVENT, GateEnv};
 use officina_host::relay::home::RelayHome;
+use officina_host::relay::run::{self as relay_run, RunArgs};
 use officina_host::writers::{hook_keeps_excerpts, record_hook_payload, record_quota};
 
 const USAGE: &str = "\
@@ -25,6 +28,10 @@ usage: officina <command>
   doctor [--floor <path>]         check the setup, print what to paste
   hook                            record a Claude Code hook payload (stdin)
   quota write [--tee]             record a statusline payload (stdin)
+  run <action> [name=value ...]   run an approved relay action from its project
+                                  (exit: its own code, 126 refused, 124 timed
+                                  out, 127 not started)
+  run --list                      list the actions this folder's project may run
   version                         print the version";
 
 fn read_stdin() -> Vec<u8> {
@@ -156,6 +163,44 @@ fn usage_error() -> ExitCode {
     ExitCode::from(EXIT_USAGE)
 }
 
+/// `officina run`: the relay's authority (AD-29). The exit code is the
+/// program's own, full Windows value included, so it leaves through
+/// `std::process::exit` rather than an 8-bit `ExitCode`.
+fn run_cmd(args: &[String]) -> ExitCode {
+    let parsed = match relay_run::parse_args(args) {
+        Ok(parsed) => parsed,
+        Err(problem) => {
+            eprintln!("officina: run: {problem}");
+            return usage_error();
+        }
+    };
+    let Some(home) = RelayHome::from_env() else {
+        eprintln!(
+            "officina: refused: no Officina home, set OFFICINA_HOME or USERPROFILE (no_home)"
+        );
+        std::process::exit(relay_run::EXIT_REFUSED);
+    };
+    // An unreadable working directory lies in no project: refused.
+    let cwd = std::env::current_dir()
+        .map(|dir| dir.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    match parsed {
+        RunArgs::List => {
+            let mut out = std::io::stdout().lock();
+            let _ = out.write_all(relay_run::list(&home, &cwd).as_bytes());
+            let _ = out.flush();
+            ExitCode::SUCCESS
+        }
+        RunArgs::Action { action, params } => std::process::exit(relay_run::run(
+            &home,
+            &cwd,
+            &action,
+            &params,
+            relay_run::session_id_from_env(),
+        )),
+    }
+}
+
 /// Extracts `--floor <path>` from the remaining arguments.
 fn floor_arg(args: &[String]) -> Result<Option<PathBuf>, ()> {
     match args.iter().position(|a| a == "--floor") {
@@ -165,7 +210,19 @@ fn floor_arg(args: &[String]) -> Result<Option<PathBuf>, ()> {
 }
 
 fn main() -> ExitCode {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    // The hook exits 0 whatever follows it (FR-3).
+    if std::env::args_os().nth(1).is_some_and(|a| a == "hook") {
+        return hook();
+    }
+    // An argument that is not Unicode (a lone surrogate on Windows) is a
+    // usage error, not the panic `std::env::args` would raise.
+    let Ok(args) = std::env::args_os()
+        .skip(1)
+        .map(std::ffi::OsString::into_string)
+        .collect::<Result<Vec<String>, _>>()
+    else {
+        return usage_error();
+    };
     let rest = args.get(1..).unwrap_or_default();
     match args.first().map(String::as_str) {
         Some("hook") => hook(),
@@ -180,6 +237,7 @@ fn main() -> ExitCode {
             Ok(floor) => doctor_cmd(floor.as_ref()),
             Err(()) => usage_error(),
         },
+        Some("run") => run_cmd(rest),
         Some("version" | "--version") => {
             println!("officina {}", env!("CARGO_PKG_VERSION"));
             ExitCode::SUCCESS

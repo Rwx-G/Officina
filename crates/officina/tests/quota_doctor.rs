@@ -168,14 +168,30 @@ fn no_command_writes_under_the_claude_config_dir() {
     env.run(&["board", "--json"], b"");
     env.run(&["doctor"], b"");
 
-    // A gate deny, with the relay approved in this home.
-    env.write_floor("schema = 2\n[[project]]\nname = \"lab\"\npath = \"C:/path/to/Lab\"\n");
+    // A gate deny and the relay's own commands, with a catalogue approved
+    // in this home.
+    let lab = env.root.path().join("work").join("Lab");
+    std::fs::create_dir_all(&lab).unwrap();
+    let lab_path = lab.to_string_lossy().replace('\\', "/");
+    env.write_floor(&format!(
+        "schema = 2\n[[project]]\nname = \"lab\"\npath = \"{lab_path}\"\nactions = [\"probe\"]\n[[action]]\nname = \"probe\"\nclass = \"free\"\nprogram = \"{{tool}}\"\n"
+    ));
     env.approve();
-    let deny = env.run(
-        &["hook"],
-        br#"{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"ssh host01"},"cwd":"C:\\path\\to\\Lab","session_id":"s"}"#,
-    );
+    let payload = serde_json::json!({
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Bash",
+        "tool_input": {"command": "ssh host01"},
+        "cwd": lab,
+        "session_id": "s",
+    });
+    let deny = env.run(&["hook"], payload.to_string().as_bytes());
     assert!(String::from_utf8_lossy(&deny.stdout).contains("\"deny\""));
+    for args in [&["run", "probe"][..], &["run", "--list"]] {
+        let mut cmd = env.officina(args);
+        cmd.current_dir(&lab);
+        let out = common::run_with(cmd, b"");
+        assert!(out.status.code().is_some(), "{args:?}");
+    }
 
     // Long enough for the collector to see the hook and quota writes, spawn
     // `claude` again and run its follow-up refresh.

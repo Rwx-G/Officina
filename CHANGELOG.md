@@ -59,6 +59,19 @@ project uses [Semantic Versioning](https://semver.org/).
 - `officina doctor` requires and prints the `PreToolUse` hook, matcher `Bash`
   only, once the relay guards a project; workstations without one keep the
   five v0.1 hooks and pay nothing per `Bash` call.
+- `officina run <action> name=value ...`: runs an action of the approved
+  catalogue from its project's folder, `free` or `guarded`, after checking,
+  in order, that the relay is not stopped, that the catalogue still is the
+  approved one, the project, the action and every parameter; the program
+  starts as an argument vector (WSL actions through the system's `wsl.exe`),
+  with its timeout and an output budget, and it and every process it starts
+  end together. Exit codes are the program's own, or 126 refused, 124 timed
+  out, 127 not started, 64 usage. Each run journals a start and an end line
+  (output byte counts and SHA-256, never the output), each refusal one line.
+  `after-check` and `human` actions are refused as not available yet.
+- `officina run --list`: the actions of the current folder's project with
+  what each parameter accepts, and whether the relay is stopped or a
+  catalogue change awaits approval.
 
 ### Changed
 

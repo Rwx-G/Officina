@@ -149,6 +149,23 @@ impl RelayHome {
     pub fn read_known_projects(&self) -> Option<KnownProjects> {
         parse_known_projects(&fs::read_to_string(self.known_projects_file()).ok()?)
     }
+
+    /// True when the relay is stopped (AD-34): `relay/stopped` exists, or
+    /// cannot be looked at.
+    pub fn relay_stopped(&self) -> bool {
+        is_stopped(
+            fs::metadata(self.stopped_file())
+                .map(|_| ())
+                .map_err(|e| e.kind()),
+        )
+    }
+}
+
+/// The stop flag's decision (AD-34) on what looking at `relay/stopped`
+/// gave: present means stopped, and so does any failure but "not found",
+/// so a flag the process cannot read never lets an action run.
+pub fn is_stopped(lookup: Result<(), io::ErrorKind>) -> bool {
+    !matches!(lookup, Err(io::ErrorKind::NotFound))
 }
 
 /// Reads a floor for the relay: both phases, the canonical form and its
@@ -161,4 +178,28 @@ pub fn load_relay_floor(path: &Path) -> Result<RelayFloor, RelayFloorError> {
     })?;
     catalogue::load(&content, &path.to_string_lossy())
         .map_err(|error| RelayFloorError::Invalid { path: shown, error })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn metadata_error_other_than_not_found_is_stopped() {
+        assert!(is_stopped(Ok(())));
+        assert!(!is_stopped(Err(io::ErrorKind::NotFound)));
+        for kind in [
+            io::ErrorKind::PermissionDenied,
+            io::ErrorKind::InvalidInput,
+            io::ErrorKind::Other,
+        ] {
+            assert!(is_stopped(Err(kind)), "{kind:?}");
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let home = RelayHome::new(dir.path(), None);
+        assert!(!home.relay_stopped());
+        fs::create_dir_all(home.relay_dir()).unwrap();
+        fs::write(home.stopped_file(), b"{\"since_ms\":1}").unwrap();
+        assert!(home.relay_stopped());
+    }
 }
