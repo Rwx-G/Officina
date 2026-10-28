@@ -104,6 +104,33 @@ fn hanging_claude_times_out_instead_of_blocking() {
     assert!(board["stale"]["error"].as_str().unwrap().contains("within"));
 }
 
+/// A timed-out `claude` loses its whole tree, not only itself (E13): the
+/// process it started stops with it.
+#[cfg(windows)]
+#[test]
+fn a_timed_out_claude_stops_with_every_process_it_started() {
+    let env = TestEnv::new();
+    let heartbeat = env.root.path().join("heartbeat");
+    // Its output goes to a file: a grandchild inherits every inheritable
+    // handle, this test's pipes included.
+    let board_file = env.root.path().join("board.json");
+    let mut cmd = env.officina(&["board", "--json"]);
+    cmd.env("FAKE_CLAUDE_MODE", "tree")
+        .env("FAKE_CLAUDE_HEARTBEAT", &heartbeat)
+        .stdin(Stdio::null())
+        .stdout(std::fs::File::create(&board_file).unwrap())
+        .stderr(Stdio::null());
+    let status = cmd.status().unwrap();
+    assert_eq!(status.code(), Some(3), "stale: claude timed out");
+    assert!(
+        common::heartbeat_len(&heartbeat) > 0,
+        "the grandchild had started"
+    );
+    let stopped = common::heartbeat_stopped(&heartbeat);
+    common::stop_heartbeat(&heartbeat);
+    assert!(stopped, "the process claude started outlived the timeout");
+}
+
 #[test]
 fn a_process_claude_leaves_running_cannot_hold_the_board() {
     let env = TestEnv::new();

@@ -18,10 +18,3 @@ README, not here.
   approved, ask for a raw `ssh` and check that the call is refused with the
   gate's reason; record it in `docs/research-notes.md` (E12 and E15 were
   `claude -p` and background sessions).
-
-## Low
-
-- The kill of a timed-out `claude` reaches only the direct child: a process
-  it started keeps running, and keeps the abandoned pipe reader threads
-  blocked, until it exits. A Job Object around the child would end the whole
-  tree (E13).

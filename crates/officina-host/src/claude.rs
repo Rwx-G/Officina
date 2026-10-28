@@ -106,10 +106,49 @@ fn read_on_thread(pipe: Option<impl Read + Send + 'static>, cap: u64) -> Receive
     receiver
 }
 
+/// The processes of one `claude` call. On Windows the child goes into a job
+/// right after it starts, so a timeout ends whatever it started too (E13),
+/// not only `claude` itself. The job does not kill on close: a process
+/// `claude` leaves running after answering (a background-session supervisor,
+/// say) is not Officina's to end; only a call that timed out loses its tree.
+/// What the child starts in the instant before the assignment escapes it;
+/// `claude` takes far longer than that before it starts anything.
+struct CallTree {
+    #[cfg(windows)]
+    job: Option<crate::platform::windows::Job>,
+}
+
+impl CallTree {
+    fn around(child: &std::process::Child) -> CallTree {
+        #[cfg(windows)]
+        {
+            let job = crate::platform::windows::Job::new(false)
+                .ok()
+                .filter(|job| job.assign(child).is_ok());
+            CallTree { job }
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = child;
+            CallTree {}
+        }
+    }
+
+    fn kill(&self, child: &mut std::process::Child) {
+        #[cfg(windows)]
+        if let Some(job) = &self.job {
+            let _ = job.terminate(1);
+        }
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+}
+
 /// Runs `claude <args>` with a deadline and returns its stdout. Returns
-/// within about `timeout` plus [`OUTPUT_GRACE`] whatever `claude` leaves running:
-/// the kill on timeout reaches only `claude` itself, and a process it started
-/// can hold the output pipes open after it exits.
+/// within about `timeout` plus [`OUTPUT_GRACE`] whatever `claude` leaves
+/// running: a timeout ends `claude` and the processes it started, and a
+/// process it left running after it answered can hold the output pipes
+/// open after it exits.
 pub fn run(
     binary: &Path,
     args: &[&str],
@@ -123,6 +162,7 @@ pub fn run(
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|e| ClaudeError::Spawn(e.to_string()))?;
+    let tree = CallTree::around(&child);
 
     // Pipes are drained on their own threads: a child that fills a pipe
     // buffer while we only poll `try_wait` would otherwise never exit.
@@ -134,8 +174,7 @@ pub fn run(
         match child.try_wait() {
             Ok(Some(status)) => break status,
             Ok(None) if Instant::now() >= deadline => {
-                let _ = child.kill();
-                let _ = child.wait();
+                tree.kill(&mut child);
                 return Err(ClaudeError::Timeout(timeout.as_secs()));
             }
             Ok(None) => std::thread::sleep(Duration::from_millis(50)),

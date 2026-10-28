@@ -78,3 +78,9 @@ project uses [Semantic Versioning](https://semver.org/).
 - The gate's command lexer reads a 64 KiB command in about 1 ms (it took
   about 4 ms): fewer allocations per word and each command analysed as soon
   as it ends.
+
+### Fixed
+
+- A `claude` call that timed out now ends with every process it started
+  (a Windows job object), instead of leaving them running and holding the
+  board's reader threads.
