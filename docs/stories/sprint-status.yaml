@@ -188,3 +188,38 @@ stories:
   - {id: "7.18", file: story-7.18-automations-table.md, slice: B, status: approved}
   - {id: "7.19", file: story-7.19-docs-doctor-and-qa.md, slice: B, status: approved}
   - {id: "7.20", file: story-7.20-two-week-measure.md, slice: B, status: approved}
+---
+epic: 8
+version: v0.8
+# approved: written and approved, implementation not started.
+# Slice 0 (8.1) records gates 0 to 3 of architecture-v0.8.md AD-166, gates 2 and 3 in halves (epic-8-decisions.md D-401 to D-403); E-numbers are given when each entry is written (D-401).
+# Gate 0 (the owner's count of production writes) comes first: no other v0.8 story starts before it is recorded (FR-0). Gate 1 before 8.3, 8.5 and any Slice A or B story; the first halves of gates 2 and 3 before 8.9 and 8.11.
+# Second halves (D-402): gate 3 closes 8.11, gate 2 closes 8.12.
+# 8.2 (Slice 0) reads story 2.8's two weeks at work and records whether Slice A is built (D-404); it holds 8.6 and 8.7, and 8.8 through its Decision time row only, never Slice B.
+# 8.2's code (metrics, journal::read_days, the two examples) is exempt from the ordering below: it lands once stories 2.8 and 2.13 have merged, before the owner's two weeks begin, which start after 2.13 merged (D-400, D-404).
+# Keys (8.3, 8.4) and the shared scope core (8.5) are built with whichever slice comes first; 8.3 starts only once a slice is confirmed (8.2's trigger, or the gate 2 and 3 first halves passed) or 8.8 is called for, and needs story 2.13 (P-72). 8.3 bumps the catalogue format once and 8.6 again (P-73, D-405).
+# Slice A, conditional (8.6, 8.7: FR-1 to FR-3 enforced): implemented only after 8.2 records a trigger; until then approved and unimplemented (P-72).
+# 8.8 (FR-4, bound paths): only when gate 1 finds ignored roles or collections under a guarded project, whatever Slice A's trigger (P-70); otherwise approved and unimplemented.
+# Slice B (8.9-8.15: FR-5 to FR-8, Slice B parts of FR-9 and FR-10) is built unless gate 2 and its fallback both fail (FR-6, P-72).
+# Slice B order: 8.9 needs the gate 2 and 3 first halves; 8.10 needs 8.3, 8.5 and 8.9; 8.11 needs 8.10; 8.12 needs 8.9 and 8.11; 8.13, 8.14 and 8.15 need 8.12.
+# Implemented after v0.2 to v0.6 have merged (story 2.8 as amended by D-170, stories 2.11 and 2.13 included) and v0.7's built slices closed (epic-7-decisions.md P-62); each seam has one owning story (epic-8-decisions.md D-400).
+# The workstation browser slice is PRD section 5's backlog note: no story; 8.16 lists it for the owner's confirmation (question 9).
+# 8.16 closes the built slices after real use (owner rule, epic-2-decisions.md P-7, with the exception of epic-8-decisions.md P-72).
+# Reworked after the story review (review-stories-epic8.md, F1 to F40; epic-8-decisions.md P-74, new decisions D-426 to D-434); F1's v0.2-wide part and F8's journal fields are story 2.13 (D-172).
+stories:
+  - {id: "8.1", file: story-8.1-workstation-gates.md, slice: "0", status: approved}
+  - {id: "8.2", file: story-8.2-two-week-reading-and-slice-a-decision.md, slice: "0", status: approved}
+  - {id: "8.3", file: story-8.3-effect-scope-and-relay-action-keys.md, slice: keys, status: approved}
+  - {id: "8.4", file: story-8.4-autonomy-labels-and-relay-view.md, slice: keys, status: approved}
+  - {id: "8.5", file: story-8.5-scope-judgement-and-target-resolution.md, slice: shared, status: approved}
+  - {id: "8.6", file: story-8.6-scope-step-in-officina-run.md, slice: A, status: approved}
+  - {id: "8.7", file: story-8.7-scope-on-the-approval-card.md, slice: A, status: approved}
+  - {id: "8.8", file: story-8.8-bound-paths.md, slice: A, status: approved}
+  - {id: "8.9", file: story-8.9-mailbox-and-officina-relay.md, slice: B, status: approved}
+  - {id: "8.10", file: story-8.10-worker-admission.md, slice: B, status: approved}
+  - {id: "8.11", file: story-8.11-worker-reads-on-the-host.md, slice: B, status: approved}
+  - {id: "8.12", file: story-8.12-mailbox-in-the-workshop.md, slice: B, status: approved}
+  - {id: "8.13", file: story-8.13-battery-relay-family.md, slice: B, status: approved}
+  - {id: "8.14", file: story-8.14-worker-calls-in-review-and-views.md, slice: B, status: approved}
+  - {id: "8.15", file: story-8.15-doctor-for-workers-and-check-mode-scan.md, slice: B, status: approved}
+  - {id: "8.16", file: story-8.16-docs-doctor-use-and-qa.md, slice: close, status: approved}
