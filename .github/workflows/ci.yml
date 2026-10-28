@@ -167,9 +167,11 @@ jobs:
           node scripts/e2e-fixtures.mjs
       - name: Playwright
         working-directory: app
+        # Three times over (D-91): a case that passes once and fails once is
+        # a flake to fix, not a pass.
         run: |
           pnpm exec playwright install chromium
-          pnpm e2e
+          pnpm e2e --repeat-each=3
       - name: Playwright report
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
