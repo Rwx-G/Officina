@@ -52,21 +52,22 @@ Findings of the implementation, all decided:
 
 ## Evidence
 
-Figures from the full local gate on `3b22c23`, the last code commit, Rust
-1.99.1, Windows 11 host; `core-linux` in a `rust:1-bookworm` container.
+Figures from the full local gate after story 4.15, on `1e7183f` (the Epic 5
+planning merge included), Rust 1.99.1, Windows 11 host; `core-linux` in a
+`rust:1-bookworm` container.
 
 | Gate | Result |
 |---|---|
 | `cargo fmt --check`; clippy `-D warnings`, workspace with `officina-core/ts` | clean |
-| Rust unit, integration, CLI end to end, doc tests, vector sets, TypeScript bindings drift | 1,076 passed, 0 failed, 11 ignored (the release-only perf, stress, crash and lexer tests below) |
-| Perf, release (hook own cost, gate own cost, gate in process, appends) | 5 passed; hook own cost 3.2 ms (bound 150 ms with CI's budget); gate own cost 4.7 ms (bound 15 ms); gate in process p95 3.6 ms (a workstation check, not asserted) |
+| Rust unit, integration, CLI end to end, doc tests, vector sets, TypeScript bindings drift | 1,084 passed, 0 failed, 11 ignored (the release-only perf, stress, crash and lexer tests below) |
+| Perf, release (hook own cost, gate own cost, gate in process, appends) | 5 passed; hook own cost 5.5 ms (bound 150 ms with CI's budget); gate own cost 3.0 ms (bound 15 ms); gate in process p95 3.4 ms (a workstation check, not asserted) |
 | Lexer against Git Bash; approvals stress; crash (release) | pass |
 | `officina.exe` built alone: no authority or registry writer marker; both in `officina-app.exe` | pass |
 | Registry dependencies, no bundled roots | pass |
-| Frontend: svelte-check, ESLint, Vitest | 0 errors, clean, 253 passed in 24 files |
-| e2e fixtures from the real CLI, Playwright `--repeat-each=3` | 783 passed, 6 skipped (the light and dark baseline cases, `test.fixme` until D-508), three times each |
+| Frontend: svelte-check, ESLint, Vitest | 0 errors, clean, 257 passed in 25 files |
+| e2e fixtures from the real CLI, Playwright `--repeat-each=3` | 840 passed, 6 skipped (the light and dark baseline cases, `test.fixme` until D-508), three times each |
 | `cargo deny` (0.19.4), `pnpm audit` (11.5.3) | `cargo deny` ok (advisories, bans, licenses, sources); `pnpm audit` 1 low, ignored with its dated reason |
-| `core-linux` in `rust:1-bookworm` | fmt and clippy clean, 944 passed, 0 failed, 9 ignored |
+| `core-linux` in `rust:1-bookworm` | fmt and clippy clean, 952 passed, 0 failed, 9 ignored |
 | Zero write under the Claude config dir | `quota_doctor.rs::no_command_writes_under_the_claude_config_dir` |
 
 Stability: one failure across the Playwright runs of the epic's closing
