@@ -214,10 +214,13 @@ test.describe("walking", () => {
     await page.clock.runFor(FRAME_MS);
     await expect(scene(page)).toHaveAttribute("data-moving", "1");
     await stepUntilSettled(page, key);
-    // Nothing is written afterwards: the loop no longer runs.
+    // Nothing is written afterwards: the loop no longer runs. The arrived
+    // figure's halo may still take its delay when the browser starts its
+    // animation (D-522), an event of the halo, not of the loop.
     await scene(page).evaluate((root) => {
       const records: MutationRecord[] = [];
-      new MutationObserver((list) => records.push(...list)).observe(root, { subtree: true, childList: true, attributes: true });
+      const haloStart = (r: MutationRecord) => r.attributeName === "style" && (r.target as Element).hasAttribute("data-halo");
+      new MutationObserver((list) => records.push(...list.filter((r) => !haloStart(r)))).observe(root, { subtree: true, childList: true, attributes: true });
       (window as unknown as { __walkRecords: MutationRecord[] }).__walkRecords = records;
     });
     await page.clock.runFor(2_000);
