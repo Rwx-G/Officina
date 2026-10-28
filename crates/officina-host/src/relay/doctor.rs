@@ -908,6 +908,7 @@ fn paragraph_checks(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(windows)]
     use crate::relay::home::system_dir;
     use officina_core::relay::catalogue::load;
     use std::path::PathBuf;
