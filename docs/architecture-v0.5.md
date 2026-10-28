@@ -2,7 +2,7 @@
 title: "Architecture addendum: Officina v0.5 - The Orchestrator"
 author: Rwx-G
 date: 2026-10-28
-status: approved 2026-10-28 (owner delegated design decisions; gates of PRD section 8 open)
+status: approved 2026-10-28 (owner delegated design decisions; gates of PRD section 8 open); addendum of section 6 (2026-10-28: scene v2, orchestrator answers, permissions design)
 inputs:
   - prd/prd-v0.5.md
   - (requirement challenge, not published)
@@ -354,7 +354,7 @@ After a call: `call_failed`, `call_timeout` (60 s), `invalid_answer`; then `revi
   - `ProposalList.svelte` and `WorkOrderHistory.svelte` complete the view.
   - Leaving the view calls `mark_briefing_read`.
 - **Meeting:** `MeetingPanel.svelte` takes the side-panel slot of AD-69, one panel at a time, 420 px. Receive is offered on Needs you and Your turn cards, in `SessionFile` and on to-resume subjects. It holds `DiffView.svelte` (files, anchors, hunks, as text) and `AnswerComposer.svelte` (textarea, character counter from limits carried in the payload, `Ctrl+Enter` and a Send button; Send is keyboard-reachable, since an answer approves nothing). The composer is shown for `ResumeLive`, `ResumeEnded` and `CopyAndAttach`; the panel shows Focus for `FocusOnly`.
-- **Scene:**
+- **Scene** (superseded by AD-179, section 6):
   - The orchestrator's room takes the eighth cell of AD-61's grid. Workshops keep seven slots, and More workshops becomes slot 7 from the eighth project. AD-70's geometry check runs on the new full-occupancy layout, and the mock gets the room before Slice C's scene story.
   - The room draws the orchestrator with employees' poses: busy has its back turned; any other status faces the author, neutral, never ringed, never with a raised hand. Absent, it draws an empty chair with a Start target, and a neutral plaque counts pending proposals. `SceneInput.orchestrator` is nullable (AD-68's rule).
   - Start is keyboard-reachable: it launches Officina's own contained session, not a work order.
@@ -476,3 +476,51 @@ No dependency is added. The JSON-RPC is hand-written on `serde_json`, randomness
 | R44 | The scene loses a workshop slot to the orchestrator's room | More workshops lists the rest; owner review of the updated mock before Slice C's scene story |
 | R45 | `claude logs` prints terminal control output | gate 7; escape stripping; the section is dropped if unreadable |
 | R46 | A mutant feature leaks into a release build | the app test on `MUTANTS_ENABLED`; no crate but the CI job enables them |
+
+## 6. Addendum (2026-10-28): the scene v2, orchestrator answers, permissions
+
+Inputs: prd-v0.4.md and architecture-v0.4.md as reworked on 2026-10-28 (AD-167 to AD-178); the research note `_bmad-output/planning-artifacts/research/claude-permission-auto-decisions.md` (not published). PRD section 9 states the requirements; `epic-5-decisions.md` D-486 to D-491 record the decisions. AD-1 to AD-96 hold except as amended here.
+
+### AD-179: The orchestrator in the decision office
+
+Supersedes AD-93's scene bullets and the AD-61 and AD-62 amendments of section 3.
+
+- `SceneInput` gains `orchestrator: OrchestratorPresence | null` (AD-89) and `proposals: { pending: number; latest: string[] } | null` from `OrchestratorView`; both nullable (AD-68's rule).
+- The figure sits on v0.4's decider chair in the decision office (architecture-v0.4.md AD-170); it is a rig like an employee's (AD-171) with the prototype's `--orch-tunic` tokens, a collar in `--color-surface` and no cap; busy shows the seated working pose, any other status the seated facing pose; never a ring or a raised hand; never counted as waiting.
+- **Briefing walk**: a work order card launched and bound (AD-81) while the orchestrator is live gives the layout one `briefing` entry (the bound card's key) for as long as that session's figure stands at reception; the orchestrator's place is then the counter's staff spot, reached through AD-170's staff nodes, and its chair otherwise. The mover walks it like any figure (AD-172).
+- **Screens and whiteboard**: the two screens draw the pending proposal count and the Needs you count; the whiteboard draws up to four proposal targets' names. Names render through the overlay layer with `{text}`, never in the object layer's markup (v0.4 AD-59 as amended). Nothing scrolls or ticks: the prototype's scrolling log and sparkline are not ported, so v0.4's truthful-motion e2e holds.
+- **Plaque and target**: "Orchestrator" while live, "Decisions: you" otherwise, neutral; the figure's target opens the Orchestrator view; absent, the chair's target offers Start (keyboard-reachable, AD-93).
+- Offices keep v0.4's eight; v0.4 AD-70's geometry property runs with the orchestrator's target added.
+
+### AD-180: The `auto` review's input and the mandatory check
+
+- **Input** (amends AD-86's prompt): the data line holds the rebuilt request, the subject's name, the author's last prompt excerpt as `Untrusted` (from `UserPromptSubmit` lines), the last 10 outcomes and the check's status. Answer excerpts (`last_message`, `last_message_tail`) are not read. The golden prompt changes once; `no_excerpts` still escalates (AD-87 cause 3), since the prompt excerpt is withheld then too.
+- **Check mandatory** (amends AD-23 and AD-75): catalogue validation raises a new `IssueKind::AutoWithoutCheck` for `class = "auto"` without `check`, with its failing fixture; AD-86's path then always applies the `after-check` rule first.
+- **Gate 8** (joins AD-96): in a scratch guarded project, a session started with `--permission-mode auto` is asked to run a catalogue `check` through `officina run`; record whether the classifier lets it through, with and without a narrow user-settings allow rule for `officina run`, and whether `claude auto-mode config` shows that rule kept. Pass: it runs with the rule. Fail: doctor prints an `autoMode.allow` sentence for `officina run` instead, and the gate runs again with it.
+- **Doctor** (joins AD-94, Slice B): a "permission mode" line lists the `permission_mode` values seen in the last 24 h of hook payloads per session kind, and prints, as text to paste, `permissions.defaultMode: "auto"` with an `autoMode.environment` skeleton of placeholders (`<trusted repository>`, `<lab host group>`), marked as the author's decision. The hook already receives `permission_mode` (E2, E15); the event line gains it as an optional field.
+
+### AD-181: The `PermissionRequest` router (v0.5.x, Slice D)
+
+- **Entry**: after v0.5's close, and once the research note's questions 3 (does the terminal dialog show while the hook waits), 4 (a `--bg` session's behaviour), 5 (what fires in auto mode), 9 (self-resolving `ask`) and 10 (the Windows payload) are recorded as research-notes entries.
+- **Registration**: doctor's block gains `PermissionRequest` (matcher every tool, exec form, `timeout` 590, `onFailure` unset, so a failure falls back to the native prompt) and `PermissionDenied` (journal only).
+- **Hook**: `officina hook` on `PermissionRequest` writes `relay/prompts/<id>.json` (session id, `CLAUDE_PID`, tool name, SHA-256 of the canonical `tool_input`, the input capped at 4 KiB as `Untrusted`, `permission_mode`), then waits by stat for `<id>.decided.json`, which only `window-authority` code writes (AD-21, AD-33's pattern). It prints the documented `PermissionRequest` output with `decision.behavior` `allow`, or `deny` with a constant message. Its output type has no `updatedPermissions`, `updatedInput` or `interrupt` field, and a test asserts the serialized schema. No decision before 580 s: exit 0, no output.
+- **Window**: a Needs you card of kind `prompt` with the tool, the input as text (argument vector chip by chip for shell tools, AD-35), the source labelled "Claude Code prompt"; Allow once and Deny, pointer only; decisions single use, bound to session and input hash, expiring at the hook's deadline. The window answers "no decision" at once for requests it does not route (interactive sessions if question 3 shows the terminal dialog waits for the hook; the author's own ask rules), so those reach the native prompt quickly.
+- **Journal**: `prompt_routed`, `prompt_decided` (session, tool, input hash, decision), `auto_mode_denied` (reason only); never the input.
+- **Scene**: a routed prompt is a Needs you wait like any (v0.4 AD-167): it queues at the decision office and may alert.
+- **Zero write**: the fingerprint test (D-80) runs the hook through allow, deny and timeout.
+
+### AD-182: Answer proposals
+
+- **Tool**: `propose_answer {session_id, text, rationale}` joins AD-90's proposal tools (rate limits shared); the file kind `answer` joins AD-91.
+- **Validation at ingestion**: the session exists and is background, live and in Your turn at ingestion; `text` passes FR-6's answer rules through the same core function as the composer's; `rationale` up to 500 characters. Statuses as AD-91, plus `expired` when the session leaves Your turn.
+- **Panel**: `MeetingPanel.svelte` shows a valid answer proposal under a "proposal" label with its rationale, as text, and a pointer-only "Send the proposed answer" (Launch's rule: `detail === 0` ignored, no key); the author's composer stays empty and separate. Sending calls `send_answer(card_key, delivery, text, proposal_id)` with the stored text; core refuses a proposal whose status is not `pending` or whose session state changed. `meeting_answer` gains `source` (`author`, `proposal`).
+- **Injection battery** (AD-95): the proposal file and `propose_answer` entry points gain the cases of FR-6's rules and "send now" text; no answer is spawned before the click, exactly one after.
+
+## 7. Risks of the addendum
+
+| # | Risk | Mitigation |
+|---|---|---|
+| R107 | Auto mode's classifier blocks `officina run apply`, breaking the relay's `human` and `auto` paths once the author switches modes | gate 8 before the switch; the narrow rule or `autoMode.allow` sentence printed by doctor; the switch stays the owner's |
+| R108 | A `PermissionRequest` hook holds a process for minutes, or the terminal dialog and the window both answer | Slice D waits for questions 3 and 4; single-use decisions bound to the input hash; no decision means the native prompt |
+| R109 | An answer proposal launders injected text into a session's next prompt | `Untrusted` display, FR-6's rules at ingestion, a pointer click per answer, no unattended path, the injection battery |
+| R110 | The orchestrator figure reads as a decider although it decides nothing that acts | plaque and file wording; Needs you keeps queueing for the author; decisions stay FR-7 to FR-9's |

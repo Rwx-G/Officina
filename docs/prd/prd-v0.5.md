@@ -2,7 +2,7 @@
 title: "PRD: Officina v0.5 - The Orchestrator"
 author: Rwx-G
 date: 2026-10-28
-status: approved 2026-10-28 (owner delegated design decisions), with the amendments of ../architecture-v0.5.md section 4 applied
+status: approved 2026-10-28 (owner delegated design decisions), with the amendments of ../architecture-v0.5.md section 4 applied; addendum of section 9 (2026-10-28: scene v2, orchestrator answers, permissions design)
 inputs:
   - (framing, not published)
   - (requirement challenge, not published)
@@ -209,6 +209,8 @@ oldest items dropped first with a count. The Orchestrator view shows it next to
 the work order composer (FR-4); no model is involved.
 
 #### FR-2: Templates
+*Amended by section 9, item 5 (`auto` names a `check`).*
+
 The floor file gains `[[template]]`: `name`, `description`, `projects` (the
 catalogue projects it may run in), `prompt` with `{param}` placeholders,
 `params`, and an optional `model` from a closed list. A template parameter has
@@ -297,6 +299,8 @@ change under v0.4 FR-3. It shows, as text:
 No transcript is read (framing principle 3).
 
 #### FR-6: Answer
+*Amended by section 9, item 3 (answers the orchestrator proposes).*
+
 For a background session or an ended one, the panel offers a composer. The
 answer is the author's text, never prefilled from session or proposal text:
 1 to 4,000 characters, no control character but newline and tab, no bidi or
@@ -327,6 +331,8 @@ outcome), never the text.
 ### 4.3 The relay class `auto`
 
 #### FR-7: Auto review
+*Amended by section 9, item 4 (the review's input) and item 5 (`check` mandatory).*
+
 An `auto` action is requested and waited on like a `human` one (AD-33); when
 it names a `check`, the `after-check` rule applies first. For each pending
 `auto` request the window runs one auto review.
@@ -492,6 +498,8 @@ the tool refuses with a reason. Work order proposals expire after 24 hours; a
 valid one opens as a card (FR-4).
 
 #### FR-13: The orchestrator's room
+*Superseded by section 9, items 1 and 2: the orchestrator takes the v0.4 decision office; no eighth cell.*
+
 Under v0.4's rules (its FR-3 on motion, FR-6 on keyboard, tokens) the scene gains the
 orchestrator's room in the eighth cell of the scene's grid; workshops keep
 seven slots and 'More workshops' takes the seventh from the eighth project:
@@ -620,3 +628,88 @@ The v0.5 close reads Use, Auto and Delivery share (P-16).
 8. The values 6 per hour, 90 % of the 5-hour window, 20 shadow cases and a 5 %
    rule difference are starting values, measured over the shadow period and
    two weeks of use.
+
+## 9. Addendum (2026-10-28): the scene v2, orchestrator answers, permissions
+
+The owner approved a new v0.4 scene (prd-v0.4.md, Change Log) whose
+prototype also showed a "target" mode for v0.5, and a research note on
+deciding Claude Code permissions on the author's behalf (not published:
+`_bmad-output/planning-artifacts/research/claude-permission-auto-decisions.md`)
+recommends where v0.5 stands. This section amends the PRD; the architecture's
+section 6 says how, and `epic-5-decisions.md` D-486 to D-491 say why. Stories
+5.1, 5.2, 5.4, 5.12, 5.13, 5.15 and 5.18 are reworked against it before Epic 5
+starts.
+
+1. **FR-13, the orchestrator in the decision office.** The orchestrator's
+   figure takes v0.4's decision office, at the decider's desk; there is no
+   eighth cell, and offices keep v0.4's eight. Its two screens show the
+   Orchestrator view's counts (pending proposals, the queue) and its
+   whiteboard the names of the four latest proposals, all redrawn only when
+   their payload changes. The plaque reads "Orchestrator" while its session
+   is live, "Decisions: you" otherwise. Its poses are the employees': back
+   turned when busy, facing otherwise, never ringed, never a raised hand.
+   Absent, its chair is empty and its file offers Start, keyboard-reachable.
+   Proposals stay neutral (not amber, not in the title or the overlay).
+2. **Briefing at reception.** When a work order launches (FR-4's click, or
+   v0.7's governor) and the orchestrator is live, the new session appears at
+   reception and the orchestrator walks to the counter, stays while the
+   launched session is bound to its work order (FR-4), then walks back. No
+   other event moves it. Decisions stay where FR-7 to FR-9 put them: the
+   orchestrator decides nothing that acts, and Needs you sessions queue for
+   the author as in v0.4.
+3. **The orchestrator may answer an idle session** through FR-6's resume
+   path. `officina mcp` gains `propose_answer {session_id, text, rationale}`:
+   a background session in Your turn, live and not waiting on a question,
+   text under FR-6's rules (1 to 4,000 characters, no control, bidi or
+   invisible character, not starting with `/` or `!`). The proposal is
+   `Untrusted<String>`, shown in the meeting panel under a "proposal" label
+   beside the author's own composer, never copied into it, and sent only by a
+   pointer click on "Send the proposed answer" (D-28's rule), through FR-6's
+   `ResumeLive` delivery, journaled `meeting_answer` with `source = proposal`.
+   An unsent proposal expires when the session changes state. No unattended
+   path exists: a proposed answer is model text that becomes a session's
+   next prompt, so it needs the author's click every time (principle 8). Its
+   delivery share is counted apart in section 7's Delivery share row.
+4. **FR-7, the review's input.** The requesting session's excerpts are the
+   author's prompts only; the answer excerpts (assistant text) are dropped,
+   as Claude Code's own classifier strips assistant text. The review sees the
+   catalogue rebuild, the subject, the author's last prompt, the last 10
+   outcomes and the check's status.
+5. **FR-2, `check` mandatory on `auto`.** Catalogue validation refuses
+   `class = "auto"` without a `check`: an unattended apply is always preceded
+   by its dry run (the `after-check` rule of FR-7 then always applies).
+6. **The judge stays narrow.** The review stays limited to catalogue `auto`
+   requests, in blind shadow behind FR-9's gate. Officina builds no model
+   judge for Claude Code permission prompts, and the orchestrator never
+   answers one.
+7. **Claude Code's auto mode, the author's decision.** For free-form commands
+   in host sessions, the recommended judge is Claude Code's own auto mode.
+   Switching his sessions from `bypassPermissions` to `auto` is the owner's
+   decision, not yet taken. Doctor prints the user-settings block
+   (`permissions.defaultMode` and an `autoMode.environment` skeleton with
+   placeholders) and shows each session's `permission_mode` from hook
+   payloads; it never writes it.
+8. **Gate 8 (Slice 0).** Before the owner changes his default mode: does auto
+   mode let `officina run <action> k=v` through in a guarded project, with and
+   without a narrow allow rule, and is that rule kept in auto mode? If not,
+   doctor prints the narrow rule or an `autoMode.allow` sentence and the gate
+   is run again with it.
+9. **Always the author:** guarded-project requests outside the catalogue;
+   anything auto mode escalates (its fallback after repeated blocks
+   included); the author's own ask rules; critical-path deletes; pushes to
+   deploy branches, production, credentials and network to hosts outside the
+   trusted set; and every irreversible or outward action.
+10. **The `PermissionRequest` router, v0.5.x (Slice D).** After v0.5 closes
+    and once the research note's questions 3, 4, 5, 9 and 10 are recorded, a
+    `PermissionRequest` hook carries Claude Code's remaining prompts to the
+    window. `officina hook` writes the request (session, tool, input hash,
+    capped input as untrusted text, `permission_mode`) and waits, as
+    `officina run` does, for a decision only the window writes; the window
+    offers Allow once or Deny, pointer only, single use, bound to session and
+    input hash. The hook returns `allow` or `deny` only: never
+    `updatedPermissions` (it would write Claude Code settings),
+    `updatedInput` or `interrupt`. With no decision before its deadline it
+    exits 0 with no output and Claude Code's normal prompt takes over;
+    `onFailure` stays unset so a failure also falls back to the prompt. A
+    `PermissionDenied` hook journals auto-mode denials, reason only. Doctor
+    prints both registrations. Slice D ships as v0.5.x and does not hold v0.6.

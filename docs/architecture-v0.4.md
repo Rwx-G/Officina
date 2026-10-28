@@ -355,9 +355,9 @@ No dependency is added. Rejected: `axe-core`, a FLIP or animation library (the m
 - `core/board.rs` (`floor_projects`, `scene`, alert fields, schema bump), `core/scene.rs` (new), `core/floor.rs` (`priority`, `[alert]`, `Plum`), `core/contract.rs` (sub-agent fields, if gate 1 passes); `host/watch.rs` (escalation recompute); `host/doctor.rs` (buffered events, if gate 1 passes; floor key checks); the app's `main.rs` (overlay, title, attention).
 - `ipc.ts` (none new), `e2e-mock.ts` (the scene reads `get_board`), `Header.svelte` (view, mode, walking and theme controls), `App.svelte` (alert band), `SessionCard.svelte` and `app.css` (halo, tokens), `BoardColumn.svelte` (tokens).
 - `e2e-fixtures.mjs` gains floor files with priorities and the scene scenarios; `board.spec.ts` keeps passing unchanged in Board mode.
-- **v0.5** places its orchestrator in the decision office and briefs arrivals at reception (prd-v0.5.md section 9, architecture-v0.5.md section 7); the staff nodes and the consult spot of AD-170 are reserved for it.
+- **v0.5** places its orchestrator in the decision office and briefs arrivals at reception (prd-v0.5.md section 9, architecture-v0.5.md section 6, AD-179); the staff nodes and the consult spot of AD-170 are reserved for it.
 - **v0.6**'s scene workers (architecture-v0.6.md AD-122 Slice B) map onto these zones: a live worker at a desk of its project's office; a package awaiting review in the decision office's queue, like a pending approval. v0.6 confirms this when its scene story is written.
-- **v0.7**'s helpers walk in through the decision office (prd-v0.7.md section 9, architecture-v0.7.md section 7).
+- **v0.7**'s helpers walk in through the decision office (prd-v0.7.md section 9, architecture-v0.7.md section 6, AD-184).
 
 ## 5. PRD amendments
 
