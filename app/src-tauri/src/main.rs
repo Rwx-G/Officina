@@ -5,6 +5,7 @@
 
 mod taskbar;
 
+use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::sync::mpsc::{RecvTimeoutError, Sender};
 use std::sync::{Arc, RwLock};
@@ -64,25 +65,42 @@ impl AppState {
 }
 
 /// The window's events (AD-5): what the collector thread emits goes to the
-/// page, and each new board also sets the title and the taskbar overlay.
-struct WindowEvents(AppHandle);
+/// page, and each new board also sets the title, the taskbar overlay and,
+/// for a session newly in alert, a flash of the taskbar button (AD-174).
+struct WindowEvents {
+    app: AppHandle,
+    /// The alerted card keys of the last board emitted.
+    alerted: std::sync::Mutex<BTreeSet<String>>,
+}
 
 impl Emit for WindowEvents {
     fn board(&self, board: &Board) {
-        let _ = self.0.emit(BOARD_EVENT, board);
-        if let Some(window) = self.0.get_webview_window("main") {
-            let _ = window.set_title(&window_title(board));
-            let overlay = (board.waiting_count > 0).then(|| overlay_image(board.waiting_count));
+        let _ = self.app.emit(BOARD_EVENT, board);
+        let announce = self.alerted.lock().is_ok_and(|mut alerted| {
+            let announce = taskbar::alerts_to_announce(&alerted, board);
+            *alerted = taskbar::alerted_keys(board);
+            announce
+        });
+        if let Some(window) = self.app.get_webview_window("main") {
+            let _ = window.set_title(&taskbar::window_title(board));
+            let overlay = taskbar::overlay_for(board, OVERLAY_SIZE)
+                .map(|badge| tauri::image::Image::new_owned(badge.rgba, badge.size, badge.size));
             let _ = window.set_overlay_icon(overlay);
+            // An OS attention request that ends on focus (D-475), not page
+            // motion: the reduced-motion setting does not apply to it.
+            if announce {
+                let _ =
+                    window.request_user_attention(Some(tauri::UserAttentionType::Informational));
+            }
         }
     }
 
     fn relay(&self, view: &RelayView) {
-        let _ = self.0.emit(RELAY_EVENT, view);
+        let _ = self.app.emit(RELAY_EVENT, view);
     }
 
     fn registry(&self, view: &RegistryView) {
-        let _ = self.0.emit(REGISTRY_EVENT, view);
+        let _ = self.app.emit(REGISTRY_EVENT, view);
     }
 }
 
@@ -402,19 +420,6 @@ fn floor_arg() -> Option<PathBuf> {
 /// dot's.
 const OVERLAY_SIZE: u32 = taskbar::OVERLAY_SIZES[0];
 
-/// The taskbar overlay for `waiting` (AD-174): the badge with the count.
-fn overlay_image(waiting: u32) -> tauri::image::Image<'static> {
-    let badge = taskbar::overlay_badge(waiting, false, OVERLAY_SIZE);
-    tauri::image::Image::new_owned(badge.rgba, badge.size, badge.size)
-}
-
-fn window_title(board: &Board) -> String {
-    match board.waiting_count {
-        0 => "Officina".to_owned(),
-        n => format!("Officina ({n} waiting)"),
-    }
-}
-
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
@@ -439,7 +444,11 @@ fn main() {
             if let Err(e) = authority::ensure_record(&relay_home) {
                 eprintln!("officina: the decision record could not be started: {e}");
             }
-            let watch = spawn(collector, WindowEvents(app.handle().clone()))?;
+            let events = WindowEvents {
+                app: app.handle().clone(),
+                alerted: std::sync::Mutex::new(BTreeSet::new()),
+            };
+            let watch = spawn(collector, events)?;
             app.manage(AppState {
                 board: watch.board,
                 relay: watch.relay,
@@ -687,8 +696,8 @@ mod tests {
             ..Default::default()
         };
         let board = build_board(&input, 10);
-        assert_eq!(super::window_title(&board), "Officina (3 waiting)");
+        assert_eq!(super::taskbar::window_title(&board), "Officina (3 waiting)");
         let none = build_board(&BoardInput::default(), 10);
-        assert_eq!(super::window_title(&none), "Officina");
+        assert_eq!(super::taskbar::window_title(&none), "Officina");
     }
 }

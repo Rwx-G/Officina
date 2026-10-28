@@ -13,6 +13,9 @@
 //! collector, no single-instance lock and no floor: it reads and writes
 //! nothing under the Officina home or the Claude config dir.
 
+// The window uses the rest of the module (the title, the alert choice);
+// the probe shows the badges only.
+#[allow(dead_code)]
 #[path = "../src/taskbar.rs"]
 mod taskbar;
 

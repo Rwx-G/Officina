@@ -1,6 +1,13 @@
-//! The taskbar overlay badge (FR-11, AD-174): a disc carrying the waiting
-//! count, drawn in code so no asset can drift from the palette. Pure: the
-//! window sets the image, the tests compare pixels without one.
+//! The taskbar overlay badge, the window title and the attention request
+//! (FR-11, AD-174): a disc carrying the waiting count, drawn in code so no
+//! asset can drift from the palette, amber or in the alert colour. Pure:
+//! the window sets the image, the title and the flash; the tests compare
+//! pixels and words without one.
+
+use std::collections::BTreeSet;
+
+use officina_core::board::Board;
+use officina_core::scene::Zone;
 
 /// The sizes the Slice 0 probe shows (AD-178 gate 2); the window uses the
 /// one the gate finds legible.
@@ -122,9 +129,246 @@ pub fn overlay_badge(count: u32, alert: bool, size: u32) -> Overlay {
     image
 }
 
+/// The overlay for `board` at `size`: none when nothing waits and nobody
+/// is in alert; else the badge with the waiting count, in the alert colour
+/// while any card is in alert, a last known alert on unknown data included
+/// (D-494).
+pub fn overlay_for(board: &Board, size: u32) -> Option<Overlay> {
+    let alert = board.alert_count > 0;
+    (board.waiting_count > 0 || alert)
+        .then(|| overlay_badge(board.waiting_count.max(board.alert_count), alert, size))
+}
+
+/// True when an alerted card's zone is unknown: its alert is the last one
+/// known, kept while the data cannot say more (D-494).
+fn alert_on_unknown_data(board: &Board) -> bool {
+    board
+        .columns
+        .all()
+        .filter_map(|card| card.scene)
+        .any(|scene| scene.alert.is_some() && scene.zone == Zone::Unknown)
+}
+
+/// The window's title, which Windows also shows on the taskbar button:
+/// `Officina`, then what waits, what is in alert and, while an alert rests
+/// on unknown data, that it does (AD-174 as amended, D-494).
+pub fn window_title(board: &Board) -> String {
+    let mut parts = Vec::new();
+    if board.waiting_count > 0 {
+        parts.push(format!("{} waiting", board.waiting_count));
+    }
+    if board.alert_count > 0 {
+        parts.push(format!("{} in alert", board.alert_count));
+        if alert_on_unknown_data(board) {
+            parts.push("data unknown".to_owned());
+        }
+    }
+    if parts.is_empty() {
+        "Officina".to_owned()
+    } else {
+        format!("Officina ({})", parts.join(", "))
+    }
+}
+
+/// The keys of the cards in alert on `board`, unknown ones included.
+pub fn alerted_keys(board: &Board) -> BTreeSet<String> {
+    board
+        .columns
+        .all()
+        .filter(|card| card.scene.is_some_and(|s| s.alert.is_some()))
+        .map(|card| card.key.clone())
+        .collect()
+}
+
+/// True when `board` holds an alerted key that `previous`, the alerted keys
+/// of the last board emitted, did not: the taskbar button flashes once for
+/// it (AD-174, D-475). A key kept alerted, unknown or not, never again.
+pub fn alerts_to_announce(previous: &BTreeSet<String>, board: &Board) -> bool {
+    alerted_keys(board)
+        .iter()
+        .any(|key| !previous.contains(key))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use officina_core::agents::parse_agents;
+    use officina_core::board::{BoardInput, ProjectRule, Staleness, build_board};
+    use officina_core::floor::Priority;
+
+    const NOW: i64 = 1_793_102_400_000;
+
+    /// `waiting` sessions waiting with no known start; the first `alerted`
+    /// of them on a high-priority project, so in alert.
+    fn board(waiting: u32, alerted: u32) -> Board {
+        let agents: Vec<serde_json::Value> = (0..waiting)
+            .map(|i| {
+                let project = if i < alerted { "hot" } else { "calm" };
+                serde_json::json!({"pid": 100 + i, "sessionId": format!("s{i}"), "kind": "interactive",
+                    "status": "waiting", "cwd": format!("C:/work/{project}"), "startedAt": 1})
+            })
+            .collect();
+        build_board(&input(&agents), NOW)
+    }
+
+    fn input(agents: &[serde_json::Value]) -> BoardInput {
+        BoardInput {
+            agents: Some(parse_agents(&serde_json::to_string(agents).unwrap()).unwrap()),
+            projects: ["hot", "calm"]
+                .into_iter()
+                .map(|name| ProjectRule {
+                    name: name.into(),
+                    path: format!("c:/work/{name}"),
+                    color: None,
+                    priority: if name == "hot" {
+                        Priority::High
+                    } else {
+                        Priority::Normal
+                    },
+                })
+                .collect(),
+            ..Default::default()
+        }
+    }
+
+    /// The same sessions, the agents snapshot failing: every card unknown,
+    /// the previous board's alerts kept.
+    fn stale_after(previous: &Board, waiting: u32, alerted: u32) -> Board {
+        let fresh = board(waiting, alerted);
+        let agents: Vec<serde_json::Value> = (0..waiting)
+            .map(|i| {
+                let project = if i < alerted { "hot" } else { "calm" };
+                serde_json::json!({"pid": 100 + i, "sessionId": format!("s{i}"), "kind": "interactive",
+                    "status": "waiting", "cwd": format!("C:/work/{project}"), "startedAt": 1})
+            })
+            .collect();
+        let stale = BoardInput {
+            stale: Some(Staleness {
+                since_ms: NOW,
+                error: "claude agents failed".into(),
+            }),
+            previous_scene: officina_core::scene::states_by_key(&previous.columns),
+            ..input(&agents)
+        };
+        let board = build_board(&stale, NOW + 1_000);
+        assert_eq!(board.waiting_count, fresh.waiting_count);
+        board
+    }
+
+    #[test]
+    fn no_overlay_without_waiting() {
+        for size in OVERLAY_SIZES {
+            assert_eq!(overlay_for(&board(0, 0), size), None);
+            assert_eq!(
+                overlay_for(&board(3, 0), size),
+                Some(overlay_badge(3, false, size))
+            );
+        }
+    }
+
+    #[test]
+    fn the_badge_turns_to_the_alert_colour() {
+        for size in OVERLAY_SIZES {
+            assert_eq!(
+                overlay_for(&board(4, 1), size),
+                Some(overlay_badge(4, true, size))
+            );
+        }
+    }
+
+    /// D-494: a stale board keeps the alert colour, and the title says the
+    /// alert is the last one known.
+    #[test]
+    fn a_last_known_alert_keeps_the_alert_colour() {
+        let alerted = board(2, 1);
+        let stale = stale_after(&alerted, 2, 1);
+        assert_eq!(stale.alert_count, 1);
+        for size in OVERLAY_SIZES {
+            assert_eq!(
+                overlay_for(&stale, size),
+                Some(overlay_badge(2, true, size))
+            );
+        }
+    }
+
+    #[test]
+    fn the_title_counts_alerts() {
+        assert_eq!(window_title(&board(0, 0)), "Officina");
+        assert_eq!(window_title(&board(3, 0)), "Officina (3 waiting)");
+        assert_eq!(
+            window_title(&board(3, 2)),
+            "Officina (3 waiting, 2 in alert)"
+        );
+    }
+
+    #[test]
+    fn the_title_marks_a_last_known_alert() {
+        let stale = stale_after(&board(3, 2), 3, 2);
+        assert_eq!(
+            window_title(&stale),
+            "Officina (3 waiting, 2 in alert, data unknown)"
+        );
+    }
+
+    #[test]
+    fn a_new_alerted_key_is_announced() {
+        let calm = board(2, 0);
+        let alerted = board(2, 1);
+        assert!(alerts_to_announce(&alerted_keys(&calm), &alerted));
+    }
+
+    #[test]
+    fn a_known_key_is_not_announced_again() {
+        let alerted = board(2, 1);
+        assert!(!alerts_to_announce(&alerted_keys(&alerted), &board(3, 1)));
+    }
+
+    #[test]
+    fn a_key_that_leaves_and_returns_is_announced_again() {
+        let alerted = board(2, 1);
+        let gone = board(0, 0);
+        assert!(!alerts_to_announce(&alerted_keys(&alerted), &gone));
+        assert!(alerts_to_announce(&alerted_keys(&gone), &alerted));
+    }
+
+    #[test]
+    fn the_first_board_with_alerts_is_announced() {
+        assert!(alerts_to_announce(&BTreeSet::new(), &board(2, 1)));
+        assert!(!alerts_to_announce(&BTreeSet::new(), &board(2, 0)));
+    }
+
+    #[test]
+    fn a_key_kept_alerted_while_unknown_is_not_announced() {
+        let alerted = board(2, 1);
+        let stale = stale_after(&alerted, 2, 1);
+        assert!(!alerts_to_announce(&alerted_keys(&alerted), &stale));
+    }
+
+    /// The custom properties of the light theme's `:root` block of
+    /// `app.css`, the only committed copy of the tokens.
+    fn light_token(name: &str) -> [u8; 3] {
+        let css = include_str!("../../src/app.css");
+        let root = &css[css.find(":root {").expect(":root")..];
+        let root = &root[..root.find("\n}").expect("end of :root")];
+        let at = root
+            .find(&format!("{name}:"))
+            .unwrap_or_else(|| panic!("{name} in app.css"));
+        let value = root[at + name.len() + 1..].trim_start();
+        let hex = value.trim_start_matches('#');
+        let byte = |i: usize| u8::from_str_radix(&hex[i..i + 2], 16).unwrap();
+        [byte(0), byte(2), byte(4)]
+    }
+
+    /// AD-174, `derived-not-transcribed`: the overlay's colours are the
+    /// light theme's tokens.
+    #[test]
+    fn overlay_colours_equal_the_light_tokens() {
+        assert_eq!(AMBER, light_token("--color-attention"));
+        assert_eq!(AMBER_TEXT, light_token("--color-attention-text"));
+        assert_eq!(ALERT, light_token("--color-alert"));
+        assert_eq!(ALERT_TEXT, light_token("--color-on-alert"));
+        assert_eq!(RIM, light_token("--color-text"));
+    }
 
     fn count_of(image: &Overlay, rgb: [u8; 3]) -> usize {
         image

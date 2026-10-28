@@ -15,6 +15,10 @@
   --color-attention: #f5b731;
   --color-attention-text: #2a1f05;
   --color-attention-border: #b07800;
+  /* A session really blocked on something that matters (FR-10): the band,
+     the taskbar badge, the alert room. Never a theme change (FR-8). */
+  --color-alert: #b03a22;
+  --color-on-alert: #ffffff;
   --color-working: #3d6b8e;
   --color-project-green: #3f8f6b;
   --color-project-blue: #4c6fbf;
