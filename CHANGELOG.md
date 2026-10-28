@@ -230,7 +230,8 @@ project uses [Semantic Versioning](https://semver.org/).
 - The window records its own decisions and lists, in the Relay view, an
   approval file, a run, an approved catalogue or a missing stop flag it
   cannot account for; `officina doctor` fails until the author acknowledges
-  each.
+  each, and `officina run` leaves an approval the record does not name
+  unused (`approval_not_given`).
 - A `pattern` that lets a value forwarded to a remote shell or a template
   hold whitespace, shell or template characters drops the action with the
   issue `forwarded_pattern`, unless it sets `forwarded_values = "accepted"`;

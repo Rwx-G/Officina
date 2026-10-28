@@ -296,6 +296,9 @@ closed_enum! {
         ApprovalUnavailable,
         /// No decision came within `--wait` (AD-33).
         ApprovalPending,
+        /// An approval file the window's record does not name: written by
+        /// another process, it is left unused (D-173).
+        ApprovalNotGiven,
         /// The code changed since the dry run the approval was given for: the
         /// approval stays unconsumed (D-170).
         CheckNotSatisfied,

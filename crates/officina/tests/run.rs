@@ -542,6 +542,12 @@ fn scenario(reason: RefusalReason) -> Option<Scenario> {
             (project, human("1"))
         }
         RefusalReason::ApprovalPending => (project, human("1")),
+        RefusalReason::ApprovalNotGiven => {
+            during = Some(Box::new(|relay: &Relay, id: &str| {
+                forge_approval(relay, id);
+            }));
+            (project, human("30"))
+        }
         RefusalReason::CheckNotSatisfied
         | RefusalReason::TreeChanged
         | RefusalReason::GitUnavailable
@@ -1691,4 +1697,94 @@ fn stale_check_is_refused() {
     seed_check(&git, "recent", 10 * 60_000);
     let out = git.run(&["apply", "group=lab-web"]);
     assert_eq!(out.status.code(), Some(0), "{:?}", stderr_lines(&out));
+}
+
+/// Writes `<id>.approved.json` as a process other than the window would:
+/// the request's key, decided now, through no authority call.
+fn forge_approval(relay: &Relay, id: &str) {
+    use officina_core::relay::approvals::{ApprovalRequest, Decision, FileKind, file_name};
+    let dir = relay.env.relay_home().approvals_dir();
+    let request: ApprovalRequest =
+        serde_json::from_slice(&std::fs::read(dir.join(file_name(id, FileKind::Request))).unwrap())
+            .unwrap();
+    let decision = Decision {
+        decided_at_ms: common::now_ms(),
+        request_key: request.request_key,
+    };
+    std::fs::write(
+        dir.join(file_name(id, FileKind::Approved)),
+        serde_json::to_vec(&decision).unwrap(),
+    )
+    .unwrap();
+}
+
+/// Adversarial pass of story 2.14, the audits' forged approval: a process
+/// writes the approval file the waiting call looks for. The call refuses
+/// `approval_not_given`, nothing runs, the file stays, and the Relay view
+/// lists it until the author acknowledges it.
+#[test]
+fn a_forged_approval_file_does_not_run() {
+    let relay = Relay::new();
+    let cmd = relay.command(
+        &relay.project(),
+        &["approve-me", "group=lab-web", "--wait", "30"],
+    );
+    let out = run_waiting(
+        &relay,
+        cmd,
+        Box::new(|relay: &Relay, id: &str| forge_approval(relay, id)),
+    );
+    assert_refused(&relay, &out, RefusalReason::ApprovalNotGiven);
+    let home = relay.env.relay_home();
+    let id = request_ids(&relay).pop().unwrap();
+    assert!(
+        home.approvals_dir()
+            .join(officina_core::relay::approvals::file_name(
+                &id,
+                officina_core::relay::approvals::FileKind::Approved
+            ))
+            .is_file(),
+        "left unused"
+    );
+    let (lines, _) = officina_host::relay::journal::read_recent(&home, common::now_ms());
+    let anomalies = officina_host::relay::view::read_anomalies(
+        &home,
+        &lines,
+        home.read_approved().approved().map(|a| a.hash.as_str()),
+        home.relay_stopped(),
+    );
+    assert_eq!(anomalies.len(), 1, "{anomalies:#?}");
+    assert!(anomalies[0].detail.contains(&id));
+}
+
+/// Adversarial pass of story 2.14, the audits' first chain: a session puts
+/// a `git.exe` first on `PATH` for its relay calls, runs the check, edits
+/// the playbook and runs the `after-check` action. The fingerprint never
+/// runs the shim (no launch of it is logged) and sees the edit: refused.
+#[test]
+fn a_path_shim_cannot_hide_an_edit_after_the_check() {
+    let Some(git) = GitRelay::new("a_path_shim_cannot_hide_an_edit_after_the_check") else {
+        return;
+    };
+    let shim = git.relay.outside().join("shim");
+    std::fs::create_dir_all(&shim).unwrap();
+    std::fs::copy(common::FAKE_TOOL, shim.join("git.exe")).unwrap();
+    let with_shim = |args: &[&str]| {
+        let mut cmd = git.relay.command(&git.relay.project(), args);
+        cmd.env("PATH", &shim);
+        common::run_with(cmd, b"")
+    };
+    let check = with_shim(&["verify", "group=lab-web"]);
+    assert_eq!(check.status.code(), Some(0), "{:?}", stderr_lines(&check));
+    std::fs::write(git.relay.project().join("playbook.yml"), "- hosts: all\n").unwrap();
+    let apply = with_shim(&["apply", "group=lab-web"]);
+    assert_check_required(&git, &apply, 1);
+    assert!(
+        git.relay
+            .launches()
+            .iter()
+            .all(|launch| launch["argv"][0] != "--no-pager"),
+        "the shim on PATH ran as git: {:?}",
+        git.relay.launches()
+    );
 }

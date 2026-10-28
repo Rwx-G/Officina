@@ -205,6 +205,18 @@ impl Refusal {
         )
     }
 
+    /// An approval file for request `id` that the window's record of its
+    /// decisions does not name: another process wrote it (D-173).
+    pub fn approval_not_given(project: &str, id: &str) -> Refusal {
+        Refusal::new(
+            RefusalReason::ApprovalNotGiven,
+            &format!(
+                "the approval {id} was not given in the Officina window, so it is not used; the author decides the request there"
+            ),
+            Some(project),
+        )
+    }
+
     /// The request could not be written.
     pub fn approval_unavailable(project: &str, why: &str) -> Refusal {
         Refusal::new(

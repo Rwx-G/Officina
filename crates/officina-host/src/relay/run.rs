@@ -443,12 +443,21 @@ enum Consumed {
     Refused(Refusal),
 }
 
-/// Uses approval `id`, last before the spawn (AD-33): the checks of [`plan`]
+/// Uses approval `id`, last before the spawn (AD-33): an approval the
+/// window's record names (D-173), the checks of [`plan`]
 /// again, the approval made under the same catalogue, the files still the
 /// ones the request was bound to, its dry run's when it names a check
 /// (D-170, D-173), and an HTTP action's credential read (D-29); then the
 /// claim. Anything refused leaves the approval unconsumed.
 fn consume(caller: &Caller<'_>, planned: &RunPlan, bound: Bound<'_>, id: &str) -> Consumed {
+    // An approval the window's record does not name was written by another
+    // process (D-173). Without a record, a window that has not run this
+    // version yet, the approval file stands alone, as before.
+    if let Some(record) = caller.home.read_record()
+        && !record.decided.contains_key(id)
+    {
+        return Consumed::Refused(Refusal::approval_not_given(&planned.project, id));
+    }
     let fresh = match with_inputs(caller.home, caller.cwd, |inputs| {
         plan(inputs, &planned.action, caller.params)
     }) {

@@ -30,6 +30,7 @@ export const REFUSAL_TEXT: Record<RefusalReason, string> = {
   approval_rejected: "rejected in Officina",
   approval_unavailable: "request could not be written",
   approval_pending: "approval still pending",
+  approval_not_given: "approval not given in the window",
   check_not_satisfied: "code changed since the dry run",
   tree_changed: "files changed since the request",
   credential_missing: "credential not in the Credential Manager",
