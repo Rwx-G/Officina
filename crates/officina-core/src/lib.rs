@@ -67,6 +67,7 @@ pub mod dates;
 pub mod events;
 pub mod floor;
 pub mod focus;
+pub mod ipc;
 pub mod quota;
 pub mod relay;
 mod wire;

@@ -5,9 +5,26 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { Board } from "./generated/Board";
 import type { FocusOutcome } from "./generated/FocusOutcome";
+import type { IpcError } from "./generated/IpcError";
 import type { RelayView } from "./generated/RelayView";
 
 export const BOARD_EVENT = "board://updated";
+
+/** True when `error` is the `IpcError` every failing command rejects with. */
+export function isIpcError(error: unknown): error is IpcError {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    typeof (error as { code?: unknown }).code === "string" &&
+    typeof (error as { message?: unknown }).message === "string"
+  );
+}
+
+/** What a rejected command says: an `IpcError`'s message; anything else,
+ *  such as a fault of the IPC layer itself, as text. */
+export function errorMessage(error: unknown): string {
+  return isIpcError(error) ? error.message : String(error);
+}
 export const RELAY_EVENT = "relay://updated";
 
 export function getRelay(): Promise<RelayView | null> {

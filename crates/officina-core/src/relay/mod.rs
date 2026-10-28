@@ -133,6 +133,7 @@ mod tests {
     use super::url::UrlIssue;
     use super::view::Tone;
     use crate::floor::Autonomy;
+    use crate::ipc::IpcErrorCode;
 
     fn assert_codes<T: Serialize + Copy + Debug>(all: &[T], code: fn(T) -> &'static str) {
         for &variant in all {
@@ -147,7 +148,7 @@ mod tests {
     /// of this crate without a line here.
     #[test]
     fn code_equals_the_serde_name_for_every_variant() {
-        let checked: [fn(); 16] = [
+        let checked: [fn(); 17] = [
             || assert_codes(ActionClass::ALL, ActionClass::code),
             || assert_codes(Autonomy::ALL, Autonomy::code),
             || assert_codes(ForwardedValues::ALL, ForwardedValues::code),
@@ -164,6 +165,7 @@ mod tests {
             || assert_codes(AnomalyKind::ALL, AnomalyKind::code),
             || assert_codes(UrlIssue::ALL, UrlIssue::code),
             || assert_codes(Tone::ALL, Tone::code),
+            || assert_codes(IpcErrorCode::ALL, IpcErrorCode::code),
         ];
         for check in checked {
             check();
@@ -172,6 +174,7 @@ mod tests {
             include_str!("../floor.rs"),
             include_str!("../board.rs"),
             include_str!("../focus.rs"),
+            include_str!("../ipc.rs"),
             include_str!("approvals.rs"),
             include_str!("argv.rs"),
             include_str!("catalogue.rs"),

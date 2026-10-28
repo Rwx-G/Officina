@@ -16,6 +16,7 @@ use std::path::{Path, PathBuf};
 
 use officina_core::board::Board;
 use officina_core::focus::FocusOutcome;
+use officina_core::ipc::IpcError;
 use officina_core::relay::view::RelayView;
 use ts_rs::{Config, TS};
 
@@ -44,6 +45,7 @@ fn export(dir: &Path) {
     let cfg = Config::new().with_large_int("number").with_out_dir(dir);
     Board::export_all(&cfg).unwrap();
     FocusOutcome::export_all(&cfg).unwrap();
+    IpcError::export_all(&cfg).unwrap();
     RelayView::export_all(&cfg).unwrap();
 }
 

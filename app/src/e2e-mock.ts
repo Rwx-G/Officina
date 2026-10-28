@@ -4,6 +4,7 @@
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 import { emit } from "@tauri-apps/api/event";
 import type { Board } from "./lib/generated/Board";
+import type { IpcError } from "./lib/generated/IpcError";
 import type { RelayView } from "./lib/generated/RelayView";
 
 export function installE2eMock(): void {
@@ -64,9 +65,11 @@ async function approve(hash: string): Promise<string> {
   const current = window.__officinaRelay ?? null;
   if (current?.pending?.hash !== hash) {
     if (current) await window.__officinaPushRelay?.(current);
-    return Promise.reject(
-      `officina-window-authority: the catalogue changed since it was displayed (displayed ${hash}, current ${current?.pending?.hash ?? "none"}); review the new diff`,
-    );
+    const error: IpcError = {
+      code: "catalogue_changed",
+      message: `officina-window-authority: the catalogue changed since it was displayed (displayed ${hash}, current ${current?.pending?.hash ?? "none"}); review the new diff`,
+    };
+    return Promise.reject(error);
   }
   const approved = window.__officinaRelayApproved;
   if (approved) await window.__officinaPushRelay?.(approved);
@@ -104,7 +107,8 @@ async function decide(id: string): Promise<void> {
   const board = window.__officinaBoard;
   const approval = board?.approvals.find((a) => a.id === id);
   if (!board || !approval?.valid) {
-    return Promise.reject(`officina-window-authority: request ${id} is invalid or unknown`);
+    const error: IpcError = { code: "refused", message: `officina-window-authority: request ${id} is invalid or unknown` };
+    return Promise.reject(error);
   }
   await window.__officinaPushBoard?.({
     ...board,

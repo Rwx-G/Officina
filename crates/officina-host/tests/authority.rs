@@ -8,6 +8,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use common::TestHome;
+use officina_core::ipc::IpcErrorCode;
 use officina_core::quota::normalise_path;
 use officina_core::relay::StopFlag;
 use officina_core::relay::approvals::{
@@ -609,4 +610,20 @@ fn a_run_without_a_window_decision_is_an_anomaly() {
             AnomalyKind::StopFlagRemoved
         ]
     );
+}
+
+/// Story 2.15 AC 7: an authority error reaches the window as one IPC error,
+/// its kind as the code the window branches on, its sentence as the
+/// message it shows.
+#[test]
+fn an_authority_error_reaches_the_window_with_its_code() {
+    let home = TestHome::new();
+    let relay = home.relay(None);
+    home.write(&relay.default_floor(), FLOOR);
+    let stale = approve_catalogue(&relay, &"0".repeat(64)).unwrap_err();
+    let ipc = stale.ipc();
+    assert_eq!(ipc.code, IpcErrorCode::CatalogueChanged);
+    assert_eq!(ipc.message, stale.to_string());
+    let unknown = decide_approval(&relay, "0123456789abcdef-1", true).unwrap_err();
+    assert_eq!(unknown.ipc().code, IpcErrorCode::Refused);
 }

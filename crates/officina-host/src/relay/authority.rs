@@ -9,6 +9,7 @@
 use std::io;
 use std::path::Path;
 
+use officina_core::ipc::{IpcError, IpcErrorCode};
 use officina_core::relay::StopFlag;
 use officina_core::relay::approvals::{DecideRefusal, Decision, FileKind, decidable, file_name};
 use officina_core::relay::catalogue::{ApprovedCatalogue, KnownProjects};
@@ -46,6 +47,24 @@ pub enum AuthorityError {
     /// (AD-35, D-27).
     #[error("{AUTHORITY_MARKER}: {0}")]
     Decide(DecideRefusal),
+}
+
+impl AuthorityError {
+    /// The error as the window's commands return it: its kind as a code,
+    /// its sentence as the message.
+    pub fn ipc(&self) -> IpcError {
+        let code = match self {
+            AuthorityError::Floor(_) => IpcErrorCode::FloorUnreadable,
+            AuthorityError::CatalogueChanged { .. } => IpcErrorCode::CatalogueChanged,
+            AuthorityError::Write { .. } => IpcErrorCode::WriteFailed,
+            AuthorityError::Journal(_) => IpcErrorCode::JournalUnavailable,
+            AuthorityError::Decide(_) => IpcErrorCode::Refused,
+        };
+        IpcError {
+            code,
+            message: self.to_string(),
+        }
+    }
 }
 
 fn write_json(path: &Path, value: &impl Serialize) -> Result<(), AuthorityError> {

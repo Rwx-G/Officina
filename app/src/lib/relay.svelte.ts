@@ -96,7 +96,7 @@ export class RelayStore {
     try {
       await ipc.approveCatalogue(hash);
     } catch (error) {
-      this.refused = { hash, message: String(error) };
+      this.refused = { hash, message: ipc.errorMessage(error) };
     } finally {
       this.approving = false;
     }
@@ -110,7 +110,7 @@ export class RelayStore {
     try {
       await ipc.acknowledgeAnomaly(key);
     } catch (error) {
-      this.anomalyError = String(error);
+      this.anomalyError = ipc.errorMessage(error);
     } finally {
       this.acknowledging = { ...this.acknowledging, [key]: false };
     }
@@ -123,7 +123,7 @@ export class RelayStore {
     try {
       await ipc.setRelayStopped(stopped);
     } catch (error) {
-      this.stopError = String(error);
+      this.stopError = ipc.errorMessage(error);
     } finally {
       this.switching = false;
     }

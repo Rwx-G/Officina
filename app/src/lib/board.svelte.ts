@@ -67,7 +67,7 @@ export class BoardStore {
     try {
       outcome = await ipc.focus(card.key);
     } catch (error) {
-      outcome = { outcome: "failed", detail: String(error) };
+      outcome = { outcome: "failed", detail: ipc.errorMessage(error) };
     }
     const atMs = Date.now();
     this.outcomes = { ...this.outcomes, [card.key]: { outcome, atMs } };
@@ -103,7 +103,7 @@ export class BoardStore {
     try {
       await ipc.decideApproval(id, approve);
     } catch (error) {
-      this.approvalErrors = { ...this.approvalErrors, [id]: String(error) };
+      this.approvalErrors = { ...this.approvalErrors, [id]: ipc.errorMessage(error) };
     } finally {
       const { [id]: _done, ...rest } = this.deciding;
       this.deciding = rest;

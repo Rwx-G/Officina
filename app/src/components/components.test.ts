@@ -7,7 +7,8 @@ import { BoardStore } from "../lib/board.svelte";
 import type { ApprovalView } from "../lib/generated/ApprovalView";
 import type { Card } from "../lib/generated/Card";
 
-vi.mock("../lib/ipc", () => ({
+vi.mock("../lib/ipc", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../lib/ipc")>()),
   decideApproval: vi.fn(async () => undefined),
 }));
 

@@ -5,7 +5,8 @@ import RelayBanners from "../components/RelayBanners.svelte";
 import type { RelayView } from "./generated/RelayView";
 import type { CanonicalCatalogue } from "./generated/CanonicalCatalogue";
 
-vi.mock("./ipc", () => ({
+vi.mock("./ipc", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./ipc")>()),
   approveCatalogue: vi.fn(async (hash: string) => hash),
   setRelayStopped: vi.fn(async () => true),
   getRelay: vi.fn(async () => null),
@@ -119,7 +120,10 @@ describe("RelayStore", () => {
   it("approves the displayed hash and keeps a refusal to explain it", async () => {
     const store = new RelayStore();
     store.relay = view();
-    vi.mocked(ipc.approveCatalogue).mockRejectedValueOnce("changed since it was displayed");
+    vi.mocked(ipc.approveCatalogue).mockRejectedValueOnce({
+      code: "catalogue_changed",
+      message: "changed since it was displayed",
+    });
     await store.approve("aa11");
     expect(ipc.approveCatalogue).toHaveBeenCalledWith("aa11");
     expect(store.refused).toEqual({ hash: "aa11", message: "changed since it was displayed" });
@@ -135,6 +139,14 @@ describe("RelayStore", () => {
     vi.mocked(ipc.setRelayStopped).mockRejectedValueOnce("journal locked");
     await store.setStopped(false);
     expect(store.stopError).toBe("journal locked");
+  });
+});
+
+describe("errorMessage", () => {
+  it("reads an IpcError's message, and anything else as text", () => {
+    expect(ipc.errorMessage({ code: "journal_unavailable", message: "journal locked" })).toBe("journal locked");
+    expect(ipc.isIpcError({ code: "refused" })).toBe(false);
+    expect(ipc.errorMessage("a fault of the IPC layer")).toBe("a fault of the IPC layer");
   });
 });
 

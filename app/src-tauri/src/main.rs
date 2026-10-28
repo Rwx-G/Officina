@@ -8,6 +8,7 @@ use std::sync::{Arc, RwLock};
 
 use officina_core::board::Board;
 use officina_core::focus::FocusOutcome;
+use officina_core::ipc::IpcError;
 use officina_core::relay::view::RelayView;
 use officina_host::collector::Collector;
 use officina_host::files::now_ms;
@@ -15,7 +16,7 @@ use officina_host::focus::{
     FocusContext, attach_command, focus_card, log_outcome, log_wrong_window,
 };
 use officina_host::paths::Paths;
-use officina_host::relay::authority;
+use officina_host::relay::authority::{self, AuthorityError};
 use officina_host::relay::home::RelayHome;
 use officina_host::watch::{CollectorMsg, spawn};
 use tauri::{Emitter, Manager, State, WindowEvent};
@@ -79,7 +80,7 @@ fn refresh(state: State<'_, AppState>) {
 }
 
 #[tauri::command]
-async fn focus(state: State<'_, AppState>, key: String) -> Result<FocusOutcome, String> {
+async fn focus(state: State<'_, AppState>, key: String) -> Result<FocusOutcome, IpcError> {
     let Some(card) = card_for(&state, &key) else {
         return Ok(FocusOutcome::Failed(
             "this session is no longer on the board".into(),
@@ -96,7 +97,7 @@ async fn focus(state: State<'_, AppState>, key: String) -> Result<FocusOutcome, 
         outcome
     })
     .await
-    .map_err(|e| e.to_string())?;
+    .map_err(|e| IpcError::internal(e.to_string()))?;
     Ok(outcome)
 }
 
@@ -115,11 +116,11 @@ fn copy_attach_command(state: State<'_, AppState>, key: String) -> Option<String
 
 /// Runs an authority call off the main thread (AD-3), then asks the
 /// collector for a relay view at once, whether the call succeeded or not
-/// (AD-35).
+/// (AD-35). Every failure reaches the window as one [`IpcError`].
 async fn with_authority<T: Send + 'static>(
     state: State<'_, AppState>,
-    call: impl FnOnce(&RelayHome) -> Result<T, String> + Send + 'static,
-) -> Result<T, String> {
+    call: impl FnOnce(&RelayHome) -> Result<T, AuthorityError> + Send + 'static,
+) -> Result<T, IpcError> {
     let home = state.relay_home.clone();
     let collector = state.collector();
     tauri::async_runtime::spawn_blocking(move || {
@@ -127,20 +128,18 @@ async fn with_authority<T: Send + 'static>(
         if let Some(sender) = collector {
             let _ = sender.send(CollectorMsg::RelayChanged);
         }
-        result
+        result.map_err(|e| e.ipc())
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| IpcError::internal(e.to_string()))?
 }
 
 /// Approves the relay's catalogue when `hash` is still the current one
 /// (AD-24, D-8). Returns the approved hash.
 #[tauri::command]
-async fn approve_catalogue(state: State<'_, AppState>, hash: String) -> Result<String, String> {
+async fn approve_catalogue(state: State<'_, AppState>, hash: String) -> Result<String, IpcError> {
     with_authority(state, move |home| {
-        authority::approve_catalogue(home, &hash)
-            .map(|approved| approved.hash)
-            .map_err(|e| e.to_string())
+        authority::approve_catalogue(home, &hash).map(|approved| approved.hash)
     })
     .await
 }
@@ -153,9 +152,9 @@ async fn decide_approval(
     state: State<'_, AppState>,
     id: String,
     approve: bool,
-) -> Result<(), String> {
+) -> Result<(), IpcError> {
     with_authority(state, move |home| {
-        authority::decide_approval(home, &id, approve).map_err(|e| e.to_string())
+        authority::decide_approval(home, &id, approve)
     })
     .await
 }
@@ -163,9 +162,9 @@ async fn decide_approval(
 /// Stops or resumes the relay (FR-11, AD-34, D-26). Returns whether the
 /// state changed.
 #[tauri::command]
-async fn set_relay_stopped(state: State<'_, AppState>, stopped: bool) -> Result<bool, String> {
+async fn set_relay_stopped(state: State<'_, AppState>, stopped: bool) -> Result<bool, IpcError> {
     with_authority(state, move |home| {
-        authority::set_relay_stopped(home, stopped).map_err(|e| e.to_string())
+        authority::set_relay_stopped(home, stopped)
     })
     .await
 }
@@ -173,9 +172,9 @@ async fn set_relay_stopped(state: State<'_, AppState>, stopped: bool) -> Result<
 /// Acknowledges an anomaly the Relay view lists (D-173): a decision the
 /// window did not make, which doctor then no longer fails on.
 #[tauri::command]
-async fn acknowledge_anomaly(state: State<'_, AppState>, key: String) -> Result<(), String> {
+async fn acknowledge_anomaly(state: State<'_, AppState>, key: String) -> Result<(), IpcError> {
     with_authority(state, move |home| {
-        authority::acknowledge_anomaly(home, &key).map_err(|e| e.to_string())
+        authority::acknowledge_anomaly(home, &key)
     })
     .await
 }
