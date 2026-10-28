@@ -135,6 +135,8 @@ const PAIRS: [Side, Side, number][] = [
   ["--color-danger", "--color-surface", 4.5],
   ["--color-danger", "--color-danger-surface", 4.5],
   ["--color-text", "--color-danger-surface", 7],
+  // The "relay stopped" chip's label.
+  ["--color-surface", "--color-danger", 4.5],
   ["--color-text", ["--color-column", "--color-bg"], 7],
   ["--color-text", ["--color-attention-wash", "--color-bg"], 7],
   // The figures on what they stand or sit on (the prototype v2's

@@ -57,7 +57,9 @@ project uses [Semantic Versioning](https://semver.org/).
   Auto, Light and Dark, kept for the next start and applied before the
   window draws. The header logo follows the theme. An alert never changes
   it. The colours the error banner, the broken-contract text, the column
-  washes and the session file's shadow hard-coded are tokens now.
+  washes and the session file's shadow hard-coded are tokens now. The
+  "relay stopped" chip takes the error banner's deep red, so its label
+  stays legible in both themes.
 - `officina hook`: records Claude Code hook events into a local, append-only
   buffer, always exits 0, p95 around 20 ms.
 - `officina quota write [--tee]`: records the account's rate limits from a

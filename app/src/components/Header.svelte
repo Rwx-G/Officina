@@ -255,8 +255,10 @@
     background: var(--color-attention);
     color: var(--color-attention-text);
   }
+  /* Danger rather than the stopped terracotta, on which the label read
+     4.15:1 in the light theme (D-529). */
   .chip.stopped {
-    background: var(--color-stopped);
+    background: var(--color-danger);
     color: var(--color-surface);
   }
   .chip.to-sort {

@@ -140,14 +140,13 @@ test.describe("stop", () => {
     expect(stops).toEqual([{ stopped: true }, { stopped: false }]);
   });
 
-  test("a stopped relay shows the terracotta chip and the board banner", async ({ page }) => {
+  // The chip's label reads 4.5:1 on the danger colour in both themes (D-529).
+  test("a stopped relay shows the danger chip and the board banner", async ({ page }) => {
     await open(page, loadRelay("relay-stopped"));
     const chip = page.getByTestId("relay-stopped-chip");
     await expect(chip).toHaveText("relay stopped");
-    const terracotta = await page.evaluate(() =>
-      getComputedStyle(document.documentElement).getPropertyValue("--color-project-terracotta").trim(),
-    );
-    await expect(chip).toHaveCSS("background-color", hexToRgb(terracotta));
+    const danger = await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue("--color-danger").trim());
+    await expect(chip).toHaveCSS("background-color", hexToRgb(danger));
     await expect(page.getByTestId("relay-stopped-banner")).toContainText("The relay is stopped since");
     await expect(page.getByTestId("relay-toggle")).toHaveAccessibleName("Resume relay");
     await expect(page.getByTestId("catalogue-chip")).toBeHidden();
