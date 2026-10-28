@@ -1,6 +1,6 @@
-//! The README against the code it describes (story 2.10 AC 7, D-34): every
-//! subcommand of the usage text is documented, and no list the code owns is
-//! transcribed. The prose itself is reviewed by hand.
+//! The README against the code it describes (story 2.10 AC 7, D-34, story
+//! 3.12 AC 2): every subcommand of the usage text is documented, and no list
+//! the code owns is transcribed. The prose itself is reviewed by hand.
 
 mod common;
 
@@ -281,5 +281,21 @@ fn changelog_states_the_current_catalogue_format() {
     assert!(
         stated.iter().all(|format| *format == CANONICAL_FORMAT),
         "[Unreleased] states the formats {stated:?}, the code {CANONICAL_FORMAT}"
+    );
+}
+
+/// Story 3.12 AC 2 (AD-39): the README tells the reader to exclude the
+/// registry's folder from a sync client by naming the clients, never by
+/// transcribing the folder markers the code looks for.
+#[test]
+fn readme_names_no_sync_marker() {
+    let text = readme();
+    assert!(!officina_host::registry::store::SYNC_ROOT_MARKERS.is_empty());
+    for marker in officina_host::registry::store::SYNC_ROOT_MARKERS {
+        assert!(!text.contains(marker), "the README transcribes {marker}");
+    }
+    assert!(
+        text.contains("Exclude `registry/` from any sync client"),
+        "positive control: the exclusion is stated"
     );
 }

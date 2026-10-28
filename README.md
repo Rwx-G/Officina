@@ -120,7 +120,7 @@ Run `officina-app.exe`. A second launch focuses the existing window. Keep it on 
 Everything stays on your machine, under `~/.officina`:
 
 - **Hook events**: the first 280 characters of each prompt and answer, and the last 280 of an answer longer than that, plus the event type, session id and folder, in daily files the window deletes once its registry and both daily copies of it hold them, normally on the third or fourth day; with the window closed or its registry unusable they are kept. Set `OFFICINA_NO_EXCERPTS=1` (or `no_excerpts = true` in the floor file) to keep no prompt or answer text at all. The hook finds the floor file at `~/.officina/floor.toml` or through `OFFICINA_FLOOR`; one passed only with `--floor` does not reach it.
-- **Registry** (`registry/`): each session seen, its project and when it was first and last seen, and its latest prompt and the head and tail of its latest answer, each kept 28 days less an hour after the event it came from; each verdict you confirm keeps a copy of the prompt and answer it was decided on, until they were due to expire; a daily copy lives two days, so no prompt or answer text survives 30 days. `no_excerpts` keeps none and clears those already stored at the window's next hourly pass. These bounds are applied while the window runs and when it starts; while it is closed nothing expires.
+- **Registry** (`registry/`): each session seen, its project and when it was first and last seen, and its latest prompt and the head and tail of its latest answer, each kept 28 days less an hour after the event it came from; each verdict you confirm keeps a copy of the prompt and answer it was decided on, until they were due to expire; the triage model's answer to a row, when you turned the model on, goes with the excerpts it answered; a daily copy lives two days, so no prompt, answer or model text survives 30 days. Each triage call is kept 90 days as counts and cost, without any text. `no_excerpts` keeps none and clears those already stored at the window's next hourly pass. These bounds are applied while the window runs and when it starts; while it is closed nothing expires. See [Privacy in the registry](#privacy-in-the-registry).
 - **Quota**: the two rate-limit windows, nothing else.
 - **Focus statistics**: outcome codes and a hash of the card, never a window title or a path.
 - **Relay journal** (`journal/`, once you use the relay): one line per run start and end, refusal, gate refusal or fault, approval, stop and resume, with the session id, the action, its parameters and argument vector, the first 280 characters of a refused command unless excerpts are off, and never a program's output.
@@ -354,7 +354,7 @@ Usable today: declare a catalogue, approve it in the window, let sessions run it
 
 ## Subjects and triage (v0.3, in progress)
 
-v0.3 gives Officina a memory that outlives the board's 24 hours: the sessions it has seen, the subjects they belong to and the verdicts you confirm.
+v0.3 gives Officina a memory that outlives the board's 24 hours: the sessions it has seen, the subjects they belong to and the verdicts you confirm when work ends, each proposal measured against your own decisions before anything acts on it.
 
 ### The registry
 
@@ -362,17 +362,24 @@ The memory is one SQLite database, `registry/registry.db` in the Officina home (
 
 **Exclude `registry/` from any sync client** (OneDrive, Dropbox, Synology Drive and the like): a client that writes an older copy back would undo what you decided. When the Officina home sits in a synchronised folder the registry still opens, and `officina doctor` warns and names the folder to exclude. On a network folder the registry is not opened at all, since SQLite's write-ahead log needs a local disk; `officina doctor` fails and the board keeps working without it.
 
-At each start the window checks the registry's integrity. A damaged database is set aside under `registry/quarantine/` and replaced by the newest daily copy that passes the check (`registry/backup/registry-<date>.db`, one a day, the two newest kept); with no valid copy a new one starts. A database written by an older Officina is copied (`backup/pre-v<version>-<date>.db`), then migrated; one written by a newer Officina is opened read-only. `officina doctor` reports the registry's location, version, integrity, copies, any quarantine and the last restore.
+At each start the window checks the registry's integrity. A damaged database is set aside under `registry/quarantine/` and replaced by the newest daily copy that passes the check (`registry/backup/registry-<date>.db`, one a day, the two newest kept); with no valid copy a new one starts. A database written by an older Officina is copied (`backup/pre-v<version>-<date>.db`), then migrated; one written by a newer Officina is opened read-only.
 
-### What it keeps, and for how long
+`officina doctor` prints one registry section, always in the same order: the registry's location, version, integrity and copies, the event files waiting or rewritten, any quarantine and the last restore, the hook fields the running Claude Code version leaves out, and the triage model's state, calls and cost. A network folder and a failed integrity check fail it (exit 1); a synchronised folder, a newer version, a quarantine, a recent restore, waiting or rewritten event files, a missing hook field and a paused model only warn.
+
+### Privacy in the registry
 
 The window ingests the event files into the registry before it shows its first board, then whenever a hook writes, and once an hour; nothing is deleted before it is ingested. For each session it keeps its project, recorded the first time the session is seen, when it was first and last seen, its latest prompt and the beginning and end of its latest answer (the hook records the last 280 characters of a long answer beside the first 280).
 
-- Prompt and answer text is kept 28 days less an hour after the event it came from, never counted from when it was ingested; a daily copy lives two days, so none survives 30 days. With `no_excerpts` (environment or floor file) none is stored, and what was stored before is cleared at the next hourly pass.
+- Prompt and answer text is kept 28 days less an hour after the event it came from, never counted from when it was ingested; a daily copy lives two days, so none survives 30 days. A subject keeps its latest excerpts only, and archiving clears them.
+- A confirmed verdict keeps the prompt and answer it was decided on until those excerpts were due to expire, so the copy is under the same 30-day bound.
+- The triage model's answer to a row (a verdict and a reason of at most 200 characters) is deleted when the row is confirmed, when its subject is archived, when the excerpts it answered expire or change, and when `no_excerpts` clears them. A confirmation keeps the model's reason code and the call's id, never its text. Each triage call is kept 90 days, as its outcome, tokens and cost.
+- With `no_excerpts` (environment or floor file) no prompt or answer is stored, what was stored before (excerpts, confirmation copies, model answers) is cleared at the next hourly pass, and the model cannot be called.
 - An event file is deleted once it is older than yesterday's and the registry and both daily copies hold it complete: normally on its third or fourth day.
 - Daily copies, set-aside databases and pre-migration copies are kept two, for two days.
 
-These bounds are applied while the window runs and when it starts. While it is closed, or while its registry is read-only or unavailable, nothing expires and event files are kept; nothing is lost, they are ingested at the next start. `officina doctor` warns when more than seven event files wait. While the registry cannot be used, the Board view says why and keeps working from Claude Code's sessions.
+These bounds are applied while the window runs and when it starts. **While it is closed nothing expires**, and while its registry is read-only or unavailable nothing expires either and event files are kept; nothing is lost, they are ingested at the next start. `officina doctor` warns when more than seven event files wait. While the registry cannot be used, the Board view says why and keeps working from Claude Code's sessions.
+
+Officina itself writes nothing under the Claude config dir nor into `~/.claude.json`; the `claude` processes it starts (`claude agents`, `claude --version`, a triage call) keep their own state there like any session.
 
 ### What a session record holds
 
@@ -398,6 +405,8 @@ A subject is a named piece of work (a change, an incident, a migration) that own
 The window's header switches between **Board**, **Subjects** and, once the relay is in use, **Relay**. The Subjects view lists the `active` subjects, then those `to_resume`, each with its sessions and their live state from the board; a subject none of whose sessions runs shows its last prompt and the end of its last answer, so you find where you left it without opening a session. Below come the unfiled sessions by project (non-interactive runs counted, the ten most recent listed on demand) and, on demand, the archived subjects with **Reopen**.
 
 Tick sessions, wherever they are listed, to file them under a subject (those of their project are offered first), to unfile them, or to name a new subject, which takes their project. **New subject** also creates one in any project the registry knows. Each subject has **Rename**, **Merge** (its sessions move to the subject you pick, and it is archived) and **Archive**, which offers the "routine, could have run alone" box. The window asks the registry's one writer and waits ten seconds at most; a refused action says which rule refused it and changes nothing, and an action not run in time is never run later. Notes say when the registry lies in a synchronised folder (with the folder to exclude), when it was restored from a copy (for seven days, naming the copy), and why it cannot be read. Digit keys open Needs you sessions in the Board view only.
+
+`officina subjects --json` prints the same view: the subjects that are not archived with their sessions (and their live board card), the latest excerpts, the unfiled sessions per project (non-interactive runs counted, the ten most recent listed), the rows that need a verdict, the measured error, the gates and the model's state, and how many event bytes wait for the window. It reads the registry read-only, works with the window closed, and exits 3 with the reason when the registry cannot be read. On the board, each card names its subject.
 
 ### What needs a verdict
 
@@ -445,10 +454,6 @@ A call is refused before anything starts, and spends nothing, when `claude` reso
 
 **Turning itself off.** After each confirmation of one of its proposals, the model is judged on its last 50 confirmed proposals: from 20 on, if it was right less often than `to_resume` would have been, it turns itself off, and the panel says why. Turning it on again then needs a newer dry run that wins. With `no_excerpts`, or `claude` a shim, it cannot be called: it proposes nothing and cannot be turned on.
 
-Officina itself writes nothing under the Claude config dir nor into `~/.claude.json`; the `claude` processes it starts (`claude agents`, `claude --version`, a triage call) keep their own state there like any session.
-
-`officina subjects --json` prints the subjects that are not archived with their sessions (and their live board card), the latest excerpts, the unfiled sessions per project (non-interactive runs counted, the ten most recent listed), and how many event bytes wait for the window: it reads the registry read-only, works with the window closed, and exits 3 with the reason when the registry cannot be read. On the board, each card names its subject.
-
 ## Command line
 
 | Command | Purpose |
@@ -471,14 +476,14 @@ Each minor version is one PRD and is useful alone.
 |---|---|
 | **v0.1 The board** | this release: who needs you, quotas, one click to the right session |
 | v0.2 The relay | in progress: a closed catalogue of actions sessions run on their own, gated and journaled, so they stop asking you to run commands and paste results |
-| v0.3 The registry and triage | subjects that survive restarts, finished sessions sorted into history or to resume |
+| v0.3 The registry and triage | in progress: subjects that survive restarts, finished sessions sorted into history or to resume, a model that proposes only while it measurably helps |
 | v0.4 The scene | the isometric workshop: rooms, focus mode, the attention halo |
 | v0.5 The orchestrator | a restricted session that sees every subject and proposes work orders, launched in one gesture |
 | v0.6 The isolated workshop | autonomous tasks in a container that holds no key, behind an allow-list gateway |
 | v0.7 The governor | spends the perishable 5-hour margin on routine tasks, never your weekly quota or your attention |
 | v1 | installer, update, Linux build, documentation |
 
-Design documents: [PRD v0.1](docs/prd/prd-v0.1.md), [PRD v0.2](docs/prd/prd-v0.2.md), [architecture](docs/architecture-spine.md) and its [v0.2 addendum](docs/architecture-v0.2.md), [research notes](docs/research-notes.md), [stories](docs/stories/).
+Design documents: [PRD v0.1](docs/prd/prd-v0.1.md), [PRD v0.2](docs/prd/prd-v0.2.md), [PRD v0.3](docs/prd/prd-v0.3.md), [architecture](docs/architecture-spine.md) and its [v0.2](docs/architecture-v0.2.md) and [v0.3](docs/architecture-v0.3.md) addenda, [research notes](docs/research-notes.md), [stories](docs/stories/).
 
 ## Building from source
 
