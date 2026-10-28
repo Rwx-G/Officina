@@ -155,6 +155,50 @@ pub fn fake_tool_path() -> String {
     }
 }
 
+/// The folder holding `git` on this test process's `PATH`, which tests put in
+/// the `PATH` of the commands they start (D-23); `None` when the machine has
+/// no `git`.
+pub fn git_dir() -> Option<PathBuf> {
+    let exe = if cfg!(windows) { "git.exe" } else { "git" };
+    std::env::split_paths(&std::env::var_os("PATH")?).find(|dir| dir.join(exe).is_file())
+}
+
+/// [`git_dir`], or `None` after printing why `test` skips (D-23).
+pub fn git_dir_or_skip(test: &str) -> Option<PathBuf> {
+    let dir = git_dir();
+    if dir.is_none() {
+        println!("skipped {test}: no git on this machine's PATH");
+    }
+    dir
+}
+
+/// Runs `git <args>` in `dir` with the `git` of `git_dir`, a fixed identity
+/// and no line ending conversion, and asserts it succeeds.
+pub fn git(git_dir: &Path, dir: &Path, args: &[&str]) {
+    let exe = if cfg!(windows) { "git.exe" } else { "git" };
+    let out = Command::new(git_dir.join(exe))
+        .args([
+            "-c",
+            "user.name=user01",
+            "-c",
+            "user.email=user@example.com",
+            "-c",
+            "core.autocrlf=false",
+            "-c",
+            "init.defaultBranch=main",
+        ])
+        .args(args)
+        .current_dir(dir)
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "git {args:?}: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
 pub fn run_with(mut cmd: Command, stdin: &[u8]) -> Output {
     let mut child = cmd.spawn().unwrap();
     child.stdin.take().unwrap().write_all(stdin).unwrap();

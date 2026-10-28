@@ -1,7 +1,9 @@
-//! `officina run` as pure functions (AD-29, D-20, D-21): the checks in their
-//! documented order, failing closed, and the text of `officina run --list`.
-//! The host reads the stop flag, the files, the working directory and the
-//! system directory, then journals and spawns what [`plan`] returns.
+//! `officina run` as pure functions (AD-29, AD-33, D-20, D-21): the checks in
+//! their documented order, failing closed, and the text of
+//! `officina run --list`. The host reads the stop flag, the files, the
+//! working directory and the system directory, then, for an `after-check`
+//! action, the journal and the tree for [`check_step`], and journals and
+//! spawns what [`plan`] returns.
 
 use std::collections::BTreeMap;
 
@@ -9,9 +11,9 @@ use super::argv::{self, ArgvRefusal, Launch};
 use super::catalogue::{
     ActionClass, ApprovedCatalogue, CanonicalAction, CanonicalParam, CanonicalProject, RelayFloor,
 };
-use super::classes;
+use super::classes::{self, CHECK_VALID_MS};
 use super::gate::{LIST_COMMAND, normalise_cwd};
-use super::journal::RefusalReason;
+use super::journal::{JournalLine, RefusalReason, TreeFingerprint};
 use crate::floor::{floor_dir_of, join_project_path};
 
 /// Exit code of a refusal (AD-29): a shell's "found but not executable".
@@ -79,6 +81,11 @@ pub struct RunPlan {
     pub catalogue_hash: String,
     pub timeout_s: u32,
     pub max_output_kib: u32,
+    /// For an `after-check` action, the check it needs (AD-33).
+    pub check: Option<String>,
+    /// True for an `after-check` action and for any action an `after-check`
+    /// action names as its check: their runs record the tree (D-22).
+    pub binds_tree: bool,
 }
 
 impl RunPlan {
@@ -148,7 +155,8 @@ pub fn projects_at<'c>(
 /// 4. that project lists the action;
 /// 5. every declared parameter is given, none other, each value accepted
 ///    (AD-30, D-5);
-/// 6. the action's class runs in this build (D-20).
+/// 6. the action's class runs in this build (D-20); an `after-check`
+///    action then needs [`check_step`], which reads the journal and the tree.
 ///
 /// The launch is built from the current floor's validated action, which
 /// the equal hash proves is the approved one, with the project folder as
@@ -266,6 +274,12 @@ pub fn plan(
             Some(project),
         );
     }
+    let after_check = validated.class == ActionClass::AfterCheck;
+    let is_a_check = relay
+        .catalogue
+        .actions
+        .values()
+        .any(|a| a.class == ActionClass::AfterCheck && a.check.as_deref() == Some(action));
     Ok(RunPlan {
         project: (*project).to_owned(),
         action: action.to_owned(),
@@ -274,7 +288,46 @@ pub fn plan(
         catalogue_hash: approved.hash.clone(),
         timeout_s: validated.timeout_s,
         max_output_kib: validated.max_output_kib,
+        check: validated.check.clone().filter(|_| after_check),
+        binds_tree: after_check || is_a_check,
     })
+}
+
+/// The `after-check` half of the class step (AD-29 step 6, AD-33): an
+/// `after-check` action runs only when [`classes::check_satisfied`] finds
+/// its check, run with the same `params` under the same catalogue on the
+/// same `tree`, in `lines`; otherwise it is refused with
+/// [`RefusalReason::CheckRequired`]. Any other plan passes.
+pub fn check_step(
+    plan: &RunPlan,
+    params: &BTreeMap<String, String>,
+    lines: &[JournalLine],
+    tree: Option<&TreeFingerprint>,
+    now_ms: i64,
+) -> Result<(), Refusal> {
+    let Some(check) = &plan.check else {
+        return Ok(());
+    };
+    if classes::check_satisfied(
+        lines,
+        &plan.project,
+        check,
+        params,
+        &plan.catalogue_hash,
+        tree,
+        now_ms,
+    ) {
+        return Ok(());
+    }
+    refuse(
+        RefusalReason::CheckRequired,
+        format!(
+            "run `{check}` first: {} runs only after {check} succeeded with the same parameters on the same code in the last {} minutes",
+            plan.action,
+            CHECK_VALID_MS / 60_000
+        ),
+        Some(&plan.project),
+    )
 }
 
 fn action_lines(text: &mut String, name: &str, action: &CanonicalAction) {
@@ -292,6 +345,12 @@ fn action_lines(text: &mut String, name: &str, action: &CanonicalAction) {
     text.push('\n');
     if !action.description.is_empty() {
         text.push_str(&format!("      {}\n", action.description));
+    }
+    if let (ActionClass::AfterCheck, Some(check)) = (action.class, &action.check) {
+        text.push_str(&format!(
+            "      runs only after `officina run {check}` succeeded with the same parameters on the same code in the last {} minutes\n",
+            CHECK_VALID_MS / 60_000
+        ));
     }
     for (param, rule) in &action.params {
         match rule {
@@ -613,6 +672,127 @@ mod tests {
         assert!(
             list_text(&inputs(false, SnapshotState::Missing, floor, "C:/x"))
                 .contains("No relay catalogue is approved")
+        );
+    }
+
+    const CHECKED_FLOOR: &str = "schema = 2
+[[project]]
+name = \"lab\"
+path = \"Lab\"
+actions = [\"verify\", \"apply\", \"probe\"]
+[[action]]
+name = \"verify\"
+class = \"free\"
+program = \"C:/path/to/tool.exe\"
+args = [\"--check\", \"{group}\"]
+[action.params.group]
+pattern = \"lab-[a-z]+\"
+[[action]]
+name = \"apply\"
+class = \"after-check\"
+check = \"verify\"
+program = \"C:/path/to/tool.exe\"
+args = [\"{group}\"]
+[action.params.group]
+pattern = \"lab-[a-z]+\"
+[[action]]
+name = \"probe\"
+class = \"free\"
+program = \"C:/path/to/tool.exe\"
+";
+
+    #[test]
+    fn after_check_needs_its_check_and_binds_the_tree() {
+        use crate::relay::journal::{
+            JournalEntry, RunFinished, RunOutcome, RunStarted, StreamSummary,
+        };
+        let current = load(CHECKED_FLOOR, FLOOR_PATH).unwrap();
+        assert!(
+            current.catalogue.issues.is_empty(),
+            "{:?}",
+            current.catalogue.issues
+        );
+        let approved = approved_of(&current);
+        let floor = FloorState::Valid {
+            relay: &current,
+            path: FLOOR_PATH,
+        };
+        let ready = inputs(
+            false,
+            SnapshotState::Valid(&approved),
+            floor,
+            "C:/path/to/Lab",
+        );
+        let group = params(&[("group", "lab-web")]);
+        let verify = plan(&ready, "verify", &group).unwrap();
+        let apply = plan(&ready, "apply", &group).unwrap();
+        let probe = plan(&ready, "probe", &params(&[])).unwrap();
+        assert_eq!((verify.check.as_deref(), verify.binds_tree), (None, true));
+        assert_eq!(
+            (apply.check.as_deref(), apply.binds_tree),
+            (Some("verify"), true)
+        );
+        assert_eq!((probe.check.as_deref(), probe.binds_tree), (None, false));
+        let listed = list_text(&ready);
+        assert!(
+            listed.contains("  officina run apply group=<...>\n      runs only after `officina run verify` succeeded with the same parameters"),
+            "{listed}"
+        );
+
+        let now = 1_793_102_400_000;
+        let tree = TreeFingerprint {
+            sha256: crate::relay::sha256_hex(b"tree"),
+            untracked_by_size: 0,
+        };
+        let refusal = check_step(&apply, &group, &[], Some(&tree), now).unwrap_err();
+        assert_eq!(refusal.reason, RefusalReason::CheckRequired);
+        assert!(
+            refusal.detail.starts_with("run `verify` first"),
+            "{}",
+            refusal.detail
+        );
+        assert_eq!(refusal.project.as_deref(), Some("lab"));
+
+        let stream = StreamSummary {
+            bytes: 0,
+            sha256: crate::relay::sha256_hex(b""),
+        };
+        let lines = [
+            JournalLine::new(
+                now - 60_000,
+                JournalEntry::RunStarted(RunStarted {
+                    run_id: "r1".to_owned(),
+                    project: "lab".to_owned(),
+                    session_id: None,
+                    action: "verify".to_owned(),
+                    class: verify.class,
+                    params: group.clone(),
+                    argv: verify.argv(),
+                    catalogue_hash: verify.catalogue_hash.clone(),
+                    approval_id: None,
+                    tree: Some(tree.clone()),
+                    timeout_s: Some(verify.timeout_s),
+                }),
+            ),
+            JournalLine::new(
+                now - 30_000,
+                JournalEntry::RunFinished(RunFinished {
+                    run_id: "r1".to_owned(),
+                    outcome: RunOutcome::Exited,
+                    exit_code: Some(0),
+                    duration_ms: 30_000,
+                    stdout: stream.clone(),
+                    stderr: stream,
+                    dropped_bytes: 0,
+                    detail: None,
+                }),
+            ),
+        ];
+        assert_eq!(check_step(&apply, &group, &lines, Some(&tree), now), Ok(()));
+        assert_eq!(
+            check_step(&verify, &group, &[], None, now),
+            Ok(()),
+            "a plan without a check passes"
         );
     }
 }

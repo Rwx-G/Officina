@@ -1,6 +1,7 @@
-//! `officina run` (AD-29 to AD-32): reads what the checks need, refuses or
+//! `officina run` (AD-29 to AD-33): reads what the checks need, refuses or
 //! starts the approved argument vector with a timeout and an output budget,
-//! and journals the run. It is the relay's authority over what runs and
+//! and journals the run. Check and `after-check` runs record the tree they
+//! start on, and an `after-check` action runs only after its check. It is the relay's authority over what runs and
 //! fails closed, unlike the gate (AD-28): every doubt is a refusal.
 //!
 //! Exit codes a shell already reads: the program's own, full Windows value
@@ -10,6 +11,7 @@
 
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
+use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -19,15 +21,15 @@ use std::time::{Duration, Instant};
 use officina_core::relay::StreamHash;
 use officina_core::relay::argv::Launch;
 use officina_core::relay::journal::{
-    JournalEntry, Refused, RunFinished, RunOutcome, RunStarted, StreamSummary,
+    JournalEntry, Refused, RunFinished, RunOutcome, RunStarted, StreamSummary, TreeFingerprint,
 };
 pub use officina_core::relay::run::{EXIT_NOT_STARTED, EXIT_REFUSED, EXIT_TIMEOUT};
 use officina_core::relay::run::{
-    FloorState, Refusal, RunInputs, RunPlan, SnapshotState, list_text, plan,
+    FloorState, Refusal, RunInputs, RunPlan, SnapshotState, check_step, list_text, plan,
 };
 
 use super::home::{ApprovedState, RelayHome, load_relay_floor};
-use super::journal;
+use super::{journal, tree};
 use crate::files::now_ms;
 
 /// The session that called, as Claude Code's Bash tool sets it (E13).
@@ -146,6 +148,11 @@ pub fn list(home: &RelayHome, cwd: &str) -> String {
 
 /// `officina run <action> name=value ...`: checks, then runs. Returns the
 /// exit code.
+///
+/// After the checks of [`plan`], a run that binds the tree takes its
+/// fingerprint in the project folder (D-22), and an `after-check` action
+/// reads two days of journal for its check (AD-33), the last step before
+/// anything is journaled as started.
 pub fn run(
     home: &RelayHome,
     cwd: &str,
@@ -153,10 +160,22 @@ pub fn run(
     params: &BTreeMap<String, String>,
     session_id: Option<String>,
 ) -> i32 {
-    match with_inputs(home, cwd, |inputs| plan(inputs, action, params)) {
-        Ok(plan) => execute(home, &plan, params, session_id),
-        Err(refusal) => refuse(home, &refusal, action, params, session_id),
+    let plan = match with_inputs(home, cwd, |inputs| plan(inputs, action, params)) {
+        Ok(plan) => plan,
+        Err(refusal) => return refuse(home, &refusal, action, params, session_id),
+    };
+    let tree = plan
+        .binds_tree
+        .then(|| tree::fingerprint(Path::new(&plan.launch.cwd)))
+        .flatten();
+    if plan.check.is_some() {
+        let now = now_ms();
+        let (lines, _) = journal::read_recent(home, now);
+        if let Err(refusal) = check_step(&plan, params, &lines, tree.as_ref(), now) {
+            return refuse(home, &refusal, action, params, session_id);
+        }
     }
+    execute(home, &plan, params, session_id, tree)
 }
 
 /// One stderr line and one `refused` line (PRD amendment 11). A journal
@@ -466,6 +485,7 @@ fn execute(
     plan: &RunPlan,
     params: &BTreeMap<String, String>,
     session_id: Option<String>,
+    tree: Option<TreeFingerprint>,
 ) -> i32 {
     let run_id = format!("{:x}-{:x}", now_ms(), std::process::id());
     let start = JournalEntry::RunStarted(RunStarted {
@@ -478,7 +498,8 @@ fn execute(
         argv: plan.argv(),
         catalogue_hash: plan.catalogue_hash.clone(),
         approval_id: None,
-        tree: None,
+        tree,
+        timeout_s: Some(plan.timeout_s),
     });
     if let Err(e) = journal::append(home, &[start], now_ms()) {
         eprintln!("officina: refused: {e}, so nothing ran (journal_unavailable)");

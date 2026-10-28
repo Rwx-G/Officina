@@ -68,7 +68,17 @@ project uses [Semantic Versioning](https://semver.org/).
   end together. Exit codes are the program's own, or 126 refused, 124 timed
   out, 127 not started, 64 usage. Each run journals a start and an end line
   (output byte counts and SHA-256, never the output), each refusal one line.
-  `after-check` and `human` actions are refused as not available yet.
+  `human` actions are refused as not available yet.
+- `after-check` actions: `officina run` runs one only after its check
+  succeeded with the same parameters, under the same approved catalogue and
+  on the same code, in the last 30 minutes, the journal of the day before
+  included; otherwise it refuses with `check_required` and names the check.
+  In a git work tree the code is bound by a fingerprint of `HEAD`, the diff
+  to it, the untracked files git does not ignore and the tracked files
+  flagged to hide their edits (by content up to 1 MiB, by size beyond);
+  `git` runs with external diff, textconv, fsmonitor and the caller's `GIT_`
+  variables out of the way. `officina run --list` says which check an
+  action waits for, and run start lines record the tree and the timeout.
 - `officina run --list`: the actions of the current folder's project with
   what each parameter accepts, and whether the relay is stopped or a
   catalogue change awaits approval.

@@ -1,7 +1,7 @@
-//! `officina run` end to end (story 2.5, AD-29 to AD-32, D-20, D-21), with
-//! `officina-fake-tool` as every action's program. Windows only: a `native`
-//! program is a Windows absolute path (AD-22) and the process tree is a job
-//! object (AD-31); Linux is v1.
+//! `officina run` end to end (stories 2.5 and 2.6, AD-29 to AD-33, D-20 to
+//! D-23), with `officina-fake-tool` as every action's program. Windows only:
+//! a `native` program is a Windows absolute path (AD-22) and the process
+//! tree is a job object (AD-31); Linux is v1.
 
 #![cfg(windows)]
 
@@ -13,12 +13,16 @@ use std::process::{Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
 use common::fake_output::{stderr_byte, stdout_byte, stream};
-use common::{TestEnv, heartbeat_len, heartbeat_stopped, read_tool_log, stop_heartbeat};
+use common::{
+    TestEnv, git, git_dir_or_skip, heartbeat_len, heartbeat_stopped, read_tool_log, stop_heartbeat,
+};
 use officina_core::relay::argv::{
     ArgvRefusal, Launch, WSL_KILL_AFTER_S, WSL_TIMEOUT_MARGIN_S, WSL_TIMEOUT_PROGRAM,
 };
+use officina_core::relay::classes::CHECK_VALID_MS;
 use officina_core::relay::journal::{
-    JournalEntry, RefusalReason, Refused, RunFinished, RunOutcome, RunStarted,
+    JournalEntry, RefusalReason, Refused, RunFinished, RunOutcome, RunStarted, StreamSummary,
+    TreeFingerprint,
 };
 use officina_core::relay::sha256_hex;
 use officina_host::relay::journal::JournalLock;
@@ -366,7 +370,8 @@ fn scenario(reason: RefusalReason) -> (Relay, PathBuf, Vec<&'static str>) {
         RefusalReason::MissingParameter => (project, vec!["probe"]),
         RefusalReason::UnknownParameter => (project, vec!["probe", "host=web01", "x=1"]),
         RefusalReason::InvalidValue => (project, vec!["probe", "host=web02"]),
-        RefusalReason::ClassNotAvailable => (project, vec!["apply", "group=lab-web"]),
+        RefusalReason::ClassNotAvailable => (project, vec!["approve-me", "group=lab-web"]),
+        RefusalReason::CheckRequired => (project, vec!["apply", "group=lab-web"]),
     };
     (relay, dir, args)
 }
@@ -417,10 +422,8 @@ fn free_action_runs() {
 #[test]
 fn after_check_and_human_are_not_available_yet() {
     let relay = Relay::new();
-    for action in ["apply", "approve-me"] {
-        let out = relay.run(&[action, "group=lab-web"]);
-        assert_refused(&relay, &out, RefusalReason::ClassNotAvailable);
-    }
+    let out = relay.run(&["approve-me", "group=lab-web"]);
+    assert_refused(&relay, &out, RefusalReason::ClassNotAvailable);
 }
 
 // ---- AC 6: exit codes ----
@@ -1009,21 +1012,19 @@ fn list_prints_the_projects_approved_actions() {
 fn list_marks_unavailable_classes() {
     let relay = Relay::new();
     let text = list(&relay, &relay.project());
-    for (action, class) in [("apply", "after-check"), ("approve-me", "human")] {
-        let line = text
-            .lines()
+    let line = |action: &str| {
+        text.lines()
             .find(|l| l.contains(&format!("officina run {action} ")))
-            .unwrap();
-        assert!(
-            line.ends_with(&format!("(class {class}, not available in this build)")),
-            "{line}"
-        );
+            .unwrap()
+            .to_owned()
+    };
+    assert!(
+        line("approve-me").ends_with("(class human, not available in this build)"),
+        "{text}"
+    );
+    for available in ["probe", "apply"] {
+        assert!(!line(available).contains("not available"), "{text}");
     }
-    let probe = text
-        .lines()
-        .find(|l| l.contains("officina run probe"))
-        .unwrap();
-    assert!(!probe.contains("not available"), "{probe}");
 }
 
 #[test]
@@ -1105,4 +1106,192 @@ fn concurrent_runs_each_journal_one_start_and_one_end() {
     ids.dedup();
     assert_eq!(ids.len(), RUNS, "run ids are unique");
     assert_eq!(relay.launches().len(), RUNS);
+}
+
+// ---- story 2.6: after-check and the tree fingerprint ----
+
+/// A relay whose guarded project is a git work tree with one commit, and
+/// whose commands get `git` on their `PATH` (D-23). `None`, with the reason
+/// printed, on a machine without `git`.
+struct GitRelay {
+    relay: Relay,
+    git_dir: PathBuf,
+}
+
+impl GitRelay {
+    fn new(test: &str) -> Option<GitRelay> {
+        let git_dir = git_dir_or_skip(test)?;
+        let relay = Relay::new();
+        let project = relay.project();
+        git(&git_dir, &project, &["init", "-q"]);
+        git(&git_dir, &project, &["config", "core.autocrlf", "false"]);
+        std::fs::write(project.join("playbook.yml"), "- hosts: lab\n").unwrap();
+        git(&git_dir, &project, &["add", "playbook.yml"]);
+        git(&git_dir, &project, &["commit", "-q", "-m", "first"]);
+        Some(GitRelay { relay, git_dir })
+    }
+
+    fn run(&self, args: &[&str]) -> Output {
+        let mut cmd = self.relay.command(&self.relay.project(), args);
+        cmd.env("PATH", &self.git_dir);
+        common::run_with(cmd, b"")
+    }
+
+    /// The fingerprint `officina run` should record now.
+    fn tree(&self) -> Option<TreeFingerprint> {
+        officina_host::relay::tree::fingerprint_with(
+            &self.git_dir.join("git.exe"),
+            &self.relay.project(),
+        )
+    }
+}
+
+/// Runs the check and returns how many times the tool started so far.
+fn checked(git: &GitRelay, group: &str) -> usize {
+    let out = git.run(&["verify", &format!("group={group}")]);
+    assert_eq!(out.status.code(), Some(0), "{:?}", stderr_lines(&out));
+    git.relay.launches().len()
+}
+
+/// The `after-check` refusal: exit 126, one stderr line naming the check,
+/// no launch beyond the `launches_before` of the check, one `refused` line.
+fn assert_check_required(git: &GitRelay, out: &Output, launches_before: usize) {
+    assert_eq!(out.status.code(), Some(126), "{:?}", stderr_lines(out));
+    let lines = stderr_lines(out);
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    assert!(
+        lines[0].starts_with("officina: refused: run `verify` first"),
+        "{lines:?}"
+    );
+    assert!(lines[0].ends_with("(check_required)"), "{lines:?}");
+    assert_eq!(git.relay.launches().len(), launches_before);
+    assert_eq!(
+        git.relay.refused().last().map(|r| r.reason),
+        Some(RefusalReason::CheckRequired)
+    );
+}
+
+#[test]
+fn check_then_apply_runs() {
+    let Some(git) = GitRelay::new("check_then_apply_runs") else {
+        return;
+    };
+    checked(&git, "lab-web");
+    let out = git.run(&["apply", "group=lab-web"]);
+    assert_eq!(out.status.code(), Some(0), "{:?}", stderr_lines(&out));
+    assert_eq!(git.relay.launches().len(), 2);
+    let started = git.relay.started();
+    assert!(started[0].tree.is_some(), "a check records its tree");
+    assert_eq!(
+        started[0].tree, started[1].tree,
+        "the apply ran on the checked tree"
+    );
+    assert_eq!(started[0].tree, git.tree());
+    assert_eq!(started[0].timeout_s, Some(540));
+    let probe = git.run(&["probe", "host=web01"]);
+    assert_eq!(probe.status.code(), Some(0));
+    assert_eq!(
+        git.relay.started()[2].tree,
+        None,
+        "an action no after-check names records no tree"
+    );
+}
+
+#[test]
+fn apply_without_check_is_refused() {
+    let Some(git) = GitRelay::new("apply_without_check_is_refused") else {
+        return;
+    };
+    let out = git.run(&["apply", "group=lab-web"]);
+    assert_check_required(&git, &out, 0);
+}
+
+#[test]
+fn apply_with_other_params_is_refused() {
+    let Some(git) = GitRelay::new("apply_with_other_params_is_refused") else {
+        return;
+    };
+    let before = checked(&git, "lab-web");
+    let out = git.run(&["apply", "group=lab-db"]);
+    assert_check_required(&git, &out, before);
+}
+
+#[test]
+fn apply_after_a_tree_change_is_refused() {
+    let Some(git) = GitRelay::new("apply_after_a_tree_change_is_refused") else {
+        return;
+    };
+    let before = checked(&git, "lab-web");
+    std::fs::write(git.relay.project().join("playbook.yml"), "- hosts: all\n").unwrap();
+    let out = git.run(&["apply", "group=lab-web"]);
+    assert_check_required(&git, &out, before);
+}
+
+#[test]
+fn apply_after_an_untracked_edit_is_refused() {
+    let Some(git) = GitRelay::new("apply_after_an_untracked_edit_is_refused") else {
+        return;
+    };
+    let vars = git.relay.project().join("vars.yml");
+    std::fs::write(&vars, "group: aaaa\n").unwrap();
+    let before = checked(&git, "lab-web");
+    std::fs::write(&vars, "group: bbbb\n").unwrap();
+    let out = git.run(&["apply", "group=lab-web"]);
+    assert_check_required(&git, &out, before);
+}
+
+/// Seeds a successful check of `verify group=lab-web` on the current tree,
+/// started `ago` milliseconds ago, as an earlier run would have journaled it
+/// (D-25).
+fn seed_check(git: &GitRelay, run_id: &str, ago: i64) {
+    let home = git.relay.env.relay_home();
+    let hash = home.read_approved().approved().unwrap().hash.clone();
+    let now = common::now_ms();
+    let stream = StreamSummary {
+        bytes: 0,
+        sha256: sha256_hex(b""),
+    };
+    let start = JournalEntry::RunStarted(RunStarted {
+        run_id: run_id.to_owned(),
+        project: "supervision".to_owned(),
+        session_id: None,
+        action: "verify".to_owned(),
+        class: officina_core::relay::catalogue::ActionClass::Free,
+        params: BTreeMap::from([("group".to_owned(), "lab-web".to_owned())]),
+        argv: vec![
+            common::fake_tool_path(),
+            "--check".to_owned(),
+            "lab-web".to_owned(),
+        ],
+        catalogue_hash: hash,
+        approval_id: None,
+        tree: git.tree(),
+        timeout_s: Some(540),
+    });
+    let end = JournalEntry::RunFinished(RunFinished {
+        run_id: run_id.to_owned(),
+        outcome: RunOutcome::Exited,
+        exit_code: Some(0),
+        duration_ms: 1000,
+        stdout: stream.clone(),
+        stderr: stream,
+        dropped_bytes: 0,
+        detail: None,
+    });
+    officina_host::relay::journal::append(&home, &[start], now - ago).unwrap();
+    officina_host::relay::journal::append(&home, &[end], now - ago + 1000).unwrap();
+}
+
+#[test]
+fn stale_check_is_refused() {
+    let Some(git) = GitRelay::new("stale_check_is_refused") else {
+        return;
+    };
+    seed_check(&git, "stale", CHECK_VALID_MS + 60_000);
+    let out = git.run(&["apply", "group=lab-web"]);
+    assert_check_required(&git, &out, 0);
+    // The same check, recent: the seeded line is what the apply reads.
+    seed_check(&git, "recent", 10 * 60_000);
+    let out = git.run(&["apply", "group=lab-web"]);
+    assert_eq!(out.status.code(), Some(0), "{:?}", stderr_lines(&out));
 }

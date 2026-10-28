@@ -104,6 +104,24 @@ impl JournalEntry {
     }
 }
 
+/// The working tree a check or `after-check` run started on (AD-33, D-22):
+/// SHA-256 over `HEAD` (or the "no HEAD" marker), the diff to it and the
+/// untracked files, computed by the host. Two runs on the same code carry
+/// equal fingerprints.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TreeFingerprint {
+    /// Lowercase hex.
+    pub sha256: String,
+    /// Files over the content limit bound by their size only: untracked
+    /// ones, or any file of a work tree without a commit (D-22).
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub untracked_by_size: u32,
+}
+
+fn is_zero_u32(value: &u32) -> bool {
+    *value == 0
+}
+
 /// `officina run` is about to start a program (AD-29 step 7).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RunStarted {
@@ -120,8 +138,14 @@ pub struct RunStarted {
     pub catalogue_hash: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub approval_id: Option<String>,
+    /// The tree it started on, for check and `after-check` actions in a git
+    /// work tree; absent otherwise (D-22).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tree: Option<String>,
+    pub tree: Option<TreeFingerprint>,
+    /// The action's timeout, so a reader can tell a run still going from an
+    /// abandoned one (AD-32). Absent from lines written before it existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_s: Option<u32>,
 }
 
 closed_enum! {
@@ -199,6 +223,10 @@ closed_enum! {
         InvalidValue,
         /// The action's class does not run in this build (D-20).
         ClassNotAvailable,
+        /// An `after-check` action without a successful run of its check,
+        /// with the same parameters on the same code, in the last 30
+        /// minutes (AD-33).
+        CheckRequired,
     }
 }
 
@@ -352,7 +380,11 @@ mod tests {
                 argv: vec!["C:/path/to/tool.exe".into(), "lab-web".into()],
                 catalogue_hash: "00".into(),
                 approval_id: None,
-                tree: None,
+                tree: Some(TreeFingerprint {
+                    sha256: crate::relay::sha256_hex(b"tree"),
+                    untracked_by_size: 1,
+                }),
+                timeout_s: Some(540),
             }),
             JournalKind::RunFinished => JournalEntry::RunFinished(RunFinished {
                 run_id: "r1".into(),

@@ -207,9 +207,25 @@ officina run check group=lab-web playbook=alerting.yml
 | 127 | the program could not start |
 | 64 | usage error |
 
-A program can exit 126 or 124 itself: the stderr line and the journal tell them apart. `after-check` and `human` actions are refused as not available in this build yet.
+A program can exit 126 or 124 itself: the stderr line and the journal tell them apart.
 
-Today the catalogue is parsed, validated and hashed, the gate refuses guarded commands and `officina run` runs `free` actions; the other classes and the approval banner in the window arrive with the rest of v0.2.
+An `after-check` action names a `free` action with the same parameters as its `check`, and runs only after that check succeeded with the same parameters, under the same approved catalogue, on the same code, in the last 30 minutes; otherwise it is refused with `check_required` and the check to run first:
+
+```toml
+[[action]]
+name = "apply"
+class = "after-check"
+check = "check"                      # a free action with the same parameters
+runner = "wsl"
+program = "/home/user01/venv/bin/ansible-playbook"
+args = ["-i", "inventory/lab", "--limit", "{group}", "playbooks/{playbook}"]
+```
+
+"The same code" means the same git fingerprint of the project's work tree: `HEAD`, the diff to it, the untracked files git does not ignore and the tracked files flagged `assume-unchanged` or `skip-worktree` (whose edits the diff hides), by content up to 1 MiB and by size beyond. Files your `.gitignore` excludes (vault files, local inventories, retry files) are not bound, so a check that writes such a file does not invalidate itself, and an edit to one does not stop the apply. Outside a git work tree only the parameters bind. `git` is the one on the session's `PATH`, run with external diff tools, textconv drivers and fsmonitor turned off.
+
+`human` actions are refused as not available in this build yet.
+
+Today the catalogue is parsed, validated and hashed, the gate refuses guarded commands and `officina run` runs `free` and `after-check` actions; `human` actions and the approval banner in the window arrive with the rest of v0.2.
 
 ## Command line
 

@@ -1,29 +1,36 @@
-//! Action classes (FR-8, AD-33): which classes this build can run. Until
-//! stories 2.6 and 2.8 land, only `free` runs; `after-check` and `human` are
-//! refused with their own reason code (D-20), a deliberate intermediate
-//! state, and marked unavailable wherever actions are offered (D-17).
+//! Action classes (FR-8, AD-33): which classes this build can run, and the
+//! `after-check` rule. `free` and `after-check` run; `human` is refused with
+//! its own reason code until story 2.8 lands (D-20), a deliberate
+//! intermediate state, and marked unavailable wherever actions are offered
+//! (D-17).
+
+use std::collections::{BTreeMap, HashSet};
 
 use super::catalogue::ActionClass;
-use super::journal::RefusalReason;
+use super::journal::{JournalEntry, JournalLine, RefusalReason, RunOutcome, TreeFingerprint};
+
+/// How long a successful check lets its `after-check` action run (AD-33).
+pub const CHECK_VALID_MS: i64 = 30 * 60 * 1000;
 
 /// True when this build runs actions of `class`.
 ///
 /// ```
 /// use officina_core::relay::catalogue::ActionClass;
 /// use officina_core::relay::classes::is_available;
-/// assert!(is_available(ActionClass::Free));
+/// assert!(is_available(ActionClass::AfterCheck));
 /// assert!(!is_available(ActionClass::Auto));
 /// ```
 pub fn is_available(class: ActionClass) -> bool {
     match class {
-        ActionClass::Free => true,
-        ActionClass::AfterCheck | ActionClass::Human | ActionClass::Auto => false,
+        ActionClass::Free | ActionClass::AfterCheck => true,
+        ActionClass::Human | ActionClass::Auto => false,
     }
 }
 
-/// The class step of `officina run` (AD-29 step 6): a `free` action runs,
-/// any other class is refused with [`RefusalReason::ClassNotAvailable`]
-/// until its story lands (D-20).
+/// The class step of `officina run` (AD-29 step 6) as far as the catalogue
+/// alone decides it: a class this build does not run is refused with
+/// [`RefusalReason::ClassNotAvailable`] (D-20). An `after-check` action
+/// passes here and then needs [`check_satisfied`].
 pub fn decide(class: ActionClass) -> Result<(), RefusalReason> {
     if is_available(class) {
         Ok(())
@@ -40,18 +47,306 @@ pub fn class_name(class: ActionClass) -> String {
         .unwrap_or_default()
 }
 
+/// The `after-check` rule (AD-33, P-3): true only when the journal holds a
+/// `run_started` of `check_action` in `project`, with exactly `params`,
+/// under `catalogue_hash` and on the same `tree` (both absent outside git),
+/// started at most [`CHECK_VALID_MS`] before `now_ms`, whose `run_finished`
+/// says it exited with code 0. `lines` are the two days the host reads, so a
+/// check just before midnight UTC counts just after it. A check still
+/// running, timed out, failed or started in the future does not count.
+pub fn check_satisfied(
+    lines: &[JournalLine],
+    project: &str,
+    check_action: &str,
+    params: &BTreeMap<String, String>,
+    catalogue_hash: &str,
+    tree: Option<&TreeFingerprint>,
+    now_ms: i64,
+) -> bool {
+    let succeeded: HashSet<&str> = lines
+        .iter()
+        .filter_map(|line| match &line.entry {
+            JournalEntry::RunFinished(finished)
+                if finished.outcome == RunOutcome::Exited && finished.exit_code == Some(0) =>
+            {
+                Some(finished.run_id.as_str())
+            }
+            _ => None,
+        })
+        .collect();
+    lines.iter().any(|line| match &line.entry {
+        JournalEntry::RunStarted(started) => {
+            started.project == project
+                && started.action == check_action
+                && started.params == *params
+                && started.catalogue_hash == catalogue_hash
+                && started.tree.as_ref() == tree
+                && (0..=CHECK_VALID_MS).contains(&(now_ms - line.ts))
+                && succeeded.contains(started.run_id.as_str())
+        }
+        _ => false,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::relay::journal::{RunFinished, RunStarted, StreamSummary};
+
+    const NOW: i64 = 1_793_102_400_000;
+    const MIN: i64 = 60_000;
+    const HASH: &str = "0123";
+
+    fn params(group: &str) -> BTreeMap<String, String> {
+        BTreeMap::from([("group".to_owned(), group.to_owned())])
+    }
+
+    fn tree(text: &str) -> TreeFingerprint {
+        TreeFingerprint {
+            sha256: crate::relay::sha256_hex(text.as_bytes()),
+            untracked_by_size: 0,
+        }
+    }
+
+    fn started(ts: i64, run_id: &str, project: &str, group: &str, hash: &str) -> JournalLine {
+        JournalLine::new(
+            ts,
+            JournalEntry::RunStarted(RunStarted {
+                run_id: run_id.to_owned(),
+                project: project.to_owned(),
+                session_id: None,
+                action: "verify".to_owned(),
+                class: ActionClass::Free,
+                params: params(group),
+                argv: vec!["C:/path/to/tool.exe".to_owned(), group.to_owned()],
+                catalogue_hash: hash.to_owned(),
+                approval_id: None,
+                tree: Some(tree("a")),
+                timeout_s: Some(540),
+            }),
+        )
+    }
+
+    fn finished(ts: i64, run_id: &str, outcome: RunOutcome, code: Option<i64>) -> JournalLine {
+        let stream = StreamSummary {
+            bytes: 0,
+            sha256: crate::relay::sha256_hex(b""),
+        };
+        JournalLine::new(
+            ts,
+            JournalEntry::RunFinished(RunFinished {
+                run_id: run_id.to_owned(),
+                outcome,
+                exit_code: code,
+                duration_ms: 10,
+                stdout: stream.clone(),
+                stderr: stream,
+                dropped_bytes: 0,
+                detail: None,
+            }),
+        )
+    }
+
+    /// A check of `lab` with `group=lab-web` on tree `a`, started `ago`
+    /// before [`NOW`] and finished one second later with `outcome`.
+    fn check(ago: i64, outcome: RunOutcome, code: Option<i64>) -> Vec<JournalLine> {
+        vec![
+            started(NOW - ago, "r1", "lab", "lab-web", HASH),
+            finished(NOW - ago + 1000, "r1", outcome, code),
+        ]
+    }
+
+    fn satisfied(lines: &[JournalLine]) -> bool {
+        check_satisfied(
+            lines,
+            "lab",
+            "verify",
+            &params("lab-web"),
+            HASH,
+            Some(&tree("a")),
+            NOW,
+        )
+    }
 
     #[test]
-    fn only_free_runs_in_this_build() {
-        assert_eq!(decide(ActionClass::Free), Ok(()));
-        for class in [
-            ActionClass::AfterCheck,
-            ActionClass::Human,
-            ActionClass::Auto,
+    fn matching_successful_check_satisfies() {
+        assert!(satisfied(&check(5 * MIN, RunOutcome::Exited, Some(0))));
+    }
+
+    #[test]
+    fn failed_check_does_not() {
+        assert!(!satisfied(&check(5 * MIN, RunOutcome::Exited, Some(1))));
+        assert!(!satisfied(&check(5 * MIN, RunOutcome::Timeout, None)));
+        assert!(!satisfied(&check(5 * MIN, RunOutcome::SpawnFailed, None)));
+        assert!(!satisfied(&check(5 * MIN, RunOutcome::Exited, None)));
+    }
+
+    #[test]
+    fn other_params_do_not() {
+        let lines = check(5 * MIN, RunOutcome::Exited, Some(0));
+        for other in [
+            params("lab-db"),
+            BTreeMap::new(),
+            BTreeMap::from([
+                ("group".to_owned(), "lab-web".to_owned()),
+                ("extra".to_owned(), "x".to_owned()),
+            ]),
         ] {
+            assert!(!check_satisfied(
+                &lines,
+                "lab",
+                "verify",
+                &other,
+                HASH,
+                Some(&tree("a")),
+                NOW
+            ));
+        }
+    }
+
+    #[test]
+    fn other_project_does_not() {
+        let lines = check(5 * MIN, RunOutcome::Exited, Some(0));
+        assert!(!check_satisfied(
+            &lines,
+            "notes",
+            "verify",
+            &params("lab-web"),
+            HASH,
+            Some(&tree("a")),
+            NOW
+        ));
+        assert!(
+            !check_satisfied(
+                &lines,
+                "lab",
+                "probe",
+                &params("lab-web"),
+                HASH,
+                Some(&tree("a")),
+                NOW
+            ),
+            "another action is not the check"
+        );
+    }
+
+    #[test]
+    fn other_catalogue_hash_does_not() {
+        let lines = check(5 * MIN, RunOutcome::Exited, Some(0));
+        assert!(!check_satisfied(
+            &lines,
+            "lab",
+            "verify",
+            &params("lab-web"),
+            "4567",
+            Some(&tree("a")),
+            NOW
+        ));
+    }
+
+    #[test]
+    fn other_tree_does_not() {
+        let lines = check(5 * MIN, RunOutcome::Exited, Some(0));
+        for other in [Some(&tree("b")), None] {
+            assert!(!check_satisfied(
+                &lines,
+                "lab",
+                "verify",
+                &params("lab-web"),
+                HASH,
+                other,
+                NOW
+            ));
+        }
+        let size_bound = TreeFingerprint {
+            untracked_by_size: 1,
+            ..tree("a")
+        };
+        assert!(!check_satisfied(
+            &lines,
+            "lab",
+            "verify",
+            &params("lab-web"),
+            HASH,
+            Some(&size_bound),
+            NOW
+        ));
+        let mut outside_git = lines.clone();
+        if let JournalEntry::RunStarted(started) = &mut outside_git[0].entry {
+            started.tree = None;
+        }
+        assert!(
+            check_satisfied(
+                &outside_git,
+                "lab",
+                "verify",
+                &params("lab-web"),
+                HASH,
+                None,
+                NOW
+            ),
+            "outside git only the parameters bind"
+        );
+    }
+
+    #[test]
+    fn check_older_than_30_min_does_not() {
+        assert!(satisfied(&check(
+            CHECK_VALID_MS,
+            RunOutcome::Exited,
+            Some(0)
+        )));
+        assert!(!satisfied(&check(
+            CHECK_VALID_MS + 1,
+            RunOutcome::Exited,
+            Some(0)
+        )));
+        assert!(
+            !satisfied(&check(-MIN, RunOutcome::Exited, Some(0))),
+            "a check dated in the future does not count"
+        );
+    }
+
+    #[test]
+    fn started_without_finished_does_not() {
+        let mut lines = check(5 * MIN, RunOutcome::Exited, Some(0));
+        lines.pop();
+        assert!(!satisfied(&lines));
+        lines.push(finished(NOW - MIN, "r2", RunOutcome::Exited, Some(0)));
+        assert!(!satisfied(&lines), "another run's end does not pair");
+    }
+
+    #[test]
+    fn check_before_midnight_counts_after_midnight() {
+        // A UTC midnight: the check at 23:50 the day before, the apply at
+        // 00:10.
+        const MIDNIGHT: i64 = 1_793_059_200_000;
+        assert_eq!(MIDNIGHT % 86_400_000, 0);
+        let lines = vec![
+            started(MIDNIGHT - 10 * MIN, "r1", "lab", "lab-web", HASH),
+            finished(MIDNIGHT - 9 * MIN, "r1", RunOutcome::Exited, Some(0)),
+        ];
+        assert!(check_satisfied(
+            &lines,
+            "lab",
+            "verify",
+            &params("lab-web"),
+            HASH,
+            Some(&tree("a")),
+            MIDNIGHT + 10 * MIN
+        ));
+        assert_ne!(
+            crate::dates::event_file_name(MIDNIGHT - 10 * MIN),
+            crate::dates::event_file_name(MIDNIGHT + 10 * MIN),
+            "the check and the apply fall in two journal files"
+        );
+    }
+
+    #[test]
+    fn free_and_after_check_run_human_and_auto_do_not() {
+        assert_eq!(decide(ActionClass::Free), Ok(()));
+        assert_eq!(decide(ActionClass::AfterCheck), Ok(()));
+        for class in [ActionClass::Human, ActionClass::Auto] {
             assert_eq!(decide(class), Err(RefusalReason::ClassNotAvailable));
             assert!(!is_available(class));
         }
