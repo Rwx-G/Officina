@@ -92,7 +92,8 @@ stories:
   # 4.3: code done; AC 2's gate 4 case waits for the owner's gate 4 entry (story 4.1).
   - {id: "4.3", file: story-4.3-scene-state-in-core.md, slice: A, status: in-progress}
   - {id: "4.4", file: story-4.4-halo-memo-and-board-halo.md, slice: A, status: review}
-  - {id: "4.5", file: story-4.5-alert-band-title-and-taskbar.md, slice: A, status: approved}
+  # 4.5: code done; AC 10 waits for gate 2 (story 4.1), which picks the badge's size.
+  - {id: "4.5", file: story-4.5-alert-band-title-and-taskbar.md, slice: A, status: in-progress}
   - {id: "4.6", file: story-4.6-scene-geometry-spots-and-layout.md, slice: A, status: approved}
   - {id: "4.7", file: story-4.7-scene-drawn-in-place-and-scene-mode.md, slice: A, status: approved}
   - {id: "4.8", file: story-4.8-scene-targets-keyboard-file-and-strip.md, slice: A, status: approved}

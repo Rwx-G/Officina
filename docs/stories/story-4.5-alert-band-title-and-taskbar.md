@@ -1,6 +1,6 @@
 # Story 4.5: The alert band, the window title, and the taskbar badge
 
-**Status:** Approved
+**Status:** In progress (code and tests done; AC 10 waits for gate 2, story 4.1, which picks the badge's size)
 
 ## Story
 
@@ -24,12 +24,12 @@ so that I know when to look without a toast, a sound or a theme change, from the
 
 ## Tasks
 
-- [ ] `--color-alert` and `--color-on-alert` in `app.css`; contrast pairs (AC 2)
-- [ ] `AlertBand.svelte` in `App.svelte` above the banners; wording function with the unknown mark (AC 1, 3)
-- [ ] `app/src-tauri/src/taskbar.rs`: overlay choice from a board, title, `alerts_to_announce`, colour test; `main.rs` wiring (AC 5-9)
-- [ ] `app/e2e/alert.spec.ts`; Vitest cases (AC 1, 3, 4)
-- [ ] Check story 4.1's gate 2 entry before closing (AC 10)
-- [ ] Update `CHANGELOG.md` and the README (AC 11)
+- [x] `--color-alert` and `--color-on-alert` in `app.css`; contrast pairs (AC 2)
+- [x] `AlertBand.svelte` in `App.svelte` above the banners; wording function with the unknown mark (AC 1, 3)
+- [x] `app/src-tauri/src/taskbar.rs`: overlay choice from a board, title, `alerts_to_announce`, colour test; `main.rs` wiring (AC 5-9)
+- [x] `app/e2e/alert.spec.ts`; Vitest cases (AC 1, 3, 4)
+- [ ] Check story 4.1's gate 2 entry before closing (AC 10) (open: the owner's gate 2)
+- [x] Update `CHANGELOG.md` and the README (AC 11)
 
 ## Dev Notes
 
@@ -52,11 +52,36 @@ so that I know when to look without a toast, a sound or a theme change, from the
 
 ### Debug Log
 
+- The band's wording lives in `lib/alert.ts` (pure, tested through the component): the first alerted card in board order (columns in display order, so an alerted Needs you comes before an alerted approval-only wait of Working), what it waits on (`waiting_for`, else "a relay approval" for an approval-only wait, else "waiting for you"), and its cause, "high-priority project" or "waiting N min" from `scene.waiting_since_ms` at the store's 30 s tick. The words of a cause come from an exhaustive `Record<AlertCause, string>`, so a new cause fails `pnpm check`.
+- `taskbar::overlay_for` also shows the badge, in the alert colour, when `waiting_count` is 0 and a card keeps its last known alert (an alerted card whose badge became unknown sits in Working, which `waiting_count` does not count): D-494 says stale or unknown data never clears an alert, and an overlay that vanished would. The badge then carries the larger of the two counts. The title says "N waiting" only when N is above 0.
+- `WindowEvents` keeps the alerted keys of the last board it emitted; `alerts_to_announce` is the pure decision. Boards are emitted only on change (AD-5), so a key that stays alerted is never announced twice.
+- The overlay's colours are constants of `taskbar.rs`, tested against `app.css`'s light `:root` block; today's rim is `--color-text`. The size stays 16 px (today's dot) until gate 2 picks one, a one-constant change in `main.rs`.
+- No capability: the calls are the Rust `WebviewWindow` methods; `capabilities/default.json` is unchanged (the existing `every_declared_command_is_allowed` test still holds it against `build.rs`).
+- Adversarial pass: a waiting count of 0 with a kept alert (handled, above); a key that leaves and returns (announced again); a key kept alerted while unknown (not announced); markup in a session name (text); a fixture with both causes; the band leaving on a board without alerts; theme tokens compared before and after an alert.
+
 ### Completion Notes
 
+- AC 1: Playwright `alert.spec.ts > {the band names the first alerted session, its reason and cause, the band shows in every view and mode, the band counts the other alerted sessions, the band leaves with the last alert}`; Vitest `components.test.ts > AlertBand > {AlertBand renders session text as text, AlertBand words both causes, AlertBand marks a last known alert on unknown data, AlertBand is absent without an alert}`. Scene and Focus join the "every view and mode" case in stories 4.7 and 4.11.
+- AC 2: Vitest `tokens.test.ts > every role pair meets its contrast target in the light theme`.
+- AC 3: Playwright `alert.spec.ts > an alert changes no theme token` (story 4.7 adds the `--scene-*` tokens, story 4.13 the dark run).
+- AC 4: Playwright `alert.spec.ts > {a wait that reaches the threshold raises the band, an approval-only wait on a normal project raises no band}` on `scene-alert-early` and `scene-alert`; the recompute without spawn is story 4.3's `watch_escalation.rs`.
+- AC 5: `taskbar.rs::tests::{no_overlay_without_waiting, the_badge_turns_to_the_alert_colour, a_last_known_alert_keeps_the_alert_colour}`.
+- AC 6: `taskbar.rs::tests::overlay_colours_equal_the_light_tokens`.
+- AC 7: `taskbar.rs::tests::{the_title_counts_alerts, the_title_marks_a_last_known_alert}`.
+- AC 8: `taskbar.rs::tests::{a_new_alerted_key_is_announced, a_known_key_is_not_announced_again, a_key_that_leaves_and_returns_is_announced_again, the_first_board_with_alerts_is_announced, a_key_kept_alerted_while_unknown_is_not_announced}`; the flash on the real window is gate 2 and story 4.14 (owner).
+- AC 9: the diff: no dependency, no capability.
+- AC 10: open until story 4.1's gate 2 entry (owner).
+- AC 11: `CHANGELOG.md` Added; README "The scene (v0.4, in progress)", "The alert"; `readme.rs` green.
+
 ## File List
+
+- `app/src-tauri/src/taskbar.rs`, `app/src-tauri/src/main.rs`, `app/src-tauri/examples/taskbar_probe.rs`
+- `app/src/lib/alert.ts` (new), `app/src/components/AlertBand.svelte` (new), `app/src/App.svelte`, `app/src/app.css`
+- `app/src/components/components.test.ts`, `app/src/tokens.test.ts`, `app/e2e/alert.spec.ts` (new), `app/e2e/fixture-index.ts`, `app/playwright.config.ts`
+- `README.md`, `CHANGELOG.md`
 
 ## Change Log
 
 - 2026-10-28 created as story 4.8 with the scene v2 rework (D-460)
 - 2026-10-28 renumbered 4.5 and narrowed after the plan challenge (D-494, D-496, D-497): the band, the title and the taskbar ship right after story 4.3, needing core only; the alert tokens move here; the alert room and the beacon move to story 4.9; the last known alert on unknown data is marked in the band and the title; the approval-only wait raises no band by time
+- 2026-10-28 implemented: the alert band, the alert tokens, the taskbar badge's alert colour, the title's alert count and the flash on a new alert. Status in progress until gate 2 picks the badge's size
