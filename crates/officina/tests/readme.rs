@@ -196,6 +196,57 @@ fn readme_states_the_binding_and_its_limits() {
     );
 }
 
+/// Debt audit H2: the Privacy section says plainly that the triage model,
+/// when on, sends excerpts to the Anthropic API through `claude`, which
+/// ones (at the hook's own excerpt length), and how to prevent it.
+#[test]
+fn readme_privacy_names_what_the_triage_model_sends() {
+    use officina_core::events::EXCERPT_CHARS;
+    let text = readme();
+    let privacy: String = text
+        .split("\n## ")
+        .find(|section| section.starts_with("Privacy"))
+        .expect("the README has a Privacy section")
+        .to_owned();
+    let bullet = privacy
+        .lines()
+        .find(|line| line.contains("Triage model"))
+        .expect("the Privacy section has a triage model entry");
+    for needed in [
+        "Anthropic API",
+        "`claude -p`",
+        "last prompt",
+        "answer",
+        &format!("{EXCERPT_CHARS} characters"),
+        "Nothing is sent while the model is off",
+        "`no_excerpts`",
+        "keep the model off",
+    ] {
+        assert!(bullet.contains(needed), "missing {needed:?} in: {bullet}");
+    }
+    let network = privacy
+        .lines()
+        .find(|line| line.contains("network"))
+        .expect("the Privacy section says what reaches the network");
+    assert!(network.contains("triage call"), "{network}");
+}
+
+/// The registry's README section states its trust boundary, as the
+/// relay's does (penetration audit H1, H2).
+#[test]
+fn readme_states_the_registry_is_no_boundary_against_the_author() {
+    let text = readme();
+    let registry: String = text
+        .split("\n### ")
+        .find(|section| section.starts_with("The registry"))
+        .expect("the README has a registry section")
+        .to_owned();
+    assert!(
+        registry.contains("not a security boundary against code running as you"),
+        "{registry}"
+    );
+}
+
 /// Story 2.15 AC 8: the Privacy section scopes the network to the HTTP
 /// actions, and the code agrees: no source file but the HTTP sender names a
 /// network API.

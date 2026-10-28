@@ -443,6 +443,13 @@ project uses [Semantic Versioning](https://semver.org/).
   proposal: the author confirms it, auto-archive never takes it, and the
   model pauses after three failed calls and turns itself off when it does
   worse than the default.
+- The README's Privacy section says what leaves the machine with the
+  triage model (v0.3): while it is on, or a dry run runs, `claude -p` sends
+  each judged row's prompt and answer excerpts and how its session ended
+  to the Anthropic API under your account; nothing while it is off; and
+  `no_excerpts` or keeping it off prevents it. A test keeps the sentence
+  from disappearing. The registry section states that the registry is not
+  a security boundary against code running as you, as the relay's does.
 - Officina runs no `.cmd` or `.bat` shim of `claude` for any call (v0.3):
   `claude agents` and `claude --version` refuse it as the triage call
   does, since `cmd.exe` runs whatever the script says; doctor and the
