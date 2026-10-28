@@ -81,7 +81,7 @@ Officina finds `claude` through `OFFICINA_CLAUDE_BIN`, then the absolute folders
 
 ### Wiring the hooks
 
-`officina doctor` prints a block like this, with the absolute path of your `officina.exe`. Merge it into your **user** settings (`~/.claude/settings.json`), so every project gets it without touching any repository:
+The hooks go in your **user** settings (`~/.claude/settings.json`), so every project gets them without touching any repository. `officina doctor` prints that file's whole `"hooks"` key with Officina's registrations merged in: every hook already there stays as it is, Officina's are added once, and a gate entry merged earlier without every tool or without `onFailure` is replaced rather than doubled. Replace the file's `"hooks"` key with it; when the file does not exist, doctor prints its whole content instead. It never prints another key of the file, since those can hold environment values or tokens, and for a file it cannot read as JSON it prints the reason and no block. Run doctor again afterwards: it then reports the hooks registered and prints nothing for them. Without other hooks, the block looks like this, with the absolute path of your `officina.exe`:
 
 ```json
 {
@@ -118,6 +118,8 @@ The quota comes from the statusline, which receives your rate limits from Claude
 ```
 
 `--tee` passes the payload through unchanged, so your statusline keeps its output. Without a statusline, the gauges say "no data" and the rest of the board works.
+
+While the quota has no fresh data, `officina doctor` prints the whole `"statusLine"` value to put in your user settings: your command behind `officina quota write --tee`, its other fields kept, or left as it is when it already runs `officina quota write`. A project whose own settings set a statusline wins over yours in sessions opened in its folder; doctor names those folders among the sessions the hook saw recently and prints, for each, the value for its `.claude/settings.local.json` (the whole file when it does not exist), never for a committed file.
 
 ### Starting the board
 

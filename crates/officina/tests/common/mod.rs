@@ -180,15 +180,24 @@ pub fn git(git_dir: &Path, dir: &Path, args: &[&str]) {
     git_support::git_ok(&git_dir.join(git_support::GIT_EXE), dir, args);
 }
 
-/// The hooks block `officina doctor` printed, parsed.
+/// The hooks block `officina doctor` printed, parsed, as a settings file
+/// holding only `hooks`: doctor prints the whole file when the user
+/// settings do not exist, else the `"hooks": ` key alone (D-530).
 pub fn printed_hooks_block(doctor_stdout: &[u8]) -> serde_json::Value {
     let text = String::from_utf8_lossy(doctor_stdout).to_string();
-    let block_start = text.find("{\n  \"hooks\"").unwrap();
-    serde_json::Deserializer::from_str(&text[block_start..])
-        .into_iter()
-        .next()
-        .unwrap()
-        .unwrap()
+    let first = |from: &str| -> serde_json::Value {
+        serde_json::Deserializer::from_str(from)
+            .into_iter()
+            .next()
+            .unwrap()
+            .unwrap()
+    };
+    if let Some(start) = text.find("{\n  \"hooks\"") {
+        return first(&text[start..]);
+    }
+    let key = "\n\"hooks\": ";
+    let start = text.find(key).unwrap() + key.len();
+    serde_json::json!({ "hooks": first(&text[start..]) })
 }
 
 pub fn run_with(mut cmd: Command, stdin: &[u8]) -> Output {

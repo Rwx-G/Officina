@@ -122,6 +122,56 @@ fn doctor_with_a_guarded_project_requires_pre_tool_use() {
     assert!(text.contains("[ok  ] hooks"), "{text}");
 }
 
+/// D-530: with user settings holding foreign hooks and other keys, doctor
+/// prints the file's whole `hooks` key with Officina's registrations merged
+/// in, and nothing of the other keys; once it replaces the key, doctor
+/// reports the hooks registered and prints no block for them.
+#[test]
+fn doctor_prints_the_whole_hooks_key_merged() {
+    const SECRET: &str = "sk-not-a-real-token";
+    let env = TestEnv::new();
+    env.write_agents("[]");
+    env.write_floor("schema = 2\n[[project]]\nname = \"lab\"\npath = \"Lab\"\n");
+    let foreign = serde_json::json!({
+        "PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "python guard.py", "onFailure": "block"}]}],
+        "PostToolUse": [{"matcher": "Edit", "hooks": [{"type": "command", "command": "npx prettier --write"}]}]
+    });
+    let settings = env.claude_config().join("settings.json");
+    let mut file = serde_json::json!({"env": {"API_TOKEN": SECRET}, "hooks": foreign});
+    std::fs::write(&settings, file.to_string()).unwrap();
+
+    let out = env.run(&["doctor"], b"");
+    let text = String::from_utf8_lossy(&out.stdout).to_string();
+    assert!(
+        text.contains(&format!(
+            "Replace the whole \"hooks\" key of {}",
+            settings.display()
+        )),
+        "{text}"
+    );
+    assert!(
+        !text.contains(SECRET) && !text.contains("\"env\""),
+        "{text}"
+    );
+    let merged = printed_hooks_block(&out.stdout)["hooks"].clone();
+    for (event, groups) in foreign.as_object().unwrap() {
+        assert_eq!(merged[event][0], groups[0], "{event}");
+    }
+    assert_eq!(merged["PreToolUse"][1]["matcher"], gated_tools_matcher());
+
+    file["hooks"] = merged;
+    std::fs::write(&settings, file.to_string()).unwrap();
+    let text = String::from_utf8_lossy(&env.run(&["doctor"], b"").stdout).to_string();
+    let hooks_line = text
+        .lines()
+        .position(|line| line.starts_with("[ok  ] hooks:"))
+        .unwrap_or_else(|| panic!("{text}"));
+    assert!(
+        text.lines().nth(hooks_line + 1).unwrap().starts_with('['),
+        "nothing printed under the hooks line: {text}"
+    );
+}
+
 /// D-171, D-173: a `PreToolUse` registration merged before stories 2.12
 /// and 2.14, naming one gated tool, is reported with the tools it leaves
 /// out; pasting the block doctor prints then covers every one.

@@ -323,6 +323,16 @@ project uses [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- `officina doctor` prints complete blocks to paste, never fragments to
+  merge by hand. For the hooks, the whole `"hooks"` key of the user
+  settings with Officina's registrations merged in: every hook already
+  there kept as it is, Officina's added once, a partial gate entry
+  replaced rather than doubled; replace the file's key with it. For the
+  statusline, the whole `"statusLine"` value, your command teed and its
+  other fields kept, for the user settings and for each project's
+  `.claude/settings.local.json` (the whole file when it does not exist).
+  Only that key is printed, never another key of a settings file, and a
+  file doctor cannot read gets no block, only the reason. Still read-only.
 - The window's first view is named **Sessions** (it was Board): Board is now
   its default mode, beside Scene. Digit keys act in both modes. The quota
   gauges keep one width whatever their text, the end of a line too long for
@@ -596,7 +606,7 @@ project uses [Semantic Versioning](https://semver.org/).
   `.claude/settings.local.json` or `.claude/settings.json` sets a
   statusline that does not run Officina's `quota write`, which wins over the
   user's in sessions opened there. It names them and prints, for each, the
-  snippet for its `.claude/settings.local.json`. Read-only.
+  statusline for its `.claude/settings.local.json`. Read-only.
 - The Triage panel's Confirm all button keeps its width: what it leaves out
   is a line beside it ("Left out: ..."), which the button names as its
   description, instead of part of its label.

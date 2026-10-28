@@ -147,43 +147,186 @@ pub fn quoted_exe(exe: &Path) -> String {
     format!("\"{}\"", exe.to_string_lossy().replace('\\', "/"))
 }
 
-/// The hooks block to paste into user settings (AD-16), one entry per
-/// registration, with a matcher naming its tools when it has some, and
+/// The matcher group that registers `registration` (AD-16): one entry
+/// running `officina hook`, a matcher naming its tools when it has some, and
 /// [`ON_FAILURE`] on the entry of a registration that fails closed.
-pub fn hooks_block(exe: &Path, registrations: &[Registration]) -> String {
+fn registration_group(exe: &Path, registration: &Registration) -> serde_json::Value {
     let command = format!("{} hook", quoted_exe(exe));
-    let mut hooks = serde_json::Map::new();
-    for registration in registrations {
-        let mut entry = serde_json::json!({ "type": "command", "command": command, "timeout": 5 });
-        if registration.fails_closed {
-            entry[ON_FAILURE.0] = ON_FAILURE.1.into();
-        }
-        let mut group = serde_json::json!({ "hooks": [entry] });
-        if !registration.tools.is_empty() {
-            group["matcher"] = registration.tools.join("|").into();
-        }
-        hooks.insert(
-            registration.event.to_owned(),
-            serde_json::Value::Array(vec![group]),
-        );
+    let mut entry = serde_json::json!({ "type": "command", "command": command, "timeout": 5 });
+    if registration.fails_closed {
+        entry[ON_FAILURE.0] = ON_FAILURE.1.into();
     }
-    serde_json::to_string_pretty(&serde_json::json!({ "hooks": hooks })).unwrap_or_default()
+    let mut group = serde_json::json!({ "hooks": [entry] });
+    if !registration.tools.is_empty() {
+        group["matcher"] = registration.tools.join("|").into();
+    }
+    group
 }
 
-/// The statusline wiring to paste (AD-16): `--tee` keeps an existing line,
-/// unless that line already runs Officina's `quota write`, which a tee into
-/// it would run twice.
-pub fn statusline_snippet(exe: &Path, existing_command: Option<&str>) -> String {
-    let command = match existing_command {
-        Some(existing) if !runs_officina_quota_write(existing) => {
-            format!("{} quota write --tee | {existing}", quoted_exe(exe))
-        }
-        _ => format!("{} quota write", quoted_exe(exe)),
+/// The `hooks` value of a settings file once `registrations` are in it
+/// (D-530): `current` with every entry it holds kept as it is, plus one
+/// matcher group from [`registration_group`] for each registration
+/// [`missing_hook_events`] reports. For a registration with tools or one
+/// that fails closed, Officina's own entries of that event are taken out
+/// first, a group they leave empty going with them, so a partial matcher or
+/// an entry without [`ON_FAILURE`] is replaced, never doubled. Fails when
+/// `current`, or the list of an event to change, does not have the shape
+/// Claude Code reads.
+pub fn merged_hooks(
+    current: Option<&serde_json::Value>,
+    exe: &Path,
+    registrations: &[Registration],
+) -> Result<serde_json::Value, String> {
+    let mut hooks = match current {
+        None => serde_json::Map::new(),
+        Some(serde_json::Value::Object(map)) => map.clone(),
+        Some(_) => return Err("its \"hooks\" key is not an object".to_owned()),
     };
-    serde_json::to_string_pretty(&serde_json::json!({
-        "statusLine": { "type": "command", "command": command }
-    }))
-    .unwrap_or_default()
+    for registration in registrations {
+        let settings = serde_json::json!({ "hooks": serde_json::Value::Object(hooks.clone()) });
+        if missing_hook_events(&settings, std::slice::from_ref(registration)).is_empty() {
+            continue;
+        }
+        let groups = hooks
+            .entry(registration.event)
+            .or_insert_with(|| serde_json::Value::Array(Vec::new()));
+        let serde_json::Value::Array(groups) = groups else {
+            return Err(format!(
+                "its \"{}\" hooks are not a list",
+                registration.event
+            ));
+        };
+        if !registration.tools.is_empty() || registration.fails_closed {
+            groups.retain_mut(|group| !drop_officina_entries(group));
+        }
+        groups.push(registration_group(exe, registration));
+    }
+    Ok(serde_json::Value::Object(hooks))
+}
+
+/// Takes the entries running `officina hook` out of a matcher group; true
+/// when it held some and none is left, so that the group goes too.
+fn drop_officina_entries(group: &mut serde_json::Value) -> bool {
+    let Some(entries) = group
+        .get_mut("hooks")
+        .and_then(serde_json::Value::as_array_mut)
+    else {
+        return false;
+    };
+    let before = entries.len();
+    entries.retain(|entry| {
+        !entry
+            .get("command")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(runs_officina_hook)
+    });
+    entries.len() < before && entries.is_empty()
+}
+
+/// The `statusLine` value that writes the quota (AD-16, D-530), from
+/// `current`, a settings file's `statusLine`: its other fields kept, its
+/// command teed into Officina's `quota write` (`--tee` keeps its output),
+/// or kept as it is when it already runs `quota write`, which a tee into it
+/// would run twice; without a command, the plain `quota write`.
+pub fn statusline_value(exe: &Path, current: Option<&serde_json::Value>) -> serde_json::Value {
+    let mut value = match current {
+        Some(serde_json::Value::Object(map)) => map.clone(),
+        _ => serde_json::Map::new(),
+    };
+    let command = match value
+        .get("command")
+        .and_then(serde_json::Value::as_str)
+        .filter(|existing| !existing.trim().is_empty())
+    {
+        Some(existing) if runs_officina_quota_write(existing) => existing.to_owned(),
+        Some(existing) => format!("{} quota write --tee | {existing}", quoted_exe(exe)),
+        None => format!("{} quota write", quoted_exe(exe)),
+    };
+    value.entry("type").or_insert_with(|| "command".into());
+    value.insert("command".to_owned(), command.into());
+    serde_json::Value::Object(value)
+}
+
+/// A Claude Code settings file as doctor reads it.
+#[derive(Debug, Clone, PartialEq)]
+pub enum SettingsFile {
+    /// No file at that path.
+    Absent,
+    /// A file doctor cannot read as a JSON object, with why. The reason
+    /// names a position, never the file's content.
+    Unreadable(String),
+    Object(serde_json::Map<String, serde_json::Value>),
+}
+
+impl SettingsFile {
+    pub fn read(path: &Path) -> SettingsFile {
+        let text = match fs::read_to_string(path) {
+            Ok(text) => text,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return SettingsFile::Absent,
+            Err(e) => return SettingsFile::Unreadable(e.to_string()),
+        };
+        match serde_json::from_str(text.trim_start_matches('\u{feff}')) {
+            Ok(serde_json::Value::Object(map)) => SettingsFile::Object(map),
+            Ok(_) => SettingsFile::Unreadable("not a JSON object".to_owned()),
+            Err(e) => SettingsFile::Unreadable(e.to_string()),
+        }
+    }
+
+    /// The value of `key`, when the file is an object that has it.
+    pub fn get(&self, key: &str) -> Option<&serde_json::Value> {
+        match self {
+            SettingsFile::Object(map) => map.get(key),
+            SettingsFile::Absent | SettingsFile::Unreadable(_) => None,
+        }
+    }
+}
+
+/// What to do so that `key` of the settings file `file` holds `value`
+/// (D-530): the sentence saying where, and the block to paste, which never
+/// holds another key of the file, since those can hold environment values
+/// or tokens. The whole file when it does not exist; else the key alone,
+/// to add or to replace whole. No block for a file doctor cannot read: one
+/// that does not start from the file's content could drop part of it.
+pub fn key_paste(
+    file: &Path,
+    settings: &SettingsFile,
+    key: &str,
+    value: &serde_json::Value,
+) -> (String, Option<String>) {
+    let file_name = file.display();
+    let pretty =
+        |value: &serde_json::Value| serde_json::to_string_pretty(value).unwrap_or_default();
+    let fragment = || format!("\"{key}\": {}", pretty(value));
+    match settings {
+        SettingsFile::Absent => (
+            format!(
+                "Create {file_name} with this content (if doctor prints another block for the same file, put both keys in the one object)"
+            ),
+            Some(pretty(&serde_json::json!({ key: value }))),
+        ),
+        SettingsFile::Object(map) if map.contains_key(key) => (
+            format!("Replace the whole \"{key}\" key of {file_name} with this one"),
+            Some(fragment()),
+        ),
+        SettingsFile::Object(_) => (
+            format!("Add this \"{key}\" key to {file_name}, beside its other keys"),
+            Some(fragment()),
+        ),
+        SettingsFile::Unreadable(why) => (
+            format!(
+                "{file_name} cannot be read as a JSON object ({why}): fix it and run doctor again; no block is printed, since one that does not start from the file's content could drop part of it"
+            ),
+            None,
+        ),
+    }
+}
+
+/// One file's part of a paste: the sentence, then the block under it.
+fn paste_section((instruction, block): (String, Option<String>)) -> String {
+    match block {
+        Some(block) => format!("{instruction}:\n{block}"),
+        None => format!("{instruction}."),
+    }
 }
 
 /// What of `registrations` the hooks in `settings` leave out: an event none
@@ -346,10 +489,6 @@ fn command_words(command: &str) -> Option<Vec<String>> {
     }
     words.extend(current);
     Some(words)
-}
-
-fn read_json(path: &Path) -> Option<serde_json::Value> {
-    serde_json::from_str(&fs::read_to_string(path).ok()?).ok()
 }
 
 /// Runs every check. `exe` is the path of the running `officina` binary.
@@ -516,11 +655,12 @@ fn check_agents_output(bin: &Path, config_dir: Option<&Path>) -> Check {
     check(level, TITLE, detail)
 }
 
-/// Every required registration in the user settings, else the block to
-/// paste.
+/// Every required registration in the user settings, else the file's whole
+/// `hooks` key with them merged in, to paste over it (D-530).
 fn check_hooks(user_settings: &Path, exe: &Path, required: &[Registration]) -> Check {
-    let settings = read_json(user_settings).unwrap_or(serde_json::Value::Null);
-    let missing = missing_hook_events(&settings, required);
+    let settings = SettingsFile::read(user_settings);
+    let current = settings.get("hooks");
+    let missing = missing_hook_events(&serde_json::json!({ "hooks": current }), required);
     if missing.is_empty() {
         return check(
             Level::Ok,
@@ -528,15 +668,35 @@ fn check_hooks(user_settings: &Path, exe: &Path, required: &[Registration]) -> C
             format!("registered in {}", user_settings.display()),
         );
     }
+    let (instruction, paste) = match merged_hooks(current, exe, required) {
+        Ok(hooks) => key_paste(user_settings, &settings, "hooks", &hooks),
+        Err(why) => (
+            format!(
+                "{} cannot be merged: {why}; fix it and run doctor again, no block is printed",
+                user_settings.display()
+            ),
+            None,
+        ),
+    };
+    let kept = if current.is_some() && paste.is_some() {
+        " (every hook already there is kept in it)"
+    } else {
+        ""
+    };
+    let never_edits = if paste.is_some() {
+        "; Officina never edits the file:"
+    } else {
+        "."
+    };
     Check {
         level: Level::Fail,
         title: "hooks".into(),
         detail: format!(
-            "not registered for {} in {}. Merge this block into that file (Officina never edits it):",
+            "not registered for {} in {}. {instruction}{kept}{never_edits}",
             missing.join(", "),
             user_settings.display()
         ),
-        paste: Some(hooks_block(exe, required)),
+        paste,
     }
 }
 
@@ -607,13 +767,9 @@ fn check_hook_activity(events_dir: &Path, now: i64) -> Vec<Check> {
     checks
 }
 
-/// The `statusLine.command` of a Claude settings file, if it sets one.
-fn statusline_command(settings: &Path) -> Option<String> {
-    read_json(settings)?
-        .get("statusLine")?
-        .get("command")?
-        .as_str()
-        .map(str::to_owned)
+/// The command of a settings file's `statusLine`, if it sets one.
+fn statusline_command(status_line: &serde_json::Value) -> Option<&str> {
+    status_line.get("command")?.as_str()
 }
 
 /// A project folder whose own settings set a statusline that does not run
@@ -626,7 +782,16 @@ pub struct StatuslineOverride {
     /// The settings file that sets it: `settings.local.json` wins over
     /// `settings.json`.
     pub file: PathBuf,
-    pub command: String,
+    /// Its whole `statusLine` value.
+    pub status_line: serde_json::Value,
+}
+
+impl StatuslineOverride {
+    /// The folder's personal settings file, where the wiring goes: never
+    /// the committed `settings.json`.
+    pub fn local_settings(&self) -> PathBuf {
+        self.folder.join(".claude").join("settings.local.json")
+    }
 }
 
 /// The overrides among `folders`: each folder's `.claude/settings.local.json`
@@ -640,12 +805,20 @@ pub fn statusline_overrides(folders: &[PathBuf]) -> Vec<StatuslineOverride> {
             ["settings.local.json", "settings.json"]
                 .into_iter()
                 .map(|name| claude.join(name))
-                .find_map(|file| statusline_command(&file).map(|command| (file, command)))
-                .filter(|(_, command)| !runs_officina_quota_write(command))
-                .map(|(file, command)| StatuslineOverride {
+                .find_map(|file| {
+                    let status_line = SettingsFile::read(&file)
+                        .get("statusLine")
+                        .filter(|value| statusline_command(value).is_some())
+                        .cloned()?;
+                    Some((file, status_line))
+                })
+                .filter(|(_, status_line)| {
+                    !statusline_command(status_line).is_some_and(runs_officina_quota_write)
+                })
+                .map(|(file, status_line)| StatuslineOverride {
                     folder: folder.clone(),
                     file,
-                    command,
+                    status_line,
                 })
         })
         .collect()
@@ -664,11 +837,13 @@ fn recent_session_folders(events_dir: &Path, now: i64) -> Vec<PathBuf> {
     folders.into_iter().collect()
 }
 
-/// A fresh quota file for this floor's account; else why it is stale and
-/// what to paste where. A user statusline that already runs Officina's
+/// A fresh quota file for this floor's account; else why it is stale and,
+/// for each settings file to change, its whole `statusLine` value wired to
+/// paste over it (D-530). A user statusline that already runs Officina's
 /// `quota write` is in place: the cause is then a project's own statusline,
 /// which wins in sessions opened in its folder, so the folders of the
-/// sessions the hook saw are checked for one, and each gets its snippet.
+/// sessions the hook saw are checked for one, and each gets its value for
+/// its `settings.local.json`.
 fn check_quota(collector: &Collector, user_settings: &Path, exe: &Path, now: i64) -> Check {
     let found = collector.read_quota();
     if let Some(q) = found
@@ -690,23 +865,33 @@ fn check_quota(collector: &Collector, user_settings: &Path, exe: &Path, now: i64
         if found.is_some() { "stale" } else { "no data" },
         collector.paths().account_key()
     );
-    let existing = statusline_command(user_settings);
-    let user_wired = existing.as_deref().is_some_and(runs_officina_quota_write);
+    let user = SettingsFile::read(user_settings);
+    let user_wired = user
+        .get("statusLine")
+        .and_then(statusline_command)
+        .is_some_and(runs_officina_quota_write);
     let overrides = statusline_overrides(&recent_session_folders(
         &collector.paths().events_dir(),
         now,
     ));
+    let user_section = || {
+        paste_section(key_paste(
+            user_settings,
+            &user,
+            "statusLine",
+            &statusline_value(exe, user.get("statusLine")),
+        ))
+    };
     let per_folder = overrides
         .iter()
         .map(|o| {
-            format!(
-                "In {}:\n{}",
-                o.folder
-                    .join(".claude")
-                    .join("settings.local.json")
-                    .display(),
-                statusline_snippet(exe, Some(&o.command))
-            )
+            let local = o.local_settings();
+            paste_section(key_paste(
+                &local,
+                &SettingsFile::read(&local),
+                "statusLine",
+                &statusline_value(exe, Some(&o.status_line)),
+            ))
         })
         .collect::<Vec<_>>()
         .join("\n");
@@ -725,24 +910,21 @@ fn check_quota(collector: &Collector, user_settings: &Path, exe: &Path, now: i64
         ),
         (true, false) => (
             format!(
-                "{state}. The user statusline already runs officina quota write, but these project settings set their own statusline, which wins in sessions opened there: {folders}. Add to each folder's .claude/settings.local.json, never a committed file:"
+                "{state}. The user statusline already runs officina quota write, but these project settings set their own statusline, which wins in sessions opened there: {folders}. Wire it in each folder's .claude/settings.local.json, never a committed file (Officina never edits them):"
             ),
             Some(per_folder),
         ),
         (false, true) => (
             format!(
-                "{state}. Wire one personal statusline (user settings or .claude/settings.local.json, never a committed file):"
+                "{state}. Wire officina quota write into the user statusline (Officina never edits the file):"
             ),
-            Some(statusline_snippet(exe, existing.as_deref())),
+            Some(user_section()),
         ),
         (false, false) => (
             format!(
-                "{state}. Wire one personal statusline (user settings, never a committed file), and in the folders whose project settings set their own ({folders}), in their .claude/settings.local.json:"
+                "{state}. Wire officina quota write into the user statusline and, in the folders whose project settings set their own ({folders}), into their .claude/settings.local.json, never a committed file (Officina never edits them):"
             ),
-            Some(format!(
-                "{}\n{per_folder}",
-                statusline_snippet(exe, existing.as_deref())
-            )),
+            Some(format!("{}\n{per_folder}", user_section())),
         ),
     };
     Check {
@@ -1148,6 +1330,279 @@ mod tests {
             .collect()
     }
 
+    /// The whole settings file doctor prints when the user settings do not
+    /// exist.
+    fn hooks_block(exe: &Path, registrations: &[Registration]) -> String {
+        serde_json::to_string_pretty(&serde_json::json!({
+            "hooks": merged_hooks(None, exe, registrations).unwrap()
+        }))
+        .unwrap()
+    }
+
+    /// Does what the author does with one block doctor printed for `file`:
+    /// writes the whole file, or sets the one key it holds.
+    fn apply_paste(file: &Path, block: &str) {
+        if block.starts_with('{') {
+            fs::write(file, block).unwrap();
+            return;
+        }
+        let SettingsFile::Object(mut settings) = SettingsFile::read(file) else {
+            panic!("a key block for a file that is not an object");
+        };
+        let (key, value) = block.split_once(": ").unwrap();
+        settings.insert(
+            serde_json::from_str(key).unwrap(),
+            serde_json::from_str(value).unwrap(),
+        );
+        fs::write(file, serde_json::Value::Object(settings).to_string()).unwrap();
+    }
+
+    /// The groups of `event` in `hooks` whose entries run `officina hook`,
+    /// counted per entry.
+    fn officina_entry_count(hooks: &serde_json::Value, event: &str) -> usize {
+        hooks[event]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|group| officina_entries(group).count())
+            .sum()
+    }
+
+    fn foreign_hooks() -> serde_json::Value {
+        serde_json::json!({
+            "PostToolUse": [{"matcher": "Edit|Write", "hooks": [
+                {"type": "command", "command": "npx prettier --write", "timeout": 30, "onFailure": "block"}]}],
+            "Stop": [{"hooks": [{"type": "command", "command": "python notify.py"}]}],
+            GATE_EVENT: [{"matcher": "Bash", "hooks": [
+                {"type": "command", "command": "python guard.py", "onFailure": "block"}]}]
+        })
+    }
+
+    /// D-530: every foreign event, group, command, matcher and `onFailure`
+    /// is in the merged value as it was, in its place, and Officina's
+    /// registrations come after them, the gate's next to a foreign
+    /// `PreToolUse` group; the result registers everything.
+    #[test]
+    fn merged_hooks_keep_every_foreign_entry() {
+        let exe = PathBuf::from("/opt/officina");
+        let foreign = foreign_hooks();
+        for gate in [false, true] {
+            let required = registrations(gate);
+            let merged = merged_hooks(Some(&foreign), &exe, &required).unwrap();
+            for (event, groups) in foreign.as_object().unwrap() {
+                let groups = groups.as_array().unwrap();
+                assert_eq!(
+                    &merged[event].as_array().unwrap()[..groups.len()],
+                    groups.as_slice(),
+                    "{event}"
+                );
+            }
+            assert!(
+                missing_hook_events(&serde_json::json!({ "hooks": &merged }), &required).is_empty(),
+                "{merged:#}"
+            );
+            for registration in &required {
+                assert_eq!(
+                    officina_entry_count(&merged, registration.event),
+                    1,
+                    "{}",
+                    registration.event
+                );
+            }
+            if gate {
+                let pre_tool_use = merged[GATE_EVENT].as_array().unwrap();
+                assert_eq!(pre_tool_use.len(), 2, "{merged:#}");
+                assert_eq!(pre_tool_use[1]["matcher"], gated_tools_matcher());
+                assert_eq!(pre_tool_use[1]["hooks"][0][ON_FAILURE.0], ON_FAILURE.1);
+            }
+        }
+    }
+
+    /// D-530: a merged value merges to itself, and doctor on the file that
+    /// holds it reports the hooks registered and prints nothing.
+    #[test]
+    fn merging_twice_changes_nothing_and_doctor_then_prints_nothing() {
+        let exe = PathBuf::from("/opt/officina");
+        let required = registrations(true);
+        let once = merged_hooks(Some(&foreign_hooks()), &exe, &required).unwrap();
+        assert_eq!(merged_hooks(Some(&once), &exe, &required).unwrap(), once);
+
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("settings.json");
+        fs::write(
+            &file,
+            serde_json::json!({"model": "opus", "hooks": foreign_hooks()}).to_string(),
+        )
+        .unwrap();
+        let line = check_hooks(&file, &exe, &required);
+        assert_eq!(line.level, Level::Fail);
+        assert!(
+            line.detail.contains(&format!(
+                "Replace the whole \"hooks\" key of {}",
+                file.display()
+            )),
+            "{}",
+            line.detail
+        );
+        apply_paste(&file, &line.paste.unwrap());
+        let line = check_hooks(&file, &exe, &required);
+        assert_eq!((line.level, line.paste), (Level::Ok, None));
+        let SettingsFile::Object(settings) = SettingsFile::read(&file) else {
+            panic!("the pasted file is an object");
+        };
+        assert_eq!(settings["model"], "opus");
+    }
+
+    /// D-530: Officina's own gate entry with a partial matcher or without
+    /// `onFailure`, in a group it shares with a foreign hook, is replaced:
+    /// the foreign entry stays in its group with its matcher, and the gate
+    /// runs once. An Officina-only group it empties goes.
+    #[test]
+    fn a_partial_gate_entry_is_replaced_never_doubled() {
+        let exe = PathBuf::from("/opt/officina");
+        let gate = [gate_registration()];
+        let guard = serde_json::json!({"type": "command", "command": "python guard.py"});
+        let hooks = serde_json::json!({GATE_EVENT: [
+            {"matcher": "Bash", "hooks": [guard.clone(), {"type": "command", "command": "officina.exe hook"}]},
+            {"matcher": gated_tools_matcher(), "hooks": [{"type": "command", "command": "officina.exe hook"}]}
+        ]});
+        let merged = merged_hooks(Some(&hooks), &exe, &gate).unwrap();
+        assert_eq!(
+            merged[GATE_EVENT],
+            serde_json::json!([
+                {"matcher": "Bash", "hooks": [guard]},
+                registration_group(&exe, &gate[0])
+            ])
+        );
+    }
+
+    /// D-530: the printed block never holds another key of the settings
+    /// file, whose values can be environment values or tokens.
+    #[test]
+    fn no_other_key_of_a_settings_file_is_printed() {
+        const SECRET: &str = "sk-not-a-real-token";
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths {
+            officina_home: dir.path().join("officina"),
+            claude_config_dir: dir.path().join("config"),
+            claude_config_override: None,
+            floor_file: None,
+        };
+        fs::create_dir_all(&paths.claude_config_dir).unwrap();
+        let user = paths.claude_config_dir.join("settings.json");
+        let others = serde_json::json!({
+            "env": {"ANTHROPIC_API_KEY": SECRET},
+            "permissions": {"allow": [format!("Bash(curl -H {SECRET})")]},
+            "apiKeyHelper": format!("echo {SECRET}")
+        });
+        let mut settings = others.clone();
+        settings["statusLine"] =
+            serde_json::json!({"type": "command", "command": "python s.py", "padding": 1});
+        settings["hooks"] = foreign_hooks();
+        fs::write(&user, settings.to_string()).unwrap();
+        let repo = session_folder(
+            &paths,
+            dir.path(),
+            "repo",
+            &[("settings.json", "python p.py")],
+        );
+        fs::write(
+            repo.join(".claude").join("settings.local.json"),
+            others.to_string(),
+        )
+        .unwrap();
+        let exe = PathBuf::from("/opt/officina");
+        let collector = Collector::from_parts(paths.clone(), LoadedFloor::default(), None);
+        let hooks = check_hooks(&user, &exe, &registrations(true));
+        let quota = check_quota(&collector, &user, &exe, now_ms());
+        for line in [&hooks, &quota] {
+            let text = format!(
+                "{}\n{}",
+                line.detail,
+                line.paste.as_deref().unwrap_or_default()
+            );
+            for key in others.as_object().unwrap().keys() {
+                assert!(!text.contains(&format!("\"{key}\"")), "{key}: {text}");
+            }
+            assert!(!text.contains(SECRET), "{text}");
+        }
+        let paste = quota.paste.unwrap();
+        assert!(paste.contains("\"padding\": 1"), "{paste}");
+        assert!(
+            paste.contains(&format!(
+                "Add this \"statusLine\" key to {}",
+                repo.join(".claude").join("settings.local.json").display()
+            )),
+            "{paste}"
+        );
+    }
+
+    /// D-530: a settings file doctor cannot read gets no merged block, only
+    /// the reason; nor does a `hooks` key of the wrong shape.
+    #[test]
+    fn an_unreadable_settings_file_gets_no_block() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("settings.json");
+        let exe = PathBuf::from("/opt/officina");
+        for text in [
+            "{\"hooks\": {",
+            "[]",
+            "{\"hooks\": []}",
+            "{\"hooks\": {\"Stop\": {}}}",
+        ] {
+            fs::write(&file, text).unwrap();
+            let line = check_hooks(&file, &exe, &registrations(false));
+            assert_eq!((line.level, &line.paste), (Level::Fail, &None), "{text}");
+            assert!(
+                line.detail.contains("no block is printed"),
+                "{text}: {}",
+                line.detail
+            );
+            let (instruction, block) = key_paste(
+                &file,
+                &SettingsFile::read(&file),
+                "statusLine",
+                &statusline_value(&exe, None),
+            );
+            assert_eq!(
+                block.is_none(),
+                matches!(SettingsFile::read(&file), SettingsFile::Unreadable(_)),
+                "{text}: {instruction}"
+            );
+        }
+    }
+
+    /// D-530: a file that does not exist gets its whole content, the key
+    /// alone; one that exists gets the key to add or to replace.
+    #[test]
+    fn the_block_is_the_whole_file_only_when_there_is_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("settings.local.json");
+        let value = serde_json::json!({"type": "command", "command": "x"});
+        let paste = || key_paste(&file, &SettingsFile::read(&file), "statusLine", &value);
+        let (instruction, block) = paste();
+        assert!(instruction.starts_with("Create "), "{instruction}");
+        let whole: serde_json::Value = serde_json::from_str(&block.unwrap()).unwrap();
+        assert_eq!(whole, serde_json::json!({ "statusLine": value }));
+
+        fs::write(&file, "\u{feff}{\"model\": \"opus\"}").unwrap();
+        let (instruction, block) = paste();
+        assert!(
+            instruction.starts_with("Add this \"statusLine\" key"),
+            "{instruction}"
+        );
+        assert!(block.unwrap().starts_with("\"statusLine\": {"));
+
+        fs::write(&file, "{\"statusLine\": {}}").unwrap();
+        let (instruction, block) = paste();
+        assert!(
+            instruction.starts_with("Replace the whole \"statusLine\" key"),
+            "{instruction}"
+        );
+        apply_paste(&file, &block.unwrap());
+        assert_eq!(SettingsFile::read(&file).get("statusLine"), Some(&value));
+    }
+
     #[test]
     fn run_reports_every_check_in_order() {
         let dir = tempfile::tempdir().unwrap();
@@ -1476,7 +1931,7 @@ mod tests {
         let line = check_hooks(&settings_file, &exe, &gate);
         assert_eq!(line.level, Level::Fail, "{line:?}");
         assert!(line.detail.contains(&fail_closed), "{line:?}");
-        fs::write(&settings_file, line.paste.unwrap()).unwrap();
+        apply_paste(&settings_file, &line.paste.unwrap());
         assert_eq!(check_hooks(&settings_file, &exe, &gate).level, Level::Ok);
     }
 
@@ -1912,16 +2367,25 @@ mod tests {
         assert_eq!(registry_line(&later, "registry restore").level, Level::Ok);
     }
 
+    /// D-530: the statusline value tees into the existing command and keeps
+    /// the existing value's other fields.
     #[test]
-    fn statusline_snippet_tees_into_the_existing_command() {
+    fn statusline_value_tees_into_the_existing_command() {
         let exe = PathBuf::from("/opt/officina");
-        let with = statusline_snippet(&exe, Some("python statusline.py"));
-        assert!(with.contains("\\\"/opt/officina\\\" quota write --tee | python statusline.py"));
-        assert!(statusline_snippet(&exe, None).contains("quota write\""));
+        let existing =
+            serde_json::json!({"type": "command", "command": "python statusline.py", "padding": 2});
+        assert_eq!(
+            statusline_value(&exe, Some(&existing)),
+            serde_json::json!({"type": "command", "command": "\"/opt/officina\" quota write --tee | python statusline.py", "padding": 2})
+        );
+        for none in [None, Some(serde_json::json!({"command": " "}))] {
+            assert_eq!(
+                statusline_value(&exe, none.as_ref()),
+                serde_json::json!({"type": "command", "command": "\"/opt/officina\" quota write"})
+            );
+        }
     }
 
-    /// An existing statusline that already runs Officina's `quota write` is
-    /// not wrapped: the snippet is the plain command, never a tee into it.
     /// A recent session's folder, its hook line in the buffer, and its
     /// project settings.
     fn session_folder(
@@ -2027,6 +2491,13 @@ mod tests {
         );
         assert!(paste.contains("quota write --tee | python"), "{paste}");
         assert!(
+            paste.contains(&format!(
+                "Create {} with this content",
+                repo.join(".claude").join("settings.local.json").display()
+            )),
+            "{paste}"
+        );
+        assert!(
             !paste.contains("quota write --tee | \\\"C:/Program Files"),
             "{paste}"
         );
@@ -2047,17 +2518,18 @@ mod tests {
         );
     }
 
+    /// An existing statusline that already runs Officina's `quota write` is
+    /// kept as it is, never teed into it again.
     #[test]
-    fn statusline_snippet_never_tees_into_officina_itself() {
+    fn statusline_value_never_tees_into_officina_itself() {
         let exe = PathBuf::from("C:/Program Files/Officina/officina.exe");
         for existing in [
             "\"C:/Program Files/Officina/officina.exe\" quota write",
             "\"C:/Program Files/Officina/officina.exe\" quota write --tee | python s.py",
             "/opt/officina quota write",
         ] {
-            let snippet = statusline_snippet(&exe, Some(existing));
-            assert!(!snippet.contains("--tee"), "{existing}: {snippet}");
-            assert!(snippet.contains("quota write"), "{existing}");
+            let current = serde_json::json!({"type": "command", "command": existing});
+            assert_eq!(statusline_value(&exe, Some(&current)), current);
         }
     }
 
