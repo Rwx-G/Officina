@@ -1,6 +1,6 @@
 # Story 4.2: Floor keys, board payloads, and the scene fixtures
 
-**Status:** Approved
+**Status:** Review
 
 ## Story
 
@@ -23,13 +23,13 @@ so that the scene places offices, fills the file and knows what is important fro
 
 ## Tasks
 
-- [ ] `crates/officina-core/src/floor.rs`: `Priority`, `priority`, `[alert] after_minutes`, `ProjectColor::Plum`, issues with lines (AC 1, 2, 5)
-- [ ] `relay/catalogue.rs`: confirm the canonical form ignores both keys, with its test (AC 3)
-- [ ] `crates/officina-host/src/doctor.rs`: floor lines for both keys (AC 4)
-- [ ] `crates/officina-core/src/board.rs`: one `ProjectView` constructor, `floor_projects`, `alert_after_ms`, `last_message_tail`, `BOARD_SCHEMA` (AC 6-8)
-- [ ] Regenerate `app/src/lib/generated/` with the command of `.claude/rules/officina-rust.md`; `app.css` plum token; colour record (AC 5, 8)
-- [ ] `app/scripts/e2e-fixtures.mjs`: `floor` support, the five scenarios with their intents, the self-checks, `index.json`; `app/e2e/fixture-index.ts` and its test; `app/vitest.config.ts` include (AC 9)
-- [ ] Update `CHANGELOG.md` and the README floor section (AC 10)
+- [x] `crates/officina-core/src/floor.rs`: `Priority`, `priority`, `[alert] after_minutes`, `ProjectColor::Plum`, issues with lines (AC 1, 2, 5)
+- [x] `relay/catalogue.rs`: confirm the canonical form ignores both keys, with its test (AC 3)
+- [x] `crates/officina-host/src/doctor.rs`: floor lines for both keys (AC 4)
+- [x] `crates/officina-core/src/board.rs`: one `ProjectView` constructor, `floor_projects`, `alert_after_ms`, `last_message_tail`, `BOARD_SCHEMA` (AC 6-8)
+- [x] Regenerate `app/src/lib/generated/` with the command of `.claude/rules/officina-rust.md`; `app.css` plum token; colour record (AC 5, 8)
+- [x] `app/scripts/e2e-fixtures.mjs`: `floor` support, the five scenarios with their intents, the self-checks, `index.json`; `app/e2e/fixture-index.ts` and its test; `app/vitest.config.ts` include (AC 9)
+- [x] Update `CHANGELOG.md` and the README floor section (AC 10)
 
 ## Dev Notes
 
@@ -55,9 +55,35 @@ so that the scene places offices, fills the file and knows what is important fro
 
 ### Debug Log
 
+- `[[project]] priority` and `[alert] after_minutes` are kept as spanned raw values (`toml::Spanned<toml::Value>`) in `ProjectEntry` and `AlertTable`, so a bad value is a view issue with its line instead of a refused floor; `FloorFile::priority_of`, `alert_after_minutes` and `view_issues` read them. `VIEW_KEYS` names them beside `RELAY_KEYS`, and the type test now asserts every view key is a field and the relay keys are exactly the rest of the schema 2 additions. `[alert]` refuses an unknown key, as the floor's other tables do.
+- `ProjectRule::view` is D-99's one constructor: `project_for` and `Board::floor_projects` both call it, so colour and priority always agree.
+- `ProjectColor::ALL` gains `Plum`, so `derived_color` now spreads over four colours: a project without a declared colour may change colour once. Recorded in the changelog.
+- `BOARD_SCHEMA` goes from 3 to 4; stories 4.3 and 4.12 add fields under it.
+- The fixture script's scene scenarios are `scene-a`, `scene-b`, `scene-c`, `scene-alert`, `scene-alert-early` (the same at one minute short of the threshold, for story 4.5's two boards either side of it), `scene-eight` (D-519's eight projects, for story 4.7's 1920 x 1080 case) and `scene-overflow`. A project whose session makes a relay request uses a real temporary folder, since `officina run` starts there; the request goes through the real `officina run --wait 1` after `approve_fixture`, as the `approvals` scenario does. The self-check compares each session's column with its helper's intent, the live card count, the floor's project order and the pending requests.
+- Vitest replaces imported CSS, `?raw` included, by an empty module, and jsdom's module URLs are not file URLs, so `tokens.test.ts` reads `app.css` from the app folder with `node:fs`. Playwright now matches `*.spec.ts` only, so the Vitest `*.test.ts` files under `e2e/` are not run as specs.
+- Adversarial pass: a doctor floor line could hide a view issue behind the `no_excerpts` warning, which returned first; both now share the line (`doctor.rs::tests::a_no_excerpts_floor_the_hook_cannot_see_warns`). Covered by the tests above: schema 1 and 2, every `Priority`, wrong types (`3`, `true`, `"HIGH"`), float, negative, string and out-of-range thresholds, an empty `[alert]`, an unknown key in it, a repeated project name, an ignored floor, a short answer after a long one, a `Stop` without an answer.
+
 ### Completion Notes
 
+- AC 1: `floor.rs::tests::{priority_defaults_to_normal, priority_high_is_read, an_unknown_priority_is_an_issue_and_stays_normal}`, `board.rs::tests::a_card_carries_its_project_priority`.
+- AC 2: `floor.rs::tests::{alert_threshold_defaults_to_ten_minutes, alert_threshold_out_of_range_is_an_issue}`, `board.rs::tests::the_board_carries_the_alert_threshold`.
+- AC 3: `relay/catalogue.rs::tests::priority_and_alert_keys_do_not_change_the_canonical_hash`.
+- AC 4: `crates/officina/tests/doctor.rs::doctor_reports_a_bad_priority_and_threshold`.
+- AC 5: `floor.rs::tests::plum_is_a_project_colour`; `pnpm check` (the exhaustive `PROJECT_COLORS`); `app/src/tokens.test.ts > every project colour has a token`.
+- AC 6: `board.rs::tests::{floor_projects_keep_file_order, floor_project_equals_the_card_project_of_a_cwd_inside, floor_projects_are_empty_without_projects}`; `crates/officina/tests/board.rs::{floor_projects_are_printed_in_file_order, an_ignored_floor_prints_no_floor_projects}`.
+- AC 7: `board.rs::tests::{cards_carry_the_answer_tail_and_withhold_it_without_excerpts, a_short_answer_clears_an_older_tail}`; `crates/officina/tests/board.rs::cards_print_the_answer_tail`.
+- AC 8: `typescript_bindings.rs::committed_bindings_match_the_rust_types`; `board.rs::board_classifies_the_fake_sessions_and_joins_hook_events` compares `schema` with the constant.
+- AC 9: CI step "e2e fixtures from the real CLI" (the intents' self-check, now before the frontend checks); `app/e2e/fixture-index.test.ts > {a missing index fails and names pnpm e2e:fixtures, an index without a board fails, files are returned by kind}`. Zone intents arrive with story 4.3.
+- AC 10: `CHANGELOG.md` Added and Changed; README floor section; `crates/officina/tests/readme.rs` green.
+
 ## File List
+
+- `crates/officina-core/src/floor.rs`, `board.rs`, `relay/catalogue.rs`, `relay/mod.rs`
+- `crates/officina-host/src/collector.rs`, `doctor.rs`, `focus.rs`, `tests/registry_ingest.rs`, `tests/registry_write.rs`
+- `crates/officina/tests/board.rs`, `crates/officina/tests/doctor.rs`
+- `app/src/lib/generated/` (Board, Card, ProjectColor, ProjectView, Priority), `app/src/lib/colors.ts`, `app/src/app.css`, `app/src/tokens.test.ts`, `app/src/lib/board.test.ts`, `app/src/components/components.test.ts`
+- `app/scripts/e2e-fixtures.mjs`, `app/e2e/fixture-index.ts`, `app/e2e/fixture-index.test.ts`, `app/e2e/fixtures.ts`, `app/vitest.config.ts`, `app/playwright.config.ts`
+- `.github/workflows/ci.yml`, `README.md`, `CHANGELOG.md`
 
 ## Change Log
 
@@ -65,3 +91,4 @@ so that the scene places offices, fills the file and knows what is important fro
 - 2026-10-28 reworked after review (F2, F4, F5, F11, F24)
 - 2026-10-28 renumbered 4.2 and reworked for the scene v2 (D-460, D-461): floor keys `priority` and `[alert] after_minutes`, `plum`, `alert_after_ms`; scenarios `scene-alert` and approvals; archived count and reset flags withdrawn
 - 2026-10-28 after the plan challenge (D-495, D-496, D-498): `scene-b`'s reception and lounge sessions carry their `SessionStart` source; `scene-alert` gains an approval-only wait; story numbers per D-498
+- 2026-10-28 implemented: floor keys, plum, `floor_projects`, `alert_after_ms`, `last_message_tail`, board schema 4, the scene fixtures with their intents and the fixture index; adversarial pass fixed the doctor line. Status review
