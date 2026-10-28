@@ -110,3 +110,43 @@ stories:
   - {id: "5.17", file: story-5.17-proposals-and-restart.md, slice: C, status: approved}
   - {id: "5.18", file: story-5.18-orchestrator-room-and-chips.md, slice: C, status: approved}
   - {id: "5.19", file: story-5.19-docs-doctor-use-and-qa.md, slice: C, status: approved}
+---
+epic: 6
+version: v0.6
+# approved: written and approved, implementation not started.
+# Reworked after the story review (review-stories-epic6.md, F1 to F56, all accepted; epic-6-decisions.md P-54 to P-56, D-229 to D-249).
+# Before 6.1 starts, this block is appended to docs/stories/sprint-status.yaml, the only place a story's status is stated (review F28, P-54).
+# Slice 0 (6.1) runs the first half of every gate of architecture-v0.6.md AD-126 and records E26 to E36 (epic-6-decisions.md D-201 to D-203); E37 and E38 are reserved for 6.20 and 6.24, so the next epic starts at E39 (review F29).
+# Gates 7 and 0 (E26, E27) come first: no Slice A story starts before both are recorded (FR-0). If E26 records neither an accepted token nor an available API key, v0.6 stops at Slice 0 (P-52).
+# First halves before the stories that rest on them: E28 before 6.5; E29 before 6.6, 6.7, 6.8; E30 before 6.6, 6.10; E31 before 6.5, 6.6, 6.7, 6.11; E32 before 6.9; E33 before 6.12; E34 before 6.2, 6.6; E35 before 6.22.
+# Needs merged (code only): 6.2, 6.3 and 6.4 are independent; 6.6 needs 6.2, 6.3 and 6.5; 6.7 needs 6.6; 6.8 needs 6.3, 6.4, 6.5 and 6.7; 6.9 needs 6.8; 6.10 needs 6.6 and 6.8; 6.11 needs 6.9 and 6.10; 6.12 needs 6.11; 6.13 needs 6.12; 6.14 and 6.15 need 6.13; 6.16 needs 6.15; 6.17 needs 6.13; 6.18 needs 6.11 to 6.17; 6.19 and 6.20 need 6.18; 6.21 to 6.23 need Slice A; 6.24 needs every other story.
+# Closes on (second halves and records; they close their own story and never block dependent code, D-202): gates 9 and 1 close 6.8 and gate 2 closes 6.10, both driven by crates/officina-host/examples/battery_ci.rs on Docker Desktop; gate 3 closes 6.19, the first story with a workshop Launch (review F5); gate 4 and E37 close 6.20; gate 8 closes 6.22; E38 closes 6.24.
+# Slice A (6.2-6.20: FR-1 to FR-12, FR-14, FR-15, FR-17 without the scene, FR-18 Slice A) is usable alone; 6.20 records it in E37. Slice B (6.21-6.23: FR-13, FR-16, FR-17's scene, FR-18 Slice B).
+# Implemented after v0.2 to v0.5; story 2.11 is a hard prerequisite (6.11 reuses its Secret and CredentialStore); each seam has one owning story (epic-6-decisions.md D-200).
+# 6.2 bumps the catalogue format once, with the relay-section hash (P-53, D-244); 6.4 writes the workshop migration whole, the next one relative to main (P-53, D-212).
+# 6.24 closes the PRD after real use and records E38 (owner rule, epic-2-decisions.md P-7, epic-6-decisions.md P-52).
+stories:
+  - {id: "6.1", file: story-6.1-workstation-gates.md, slice: "0", status: approved}
+  - {id: "6.2", file: story-6.2-floor-keys-and-catalogue-format.md, slice: A, status: approved}
+  - {id: "6.3", file: story-6.3-engine-driver-and-host-git.md, slice: A, status: approved}
+  - {id: "6.4", file: story-6.4-migration-3-and-workshop-records.md, slice: A, status: approved}
+  - {id: "6.5", file: story-6.5-gateway-and-container-crate.md, slice: A, status: approved}
+  - {id: "6.6", file: story-6.6-container-vectors-and-run-plan.md, slice: A, status: approved}
+  - {id: "6.7", file: story-6.7-entry-point-and-packer.md, slice: A, status: approved}
+  - {id: "6.8", file: story-6.8-images-and-build.md, slice: A, status: approved}
+  - {id: "6.9", file: story-6.9-hook-program-inventory.md, slice: A, status: approved}
+  - {id: "6.10", file: story-6.10-escape-battery.md, slice: A, status: approved}
+  - {id: "6.11", file: story-6.11-workshop-card-and-launch.md, slice: A, status: approved}
+  - {id: "6.12", file: story-6.12-follow-limits-and-reconciliation.md, slice: A, status: approved}
+  - {id: "6.13", file: story-6.13-collection-verification-and-no-change.md, slice: A, status: approved}
+  - {id: "6.14", file: story-6.14-credential-scan.md, slice: A, status: approved}
+  - {id: "6.15", file: story-6.15-sensitive-groups-and-approvals.md, slice: A, status: approved}
+  - {id: "6.16", file: story-6.16-import-discard-and-template-table.md, slice: A, status: approved}
+  - {id: "6.17", file: story-6.17-stop-all-and-resume.md, slice: A, status: approved}
+  - {id: "6.18", file: story-6.18-workshop-view-board-and-cli.md, slice: A, status: approved}
+  - {id: "6.19", file: story-6.19-card-and-review-panel-frontend.md, slice: A, status: approved}
+  - {id: "6.20", file: story-6.20-workshop-section-header-and-slice-a-close.md, slice: A, status: approved}
+  - {id: "6.21", file: story-6.21-memory-as-proposal.md, slice: B, status: approved}
+  - {id: "6.22", file: story-6.22-browser-base-image.md, slice: B, status: approved}
+  - {id: "6.23", file: story-6.23-scene-workers.md, slice: B, status: approved}
+  - {id: "6.24", file: story-6.24-docs-doctor-use-and-qa.md, slice: B, status: approved}
