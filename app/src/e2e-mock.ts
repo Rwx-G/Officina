@@ -31,6 +31,10 @@ export function installE2eMock(): void {
         }
         case "approve_catalogue":
           return approve((args as { hash: string }).hash);
+        case "decide_approval": {
+          const { id } = args as { id: string; approve: boolean };
+          return decide(id);
+        }
         case "set_relay_stopped":
           return setStopped((args as { stopped: boolean }).stopped);
         default:
@@ -78,4 +82,20 @@ async function setStopped(stopped: boolean): Promise<boolean> {
     stopped_since_ms: stopped ? Date.now() : null,
   });
   return true;
+}
+
+/** Mirrors `authority::decide_approval`: a request the board lists as valid
+ *  is decided and leaves Needs you with the next board; anything else is
+ *  refused, as the backend refuses an unknown or invalid request. */
+async function decide(id: string): Promise<void> {
+  const board = window.__officinaBoard;
+  const approval = board?.approvals.find((a) => a.id === id);
+  if (!board || !approval?.valid) {
+    return Promise.reject(`officina-window-authority: request ${id} is invalid or unknown`);
+  }
+  await window.__officinaPushBoard?.({
+    ...board,
+    approvals: board.approvals.filter((a) => a.id !== id),
+    waiting_count: board.waiting_count - 1,
+  });
 }

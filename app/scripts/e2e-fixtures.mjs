@@ -4,7 +4,7 @@
 //
 // Usage: node scripts/e2e-fixtures.mjs   (after `cargo build -p officina`)
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -234,6 +234,114 @@ for (const [name, steps] of Object.entries(relayScenarios)) {
   const env = { SYSTEMROOT: process.env.SYSTEMROOT ?? "", USERPROFILE: home, HOME: home, OFFICINA_HOME: officinaHome };
   const run = spawnSync(officina, ["relay", "--json"], { env, encoding: "utf8" });
   if (run.status !== 0) throw new Error(`${name}: officina relay exited ${run.status}: ${run.stderr}`);
+  writeFileSync(join(outDir, `${name}.json`), run.stdout);
+  rmSync(tmp, { recursive: true, force: true });
+  console.log(`fixture ${name}: exit ${run.status}`);
+}
+
+// Approval requests (story 2.8, D-25, D-170): a catalogue approved through
+// `approve_fixture`, a dry run and two requests made by the real
+// `officina run --wait 1` (one from a session the busy board lists), and one
+// forged request file whose key belongs to another parameter set, which the
+// board must show as invalid. The board is `officina board --json` on the
+// busy sessions.
+{
+  const name = "approvals";
+  const tmp = mkdtempSync(join(tmpdir(), `officina-fixture-${name}-`));
+  const home = join(tmp, "home");
+  const officinaHome = join(tmp, "officina");
+  const project = join(tmp, "work", "infra-scripts");
+  mkdirSync(join(home, ".claude", "sessions"), { recursive: true });
+  mkdirSync(join(officinaHome, "events"), { recursive: true });
+  mkdirSync(project, { recursive: true });
+  const fakeTool = join(targetDir, "debug", `officina-fake-tool${exe}`).replaceAll("\\", "/");
+  writeFileSync(
+    join(officinaHome, "floor.toml"),
+    `schema = 2
+
+[[project]]
+name = "infra-scripts"
+path = "${project.replaceAll("\\", "/")}"
+actions = ["check", "apply", "restart"]
+
+[[action]]
+name = "check"
+description = "Dry run of a playbook on one lab group"
+class = "free"
+program = "${fakeTool}"
+env = { FAKE_TOOL_MODE = "echo" }
+args = ["TASK [deploy {group}]", "changed=1", "unreachable=0"]
+
+[action.params.group]
+pattern = "lab-[a-z0-9-]{1,30}"
+
+[[action]]
+name = "apply"
+description = "Apply the playbook checked by its dry run"
+class = "human"
+check = "check"
+program = "/home/user01/venv/bin/ansible-playbook"
+runner = "wsl"
+args = ["-i", "inventory/lab", "--limit", "{group}", "playbooks/site.yml"]
+
+[action.params.group]
+pattern = "lab-[a-z0-9-]{1,30}"
+
+[[action]]
+name = "restart"
+description = "Restart one service"
+class = "human"
+program = "C:/path/to/service-tool.exe"
+args = ["restart", "{service}"]
+
+[action.params.service]
+values = ["web01", "db01"]
+`,
+  );
+  approveFixture(officinaHome, "approve");
+  const base = { SYSTEMROOT: process.env.SYSTEMROOT ?? "", USERPROFILE: home, HOME: home, OFFICINA_HOME: officinaHome };
+  const relayRun = (args, extra = {}) => {
+    const run = spawnSync(officina, ["run", ...args], { env: { ...base, ...extra }, cwd: project, encoding: "utf8" });
+    if (run.status !== 0 && run.status !== 126) console.error(run.stderr);
+    return run.status;
+  };
+  if (relayRun(["check", "group=lab-web"]) !== 0) throw new Error(`${name}: the dry run failed`);
+  // From the session of the busy board's first card, then from a terminal.
+  if (relayRun(["apply", "group=lab-web", "--wait", "1"], { CLAUDE_CODE_SESSION_ID: sid(1) }) !== 126) {
+    throw new Error(`${name}: the apply request did not wait`);
+  }
+  if (relayRun(["restart", "service=db01", "--wait", "1"]) !== 126) {
+    throw new Error(`${name}: the restart request did not wait`);
+  }
+  const approvalsDir = join(officinaHome, "relay", "approvals");
+  const restartFile = readdirSync(approvalsDir)
+    .filter((f) => f.endsWith(".request.json"))
+    .map((f) => join(approvalsDir, f))
+    .find((f) => JSON.parse(readFileSync(f, "utf8")).action === "restart");
+  const forged = JSON.parse(readFileSync(restartFile, "utf8"));
+  forged.params = { service: "web01" };
+  forged.argv = ["C:/path/to/harmless.exe"];
+  forged.created_at_ms += 1;
+  writeFileSync(
+    join(approvalsDir, `${forged.request_key.slice(0, 16)}-${forged.created_at_ms}.request.json`),
+    JSON.stringify(forged, null, 2),
+  );
+
+  const fixture = join(tmp, "agents.json");
+  writeFileSync(fixture, JSON.stringify(busyAgents));
+  const byDay = new Map();
+  for (const event of busyEvents) {
+    const day = utcDay(event.ts);
+    byDay.set(day, (byDay.get(day) ?? "") + JSON.stringify(event) + "\n");
+  }
+  for (const [day, content] of byDay) writeFileSync(join(officinaHome, "events", `${day}.jsonl`), content);
+  const env = { ...base, OFFICINA_CLAUDE_BIN: fakeClaude, FAKE_CLAUDE_FIXTURE: fixture, FAKE_CLAUDE_MODE: "ok" };
+  const run = spawnSync(officina, ["board", "--json"], { env, encoding: "utf8" });
+  if (run.status !== 0) throw new Error(`${name}: officina board exited ${run.status}: ${run.stderr}`);
+  const board = JSON.parse(run.stdout);
+  if (board.approvals.length !== 3 || board.approvals.filter((a) => a.valid).length !== 2) {
+    throw new Error(`${name}: expected two valid requests and a forged one: ${JSON.stringify(board.approvals)}`);
+  }
   writeFileSync(join(outDir, `${name}.json`), run.stdout);
   rmSync(tmp, { recursive: true, force: true });
   console.log(`fixture ${name}: exit ${run.status}`);

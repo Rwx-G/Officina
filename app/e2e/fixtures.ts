@@ -8,7 +8,7 @@ import type { RelayView } from "../src/lib/generated/RelayView";
 
 const dir = join(dirname(fileURLToPath(import.meta.url)), ".fixtures");
 
-export type Scenario = "busy" | "empty" | "stale" | "quota-reset";
+export type Scenario = "busy" | "empty" | "stale" | "quota-reset" | "approvals";
 
 export type RelayScenario =
   | "relay-clean"

@@ -24,6 +24,12 @@ export function approveCatalogue(hash: string): Promise<string> {
   return invoke<string>("approve_catalogue", { hash });
 }
 
+/** Approves or rejects a `human` action's request (AD-35); the backend
+ *  refuses one that is unknown, decided, expired or invalid (D-27). */
+export function decideApproval(id: string, approve: boolean): Promise<void> {
+  return invoke("decide_approval", { id, approve });
+}
+
 /** Stops or resumes the relay (AD-34). True when the state changed. */
 export function setRelayStopped(stopped: boolean): Promise<boolean> {
   return invoke<boolean>("set_relay_stopped", { stopped });

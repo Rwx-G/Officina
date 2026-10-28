@@ -1,7 +1,9 @@
 <script lang="ts">
   import type { Card } from "../lib/generated/Card";
   import type { Column } from "../lib/generated/Column";
+  import type { ApprovalView } from "../lib/generated/ApprovalView";
   import type { BoardStore } from "../lib/board.svelte";
+  import ApprovalCard from "./ApprovalCard.svelte";
   import SessionCard from "./SessionCard.svelte";
 
   interface Props {
@@ -12,8 +14,10 @@
     store: BoardStore;
     collapseAfter?: number;
     numbered?: boolean;
+    /** Approval requests, listed before the session cards (AD-35). */
+    approvals?: ApprovalView[];
   }
-  let { column, title, hint, cards, store, collapseAfter, numbered = false }: Props = $props();
+  let { column, title, hint, cards, store, collapseAfter, numbered = false, approvals = [] }: Props = $props();
 
   let expanded = $state(false);
   let visible = $derived(
@@ -25,14 +29,17 @@
 <section class="column {column}" data-testid="column-{column}" aria-labelledby="title-{column}">
   <header>
     <h2 id="title-{column}">{title}</h2>
-    <span class="count" data-testid="count-{column}">{cards.length}</span>
+    <span class="count" data-testid="count-{column}">{cards.length + approvals.length}</span>
   </header>
   <p class="hint">{hint}</p>
   <div class="cards">
+    {#each approvals as approval (approval.id)}
+      <ApprovalCard {approval} {store} />
+    {/each}
     {#each visible as card, i (card.key)}
       <SessionCard {card} {store} index={numbered ? i : undefined} />
     {:else}
-      <p class="empty">Nothing here.</p>
+      {#if approvals.length === 0}<p class="empty">Nothing here.</p>{/if}
     {/each}
   </div>
   {#if hidden > 0}

@@ -13,7 +13,8 @@
 //!   `tree` (starts a copy of itself that appends a byte to
 //!   `FAKE_TOOL_HEARTBEAT` every 100 ms, then sleeps), `orphan` (starts the
 //!   same heartbeat with its own stdout and stderr, then exits 0 at once, as
-//!   a program that leaves a daemon behind); unset, exit 0. The heartbeat
+//!   a program that leaves a daemon behind), `echo` (writes its arguments,
+//!   joined by spaces, as one line on stdout); unset, exit 0. The heartbeat
 //!   ends by itself after a while, or as soon as a file named like the
 //!   heartbeat plus `.stop` exists, which tests create to clean up a
 //!   grandchild nothing else ends.
@@ -117,6 +118,10 @@ fn main() {
             let len: u64 = value.parse().unwrap_or(0);
             write_stream(&mut std::io::stdout().lock(), len, fake_output::stdout_byte);
             write_stream(&mut std::io::stderr().lock(), len, fake_output::stderr_byte);
+        }
+        "echo" => {
+            let args: Vec<String> = std::env::args().skip(1).collect();
+            println!("{}", args.join(" "));
         }
         "sleep" => {
             let seconds: f64 = value.parse().unwrap_or(0.0);

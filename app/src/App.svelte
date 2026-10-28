@@ -70,8 +70,9 @@
     <BoardColumn
       column="needs_you"
       title="Needs you"
-      hint="A decision blocks the session. Keys 1-9 open them."
+      hint="A decision blocks the session. Keys 1-9 open the sessions; approvals take a click."
       cards={columns.needs_you}
+      approvals={board.approvals}
       {store}
       numbered
     />

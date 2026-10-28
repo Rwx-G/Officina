@@ -1,9 +1,17 @@
-import { afterEach, describe, expect, it } from "vitest";
-import { cleanup, render } from "@testing-library/svelte";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, render } from "@testing-library/svelte";
+import ApprovalCard from "./ApprovalCard.svelte";
 import Gauge from "./Gauge.svelte";
 import SessionCard from "./SessionCard.svelte";
 import { BoardStore } from "../lib/board.svelte";
+import type { ApprovalView } from "../lib/generated/ApprovalView";
 import type { Card } from "../lib/generated/Card";
+
+vi.mock("../lib/ipc", () => ({
+  decideApproval: vi.fn(async () => undefined),
+}));
+
+const ipc = await import("../lib/ipc");
 
 const NOW = 1_800_000_000_000;
 
@@ -104,5 +112,113 @@ describe("Gauge", () => {
     });
     expect(getByText("--")).toBeTruthy();
     expect(getByText("reset, no new data")).toBeTruthy();
+  });
+});
+
+function approval(overrides: Partial<ApprovalView> = {}): ApprovalView {
+  return {
+    id: "0123456789abcdef-1",
+    project: "infra",
+    action: "restart",
+    description: "Restart one service",
+    argv: ["C:/path/to/tool.exe", "restart", "web01"],
+    valid: true,
+    invalid_reason: null,
+    session_id: "s",
+    session_name: "deploy-lab",
+    requested_at_ms: NOW - 3 * 60_000,
+    expires_at_ms: NOW + 57 * 60_000,
+    dry_run: null,
+    ...overrides,
+  };
+}
+
+describe("ApprovalCard", () => {
+  beforeEach(() => vi.mocked(ipc.decideApproval).mockClear());
+
+  it("renders one chip per argument", () => {
+    const argv = ["C:/path/to/tool.exe", "--limit", "lab web", "playbooks/site.yml"];
+    const { getAllByTestId, getByTestId, getByText } = render(ApprovalCard, {
+      approval: approval({ argv }),
+      store: store(),
+    });
+    expect(getAllByTestId("arg").map((chip) => chip.textContent)).toEqual(argv);
+    expect(getByTestId("approval-session").textContent).toBe("deploy-lab");
+    expect(getByText("asked 3 min ago")).toBeTruthy();
+    expect(getByText("expires in 57 min")).toBeTruthy();
+    cleanup();
+    const unknown = render(ApprovalCard, { approval: approval({ session_name: null }), store: store() });
+    expect(unknown.getByTestId("approval-session").textContent).toBe("session unknown");
+  });
+
+  it("bidi and markup in arguments stay inert text", () => {
+    const argv = [`<img src=x onerror="window.__hit = 1">`, "\u202Egnp.exe", "a b"];
+    const { container, getAllByTestId } = render(ApprovalCard, {
+      approval: approval({ argv, description: "<b>bold</b>" }),
+      store: store(),
+    });
+    expect(container.querySelector("img")).toBeNull();
+    expect(container.querySelector("b")).toBeNull();
+    const chips = getAllByTestId("arg");
+    expect(chips.map((chip) => chip.textContent)).toEqual(argv);
+    expect(chips.every((chip) => chip.children.length === 0)).toBe(true);
+  });
+
+  it("a pointer click calls decideApproval with the card id", async () => {
+    const { getByTestId } = render(ApprovalCard, { approval: approval(), store: store() });
+    await fireEvent.click(getByTestId("approve"), { detail: 1 });
+    expect(ipc.decideApproval).toHaveBeenCalledWith("0123456789abcdef-1", true);
+    await fireEvent.click(getByTestId("reject"), { detail: 1 });
+    expect(ipc.decideApproval).toHaveBeenLastCalledWith("0123456789abcdef-1", false);
+  });
+
+  it("Enter and Space on a focused Approve button do not decide", async () => {
+    const { getByTestId } = render(ApprovalCard, { approval: approval(), store: store() });
+    for (const button of [getByTestId("approve"), getByTestId("reject")]) {
+      button.focus();
+      for (const key of ["Enter", " "]) {
+        const keydown = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true });
+        button.dispatchEvent(keydown);
+        expect(keydown.defaultPrevented).toBe(true);
+      }
+      // What a browser does for a key activation: a click with detail 0.
+      await fireEvent.click(button, { detail: 0 });
+    }
+    expect(ipc.decideApproval).not.toHaveBeenCalled();
+  });
+
+  it("an invalid request shows its reason and no button", () => {
+    const { queryByTestId, getByTestId } = render(ApprovalCard, {
+      approval: approval({ valid: false, invalid_reason: "its key does not match", argv: [] }),
+      store: store(),
+    });
+    expect(getByTestId("invalid-reason").textContent).toContain("its key does not match");
+    expect(queryByTestId("approve")).toBeNull();
+    expect(queryByTestId("reject")).toBeNull();
+    expect(queryByTestId("argv")).toBeNull();
+  });
+
+  it("ApprovalCard shows the dry run as inert text", () => {
+    const output = `TASK [restart] <script>window.__hit = 1</script>\nchanged: [web01]\n`;
+    const { container, getByTestId, queryByTestId, rerender } = render(ApprovalCard, {
+      approval: approval({
+        dry_run: { check: "check", run_id: "r1", output, missing: null, files_unchanged: true },
+      }),
+      store: store(),
+    });
+    expect(container.querySelector("script")).toBeNull();
+    expect(getByTestId("dry-run-output").textContent).toBe(output);
+    expect(getByTestId("files-unchanged").textContent).toBe(
+      "tracked and unignored files unchanged since the dry run",
+    );
+    rerender({
+      approval: approval({
+        dry_run: { check: "check", run_id: "r1", output: null, missing: "not kept", files_unchanged: false },
+      }),
+      store: store(),
+    });
+    expect(getByTestId("dry-run-missing").textContent).toBe("not kept");
+    expect(queryByTestId("files-unchanged")).toBeNull();
+    expect(getByTestId("files-changed")).toBeTruthy();
   });
 });

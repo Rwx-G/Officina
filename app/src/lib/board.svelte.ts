@@ -24,8 +24,15 @@ export class BoardStore {
   outcomes = $state<Record<string, ShownOutcome>>({});
   copied = $state<string | null>(null);
   alwaysOnTop = $state(false);
+  /** Why the backend refused a decision, by request id. */
+  approvalErrors = $state<Record<string, string>>({});
+  /** Requests whose decision is on its way to the backend. */
+  deciding = $state<Record<string, boolean>>({});
 
+  /** The session cards keys 1 to 9 focus: approval cards are not among
+   *  them, so no key ever lands on Approve (D-28). */
   needsYou = $derived(this.board?.columns.needs_you ?? []);
+  approvals = $derived(this.board?.approvals ?? []);
 
   async start(): Promise<() => void> {
     const unlisten = await ipc.onBoard((board) => {
@@ -84,6 +91,23 @@ export class BoardStore {
     setTimeout(() => {
       if (this.copied === card.key) this.copied = null;
     }, 2000);
+  }
+
+  /** Approves or rejects request `id`, once at a time; a refusal is kept to
+   *  show on its card. The card leaves Needs you with the next board. */
+  async decideApproval(id: string, approve: boolean): Promise<void> {
+    if (this.deciding[id]) return;
+    this.deciding = { ...this.deciding, [id]: true };
+    const { [id]: _previous, ...others } = this.approvalErrors;
+    this.approvalErrors = others;
+    try {
+      await ipc.decideApproval(id, approve);
+    } catch (error) {
+      this.approvalErrors = { ...this.approvalErrors, [id]: String(error) };
+    } finally {
+      const { [id]: _done, ...rest } = this.deciding;
+      this.deciding = rest;
+    }
   }
 
   async toggleAlwaysOnTop(): Promise<void> {
