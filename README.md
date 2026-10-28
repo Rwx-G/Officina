@@ -391,6 +391,12 @@ A subject is a named piece of work (a change, an incident, a migration) that own
 - **Waking up.** Filing a live session into a `to_resume` subject makes it `active`. A session of a `to_resume` or `archived` subject that comes alive again (listed by `claude agents` again, or sent a new prompt) makes its subject `active`; an archived one counts as reopened.
 - **Excerpts.** A subject keeps the latest prompt and answer of its sessions only: once a later session of it records excerpts, the older ones are cleared, and archiving clears them all, from the database and its log.
 
+### The Subjects view
+
+The window's header switches between **Board**, **Subjects** and, once the relay is in use, **Relay**. The Subjects view lists the `active` subjects, then those `to_resume`, each with its sessions and their live state from the board; a subject none of whose sessions runs shows its last prompt and the end of its last answer, so you find where you left it without opening a session. Below come the unfiled sessions by project (non-interactive runs counted, the ten most recent listed on demand) and, on demand, the archived subjects with **Reopen**.
+
+Tick sessions, wherever they are listed, to file them under a subject (those of their project are offered first), to unfile them, or to name a new subject, which takes their project. **New subject** also creates one in any project the registry knows. Each subject has **Rename**, **Merge** (its sessions move to the subject you pick, and it is archived) and **Archive**, which offers the "routine, could have run alone" box. The window asks the registry's one writer and waits ten seconds at most; a refused action says which rule refused it and changes nothing, and an action not run in time is never run later. Notes say when the registry lies in a synchronised folder (with the folder to exclude), when it was restored from a copy (for seven days, naming the copy), and why it cannot be read. Digit keys open Needs you sessions in the Board view only.
+
 `officina subjects --json` prints the subjects that are not archived with their sessions (and their live board card), the latest excerpts, the unfiled sessions per project (non-interactive runs counted, the ten most recent listed), and how many event bytes wait for the window: it reads the registry read-only, works with the window closed, and exits 3 with the reason when the registry cannot be read. On the board, each card names its subject.
 
 ## Command line

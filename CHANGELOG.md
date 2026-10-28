@@ -167,7 +167,20 @@ project uses [Semantic Versioning](https://semver.org/).
   lag, read-only and with the window closed; exit 3 with the reason when
   the registry cannot be read.
 - Board cards carry their subject (`subject`, in the board contract's
-  schema 3), from the registry, read-only for `officina board --json`.
+  schema 3), from the registry, read-only for `officina board --json`; the
+  window shows it on each card.
+- Subjects view in the window (v0.3, in progress), beside Board and
+  Relay: the active then `to_resume` subjects with their sessions' live
+  state, and for a subject with no live session its last prompt and the
+  end of its last answer; the unfiled sessions by project, non-interactive
+  runs counted and collapsed; the archived subjects on demand. Create a
+  subject (from selected sessions, which give it their project, or in a
+  project the registry knows), rename, file, unfile, merge, archive with
+  the "routine, could have run alone" box and reopen, each in one gesture;
+  a refused action says which rule refused it and changes nothing. Notes
+  name the folder to exclude from a sync client, the copy a damaged
+  registry was restored from (for 7 days), or why the registry cannot be
+  read. Digit keys focus cards in the Board view only.
 
 ### Changed
 
