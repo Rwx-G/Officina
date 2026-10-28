@@ -121,7 +121,7 @@
         {#each recent as archived (archived.subject.id)}
           <li data-testid="auto-archived" data-subject={archived.subject.id}>
             <span class="name">{archived.subject.name}</span>
-            <span class="muted">({archived.project}), archived {clock(archived.archived_at_ms, nowMs)}</span>
+            <span class="muted">(<bdi>{archived.project}</bdi>), archived {clock(archived.archived_at_ms, nowMs)}</span>
             {#if archived.archived}
               <button
                 class="tool"
@@ -306,8 +306,11 @@
     margin: 2px 0;
   }
   .source,
+  /* Registry text beside other words is isolated, so a bidi control in a
+     folder or session name cannot reorder them (security audit Info). */
   .name {
     font-weight: 600;
+    unicode-bidi: isolate;
   }
   .paused {
     margin-top: 6px;

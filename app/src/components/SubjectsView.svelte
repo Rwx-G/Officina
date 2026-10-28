@@ -100,7 +100,7 @@
           {#each view.routine_candidates as candidate (candidate.subject.id)}
             <li data-testid="routine-candidate" data-subject={candidate.subject.id}>
               <span class="name">{candidate.subject.name}</span>
-              <span class="muted">({candidate.project}), archived {clock(candidate.archived_at_ms, nowMs)}</span>
+              <span class="muted">(<bdi>{candidate.project}</bdi>), archived {clock(candidate.archived_at_ms, nowMs)}</span>
             </li>
           {/each}
         </ul>
@@ -228,6 +228,7 @@
   }
   .routine .name {
     font-weight: 600;
+    unicode-bidi: isolate;
   }
   .fault {
     color: var(--color-stopped-text);

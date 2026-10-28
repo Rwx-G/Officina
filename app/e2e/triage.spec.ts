@@ -304,6 +304,17 @@ test.describe("Triage panel", () => {
     ]);
   });
 
+  // Security audit Info: a project name beside other words is isolated,
+  // so a bidi control in a folder's name cannot reorder them.
+  test("a row's project name is bidi-isolated", async ({ page }) => {
+    await openTriage(page);
+    const isolation = await page
+      .locator('[data-testid="triage-row"] .project')
+      .first()
+      .evaluate((element) => getComputedStyle(element).unicodeBidi);
+    expect(isolation).toBe("isolate");
+  });
+
   test("the to-sort chip is neutral and opens the panel", async ({ page }) => {
     const view = loadRegistry("triage");
     await openBoard(page, loadBoard("triage-board"), {}, null, view);

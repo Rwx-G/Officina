@@ -52,7 +52,7 @@
 <article class="row" class:in-flight={inFlight} data-testid="triage-row" data-key={row.key} data-kind={row.kind}>
   <header>
     <h3 class="title" data-testid="triage-title">{title}</h3>
-    <span class="project">{row.project}</span>
+    <bdi class="project">{row.project}</bdi>
     {#if row.kind === "unfiled_session"}<span class="tag">unfiled</span>{/if}
     {#if row.model_pending}<span class="tag" data-testid="triage-model-pending">model pending</span>{/if}
     {#if inFlight}<span class="tag" data-testid="triage-in-flight">confirming...</span>{/if}

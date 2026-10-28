@@ -33,7 +33,7 @@
         {@const error = store.errors[subjectTarget(subject.id)]}
         <li data-testid="archived-subject" data-subject={subject.id}>
           <span class="name">{subject.name}</span>
-          <span class="muted">{subject.project}</span>
+          <span class="muted"><bdi>{subject.project}</bdi></span>
           {#if subject.routine}<span class="tag" data-testid="routine">routine</span>{/if}
           <button
             class="tool"
@@ -77,6 +77,7 @@
   .name {
     font-weight: 600;
     overflow-wrap: anywhere;
+    unicode-bidi: isolate;
   }
   .muted {
     font-size: 13px;
