@@ -76,3 +76,36 @@ stories:
   - {id: "4.7", file: story-4.7-instruments.md, slice: B, status: approved}
   - {id: "4.8", file: story-4.8-dark-theme.md, slice: B, status: approved}
   - {id: "4.9", file: story-4.9-docs-workstation-checks-and-qa.md, slice: B, status: approved}
+---
+epic: 5
+version: v0.5
+# approved: written and approved, implementation not started.
+# Slice 0 (5.1) runs the workstation gates of architecture-v0.5.md AD-96 and records E18 to E24 (epic-5-decisions.md D-125 to D-127).
+# 5.1 order: E18 before 5.2; gates 2, 3, 4 and 7 before 5.5, 5.7, 5.10 and 5.11; gate 1's containment half before 5.15.
+# Second halves (D-126): gate 4's window half closes 5.7, gate 7's readability 5.10, E25 (memory files) 5.13, gate 1's window half 5.16; 5.17 and 5.18 wait for 5.16's.
+# Slice A (5.2-5.11: FR-1 to FR-6) is usable alone. Slice B (5.12-5.14: FR-7 to FR-9). Slice C (5.15-5.18: FR-10 to FR-14).
+# Implemented after v0.2, v0.3 and v0.4; each seam has one owning story (epic-5-decisions.md D-124).
+# 5.2, 5.3 and 5.4 are independent; 5.5 needs 5.3 for its doctests; 5.6 writes migration 2 whole (D-133), so the owner may run Slice A builds before Slice B.
+# 5.15 needs 5.6 (proposal table) and 5.8 (briefing); 5.17 needs 5.10 (recap section).
+# Reworked after the story review (epic-5-decisions.md, review F1 to F47; new decisions D-151 to D-169).
+# 5.19 closes the PRD after real use (owner rule, epic-2-decisions.md P-7, epic-5-decisions.md P-25).
+stories:
+  - {id: "5.1", file: story-5.1-workstation-gates.md, slice: "0", status: approved}
+  - {id: "5.2", file: story-5.2-spawn-module.md, slice: A, status: approved}
+  - {id: "5.3", file: story-5.3-untrusted-text.md, slice: A, status: approved}
+  - {id: "5.4", file: story-5.4-templates-and-catalogue-format.md, slice: A, status: approved}
+  - {id: "5.5", file: story-5.5-work-order-validation-and-vector.md, slice: A, status: approved}
+  - {id: "5.6", file: story-5.6-migration-2-and-work-order-records.md, slice: A, status: approved}
+  - {id: "5.7", file: story-5.7-cards-and-launch.md, slice: A, status: approved}
+  - {id: "5.8", file: story-5.8-briefing-and-orchestrator-view.md, slice: A, status: approved}
+  - {id: "5.9", file: story-5.9-composer-and-work-order-cards.md, slice: A, status: approved}
+  - {id: "5.10", file: story-5.10-meeting-receive.md, slice: A, status: approved}
+  - {id: "5.11", file: story-5.11-meeting-answers.md, slice: A, status: approved}
+  - {id: "5.12", file: story-5.12-auto-class-in-run-and-approvals.md, slice: B, status: approved}
+  - {id: "5.13", file: story-5.13-review-call-and-worker.md, slice: B, status: approved}
+  - {id: "5.14", file: story-5.14-shadow-gate-toggle-and-relay-auto.md, slice: B, status: approved}
+  - {id: "5.15", file: story-5.15-officina-mcp.md, slice: C, status: approved}
+  - {id: "5.16", file: story-5.16-orchestrator-session.md, slice: C, status: approved}
+  - {id: "5.17", file: story-5.17-proposals-and-restart.md, slice: C, status: approved}
+  - {id: "5.18", file: story-5.18-orchestrator-room-and-chips.md, slice: C, status: approved}
+  - {id: "5.19", file: story-5.19-docs-doctor-use-and-qa.md, slice: C, status: approved}

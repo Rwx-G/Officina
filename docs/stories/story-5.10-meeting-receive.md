@@ -1,0 +1,62 @@
+# Story 5.10: The meeting: Receive, changes and logs
+
+**Status:** Approved
+
+## Story
+
+As the author receiving an employee that waits on a real decision,
+I want one panel that shows what it expects of me, what it ran and what blocked, the commits and the diff since it started, and for a background session its recent output,
+so that I decide from facts in front of me, without opening its terminal or reading its transcript (J4, journey 4).
+
+## Acceptance Criteria
+
+1. **The meeting view** (AD-84, FR-5). `officina-core::meeting::build(...) -> MeetingView` (ts-rs) holds: decision expected (`waiting_for`, the latest `Notification` message, the answer tail of AD-45, the last prompt); runs and approvals (this session's runs from the journal, read back to the session's `startedAt` and at most the journal's 90 days rather than the readers' two days (D-169, review F32), succeeded, failed with exit code, refused, each with its journal reference, and its pending approvals); changes; logs (background only); and the delivery of AC 6. Every session text, commit subject, path and log line is `Untrusted`. No transcript is read: no input of `build` carries a transcript path or its content. Proof: core `crates/officina-core/src/meeting.rs::tests::{decision_expected_holds_waiting_for_notification_tail_and_prompt, runs_are_this_session_only_with_their_journal_reference, every_text_is_untrusted}`; host `crates/officina-host/tests/relay_journal.rs::a_meeting_reads_runs_back_to_the_session_start`; `crates/officina-core/tests/typescript_bindings.rs::committed_bindings_match_the_rust_types`.
+2. **Inputs** (D-138). `SessionEvents` gains the latest `Notification` message from the event lines the collector holds; `Card` does not change. `open_meeting(card_key)` asks the collector for the card (or, for a `sid:` key absent from the board, the registry record), excerpts, runs and approvals; then runs `git` and the `Logs` vector on the command's blocking thread and calls `meeting::build` there. Receive on a to-resume subject opens its latest session that saw a prompt (D-76) as `sid:<session id>`. `open_meeting` is declared in `build.rs`, allowed in the capability file, wrapped in `ipc.ts` and answered by `e2e-mock.ts`. Proof: core `crates/officina-core/src/board.rs::tests::the_latest_notification_message_is_kept_per_session`; CLI-crate collector tests `crates/officina/tests/watch.rs::{a_meeting_reads_its_inputs_without_blocking_the_board, a_subject_to_resume_opens_its_latest_prompted_session}`; `app/src-tauri/src/main.rs::tests::every_declared_command_is_allowed`.
+3. **Changes** (AD-84, D-22, D-128, D-154, D-168, R42; review F19, F20, F22). Host `git` runs on Receive only, in the folder `claude agents` reported for the session (the live card's, or the registry's agents-sourced fact), never one taken from an event line; without such a folder the section says the folder is unknown and no git runs. 10 s deadline: commits since `startedAt` (`log --no-show-signature --since=<ISO 8601 UTC from core's date math> --name-status`), one diff from the parent of the oldest of those commits (or `HEAD`, or the empty tree) to the working tree, capped at 256 KiB, with per-file offsets for the jumps; before that diff `host::git` reads `git config --local --get-regexp "^filter\."` and, when a filter driver is configured, diffs the commits only and says why; untracked files listed by name and size, never read; outside git the section says so. Proof: core `meeting.rs::tests::{since_is_iso_8601_utc_of_started_at, the_diff_is_capped_with_per_file_offsets, outside_git_is_said}`; host `crates/officina-host/tests/git.rs::{commits_since_start_and_one_diff_to_the_working_tree, untracked_files_are_listed_never_read, a_meeting_leaves_a_stale_index_unchanged, no_configured_program_runs_on_receive}` (the third touches a tracked file's modification time first, so plain git would refresh the index, with story 5.2's control proving the precondition, D-163; the fourth runs one case per neutralised configuration: external diff, textconv, fsmonitor, `log.showSignature` with `gpg.program`, a filter driver, each pointing at a marker program whose output file must stay absent; all skip with a printed reason when no `git` exists, D-23); CLI-crate collector test `crates/officina/tests/watch.rs::a_folder_from_an_event_line_runs_no_git` (an unlisted session whose only `cwd` comes from a forged event line).
+4. **Logs** (AD-84, AD-79, E23, D-126). When E23 kept it, `VectorKind` gains `Logs` (`logs <bg id>`, the binary's folder, no console, stdin null, stdout 256 KiB, 5 s) with its golden case (only an `.exe` accepted, D-128's session-kind environment); core strips CSI, OSC and other ESC sequences, keeps the last 64 KiB and finds the first line matching `LOG_ERROR_MARKERS`. Fake claude mode `logs` prints a fixture with each sequence family and an error line built from an entry of `LOG_ERROR_MARKERS`, never a typed string (D-129, review F42). `crates/officina-host/examples/logs_probe.rs <bg id>` runs the real `Logs` vector and prints the stripped text with its counts; the owner judges it readable on a real background session, recorded in E23; unreadable text removes the section and the kind in this story (D-126). Proof: core `meeting.rs::tests::{escape_sequences_are_stripped, only_the_last_64_kib_is_kept, the_first_error_line_is_found}`; the `Logs` case of `tests/vectors/spawn.json`; CLI `crates/officina/tests/spawn.rs::every_kind_reaches_the_fake_claude_as_its_golden_vector`; manual, E23's readability line.
+5. **The panel** (AD-93, AD-69 as amended). Receive is offered on Needs you and Your turn cards, in `SessionFile` and on to-resume subjects in the Subjects view. `MeetingPanel.svelte` takes the side-panel slot of AD-69 (420 px, one panel at a time) in Board and Scene modes and holds the sections; `DiffView.svelte` shows files, anchors and hunks as text, with a jump from each file to its hunks and from each failed run to its journal entry in the Relay view; `lib/meeting.svelte.ts` holds the open meeting and asks again when the board shows that card's state changed. The e2e fixtures come from real code (D-72's pattern): `examples/orchestrator_fixture.rs` gains the scenarios `meeting-background` and `meeting-interactive`, which build a temporary git repository with two commits since the session's start and a working-tree change, and print the `MeetingView` of `meeting::build` with the fake claude's logs fixture; their outputs join D-181's `index.json` under the new kind `meeting` and specs load them through `app/e2e/fixture-index.ts` (review F30). Proof: Playwright `app/e2e/meeting.spec.ts > Receive opens the panel from a Needs you card, a Your turn card, the file and a subject to resume`, `> the panel shows each section from the fixture`, `> a file jumps to its hunks and a failed run to its journal entry`, `> the panel asks again when the card's state changes`; Vitest `components.test.ts > MeetingPanel renders markup in commit subjects, paths and logs as text`.
+6. **Delivery shown** (AD-84, D-168; review F20). `meeting::delivery(&MeetingTarget) -> Delivery` (`closed_enum!`), the target holding the card and the folder `claude agents` reported for the session, if any: a live background session not waiting gives `ResumeLive`; a background session waiting (`waiting`, `blocked` or `waitingFor` present) gives `CopyAndAttach`; an ended session (interactive ended or interrupted, background `stopped` or `failed`) gives `ResumeEnded` when an agents-reported folder exists, otherwise `CopyAndAttach` for a background session and `CopyOnly` for an interactive one (the text is copied, nothing is spawned, and the panel says to resume it by hand in its folder); a live interactive session gives `FocusOnly`; a `done` background session with a pid is live and idle (E1). Story 5.11 adds the `claude` version argument and E21's branch (D-139); here the panel shows the delivery, and Focus for `FocusOnly`. Proof: core `meeting.rs::tests::{each_card_shape_gets_its_delivery, a_done_background_session_with_a_pid_is_resume_live, an_ended_session_without_an_agents_folder_is_never_resumed, every_delivery_has_a_case}` (iterates `Delivery::ALL`).
+7. **The scene marker** (AD-84, AD-70). `SceneInput` gains `received_key`; the layout marks that desk with a neutral `--color-working` outline; opening a meeting changes the scene once, closing it once more. Proof: Vitest `app/src/lib/scene/layout.test.ts > the received session's desk is marked`, `> no received key, no marker`; Playwright `app/e2e/scene.spec.ts > opening a meeting marks the desk once`, and `> nothing in the scene changes while the payloads are unchanged` stays green.
+8. **Documentation** (D-149). `CHANGELOG.md` `[Unreleased]` under Added: the meeting panel; README "The orchestrator (v0.5, in progress)": Receive, what the panel shows, that git is read-only and no transcript is read. Proof: review.
+
+## Tasks
+
+- [ ] `crates/officina-core/src/meeting.rs`: view, sections, date, diff shaping, stripping, markers, `Delivery` (AC 1, 3, 4, 6)
+- [ ] `SessionEvents` notification message (AC 2)
+- [ ] `open_meeting`: collector read, blocking-thread `git` and `Logs`, build; command, capability, `ipc.ts`, mock (AC 2)
+- [ ] `crates/officina-host/src/git.rs` meeting reads, `--no-show-signature`, the filter-driver check, the agents-sourced folder (AC 3)
+- [ ] Journal read back to the session's start for the meeting (AC 1)
+- [ ] `Logs` kind, golden case, fake `logs` mode, `examples/logs_probe.rs`; E23 readability with the owner (AC 4)
+- [ ] `MeetingPanel.svelte`, `DiffView.svelte`, `lib/meeting.svelte.ts`, Receive buttons (AC 5)
+- [ ] Scene `received_key` (AC 7)
+- [ ] Update `CHANGELOG.md` and the README (AC 8)
+
+## Dev Notes
+
+- Requirements: FR-5, J4, journey 4. Decisions: AD-3, AD-45, AD-69 as amended, AD-84, AD-93. Facts: E1 (`done` with a pid is idle and alive), E23 (gate 7). Risks: R42, R45. Epic decisions: D-22, D-23 (Epic 2); D-76 (Epic 3); D-111, D-181 (Epic 4); P-24, D-124, D-126, D-128, D-129, D-138, D-154, D-163, D-168, D-169.
+- Seams (D-124): `SessionCard.svelte`, `SessionFile.svelte` and the side-panel slot (4.5), the Subjects view (3.5), `lib/scene/layout.ts` (4.3), `SessionEvents` (v0.1), the journal reader (2.6) and pending approvals (2.8), registry excerpts (3.2).
+- The meeting panel and the file panel share AD-69's slot: opening one closes the other, as D-111's panel never resizes the sessions area.
+- `GIT_OPTIONAL_LOCKS=0` and D-22's flags come from `host::git` (story 5.2); a repository a session controls may carry hooks or a hostile config. D-22's flags cover external diff, textconv and fsmonitor; `--no-show-signature` and the filter-driver check cover what they do not, and AC 3's marker programs make R42's claim executable (D-154).
+- A folder from an event line is never trusted: any session can append event lines, and a forged `cwd` would choose where `claude --resume` or git runs (D-168).
+- The answer composer is story 5.11; this story shows the delivery and Focus only.
+- No employer content in fixtures: placeholder repositories, commit subjects and paths.
+
+## Testing
+
+- Core unit: `crates/officina-core/src/{meeting,board}.rs`; core integration: `crates/officina-core/tests/{spawn_vectors,typescript_bindings}.rs`.
+- Host integration: `crates/officina-host/tests/{git,relay_journal}.rs`. CLI integration: `crates/officina/tests/{watch,spawn}.rs`.
+- Vitest: `components.test.ts`, `app/src/lib/scene/layout.test.ts`. Playwright: `app/e2e/{meeting,scene}.spec.ts`.
+- Manual: `examples/logs_probe.rs`, E23.
+
+## Dev Agent Record
+
+### Debug Log
+
+### Completion Notes
+
+## File List
+
+## Change Log
+
+- 2026-10-28 created
+- 2026-10-28 reworked after review: git hardened (`--no-show-signature`, filter drivers, marker programs) (F19); folders only from `claude agents`, `CopyOnly` (F20); index test with precondition (F22); fixtures in D-181's index (F30); runs read back to the session's start (F32); logs fixture marker derived (F42)
