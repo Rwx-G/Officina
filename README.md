@@ -182,7 +182,15 @@ The relay runs only a catalogue you approved in the window. Approval records a h
 
 In a guarded repository the gate reads each `Bash` command and refuses one that would start a guarded program, even through quotes, wrappers, `bash -c`, an interpreter one-liner or a command substitution, along with a command name built at run time, a PowerShell encoded command, a redirection of Officina's home, and any mention of an `OFFICINA_` setting or of Officina's own files. It is a guardrail, not a boundary: a text match cannot catch a guarded program hidden in a script file (`bash deploy.sh`, `make apply`), called by another tool (`git` over SSH, a Python import), renamed, aliased from an earlier command, or reached by a `cd` from a free repository into a guarded one. Those stay the author's to watch; the limits are listed in the architecture (AD-27).
 
-Today the floor's catalogue is parsed, validated and hashed, and the gate decision is computed; running actions, wiring the gate into the hook and the approval banner in the window arrive with the rest of v0.2.
+The gate runs inside `officina hook` as a `PreToolUse` hook on `Bash`. Once the floor guards a project, `officina doctor` adds it to the block to paste:
+
+```json
+"PreToolUse": [{ "matcher": "Bash", "hooks": [{ "type": "command", "command": "\"C:/path/to/officina.exe\" hook", "timeout": 5 }] }]
+```
+
+A refusal holds in every permission mode, bypass included: the session sees why, and the actions it may run instead. A repository counts as guarded when the current floor or the approved catalogue says so, so a session cannot lift containment by editing the floor, and when it is the session's root or the shell's current folder, so `cd ..` does not leave it. If the approved catalogue or the floor cannot be read, the gate gets stricter, not looser. Each refusal, and each such fault, is one line in `~/.officina/journal/YYYY-MM-DD.jsonl`, with the first 280 characters of the command unless excerpts are off.
+
+Today the floor's catalogue is parsed, validated and hashed, and the gate refuses guarded commands; running actions and the approval banner in the window arrive with the rest of v0.2.
 
 ## Command line
 
@@ -190,7 +198,7 @@ Today the floor's catalogue is parsed, validated and hashed, and the gate decisi
 |---|---|
 | `officina doctor` | check the setup, print what to paste; exit 1 when something required is missing |
 | `officina board --json` | print the board once (exit 3 when the session list could not be refreshed) |
-| `officina hook` | record one hook payload from stdin (run by Claude Code) |
+| `officina hook` | record one hook payload from stdin, or answer the relay gate for a `Bash` call (run by Claude Code) |
 | `officina quota write [--tee]` | record the rate limits from a statusline payload (run by your statusline) |
 
 ## Roadmap

@@ -4,7 +4,7 @@ mod common;
 
 use common::{TestEnv, read_events};
 
-use officina_host::doctor::HOOK_EVENTS as EVENTS;
+use officina_host::doctor::BUFFERED_EVENTS as EVENTS;
 
 fn payload(event: &str) -> String {
     serde_json::json!({

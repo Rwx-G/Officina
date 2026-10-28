@@ -56,6 +56,9 @@ project uses [Semantic Versioning](https://semver.org/).
 - Relay journal (`~/.officina/journal/YYYY-MM-DD.jsonl`): every gate deny,
   gate error and catalogue approval leaves one line, written under a lock
   file so lines never interleave; command excerpts follow `no_excerpts`.
+- `officina doctor` requires and prints the `PreToolUse` hook, matcher `Bash`
+  only, once the relay guards a project; workstations without one keep the
+  five v0.1 hooks and pay nothing per `Bash` call.
 
 ### Changed
 

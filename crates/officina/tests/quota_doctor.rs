@@ -63,6 +63,17 @@ fn doctor_fails_without_hooks_and_prints_the_block_to_paste() {
     assert!(text.contains("quota write"));
 }
 
+/// The hooks block doctor printed, parsed.
+fn printed_hooks_block(doctor_stdout: &[u8]) -> serde_json::Value {
+    let text = String::from_utf8_lossy(doctor_stdout).to_string();
+    let block_start = text.find("{\n  \"hooks\"").unwrap();
+    serde_json::Deserializer::from_str(&text[block_start..])
+        .into_iter()
+        .next()
+        .unwrap()
+        .unwrap()
+}
+
 #[test]
 fn doctor_passes_once_the_block_is_merged() {
     let env = TestEnv::new();
@@ -70,13 +81,11 @@ fn doctor_passes_once_the_block_is_merged() {
         r#"[{"pid":1,"cwd":"C:/x","kind":"interactive","startedAt":1,"sessionId":"s","status":"busy"}]"#,
     );
     let first = env.run(&["doctor"], b"");
-    let text = String::from_utf8_lossy(&first.stdout).to_string();
-    let block_start = text.find("{\n  \"hooks\"").unwrap();
-    let block: serde_json::Value = serde_json::Deserializer::from_str(&text[block_start..])
-        .into_iter()
-        .next()
-        .unwrap()
-        .unwrap();
+    let block = printed_hooks_block(&first.stdout);
+    assert!(
+        block["hooks"].get("PreToolUse").is_none(),
+        "no guarded project, no gate hook (D-18)"
+    );
     std::fs::write(env.claude_config().join("settings.json"), block.to_string()).unwrap();
     env.run(
         &["hook"],
@@ -91,6 +100,33 @@ fn doctor_passes_once_the_block_is_merged() {
     assert!(text.contains("[ok  ] hook activity"));
     assert!(text.contains("[ok  ] quota"));
     assert!(text.contains("9.9.9"));
+}
+
+#[test]
+fn doctor_with_a_guarded_project_requires_pre_tool_use() {
+    let env = TestEnv::new();
+    env.write_agents("[]");
+    env.write_floor("schema = 2\n[[project]]\nname = \"lab\"\npath = \"Lab\"\n");
+    // The buffered events are already registered, as on a v0.1 workstation.
+    let v0_1 = TestEnv::new();
+    v0_1.write_agents("[]");
+    let v0_1_block = printed_hooks_block(&v0_1.run(&["doctor"], b"").stdout);
+    let settings = env.claude_config().join("settings.json");
+    std::fs::write(&settings, v0_1_block.to_string()).unwrap();
+
+    let out = env.run(&["doctor"], b"");
+    let text = String::from_utf8_lossy(&out.stdout).to_string();
+    assert_eq!(out.status.code(), Some(1), "{text}");
+    assert!(
+        text.contains("[FAIL] hooks: not registered for PreToolUse"),
+        "{text}"
+    );
+    let block = printed_hooks_block(&out.stdout);
+    assert_eq!(block["hooks"]["PreToolUse"][0]["matcher"], "Bash");
+
+    std::fs::write(&settings, block.to_string()).unwrap();
+    let text = String::from_utf8_lossy(&env.run(&["doctor"], b"").stdout).to_string();
+    assert!(text.contains("[ok  ] hooks"), "{text}");
 }
 
 #[test]
