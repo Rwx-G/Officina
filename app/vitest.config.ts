@@ -6,6 +6,6 @@ export default defineConfig({
   resolve: { conditions: ["browser"] },
   test: {
     environment: "jsdom",
-    include: ["src/**/*.test.ts", "e2e/**/*.test.ts"],
+    include: ["src/**/*.test.ts", "e2e/**/*.test.ts", "scripts/*.test.ts"],
   },
 });
