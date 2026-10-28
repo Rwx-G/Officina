@@ -581,7 +581,7 @@ pub fn confirmation_input(
         answer_tail: excerpt.answer_tail.clone(),
         end_reason: session.ending().and_then(|e| end_reason(e.value)),
         cut_mid_turn: cut_mid_turn(session),
-        expires_at_ms: earliest + EXCERPT_TTL_MS,
+        expires_at_ms: earliest.saturating_add(EXCERPT_TTL_MS),
     })
 }
 

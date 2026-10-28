@@ -448,6 +448,10 @@ project uses [Semantic Versioning](https://semver.org/).
   does, since `cmd.exe` runs whatever the script says; doctor and the
   board say why. Install the native `claude.exe` or set
   `OFFICINA_CLAUDE_BIN` to it.
+- An event line dated in the future, by a wrong clock or a forged line, is
+  recorded at the time it is read, and a line dated before its file's day
+  at the start of that day (v0.3): no excerpt outlives the 30-day bound
+  and newer observations still replace it.
 - A damaged registry is restored from the copy whose name carries the
   newest UTC day (v0.3), never from the newest modification time, which any
   process can set; a file of another name under `registry/backup/` is never

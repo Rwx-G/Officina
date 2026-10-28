@@ -46,6 +46,31 @@ pub fn partial_tail_is_corrupt(name: &str, now_ms: i64) -> bool {
     dated_file_day(name).is_some_and(|day| day < utc_date(now_ms - DAY_MS))
 }
 
+/// The time a line of the event file `name` is recorded at, at `now_ms`:
+/// its `ts`, held within the file's UTC day (up to [`COMPLETE_GRACE_MS`]
+/// after its end, D-49) and never past `now_ms`. Excerpt lifetimes and the
+/// "newer wins" rule count from it (D-50), so a line dated in the future (a
+/// wrong clock, a forged line) can neither outlive the privacy bound nor
+/// freeze newer observations; a line dated before its file's day cannot
+/// pass for older than the file. Unchanged for a name that is no event
+/// file.
+///
+/// ```
+/// use officina_core::registry::ingestion::recorded_at;
+/// let now = 1_793_102_400_000; // 2026-10-27 12:00
+/// assert_eq!(recorded_at(4_102_444_800_000, "2026-10-27.jsonl", now), now);
+/// assert_eq!(recorded_at(now - 1, "2026-10-27.jsonl", now), now - 1);
+/// assert_eq!(recorded_at(0, "2026-10-27.jsonl", now), 1_793_059_200_000);
+/// ```
+pub fn recorded_at(ts: i64, name: &str, now_ms: i64) -> i64 {
+    let Some(day) = dated_file_day(name) else {
+        return ts.min(now_ms);
+    };
+    let start = day_start_ms(day);
+    let end = (start + DAY_MS + COMPLETE_GRACE_MS).min(now_ms);
+    ts.min(end).max(start.min(end))
+}
+
 /// True when `cwd` lies in `<officina_home>/triage/`, compared as
 /// [`normalise_path`] does, so case and slashes do not matter (D-97).
 ///
@@ -117,6 +142,28 @@ mod tests {
         assert!(partial_tail_is_corrupt("2026-10-25.jsonl", NOW));
         assert!(!partial_tail_is_corrupt("2026-10-26.jsonl", NOW));
         assert!(!partial_tail_is_corrupt("2026-10-27.jsonl", NOW));
+    }
+
+    /// Security audit M1: a line's time stays within its file's day and
+    /// never passes now, whatever it says.
+    #[test]
+    fn a_line_is_recorded_within_its_files_day_and_never_after_now() {
+        let today = day_start_ms(utc_date(NOW));
+        let yesterday = today - DAY_MS;
+        for (ts, name, expected) in [
+            (i64::MAX, "2026-10-27.jsonl", NOW),
+            (NOW + DAY_MS, "2026-10-27.jsonl", NOW),
+            (NOW - 5, "2026-10-27.jsonl", NOW - 5),
+            (i64::MIN, "2026-10-27.jsonl", today),
+            (today - 1, "2026-10-27.jsonl", today),
+            (NOW, "2026-10-26.jsonl", today + COMPLETE_GRACE_MS),
+            (yesterday + 10, "2026-10-26.jsonl", yesterday + 10),
+            (NOW + 1, "notes.jsonl", NOW),
+        ] {
+            assert_eq!(recorded_at(ts, name, NOW), expected, "{ts} in {name}");
+        }
+        // A file dated in the future records nothing after now either.
+        assert_eq!(recorded_at(NOW + 3 * DAY_MS, "2026-10-30.jsonl", NOW), NOW);
     }
 
     #[test]

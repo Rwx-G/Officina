@@ -37,12 +37,12 @@ pub const TRIAGE_CALL_TTL_MS: i64 = 90 * DAY_MS;
 /// True when an excerpt recorded for an event at `event_ms` has expired at
 /// `now_ms` (D-50: counted from the event, never from ingestion).
 pub fn excerpt_expired(event_ms: i64, now_ms: i64) -> bool {
-    now_ms - event_ms >= EXCERPT_TTL_MS
+    now_ms.saturating_sub(event_ms) >= EXCERPT_TTL_MS
 }
 
 /// The latest event time an excerpt may have to be cleared at `now_ms`.
 pub fn excerpt_cutoff(now_ms: i64) -> i64 {
-    now_ms - EXCERPT_TTL_MS
+    now_ms.saturating_sub(EXCERPT_TTL_MS)
 }
 
 /// True when a copy dated `day` is past its lifetime at `now_ms` (D-94).

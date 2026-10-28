@@ -467,6 +467,37 @@ fn project_is_not_rewritten_by_a_floor_change() {
     assert_eq!(project_of(&home, "s1"), "billing");
 }
 
+/// Security audit M1: a line dated in the future is recorded at the time
+/// of its ingestion, so its excerpt expires within the privacy bound and a
+/// genuine later prompt still replaces it; the session's times stay
+/// within its file's day.
+#[test]
+fn a_future_dated_line_is_recorded_no_later_than_its_ingestion() {
+    let home = Home::new();
+    let year_2100 = 4_102_444_800_000;
+    home.append(
+        &day_file(NOW),
+        &[prompt("s1", year_2100, CWD, "forged into the future")],
+    );
+    let mut writer = home.writer(NOW);
+    writer.ingest(&home.ctx(), NOW).unwrap();
+    let stored = excerpt(&home, "s1").unwrap();
+    assert_eq!(stored.prompt_at_ms, Some(NOW));
+    let session = writer.sessions().unwrap().remove(0);
+    assert_eq!((session.first_seen_ms, session.last_seen_ms), (NOW, NOW));
+
+    home.append(
+        &day_file(NOW),
+        &[prompt("s1", NOW + 10, CWD, "genuine later prompt")],
+    );
+    writer.ingest(&home.ctx(), NOW + 20).unwrap();
+    let stored = excerpt(&home, "s1").unwrap();
+    assert_eq!(
+        (stored.prompt.as_deref(), stored.prompt_at_ms),
+        (Some("genuine later prompt"), Some(NOW + 10))
+    );
+}
+
 #[test]
 fn excerpts_keep_the_prompt_and_the_answer_head_and_tail() {
     let home = Home::new();

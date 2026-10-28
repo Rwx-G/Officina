@@ -18,7 +18,7 @@ use officina_core::registry::filing::filing_at_creation;
 use officina_core::registry::fold::{candidates_needed, line_facts, link_for_line};
 use officina_core::registry::ingestion::{
     CHUNK_MAX_BYTES, CHUNK_MAX_LINES, ExcerptObservation, complete_once_read, excerpt_observation,
-    in_triage_workdir, partial_tail_is_corrupt,
+    in_triage_workdir, partial_tail_is_corrupt, recorded_at,
 };
 use officina_core::registry::retention::excerpt_expired;
 use officina_core::registry::types::{EventFileRecord, SessionRecord, Source};
@@ -246,7 +246,8 @@ impl Writer {
                     .transaction_with_behavior(TransactionBehavior::Immediate)?;
                 for raw in chunk {
                     match parse_line(&raw[..raw.len() - 1]) {
-                        ParsedLine::Event(line) => {
+                        ParsedLine::Event(mut line) => {
+                            line.ts = recorded_at(line.ts, &name, now_ms);
                             report.hook_sightings.observe(&line);
                             if apply(&tx, &line, ctx, now_ms)? {
                                 report.lines += 1;
