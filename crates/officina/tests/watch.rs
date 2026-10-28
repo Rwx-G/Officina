@@ -43,7 +43,7 @@ use officina_host::relay::credential::OwnedStore;
 use officina_host::relay::journal::append;
 use officina_host::watch::{
     AUTHOR_HEADROOM, AUTHOR_WAIT, AuthorAnswer, AuthorCommand, AuthorReply, AuthorRequest,
-    CollectorMsg, WatchHandle, spawn,
+    CollectorMsg, FOLLOW_UP, MIN_SPAWN_INTERVAL, RELAY_POLL, WatchHandle, spawn,
 };
 use officina_host::writers::{record_hook, record_quota};
 
@@ -90,6 +90,20 @@ fn watch_with(
 fn stop(handle: WatchHandle) {
     handle.sender.send(CollectorMsg::Shutdown).unwrap();
     handle.thread.join().unwrap();
+}
+
+/// How long the startup's spawns and their follow-up take to pass, from
+/// the plan's own constants: after it, a trigger's spawn is not rate
+/// limited away.
+const SETTLE: Duration = FOLLOW_UP.saturating_add(MIN_SPAWN_INTERVAL);
+
+/// The next value `rx` brings within 10 s: after a wait in which nothing
+/// was to come, it must be the change the test made next, so a repeat
+/// sent meanwhile fails the test instead of being skipped (quality audit
+/// M8).
+fn next<T>(rx: &Receiver<T>) -> T {
+    rx.recv_timeout(Duration::from_secs(10))
+        .expect("the change made no emission")
 }
 
 /// The first value `rx` brings within 10 s that satisfies `wanted`.
@@ -295,7 +309,10 @@ fn relay_view_is_emitted_only_on_change() {
         "an unchanged relay view must not be emitted again"
     );
     write(&env.relay_home().stopped_file(), "{}");
-    until(&views, |v| v.stopped);
+    assert!(
+        next(&views).stopped,
+        "the next view is the change, not a repeat"
+    );
     stop(handle);
 }
 
@@ -313,13 +330,10 @@ fn relay_changed_message_recomputes_now() {
     );
     let sent = Instant::now();
     handle.sender.send(CollectorMsg::RelayChanged).unwrap();
-    let next = until(&views, |v| !v.recent.is_empty());
-    assert!(
-        sent.elapsed() < Duration::from_secs(2),
-        "{:?}",
-        sent.elapsed()
-    );
-    assert_eq!(next.recent[0].ts, yesterday);
+    let changed = next(&views);
+    // Well before the relay's own poll, which would also have found it.
+    assert!(sent.elapsed() < RELAY_POLL / 2, "{:?}", sent.elapsed());
+    assert_eq!(changed.recent[0].ts, yesterday);
     stop(handle);
 }
 
@@ -623,7 +637,7 @@ fn each_tick_ingests_before_the_agents_snapshot() {
     let (handle, rx, sidecar) = watch_listing(&env, |_| {});
     until(&rx, |_| true);
     // Past the startup's spawns and follow-ups.
-    std::thread::sleep(Duration::from_millis(1500));
+    std::thread::sleep(SETTLE);
     let mut config: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&sidecar).unwrap()).unwrap();
     config["mode"] = "hang".into();
@@ -886,7 +900,7 @@ fn session_gone_while_the_window_was_closed_is_interrupted() {
 /// Past the startup's spawns and follow-ups, the line's tick both ingests
 /// and lists the sessions, so the order within one tick decides (D-78).
 fn end_then_vanish(env: &common::TestEnv, rx: &Receiver<Board>, session: &str, reason: &str) {
-    std::thread::sleep(Duration::from_millis(1500));
+    std::thread::sleep(SETTLE);
     hook_line(
         env,
         serde_json::json!({"hook_event_name": "SessionEnd", "session_id": session, "cwd": "C:/work/api", "reason": reason}),
@@ -1092,7 +1106,7 @@ fn corruption_while_running_makes_the_registry_unavailable_until_restart() {
         serde_json::json!({"hook_event_name": "Stop", "session_id": "s-live", "cwd": "C:/work/api", "last_assistant_message": "done"}),
         officina_host::files::now_ms(),
     );
-    std::thread::sleep(Duration::from_millis(1500));
+    std::thread::sleep(SETTLE);
     let still = handle.board.read().unwrap().clone().unwrap();
     assert_eq!(
         registry_state(&still),
@@ -1165,7 +1179,7 @@ fn hold_in_a_refresh(
     config["hang_ms"] = hang_ms.into();
     std::fs::write(sidecar, config.to_string()).unwrap();
     // Past the startup's spawns, so the refresh is not rate limited away.
-    std::thread::sleep(Duration::from_millis(1500));
+    std::thread::sleep(SETTLE);
     let before = claude_calls(env);
     handle.sender.send(CollectorMsg::Refresh).unwrap();
     let deadline = Instant::now() + Duration::from_secs(10);
@@ -1363,7 +1377,10 @@ fn registry_view_is_emitted_only_on_change() {
         serde_json::json!({"hook_event_name": "UserPromptSubmit", "session_id": "s-new", "cwd": "C:/work/api", "prompt": "x"}),
         officina_host::files::now_ms(),
     );
-    until(&emitted.registries, |v| unfiled_ids(v).contains(&"s-new"));
+    assert!(
+        unfiled_ids(&next(&emitted.registries)).contains(&"s-new"),
+        "the next view is the change, not a repeat"
+    );
     stop(handle);
 }
 
@@ -1584,8 +1601,9 @@ fn board_keeps_its_pace_while_a_triage_call_hangs() {
     seed_a_dry_run_case(&env);
     let bin = env.root.path().join("bin");
     let triage_log = env.root.path().join("triage.log");
+    const HANG: Duration = Duration::from_secs(15);
     let sidecar = serde_json::json!({"fixture": env.fixture(), "log": env.fake_log(),
-        "mode": "triage-hang", "hang_ms": 15_000, "triage_log": triage_log});
+        "mode": "triage-hang", "hang_ms": HANG.as_millis() as u64, "triage_log": triage_log});
     let fake = common::fake_claude_in(&bin, &sidecar);
     let base = vec![(
         "SYSTEMROOT".to_owned(),
@@ -1607,8 +1625,8 @@ fn board_keeps_its_pace_while_a_triage_call_hangs() {
         other => panic!("{other:?}"),
     }
     assert!(
-        asked.elapsed() < Duration::from_secs(5),
-        "answered once queued"
+        asked.elapsed() < HANG / 3,
+        "answered once queued, not after the call"
     );
     let running = until(&emitted.registries, |v| v.model.dry_run.is_some());
     assert_eq!(
@@ -1638,7 +1656,7 @@ fn board_keeps_its_pace_while_a_triage_call_hangs() {
         );
         until(&emitted.boards, |b| shows(b, &session));
         assert!(
-            written.elapsed() < Duration::from_secs(2),
+            written.elapsed() < HANG / 3,
             "a board waited on the call: {:?}",
             written.elapsed()
         );

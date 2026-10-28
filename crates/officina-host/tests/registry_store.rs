@@ -206,8 +206,15 @@ fn reader_never_blocks_the_writer() {
     writer
         .set_setting(SettingKey::AutoArchive, "2", Source::Author, NOW)
         .unwrap();
+    // A writer blocked by the reader would wait its whole busy timeout
+    // (AD-39) before failing; well under half of it, nothing waited.
+    let busy_ms: u64 = WRITER_PRAGMAS
+        .iter()
+        .find(|(name, _, _)| *name == "busy_timeout")
+        .map(|(_, value, _)| value.parse().unwrap())
+        .unwrap();
     assert!(
-        started.elapsed() < Duration::from_secs(1),
+        started.elapsed() < Duration::from_millis(busy_ms / 2),
         "{:?}",
         started.elapsed()
     );

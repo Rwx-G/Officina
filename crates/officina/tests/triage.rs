@@ -286,7 +286,8 @@ fn timeout_ends_the_child_and_its_tree() {
     let started = std::time::Instant::now();
     let done = setup.run(&job);
     assert_eq!(done.outcome, TriageOutcome::Timeout, "{done:?}");
-    assert!(started.elapsed() < Duration::from_secs(10));
+    // Well past the deadline, yet far from a call left to run on.
+    assert!(started.elapsed() < job.limits.timeout * 5);
     assert!(
         common::heartbeat_len(&heartbeat) > 0,
         "the grandchild was running"
@@ -308,7 +309,8 @@ fn oversized_stdout_is_invalid_not_a_timeout() {
     assert_eq!(done.outcome, TriageOutcome::Invalid, "{done:?}");
     assert_eq!(done.detail.as_deref(), Some("too_large"));
     assert!(done.answer.is_none());
-    assert!(started.elapsed() < Duration::from_secs(10));
+    // Well past the deadline, yet far from a call left to run on.
+    assert!(started.elapsed() < job.limits.timeout * 5);
 }
 
 /// AD-51: every output the schema refuses, an error Claude Code reports
