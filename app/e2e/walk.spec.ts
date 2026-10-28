@@ -24,6 +24,9 @@ const MAX_FRAMES = 1_500;
 const MAX_STEP_PX = 3;
 /** A facing change does not come back within this many frames (AD-70). */
 const FACING_HOLD = 8;
+/** Frames between samples where a case checks no single frame: a fade
+ *  still spans several samples. */
+const SPARSE = 3;
 
 const scene = (page: Page) => page.getByTestId("scene");
 
@@ -120,14 +123,16 @@ function sample(page: Page, key: string): Promise<Sample | null> {
   }, key);
 }
 
-/** Steps frames until the scene stops moving, sampling `key` after each. */
-async function stepUntilSettled(page: Page, key: string): Promise<(Sample | null)[]> {
+/** Steps frames until the scene stops moving, sampling `key` after each,
+ *  or after every `every` frames where a case needs no frame-by-frame
+ *  check (each sample costs the page a round trip). */
+async function stepUntilSettled(page: Page, key: string, every = 1): Promise<(Sample | null)[]> {
   const out: (Sample | null)[] = [];
-  for (let i = 0; i < MAX_FRAMES; i++) {
-    await page.clock.runFor(FRAME_MS);
+  for (let i = 0; i < MAX_FRAMES; i += every) {
+    await page.clock.runFor(FRAME_MS * every);
     const s = await sample(page, key);
     out.push(s);
-    if ((await scene(page).getAttribute("data-moving")) === "0") break;
+    if (s?.moving === "0" || (s === null && (await scene(page).getAttribute("data-moving")) === "0")) break;
   }
   expect(await scene(page).getAttribute("data-moving"), "still moving").toBe("0");
   return out;
@@ -237,18 +242,18 @@ test.describe("walking", () => {
     expect(Math.hypot(first.x - exit.x, first.y - exit.y), "appears at the entrance").toBeLessThan(MAX_STEP_PX);
     expect(Number(first.opacity)).toBeLessThan(1);
     await mark(page, arrived.key);
-    const walkIn = await stepUntilSettled(page, arrived.key);
+    const walkIn = await stepUntilSettled(page, arrived.key, SPARSE);
     expect(walkIn.every((s) => s!.same)).toBe(true);
     const last = walkIn[walkIn.length - 1]!;
     expect(last.opacity).toBeNull();
     const at = layout!.employees.find((e) => e.key === arrived.key)!.at!;
     expect([last.x, last.y]).toEqual([snapped(at.x, scale), snapped(at.y, scale)]);
 
-    // The new one ends at once: it walks back out and fades at the exit.
+    // A session of the same office ends: it walks out and fades at the exit.
     const leaving = template.key;
     await mark(page, leaving);
     await push(page, ends(withNew, leaving));
-    const walkOut = await stepUntilSettled(page, leaving);
+    const walkOut = await stepUntilSettled(page, leaving, SPARSE);
     expect(walkOut[walkOut.length - 1]).toBeNull();
     const shown = walkOut.filter((s): s is Sample => s !== null);
     expect(shown.every((s) => s.same)).toBe(true);
