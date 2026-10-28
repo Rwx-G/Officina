@@ -271,3 +271,83 @@ fn no_command_writes_under_the_claude_config_dir() {
     assert_eq!(fingerprint(&config), before);
     assert_eq!(std::fs::read(&claude_json).unwrap(), claude_json_before);
 }
+
+/// Story 3.8 AC 4 (AD-56, D-71): doctor prints, for the running version,
+/// the hook fields its lines left out and the buffered events none of its
+/// lines carried yet, from the record `board --json` started and the
+/// window's ingestion filled.
+#[test]
+fn doctor_reports_hook_fields_missing_and_not_observed() {
+    use officina_core::contract::HOOK_FIELDS;
+    use officina_host::collector::{ContractStore, record_hook_fields};
+    use officina_host::doctor::BUFFERED_EVENTS;
+    use officina_host::registry::ingest::IngestContext;
+    use officina_host::registry::store::open_writer;
+
+    let env = TestEnv::new();
+    env.write_agents(
+        r#"[{"pid":1,"cwd":"C:/work/api","kind":"interactive","startedAt":1,"sessionId":"s","status":"busy"}]"#,
+    );
+    let out = env.run(&["doctor"], b"");
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        text.contains("hook fields") && text.contains("not checked yet"),
+        "no record before a version was first seen: {text}"
+    );
+    assert!(env.run(&["board", "--json"], b"").status.success());
+    let contract = env.officina_home().join("state").join("contract.json");
+    let version = ContractStore::read(&contract)
+        .versions
+        .keys()
+        .next()
+        .cloned()
+        .expect("board --json records the running version");
+
+    let (event, fields) = HOOK_FIELDS
+        .iter()
+        .find(|(event, _)| *event == "SessionEnd")
+        .unwrap();
+    let mut payload = serde_json::json!({"hook_event_name": event});
+    for field in fields.iter().skip(1) {
+        payload[*field] = serde_json::json!("redacted");
+    }
+    assert!(
+        env.run(&["hook"], payload.to_string().as_bytes())
+            .status
+            .success()
+    );
+    // The window's ingestion, then its fold into the version's record.
+    let (events, home) = (env.events_dir(), env.officina_home());
+    let ctx = IngestContext {
+        events_dir: &events,
+        officina_home: &home,
+        projects: &[],
+        no_excerpts: false,
+    };
+    let mut writer = open_writer(&home, &[], now_ms()).writer().unwrap();
+    let report = writer.ingest(&ctx, now_ms()).unwrap();
+    drop(writer);
+    record_hook_fields(&contract, &version, &report.hook_sightings).unwrap();
+
+    let out = env.run(&["doctor"], b"");
+    let text = String::from_utf8_lossy(&out.stdout);
+    let line = text
+        .lines()
+        .find(|line| line.contains("hook fields"))
+        .unwrap_or_else(|| panic!("no hook fields line: {text}"));
+    assert!(line.contains("[FAIL]"), "{line}");
+    assert!(
+        line.contains(&format!("missing: {event}.{}", fields[0])),
+        "{line}"
+    );
+    let not_observed: Vec<&str> = BUFFERED_EVENTS
+        .iter()
+        .copied()
+        .filter(|e| e != event)
+        .collect();
+    assert!(
+        line.contains(&format!("not observed yet: {}", not_observed.join(", "))),
+        "{line}"
+    );
+    assert_eq!(out.status.code(), Some(1));
+}

@@ -413,7 +413,7 @@ impl Collector {
     }
 
     /// `state/contract.json`, where each version's record lives.
-    fn contract_file(&self) -> PathBuf {
+    pub fn contract_file(&self) -> PathBuf {
         self.paths.state_dir().join("contract.json")
     }
 

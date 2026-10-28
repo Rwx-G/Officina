@@ -14,7 +14,7 @@ use officina_core::registry::types::RegistryState;
 use officina_core::relay::gate::gated_tools;
 
 use crate::claude;
-use crate::collector::Collector;
+use crate::collector::{Collector, ContractStore};
 use crate::files::{now_ms, read_recent_events};
 use crate::paths::{ENV_FLOOR, env_path};
 use crate::registry::RegistryPaths;
@@ -310,11 +310,50 @@ fn check_claude(collector: &Collector) -> Vec<Check> {
         )];
     };
     let config_dir = collector.paths().claude_config_override.as_deref();
-    let version = match claude::version(bin, config_dir) {
-        Ok(v) => check(Level::Ok, "claude", format!("{v} at {}", bin.display())),
-        Err(e) => check(Level::Fail, "claude", e.to_string()),
+    match claude::version(bin, config_dir) {
+        Ok(v) => vec![
+            check(Level::Ok, "claude", format!("{v} at {}", bin.display())),
+            check_agents_output(bin, config_dir),
+            check_hook_fields(&collector.contract_file(), &v),
+        ],
+        Err(e) => vec![
+            check(Level::Fail, "claude", e.to_string()),
+            check_agents_output(bin, config_dir),
+        ],
+    }
+}
+
+/// The hook payload fields of `HOOK_FIELDS` the running version left out,
+/// and the buffered events none of its lines carried yet, from the record
+/// the window keeps in `state/contract.json` (AD-56, D-71).
+fn check_hook_fields(contract_file: &Path, version: &str) -> Check {
+    const TITLE: &str = "hook fields";
+    let store = ContractStore::read(contract_file);
+    let Some(record) = store.versions.get(version) else {
+        return check(
+            Level::Ok,
+            TITLE,
+            format!("not checked yet for {version}: the window checks them as hook events arrive"),
+        );
     };
-    vec![version, check_agents_output(bin, config_dir)]
+    let (level, mut detail) = if record.hook_missing.is_empty() {
+        (
+            Level::Ok,
+            "every field of HOOK_FIELDS present since this version was first seen".to_owned(),
+        )
+    } else {
+        (
+            Level::Fail,
+            format!("missing: {}", record.hook_missing.join(", ")),
+        )
+    };
+    if !record.hook_not_observed.is_empty() {
+        detail.push_str(&format!(
+            "; not observed yet: {}",
+            record.hook_not_observed.join(", ")
+        ));
+    }
+    check(level, TITLE, detail)
 }
 
 fn check_agents_output(bin: &Path, config_dir: Option<&Path>) -> Check {
