@@ -1,6 +1,6 @@
 # Story 4.6: Scene geometry, spots and layout
 
-**Status:** Approved
+**Status:** Review
 
 ## Story
 
@@ -26,14 +26,14 @@ so that the scene is the same every time for the same payloads, every employee h
 
 ## Tasks
 
-- [ ] Read story 4.1's gate 5 entry and the owner's answer; fix the column counts and the scale rule (AC 1, 13)
-- [ ] `geometry.ts` from the prototype v2's constants; `geometry.test.ts`; `tokens.test.ts` first case (AC 1, 3)
-- [ ] `places.ts` (spots) and its test (AC 2)
-- [ ] `layout.ts`: types, `layoutScene`, `nearestTarget` (AC 4-9)
-- [ ] `text.ts` (AC 10); `memory.ts` (AC 11)
-- [ ] `layout.test.ts` with the arrow vectors, `text.test.ts`, `memory.test.ts` (AC 4-11)
-- [ ] `.github/workflows/ci.yml`: fixture step before `pnpm test` (AC 12)
-- [ ] Completion Notes and, without growth, the backlog entry (AC 13)
+- [x] Read story 4.1's gate 5 entry and the owner's answer; fix the column counts and the scale rule (AC 1, 13): answered by D-519 (growth by columns) and D-520 (`MIN_SCALE` kept, no scene-only viewing scale)
+- [x] `geometry.ts` from the prototype v2's constants; `geometry.test.ts`; `tokens.test.ts` first case (AC 1, 3)
+- [x] `places.ts` (spots) and its test (AC 2)
+- [x] `layout.ts`: types, `layoutScene`, `nearestTarget` (AC 4-9)
+- [x] `text.ts` (AC 10); `memory.ts` (AC 11)
+- [x] `layout.test.ts` with the arrow vectors, `text.test.ts`, `memory.test.ts` (AC 4-11)
+- [x] `.github/workflows/ci.yml`: fixture step before `pnpm test` (AC 12): already in place since story 4.2
+- [x] Completion Notes; with growth, no backlog entry (AC 13)
 
 ## Dev Notes
 
@@ -55,9 +55,57 @@ so that the scene is the same every time for the same payloads, every employee h
 
 ### Debug Log
 
+- Spots against the target property (D-471). Two figure targets are disjoint when their floor points are 48 px apart on screen in x or y: 1.34 tiles along one grid axis, or 2.67 along the sum of both; the prototype's pitches (0.7 to 1.1 tiles) were not. Changes in `places.ts`, each named in its comment: reception's four visitors move to a row in front of the counter and its left end, clear of the queue's corridor places; the queue keeps three places inside at a 1.4-tile pitch and three in the corridor (the prototype's fourth met the lounge's back sofa); the alert room's five places form a row in front of the beacon and one before it, below the room's plaque; the lounge keeps the back sofa's end seat, one armchair and one standing place (the side sofa sits under the lounge's plaque, the other seats and places met a kept neighbour, and the queue's last corridor place was kept over a second sofa seat because a waiting session is the one the author acts on); an office keeps one chip spot, in its left corner (the right corner's met the next office's chip).
+- Group targets are pinned to their plaque's left end, not D-104's right end: at the right end an office's chip met the chip spot of the office to its right, and the alert room's met the queue in the corridor. The drawing (story 4.7) follows `geometry.ts`, the only copy.
+- The "high priority" pill is stacked above its office's plaque (`PRIORITY_PILL.gap`): beside it, as in the prototype, it met the desk targets of the office below. The entrance sign counts as a plaque in the property.
+- The register keeps the prototype v2's five rows (`REGISTER.rows`): D-103's nine rows were sized for the old mock, and the v2's left wall leaves no room for them. Its overflow target sits under the last row. The decision office's group lists the waiting beyond the queue's spots (D-484); which rows the register draws is story 4.7's.
+- `MAX_SCALE` is 1.5: a figure target at most 72 CSS px, so a small floor on a large screen still reads as a scene. `TARGET_MIN` is `ceil(TARGET_CSS_MIN / MIN_SCALE)` with an epsilon for the division's rounding.
+- `floorOrigin(columns)` takes the column count and ignores it: the test that no room's corners move across column counts is then a real check of AD-169's "origins depend on the row count only".
+- Unknown (D-482): an employee seen before keeps its last spot or group, pose and facing; the spots unknown employees hold are taken, so the queue, the alert room and the sticky zones fill around them and no two figures share a spot. A key first seen unknown sits at its desk, seated facing the author, with the question mark; without a free desk it stands with the chip list. A live card without a scene state is placed as unknown (AD-68: missing data is unknown). An unknown employee keeps its board number on its ticket while Needs you numbers it.
+- Sticky places (reception, the lounge, an office's chip list) keep group membership too: a session in a zone's group stays there until its own zone changes, even when a spot frees, as D-102's chip list does with a freed desk, so only state changes move (FR-3). A chip list member that takes a desk on a zone change frees its chip spot at once.
+- An approval-only wait whose request is no longer in `board.approvals` falls back to its `waiting_since_ms`, then its key, after the others.
+- Offices within a run: once laid out, the order is this run's slot list; a floor project added to the floor file during the run takes the next free office rather than shifting others (slots kept until restart).
+- More offices is a target even when none of its projects has a live session: it names its projects. A More offices project gets no desk; its office-zone sessions are listed in the More offices group, its waiting sessions queue as any other.
+- `SceneMemory` holds the persisted part (`floor`, `offices`, `desks`; stored as `{ v: 2, ... }`) and this run's part (`inRun`, `chips`, `sticky`, `last`). Desks are persisted only for projects holding a desk. `memory.ts` exports `sceneMemoryStore(getStorage)`, whose default instance on `globalThis.localStorage` backs `load`, `current` and `commit`, so the tests drive a fake storage; `load` reads once and later calls return the memory.
+- Purity: `layout.test.ts > reads no clock and no randomness` spies on `Math.random` and `Date.now`; the scene lint rule of D-110 and D-470 is not in this story.
+- `app/src/lib/scene/testing.ts` builds synthetic cards and boards for the scene's tests and reads the fixture boards through `e2e/fixture-index.ts`; nothing outside the tests imports it. `COLUMN_OF` there is test data, never read by the layout (AD-13).
+- No `CHANGELOG.md` entry: nothing is user-visible until story 4.7 draws the scene.
+- Adversarial pass: stale and unknown cards first seen and seen before, a card without a scene state, no `floor_projects`, cards without `started_at_ms`, projects named `other` and `unknown`, a repeated floor project name, a floor project added during the run, more than eight projects, a fifth live session in one office, more waiting than the queue holds, approval-only waits with invalid and earlier requests, empty boards, storage that is missing, throws on access, or throws on read and write. Two misses found and fixed with a test each: a chip spot stayed reserved for a session that had just taken a desk (`> a chip list member that takes a desk frees its chip spot`, which fails without the fix), and an unknown key whose last place no longer existed skipped the desk it should take on first sight (`> an unknown employee whose last place left the floor is placed as first seen`).
+
 ### Completion Notes
 
+- AC 1: `geometry.test.ts > the canvas follows the columns`, `> each column count holds its offices and columnsFor picks the smallest`, `> an office cell never takes a shared zone's cell`; `app/src/tokens.test.ts > TARGET_CSS_MIN equals app.css's --target-min`. Growth outcome: `COLUMN_COUNTS` from `BASE_COLUMNS` to `MAX_COLUMNS`; the canvas sizes come out of `canvas(columns)`, never typed.
+- AC 2: `places.test.ts > every zone has its spots in order`, `> every spot lies inside its room` (the queue's corridor places on the corridor between rows), `> no two spots of one zone coincide`, `> each spot carries its posture and facing`, `> the decider's chair is furniture, not a spot`.
+- AC 3: `geometry.test.ts`, for every column count and for the largest with More offices: `> no two targets intersect at full occupancy`, `> no target meets a plaque it does not own`, `> every target is 44 CSS px or more at the minimum scale`, `> every target lies inside the canvas`.
+- AC 4: `layout.test.ts > identical input gives a deep-equal layout`, `> the layout is a fixed point of its own memory` (both over every fixture board), `> reads no clock and no randomness`, `> every live card of every fixture board is in exactly one target`.
+- AC 5: `layout.test.ts > floor projects take the first offices in file order`, `> a repeated floor project name takes no second office`, `> remembered projects with a live card come next`, `> new projects follow in order of first appearance`, `> ties go to the earliest start, then the name`, `> an office keeps its slot and dims when its sessions end`, `> other and unknown are ordinary projects`, `> a fifth project adds a column and the floor never shrinks`, `> a ninth project turns office 8 into More offices`, `> a floor project added during the run takes the next office`.
+- AC 6: `layout.test.ts > each zone places its employees`, `> the queue follows board order with approvals after the numbered`, `> the alert room follows board order`, `> reception and lounge spots are kept while the employee stays`, `> an unknown employee keeps its last place`, `> an unknown employee first seen sits at its desk`, `> an unknown employee whose last place left the floor is placed as first seen`, `> a live card without a scene state is placed as unknown`, `> a chip list member that takes a desk frees its chip spot`, `> beyond its spots a zone fills its group`, `> only the changed card and the queue members whose order changed get a new place` (every live card of every fixture board moved to every other zone, first and last in its column).
+- AC 7: `layout.test.ts > a session at reception has no desk yet`, `> a session keeps its desk while it waits or rests`, `> a kept desk shows the number up to nine or the desk number in the lounge`, `> an ended session frees its desk`, `> a fifth live session goes to the chip list and stays there until its zone changes`.
+- AC 8: `layout.test.ts > the pose and marks follow the zone` (a `Record<Zone, ...>` of expectations, so a new zone fails `pnpm check`).
+- AC 9: `layout.test.ts > targets follow the tab order`, `> a figure's target sits at its place`, `> arrows follow the vectors of a full office and a full queue` (the vectors are test data, computed by hand from the geometry), `> an arrow with no target within 45 degrees goes nowhere`.
+- AC 10: `text.test.ts > the summary names the waiting count, the alert count and the oldest waiting session`, `> nobody waiting reads as such`, `> every figure's name states session, project, zone, state and its number up to nine`, `> an unknown employee reads as unknown`, `> an unknown employee that keeps an alert says so`, `> group targets name their count`, `> every zone, column and badge has a word`, `> draws no relative time`.
+- AC 11: `memory.test.ts > load prunes offices and desks without a live card on the first board`, `> load discards a memory of another floor`, `> the v1 key is ignored`, `> commit writes only when the persisted assignment changes`, `> an unreadable or foreign value starts empty`, `> a storage that throws keeps the layout working`.
+- AC 12: the CI `windows` job already runs "e2e fixtures from the real CLI" before "Frontend checks" (`pnpm check`, `pnpm lint`, `pnpm test`), added with story 4.2; no change.
+- AC 13: story 4.1's gate 5 entry holds the owner's answers, D-519 (four to six projects live, eight the design target, growth by columns kept) and D-520 (1920 x 1080 at 100 %, maximised, eight projects without scrolling, `MIN_SCALE` kept, no scene-only viewing scale). Outcome built: growth by columns (4, 5, 6 columns; More offices from the ninth project); `MIN_SCALE = TARGET_CSS_MIN / FIGURE_TARGET.w`; no `SCENE_VIEW_MIN_SCALE`; no backlog entry. Gate 5's real-use counts and the window's devtools figures stay open in story 4.1 as a confirming measurement.
+- Final capacities (`places.ts` `CAPACITY`, D-484's group texts depend on them): reception 4 (prototype 4), the decision office's queue 6 (7), the alert room 5 (5), the lounge 3 (9), desks 4 per office (4), chip spots 1 per office (2). Beyond them: the register's overflow, the zone's "+n" group, the office's chip.
+- Screen question (D-520), from `geometry.ts`: the minimum sessions area at `MIN_SCALE` (44 / 48) is `canvas(columns)` times `MIN_SCALE`: 6 columns (seven or eight projects) 1605 x 948 logical, 1471 x 869 CSS px; 5 columns 1290 x 778; 4 columns 1108 x 688. A maximised window on 1920 x 1080 at 100 % gives about 1920 x 1000 inner. Taking the header at about 110 px, the line under the scene (story 4.8) at 52, the alert band (story 4.5) at 40 while an alert shows, and the board's 20 px side and bottom padding, the sessions area is about 1880 x 818 without an alert and 1880 x 778 with one. Width holds at every column count; height does not at 6 columns: **eight projects do not fit without scrolling**, short by about 51 px without an alert and 91 px with one (fitting the height would mean a scale of 0.86 or 0.82, targets of 41 or 39 CSS px, which D-520 refuses). Five or six projects fit without an alert and sit at the edge with one. Edits that make eight fit while every target stays 44 CSS px, recommended together: (1) story 4.8 draws the line under the scene inside the canvas's empty bottom-left corner, below the floor's front-left edge, rather than under the canvas (52 px back); (2) the header keeps one row in Scene mode, its status slot beside the tools rather than under them (about 36 px back, D-517's rule unchanged); (3) `PAD.top` from 30 to 24 (5.5 CSS px). With (1) and (2) eight projects fit without an alert (37 px to spare) and miss by 3 px with one; (3) closes that. Not recommended: a larger figure target (54 logical px gives `MIN_SCALE` 0.81 and fits with no chrome change) needs a 1.5-tile spot pitch and costs queue, lounge and alert places; lower walls change the approved look. These figures are estimates from the header's CSS and the planned bands: gate 5's devtools reading and D-520's Playwright case at that viewport (stories 4.7 and 4.8) settle them.
+
 ## File List
+
+- `app/src/lib/scene/geometry.ts` (new)
+- `app/src/lib/scene/geometry.test.ts` (new)
+- `app/src/lib/scene/places.ts` (new)
+- `app/src/lib/scene/places.test.ts` (new)
+- `app/src/lib/scene/layout.ts` (new)
+- `app/src/lib/scene/layout.test.ts` (new)
+- `app/src/lib/scene/text.ts` (new)
+- `app/src/lib/scene/text.test.ts` (new)
+- `app/src/lib/scene/memory.ts` (new)
+- `app/src/lib/scene/memory.test.ts` (new)
+- `app/src/lib/scene/testing.ts` (new, tests only)
+- `app/src/tokens.test.ts` (modified)
+- `docs/stories/story-4.6-scene-geometry-spots-and-layout.md` (modified)
+- `docs/stories/sprint-status.yaml` (modified)
 
 ## Change Log
 
@@ -65,3 +113,4 @@ so that the scene is the same every time for the same payloads, every employee h
 - 2026-10-28 reworked after review (F2, F6, F10, F13, F17, F23, F25, F33, F36)
 - 2026-10-28 renumbered 4.5 and rewritten for the scene v2 (D-460): the prototype v2's floor, offices growing by column, places and the navigation graph, zones from core, approvals in the queue, unknown in place; shelf, cabinet, lamp and dials withdrawn
 - 2026-10-28 renumbered 4.6 after the plan challenge (D-497, D-503, D-506): the navigation graph and paths move to story 4.10; no staff node or consult spot; growth and the minimum scale follow gate 5 and the owner's answer, both outcomes stated; an unknown employee keeping an alert is worded
+- 2026-10-28 implemented with growth by columns and `MIN_SCALE` kept (D-519, D-520): geometry, spots spread or removed for the target property, layout, words, memory and their Vitest cases; the screen question answered in Completion Notes. Status Review
