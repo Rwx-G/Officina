@@ -1,6 +1,12 @@
 /* "Synthese" orientation, validated on 2026-10-27: warm, light, rounded,
    amber reserved for what waits on the author. This file is the only
-   committed copy of the design tokens. */
+   committed copy of the design tokens.
+
+   Two themes with the same roles (AD-67): the light values in the first
+   `:root` block, the dark ones twice below it, under the theme attribute
+   the header's control sets and under the system's dark scheme while that
+   control is on Auto. tokens.test.ts keeps the two dark copies equal and
+   checks every role pair in both themes. */
 
 @import "@fontsource/plus-jakarta-sans/400.css";
 @import "@fontsource/plus-jakarta-sans/600.css";
@@ -25,11 +31,19 @@
   --color-project-terracotta: #c0603c;
   --color-project-plum: #8a5a9e;
   --color-project-none: #9a8e7a;
+  /* An error or a broken contract, for text and border alike (D-189). */
+  --color-danger: #8a2b14;
+  --color-danger-surface: #f6e3dc;
   /* A stopped relay (AD-35): terracotta, never amber, which marks what
      waits on the author. */
   --color-stopped: var(--color-project-terracotta);
-  --color-stopped-surface: #f6e3dc;
-  --color-stopped-text: #8a2b14;
+  --color-stopped-surface: var(--color-danger-surface);
+  --color-stopped-text: var(--color-danger);
+  /* The board's column washes, laid over the page. */
+  --color-column: rgb(255 253 248 / 0.55);
+  --color-attention-wash: rgb(245 183 49 / 0.12);
+  /* The shadow a panel casts over the page. */
+  --color-shadow: rgb(42 36 28 / 0.12);
 
   /* The scene's materials (prototype v2, light): what the floor, the
      furniture and the figures are drawn with. */
@@ -101,6 +115,7 @@
      reduced motion. */
   --halo-rest: 0.8;
 
+  color-scheme: light;
   font-family: "Plus Jakarta Sans", system-ui, sans-serif;
   font-size: 15px;
   line-height: 1.45;
@@ -108,6 +123,157 @@
   background: var(--color-bg);
   font-variant-numeric: tabular-nums;
   -webkit-font-smoothing: antialiased;
+}
+
+/* The dark values (AD-67): derived in the prototype, people excepted,
+   whose colours are the same in both themes. The block below is the same
+   under the media query; tokens.test.ts refuses any difference. */
+:root[data-theme="dark"] {
+  --color-bg: #1b1814;
+  --color-surface: #26221c;
+  --color-border: #40382d;
+  --color-text: #f4ecde;
+  --color-text-muted: #b9ac97;
+  --color-attention: #f5b731;
+  --color-attention-text: #2a1f05;
+  --color-attention-border: #d9a21f;
+  --color-alert: #f0755a;
+  --color-on-alert: #2a0e06;
+  --color-working: #7fa8c9;
+  --color-project-green: #5db88f;
+  --color-project-blue: #8aa5ec;
+  --color-project-terracotta: #e68a62;
+  --color-project-plum: #c39bd6;
+  --color-project-none: #8f8472;
+  --color-danger: #f29a80;
+  --color-danger-surface: #3b2520;
+  --color-column: rgb(38 34 28 / 0.55);
+  --color-attention-wash: rgb(245 183 49 / 0.12);
+  --color-shadow: rgb(0 0 0 / 0.4);
+  --scene-ground: #24201a;
+  --scene-slab-l: #1f1b16;
+  --scene-slab-r: #171410;
+  --scene-room: #322c24;
+  --scene-room-edge: #40382d;
+  --scene-room-vacant: #2a251f;
+  --scene-alert-floor: #3f2722;
+  --scene-wall-l: #2b261f;
+  --scene-wall-r: #332d25;
+  --scene-wall-top: #4a4135;
+  --scene-skirting: #40382d;
+  --scene-window: #2e3a44;
+  --scene-board: #e9e4da;
+  --scene-part-t: #51473a;
+  --scene-part-l: #3b342a;
+  --scene-part-r: #332d25;
+  --scene-wood-t: #5a4f40;
+  --scene-wood-l: #4a4135;
+  --scene-wood-r: #3d352b;
+  --scene-metal: #141210;
+  --scene-metal-2: #221e19;
+  --scene-screen-off: #4a4135;
+  --scene-screen-line: #d3e3f0;
+  --scene-chair: #6f6556;
+  --scene-chair-2: #5a5145;
+  --scene-sofa-t: #3f524d;
+  --scene-sofa-l: #36473f;
+  --scene-sofa-r: #2e3d38;
+  --scene-rug: #2c343a;
+  --scene-rug-2: #3a3127;
+  --scene-leaf: #6e8a69;
+  --scene-leaf-2: #5b7557;
+  --scene-leaf-3: #8daa86;
+  --scene-pot: #9a6a4e;
+  --scene-pot-shade: #7c533d;
+  --scene-pot-rim: #ad7b5e;
+  --scene-soil: #2b221b;
+  --scene-ceramic: #5e564b;
+  --scene-ceramic-shade: #4c453c;
+  --scene-lamp: #6b5a33;
+  --scene-shadow: rgb(0 0 0 / 0.28);
+  --figure-tunic: #b9ac97;
+  --figure-tunic-shade: #9d9079;
+  --figure-legs: #8c8170;
+  --figure-shoe: #1c1814;
+  --figure-eye: #211a14;
+  --figure-rim: rgb(244 236 222 / 0.55);
+
+  color-scheme: dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --color-bg: #1b1814;
+    --color-surface: #26221c;
+    --color-border: #40382d;
+    --color-text: #f4ecde;
+    --color-text-muted: #b9ac97;
+    --color-attention: #f5b731;
+    --color-attention-text: #2a1f05;
+    --color-attention-border: #d9a21f;
+    --color-alert: #f0755a;
+    --color-on-alert: #2a0e06;
+    --color-working: #7fa8c9;
+    --color-project-green: #5db88f;
+    --color-project-blue: #8aa5ec;
+    --color-project-terracotta: #e68a62;
+    --color-project-plum: #c39bd6;
+    --color-project-none: #8f8472;
+    --color-danger: #f29a80;
+    --color-danger-surface: #3b2520;
+    --color-column: rgb(38 34 28 / 0.55);
+    --color-attention-wash: rgb(245 183 49 / 0.12);
+    --color-shadow: rgb(0 0 0 / 0.4);
+    --scene-ground: #24201a;
+    --scene-slab-l: #1f1b16;
+    --scene-slab-r: #171410;
+    --scene-room: #322c24;
+    --scene-room-edge: #40382d;
+    --scene-room-vacant: #2a251f;
+    --scene-alert-floor: #3f2722;
+    --scene-wall-l: #2b261f;
+    --scene-wall-r: #332d25;
+    --scene-wall-top: #4a4135;
+    --scene-skirting: #40382d;
+    --scene-window: #2e3a44;
+    --scene-board: #e9e4da;
+    --scene-part-t: #51473a;
+    --scene-part-l: #3b342a;
+    --scene-part-r: #332d25;
+    --scene-wood-t: #5a4f40;
+    --scene-wood-l: #4a4135;
+    --scene-wood-r: #3d352b;
+    --scene-metal: #141210;
+    --scene-metal-2: #221e19;
+    --scene-screen-off: #4a4135;
+    --scene-screen-line: #d3e3f0;
+    --scene-chair: #6f6556;
+    --scene-chair-2: #5a5145;
+    --scene-sofa-t: #3f524d;
+    --scene-sofa-l: #36473f;
+    --scene-sofa-r: #2e3d38;
+    --scene-rug: #2c343a;
+    --scene-rug-2: #3a3127;
+    --scene-leaf: #6e8a69;
+    --scene-leaf-2: #5b7557;
+    --scene-leaf-3: #8daa86;
+    --scene-pot: #9a6a4e;
+    --scene-pot-shade: #7c533d;
+    --scene-pot-rim: #ad7b5e;
+    --scene-soil: #2b221b;
+    --scene-ceramic: #5e564b;
+    --scene-ceramic-shade: #4c453c;
+    --scene-lamp: #6b5a33;
+    --scene-shadow: rgb(0 0 0 / 0.28);
+    --figure-tunic: #b9ac97;
+    --figure-tunic-shade: #9d9079;
+    --figure-legs: #8c8170;
+    --figure-shoe: #1c1814;
+    --figure-eye: #211a14;
+    --figure-rim: rgb(244 236 222 / 0.55);
+
+    color-scheme: dark;
+  }
 }
 
 * {

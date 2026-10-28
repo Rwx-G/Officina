@@ -198,7 +198,7 @@
     padding: 16px 20px 20px;
     background: var(--color-surface);
     border-left: 1px solid var(--color-border);
-    box-shadow: -6px 0 18px rgb(42 36 28 / 0.12);
+    box-shadow: -6px 0 18px var(--color-shadow);
   }
   header {
     display: flex;

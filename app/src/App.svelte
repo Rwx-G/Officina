@@ -192,8 +192,8 @@
     margin: 0 20px 12px;
     padding: 10px 16px;
     border-radius: 16px;
-    background: #f6e3dc;
-    border: 1px solid #c0603c;
+    background: var(--color-danger-surface);
+    border: 1px solid var(--color-danger);
     color: var(--color-text);
     font-weight: 600;
   }

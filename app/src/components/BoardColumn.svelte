@@ -63,11 +63,11 @@
     min-width: 0;
     padding: 14px;
     border-radius: 28px;
-    background: rgb(255 253 248 / 0.55);
+    background: var(--color-column);
     border: 1px solid var(--color-border);
   }
   .column.needs_you {
-    background: rgb(245 183 49 / 0.12);
+    background: var(--color-attention-wash);
     border: 2px solid var(--color-attention-border);
   }
   header {

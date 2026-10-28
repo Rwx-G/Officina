@@ -316,7 +316,7 @@
     color: var(--color-text-muted);
   }
   .contract.broken {
-    color: #8a2b14;
+    color: var(--color-danger);
     font-weight: 600;
   }
 </style>
