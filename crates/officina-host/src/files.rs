@@ -1,12 +1,13 @@
 //! File primitives (AD-9, AD-10): single-write appends, atomic replaces, the
-//! event buffer reader and its retention pass.
+//! event buffer reader. Event files are deleted by the window's hourly pass
+//! only, once the registry holds them (AD-44).
 
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
 use std::path::Path;
 use std::time::Duration;
 
-use officina_core::dates::{event_file_name, event_files_to_read, is_expired_event_file};
+use officina_core::dates::{event_file_name, event_files_to_read};
 use officina_core::events::{EventLine, ParsedLine, parse_line};
 
 /// Appends `line` to `path` with one `write_all` on a file opened in append
@@ -118,19 +119,6 @@ pub fn read_recent_events(events_dir: &Path, now_ms: i64) -> (Vec<EventLine>, u3
     (events, corrupt)
 }
 
-/// Deletes event files older than yesterday (UTC). Never called by the hook.
-/// Returns how many files were removed.
-pub fn retention_pass(events_dir: &Path, now_ms: i64) -> usize {
-    let Ok(entries) = fs::read_dir(events_dir) else {
-        return 0;
-    };
-    entries
-        .filter_map(Result::ok)
-        .filter(|e| is_expired_event_file(&e.file_name().to_string_lossy(), now_ms))
-        .filter(|e| fs::remove_file(e.path()).is_ok())
-        .count()
-}
-
 /// Current time in Unix milliseconds.
 pub fn now_ms() -> i64 {
     std::time::SystemTime::now()
@@ -218,17 +206,5 @@ mod tests {
             .map(|e| e.unwrap().file_name())
             .collect();
         assert_eq!(names.len(), 1);
-    }
-
-    #[test]
-    fn retention_removes_only_expired_event_files() {
-        let dir = tempfile::tempdir().unwrap();
-        for ts in [NOW, NOW - DAY, NOW - 2 * DAY, NOW - 9 * DAY] {
-            append_line(&event_file_for(dir.path(), ts), &line(ts, "Stop")).unwrap();
-        }
-        fs::write(dir.path().join("keep.txt"), "x").unwrap();
-        assert_eq!(retention_pass(dir.path(), NOW), 2);
-        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 3);
-        assert_eq!(retention_pass(&dir.path().join("missing"), NOW), 0);
     }
 }

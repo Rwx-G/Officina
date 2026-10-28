@@ -319,3 +319,68 @@ fn contract_is_unknown_on_an_empty_sample_and_held_on_a_real_one() {
     assert_eq!(broken["contract"]["held"], false);
     assert_eq!(broken["contract"]["missing"][0], "sessionId");
 }
+
+/// FR-2, AD-44, AD-53: no command line deletes an event file, however old.
+#[test]
+fn board_json_deletes_no_event_file() {
+    let env = TestEnv::new();
+    env.write_agents("[]");
+    std::fs::create_dir_all(env.events_dir()).unwrap();
+    let now = now_ms();
+    let names: Vec<String> = [2, 9, 40]
+        .map(|days| officina_core::dates::event_file_name(now - days * 86_400_000))
+        .to_vec();
+    for name in &names {
+        std::fs::write(
+            env.events_dir().join(name),
+            "{\"v\":1,\"ts\":1,\"event\":\"Stop\"}\n",
+        )
+        .unwrap();
+    }
+    let (code, _) = board(&env);
+    assert_eq!(code, Some(0));
+    for name in &names {
+        assert!(env.events_dir().join(name).exists(), "{name} was deleted");
+    }
+}
+
+/// AD-53, D-47, D-82: `board --json` reads the registry read-only to
+/// report its state, with the window closed too, and never creates it.
+#[test]
+fn board_json_reports_the_registry_state_with_the_window_closed() {
+    use officina_core::registry::types::RegistryState;
+    let env = TestEnv::new();
+    env.write_agents("[]");
+    let registry = officina_host::registry::RegistryPaths::new(&env.officina_home());
+    let state = |board: &serde_json::Value| board["diagnostics"]["registry"]["state"].clone();
+
+    let (_, absent) = board(&env);
+    assert_eq!(state(&absent), RegistryState::Absent.code());
+    assert!(
+        !registry.dir().exists(),
+        "board --json created the registry"
+    );
+
+    // The window wrote it, then closed.
+    drop(
+        officina_host::registry::store::open_writer(&env.officina_home(), &[], now_ms())
+            .writer()
+            .unwrap(),
+    );
+    let before = std::fs::read(registry.database()).unwrap();
+    let (code, ready) = board(&env);
+    assert_eq!(code, Some(0));
+    assert_eq!(state(&ready), RegistryState::Ready.code());
+    assert!(ready["diagnostics"]["registry"]["detail"].is_null());
+    assert_eq!(std::fs::read(registry.database()).unwrap(), before);
+
+    std::fs::write(registry.database(), "not a database, ".repeat(300)).unwrap();
+    let (code, unavailable) = board(&env);
+    assert_eq!(code, Some(0), "the board keeps working");
+    assert_eq!(state(&unavailable), RegistryState::Unavailable.code());
+    assert!(
+        unavailable["diagnostics"]["registry"]["detail"]
+            .as_str()
+            .is_some()
+    );
+}
