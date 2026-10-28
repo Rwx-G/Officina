@@ -3,6 +3,7 @@
   import type { BoardStore } from "../lib/board.svelte";
   import { projectColor } from "../lib/colors";
   import { breathe } from "../lib/halo";
+  import { outcomeText, visibleOutcome } from "../lib/outcome";
   import { ago, duration } from "../lib/time";
   import StableLabel from "./StableLabel.svelte";
 
@@ -15,27 +16,8 @@
 
   const BADGE_TEXT = { unknown: "unknown", interrupted: "interrupted", stopped: "stopped", ended: "ended" } as const;
 
-  let shown = $derived(store.outcomes[card.key]?.pending ? undefined : store.outcomes[card.key]);
-  let outcomeText = $derived.by(() => {
-    if (!shown) return null;
-    const o = shown.outcome;
-    switch (o.outcome) {
-      case "focused":
-        return "Window brought to front";
-      case "attach_opened":
-        return "Attach console opened";
-      case "candidates":
-        return "Several windows could match, none chosen:";
-      case "no_window":
-        return "No window found for this session";
-      case "refused":
-        return "Windows refused the switch; the window is flashing";
-      case "unsupported":
-        return "Not supported on this platform";
-      case "failed":
-        return `Could not open: ${o.detail}`;
-    }
-  });
+  let shown = $derived(visibleOutcome(store.outcomes, card.key));
+  let shownText = $derived(shown ? outcomeText(shown.outcome) : null);
   let since = $derived(card.last_event_at_ms ?? card.started_at_ms);
   let halo = $derived(card.column === "needs_you" ? { key: card.key, enteredAt: since } : null);
 </script>
@@ -77,9 +59,9 @@
     </div>
   </button>
 
-  {#if outcomeText}
+  {#if shownText}
     <div class="outcome" role="status" data-testid="focus-outcome">
-      {outcomeText}
+      {shownText}
       {#if shown?.outcome.outcome === "candidates"}
         <ul>
           {#each shown.outcome.detail as title, i (i)}<li>{title}</li>{/each}
