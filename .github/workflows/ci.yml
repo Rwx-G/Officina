@@ -14,6 +14,14 @@ on:
   # A run by hand needs no push: GitHub stops the schedule after 60 days
   # without activity in the repository.
   workflow_dispatch:
+    inputs:
+      update_snapshots:
+        # D-119, D-508: the scene's screenshot baselines are made here, on
+        # the reference runner, and committed only once the owner has
+        # compared them with the prototype's render.
+        description: "Write the Playwright screenshot baselines and upload them as an artifact"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -175,10 +183,25 @@ jobs:
       - name: Playwright
         working-directory: app
         # Three times over (D-91): a case that passes once and fails once is
-        # a flake to fix, not a pass.
+        # a flake to fix, not a pass. A snapshot run writes the baselines
+        # once instead, missing or not.
+        shell: bash
+        env:
+          UPDATE_SNAPSHOTS: ${{ inputs.update_snapshots }}
         run: |
           pnpm exec playwright install chromium
-          pnpm e2e --repeat-each=3
+          if [ "$UPDATE_SNAPSHOTS" = "true" ]; then
+            pnpm e2e --update-snapshots=all
+          else
+            pnpm e2e --repeat-each=3
+          fi
+      - name: Screenshot baselines
+        if: ${{ inputs.update_snapshots }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: playwright-snapshots
+          path: app/e2e/*-snapshots/
+          if-no-files-found: error
       - name: Playwright report
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
