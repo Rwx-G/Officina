@@ -114,12 +114,20 @@ const GATE_ACTIONS: usize = 50;
 const GATE_COMMAND_BYTES: usize = 64 * 1024;
 const GATE_RUNS: usize = 200;
 
+/// The guarded project of [`gate_env`]: a real folder, so the gate's
+/// resolution of `cwd` by handle (D-173) pays its real cost.
+fn lab_dir(env: &TestEnv) -> std::path::PathBuf {
+    env.root.path().join("work").join("Lab")
+}
+
 /// AD-28's sizing: a guarded project whose approved catalogue holds
 /// [`GATE_ACTIONS`] actions, each with a pattern parameter.
 fn gate_env() -> TestEnv {
     let env = TestEnv::new();
-    let mut floor = String::from(
-        "schema = 2\n[[project]]\nname = \"lab\"\npath = \"C:/path/to/Lab\"\nactions = [",
+    std::fs::create_dir_all(lab_dir(&env).join("roles")).unwrap();
+    let mut floor = format!(
+        "schema = 2\n[[project]]\nname = \"lab\"\npath = \"{}\"\nactions = [",
+        lab_dir(&env).to_string_lossy().replace('\\', "/")
     );
     let names: Vec<String> = (0..GATE_ACTIONS)
         .map(|i| format!("\"action-{i}\""))
@@ -147,9 +155,9 @@ fn big_command() -> String {
     command
 }
 
-fn gate_payload(command: &str) -> serde_json::Value {
+fn gate_payload(env: &TestEnv, command: &str) -> serde_json::Value {
     serde_json::json!({
-        "cwd": "C:\\path\\to\\Lab",
+        "cwd": lab_dir(env).join("roles").to_string_lossy(),
         "effort": "high",
         "hook_event_name": "PreToolUse",
         "permission_mode": "bypassPermissions",
@@ -184,8 +192,8 @@ fn gate_overhead_over_empty_process() {
     let _serial = serial();
     let env = gate_env();
     let command = big_command();
-    let payload = gate_payload(&command).to_string().into_bytes();
-    let mut other_tool = gate_payload(&command);
+    let payload = gate_payload(&env, &command).to_string().into_bytes();
+    let mut other_tool = gate_payload(&env, &command);
     other_tool["tool_name"] = "Read".into();
     let other_tool = other_tool.to_string().into_bytes();
     assert_eq!(payload.len(), other_tool.len(), "the same bytes to read");
@@ -228,7 +236,7 @@ fn gate_in_process_p95() {
     let _serial = serial();
     let env = gate_env();
     let home = env.relay_home();
-    let raw = gate_payload(&big_command()).to_string();
+    let raw = gate_payload(&env, &big_command()).to_string();
     let gate_env = GateEnv::default();
     let in_process = p95(timed(GATE_RUNS, || {
         let payload: serde_json::Value = serde_json::from_str(&raw).unwrap();
@@ -251,9 +259,13 @@ fn journal_appends_never_interleave() {
     const LINES: usize = 200;
     let _serial = serial();
     let env = TestEnv::new();
-    env.write_floor("schema = 2\n[[project]]\nname = \"lab\"\npath = \"C:/path/to/Lab\"\n");
+    std::fs::create_dir_all(lab_dir(&env).join("roles")).unwrap();
+    env.write_floor(&format!(
+        "schema = 2\n[[project]]\nname = \"lab\"\npath = \"{}\"\n",
+        lab_dir(&env).to_string_lossy().replace('\\', "/")
+    ));
     env.approve();
-    let mut payload = gate_payload("ssh host01");
+    let mut payload = gate_payload(&env, "ssh host01");
     payload["session_id"] = "s".repeat(4200).into();
     let payload = payload.to_string().into_bytes();
     std::thread::scope(|scope| {

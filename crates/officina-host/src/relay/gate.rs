@@ -5,6 +5,13 @@
 //! each fault; and returns the JSON Claude Code honours in every mode (E12,
 //! E15). It spawns nothing and compiles no pattern.
 //!
+//! Before the pure gate sees them, the payload `cwd`, `CLAUDE_PROJECT_DIR`
+//! and a file tool's target are resolved to the final path of an opened
+//! handle (D-173): an 8.3 short name, a junction, a symbolic link or a
+//! `subst` drive leading into a guarded project, or into the Officina home,
+//! reads as the folder it leads to. A path that cannot be opened keeps its
+//! normalised string; the folders are looked up as given and as resolved.
+//!
 //! It is containment, not the authority: an internal fault gives no
 //! decision (fail open, AD-28), while an input it cannot read makes it
 //! stricter (D-15). `officina run` fails closed on its own.
@@ -12,6 +19,7 @@
 use std::fs;
 use std::io;
 use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::path::{Path, PathBuf};
 
 use officina_core::events::excerpt;
 use officina_core::floor::{parse_floor, requests_no_excerpts};
@@ -19,7 +27,7 @@ use officina_core::quota::normalise_path;
 use officina_core::relay::HOME_DIR_NAME;
 use officina_core::relay::gate::{
     Deny, FloorInput, Offer, SnapshotInput, ToolRule, containment, decide_call, decide_file_write,
-    deny_reason, file_tool_field, protected_dirs, tool_rule,
+    deny_reason, file_tool_field, normalise_cwd, protected_dirs, tool_rule,
 };
 use officina_core::relay::journal::{
     COMMAND_EXCERPT_CHARS, GateDenied, GateError, GateFault, JournalEntry,
@@ -111,16 +119,43 @@ impl ToolCall {
 
 /// A file tool's target as an absolute path: a relative one is taken from
 /// the call's `cwd`, then made absolute as Windows would (`..` applied).
-pub fn absolute_target(target: &str, cwd: Option<&str>) -> String {
-    let path = std::path::Path::new(target);
+pub fn absolute_target(target: &str, cwd: Option<&str>) -> PathBuf {
+    let path = Path::new(target);
     let joined = match cwd {
-        Some(cwd) if path.is_relative() => std::path::Path::new(cwd).join(path),
+        Some(cwd) if path.is_relative() => Path::new(cwd).join(path),
         _ => path.to_path_buf(),
     };
-    std::path::absolute(&joined)
-        .unwrap_or(joined)
-        .to_string_lossy()
-        .into_owned()
+    std::path::absolute(&joined).unwrap_or(joined)
+}
+
+/// The final path of a folder the payload names, by an opened handle
+/// (D-173), or `None` when it cannot be opened. Git Bash's `/c/...` and the
+/// other spellings the pure gate reads are taken as Windows paths first.
+pub fn final_dir(dir: &str) -> Option<String> {
+    std::fs::canonicalize(normalise_cwd(dir))
+        .ok()
+        .map(|path| path.to_string_lossy().into_owned())
+}
+
+/// `path` with its deepest folder that opens resolved by handle and the
+/// rest joined as written (D-173): what a file a tool is about to create
+/// resolves to. The path itself when no part of it opens.
+pub fn final_target(path: &Path) -> String {
+    let mut rest = Vec::new();
+    let mut current = path;
+    loop {
+        if let Ok(mut found) = std::fs::canonicalize(current) {
+            found.extend(rest.iter().rev());
+            return found.to_string_lossy().into_owned();
+        }
+        match (current.parent(), current.file_name()) {
+            (Some(parent), Some(name)) => {
+                rest.push(name);
+                current = parent;
+            }
+            _ => return path.to_string_lossy().into_owned(),
+        }
+    }
 }
 
 /// A deny and what the session is told.
@@ -218,13 +253,20 @@ pub fn evaluate(home: &RelayHome, call: &ToolCall, project_dir: Option<&str>) ->
         Ok(Ok(floor)) => floor.no_excerpts,
         _ => floor_text.as_deref().is_ok_and(requests_no_excerpts),
     };
-    let dirs: Vec<&str> = project_dir.into_iter().chain(call.cwd.as_deref()).collect();
+    // As given first, so D-16's order holds, then as resolved by handle.
+    let given: Vec<&str> = project_dir.into_iter().chain(call.cwd.as_deref()).collect();
+    let resolved: Vec<String> = given.iter().filter_map(|dir| final_dir(dir)).collect();
+    let dirs: Vec<&str> = given
+        .iter()
+        .copied()
+        .chain(resolved.iter().map(String::as_str))
+        .collect();
     if let Some(target) = &call.target {
         let project = contained.guarded_project(&dirs);
         let name = project.map(|p| p.name.clone()).unwrap_or_default();
         let deny = decide_file_write(
-            &absolute_target(target, call.cwd.as_deref()),
-            &home.officina_home().to_string_lossy(),
+            &final_target(&absolute_target(target, call.cwd.as_deref())),
+            &final_target(home.officina_home()),
             contained.guards_any(),
         )
         .map(|deny| GateDeny {
@@ -395,6 +437,152 @@ mod tests {
                 other => panic!("unexpected line {other:?}"),
             })
             .collect()
+    }
+
+    /// `cmd.exe` from the system directory, running `line`; its stdout.
+    #[cfg(windows)]
+    fn cmd(line: &str) -> String {
+        use std::os::windows::process::CommandExt;
+        let system = crate::relay::home::system_dir().unwrap();
+        let out = std::process::Command::new(system.join("cmd.exe"))
+            .arg("/d")
+            .arg("/c")
+            .raw_arg(line)
+            .stdin(std::process::Stdio::null())
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&out.stdout).trim().to_owned()
+    }
+
+    /// A relay home whose floor guards `project` as `lab`, with the default
+    /// list (`ssh` among it), nothing approved yet.
+    #[cfg(windows)]
+    fn home_guarding(dir: &Path, project: &Path) -> RelayHome {
+        let home = RelayHome::new(dir.join("officina-home"), None);
+        fs::create_dir_all(home.officina_home()).unwrap();
+        let path = project.to_string_lossy().replace('\\', "/");
+        fs::write(
+            home.default_floor(),
+            format!("schema = 2\n[[project]]\nname = \"lab\"\npath = \"{path}\"\n"),
+        )
+        .unwrap();
+        home
+    }
+
+    #[cfg(windows)]
+    fn bash_in(cwd: &Path) -> ToolCall {
+        ToolCall {
+            cwd: Some(cwd.to_string_lossy().into_owned()),
+            ..call()
+        }
+    }
+
+    /// AC 8 of story 2.14 (D-173): a session entering a guarded project by
+    /// its 8.3 short name is guarded; skipped where the volume makes no
+    /// short names.
+    #[cfg(windows)]
+    #[test]
+    fn short_name_resolves_to_the_guarded_project() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("Supervision Platform Project");
+        fs::create_dir_all(&project).unwrap();
+        let short = cmd(&format!(
+            "for %I in (\"{}\") do @echo %~sI",
+            project.display()
+        ));
+        if short.is_empty() || short.eq_ignore_ascii_case(&project.to_string_lossy()) {
+            println!("skipped: this volume makes no 8.3 short names");
+            return;
+        }
+        assert!(short.contains('~'), "{short}");
+        let home = home_guarding(dir.path(), &project);
+        let found = evaluate(&home, &bash_in(Path::new(&short)), None);
+        let deny = found.deny.expect("the short name is the guarded project");
+        assert_eq!(deny.project, "lab");
+        let as_root = evaluate(&home, &bash_in(dir.path()), Some(&short));
+        assert!(
+            as_root.deny.is_some(),
+            "CLAUDE_PROJECT_DIR by its short name"
+        );
+    }
+
+    /// AC 8 of story 2.14 (D-173): a junction from a free folder into a
+    /// guarded project is guarded, as `cwd` and as `CLAUDE_PROJECT_DIR`; a
+    /// junction into the Officina home cannot carry a file write either.
+    #[cfg(windows)]
+    #[test]
+    fn junction_into_a_guarded_project_is_guarded() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("Supervision");
+        let free = dir.path().join("Notes");
+        fs::create_dir_all(project.join("roles")).unwrap();
+        fs::create_dir_all(&free).unwrap();
+        let link = free.join("lab-link");
+        cmd(&format!(
+            "mklink /J \"{}\" \"{}\"",
+            link.display(),
+            project.display()
+        ));
+        assert!(link.join("roles").is_dir(), "the junction was made");
+        let home = home_guarding(dir.path(), &project);
+        let inside = link.join("roles");
+        assert_eq!(
+            evaluate(&home, &bash_in(&inside), None)
+                .deny
+                .map(|d| d.project),
+            Some("lab".to_owned())
+        );
+        assert!(
+            evaluate(&home, &bash_in(&free), Some(&link.to_string_lossy()))
+                .deny
+                .is_some()
+        );
+        assert!(
+            evaluate(&home, &bash_in(&free), None).deny.is_none(),
+            "the free folder itself stays free"
+        );
+
+        fs::create_dir_all(home.approvals_dir()).unwrap();
+        let home_link = free.join("home-link");
+        cmd(&format!(
+            "mklink /J \"{}\" \"{}\"",
+            home_link.display(),
+            home.officina_home().display()
+        ));
+        let forged = home_link
+            .join("relay")
+            .join("approvals")
+            .join("0123456789abcdef-1.approved.json");
+        let write = ToolCall {
+            tool: "Write".to_owned(),
+            command: None,
+            target: Some(forged.to_string_lossy().into_owned()),
+            ..bash_in(&free)
+        };
+        let found = evaluate(&home, &write, None)
+            .deny
+            .expect("written through a junction");
+        assert_eq!(
+            found.deny.kind,
+            officina_core::relay::gate::DenyKind::RelayStateWrite
+        );
+    }
+
+    #[test]
+    fn a_target_that_does_not_exist_resolves_its_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        let folder = dir.path().join("relay");
+        fs::create_dir_all(&folder).unwrap();
+        let resolved = final_target(&folder.join("new").join("file.json"));
+        let expected = fs::canonicalize(&folder)
+            .unwrap()
+            .join("new")
+            .join("file.json");
+        assert_eq!(resolved, expected.to_string_lossy());
+        assert_eq!(
+            final_dir(&dir.path().join("absent").to_string_lossy()),
+            None
+        );
     }
 
     #[test]
