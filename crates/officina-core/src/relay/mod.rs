@@ -33,7 +33,9 @@ pub mod journal;
 pub mod params;
 pub mod run;
 pub mod shell;
+pub mod view;
 
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 /// The Officina home's directory name under the user's home, when
@@ -43,6 +45,27 @@ pub const HOME_DIR_NAME: &str = ".officina";
 pub const RELAY_DIR: &str = "relay";
 /// The journal's directory under the Officina home (AD-25, AD-32).
 pub const JOURNAL_DIR: &str = "journal";
+
+/// Content of `relay/stopped` (AD-25, AD-34), written by the window only.
+/// The file's presence stops the relay, whatever it holds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StopFlag {
+    /// When the author stopped the relay, Unix milliseconds.
+    pub since_ms: i64,
+}
+
+impl StopFlag {
+    /// The flag's time, when its content is a well-formed flag.
+    ///
+    /// ```
+    /// use officina_core::relay::StopFlag;
+    /// assert_eq!(StopFlag::parse(br#"{"since_ms":5}"#), Some(StopFlag { since_ms: 5 }));
+    /// assert_eq!(StopFlag::parse(b""), None);
+    /// ```
+    pub fn parse(content: &[u8]) -> Option<StopFlag> {
+        serde_json::from_slice(content).ok()
+    }
+}
 
 /// SHA-256 over bytes that arrive in pieces, as `officina run` hashes an
 /// output stream (AD-31).

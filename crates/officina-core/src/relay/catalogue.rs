@@ -72,6 +72,7 @@ pub const UNNAMED: &str = "(unnamed)";
 closed_enum! {
     /// Where an action runs (AD-22, AD-30).
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+    #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
     #[serde(rename_all = "lowercase")]
     pub enum Runner {
         /// The program itself, a Windows absolute path.
@@ -84,6 +85,7 @@ closed_enum! {
 
 /// How an action is allowed (FR-8).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "kebab-case")]
 pub enum ActionClass {
     Free,
@@ -97,6 +99,7 @@ closed_enum! {
     /// One rule of AD-23 or of D-1 to D-5. Every variant has a failing
     /// fixture in this module's tests.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+    #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
     #[serde(rename_all = "snake_case")]
     pub enum IssueKind {
         /// The table does not convert: unknown key, wrong type, missing key.
@@ -163,6 +166,7 @@ closed_enum! {
 /// A problem found in phase 2. `name` is the action's, or for a project or
 /// `guarded_programs` issue the project's name or the key.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct ActionIssue {
     pub name: String,
     /// 1-based line in the floor file, when the issue comes from one.
@@ -812,6 +816,7 @@ fn check_target_problem(
 
 /// The canonical form of one parameter.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum CanonicalParam {
     /// Sorted, deduplicated.
@@ -821,6 +826,7 @@ pub enum CanonicalParam {
 
 /// The canonical form of one valid action, every default explicit.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(deny_unknown_fields)]
 pub struct CanonicalAction {
     pub description: String,
@@ -868,6 +874,7 @@ impl From<&Action> for CanonicalAction {
 
 /// The canonical form of one project.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(deny_unknown_fields)]
 pub struct CanonicalProject {
     /// Resolved against the floor and normalised.
@@ -881,6 +888,7 @@ pub struct CanonicalProject {
 /// Colours, the floor's `name`, `config_dir`, `no_excerpts`, comments and
 /// invalid actions are not part of it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(deny_unknown_fields)]
 pub struct CanonicalCatalogue {
     pub format: u32,
@@ -954,14 +962,18 @@ pub fn load(content: &str, floor_path: &str) -> Result<RelayFloor, FloorError> {
 
 /// One changed field, as JSON so any field type renders.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct FieldChange {
     pub field: String,
+    #[cfg_attr(feature = "ts", ts(type = "unknown"))]
     pub before: serde_json::Value,
+    #[cfg_attr(feature = "ts", ts(type = "unknown"))]
     pub after: serde_json::Value,
 }
 
 /// One entry present on both sides with different content.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct EntryChange {
     pub name: String,
     pub fields: Vec<FieldChange>,
@@ -969,6 +981,7 @@ pub struct EntryChange {
 
 /// Entries added, removed and changed, by name.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct SectionDiff {
     pub added: Vec<String>,
     pub removed: Vec<String>,
@@ -983,6 +996,7 @@ impl SectionDiff {
 
 /// Entries added to and removed from a list.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct ListDiff {
     pub added: Vec<String>,
     pub removed: Vec<String>,
@@ -990,6 +1004,7 @@ pub struct ListDiff {
 
 /// What changed between the approved catalogue and the current one (AD-24).
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct CatalogueDiff {
     pub format: Option<FieldChange>,
     pub floor_path: Option<FieldChange>,

@@ -109,6 +109,7 @@ impl JournalEntry {
 /// untracked files, computed by the host. Two runs on the same code carry
 /// equal fingerprints.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct TreeFingerprint {
     /// Lowercase hex.
     pub sha256: String,
@@ -124,6 +125,7 @@ fn is_zero_u32(value: &u32) -> bool {
 
 /// `officina run` is about to start a program (AD-29 step 7).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct RunStarted {
     pub run_id: String,
     pub project: String,
@@ -151,6 +153,7 @@ pub struct RunStarted {
 closed_enum! {
     /// How a run ended (AD-32).
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+    #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
     #[serde(rename_all = "snake_case")]
     pub enum RunOutcome {
         /// The program exited by itself; `exit_code` holds its code.
@@ -165,6 +168,7 @@ closed_enum! {
 /// What one output stream carried. Every byte is counted and hashed, the
 /// bytes dropped past the output budget included (AD-31).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct StreamSummary {
     pub bytes: u64,
     /// SHA-256 of every byte, lowercase hex.
@@ -174,6 +178,7 @@ pub struct StreamSummary {
 /// A run ended. A `run_started` without one past its timeout plus 60 s
 /// reads "abandoned" (AD-32).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct RunFinished {
     pub run_id: String,
     pub outcome: RunOutcome,
@@ -199,6 +204,7 @@ closed_enum! {
     /// Why `officina run` refused (AD-29), in the order its checks run. The
     /// stderr line and the journal's `refused` line carry the code.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+    #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
     #[serde(rename_all = "snake_case")]
     pub enum RefusalReason {
         /// The author stopped the relay in the window (AD-34).
@@ -232,6 +238,7 @@ closed_enum! {
 
 /// `officina run` refused before starting anything.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct Refused {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project: Option<String>,
@@ -249,6 +256,7 @@ closed_enum! {
     /// not read, which made it stricter, or an internal fault, which made it
     /// decide nothing. Also the journal's `cause` vocabulary.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+    #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
     #[serde(rename_all = "snake_case")]
     pub enum GateFault {
         /// `relay/approved.json` cannot be read or parsed.
@@ -274,6 +282,7 @@ closed_enum! {
 
 /// The gate denied a `Bash` command (AD-26).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct GateDenied {
     pub project: String,
     #[serde(default)]
@@ -290,6 +299,7 @@ pub struct GateDenied {
 /// The gate met a fault: an input it could not read (D-15) or an internal
 /// error (AD-28). The decision it took stands beside it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct GateError {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project: Option<String>,
@@ -303,6 +313,7 @@ pub struct GateError {
 
 /// The author approved a catalogue in the window (AD-24).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct CatalogueApproved {
     pub hash: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -311,6 +322,7 @@ pub struct CatalogueApproved {
 
 /// A `human` approval request and its decisions (AD-33).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct ApprovalEvent {
     pub approval_id: String,
     pub request_key: String,

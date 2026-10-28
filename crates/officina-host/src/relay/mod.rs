@@ -11,3 +11,4 @@ pub mod home;
 pub mod journal;
 pub mod run;
 pub mod tree;
+pub mod view;

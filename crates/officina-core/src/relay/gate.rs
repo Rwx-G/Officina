@@ -56,6 +56,7 @@ closed_enum! {
     /// `tests/vectors/gate.json` and the journal's (story 2.4). When several
     /// apply, the first in this order is reported.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+    #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
     #[serde(rename_all = "snake_case")]
     pub enum DenyKind {
         /// The lexer cannot read the command.

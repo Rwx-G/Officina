@@ -1,5 +1,6 @@
 //! `officina`: the console binary. Claude Code runs `hook` and `quota write`;
-//! sessions run `run`; the author runs `doctor` and `board --json`.
+//! sessions run `run`; the author runs `doctor`, `board --json` and
+//! `relay --json`.
 //! Arguments are parsed by hand (AD-16, AD-29): a few subcommands do not
 //! justify a parser in the hook's image.
 //!
@@ -19,6 +20,7 @@ use officina_host::paths::Paths;
 use officina_host::relay::gate::{self, GATE_EVENT, GateEnv};
 use officina_host::relay::home::RelayHome;
 use officina_host::relay::run::{self as relay_run, RunArgs};
+use officina_host::relay::view::read_view;
 use officina_host::writers::{hook_keeps_excerpts, record_hook_payload, record_quota};
 
 const USAGE: &str = "\
@@ -28,6 +30,8 @@ usage: officina <command>
   doctor [--floor <path>]         check the setup, print what to paste
   hook                            record a Claude Code hook payload (stdin)
   quota write [--tee]             record a statusline payload (stdin)
+  relay --json                    print the relay's state once: approved
+                                  catalogue, pending change, recent activity
   run <action> [name=value ...]   run an approved relay action from its project
                                   (exit: its own code, 126 refused, 124 timed
                                   out, 127 not started)
@@ -201,6 +205,32 @@ fn run_cmd(args: &[String]) -> ExitCode {
     }
 }
 
+/// `officina relay --json` (D-24): the relay view the window shows, read
+/// only. Exit 0, or 1 when the Officina home cannot be determined or read.
+fn relay_json() -> ExitCode {
+    let Some(home) = RelayHome::from_env() else {
+        eprintln!("officina: no Officina home, set OFFICINA_HOME or USERPROFILE");
+        return ExitCode::FAILURE;
+    };
+    let view = match read_view(&home, now_ms()) {
+        Ok(view) => view,
+        Err(e) => {
+            eprintln!("officina: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    match serde_json::to_string_pretty(&view) {
+        Ok(json) => {
+            println!("{json}");
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("officina: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
 /// Extracts `--floor <path>` from the remaining arguments.
 fn floor_arg(args: &[String]) -> Result<Option<PathBuf>, ()> {
     match args.iter().position(|a| a == "--floor") {
@@ -238,6 +268,7 @@ fn main() -> ExitCode {
             Err(()) => usage_error(),
         },
         Some("run") => run_cmd(rest),
+        Some("relay") if rest == ["--json"] => relay_json(),
         Some("version" | "--version") => {
             println!("officina {}", env!("CARGO_PKG_VERSION"));
             ExitCode::SUCCESS

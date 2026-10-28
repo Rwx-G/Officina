@@ -225,6 +225,8 @@ args = ["-i", "inventory/lab", "--limit", "{group}", "playbooks/{playbook}"]
 
 `human` actions are refused as not available in this build yet.
 
+`officina relay --json` prints the relay's state once, without writing anything: whether it is stopped, the approved catalogue, a pending change with its diff, the floor's catalogue issues with their lines, and the last 50 journal entries with each run's start and end paired. A run with no end line 60 s past its timeout reads "abandoned" (its `officina run` was killed). The window reads the same contract.
+
 Today the catalogue is parsed, validated and hashed, the gate refuses guarded commands and `officina run` runs `free` and `after-check` actions; `human` actions and the approval banner in the window arrive with the rest of v0.2.
 
 ## Command line
@@ -237,6 +239,7 @@ Today the catalogue is parsed, validated and hashed, the gate refuses guarded co
 | `officina quota write [--tee]` | record the rate limits from a statusline payload (run by your statusline) |
 | `officina run <action> [name=value ...]` | run an approved relay action from its project (run by sessions) |
 | `officina run --list` | list the actions of the current folder's project |
+| `officina relay --json` | print the relay's state once: catalogue, pending change, recent activity |
 
 ## Roadmap
 

@@ -45,6 +45,7 @@ impl ProjectColor {
 
 /// What the relay's gate does in a project (FR-1).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "lowercase")]
 pub enum Autonomy {
     /// Officina does not interfere.

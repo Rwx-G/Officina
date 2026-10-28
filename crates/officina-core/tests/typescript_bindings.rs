@@ -1,5 +1,5 @@
-//! The TypeScript types of the board contract are generated from the Rust
-//! types (AD-13) and committed under `app/src/lib/generated/`. This test
+//! The TypeScript types of the board and relay contracts are generated from
+//! the Rust types (AD-13) and committed under `app/src/lib/generated/`. This test
 //! regenerates them in memory and fails when the committed files differ, so a
 //! Rust change cannot leave the frontend on a stale contract.
 //!
@@ -16,6 +16,7 @@ use std::path::{Path, PathBuf};
 
 use officina_core::board::Board;
 use officina_core::focus::FocusOutcome;
+use officina_core::relay::view::RelayView;
 use ts_rs::{Config, TS};
 
 fn committed_dir() -> PathBuf {
@@ -43,6 +44,7 @@ fn export(dir: &Path) {
     let cfg = Config::new().with_large_int("number").with_out_dir(dir);
     Board::export_all(&cfg).unwrap();
     FocusOutcome::export_all(&cfg).unwrap();
+    RelayView::export_all(&cfg).unwrap();
 }
 
 #[test]

@@ -186,7 +186,11 @@ fn no_command_writes_under_the_claude_config_dir() {
     });
     let deny = env.run(&["hook"], payload.to_string().as_bytes());
     assert!(String::from_utf8_lossy(&deny.stdout).contains("\"deny\""));
-    for args in [&["run", "probe"][..], &["run", "--list"]] {
+    for args in [
+        &["run", "probe"][..],
+        &["run", "--list"],
+        &["relay", "--json"],
+    ] {
         let mut cmd = env.officina(args);
         cmd.current_dir(&lab);
         let out = common::run_with(cmd, b"");

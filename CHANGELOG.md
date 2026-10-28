@@ -82,6 +82,13 @@ project uses [Semantic Versioning](https://semver.org/).
 - `officina run --list`: the actions of the current folder's project with
   what each parameter accepts, and whether the relay is stopped or a
   catalogue change awaits approval.
+- `officina relay --json`: the relay's state once, read only and the same
+  contract the window reads: the stop flag, the approved catalogue, a
+  pending change with its diff per action and field, the floor's catalogue
+  issues with their lines, the last 50 journal entries with each run's start
+  and end paired (abandoned when no end came 60 s past its timeout), the
+  unreadable journal lines and the gate errors of the last 24 hours. Exit 0,
+  or 1 when the Officina home cannot be read.
 
 ### Changed
 
