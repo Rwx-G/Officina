@@ -2,7 +2,7 @@
 title: "PRD: Officina v0.7 - The Governor"
 author: Rwx-G
 date: 2026-10-28
-status: approved 2026-10-28 (owner delegated design decisions), with the amendments of ../architecture-v0.7.md section 4 applied; Slice B gated (gate 0, eligibility, shadow evidence)
+status: approved 2026-10-28 (owner delegated design decisions), with the amendments of ../architecture-v0.7.md section 4 applied; Slice B gated (gate 0, eligibility, shadow evidence); addendum of section 9 (2026-10-28: the critic and research helpers)
 inputs:
   - (framing, not published)
   - (requirement challenge, not published)
@@ -984,7 +984,7 @@ Gate 5. The chord is registered with `MOD_NOREPEAT`, so holding it stops once.
   suspensions, pauses and self-stops. `officina mcp` serves them through
   `briefing` and `board`; no tool is added, and none changes the mode,
   launches, releases, links or corrects.
-- **Scene:** no new element. Autonomous workers sit at their project's desks
+- **Scene** (amended by section 9, item 3, for helpers): no new element. Autonomous workers sit at their project's desks
   like v0.6's isolated workers; a held package is not drawn, since nobody
   waits on the author until it is released (v0.4 FR-3: no motion without a
   state change).
@@ -1241,3 +1241,32 @@ section 6.1.1's exception).
     default cadence, 10 minutes between live probes, 60 minutes of default
     back-off and FR-5's probe budget are starting values. The shadow measures
     the ones the decision uses; the two-week measure measures the rest.
+
+## 9. Addendum (2026-10-28): the critic and research helpers
+
+The owner's approved scene prototype (prd-v0.4.md, Change Log) shows, in its
+v0.5-and-later mode, a critic and a research helper that come to the
+orchestrator's desk when it works on a question. This section places them in
+v0.7; the architecture's section 6 says how, and `epic-7-decisions.md` D-492
+and D-493 say why.
+
+1. **Helpers are governor-launched work.** A helper is a v0.6 workshop run of
+   an author-written template whose `role` is `critic` or `research`: read-only
+   on the project (no package to Import, only its report), within the
+   template's budget. It launches either by the author's click on a card the
+   orchestrator proposed (v0.5 FR-4), or by the governor from a standing order
+   whose trigger is a deterministic condition the author wrote, counted in
+   FR-8's ceiling and FR-6's allowances like any autonomous run. No model
+   decides to launch a helper (section 5).
+2. **What a helper's result can do.** Its report is untrusted text: shown to
+   the author in the review panel, and served read-only to the orchestrator
+   (`officina mcp` gains a `helper_reports` read tool). It reaches a session
+   only through an answer the author sends (prd-v0.5.md section 9, item 3).
+3. **FR-17, Scene.** Replace "no new element" for helpers: a live helper run
+   is a smaller figure without a cap, in the orchestrator's tunic, that walks
+   in through the decision office's staff door when the run starts, stands at
+   the orchestrator's desk while it runs and walks out when it ends. Other
+   autonomous workers still sit at their project's desks, and a held package
+   is still not drawn.
+4. **Delivery.** Helpers belong to Slice B (they launch). Their templates and
+   standing orders follow FR-10's rules and approval.

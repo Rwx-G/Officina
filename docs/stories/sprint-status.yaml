@@ -110,6 +110,7 @@ version: v0.5
 # 5.15 needs 5.6 (proposal table) and 5.8 (briefing); 5.17 needs 5.10 (recap section).
 # Reworked after the story review (epic-5-decisions.md, review F1 to F47; new decisions D-151 to D-169).
 # 5.19 closes the PRD after real use (owner rule, epic-2-decisions.md P-7, epic-5-decisions.md P-25).
+# Addendum 2026-10-28 (prd-v0.5.md section 9, architecture-v0.5.md section 6, epic-5-decisions.md D-486 to D-491): 5.1, 5.2, 5.4, 5.12, 5.13, 5.15 and 5.18 are reworked against it before Epic 5 starts; gate 8 joins 5.1; Slice D (the PermissionRequest router, v0.5.x) gets its stories once its entry questions are recorded.
 stories:
   - {id: "5.1", file: story-5.1-workstation-gates.md, slice: "0", status: approved}
   - {id: "5.2", file: story-5.2-spawn-module.md, slice: A, status: approved}
@@ -186,6 +187,7 @@ version: v0.7
 # No build offers mode on before scope quarantine and held packages exist: 7.15 (scope, holding, the self-stop writer) merges before 7.16 (mode on), D-345.
 # Reworked after the story review (epic-7-decisions.md P-65, review F1 to F41; new decisions D-343 to D-355). F22 (this block in docs/stories/sprint-status.yaml) is left to the coordinator.
 # 7.19 closes the built slices (v0.8 may start); 7.20 reads the two-week measure alongside v0.8, at the latest at v1's close (P-62, PRD section 6.1.1's exception to P-7 and P-16, for the owner's confirmation).
+# Addendum 2026-10-28 (prd-v0.7.md section 9, architecture-v0.7.md section 6, epic-7-decisions.md D-492, D-493): the critic and research helpers are Slice B work; their stories are written with Slice B.
 stories:
   - {id: "7.1", file: story-7.1-workstation-gates.md, slice: "0", status: approved}
   - {id: "7.2", file: story-7.2-floor-keys-and-catalogue-format.md, slice: A, status: approved}

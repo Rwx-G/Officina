@@ -2,7 +2,7 @@
 title: "Architecture addendum: Officina v0.7 - The Governor"
 author: Rwx-G
 date: 2026-10-28
-status: approved 2026-10-28 (owner delegated design decisions; windows-sys features Win32_System_Time and Win32_UI_Input_KeyboardAndMouse accepted; gates open)
+status: approved 2026-10-28 (owner delegated design decisions; windows-sys features Win32_System_Time and Win32_UI_Input_KeyboardAndMouse accepted; gates open); addendum of section 6 (2026-10-28: the critic and research helpers)
 inputs:
   - prd/prd-v0.7.md (revised after the requirement challenge)
   - (requirement challenge, not published)
@@ -495,3 +495,27 @@ Both need Linux counterparts at v1 (PRD section 5). Ruled out: `chrono`, `time` 
 | R80 | The author's environment sets a credential variable or turns non-essential traffic off, and the probe answers for another account or not at all | the vector removes both credential names; doctor names the traffic variable; a missing report is a structural failure |
 | R81 | Migration 4's rebuilds of `work_order` and `setting` lose a row or a constraint | `pre-v4.db` copy; a migration test from a version 3 fixture compares every row, `UNIQUE` and index |
 | R82 | A suspended order comes back through an edit of the floor | state keyed on the order's name and kept across edits; only the author's click turns it on |
+
+## 6. Addendum (2026-10-28): the critic and research helpers
+
+Inputs: prd-v0.4.md and architecture-v0.4.md as reworked on 2026-10-28; architecture-v0.5.md section 6. PRD section 9 states the requirements; `epic-7-decisions.md` D-492 and D-493 record the decisions. AD-127 to AD-149 hold except as amended here.
+
+### AD-183: Helpers as governor-launched work
+
+- **Template key** (joins AD-128, phase 2, part of the canonical catalogue): `role = "critic" | "research"` on a workshop template; a template with a role must declare no Import (its run ends with a report only) and names the read-only capabilities v0.6 already defines; validation refuses a role on a host template.
+- **Launch**: unchanged paths. A clicked card (v0.5 AD-78) or the governor's decision (AD-137) on a standing order whose trigger is one of the closed conditions of AD-137; no new trigger reads model text. Helper runs count in the ceiling, the allowances and the weekly cap like any autonomous run.
+- **Report**: the run's final report is stored as v0.6 stores a package's summary, `Untrusted<String>`, capped; `officina mcp` gains the read tool `helper_reports {limit <= 10}` returning reports with their template, project and run id, wrapped as untrusted (v0.5 AD-90's rule). No tool sends a report to a session.
+- **Journal**: the existing workshop and governor kinds, with the template's role.
+
+### AD-184: Helpers in the scene
+
+- `SceneInput` gains `helpers: { runId: string; role: "critic" | "research" }[] | null`, the live helper runs from the workshop view (nullable, AD-68's rule).
+- Each is a rig scaled 0.68 without a cap, in `--orch-tunic` (v0.4 AD-171); its place is a spot beside the orchestrator's desk (one per role, then the decision office's group), reached through the staff door nodes of v0.4 AD-170; it walks in when the run appears and out when it ends (v0.4 AD-172). It is static once placed: no bubbles, no blinking. Its target opens the run's card.
+- Helpers are never counted as waiting; a helper whose run waits on the author (a package to review) is shown by the run's card, not by a second figure.
+
+## 7. Risks of the addendum
+
+| # | Risk | Mitigation |
+|---|---|---|
+| R111 | Helper runs spend quota the author expected for project work | they count in the ceiling, allowances and weekly cap; standing orders for helpers are the author's text and approval |
+| R112 | A helper's report steers the orchestrator's next proposal toward an injected goal | reports are untrusted text; proposals act only through the author's click (v0.5 FR-12, prd-v0.5.md section 9 item 3) |
