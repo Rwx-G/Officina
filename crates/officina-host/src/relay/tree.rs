@@ -519,6 +519,14 @@ mod tests {
             return;
         };
         let repo = Repo::new(git);
+        // A write always moves the inode's change time, which no caller can
+        // put back; git compares it outside Windows, so the positive control
+        // below only held when the edit and the refresh fell in one second.
+        git_ok(
+            &repo.git,
+            &repo.root,
+            &["config", "core.trustctime", "false"],
+        );
         let playbook = repo.root.join("playbook.yml");
         let set_modified = |at: std::time::SystemTime| {
             std::fs::File::options()
