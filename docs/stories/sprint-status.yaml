@@ -108,16 +108,17 @@ stories:
 epic: 5
 version: v0.5
 # approved: written and approved, implementation not started.
-# Slice 0 (5.1) runs the workstation gates of architecture-v0.5.md AD-96 and records E18 to E24 (epic-5-decisions.md D-125 to D-127).
-# 5.1 order: E18 before 5.2; gates 2, 3, 4 and 7 before 5.5, 5.7, 5.10 and 5.11; gate 1's containment half before 5.15.
+# Slice 0 (5.1) runs the workstation gates of architecture-v0.5.md AD-96 and AD-180 and records the session-variables entry, E19 to E24 and the gate 8 entry (epic-5-decisions.md D-125 to D-127, D-560, D-572). E18 is story 2.17's: the session-variables, gate 8 and Slice D entries take the next free number when written (D-560).
+# 5.1 order: the session-variables entry before 5.2; gates 2, 3, 4 and 7 before 5.5, 5.7, 5.10 and 5.11; gate 1's containment half before 5.15; gate 8 before 5.20 and before the owner switches his default mode. 5.1 closes on its ACs 1 to 10; AC 11 (Slice D's entry checks SD-1 to SD-5) is run by the owner when he chooses and gates no v0.5 story (D-578).
 # Second halves (D-126): gate 4's window half closes 5.7, gate 7's readability 5.10, E25 (memory files) 5.13, gate 1's window half 5.16; 5.17 and 5.18 wait for 5.16's.
-# Slice A (5.2-5.11: FR-1 to FR-6) is usable alone. Slice B (5.12-5.14: FR-7 to FR-9). Slice C (5.15-5.18: FR-10 to FR-14).
-# Implemented after v0.2, v0.3 and v0.4; each seam has one owning story (epic-5-decisions.md D-124).
-# 5.2, 5.3 and 5.4 are independent; 5.5 needs 5.3 for its doctests; 5.6 writes migration 2 whole (D-133), so the owner may run Slice A builds before Slice B.
-# 5.15 needs 5.6 (proposal table) and 5.8 (briefing); 5.17 needs 5.10 (recap section).
+# Slice A (5.2-5.11: FR-1 to FR-6) is usable alone. Slice B (5.12-5.14, 5.20: FR-7 to FR-9, PRD section 9 items 4, 5, 7 and 8's branch). Slice C (5.15-5.18, 5.21: FR-10 to FR-14, section 9 items 1 to 3). 5.19 closes v0.5.
+# Slice D (5.22, 5.23: the PermissionRequest router, AD-181, v0.5.x) starts after 5.19 closes v0.5 and does not hold v0.6; 5.22 and 5.23 are independent (D-581).
+# Slice D's routing story is not written: it waits on SD-1 to SD-5 (the owner's workstation checks, 5.1 AC 11) and the owner's SD-6 (which requests the window routes). It will hold the routing policy, the Needs you card of kind prompt, the scene's wait, the PermissionRequest registration and routes_prompts turned on (D-578, D-580).
+# Implemented after v0.2, v0.3 and v0.4; each seam has one owning story (epic-5-decisions.md D-124), read through the files on main (D-563); each addendum point has one owning story (D-577).
+# Order (code; gates as above): 5.2, 5.3 and 5.4 are independent; 5.5 needs 5.3 for its doctests; 5.6 writes migration 2 whole (D-133), so the owner may run Slice A builds before Slice B; 5.20 needs 5.13 and the gate 8 entry; 5.15 needs 5.6 (proposal table) and 5.8 (briefing); 5.17 needs 5.10 (recap section); 5.18 needs 5.8, 5.16 (gate 1's window half) and 5.17; 5.21 needs 5.11, 5.15 and 5.17; 5.19 needs every story from 5.1 to 5.18, 5.20 and 5.21.
 # Reworked after the story review (epic-5-decisions.md, review F1 to F47; new decisions D-151 to D-169).
+# Reworked 2026-10-28 against the addendum (prd-v0.5.md section 9, architecture-v0.5.md section 6, D-486 to D-491) and v0.2 to v0.4 as built on main (D-560 to D-582): 5.1, 5.2, 5.4, 5.12, 5.13, 5.15 and 5.18 reworked (5.18 rewritten for v0.4's decision office, its file renamed); the other stories aligned; 5.20, 5.21, 5.22 and 5.23 added.
 # 5.19 closes the PRD after real use (owner rule, epic-2-decisions.md P-7, epic-5-decisions.md P-25).
-# Addendum 2026-10-28 (prd-v0.5.md section 9, architecture-v0.5.md section 6, epic-5-decisions.md D-486 to D-491): 5.1, 5.2, 5.4, 5.12, 5.13, 5.15 and 5.18 are reworked against it before Epic 5 starts; gate 8 joins 5.1; Slice D (the PermissionRequest router, v0.5.x) gets its stories once its entry questions are recorded.
 stories:
   - {id: "5.1", file: story-5.1-workstation-gates.md, slice: "0", status: approved}
   - {id: "5.2", file: story-5.2-spawn-module.md, slice: A, status: approved}
@@ -136,8 +137,14 @@ stories:
   - {id: "5.15", file: story-5.15-officina-mcp.md, slice: C, status: approved}
   - {id: "5.16", file: story-5.16-orchestrator-session.md, slice: C, status: approved}
   - {id: "5.17", file: story-5.17-proposals-and-restart.md, slice: C, status: approved}
-  - {id: "5.18", file: story-5.18-orchestrator-room-and-chips.md, slice: C, status: approved}
+  - {id: "5.18", file: story-5.18-orchestrator-in-the-decision-office.md, slice: C, status: approved}
   - {id: "5.19", file: story-5.19-docs-doctor-use-and-qa.md, slice: C, status: approved}
+  # 5.20 and 5.21 merge before 5.19.
+  - {id: "5.20", file: story-5.20-permission-modes-in-doctor.md, slice: B, status: approved}
+  - {id: "5.21", file: story-5.21-answer-proposals.md, slice: C, status: approved}
+  # Slice D, v0.5.x, after 5.19.
+  - {id: "5.22", file: story-5.22-permission-router-core-and-hook.md, slice: D, status: approved}
+  - {id: "5.23", file: story-5.23-auto-mode-denials.md, slice: D, status: approved}
 ---
 epic: 6
 version: v0.6
