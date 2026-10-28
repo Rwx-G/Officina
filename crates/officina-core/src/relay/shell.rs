@@ -18,6 +18,11 @@
 //! less: a guarded repository then gets a false positive and a retry, never a
 //! silent pass (D-10). Facts about the Bash the sessions run (Git for
 //! Windows) that shaped a rule are recorded in story 2.3's Debug Log.
+//!
+//! Three parts share one line's result: a `Level` lexes one text (bytes,
+//! quoting, commands, redirections, here-documents), an `Analyser` reads
+//! each command it ends for the programs it starts (wrappers, builtins,
+//! interpreters), and both record through the level's `Recorder`.
 
 use std::borrow::Cow;
 use std::ops::Range;
@@ -719,6 +724,19 @@ enum CaseState {
     Body,
 }
 
+/// Where a `coproc` command stands: the word after its first may start the
+/// compound command it runs (`coproc NAME { ...; }`), so it is read in
+/// command position too.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Coproc {
+    /// No `coproc` in the command being read.
+    Outside,
+    /// `coproc` read: the next word is its first (a name or a command).
+    Keyword,
+    /// Its first word read: the next one may start the compound command.
+    FirstWord,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Expect {
     Command,
@@ -734,7 +752,7 @@ struct Word {
     /// substitution is one NUL; unquoted glob characters kept.
     text: String,
     /// Where the word's source lies in the level's input, for the dynamic
-    /// report ([`Level::raw`]); a range, not a copy, since the report needs
+    /// report ([`Analyser::raw`]); a range, not a copy, since the report needs
     /// it only for the rare dynamic word.
     raw: Range<usize>,
     /// Length of the prefix of `text` built from unquoted characters only.
@@ -941,17 +959,26 @@ struct Command {
     redirs: Vec<Redir>,
 }
 
+/// What one level records into the line's [`Lexed`], and where it stands
+/// among the levels: the half the lexer and the analysis share.
+struct Recorder<'o> {
+    out: &'o mut Lexed,
+    nesting: &'o mut usize,
+    frame: Frame,
+}
+
+/// The lexer of one level of text: bytes, quoting, the command-line parser,
+/// redirections and here-documents. Each command it reads goes to an
+/// [`Analyser`].
 struct Level<'a, 'o> {
     b: &'a [u8],
     pos: usize,
-    frame: Frame,
-    out: &'o mut Lexed,
-    nesting: &'o mut usize,
+    rec: Recorder<'o>,
     subshells: usize,
     cases: Vec<CaseState>,
     at_start: bool,
     expect: Expect,
-    coproc: u8,
+    coproc: Coproc,
     command: Command,
     pending: Vec<Pending>,
     bodies: Vec<Body>,
@@ -971,14 +998,16 @@ impl<'a, 'o> Level<'a, 'o> {
         Level {
             b,
             pos,
-            frame,
-            out,
-            nesting,
+            rec: Recorder {
+                out,
+                nesting,
+                frame,
+            },
             subshells: 0,
             cases: Vec::new(),
             at_start: true,
             expect: Expect::Command,
-            coproc: 0,
+            coproc: Coproc::Outside,
             command: Command::default(),
             pending: Vec::new(),
             bodies: Vec::new(),
@@ -991,16 +1020,11 @@ impl<'a, 'o> Level<'a, 'o> {
 
     fn bump(&mut self) {
         self.pos += 1;
-        self.out.steps += 1;
+        self.rec.out.steps += 1;
     }
 
     fn peek_raw(&self) -> Option<u8> {
         self.b.get(self.pos).copied()
-    }
-
-    /// A word of this level as written, for the dynamic report.
-    fn raw(&self, word: &Word) -> Cow<'a, str> {
-        String::from_utf8_lossy(self.b.get(word.raw.clone()).unwrap_or_default())
     }
 
     /// The next byte after any line continuations, which bash removes
@@ -1008,7 +1032,7 @@ impl<'a, 'o> Level<'a, 'o> {
     fn peek(&mut self) -> Option<u8> {
         while self.b.get(self.pos) == Some(&b'\\') && self.b.get(self.pos + 1) == Some(&b'\n') {
             self.pos += 2;
-            self.out.steps += 2;
+            self.rec.out.steps += 2;
         }
         self.peek_raw()
     }
@@ -1029,85 +1053,33 @@ impl<'a, 'o> Level<'a, 'o> {
     }
 
     fn enter(&mut self) -> Result<(), LexError> {
-        *self.nesting += 1;
-        if *self.nesting > MAX_NESTING {
+        *self.rec.nesting += 1;
+        if *self.rec.nesting > MAX_NESTING {
             return Err(LexError::TooNested);
         }
         Ok(())
     }
 
     fn leave(&mut self) {
-        *self.nesting -= 1;
+        *self.rec.nesting -= 1;
     }
 
     /// A line break inside a construct while a here-document waits: bash
     /// versions disagree on where the body starts, so the line is refused.
     fn newline_in_construct(&self) -> Result<(), LexError> {
-        if self.pending.is_empty() && !self.frame.outer_pending {
+        if self.pending.is_empty() && !self.rec.frame.outer_pending {
             Ok(())
         } else {
             Err(LexError::HeredocInConstruct)
         }
     }
 
-    // ---- recording ----
-
-    fn in_latent_root(&self) -> bool {
-        self.frame
-            .latent
-            .is_some_and(|root| self.frame.depth <= root)
-    }
-
-    fn trace(&mut self, seen: Seen) {
-        if self.frame.latent.is_none() {
-            self.out.trace.push(seen);
-        }
-    }
-
-    fn program(&mut self, written: &str, origin: Origin) {
-        if !self.in_latent_root() {
-            self.out.programs.push(Program {
-                written: written.to_owned(),
-                origin,
-            });
-        }
-    }
-
-    fn dynamic(&mut self, raw: &str) {
-        if self.frame.latent.is_none() {
-            self.out.dynamic.push(raw.to_owned());
-        }
-    }
-
-    fn assign(&mut self, assignment: Assignment) {
-        if self.frame.latent.is_none() {
-            self.out.assignments.push(assignment);
-        }
-    }
-
-    fn value(&mut self, text: &str) {
-        if self.frame.latent.is_none() {
-            self.out.values.push_str(text);
-            self.out.values.push('\n');
-        }
-    }
-
-    fn lex_nested(&mut self, text: &str) -> Result<(), LexError> {
-        lex_text(
-            self.out,
-            self.nesting,
-            text,
-            self.frame.depth + 1,
-            self.frame.latent,
-        )
-    }
-
-    /// Text bash may evaluate later (a prompt, an arithmetic subscript): its
-    /// substitutions are reported; errors and everything else are ignored.
-    fn latent(&mut self, word: &Word) {
-        if self.frame.latent.is_none() && (word.text.contains("$(") || word.text.contains('`')) {
-            let depth = self.frame.depth + 1;
-            let _ = lex_text(self.out, self.nesting, &word.text, depth, Some(depth));
+    /// The analysis of this level's commands, recording into the same line.
+    fn analyser(&mut self) -> Analyser<'_, 'a, 'o> {
+        Analyser {
+            b: self.b,
+            bodies: &self.bodies,
+            rec: &mut self.rec,
         }
     }
 
@@ -1119,7 +1091,7 @@ impl<'a, 'o> Level<'a, 'o> {
         loop {
             self.skip_blanks();
             let Some(c) = self.peek() else {
-                if self.frame.close == Close::Paren {
+                if self.rec.frame.close == Close::Paren {
                     return Err(LexError::UnterminatedSubstitution);
                 }
                 self.end_line()?;
@@ -1127,11 +1099,11 @@ impl<'a, 'o> Level<'a, 'o> {
             };
             match c {
                 b'\n' => {
-                    if self.frame.outer_pending {
+                    if self.rec.frame.outer_pending {
                         return Err(LexError::HeredocInConstruct);
                     }
                     self.bump();
-                    self.trace(Seen::Separator("\n"));
+                    self.rec.trace(Seen::Separator("\n"));
                     self.end_command();
                     self.read_heredocs()?;
                     self.end_line()?;
@@ -1179,7 +1151,7 @@ impl<'a, 'o> Level<'a, 'o> {
     }
 
     fn separator(&mut self, op: &'static str) {
-        self.trace(Seen::Separator(op));
+        self.rec.trace(Seen::Separator(op));
         self.end_command();
         self.at_start = true;
         self.expect = Expect::Command;
@@ -1262,7 +1234,7 @@ impl<'a, 'o> Level<'a, 'o> {
             && self.b.get(self.pos + 1) == Some(&b'(')
             && let Some(end) = self.arithmetic_end(self.pos + 2, for_arithmetic)
         {
-            self.out.steps += (end - self.pos) as u64;
+            self.rec.out.steps += (end - self.pos) as u64;
             self.pos = end;
             if for_arithmetic {
                 self.expect = Expect::ForWords;
@@ -1281,13 +1253,13 @@ impl<'a, 'o> Level<'a, 'o> {
         {
             *state = CaseState::Body;
             self.bump();
-            self.trace(Seen::Separator(")"));
+            self.rec.trace(Seen::Separator(")"));
             self.at_start = true;
             self.expect = Expect::Command;
             return false;
         }
         self.bump();
-        if self.subshells == 0 && self.frame.close == Close::Paren {
+        if self.subshells == 0 && self.rec.frame.close == Close::Paren {
             self.end_command();
             return true;
         }
@@ -1306,7 +1278,7 @@ impl<'a, 'o> Level<'a, 'o> {
         let mut depth = 2usize;
         let mut i = from;
         while let Some(&c) = b.get(i) {
-            self.out.steps += 1;
+            self.rec.out.steps += 1;
             match c {
                 b'(' => depth += 1,
                 b')' => {
@@ -1352,7 +1324,7 @@ impl<'a, 'o> Level<'a, 'o> {
             }
             Some(CaseState::Pattern) => {
                 if word.reserved() == Some("esac") {
-                    self.trace(Seen::Reserved("esac"));
+                    self.rec.trace(Seen::Reserved("esac"));
                     self.cases.pop();
                     self.at_start = true;
                 }
@@ -1362,7 +1334,7 @@ impl<'a, 'o> Level<'a, 'o> {
         }
         match self.expect {
             Expect::ForVariable => {
-                self.declared_name(&word);
+                self.analyser().declared_name(&word);
                 self.expect = Expect::ForWords;
                 return;
             }
@@ -1377,7 +1349,7 @@ impl<'a, 'o> Level<'a, 'o> {
         if self.at_start
             && let Some(reserved) = word.reserved()
         {
-            self.trace(Seen::Reserved(reserved));
+            self.rec.trace(Seen::Reserved(reserved));
             match reserved {
                 "case" => self.cases.push(CaseState::Subject),
                 "esac" => {
@@ -1385,22 +1357,21 @@ impl<'a, 'o> Level<'a, 'o> {
                 }
                 "for" | "select" => self.expect = Expect::ForVariable,
                 "function" => self.expect = Expect::FunctionName,
-                "coproc" => self.coproc = 2,
+                "coproc" => self.coproc = Coproc::Keyword,
                 _ => {}
             }
             return;
         }
-        // `coproc NAME { ...; }`: the word after the first may start the
-        // compound command, so it is read in command position too.
-        if self.coproc == 1 {
-            self.coproc = 0;
-            self.end_command();
-            self.at_start = true;
-            self.on_word(word);
-            return;
-        }
-        if self.coproc == 2 {
-            self.coproc = 1;
+        match self.coproc {
+            Coproc::FirstWord => {
+                self.coproc = Coproc::Outside;
+                self.end_command();
+                self.at_start = true;
+                self.on_word(word);
+                return;
+            }
+            Coproc::Keyword => self.coproc = Coproc::FirstWord,
+            Coproc::Outside => {}
         }
         self.command.words.push(word);
         self.at_start = false;
@@ -1419,16 +1390,16 @@ impl<'a, 'o> Level<'a, 'o> {
     /// An analysis error is held and returned by [`Level::end_line`], where
     /// the analysis used to run.
     fn end_command(&mut self) {
-        self.coproc = 0;
+        self.coproc = Coproc::Outside;
         if self.command.words.is_empty() && self.command.redirs.is_empty() {
             return;
         }
         let command = std::mem::take(&mut self.command);
         if !self.line.is_empty() || !self.pending.is_empty() {
             self.line.push(command);
-        } else if !self.in_latent_root()
+        } else if !self.rec.in_latent_root()
             && self.failed.is_none()
-            && let Err(e) = self.analyse(&command)
+            && let Err(e) = self.analyser().analyse(&command)
         {
             self.failed = Some(e);
         }
@@ -1443,11 +1414,11 @@ impl<'a, 'o> Level<'a, 'o> {
         if let Some(e) = self.failed.take() {
             return Err(e);
         }
-        if self.in_latent_root() {
+        if self.rec.in_latent_root() {
             return Ok(());
         }
         for command in &line {
-            self.analyse(command)?;
+            self.analyser().analyse(command)?;
         }
         Ok(())
     }
@@ -1504,7 +1475,7 @@ impl<'a, 'o> Level<'a, 'o> {
     }
 
     fn redirect_to(&mut self, op: &'static str, fd: Option<String>) -> Result<(), LexError> {
-        self.trace(Seen::Redirection(op));
+        self.rec.trace(Seen::Redirection(op));
         self.skip_blanks();
         if matches!(op, "<<" | "<<-") {
             let (delimiter, quoted) = self.heredoc_delimiter()?;
@@ -1529,7 +1500,7 @@ impl<'a, 'o> Level<'a, 'o> {
         if self.pos == start {
             return Err(LexError::MissingRedirectionTarget);
         }
-        self.latent(&target);
+        self.rec.latent(&target);
         self.command.redirs.push(Redir {
             op,
             fd,
@@ -1647,7 +1618,7 @@ impl<'a, 'o> Level<'a, 'o> {
             } else {
                 self.expand_body(&text)?
             };
-            self.value(&result.text);
+            self.rec.value(&result.text);
             self.bodies[pending.index] = result;
         }
         Ok(())
@@ -1678,9 +1649,9 @@ impl<'a, 'o> Level<'a, 'o> {
         let frame = Frame {
             close: Close::Eof,
             outer_pending: false,
-            ..self.frame
+            ..self.rec.frame
         };
-        let mut level = Level::new(bytes, 0, frame, self.out, self.nesting);
+        let mut level = Level::new(bytes, 0, frame, self.rec.out, self.rec.nesting);
         let mut word = WordBuf::default();
         while let Some(c) = level.peek_raw() {
             match c {
@@ -1760,7 +1731,7 @@ impl<'a, 'o> Level<'a, 'o> {
         }
         let word = w.finish(start..self.pos);
         if !word.text.is_empty() || word.quoted {
-            self.value(&word.text);
+            self.rec.value(&word.text);
         }
         Ok(word)
     }
@@ -1850,7 +1821,7 @@ impl<'a, 'o> Level<'a, 'o> {
                 if self.peek_raw() == Some(b'(')
                     && let Some(end) = self.arithmetic_end(self.pos + 1, false)
                 {
-                    self.out.steps += (end - self.pos) as u64;
+                    self.rec.out.steps += (end - self.pos) as u64;
                     self.pos = end;
                     w.expansion();
                     return Ok(());
@@ -2004,18 +1975,18 @@ impl<'a, 'o> Level<'a, 'o> {
     }
 
     fn nested_level(&mut self) -> Result<usize, LexError> {
-        let depth = self.frame.depth + 1;
+        let depth = self.rec.frame.depth + 1;
         if depth > MAX_DEPTH {
             return Err(LexError::TooDeep);
         }
         let frame = Frame {
             depth,
             close: Close::Paren,
-            latent: self.frame.latent,
-            outer_pending: !self.pending.is_empty() || self.frame.outer_pending,
+            latent: self.rec.frame.latent,
+            outer_pending: !self.pending.is_empty() || self.rec.frame.outer_pending,
         };
         let start = self.pos;
-        Level::new(self.b, start, frame, self.out, self.nesting).parse()
+        Level::new(self.b, start, frame, self.rec.out, self.rec.nesting).parse()
     }
 
     fn process_substitution(&mut self, w: &mut WordBuf) -> Result<(), LexError> {
@@ -2056,7 +2027,7 @@ impl<'a, 'o> Level<'a, 'o> {
             }
         }
         let text = String::from_utf8_lossy(&content).into_owned();
-        self.lex_nested(&text)?;
+        self.rec.lex_nested(&text)?;
         w.expansion();
         Ok(())
     }
@@ -2178,7 +2149,7 @@ impl<'a, 'o> Level<'a, 'o> {
                     if self.pos == start {
                         self.bump();
                     }
-                    self.latent(&element);
+                    self.rec.latent(&element);
                 }
             }
         }
@@ -2186,8 +2157,83 @@ impl<'a, 'o> Level<'a, 'o> {
         w.non_literal(&[0], false);
         Ok(())
     }
+}
 
-    // ---- analysis ----
+impl Recorder<'_> {
+    fn in_latent_root(&self) -> bool {
+        self.frame
+            .latent
+            .is_some_and(|root| self.frame.depth <= root)
+    }
+
+    fn trace(&mut self, seen: Seen) {
+        if self.frame.latent.is_none() {
+            self.out.trace.push(seen);
+        }
+    }
+
+    fn program(&mut self, written: &str, origin: Origin) {
+        if !self.in_latent_root() {
+            self.out.programs.push(Program {
+                written: written.to_owned(),
+                origin,
+            });
+        }
+    }
+
+    fn dynamic(&mut self, raw: &str) {
+        if self.frame.latent.is_none() {
+            self.out.dynamic.push(raw.to_owned());
+        }
+    }
+
+    fn assign(&mut self, assignment: Assignment) {
+        if self.frame.latent.is_none() {
+            self.out.assignments.push(assignment);
+        }
+    }
+
+    fn value(&mut self, text: &str) {
+        if self.frame.latent.is_none() {
+            self.out.values.push_str(text);
+            self.out.values.push('\n');
+        }
+    }
+
+    fn lex_nested(&mut self, text: &str) -> Result<(), LexError> {
+        lex_text(
+            self.out,
+            self.nesting,
+            text,
+            self.frame.depth + 1,
+            self.frame.latent,
+        )
+    }
+
+    /// Text bash may evaluate later (a prompt, an arithmetic subscript): its
+    /// substitutions are reported; errors and everything else are ignored.
+    fn latent(&mut self, word: &Word) {
+        if self.frame.latent.is_none() && (word.text.contains("$(") || word.text.contains('`')) {
+            let depth = self.frame.depth + 1;
+            let _ = lex_text(self.out, self.nesting, &word.text, depth, Some(depth));
+        }
+    }
+}
+
+/// The analysis of one command (D-10 to D-12): the words a [`Level`] read,
+/// looked at for every program they can start. It reads the level's bytes
+/// and here-document bodies, and records through the level's [`Recorder`].
+struct Analyser<'l, 'a, 'o> {
+    b: &'a [u8],
+    bodies: &'l [Body],
+    rec: &'l mut Recorder<'o>,
+}
+
+impl<'a> Analyser<'_, 'a, '_> {
+    /// A word of the level as written, for the dynamic report.
+    fn raw(&self, word: &Word) -> Cow<'a, str> {
+        String::from_utf8_lossy(self.b.get(word.raw.clone()).unwrap_or_default())
+    }
 
     fn analyse(&mut self, command: &Command) -> Result<(), LexError> {
         // Most commands queue no further work (`find -exec` does): the list
@@ -2232,28 +2278,28 @@ impl<'a, 'o> Level<'a, 'o> {
             } else if let Some(builtin) = Builtin::from_name(&name) {
                 self.builtin(builtin, args, redirs)?;
             } else if let Some(shell) = SHELL_INTERPRETERS.iter().copied().find(|s| *s == name) {
-                self.trace(Seen::Shell(shell));
+                self.rec.trace(Seen::Shell(shell));
                 self.shell(word, args, redirs)?;
             } else if let Some(script) = SCRIPT_INTERPRETERS
                 .iter()
                 .find(|s| name_matches(s.name, &name))
             {
-                self.trace(Seen::Script(script.name));
+                self.rec.trace(Seen::Script(script.name));
                 self.script(script, word, args, redirs)?;
             } else if name == CMD_INTERPRETER {
-                self.trace(Seen::Cmd);
+                self.rec.trace(Seen::Cmd);
                 self.cmd(word, args, redirs)?;
             } else if let Some(powershell) =
                 POWERSHELL_INTERPRETERS.iter().copied().find(|p| *p == name)
             {
-                self.trace(Seen::PowerShell(powershell));
+                self.rec.trace(Seen::PowerShell(powershell));
                 self.powershell(word, args, redirs)?;
             } else if let Some(launcher) = LAUNCHERS.iter().find(|l| l.name == name) {
-                self.trace(Seen::Launcher(launcher.name));
+                self.rec.trace(Seen::Launcher(launcher.name));
                 self.launcher(launcher, word, args);
             } else {
                 for arg in args {
-                    self.latent(arg);
+                    self.rec.latent(arg);
                 }
             }
             return Ok(());
@@ -2266,10 +2312,10 @@ impl<'a, 'o> Level<'a, 'o> {
     fn command_word(&mut self, word: &Word) -> bool {
         let dynamic = word.non_literal() && !matches!(word.text.as_str(), "[" | "[[");
         if !dynamic || word.last_segment_literal() {
-            self.program(&word.text, Origin::Command);
+            self.rec.program(&word.text, Origin::Command);
         }
         if dynamic {
-            self.dynamic(&self.raw(word));
+            self.rec.dynamic(&self.raw(word));
         }
         dynamic
     }
@@ -2280,10 +2326,9 @@ impl<'a, 'o> Level<'a, 'o> {
         words: &[Word],
         mut i: usize,
     ) -> Result<usize, LexError> {
-        self.trace(Seen::Wrapper(wrapper.name));
+        self.rec.trace(Seen::Wrapper(wrapper.name));
         let mut positionals = wrapper.positionals;
-        let mut replace: Option<String> = None;
-        let mut watch_exec = false;
+        let mut state = WrapperState::default();
         let mut options_done = false;
         while let Some(arg) = words.get(i) {
             // Quotes do not matter here: bash removed them before the
@@ -2302,22 +2347,14 @@ impl<'a, 'o> Level<'a, 'o> {
             }
             if option {
                 let next = words.get(i + 1);
-                let consumed = if let Some(long) = v.strip_prefix("--") {
-                    let (name, attached) = match long.split_once('=') {
-                        Some((name, value)) => (name, Some(value)),
-                        None => (long, None),
-                    };
-                    let option = &v[..name.len() + 2];
-                    self.wrapper_option(
-                        wrapper,
-                        option,
-                        attached,
-                        next,
-                        &mut replace,
-                        &mut watch_exec,
-                    )?
-                } else {
-                    self.wrapper_cluster(wrapper, v, next, &mut replace, &mut watch_exec)?
+                let consumed = match OptionWord::of(v) {
+                    Some(OptionWord::Long { option, attached }) => {
+                        self.wrapper_option(wrapper, &mut state, option, attached, next)?
+                    }
+                    Some(OptionWord::Cluster { letters, .. }) => {
+                        self.wrapper_cluster(wrapper, &mut state, letters, next)?
+                    }
+                    None => OptionOutcome::Consumed(0),
                 };
                 match consumed {
                     OptionOutcome::Stop => return Ok(words.len()),
@@ -2332,44 +2369,42 @@ impl<'a, 'o> Level<'a, 'o> {
             }
             break;
         }
-        if wrapper.kind == WrapperKind::Watch && !watch_exec && i < words.len() {
+        if wrapper.kind == WrapperKind::Watch && !state.watch_exec && i < words.len() {
             let operands = &words[i..];
             if operands.iter().any(|w| w.computed) {
-                self.dynamic(&self.raw(&operands[0]));
+                self.rec.dynamic(&self.raw(&operands[0]));
             }
             let text = join_values(operands);
-            self.lex_nested(&text)?;
+            self.rec.lex_nested(&text)?;
             return Ok(words.len());
         }
         // A non-empty replace string is filled from stdin at run time, so any
         // word carrying it (the command itself, or a shell's `-c` text) builds
         // a command the lexer cannot see.
-        if let Some(replace) = replace
+        if let Some(replace) = state.replace
             && !replace.is_empty()
             && let Some(templated) = words[i..].iter().find(|w| w.text.contains(&replace))
         {
-            self.dynamic(&self.raw(templated));
+            self.rec.dynamic(&self.raw(templated));
         }
         Ok(i)
     }
 
+    /// A wrapper's cluster of letters (`-iu NAME`), one option each, until
+    /// one takes the rest of the cluster or the next word as its value.
     fn wrapper_cluster(
         &mut self,
         wrapper: &'static Wrapper,
-        v: &str,
+        state: &mut WrapperState,
+        letters: &str,
         next: Option<&Word>,
-        replace: &mut Option<String>,
-        watch_exec: &mut bool,
     ) -> Result<OptionOutcome, LexError> {
-        for (k, ch) in v.char_indices().skip(1) {
-            let spelled = format!("-{ch}");
-            let rest = &v[k + ch.len_utf8()..];
-            let attached = (!rest.is_empty()).then_some(rest);
-            let outcome =
-                self.wrapper_option(wrapper, &spelled, attached, next, replace, watch_exec)?;
+        for option in cluster('-', letters) {
+            let attached = (!option.rest.is_empty()).then_some(option.rest);
+            let outcome = self.wrapper_option(wrapper, state, &option.spelled, attached, next)?;
             match outcome {
                 OptionOutcome::Consumed(0)
-                    if attached.is_some() && self.option_took_value(wrapper, &spelled) =>
+                    if attached.is_some() && option_took_value(wrapper, &option.spelled) =>
                 {
                     return Ok(OptionOutcome::Consumed(0));
                 }
@@ -2380,21 +2415,14 @@ impl<'a, 'o> Level<'a, 'o> {
         Ok(OptionOutcome::Consumed(0))
     }
 
-    fn option_took_value(&self, wrapper: &Wrapper, option: &str) -> bool {
-        wrapper.value_options.contains(&option)
-            || (wrapper.kind == WrapperKind::Env && ENV_SPLIT_OPTIONS.contains(&option))
-            || (wrapper.kind == WrapperKind::Xargs && XARGS_REPLACE_OPTIONS.contains(&option))
-    }
-
     /// One option of a wrapper, its value attached or in `next`.
     fn wrapper_option(
         &mut self,
         wrapper: &'static Wrapper,
+        state: &mut WrapperState,
         option: &str,
         attached: Option<&str>,
         next: Option<&Word>,
-        replace: &mut Option<String>,
-        watch_exec: &mut bool,
     ) -> Result<OptionOutcome, LexError> {
         let from_next = |attached: Option<&str>| -> (Option<String>, usize) {
             match attached {
@@ -2405,51 +2433,52 @@ impl<'a, 'o> Level<'a, 'o> {
         match wrapper.kind {
             WrapperKind::Env => {
                 if let Some(split) = ENV_SPLIT_OPTIONS.iter().copied().find(|o| *o == option) {
-                    self.trace(Seen::EnvSplit(split));
+                    self.rec.trace(Seen::EnvSplit(split));
                     let (value, used) = from_next(attached);
                     let computed = attached.is_none() && next.is_some_and(|w| w.computed);
                     if computed {
-                        self.dynamic(&next.map_or(Cow::Borrowed(""), |w| self.raw(w)));
+                        self.rec
+                            .dynamic(&next.map_or(Cow::Borrowed(""), |w| self.raw(w)));
                     }
                     if let Some(value) = value {
-                        self.lex_nested(&value)?;
+                        self.rec.lex_nested(&value)?;
                     }
                     return Ok(OptionOutcome::Consumed(used));
                 }
             }
             WrapperKind::Command => {
                 if let Some(query) = COMMAND_QUERY_OPTIONS.iter().copied().find(|o| *o == option) {
-                    self.trace(Seen::CommandQuery(query));
+                    self.rec.trace(Seen::CommandQuery(query));
                     return Ok(OptionOutcome::Stop);
                 }
             }
             WrapperKind::Xargs => {
                 if let Some(spelling) = XARGS_REPLACE_OPTIONS.iter().copied().find(|o| *o == option)
                 {
-                    self.trace(Seen::XargsReplace(spelling));
+                    self.rec.trace(Seen::XargsReplace(spelling));
                     if wrapper.value_options.contains(&option) {
                         let (value, used) = from_next(attached);
-                        self.trace(Seen::WrapperOption {
+                        self.rec.trace(Seen::WrapperOption {
                             wrapper: wrapper.name,
                             option: spelling,
                         });
-                        *replace = value;
+                        state.replace = value;
                         return Ok(OptionOutcome::Consumed(used));
                     }
-                    *replace = Some(attached.unwrap_or(XARGS_DEFAULT_REPLACE).to_owned());
+                    state.replace = Some(attached.unwrap_or(XARGS_DEFAULT_REPLACE).to_owned());
                     return Ok(OptionOutcome::Consumed(0));
                 }
             }
             WrapperKind::Watch => {
                 if let Some(exec) = WATCH_EXEC_OPTIONS.iter().copied().find(|o| *o == option) {
-                    self.trace(Seen::WatchExec(exec));
-                    *watch_exec = true;
+                    self.rec.trace(Seen::WatchExec(exec));
+                    state.watch_exec = true;
                 }
             }
             WrapperKind::Plain => {}
         }
         if let Some(entry) = wrapper.value_options.iter().copied().find(|o| *o == option) {
-            self.trace(Seen::WrapperOption {
+            self.rec.trace(Seen::WrapperOption {
                 wrapper: wrapper.name,
                 option: entry,
             });
@@ -2458,7 +2487,7 @@ impl<'a, 'o> Level<'a, 'o> {
                 && let Some(value) = value
                 && matches!(entry, "-u" | "--unset")
             {
-                self.assign(Assignment::Name(value));
+                self.rec.assign(Assignment::Name(value));
             }
             return Ok(OptionOutcome::Consumed(used));
         }
@@ -2478,11 +2507,12 @@ impl<'a, 'o> Level<'a, 'o> {
             .strip_suffix('+')
             .map_or(name_end, str::len);
         if word.computed && word.first_non_literal.is_some_and(|p| p < name_end) {
-            self.assign(Assignment::Computed);
+            self.rec.assign(Assignment::Computed);
         } else if name_end > 0 {
-            self.assign(Assignment::Name(word.text[..name_end].to_owned()));
+            self.rec
+                .assign(Assignment::Name(word.text[..name_end].to_owned()));
         }
-        self.latent(word);
+        self.rec.latent(word);
     }
 
     /// Records an assignment (prefix, `env NAME=`, `declare`, D-12): the
@@ -2496,15 +2526,15 @@ impl<'a, 'o> Level<'a, 'o> {
             let computed = word.computed_from(value_start);
             if base == COMMAND_BINDING_PROGRAM {
                 if computed {
-                    self.dynamic(&self.raw(word));
+                    self.rec.dynamic(&self.raw(word));
                 } else if !value.is_empty() {
-                    self.program(&value, Origin::Command);
+                    self.rec.program(&value, Origin::Command);
                 }
             } else if base == COMMAND_BINDING_ALIAS {
                 if computed {
-                    self.dynamic(&self.raw(word));
+                    self.rec.dynamic(&self.raw(word));
                 } else {
-                    self.lex_nested(&value)?;
+                    self.rec.lex_nested(&value)?;
                 }
             }
         }
@@ -2519,11 +2549,11 @@ impl<'a, 'o> Level<'a, 'o> {
                 .copied()
                 .find(|a| *a == args[i].text)
             else {
-                self.latent(&args[i]);
+                self.rec.latent(&args[i]);
                 i += 1;
                 continue;
             };
-            self.trace(Seen::FindAction(action));
+            self.rec.trace(Seen::FindAction(action));
             let start = i + 1;
             let end = args[start..]
                 .iter()
@@ -2533,7 +2563,7 @@ impl<'a, 'o> Level<'a, 'o> {
                 .get(end)
                 .and_then(|a| FIND_EXEC_TERMINATORS.iter().copied().find(|t| *t == a.text))
             {
-                self.trace(Seen::FindTerminator(terminator));
+                self.rec.trace(Seen::FindTerminator(terminator));
             }
             work.push(&args[start..end]);
             i = end + 1;
@@ -2546,7 +2576,7 @@ impl<'a, 'o> Level<'a, 'o> {
         args: &[Word],
         redirs: &[Redir],
     ) -> Result<(), LexError> {
-        self.trace(Seen::Builtin(builtin));
+        self.rec.trace(Seen::Builtin(builtin));
         match builtin {
             Builtin::Eval => {
                 let args = match args.first() {
@@ -2554,28 +2584,28 @@ impl<'a, 'o> Level<'a, 'o> {
                     _ => args,
                 };
                 if let Some(computed) = args.iter().find(|a| a.computed) {
-                    self.dynamic(&self.raw(computed));
+                    self.rec.dynamic(&self.raw(computed));
                 }
                 if !args.is_empty() {
-                    self.lex_nested(&join_values(args))?;
+                    self.rec.lex_nested(&join_values(args))?;
                 }
             }
             Builtin::Alias => {
                 for arg in args {
                     if let Some((_, value)) = arg.text.split_once('=') {
                         if arg.computed {
-                            self.dynamic(&self.raw(arg));
+                            self.rec.dynamic(&self.raw(arg));
                         }
-                        self.lex_nested(value)?;
+                        self.rec.lex_nested(value)?;
                     }
                 }
             }
             Builtin::Trap => {
                 if let Some(action) = args.iter().find(|a| !a.text.starts_with('-')) {
                     if action.computed {
-                        self.dynamic(&self.raw(action));
+                        self.rec.dynamic(&self.raw(action));
                     }
-                    self.lex_nested(&action.text)?;
+                    self.rec.lex_nested(&action.text)?;
                 }
             }
             Builtin::Hash => {
@@ -2588,7 +2618,7 @@ impl<'a, 'o> Level<'a, 'o> {
                             Some(attached.to_owned())
                         };
                         if let Some(path) = path {
-                            self.program(&path, Origin::Command);
+                            self.rec.program(&path, Origin::Command);
                         }
                     }
                 }
@@ -2626,10 +2656,10 @@ impl<'a, 'o> Level<'a, 'o> {
                                 self.declared_name(name);
                             }
                         } else {
-                            self.assign(Assignment::Name(attached.to_owned()));
+                            self.rec.assign(Assignment::Name(attached.to_owned()));
                         }
                     } else {
-                        self.latent(arg);
+                        self.rec.latent(arg);
                     }
                 }
             }
@@ -2641,7 +2671,8 @@ impl<'a, 'o> Level<'a, 'o> {
             Builtin::Let => {
                 for arg in args {
                     if let Some(len) = name_length(arg.text.as_bytes()) {
-                        self.assign(Assignment::Name(arg.text[..len].to_owned()));
+                        self.rec
+                            .assign(Assignment::Name(arg.text[..len].to_owned()));
                     }
                 }
             }
@@ -2660,12 +2691,12 @@ impl<'a, 'o> Level<'a, 'o> {
     ) -> Result<(), LexError> {
         match operand {
             Some(op) if op.process_substitution => {
-                self.dynamic(&self.raw(op));
+                self.rec.dynamic(&self.raw(op));
                 Ok(())
             }
             Some(op) => match STDIN_PATHS.iter().copied().find(|p| *p == op.text) {
                 Some(path) => {
-                    self.trace(Seen::StdinPath(path));
+                    self.rec.trace(Seen::StdinPath(path));
                     self.stdin_program(program_raw, redirs, shell)
                 }
                 None => Ok(()),
@@ -2707,14 +2738,14 @@ impl<'a, 'o> Level<'a, 'o> {
                         .as_ref()
                         .is_some_and(|t| t.process_substitution)
                     {
-                        self.dynamic(program_raw);
+                        self.rec.dynamic(program_raw);
                     }
                 }
-                _ => self.dynamic(program_raw),
+                _ => self.rec.dynamic(program_raw),
             }
         }
         if !explicit {
-            self.dynamic(program_raw);
+            self.rec.dynamic(program_raw);
         }
         Ok(())
     }
@@ -2728,9 +2759,9 @@ impl<'a, 'o> Level<'a, 'o> {
     ) -> Result<(), LexError> {
         if shell {
             if computed {
-                self.dynamic(program_raw);
+                self.rec.dynamic(program_raw);
             }
-            self.lex_nested(text)
+            self.rec.lex_nested(text)
         } else {
             self.scan(text);
             Ok(())
@@ -2747,38 +2778,38 @@ impl<'a, 'o> Level<'a, 'o> {
                 i += 1;
                 break;
             }
-            if v.starts_with("--") {
-                let name = v.split_once('=').map_or(v, |(name, _)| name);
-                if let Some(entry) = SHELL_VALUE_OPTIONS.iter().copied().find(|o| *o == name) {
-                    self.trace(Seen::ShellOption(entry));
-                    i += if v.contains('=') { 1 } else { 2 };
-                } else {
-                    i += 1;
-                }
-                continue;
-            }
-            let Some(sign) = v.chars().next().filter(|c| matches!(c, '-' | '+')) else {
-                break;
-            };
-            if v.len() < 2 {
-                break;
-            }
-            let mut take_next = false;
-            for (k, ch) in v.char_indices().skip(1) {
-                if ch == SHELL_COMMAND_LETTER {
-                    command = true;
-                    self.trace(Seen::ShellCommandLetter);
-                } else if ch == SHELL_STDIN_LETTER {
-                    stdin = true;
-                    self.trace(Seen::ShellStdinLetter);
-                } else {
-                    let spelled = format!("{sign}{ch}");
-                    if let Some(entry) = SHELL_VALUE_OPTIONS.iter().copied().find(|o| *o == spelled)
+            let (sign, letters) = match OptionWord::of(v) {
+                Some(OptionWord::Long { option, attached }) => {
+                    if let Some(entry) = SHELL_VALUE_OPTIONS.iter().copied().find(|o| *o == option)
                     {
-                        self.trace(Seen::ShellOption(entry));
-                        take_next = v[k + ch.len_utf8()..].is_empty();
-                        break;
+                        self.rec.trace(Seen::ShellOption(entry));
+                        i += if attached.is_some() { 1 } else { 2 };
+                    } else {
+                        i += 1;
                     }
+                    continue;
+                }
+                Some(OptionWord::Cluster { sign, letters }) if !letters.is_empty() => {
+                    (sign, letters)
+                }
+                Some(OptionWord::Cluster { .. }) | None => break,
+            };
+            let mut take_next = false;
+            for option in cluster(sign, letters) {
+                if option.letter == SHELL_COMMAND_LETTER {
+                    command = true;
+                    self.rec.trace(Seen::ShellCommandLetter);
+                } else if option.letter == SHELL_STDIN_LETTER {
+                    stdin = true;
+                    self.rec.trace(Seen::ShellStdinLetter);
+                } else if let Some(entry) = SHELL_VALUE_OPTIONS
+                    .iter()
+                    .copied()
+                    .find(|o| *o == option.spelled)
+                {
+                    self.rec.trace(Seen::ShellOption(entry));
+                    take_next = option.rest.is_empty();
+                    break;
                 }
             }
             i += 1 + usize::from(take_next);
@@ -2786,12 +2817,12 @@ impl<'a, 'o> Level<'a, 'o> {
         let operands = args.get(i..).unwrap_or_default();
         if command {
             match operands.first() {
-                None => self.dynamic(&self.raw(program)),
+                None => self.rec.dynamic(&self.raw(program)),
                 Some(text) => {
                     if text.computed {
-                        self.dynamic(&self.raw(text));
+                        self.rec.dynamic(&self.raw(text));
                     }
-                    self.lex_nested(&text.text)?;
+                    self.rec.lex_nested(&text.text)?;
                 }
             }
             return Ok(());
@@ -2827,14 +2858,14 @@ impl<'a, 'o> Level<'a, 'o> {
                         && !v.starts_with("--"))
             });
             if let Some(flag) = inline {
-                self.trace(Seen::ScriptFlag {
+                self.rec.trace(Seen::ScriptFlag {
                     interpreter: interpreter.name,
                     flag,
                 });
                 return Ok(());
             }
             if let Some(option) = interpreter.value_options.iter().copied().find(|o| *o == v) {
-                self.trace(Seen::ScriptFlag {
+                self.rec.trace(Seen::ScriptFlag {
                     interpreter: interpreter.name,
                     flag: option,
                 });
@@ -2867,14 +2898,15 @@ impl<'a, 'o> Level<'a, 'o> {
                     .copied()
                     .find(|s| lower.starts_with(s))
                 {
-                    self.trace(Seen::CmdSwitch(entry));
+                    self.rec.trace(Seen::CmdSwitch(entry));
                     command = true;
                     text.push_str(&switch[entry.len()..]);
                     text.push(' ');
                     continue;
                 }
                 if lower.starts_with(CMD_DELAYED_EXPANSION_SWITCH) && !lower.ends_with("off") {
-                    self.trace(Seen::CmdSwitch(CMD_DELAYED_EXPANSION_SWITCH));
+                    self.rec
+                        .trace(Seen::CmdSwitch(CMD_DELAYED_EXPANSION_SWITCH));
                     delayed = true;
                 }
             }
@@ -2882,10 +2914,10 @@ impl<'a, 'o> Level<'a, 'o> {
             text.push(' ');
         }
         let text = remove_carets(&text);
-        self.value(&text);
+        self.rec.value(&text);
         self.scan(&text);
         if count(&text, '%') >= 2 || delayed && count(&text, '!') >= 2 {
-            self.dynamic(&self.raw(program));
+            self.rec.dynamic(&self.raw(program));
         }
         if !command {
             self.stdin_program(&self.raw(program), redirs, false)?;
@@ -2901,9 +2933,9 @@ impl<'a, 'o> Level<'a, 'o> {
     ) -> Result<(), LexError> {
         for arg in args {
             if let Some(spelling) = encoded_command_parameter(&arg.text) {
-                self.trace(Seen::EncodedSpelling(spelling));
-                if self.frame.latent.is_none() {
-                    self.out.encoded_command = true;
+                self.rec.trace(Seen::EncodedSpelling(spelling));
+                if self.rec.frame.latent.is_none() {
+                    self.rec.out.encoded_command = true;
                 }
             }
             self.scan(&arg.text);
@@ -2923,10 +2955,10 @@ impl<'a, 'o> Level<'a, 'o> {
         } else {
             text
         };
-        self.value(&text);
+        self.rec.value(&text);
         self.scan(&text);
         if launcher.cmd_parsed && count(&text, '%') >= 2 {
-            self.dynamic(&self.raw(program));
+            self.rec.dynamic(&self.raw(program));
         }
     }
 
@@ -2935,16 +2967,16 @@ impl<'a, 'o> Level<'a, 'o> {
     fn scan(&mut self, text: &str) {
         let mut token = String::new();
         for ch in text.chars() {
-            self.out.steps += 1;
+            self.rec.out.steps += 1;
             if ch.is_alphanumeric() || matches!(ch, '_' | '-' | '.') {
                 token.push(ch);
             } else if ch != '\r' && !token.is_empty() {
-                self.program(&token, Origin::Scanned);
+                self.rec.program(&token, Origin::Scanned);
                 token.clear();
             }
         }
         if !token.is_empty() {
-            self.program(&token, Origin::Scanned);
+            self.rec.program(&token, Origin::Scanned);
         }
         self.scan_encoded(text);
     }
@@ -2959,9 +2991,9 @@ impl<'a, 'o> Level<'a, 'o> {
             if ch.is_whitespace() || separator || "\"'`,[](){}".contains(ch) {
                 if !arg.is_empty() {
                     if after_powershell && let Some(spelling) = encoded_command_parameter(&arg) {
-                        self.trace(Seen::EncodedSpelling(spelling));
-                        if self.frame.latent.is_none() {
-                            self.out.encoded_command = true;
+                        self.rec.trace(Seen::EncodedSpelling(spelling));
+                        if self.rec.frame.latent.is_none() {
+                            self.rec.out.encoded_command = true;
                         }
                     }
                     if POWERSHELL_INTERPRETERS.contains(&program_name(&arg).as_str()) {
@@ -2977,6 +3009,76 @@ impl<'a, 'o> Level<'a, 'o> {
             }
         }
     }
+}
+
+/// What a wrapper's options set for the command it runs.
+#[derive(Default)]
+struct WrapperState {
+    /// `xargs`'s replace string, filled from stdin at run time.
+    replace: Option<String>,
+    /// `watch -x`: the command is an argument vector, not shell text.
+    watch_exec: bool,
+}
+
+/// True when a wrapper's option took a value attached in its cluster.
+fn option_took_value(wrapper: &Wrapper, option: &str) -> bool {
+    wrapper.value_options.contains(&option)
+        || (wrapper.kind == WrapperKind::Env && ENV_SPLIT_OPTIONS.contains(&option))
+        || (wrapper.kind == WrapperKind::Xargs && XARGS_REPLACE_OPTIONS.contains(&option))
+}
+
+/// One option word, as the wrappers and shells read it once bash removed
+/// the quotes: the one scan both use.
+enum OptionWord<'w> {
+    /// `--name` or `--name=value`: the option as written up to `=`, and
+    /// what follows it.
+    Long {
+        option: &'w str,
+        attached: Option<&'w str>,
+    },
+    /// `-abc` or `+abc`: one option per letter, spelled with the sign.
+    Cluster { sign: char, letters: &'w str },
+}
+
+impl<'w> OptionWord<'w> {
+    /// `v` read as an option, `None` for an operand. `--` alone is a long
+    /// option with an empty name: a caller ending its options there checks
+    /// it first.
+    fn of(v: &'w str) -> Option<OptionWord<'w>> {
+        if let Some(long) = v.strip_prefix("--") {
+            let (name, attached) = match long.split_once('=') {
+                Some((name, value)) => (name, Some(value)),
+                None => (long, None),
+            };
+            return Some(OptionWord::Long {
+                option: &v[..name.len() + 2],
+                attached,
+            });
+        }
+        let sign = v.chars().next().filter(|c| matches!(c, '-' | '+'))?;
+        Some(OptionWord::Cluster {
+            sign,
+            letters: &v[sign.len_utf8()..],
+        })
+    }
+}
+
+/// One letter of a cluster: the letter, the option it spells with the
+/// sign, and the text after it, the value it may take.
+struct ClusterOption<'w> {
+    letter: char,
+    spelled: String,
+    rest: &'w str,
+}
+
+fn cluster(sign: char, letters: &str) -> impl Iterator<Item = ClusterOption<'_>> {
+    letters
+        .char_indices()
+        .map(move |(k, letter)| ClusterOption {
+            letter,
+            spelled: format!("{sign}{letter}"),
+            rest: &letters[k + letter.len_utf8()..],
+        })
 }
 
 enum OptionOutcome {
