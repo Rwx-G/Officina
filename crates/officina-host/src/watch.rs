@@ -575,7 +575,10 @@ fn ingest_context<'a>(collector: &'a Collector, events: &'a Path) -> IngestConte
 fn ingest(collector: &mut Collector, registry: &mut WindowRegistry) {
     let events = collector.paths().events_dir();
     let ctx = ingest_context(collector, &events);
-    registry.ingest(&ctx, now_ms());
+    let report = registry.ingest(&ctx, now_ms());
+    if let Some(report) = report {
+        collector.record_hook_sightings(&report.hook_sightings);
+    }
     report_registry(collector, registry);
 }
 
@@ -602,7 +605,10 @@ fn apply_agents(collector: &mut Collector, registry: &mut WindowRegistry, now_ms
 fn hourly_pass(collector: &mut Collector, registry: &mut WindowRegistry) {
     let events = collector.paths().events_dir();
     let ctx = ingest_context(collector, &events);
-    registry.hourly_pass(&ctx, now_ms());
+    let pass = registry.hourly_pass(&ctx, now_ms());
+    if let Some(pass) = pass {
+        collector.record_hook_sightings(&pass.ingested.hook_sightings);
+    }
     crate::focus::prune_focus_log(&collector.paths().state_dir(), now_ms());
     crate::relay::approvals::prune(collector.relay(), SystemTime::now());
     crate::relay::journal::prune(collector.relay(), now_ms());

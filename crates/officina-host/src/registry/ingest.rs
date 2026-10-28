@@ -10,6 +10,7 @@ use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
 
 use officina_core::board::{ProjectRule, project_for};
+use officina_core::contract::HookSightings;
 use officina_core::dates::dated_file_day;
 use officina_core::events::{EventLine, ParsedLine, parse_line};
 use officina_core::registry::confirm::wake;
@@ -53,6 +54,9 @@ pub struct IngestReport {
     pub rewritten: Vec<String>,
     /// Files found complete in this pass.
     pub completed: Vec<String>,
+    /// What the lines read said about the hook payloads (AD-56): the
+    /// window folds it into the running version's contract record.
+    pub hook_sightings: HookSightings,
 }
 
 /// A call made after each line a chunk's transaction read, with the count
@@ -243,6 +247,7 @@ impl Writer {
                 for raw in chunk {
                     match parse_line(&raw[..raw.len() - 1]) {
                         ParsedLine::Event(line) => {
+                            report.hook_sightings.observe(&line);
                             if apply(&tx, &line, ctx, now_ms)? {
                                 report.lines += 1;
                             }

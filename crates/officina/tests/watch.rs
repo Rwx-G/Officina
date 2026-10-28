@@ -1503,3 +1503,34 @@ fn a_closed_weekend_loses_no_session_subject_or_verdict() {
     );
     stop(handle);
 }
+
+/// Story 3.8 AC 3 and 4 through the window (AD-56, D-71): once the running
+/// version has its record, a hook line whose payload lacked a field reaches
+/// the record at ingestion, and the next board names the field.
+#[test]
+fn a_missing_hook_field_reaches_the_board() {
+    let env = common::TestEnv::new();
+    let now = officina_host::files::now_ms();
+    env.write_agents(&listed_session("s-live", now));
+    let (handle, emitted, _) = watch_all(&env, |_| {});
+    until(&emitted.boards, |b| b.contract.held == Some(true));
+    let (event, fields) = officina_core::contract::HOOK_FIELDS[2];
+    let mut payload = serde_json::json!({"hook_event_name": event});
+    for field in fields.iter().skip(1) {
+        payload[*field] = serde_json::json!("redacted");
+    }
+    hook_line(&env, payload, officina_host::files::now_ms());
+    let expected = vec![format!("{event}.{}", fields[0])];
+    let board = until(&emitted.boards, |b| !b.contract.hook_missing.is_empty());
+    assert_eq!(board.contract.hook_missing, expected);
+    let stored: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(env.officina_home().join("state").join("contract.json")).unwrap(),
+    )
+    .unwrap();
+    let version = board.contract.claude_version.clone().unwrap();
+    assert_eq!(
+        stored["versions"][&version]["hook_missing"],
+        serde_json::json!(expected)
+    );
+    stop(handle);
+}

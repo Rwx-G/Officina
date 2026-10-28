@@ -141,6 +141,9 @@ fn board(floor: Option<&PathBuf>) -> ExitCode {
     let registry = read_registry(&mut collector);
     drop(registry);
     collector.refresh_agents(now);
+    // The running version's record (D-71): this command keeps its agents
+    // fields current, and the board shows its missing hook fields.
+    collector.refresh_contract(now);
     let board = collector.board(now);
     match serde_json::to_string_pretty(&board) {
         Ok(json) => println!("{json}"),

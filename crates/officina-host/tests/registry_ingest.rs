@@ -8,11 +8,14 @@ mod common;
 use common::registry::{DAY, Home, NOW, answer, day_file, line, prompt};
 use officina_core::agents::parse_agents;
 use officina_core::board::ProjectRule;
+use officina_core::contract::HOOK_FIELDS;
 use officina_core::dates::{day_start_ms, utc_date};
 use officina_core::registry::ingestion::{CHUNK_MAX_LINES, COMPLETE_GRACE_MS};
 use officina_core::registry::types::{
     Ending, EventFileRecord, ExcerptRecord, FactValue, SessionFact, Source,
 };
+use officina_host::collector::{ContractRecord, ContractStore, record_hook_fields};
+use officina_host::doctor::BUFFERED_EVENTS;
 use officina_host::registry::ingest::IngestContext;
 use officina_host::registry::store::open_reader;
 
@@ -811,4 +814,152 @@ fn a_line_without_a_session_id_records_nothing() {
     let report = writer.ingest(&home.ctx(), NOW).unwrap();
     assert_eq!((report.lines, report.corrupt_lines), (0, 0));
     assert!(writer.sessions().unwrap().is_empty());
+}
+
+/// The running version of the hook-field cases, and when it was first seen.
+const VERSION: &str = "2.1.400";
+const FIRST_SEEN: i64 = NOW - 60_000;
+
+/// An event line of `event`, at `ts`, whose payload lacked `absent`.
+fn lacking(event: &str, ts: i64, absent: &[&str]) -> String {
+    let mut value =
+        serde_json::json!({"v": 1, "ts": ts, "event": event, "session_id": "s1", "cwd": CWD});
+    if !absent.is_empty() {
+        value["absent"] = serde_json::json!(absent);
+    }
+    format!("{value}\n")
+}
+
+/// `state/contract.json` with `VERSION` first seen at `FIRST_SEEN`, every
+/// buffered event not observed yet, as the agents check leaves a new
+/// version's record.
+fn contract_file(home: &Home) -> std::path::PathBuf {
+    let path = home.home.join("state").join("contract.json");
+    let mut store = ContractStore {
+        schema: 1,
+        ..ContractStore::default()
+    };
+    store.versions.insert(
+        VERSION.to_owned(),
+        ContractRecord {
+            checked_at: FIRST_SEEN,
+            held: true,
+            missing: Vec::new(),
+            not_observed: Vec::new(),
+            first_seen_at: Some(FIRST_SEEN),
+            hook_missing: Vec::new(),
+            hook_not_observed: BUFFERED_EVENTS.iter().map(|e| (*e).to_owned()).collect(),
+        },
+    );
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    store.write(&path);
+    path
+}
+
+/// The window's path: ingest the home's event files, then fold what the
+/// lines said into `VERSION`'s record.
+fn ingest_into_contract(home: &Home, contract: &std::path::Path) -> ContractRecord {
+    let mut writer = home.writer(NOW);
+    let report = writer.ingest(&home.ctx(), NOW).unwrap();
+    record_hook_fields(contract, VERSION, &report.hook_sightings).unwrap()
+}
+
+/// Story 3.8 AC 3 (AD-56, D-71): a line carrying `absent` after the
+/// version's first sighting adds `Event.field` to its `hook_missing`, in the
+/// file the window and doctor read.
+#[test]
+fn absent_after_the_first_sighting_updates_hook_missing() {
+    let (event, fields) = HOOK_FIELDS[2];
+    let home = Home::new();
+    let contract = contract_file(&home);
+    home.append(&day_file(NOW), &[lacking(event, NOW - 1_000, &[fields[2]])]);
+    let record = ingest_into_contract(&home, &contract);
+    let expected = vec![format!("{event}.{}", fields[2])];
+    assert_eq!(record.hook_missing, expected);
+    let stored = ContractStore::read(&contract);
+    assert_eq!(stored.versions[VERSION].hook_missing, expected);
+    assert_eq!(stored.versions[VERSION].first_sighting(), FIRST_SEEN);
+}
+
+/// D-71: a line older than the version's first sighting describes the
+/// version before, so an upgrade does not inherit its gaps.
+#[test]
+fn absent_before_the_first_sighting_is_ignored() {
+    let (event, fields) = HOOK_FIELDS[0];
+    let home = Home::new();
+    let contract = contract_file(&home);
+    home.append(
+        &day_file(NOW),
+        &[lacking(event, FIRST_SEEN - 1, &[fields[0]])],
+    );
+    let record = ingest_into_contract(&home, &contract);
+    assert!(record.hook_missing.is_empty(), "{:?}", record.hook_missing);
+    // Positive control: the same line after the sighting counts.
+    home.append(&day_file(NOW), &[lacking(event, FIRST_SEEN, &[fields[0]])]);
+    let record = ingest_into_contract(&home, &contract);
+    assert_eq!(record.hook_missing, [format!("{event}.{}", fields[0])]);
+}
+
+/// AD-56: `hook_not_observed` lists the buffered events no line has
+/// carried since the first sighting, and shrinks as they arrive.
+#[test]
+fn hook_not_observed_shrinks_as_events_arrive() {
+    let home = Home::new();
+    let contract = contract_file(&home);
+    let (seen, before) = (BUFFERED_EVENTS[0], BUFFERED_EVENTS[1]);
+    home.append(
+        &day_file(NOW),
+        &[
+            lacking(seen, NOW - 1_000, &[]),
+            lacking(before, FIRST_SEEN - 1, &[]),
+        ],
+    );
+    let record = ingest_into_contract(&home, &contract);
+    let left: Vec<String> = BUFFERED_EVENTS
+        .iter()
+        .filter(|e| **e != seen)
+        .map(|e| (*e).to_owned())
+        .collect();
+    assert_eq!(
+        record.hook_not_observed, left,
+        "{before} came before the sighting"
+    );
+    let rest: Vec<String> = BUFFERED_EVENTS
+        .iter()
+        .map(|event| lacking(event, NOW - 500, &[]))
+        .collect();
+    home.append(&day_file(NOW), &rest);
+    let record = ingest_into_contract(&home, &contract);
+    assert!(record.hook_not_observed.is_empty());
+    assert!(
+        record.hook_missing.is_empty(),
+        "complete lines miss nothing"
+    );
+}
+
+/// D-71: a contract file a v0.2 window wrote, without the hook fields,
+/// loads with its check time as the first sighting, nothing missing and
+/// every buffered event not observed; a hook update then writes the fields.
+#[test]
+fn a_v0_2_contract_file_still_loads() {
+    let home = Home::new();
+    let path = home.home.join("state").join("contract.json");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let old = serde_json::json!({"schema": 1, "versions": {VERSION: {
+        "checked_at": FIRST_SEEN, "held": true, "missing": [], "not_observed": ["waitingFor"]}}});
+    std::fs::write(&path, old.to_string()).unwrap();
+    let store = ContractStore::read(&path);
+    let record = &store.versions[VERSION];
+    assert_eq!(record.first_sighting(), FIRST_SEEN);
+    assert!(record.hook_missing.is_empty());
+    assert_eq!(record.hook_not_observed, BUFFERED_EVENTS);
+    assert_eq!(record.not_observed, ["waitingFor"]);
+
+    let (event, fields) = HOOK_FIELDS[1];
+    home.append(&day_file(NOW), &[lacking(event, NOW - 1_000, &[fields[1]])]);
+    let updated = ingest_into_contract(&home, &path);
+    assert_eq!(updated.hook_missing, [format!("{event}.{}", fields[1])]);
+    let written: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(written["versions"][VERSION]["first_seen_at"], FIRST_SEEN);
 }

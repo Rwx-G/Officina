@@ -9,13 +9,16 @@ use std::time::{Duration, Instant};
 
 use officina_core::agents::{AgentRecord, parse_agents};
 use officina_core::board::{Board, BoardInput, ContractView, ProjectRule, Staleness, build_board};
-use officina_core::contract::check_agents;
+use officina_core::contract::{
+    HookSightings, check_agents, hook_missing_after, hook_not_observed_after,
+};
 use officina_core::floor::{FloorFile, parse_floor, resolve_project_path};
 use officina_core::quota::{QuotaFile, parse_quota_file};
 use officina_core::registry::types::{RegistryReport, SubjectRef};
 use serde::{Deserialize, Serialize};
 
 use crate::claude;
+use crate::doctor::BUFFERED_EVENTS;
 use crate::files::{atomic_write, read_recent_events};
 use crate::paths::{ENV_FLOOR, Paths, env_path, excerpts_disabled_by_env};
 use crate::relay::approvals::board_approvals;
@@ -91,13 +94,87 @@ pub struct ContractStore {
     pub versions: std::collections::BTreeMap<String, ContractRecord>,
 }
 
-/// One version's contract result.
+impl ContractStore {
+    /// The store at `path`; an empty one when it is absent or unreadable.
+    pub fn read(path: &Path) -> ContractStore {
+        fs::read_to_string(path)
+            .ok()
+            .and_then(|c| serde_json::from_str(&c).ok())
+            .unwrap_or(ContractStore {
+                schema: 1,
+                ..Default::default()
+            })
+    }
+
+    /// Writes the store to `path` whole, replacing it atomically; a failed
+    /// write leaves the previous file, and the next update writes again
+    /// (D-71).
+    pub fn write(&self, path: &Path) {
+        if let Ok(bytes) = serde_json::to_vec_pretty(self) {
+            let _ = atomic_write(path, &bytes);
+        }
+    }
+}
+
+/// One version's contract result: the agents fields from a `claude agents`
+/// sample, and the hook fields from the event lines that followed the
+/// version's first sighting (AD-56, D-71). A record written before the hook
+/// fields existed reads with its check time as its first sighting, no field
+/// missing and every buffered event not observed yet.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ContractRecord {
     pub checked_at: i64,
     pub held: bool,
     pub missing: Vec<String>,
     pub not_observed: Vec<String>,
+    /// When this version was first seen; `checked_at` for an older record.
+    #[serde(default)]
+    pub first_seen_at: Option<i64>,
+    /// `Event.field` of `HOOK_FIELDS` a line of this version left out.
+    #[serde(default)]
+    pub hook_missing: Vec<String>,
+    /// The buffered events no line of this version has carried yet.
+    #[serde(default = "every_buffered_event")]
+    pub hook_not_observed: Vec<String>,
+}
+
+fn every_buffered_event() -> Vec<String> {
+    BUFFERED_EVENTS.iter().map(|e| (*e).to_owned()).collect()
+}
+
+impl ContractRecord {
+    /// The version's first sighting (D-71): lines older than it describe
+    /// another version.
+    pub fn first_sighting(&self) -> i64 {
+        self.first_seen_at.unwrap_or(self.checked_at)
+    }
+}
+
+/// Folds `sightings` into `version`'s record in the store at `path` (AD-56,
+/// D-71): `hook_missing` gains every field reported absent since the
+/// version's first sighting, and `hook_not_observed` loses every event seen
+/// since then. Returns the record, `None` when the store holds none for the
+/// version yet, whose first sighting every line so far then precedes. The
+/// file is rewritten only when the record changed.
+pub fn record_hook_fields(
+    path: &Path,
+    version: &str,
+    sightings: &HookSightings,
+) -> Option<ContractRecord> {
+    let mut store = ContractStore::read(path);
+    let record = store.versions.get_mut(version)?;
+    let first = record.first_sighting();
+    let missing = hook_missing_after(&record.hook_missing, sightings, first);
+    let not_observed = hook_not_observed_after(&record.hook_not_observed, sightings, first);
+    if missing != record.hook_missing || not_observed != record.hook_not_observed {
+        record.first_seen_at = Some(first);
+        record.hook_missing = missing;
+        record.hook_not_observed = not_observed;
+        let updated = record.clone();
+        store.write(path);
+        return Some(updated);
+    }
+    Some(record.clone())
 }
 
 /// Tree fingerprints of the projects with a pending dry run, by folder,
@@ -144,6 +221,9 @@ pub struct Collector {
     registry: Option<RegistryReport>,
     /// The subject of each filed session, from the same holder (AD-54).
     subjects: BTreeMap<String, SubjectRef>,
+    /// What the ingested event lines said about the hook payloads, kept
+    /// until the running version and its record are known (AD-56).
+    hook_sightings: HookSightings,
 }
 
 impl Collector {
@@ -194,6 +274,7 @@ impl Collector {
             known_projects: KnownProjectsKeeper::default(),
             registry: None,
             subjects: BTreeMap::new(),
+            hook_sightings: HookSightings::default(),
         }
     }
 
@@ -331,44 +412,82 @@ impl Collector {
         self.check_contract(now_ms);
     }
 
+    /// `state/contract.json`, where each version's record lives.
+    fn contract_file(&self) -> PathBuf {
+        self.paths.state_dir().join("contract.json")
+    }
+
     /// Checks the last agents sample against the contract. An empty sample
     /// proves nothing, so it leaves the result unknown rather than "held".
-    /// The per-version record is written only when the result changes.
+    /// The per-version record is written only when the result changes, and
+    /// keeps what the hook lines taught it; a version seen for the first
+    /// time is first sighted now (D-71). The board then shows the version's
+    /// missing hook fields, whatever the sample.
     fn check_contract(&mut self, now_ms: i64) {
-        let Some(raw) = self.agents_raw.as_ref().filter(|r| !r.is_empty()) else {
-            return;
-        };
-        let check = check_agents(raw);
-        self.contract.held = Some(check.held());
-        self.contract.missing.clone_from(&check.missing);
+        let check = self
+            .agents_raw
+            .as_ref()
+            .filter(|r| !r.is_empty())
+            .map(|raw| check_agents(raw));
+        if let Some(check) = &check {
+            self.contract.held = Some(check.held());
+            self.contract.missing.clone_from(&check.missing);
+        }
         let Some(version) = self.contract.claude_version.clone() else {
             return;
         };
-        let path = self.paths.state_dir().join("contract.json");
-        let mut store: ContractStore = fs::read_to_string(&path)
-            .ok()
-            .and_then(|c| serde_json::from_str(&c).ok())
-            .unwrap_or(ContractStore {
-                schema: 1,
-                ..Default::default()
+        let path = self.contract_file();
+        let mut store = ContractStore::read(&path);
+        if let Some(check) = check {
+            let known = store.versions.get(&version);
+            let unchanged = known.is_some_and(|r| {
+                r.held == check.held()
+                    && r.missing == check.missing
+                    && r.not_observed == check.not_observed
             });
-        let record = ContractRecord {
-            checked_at: now_ms,
-            held: check.held(),
-            missing: check.missing,
-            not_observed: check.not_observed,
-        };
-        let unchanged = store.versions.get(&version).is_some_and(|r| {
-            r.held == record.held
-                && r.missing == record.missing
-                && r.not_observed == record.not_observed
-        });
-        if unchanged {
+            if !unchanged {
+                let record = ContractRecord {
+                    checked_at: now_ms,
+                    held: check.held(),
+                    first_seen_at: Some(known.map_or(now_ms, ContractRecord::first_sighting)),
+                    hook_missing: known.map(|r| r.hook_missing.clone()).unwrap_or_default(),
+                    hook_not_observed: known
+                        .map_or_else(every_buffered_event, |r| r.hook_not_observed.clone()),
+                    missing: check.missing,
+                    not_observed: check.not_observed,
+                };
+                store.versions.insert(version.clone(), record);
+                store.write(&path);
+            }
+        }
+        self.contract.hook_missing = store
+            .versions
+            .get(&version)
+            .map(|r| r.hook_missing.clone())
+            .unwrap_or_default();
+        self.flush_hook_sightings();
+    }
+
+    /// Takes what an ingestion pass learnt of the hook payloads (AD-56):
+    /// folded into the running version's record once that version and its
+    /// record are known, kept until then.
+    pub fn record_hook_sightings(&mut self, sightings: &HookSightings) {
+        self.hook_sightings.merge(sightings);
+        self.flush_hook_sightings();
+    }
+
+    fn flush_hook_sightings(&mut self) {
+        if self.hook_sightings.is_empty() {
             return;
         }
-        store.versions.insert(version, record);
-        if let Ok(bytes) = serde_json::to_vec_pretty(&store) {
-            let _ = atomic_write(&path, &bytes);
+        let Some(version) = self.contract.claude_version.clone() else {
+            return;
+        };
+        if let Some(record) =
+            record_hook_fields(&self.contract_file(), &version, &self.hook_sightings)
+        {
+            self.contract.hook_missing = record.hook_missing;
+            self.hook_sightings = HookSightings::default();
         }
     }
 
