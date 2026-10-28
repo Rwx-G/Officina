@@ -3,5 +3,6 @@
 //! the SQLite file, reads the event files and passes `now_ms`; what is kept,
 //! for how long and in which order is decided here.
 
+pub mod ingestion;
 pub mod retention;
 pub mod types;
