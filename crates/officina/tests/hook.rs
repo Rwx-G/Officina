@@ -254,7 +254,11 @@ fn unknown_subcommand_exits_64_never_2() {
         assert_eq!(out.status.code(), Some(64), "{args:?}");
         assert!(String::from_utf8_lossy(&out.stderr).contains("usage: officina"));
     }
-    for args in [&["doctor", "--floor"][..], &["board", "--json", "--floor"]] {
+    for args in [
+        &["doctor", "--floor"][..],
+        &["board", "--json", "--floor"],
+        &["subjects", "--json", "--floor"],
+    ] {
         let out = env.run(args, b"");
         assert_eq!(out.status.code(), Some(64), "{args:?}");
         assert!(

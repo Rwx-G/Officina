@@ -337,7 +337,7 @@ fn main() -> ExitCode {
         Some("relay") if rest == ["--json"] => relay_json(),
         Some("subjects") if rest.iter().any(|a| a == "--json") => match floor_arg(rest) {
             Ok(floor) => subjects_json(floor.as_ref()),
-            Err(()) => usage_error(),
+            Err(missing) => missing.usage_error(),
         },
         Some("version" | "--version") => {
             println!("officina {}", env!("CARGO_PKG_VERSION"));
