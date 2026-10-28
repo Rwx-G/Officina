@@ -334,6 +334,31 @@
       ]
     },
     {
+      "name": "a conversation resumed back after its successor is itself again",
+      "steps": [
+        {"events": [
+          {"v": 1, "ts": 1793102400000, "event": "UserPromptSubmit", "session_id": "s1", "cwd": "C:/work/api", "prompt": "draft the plan", "claude_pid": 4100},
+          {"v": 1, "ts": 1793102410000, "event": "SessionEnd", "session_id": "s1", "cwd": "C:/work/api", "reason": "resume", "claude_pid": 4100},
+          {"v": 1, "ts": 1793102410200, "event": "SessionStart", "session_id": "s3", "cwd": "C:/work/api", "source": "resume", "claude_pid": 4100},
+          {"v": 1, "ts": 1793102412000, "event": "UserPromptSubmit", "session_id": "s3", "cwd": "C:/work/api", "prompt": "check the old notes", "claude_pid": 4100},
+          {"v": 1, "ts": 1793102420000, "event": "SessionEnd", "session_id": "s3", "cwd": "C:/work/api", "reason": "resume", "claude_pid": 4100},
+          {"v": 1, "ts": 1793102420200, "event": "SessionStart", "session_id": "s1", "cwd": "C:/work/api", "source": "resume", "claude_pid": 4100},
+          {"v": 1, "ts": 1793102430000, "event": "UserPromptSubmit", "session_id": "s1", "cwd": "C:/work/api", "prompt": "back to the plan", "claude_pid": 4100}
+        ]},
+        {"agents": {"now_ms": 1793102460000, "records": [
+          {"pid": 4100, "sessionId": "s3", "kind": "interactive", "cwd": "C:/work/api", "name": "api", "status": "busy", "startedAt": 1793102340000}
+        ]}}
+      ],
+      "expect": [
+        {"session_id": "s1",
+         "facts": {"kind": ["interactive", "agents"], "name": ["api", "agents"], "cwd": ["C:/work/api", "hook"], "claude_pid": [4100, "hook"], "status": ["busy", "agents"], "listed": [1793102460000, "agents"], "started": [{"source": "resume", "claude_pid": 4100}, "hook"], "last_prompt_at": [1793102430000, "hook"], "ended": [{"reason": "resume", "claude_pid": 4100}, "hook"], "successor": ["s3", "hook"]},
+         "ended": null, "superseded": false, "non_interactive": false},
+        {"session_id": "s3",
+         "facts": {"cwd": ["C:/work/api", "hook"], "claude_pid": [4100, "hook"], "started": [{"source": "resume", "claude_pid": 4100}, "hook"], "last_prompt_at": [1793102412000, "hook"], "ended": [{"reason": "resume", "claude_pid": 4100}, "hook"], "successor": ["s1", "hook"]},
+         "ended": {"kind": "session_end", "reason": "resume"}, "superseded": true, "non_interactive": false}
+      ]
+    },
+    {
       "name": "a session gone while the window was closed is interrupted at the first refresh",
       "steps": [
         {"agents": {"now_ms": 1793102400000, "records": [

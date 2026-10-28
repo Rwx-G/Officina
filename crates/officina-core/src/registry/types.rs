@@ -402,10 +402,20 @@ impl SessionRecord {
         self.ending().is_some()
     }
 
+    /// The session that replaced this one in its process (D-52), unless a
+    /// later sign of life shows this one continued since: a conversation
+    /// resumed later keeps its id (D-75), and is itself again (D-77).
+    pub fn current_successor(&self) -> Option<&Sourced<String>> {
+        let life = self.sign_of_life_ms();
+        self.successor
+            .as_ref()
+            .filter(|next| life.is_none_or(|life| life <= next.at_ms))
+    }
+
     /// True when another session replaced this one in its process (AD-47):
     /// it gives no triage row of its own.
     pub fn is_superseded(&self) -> bool {
-        self.successor.is_some()
+        self.current_successor().is_some()
     }
 
     /// True when a `UserPromptSubmit` was seen.

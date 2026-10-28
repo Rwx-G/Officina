@@ -533,8 +533,8 @@ pub struct AgentsChanges {
 /// The session a `claude agents` record of `session_id`, in process
 /// `claude_pid`, stands for (AD-46, E14): a session superseded in that same
 /// process stands for its successor, and so on to the chain's head. A
-/// successor in another process, or one `known` does not hold, ends the
-/// chain.
+/// successor in another process, one `known` does not hold, or a session
+/// that continued since it was replaced ends the chain.
 pub fn chain_head(
     session_id: &str,
     claude_pid: Option<u32>,
@@ -545,7 +545,7 @@ pub fn chain_head(
     while seen.insert(head.clone()) {
         let Some(next) = known
             .get(&head)
-            .and_then(|r| r.successor.as_ref())
+            .and_then(SessionRecord::current_successor)
             .map(|s| s.value.clone())
         else {
             break;
@@ -1111,6 +1111,30 @@ mod tests {
         let next = memory.agents(&next, &elsewhere, NOW + 4_000);
         assert!(next.session_ids().any(|id| id == "s1"));
         assert!(!memory.records()["s1"].is_ended(), "listed again: alive");
+    }
+
+    /// Adversarial pass: `/resume` back to a conversation another `/resume`
+    /// left (D-75 keeps its id) makes it itself again; its old link no
+    /// longer marks it superseded, and the chain does not loop back to the
+    /// session that replaced it.
+    #[test]
+    fn a_session_resumed_after_its_successor_is_itself_again() {
+        let mut memory = Memory::default();
+        memory.line(&event("UserPromptSubmit", "s1", NOW));
+        memory.line(&end("s1", "resume", NOW + 1_000));
+        memory.line(&start("s3", "resume", NOW + 1_200));
+        memory.line(&event("UserPromptSubmit", "s3", NOW + 2_000));
+        memory.line(&end("s3", "resume", NOW + 3_000));
+        memory.line(&start("s1", "resume", NOW + 3_200));
+        memory.line(&event("UserPromptSubmit", "s1", NOW + 4_000));
+        let records = memory.records();
+        assert_eq!(records["s1"].successor.as_ref().unwrap().value, "s3");
+        assert!(!records["s1"].is_superseded(), "it continued since");
+        assert!(!records["s1"].is_ended());
+        assert!(records["s3"].is_superseded());
+        for named in ["s1", "s3"] {
+            assert_eq!(chain_head(named, Some(PID), &records), "s1", "{named}");
+        }
     }
 
     #[test]
