@@ -2,7 +2,9 @@
 //! and the queries it shares with the window's writer, each turning rows
 //! into core records.
 
-use officina_core::registry::types::{RestoreNotice, SettingKey, Source};
+use officina_core::registry::types::{
+    EventFileRecord, ExcerptRecord, RestoreNotice, SessionRow, SettingKey, Source,
+};
 use rusqlite::Connection;
 use rusqlite::types::ValueRef;
 
@@ -77,6 +79,73 @@ impl Reader {
     pub fn restore_notice(&self) -> Option<RestoreNotice> {
         restore_notice(&self.conn)
     }
+
+    /// Every `event_file` row, by name.
+    pub fn event_files(&self) -> rusqlite::Result<Vec<EventFileRecord>> {
+        event_files(&self.conn)
+    }
+
+    /// Every `session` row, by session id.
+    pub fn sessions(&self) -> rusqlite::Result<Vec<SessionRow>> {
+        sessions(&self.conn)
+    }
+
+    /// Every `session_excerpt` row, by session id.
+    pub fn excerpts(&self) -> rusqlite::Result<Vec<ExcerptRecord>> {
+        excerpts(&self.conn)
+    }
+}
+
+/// Every `event_file` row, by name.
+pub(crate) fn event_files(conn: &Connection) -> rusqlite::Result<Vec<EventFileRecord>> {
+    conn.prepare_cached(
+        "SELECT name, ingested_bytes, complete_at_ms, corrupt_lines, rewrites FROM event_file ORDER BY name",
+    )?
+    .query_map([], |row| {
+        Ok(EventFileRecord {
+            name: row.get(0)?,
+            ingested_bytes: u64::try_from(row.get::<_, i64>(1)?).unwrap_or(0),
+            complete_at_ms: row.get(2)?,
+            corrupt_lines: row.get(3)?,
+            rewrites: row.get(4)?,
+        })
+    })?
+    .collect()
+}
+
+/// Every `session` row, by session id.
+pub(crate) fn sessions(conn: &Connection) -> rusqlite::Result<Vec<SessionRow>> {
+    conn.prepare_cached(
+        "SELECT session_id, project, first_seen_ms, last_seen_ms FROM session ORDER BY session_id",
+    )?
+    .query_map([], |row| {
+        Ok(SessionRow {
+            session_id: row.get(0)?,
+            project: row.get(1)?,
+            first_seen_ms: row.get(2)?,
+            last_seen_ms: row.get(3)?,
+        })
+    })?
+    .collect()
+}
+
+/// Every `session_excerpt` row, by session id.
+pub(crate) fn excerpts(conn: &Connection) -> rusqlite::Result<Vec<ExcerptRecord>> {
+    conn.prepare_cached(
+        "SELECT session_id, prompt, prompt_at_ms, answer_head, answer_tail, answer_at_ms
+         FROM session_excerpt ORDER BY session_id",
+    )?
+    .query_map([], |row| {
+        Ok(ExcerptRecord {
+            session_id: row.get(0)?,
+            prompt: row.get(1)?,
+            prompt_at_ms: row.get(2)?,
+            answer_head: row.get(3)?,
+            answer_tail: row.get(4)?,
+            answer_at_ms: row.get(5)?,
+        })
+    })?
+    .collect()
 }
 
 /// `PRAGMA user_version`.

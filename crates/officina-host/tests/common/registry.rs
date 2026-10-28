@@ -16,6 +16,8 @@ pub struct Home {
     _dir: tempfile::TempDir,
     pub root: PathBuf,
     pub home: PathBuf,
+    /// The event files' folder.
+    pub events: PathBuf,
 }
 
 impl Home {
@@ -23,10 +25,12 @@ impl Home {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().to_path_buf();
         let home = root.join("officina-home");
+        let events = home.join("events");
         Home {
             _dir: dir,
             root,
             home,
+            events,
         }
     }
 
@@ -78,6 +82,61 @@ pub fn file_contains(path: &Path, needle: &str) -> bool {
         .unwrap_or_default()
         .windows(needle.len())
         .any(|w| w == needle.as_bytes())
+}
+
+impl Home {
+    /// Appends `lines` to the event file `name`, creating it.
+    pub fn append(&self, name: &str, lines: &[String]) {
+        std::fs::create_dir_all(&self.events).unwrap();
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .create(true)
+            .open(self.events.join(name))
+            .unwrap();
+        for line in lines {
+            file.write_all(line.as_bytes()).unwrap();
+        }
+    }
+
+    /// An ingestion context on this home, no floor, excerpts kept.
+    pub fn ctx(&self) -> officina_host::registry::ingest::IngestContext<'_> {
+        officina_host::registry::ingest::IngestContext {
+            events_dir: &self.events,
+            officina_home: &self.home,
+            projects: &[],
+            no_excerpts: false,
+        }
+    }
+}
+
+/// One event line, newline included, as the hook writes it.
+pub fn line(event: &str, session: &str, ts: i64, cwd: &str) -> String {
+    format!(
+        "{}\n",
+        serde_json::json!({"v": 1, "ts": ts, "event": event, "session_id": session, "cwd": cwd})
+    )
+}
+
+/// A `UserPromptSubmit` line carrying `prompt`.
+pub fn prompt(session: &str, ts: i64, cwd: &str, prompt: &str) -> String {
+    format!(
+        "{}\n",
+        serde_json::json!({"v": 1, "ts": ts, "event": "UserPromptSubmit", "session_id": session, "cwd": cwd, "prompt": prompt})
+    )
+}
+
+/// A `Stop` line carrying an answer's head and, when given, its tail.
+pub fn answer(session: &str, ts: i64, cwd: &str, head: &str, tail: Option<&str>) -> String {
+    let mut value = serde_json::json!({"v": 1, "ts": ts, "event": "Stop", "session_id": session, "cwd": cwd, "last_message": head});
+    if let Some(tail) = tail {
+        value["last_message_tail"] = tail.into();
+    }
+    format!("{value}\n")
+}
+
+/// The event file name of the UTC day `ms` falls in.
+pub fn day_file(ms: i64) -> String {
+    officina_core::dates::event_file_name(ms)
 }
 
 /// The example `name`, which `cargo test` builds next to the test

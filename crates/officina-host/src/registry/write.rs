@@ -4,7 +4,9 @@
 
 use std::path::Path;
 
-use officina_core::registry::types::{SettingKey, Source};
+use officina_core::registry::types::{
+    EventFileRecord, ExcerptRecord, SessionRow, SettingKey, Source,
+};
 use rusqlite::ErrorCode;
 
 use super::read::{self, SettingRow};
@@ -97,5 +99,20 @@ impl Writer {
     /// The schema version the database is at.
     pub fn user_version(&self) -> Result<i64, RegistryError> {
         Ok(read::user_version(&self.conn)?)
+    }
+
+    /// Every `event_file` row, by name.
+    pub fn event_files(&self) -> Result<Vec<EventFileRecord>, RegistryError> {
+        Ok(read::event_files(&self.conn)?)
+    }
+
+    /// Every `session` row, by session id.
+    pub fn sessions(&self) -> Result<Vec<SessionRow>, RegistryError> {
+        Ok(read::sessions(&self.conn)?)
+    }
+
+    /// Every `session_excerpt` row, by session id.
+    pub fn excerpts(&self) -> Result<Vec<ExcerptRecord>, RegistryError> {
+        Ok(read::excerpts(&self.conn)?)
     }
 }
