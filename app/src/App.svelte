@@ -3,7 +3,8 @@
   import { BoardStore } from "./lib/board.svelte";
   import { RegistryStore } from "./lib/registry.svelte";
   import { RelayStore } from "./lib/relay.svelte";
-  import { ViewStore, type WindowView } from "./lib/view.svelte";
+  import { OrchestratorStore } from "./lib/orchestrator.svelte";
+  import { ViewStore, keyAction, type WindowView } from "./lib/view.svelte";
   import { startAll } from "./lib/lifecycle";
   import { REGISTRY_STATE_TEXT } from "./lib/registry-text";
   import { clock, hours } from "./lib/time";
@@ -15,6 +16,7 @@
   import BoardColumn from "./components/BoardColumn.svelte";
   import FocusList from "./components/FocusList.svelte";
   import RelayBanners from "./components/RelayBanners.svelte";
+  import OrchestratorView from "./components/OrchestratorView.svelte";
   import RelayView from "./components/RelayView.svelte";
   import SubjectsView from "./components/SubjectsView.svelte";
   import Scene from "./components/scene/Scene.svelte";
@@ -22,6 +24,7 @@
   const store = new BoardStore();
   const relay = new RelayStore();
   const registry = new RegistryStore();
+  const orchestrator = new OrchestratorStore();
   const windowView = new ViewStore();
   const DONE_VISIBLE = 5;
 
@@ -63,11 +66,21 @@
   let view = $derived<WindowView>(windowView.view === "relay" && !relay.inUse ? "sessions" : windowView.view);
   let scene = $derived(view === "sessions" && windowView.mode === "scene");
 
+  // Leaving the Orchestrator view, by any path, is a reading of its
+  // briefing (AD-83, AD-93); closing the window is the backend's.
+  let shownView: WindowView = "sessions";
+  $effect(() => {
+    const current = view;
+    if (shownView === "orchestrator" && current !== "orchestrator") void orchestrator.markRead();
+    shownView = current;
+  });
+
   onMount(() =>
     startAll(
       () => store.start(),
       () => relay.start(),
       () => registry.start(),
+      () => orchestrator.start(),
     ),
   );
 
@@ -81,27 +94,25 @@
     if (event.ctrlKey || event.altKey || event.metaKey) return;
     const target = event.target as HTMLElement | null;
     if (target && ["INPUT", "TEXTAREA"].includes(target.tagName)) return;
-    if (event.key === "r") {
-      void store.refresh();
-      return;
-    }
-    // `m`, `f` and digits act in the Sessions view only (AD-55, AD-66):
-    // the Subjects view's triage keeps its own `f`.
-    if (view !== "sessions") return;
+    // The Subjects view's triage keeps its own `f` (AD-55, AD-66).
+    const action = keyAction(view, event.key);
+    if (action === null) return;
     // A held key switches once, not once per auto-repeat.
-    if (event.key === "m") {
-      if (!event.repeat) windowView.toggleBase();
-      return;
-    }
-    if (event.key === "f") {
-      if (!event.repeat) windowView.toggleFocus();
-      return;
-    }
-    // Digits focus Needs you sessions in every mode (AD-55 as amended).
-    const n = Number(event.key);
-    if (Number.isInteger(n) && n >= 1 && n <= 9) {
-      const card = store.needsYou[n - 1];
-      if (card) void store.focus(card);
+    switch (action.kind) {
+      case "refresh":
+        void store.refresh();
+        return;
+      case "toggle_base":
+        if (!event.repeat) windowView.toggleBase();
+        return;
+      case "toggle_focus":
+        if (!event.repeat) windowView.toggleFocus();
+        return;
+      case "focus_needs_you": {
+        const card = store.needsYou[action.index];
+        if (card) void store.focus(card);
+        return;
+      }
     }
   }
 </script>
@@ -116,6 +127,7 @@
     {store}
     {relay}
     {registry}
+    {orchestrator}
     {view}
     onView={(next) => (windowView.view = next)}
     base={windowView.base}
@@ -132,6 +144,8 @@
 
   {#if view === "relay"}
     <RelayView store={relay} nowMs={store.nowMs} />
+  {:else if view === "orchestrator"}
+    <OrchestratorView store={orchestrator} nowMs={store.nowMs} />
   {:else if view === "subjects"}
     <SubjectsView store={registry} nowMs={store.nowMs} />
   {:else}

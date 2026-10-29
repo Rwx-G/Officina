@@ -99,6 +99,21 @@ project uses [Semantic Versioning](https://semver.org/).
   `CLAUDE_CODE_DISABLE_AGENT_VIEW` turns agent view off in its environment
   or in the `env` object of the user settings: work orders and answers
   will fail, and set in the settings file the board's own refresh too.
+- The Orchestrator view and its briefing (v0.5, story 5.8): a fourth view
+  in the header's switch, with a neutral presence mark (absent until the
+  orchestrator ships). The briefing, built by Officina's own code from the
+  board, the relay view and the registry, lists the open subjects with
+  their sessions' states, the Needs you and Your turn sessions, the pending
+  approvals, the rows to sort, the failed and refused runs and the launched
+  work orders, and what changed since you last read it (runs finished,
+  sessions that began to wait, subjects whose status changed, orders
+  launched). It is at most 32 KiB: the oldest items go first and each
+  section says how many. Leaving the view or closing the window records
+  the reading. The view also lists the approved templates, those awaiting
+  approval and the work order history with each order's outcome, binding,
+  "unbound" and "printed id differs" flags and its session's state.
+  Commands `get_orchestrator` and `mark_briefing_read`, event
+  `orchestrator://updated`.
 
 - Sub-agents in the scene (v0.4, story 4.12): each running sub-agent of a
   session stands beside its desk, a smaller figure without a cap, from its

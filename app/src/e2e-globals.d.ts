@@ -7,6 +7,7 @@ import type { DiscardedSession } from "./lib/generated/DiscardedSession";
 import type { FocusOutcome } from "./lib/generated/FocusOutcome";
 import type { ItemOutcome } from "./lib/generated/ItemOutcome";
 import type { LaunchAnswer } from "./lib/generated/LaunchAnswer";
+import type { OrchestratorView } from "./lib/generated/OrchestratorView";
 import type { RegistryView } from "./lib/generated/RegistryView";
 import type { RelayView } from "./lib/generated/RelayView";
 import type { SubjectView } from "./lib/generated/SubjectView";
@@ -41,6 +42,10 @@ declare global {
     __officinaCardAnswer?: CardAnswer;
     /** What `launch_work_order` answers (story 5.7). */
     __officinaLaunchAnswer?: LaunchAnswer;
+    /** The Orchestrator view `get_orchestrator` answers (story 5.8). */
+    __officinaOrchestrator?: OrchestratorView | null;
+    /** Sets the Orchestrator view and emits `orchestrator://updated`. */
+    __officinaPushOrchestrator?: (view: OrchestratorView) => Promise<void>;
   }
 }
 

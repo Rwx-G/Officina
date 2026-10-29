@@ -14,8 +14,29 @@ import {
   type ThemeChoice,
 } from "./theme";
 
-/** The window's views: local state, never part of the Rust contract. */
-export type WindowView = "sessions" | "subjects" | "relay";
+/** The window's views: local state, never part of the Rust contract and
+ *  never stored (D-113). */
+export type WindowView = "sessions" | "subjects" | "relay" | "orchestrator";
+
+/** What a key asks of the window (AD-55, AD-66): `r` refreshes in every
+ *  view; `m`, `f` and the digits act in the Sessions view only (D-113,
+ *  D-532), so no other view takes them. */
+export type KeyAction =
+  | { kind: "refresh" }
+  | { kind: "toggle_base" }
+  | { kind: "toggle_focus" }
+  | { kind: "focus_needs_you"; index: number }
+  | null;
+
+export function keyAction(view: WindowView, key: string): KeyAction {
+  if (key === "r") return { kind: "refresh" };
+  if (view !== "sessions") return null;
+  if (key === "m") return { kind: "toggle_base" };
+  if (key === "f") return { kind: "toggle_focus" };
+  // Digits focus Needs you sessions in every mode (AD-55 as amended).
+  const n = Number(key);
+  return Number.isInteger(n) && n >= 1 && n <= 9 ? { kind: "focus_needs_you", index: n - 1 } : null;
+}
 
 /** The Sessions view's bases: what Focus hides and `f` brings back. */
 export type Base = "board" | "scene";

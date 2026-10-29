@@ -7,6 +7,7 @@ import {
   VIEW_STORAGE_KEY,
   ViewStore,
   defaultViewState,
+  keyAction,
   readViewState,
   serialiseViewState,
   storedViewState,
@@ -199,5 +200,32 @@ describe("view state", () => {
     expect(document.documentElement.getAttribute("data-theme")).toBe(store.theme);
     expect(storedViewState(() => throwing)).toEqual(defaultViewState());
     applyTheme(DEFAULT_THEME);
+  });
+});
+
+describe("window views", () => {
+  it("the orchestrator view is not persisted and digits stay in the Sessions view", () => {
+    const storage = memoryStorage();
+    const store = new ViewStore(() => storage);
+    store.view = "orchestrator";
+    store.toggleBase();
+    store.cycleTheme();
+    // The stored state has no view: the next window starts on Sessions.
+    expect(JSON.parse(storage.items.get(VIEW_STORAGE_KEY)!)).not.toHaveProperty("view");
+    expect(new ViewStore(() => storage).view).toBe("sessions");
+    applyTheme(DEFAULT_THEME);
+    // `m`, `f` and the digits act in the Sessions view only; `r` everywhere.
+    const sessionKeys = ["m", "f", ...Array.from({ length: 9 }, (_, i) => String(i + 1))];
+    for (const key of sessionKeys) {
+      expect(keyAction("sessions", key), key).not.toBeNull();
+      for (const view of ["subjects", "relay", "orchestrator"] as const) {
+        expect(keyAction(view, key), `${view} ${key}`).toBeNull();
+      }
+    }
+    expect(keyAction("sessions", "3")).toEqual({ kind: "focus_needs_you", index: 2 });
+    for (const view of ["sessions", "subjects", "relay", "orchestrator"] as const) {
+      expect(keyAction(view, "r")).toEqual({ kind: "refresh" });
+    }
+    expect(keyAction("sessions", "0")).toBeNull();
   });
 });

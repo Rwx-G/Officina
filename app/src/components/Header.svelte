@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { BoardStore } from "../lib/board.svelte";
+  import type { OrchestratorStore } from "../lib/orchestrator.svelte";
   import type { RegistryStore } from "../lib/registry.svelte";
   import type { RelayStore } from "../lib/relay.svelte";
   import { DEFAULT_WALKING, type Base, type Mode, type WindowView } from "../lib/view.svelte";
@@ -20,6 +21,8 @@
     relay?: RelayStore;
     /** Its rows to sort make the neutral "N to sort" chip (D-61). */
     registry?: RegistryStore;
+    /** Its presence marks the Orchestrator view button (D-565). */
+    orchestrator?: OrchestratorStore;
     /** The view shown, local window state (AD-66). */
     view?: WindowView;
     onView?: (view: WindowView) => void;
@@ -42,6 +45,7 @@
     store,
     relay,
     registry,
+    orchestrator,
     view = "sessions",
     onView,
     base = "board",
@@ -69,7 +73,15 @@
     { id: "sessions", label: "Sessions" },
     { id: "subjects", label: "Subjects" },
     { id: "relay", label: "Relay" },
+    { id: "orchestrator", label: "Orchestrator" },
   ];
+
+  // D-565: the Orchestrator button carries the orchestrator's presence as
+  // a neutral shape, never the attention colour. `presence` is null until
+  // story 5.16 reports a live orchestrator, so the ring reads absent. The
+  // pending proposals' count joins it with story 5.18 (D-675).
+  let orchestratorLive = $derived((orchestrator?.view?.presence ?? null) !== null);
+  let orchestratorName = $derived(`Orchestrator: ${orchestratorLive ? "live" : "absent"}`);
 
   // The Relay position only where the relay is in use (story 2.9).
   let views = $derived(VIEWS.filter((option) => option.id !== "relay" || relay?.inUse));
@@ -94,14 +106,35 @@
   {#if onView}
     <div class="views" role="group" aria-label="View" data-testid="view-switch">
       {#each views as option (option.id)}
-        <button
-          class="view"
-          data-testid="view-{option.id}"
-          aria-pressed={view === option.id}
-          onclick={() => onView(option.id)}
-        >
-          {option.label}
-        </button>
+        {#if option.id === "orchestrator"}
+          <button
+            class="view"
+            data-testid="view-{option.id}"
+            aria-pressed={view === option.id}
+            aria-label={orchestratorName}
+            title={orchestratorName}
+            onclick={() => onView(option.id)}
+          >
+            {option.label}
+            <span
+              class="presence"
+              class:live={orchestratorLive}
+              data-testid="orchestrator-presence"
+              data-presence={orchestratorLive ? "live" : "absent"}
+              aria-hidden="true"
+            ></span>
+
+          </button>
+        {:else}
+          <button
+            class="view"
+            data-testid="view-{option.id}"
+            aria-pressed={view === option.id}
+            onclick={() => onView(option.id)}
+          >
+            {option.label}
+          </button>
+        {/if}
       {/each}
     </div>
   {/if}
@@ -249,6 +282,27 @@
   .view[aria-pressed="true"] {
     background: var(--color-text);
     color: var(--color-bg);
+  }
+  /* D-565: a hollow ring while absent, a filled dot while live; a shape,
+     never a colour of its own. Pressed, it takes the button's text colour,
+     on which the muted one would not read. */
+  .presence {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    margin-left: 6px;
+    border: 1.5px solid var(--color-text-muted);
+    border-radius: 50%;
+    vertical-align: middle;
+  }
+  .presence.live {
+    background: var(--color-text-muted);
+  }
+  .view[aria-pressed="true"] .presence {
+    border-color: currentColor;
+  }
+  .view[aria-pressed="true"] .presence.live {
+    background: currentColor;
   }
   /* A count badge: the one pill of the header (D-539). */
   .pill {

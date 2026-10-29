@@ -9,6 +9,7 @@ import type { ConfirmItem } from "./lib/generated/ConfirmItem";
 import type { IpcError } from "./lib/generated/IpcError";
 import type { ItemAnswer } from "./lib/generated/ItemAnswer";
 import type { LaunchAnswer } from "./lib/generated/LaunchAnswer";
+import type { OrchestratorView } from "./lib/generated/OrchestratorView";
 import type { RegistryView } from "./lib/generated/RegistryView";
 import type { RelayView } from "./lib/generated/RelayView";
 
@@ -77,6 +78,10 @@ export function installE2eMock(): void {
           return card();
         case "launch_work_order":
           return launch();
+        case "get_orchestrator":
+          return window.__officinaOrchestrator ?? null;
+        case "mark_briefing_read":
+          return null;
         default:
           if (AUTHOR_COMMANDS.includes(cmd)) return author(cmd);
           return null;
@@ -95,6 +100,10 @@ export function installE2eMock(): void {
   window.__officinaPushRegistry = async (view: RegistryView) => {
     window.__officinaRegistry = view;
     await emit("registry://updated", view);
+  };
+  window.__officinaPushOrchestrator = async (view: OrchestratorView) => {
+    window.__officinaOrchestrator = view;
+    await emit("orchestrator://updated", view);
   };
 }
 

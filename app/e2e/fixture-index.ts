@@ -14,7 +14,7 @@ export const FIXTURE_DIR = import.meta.url.startsWith("file:")
   ? join(dirname(fileURLToPath(import.meta.url)), ".fixtures")
   : join(process.cwd(), "e2e", ".fixtures");
 
-export type FixtureKind = "board" | "relay" | "registry";
+export type FixtureKind = "board" | "relay" | "registry" | "orchestrator";
 
 export interface FixtureIndex {
   files: Record<string, FixtureKind>;
@@ -37,6 +37,17 @@ export function readFixtureIndex(dir: string = FIXTURE_DIR): FixtureIndex {
     throw new Error(`the fixture index at ${path} lists no board: ${REBUILD}`);
   }
   return index;
+}
+
+/** The fixture `name` of `kind`, parsed; throws, naming the command that
+ *  writes the fixtures, when the index lists no output of that kind or
+ *  none of that name. */
+export function fixtureOf<T>(kind: FixtureKind, name: string, dir: string = FIXTURE_DIR): T {
+  const found = fixturesOf<T>(kind, dir);
+  if (found.length === 0) throw new Error(`the fixture index in ${dir} lists no ${kind} output: ${REBUILD}`);
+  const fixture = found.find((f) => f.name === name);
+  if (!fixture) throw new Error(`the fixture index in ${dir} lists no ${kind} output named ${name}: ${REBUILD}`);
+  return fixture.data;
 }
 
 /** Every fixture of `kind`, by file name without `.json`, parsed. */

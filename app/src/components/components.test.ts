@@ -8,6 +8,8 @@ import { tick } from "svelte";
 import SessionCard from "./SessionCard.svelte";
 import SessionFile from "./SessionFile.svelte";
 import EndedCounts from "./EndedCounts.svelte";
+import Briefing from "./Briefing.svelte";
+import type { Briefing as BriefingPayload } from "../lib/generated/Briefing";
 import StableLabel from "./StableLabel.svelte";
 import { OUTCOME_TEXT, outcomeText, type OutcomeKind } from "../lib/outcome";
 import { SIGN_WORDS, ZONE_WORDS } from "../lib/scene/text";
@@ -934,5 +936,76 @@ describe("FocusList", () => {
     expect(getByTestId("focus-waiting-for").textContent).toBe(hostile);
     // The alert's cause, last known on unknown data (D-494).
     expect(getByTestId("focus-alert").textContent).toContain(`${CAUSE_TEXT.priority}, last known`);
+  });
+});
+
+describe("Briefing", () => {
+  const hostile = `<img src=x onerror="window.__officinaXss = 1">`;
+  const section = <T,>(items: T[], dropped = 0) => ({ count: items.length + dropped, dropped, items });
+
+  function briefing(): BriefingPayload {
+    return {
+      generated_at_ms: NOW,
+      cursor: { kind: "none" },
+      subjects: section([
+        {
+          id: 1,
+          project: "billing-api",
+          name: "invoice export",
+          status: "active",
+          sessions: [{ session_id: "s1", name: hostile, phase: "working" }],
+          at_ms: NOW,
+        },
+      ]),
+      waiting: section([
+        {
+          key: "k1",
+          session_id: "s1",
+          name: hostile,
+          project: "billing-api",
+          column: "needs_you",
+          waiting_for: "permission prompt",
+          subject: null,
+          at_ms: NOW,
+        },
+      ]),
+      approvals: section([
+        {
+          id: "r1",
+          project: "billing-api",
+          action: "deploy",
+          session_name: hostile,
+          valid: true,
+          expires_at_ms: NOW + 60_000,
+          at_ms: NOW,
+        },
+      ]),
+      triage: section([
+        { key: "session:s2", kind: "unfiled_session", project: "docs-site", subject: null, session_name: hostile, at_ms: null },
+      ]),
+      runs: section([
+        {
+          kind: "refused",
+          project: "billing-api",
+          session_id: "s1",
+          action: hostile,
+          exit_code: null,
+          reason: "action_not_allowed",
+          at_ms: NOW,
+        },
+      ]),
+      work_orders: section([]),
+      changed: section([{ kind: "started_waiting", key: "k1", name: hostile, column: "needs_you", at_ms: NOW }], 3),
+    };
+  }
+
+  it("Briefing renders session names with markup as text", () => {
+    const { container, getByTestId } = render(Briefing, { briefing: briefing(), nowMs: NOW });
+    expect(container.querySelector("img")).toBeNull();
+    for (const id of ["briefing-waiting", "briefing-approval", "briefing-triage", "briefing-run", "briefing-change", "briefing-subject"]) {
+      expect(getByTestId(id).textContent, id).toContain(hostile);
+    }
+    expect(getByTestId("briefing-dropped-changed").textContent).toContain("3 older items");
+    expect(getByTestId("briefing-since").textContent).toContain("first reading");
   });
 });

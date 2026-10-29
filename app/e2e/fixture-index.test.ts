@@ -3,7 +3,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { fixturesOf, readFixtureIndex } from "./fixture-index";
+import { fixtureOf, fixturesOf, readFixtureIndex } from "./fixture-index";
 
 function dirWith(files: Record<string, unknown>): string {
   const dir = mkdtempSync(join(tmpdir(), "officina-fixture-index-"));
@@ -33,5 +33,17 @@ describe("fixture index", () => {
       { name: "c", data: { n: 3 } },
     ]);
     expect(fixturesOf("registry", dir)).toEqual([]);
+  });
+
+  it("an index without an orchestrator output fails and names pnpm e2e:fixtures", () => {
+    const dir = dirWith({ "index.json": { files: { "a.json": "board" } }, "a.json": {} });
+    expect(() => fixtureOf("orchestrator", "orchestrator-day", dir)).toThrow(/no orchestrator output.*pnpm e2e:fixtures/);
+    const listed = dirWith({
+      "index.json": { files: { "a.json": "board", "orchestrator-day.json": "orchestrator" } },
+      "a.json": {},
+      "orchestrator-day.json": { schema: 1 },
+    });
+    expect(fixtureOf("orchestrator", "orchestrator-day", listed)).toEqual({ schema: 1 });
+    expect(() => fixtureOf("orchestrator", "orchestrator-empty", listed)).toThrow(/named orchestrator-empty.*pnpm e2e:fixtures/);
   });
 });

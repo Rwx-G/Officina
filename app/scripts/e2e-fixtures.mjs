@@ -1297,6 +1297,201 @@ for (const [name, scenario] of Object.entries(sceneScenarioTable).filter(([, s])
   console.log(`fixture ${name}: exit ${run.status}`);
 }
 
+// Orchestrator views (story 5.8, D-72's pattern, D-181's kind
+// `orchestrator`): a hand-written, redacted floor with templates approved
+// through `approve_fixture`; subjects through `registry_fixture`; work
+// orders written, bound and the briefing's reading recorded by the window's
+// writer through `orchestrator_fixture`, at explicit times, which then
+// prints the `OrchestratorView` the window would build from the real
+// `officina board --json` of the same home. No hash, no SQL, no view built
+// here.
+const orchestratorFixture = join(targetDir, "debug", "examples", `orchestrator_fixture${exe}`);
+execFileSync(
+  "cargo",
+  ["build", "--quiet", "--locked", "-p", "officina-host", "--example", "orchestrator_fixture", "--features", "window-authority"],
+  { cwd: root, stdio: ["ignore", "ignore", "inherit"] },
+);
+
+const orchestratorFloor = `schema = 2
+
+[[project]]
+name = "billing-api"
+path = "C:/work/billing-api"
+
+[[project]]
+name = "docs-site"
+path = "C:/work/docs-site"
+
+[[template]]
+name = "dependency-bump"
+description = "Bump one dependency and fix what breaks"
+projects = ["billing-api", "docs-site"]
+prompt = "Bump {package} to its latest {level} release, run the tests, fix what breaks, commit."
+model = "sonnet"
+
+[template.params.package]
+values = ["serde_json", "@scope/pkg"]
+
+[template.params.level]
+values = ["patch", "minor"]
+
+[[template]]
+name = "lint-sweep"
+description = "Fix the lint warnings of one project"
+projects = ["billing-api"]
+prompt = "Fix the {level} lint warnings, run the tests, commit."
+
+[template.params.level]
+values = ["error", "warning"]
+`;
+
+// A template added since the approval: it awaits the author's.
+const orchestratorPendingFloor = `${orchestratorFloor}
+[[template]]
+name = "release-notes"
+description = "Draft the release notes of one version"
+projects = ["docs-site"]
+prompt = "Draft the release notes of {version} from the merged changes."
+
+[template.params.version]
+values = ["v0.5.0"]
+`;
+
+const bump = (card, seq, extra) => ({
+  card,
+  template: "dependency-bump",
+  project: "billing-api",
+  values: [["package", "serde_json"], ["level", "minor"]],
+  seq,
+  subject: { kind: "new", value: "dependency upgrades" },
+  outcome: "started",
+  exit_code: 0,
+  ...extra,
+});
+
+const orchestratorScenarios = {
+  // The approved catalogue, nothing launched, nothing read yet.
+  "orchestrator-empty": { steps: [], orders: [], journal: [], agents: [], events: [], readAt: null, pending: false },
+  "orchestrator-day": {
+    events: [
+      { ts: now - 3 * HOUR, event: "UserPromptSubmit", session_id: sid(504), cwd: work("docs-site"), prompt: hostile },
+      { ts: now - 170 * MIN, event: "SessionEnd", session_id: sid(504), cwd: work("docs-site"), reason: "prompt_input_exit" },
+      { ts: now - 40 * MIN, event: "UserPromptSubmit", session_id: sid(503), cwd: work("docs-site"), prompt: "Draft the install guide" },
+      { ts: now - 20 * MIN, event: "Stop", session_id: sid(503), cwd: work("docs-site"), last_message: "Drafted. Which tone do you want?" },
+      { ts: now - 6 * MIN, event: "UserPromptSubmit", session_id: sid(501), cwd: work("billing-api"), prompt: "Run the migration dry-run" },
+      { ts: now - 4 * MIN, event: "Notification", session_id: sid(501), cwd: work("billing-api"), notification_type: "permission_prompt", message: "Claude needs your permission to use Bash" },
+    ].map((e) => ({ v: 1, ...e })),
+    steps: [
+      "ingest",
+      { at: now - 3 * HOUR },
+      { author: { kind: "create", name: "install guide", origin: { sessions: [sid(503)] } } },
+      { author: { kind: "create", name: "old spike", origin: { project: "billing-api" } } },
+      { at: now - 30 * MIN },
+      { author: { kind: "archive", subject: 2, routine: false } },
+    ],
+    orders: [
+      bump("card-bound", 1, { launched_at_ms: now - 50 * MIN, printed: "backgrounded · bg0101 · dependency-bump-1", bind: { bg_id: "bg0101", session_id: sid(502) } }),
+      bump("card-unbound", 2, { launched_at_ms: now - 25 * MIN, printed: "backgrounded · bg0102 · dependency-bump-2" }),
+      bump("card-differs", 3, { launched_at_ms: now - 15 * MIN, printed: "backgrounded · bg9999 · dependency-bump-3", bind: { bg_id: "bg0103", session_id: sid(505) } }),
+      {
+        card: "card-failed",
+        template: "lint-sweep",
+        project: "billing-api",
+        values: [["level", "warning"]],
+        seq: 1,
+        subject: { kind: "new", value: "lint" },
+        launched_at_ms: now - 10 * MIN,
+        outcome: "failed",
+        exit_code: 1,
+        error: `error: ${hostile}`,
+      },
+    ],
+    // Runs through the relay that failed or were refused, as `officina run`
+    // journals them.
+    journal: [
+      { ts: now - 35 * MIN, kind: "refused", project: "billing-api", session_id: sid(501), action: hostile, reason: "action_not_allowed", detail: "not in the catalogue" },
+    ],
+    agents: [
+      { pid: 4501, cwd: work("billing-api"), kind: "interactive", startedAt: now - HOUR, sessionId: sid(501), name: "billing-api", status: "waiting", waitingFor: "permission prompt" },
+      { pid: 4503, cwd: work("docs-site"), kind: "interactive", startedAt: now - HOUR, sessionId: sid(503), name: hostile, status: "idle" },
+      { pid: 4502, id: "bg0101", cwd: work("billing-api"), kind: "background", startedAt: now - 50 * MIN + 1_000, sessionId: sid(502), name: "dependency-bump-1", status: "busy", state: "working" },
+    ],
+    readAt: now - HOUR,
+    pending: true,
+  },
+};
+
+for (const [name, scenario] of Object.entries(orchestratorScenarios)) {
+  const tmp = mkdtempSync(join(tmpdir(), `officina-fixture-${name}-`));
+  const home = join(tmp, "home");
+  const officinaHome = join(tmp, "officina");
+  mkdirSync(join(home, ".claude", "sessions"), { recursive: true });
+  mkdirSync(join(officinaHome, "events"), { recursive: true });
+  const byDay = new Map();
+  for (const event of scenario.events) {
+    const day = utcDay(event.ts);
+    byDay.set(day, (byDay.get(day) ?? "") + JSON.stringify(event) + "\n");
+  }
+  for (const [day, content] of byDay) writeFileSync(join(officinaHome, "events", `${day}.jsonl`), content);
+  writeFileSync(join(officinaHome, "floor.toml"), orchestratorFloor);
+  approveFixture(officinaHome, "approve");
+  if (scenario.steps.length > 0) {
+    const steps = join(tmp, "steps.json");
+    writeFileSync(steps, JSON.stringify({ now_ms: now, steps: scenario.steps }));
+    execFileSync(registryFixture, [officinaHome, steps], { stdio: ["ignore", "ignore", "inherit"] });
+  }
+  const script = join(tmp, "orders.json");
+  writeFileSync(script, JSON.stringify({ now_ms: now, orders: scenario.orders }));
+  execFileSync(orchestratorFixture, [officinaHome, script], { stdio: ["ignore", "ignore", "inherit"] });
+  if (scenario.journal.length > 0) {
+    mkdirSync(join(officinaHome, "journal"), { recursive: true });
+    for (const line of scenario.journal) {
+      appendFileSync(join(officinaHome, "journal", `${utcDay(line.ts)}.jsonl`), JSON.stringify({ v: 1, ...line }) + "\n");
+    }
+  }
+  if (scenario.pending) writeFileSync(join(officinaHome, "floor.toml"), orchestratorPendingFloor);
+  const fixture = join(tmp, "agents.json");
+  writeFileSync(fixture, JSON.stringify(scenario.agents));
+  const env = {
+    SYSTEMROOT: process.env.SYSTEMROOT ?? "",
+    USERPROFILE: home,
+    HOME: home,
+    OFFICINA_HOME: officinaHome,
+    OFFICINA_CLAUDE_BIN: fakeClaude,
+    FAKE_CLAUDE_FIXTURE: fixture,
+    FAKE_CLAUDE_MODE: "ok",
+  };
+  const board = officinaJson(["board", "--json"], env);
+  if (board.status !== 0) throw new Error(`${name}: officina board exited ${board.status}: ${board.stderr}`);
+  const boardFile = join(tmp, "board.json");
+  writeFileSync(boardFile, board.stdout);
+  writeFileSync(script, JSON.stringify({ now_ms: now, board_file: boardFile, read_at_ms: scenario.readAt }));
+  const view = spawnSync(orchestratorFixture, [officinaHome, script], { encoding: "utf8" });
+  if (view.status !== 0) throw new Error(`${name}: orchestrator_fixture exited ${view.status}: ${view.stderr}`);
+  const printed = JSON.parse(view.stdout);
+  const { briefing } = printed;
+  const day = name === "orchestrator-day";
+  const checks = [
+    [printed.templates.length === 2, "the two approved templates"],
+    [day === (printed.awaiting_templates.length > 0), "a template awaiting approval on the day only"],
+    [day === (briefing.cursor.kind === "read_at"), "the day's last reading"],
+    ...["waiting", "subjects", "triage", "runs", "work_orders", "changed"].map((section) => [
+      day === (briefing[section].count > 0),
+      `${day ? "items" : "nothing"} in ${section}`,
+    ]),
+    [!day || printed.work_orders.some((o) => o.unbound), "an unbound order"],
+    [!day || printed.work_orders.some((o) => o.printed_id_differs), "an order whose printed id differs"],
+    [!day || printed.work_orders.some((o) => o.session !== null), "an order bound to its session"],
+    [!day || printed.work_orders.some((o) => o.outcome === "failed"), "a failed order"],
+  ];
+  for (const [held, what] of checks) {
+    if (!held) throw new Error(`${name}: expected ${what}: ${view.stdout}`);
+  }
+  writeFixture(name, "orchestrator", view.stdout);
+  rmSync(tmp, { recursive: true, force: true });
+  console.log(`fixture ${name}: exit ${view.status}`);
+}
+
 // D-181: every fixture file and its kind, for the loader the specs and the
 // Vitest cases share (`e2e/fixture-index.ts`).
 writeFileSync(join(outDir, "index.json"), JSON.stringify({ files: fixtureKinds }, null, 2) + "\n");
