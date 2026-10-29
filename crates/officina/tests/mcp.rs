@@ -586,6 +586,40 @@ fn the_31st_proposal_in_an_hour_is_refused_with_its_reason() {
     assert_eq!(files(&home).len(), PROPOSALS_PER_HOUR);
 }
 
+/// D-964 (story 5.19's security audit, Low): files another process wrote
+/// with ids dated a day ahead are not this hour's, so they never stop the
+/// orchestrator's proposal tools.
+#[test]
+fn proposals_dated_ahead_do_not_reach_the_hourly_limit() {
+    let home = McpHome::new();
+    let ahead = now_ms() + 24 * PROPOSAL_HOUR_MS;
+    let file = ProposalFile::recap(
+        RecapProposal {
+            target: ProposalTarget::SubjectId(4),
+            done: "d".into(),
+            blocking: "b".into(),
+            decision_expected: "e".into(),
+        },
+        None,
+        ahead,
+    );
+    for _ in 0..PROPOSALS_PER_HOUR {
+        write_proposal(&home.proposals_dir(), &file, ahead).unwrap();
+    }
+    let sources = Sources::neutral();
+    let (_, responses) = home.session(&[call(
+        2,
+        McpTool::ProposeRecap,
+        arguments(McpTool::ProposeRecap, &sources, 4),
+    )]);
+    assert_eq!(
+        response(&responses, 2)["result"]["isError"],
+        false,
+        "{responses:?}"
+    );
+    assert_eq!(files(&home).len(), PROPOSALS_PER_HOUR + 1);
+}
+
 /// AD-90, D-145: with as many proposals pending as the limit, written
 /// over an hour ago, the next is refused with its reason.
 #[test]

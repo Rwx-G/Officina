@@ -484,7 +484,10 @@ impl RateRefusal {
 
 /// The rate limits (AD-90): `written` holds when each known proposal was
 /// written (the files and the registry rows, each id once), `pending` how
-/// many wait. The hourly limit is checked first.
+/// many wait. The hourly limit is checked first. A time after `now_ms` is
+/// not within the hour: an id's time is its writer's choice, and a file
+/// dated ahead would otherwise count as written this hour until retention
+/// removed it, stopping the orchestrator's proposal tools (D-964).
 ///
 /// ```
 /// use officina_core::orders::proposal::{PROPOSALS_PER_HOUR, RateRefusal, rate_refusal};
@@ -496,7 +499,7 @@ impl RateRefusal {
 pub fn rate_refusal(now_ms: i64, written: &[i64], pending: usize) -> Option<RateRefusal> {
     let this_hour = written
         .iter()
-        .filter(|at| **at > now_ms - PROPOSAL_HOUR_MS)
+        .filter(|at| (now_ms - PROPOSAL_HOUR_MS + 1..=now_ms).contains(*at))
         .count();
     if this_hour >= PROPOSALS_PER_HOUR {
         Some(RateRefusal::HourlyLimit)
@@ -1172,6 +1175,12 @@ mod tests {
             rate_refusal(NOW, &recent, PROPOSALS_PENDING_MAX),
             Some(RateRefusal::HourlyLimit),
             "the hourly limit first"
+        );
+        let ahead = vec![NOW + 1; PROPOSALS_PER_HOUR];
+        assert_eq!(
+            rate_refusal(NOW, &ahead, 0),
+            None,
+            "D-964: ids dated ahead of the clock are not this hour's"
         );
     }
 
