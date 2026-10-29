@@ -8,51 +8,27 @@
 //! `orchestrator_started` line, and keeps the pid, as it does a refusal or
 //! a failure. A Start is always a new session, never a resume.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::mpsc::Sender;
 
 use officina_core::board::Board;
 use officina_core::focus::FocusOutcome;
 use officina_core::ipc::IpcError;
 use officina_core::orders::orchestrator::{StartAnswer, StartRefusal};
-use officina_core::orders::{ORCHESTRATOR_DIR, PROPOSALS_DIR};
 use officina_core::registry::types::OrchestratorStartOutcome;
 use officina_core::relay::journal::{JournalEntry, OrchestratorStarted};
-use officina_core::spawn::{ClaudeVector, McpServerInputs, OfficinaDir};
+use officina_core::spawn::{ClaudeVector, McpServerInputs};
 
 use crate::collector::Collector;
+pub use crate::files::holds_anything;
+pub use crate::paths::{
+    officina_exe_name, orchestrator_proposals_dir as proposals_dir, orchestrator_workdir as workdir,
+};
 use crate::registry::orders::OrchestratorStartRecord;
 use crate::registry::window::WindowRegistry;
 use crate::relay::home::load_relay_floor;
 use crate::spawn::{self, BaseEnv, ResolvedClaude, SpawnError, SpawnOutcome};
 use crate::watch::{AUTHOR_WAIT, AuthorCommand, CollectorMsg, ask};
-
-/// The file name of the `officina` binary the MCP config runs (D-144),
-/// beside the window's own executable.
-pub fn officina_exe_name() -> String {
-    format!("officina{}", std::env::consts::EXE_SUFFIX)
-}
-
-/// `<home>/orchestrator/workdir`.
-pub fn workdir(officina_home: &Path) -> PathBuf {
-    OfficinaDir::OrchestratorWorkdir
-        .segments()
-        .iter()
-        .fold(officina_home.to_path_buf(), |path, segment| {
-            path.join(segment)
-        })
-}
-
-/// `<home>/orchestrator/proposals`, where the proposal tools write (AD-91).
-pub fn proposals_dir(officina_home: &Path) -> PathBuf {
-    officina_home.join(ORCHESTRATOR_DIR).join(PROPOSALS_DIR)
-}
-
-/// True when `dir` holds anything; a folder that cannot be listed counts
-/// as holding something, so nothing starts in it.
-pub fn holds_anything(dir: &Path) -> bool {
-    std::fs::read_dir(dir).map_or(true, |mut entries| entries.next().is_some())
-}
 
 /// The pid a spawned Start kept, with its creation time in Unix
 /// milliseconds, which tells it from a later process given the same pid
@@ -366,6 +342,7 @@ pub fn start_orchestrator(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     #[test]
     fn a_spawn_ends_as_its_outcome_says() {

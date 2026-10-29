@@ -82,6 +82,12 @@ pub fn atomic_write(path: &Path, content: &[u8]) -> io::Result<()> {
     Err(last_error.unwrap_or_else(|| io::Error::other("rename failed")))
 }
 
+/// True when `dir` holds anything; a folder that cannot be listed counts
+/// as holding something, so nothing starts in it (AD-89's workdir).
+pub fn holds_anything(dir: &Path) -> bool {
+    fs::read_dir(dir).map_or(true, |mut entries| entries.next().is_some())
+}
+
 /// Path of the event file a hook running at `now_ms` appends to.
 pub fn event_file_for(events_dir: &Path, now_ms: i64) -> std::path::PathBuf {
     events_dir.join(event_file_name(now_ms))

@@ -7,12 +7,13 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use officina_core::agents::SessionKind;
+use officina_core::agents::{AgentRecord, SessionKind, parse_agents};
 use officina_core::permissions::{SeenKind, auto_mode_block, permission_line, permissions_block};
 
 use officina_core::contract::{ON_FAILURE_SINCE, check_agents, claude_version};
 use officina_core::dates::{DAY_MS, dated_file_day, day_start_ms, utc_date, utc_day_text};
 use officina_core::floor::{Autonomy, parse_floor};
+use officina_core::orders::orchestrator::{is_orchestrator, under_orchestrator_dir};
 use officina_core::quota::STALE_AFTER_MS;
 use officina_core::registry::model::PAUSE_AFTER_FAILED_CALLS;
 use officina_core::registry::triage_call::{
@@ -25,8 +26,10 @@ use officina_core::relay::gate::gated_tools;
 use officina_core::spawn::AGENT_VIEW_VAR;
 
 use crate::collector::{Collector, ContractStore};
-use crate::files::{now_ms, read_recent_events};
-use crate::paths::{ENV_FLOOR, Paths, env_path, events_dir_of};
+use crate::files::{holds_anything, now_ms, read_recent_events};
+use crate::paths::{
+    ENV_FLOOR, Paths, env_path, events_dir_of, officina_exe_name, orchestrator_workdir,
+};
 use crate::registry::RegistryPaths;
 use crate::registry::store::{
     self as registry_store, Location, daily_copies, onedrive_roots_from_env, quarantined,
@@ -577,7 +580,9 @@ fn command_words(command: &str) -> Option<Vec<String>> {
     Some(words)
 }
 
-/// Runs every check. `exe` is the path of the running `officina` binary.
+/// Runs every check. `exe` is the path of the running `officina` binary;
+/// its folder is where the window's `officina.exe` sits too (D-144,
+/// D-167).
 pub fn run(collector: &Collector, exe: &Path) -> Vec<Check> {
     run_with(collector, exe, false)
 }
@@ -721,7 +726,7 @@ pub fn run_with(collector: &Collector, exe: &Path, permissions: bool) -> Vec<Che
     let relay = RelayHome::new(paths.officina_home.clone(), env_path(ENV_FLOOR));
     let gate = gate_required(&relay);
     let required = registrations(gate);
-    let (mut checks, version) = check_claude(collector);
+    let (mut checks, version, agents) = check_claude(collector);
     checks.extend(check_agent_view(
         collector.base_env().vars(),
         &SettingsFile::read(&user_settings),
@@ -753,6 +758,11 @@ pub fn run_with(collector: &Collector, exe: &Path, permissions: bool) -> Vec<Che
     }
     checks.extend(write_paste_files(&doctor_dir, &files));
     checks.push(check_officina_home(&paths.officina_home));
+    checks.extend(check_orchestrator(
+        &paths.officina_home,
+        exe.parent().unwrap_or(Path::new("")),
+        agents.as_deref(),
+    ));
     let mut registry = check_registry(&paths.officina_home, &onedrive_roots, now);
     if let Some(version) = &version {
         registry.push(check_hook_fields(&collector.contract_file(), version));
@@ -826,8 +836,9 @@ pub fn refused_claude_line(claude: &Path) -> String {
 
 /// `claude --version`, then `claude agents --json` against the contract;
 /// the version, when it was read, for the hook fields of the registry
-/// section. A `claude` Officina refuses to run fails with one line.
-fn check_claude(collector: &Collector) -> (Vec<Check>, Option<String>) {
+/// section, and the sessions listed, for the orchestrator's lines. A
+/// `claude` Officina refuses to run fails with one line.
+fn check_claude(collector: &Collector) -> (Vec<Check>, Option<String>, Option<Vec<AgentRecord>>) {
     let Some(bin) = collector.resolved_claude() else {
         return (
             vec![check(
@@ -835,6 +846,7 @@ fn check_claude(collector: &Collector) -> (Vec<Check>, Option<String>) {
                 "claude",
                 SpawnError::NotFound.to_string(),
             )],
+            None,
             None,
         );
     };
@@ -846,30 +858,24 @@ fn check_claude(collector: &Collector) -> (Vec<Check>, Option<String>) {
                 refused_claude_line(bin.path()),
             )],
             None,
+            None,
         );
     }
     let config_dir = collector.paths().claude_config_override.as_deref();
     let base = collector.base_env();
-    match spawn::version(bin, config_dir, base) {
-        Ok(v) => (
-            vec![
-                check(
-                    Level::Ok,
-                    "claude",
-                    format!("{v} at {}", bin.path().display()),
-                ),
-                check_agents_output(bin, config_dir, base),
-            ],
-            Some(v),
-        ),
-        Err(e) => (
-            vec![
-                check(Level::Fail, "claude", e.to_string()),
-                check_agents_output(bin, config_dir, base),
-            ],
-            None,
-        ),
-    }
+    let (version, version_line) = match spawn::version(bin, config_dir, base) {
+        Ok(v) => {
+            let line = check(
+                Level::Ok,
+                "claude",
+                format!("{v} at {}", bin.path().display()),
+            );
+            (Some(v), line)
+        }
+        Err(e) => (None, check(Level::Fail, "claude", e.to_string())),
+    };
+    let (agents_line, agents) = check_agents_output(bin, config_dir, base);
+    (vec![version_line, agents_line], version, agents)
 }
 
 /// True when a value of [`AGENT_VIEW_VAR`] turns agent view off: set, not
@@ -961,16 +967,28 @@ fn check_hook_fields(contract_file: &Path, version: &str) -> Check {
     check(level, TITLE, detail)
 }
 
-fn check_agents_output(bin: &ResolvedClaude, config_dir: Option<&Path>, base: &BaseEnv) -> Check {
+/// `claude agents --json` against the contract, and the sessions it
+/// listed, when it answered a JSON array.
+fn check_agents_output(
+    bin: &ResolvedClaude,
+    config_dir: Option<&Path>,
+    base: &BaseEnv,
+) -> (Check, Option<Vec<AgentRecord>>) {
     const TITLE: &str = "claude agents --json";
     let out = match spawn::agents_json(bin, config_dir, base) {
         Ok(out) => out,
-        Err(e) => return check(Level::Fail, TITLE, e.to_string()),
+        Err(e) => return (check(Level::Fail, TITLE, e.to_string()), None),
     };
     let entries = match serde_json::from_str::<Vec<serde_json::Value>>(out.trim()) {
         Ok(entries) => entries,
-        Err(e) => return check(Level::Fail, TITLE, format!("not a JSON array: {e}")),
+        Err(e) => {
+            return (
+                check(Level::Fail, TITLE, format!("not a JSON array: {e}")),
+                None,
+            );
+        }
     };
+    let records = parse_agents(out.trim()).ok();
     let c = check_agents(&entries);
     let level = if c.held() { Level::Ok } else { Level::Fail };
     let mut detail = format!("{} sessions listed", entries.len());
@@ -983,7 +1001,84 @@ fn check_agents_output(bin: &ResolvedClaude, config_dir: Option<&Path>, base: &B
             c.not_observed.join(", ")
         ));
     }
-    check(level, TITLE, detail)
+    (check(level, TITLE, detail), records)
+}
+
+/// The orchestrator's lines (AD-94 part C, D-166, D-167): its workdir
+/// present and empty, the `officina.exe` its MCP config runs in
+/// `exe_dir`, and a warning for each session `agents` lists under
+/// `<officina_home>/orchestrator/` that is not the orchestrator, which
+/// the board shows as an ordinary card. A workdir not created yet is
+/// fine: the window creates it at the first Start.
+pub fn check_orchestrator(
+    officina_home: &Path,
+    exe_dir: &Path,
+    agents: Option<&[AgentRecord]>,
+) -> Vec<Check> {
+    let workdir = orchestrator_workdir(officina_home);
+    let workdir_line = if !workdir.exists() {
+        check(
+            Level::Ok,
+            "orchestrator workdir",
+            format!(
+                "{} not created yet: the window creates it at the first Start",
+                workdir.display()
+            ),
+        )
+    } else if holds_anything(&workdir) {
+        check(
+            Level::Fail,
+            "orchestrator workdir",
+            format!(
+                "{} is not empty: Start is refused until it is; Officina never deletes what it holds",
+                workdir.display()
+            ),
+        )
+    } else {
+        check(
+            Level::Ok,
+            "orchestrator workdir",
+            format!("{} present and empty", workdir.display()),
+        )
+    };
+    let exe = exe_dir.join(officina_exe_name());
+    let exe_line = if exe.is_file() {
+        check(Level::Ok, "officina.exe", exe.display().to_string())
+    } else {
+        check(
+            Level::Fail,
+            "officina.exe",
+            format!(
+                "{} is missing: the orchestrator's MCP server runs it, so Start is refused; reinstall Officina or put officina.exe beside officina-app.exe",
+                exe.display()
+            ),
+        )
+    };
+    let home = officina_home.to_string_lossy();
+    let strangers = agents.unwrap_or_default().iter().filter(|record| {
+        !is_orchestrator(record, &home)
+            && record
+                .cwd
+                .as_deref()
+                .is_some_and(|cwd| under_orchestrator_dir(cwd, &home))
+    });
+    let stranger_lines = strangers.map(|record| {
+        check(
+            Level::Warn,
+            "orchestrator folder",
+            format!(
+                "a session that is not the orchestrator works in {}: it shows as an ordinary card, and only the orchestrator belongs under {}",
+                record.cwd.as_deref().unwrap_or_default(),
+                officina_home
+                    .join(officina_core::orders::ORCHESTRATOR_DIR)
+                    .display()
+            ),
+        )
+    });
+    [workdir_line, exe_line]
+        .into_iter()
+        .chain(stranger_lines)
+        .collect()
 }
 
 /// Every required registration in the user settings, else the file's whole
@@ -1995,7 +2090,7 @@ mod tests {
             std::fs::write(&shim, format!("@echo ran> \"{}\"\r\n", ran.display())).unwrap();
             let collector =
                 Collector::from_parts(paths.clone(), LoadedFloor::default(), Some(shim.clone()));
-            let (checks, version) = check_claude(&collector);
+            let (checks, version, _) = check_claude(&collector);
             assert_eq!(version, None);
             let [line] = checks.as_slice() else {
                 panic!("{name}: one line, {checks:?}");
@@ -2034,6 +2129,98 @@ mod tests {
     }
 
     const SETTINGS: &str = "C:/path/to/claude/settings.json";
+
+    /// An Officina home and an executable directory, the latter holding
+    /// `officina.exe` when `with_exe`.
+    fn orchestrator_setup(with_exe: bool) -> (tempfile::TempDir, PathBuf, PathBuf) {
+        let root = tempfile::tempdir().unwrap();
+        let home = root.path().join("officina-home");
+        let exe_dir = root.path().join("app");
+        fs::create_dir_all(&exe_dir).unwrap();
+        if with_exe {
+            fs::write(exe_dir.join(officina_exe_name()), b"").unwrap();
+        }
+        (root, home, exe_dir)
+    }
+
+    fn line<'a>(checks: &'a [Check], title: &str) -> &'a Check {
+        checks
+            .iter()
+            .find(|c| c.title == title)
+            .unwrap_or_else(|| panic!("no {title} line: {checks:?}"))
+    }
+
+    /// Story 5.16 AC 9 (AD-94 part C): a workdir holding anything fails,
+    /// since Start is refused; absent or empty it is fine.
+    #[test]
+    fn a_non_empty_orchestrator_workdir_fails() {
+        let (_root, home, exe_dir) = orchestrator_setup(true);
+        let absent = check_orchestrator(&home, &exe_dir, None);
+        assert_eq!(line(&absent, "orchestrator workdir").level, Level::Ok);
+        let workdir = orchestrator_workdir(&home);
+        fs::create_dir_all(&workdir).unwrap();
+        let empty = check_orchestrator(&home, &exe_dir, None);
+        let empty = line(&empty, "orchestrator workdir");
+        assert_eq!(empty.level, Level::Ok);
+        assert!(
+            empty.detail.contains("present and empty"),
+            "{}",
+            empty.detail
+        );
+        fs::write(workdir.join("notes.md"), b"x").unwrap();
+        let full = check_orchestrator(&home, &exe_dir, None);
+        let full = line(&full, "orchestrator workdir");
+        assert_eq!(full.level, Level::Fail);
+        assert!(full.detail.contains("Start is refused"), "{}", full.detail);
+    }
+
+    /// Story 5.16 AC 9 (D-144, D-167): the executable directory is an
+    /// argument; without `officina.exe` there, the line fails.
+    #[test]
+    fn a_missing_officina_exe_is_reported() {
+        let (_root, home, exe_dir) = orchestrator_setup(true);
+        let found = check_orchestrator(&home, &exe_dir, None);
+        assert_eq!(line(&found, "officina.exe").level, Level::Ok);
+        let (_other, home, bare) = orchestrator_setup(false);
+        let missing = check_orchestrator(&home, &bare, None);
+        let missing = line(&missing, "officina.exe");
+        assert_eq!(missing.level, Level::Fail);
+        assert!(
+            missing.detail.contains("Start is refused"),
+            "{}",
+            missing.detail
+        );
+    }
+
+    /// Story 5.16 AC 9 (D-166): a session under `<home>/orchestrator/`
+    /// that is not the orchestrator warns, one line each; the orchestrator
+    /// itself and sessions elsewhere make none.
+    #[test]
+    fn a_stranger_under_the_orchestrator_folder_warns() {
+        let (_root, home, exe_dir) = orchestrator_setup(true);
+        let under = |rest: &str| format!("{}/orchestrator/{rest}", home.display());
+        let listed = serde_json::json!([
+            {"name": "officina-orchestrator", "cwd": under("workdir"), "sessionId": "o"},
+            {"name": "notes", "cwd": under("workdir"), "sessionId": "n"},
+            {"name": "officina-orchestrator", "cwd": under("proposals"), "sessionId": "p"},
+            {"name": "api", "cwd": "C:/work/api", "sessionId": "a"}
+        ]);
+        let agents = parse_agents(&listed.to_string()).unwrap();
+        let checks = check_orchestrator(&home, &exe_dir, Some(&agents));
+        let warned: Vec<&Check> = checks
+            .iter()
+            .filter(|c| c.title == "orchestrator folder")
+            .collect();
+        assert_eq!(warned.len(), 2, "{checks:?}");
+        assert!(warned.iter().all(|c| c.level == Level::Warn));
+        assert!(
+            warned[1].detail.contains("proposals"),
+            "{}",
+            warned[1].detail
+        );
+        let alone = check_orchestrator(&home, &exe_dir, Some(&agents[..1]));
+        assert!(alone.iter().all(|c| c.title != "orchestrator folder"));
+    }
 
     /// D-137: agent view turned off in doctor's environment warns that
     /// work orders and answers will fail, whatever the name's case.
@@ -2169,6 +2356,8 @@ mod tests {
                 ("quota", Level::Warn, true),
                 ("permissions block", Level::Ok, false),
                 ("officina home", Level::Ok, false),
+                ("orchestrator workdir", Level::Ok, false),
+                ("officina.exe", Level::Fail, false),
                 ("registry location", Level::Ok, false),
                 ("registry", Level::Ok, false),
                 ("triage model", Level::Ok, false),

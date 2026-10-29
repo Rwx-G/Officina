@@ -145,6 +145,31 @@ pub fn is_default_config_dir(dir: &Path) -> bool {
     })
 }
 
+/// The file name of the `officina` binary the orchestrator's MCP config
+/// runs (D-144), beside the window's own executable.
+pub fn officina_exe_name() -> String {
+    format!("officina{}", std::env::consts::EXE_SUFFIX)
+}
+
+/// `<officina_home>/orchestrator/workdir`, the orchestrator's working
+/// directory (AD-89).
+pub fn orchestrator_workdir(officina_home: &Path) -> PathBuf {
+    officina_core::spawn::OfficinaDir::OrchestratorWorkdir
+        .segments()
+        .iter()
+        .fold(officina_home.to_path_buf(), |path, segment| {
+            path.join(segment)
+        })
+}
+
+/// `<officina_home>/orchestrator/proposals`, where the proposal tools
+/// write (AD-91).
+pub fn orchestrator_proposals_dir(officina_home: &Path) -> PathBuf {
+    officina_home
+        .join(officina_core::orders::ORCHESTRATOR_DIR)
+        .join(officina_core::orders::PROPOSALS_DIR)
+}
+
 /// True when prompt and assistant excerpts are disabled by the environment
 /// (`1` or `true`).
 pub fn excerpts_disabled_by_env() -> bool {
