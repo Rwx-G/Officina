@@ -590,6 +590,10 @@ Every `claude` process Officina starts comes from one module, from a vector per 
 
 Every kind then sets `NoDefaultCurrentDirectoryInExePath=1` and, when the floor names one, `CLAUDE_CONFIG_DIR`, never one inherited. Names compare ignoring case, as Windows compares them.
 
+### Work orders (not offered yet)
+
+A work order is one of your templates in one of its projects, with a value chosen from each parameter's list. It exists only once validated against your approved catalogue: the template is read from your last approval, and only while the floor file still means what you approved; the project must be one of the template's; each parameter is given once, with a value that is exactly one of its list's (the order keeps your string, not the one it was given); and the rendered prompt keeps the template's rules. Its process is a session kind: `claude --bg --name <template>-<seq>`, the template's model when it names one, then `--` and the rendered prompt as one argument, started in the project's folder as the floor declares it. It runs in no job, so its deadline ends `claude` alone, never the background service it starts. The window will offer work orders with a later story; nothing launches one yet.
+
 ### The `auto` class
 
 An action may now be `class = "auto"`. It must name its `check`, a `free` action with the same parameters, as an `after-check` action does: an unattended apply always runs after its dry run, and an `auto` action without one is skipped with the issue `auto_without_check`. `auto_max_per_hour` (1 to 60, 6 when not set) caps how many such runs can be approved in an hour; it applies to `auto` actions only. An HTTP action cannot be `auto`: it stays on the `human` path. Until the review of `auto` requests ships, `officina run` refuses an `auto` action with `class_not_available`, and `officina run --list` marks it as not available in this build.

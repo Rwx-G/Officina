@@ -46,33 +46,46 @@ pub fn wait_until(child: &mut Child, deadline: Instant) -> Waited {
     }
 }
 
-/// How much of a child's stderr is kept for the message of a failure.
-pub const STDERR_KEPT_BYTES: usize = 4 * 1024;
-
 /// How many characters of the kept stderr a failure message quotes.
 const STDERR_QUOTED_CHARS: usize = 500;
+
+/// What a child's process tree is to Officina (AD-73, D-128 review F10), as
+/// [`run_contained`] sets it per call.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JobRule {
+    /// In a job ended with its tree on a timeout only: what the child
+    /// leaves running after it answered is not Officina's (a supervisor
+    /// `claude agents` starts), and a job that cannot be set up leaves the
+    /// child alone.
+    TreeOnTimeout,
+    /// In a kill-on-close job assigned before anything is written to the
+    /// child, or stopped (D-64, D-436); the tree is ended at the exit.
+    KillOnClose,
+    /// No job: a deadline ends the child alone. What it starts is not
+    /// Officina's: a console kind's is the author's, and `claude --bg` may
+    /// start the supervisor of every background session (D-128).
+    NoJob,
+}
 
 /// What [`run_contained`] allows one child.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RunLimits {
-    /// How long the child may run before it and its tree are ended.
+    /// How long the child may run before it is ended, with its tree as
+    /// [`RunLimits::job`] says.
     pub timeout: Duration,
     /// The most stdout kept; more is drained and dropped, and
     /// [`Contained::stdout_over`] says so.
     pub stdout_cap: usize,
+    /// The most stderr kept, for a failure's message; more is drained and
+    /// dropped.
+    pub stderr_cap: usize,
     /// How long the output pipes may stay open once the child exited:
     /// what it wrote is drained within microseconds; only a process it
     /// started and left running, which inherited the pipes, keeps them
     /// open longer.
     pub grace: Duration,
-    /// True when every process the child starts is Officina's to end: its
-    /// job kills on close and is ended as soon as the child exits, and a
-    /// job that cannot be created or assigned stops the run before
-    /// anything is written to the child (D-64). False for a call whose
-    /// leftovers are not Officina's (a background-session supervisor
-    /// `claude agents` starts): the job only ends the tree on a timeout,
-    /// and a job that cannot be set up leaves the child alone in it.
-    pub owns_tree: bool,
+    /// The child's tree: in a job, and which.
+    pub job: JobRule,
 }
 
 /// A child that ran to its exit.
@@ -82,8 +95,8 @@ pub struct Contained {
     pub stdout: Vec<u8>,
     /// True when the child wrote more than [`RunLimits::stdout_cap`].
     pub stdout_over: bool,
-    /// At most [`STDERR_KEPT_BYTES`]; empty when the pipe stayed open past
-    /// the grace.
+    /// At most [`RunLimits::stderr_cap`]; empty when the pipe stayed open
+    /// past the grace.
     pub stderr: Vec<u8>,
 }
 
@@ -160,7 +173,8 @@ fn drain(pipe: Option<impl Read + Send + 'static>, keep: usize) -> Receiver<(Vec
 }
 
 /// The processes of one child. On Windows the child goes into a job right
-/// after it starts, so ending the job ends what it started too (E13). What
+/// after it starts, unless its rule is [`JobRule::NoJob`], so ending the
+/// job ends what it started too (E13). What
 /// the child starts in the instant before the assignment escapes it (D-64):
 /// the programs Officina runs this way take far longer than that before
 /// they start anything.
@@ -170,20 +184,25 @@ struct Tree {
 }
 
 impl Tree {
-    fn around(child: &Child, owns_tree: bool) -> std::io::Result<Tree> {
+    fn around(child: &Child, rule: JobRule) -> std::io::Result<Tree> {
         #[cfg(windows)]
         {
-            let job = crate::platform::windows::Job::new(owns_tree)
+            let kill_on_close = match rule {
+                JobRule::NoJob => return Ok(Tree { job: None }),
+                JobRule::KillOnClose => true,
+                JobRule::TreeOnTimeout => false,
+            };
+            let job = crate::platform::windows::Job::new(kill_on_close)
                 .and_then(|job| job.assign(child).map(|()| job));
             match job {
                 Ok(job) => Ok(Tree { job: Some(job) }),
-                Err(error) if owns_tree => Err(error),
+                Err(error) if kill_on_close => Err(error),
                 Err(_) => Ok(Tree { job: None }),
             }
         }
         #[cfg(not(windows))]
         {
-            let _ = (child, owns_tree);
+            let _ = (child, rule);
             Ok(Tree {})
         }
     }
@@ -221,7 +240,7 @@ pub fn run_contained(
         .stderr(Stdio::piped());
     hide_console(&mut command);
     let mut child = command.spawn().map_err(RunError::Spawn)?;
-    let tree = match Tree::around(&child, limits.owns_tree) {
+    let tree = match Tree::around(&child, limits.job) {
         Ok(tree) => tree,
         Err(error) => {
             let _ = child.kill();
@@ -235,7 +254,7 @@ pub fn run_contained(
         });
     }
     let stdout = drain(child.stdout.take(), limits.stdout_cap);
-    let stderr = drain(child.stderr.take(), STDERR_KEPT_BYTES);
+    let stderr = drain(child.stderr.take(), limits.stderr_cap);
     let status = match wait_until(&mut child, started + limits.timeout) {
         Waited::Exited(status) => status,
         Waited::Deadline => {
@@ -247,7 +266,7 @@ pub fn run_contained(
             return Err(RunError::Lost(error));
         }
     };
-    if limits.owns_tree {
+    if limits.job == JobRule::KillOnClose {
         // A process the child left running would hold the pipes open; it
         // is Officina's, so it ends before the output is read.
         tree.end(&mut child);

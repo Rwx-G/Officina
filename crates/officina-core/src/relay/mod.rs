@@ -115,11 +115,12 @@ mod tests {
     use super::journal::{GateFault, JournalKind, RefusalReason, RunOutcome};
     use super::params::ValueRefusal;
     use super::record::{AnomalyKind, Verdict};
-    use super::template::ModelAlias;
+    use super::template::{ModelAlias, TemplateUnavailable};
     use super::url::UrlIssue;
     use super::view::Tone;
     use crate::floor::{Autonomy, Priority};
     use crate::ipc::IpcErrorCode;
+    use crate::orders::work_order::WorkOrderRefusal;
     use crate::scene::{AlertCause, Zone};
 
     fn assert_codes<T: Serialize + Copy + Debug>(all: &[T], code: fn(T) -> &'static str) {
@@ -135,10 +136,12 @@ mod tests {
     /// of this crate without a line here.
     #[test]
     fn code_equals_the_serde_name_for_every_variant() {
-        let checked: [fn(); 23] = [
+        let checked: [fn(); 25] = [
             || assert_codes(ActionClass::ALL, ActionClass::code),
             || assert_codes(IssueTable::ALL, IssueTable::code),
             || assert_codes(ModelAlias::ALL, ModelAlias::code),
+            || assert_codes(TemplateUnavailable::ALL, TemplateUnavailable::code),
+            || assert_codes(WorkOrderRefusal::ALL, WorkOrderRefusal::code),
             || assert_codes(Autonomy::ALL, Autonomy::code),
             || assert_codes(Priority::ALL, Priority::code),
             || assert_codes(Zone::ALL, Zone::code),
@@ -169,6 +172,7 @@ mod tests {
             include_str!("../focus.rs"),
             include_str!("../scene.rs"),
             include_str!("../ipc.rs"),
+            include_str!("../orders/work_order.rs"),
             include_str!("approvals.rs"),
             include_str!("argv.rs"),
             include_str!("catalogue.rs"),

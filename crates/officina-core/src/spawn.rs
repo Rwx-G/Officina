@@ -21,6 +21,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::focus::is_valid_attach_id;
+use crate::orders::work_order::WorkOrder;
 use crate::registry::ingestion::TRIAGE_DIR;
 use crate::registry::triage_call::{CALL_TIMEOUT_MS, STDOUT_CAP_BYTES, WORKDIR_NAME};
 use crate::relay::template::ModelAlias;
@@ -39,6 +40,8 @@ closed_enum! {
         Attach,
         /// The contained triage call (AD-51).
         TriageCall,
+        /// `claude --bg` with a validated work order's prompt (FR-3).
+        WorkOrder,
     }
 }
 
@@ -55,14 +58,17 @@ impl VectorKind {
     pub const fn is_launch(self) -> bool {
         match self {
             VectorKind::Agents | VectorKind::Version | VectorKind::Attach => false,
-            VectorKind::TriageCall => true,
+            VectorKind::TriageCall | VectorKind::WorkOrder => true,
         }
     }
 
     /// The kind's environment rule (D-561).
     pub const fn env_rule(self) -> EnvRule {
         match self {
-            VectorKind::Agents | VectorKind::Version | VectorKind::Attach => EnvRule::Session,
+            VectorKind::Agents
+            | VectorKind::Version
+            | VectorKind::Attach
+            | VectorKind::WorkOrder => EnvRule::Session,
             VectorKind::TriageCall => EnvRule::Contained,
         }
     }
@@ -137,6 +143,8 @@ pub enum CwdRule {
     BinaryFolder,
     /// A fixed folder under the Officina home.
     Officina { home: String, dir: OfficinaDir },
+    /// A catalogue project's folder as the floor declares it (D-6).
+    Project { folder: String },
 }
 
 /// What a captured kind keeps of its output; both streams are drained to
@@ -274,6 +282,15 @@ pub const AGENTS_STDOUT_CAP: usize = 8 * 1024 * 1024;
 /// How much of a captured child's stderr is kept, for a failure's message.
 pub const STDERR_CAP_BYTES: usize = 4 * 1024;
 
+/// What a work order keeps of each output stream (AD-79): `claude --bg`
+/// prints a few lines and exits (E20).
+pub const WORK_ORDER_OUTPUT_CAP: usize = 64 * 1024;
+
+/// How long `claude --bg` may run before its process, and it alone, is
+/// ended (AD-79, D-128): it exits within seconds once the session is handed
+/// to the supervisor (E20).
+pub const WORK_ORDER_DEADLINE_MS: u64 = 60_000;
+
 /// What the triage call's `--settings` sets (AD-51 as amended): a `-p`
 /// session binds an inbox, and another session must not deliver text into
 /// it mid-call.
@@ -369,7 +386,7 @@ impl BackgroundId {
 
 /// One `claude` process, as data. Its fields are private: the per-kind
 /// builders of this module ([`agents`], [`version`], [`attach`],
-/// [`triage_call`]) are its only constructors.
+/// [`triage_call`], [`work_order`]) are its only constructors.
 ///
 /// ```compile_fail
 /// use officina_core::spawn::{ClaudeVector, Console, CwdRule, EnvRule, StdinRule, VectorKind};
@@ -618,9 +635,51 @@ pub fn triage_call(
     }
 }
 
+/// A validated work order as a background session (AD-79, FR-3 as
+/// amended): `--bg`, its name `<template>-<seq>`, the template's model when
+/// it names one, then `--` and the rendered prompt as exactly one argument,
+/// so no line of it reads as an option; E20 found the prompt delivered byte
+/// for byte after `--` with `--bg`, so the separator stays (D-127). It runs
+/// in the project's folder, without a console or stdin, its output
+/// captured within [`WORK_ORDER_OUTPUT_CAP`] and [`WORK_ORDER_DEADLINE_MS`],
+/// as a session the author starts would (D-128). No `--settings` and no
+/// permission mode: the session takes the author's own.
+///
+/// `seq` is the number the card store reserved for the card (D-135), so
+/// the name is unique and the vector the card shows is the one that runs.
+pub fn work_order(order: &WorkOrder, seq: u32, config_dir: Option<&str>) -> ClaudeVector {
+    let name = format!("{}-{seq}", order.template());
+    let model = order
+        .model()
+        .map(|model| ["--model".to_owned(), model.code().to_owned()]);
+    let args = ["--bg".to_owned(), "--name".to_owned(), name]
+        .into_iter()
+        .chain(model.into_iter().flatten())
+        .chain(["--".to_owned(), order.prompt().to_owned()])
+        .collect();
+    ClaudeVector {
+        kind: VectorKind::WorkOrder,
+        args,
+        cwd: CwdRule::Project {
+            folder: order.project_folder().to_owned(),
+        },
+        console: Console::None,
+        stdin: StdinRule::Null,
+        capture: Some(Capture {
+            stdout_cap: WORK_ORDER_OUTPUT_CAP,
+            stderr_cap: WORK_ORDER_OUTPUT_CAP,
+        }),
+        deadline_ms: Some(WORK_ORDER_DEADLINE_MS),
+        env_set: env_set(config_dir),
+        env_rule: VectorKind::WorkOrder.env_rule(),
+        stdin_data: Vec::new(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::orders::work_order::sample_order;
     use crate::registry::triage_call::{DATA_MARKER, TRIAGE_MODEL, schema};
 
     const CONFIG: &str = "C:/path/to/claude-work";
@@ -634,6 +693,7 @@ mod tests {
             VectorKind::TriageCall => {
                 triage_call(TRIAGE_MODEL, &schema(), config_dir, "C:/path/to/home")
             }
+            VectorKind::WorkOrder => work_order(&sample_order(), 7, config_dir),
         }
     }
 
@@ -904,6 +964,126 @@ mod tests {
             "C:/x.bat/claude",
         ] {
             assert!(is_native_binary(native), "{native:?}");
+        }
+    }
+
+    /// The order of `floor`'s template `bump` in project `backend`, its
+    /// one parameter `package` set to `serde_json`.
+    fn order_of(floor: &str) -> WorkOrder {
+        use crate::relay::catalogue::{ApprovedCatalogue, load};
+        use crate::relay::template::{ApprovedTemplate, ParamName, ProjectName, TemplateName};
+        let path = "C:/path/to/officina.toml";
+        let current = load(floor, path).unwrap();
+        assert!(
+            current.catalogue.issues.is_empty(),
+            "{:?}",
+            current.catalogue.issues
+        );
+        let approved = ApprovedCatalogue::approving(&current, path, 0);
+        let template =
+            ApprovedTemplate::new(&approved, &current, &TemplateName::parse("bump").unwrap())
+                .unwrap();
+        let values = [(ParamName::parse("package").unwrap(), "serde_json")];
+        WorkOrder::validate(&template, &ProjectName::parse("backend").unwrap(), &values).unwrap()
+    }
+
+    /// A template whose prompt holds what a command line could split or
+    /// read as options: newlines, a tab, quotes, an inner `--`, `--bg` and
+    /// `--model`, a line starting with a dash and trailing backslashes.
+    const AWKWARD_FLOOR: &str = r#"schema = 2
+[[project]]
+name = "backend"
+path = "Backend"
+[[template]]
+name = "bump"
+description = "Bump one dependency"
+projects = ["backend"]
+prompt = "Bump {package}.\n--bg -- --model opus\n-x \"quoted\" and 'single'\ttab 100% & | < > ^ !\nC:\\dir\\ ends C:\\dir\\"
+[template.params.package]
+values = ["serde_json"]
+"#;
+
+    #[test]
+    fn the_prompt_is_one_argument_after_the_separator() {
+        let order = order_of(AWKWARD_FLOOR);
+        assert!(order.prompt().contains("\n--bg -- --model opus\n-x \""));
+        let vector = work_order(&order, 12, None);
+        assert_eq!(
+            vector.args(),
+            ["--bg", "--name", "bump-12", "--", order.prompt()],
+            "no model named, no --model"
+        );
+        let with_model = order_of(&AWKWARD_FLOOR.replace(
+            "[template.params.package]",
+            "model = \"opus\"\n[template.params.package]",
+        ));
+        let vector = work_order(&with_model, 3, Some("C:/path/to/claude-work"));
+        assert_eq!(
+            vector.args(),
+            [
+                "--bg",
+                "--name",
+                "bump-3",
+                "--model",
+                "opus",
+                "--",
+                with_model.prompt()
+            ]
+        );
+        // The separator is the first `--`, just before the prompt, which is
+        // the last argument and the only one holding author text.
+        let separator = vector.args().iter().position(|a| a == "--").unwrap();
+        assert_eq!(separator, vector.args().len() - 2);
+        assert_eq!(
+            vector.args().last().map(String::as_str),
+            Some(with_model.prompt())
+        );
+        assert_eq!(
+            vector.cwd(),
+            &CwdRule::Project {
+                folder: "C:/path/to/Backend".to_owned()
+            }
+        );
+        assert_eq!(vector.kind(), VectorKind::WorkOrder);
+        assert_eq!(
+            (vector.console(), vector.stdin()),
+            (Console::None, StdinRule::Null)
+        );
+        assert_eq!(
+            vector.capture(),
+            Some(Capture {
+                stdout_cap: WORK_ORDER_OUTPUT_CAP,
+                stderr_cap: WORK_ORDER_OUTPUT_CAP
+            })
+        );
+        assert_eq!(vector.deadline_ms(), Some(WORK_ORDER_DEADLINE_MS));
+    }
+
+    #[test]
+    fn a_work_order_vector_carries_no_settings_and_no_permission_mode() {
+        for order in [sample_order(), order_of(AWKWARD_FLOOR)] {
+            let vector = work_order(&order, 1, Some(CONFIG));
+            let separator = vector.args().iter().position(|a| a == "--").unwrap();
+            let options = &vector.args()[..separator];
+            for option in options {
+                assert!(
+                    ["--bg", "--name", "--model"].contains(&option.as_str())
+                        || options
+                            .iter()
+                            .zip(options.iter().skip(1))
+                            .any(|(flag, value)| value == option
+                                && (flag == "--name" || flag == "--model")),
+                    "{option:?} is neither a work order option nor its value"
+                );
+                for refused in ["settings", "permission", "allowed", "dangerously", "-p"] {
+                    assert!(!option.contains(refused), "{option:?}");
+                }
+            }
+            // The session kind's environment: nothing set but the two every
+            // vector sets, the author's own variables kept (D-128).
+            assert_eq!(vector.env_rule(), EnvRule::Session);
+            assert_eq!(vector.env_set(), env_set(Some(CONFIG)));
+            assert!(VectorKind::WorkOrder.is_launch());
         }
     }
 }

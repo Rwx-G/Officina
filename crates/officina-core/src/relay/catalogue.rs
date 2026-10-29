@@ -2224,6 +2224,9 @@ pub struct RelayFloor {
     pub catalogue: Catalogue,
     pub canonical: CanonicalCatalogue,
     pub hash: String,
+    /// The floor's path as read, which [`project_dirs`] resolves the
+    /// projects' folders against (D-6).
+    pub floor_path: String,
 }
 
 /// Runs phase 1 and phase 2 on a floor's content and computes its canonical
@@ -2238,6 +2241,7 @@ pub fn load(content: &str, floor_path: &str) -> Result<RelayFloor, FloorError> {
         catalogue,
         canonical,
         hash,
+        floor_path: floor_path.to_owned(),
     })
 }
 

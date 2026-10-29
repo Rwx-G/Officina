@@ -29,6 +29,19 @@ project uses [Semantic Versioning](https://semver.org/).
 - `officina doctor` names each issue's table (`template bump`, `action
   apply`), counts valid templates, and lists templates, credentials and the
   review model in a pending change.
+- The validated work order and its vector (v0.5, story 5.5; internal until
+  the window offers work orders): a template is read from the approved
+  snapshot only while the floor still hashes to it (`TemplateUnavailable`),
+  and `WorkOrder::validate` is the only way to an order, refusing a project
+  the template does not list, a missing, repeated or undeclared parameter,
+  a value that is not byte for byte one of its list's, and a rendering over
+  the prompt limit or starting with `/`, `!` or `-` (`WorkOrderRefusal`).
+  The order keeps the template's own strings. Its vector, `claude --bg
+  --name <template>-<seq> [--model <alias>] -- <prompt>`, runs in the
+  project's folder as declared, the prompt one argument after `--`, as a
+  session kind, in no job, its deadline ending `claude` alone. Pinned by
+  `tests/vectors/orders.json` and a `work_order` case of
+  `tests/vectors/spawn.json`.
 
 - Sub-agents in the scene (v0.4, story 4.12): each running sub-agent of a
   session stands beside its desk, a smaller figure without a cap, from its

@@ -75,6 +75,7 @@ impl Setup {
             VectorKind::Agents | VectorKind::Version => "ok",
             VectorKind::Attach => "interactive",
             VectorKind::TriageCall => "triage",
+            VectorKind::WorkOrder => "bg",
         };
         self.fake(kind.code(), serde_json::json!({"mode": mode}))
     }
@@ -85,8 +86,18 @@ impl Setup {
             .cases
             .iter()
             .find(|case| case.kind() == kind)
-            .map(|case| case.build(Some(&self.home().to_string_lossy())))
+            .map(|case| self.build(case))
             .expect("every kind has a golden case")
+    }
+
+    /// `case`'s vector built with this setup's home, the project folder a
+    /// work order runs in created under it.
+    fn build(&self, case: &spawn_cases::Case) -> ClaudeVector {
+        let vector = case.build(Some(&self.home().to_string_lossy()));
+        if let CwdRule::Project { folder } = vector.cwd() {
+            std::fs::create_dir_all(folder).unwrap();
+        }
+        vector
     }
 }
 
@@ -259,7 +270,7 @@ fn every_kind_reaches_the_fake_claude_as_its_golden_vector() {
     )];
     for (at, case) in spawn_cases::load().cases.iter().enumerate() {
         let kind = case.kind();
-        let vector = case.build(Some(&setup.home().to_string_lossy()));
+        let vector = setup.build(case);
         if !cfg!(windows) && vector.console() == Console::New {
             continue;
         }
@@ -267,6 +278,7 @@ fn every_kind_reaches_the_fake_claude_as_its_golden_vector() {
         let mode = match kind {
             VectorKind::Attach => "interactive",
             VectorKind::TriageCall => "triage",
+            VectorKind::WorkOrder => "bg",
             VectorKind::Agents | VectorKind::Version => "ok",
         };
         let fake = setup.fake(&name, serde_json::json!({"mode": mode}));
@@ -287,6 +299,7 @@ fn every_kind_reaches_the_fake_claude_as_its_golden_vector() {
             CwdRule::Inherited => std::env::current_dir().unwrap(),
             CwdRule::BinaryFolder => fake.path().parent().unwrap().to_path_buf(),
             CwdRule::Officina { .. } => setup.triage_workdir(),
+            CwdRule::Project { folder } => PathBuf::from(folder),
         };
         assert_eq!(
             std::fs::canonicalize(&cwd).unwrap(),
@@ -303,6 +316,89 @@ fn every_kind_reaches_the_fake_claude_as_its_golden_vector() {
         let config = case.input.get("config_dir").and_then(|v| v.as_str());
         assert_eq!(call["config_dir"].as_str(), config, "{}", case.name);
     }
+}
+
+/// D-129, AD-81's binding: the fake in `bg` mode answers a work order as
+/// `claude --bg` does, and the session it started is what `claude agents
+/// --json` lists next, with the order's name, its project folder and its
+/// start time.
+#[test]
+fn bg_mode_lists_the_new_session_in_agents() {
+    let setup = Setup::new();
+    let fake = setup.fake("bg", serde_json::json!({"mode": "bg"}));
+    let order = setup.vector(VectorKind::WorkOrder);
+    let base = BaseEnv::new(seeded_base());
+    let before = common::now_ms();
+    let outcome = execute(&fake, &order, &base);
+    let after = common::now_ms();
+    let Ok(SpawnOutcome::Captured(ran)) = outcome else {
+        panic!("{outcome:?}");
+    };
+    assert!(ran.status.success(), "{}", ran.quoted_stderr());
+    let stdout = String::from_utf8(ran.stdout).unwrap();
+    let printed: Vec<&str> = stdout.lines().next().unwrap().split(" \u{b7} ").collect();
+    let [word, id, printed_name] = printed[..] else {
+        panic!("{stdout}");
+    };
+    assert_eq!(word, "backgrounded");
+    let name_at = order.args().iter().position(|a| a == "--name").unwrap();
+    let name = &order.args()[name_at + 1];
+    assert_eq!(printed_name, name);
+
+    let listed = execute(&fake, &setup.vector(VectorKind::Agents), &base);
+    let Ok(SpawnOutcome::Captured(listed)) = listed else {
+        panic!("{listed:?}");
+    };
+    let records =
+        officina_core::agents::parse_agents(&String::from_utf8(listed.stdout).unwrap()).unwrap();
+    let session = records
+        .iter()
+        .find(|r| r.id.as_deref() == Some(id))
+        .unwrap_or_else(|| panic!("{id} not listed: {records:?}"));
+    assert_eq!(session.name.as_deref(), Some(name.as_str()));
+    assert_eq!(
+        session.kind,
+        Some(officina_core::agents::SessionKind::Background)
+    );
+    let CwdRule::Project { folder } = order.cwd() else {
+        panic!("{:?}", order.cwd());
+    };
+    assert_eq!(
+        std::fs::canonicalize(session.cwd.as_deref().unwrap()).unwrap(),
+        std::fs::canonicalize(folder).unwrap()
+    );
+    let started = session.started_at_ms.unwrap();
+    assert!(
+        (before..=after).contains(&started),
+        "{before} {started} {after}"
+    );
+}
+
+/// D-128 review F10: a work order runs in no job, and its deadline ends
+/// `claude` alone; what it started (for the real one, the supervisor of
+/// every background session) keeps running. The vector is tightened to
+/// 2 s; the fake hangs with a grandchild beating.
+#[test]
+fn a_work_order_deadline_ends_the_child_alone() {
+    let setup = Setup::new();
+    let heartbeat = setup.root.path().join("heartbeat");
+    let fake = setup.fake(
+        "tree",
+        serde_json::json!({"mode": "tree", "heartbeat": heartbeat}),
+    );
+    let order = setup
+        .vector(VectorKind::WorkOrder)
+        .tightened(2_000, usize::MAX);
+    let started = Instant::now();
+    let outcome = execute(&fake, &order, &BaseEnv::new(seeded_base()));
+    let timed_out =
+        matches!(&outcome, Err(error) if matches!(error.cause(), SpawnError::Timeout(_)));
+    assert!(timed_out, "{outcome:?}");
+    assert!(started.elapsed() < Duration::from_secs(10));
+    assert!(common::heartbeat_len(&heartbeat) > 0, "the grandchild ran");
+    let running = !common::heartbeat_stopped(&heartbeat);
+    common::stop_heartbeat(&heartbeat);
+    assert!(running, "the deadline ended what claude started");
 }
 
 /// D-97, D-562: a captured kind keeps at most its cap and still drains

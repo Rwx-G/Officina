@@ -6,8 +6,12 @@
 
 #![allow(dead_code)] // each test crate uses a different subset
 
+use officina_core::orders::work_order::WorkOrder;
 use officina_core::registry::triage_call::schema;
-use officina_core::relay::template::ModelAlias;
+use officina_core::relay::catalogue::{self, ApprovedCatalogue};
+use officina_core::relay::template::{
+    ApprovedTemplate, ModelAlias, ParamName, ProjectName, TemplateName,
+};
 use officina_core::spawn::{self, BackgroundId, ClaudeVector, VectorKind};
 use serde_json::Value;
 
@@ -20,6 +24,12 @@ const INPUT_KEYS: &[&str] = &[
     "model",
     "schema",
     "officina_home",
+    "floor",
+    "floor_path",
+    "template",
+    "project",
+    "values",
+    "seq",
 ];
 
 #[derive(Debug)]
@@ -88,8 +98,50 @@ impl Case {
             .unwrap_or_else(|| panic!("case {}: no {key}", self.name))
     }
 
+    /// The work order of the case's floor, approved as read: its template
+    /// in its project with its values. With `home`, the floor's folder is
+    /// `home`, so a relative project folder lies under it.
+    pub fn work_order(&self, home: Option<&str>) -> WorkOrder {
+        let floor_path = match home {
+            Some(home) => {
+                let file = self.required("floor_path").rsplit(['/', '\\']).next();
+                format!("{home}/{}", file.unwrap_or_default())
+            }
+            None => self.required("floor_path").to_owned(),
+        };
+        let current = catalogue::load(self.required("floor"), &floor_path)
+            .unwrap_or_else(|e| panic!("case {}: floor: {e}", self.name));
+        assert!(
+            current.catalogue.issues.is_empty(),
+            "case {}: {:?}",
+            self.name,
+            current.catalogue.issues
+        );
+        let approved = ApprovedCatalogue::approving(&current, &floor_path, 0);
+        let name = TemplateName::parse(self.required("template")).expect("a template name");
+        let template = ApprovedTemplate::new(&approved, &current, &name)
+            .unwrap_or_else(|e| panic!("case {}: {e:?}", self.name));
+        let project = ProjectName::parse(self.required("project")).expect("a project name");
+        let values: Vec<(ParamName, &str)> = self.input["values"]
+            .as_array()
+            .unwrap_or_else(|| panic!("case {}: no values", self.name))
+            .iter()
+            .map(|pair| {
+                let name = pair[0].as_str().and_then(ParamName::parse);
+                let value = pair[1].as_str();
+                match (name, value) {
+                    (Some(name), Some(value)) => (name, value),
+                    _ => panic!("case {}: a value is a [name, value] pair", self.name),
+                }
+            })
+            .collect();
+        WorkOrder::validate(&template, &project, &values)
+            .unwrap_or_else(|e| panic!("case {}: {e:?}", self.name))
+    }
+
     /// The vector the kind's builder makes from the case's inputs, with
-    /// the Officina home replaced by `home` when one is given.
+    /// the Officina home replaced by `home` when one is given (for a work
+    /// order, the floor's folder: [`Case::work_order`]).
     pub fn build(&self, home: Option<&str>) -> ClaudeVector {
         let config_dir = self.text("config_dir");
         match self.kind() {
@@ -106,6 +158,13 @@ impl Case {
                 assert_eq!(self.required("schema"), "triage", "case {}", self.name);
                 let officina_home = home.unwrap_or_else(|| self.required("officina_home"));
                 spawn::triage_call(model, &schema(), config_dir, officina_home)
+            }
+            VectorKind::WorkOrder => {
+                let seq = self.input["seq"]
+                    .as_u64()
+                    .and_then(|seq| u32::try_from(seq).ok())
+                    .unwrap_or_else(|| panic!("case {}: no seq", self.name));
+                spawn::work_order(&self.work_order(home), seq, config_dir)
             }
         }
     }

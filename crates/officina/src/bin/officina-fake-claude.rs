@@ -15,7 +15,12 @@
 //!   file named like it plus `.stop` exists, then hangs for 60 s); and the
 //!   triage modes below; `interactive` (story 5.2, D-129) records in its
 //!   log line whether its stdin and stdout are a console, then exits 0, for
-//!   the kinds that start in a console of their own.
+//!   the kinds that start in a console of their own; `bg` (story 5.5,
+//!   D-129) answers a call holding `--bg` as `claude --bg` does (E20): it
+//!   prints `backgrounded · <id> · <name>`, then appends to the fixture a
+//!   background entry with that id, the `--name` value, its working
+//!   directory as `cwd` and the current time as `startedAt`, so a later
+//!   `agents --json` lists it; any other call prints the fixture.
 //! - `FAKE_CLAUDE_HANG_MS` (`hang_ms`): how long `hang` sleeps, 60 s by
 //!   default.
 //! - `FAKE_CLAUDE_VERSION` (`version`): answer to `--version`.
@@ -47,7 +52,7 @@
 //! session list.
 
 use std::io::{IsTerminal, Read, Write};
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// How long the process `orphan` leaves behind holds the output: well past
 /// the caller's grace period, short enough not to linger after the test.
@@ -154,6 +159,45 @@ fn start_heartbeat() {
             .env("FAKE_CLAUDE_TRIAGE_LOG", "")
             .stdin(std::process::Stdio::null())
             .spawn();
+    }
+}
+
+/// A `--bg` call in mode `bg`: a new background session in the fixture,
+/// and the lines `claude --bg` prints for it (E20).
+fn background(args: &[String]) {
+    let since_epoch = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default();
+    let started_at = u64::try_from(since_epoch.as_millis()).unwrap_or(u64::MAX);
+    let id = format!("{:08x}", since_epoch.subsec_nanos() ^ std::process::id());
+    let name = args
+        .iter()
+        .position(|a| a == "--name")
+        .and_then(|at| args.get(at + 1))
+        .cloned()
+        .unwrap_or_default();
+    let entry = serde_json::json!({
+        "id": id,
+        "sessionId": format!("{id}-0000-4000-8000-{started_at:012x}"),
+        "name": name,
+        "cwd": std::env::current_dir().ok(),
+        "kind": "background",
+        "pid": std::process::id(),
+        "startedAt": started_at,
+        "status": "busy",
+        "state": "working",
+    });
+    if let Some(fixture) = setting("fixture") {
+        let mut entries: Vec<serde_json::Value> = std::fs::read(&fixture)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+            .unwrap_or_default();
+        entries.push(entry);
+        let _ = std::fs::write(&fixture, serde_json::Value::from(entries).to_string());
+    }
+    println!("backgrounded \u{b7} {id} \u{b7} {name}");
+    for command in ["agents", "attach", "logs", "stop"] {
+        println!("  claude {command} {id}");
     }
 }
 
@@ -301,6 +345,7 @@ fn main() {
     }
     match mode.as_str() {
         "interactive" => {}
+        "bg" if args.iter().any(|a| a == "--bg") => background(&args),
         "hang" => {
             let ms = setting("hang_ms")
                 .and_then(|v| v.parse().ok())

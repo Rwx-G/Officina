@@ -27,6 +27,7 @@ use officina_core::spawn::{
 };
 
 use crate::paths::{ENV_CLAUDE_BIN, user_home};
+pub use crate::process::JobRule;
 use crate::process::{Contained, RunError, RunLimits, run_contained};
 
 /// Deadline of one `claude agents` or `claude --version` call.
@@ -205,28 +206,14 @@ pub struct LaunchError {
     pub cause: Box<SpawnError>,
 }
 
-/// What a kind's process tree is to Officina (AD-73, D-128 review F10),
-/// as [`run_contained`] sets it per call.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum JobRule {
-    /// In a job ended with its tree on a timeout; what `claude` leaves
-    /// running after it answered is not Officina's (a supervisor `claude
-    /// agents` starts), and a job that cannot be set up leaves the child
-    /// alone.
-    TreeOnTimeout,
-    /// In a kill-on-close job assigned before anything is written to the
-    /// child, or stopped (D-64, D-436); the tree is ended at the exit.
-    KillOnClose,
-    /// No job: a console kind, which the author owns.
-    NoJob,
-}
-
-/// The job rule of `kind`.
+/// The job rule of `kind` (D-128 review F10): the read calls end their
+/// tree on a timeout, a contained call owns its tree, and a work order
+/// and a console kind run in no job.
 pub const fn job_rule(kind: VectorKind) -> JobRule {
     match kind {
         VectorKind::Agents | VectorKind::Version => JobRule::TreeOnTimeout,
         VectorKind::TriageCall => JobRule::KillOnClose,
-        VectorKind::Attach => JobRule::NoJob,
+        VectorKind::Attach | VectorKind::WorkOrder => JobRule::NoJob,
     }
 }
 
@@ -303,6 +290,7 @@ fn working_dir(claude: &ResolvedClaude, rule: &CwdRule) -> Option<PathBuf> {
                 .iter()
                 .fold(PathBuf::from(home), |path, segment| path.join(segment)),
         ),
+        CwdRule::Project { folder } => Some(PathBuf::from(folder)),
     }
 }
 
@@ -326,16 +314,18 @@ fn run_captured(
             vector.kind().code()
         )));
     };
-    let (owns_tree, grace) = match job_rule(vector.kind()) {
-        JobRule::TreeOnTimeout => (false, OUTPUT_GRACE),
-        JobRule::KillOnClose | JobRule::NoJob => (true, CONTAINED_GRACE),
+    let job = job_rule(vector.kind());
+    let grace = match job {
+        JobRule::TreeOnTimeout => OUTPUT_GRACE,
+        JobRule::KillOnClose | JobRule::NoJob => CONTAINED_GRACE,
     };
     let timeout = Duration::from_millis(deadline_ms);
     let limits = RunLimits {
         timeout,
         stdout_cap: capture.stdout_cap,
+        stderr_cap: capture.stderr_cap,
         grace,
-        owns_tree,
+        job,
     };
     let mut command = claude_command(claude);
     command.args(vector.args()).env_clear().envs(env);
@@ -432,7 +422,10 @@ pub fn version(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use officina_core::orders::work_order::WorkOrder;
     use officina_core::registry::triage_call::{TRIAGE_MODEL, schema};
+    use officina_core::relay::catalogue::{ApprovedCatalogue, load};
+    use officina_core::relay::template::{ApprovedTemplate, ParamName, ProjectName, TemplateName};
     use officina_core::spawn::BackgroundId;
 
     /// A vector of `kind`, through its builder.
@@ -446,7 +439,31 @@ mod tests {
             VectorKind::TriageCall => {
                 officina_core::spawn::triage_call(TRIAGE_MODEL, &schema(), None, "C:/path/to/home")
             }
+            VectorKind::WorkOrder => officina_core::spawn::work_order(&order(), 1, None),
         }
+    }
+
+    /// A validated order of a one-template floor.
+    fn order() -> WorkOrder {
+        let path = "C:/path/to/officina.toml";
+        let floor = "schema = 2
+[[project]]
+name = \"backend\"
+path = \"Backend\"
+[[template]]
+name = \"bump\"
+description = \"Bump one dependency\"
+projects = [\"backend\"]
+prompt = \"Bump {package}.\"
+[template.params.package]
+values = [\"serde_json\"]
+";
+        let current = load(floor, path).unwrap();
+        let approved = ApprovedCatalogue::approving(&current, path, 0);
+        let name = TemplateName::parse("bump").unwrap();
+        let template = ApprovedTemplate::new(&approved, &current, &name).unwrap();
+        let values = [(ParamName::parse("package").unwrap(), "serde_json")];
+        WorkOrder::validate(&template, &ProjectName::parse("backend").unwrap(), &values).unwrap()
     }
 
     #[test]
@@ -484,18 +501,25 @@ mod tests {
             let vector = sample(kind);
             let rule = job_rule(kind);
             // A console kind is the author's: no job. A contained call
-            // owns its tree; the read calls end theirs on a timeout only.
-            let expected = match (vector.console(), vector.env_rule()) {
-                (Console::New, _) => JobRule::NoJob,
-                (Console::None, officina_core::spawn::EnvRule::Contained) => JobRule::KillOnClose,
-                (Console::None, officina_core::spawn::EnvRule::Session) => JobRule::TreeOnTimeout,
+            // owns its tree; the read calls end theirs on a timeout only;
+            // a launch for the author (`claude --bg`) may start the
+            // supervisor of every background session: no job either.
+            let expected = match (vector.console(), vector.env_rule(), kind.is_launch()) {
+                (Console::New, _, _) => JobRule::NoJob,
+                (Console::None, officina_core::spawn::EnvRule::Contained, _) => {
+                    JobRule::KillOnClose
+                }
+                (Console::None, officina_core::spawn::EnvRule::Session, true) => JobRule::NoJob,
+                (Console::None, officina_core::spawn::EnvRule::Session, false) => {
+                    JobRule::TreeOnTimeout
+                }
             };
             assert_eq!(rule, expected, "{kind:?}");
         }
     }
 
     #[test]
-    fn a_binary_folder_or_an_officina_folder_is_where_the_rule_says() {
+    fn a_binary_folder_an_officina_folder_or_a_project_is_where_the_rule_says() {
         let claude = ResolvedClaude::new(PathBuf::from("C:/path/to/bin/claude.exe"));
         assert_eq!(working_dir(&claude, &CwdRule::Inherited), None);
         assert_eq!(
@@ -510,6 +534,11 @@ mod tests {
         assert_eq!(working_dir(&claude, triage.cwd()), Some(expected));
         let bare = ResolvedClaude::new(PathBuf::from("claude.exe"));
         assert_eq!(working_dir(&bare, &CwdRule::BinaryFolder), None);
+        let order = sample(VectorKind::WorkOrder);
+        assert_eq!(
+            working_dir(&claude, order.cwd()),
+            Some(PathBuf::from("C:/path/to/Backend"))
+        );
     }
 
     /// AD-73, D-128 review F5: built without `window-authority`, every

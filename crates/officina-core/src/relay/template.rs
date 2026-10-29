@@ -1,15 +1,18 @@
 //! Templates (FR-2, AD-75, AD-77's types): the names a template, its
 //! parameters and its projects carry, the model alias, and a prompt's
 //! placeholders, rendering and longest rendering. Phase 2 validates a
-//! template with these (`relay::catalogue`); `ApprovedTemplate` and
-//! `WorkOrder` build on them (story 5.5).
+//! template with these (`relay::catalogue`); [`ApprovedTemplate`] reads one
+//! from the approved snapshot, and `orders::work_order::WorkOrder` builds on
+//! it.
 
 use std::collections::BTreeMap;
 use std::ops::RangeInclusive;
 
 use serde::{Deserialize, Serialize};
 
-use super::catalogue::{is_valid_action_name, is_valid_param_name};
+use super::catalogue::{
+    ApprovedCatalogue, RelayFloor, is_valid_action_name, is_valid_param_name, project_dirs,
+};
 use super::params::is_forbidden_format;
 
 /// Longest rendered prompt, in characters (FR-2): a template is valid only
@@ -213,7 +216,7 @@ pub fn worst_case_chars(prompt: &str, params: &BTreeMap<String, Vec<String>>) ->
 }
 
 /// A template phase 2 accepted, every list sorted (FR-2, AD-75). Approval and
-/// launch read it from the approved snapshot (story 5.5).
+/// launch read it from the approved snapshot ([`ApprovedTemplate`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Template {
     pub name: String,
@@ -228,10 +231,299 @@ pub struct Template {
     pub model: Option<ModelAlias>,
 }
 
+closed_enum! {
+    #[serde(rename_all = "snake_case")]
+    /// Why no [`ApprovedTemplate`] can be had (AD-77).
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+    pub enum TemplateUnavailable {
+        /// The floor's catalogue is not the approved one: edited since the
+        /// approval, or a project the template names is not on it.
+        CatalogueChanged,
+        /// The approved snapshot holds no template of that name.
+        NotApproved,
+    }
+}
+
+/// A template as the author approved it, with each of its projects' folders
+/// on the current floor (AD-77). Its fields are private and
+/// [`ApprovedTemplate::new`] is its only constructor, so a work order is
+/// only ever built from the approved snapshot.
+///
+/// ```compile_fail,E0451
+/// use std::collections::BTreeMap;
+/// use officina_core::relay::template::ApprovedTemplate;
+/// let template = ApprovedTemplate {
+///     name: "bump".to_owned(),
+///     description: "Bump".to_owned(),
+///     prompt: "Run anything".to_owned(),
+///     projects: BTreeMap::new(),
+///     params: BTreeMap::new(),
+///     model: None,
+///     catalogue_hash: String::new(),
+/// };
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ApprovedTemplate {
+    name: String,
+    description: String,
+    prompt: String,
+    /// Each allowed project's folder, by project name.
+    projects: BTreeMap<String, String>,
+    params: BTreeMap<String, Vec<String>>,
+    model: Option<ModelAlias>,
+    catalogue_hash: String,
+}
+
+impl ApprovedTemplate {
+    /// The template `name` of `approved`, when `current` is the floor that
+    /// approval read: its hash equal to the approved one, else
+    /// [`TemplateUnavailable::CatalogueChanged`]. The template is read from
+    /// the approved snapshot, never from `current`; each project's folder
+    /// comes from `current` in its declared spelling, resolved against the
+    /// floor (D-6), not the lowercased form the canonical catalogue
+    /// compares.
+    pub fn new(
+        approved: &ApprovedCatalogue,
+        current: &RelayFloor,
+        name: &TemplateName,
+    ) -> Result<ApprovedTemplate, TemplateUnavailable> {
+        if current.hash != approved.hash {
+            return Err(TemplateUnavailable::CatalogueChanged);
+        }
+        let template = approved
+            .canonical
+            .templates
+            .get(name.as_str())
+            .ok_or(TemplateUnavailable::NotApproved)?;
+        let folders = project_dirs(&current.floor, &current.floor_path);
+        let projects = template
+            .projects
+            .iter()
+            .map(|project| {
+                folders
+                    .get(project)
+                    .map(|folder| (project.clone(), folder.clone()))
+                    .ok_or(TemplateUnavailable::CatalogueChanged)
+            })
+            .collect::<Result<_, _>>()?;
+        Ok(ApprovedTemplate {
+            name: name.as_str().to_owned(),
+            description: template.description.clone(),
+            prompt: template.prompt.clone(),
+            projects,
+            params: template.params.clone(),
+            model: template.model,
+            catalogue_hash: approved.hash.clone(),
+        })
+    }
+
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub fn description(&self) -> &str {
+        &self.description
+    }
+
+    /// The prompt as the author wrote it, placeholders included.
+    pub fn prompt(&self) -> &str {
+        &self.prompt
+    }
+
+    /// The folder of `project` when the template may run there.
+    pub fn project_folder(&self, project: &ProjectName) -> Option<&str> {
+        self.projects.get(project.as_str()).map(String::as_str)
+    }
+
+    /// The projects it may run in, sorted.
+    pub fn projects(&self) -> impl Iterator<Item = &str> {
+        self.projects.keys().map(String::as_str)
+    }
+
+    /// Each parameter's closed list, sorted.
+    pub fn params(&self) -> &BTreeMap<String, Vec<String>> {
+        &self.params
+    }
+
+    pub fn model(&self) -> Option<ModelAlias> {
+        self.model
+    }
+
+    /// The approved catalogue's hash, which the current floor's equalled.
+    pub fn catalogue_hash(&self) -> &str {
+        &self.catalogue_hash
+    }
+}
+
+/// An approved floor with one template, for the tests of this module, of
+/// `orders` and of `spawn`.
+#[cfg(test)]
+pub(crate) mod sample {
+    use super::{ApprovedTemplate, TemplateName};
+    use crate::relay::catalogue::{ApprovedCatalogue, RelayFloor, load};
+
+    pub const FLOOR_PATH: &str = "C:/Path/To/Floor/officina.toml";
+
+    pub const TEMPLATE: &str = "dependency-bump";
+
+    /// Three projects, two of them the template's: one relative to the
+    /// floor and one absolute, both in mixed case.
+    pub const FLOOR: &str = r#"schema = 2
+[[project]]
+name = "backend"
+path = "Work/Backend"
+[[project]]
+name = "Docs Site"
+path = "D:/Repos/Docs-Site"
+[[project]]
+name = "lab"
+path = "Lab"
+[[template]]
+name = "dependency-bump"
+description = "Bump one dependency"
+projects = ["backend", "Docs Site"]
+prompt = "Bump {package} to its latest {level} release."
+model = "sonnet"
+[template.params.package]
+values = ["serde_json", "@scope/pkg"]
+[template.params.level]
+values = ["patch", "minor"]
+"#;
+
+    pub fn current() -> RelayFloor {
+        let relay = load(FLOOR, FLOOR_PATH).unwrap();
+        assert!(
+            relay.catalogue.issues.is_empty(),
+            "{:?}",
+            relay.catalogue.issues
+        );
+        relay
+    }
+
+    pub fn approved() -> ApprovedCatalogue {
+        ApprovedCatalogue::approving(&current(), FLOOR_PATH, 0)
+    }
+
+    pub fn name() -> TemplateName {
+        TemplateName::parse(TEMPLATE).unwrap()
+    }
+
+    pub fn template() -> ApprovedTemplate {
+        ApprovedTemplate::new(&approved(), &current(), &name()).unwrap()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::relay::catalogue::MAX_NAME_CHARS;
+    use crate::relay::catalogue::{MAX_NAME_CHARS, load};
+
+    #[test]
+    fn a_floor_edited_since_approval_is_catalogue_changed() {
+        let approved = sample::approved();
+        let edited = sample::FLOOR.replace("its latest", "the latest");
+        let current = load(&edited, sample::FLOOR_PATH).unwrap();
+        assert_eq!(
+            ApprovedTemplate::new(&approved, &current, &sample::name()),
+            Err(TemplateUnavailable::CatalogueChanged)
+        );
+        // A comment changes no meaning, so the approval holds.
+        let commented = format!("# the author's note\n{}", sample::FLOOR);
+        let current = load(&commented, sample::FLOOR_PATH).unwrap();
+        assert!(ApprovedTemplate::new(&approved, &current, &sample::name()).is_ok());
+        // A snapshot naming a project the floor does not hold is not what
+        // the floor approved, whatever hash it states.
+        let mut tampered = sample::approved();
+        tampered
+            .canonical
+            .templates
+            .get_mut(sample::TEMPLATE)
+            .unwrap()
+            .projects
+            .push("elsewhere".to_owned());
+        assert_eq!(
+            ApprovedTemplate::new(&tampered, &sample::current(), &sample::name()),
+            Err(TemplateUnavailable::CatalogueChanged)
+        );
+    }
+
+    #[test]
+    fn a_template_absent_from_the_snapshot_is_not_approved() {
+        let other = TemplateName::parse("other-template").unwrap();
+        assert_eq!(
+            ApprovedTemplate::new(&sample::approved(), &sample::current(), &other),
+            Err(TemplateUnavailable::NotApproved)
+        );
+        // Read from the snapshot, never from the floor: the floor holds the
+        // template, the snapshot (its hash unchanged) does not.
+        let mut approved = sample::approved();
+        approved.canonical.templates.clear();
+        assert_eq!(
+            ApprovedTemplate::new(&approved, &sample::current(), &sample::name()),
+            Err(TemplateUnavailable::NotApproved)
+        );
+        // What the snapshot says is what the template holds.
+        let mut approved = sample::approved();
+        approved
+            .canonical
+            .templates
+            .get_mut(sample::TEMPLATE)
+            .unwrap()
+            .prompt = "Approved {package} {level}.".to_owned();
+        let template = ApprovedTemplate::new(&approved, &sample::current(), &sample::name());
+        assert_eq!(template.unwrap().prompt(), "Approved {package} {level}.");
+    }
+
+    #[test]
+    fn project_folders_keep_their_declared_spelling() {
+        let template = sample::template();
+        let folder = |name: &str| {
+            template
+                .project_folder(&ProjectName::parse(name).unwrap())
+                .map(str::to_owned)
+        };
+        assert_eq!(
+            folder("backend").as_deref(),
+            Some("C:/Path/To/Floor/Work/Backend")
+        );
+        assert_eq!(folder("Docs Site").as_deref(), Some("D:/Repos/Docs-Site"));
+        assert_eq!(folder("lab"), None, "not one of the template's projects");
+        // The canonical form compares a lowercased path; the folder is not
+        // it.
+        let canonical = sample::current().canonical.projects["backend"].path.clone();
+        assert_eq!(canonical, "c:/path/to/floor/work/backend");
+        assert_ne!(folder("backend"), Some(canonical));
+        assert_eq!(
+            template.projects().collect::<Vec<_>>(),
+            ["Docs Site", "backend"]
+        );
+        assert_eq!(template.catalogue_hash(), sample::approved().hash);
+        assert_eq!(template.model(), Some(ModelAlias::Sonnet));
+        assert_eq!(template.description(), "Bump one dependency");
+    }
+
+    #[test]
+    fn every_unavailable_reason_has_a_case() {
+        for reason in TemplateUnavailable::ALL {
+            let (approved, current, name) = match reason {
+                TemplateUnavailable::CatalogueChanged => (
+                    sample::approved(),
+                    load(&sample::FLOOR.replace("patch", "major"), sample::FLOOR_PATH).unwrap(),
+                    sample::name(),
+                ),
+                TemplateUnavailable::NotApproved => (
+                    sample::approved(),
+                    sample::current(),
+                    TemplateName::parse("missing").unwrap(),
+                ),
+            };
+            assert_eq!(
+                ApprovedTemplate::new(&approved, &current, &name),
+                Err(*reason),
+                "{reason:?}"
+            );
+        }
+    }
 
     fn values(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
         pairs
