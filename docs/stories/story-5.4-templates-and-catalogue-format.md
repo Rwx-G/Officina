@@ -1,6 +1,6 @@
 # Story 5.4: Templates, the new floor tables and the canonical catalogue format
 
-**Status:** Approved
+**Status:** Review
 
 ## Story
 
@@ -24,14 +24,14 @@ so that a template can run only once I approved exactly its text and its closed 
 
 ## Tasks
 
-- [ ] `floor.rs`: `RELAY_KEYS`; phase 1 raw tables (AC 1)
-- [ ] `crates/officina-core/src/relay/template.rs` (AC 2)
-- [ ] `relay/catalogue.rs`: template conversion and rules, `IssueKind` variants and fixtures (`AutoWithoutCheck` among them), issue table, `auto` and `auto_max_per_hour`, the two tables (AC 3, 5)
-- [ ] `relay/params.rs`: split and `template_value` (AC 4)
-- [ ] Canonical form, format, golden floor and hash; previous-format fixture; diff (AC 6-8)
-- [ ] Relay view templates table and diff; bindings (AC 9)
-- [ ] Doctor lines (AC 10)
-- [ ] Update `CHANGELOG.md` and the README (AC 11)
+- [x] `floor.rs`: `RELAY_KEYS`; phase 1 raw tables (AC 1)
+- [x] `crates/officina-core/src/relay/template.rs` (AC 2)
+- [x] `relay/catalogue.rs`: template conversion and rules, `IssueKind` variants and fixtures (`AutoWithoutCheck` among them), issue table, `auto` and `auto_max_per_hour`, the two tables (AC 3, 5)
+- [x] `relay/params.rs`: split and `template_value` (AC 4)
+- [x] Canonical form, format, golden floor and hash; previous-format fixture; diff (AC 6-8)
+- [x] Relay view templates table and diff; bindings (AC 9)
+- [x] Doctor lines (AC 10)
+- [x] Update `CHANGELOG.md` and the README (AC 11)
 
 ## Dev Notes
 
@@ -56,12 +56,41 @@ so that a template can run only once I approved exactly its text and its closed 
 
 ### Debug Log
 
+- The seam AC 5 names was gone: story 2.8 removed `class_not_available` and story 2.15 removed `classes::is_available` and the `run --list` mark, since no catalogue could hold an `auto` action. They come back as they were built (D-636).
+- `RelayView` does carry a schema number, so it goes from 1 to 2 as the story's notes ask (D-642).
+- The previous-format fixture was written by running `ApprovedCatalogue::approving` on the golden floor with the code before any change of this story, from a throwaway test that was then removed; its stored hash is the previous pinned golden hash (D-641).
+- `toml_string` in the catalogue tests now escapes newlines, carriage returns and tabs, which the prompt cases need inside one-line TOML strings.
+- A failing `[auto_review]` needed a canonical form AD-76 does not give: `model: null` (D-638).
+
 ### Completion Notes
 
+- AC 1: `floor.rs::tests::{relay_keys_constant_matches_the_type, schema_1_with_each_relay_key_names_schema_2, a_schema_1_floor_with_a_template_names_schema_2}`; `catalogue.rs::tests::a_malformed_template_never_invalidates_the_floor`.
+- AC 2: `relay/template.rs::tests::{names_follow_the_catalogue_rules, render_replaces_each_placeholder_once, worst_case_uses_each_longest_value, model_alias_round_trips_its_text, braces_delimit_placeholders_only}` and the module's doctests; `ProjectName`'s rule is D-639.
+- AC 3: `catalogue.rs::tests::every_issue_kind_has_a_case` (over `IssueKind::ALL`, a fixture per new variant), `every_template_issue_names_its_table_and_line`, `the_base_template_is_valid`, `template_names_are_separate_from_action_names`, `an_unknown_project_leaves_the_template`, `a_template_left_with_no_project_is_dropped`, `a_prompt_starting_with_a_placeholder_is_refused`, `a_leading_slash_bang_or_dash_after_whitespace_is_refused` (with D-640's line ends), `the_longest_rendering_is_checked`, `pattern_is_refused_for_templates`, `template_values_follow_the_template_value_rule`. Shared rules stay one variant with the table telling them apart (D-637).
+- AC 4: `params.rs::tests::{template_value_accepts_a_scoped_package, template_value_refuses_a_space_and_65_characters, template_value_refuses_a_leading_dash_and_a_dot_segment, native_argument_values_still_refuse_a_leading_slash_or_at}`; `crates/officina-core/tests/argv_vectors.rs` and `tests/vectors/argv.json` unchanged and green.
+- AC 5: `catalogue.rs::tests::{auto_is_a_valid_class, auto_without_a_check_is_an_issue, auto_check_names_a_valid_free_action, auto_max_per_hour_range_and_class, auto_on_an_http_action_is_an_issue, a_failing_orchestrator_table_is_an_issue, a_failing_auto_review_table_is_an_issue}` and `every_issue_kind_has_a_case`; `classes.rs`'s `is_available` doctest (restored, D-636); `run.rs::tests::auto_is_not_available_yet`; CLI `crates/officina/tests/run.rs::auto_is_refused_as_not_available` and `every_refusal_code_exits_126_with_one_journal_line` (its `class_not_available` scenario).
+- AC 6: `CANONICAL_FORMAT` 3 to 4; `crates/officina-core/tests/catalogue_hash.rs::{golden_fixture_hash_is_pinned, every_canonical_field_changes_the_hash, formatting_and_excluded_fields_keep_the_hash}` on a golden floor (and its variant) that declares two templates, an `auto` action with its check, `[auto_review]` and `[orchestrator]`; the hash re-pinned in this change only; `catalogue.rs::tests::{orchestrator_table_is_not_canonical, templates_are_canonical_and_change_the_hash}`.
+- AC 7: host `crates/officina-host/tests/authority.rs::an_approval_in_the_previous_format_keeps_guarding_and_waits_for_one_approval` (parses, stored hash kept, gate guards the snapshot's project, pending diff shows the format and the templates, one approval holds the new format); CLI `run.rs::previous_format_approval_refuses_as_pending`; `catalogue.rs::tests::diff_reports_the_format_change`. The fixture and how it moves between homes: D-641.
+- AC 8: `catalogue.rs::tests::{diff_reports_templates_added_removed_and_changed, diff_reports_the_review_model, diff_covers_every_canonical_field}`.
+- AC 9: Playwright `app/e2e/relay-view.spec.ts > templates and auto in the light theme` and `in the dark theme` `> the catalogue lists templates with their projects, values and model`, `> an auto action shows its check and hourly cap`, `> the pending diff shows the format change and the templates added`, on the real-CLI fixtures `relay-clean` and the new `relay-previous-format` (`approve_fixture previous-format`), each comparing computed colours with the catalogue's tokens; Vitest `app/src/lib/relay.test.ts` (template text rendered as text, `classText`, `reviewModelText`, `issueSubject`); `typescript_bindings.rs::committed_bindings_match_the_rust_types` with the regenerated bindings. No colour token and no header control added; the templates table also shows the prompt (D-643).
+- AC 10: host `crates/officina-host/src/relay/doctor.rs::tests::{template_issues_are_listed_with_their_lines, an_auto_action_without_a_check_is_listed, templates_awaiting_approval_are_listed, the_paragraph_marks_an_auto_action_unavailable}`; CLI `doctor_relay.rs::issues_are_reported_with_lines` now reads `action broken`.
+- AC 11: `CHANGELOG.md` `[Unreleased]` Added and Changed (the format bump and the one approval); README "The orchestrator (v0.5, in progress)" (templates with placeholder project names, closed lists only, `auto` naming its check, the upgrade note); `crates/officina/tests/readme.rs` green, `changelog_states_the_current_catalogue_format` included.
+
 ## File List
+
+- `crates/officina-core/src/relay/template.rs` (new), `crates/officina-core/src/relay/{catalogue.rs, classes.rs, journal.rs, mod.rs, params.rs, run.rs, view.rs}`, `crates/officina-core/src/floor.rs`
+- `crates/officina-core/tests/catalogue_hash.rs`, `crates/officina-core/tests/data/relay/{golden-floor.toml, golden-floor-variant.toml, approved-previous-format.json (new)}`
+- `tests/support/previous_format.rs` (new)
+- `crates/officina-host/src/relay/doctor.rs`, `crates/officina-host/examples/approve_fixture.rs`, `crates/officina-host/tests/{authority.rs, common/mod.rs}`
+- `crates/officina/tests/{run.rs, doctor_relay.rs, common/mod.rs, common/relay.rs}`
+- `app/src/lib/generated/` (regenerated: `ActionIssue`, `CanonicalAction`, `CanonicalCatalogue`, `CatalogueDiff`, `IssueKind`, `RefusalReason`; new `CanonicalAutoReview`, `CanonicalTemplate`, `IssueTable`, `ModelAlias`)
+- `app/src/components/{CatalogueTable.svelte, PendingCatalogue.svelte, RelayView.svelte}`, `app/src/lib/{relay.svelte.ts, relay-text.ts, relay.test.ts}`, `app/e2e/{relay-view.spec.ts, fixtures.ts}`, `app/scripts/e2e-fixtures.mjs`
+- `CHANGELOG.md`, `README.md`
+- `docs/stories/epic-5-decisions.md` (D-636 to D-643), `docs/stories/sprint-status.yaml`
 
 ## Change Log
 
 - 2026-10-28 created
 - 2026-10-28 reworked after review: the prompt's first-character rule applies after leading whitespace (F34); `auto` on an HTTP action is an issue, 2.11 named as a seam (F24)
 - 2026-10-28 reworked against the addendum and v0.4 as built: `check` mandatory on `auto` through `AutoWithoutCheck`, in validation, doctor, the Relay view and the docs (PRD section 9 item 5, D-570); the Relay view's components named as built and checked in both themes (D-563, D-564)
+- 2026-10-29 implemented; decisions D-636 to D-643. Status review
