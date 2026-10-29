@@ -447,7 +447,8 @@ mod tests {
     }
 
     /// Story 5.22 AC 4: with no answer, the wait ends at its deadline (a
-    /// 200 ms one here) with no decision.
+    /// 200 ms one here) with no decision: not before the deadline, which
+    /// counts from the request's time, before its file was written.
     #[test]
     fn the_deadline_ends_the_wait_with_no_decision() {
         let (_dir, home) = home();
@@ -455,8 +456,8 @@ mod tests {
         let request = request(&home, 200);
         let started = Instant::now();
         assert_eq!(wait(&home, &request), WaitEnd::Deadline);
+        assert!(now_ms() >= request.deadline_ms);
         let took = started.elapsed();
-        assert!(took >= Duration::from_millis(150), "{took:?}");
         assert!(took < Duration::from_secs(5), "{took:?}");
     }
 
