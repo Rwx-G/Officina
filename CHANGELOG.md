@@ -8,6 +8,17 @@ project uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Written answers from the meeting (v0.5, story 5.11): a composer, never
+  prefilled, sends with Send or Ctrl+Enter and copies the text on the same
+  gesture. A live idle background session or an ended one gets the
+  answer as its next turn through `claude --resume` in its own console,
+  in the folder `claude agents` reported for it, confirmed when the
+  session turns busy within 30 s; a session waiting on a question gets
+  the copy and `claude attach`; one whose folder Claude Code never
+  reported, the copy alone; an interactive one, Focus. The panel keeps the
+  text until it is confirmed or discarded; the journal keeps its SHA-256
+  (`meeting_answer`), never the text. `officina doctor` warns when
+  `claude` is too old to send a resumed prompt.
 - The meeting (v0.5, story 5.10): Receive on a Needs you or Your turn card,
   a background session idle in Done, the session file or a subject to
   resume opens a side panel in the file's place, which resizes nothing:

@@ -8,6 +8,8 @@ import { tick } from "svelte";
 import SessionCard from "./SessionCard.svelte";
 import SessionFile from "./SessionFile.svelte";
 import MeetingPanel from "./MeetingPanel.svelte";
+import AnswerComposer from "./AnswerComposer.svelte";
+import { ANSWER_REFUSAL_TEXT } from "../lib/meeting-text";
 import { meeting } from "../lib/meeting.svelte";
 import type { MeetingView } from "../lib/generated/MeetingView";
 import EndedCounts from "./EndedCounts.svelte";
@@ -1194,5 +1196,55 @@ describe("MeetingPanel", () => {
     for (const commit of getAllByTestId("meeting-commit")) expect(commit.textContent).toContain(hostile);
     expect(getByTestId("diff-file").textContent).toBe(hostile);
     expect((window as { __officinaXss?: number }).__officinaXss).toBeUndefined();
+  });
+});
+
+describe("AnswerComposer", () => {
+  const live = (): MeetingView => ({ ...fixtureOf<MeetingView>("meeting", "meeting-background"), key: "bg:composer" });
+  let writeText: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    writeText = vi.fn(async () => undefined);
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+    meeting.discard("bg:composer");
+  });
+
+  it("AnswerComposer starts empty and counts characters", async () => {
+    const view = live();
+    const { getByTestId } = render(AnswerComposer, { view });
+    const text = getByTestId("answer-text") as HTMLTextAreaElement;
+    expect(text.value).toBe("");
+    expect(getByTestId("answer-count").textContent).toBe(`0 / ${view.answer_max_chars}`);
+    await fireEvent.input(text, { target: { value: "Keep é" } });
+    expect(getByTestId("answer-count").textContent).toBe(`6 / ${view.answer_max_chars}`);
+  });
+
+  it("Ctrl+Enter sends and copies", async () => {
+    const view = live();
+    const sent = vi.spyOn(ipc, "sendAnswer").mockResolvedValue({ outcome: "confirmed" });
+    const { getByTestId } = render(AnswerComposer, { view });
+    const text = getByTestId("answer-text") as HTMLTextAreaElement;
+    await fireEvent.input(text, { target: { value: "Keep the 1.x line." } });
+    await fireEvent.keyDown(text, { key: "Enter", ctrlKey: true });
+    await vi.waitFor(() => expect(sent).toHaveBeenCalledWith(view.key, view.delivery, "Keep the 1.x line."));
+    expect(writeText).toHaveBeenCalledWith("Keep the 1.x line.");
+    await vi.waitFor(() => expect(getByTestId("answer-result").getAttribute("data-outcome")).toBe("confirmed"));
+    // Confirmed, the draft goes.
+    expect((getByTestId("answer-text") as HTMLTextAreaElement).value).toBe("");
+  });
+
+  it("a refused answer shows its reason and keeps the text", async () => {
+    const view = live();
+    vi.spyOn(ipc, "sendAnswer").mockResolvedValue({ outcome: "refused", value: { kind: "answer", detail: "leading_slash" } });
+    const { getByTestId } = render(AnswerComposer, { view });
+    const text = getByTestId("answer-text") as HTMLTextAreaElement;
+    await fireEvent.input(text, { target: { value: "/clear" } });
+    await fireEvent.click(getByTestId("answer-send"));
+    await vi.waitFor(() => expect(getByTestId("answer-result").textContent).toContain(ANSWER_REFUSAL_TEXT.leading_slash));
+    expect((getByTestId("answer-text") as HTMLTextAreaElement).value).toBe("/clear");
   });
 });

@@ -2,7 +2,9 @@
 // panel's slot. Receive asks the backend for the meeting of a card key, a
 // `sid:` session or a `subject:` to resume; the panel asks again whenever
 // the board shows that card's state changed. Nothing is stored.
-import { openMeeting } from "./ipc";
+import { openMeeting, sendAnswer } from "./ipc";
+import type { AnswerResult } from "./generated/AnswerResult";
+import type { Delivery } from "./generated/Delivery";
 import type { Board } from "./generated/Board";
 import type { Card } from "./generated/Card";
 import type { MeetingView } from "./generated/MeetingView";
@@ -37,6 +39,13 @@ export class MeetingStore {
   view = $state<MeetingView | null>(null);
   error = $state<string | null>(null);
   loading = $state(false);
+  /** The answers being written, by card key, in memory only (AD-85):
+   *  kept until the session confirms one or the author discards it. */
+  drafts = $state<Record<string, string>>({});
+  /** The key whose answer is being sent. */
+  sending = $state<string | null>(null);
+  /** What became of the last answer sent, by card key. */
+  results = $state<Record<string, AnswerResult>>({});
   /** Called when a meeting opens, so the window shows the sessions. */
   onOpen: () => void = () => {};
   #asked = 0;
@@ -86,6 +95,41 @@ export class MeetingStore {
     const back = this.#returnFocus;
     this.#returnFocus = null;
     if (refocus && back?.isConnected) back.focus();
+  }
+
+  draftOf(key: string): string {
+    return this.drafts[key] ?? "";
+  }
+
+  setDraft(key: string, text: string): void {
+    this.drafts[key] = text;
+  }
+
+  resultOf(key: string): AnswerResult | null {
+    return this.results[key] ?? null;
+  }
+
+  /** Discards the draft of `key` and what its last answer became. */
+  discard(key: string): void {
+    delete this.drafts[key];
+    delete this.results[key];
+  }
+
+  /** Sends the answer of `key` (AD-85): confirmed, it leaves; refused
+   *  because the session changed, the meeting is read again. */
+  async send(key: string, delivery: Delivery, text: string): Promise<void> {
+    if (this.sending !== null) return;
+    this.sending = key;
+    try {
+      const result = await sendAnswer(key, delivery, text);
+      this.results[key] = result;
+      if (result.outcome === "confirmed") delete this.drafts[key];
+      if (result.outcome === "refused" && result.value.kind === "state_changed" && this.key !== null) void this.#ask(this.key);
+    } catch (error) {
+      this.results[key] = { outcome: "spawn_failed", value: (error as { message?: string }).message ?? String(error) };
+    } finally {
+      this.sending = null;
+    }
   }
 
   /** Each new board: the meeting asks again when its card's state there

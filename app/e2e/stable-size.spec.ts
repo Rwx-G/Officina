@@ -6,6 +6,7 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import { fixtureOf } from "./fixture-index";
 import { loadBoard, loadRegistry, loadRelay, openBoard, openScene } from "./fixtures";
+import type { MeetingView } from "../src/lib/generated/MeetingView";
 import type { OrchestratorView } from "../src/lib/generated/OrchestratorView";
 import type { RegistryView } from "../src/lib/generated/RegistryView";
 import type { WorkOrderCard } from "../src/lib/generated/WorkOrderCard";
@@ -17,7 +18,7 @@ const TOLERANCE_PX = 0.5;
 /** What makes an element a toggle this spec must cover. */
 const TOGGLE = '[aria-pressed], [role="radio"], [data-stable-slot], :has(> [data-stable-label])';
 
-type SceneName = "board" | "autoApproval" | "sceneMode" | "relay" | "relayAuto" | "subjects" | "triage" | "orchestrator";
+type SceneName = "board" | "autoApproval" | "sceneMode" | "relay" | "relayAuto" | "subjects" | "triage" | "orchestrator" | "meeting";
 
 const SCENES: Record<SceneName, (page: Page) => Promise<void>> = {
   board: async (page) => {
@@ -74,6 +75,18 @@ const SCENES: Record<SceneName, (page: Page) => Promise<void>> = {
       await page.locator(`[data-testid="composer-param"][data-param="${param.name}"]`).selectOption(param.value);
     }
     await expect(page.getByTestId("work-order-card")).toBeVisible();
+  },
+  // The busy board's first Needs you card received, its meeting the
+  // background fixture's (story 5.11): the composer's Send.
+  meeting: async (page) => {
+    const board = loadBoard("busy");
+    const key = board.columns.needs_you[0]!.key;
+    const view = { ...fixtureOf<MeetingView>("meeting", "meeting-background"), key };
+    await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+    await page.addInitScript((m) => (window.__officinaMeetings = { [m.key]: m }), view);
+    await openBoard(page, board, {}, loadRelay("relay-clean"));
+    await page.locator(`[data-testid="card"][data-key=${JSON.stringify(key)}]`).getByTestId("receive").click();
+    await expect(page.getByTestId("answer-composer")).toBeVisible();
   },
 };
 
@@ -153,6 +166,17 @@ const CASES: ToggleCase[] = [
       control.locator("xpath=ancestor::*[@data-testid='approval-card']").getByTestId("reject").click(),
   },
   { name: "Relay view stop toggle", selector: '[data-testid="relay-view-stop"]', scene: "relay" },
+  {
+    name: "answer Send",
+    selector: '[data-testid="answer-send"]',
+    scene: "meeting",
+    // Held in flight, its label reads Sending (D-564).
+    act: async (page, control) => {
+      await page.getByTestId("answer-text").fill("Keep the 1.x line.");
+      await page.evaluate(() => (window.__officinaAnswerHeld = true));
+      await control.click();
+    },
+  },
   // Story 5.14 (D-564): the `auto` section's toggles and their slots, with
   // approval on and the gate holding; turning it off keeps it offered.
   {

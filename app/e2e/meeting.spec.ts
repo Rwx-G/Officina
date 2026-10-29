@@ -4,7 +4,8 @@
 // closes back to its opener; it shows each section of a meeting printed by
 // the window's own functions (`orchestrator_fixture`, kind `meeting`), jumps
 // to a file's hunks and to a failed run's journal entry, and asks again when
-// the board shows its card changed.
+// the board shows its card changed. Its composer (story 5.11) sends the
+// author's answer by its delivery, copying it on the same gesture.
 import { expect, test, type Page } from "@playwright/test";
 import type { Board } from "../src/lib/generated/Board";
 import type { Card } from "../src/lib/generated/Card";
@@ -118,7 +119,10 @@ for (const theme of ["light", "dark"] as const) {
         return getComputedStyle(probe).color;
       };
       const tokens = Object.fromEntries(
-        ["--color-text", "--color-text-muted", "--color-working", "--color-surface", "--color-border", "--color-attention", "--color-danger"].map((t) => [t, resolve(t)]),
+        ["--color-text", "--color-text-muted", "--color-working", "--color-surface", "--color-bg", "--color-border", "--color-attention", "--color-danger"].map((t) => [
+          t,
+          resolve(t),
+        ]),
       );
       probe.remove();
       const panel = document.querySelector('[data-testid="meeting-panel"]')!;
@@ -132,7 +136,7 @@ for (const theme of ["light", "dark"] as const) {
     });
     expect(found.background).toBe(found.tokens["--color-surface"]);
     expect(found.diff).toBe(found.tokens["--color-text"]);
-    const allowed = ["--color-text", "--color-text-muted", "--color-working", "--color-surface"].map((t) => found.tokens[t]);
+    const allowed = ["--color-text", "--color-text-muted", "--color-working", "--color-surface", "--color-bg"].map((t) => found.tokens[t]);
     for (const colour of found.colours) expect(allowed, `${theme}: ${colour}`).toContain(colour);
     expect(found.colours).not.toContain(found.tokens["--color-attention"]);
   });
@@ -212,4 +216,91 @@ test("the panel asks again when the card's state changes", async ({ page }) => {
   moved.columns.working.unshift({ ...card, column: "working", waiting_for: null });
   await page.evaluate((b) => window.__officinaPushBoard!(b), moved);
   await expect.poll(() => meetingCalls(page)).toEqual([needs.key, needs.key]);
+});
+
+// ---- story 5.11: answers (FR-6, AD-85, D-168) ----
+
+/** Opens the busy board's first Needs you card as a meeting whose
+ *  delivery is `delivery` and whose session is `kind`, the clipboard
+ *  readable. */
+async function openAnswering(page: Page, delivery: MeetingView["delivery"], view: MeetingView = background()): Promise<MeetingView> {
+  await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+  const board = loadBoard("busy");
+  const needs = board.columns.needs_you[0]!;
+  const meeting = { ...as(view, needs.key), delivery };
+  await openBoard(page, board);
+  await serveMeetings(page, { [needs.key]: meeting });
+  await cardOf(page, needs.key).getByTestId("receive").click();
+  await expect(panel(page).getByTestId("meeting-delivery")).toHaveAttribute("data-delivery", delivery);
+  return meeting;
+}
+
+const answerCalls = async (page: Page) =>
+  (await calls(page)).filter((c) => c.cmd === "send_answer").map((c) => c.args as { key: string; expected: string; text: string });
+
+const clipboard = (page: Page) => page.evaluate(() => navigator.clipboard.readText());
+
+test("an answer to a live background session is sent and confirmed", async ({ page }) => {
+  const meeting = await openAnswering(page, "resume_live");
+  const text = panel(page).getByTestId("answer-text");
+  await expect(text).toHaveValue("");
+  await text.fill("Keep the 1.x line, then run the tests again.");
+  await panel(page).getByTestId("answer-send").click();
+  await expect(panel(page).getByTestId("answer-result")).toHaveAttribute("data-outcome", "confirmed");
+  expect(await answerCalls(page)).toEqual([{ key: meeting.key, expected: "resume_live", text: "Keep the 1.x line, then run the tests again." }]);
+  expect(await clipboard(page)).toBe("Keep the 1.x line, then run the tests again.");
+  // Confirmed, the draft goes.
+  await expect(text).toHaveValue("");
+});
+
+test("an unconfirmed answer stays in the panel and on the clipboard", async ({ page }) => {
+  await openAnswering(page, "resume_live");
+  await page.evaluate(() => (window.__officinaAnswerResult = { outcome: "not_confirmed" }));
+  const text = panel(page).getByTestId("answer-text");
+  await text.fill("Use the fixture of the release branch.");
+  // Ctrl+Enter sends from the keyboard: an answer approves nothing.
+  await text.press("Control+Enter");
+  await expect(panel(page).getByTestId("answer-result")).toHaveAttribute("data-outcome", "not_confirmed");
+  await expect(panel(page).getByTestId("answer-result")).toContainText("Not confirmed");
+  await expect(text).toHaveValue("Use the fixture of the release branch.");
+  expect(await clipboard(page)).toBe("Use the fixture of the release branch.");
+  // Closing and receiving again keeps the draft, in memory.
+  await panel(page).getByTestId("meeting-close").click();
+  await cardOf(page, loadBoard("busy").columns.needs_you[0]!.key).getByTestId("receive").click();
+  await expect(panel(page).getByTestId("answer-text")).toHaveValue("Use the fixture of the release branch.");
+  await panel(page).getByTestId("answer-discard").click();
+  await expect(panel(page).getByTestId("answer-text")).toHaveValue("");
+});
+
+test("a waiting background session copies and opens attach", async ({ page }) => {
+  await openAnswering(page, "copy_and_attach");
+  await page.evaluate(() => (window.__officinaAnswerResult = { outcome: "attached" }));
+  await panel(page).getByTestId("answer-text").fill("Pick the second option.");
+  await panel(page).getByTestId("answer-send").click();
+  await expect(panel(page).getByTestId("answer-result")).toHaveAttribute("data-outcome", "attached");
+  expect((await answerCalls(page))[0]!.expected).toBe("copy_and_attach");
+  expect(await clipboard(page)).toBe("Pick the second option.");
+});
+
+test("an ended session never seen by claude agents is copy only", async ({ page }) => {
+  await openAnswering(page, "copy_only");
+  await expect(panel(page).getByTestId("meeting-delivery")).toContainText("resume it by hand in its folder");
+  await page.evaluate(() => (window.__officinaAnswerResult = { outcome: "copied" }));
+  await panel(page).getByTestId("answer-text").fill("Carry on from the last commit.");
+  await panel(page).getByTestId("answer-send").click();
+  await expect(panel(page).getByTestId("answer-result")).toHaveAttribute("data-outcome", "copied");
+  expect((await answerCalls(page))[0]!.expected).toBe("copy_only");
+  expect(await clipboard(page)).toBe("Carry on from the last commit.");
+});
+
+test("a live interactive session offers Focus and no composer", async ({ page }) => {
+  const board = loadBoard("busy");
+  const turn = board.columns.your_turn[0]!;
+  await openBoard(page, board);
+  await serveMeetings(page, { [turn.key]: as(interactive(), turn.key) });
+  await cardOf(page, turn.key).getByTestId("receive").click();
+  await expect(panel(page).getByTestId("meeting-focus")).toBeVisible();
+  await expect(panel(page).getByTestId("answer-composer")).toHaveCount(0);
+  await panel(page).getByTestId("meeting-focus").click();
+  expect((await calls(page)).some((c) => c.cmd === "focus")).toBe(true);
 });

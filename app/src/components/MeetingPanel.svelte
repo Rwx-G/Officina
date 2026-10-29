@@ -15,6 +15,7 @@
   import { CHANGES_TEXT, DELIVERY_TEXT, runResultText } from "../lib/meeting-text";
   import { clock } from "../lib/time";
   import DiffView from "./DiffView.svelte";
+  import AnswerComposer from "./AnswerComposer.svelte";
 
   interface Props {
     board: Board | null;
@@ -115,8 +116,12 @@
     <section data-testid="meeting-delivery" data-delivery={view.delivery} aria-label="Answer">
       <h3>Answer</h3>
       <p>{DELIVERY_TEXT[view.delivery]}</p>
-      {#if view.delivery === "focus_only" && card}
-        <button type="button" class="action" data-testid="meeting-focus" onclick={() => store.focus(card!)}>Focus</button>
+      {#if view.delivery === "focus_only"}
+        {#if card}
+          <button type="button" class="action" data-testid="meeting-focus" onclick={() => store.focus(card!)}>Focus</button>
+        {/if}
+      {:else}
+        <AnswerComposer {view} />
       {/if}
     </section>
 
