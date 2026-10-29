@@ -18,8 +18,9 @@ use officina_core::registry::confirm::wake;
 use officina_core::registry::filing::filing_for_new_session;
 use officina_core::registry::fold::{candidates_needed, line_facts, link_for_line};
 use officina_core::registry::ingestion::{
-    ExcerptObservation, FileOpening, close_event_file, excerpt_observation, in_review_workdir,
-    in_triage_workdir, line_too_long, open_event_file, recorded_at, starts_a_chunk,
+    ExcerptObservation, FileOpening, close_event_file, excerpt_observation,
+    in_orchestrator_workdir, in_review_workdir, in_triage_workdir, line_too_long, open_event_file,
+    recorded_at, starts_a_chunk,
 };
 use officina_core::registry::retention::excerpt_expired;
 use officina_core::registry::types::{EventFileRecord, SessionRecord};
@@ -401,7 +402,8 @@ impl Writer {
 }
 
 /// Applies one event line; returns false for a line that records nothing:
-/// no session id, or a `cwd` in the triage workdir (AD-43, D-97).
+/// no session id, or a `cwd` in the triage, review or orchestrator workdir
+/// (AD-43 as amended, D-97, D-166).
 fn apply(
     conn: &Connection,
     line: &EventLine,
@@ -418,11 +420,11 @@ fn apply(
         return Ok(false);
     }
     let home = ctx.officina_home.to_string_lossy();
-    if line
-        .cwd
-        .as_deref()
-        .is_some_and(|cwd| in_triage_workdir(cwd, &home) || in_review_workdir(cwd, &home))
-    {
+    if line.cwd.as_deref().is_some_and(|cwd| {
+        in_triage_workdir(cwd, &home)
+            || in_review_workdir(cwd, &home)
+            || in_orchestrator_workdir(cwd, &home)
+    }) {
         return Ok(false);
     }
     ensure_session(conn, session_id, line.cwd.as_deref(), line.ts, ctx.projects)?;

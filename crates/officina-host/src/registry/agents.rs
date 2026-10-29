@@ -10,6 +10,7 @@ use officina_core::agents::AgentRecord;
 use officina_core::board::ProjectRule;
 use officina_core::registry::confirm::wake;
 use officina_core::registry::fold::{AgentsChanges, AgentsSnapshot, fold_agents};
+use officina_core::registry::ingestion::in_orchestrator_workdir;
 use officina_core::registry::types::SessionRecord;
 use rusqlite::{Connection, TransactionBehavior};
 
@@ -64,6 +65,19 @@ impl Writer {
         projects: &[ProjectRule],
         now_ms: i64,
     ) -> Result<AgentsChanges, RegistryError> {
+        // AD-43 as amended, D-166: an entry working in the orchestrator's
+        // folder is never filed or triaged, as its event lines are not.
+        let home = self.paths().officina_home().to_string_lossy().into_owned();
+        let records: Vec<AgentRecord> = records
+            .iter()
+            .filter(|r| {
+                !r.cwd
+                    .as_deref()
+                    .is_some_and(|cwd| in_orchestrator_workdir(cwd, &home))
+            })
+            .cloned()
+            .collect();
+        let records = records.as_slice();
         let tx = self
             .conn
             .transaction_with_behavior(TransactionBehavior::Immediate)?;

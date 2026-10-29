@@ -52,6 +52,11 @@ impl RegistryPaths {
         &self.dir
     }
 
+    /// The Officina home the registry belongs to.
+    pub fn officina_home(&self) -> &Path {
+        self.dir.parent().unwrap_or(&self.dir)
+    }
+
     /// `registry/registry.db`.
     pub fn database(&self) -> PathBuf {
         self.dir.join("registry.db")

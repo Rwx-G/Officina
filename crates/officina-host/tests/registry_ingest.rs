@@ -675,6 +675,81 @@ fn other_lines_under_the_review_folder_are_recorded() {
     assert_eq!(sessions, ["n1"]);
 }
 
+/// The session ids the writer holds, sorted.
+fn session_ids(writer: &officina_host::registry::store::Writer) -> Vec<String> {
+    let mut ids: Vec<String> = writer
+        .sessions()
+        .unwrap()
+        .into_iter()
+        .map(|s| s.session_id)
+        .collect();
+    ids.sort();
+    ids
+}
+
+/// Story 5.16 AC 6 (AD-43 as amended, D-166): the orchestrator's lines
+/// and its agents entry never reach the registry, however its folder is
+/// spelled.
+#[test]
+fn orchestrator_lines_and_its_agents_entry_are_skipped() {
+    let home = Home::new();
+    let workdir = home.home.join("orchestrator").join("workdir");
+    let backslash = workdir.to_string_lossy().replace('/', "\\");
+    let forward = backslash.replace('\\', "/");
+    home.append(
+        &day_file(NOW),
+        &[
+            prompt("o1", NOW - 2, &backslash, "the briefing"),
+            prompt("o2", NOW - 1, &forward.to_ascii_uppercase(), "the briefing"),
+            prompt("s1", NOW, CWD, "real work"),
+        ],
+    );
+    let mut writer = home.writer(NOW);
+    let report = writer.ingest(&home.ctx(), NOW).unwrap();
+    assert_eq!(report.lines, 1);
+    let entry = serde_json::json!([
+        {"pid": 4100, "sessionId": "o3", "name": "officina-orchestrator", "kind": "interactive",
+         "cwd": format!("{forward}/"), "status": "idle", "startedAt": NOW - 60_000},
+        {"pid": 4101, "sessionId": "s2", "name": "api", "kind": "interactive",
+         "cwd": CWD, "status": "idle", "startedAt": NOW - 60_000}
+    ]);
+    let records = parse_agents(&entry.to_string()).unwrap();
+    let mut snapshot = None;
+    writer
+        .apply_agents(&mut snapshot, &records, &[], NOW + 1)
+        .unwrap();
+    // Gone at the next refresh: no record means nothing to interrupt.
+    writer
+        .apply_agents(&mut snapshot, &records[1..], &[], NOW + 2)
+        .unwrap();
+    assert_eq!(session_ids(&writer), ["s1", "s2"]);
+}
+
+/// Story 5.16 AC 6 (D-166): only the orchestrator's own folder is
+/// skipped; a session elsewhere under `orchestrator/`, by its lines or by
+/// its agents entry, is recorded like any other.
+#[test]
+fn other_sessions_under_the_orchestrator_folder_are_recorded() {
+    let home = Home::new();
+    let proposals = home.home.join("orchestrator").join("proposals");
+    let notes = home.home.join("orchestrator").join("notes");
+    home.append(
+        &day_file(NOW),
+        &[prompt("n1", NOW, &notes.to_string_lossy(), "notes")],
+    );
+    let mut writer = home.writer(NOW);
+    assert_eq!(writer.ingest(&home.ctx(), NOW).unwrap().lines, 1);
+    let entry = serde_json::json!([
+        {"pid": 4100, "sessionId": "n2", "name": "officina-orchestrator", "kind": "interactive",
+         "cwd": proposals.to_string_lossy(), "status": "idle", "startedAt": NOW - 60_000}
+    ]);
+    let records = parse_agents(&entry.to_string()).unwrap();
+    writer
+        .apply_agents(&mut None, &records, &[], NOW + 1)
+        .unwrap();
+    assert_eq!(session_ids(&writer), ["n1", "n2"]);
+}
+
 /// Adversarial pass: an entry named like an event file that cannot be read
 /// (a folder, or a file deleted between the listing and the read, as an
 /// older `board --json` still installed would do) must not stop the pass,
