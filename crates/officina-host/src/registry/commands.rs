@@ -2,6 +2,7 @@
 //! D-97): `board --json` fills its cards' subjects, `subjects --json` prints
 //! the Subjects view, with the window open or closed. Neither writes.
 
+use officina_core::board::Board;
 use officina_core::registry::dry_run::DryRunState;
 use officina_core::registry::model::unavailable;
 use officina_core::registry::types::{RegistryReport, RegistryState};
@@ -56,12 +57,24 @@ pub fn subjects_view(collector: &mut Collector, now_ms: i64) -> (RegistryView, V
     let opened = read_registry(collector);
     collector.refresh_agents(now_ms);
     let board = collector.board(now_ms);
+    registry_view(collector, &opened, &board, now_ms)
+}
+
+/// The Subjects view from `opened`, the reader [`read_registry`] gave
+/// `collector`, joined to `board`'s live cards; and whether the registry
+/// was read.
+pub fn registry_view(
+    collector: &Collector,
+    opened: &Result<Reader, ReaderFailure>,
+    board: &Board,
+    now_ms: i64,
+) -> (RegistryView, ViewRead) {
     let report = board
         .diagnostics
         .registry
         .clone()
-        .unwrap_or_else(|| reader_report(&opened));
-    match &opened {
+        .unwrap_or_else(|| reader_report(opened));
+    match opened {
         Ok(reader) if report.state == RegistryState::Ready => {
             let events = collector.paths().events_dir();
             let claude = collector
@@ -69,7 +82,7 @@ pub fn subjects_view(collector: &mut Collector, now_ms: i64) -> (RegistryView, V
                 .map(|path| path.to_string_lossy().into_owned());
             let ctx = ViewContext {
                 report: report.clone(),
-                board: Some(&board),
+                board: Some(board),
                 events_dir: &events,
                 dry_run: DryRunState::default(),
                 unavailable: unavailable(claude.as_deref(), collector.no_excerpts()),

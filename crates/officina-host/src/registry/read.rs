@@ -7,6 +7,9 @@ use std::path::Path;
 
 use officina_core::board::{Board, SessionSettlement};
 use officina_core::dates::dated_file_day;
+use officina_core::orders::proposal::{
+    ProposalContent, ProposalView, ProposedSubject, ProposedSubjectView, TargetView, written_at,
+};
 use officina_core::registry::confirm::TriageContext;
 use officina_core::registry::dry_run::{DryRunState, Evaluation, Tally};
 use officina_core::registry::fold::pivot;
@@ -27,7 +30,10 @@ use officina_core::registry::types::{
 };
 #[cfg(feature = "window-authority")]
 use officina_core::registry::types::{HookEnd, HookStart};
-use officina_core::registry::types::{LaunchOutcome, WorkOrderRecord, WorkOrderSource};
+use officina_core::registry::types::{
+    LaunchOutcome, OrchestratorStartOutcome, ProposalKind, ProposalStatus, WorkOrderRecord,
+    WorkOrderSource,
+};
 use officina_core::registry::verdict::{Row, VerdictInput, rows};
 use officina_core::registry::view::{
     AutoArchiveSetting, DiscardedSession, EvidenceInput, IngestionView, RegistryView, SubjectView,
@@ -270,6 +276,116 @@ impl Reader {
     pub fn briefing_read_at(&self) -> rusqlite::Result<Option<i64>> {
         briefing_read_at(&self.conn)
     }
+
+    /// The event lines not ingested yet, from the files in `events_dir`
+    /// against their offsets (AD-53): the lag behind a closed window.
+    pub fn ingestion(&self, events_dir: &Path) -> rusqlite::Result<IngestionView> {
+        ingestion_view(&self.conn, events_dir)
+    }
+
+    /// `officina mcp`'s briefing cursor (AD-83, D-144): the start of the
+    /// newest orchestrator spawned before the newest one, the current
+    /// session's; refused and failed starts are never one.
+    pub fn previous_orchestrator_start(&self) -> rusqlite::Result<Option<i64>> {
+        self.conn
+            .prepare_cached(
+                "SELECT started_at_ms FROM orchestrator_start WHERE outcome = ?1
+                 ORDER BY started_at_ms DESC, id DESC LIMIT 1 OFFSET 1",
+            )?
+            .query_row([OrchestratorStartOutcome::Spawned.code()], |row| row.get(0))
+            .optional()
+    }
+
+    /// Every proposal row, newest first (AD-91), each text untrusted.
+    pub fn proposals(&self) -> rusqlite::Result<Vec<ProposalView>> {
+        proposals(&self.conn)
+    }
+}
+
+/// A proposal row's columns, the order [`proposal_row`] reads.
+const PROPOSAL_COLUMNS: &str = "id, kind, status, invalid_reason, received_at_ms,      orchestrator_session_id, target_subject_id, target_session_id, template, project,      values_json, subject_choice_json, texts_json";
+
+/// The proposal rows (AD-82, AD-91), newest first. The columns hold a
+/// file's fields as ingestion stores them: the target in its two columns,
+/// `values_json` the values' map, `subject_choice_json` the subject as the
+/// file writes it, and `texts_json` an object of the kind's texts by field
+/// name (a recap's three, a work order's `rationale`). A row whose fields
+/// do not read back that way, or with no kind, shows without its content.
+pub(crate) fn proposals(conn: &Connection) -> rusqlite::Result<Vec<ProposalView>> {
+    conn.prepare_cached(&format!(
+        "SELECT {PROPOSAL_COLUMNS} FROM proposal ORDER BY id DESC"
+    ))?
+    .query_map([], proposal_row)?
+    .collect()
+}
+
+fn proposal_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ProposalView> {
+    let id: String = row.get(0)?;
+    let kind = row
+        .get::<_, Option<String>>(1)?
+        .map(|code| {
+            ProposalKind::from_code(&code).ok_or_else(|| {
+                rusqlite::Error::InvalidColumnType(1, code, rusqlite::types::Type::Text)
+            })
+        })
+        .transpose()?;
+    let text = |index: usize| row.get::<_, Option<String>>(index);
+    let texts: Option<BTreeMap<String, String>> = text(12)?
+        .as_deref()
+        .and_then(|json| serde_json::from_str(json).ok());
+    let field = |name: &str| {
+        texts
+            .as_ref()
+            .and_then(|t| t.get(name))
+            .map(|t| Untrusted::new(t.clone()))
+    };
+    let content = match kind {
+        Some(ProposalKind::Recap) => {
+            let target = match (row.get::<_, Option<i64>>(6)?, text(7)?) {
+                (Some(subject), None) => Some(TargetView::SubjectId(subject)),
+                (None, Some(session)) => Some(TargetView::SessionId(Untrusted::new(session))),
+                _ => None,
+            };
+            target.zip(field("done")).and_then(|(target, done)| {
+                Some(ProposalContent::Recap {
+                    target,
+                    done,
+                    blocking: field("blocking")?,
+                    decision_expected: field("decision_expected")?,
+                })
+            })
+        }
+        Some(ProposalKind::WorkOrder) => {
+            let values: Option<BTreeMap<String, String>> =
+                text(10)?.and_then(|json| serde_json::from_str(&json).ok());
+            let subject: Option<ProposedSubject> =
+                text(11)?.and_then(|json| serde_json::from_str(&json).ok());
+            match (text(8)?, text(9)?, values, subject, field("rationale")) {
+                (Some(template), Some(project), Some(values), Some(subject), Some(rationale)) => {
+                    Some(ProposalContent::WorkOrder {
+                        template: Untrusted::new(template),
+                        project: Untrusted::new(project),
+                        values: Untrusted::new(values),
+                        subject: ProposedSubjectView::of(&subject),
+                        rationale,
+                    })
+                }
+                _ => None,
+            }
+        }
+        Some(ProposalKind::Answer) | None => None,
+    };
+    let received_at_ms: i64 = row.get(4)?;
+    Ok(ProposalView {
+        written_at_ms: written_at(&id).unwrap_or(received_at_ms),
+        id,
+        kind,
+        status: code_of(row, 2, ProposalStatus::from_code)?,
+        invalid_reason: text(3)?.map(Untrusted::new),
+        received_at_ms: Some(received_at_ms),
+        orchestrator_session_id: text(5)?.map(Untrusted::new),
+        content,
+    })
 }
 
 /// When the author last left the Orchestrator view or closed the window

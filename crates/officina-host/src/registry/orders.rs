@@ -12,7 +12,8 @@ use officina_core::orders::work_order::{
 };
 use officina_core::registry::filing::{NewSubjectFiling, refiles_on_binding, subject_for_new};
 use officina_core::registry::types::{
-    LaunchOutcome, SettingKey, Source, SubjectStatus, WorkOrderRecord, WorkOrderSource,
+    LaunchOutcome, OrchestratorStartOutcome, SettingKey, Source, SubjectStatus, WorkOrderRecord,
+    WorkOrderSource,
 };
 use officina_core::spawn;
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
@@ -321,6 +322,40 @@ impl Writer {
     pub fn briefing_read_at(&self) -> Result<Option<i64>, RegistryError> {
         Ok(read::briefing_read_at(&self.conn)?)
     }
+
+    /// Records one Start of the orchestrator (AD-82, AD-89, D-144): when,
+    /// how it ended, the kept pid and its creation time, and the cause of a
+    /// refused or failed start. A spawned row's start is the next session's
+    /// briefing cursor. Returns the row's id.
+    pub fn record_orchestrator_start(
+        &mut self,
+        start: &OrchestratorStartRecord,
+    ) -> Result<i64, RegistryError> {
+        self.conn.execute(
+            "INSERT INTO orchestrator_start (started_at_ms, pid, pid_created_at_ms, outcome, error)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                start.started_at_ms,
+                start.pid,
+                start.pid_created_at_ms,
+                start.outcome.code(),
+                start.error
+            ],
+        )?;
+        Ok(self.conn.last_insert_rowid())
+    }
+}
+
+/// One Start of the orchestrator, as `orchestrator_start` records it
+/// (AD-82, D-144).
+#[derive(Debug, Clone, Copy)]
+pub struct OrchestratorStartRecord<'a> {
+    pub started_at_ms: i64,
+    pub outcome: OrchestratorStartOutcome,
+    pub pid: Option<u32>,
+    pub pid_created_at_ms: Option<i64>,
+    /// Why a start was refused or failed.
+    pub error: Option<&'a str>,
 }
 
 /// `value` as JSON. A map of strings or a list of strings always
