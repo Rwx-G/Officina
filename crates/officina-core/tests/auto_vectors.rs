@@ -11,8 +11,9 @@ use officina_core::relay::approvals::{
     ApprovalContext, ApprovalRequest, KeyInputs, request_id, request_key,
 };
 use officina_core::relay::auto::{
-    CheckStatus, EscalationCause, Precheck, PrecheckFacts, ReviewContext, ReviewJob, ReviewRecord,
-    data_line, decide, output_error_cause, precheck, prompt, read_output, rule_baseline,
+    CheckStatus, EscalationCause, GATE_CASES, Precheck, PrecheckFacts, RULE_DIFF_PERCENT,
+    ReviewContext, ReviewJob, ReviewRecord, StatsRecord, data_line, decide, output_error_cause,
+    precheck, precheck_rule, prompt, read_output, rule_baseline, rule_decision, shadow_stats,
 };
 use officina_core::relay::catalogue::{ApprovedCatalogue, load};
 use officina_core::relay::journal::{
@@ -418,13 +419,107 @@ fn baseline_cases_match() {
     }
 }
 
+/// Story 5.14 AC 4 (D-141): rule mode's precheck, then the rule's
+/// decision on the case's baseline.
+#[test]
+fn rule_cases_match() {
+    let set = load_set();
+    let dirs = dirs();
+    let ctx = ApprovalContext {
+        approved: Some(&set.approved),
+        project_dirs: &dirs,
+        system_dir: "C:/Windows/System32",
+    };
+    for case in cases(&set, "rule") {
+        let name = case["name"].as_str().unwrap();
+        let session = match case.get("session_id") {
+            Some(Value::Null) => None,
+            Some(value) => value.as_str(),
+            None => Some(SESSION),
+        };
+        let (id, request) = request(&set, case["action"].as_str().unwrap(), session, None);
+        let rows = rows(&set, &case["facts"]);
+        let found = match precheck_rule(&ctx, &id, &request, &rows, set.now_ms) {
+            Precheck::Review(_) => match rule_decision(case["baseline"].as_bool().unwrap()) {
+                (decision, None) => decision.code().to_owned(),
+                (_, Some(cause)) => cause.code().to_owned(),
+            },
+            other => outcome_code(&other),
+        };
+        assert_eq!(found, case["expect"], "case {name}");
+    }
+}
+
+/// Story 5.14 AC 1 (AD-88, D-143): the shadow statistics of each case's
+/// rows, and the 3/n bound of its cases.
+#[test]
+fn stats_cases_match() {
+    let set = load_set();
+    let defaults = serde_json::json!({
+        "requested_at_ms": set.now_ms - 60_000,
+        "mode": "shadow",
+        "outcome": "answered",
+        "decision": "approve",
+        "rule_baseline": true,
+        "author_decision": "approved",
+        "author_reason": null,
+        "marked_at_ms": null,
+    });
+    for case in cases(&set, "stats") {
+        let name = case["name"].as_str().unwrap();
+        let mut rows: Vec<StatsRecord> = Vec::new();
+        for spec in case["rows"].as_array().unwrap() {
+            let mut row = defaults.clone();
+            for (key, value) in spec.as_object().unwrap() {
+                if key != "n" {
+                    row[key] = value.clone();
+                }
+            }
+            let record: StatsRecord = serde_json::from_value(row).expect("a stats row parses");
+            let n = spec.get("n").and_then(Value::as_u64).unwrap_or(1);
+            rows.extend((0..n).map(|_| record.clone()));
+        }
+        let stats = shadow_stats(&rows, set.now_ms);
+        let expect = &case["expect"];
+        assert_eq!(
+            (
+                u64::from(stats.cases),
+                u64::from(stats.disagreements),
+                u64::from(stats.rule_diff),
+                stats.gate,
+                stats.rule_offer
+            ),
+            (
+                expect["cases"].as_u64().unwrap(),
+                expect["disagreements"].as_u64().unwrap(),
+                expect["rule_diff"].as_u64().unwrap(),
+                expect["gate"].as_bool().unwrap(),
+                expect["rule_offer"].as_bool().unwrap()
+            ),
+            "case {name}"
+        );
+        assert_eq!(
+            stats.false_approve_bound_percent,
+            Some(300.0 / f64::from(stats.cases)),
+            "case {name}"
+        );
+        assert_eq!(
+            (stats.gate_cases, stats.rule_diff_percent),
+            (GATE_CASES, RULE_DIFF_PERCENT)
+        );
+    }
+}
+
 /// Every cause has a case: the precheck's in the precheck section, a
-/// call's in the output section, and the timeout named by the set.
+/// call's in the output section, the rule's in the rule section, and the
+/// timeout and the authority's refusal named by the set (the host tests
+/// replay those two: `watch.rs` and `authority.rs`).
 #[test]
 fn every_cause_has_a_case() {
     let set = load_set();
-    let mut seen: BTreeSet<String> = cases(&set, "precheck")
+    let mut seen: BTreeSet<String> = ["precheck", "rule"]
         .iter()
+        .flat_map(|section| cases(&set, section))
         .filter_map(|case| case["expect"].as_str().map(str::to_owned))
         .collect();
     seen.extend(
@@ -433,10 +528,11 @@ fn every_cause_has_a_case() {
             .filter_map(|case| case["cause"].as_str().map(str::to_owned)),
     );
     seen.insert(set.raw["timeout_cause"].as_str().unwrap().to_owned());
+    seen.insert(set.raw["refused_cause"].as_str().unwrap().to_owned());
     for cause in EscalationCause::ALL {
         assert!(seen.contains(cause.code()), "no case for {cause:?}");
     }
-    for section in ["precheck", "prompt", "output", "baseline"] {
+    for section in ["precheck", "prompt", "output", "baseline", "rule", "stats"] {
         assert!(!cases(&set, section).is_empty(), "{section}");
     }
 }

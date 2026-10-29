@@ -4,7 +4,10 @@
 //! writer at explicit times, binds the started ones as the window binds
 //! them (AD-81 step 4), records the author's last reading of the briefing,
 //! then prints the `OrchestratorView` the window would build, from the same
-//! functions the collector calls. Never SQL from Node, never a command line
+//! functions the collector calls. Story 5.14 adds the `auto` class's
+//! review rows with the author's decisions, its switches and the decision
+//! lines, which `officina relay --json` then prints (the `relay-auto`
+//! scenario). Never SQL from Node, never a command line
 //! write path. Built only with `window-authority`, linked into neither
 //! shipped binary.
 //!
@@ -21,14 +24,21 @@ use officina_core::agents::parse_agents;
 use officina_core::board::Board;
 use officina_core::orders::work_order::{SubjectChoice, WorkOrder, order_name};
 use officina_core::registry::fold::AgentsSnapshot;
-use officina_core::registry::types::{LaunchOutcome, WorkOrderSource};
+use officina_core::registry::types::{
+    AuthorDecision, AuthorReason, LaunchOutcome, ReviewMode, ReviewOutcome, WorkOrderSource,
+};
+use officina_core::relay::approvals::ApprovalBy;
+use officina_core::relay::auto::{AutoMode, EscalationCause, ReviewDecision};
+use officina_core::relay::journal::{ApprovalEvent, JournalEntry};
 use officina_core::relay::template::{ApprovedTemplate, ParamName, ProjectName, TemplateName};
 use officina_host::paths::events_dir_of;
 use officina_host::registry::orders::LaunchRecord;
+use officina_host::registry::review::NewReview;
 use officina_host::registry::store::{Writer, open_writer};
 use officina_host::registry::window::WindowRegistry;
 use officina_host::relay::home::{RelayHome, load_relay_floor};
-use officina_host::relay::view::read_view_with;
+use officina_host::relay::journal;
+use officina_host::relay::view::{AutoRead, read_view_with};
 use serde::Deserialize;
 
 const USAGE: &str = "usage: orchestrator_fixture <officina home> <script.json>";
@@ -51,6 +61,131 @@ struct Script {
     /// The author's last reading of the briefing, when there was one.
     #[serde(default)]
     read_at_ms: Option<i64>,
+    /// Review rows of `auto` requests, with the author's decisions copied
+    /// onto them (story 5.14, AD-88).
+    #[serde(default)]
+    reviews: Vec<SeededReview>,
+    /// Auto approval turned on or off at `now_ms` through the writer,
+    /// which refuses it without the gate.
+    #[serde(default)]
+    auto_approval: Option<bool>,
+    /// Auto approval's mode set at `now_ms` through the writer.
+    #[serde(default)]
+    auto_mode: Option<AutoMode>,
+    /// Approval decisions journaled as the window's authority writes them,
+    /// for the decisions per day (AD-92).
+    #[serde(default)]
+    decisions: Vec<SeededDecision>,
+}
+
+/// One review row, as the window's review would have written it.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SeededReview {
+    approval_id: String,
+    project: String,
+    action: String,
+    requested_at_ms: i64,
+    mode: ReviewMode,
+    outcome: ReviewOutcome,
+    #[serde(default)]
+    cause: Option<EscalationCause>,
+    #[serde(default)]
+    decision: Option<ReviewDecision>,
+    #[serde(default)]
+    reason: Option<String>,
+    rule_baseline: bool,
+    /// The author's decision, copied a minute after the request.
+    #[serde(default)]
+    author: Option<AuthorDecision>,
+    #[serde(default)]
+    author_reason: Option<AuthorReason>,
+    /// The run the approval started, linked as the window links it.
+    #[serde(default)]
+    run_id: Option<String>,
+}
+
+/// One `approval_given` or `approval_rejected` line.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SeededDecision {
+    at_ms: i64,
+    approval_id: String,
+    approve: bool,
+    by: ApprovalBy,
+}
+
+/// Writes the review rows, the auto settings and the decision lines of
+/// `script` (story 5.14).
+fn seed_auto(writer: &mut Writer, relay: &RelayHome, script: &Script) -> Result<(), String> {
+    for review in &script.reviews {
+        let called = review.outcome != ReviewOutcome::NoCall;
+        let id = writer
+            .insert_review(&NewReview {
+                approval_id: review.approval_id.clone(),
+                request_key: format!("key-{}", review.approval_id),
+                project: review.project.clone(),
+                action: review.action.clone(),
+                requested_at_ms: review.requested_at_ms,
+                mode: review.mode,
+                outcome: review.outcome,
+                cause: review.cause,
+                decision: review.decision,
+                reason: review.reason.clone(),
+                rule_baseline: review.rule_baseline,
+                call_started_at_ms: called.then_some(review.requested_at_ms + 1_000),
+                duration_ms: called.then_some(2_400),
+                input_tokens: None,
+                output_tokens: None,
+                cost_microusd: None,
+            })
+            .map_err(|e| e.to_string())?;
+        if let Some(author) = review.author {
+            writer
+                .copy_author_decision(
+                    id,
+                    author,
+                    review.author_reason,
+                    review.requested_at_ms + 60_000,
+                )
+                .map_err(|e| e.to_string())?;
+        }
+        if let Some(run_id) = &review.run_id {
+            writer
+                .link_runs(&[(review.approval_id.clone(), run_id.clone())])
+                .map_err(|e| e.to_string())?;
+        }
+    }
+    if let Some(on) = script.auto_approval {
+        writer
+            .set_auto_approval(on, script.now_ms)
+            .map_err(|e| e.to_string())?
+            .map_err(|refusal| refusal.to_string())?;
+    }
+    if let Some(mode) = script.auto_mode {
+        writer
+            .set_auto_mode(mode, script.now_ms)
+            .map_err(|e| e.to_string())?
+            .map_err(|refusal| refusal.to_string())?;
+    }
+    for decision in &script.decisions {
+        let event = ApprovalEvent {
+            approval_id: decision.approval_id.clone(),
+            request_key: format!("key-{}", decision.approval_id),
+            project: None,
+            action: None,
+            dry_run: None,
+            by: Some(decision.by),
+            reason: None,
+        };
+        let line = if decision.approve {
+            JournalEntry::ApprovalGiven(event)
+        } else {
+            JournalEntry::ApprovalRejected(event)
+        };
+        journal::append(relay, &[line], decision.at_ms).map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }
 
 /// One work order, launched from a card of the approved catalogue.
@@ -180,6 +315,7 @@ fn run(home: &Path, script: &Script) -> Result<String, String> {
         if let Some(at) = script.read_at_ms {
             writer.mark_briefing_read(at).map_err(|e| e.to_string())?;
         }
+        seed_auto(&mut writer, &relay, script)?;
     }
     let board: Option<Board> = match &script.board_file {
         Some(path) => Some(
@@ -188,7 +324,9 @@ fn run(home: &Path, script: &Script) -> Result<String, String> {
         ),
         None => None,
     };
-    let relay_view = read_view_with(&relay, script.now_ms, None).map_err(|e| e.to_string())?;
+    let auto = AutoRead::read_only(home, script.now_ms);
+    let relay_view =
+        read_view_with(&relay, script.now_ms, None, &auto).map_err(|e| e.to_string())?;
     let mut registry = WindowRegistry::open(home, &[], script.now_ms);
     let registry_view = registry.view(board.as_ref(), &events_dir_of(home), script.now_ms);
     let view = registry.orchestrator_view(

@@ -4,7 +4,7 @@
 // unreadable line, and a pending change with issues.
 import { expect, test, type Page } from "@playwright/test";
 import { runDuration } from "../src/lib/time";
-import { loadBoard, loadRelay, openBoard } from "./fixtures";
+import { calls, loadBoard, loadRelay, openBoard } from "./fixtures";
 import type { RelayView } from "../src/lib/generated/RelayView";
 
 async function openRelayView(page: Page, relay: RelayView): Promise<void> {
@@ -327,6 +327,117 @@ for (const theme of ["light", "dark"] as const) {
         "color",
         await tokenColour(page, "--color-text"),
       );
+    });
+  });
+}
+
+// Story 5.14 AC 8 (AD-93, FR-9, D-28, D-564): the `auto` section on the view
+// `officina relay --json` printed after `orchestrator_fixture` wrote shadow
+// reviews, two auto-approved runs and the decisions of the last days, auto
+// approval on under its gate. Every number comes from the payload; no
+// colour is added, in either theme.
+for (const theme of ["light", "dark"] as const) {
+  test.describe(`the auto section in the ${theme} theme`, () => {
+    const relay = loadRelay("relay-auto");
+    const withAuto = (auto: Partial<RelayView["auto"]>, stats: Partial<RelayView["auto"]["stats"]> = {}): RelayView => ({
+      ...relay,
+      auto: { ...relay.auto, ...auto, stats: { ...relay.auto.stats, ...stats } },
+    });
+    const autoCalls = async (page: Page, cmd: string) =>
+      (await calls(page)).filter((c) => c.cmd === cmd).map((c) => c.args);
+
+    test.beforeEach(async ({ page }) => {
+      await page.emulateMedia({ colorScheme: theme });
+    });
+
+    test("the auto section shows the counts and the weakness of the evidence", async ({ page }) => {
+      const { stats } = relay.auto;
+      expect(stats.gate && stats.false_approve_bound_percent !== null).toBe(true);
+      await openRelayView(page, relay);
+      await expect(page.getByTestId("theme-switch")).toHaveAttribute("data-theme-resolved", theme);
+      const section = page.getByTestId("relay-auto");
+      await expect(section.getByTestId("auto-state")).toContainText(`On, mode ${relay.auto.mode}`);
+      await expect(section.getByTestId("auto-counts")).toContainText(
+        `${stats.cases} shadow cases met your decision in the last 30 days, ${stats.disagreements} disagreements; review and rule differ in ${stats.rule_diff}`,
+      );
+      await expect(section.getByTestId("auto-bound")).toHaveText(
+        `${stats.cases} clean cases bound the rate of wrong approvals only to about ${Math.round(stats.false_approve_bound_percent!)} %, not to zero.`,
+      );
+      await expect(section.getByTestId("auto-budget")).toContainText(
+        `${relay.auto.calls_today} of ${relay.auto.calls_per_day} calls`,
+      );
+      await expect(section.getByTestId("auto-run")).toHaveCount(relay.auto.runs.length);
+      await expect(section.getByTestId("auto-day")).toHaveCount(relay.auto.decisions.length);
+      const today = relay.auto.decisions.at(-1)!;
+      await expect(section.getByTestId("auto-day").last()).toHaveText(`${today.day}${today.author}${today.auto}`);
+      // A decision of the author shows what its review said, without a
+      // reason: `officina relay --json` never prints one.
+      const reviewed = page.getByTestId("recent-entry").filter({ hasText: "review: approve" });
+      await expect(reviewed.first()).toBeVisible();
+      await expect(section.getByTestId("auto-counts")).toHaveCSS("color", await tokenColour(page, "--color-text"));
+      await expect(section.getByTestId("auto-bound")).toHaveCSS("color", await tokenColour(page, "--color-text-muted"));
+    });
+
+    test("the toggle is offered only while the gate holds", async ({ page }) => {
+      await openRelayView(page, withAuto({ approval_on: false }, { gate: false, rule_offer: false }));
+      const slot = page.getByTestId("auto-approval-slot");
+      const toggle = page.getByTestId("auto-approval-toggle");
+      await expect(toggle).toBeHidden();
+      const hidden = await slot.boundingBox();
+      await page.evaluate((r) => window.__officinaPushRelay?.(r), withAuto({ approval_on: false }));
+      await expect(toggle).toBeVisible();
+      await expect(toggle).toHaveAccessibleName("Turn auto approval on");
+      const shown = await slot.boundingBox();
+      expect(shown).toEqual(hidden);
+    });
+
+    test("turning auto approval on needs a pointer click", async ({ page }) => {
+      await openRelayView(page, withAuto({ approval_on: false }));
+      const toggle = page.getByTestId("auto-approval-toggle");
+      await toggle.focus();
+      await page.keyboard.press("Enter");
+      await page.keyboard.press(" ");
+      expect(await autoCalls(page, "set_auto_approval")).toEqual([]);
+      await toggle.click();
+      await expect(toggle).toHaveAttribute("aria-pressed", "true");
+      expect(await autoCalls(page, "set_auto_approval")).toEqual([{ on: true }]);
+      // Off is reachable by keyboard.
+      await toggle.focus();
+      await page.keyboard.press("Enter");
+      await expect(toggle).toHaveAttribute("aria-pressed", "false");
+      expect(await autoCalls(page, "set_auto_approval")).toEqual([{ on: true }, { on: false }]);
+    });
+
+    test("should not have run sends the mark", async ({ page }) => {
+      const run = relay.auto.runs.find((r) => r.run_id !== null && r.marked_at_ms === null)!;
+      await openRelayView(page, relay);
+      const row = page.locator(`[data-testid="auto-run"][data-id="${run.approval_id}"]`);
+      await row.getByTestId("mark-run").focus();
+      await page.keyboard.press("Enter");
+      expect(await autoCalls(page, "mark_should_not_have_run")).toEqual([]);
+      await row.getByTestId("mark-run").click();
+      expect(await autoCalls(page, "mark_should_not_have_run")).toEqual([{ runId: run.run_id }]);
+      await expect(row.getByTestId("auto-run-marked")).toBeVisible();
+      await expect(page.getByTestId("auto-state")).toContainText("turned off because a run was marked");
+      await expect(page.getByTestId("auto-approval-toggle")).toBeHidden();
+    });
+
+    test("the rule offer appears only with the gate and under 5 %", async ({ page }) => {
+      await openRelayView(page, withAuto({}, { rule_offer: false }));
+      const toggle = page.getByTestId("auto-mode-toggle");
+      await expect(toggle).toBeHidden();
+      await page.evaluate((r) => window.__officinaPushRelay?.(r), relay);
+      await expect(toggle).toBeVisible();
+      await expect(page.getByTestId("auto-mode-slot")).toContainText(
+        `under ${relay.auto.stats.rule_diff_percent} % of the cases`,
+      );
+      await toggle.focus();
+      await page.keyboard.press("Enter");
+      expect(await autoCalls(page, "set_auto_mode")).toEqual([]);
+      await toggle.click();
+      await expect(toggle).toHaveAttribute("aria-pressed", "true");
+      expect(await autoCalls(page, "set_auto_mode")).toEqual([{ mode: "rule" }]);
+      await expect(page.getByTestId("auto-state")).toContainText("mode rule");
     });
   });
 }

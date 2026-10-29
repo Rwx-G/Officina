@@ -6,16 +6,22 @@
 use std::collections::BTreeMap;
 use std::fs;
 use std::io;
+use std::path::Path;
 
 use officina_core::relay::StopFlag;
+use officina_core::relay::auto::STATS_WINDOW_MS;
 use officina_core::relay::record::{Anomaly, AnomalyInputs, anomalies};
 use officina_core::relay::run::SnapshotState;
-use officina_core::relay::view::{FloorRead, RelayView, StopState, ViewInputs, build};
+use officina_core::relay::view::{
+    AutoInputs, AutoRow, DECISION_DAYS, FloorRead, RelayView, StopState, ViewInputs, build,
+};
 
 use super::approvals::read_files;
 use super::credential::CredentialStore;
 use super::home::{ApprovedState, RelayHome, load_relay_floor};
-use super::journal::read_recent;
+use super::journal::{read_days, read_recent};
+use crate::registry::review::AutoState;
+use crate::registry::store::{onedrive_roots_from_env, open_reader};
 
 /// Why no view could be read: the Officina home is not a folder that can be
 /// listed. A home that does not exist yet is an empty relay, not an error.
@@ -55,19 +61,51 @@ pub fn read_stop(home: &RelayHome) -> StopState {
     }
 }
 
+/// The registry's side of the relay view's `auto` section (AD-88, AD-92):
+/// auto approval, its mode, and the review rows of the statistics' window.
+#[derive(Debug, Clone, Default)]
+pub struct AutoRead {
+    pub state: AutoState,
+    pub rows: Vec<AutoRow>,
+}
+
+impl AutoRead {
+    /// What a read-only registry holds, read at `now_ms` (D-82), without
+    /// any review's reason: `officina relay --json`, which every session
+    /// can run, never prints one (D-143, review F17). Empty without a
+    /// readable registry.
+    pub fn read_only(officina_home: &Path, now_ms: i64) -> AutoRead {
+        let Ok(reader) = open_reader(officina_home, &onedrive_roots_from_env()) else {
+            return AutoRead::default();
+        };
+        AutoRead {
+            state: reader.auto_state().unwrap_or_default(),
+            rows: reader
+                .review_rows(now_ms - STATS_WINDOW_MS)
+                .unwrap_or_default()
+                .iter()
+                .map(|row| row.auto_row(false))
+                .collect(),
+        }
+    }
+}
+
 /// Reads the relay's state at `now_ms` and builds its view, every
 /// credential unchecked: `officina relay --json` never reads the store
-/// (D-41).
+/// (D-41). The `auto` section reads the registry read-only, reasons left
+/// out ([`AutoRead::read_only`]).
 pub fn read_view(home: &RelayHome, now_ms: i64) -> Result<RelayView, HomeUnreadable> {
-    read_view_with(home, now_ms, None)
+    let auto = AutoRead::read_only(home.officina_home(), now_ms);
+    read_view_with(home, now_ms, None, &auto)
 }
 
 /// [`read_view`] with what the window found in the credential store
-/// ([`credential_presence`]), by credential name.
+/// ([`credential_presence`]), by credential name, and in its registry.
 pub fn read_view_with(
     home: &RelayHome,
     now_ms: i64,
     credential_presence: Option<&BTreeMap<String, bool>>,
+    auto: &AutoRead,
 ) -> Result<RelayView, HomeUnreadable> {
     check_home(home)?;
     let flag = read_stop(home);
@@ -124,6 +162,14 @@ pub fn read_view_with(
         approved.approved().map(|a| a.hash.as_str()),
         !matches!(flag, StopState::Running),
     );
+    let (decision_lines, _) = read_days(home, now_ms, DECISION_DAYS);
+    let auto_inputs = AutoInputs {
+        approval: auto.state.approval,
+        approval_src: auto.state.approval_src,
+        mode: auto.state.mode,
+        rows: &auto.rows,
+        decision_lines: &decision_lines,
+    };
     Ok(build(&ViewInputs {
         stop,
         snapshot,
@@ -134,6 +180,7 @@ pub fn read_view_with(
         now_ms,
         credential_presence,
         anomalies: &anomalies,
+        auto: Some(&auto_inputs),
     }))
 }
 

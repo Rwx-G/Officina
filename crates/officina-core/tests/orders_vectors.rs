@@ -637,6 +637,7 @@ fn recent_of(row: &RunRow) -> RecentEntry {
         ts: row.ts,
         tone: tone_of(&event),
         event,
+        review: None,
     }
 }
 

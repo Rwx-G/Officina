@@ -9,8 +9,8 @@ use std::path::PathBuf;
 use std::process::Output;
 use std::time::{Duration, Instant};
 
-use officina_core::registry::types::{ReviewMode, ReviewOutcome};
-use officina_core::relay::auto::{EscalationCause, ReviewDecision};
+use officina_core::registry::types::{ReviewMode, ReviewOutcome, SettingKey, Source};
+use officina_core::relay::auto::{AutoMode, EscalationCause, ReviewDecision};
 use officina_host::collector::{Collector, load_floor};
 use officina_host::paths::Paths;
 use officina_host::registry::review::{NewReview, ReviewRow};
@@ -281,15 +281,22 @@ impl Auto {
     /// them: `count` rows of `apply` requested `ago` ms before now, with a
     /// call and `decision`.
     pub fn seed_rows(&self, count: usize, ago: i64, decision: Option<ReviewDecision>) {
-        use officina_host::registry::store::WriterOpen;
+        self.seed_rows_in(ReviewMode::Shadow, count, ago, decision);
+    }
+
+    /// [`Auto::seed_rows`] in `mode`: a rule row has no call.
+    pub fn seed_rows_in(
+        &self,
+        mode: ReviewMode,
+        count: usize,
+        ago: i64,
+        decision: Option<ReviewDecision>,
+    ) {
+        let mut writer = self.writer();
         let now = now_ms();
-        let WriterOpen::Writable { mut writer, .. } =
-            open_writer(&self.relay.env.officina_home(), &[], now)
-        else {
-            panic!("the registry did not open writable");
-        };
         for at in 0..count {
             let at = i64::try_from(at).unwrap();
+            let called = mode != ReviewMode::Rule;
             writer
                 .insert_review(&NewReview {
                     approval_id: format!("seeded-{at}"),
@@ -297,19 +304,101 @@ impl Auto {
                     project: "supervision".into(),
                     action: "apply".into(),
                     requested_at_ms: now - ago - at,
-                    mode: ReviewMode::Shadow,
-                    outcome: ReviewOutcome::Answered,
-                    cause: Some(EscalationCause::AutoApprovalOff),
+                    mode,
+                    outcome: if called {
+                        ReviewOutcome::Answered
+                    } else {
+                        ReviewOutcome::NoCall
+                    },
+                    cause: (mode == ReviewMode::Shadow).then_some(EscalationCause::AutoApprovalOff),
                     decision,
                     reason: None,
                     rule_baseline: false,
-                    call_started_at_ms: Some(now - ago - at),
+                    call_started_at_ms: called.then_some(now - ago - at),
                     duration_ms: Some(1),
                     input_tokens: None,
                     output_tokens: None,
                     cost_microusd: None,
                 })
                 .unwrap();
+        }
+    }
+
+    fn writer(&self) -> officina_host::registry::store::Writer {
+        use officina_host::registry::store::WriterOpen;
+        let WriterOpen::Writable { writer, .. } =
+            open_writer(&self.relay.env.officina_home(), &[], now_ms())
+        else {
+            panic!("the registry did not open writable");
+        };
+        writer
+    }
+
+    /// Stores auto approval `on` in `mode` before the window starts, as a
+    /// switch turned while the gate held would have (AD-88).
+    pub fn set_auto(&self, on: bool, mode: AutoMode) {
+        let mut writer = self.writer();
+        let value = |v: serde_json::Value| v.to_string();
+        writer
+            .set_setting(
+                SettingKey::AutoApproval,
+                &value(serde_json::json!({"on": on})),
+                Source::Author,
+                now_ms(),
+            )
+            .unwrap();
+        writer
+            .set_setting(
+                SettingKey::AutoMode,
+                &value(serde_json::json!(mode.code())),
+                Source::Author,
+                now_ms(),
+            )
+            .unwrap();
+    }
+
+    /// Makes the project a git work tree with one committed file, so a
+    /// request binds its files (D-173); false, after printing why, when
+    /// `test` cannot have one here.
+    pub fn git_project(&self, test: &str) -> bool {
+        use super::git_support::{git_ok, git_or_skip};
+        let Some(git) = git_or_skip(test) else {
+            return false;
+        };
+        if officina_host::relay::tree::resolve_git().is_none() {
+            println!("skipped {test}: Git for Windows records no install folder here");
+            return false;
+        }
+        let project = self.relay.project();
+        git_ok(&git, &project, &["init", "-q"]);
+        std::fs::write(project.join("playbook.yml"), "- hosts: lab\n").unwrap();
+        git_ok(&git, &project, &["add", "playbook.yml"]);
+        git_ok(&git, &project, &["commit", "-q", "-m", "first"]);
+        true
+    }
+
+    /// The names in `relay/approvals/`.
+    pub fn approval_files(&self) -> Vec<String> {
+        std::fs::read_dir(self.relay.env.relay_home().approvals_dir())
+            .map(|entries| {
+                entries
+                    .flatten()
+                    .map(|e| e.file_name().to_string_lossy().into_owned())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Waits until `relay/approvals/` holds `name`.
+    pub fn wait_for_file(&self, name: &str) {
+        let deadline = Instant::now() + PATIENCE;
+        while !self.approval_files().iter().any(|n| n == name) {
+            assert!(
+                Instant::now() < deadline,
+                "no {name}: {:?}",
+                self.approval_files()
+            );
+            std::thread::sleep(Duration::from_millis(50));
         }
     }
 }

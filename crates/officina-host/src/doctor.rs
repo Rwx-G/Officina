@@ -16,6 +16,7 @@ use officina_core::registry::triage_call::{
 };
 use officina_core::registry::types::RegistryState;
 use officina_core::registry::view::RESTORE_NOTICE_MS;
+use officina_core::relay::auto::STATS_WINDOW_MS;
 use officina_core::relay::gate::gated_tools;
 use officina_core::spawn::AGENT_VIEW_VAR;
 
@@ -612,15 +613,18 @@ pub fn run(collector: &Collector, exe: &Path) -> Vec<Check> {
     checks.extend(registry_section(registry));
     checks.push(check_floor(collector));
     let system_dir = crate::relay::home::system_dir();
-    let reviews = registry_store::open_reader(&paths.officina_home, &onedrive_roots)
-        .ok()
-        .and_then(|reader| reader.review_rows(now - DAY_MS).ok());
+    let reader = registry_store::open_reader(&paths.officina_home, &onedrive_roots).ok();
+    let reviews = reader
+        .as_ref()
+        .and_then(|reader| reader.review_rows(now - STATS_WINDOW_MS).ok());
+    let auto = reader.as_ref().and_then(|reader| reader.auto_state().ok());
     checks.extend(relay_doctor::checks(&RelayDoctor {
         home: &relay,
         doctor_floor: collector.floor().path.as_deref(),
         system_dir: system_dir.as_deref(),
         now_ms: now,
         reviews: reviews.as_deref(),
+        auto,
     }));
     checks
 }

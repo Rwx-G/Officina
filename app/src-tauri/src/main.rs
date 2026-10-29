@@ -23,6 +23,7 @@ use officina_core::orders::view::OrchestratorView;
 use officina_core::registry::confirm::{AuthorAction, ConfirmItem, ItemAnswer, SubjectOrigin};
 use officina_core::registry::types::{AuthorReason, Settlement};
 use officina_core::registry::view::{DiscardedSession, RegistryView, SubjectView};
+use officina_core::relay::auto::AutoMode;
 use officina_core::relay::view::RelayView;
 use officina_host::collector::Collector;
 use officina_host::files::now_ms;
@@ -351,6 +352,42 @@ async fn set_triage_model(state: State<'_, AppState>, on: bool) -> Result<(), Ip
         .map(|_| ())
 }
 
+/// Turns auto approval on, only while its gate holds when the registry
+/// writes, or off (AD-88): a refusal says why, and the Relay view offers
+/// the toggle only while the gate holds. Each change is journaled
+/// `auto_approval_set`.
+#[tauri::command]
+async fn set_auto_approval(state: State<'_, AppState>, on: bool) -> Result<(), IpcError> {
+    ask(state, AuthorCommand::SetAutoApproval(on))
+        .await?
+        .into_done()
+        .map(|_| ())
+}
+
+/// Sets auto approval's mode (D-162): `rule` only while the rule offer
+/// holds when the registry writes, `review` always.
+#[tauri::command]
+async fn set_auto_mode(state: State<'_, AppState>, mode: AutoMode) -> Result<(), IpcError> {
+    ask(state, AuthorCommand::SetAutoMode(mode))
+        .await?
+        .into_done()
+        .map(|_| ())
+}
+
+/// Marks an auto-approved run of the last 7 days "should not have run"
+/// (AD-88, FR-9): auto approval turns off and the mode returns to
+/// `review`.
+#[tauri::command]
+async fn mark_should_not_have_run(
+    state: State<'_, AppState>,
+    run_id: String,
+) -> Result<(), IpcError> {
+    ask(state, AuthorCommand::MarkShouldNotHaveRun(run_id))
+        .await?
+        .into_done()
+        .map(|_| ())
+}
+
 /// Queues a dry run of the triage model on the author's past
 /// confirmations (AD-52, D-92): answered once queued, with how many cases
 /// it holds; its progress and its result come in the registry view, never
@@ -604,6 +641,9 @@ fn main() {
             evaluate_triage_model,
             set_triage_model,
             set_auto_archive,
+            set_auto_approval,
+            set_auto_mode,
+            mark_should_not_have_run,
             settle_session,
             list_discarded,
             issue_card,

@@ -487,7 +487,7 @@ pub(crate) fn view(
 
 /// A setting's value, with who set it and when, when it is recorded and
 /// reads as `T`: a value this build cannot read counts as absent.
-fn setting_of<T: serde::de::DeserializeOwned>(
+pub(crate) fn setting_of<T: serde::de::DeserializeOwned>(
     conn: &Connection,
     key: SettingKey,
 ) -> rusqlite::Result<Option<Sourced<T>>> {

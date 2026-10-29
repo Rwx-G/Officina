@@ -12,9 +12,9 @@ use crate::agents::{AgentRecord, LifecycleState, LiveStatus, SessionKind};
 use crate::events::EventLine;
 use crate::floor::{ALERT_AFTER_MINUTES_DEFAULT, Priority, ProjectColor};
 use crate::quota::{QuotaFile, QuotaWindow};
-use crate::registry::types::{RegistryReport, Settlement, SubjectRef};
+use crate::registry::types::{RegistryReport, ReviewMode, Settlement, SubjectRef};
 use crate::relay::approvals::{ApprovalState, ApprovalView};
-use crate::relay::auto::EscalationCause;
+use crate::relay::auto::{Escalation, EscalationCause};
 use crate::relay::catalogue::ActionClass;
 use crate::scene::{SceneFacts, SceneState};
 use crate::untrusted::Untrusted;
@@ -29,20 +29,25 @@ use crate::untrusted::Untrusted;
 pub const BOARD_SCHEMA: u32 = 5;
 
 /// What a pending `auto` request's card says of why it is the author's
-/// (AD-87, D-143): a cause found before any call as it is; anything a
-/// call came to as `auto_approval_off`, the reason every `auto` request
-/// waits for the author while approval is off, so a review's answer never
-/// shows before the author decides.
+/// (AD-87, D-143): in shadow mode, a cause found before any call as it is
+/// and anything a call came to as `auto_approval_off`, the reason every
+/// `auto` request waits for the author while approval is off, so a
+/// review's answer never shows before the author decides; in live and
+/// rule modes, the cause as it is, since the request is his because of it.
 ///
 /// ```
 /// use officina_core::board::shown_escalation;
-/// use officina_core::relay::auto::EscalationCause;
-/// assert_eq!(shown_escalation(Some(EscalationCause::NoSessionId)), Some(EscalationCause::NoSessionId));
-/// assert_eq!(shown_escalation(Some(EscalationCause::ReviewRejected)), Some(EscalationCause::AutoApprovalOff));
+/// use officina_core::registry::types::ReviewMode;
+/// use officina_core::relay::auto::{Escalation, EscalationCause};
+/// let shadow = |cause| Some(Escalation { cause, mode: ReviewMode::Shadow });
+/// assert_eq!(shown_escalation(shadow(EscalationCause::NoSessionId)), Some(EscalationCause::NoSessionId));
+/// assert_eq!(shown_escalation(shadow(EscalationCause::ReviewRejected)), Some(EscalationCause::AutoApprovalOff));
+/// let live = Some(Escalation { cause: EscalationCause::ReviewRejected, mode: ReviewMode::Live });
+/// assert_eq!(shown_escalation(live), Some(EscalationCause::ReviewRejected));
 /// ```
-pub fn shown_escalation(cause: Option<EscalationCause>) -> Option<EscalationCause> {
-    cause.map(|cause| {
-        if cause.before_any_call() {
+pub fn shown_escalation(escalation: Option<Escalation>) -> Option<EscalationCause> {
+    escalation.map(|Escalation { cause, mode }| {
+        if cause.before_any_call() || mode != ReviewMode::Shadow {
             cause
         } else {
             EscalationCause::AutoApprovalOff
@@ -395,7 +400,7 @@ pub struct BoardInput {
     /// Why each `auto` request the window looked at is the author's, by
     /// approval id (AD-87): the board shows only what [`shown_escalation`]
     /// lets through.
-    pub auto_escalations: BTreeMap<String, EscalationCause>,
+    pub auto_escalations: BTreeMap<String, Escalation>,
     /// The registry's state as the caller found it.
     pub registry: Option<RegistryReport>,
     /// The subject of each filed session, by session id, from the registry
@@ -1859,8 +1864,20 @@ values = [\"web01\"]
                 &BoardInput {
                     approvals,
                     auto_escalations: BTreeMap::from([
-                        (reviewed.clone(), EscalationCause::ReviewRejected),
-                        (prechecked.clone(), EscalationCause::NoSessionId),
+                        (
+                            reviewed.clone(),
+                            Escalation {
+                                cause: EscalationCause::ReviewRejected,
+                                mode: ReviewMode::Shadow,
+                            },
+                        ),
+                        (
+                            prechecked.clone(),
+                            Escalation {
+                                cause: EscalationCause::NoSessionId,
+                                mode: ReviewMode::Shadow,
+                            },
+                        ),
                     ]),
                     ..Default::default()
                 },
@@ -1890,6 +1907,56 @@ values = [\"web01\"]
                 "\"mode\"",
             ] {
                 assert!(!text.contains(field), "{field}");
+            }
+        }
+
+        /// Story 5.14 AC 3 (D-143): a live or rule escalation shows its
+        /// cause, a call's included, since the request is the author's
+        /// because of it; a reviewing request shows none and does not wait.
+        #[test]
+        fn a_live_escalation_shows_its_cause_and_a_reviewing_request_none() {
+            use crate::relay::auto::EscalationCause;
+            use crate::relay::catalogue::ActionClass;
+            let approved = approved();
+            let dirs = BTreeMap::from([("lab".to_owned(), "C:/path/to/Lab".to_owned())]);
+            let ctx = ApprovalContext {
+                approved: Some(&approved),
+                project_dirs: &dirs,
+                system_dir: "C:/Windows/System32",
+            };
+            let all = files(vec![
+                request(&approved, "restart", "web01", NOW - MIN, None),
+                request(&approved, "restart", "db01", NOW - MIN, None),
+            ]);
+            let mut approvals = pending(&all, &ctx, &DryRunInputs::default(), NOW);
+            for approval in &mut approvals {
+                approval.class = ActionClass::Auto;
+            }
+            approvals[1].state = ApprovalState::Reviewing;
+            let (live, reviewing) = (approvals[0].id.clone(), approvals[1].id.clone());
+            let escalation = |mode| Escalation {
+                cause: EscalationCause::ReviewRejected,
+                mode,
+            };
+            for mode in [ReviewMode::Live, ReviewMode::Rule] {
+                let board = build_board(
+                    &BoardInput {
+                        approvals: approvals.clone(),
+                        auto_escalations: BTreeMap::from([
+                            (live.clone(), escalation(mode)),
+                            (reviewing.clone(), escalation(mode)),
+                        ]),
+                        ..Default::default()
+                    },
+                    NOW,
+                );
+                let by_id = |id: &str| board.approvals.iter().find(|a| a.id == id).unwrap();
+                assert_eq!(
+                    by_id(&live).escalation,
+                    Some(EscalationCause::ReviewRejected)
+                );
+                assert_eq!(by_id(&reviewing).escalation, None);
+                assert_eq!(board.waiting_count, 1, "{mode:?}");
             }
         }
 

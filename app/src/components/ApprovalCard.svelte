@@ -4,7 +4,8 @@
   // class, and Approve and Reject that act on a pointer click only (D-28).
   // Rejecting an `auto` request asks why, "should not run" or "not now", in
   // a slot the card always reserves, so the question moves nothing (FR-9,
-  // D-564). Every text is rendered as text: arguments, descriptions and
+  // D-564). While a live review decides it, the buttons' slot says so and
+  // holds no button (D-157). Every text is rendered as text: arguments, descriptions and
   // outputs come from files a session can write.
   import type { ApprovalView } from "../lib/generated/ApprovalView";
   import type { AuthorReason } from "../lib/generated/AuthorReason";
@@ -28,6 +29,8 @@
   let dryRun = $derived(approval.dry_run);
   let binding = $derived(bindingText(approval));
   let isAuto = $derived(approval.class === "auto");
+  /** A live review is deciding it (D-157): no button until it escalates. */
+  let reviewing = $derived(approval.state === "reviewing");
   /** Reject was clicked on an `auto` card: its reasons are shown. */
   let asking = $state(false);
 
@@ -114,25 +117,29 @@
   </div>
 
   {#if approval.valid}
-    <div class="buttons">
-      <button
-        class="approve"
-        data-testid="approve"
-        disabled={busy}
-        onclick={(event) => decide(event, true)}
-        onkeydown={noKeyDecides}
-      >
-        Approve
-      </button>
-      <button
-        class="reject"
-        data-testid="reject"
-        disabled={busy}
-        onclick={(event) => decide(event, false)}
-        onkeydown={noKeyDecides}
-      >
-        Reject
-      </button>
+    <div class="buttons" data-stable-slot data-testid="approval-actions">
+      {#if reviewing}
+        <p class="reviewing" data-testid="approval-reviewing">Being reviewed: yours if its review does not approve it</p>
+      {:else}
+        <button
+          class="approve"
+          data-testid="approve"
+          disabled={busy}
+          onclick={(event) => decide(event, true)}
+          onkeydown={noKeyDecides}
+        >
+          Approve
+        </button>
+        <button
+          class="reject"
+          data-testid="reject"
+          disabled={busy}
+          onclick={(event) => decide(event, false)}
+          onkeydown={noKeyDecides}
+        >
+          Reject
+        </button>
+      {/if}
     </div>
     {#if isAuto}
       <div class="reasons" data-stable-slot data-testid="reject-reasons" class:shown={asking}>
@@ -308,9 +315,25 @@
     font-size: 12.5px;
     color: var(--color-text-muted);
   }
+  /* The buttons' slot: while a live review runs, one line in their place,
+     so the card keeps its height (D-564). */
   .buttons {
     display: flex;
     gap: 8px;
+    min-height: var(--target-min);
+  }
+  .reviewing {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    margin: 0;
+    min-width: 0;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--color-text-muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
   .buttons button {
     flex: 1;

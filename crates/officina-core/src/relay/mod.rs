@@ -109,7 +109,7 @@ mod tests {
     use serde::Serialize;
 
     use super::approvals::{ApprovalBy, ApprovalState};
-    use super::auto::{EscalationCause, ReviewDecision};
+    use super::auto::{AutoMode, AutoOffReason, EscalationCause, ReviewDecision};
     use super::catalogue::{
         ActionClass, ForwardedValues, IssueKind, IssueTable, NoticeKind, Runner,
     };
@@ -139,8 +139,10 @@ mod tests {
     /// of this crate without a line here.
     #[test]
     fn code_equals_the_serde_name_for_every_variant() {
-        let checked: [fn(); 29] = [
+        let checked: [fn(); 31] = [
             || assert_codes(EscalationCause::ALL, EscalationCause::code),
+            || assert_codes(AutoMode::ALL, AutoMode::code),
+            || assert_codes(AutoOffReason::ALL, AutoOffReason::code),
             || assert_codes(ApprovalBy::ALL, ApprovalBy::code),
             || assert_codes(ApprovalState::ALL, ApprovalState::code),
             || assert_codes(ReviewDecision::ALL, ReviewDecision::code),

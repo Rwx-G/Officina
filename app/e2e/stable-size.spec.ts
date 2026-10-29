@@ -14,7 +14,7 @@ const TOLERANCE_PX = 0.5;
 /** What makes an element a toggle this spec must cover. */
 const TOGGLE = '[aria-pressed], [role="radio"], [data-stable-slot], :has(> [data-stable-label])';
 
-type SceneName = "board" | "autoApproval" | "sceneMode" | "relay" | "subjects" | "triage";
+type SceneName = "board" | "autoApproval" | "sceneMode" | "relay" | "relayAuto" | "subjects" | "triage";
 
 const SCENES: Record<SceneName, (page: Page) => Promise<void>> = {
   board: async (page) => {
@@ -33,6 +33,12 @@ const SCENES: Record<SceneName, (page: Page) => Promise<void>> = {
     await openBoard(page, loadBoard("busy"), {}, loadRelay("relay-clean"));
     await page.getByTestId("view-relay").click();
     await expect(page.getByTestId("relay-view")).toBeVisible();
+  },
+  // The Relay view's `auto` section with its gate holding (story 5.14).
+  relayAuto: async (page) => {
+    await openBoard(page, loadBoard("busy"), {}, loadRelay("relay-auto"));
+    await page.getByTestId("view-relay").click();
+    await expect(page.getByTestId("relay-auto")).toBeVisible();
   },
   subjects: async (page) => {
     await openBoard(page, loadBoard("model-board"), {}, null, loadRegistry("model"));
@@ -103,6 +109,37 @@ const CASES: ToggleCase[] = [
       control.locator("xpath=ancestor::*[@data-testid='approval-card']").getByTestId("reject").click(),
   },
   { name: "Relay view stop toggle", selector: '[data-testid="relay-view-stop"]', scene: "relay" },
+  // Story 5.14 (D-564): the `auto` section's toggles and their slots, with
+  // approval on and the gate holding; turning it off keeps it offered.
+  {
+    name: "auto approval toggle",
+    selector: '[data-testid="auto-approval-slot"], [data-testid="auto-approval-toggle"]',
+    scene: "relayAuto",
+    pressed: true,
+  },
+  {
+    name: "auto rule mode toggle",
+    selector: '[data-testid="auto-mode-slot"], [data-testid="auto-mode-toggle"]',
+    scene: "relayAuto",
+    // The slot is measured; its button, not its sentence, takes the click.
+    act: (page) => page.getByTestId("auto-mode-toggle").click(),
+  },
+  {
+    name: "approval reviewing slot",
+    selector: '[data-testid="approval-actions"]',
+    scene: "autoApproval",
+    // A live review takes the request: the buttons give way to a line.
+    act: async (page, control) => {
+      const id = await control.locator("xpath=ancestor::*[@data-testid='approval-card']").getAttribute("data-id");
+      await page.evaluate((reviewed) => {
+        const board = window.__officinaBoard!;
+        return window.__officinaPushBoard?.({
+          ...board,
+          approvals: board.approvals.map((a) => (a.id === reviewed ? { ...a, state: "reviewing" as const } : a)),
+        });
+      }, id);
+    },
+  },
   { name: "triage verdict", selector: '[data-testid^="triage-verdict-"]', scene: "subjects" },
   {
     name: "subject actions",

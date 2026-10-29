@@ -238,6 +238,23 @@ impl Decision {
         }
     }
 
+    /// An approval by a review or the rule (AD-86, D-141), naming the
+    /// review row that gave it.
+    pub fn by_review(
+        decided_at_ms: i64,
+        request_key: &str,
+        by: ApprovalBy,
+        review_id: i64,
+    ) -> Self {
+        Decision {
+            decided_at_ms,
+            request_key: request_key.to_owned(),
+            by: Some(by),
+            review_id: Some(review_id.to_string()),
+            reason: None,
+        }
+    }
+
     /// Who decided: the author when the file does not say (AD-86).
     pub fn by(&self) -> ApprovalBy {
         self.by.unwrap_or(ApprovalBy::Author)
@@ -482,6 +499,13 @@ pub enum DecideRefusal {
     Expired(String),
     #[error("request {id} is invalid: {why}")]
     Invalid { id: String, why: String },
+    /// A review or the rule may only approve an `auto` request (AD-86).
+    #[error("request {0} is not an auto action's")]
+    NotAuto(String),
+    /// The action's review approvals of the last hour reached its
+    /// `auto_max_per_hour` (D-142, review F15).
+    #[error("request {0}: its action reached its hourly cap of review approvals")]
+    HourlyCap(String),
 }
 
 /// The request the window may decide now, with its class, or why not: it
@@ -512,6 +536,37 @@ pub fn decidable<'f>(
         why,
     })?;
     Ok((request, rebuilt.class))
+}
+
+/// The `auto` request a review or the rule may approve now, rebuilt, or
+/// why not (AD-86, D-157): as [`decidable`], except that its own
+/// `reviewing` mark does not stop it, and the request must rebuild as an
+/// `auto` action of the approved catalogue, which refuses one whose
+/// catalogue changed while it was reviewed.
+pub fn review_decidable<'f>(
+    files: &'f ApprovalFiles,
+    ctx: &ApprovalContext<'_>,
+    id: &str,
+    now_ms: i64,
+) -> Result<(&'f ApprovalRequest, Rebuilt), DecideRefusal> {
+    let request = files
+        .requests
+        .get(id)
+        .ok_or_else(|| DecideRefusal::Unknown(id.to_owned()))?;
+    if files.decided(id) || files.markers.contains(id) {
+        return Err(DecideRefusal::Decided(id.to_owned()));
+    }
+    if !is_live(request.created_at_ms, now_ms) {
+        return Err(DecideRefusal::Expired(id.to_owned()));
+    }
+    let rebuilt = rebuild(ctx, id, request).map_err(|why| DecideRefusal::Invalid {
+        id: id.to_owned(),
+        why,
+    })?;
+    if rebuilt.class != ActionClass::Auto {
+        return Err(DecideRefusal::NotAuto(id.to_owned()));
+    }
+    Ok((request, rebuilt))
 }
 
 /// Whether the author's decision carries the reason its class asks for

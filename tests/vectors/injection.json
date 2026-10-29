@@ -382,5 +382,56 @@
       "answer": "MARK-control-7 Done.",
       "decision": "reject"
     }
+  ],
+  "auto_approved_run": [
+    {
+      "name": "a live approval runs the catalogue's argument vector",
+      "family": "control",
+      "mode": "review",
+      "setup": "approve",
+      "expect": "ran"
+    },
+    {
+      "name": "a rule approval runs the catalogue's argument vector",
+      "family": "control",
+      "mode": "rule",
+      "setup": "approve",
+      "expect": "ran"
+    },
+    {
+      "name": "a request file with a forged argument vector is never reviewed",
+      "family": "argument_fragment",
+      "mode": "review",
+      "setup": "forged_argv",
+      "expect": "never_reviewed"
+    },
+    {
+      "name": "a request file with a forged argument vector is never decided by the rule",
+      "family": "argument_fragment",
+      "mode": "rule",
+      "setup": "forged_argv",
+      "expect": "never_reviewed"
+    },
+    {
+      "name": "a catalogue approved again during the review refuses its approval",
+      "family": "edited_snapshot",
+      "mode": "review",
+      "setup": "catalogue_change",
+      "expect": "approval_refused"
+    },
+    {
+      "name": "a review answering approve with an argument vector",
+      "family": "option_string",
+      "mode": "review",
+      "setup": "extra_field",
+      "expect": "invalid_answer"
+    },
+    {
+      "name": "a tree change between the approval and its consumption",
+      "family": "tree_change",
+      "mode": "review",
+      "setup": "tree_change",
+      "expect": "check_not_satisfied"
+    }
   ]
 }

@@ -3,6 +3,7 @@
 // a browser.
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 import { emit } from "@tauri-apps/api/event";
+import type { AutoMode } from "./lib/generated/AutoMode";
 import type { Board } from "./lib/generated/Board";
 import type { CardAnswer } from "./lib/generated/CardAnswer";
 import type { ConfirmItem } from "./lib/generated/ConfirmItem";
@@ -57,6 +58,12 @@ export function installE2eMock(): void {
         }
         case "set_relay_stopped":
           return setStopped((args as { stopped: boolean }).stopped);
+        case "set_auto_approval":
+          return setAutoApproval((args as { on: boolean }).on);
+        case "set_auto_mode":
+          return setAutoMode((args as { mode: AutoMode }).mode);
+        case "mark_should_not_have_run":
+          return markRun((args as { runId: string }).runId);
         case "acknowledge_anomaly":
           return acknowledge((args as { key: string }).key);
         case "get_registry":
@@ -239,6 +246,64 @@ async function setStopped(stopped: boolean): Promise<boolean> {
     stopped_since_ms: stopped ? Date.now() : null,
   });
   return true;
+}
+
+/** A refusal of the registry's writer, as the window's commands return it. */
+function refused(message: string): Promise<void> {
+  const error: IpcError = { code: "refused", message, refusal: null };
+  return Promise.reject(error);
+}
+
+/** Mirrors the collector's answer to `set_auto_approval` (AD-88): on is
+ *  refused unless the view's gate holds; the next view shows the switch. */
+async function setAutoApproval(on: boolean): Promise<void> {
+  const current = window.__officinaRelay;
+  if (!current) return;
+  if (on && !current.auto.stats.gate) {
+    return refused(
+      `auto approval needs at least ${current.auto.stats.gate_cases} shadow reviews met by your decision in the last 30 days, with no disagreement`,
+    );
+  }
+  await window.__officinaPushRelay?.({
+    ...current,
+    auto: { ...current.auto, approval_on: on, approval_src: "author", approval_reason: null },
+  });
+}
+
+/** Mirrors the collector's answer to `set_auto_mode` (D-162): `rule` is
+ *  refused unless the view's rule offer holds. */
+async function setAutoMode(mode: AutoMode): Promise<void> {
+  const current = window.__officinaRelay;
+  if (!current) return;
+  if (mode === "rule" && !current.auto.stats.rule_offer) {
+    return refused(
+      `rule mode needs the approval gate and review and rule differing in under ${current.auto.stats.rule_diff_percent} % of the cases`,
+    );
+  }
+  await window.__officinaPushRelay?.({ ...current, auto: { ...current.auto, mode } });
+}
+
+/** Mirrors the collector's answer to `mark_should_not_have_run` (AD-88):
+ *  the run is marked, approval turns off with the reason, the mode returns
+ *  to `review`, and the mark is a disagreement that breaks the gate. */
+async function markRun(runId: string): Promise<void> {
+  const current = window.__officinaRelay;
+  if (!current) return;
+  const run = current.auto.runs.find((r) => r.run_id === runId);
+  if (!run || run.marked_at_ms !== null) return refused(`run ${runId} is no run a review or the rule approved in the last 7 days`);
+  const stats = current.auto.stats;
+  await window.__officinaPushRelay?.({
+    ...current,
+    auto: {
+      ...current.auto,
+      approval_on: false,
+      approval_src: "author",
+      approval_reason: "should_not_have_run",
+      mode: "review",
+      stats: { ...stats, disagreements: stats.disagreements + 1, gate: false, rule_offer: false },
+      runs: current.auto.runs.map((r) => (r.run_id === runId ? { ...r, marked_at_ms: Date.now() } : r)),
+    },
+  });
 }
 
 /** Mirrors `authority::acknowledge_anomaly`: the anomaly stays listed,

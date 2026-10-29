@@ -28,12 +28,16 @@ use crate::files::{event_file_for, now_ms};
 use crate::orders::{CardStore, LaunchGrant, LaunchReport};
 use crate::paths::Paths;
 use crate::registry::ingest::IngestContext;
+use crate::registry::review::AutoState;
 use crate::registry::store::onedrive_roots_from_env;
 use crate::registry::triage::{CallLimits, NextCall, TriageJob, TriageWorker, binary_stamp};
 use crate::registry::window::WindowRegistry;
 use crate::relay::home::RelayHome;
-use crate::relay::review::{ReviewEnv, ReviewWorker, Reviews};
-use crate::relay::view::{credential_presence, read_view_with};
+use crate::relay::review::{ReviewEnv, ReviewWorker, Reviews, link_runs};
+use crate::relay::view::{AutoRead, credential_presence, read_view_with};
+use officina_core::registry::types::Source;
+use officina_core::relay::auto::{AutoMode, STATS_WINDOW_MS};
+use officina_core::relay::journal::{AutoApprovalSet, JournalEntry};
 
 /// How often the watched paths are stat'ed. A handful of `metadata` calls:
 /// cheap enough to run four times a second.
@@ -91,6 +95,14 @@ pub enum AuthorCommand {
     /// The triage model turned on, under its gate and while it can be
     /// called, or off (FR-10 as amended).
     SetTriageModel(bool),
+    /// Auto approval turned on, under its gate, or off (AD-88).
+    SetAutoApproval(bool),
+    /// Auto approval's mode: `rule` under the rule offer, or `review`
+    /// (D-162).
+    SetAutoMode(AutoMode),
+    /// An auto-approved run marked "should not have run", by run id
+    /// (AD-88, FR-9).
+    MarkShouldNotHaveRun(String),
     /// A work order card for these values (AD-78).
     IssueCard(CardRequest),
     /// A new card in place of `card_id`, with one change (AD-78).
@@ -855,7 +867,9 @@ fn run<E: Emit>(
             Ok(CollectorMsg::Visibility(visible)) => plan.visibility_changed(visible),
             Ok(CollectorMsg::RelayChanged) => plan.relay_files_changed(),
             Ok(CollectorMsg::Author(request)) => {
-                answer_author(collector, &mut registry, &mut cards, request, outputs);
+                if answer_author(collector, &mut registry, &mut cards, request, outputs) {
+                    plan.relay_files_changed();
+                }
             }
             Err(RecvTimeoutError::Timeout) => {}
         }
@@ -904,15 +918,17 @@ fn run<E: Emit>(
         if let Some(worker) = &mut worker {
             pump_triage(collector, &mut registry, worker, outputs);
         }
-        pump_review(collector, &mut registry, &mut reviews, outputs);
-        if due.relay {
+        let reviewed = pump_review(collector, &mut registry, &mut reviews, outputs);
+        if due.relay || reviewed {
             collector.keep_known_projects(now_ms());
             if due.credentials {
                 presence = credential_presence(collector.relay(), collector.credential_store());
             }
+            let now = now_ms();
+            let auto = auto_read(&mut registry, now);
             // A home that cannot be read keeps the last view. A new one
             // changes the briefing's runs and the composer's templates.
-            if let Ok(view) = read_view_with(collector.relay(), now_ms(), Some(&presence))
+            if let Ok(view) = read_view_with(collector.relay(), now, Some(&presence), &auto)
                 && publish_relay(view, outputs)
             {
                 publish_orchestrator(&mut registry, outputs, false, now_ms());
@@ -958,16 +974,24 @@ fn rebuild_and_publish<E: Emit>(
 /// Runs one author request on the registry's writer (AD-38), unless its
 /// deadline is too close (D-92): an action is written, the cards' subjects
 /// refreshed, and the board and the registry view emitted before the reply.
+/// Returns true when the relay view must be rebuilt: an `auto` switch or a
+/// mark changed what it shows.
 fn answer_author<E: Emit>(
     collector: &mut Collector,
     registry: &mut WindowRegistry,
     cards: &mut CardStore,
     request: AuthorRequest,
     outputs: &mut Outputs<E>,
-) {
+) -> bool {
     if request.expired(Instant::now()) {
-        return;
+        return false;
     }
+    let relay_shows = matches!(
+        request.command,
+        AuthorCommand::SetAutoApproval(_)
+            | AuthorCommand::SetAutoMode(_)
+            | AuthorCommand::MarkShouldNotHaveRun(_)
+    );
     // One time for the whole request, so what it writes and the views it
     // publishes agree.
     let now = now_ms();
@@ -997,6 +1021,24 @@ fn answer_author<E: Emit>(
         AuthorCommand::SetTriageModel(on) => registry
             .set_triage_model(on, now)
             .map(|()| AuthorAnswer::Done { created: None }),
+        AuthorCommand::SetAutoApproval(on) => registry.set_auto_approval(on, now).map(|state| {
+            journal_auto_state(collector.relay(), state, now);
+            AuthorAnswer::Done { created: None }
+        }),
+        AuthorCommand::SetAutoMode(mode) => registry.set_auto_mode(mode, now).map(|state| {
+            journal_auto_state(collector.relay(), state, now);
+            AuthorAnswer::Done { created: None }
+        }),
+        AuthorCommand::MarkShouldNotHaveRun(run_id) => {
+            // A run started since the last tick is linked first.
+            link_runs(collector.relay(), registry, now);
+            registry
+                .mark_should_not_have_run(&run_id, now)
+                .map(|state| {
+                    journal_auto_state(collector.relay(), state, now);
+                    AuthorAnswer::Done { created: None }
+                })
+        }
         AuthorCommand::Evaluate => registry
             .evaluate(now)
             .map(|cases| AuthorAnswer::Evaluating { cases }),
@@ -1039,6 +1081,7 @@ fn answer_author<E: Emit>(
         publish_both(collector, registry, outputs, true);
     }
     let _ = request.reply.send(reply);
+    relay_shows
 }
 
 /// Whether the triage model can be called, and the `claude` binary's
@@ -1101,15 +1144,42 @@ fn pump_triage<E: Emit>(
     }
 }
 
+/// The registry's side of the relay view's `auto` section, reasons
+/// included: the window shows a review once the author decided (D-143).
+fn auto_read(registry: &mut WindowRegistry, now_ms: i64) -> AutoRead {
+    AutoRead {
+        state: registry.auto_state(),
+        rows: registry
+            .review_rows(now_ms - STATS_WINDOW_MS)
+            .iter()
+            .map(|row| row.auto_row(true))
+            .collect(),
+    }
+}
+
+/// Journals a change of auto approval or its mode (AD-88): the state
+/// written, source `author`. A journal that cannot be written loses the
+/// line, not the change.
+fn journal_auto_state(relay: &RelayHome, state: AutoState, now_ms: i64) {
+    let line = JournalEntry::AutoApprovalSet(AutoApprovalSet {
+        on: state.approval.on,
+        mode: state.mode,
+        src: state.approval_src.unwrap_or(Source::Author),
+        reason: state.approval.reason,
+    });
+    let _ = crate::relay::journal::record(relay, &[line], now_ms);
+}
+
 /// One tick of the `auto` review (AD-86): new requests prechecked, results
 /// recorded, the next call started; never a wait. The board is rebuilt
-/// when what it shows of the `auto` requests changed.
+/// when what it shows of the `auto` requests changed; returns true then,
+/// so the relay view is rebuilt too.
 fn pump_review<E: Emit>(
     collector: &mut Collector,
     registry: &mut WindowRegistry,
     reviews: &mut Reviews,
     outputs: &mut Outputs<E>,
-) {
+) -> bool {
     let board = outputs.board.current();
     let paths = collector.paths().clone();
     let env = ReviewEnv {
@@ -1126,7 +1196,9 @@ fn pump_review<E: Emit>(
     if reviews.tick(&env, registry, now_ms()) {
         collector.set_auto_escalations(reviews.escalations().clone());
         publish_both(collector, registry, outputs, false);
+        return true;
     }
+    false
 }
 
 /// Shares `board` with the window's commands, and emits it when it differs

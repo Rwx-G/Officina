@@ -81,6 +81,12 @@ closed_enum! {
         ReviewEscalated,
         /// The review answered approve while auto approval is off.
         AutoApprovalOff,
+        /// Rule mode: the rule baseline does not hold (D-141).
+        RuleBaselineFalse,
+        /// The review or the rule approved, and the window's authority
+        /// refused to record it: the request was decided, expired or
+        /// changed meanwhile, or its files could not be written (D-734).
+        ApprovalRefused,
     }
 }
 
@@ -103,9 +109,20 @@ impl EscalationCause {
             | EscalationCause::InvalidAnswer
             | EscalationCause::ReviewRejected
             | EscalationCause::ReviewEscalated
-            | EscalationCause::AutoApprovalOff => false,
+            | EscalationCause::AutoApprovalOff
+            | EscalationCause::RuleBaselineFalse
+            | EscalationCause::ApprovalRefused => false,
         }
     }
+}
+
+/// Why a pending `auto` request is the author's, and the mode it was
+/// decided in, which says whether its card may name the cause before he
+/// decides (AD-87, D-143).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Escalation {
+    pub cause: EscalationCause,
+    pub mode: ReviewMode,
 }
 
 /// The 5-hour use at or above which no review call is made (FR-8).
@@ -302,20 +319,9 @@ pub fn precheck(
     request: &ApprovalRequest,
     facts: &PrecheckFacts<'_>,
 ) -> Precheck {
-    let Ok(rebuilt) = rebuild(ctx, id, request) else {
+    let Some(job) = auto_job(ctx, id, request) else {
         return Precheck::NotAuto;
     };
-    let (ActionClass::Auto, Some(check), Some(approved)) =
-        (rebuilt.class, rebuilt.check.clone(), ctx.approved)
-    else {
-        return Precheck::NotAuto;
-    };
-    let max_per_hour = approved
-        .canonical
-        .actions
-        .get(&request.action)
-        .and_then(|action| action.auto_max_per_hour)
-        .unwrap_or(super::catalogue::DEFAULT_AUTO_MAX_PER_HOUR);
     let escalate = Precheck::Escalate;
     match facts.claude {
         None => return escalate(EscalationCause::ClaudeNotFound),
@@ -327,19 +333,61 @@ pub fn precheck(
     if !facts.workdir_empty {
         return escalate(EscalationCause::WorkdirNotEmpty);
     }
-    let Some(session_id) = request.session_id.clone().filter(|s| !s.is_empty()) else {
+    if job.session_id.is_empty() {
         return escalate(EscalationCause::NoSessionId);
-    };
+    }
     if facts.no_excerpts {
         return escalate(EscalationCause::NoExcerpts);
     }
-    if let Some(cause) = recheck(&request.project, &request.action, max_per_hour, facts) {
+    if let Some(cause) = recheck(&job.project, &job.action, job.max_per_hour, facts) {
         return escalate(cause);
     }
     let Some(model) = facts.review_model else {
         return escalate(EscalationCause::ReviewConfigInvalid);
     };
-    Precheck::Review(Box::new(ReviewJob {
+    Precheck::Review(Box::new(ReviewJob { model, ..job }))
+}
+
+/// Rule mode's precheck (D-141): [`Precheck::NotAuto`] as [`precheck`]
+/// gives it; then only `no_session_id` and `hourly_cap` apply, the causes
+/// about a call having nothing to guard; otherwise the job, whose request
+/// the rule baseline then decides ([`rule_decision`]).
+pub fn precheck_rule(
+    ctx: &ApprovalContext<'_>,
+    id: &str,
+    request: &ApprovalRequest,
+    rows: &[ReviewRecord],
+    now_ms: i64,
+) -> Precheck {
+    let Some(job) = auto_job(ctx, id, request) else {
+        return Precheck::NotAuto;
+    };
+    if job.session_id.is_empty() {
+        return Precheck::Escalate(EscalationCause::NoSessionId);
+    }
+    if approvals_in_hour(rows, &job.project, &job.action, now_ms) >= job.max_per_hour as usize {
+        return Precheck::Escalate(EscalationCause::HourlyCap);
+    }
+    Precheck::Review(Box::new(job))
+}
+
+/// The job of request `id` when it rebuilds from the approved snapshot as
+/// an `auto` action naming its check (D-27, D-570), with the default review
+/// model and an empty session id when the request names none.
+fn auto_job(ctx: &ApprovalContext<'_>, id: &str, request: &ApprovalRequest) -> Option<ReviewJob> {
+    let rebuilt = rebuild(ctx, id, request).ok()?;
+    let (ActionClass::Auto, Some(check), Some(approved)) =
+        (rebuilt.class, rebuilt.check, ctx.approved)
+    else {
+        return None;
+    };
+    let max_per_hour = approved
+        .canonical
+        .actions
+        .get(&request.action)
+        .and_then(|action| action.auto_max_per_hour)
+        .unwrap_or(super::catalogue::DEFAULT_AUTO_MAX_PER_HOUR);
+    Some(ReviewJob {
         approval_id: id.to_owned(),
         request_key: request.request_key.clone(),
         project: request.project.clone(),
@@ -349,11 +397,11 @@ pub fn precheck(
         argv: rebuilt.argv,
         check,
         catalogue_hash: request.catalogue_hash.clone(),
-        session_id,
+        session_id: request.session_id.clone().unwrap_or_default(),
         requested_at_ms: request.created_at_ms,
         max_per_hour,
-        model,
-    }))
+        model: super::template::DEFAULT_REVIEW_MODEL,
+    })
 }
 
 /// One earlier run of the action in the project, as the review sees it.
@@ -632,13 +680,210 @@ pub fn rule_baseline(
     check_status(job, lines, tree, now_ms).satisfied && last_succeeded
 }
 
-/// The mode a review runs in: shadow while auto approval is off (story
-/// 5.13 has it off throughout; story 5.14 adds the others).
-pub fn mode(approval_on: bool) -> ReviewMode {
-    if approval_on {
-        ReviewMode::Live
+/// The mode a request is decided in (AD-88, D-162): shadow while auto
+/// approval is off, whatever the stored mode; live or rule while it is on.
+///
+/// ```
+/// use officina_core::registry::types::ReviewMode;
+/// use officina_core::relay::auto::{AutoMode, mode};
+/// assert_eq!(mode(false, AutoMode::Rule), ReviewMode::Shadow);
+/// assert_eq!(mode(true, AutoMode::Review), ReviewMode::Live);
+/// assert_eq!(mode(true, AutoMode::Rule), ReviewMode::Rule);
+/// ```
+pub fn mode(approval_on: bool, auto_mode: AutoMode) -> ReviewMode {
+    match (approval_on, auto_mode) {
+        (false, _) => ReviewMode::Shadow,
+        (true, AutoMode::Review) => ReviewMode::Live,
+        (true, AutoMode::Rule) => ReviewMode::Rule,
+    }
+}
+
+closed_enum! {
+    #[serde(rename_all = "snake_case")]
+    /// Who decides `auto` requests while auto approval is on (AD-88,
+    /// D-162): the review's model call, or the rule baseline alone.
+    #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+    #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+    pub enum AutoMode {
+        /// The mode before the author ever chose one, and the one a mark
+        /// returns to (D-141).
+        #[default]
+        Review,
+        Rule,
+    }
+}
+
+/// The shadow cases the approval gate needs (FR-9).
+pub const GATE_CASES: u32 = 20;
+
+/// The rule offer holds while review and rule differ in fewer than this
+/// share of the cases, in percent (FR-9).
+pub const RULE_DIFF_PERCENT: u32 = 5;
+
+/// The window the statistics read (FR-9, AD-88).
+pub const STATS_WINDOW_MS: i64 = 30 * crate::dates::DAY_MS;
+
+/// The window whose auto-approved runs offer "should not have run" (FR-9).
+pub const MARK_WINDOW_MS: i64 = 7 * crate::dates::DAY_MS;
+
+/// One review row as the statistics read it (AD-88).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StatsRecord {
+    pub requested_at_ms: i64,
+    pub mode: ReviewMode,
+    pub outcome: ReviewOutcome,
+    pub decision: Option<ReviewDecision>,
+    pub rule_baseline: bool,
+    pub author_decision: Option<crate::registry::types::AuthorDecision>,
+    pub author_reason: Option<crate::registry::types::AuthorReason>,
+    /// When the author marked its run "should not have run".
+    pub marked_at_ms: Option<i64>,
+}
+
+/// What the shadow reviews of the last [`STATS_WINDOW_MS`] say (AD-88,
+/// D-143): the gate's cases, the disagreements, how often review and rule
+/// differed, whether the gate and the rule offer hold, and the bound the
+/// rule of three puts on the false-approve rate.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct ShadowStats {
+    /// Shadow rows that answered and met an author decision: an approval,
+    /// or a rejection with its reason.
+    pub cases: u32,
+    /// A review approve against "should not run", or a "should not have
+    /// run" mark.
+    pub disagreements: u32,
+    /// Cases where "the review approved" differs from the baseline.
+    pub rule_diff: u32,
+    /// At least [`GATE_CASES`] cases and no disagreement.
+    pub gate: bool,
+    /// The gate, and `rule_diff` under [`RULE_DIFF_PERCENT`] of the cases.
+    pub rule_offer: bool,
+    /// 3/n, the rule of three's bound on the false-approve rate, in
+    /// percent; `None` without a case.
+    pub false_approve_bound_percent: Option<f64>,
+    /// [`GATE_CASES`], carried so the window states it without restating it.
+    pub gate_cases: u32,
+    /// [`RULE_DIFF_PERCENT`], likewise.
+    pub rule_diff_percent: u32,
+}
+
+/// The shadow statistics at `now_ms` (AD-88, D-143): cases are rows of mode
+/// `shadow`, outcome `answered`, requested in the last
+/// [`STATS_WINDOW_MS`], that met an author decision; live and rule rows
+/// never count, and an expiry is no decision. A disagreement is a review
+/// approve the author rejected as "should not run", or any row marked
+/// "should not have run" in the window.
+///
+/// ```
+/// use officina_core::relay::auto::shadow_stats;
+/// let stats = shadow_stats(&[], 0);
+/// assert_eq!((stats.cases, stats.gate), (0, false));
+/// ```
+pub fn shadow_stats(rows: &[StatsRecord], now_ms: i64) -> ShadowStats {
+    use crate::registry::types::{AuthorDecision, AuthorReason};
+    let recent = |at: i64| (0..STATS_WINDOW_MS).contains(&(now_ms - at));
+    let cases: Vec<&StatsRecord> = rows
+        .iter()
+        .filter(|row| {
+            row.mode == ReviewMode::Shadow
+                && row.outcome == ReviewOutcome::Answered
+                && recent(row.requested_at_ms)
+                && match row.author_decision {
+                    Some(AuthorDecision::Approved) => true,
+                    Some(AuthorDecision::Rejected) => row.author_reason.is_some(),
+                    None => false,
+                }
+        })
+        .collect();
+    let approved = |row: &StatsRecord| row.decision == Some(ReviewDecision::Approve);
+    let refused_approvals = cases
+        .iter()
+        .filter(|row| approved(row) && row.author_reason == Some(AuthorReason::ShouldNotRun))
+        .count();
+    let marks = rows
+        .iter()
+        .filter(|row| row.marked_at_ms.is_some_and(recent))
+        .count();
+    let rule_diff = cases
+        .iter()
+        .filter(|row| approved(row) != row.rule_baseline)
+        .count();
+    let count = |n: usize| u32::try_from(n).unwrap_or(u32::MAX);
+    let (cases, disagreements, rule_diff) = (
+        count(cases.len()),
+        count(refused_approvals + marks),
+        count(rule_diff),
+    );
+    let gate = cases >= GATE_CASES && disagreements == 0;
+    ShadowStats {
+        cases,
+        disagreements,
+        rule_diff,
+        gate,
+        rule_offer: gate && rule_diff * 100 < RULE_DIFF_PERCENT * cases,
+        false_approve_bound_percent: (cases > 0).then(|| 300.0 / f64::from(cases)),
+        gate_cases: GATE_CASES,
+        rule_diff_percent: RULE_DIFF_PERCENT,
+    }
+}
+
+closed_enum! {
+    #[serde(rename_all = "snake_case")]
+    /// Why auto approval was turned off by something else than the
+    /// author's switch (AD-88).
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+    #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+    pub enum AutoOffReason {
+        /// The author marked an auto-approved run "should not have run".
+        ShouldNotHaveRun,
+    }
+}
+
+/// The `auto_approval` setting's value (AD-88, D-69's pattern): on or off,
+/// and why it went off when a mark turned it off.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AutoApprovalSetting {
+    pub on: bool,
+    #[serde(default)]
+    pub reason: Option<AutoOffReason>,
+}
+
+/// Why the writer refused a toggle (AD-88): the evidence does not hold
+/// when it writes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum ToggleRefusal {
+    #[error(
+        "auto approval needs at least {GATE_CASES} shadow reviews met by your decision in the last 30 days, with no disagreement"
+    )]
+    GateDoesNotHold,
+    #[error(
+        "rule mode needs the approval gate and review and rule differing in under {RULE_DIFF_PERCENT} % of the cases"
+    )]
+    NoRuleOffer,
+}
+
+/// Why the writer refused a "should not have run" mark (AD-88, FR-9).
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum MarkRefusal {
+    #[error("run {0} is no run a review or the rule approved in the last 7 days")]
+    NotAutoApproved(String),
+    #[error("run {0} is already marked")]
+    AlreadyMarked(String),
+}
+
+/// What rule mode decides for a request whose baseline is `baseline`
+/// (D-141, D-162): approve on a true baseline, escalate with
+/// `rule_baseline_false` otherwise.
+pub fn rule_decision(baseline: bool) -> (ReviewDecision, Option<EscalationCause>) {
+    if baseline {
+        (ReviewDecision::Approve, None)
     } else {
-        ReviewMode::Shadow
+        (
+            ReviewDecision::Escalate,
+            Some(EscalationCause::RuleBaselineFalse),
+        )
     }
 }
 
@@ -1044,7 +1289,66 @@ values = [\"lab-web\"]
         for decision in ReviewDecision::ALL {
             assert!(decide(*decision, false).is_some(), "{decision:?}");
         }
-        assert_eq!(mode(false), ReviewMode::Shadow);
+        for auto_mode in AutoMode::ALL {
+            assert_eq!(mode(false, *auto_mode), ReviewMode::Shadow);
+        }
+    }
+
+    /// Story 5.14 AC 4 (D-141): rule mode prechecks `no_session_id` and
+    /// `hourly_cap` only; a call's causes never stop it.
+    #[test]
+    fn rule_mode_prechecks_the_session_and_the_cap_only() {
+        let approved = approved();
+        let dirs = dirs();
+        let ctx = ApprovalContext {
+            approved: Some(&approved),
+            project_dirs: &dirs,
+            system_dir: "C:/Windows/System32",
+        };
+        let (id, apply) = request(&approved, "apply", &APPLY);
+        let Precheck::Review(job) = precheck_rule(&ctx, &id, &apply, &[], NOW) else {
+            panic!("a request with a session and room under its cap is decided by the rule");
+        };
+        assert_eq!(job.approval_id(), id);
+        let no_session = ApprovalRequest {
+            session_id: None,
+            ..apply.clone()
+        };
+        assert_eq!(
+            precheck_rule(&ctx, &id, &no_session, &[], NOW),
+            Precheck::Escalate(EscalationCause::NoSessionId)
+        );
+        let full: Vec<ReviewRecord> = (0..job.max_per_hour())
+            .map(|i| ReviewRecord {
+                project: apply.project.clone(),
+                action: apply.action.clone(),
+                requested_at_ms: NOW - i64::from(i) * MIN,
+                outcome: ReviewOutcome::NoCall,
+                decision: Some(ReviewDecision::Approve),
+                call_started_at_ms: None,
+            })
+            .collect();
+        assert_eq!(
+            precheck_rule(&ctx, &id, &apply, &full, NOW),
+            Precheck::Escalate(EscalationCause::HourlyCap)
+        );
+        let (human_id, human) = request(&approved, "restart", &["C:/path/to/tool.exe", "lab-web"]);
+        assert_eq!(
+            precheck_rule(&ctx, &human_id, &human, &[], NOW),
+            Precheck::NotAuto
+        );
+    }
+
+    #[test]
+    fn the_rule_approves_a_true_baseline_and_escalates_a_false_one() {
+        assert_eq!(rule_decision(true), (ReviewDecision::Approve, None));
+        assert_eq!(
+            rule_decision(false),
+            (
+                ReviewDecision::Escalate,
+                Some(EscalationCause::RuleBaselineFalse)
+            )
+        );
     }
 
     #[test]

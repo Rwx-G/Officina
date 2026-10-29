@@ -1492,6 +1492,110 @@ for (const [name, scenario] of Object.entries(orchestratorScenarios)) {
   console.log(`fixture ${name}: exit ${view.status}`);
 }
 
+// The `auto` class in the Relay view (story 5.14, AD-88, AD-92): a floor
+// with an `auto` action approved through `approve_fixture`; shadow reviews
+// met by the author's decisions, two runs a review and the rule approved,
+// auto approval turned on under its gate and the decisions of the last days
+// written by the window's writer through `orchestrator_fixture` at explicit
+// times; then printed by the real `officina relay --json`, which carries no
+// review's reason (D-143).
+{
+  const name = "relay-auto";
+  const tmp = mkdtempSync(join(tmpdir(), `officina-fixture-${name}-`));
+  const home = join(tmp, "home");
+  const officinaHome = join(tmp, "officina");
+  mkdirSync(join(home, ".claude", "sessions"), { recursive: true });
+  mkdirSync(officinaHome, { recursive: true });
+  writeFileSync(
+    join(officinaHome, "floor.toml"),
+    `schema = 2
+
+[[project]]
+name = "infra-scripts"
+path = "${work("infra-scripts")}"
+actions = ["check", "apply"]
+
+[[action]]
+name = "check"
+description = "Dry run of a playbook on one lab group"
+class = "free"
+program = "C:/path/to/ansible-playbook.exe"
+args = ["--check", "{group}"]
+
+[action.params.group]
+pattern = "lab-[a-z0-9-]{1,30}"
+
+[[action]]
+name = "apply"
+description = "Apply the playbook checked by its dry run"
+class = "auto"
+check = "check"
+auto_max_per_hour = 4
+program = "C:/path/to/ansible-playbook.exe"
+args = ["{group}"]
+
+[action.params.group]
+pattern = "lab-[a-z0-9-]{1,30}"
+
+[auto_review]
+model = "haiku"
+`,
+  );
+  approveFixture(officinaHome, "approve");
+  const id = (n) => `0123456789abcdef-${n}`;
+  const review = (n, at, extra) => ({
+    approval_id: id(n),
+    project: "infra-scripts",
+    action: "apply",
+    requested_at_ms: at,
+    mode: "shadow",
+    outcome: "answered",
+    cause: "auto_approval_off",
+    decision: "approve",
+    reason: "The dry run changed one host and the last run succeeded.",
+    rule_baseline: true,
+    author: "approved",
+    ...extra,
+  });
+  // 21 shadow cases over the last days, one where review and rule differ.
+  const shadow = Array.from({ length: 21 }, (_, n) =>
+    review(n, now - (n + 1) * 7 * HOUR, n === 4 ? { rule_baseline: false } : {}),
+  );
+  const auto = [
+    review(30, now - 3 * HOUR, { mode: "live", cause: null, author: null, run_id: "19a2b3c4d5e-30" }),
+    review(31, now - 2 * DAY, { mode: "rule", outcome: "no_call", cause: null, author: null, reason: null, run_id: "19a2b3c4d5e-31" }),
+  ];
+  // The author's decisions, one a day or two, and the review's and the
+  // rule's approvals; the shadow cases of the last two days show their
+  // review in the recent activity.
+  const decisions = [
+    ...shadow.map((r) => ({ at_ms: r.requested_at_ms + MIN, approval_id: r.approval_id, approve: true, by: "author" })),
+    { at_ms: now - 3 * HOUR + MIN, approval_id: id(30), approve: true, by: "review" },
+    { at_ms: now - 2 * DAY + MIN, approval_id: id(31), approve: true, by: "rule" },
+  ];
+  const script = join(tmp, "auto.json");
+  writeFileSync(script, JSON.stringify({ now_ms: now, reviews: [...shadow, ...auto], auto_approval: true, decisions }));
+  execFileSync(orchestratorFixture, [officinaHome, script], { stdio: ["ignore", "ignore", "inherit"] });
+  const env = { SYSTEMROOT: process.env.SYSTEMROOT ?? "", USERPROFILE: home, HOME: home, OFFICINA_HOME: officinaHome };
+  const run = spawnSync(officina, ["relay", "--json"], { env, encoding: "utf8" });
+  if (run.status !== 0) throw new Error(`${name}: officina relay exited ${run.status}: ${run.stderr}`);
+  const printed = JSON.parse(run.stdout);
+  const checks = [
+    [printed.auto.approval_on, "auto approval on"],
+    [printed.auto.stats.gate && printed.auto.stats.rule_offer, "the gate and the rule offer"],
+    [printed.auto.stats.rule_diff === 1, "one case where review and rule differ"],
+    [printed.auto.runs.length === 2, "two auto-approved runs"],
+    [printed.recent.some((e) => e.review !== null), "a decision showing its review"],
+    [!run.stdout.includes("The dry run changed one host"), "no review's reason"],
+  ];
+  for (const [held, what] of checks) {
+    if (!held) throw new Error(`${name}: expected ${what}: ${run.stdout}`);
+  }
+  writeFixture(name, "relay", run.stdout);
+  rmSync(tmp, { recursive: true, force: true });
+  console.log(`fixture ${name}: exit ${run.status}`);
+}
+
 // D-181: every fixture file and its kind, for the loader the specs and the
 // Vitest cases share (`e2e/fixture-index.ts`).
 writeFileSync(join(outDir, "index.json"), JSON.stringify({ files: fixtureKinds }, null, 2) + "\n");

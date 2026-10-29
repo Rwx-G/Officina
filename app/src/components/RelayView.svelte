@@ -1,14 +1,16 @@
 <script lang="ts">
   // The Relay view (AD-35, FR-10): the stop toggle, the pending change with
   // its Approve button, the floor's issues, the approved catalogue, the
-  // recent activity and the journal's own diagnostics. Approvals of `human`
-  // actions are not here: they are decided on their cards in Needs you.
+  // `auto` class's section, the recent activity and the journal's own
+  // diagnostics. Approvals of `human` and `auto` actions are not here: they
+  // are decided on their cards in Needs you.
   // Every text is rendered as text.
   import { fadeMotion } from "../lib/motion";
   import { isPointerClick } from "../lib/pointer";
   import type { RelayStore } from "../lib/relay.svelte";
   import { ANOMALY_TEXT, RELAY_TOGGLE_TEXT, issueSubject } from "../lib/relay-text";
   import { clock, hours } from "../lib/time";
+  import AutoSection from "./AutoSection.svelte";
   import CatalogueTable from "./CatalogueTable.svelte";
   import PendingCatalogue from "./PendingCatalogue.svelte";
   import RecentActivity from "./RecentActivity.svelte";
@@ -22,6 +24,14 @@
 
   let relay = $derived(store.relay);
   let open = $derived(relay?.anomalies.filter((a) => !a.acknowledged).length ?? 0);
+  /** The `auto` section shows once the approved catalogue holds an `auto`
+   *  action, or while something of the class remains to see. */
+  let hasAuto = $derived(
+    relay !== null &&
+      (Object.values(relay.catalogue?.actions ?? {}).some((action) => action?.class === "auto") ||
+        relay.auto.approval_on ||
+        relay.auto.runs.length > 0),
+  );
 </script>
 
 <main class="relay-view" data-testid="relay-view" in:fadeMotion|global>
@@ -139,6 +149,10 @@
         <p class="muted" data-testid="catalogue-none">Nothing is approved: <code>officina run</code> refuses every action.</p>
       {/if}
     </section>
+
+    {#if hasAuto}
+      <AutoSection {store} auto={relay.auto} {nowMs} />
+    {/if}
 
     <section class="block" data-testid="relay-recent" aria-labelledby="relay-recent-title">
       <h2 id="relay-recent-title">Recent activity</h2>

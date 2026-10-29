@@ -2,7 +2,8 @@
 //! row per request with its baseline and reason, the author's decision
 //! copied onto it, an expiry left as no decision; driven through the
 //! window's review tick without a `review` thread, so every request
-//! escalates before any call.
+//! escalates before any call. Story 5.14: the switches under the shadow
+//! gate, the mark that takes approval back, and runs linked to their row.
 
 mod common;
 
@@ -10,12 +11,17 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use common::TestHome;
-use officina_core::registry::types::{AuthorDecision, AuthorReason, ReviewMode, ReviewOutcome};
+use officina_core::registry::types::{
+    AuthorDecision, AuthorReason, ReviewMode, ReviewOutcome, Source,
+};
 use officina_core::relay::approvals::{
     ApprovalRequest, KeyInputs, PENDING_MS, request_id, request_key,
 };
-use officina_core::relay::auto::{EscalationCause, ReviewDecision};
-use officina_core::relay::journal::JournalEntry;
+use officina_core::relay::auto::{
+    AutoMode, AutoOffReason, EscalationCause, ReviewDecision, STATS_WINDOW_MS,
+};
+use officina_core::relay::catalogue::ActionClass;
+use officina_core::relay::journal::{AutoApprovalSet, JournalEntry, RunStarted};
 use officina_host::files::now_ms;
 use officina_host::registry::review::NewReview;
 use officina_host::registry::store::open_reader;
@@ -24,6 +30,7 @@ use officina_host::relay::approvals;
 use officina_host::relay::authority::{approve_catalogue, decide_approval};
 use officina_host::relay::home::{RelayHome, load_relay_floor};
 use officina_host::relay::journal::read_recent;
+use officina_host::relay::review::link_runs;
 use officina_host::relay::review::{ReviewEnv, Reviews};
 use officina_host::spawn::BaseEnv;
 
@@ -158,8 +165,8 @@ fn an_escalated_request_gets_one_row_and_its_line() {
     assert!(tick(&mut reviews, &relay, &mut registry));
     assert!(!tick(&mut reviews, &relay, &mut registry));
     assert_eq!(
-        reviews.escalations().get(&id),
-        Some(&EscalationCause::ClaudeNotFound)
+        reviews.escalations().get(&id).map(|e| (e.cause, e.mode)),
+        Some((EscalationCause::ClaudeNotFound, ReviewMode::Shadow))
     );
     drop(registry);
     let found = rows(relay.officina_home());
@@ -230,4 +237,278 @@ fn expiry_is_not_a_decision() {
     assert_eq!(found[0].approval_id, id);
     assert_eq!(found[0].author_decision, None);
     assert!(found.iter().all(|r| r.approval_id != expired));
+}
+
+/// One row of `mode` for request `approval_id`, requested `ago` ms ago:
+/// an answered `approve` whose baseline held.
+fn review(approval_id: &str, mode: ReviewMode, ago: i64) -> NewReview {
+    let at = now_ms() - ago;
+    NewReview {
+        approval_id: approval_id.into(),
+        request_key: "ab".into(),
+        project: "lab".into(),
+        action: "apply".into(),
+        requested_at_ms: at,
+        mode,
+        outcome: ReviewOutcome::Answered,
+        cause: (mode == ReviewMode::Shadow).then_some(EscalationCause::AutoApprovalOff),
+        decision: Some(ReviewDecision::Approve),
+        reason: Some("The dry run passed.".into()),
+        rule_baseline: true,
+        call_started_at_ms: Some(at),
+        duration_ms: Some(800),
+        input_tokens: None,
+        output_tokens: None,
+        cost_microusd: None,
+    }
+}
+
+/// `n` clean shadow cases: answered approve, the author approving too.
+fn clean_cases(registry: &mut WindowRegistry, n: usize) {
+    for i in 0..n {
+        let id = registry
+            .insert_review(&review(&format!("shadow-{i}"), ReviewMode::Shadow, 60_000))
+            .unwrap();
+        registry.copy_author_decision(id, AuthorDecision::Approved, None, now_ms() - 30_000);
+    }
+}
+
+fn auto_lines(relay: &RelayHome) -> Vec<AutoApprovalSet> {
+    read_recent(relay, now_ms())
+        .0
+        .into_iter()
+        .filter_map(|line| match line.entry {
+            JournalEntry::AutoApprovalSet(set) => Some(set),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Story 5.14 AC 2 (AD-88): turning auto approval on is refused while the
+/// gate does not hold; 19 clean cases are not enough, 20 are.
+#[test]
+fn turning_on_is_refused_without_the_gate() {
+    let home = TestHome::new();
+    let relay = relay(&home);
+    let mut registry = open(&relay);
+    clean_cases(&mut registry, 19);
+    let refused = registry.set_auto_approval(true, now_ms()).unwrap_err();
+    assert!(
+        refused.message.contains("20 shadow reviews"),
+        "{}",
+        refused.message
+    );
+    assert!(!registry.auto_state().approval.on);
+    clean_cases(&mut registry, 1);
+    let state = registry.set_auto_approval(true, now_ms()).unwrap();
+    assert!(state.approval.on);
+    assert_eq!(state.approval_src, Some(Source::Author));
+}
+
+/// Story 5.14 AC 2 (AD-88): the gate is judged when the writer writes, not
+/// when the window showed it: a disagreement since then refuses.
+#[test]
+fn turning_on_is_refused_when_the_gate_broke_since_display() {
+    let home = TestHome::new();
+    let relay = relay(&home);
+    let mut registry = open(&relay);
+    clean_cases(&mut registry, 20);
+    assert!(
+        registry
+            .writer()
+            .unwrap()
+            .shadow_stats(now_ms())
+            .unwrap()
+            .gate
+    );
+    let id = registry
+        .insert_review(&review("refused-later", ReviewMode::Shadow, 60_000))
+        .unwrap();
+    registry.copy_author_decision(
+        id,
+        AuthorDecision::Rejected,
+        Some(AuthorReason::ShouldNotRun),
+        now_ms(),
+    );
+    assert!(registry.set_auto_approval(true, now_ms()).is_err());
+    assert!(!registry.auto_state().approval.on);
+}
+
+/// Story 5.14 AC 2 (AD-88): off is always allowed, without any case.
+#[test]
+fn off_is_always_allowed() {
+    let home = TestHome::new();
+    let relay = relay(&home);
+    let mut registry = open(&relay);
+    let state = registry.set_auto_approval(false, now_ms()).unwrap();
+    assert!(!state.approval.on);
+    assert_eq!(state.approval_src, Some(Source::Author));
+    assert_eq!(state.approval.reason, None);
+}
+
+/// Story 5.14 AC 2 (D-162): rule mode needs the rule offer, review mode
+/// never does; the mode reads back as stored text.
+#[test]
+fn rule_mode_needs_the_rule_offer() {
+    let home = TestHome::new();
+    let relay = relay(&home);
+    let mut registry = open(&relay);
+    clean_cases(&mut registry, 19);
+    let refused = registry
+        .set_auto_mode(AutoMode::Rule, now_ms())
+        .unwrap_err();
+    assert!(refused.message.contains("rule mode"), "{}", refused.message);
+    assert_eq!(
+        registry
+            .set_auto_mode(AutoMode::Review, now_ms())
+            .unwrap()
+            .mode,
+        AutoMode::Review
+    );
+    clean_cases(&mut registry, 1);
+    assert_eq!(
+        registry
+            .set_auto_mode(AutoMode::Rule, now_ms())
+            .unwrap()
+            .mode,
+        AutoMode::Rule
+    );
+    drop(registry);
+    let reader = open_reader(relay.officina_home(), &[]).unwrap();
+    assert_eq!(reader.auto_state().unwrap().mode, AutoMode::Rule);
+}
+
+/// A live approval of request `approval_id` and the run `officina run`
+/// started from it, journaled; the run's id.
+fn live_run(relay: &RelayHome, registry: &mut WindowRegistry, approval_id: &str) -> String {
+    registry
+        .insert_review(&review(approval_id, ReviewMode::Live, 60_000))
+        .unwrap();
+    let run_id = format!("run-{approval_id}");
+    let started = JournalEntry::RunStarted(RunStarted {
+        run_id: run_id.clone(),
+        project: "lab".into(),
+        session_id: None,
+        action: "apply".into(),
+        class: ActionClass::Auto,
+        params: BTreeMap::new(),
+        argv: Vec::new(),
+        method: None,
+        url: None,
+        credential: None,
+        catalogue_hash: "00".into(),
+        approval_id: Some(approval_id.into()),
+        tree: None,
+        timeout_s: Some(60),
+    });
+    officina_host::relay::journal::append(relay, &[started], now_ms()).unwrap();
+    run_id
+}
+
+/// Story 5.14 AC 5 (AD-88): a run started from a review's approval links
+/// to its row through `run_started.approval_id`; one from no review links
+/// nothing.
+#[test]
+fn runs_link_to_their_review_through_the_approval_id() {
+    let home = TestHome::new();
+    let relay = relay(&home);
+    let mut registry = open(&relay);
+    let run_id = live_run(&relay, &mut registry, "0123456789abcdef-7");
+    let shadow = registry
+        .insert_review(&review("0123456789abcdef-8", ReviewMode::Shadow, 60_000))
+        .unwrap();
+    link_runs(&relay, &mut registry, now_ms());
+    drop(registry);
+    let found = rows(relay.officina_home());
+    let row = |id: &str| found.iter().find(|r| r.approval_id == id).unwrap();
+    assert_eq!(
+        row("0123456789abcdef-7").run_id.as_deref(),
+        Some(run_id.as_str())
+    );
+    assert_eq!(found.iter().find(|r| r.id == shadow).unwrap().run_id, None);
+}
+
+/// Story 5.14 AC 5 (AD-88, FR-9, D-141): "should not have run" stamps the
+/// run's row, turns approval off with its reason, sets the mode back to
+/// `review`, and is refused for a run no review approved or a second time.
+#[test]
+fn a_mark_turns_approval_off_and_resets_the_mode() {
+    let home = TestHome::new();
+    let relay = relay(&home);
+    let mut registry = open(&relay);
+    clean_cases(&mut registry, 20);
+    registry.set_auto_approval(true, now_ms()).unwrap();
+    registry.set_auto_mode(AutoMode::Rule, now_ms()).unwrap();
+    let run_id = live_run(&relay, &mut registry, "0123456789abcdef-7");
+    assert!(
+        registry
+            .mark_should_not_have_run(&run_id, now_ms())
+            .is_err(),
+        "not linked yet"
+    );
+    link_runs(&relay, &mut registry, now_ms());
+    let state = registry
+        .mark_should_not_have_run(&run_id, now_ms())
+        .unwrap();
+    assert!(!state.approval.on);
+    assert_eq!(state.approval.reason, Some(AutoOffReason::ShouldNotHaveRun));
+    assert_eq!(state.approval_src, Some(Source::Author));
+    assert_eq!(state.mode, AutoMode::Review);
+    let again = registry
+        .mark_should_not_have_run(&run_id, now_ms())
+        .unwrap_err();
+    assert!(
+        again.message.contains("already marked"),
+        "{}",
+        again.message
+    );
+    assert!(
+        registry
+            .mark_should_not_have_run("run-of-no-review", now_ms())
+            .is_err()
+    );
+    drop(registry);
+    let found = rows(relay.officina_home());
+    assert!(
+        found
+            .iter()
+            .any(|r| r.run_id.as_deref() == Some(run_id.as_str()) && r.marked_at_ms.is_some())
+    );
+}
+
+/// Story 5.14 AC 5 (AD-88): a mark is a disagreement for 30 days, so
+/// turning approval on again needs the gate to hold again.
+#[test]
+fn a_mark_is_a_disagreement_for_30_days() {
+    let home = TestHome::new();
+    let relay = relay(&home);
+    let mut registry = open(&relay);
+    clean_cases(&mut registry, 25);
+    registry.set_auto_approval(true, now_ms()).unwrap();
+    let run_id = live_run(&relay, &mut registry, "0123456789abcdef-7");
+    link_runs(&relay, &mut registry, now_ms());
+    registry
+        .mark_should_not_have_run(&run_id, now_ms())
+        .unwrap();
+    let stats = registry.writer().unwrap().shadow_stats(now_ms()).unwrap();
+    assert_eq!((stats.cases, stats.disagreements), (25, 1));
+    assert!(registry.set_auto_approval(true, now_ms()).is_err());
+    let later = now_ms() + STATS_WINDOW_MS + 1;
+    let stats = registry.writer().unwrap().shadow_stats(later).unwrap();
+    assert_eq!(
+        stats.disagreements, 0,
+        "the mark leaves the window after 30 days"
+    );
+}
+
+/// Story 5.14 AC 2: each change the window makes is journaled
+/// `auto_approval_set` by the collector; the registry's writer journals
+/// nothing itself.
+#[test]
+fn the_writer_journals_nothing_itself() {
+    let home = TestHome::new();
+    let relay = relay(&home);
+    let mut registry = open(&relay);
+    registry.set_auto_approval(false, now_ms()).unwrap();
+    assert!(auto_lines(&relay).is_empty());
 }

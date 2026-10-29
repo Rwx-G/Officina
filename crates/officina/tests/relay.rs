@@ -375,6 +375,125 @@ fn unreadable_home_exits_1() {
     assert!(String::from_utf8_lossy(&out.stderr).contains("no Officina home"));
 }
 
+/// The reason the seeded reviews give, searched where it must not be.
+const REASON_MARKER: &str = "REVIEW-REASON-MARKER-5e1d";
+
+/// Seeds the registry as a window would leave it: `cases` shadow reviews
+/// the author approved, each with its journaled decision, and auto
+/// approval on in mode `review`; then closes it.
+fn seed_auto(env: &TestEnv, cases: usize) {
+    use officina_core::registry::types::{
+        AuthorDecision, ReviewMode, ReviewOutcome, SettingKey, Source,
+    };
+    use officina_core::relay::approvals::ApprovalBy;
+    use officina_core::relay::auto::{EscalationCause, ReviewDecision};
+    use officina_core::relay::journal::ApprovalEvent;
+    use officina_host::registry::review::NewReview;
+    use officina_host::registry::store::{WriterOpen, open_writer};
+    let now = now_ms();
+    let WriterOpen::Writable { mut writer, .. } = open_writer(&env.officina_home(), &[], now)
+    else {
+        panic!("the registry did not open writable");
+    };
+    let mut lines = Vec::new();
+    for i in 0..cases {
+        let approval_id = format!("0123456789abcdef-{i}");
+        let at = now - 120_000;
+        let id = writer
+            .insert_review(&NewReview {
+                approval_id: approval_id.clone(),
+                request_key: "ab".into(),
+                project: "lab".into(),
+                action: "probe".into(),
+                requested_at_ms: at,
+                mode: ReviewMode::Shadow,
+                outcome: ReviewOutcome::Answered,
+                cause: Some(EscalationCause::AutoApprovalOff),
+                decision: Some(ReviewDecision::Approve),
+                reason: Some(format!("{REASON_MARKER} the dry run passed")),
+                rule_baseline: true,
+                call_started_at_ms: Some(at),
+                duration_ms: Some(1),
+                input_tokens: None,
+                output_tokens: None,
+                cost_microusd: None,
+            })
+            .unwrap();
+        writer
+            .copy_author_decision(id, AuthorDecision::Approved, None, now - 60_000)
+            .unwrap();
+        lines.push(JournalEntry::ApprovalGiven(ApprovalEvent {
+            approval_id,
+            request_key: "ab".into(),
+            project: Some("lab".into()),
+            action: Some("probe".into()),
+            dry_run: None,
+            by: Some(ApprovalBy::Author),
+            reason: None,
+        }));
+    }
+    writer
+        .set_setting(
+            SettingKey::AutoApproval,
+            r#"{"on":true}"#,
+            Source::Author,
+            now,
+        )
+        .unwrap();
+    drop(writer);
+    append(&env.relay_home(), &lines, now - 60_000).unwrap();
+}
+
+/// Story 5.14 AC 7 (AD-92, D-82): `officina relay --json` prints the
+/// `auto` section with the window closed, reading the registry read-only:
+/// approval and mode, the gate's counts and bound, the decisions per day,
+/// and each decision's review, its decision and baseline.
+#[test]
+fn prints_the_auto_section_with_the_window_closed() {
+    use officina_core::relay::auto::{AutoMode, GATE_CASES, ReviewDecision};
+    let env = approved_env();
+    seed_auto(&env, usize::try_from(GATE_CASES).unwrap());
+    let shown = view(&env);
+    let auto = &shown.auto;
+    assert!(auto.approval_on);
+    assert_eq!(auto.mode, AutoMode::Review);
+    assert_eq!(auto.stats.cases, GATE_CASES);
+    assert!(auto.stats.gate);
+    assert_eq!(
+        auto.stats.false_approve_bound_percent,
+        Some(300.0 / f64::from(GATE_CASES))
+    );
+    assert_eq!(auto.decisions.last().map(|d| d.author), Some(GATE_CASES));
+    let reviewed: Vec<_> = shown
+        .recent
+        .iter()
+        .filter_map(|e| e.review.as_ref())
+        .collect();
+    assert_eq!(reviewed.len(), usize::try_from(GATE_CASES).unwrap());
+    assert!(
+        reviewed
+            .iter()
+            .all(|r| r.decision == Some(ReviewDecision::Approve) && r.rule_baseline)
+    );
+    let fresh = view(&TestEnv::new());
+    assert!(!fresh.auto.approval_on && fresh.auto.stats.cases == 0);
+}
+
+/// Story 5.14 AC 7 (D-143, review F17): every session can run `officina
+/// relay --json`, so it never prints a review's reason, which the window
+/// shows once the author decided.
+#[test]
+fn relay_json_never_prints_a_review_reason() {
+    let env = approved_env();
+    seed_auto(&env, 2);
+    let out = relay_json(&env);
+    assert_eq!(out.status.code(), Some(0));
+    let printed = String::from_utf8_lossy(&out.stdout);
+    assert!(printed.contains("\"rule_baseline\""), "positive control");
+    assert!(!printed.contains(REASON_MARKER), "{printed}");
+    assert!(!String::from_utf8_lossy(&out.stderr).contains(REASON_MARKER));
+}
+
 #[test]
 fn relay_json_writes_nothing() {
     let env = approved_env();

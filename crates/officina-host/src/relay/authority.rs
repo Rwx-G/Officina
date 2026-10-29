@@ -14,8 +14,12 @@ use officina_core::registry::types::AuthorReason;
 use officina_core::relay::StopFlag;
 use officina_core::relay::approvals::{
     ApprovalBy, DecideRefusal, Decision, FileKind, decidable, file_name, reason_fits,
+    review_decidable,
 };
-use officina_core::relay::catalogue::{ApprovedCatalogue, KnownProjects};
+use officina_core::relay::auto::{ReviewRecord, approvals_in_hour};
+use officina_core::relay::catalogue::{
+    ApprovedCatalogue, DEFAULT_AUTO_MAX_PER_HOUR, KnownProjects,
+};
 use officina_core::relay::journal::{ApprovalEvent, CatalogueApproved, JournalEntry};
 use officina_core::relay::record::{
     DecisionRecord, RecordState, RecordedDecision, Verdict, holds_decisions, record_anomaly_key,
@@ -312,6 +316,82 @@ pub fn decide_approval(
         &home.approvals_dir().join(file_name(id, kind)),
         &Decision::by_author(now, &request.request_key, reason),
     )?;
+    journal
+        .append(&[line], now)
+        .map_err(|e| AuthorityError::Journal(e.to_string()))
+}
+
+/// Records the approval of `auto` request `id` by its review, or by the
+/// rule when `by_rule` (AD-21 as amended, AD-86, D-141, D-157): under the
+/// journal lock, the request must still be pending, undecided and rebuild
+/// as an `auto` action of the approved catalogue (a catalogue changed
+/// during the review refuses it); its action's review approvals of the
+/// last hour in `rows`, the request's own row left out, must be under its
+/// `auto_max_per_hour` (review F15); then the decision marker is claimed
+/// with `create_new`, so an author decision already made wins
+/// (`already_decided`), the window's record takes it, `<id>.approved.json`
+/// is written with `by` and `review_id`, and `approval_given` is journaled
+/// with `by`.
+pub fn record_review_approval(
+    home: &RelayHome,
+    id: &str,
+    by_rule: bool,
+    review_id: i64,
+    rows: &[ReviewRecord],
+) -> Result<(), AuthorityError> {
+    let journal = JournalLock::acquire(home).map_err(|e| AuthorityError::Journal(e.to_string()))?;
+    let files = approvals::read_files(home);
+    let sources = ContextSources::read(home);
+    let ctx = sources.context();
+    let now = now_ms();
+    let (request, _) = review_decidable(&files, &ctx, id, now).map_err(AuthorityError::Decide)?;
+    let max_per_hour = ctx
+        .approved
+        .and_then(|approved| approved.canonical.actions.get(&request.action))
+        .and_then(|action| action.auto_max_per_hour)
+        .unwrap_or(DEFAULT_AUTO_MAX_PER_HOUR);
+    if approvals_in_hour(rows, &request.project, &request.action, now) >= max_per_hour as usize {
+        return Err(AuthorityError::Decide(DecideRefusal::HourlyCap(
+            id.to_owned(),
+        )));
+    }
+    let claimed = approvals::claim_decision(home, id).map_err(|e| AuthorityError::Write {
+        path: home.approvals_dir().display().to_string(),
+        error: e.to_string(),
+    })?;
+    if !claimed {
+        return Err(AuthorityError::Decide(DecideRefusal::Decided(
+            id.to_owned(),
+        )));
+    }
+    let by = if by_rule {
+        ApprovalBy::Rule
+    } else {
+        ApprovalBy::Review
+    };
+    update_record(home, now, |record| {
+        record.decided.insert(
+            id.to_owned(),
+            RecordedDecision {
+                verdict: Verdict::Approved,
+                request_key: request.request_key.clone(),
+                at_ms: now,
+            },
+        );
+    })?;
+    write_json(
+        &home.approvals_dir().join(file_name(id, FileKind::Approved)),
+        &Decision::by_review(now, &request.request_key, by, review_id),
+    )?;
+    let line = JournalEntry::ApprovalGiven(ApprovalEvent {
+        approval_id: id.to_owned(),
+        request_key: request.request_key.clone(),
+        project: Some(request.project.clone()),
+        action: Some(request.action.clone()),
+        dry_run: None,
+        by: Some(by),
+        reason: None,
+    });
     journal
         .append(&[line], now)
         .map_err(|e| AuthorityError::Journal(e.to_string()))

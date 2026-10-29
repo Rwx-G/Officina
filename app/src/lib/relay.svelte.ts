@@ -1,5 +1,6 @@
 // The relay's state in the window (AD-35): the last relay view, and the
 // outcome of the author's approve and stop clicks.
+import type { AutoMode } from "./generated/AutoMode";
 import type { CanonicalAction } from "./generated/CanonicalAction";
 import type { FieldChange } from "./generated/FieldChange";
 import type { ModelAlias } from "./generated/ModelAlias";
@@ -76,6 +77,10 @@ export class RelayStore {
   stopError = $state<string | null>(null);
   acknowledging = $state<Record<string, boolean>>({});
   anomalyError = $state<string | null>(null);
+  /** An `auto` switch or mark is on its way. */
+  autoBusy = $state(false);
+  /** Why the last `auto` switch or mark was refused, if it was. */
+  autoError = $state<string | null>(null);
 
   pending = $derived(this.relay?.pending ?? null);
   stopped = $derived(this.relay?.stopped ?? false);
@@ -120,6 +125,38 @@ export class RelayStore {
       this.anomalyError = ipc.errorMessage(error);
     } finally {
       this.acknowledging = { ...this.acknowledging, [key]: false };
+    }
+  }
+
+  /** Turns auto approval on or off (AD-88). On is sent on a pointer click
+   *  only, by the caller (D-28); the backend refuses it without the gate. */
+  async setAutoApproval(on: boolean): Promise<void> {
+    await this.autoCommand(() => ipc.setAutoApproval(on));
+  }
+
+  /** Sets auto approval's mode (D-162). */
+  async setAutoMode(mode: AutoMode): Promise<void> {
+    await this.autoCommand(() => ipc.setAutoMode(mode));
+  }
+
+  /** Marks run `runId` "should not have run" (AD-88, FR-9), on a pointer
+   *  click only, by the caller. */
+  async markShouldNotHaveRun(runId: string): Promise<void> {
+    await this.autoCommand(() => ipc.markShouldNotHaveRun(runId));
+  }
+
+  /** One `auto` command at a time; its refusal kept to show. The next
+   *  relay view shows what changed. */
+  private async autoCommand(command: () => Promise<void>): Promise<void> {
+    if (this.autoBusy) return;
+    this.autoBusy = true;
+    this.autoError = null;
+    try {
+      await command();
+    } catch (error) {
+      this.autoError = ipc.errorMessage(error);
+    } finally {
+      this.autoBusy = false;
     }
   }
 

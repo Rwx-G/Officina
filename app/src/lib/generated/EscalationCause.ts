@@ -5,4 +5,4 @@
  * causes checked before any call, in their order, then what a call
  * came to. Recorded on the review row and in `auto_escalated`.
  */
-export type EscalationCause = "claude_not_found" | "claude_shim" | "workdir_not_empty" | "no_session_id" | "no_excerpts" | "quota_high" | "hourly_cap" | "budget_spent" | "review_config_invalid" | "call_failed" | "call_timeout" | "invalid_answer" | "review_rejected" | "review_escalated" | "auto_approval_off";
+export type EscalationCause = "claude_not_found" | "claude_shim" | "workdir_not_empty" | "no_session_id" | "no_excerpts" | "quota_high" | "hourly_cap" | "budget_spent" | "review_config_invalid" | "call_failed" | "call_timeout" | "invalid_answer" | "review_rejected" | "review_escalated" | "auto_approval_off" | "rule_baseline_false" | "approval_refused";

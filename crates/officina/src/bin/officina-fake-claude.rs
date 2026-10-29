@@ -65,7 +65,8 @@
 //! names (`escalate` without one) with the reason `REVIEW_REASON`;
 //! `review-garbage` prints prose; `review-extra-field` adds an argument
 //! vector to the answer; `review-exit1` fails; `review-hang` sleeps
-//! `hang_ms`. A triage call in those modes (its schema names verdicts) is
+//! `hang_ms`; `review-slow` sleeps `hang_ms`, then answers as `review`
+//! (story 5.14). A triage call in those modes (its schema names verdicts) is
 //! answered in the triage mode `triage_mode` names. Any other call
 //! answers as `ok`.
 
@@ -398,6 +399,16 @@ fn review(mode: &str, args: &[String]) {
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(60_000);
             std::thread::sleep(Duration::from_millis(ms));
+        }
+        "review-slow" => {
+            let ms = setting("hang_ms")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(60_000);
+            std::thread::sleep(Duration::from_millis(ms));
+            println!(
+                "{}",
+                result_with(serde_json::json!({"decision": decision, "reason": REVIEW_REASON}))
+            );
         }
         _ => println!(
             "{}",

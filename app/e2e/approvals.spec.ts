@@ -170,6 +170,31 @@ test.describe("auto requests", () => {
     await expect(page.locator(`[data-id="${human.id}"]`).getByTestId("approval-escalation")).toHaveCount(0);
   });
 
+  // Story 5.14 AC 8 (D-157, D-564): while its live review runs, the card
+  // holds no button, says so in the buttons' place and keeps its height; it
+  // is not counted as waiting.
+  test("a reviewing request shows no buttons", async ({ page }) => {
+    await openBoard(page, autoBoard);
+    const card = autoCard(page);
+    await expect(card.getByTestId("approve")).toBeVisible();
+    const before = await card.boundingBox();
+    const reviewing = {
+      ...autoBoard,
+      approvals: autoBoard.approvals.map((a) => (a.id === auto.id ? { ...a, state: "reviewing" as const } : a)),
+      waiting_count: autoBoard.waiting_count - 1,
+    };
+    await page.evaluate((b) => window.__officinaPushBoard?.(b), reviewing);
+    await expect(card.getByTestId("approval-reviewing")).toBeVisible();
+    await expect(card.getByTestId("approve")).toHaveCount(0);
+    await expect(card.getByTestId("reject")).toHaveCount(0);
+    await expect(card.getByTestId("approval-escalation")).toHaveCount(0);
+    const after = await card.boundingBox();
+    expect(Math.abs(after!.height - before!.height)).toBeLessThanOrEqual(0.5);
+    await card.focus();
+    await page.keyboard.press("Enter");
+    expect((await calls(page)).filter((c) => c.cmd === "decide_approval")).toEqual([]);
+  });
+
   for (const theme of ["light", "dark"] as const) {
     test(`the approval card is the same in both themes but for its tokens (${theme})`, async ({ page }) => {
       await page.emulateMedia({ colorScheme: theme });

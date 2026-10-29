@@ -15,7 +15,7 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::time::{Duration, Instant};
 
-use officina_core::dates::{event_file_name, event_files_to_read};
+use officina_core::dates::{DAY_MS, event_file_name, event_files_to_read};
 use officina_core::relay::journal::{
     JournalEntry, JournalLine, ParsedLine, is_expired_journal_file, parse_line, spill_file_name,
     spilled_day_file,
@@ -182,6 +182,23 @@ pub fn prune(home: &RelayHome, now_ms: i64) -> usize {
 /// line of another version and a line of a `kind` this version does not
 /// know are skipped without being counted.
 pub fn read_recent(home: &RelayHome, now_ms: i64) -> (Vec<JournalLine>, u32) {
+    read_named(home, &event_files_to_read(now_ms))
+}
+
+/// The journal lines of the last `days` UTC days, today included, read as
+/// [`read_recent`] reads its two: what the Relay view's decisions per day
+/// count (AD-92).
+pub fn read_days(home: &RelayHome, now_ms: i64, days: i64) -> (Vec<JournalLine>, u32) {
+    let names: Vec<String> = (0..days)
+        .rev()
+        .map(|back| event_file_name(now_ms - back * DAY_MS))
+        .collect();
+    read_named(home, &names)
+}
+
+/// The lines of the day files `day_files`, each followed by its spill
+/// files, with the count of lines that could not be read.
+fn read_named(home: &RelayHome, day_files: &[String]) -> (Vec<JournalLine>, u32) {
     let dir = home.journal_dir();
     let mut spills: Vec<(String, String)> = fs::read_dir(&dir)
         .map(|entries| {
@@ -197,10 +214,10 @@ pub fn read_recent(home: &RelayHome, now_ms: i64) -> (Vec<JournalLine>, u32) {
     spills.sort();
     let mut lines = Vec::new();
     let mut corrupt = 0u32;
-    for day_file in event_files_to_read(now_ms) {
+    for day_file in day_files {
         let of_the_day = spills
             .iter()
-            .filter(|(day, _)| *day == day_file)
+            .filter(|(day, _)| day == day_file)
             .map(|(_, name)| name.as_str());
         for name in std::iter::once(day_file.as_str()).chain(of_the_day) {
             read_file(&dir.join(name), &mut lines, &mut corrupt);

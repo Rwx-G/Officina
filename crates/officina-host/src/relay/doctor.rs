@@ -45,10 +45,10 @@ use super::tree::TreeError;
 use super::{journal, tree};
 use crate::doctor::{Check, Level, check};
 use crate::process::{Waited, wait_until};
-use crate::registry::review::ReviewRow;
+use crate::registry::review::{AutoState, ReviewRow};
 use officina_core::dates::{day_start_ms, utc_date};
 use officina_core::registry::triage_call::{CALLS_PER_DAY, CALLS_PER_HOUR};
-use officina_core::relay::auto::EscalationCause;
+use officina_core::relay::auto::{AutoMode, EscalationCause, shadow_stats};
 
 /// The program the WSL probe runs inside the distro, by absolute path like
 /// the tools it probes (D-6): `test -x <path>` exits 0 when the path is an
@@ -70,9 +70,11 @@ pub struct RelayDoctor<'a> {
     /// `None` off Windows or when it cannot be read.
     pub system_dir: Option<&'a Path>,
     pub now_ms: i64,
-    /// The `auto` review rows of the last day, read-only, when the
-    /// registry could be read (AD-94 part B).
+    /// The `auto` review rows of the statistics' window, read-only, when
+    /// the registry could be read (AD-94 part B).
     pub reviews: Option<&'a [ReviewRow]>,
+    /// Auto approval and its mode, when the registry could be read.
+    pub auto: Option<AutoState>,
 }
 
 /// How one probe call ended.
@@ -245,6 +247,7 @@ fn checks_with(
         checks.extend(review_checks(
             &relay.canonical,
             inputs.reviews,
+            inputs.auto,
             inputs.now_ms,
         ));
         checks.extend(check_listing_checks(&relay.canonical));
@@ -798,11 +801,15 @@ fn auto_action_checks(actions: &BTreeMap<String, CanonicalAction>) -> Vec<Check>
 
 /// AD-94 part B: with an `auto` action in the catalogue, the review's model,
 /// or `review_config_invalid` when `[auto_review]` fails (every `auto`
-/// request then goes to the author), and the reviews and calls of today
-/// against the review's own budget (D-142).
+/// request then goes to the author); auto approval and its mode, the
+/// shadow gate's counts and the rule difference (AD-88, story 5.14); and
+/// the reviews and calls of today against the review's own budget (D-142).
+/// Approval on while the gate no longer holds warns: only a mark or the
+/// author turns it off.
 fn review_checks(
     catalogue: &CanonicalCatalogue,
     reviews: Option<&[ReviewRow]>,
+    auto: Option<AutoState>,
     now_ms: i64,
 ) -> Vec<Check> {
     const TITLE: &str = "relay auto review";
@@ -823,12 +830,41 @@ fn review_checks(
             ),
         )];
     };
-    let mut detail = format!(
-        "model {}; auto approval off: each review runs in shadow and approves nothing",
-        model.code()
-    );
+    let state = auto.unwrap_or_default();
+    let mut detail = format!("model {}; ", model.code());
+    if state.approval.on {
+        detail.push_str(match state.mode {
+            AutoMode::Review => "auto approval on, mode review: a review's approve runs the action",
+            AutoMode::Rule => {
+                "auto approval on, mode rule: the rule baseline decides, no call runs"
+            }
+        });
+    } else {
+        detail.push_str("auto approval off: each review runs in shadow and approves nothing");
+        if let Some(reason) = state.approval.reason {
+            detail.push_str(&format!(" (turned off: {})", reason.code()));
+        }
+    }
+    let mut level = Level::Ok;
     match reviews {
         Some(rows) => {
+            let records: Vec<_> = rows.iter().map(|r| r.auto_row(false).stats()).collect();
+            let stats = shadow_stats(&records, now_ms);
+            detail.push_str(&format!(
+                "; gate {} of {} cases, {} disagreements, review and rule differ in {}{}",
+                stats.cases,
+                stats.gate_cases,
+                stats.disagreements,
+                stats.rule_diff,
+                stats
+                    .false_approve_bound_percent
+                    .map(|bound| format!(", false approvals bounded only to {bound:.0} %"))
+                    .unwrap_or_default()
+            ));
+            if state.approval.on && !stats.gate {
+                level = Level::Warn;
+                detail.push_str("; approval is on while the gate no longer holds");
+            }
             let today = day_start_ms(utc_date(now_ms));
             let reviewed = rows.iter().filter(|r| r.requested_at_ms >= today).count();
             let calls = rows
@@ -841,7 +877,7 @@ fn review_checks(
         }
         None => detail.push_str("; no registry to count its calls in"),
     }
-    vec![check(Level::Ok, TITLE, detail)]
+    vec![check(level, TITLE, detail)]
 }
 
 /// An action naming a check (an `after-check` action, or a `human` action's
@@ -1344,6 +1380,8 @@ mod tests {
             author_decision: None,
             author_reason: None,
             decided_at_ms: None,
+            run_id: None,
+            marked_at_ms: None,
         }
     }
 
@@ -1360,7 +1398,7 @@ mod tests {
             review_row(NOW - 30_000, false),
             review_row(yesterday, true),
         ];
-        let checks = review_checks(&relay.canonical, Some(&rows), NOW);
+        let checks = review_checks(&relay.canonical, Some(&rows), None, NOW);
         assert_eq!(checks.len(), 1);
         assert_eq!(checks[0].level, Level::Ok);
         assert!(
@@ -1375,7 +1413,7 @@ mod tests {
             "{}",
             checks[0].detail
         );
-        let unread = review_checks(&relay.canonical, None, NOW);
+        let unread = review_checks(&relay.canonical, None, None, NOW);
         assert!(
             unread[0].detail.contains("no registry"),
             "{}",
@@ -1383,7 +1421,69 @@ mod tests {
         );
         let human = template_floor(TEMPLATE).replace("class = \"auto\"", "class = \"human\"");
         let none = load(&human, FLOOR_PATH).unwrap();
-        assert!(review_checks(&none.canonical, Some(&rows), NOW).is_empty());
+        assert!(review_checks(&none.canonical, Some(&rows), None, NOW).is_empty());
+    }
+
+    /// Story 5.14 AC 10 (AD-94 part B, AD-88): auto approval and its mode,
+    /// why a mark turned it off, the gate's counts and the rule difference
+    /// join the review line; approval on without the gate warns.
+    #[test]
+    fn auto_state_and_gate_are_reported() {
+        use crate::registry::review::AutoState;
+        use officina_core::registry::types::{AuthorDecision, Source};
+        use officina_core::relay::auto::{
+            AutoApprovalSetting, AutoMode, AutoOffReason, GATE_CASES, ReviewDecision,
+        };
+        const NOW: i64 = 1_793_102_400_000;
+        let relay = load(&template_floor(TEMPLATE), FLOOR_PATH).unwrap();
+        let clean = |at: i64| ReviewRow {
+            decision: Some(ReviewDecision::Approve),
+            rule_baseline: true,
+            author_decision: Some(AuthorDecision::Approved),
+            ..review_row(at, true)
+        };
+        let rows: Vec<ReviewRow> = (0..i64::from(GATE_CASES))
+            .map(|i| clean(NOW - 60_000 - i))
+            .collect();
+        let on = |mode| AutoState {
+            approval: AutoApprovalSetting {
+                on: true,
+                reason: None,
+            },
+            approval_src: Some(Source::Author),
+            mode,
+        };
+        let detail = |rows: &[ReviewRow], state| {
+            let checks = review_checks(&relay.canonical, Some(rows), Some(state), NOW);
+            (checks[0].level, checks[0].detail.clone())
+        };
+        let (level, text) = detail(&rows, on(AutoMode::Rule));
+        assert_eq!(level, Level::Ok, "{text}");
+        assert!(text.contains("auto approval on, mode rule"), "{text}");
+        assert!(
+            text.contains(&format!(
+                "gate {GATE_CASES} of {GATE_CASES} cases, 0 disagreements, review and rule differ in 0, false approvals bounded only to 15 %"
+            )),
+            "{text}"
+        );
+        let (level, text) = detail(&rows[1..], on(AutoMode::Review));
+        assert_eq!(level, Level::Warn, "{text}");
+        assert!(text.contains("mode review"), "{text}");
+        assert!(text.contains("gate no longer holds"), "{text}");
+        let off = AutoState {
+            approval: AutoApprovalSetting {
+                on: false,
+                reason: Some(AutoOffReason::ShouldNotHaveRun),
+            },
+            approval_src: Some(Source::Author),
+            mode: AutoMode::Review,
+        };
+        let (level, text) = detail(&rows, off);
+        assert_eq!(level, Level::Ok);
+        assert!(
+            text.contains("auto approval off: each review runs in shadow and approves nothing (turned off: should_not_have_run)"),
+            "{text}"
+        );
     }
 
     /// Story 5.13 AC 12 (AD-75, D-638): a failing `[auto_review]` fails
@@ -1396,7 +1496,7 @@ mod tests {
         );
         let relay = load(&floor, FLOOR_PATH).unwrap();
         assert_eq!(relay.canonical.auto_review.model, None);
-        let checks = review_checks(&relay.canonical, Some(&[]), 0);
+        let checks = review_checks(&relay.canonical, Some(&[]), None, 0);
         assert_eq!(checks[0].level, Level::Fail);
         assert!(
             checks[0].detail.starts_with("review_config_invalid:"),
@@ -1573,6 +1673,7 @@ mod tests {
             system_dir: None,
             now_ms: 1_793_102_400_000,
             reviews: None,
+            auto: None,
         };
         let floor = dir.path().join("officina.toml");
         std::fs::write(

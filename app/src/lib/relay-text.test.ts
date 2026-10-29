@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanup, render } from "@testing-library/svelte";
-import { activityRow } from "./relay-text";
+import { activityRow, boundText, reviewText } from "./relay-text";
 import RecentActivity from "../components/RecentActivity.svelte";
 import type { RecentEntry } from "./generated/RecentEntry";
 import type { RunFinished } from "./generated/RunFinished";
@@ -18,6 +18,7 @@ function run(
   return {
     ts: NOW - 60_000,
     tone,
+    review: null,
     event: {
       kind: "run",
       state,
@@ -89,6 +90,7 @@ describe("activityRow", () => {
       activityRow({
         ts: NOW,
         tone: "refused",
+        review: null,
         event: {
           kind: "refused",
           project: "lab",
@@ -104,12 +106,61 @@ describe("activityRow", () => {
       activityRow({
         ts: NOW,
         tone: "refused",
+        review: null,
         event: { kind: "gate_denied", project: "lab", session_id: null, deny: "guarded_program", matched: "ssh", command_excerpt: "ssh host01" },
       }),
     ).toMatchObject({ action: "gate", outcome: "denied: guarded program ssh", detail: "ssh host01", tone: "fault" });
     expect(
-      activityRow({ ts: NOW, tone: "failed", event: { kind: "gate_error", session_id: null, cause: "floor_invalid", detail: "line 1" } }),
+      activityRow({
+        ts: NOW,
+        tone: "failed",
+        review: null,
+        event: { kind: "gate_error", session_id: null, cause: "floor_invalid", detail: "line 1" },
+      }),
     ).toMatchObject({ outcome: "gate error: relay floor invalid", detail: "line 1", tone: "fault" });
+  });
+});
+
+// Story 5.14 AC 7 and 8 (D-143): a decision says who gave it and, once the
+// author decided, what its review said; the bound is the payload's.
+describe("auto texts", () => {
+  const decision = (by: "author" | "review" | null, review: RecentEntry["review"]): RecentEntry => ({
+    ts: NOW,
+    tone: null,
+    review,
+    event: {
+      kind: "approval_given",
+      approval_id: "0123456789abcdef-1",
+      request_key: "ab",
+      by,
+    },
+  });
+
+  it("a decision shows its review once the author decided", () => {
+    const review = { mode: "shadow" as const, outcome: "answered" as const, decision: "approve" as const, reason: HOSTILE, rule_baseline: false };
+    expect(activityRow(decision("author", review)).detail).toBe(
+      `0123456789abcdef-1\nreview: approve (rule baseline did not hold): ${HOSTILE}`,
+    );
+    expect(activityRow(decision(null, null)).detail).toBe("0123456789abcdef-1");
+    expect(activityRow(decision("review", null)).outcome).toBe("approved by the review");
+    expect(reviewText({ ...review, decision: null, outcome: "timeout", reason: null })).toBe(
+      "review: timeout (rule baseline did not hold)",
+    );
+  });
+
+  it("states the bound the payload carries, rounded", () => {
+    const stats = {
+      cases: 20,
+      disagreements: 0,
+      rule_diff: 0,
+      gate: true,
+      rule_offer: true,
+      false_approve_bound_percent: 15,
+      gate_cases: 20,
+      rule_diff_percent: 5,
+    };
+    expect(boundText(stats)).toBe("20 clean cases bound the rate of wrong approvals only to about 15 %, not to zero.");
+    expect(boundText({ ...stats, cases: 0, false_approve_bound_percent: null })).toContain("nothing bounds");
   });
 });
 
@@ -122,11 +173,13 @@ describe("RecentActivity", () => {
           {
             ts: NOW,
             tone: "refused",
+            review: null,
             event: { kind: "gate_denied", project: "lab", session_id: null, deny: "dynamic", command_excerpt: HOSTILE },
           },
           {
             ts: NOW,
             tone: "refused",
+            review: null,
             event: {
               kind: "refused",
               session_id: null,

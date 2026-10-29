@@ -54,6 +54,24 @@ project uses [Semantic Versioning](https://semver.org/).
   Doctor reports the review's model, today's requests and calls against
   the budget, and an invalid `[auto_review]` table. The triage call also
   turns the advisor tool off (`CLAUDE_CODE_DISABLE_ADVISOR_TOOL=1`).
+- Letting reviews approve (v0.5, story 5.14): the Relay view's Auto
+  approval section counts the shadow reviews met by the author's decision
+  over 30 days, the disagreements and how often review and rule differ,
+  and states the 3/n bound on wrong approvals. Turning auto approval on is
+  offered only while the gate holds (20 cases, no disagreement), on a
+  pointer click, and the writer refuses it when the gate broke since
+  display. Live mode: a request is `reviewing` (no buttons, not waiting)
+  until its review answers; an approve is recorded by the window's
+  authority (`by = "review"`, the review's id), the hourly cap checked once
+  more, an author decision winning. Rule mode, offered while review and
+  rule differ in under 5 % of the cases: no call, a true baseline approves
+  `by = "rule"`, a false one escalates `rule_baseline_false`. "Should not
+  have run" on an auto-approved run of the last 7 days turns approval off
+  and the mode back to review, and counts as a disagreement for 30 days.
+  Each change is journaled `auto_approval_set`; an approval the authority
+  refuses escalates `approval_refused`. `officina relay --json` prints the
+  section and each decision's review without any reason; doctor reports
+  approval, mode, the gate's counts and the rule difference.
 - `officina doctor` names each issue's table (`template bump`, `action
   apply`), counts valid templates, and lists templates, credentials and the
   review model in a pending change.

@@ -9,11 +9,11 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 use super::approvals::ApprovalBy;
-use super::auto::{EscalationCause, ReviewDecision};
+use super::auto::{AutoMode, AutoOffReason, EscalationCause, ReviewDecision};
 use super::catalogue::ActionClass;
 use super::gate::DenyKind;
 use super::http::HttpMethod;
-use crate::registry::types::{AuthorReason, LaunchOutcome, ReviewMode, ReviewOutcome};
+use crate::registry::types::{AuthorReason, LaunchOutcome, ReviewMode, ReviewOutcome, Source};
 
 /// Version of the journal line format. Readers skip lines of another
 /// version without counting them corrupt.
@@ -137,6 +137,7 @@ pub enum JournalEntry {
     WorkOrderLaunched(WorkOrderLaunched),
     AutoEscalated(AutoEscalated),
     AutoReview(AutoReviewed),
+    AutoApprovalSet(AutoApprovalSet),
 }
 
 closed_enum! {
@@ -159,6 +160,7 @@ closed_enum! {
         WorkOrderLaunched,
         AutoEscalated,
         AutoReview,
+        AutoApprovalSet,
     }
 }
 
@@ -180,6 +182,7 @@ impl JournalEntry {
             JournalEntry::WorkOrderLaunched(_) => JournalKind::WorkOrderLaunched,
             JournalEntry::AutoEscalated(_) => JournalKind::AutoEscalated,
             JournalEntry::AutoReview(_) => JournalKind::AutoReview,
+            JournalEntry::AutoApprovalSet(_) => JournalKind::AutoApprovalSet,
         }
     }
 }
@@ -566,6 +569,18 @@ pub struct AutoReviewed {
     pub decision: Option<ReviewDecision>,
 }
 
+/// Auto approval or its mode changed (AD-88): the state after the change,
+/// who made it (`author`, or `rules` for a change no click made) and, when
+/// a mark turned approval off, why.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AutoApprovalSet {
+    pub on: bool,
+    pub mode: AutoMode,
+    pub src: Source,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<AutoOffReason>,
+}
+
 /// How a reader classifies one raw line.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[allow(clippy::large_enum_variant)] // returned by value and consumed at once, never stored
@@ -691,6 +706,41 @@ mod tests {
                 cause: EscalationCause::NoSessionId,
             }),
             JournalKind::AutoReview => JournalEntry::AutoReview(reviewed()),
+            JournalKind::AutoApprovalSet => JournalEntry::AutoApprovalSet(AutoApprovalSet {
+                on: false,
+                mode: AutoMode::Review,
+                src: Source::Author,
+                reason: Some(AutoOffReason::ShouldNotHaveRun),
+            }),
+        }
+    }
+
+    /// Story 5.14 AC 2 (AD-88): `auto_approval_set` reads back with its
+    /// state, source and reason, for every mode, and leaves out a reason
+    /// it does not have.
+    #[test]
+    fn auto_approval_set_round_trips() {
+        for (on, mode) in [true, false]
+            .into_iter()
+            .flat_map(|on| AutoMode::ALL.iter().map(move |mode| (on, *mode)))
+        {
+            for reason in [None, Some(AutoOffReason::ShouldNotHaveRun)] {
+                let entry = JournalEntry::AutoApprovalSet(AutoApprovalSet {
+                    on,
+                    mode,
+                    src: Source::Author,
+                    reason,
+                });
+                let line = JournalLine::new(4, entry.clone()).to_line();
+                let value: serde_json::Value = serde_json::from_str(&line).unwrap();
+                assert_eq!(value["kind"], "auto_approval_set");
+                assert_eq!(value["mode"], mode.code());
+                assert_eq!(value.get("reason").is_some(), reason.is_some());
+                assert_eq!(
+                    parse_line(line.trim_end()),
+                    ParsedLine::Line(JournalLine::new(4, entry))
+                );
+            }
         }
     }
 

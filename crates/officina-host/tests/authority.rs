@@ -10,17 +10,20 @@ use std::path::Path;
 use common::TestHome;
 use officina_core::ipc::IpcErrorCode;
 use officina_core::quota::normalise_path;
-use officina_core::registry::types::AuthorReason;
+use officina_core::registry::types::{AuthorReason, ReviewOutcome};
 use officina_core::relay::StopFlag;
 use officina_core::relay::approvals::{
     ApprovalBy, ApprovalRequest, DecideRefusal, Decision, FileKind, KeyInputs, PENDING_MS,
     file_name, request_id, request_key,
 };
+use officina_core::relay::auto::{ReviewDecision, ReviewRecord};
+use officina_core::relay::catalogue::DEFAULT_AUTO_MAX_PER_HOUR;
 use officina_core::relay::journal::{ApprovalEvent, CatalogueApproved, JournalEntry};
 use officina_host::files::now_ms;
 use officina_host::relay::approvals;
 use officina_host::relay::authority::{
-    AUTHORITY_MARKER, AuthorityError, approve_catalogue, decide_approval, set_relay_stopped,
+    AUTHORITY_MARKER, AuthorityError, approve_catalogue, decide_approval, record_review_approval,
+    set_relay_stopped,
 };
 use officina_host::relay::home::{ApprovedState, RelayHome, load_relay_floor};
 use officina_host::relay::journal::{JournalLock, read_recent};
@@ -648,6 +651,143 @@ fn a_reviewing_request_cannot_be_decided() {
     assert!(decision_file(&relay, &id, FileKind::Approved).is_none());
     approvals::set_reviewing(&relay, &id, false).unwrap();
     decide_approval(&relay, &id, true, None).unwrap();
+}
+
+// ---- story 5.14: approvals by a review or the rule (AD-86, D-141) ----
+
+/// `n` review approvals of `lab`'s `apply` in the last hour.
+fn approvals_this_hour(n: usize) -> Vec<ReviewRecord> {
+    (0..n)
+        .map(|_| ReviewRecord {
+            project: "lab".into(),
+            action: "apply".into(),
+            requested_at_ms: now_ms() - 60_000,
+            outcome: ReviewOutcome::Answered,
+            decision: Some(ReviewDecision::Approve),
+            call_started_at_ms: Some(now_ms() - 60_000),
+        })
+        .collect()
+}
+
+/// Story 5.14 AC 3 (AD-86): a review's approval of a request it is
+/// reviewing writes `by = "review"` and its row's id, goes into the
+/// window's record, and journals `approval_given` with `by`; the rule's
+/// says `rule`. A `human` request is never a review's to approve.
+#[test]
+fn a_review_approval_says_by_review_with_its_id() {
+    let home = TestHome::new();
+    let relay = auto_relay(&home);
+    let id = write_auto_request(&relay, "web01");
+    approvals::set_reviewing(&relay, &id, true).unwrap();
+    record_review_approval(&relay, &id, false, 42, &[]).unwrap();
+    let approved = decision_file(&relay, &id, FileKind::Approved).unwrap();
+    assert_eq!(
+        (approved.by, approved.review_id.as_deref(), approved.reason),
+        (Some(ApprovalBy::Review), Some("42"), None)
+    );
+    assert!(
+        relay
+            .read_record()
+            .valid()
+            .is_some_and(|record| record.decided.contains_key(&id)),
+        "the window's record holds it, so `officina run` may consume it"
+    );
+    let rule = write_auto_request(&relay, "db01");
+    record_review_approval(&relay, &rule, true, 43, &[]).unwrap();
+    assert_eq!(
+        decision_file(&relay, &rule, FileKind::Approved).unwrap().by,
+        Some(ApprovalBy::Rule)
+    );
+    match decision_lines(&relay).as_slice() {
+        [
+            JournalEntry::ApprovalGiven(review),
+            JournalEntry::ApprovalGiven(by_rule),
+        ] => {
+            assert_eq!(review.by, Some(ApprovalBy::Review));
+            assert_eq!(by_rule.by, Some(ApprovalBy::Rule));
+        }
+        other => panic!("{other:?}"),
+    }
+    let (human, _) = write_request(&relay, "web01", 1_000);
+    assert!(matches!(
+        refusal_of(record_review_approval(&relay, &human, false, 44, &[])),
+        DecideRefusal::NotAuto(_)
+    ));
+}
+
+/// Story 5.14 AC 3 (D-157, review F26): an author decision already made
+/// wins: the review's approval is refused `already_decided` and writes
+/// nothing.
+#[test]
+fn a_review_approval_loses_to_an_author_decision() {
+    let home = TestHome::new();
+    let relay = auto_relay(&home);
+    let id = write_auto_request(&relay, "web01");
+    decide_approval(&relay, &id, false, Some(AuthorReason::NotNow)).unwrap();
+    assert!(matches!(
+        refusal_of(record_review_approval(&relay, &id, false, 42, &[])),
+        DecideRefusal::Decided(_)
+    ));
+    assert!(decision_file(&relay, &id, FileKind::Approved).is_none());
+    assert_eq!(decision_lines(&relay).len(), 1);
+    let claimed = write_auto_request(&relay, "db01");
+    assert!(
+        approvals::claim_decision(&relay, &claimed).unwrap(),
+        "the author first"
+    );
+    assert!(matches!(
+        refusal_of(record_review_approval(&relay, &claimed, false, 43, &[])),
+        DecideRefusal::Decided(_)
+    ));
+}
+
+/// Story 5.14 AC 3 (D-142, review F15): the hourly cap is checked once
+/// more right before a review's approval: a burst of approvals cannot pass
+/// it, the default cap of the action counting.
+#[test]
+fn a_burst_cannot_approve_past_the_hourly_cap() {
+    let home = TestHome::new();
+    let relay = auto_relay(&home);
+    let cap = usize::try_from(DEFAULT_AUTO_MAX_PER_HOUR).unwrap();
+    let id = write_auto_request(&relay, "web01");
+    assert!(matches!(
+        refusal_of(record_review_approval(
+            &relay,
+            &id,
+            false,
+            42,
+            &approvals_this_hour(cap)
+        )),
+        DecideRefusal::HourlyCap(_)
+    ));
+    assert!(decision_file(&relay, &id, FileKind::Approved).is_none());
+    assert!(
+        !relay
+            .approvals_dir()
+            .join(file_name(&id, FileKind::Decided))
+            .exists(),
+        "a refused approval claims nothing"
+    );
+    record_review_approval(&relay, &id, false, 42, &approvals_this_hour(cap - 1)).unwrap();
+}
+
+/// Story 5.14 AC 6 (D-27, AD-95): a catalogue approved again while the
+/// review ran refuses its approval: the request no longer rebuilds.
+#[test]
+fn a_catalogue_change_during_a_review_refuses_its_approval() {
+    let home = TestHome::new();
+    let relay = auto_relay(&home);
+    let id = write_auto_request(&relay, "web01");
+    home.write(
+        &relay.default_floor(),
+        &AUTO_FLOOR.replace("\"web01\", \"db01\"", "\"web01\", \"db01\", \"cache01\""),
+    );
+    approve_catalogue(&relay, &displayed(&relay.default_floor())).unwrap();
+    assert!(matches!(
+        refusal_of(record_review_approval(&relay, &id, false, 42, &[])),
+        DecideRefusal::Invalid { .. }
+    ));
+    assert!(decision_file(&relay, &id, FileKind::Approved).is_none());
 }
 
 #[test]

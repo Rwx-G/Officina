@@ -4,8 +4,13 @@
 // relay rule is computed here: the entries come paired and dated from Rust.
 import type { ActionIssue } from "./generated/ActionIssue";
 import type { AnomalyKind } from "./generated/AnomalyKind";
+import type { ApprovalBy } from "./generated/ApprovalBy";
 import type { ApprovalView } from "./generated/ApprovalView";
 import type { AuthorReason } from "./generated/AuthorReason";
+import type { AutoMode } from "./generated/AutoMode";
+import type { AutoOffReason } from "./generated/AutoOffReason";
+import type { ReviewShown } from "./generated/ReviewShown";
+import type { ShadowStats } from "./generated/ShadowStats";
 import type { EscalationCause } from "./generated/EscalationCause";
 import type { DenyKind } from "./generated/DenyKind";
 import type { GateFault } from "./generated/GateFault";
@@ -58,10 +63,12 @@ const REJECT_REASON_TEXT: Record<AuthorReason, string> = {
 export const REJECT_REASONS = Object.entries(REJECT_REASON_TEXT) as [AuthorReason, string][];
 
 /** Why an `auto` request is the author's, as its card says it (AD-87).
- *  Before he decides, the board only ever sends a cause found before any
- *  call or `auto_approval_off` (D-143); the other texts serve the Relay
- *  view once he decided. */
+ *  In shadow, the board only ever sends a cause found before any call or
+ *  `auto_approval_off` before he decides (D-143); in live and rule modes
+ *  it sends the cause itself. */
 export const ESCALATION_TEXT: Record<EscalationCause, string> = {
+  rule_baseline_false: "the rule baseline does not hold: no recent check on these files, or the last run failed",
+  approval_refused: "the review approved it, but the request changed, expired or was decided meanwhile",
   claude_not_found: "no claude binary was found, so no review ran",
   claude_shim: "claude is not the native claude.exe, so no review ran",
   workdir_not_empty: "the review's empty folder holds a file, so no review ran",
@@ -183,6 +190,57 @@ export const TONE_CLASS: Record<Tone, RowTone> = {
   refused: "fault",
 };
 
+/** What a review said, once the author decided (D-143): its decision or
+ *  how its call ended, the rule baseline, and its reason when the payload
+ *  carries one (the window's; `officina relay --json` never does). */
+export function reviewText(review: ReviewShown): string {
+  const said = review.decision ? `review: ${review.decision}` : `review: ${review.outcome}`;
+  const rule = review.rule_baseline ? "rule baseline held" : "rule baseline did not hold";
+  return review.reason ? `${said} (${rule}): ${review.reason}` : `${said} (${rule})`;
+}
+
+/** Auto approval's toggle, in each state: it names what a click does. */
+export const AUTO_APPROVAL_TOGGLE_TEXT = {
+  on: "Turn auto approval off",
+  off: "Turn auto approval on",
+} as const;
+
+/** The mode toggle, offered with the rule offer: it names what a click
+ *  does. */
+export const AUTO_MODE_TOGGLE_TEXT: Record<AutoMode, string> = {
+  review: "Decide by the rule instead",
+  rule: "Decide by the review again",
+};
+
+/** What each mode does, in a sentence. */
+export const AUTO_MODE_TEXT: Record<AutoMode, string> = {
+  review: "a review's approve runs the action",
+  rule: "the rule baseline decides, without any model call",
+};
+
+/** Why auto approval went off when a mark turned it off. */
+export const AUTO_OFF_TEXT: Record<AutoOffReason, string> = {
+  should_not_have_run: "a run was marked as one that should not have run",
+};
+
+/** Who approved an auto-approved run. */
+export const APPROVED_BY_TEXT: Record<ApprovalBy, string> = {
+  author: "you",
+  review: "its review",
+  rule: "the rule",
+};
+
+/** The weakness of the evidence, from the payload's numbers only (AD-5):
+ *  `n` clean cases bound the false-approve rate to 3/n by the rule of
+ *  three. */
+export function boundText(stats: ShadowStats): string {
+  if (stats.false_approve_bound_percent === null) {
+    return "No shadow case met your decision yet: nothing bounds how often a review would approve wrongly.";
+  }
+  const bound = Math.round(stats.false_approve_bound_percent);
+  return `${stats.cases} clean ${stats.cases === 1 ? "case bounds" : "cases bound"} the rate of wrong approvals only to about ${bound} %, not to zero.`;
+}
+
 /** One row of the recent activity, every field as text. */
 export interface ActivityRow {
   project: string;
@@ -257,8 +315,8 @@ export function activityRow(entry: RecentEntry): ActivityRow {
     case "approval_rejected": {
       const verb = { approval_requested: "requested", approval_given: "approved", approval_rejected: "rejected" };
       row.action = "approval";
-      row.outcome = verb[event.kind];
-      row.detail = event.approval_id;
+      row.outcome = event.by && event.by !== "author" ? `${verb[event.kind]} by the ${event.by}` : verb[event.kind];
+      row.detail = entry.review ? `${event.approval_id}\n${reviewText(entry.review)}` : event.approval_id;
       return row;
     }
     case "relay_stopped":

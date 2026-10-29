@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "_doc": "Hand-written cases of the auto review (AD-86 to AD-88, story 5.13), replayed by crates/officina-core/tests/auto_vectors.rs over the floor below, approved as read. A precheck case names the request's action and session, its stored argument vector when it differs from the rebuild, the facts the precheck reads, and what it gives: review, not_auto, or a cause. Rows are auto_review rows (project lab). A prompt case gives the author's last prompt and what the data line must hold or lack. An output case gives a call's stdout and what it leads to with auto approval off. A baseline case gives journal runs (check or apply, group lab-web), the tree at review time and the expected baseline. Times are Unix ms; placeholders only.",
+  "_doc": "Hand-written cases of the auto review (AD-86 to AD-88, story 5.13), replayed by crates/officina-core/tests/auto_vectors.rs over the floor below, approved as read. A precheck case names the request's action and session, its stored argument vector when it differs from the rebuild, the facts the precheck reads, and what it gives: review, not_auto, or a cause. Rows are auto_review rows (project lab). A prompt case gives the author's last prompt and what the data line must hold or lack. An output case gives a call's stdout and what it leads to with auto approval off. A baseline case gives journal runs (check or apply, group lab-web), the tree at review time and the expected baseline. A rule case (story 5.14) is a precheck case decided by the rule with the baseline it gives: approve, not_auto, or a cause. A stats case lists review rows, each repeated n times over defaults that make one clean shadow case, and the counts the statistics give. Times are Unix ms; placeholders only.",
   "floor": "schema = 2\n[[project]]\nname = \"lab\"\npath = \"Lab\"\nactions = [\"check\", \"apply\", \"restart\"]\n[[action]]\nname = \"check\"\nclass = \"free\"\nprogram = \"C:/path/to/tool.exe\"\nargs = [\"--check\", \"{group}\"]\n[action.params.group]\nvalues = [\"lab-web\", \"lab-db\"]\n[[action]]\nname = \"apply\"\ndescription = \"Apply the playbook\"\nclass = \"auto\"\ncheck = \"check\"\nauto_max_per_hour = 2\nprogram = \"C:/path/to/tool.exe\"\nargs = [\"--apply\", \"{group}\"]\n[action.params.group]\nvalues = [\"lab-web\", \"lab-db\"]\n[[action]]\nname = \"restart\"\nclass = \"human\"\nprogram = \"C:/path/to/tool.exe\"\nargs = [\"{group}\"]\n[action.params.group]\nvalues = [\"lab-web\"]\n",
   "now_ms": 1793102400000,
   "precheck": [
@@ -49,6 +49,7 @@
     {"name": "a reason with a bidi character is invalid", "stdout": "{\"structured_output\":{\"decision\":\"approve\",\"reason\":\"ok \u202E\"}}", "outcome": "invalid", "decision": null, "cause": "invalid_answer"}
   ],
   "timeout_cause": "call_timeout",
+  "refused_cause": "approval_refused",
   "baseline": [
     {"name": "a check on this tree and a last success", "runs": [["apply", "a1", 1793098800000, "a", 0], ["check", "c1", 1793102100000, "a", 0]], "tree": "a", "expect": true},
     {"name": "the last apply failed", "runs": [["apply", "a1", 1793098800000, "a", 0], ["apply", "a2", 1793099400000, "a", 2], ["check", "c1", 1793102100000, "a", 0]], "tree": "a", "expect": false},
@@ -56,5 +57,32 @@
     {"name": "the tree changed since the check", "runs": [["apply", "a1", 1793098800000, "a", 0], ["check", "c1", 1793102100000, "a", 0]], "tree": "b", "expect": false},
     {"name": "the check failed", "runs": [["apply", "a1", 1793098800000, "a", 0], ["check", "c1", 1793102100000, "a", 1]], "tree": "a", "expect": false},
     {"name": "the check is older than 30 minutes", "runs": [["apply", "a1", 1793098800000, "a", 0], ["check", "c1", 1793100500000, "a", 0]], "tree": "a", "expect": false}
+  ],
+  "rule": [
+    {"name": "a true baseline approves by the rule", "action": "apply", "facts": {}, "baseline": true, "expect": "approve"},
+    {"name": "a false baseline escalates", "action": "apply", "facts": {}, "baseline": false, "expect": "rule_baseline_false"},
+    {"name": "a request from a terminal", "action": "apply", "session_id": null, "facts": {}, "baseline": true, "expect": "no_session_id"},
+    {"name": "two approvals this hour reach the cap of two, rule rows counting as review rows", "action": "apply", "facts": {"rows": [
+      {"project": "lab", "action": "apply", "requested_at_ms": 1793101000000, "outcome": "no_call", "decision": "approve", "call_started_at_ms": null},
+      {"project": "lab", "action": "apply", "requested_at_ms": 1793102000000, "outcome": "answered", "decision": "approve", "call_started_at_ms": 1793102000000}
+    ]}, "baseline": true, "expect": "hourly_cap"},
+    {"name": "a spent call budget does not stop the rule, which makes no call", "action": "apply", "facts": {"calls_in_last_hour": 60}, "baseline": true, "expect": "approve"},
+    {"name": "no claude binary does not stop the rule", "action": "apply", "facts": {"claude": null, "no_excerpts": true, "five_hour_used": 99.0, "review_model": null}, "baseline": true, "expect": "approve"},
+    {"name": "a human request is not the rule's", "action": "restart", "facts": {}, "baseline": true, "expect": "not_auto"}
+  ],
+  "stats": [
+    {"name": "19 clean cases do not open the gate", "rows": [{"n": 19}], "expect": {"cases": 19, "disagreements": 0, "rule_diff": 0, "gate": false, "rule_offer": false}},
+    {"name": "20 clean cases open the gate and the rule offer", "rows": [{"n": 20}], "expect": {"cases": 20, "disagreements": 0, "rule_diff": 0, "gate": true, "rule_offer": true}},
+    {"name": "an approve the author rejected as should not run is a disagreement", "rows": [{"n": 20}, {"author_decision": "rejected", "author_reason": "should_not_run"}], "expect": {"cases": 21, "disagreements": 1, "rule_diff": 0, "gate": false, "rule_offer": false}},
+    {"name": "an approve rejected as not now is a case, not a disagreement", "rows": [{"n": 20}, {"author_decision": "rejected", "author_reason": "not_now"}], "expect": {"cases": 21, "disagreements": 0, "rule_diff": 0, "gate": true, "rule_offer": true}},
+    {"name": "an expired request is no case", "rows": [{"n": 19}, {"author_decision": null}], "expect": {"cases": 19, "disagreements": 0, "rule_diff": 0, "gate": false, "rule_offer": false}},
+    {"name": "a rejection without its reason is no case", "rows": [{"n": 19}, {"author_decision": "rejected"}], "expect": {"cases": 19, "disagreements": 0, "rule_diff": 0, "gate": false, "rule_offer": false}},
+    {"name": "live and rule rows never count", "rows": [{"n": 19}, {"mode": "live"}, {"mode": "rule", "outcome": "no_call"}], "expect": {"cases": 19, "disagreements": 0, "rule_diff": 0, "gate": false, "rule_offer": false}},
+    {"name": "a row without an answer is no case", "rows": [{"n": 19}, {"outcome": "timeout", "decision": null}], "expect": {"cases": 19, "disagreements": 0, "rule_diff": 0, "gate": false, "rule_offer": false}},
+    {"name": "a should not have run mark is a disagreement, whatever its row", "rows": [{"n": 20}, {"mode": "live", "marked_at_ms": 1793098800000}], "expect": {"cases": 20, "disagreements": 1, "rule_diff": 0, "gate": false, "rule_offer": false}},
+    {"name": "a mark older than 30 days no longer counts", "rows": [{"n": 20}, {"mode": "live", "requested_at_ms": 1790424000000, "marked_at_ms": 1790424000000}], "expect": {"cases": 20, "disagreements": 0, "rule_diff": 0, "gate": true, "rule_offer": true}},
+    {"name": "a case older than 30 days does not count", "rows": [{"n": 19}, {"requested_at_ms": 1790424000000}], "expect": {"cases": 19, "disagreements": 0, "rule_diff": 0, "gate": false, "rule_offer": false}},
+    {"name": "review and rule differing in 4 percent of the cases keep the offer", "rows": [{"n": 24}, {"rule_baseline": false}], "expect": {"cases": 25, "disagreements": 0, "rule_diff": 1, "gate": true, "rule_offer": true}},
+    {"name": "review and rule differing in 5 percent of the cases lose the offer", "rows": [{"n": 19}, {"decision": "escalate"}], "expect": {"cases": 20, "disagreements": 0, "rule_diff": 1, "gate": true, "rule_offer": false}}
   ]
 }

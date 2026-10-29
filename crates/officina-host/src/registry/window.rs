@@ -4,7 +4,7 @@
 //! could not be opened and one found damaged while the window runs
 //! (unavailable until the next start) do neither, and the board says why.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use officina_core::agents::AgentRecord;
@@ -26,10 +26,12 @@ use super::ingest::{IngestContext, IngestReport};
 use super::orders::{LaunchRecord, NameTaken};
 use super::read::{self, Reader};
 use super::retention::PassReport;
+use super::review::{AutoState, ReviewRow};
 use super::store::{Writer, WriterOpen, open_writer};
 use super::triage::{CallResult, DryRunRefusal, NextCall, Triage};
 use super::write::{AuthorError, RegistryError};
 use crate::orders::LaunchResult;
+use officina_core::relay::auto::AutoMode;
 
 /// What the briefing reads of the registry (AD-83).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -569,6 +571,76 @@ impl WindowRegistry {
         let state = self.orders_state();
         let input = ViewInput::of(board, relay, registry, &state.subjects, &state.work_orders);
         view::build(&input, state.cursor(), now_ms)
+    }
+
+    /// Sets the cause of review row `id` (D-734), when the registry is
+    /// writable.
+    pub fn set_review_cause(
+        &mut self,
+        id: i64,
+        cause: officina_core::relay::auto::EscalationCause,
+    ) {
+        self.on_writer(|writer| writer.set_review_cause(id, cause));
+    }
+
+    /// Auto approval and its mode; approval off when the registry cannot
+    /// be read, so nothing is approved by a review then.
+    pub fn auto_state(&mut self) -> AutoState {
+        self.on_writer(|writer| writer.auto_state())
+            .unwrap_or_default()
+    }
+
+    /// The review rows requested, called or marked since `since_ms`, when
+    /// the registry is writable.
+    pub fn review_rows(&mut self, since_ms: i64) -> Vec<ReviewRow> {
+        self.on_writer(|writer| writer.review_rows(since_ms))
+            .unwrap_or_default()
+    }
+
+    /// The approvals a review or the rule gave since `since_ms` whose run
+    /// is not linked yet.
+    pub fn unlinked_approvals(&mut self, since_ms: i64) -> BTreeSet<String> {
+        self.on_writer(|writer| writer.unlinked_approvals(since_ms))
+            .unwrap_or_default()
+    }
+
+    /// Links runs to their approval's review row (AD-88).
+    pub fn link_runs(&mut self, runs: &[(String, String)]) {
+        self.on_writer(|writer| writer.link_runs(runs));
+    }
+
+    /// Turns auto approval on, refused unless the approval gate holds when
+    /// it writes, or off (AD-88): the state written.
+    pub fn set_auto_approval(&mut self, on: bool, now_ms: i64) -> Result<AutoState, IpcError> {
+        self.with_writer(|writer| {
+            Ok(writer
+                .set_auto_approval(on, now_ms)?
+                .map_err(|refusal| IpcError::new(IpcErrorCode::Refused, refusal.to_string())))
+        })
+    }
+
+    /// Sets auto approval's mode, `rule` refused unless the rule offer
+    /// holds when it writes (D-162): the state written.
+    pub fn set_auto_mode(&mut self, mode: AutoMode, now_ms: i64) -> Result<AutoState, IpcError> {
+        self.with_writer(|writer| {
+            Ok(writer
+                .set_auto_mode(mode, now_ms)?
+                .map_err(|refusal| IpcError::new(IpcErrorCode::Refused, refusal.to_string())))
+        })
+    }
+
+    /// Marks run `run_id` "should not have run" (AD-88, FR-9): auto
+    /// approval off, mode `review`; the state written.
+    pub fn mark_should_not_have_run(
+        &mut self,
+        run_id: &str,
+        now_ms: i64,
+    ) -> Result<AutoState, IpcError> {
+        self.with_writer(|writer| {
+            Ok(writer
+                .mark_should_not_have_run(run_id, now_ms)?
+                .map_err(|refusal| IpcError::new(IpcErrorCode::Refused, refusal.to_string())))
+        })
     }
 
     /// The registry's hourly pass, when the registry is writable: read-only

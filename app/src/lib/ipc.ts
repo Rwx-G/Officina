@@ -4,6 +4,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { AuthorReason } from "./generated/AuthorReason";
+import type { AutoMode } from "./generated/AutoMode";
 import type { Board } from "./generated/Board";
 import type { CardAnswer } from "./generated/CardAnswer";
 import type { CardChange } from "./generated/CardChange";
@@ -66,6 +67,26 @@ export function decideApproval(id: string, approve: boolean, reason?: AuthorReas
  *  marked acknowledged, and doctor no longer fails on it. */
 export function acknowledgeAnomaly(key: string): Promise<void> {
   return invoke("acknowledge_anomaly", { key });
+}
+
+/** Turns auto approval on, refused unless the shadow gate holds when the
+ *  registry writes, or off (AD-88). The caller sends `true` on a pointer
+ *  click only (D-28). */
+export function setAutoApproval(on: boolean): Promise<void> {
+  return invoke("set_auto_approval", { on });
+}
+
+/** Sets auto approval's mode (D-162): `rule` refused unless the rule offer
+ *  holds when the registry writes, `review` always. */
+export function setAutoMode(mode: AutoMode): Promise<void> {
+  return invoke("set_auto_mode", { mode });
+}
+
+/** Marks an auto-approved run "should not have run" (AD-88, FR-9): auto
+ *  approval turns off and the mode returns to `review`. Sent on a pointer
+ *  click only (D-28). */
+export function markShouldNotHaveRun(runId: string): Promise<void> {
+  return invoke("mark_should_not_have_run", { runId });
 }
 
 /** Stops or resumes the relay (AD-34). True when the state changed. */

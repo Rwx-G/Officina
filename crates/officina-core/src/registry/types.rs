@@ -223,6 +223,7 @@ closed_enum! {
     #[serde(rename_all = "snake_case")]
     /// How an `auto` request was reviewed (AD-82, AD-88).
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+    #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
     pub enum ReviewMode {
         /// Blind: the author decides, the review is evidence.
         Shadow,
@@ -237,6 +238,7 @@ closed_enum! {
     #[serde(rename_all = "snake_case")]
     /// How a review call ended (AD-82, AD-87).
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+    #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
     pub enum ReviewOutcome {
         /// Escalated before any call.
         NoCall,

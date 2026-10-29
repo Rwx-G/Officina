@@ -12,7 +12,8 @@
 //! `mutants` job expects to fail with that mutant on (D-148): the failure
 //! message names it, `guarded by <feature>`.
 //!
-//! Sections: `card_launch` (story 5.7); later stories add theirs.
+//! Sections: `card_launch` (story 5.7), `review_excerpt` (story 5.13),
+//! `auto_approved_run` (story 5.14); later stories add theirs.
 
 mod common;
 
@@ -45,12 +46,15 @@ const HOST_MANIFEST: &str = include_str!("../../officina-host/Cargo.toml");
 const CLI_MANIFEST: &str = include_str!("../Cargo.toml");
 const CORE_LIB: &str = include_str!("../../officina-core/src/lib.rs");
 
-/// The entry points the battery covers, one section each (D-147).
-const SECTIONS: &[&str] = &["card_launch", "review_excerpt"];
+/// The entry points the battery covers, one section each (D-147), in the
+/// order the vector set's keys read back.
+const SECTIONS: &[&str] = &["auto_approved_run", "card_launch", "review_excerpt"];
 
-/// The attack families of PRD section 7's Gesture row the sections hold,
-/// declared here once (D-147), and what a case of none of them is.
+/// The attack families of PRD section 7's Gesture and Auto fail-closed
+/// rows the sections hold, declared here once (D-147), and what a case of
+/// none of them is.
 const FAMILIES: &[&str] = &[
+    "tree_change",
     "argument_fragment",
     "option_string",
     "settings",
@@ -524,6 +528,233 @@ fn review_excerpt_cases() {
             let runs: Vec<_> = chunk
                 .iter()
                 .map(|case| scope.spawn(move || run_review_excerpt(case)))
+                .collect();
+            chunk
+                .iter()
+                .zip(runs)
+                .map(|(case, run)| {
+                    (
+                        case["name"].as_str().unwrap().to_owned(),
+                        run.join()
+                            .unwrap_or_else(|_| Err("the case panicked".to_owned())),
+                    )
+                })
+                .collect()
+        });
+        failures.extend(
+            results
+                .into_iter()
+                .filter_map(|(name, result)| result.err().map(|why| format!("case {name}: {why}"))),
+        );
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// The board the window publishes once its card for `id` satisfies
+/// `holds`.
+#[cfg(windows)]
+fn board_where(
+    emitted: &common::Emitted,
+    id: &str,
+    holds: impl Fn(&officina_core::relay::approvals::ApprovalView) -> bool,
+) -> Result<officina_core::board::Board, String> {
+    loop {
+        let board = emitted
+            .boards
+            .recv_timeout(common::auto::PATIENCE)
+            .map_err(|_| format!("no board shows {id} as expected"))?;
+        if board.approvals.iter().any(|a| a.id == id && holds(a)) {
+            return Ok(board);
+        }
+    }
+}
+
+/// The request file of `id` as the window reads it, and the argument
+/// vector the approved catalogue on disk rebuilds for it (D-27).
+#[cfg(windows)]
+fn request_and_rebuild(
+    auto: &common::auto::Auto,
+    id: &str,
+) -> Result<
+    (
+        officina_core::relay::approvals::ApprovalRequest,
+        Vec<String>,
+    ),
+    String,
+> {
+    let home = auto.relay.env.relay_home();
+    let files = officina_host::relay::approvals::read_files(&home);
+    let request = files
+        .requests
+        .get(id)
+        .cloned()
+        .ok_or("the request file is gone")?;
+    let sources = officina_host::relay::approvals::ContextSources::read(&home);
+    let rebuilt = officina_core::relay::approvals::rebuild(&sources.context(), id, &request)?;
+    Ok((request, rebuilt.argv))
+}
+
+/// One `auto_approved_run` case (story 5.14 AC 6, AD-95, D-147, D-151):
+/// auto approval on in the case's mode, an `auto` request made by
+/// `officina run`, the case's setup applied, and what came of it.
+#[cfg(windows)]
+fn run_auto_approved_run(case: &Value) -> Result<(), String> {
+    use common::auto::{Auto, Options, SESSION, stop};
+    use officina_core::relay::auto::{AutoMode, EscalationCause};
+    let setup = case["setup"].as_str().unwrap();
+    let mode = match case["mode"].as_str().unwrap() {
+        "rule" => AutoMode::Rule,
+        _ => AutoMode::Review,
+    };
+    let options = Options {
+        mode: match setup {
+            "extra_field" => "review-extra-field",
+            "catalogue_change" => "review-slow",
+            _ => "review",
+        },
+        hang_ms: 3_000,
+        prompt: "Apply the playbook. FAKE-REVIEW:approve".to_owned(),
+        ..Options::default()
+    };
+    let auto = Auto::new(&options);
+    if setup == "tree_change" && !auto.git_project(case["name"].as_str().unwrap()) {
+        return Ok(());
+    }
+    let home = auto.relay.env.relay_home();
+    auto.set_auto(true, mode);
+    if mode == AutoMode::Rule && setup == "approve" {
+        // The rule needs a last run of the action that succeeded.
+        let first = auto.request("lab-web", Some(SESSION));
+        officina_host::relay::authority::decide_approval(&home, &first, true, None)
+            .map_err(|e| e.to_string())?;
+        let ran = auto.run(&["apply", "group=lab-web"], Some(SESSION));
+        if ran.status.code() != Some(0) {
+            return Err(format!("the author's run: {ran:?}"));
+        }
+    }
+    let id = auto.request("lab-web", Some(SESSION));
+    if setup == "forged_argv" {
+        let path = home.approvals_dir().join(format!("{id}.request.json"));
+        let mut request: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        request["argv"] = serde_json::json!(["C:/Windows/System32/cmd.exe", "/c", "calc"]);
+        std::fs::write(&path, request.to_string()).unwrap();
+    }
+    let fake = auto.fake(&options, "bin");
+    let (handle, emitted) =
+        auto.window_with(auto.collector(Some(fake), std::time::Duration::from_secs(10)));
+    let outcome = (|| -> Result<(), String> {
+        match setup {
+            "forged_argv" => {
+                board_where(&emitted, &id, |a| !a.valid)?;
+                // A few ticks more: the window never takes it up.
+                std::thread::sleep(std::time::Duration::from_secs(2));
+                if auto.rows().iter().any(|r| r.approval_id == id) || !auto.calls().is_empty() {
+                    return Err("the forged request was reviewed".to_owned());
+                }
+            }
+            "catalogue_change" => {
+                auto.wait_for_file(&format!("{id}.reviewing"));
+                let floor = std::fs::read_to_string(home.default_floor()).unwrap();
+                std::fs::write(
+                    home.default_floor(),
+                    floor.replace("Apply the playbook", "Apply the playbook again"),
+                )
+                .unwrap();
+                let hash = officina_host::relay::home::load_relay_floor(&home.default_floor())
+                    .map_err(|e| e.to_string())?
+                    .hash;
+                officina_host::relay::authority::approve_catalogue(&home, &hash)
+                    .map_err(|e| e.to_string())?;
+                let row = auto.row_of(&id);
+                if row.cause != Some(EscalationCause::ApprovalRefused) {
+                    return Err(format!("cause {:?}", row.cause));
+                }
+            }
+            "extra_field" => {
+                let row = auto.row_of(&id);
+                if row.cause != Some(EscalationCause::InvalidAnswer) {
+                    return Err(format!("cause {:?}", row.cause));
+                }
+            }
+            _ => auto.wait_for_file(&format!("{id}.approved.json")),
+        }
+        Ok(())
+    })();
+    stop(handle);
+    outcome?;
+    let decided = auto
+        .approval_files()
+        .into_iter()
+        .filter(|n| n.starts_with(&id) && !n.ends_with(".request.json"))
+        .collect::<Vec<_>>();
+    match case["expect"].as_str().unwrap() {
+        "never_reviewed" | "approval_refused" | "invalid_answer" => {
+            if !decided.is_empty() {
+                return Err(format!("decision files written: {decided:?}"));
+            }
+            return Ok(());
+        }
+        "check_not_satisfied" => {
+            std::fs::write(auto.relay.project().join("playbook.yml"), "- hosts: all\n").unwrap();
+            let refused = auto.run(&["apply", "group=lab-web"], Some(SESSION));
+            if refused.status.code() == Some(0) {
+                return Err("a run started after the tree changed".to_owned());
+            }
+            if !auto
+                .approval_files()
+                .contains(&format!("{id}.approved.json"))
+                || auto
+                    .approval_files()
+                    .contains(&format!("{id}.consumed.json"))
+            {
+                return Err("the approval was consumed".to_owned());
+            }
+            return Ok(());
+        }
+        _ => {}
+    }
+    let (_, rebuilt) = request_and_rebuild(&auto, &id)?;
+    let ran = auto.run(&["apply", "group=lab-web"], Some(SESSION));
+    if ran.status.code() != Some(0) {
+        return Err(format!("the approved run: {ran:?}"));
+    }
+    let started: Vec<_> = auto
+        .relay
+        .env
+        .journal()
+        .into_iter()
+        .filter_map(|line| match line.entry {
+            officina_core::relay::journal::JournalEntry::RunStarted(s)
+                if s.approval_id.as_deref() == Some(id.as_str()) =>
+            {
+                Some(s)
+            }
+            _ => None,
+        })
+        .collect();
+    match started.as_slice() {
+        [run] if run.argv == rebuilt => Ok(()),
+        [run] => Err(format!(
+            "ran {:?}, the catalogue rebuilds {rebuilt:?}",
+            run.argv
+        )),
+        other => Err(format!("{} runs of the approval", other.len())),
+    }
+}
+
+/// Story 5.14 AC 6 (AD-95, D-147): every case of `auto_approved_run`.
+#[cfg(windows)]
+#[test]
+fn auto_approved_run_cases() {
+    let set = load();
+    let cases = cases(&set, "auto_approved_run");
+    assert!(!cases.is_empty());
+    let mut failures = Vec::new();
+    for chunk in cases.chunks(PARALLEL_CASES) {
+        let results: Vec<(String, Result<(), String>)> = std::thread::scope(|scope| {
+            let runs: Vec<_> = chunk
+                .iter()
+                .map(|case| scope.spawn(move || run_auto_approved_run(case)))
                 .collect();
             chunk
                 .iter()

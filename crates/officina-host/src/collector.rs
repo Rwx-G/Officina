@@ -17,7 +17,7 @@ use officina_core::contract::{
 use officina_core::floor::{FloorFile, ViewIssue, parse_floor, resolve_project_path};
 use officina_core::quota::{QuotaFile, parse_quota_file};
 use officina_core::registry::types::{RegistryReport, SubjectRef};
-use officina_core::relay::auto::EscalationCause;
+use officina_core::relay::auto::Escalation;
 use officina_core::scene::{SceneState, states_by_key};
 use serde::{Deserialize, Serialize};
 
@@ -244,7 +244,7 @@ pub struct Collector {
     last_scene: RefCell<BTreeMap<String, SceneState>>,
     /// Why each pending `auto` request is the author's, from the window's
     /// reviews (AD-87): the board shows it on the card.
-    auto_escalations: BTreeMap<String, EscalationCause>,
+    auto_escalations: BTreeMap<String, Escalation>,
     /// How long a review call may run: `REVIEW_TIMEOUT_MS` unless a test
     /// lowers it.
     review_timeout: Duration,
@@ -341,7 +341,7 @@ impl Collector {
 
     /// Records why each pending `auto` request is the author's, which the
     /// next board's approval cards show (AD-87, D-143).
-    pub fn set_auto_escalations(&mut self, escalations: BTreeMap<String, EscalationCause>) {
+    pub fn set_auto_escalations(&mut self, escalations: BTreeMap<String, Escalation>) {
         self.auto_escalations = escalations;
     }
 

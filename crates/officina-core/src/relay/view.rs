@@ -13,6 +13,13 @@ use super::catalogue::{
 use super::gate::DenyKind;
 // Named by `GateDeniedView`'s documentation, which is its TypeScript
 // type's too and so cannot carry a path.
+use super::approvals::ApprovalBy;
+#[cfg(doc)]
+use super::auto::STATS_WINDOW_MS;
+use super::auto::{
+    AutoApprovalSetting, AutoMode, AutoOffReason, EscalationCause, MARK_WINDOW_MS, ReviewDecision,
+    ShadowStats, StatsRecord, shadow_stats,
+};
 #[cfg(doc)]
 use super::journal::COMMAND_EXCERPT_CHARS;
 use super::journal::{
@@ -21,11 +28,16 @@ use super::journal::{
 };
 use super::record::Anomaly;
 use super::run::SnapshotState;
+use super::template::ModelAlias;
+use crate::dates::{DAY_MS, day_start_ms, utc_date, utc_day_text};
+use crate::registry::triage_call::CALLS_PER_DAY;
+use crate::registry::types::{AuthorDecision, AuthorReason, ReviewMode, ReviewOutcome, Source};
 use crate::untrusted::Untrusted;
 
 /// Version of the relay view contract: 2 added templates, the review model,
-/// `auto_max_per_hour` and each issue's table (story 5.4, P-26).
-pub const RELAY_VIEW_SCHEMA: u32 = 2;
+/// `auto_max_per_hour` and each issue's table (story 5.4, P-26); 3 the
+/// `auto` section and each decision's review (story 5.14).
+pub const RELAY_VIEW_SCHEMA: u32 = 3;
 /// How many entries [`RelayView::recent`] keeps, a run counting once.
 pub const RECENT_ENTRIES: usize = 50;
 /// A run with no end line this long past its timeout reads abandoned
@@ -227,6 +239,262 @@ pub struct RecentEntry {
     pub event: RecentEvent,
     /// How it ended ([`tone_of`]).
     pub tone: Option<Tone>,
+    /// On the author's decision of an `auto` request: what its review
+    /// said, shown once he decided and never before (D-130, D-143).
+    pub review: Option<ReviewShown>,
+}
+
+/// What a review said of one request, as the Relay view shows it once the
+/// author decided, or once the review or the rule approved it (AD-88,
+/// D-143): its decision, its reason (model text), and the rule baseline.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct ReviewShown {
+    pub mode: ReviewMode,
+    pub outcome: ReviewOutcome,
+    pub decision: Option<ReviewDecision>,
+    /// Absent from `officina relay --json`, which every session can run
+    /// (D-143, review F17), and once retention cleared it.
+    pub reason: Option<Untrusted<String>>,
+    pub rule_baseline: bool,
+}
+
+/// One `auto_review` row as the relay view reads it (AD-88): the host
+/// maps the registry's row, its reason left out by `officina relay
+/// --json`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AutoRow {
+    pub approval_id: String,
+    pub project: String,
+    pub action: String,
+    pub requested_at_ms: i64,
+    pub mode: ReviewMode,
+    pub outcome: ReviewOutcome,
+    pub cause: Option<EscalationCause>,
+    pub decision: Option<ReviewDecision>,
+    pub reason: Option<Untrusted<String>>,
+    pub rule_baseline: bool,
+    pub call_started_at_ms: Option<i64>,
+    pub author_decision: Option<AuthorDecision>,
+    pub author_reason: Option<AuthorReason>,
+    pub run_id: Option<String>,
+    pub marked_at_ms: Option<i64>,
+}
+
+impl AutoRow {
+    /// The row as the shadow statistics read it.
+    pub fn stats(&self) -> StatsRecord {
+        StatsRecord {
+            requested_at_ms: self.requested_at_ms,
+            mode: self.mode,
+            outcome: self.outcome,
+            decision: self.decision,
+            rule_baseline: self.rule_baseline,
+            author_decision: self.author_decision,
+            author_reason: self.author_reason,
+            marked_at_ms: self.marked_at_ms,
+        }
+    }
+
+    /// True for a request a review or the rule approved: decision
+    /// `approve` in live or rule mode, with no cause (an approval the
+    /// authority refused keeps the cause it escalated with).
+    pub fn auto_approved(&self) -> bool {
+        matches!(self.mode, ReviewMode::Live | ReviewMode::Rule)
+            && self.decision == Some(ReviewDecision::Approve)
+            && self.cause.is_none()
+    }
+
+    fn shown(&self) -> ReviewShown {
+        ReviewShown {
+            mode: self.mode,
+            outcome: self.outcome,
+            decision: self.decision,
+            reason: self.reason.clone(),
+            rule_baseline: self.rule_baseline,
+        }
+    }
+}
+
+/// The review of `approval_id` once the author decided it (D-143).
+fn shown_review(rows: &[AutoRow], approval_id: &str) -> Option<ReviewShown> {
+    rows.iter()
+        .find(|row| row.approval_id == approval_id && row.author_decision.is_some())
+        .map(AutoRow::shown)
+}
+
+/// What the `auto` section needs besides the journal, read by the host
+/// (AD-88, AD-92).
+#[derive(Debug, Clone, Copy)]
+pub struct AutoInputs<'a> {
+    pub approval: AutoApprovalSetting,
+    /// Who last set it; `None` before anyone did.
+    pub approval_src: Option<Source>,
+    pub mode: AutoMode,
+    /// The review rows of at least the last [`STATS_WINDOW_MS`], marked
+    /// rows of that window included.
+    pub rows: &'a [AutoRow],
+    /// The journal lines of the last [`DECISION_DAYS`] UTC days.
+    pub decision_lines: &'a [JournalLine],
+}
+
+/// How many UTC days [`AutoView::decisions`] covers (AD-92).
+pub const DECISION_DAYS: i64 = 14;
+
+/// One auto-approved run of the last [`MARK_WINDOW_MS`] (AD-88, FR-9).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct AutoRun {
+    pub approval_id: String,
+    /// The run its approval started, from `run_started.approval_id`;
+    /// `None` until `officina run` consumed it.
+    pub run_id: Option<String>,
+    pub project: String,
+    pub action: String,
+    pub by: ApprovalBy,
+    pub requested_at_ms: i64,
+    /// When the author marked it "should not have run".
+    pub marked_at_ms: Option<i64>,
+    pub review: ReviewShown,
+}
+
+/// The decisions of one UTC day (AD-92, the Auto metric): the author's,
+/// on `human` and `auto` requests alike, and those a review or the rule
+/// gave.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct DayDecisions {
+    /// `YYYY-MM-DD`.
+    pub day: String,
+    pub author: u32,
+    pub auto: u32,
+}
+
+/// The Relay view's `auto` section (AD-88, AD-92, D-142, D-143).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct AutoView {
+    pub approval_on: bool,
+    /// Who last set auto approval; `None` before anyone did.
+    pub approval_src: Option<Source>,
+    /// Why it went off, when a mark turned it off.
+    pub approval_reason: Option<AutoOffReason>,
+    pub mode: AutoMode,
+    pub stats: ShadowStats,
+    /// Requests reviewed or escalated since the UTC day began.
+    pub reviews_today: u32,
+    /// Review calls started since the UTC day began, against
+    /// `calls_per_day`.
+    pub calls_today: u32,
+    pub calls_per_day: u32,
+    /// The approved review model; `None` without an approved catalogue or
+    /// with a failing `[auto_review]`.
+    pub review_model: Option<ModelAlias>,
+    /// The auto-approved runs of the last `mark_window_ms`, newest first.
+    pub runs: Vec<AutoRun>,
+    /// [`MARK_WINDOW_MS`], carried so the window states it.
+    pub mark_window_ms: i64,
+    /// The last [`DECISION_DAYS`] UTC days, oldest first, today last.
+    pub decisions: Vec<DayDecisions>,
+}
+
+/// Builds the `auto` section at `now_ms`.
+fn auto_view(
+    inputs: Option<&AutoInputs<'_>>,
+    lines: &[JournalLine],
+    approved: Option<&ApprovedCatalogue>,
+    now_ms: i64,
+) -> AutoView {
+    let rows = inputs.map_or(&[][..], |i| i.rows);
+    let day_start = day_start_ms(utc_date(now_ms));
+    let count = |n: usize| u32::try_from(n).unwrap_or(u32::MAX);
+    let run_of: BTreeMap<&str, &str> = lines
+        .iter()
+        .filter_map(|line| match &line.entry {
+            JournalEntry::RunStarted(started) => started
+                .approval_id
+                .as_deref()
+                .map(|id| (id, started.run_id.as_str())),
+            _ => None,
+        })
+        .collect();
+    let mut runs: Vec<AutoRun> = rows
+        .iter()
+        .filter(|row| row.auto_approved())
+        .filter(|row| (0..MARK_WINDOW_MS).contains(&(now_ms - row.requested_at_ms)))
+        .map(|row| AutoRun {
+            approval_id: row.approval_id.clone(),
+            run_id: row.run_id.clone().or_else(|| {
+                run_of
+                    .get(row.approval_id.as_str())
+                    .map(|r| (*r).to_owned())
+            }),
+            project: row.project.clone(),
+            action: row.action.clone(),
+            by: if row.mode == ReviewMode::Rule {
+                ApprovalBy::Rule
+            } else {
+                ApprovalBy::Review
+            },
+            requested_at_ms: row.requested_at_ms,
+            marked_at_ms: row.marked_at_ms,
+            review: row.shown(),
+        })
+        .collect();
+    runs.sort_by_key(|run| std::cmp::Reverse(run.requested_at_ms));
+    let decision_lines = inputs.map_or(&[][..], |i| i.decision_lines);
+    let decisions = (0..DECISION_DAYS)
+        .rev()
+        .map(|back| {
+            let start = day_start - back * DAY_MS;
+            let of_day = |by_author: bool| {
+                count(
+                    decision_lines
+                        .iter()
+                        .filter(|line| (start..start + DAY_MS).contains(&line.ts))
+                        .filter(|line| match &line.entry {
+                            JournalEntry::ApprovalGiven(event)
+                            | JournalEntry::ApprovalRejected(event) => {
+                                (event.by.unwrap_or(ApprovalBy::Author) == ApprovalBy::Author)
+                                    == by_author
+                            }
+                            _ => false,
+                        })
+                        .count(),
+                )
+            };
+            DayDecisions {
+                day: utc_day_text(start),
+                author: of_day(true),
+                auto: of_day(false),
+            }
+        })
+        .collect();
+    let stats: Vec<StatsRecord> = rows.iter().map(AutoRow::stats).collect();
+    let approval = inputs.map(|i| i.approval).unwrap_or_default();
+    AutoView {
+        approval_on: approval.on,
+        approval_src: inputs.and_then(|i| i.approval_src),
+        approval_reason: approval.reason,
+        mode: inputs.map(|i| i.mode).unwrap_or_default(),
+        stats: shadow_stats(&stats, now_ms),
+        reviews_today: count(
+            rows.iter()
+                .filter(|row| row.requested_at_ms >= day_start)
+                .count(),
+        ),
+        calls_today: count(
+            rows.iter()
+                .filter(|row| row.outcome != ReviewOutcome::NoCall)
+                .filter(|row| row.call_started_at_ms.is_some_and(|at| at >= day_start))
+                .count(),
+        ),
+        calls_per_day: count(CALLS_PER_DAY),
+        review_model: approved.and_then(|a| a.canonical.auto_review.model),
+        runs,
+        mark_window_ms: MARK_WINDOW_MS,
+        decisions,
+    }
 }
 
 /// A credential of the approved catalogue (AD-36, D-41): where it may go,
@@ -287,6 +555,8 @@ pub struct RelayView {
     pub notices: Vec<Notice>,
     /// Decisions the window did not make (D-173), acknowledged or not.
     pub anomalies: Vec<Anomaly>,
+    /// The `auto` class: approval, mode, gate and the runs it approved.
+    pub auto: AutoView,
 }
 
 /// `relay/stopped` as the host found it (AD-34).
@@ -326,6 +596,9 @@ pub struct ViewInputs<'a> {
     pub credential_presence: Option<&'a BTreeMap<String, bool>>,
     /// What `relay::record::anomalies` found.
     pub anomalies: &'a [Anomaly],
+    /// The registry's side of the `auto` section; `None` without a
+    /// readable registry, the section then reporting approval off.
+    pub auto: Option<&'a AutoInputs<'a>>,
 }
 
 /// What a first approval compares with: nothing approved.
@@ -398,7 +671,7 @@ fn credentials(
 /// start; an end line whose start is older than the lines read is dropped. A run without an end reads abandoned
 /// once its timeout (the longest one for lines that do not record it) plus
 /// [`ABANDONED_GRACE_MS`] has passed.
-fn recent(lines: &[JournalLine], now_ms: i64) -> Vec<RecentEntry> {
+fn recent(lines: &[JournalLine], now_ms: i64, rows: &[AutoRow]) -> Vec<RecentEntry> {
     let ends: BTreeMap<&str, (&RunFinished, i64)> = lines
         .iter()
         .filter_map(|line| match &line.entry {
@@ -447,14 +720,26 @@ fn recent(lines: &[JournalLine], now_ms: i64) -> Vec<RecentEntry> {
                 JournalEntry::RelayResumed => RecentEvent::RelayResumed,
                 // A launch is no relay entry: the Orchestrator view's
                 // history shows work orders, from the registry (AD-92).
+                // A review shows on its request's decision, and the
+                // switch's state in the `auto` section.
                 JournalEntry::WorkOrderLaunched(_)
                 | JournalEntry::AutoEscalated(_)
-                | JournalEntry::AutoReview(_) => return None,
+                | JournalEntry::AutoReview(_)
+                | JournalEntry::AutoApprovalSet(_) => return None,
+            };
+            let review = match &event {
+                RecentEvent::ApprovalGiven(decision) | RecentEvent::ApprovalRejected(decision)
+                    if decision.by.unwrap_or(ApprovalBy::Author) == ApprovalBy::Author =>
+                {
+                    shown_review(rows, &decision.approval_id)
+                }
+                _ => None,
             };
             Some(RecentEntry {
                 ts: line.ts,
                 tone: tone_of(&event),
                 event,
+                review,
             })
         })
         .collect();
@@ -522,7 +807,11 @@ pub fn build(inputs: &ViewInputs<'_>) -> RelayView {
         catalogue: approved.map(|a| a.canonical.clone()),
         pending,
         issues,
-        recent: recent(inputs.lines, inputs.now_ms),
+        recent: recent(
+            inputs.lines,
+            inputs.now_ms,
+            inputs.auto.map_or(&[][..], |auto| auto.rows),
+        ),
         journal_corrupt_lines: inputs.journal_corrupt_lines,
         gate_errors: u32::try_from(gate_errors).unwrap_or(u32::MAX),
         gate_errors_window_ms: GATE_ERRORS_WINDOW_MS,
@@ -534,6 +823,7 @@ pub fn build(inputs: &ViewInputs<'_>) -> RelayView {
             }
         },
         anomalies: inputs.anomalies.to_vec(),
+        auto: auto_view(inputs.auto, inputs.lines, approved, inputs.now_ms),
     }
 }
 
@@ -568,6 +858,7 @@ mod tests {
             now_ms: NOW,
             credential_presence: None,
             anomalies: &[],
+            auto: None,
         }
     }
 
@@ -912,7 +1203,8 @@ mod tests {
                 // match: work orders show in the Orchestrator view.
                 JournalKind::WorkOrderLaunched
                 | JournalKind::AutoEscalated
-                | JournalKind::AutoReview => continue,
+                | JournalKind::AutoReview
+                | JournalKind::AutoApprovalSet => continue,
             };
             let lines = [JournalLine::new(NOW, entry)];
             let view = build(&inputs(SnapshotState::Missing, FloorRead::Missing, &lines));
@@ -1266,5 +1558,232 @@ credential = "monitoring"
         assert_eq!(view.gate_errors, 2);
         assert_eq!(view.gate_errors_window_ms, GATE_ERRORS_WINDOW_MS);
         assert_eq!(view.journal_corrupt_lines, 3);
+    }
+
+    /// A clean shadow case: answered approve, baseline true, approved by
+    /// the author.
+    fn shadow_row(id: &str, at: i64) -> AutoRow {
+        AutoRow {
+            approval_id: id.to_owned(),
+            project: "lab".to_owned(),
+            action: "apply".to_owned(),
+            requested_at_ms: at,
+            mode: ReviewMode::Shadow,
+            outcome: ReviewOutcome::Answered,
+            cause: Some(EscalationCause::AutoApprovalOff),
+            decision: Some(ReviewDecision::Approve),
+            reason: Some(Untrusted::new("REVIEW-REASON-MARKER".to_owned())),
+            rule_baseline: true,
+            call_started_at_ms: Some(at),
+            author_decision: Some(AuthorDecision::Approved),
+            author_reason: None,
+            run_id: None,
+            marked_at_ms: None,
+        }
+    }
+
+    fn auto_inputs<'a>(rows: &'a [AutoRow], lines: &'a [JournalLine]) -> AutoInputs<'a> {
+        AutoInputs {
+            approval: AutoApprovalSetting::default(),
+            approval_src: None,
+            mode: AutoMode::Review,
+            rows,
+            decision_lines: lines,
+        }
+    }
+
+    /// Story 5.14 AC 7 (AD-88, D-143): the section carries the gate's
+    /// counts, the 3/n bound and the rule offer from the statistics, the
+    /// review model, today's reviews and calls against the budget, and the
+    /// auto-approved runs of the last 7 days with the run each started.
+    #[test]
+    fn auto_section_reports_the_gate_and_its_bound() {
+        let relay = load(
+            &format!("{FLOOR}[auto_review]\nmodel = \"sonnet\"\n"),
+            FLOOR_PATH,
+        )
+        .unwrap();
+        let approved = approved_of(&relay);
+        let mut rows: Vec<AutoRow> = (0..20)
+            .map(|i| shadow_row(&format!("s{i}"), NOW - (i + 1) * MIN))
+            .collect();
+        let live = AutoRow {
+            mode: ReviewMode::Live,
+            cause: None,
+            author_decision: None,
+            ..shadow_row("live", NOW - 2 * MIN)
+        };
+        let refused = AutoRow {
+            cause: Some(EscalationCause::HourlyCap),
+            ..live.clone()
+        };
+        let old = AutoRow {
+            requested_at_ms: NOW - MARK_WINDOW_MS - 1,
+            call_started_at_ms: Some(NOW - MARK_WINDOW_MS - 1),
+            ..live.clone()
+        };
+        rows.extend([live, refused, old]);
+        let lines = [JournalLine::new(
+            NOW - MIN,
+            JournalEntry::RunStarted(RunStarted {
+                approval_id: Some("live".to_owned()),
+                ..run_started("r-live")
+            }),
+        )];
+        let auto = AutoInputs {
+            approval: AutoApprovalSetting {
+                on: true,
+                reason: None,
+            },
+            approval_src: Some(Source::Author),
+            ..auto_inputs(&rows, &[])
+        };
+        let mut read = inputs(
+            SnapshotState::Valid(&approved),
+            FloorRead::Valid(&relay),
+            &lines,
+        );
+        read.auto = Some(&auto);
+        let view = build(&read).auto;
+        assert!(view.approval_on);
+        assert_eq!(view.approval_src, Some(Source::Author));
+        assert_eq!(view.review_model, Some(ModelAlias::Sonnet));
+        assert_eq!((view.stats.cases, view.stats.disagreements), (20, 0));
+        assert!(view.stats.gate && view.stats.rule_offer);
+        assert_eq!(view.stats.false_approve_bound_percent, Some(15.0));
+        assert_eq!(view.calls_per_day, u32::try_from(CALLS_PER_DAY).unwrap());
+        assert_eq!(view.mark_window_ms, MARK_WINDOW_MS);
+        assert_eq!(
+            view.runs
+                .iter()
+                .map(|run| (run.approval_id.as_str(), run.run_id.as_deref(), run.by))
+                .collect::<Vec<_>>(),
+            [("live", Some("r-live"), ApprovalBy::Review)],
+            "an approval the authority refused, or older than the window, offers no mark"
+        );
+        let empty = build(&inputs(SnapshotState::Missing, FloorRead::Missing, &[])).auto;
+        assert!(!empty.approval_on && empty.runs.is_empty());
+        assert_eq!(empty.stats.false_approve_bound_percent, None);
+        assert_eq!(empty.review_model, None);
+    }
+
+    fn run_started(run_id: &str) -> RunStarted {
+        RunStarted {
+            run_id: run_id.to_owned(),
+            project: "lab".to_owned(),
+            session_id: None,
+            action: "apply".to_owned(),
+            class: ActionClass::Auto,
+            params: BTreeMap::new(),
+            argv: Vec::new(),
+            method: None,
+            url: None,
+            credential: None,
+            catalogue_hash: "00".to_owned(),
+            approval_id: None,
+            tree: None,
+            timeout_s: Some(60),
+        }
+    }
+
+    fn decision_line(ts: i64, given: bool, by: Option<ApprovalBy>) -> JournalLine {
+        let event = ApprovalEvent {
+            approval_id: format!("0123456789abcdef-{ts}"),
+            request_key: "ab".to_owned(),
+            project: Some("lab".to_owned()),
+            action: Some("apply".to_owned()),
+            dry_run: None,
+            by,
+            reason: None,
+        };
+        JournalLine::new(
+            ts,
+            if given {
+                JournalEntry::ApprovalGiven(event)
+            } else {
+                JournalEntry::ApprovalRejected(event)
+            },
+        )
+    }
+
+    /// Story 5.14 AC 7 (AD-92, D-142): the author's decisions per UTC day
+    /// over the last 14, a line without `by` counting as his, apart from
+    /// the review's and the rule's approvals; a request is no decision.
+    #[test]
+    fn author_decisions_per_day_count_human_and_auto() {
+        let today = day_start_ms(utc_date(NOW));
+        let lines = [
+            decision_line(today + 1, true, None),
+            decision_line(today + 2, false, Some(ApprovalBy::Author)),
+            decision_line(today + 3, true, Some(ApprovalBy::Review)),
+            decision_line(today + 4, true, Some(ApprovalBy::Rule)),
+            decision_line(today - DAY_MS + 5, true, None),
+            decision_line(today - DECISION_DAYS * DAY_MS + 6, true, None),
+        ];
+        let auto = auto_inputs(&[], &lines);
+        let mut read = inputs(SnapshotState::Missing, FloorRead::Missing, &[]);
+        read.auto = Some(&auto);
+        let days = build(&read).auto.decisions;
+        assert_eq!(days.len(), usize::try_from(DECISION_DAYS).unwrap());
+        let last = days.last().unwrap();
+        assert_eq!(last.day, utc_day_text(NOW));
+        assert_eq!((last.author, last.auto), (2, 2));
+        let yesterday = &days[days.len() - 2];
+        assert_eq!((yesterday.author, yesterday.auto), (1, 0));
+        assert_eq!(
+            days.iter().map(|d| d.author + d.auto).sum::<u32>(),
+            5,
+            "a day older than the 14 does not count"
+        );
+    }
+
+    /// Story 5.14 AC 7 (D-130, D-143): the author's decision of an `auto`
+    /// request shows its review, reason included, once he decided; a
+    /// review the author has not met shows on no entry.
+    #[test]
+    fn a_review_shows_only_after_the_author_decided() {
+        let decided = shadow_row("0123456789abcdef-1", NOW - 2 * MIN);
+        let pending = AutoRow {
+            author_decision: None,
+            approval_id: "0123456789abcdef-2".to_owned(),
+            ..decided.clone()
+        };
+        let with_id = |mut line: JournalLine, id: &str| {
+            if let JournalEntry::ApprovalGiven(event) | JournalEntry::ApprovalRejected(event) =
+                &mut line.entry
+            {
+                event.approval_id = id.to_owned();
+            }
+            line
+        };
+        // The author's rejection of `pending` is journaled; the window has
+        // not copied it onto the row yet.
+        let lines = [
+            with_id(
+                decision_line(NOW - 2 * MIN, false, Some(ApprovalBy::Author)),
+                &pending.approval_id,
+            ),
+            with_id(
+                decision_line(NOW - MIN, true, Some(ApprovalBy::Author)),
+                &decided.approval_id,
+            ),
+        ];
+        let rows = [decided, pending];
+        let auto = auto_inputs(&rows, &[]);
+        let mut read = inputs(SnapshotState::Missing, FloorRead::Missing, &lines);
+        read.auto = Some(&auto);
+        let view = build(&read);
+        let shown: Vec<_> = view.recent.iter().map(|e| e.review.clone()).collect();
+        assert_eq!(shown.len(), 2);
+        let review = shown[0]
+            .as_ref()
+            .expect("the decided request shows its review");
+        assert_eq!(review.decision, Some(ReviewDecision::Approve));
+        assert!(review.rule_baseline);
+        let text = serde_json::to_string(&view.recent[0]).unwrap();
+        assert!(text.contains("REVIEW-REASON-MARKER"));
+        assert_eq!(shown[1], None, "not before the row holds his decision");
+        let text = serde_json::to_string(&view.recent[1]).unwrap();
+        assert!(!text.contains("REVIEW-REASON-MARKER"));
     }
 }
