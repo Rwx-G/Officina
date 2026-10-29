@@ -502,6 +502,11 @@ project uses [Semantic Versioning](https://semver.org/).
   orders, the orchestrator's proposals and starts, and the reviews of
   `auto` requests, written whole in one migration, and `setting` rebuilt
   for its three new keys. Every row of version 1 is kept.
+- The header no longer shows "contract held" (v0.5, story 5.8): it shows
+  the contract only when it is broken or lacks hook fields, as before. The
+  view switch's buttons are 8 px narrower (4 px a side), their height kept,
+  so the four views and the status chips stay on one line beside eight
+  projects and the alert band on a Full HD screen.
 - Sober corners: controls round 4 px and surfaces 6 px, from one radius
   family in `app.css`; pills are kept for count badges (story 4.15).
 - One header in every view and mode: the same quota gauges (150 px wide,
