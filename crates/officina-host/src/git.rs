@@ -145,16 +145,31 @@ fn logged_hashes(log: &[u8]) -> Vec<String> {
         .collect()
 }
 
+/// True when `config --show-scope --get-regexp` output names a filter set
+/// by the repository's own configuration: its `config`, a file that one
+/// includes, or `config.worktree` (scopes `local` and `worktree`), which
+/// the session working in it can write. A filter of the author's own
+/// global or system configuration is his, and plain git runs it as well.
+fn repository_scoped(scoped: &str) -> bool {
+    scoped.lines().any(|line| {
+        matches!(
+            line.split_once('\t').map(|(scope, _)| scope),
+            Some("local" | "worktree")
+        )
+    })
+}
+
 /// The meeting's reads of the work tree `dir` lies in, for the commits
 /// since `since` (ISO 8601 UTC), within [`MEETING_DEADLINE`] from
 /// `started` (AD-84, D-154). Read-only: every call carries
 /// [`GIT_GLOBAL_ARGS`] and `GIT_OPTIONAL_LOCKS=0`, `log` and `diff` carry
 /// [`MEETING_DIFF_ARGS`] and `log` `--no-show-signature`. Before the
-/// working-tree diff, `config --local --get-regexp ^filter\.` (a read,
-/// which runs nothing) says whether a filter driver is configured; then
-/// the diff covers the commits only, since diffing the working tree would
-/// run its clean filter. Untracked files are listed and stat'ed, never
-/// read.
+/// working-tree diff, `config --includes --show-scope --get-regexp
+/// ^filter\.` (a read, which runs nothing, following `include` and
+/// `includeIf` as git does) says whether the repository configures a
+/// filter driver ([`repository_scoped`]); then the diff covers the commits
+/// only, since diffing the working tree would run its clean filter.
+/// Untracked files are listed and stat'ed, never read.
 pub fn meeting_changes(
     program: &Path,
     dir: &Path,
@@ -243,10 +258,17 @@ fn read_changes(
         }
     };
     let filters = run(
-        &["config", "--local", "--get-regexp", "^filter\\."],
+        &[
+            "config",
+            "--includes",
+            "--show-scope",
+            "--get-regexp",
+            "^filter\\.",
+        ],
         64 * 1024,
     )?;
-    let filter_driver = filters.code == Some(0) && !filters.stdout.is_empty();
+    let filter_driver =
+        filters.code == Some(0) && repository_scoped(&String::from_utf8_lossy(&filters.stdout));
     let mut diff_args = vec!["diff"];
     diff_args.extend(MEETING_DIFF_ARGS);
     diff_args.push(base.as_str());
@@ -341,5 +363,21 @@ mod tests {
             assert!(envs.contains(&("PATH".to_owned(), Some("C:/bin".to_owned()))));
             assert_eq!(built.get_current_dir(), Some(Path::new("C:/repo")));
         }
+    }
+
+    #[test]
+    fn only_the_repositorys_own_filters_count() {
+        assert!(repository_scoped("local\tfilter.mark.clean /x/marker.sh\n"));
+        assert!(repository_scoped(
+            "worktree\tfilter.mark.clean /x/marker.sh\n"
+        ));
+        assert!(repository_scoped(
+            "global\tfilter.lfs.clean git-lfs clean -- %f\nlocal\tfilter.mark.clean x\n"
+        ));
+        assert!(!repository_scoped(
+            "global\tfilter.lfs.clean git-lfs clean -- %f\n"
+        ));
+        assert!(!repository_scoped("system\tfilter.lfs.smudge git-lfs\n"));
+        assert!(!repository_scoped(""));
     }
 }

@@ -409,7 +409,23 @@ const CONFIGURED: &[Configured] = &[
         name: "filter driver",
         control: &["diff"],
     },
+    // A config lookup on the repository's file alone follows no include
+    // and reads no `config.worktree` (story 5.19's security audit).
+    Configured {
+        name: "filter driver through include.path",
+        control: &["diff"],
+    },
+    Configured {
+        name: "filter driver in config.worktree",
+        control: &["diff"],
+    },
 ];
+
+/// The cases whose program is a clean filter: the meeting's diff covers
+/// the commits only and says why.
+fn is_filter(case: &Configured) -> bool {
+    case.name.starts_with("filter driver")
+}
 
 /// Sets `case` up in `repo`, pointing it at `program`.
 fn configure(repo: &MeetingRepo, case: &Configured, program: &Path) {
@@ -433,6 +449,24 @@ fn configure(repo: &MeetingRepo, case: &Configured, program: &Path) {
         "filter driver" => {
             attributes("*.txt filter=mark\n");
             set("filter.mark.clean", &program);
+        }
+        "filter driver through include.path" => {
+            attributes("*.txt filter=mark\n");
+            std::fs::write(
+                repo.root.join(".git").join("marker.inc"),
+                format!("[filter \"mark\"]\n\tclean = {program}\n"),
+            )
+            .unwrap();
+            set("include.path", "marker.inc");
+        }
+        "filter driver in config.worktree" => {
+            attributes("*.txt filter=mark\n");
+            set("extensions.worktreeConfig", "true");
+            git_ok(
+                &repo.git,
+                &repo.root,
+                &["config", "--worktree", "filter.mark.clean", &program],
+            );
         }
         other => panic!("no setup for {other}"),
     }
@@ -494,7 +528,7 @@ fn no_configured_program_runs_on_receive() {
             case.name
         );
         let read = changes(read);
-        if case.name == "filter driver" {
+        if is_filter(case) {
             assert!(read.diff_scope_note.is_some(), "{}", case.name);
             let diff = text(&read.diff.text);
             assert!(!diff.contains("+working tree"), "{}: {diff}", case.name);
