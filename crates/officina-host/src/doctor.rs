@@ -19,7 +19,7 @@ use officina_core::registry::model::PAUSE_AFTER_FAILED_CALLS;
 use officina_core::registry::triage_call::{
     COUNT_WINDOW_MS, CallCounts, count_calls, refusal_for_binary,
 };
-use officina_core::registry::types::RegistryState;
+use officina_core::registry::types::{ProposalStatus, RegistryState};
 use officina_core::registry::view::RESTORE_NOTICE_MS;
 use officina_core::relay::auto::STATS_WINDOW_MS;
 use officina_core::relay::gate::gated_tools;
@@ -28,7 +28,8 @@ use officina_core::spawn::AGENT_VIEW_VAR;
 use crate::collector::{Collector, ContractStore};
 use crate::files::{holds_anything, now_ms, read_recent_events};
 use crate::paths::{
-    ENV_FLOOR, Paths, env_path, events_dir_of, officina_exe_name, orchestrator_workdir,
+    ENV_FLOOR, Paths, env_path, events_dir_of, officina_exe_name, orchestrator_proposals_dir,
+    orchestrator_workdir,
 };
 use crate::registry::RegistryPaths;
 use crate::registry::store::{
@@ -766,6 +767,16 @@ pub fn run_with(collector: &Collector, exe: &Path, permissions: bool) -> Vec<Che
         exe.parent().unwrap_or(Path::new("")),
         agents.as_deref(),
     ));
+    let statuses: Option<Vec<ProposalStatus>> =
+        registry_store::open_reader(&paths.officina_home, &onedrive_roots)
+            .ok()
+            .and_then(|reader| reader.proposals().ok())
+            .map(|rows| rows.into_iter().map(|row| row.status).collect());
+    checks.push(check_proposals(
+        &paths.officina_home,
+        statuses.as_deref(),
+        now,
+    ));
     let mut registry = check_registry(&paths.officina_home, &onedrive_roots, now);
     if let Some(version) = &version {
         registry.push(check_hook_fields(&collector.contract_file(), version));
@@ -1082,6 +1093,62 @@ pub fn check_orchestrator(
         .into_iter()
         .chain(stranger_lines)
         .collect()
+}
+
+/// The orchestrator's proposals (AD-94 part C, story 5.17): how many wait
+/// for the author and how many the window stored invalid, from
+/// `statuses` (the registry's rows; `None` when it cannot be read), and
+/// the temporary files of `proposals/` older than
+/// [`TMP_FILE_TTL_MS`](officina_core::orders::proposal::TMP_FILE_TTL_MS)
+/// at `now_ms`, which a writer killed mid-write left and the window's
+/// ingestion deletes: some left means the window has not run since.
+pub fn check_proposals(
+    officina_home: &Path,
+    statuses: Option<&[ProposalStatus]>,
+    now_ms: i64,
+) -> Check {
+    use officina_core::orders::proposal::{TMP_FILE_TTL_MS, is_temporary_file};
+    const TITLE: &str = "orchestrator proposals";
+    let dir = orchestrator_proposals_dir(officina_home);
+    let stale = fs::read_dir(&dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|entry| is_temporary_file(&entry.file_name().to_string_lossy()))
+        .filter(|entry| {
+            entry
+                .metadata()
+                .and_then(|meta| meta.modified())
+                .ok()
+                .and_then(|at| at.duration_since(std::time::UNIX_EPOCH).ok())
+                .and_then(|since| i64::try_from(since.as_millis()).ok())
+                .is_some_and(|at| now_ms - at >= TMP_FILE_TTL_MS)
+        })
+        .count();
+    let counts = statuses.map_or_else(
+        || "the registry cannot be read: counts unknown".to_owned(),
+        |statuses| {
+            let of = |wanted: ProposalStatus| statuses.iter().filter(|s| **s == wanted).count();
+            format!(
+                "{} pending, {} invalid",
+                of(ProposalStatus::Pending),
+                of(ProposalStatus::Invalid)
+            )
+        },
+    );
+    if stale > 0 {
+        check(
+            Level::Warn,
+            TITLE,
+            format!(
+                "{counts}; {stale} temporary {} in {} older than a day: a writer stopped mid-write, and the window deletes them when it runs",
+                if stale == 1 { "file" } else { "files" },
+                dir.display()
+            ),
+        )
+    } else {
+        check(Level::Ok, TITLE, counts)
+    }
 }
 
 /// Every required registration in the user settings, else the file's whole
@@ -2173,6 +2240,46 @@ mod tests {
             .unwrap_or_else(|| panic!("no {title} line: {checks:?}"))
     }
 
+    /// Story 5.17 AC 10 (AD-94 part C): the pending and invalid counts,
+    /// and the temporary files older than a day, which warn; a younger one
+    /// or a proposal file does not.
+    #[test]
+    fn proposal_counts_and_stale_tmp_files_are_reported() {
+        use officina_core::orders::proposal::TMP_FILE_TTL_MS;
+        let (_root, home, _) = orchestrator_setup(true);
+        let statuses = [
+            ProposalStatus::Pending,
+            ProposalStatus::Pending,
+            ProposalStatus::Invalid,
+            ProposalStatus::Dismissed,
+        ];
+        let now = now_ms();
+        let quiet = check_proposals(&home, Some(&statuses), now);
+        assert_eq!(quiet.level, Level::Ok);
+        assert_eq!(quiet.detail, "2 pending, 1 invalid");
+        let unread = check_proposals(&home, None, now);
+        assert!(
+            unread.detail.contains("counts unknown"),
+            "{}",
+            unread.detail
+        );
+        let dir = orchestrator_proposals_dir(&home);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("1761700000000-00000000000000ab.json.42.tmp"), b"{").unwrap();
+        fs::write(dir.join("1761700000000-00000000000000ac.json"), b"{}").unwrap();
+        let young = check_proposals(&home, Some(&statuses), now + TMP_FILE_TTL_MS - 60_000);
+        assert_eq!(young.level, Level::Ok, "{}", young.detail);
+        let stale = check_proposals(&home, Some(&statuses), now + TMP_FILE_TTL_MS + 60_000);
+        assert_eq!(stale.level, Level::Warn);
+        assert!(
+            stale
+                .detail
+                .starts_with("2 pending, 1 invalid; 1 temporary file"),
+            "{}",
+            stale.detail
+        );
+    }
+
     /// Story 5.16 AC 9 (AD-94 part C): a workdir holding anything fails,
     /// since Start is refused; absent or empty it is fine.
     #[test]
@@ -2381,6 +2488,7 @@ mod tests {
                 ("officina home", Level::Ok, false),
                 ("orchestrator workdir", Level::Ok, false),
                 ("officina.exe", Level::Fail, false),
+                ("orchestrator proposals", Level::Ok, false),
                 ("registry location", Level::Ok, false),
                 ("registry", Level::Ok, false),
                 ("triage model", Level::Ok, false),
