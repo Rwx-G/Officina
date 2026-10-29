@@ -811,6 +811,33 @@ project uses [Semantic Versioning](https://semver.org/).
 
 ### Security
 
+- The review of an `auto` request reads only a session the request is
+  bound to (v0.5, story 5.19's security audit, High): `officina run`
+  records itself and its ancestors with their start stamps in the request,
+  and the window reviews it, or the rule decides it, only when the session
+  it names is live in `claude agents` with a process, at the start stamp
+  it has now, among those ancestors, and is an interactive session or a
+  background session a work order you launched is bound to. Otherwise the
+  request is yours at once, with the cause `session_unbound`, its row, its
+  journal line and no call, and it is no shadow-gate case. A session can
+  no longer claim another session's prompt with
+  `CLAUDE_CODE_SESSION_ID`, nor have a `claude --bg` it started speak for
+  you.
+- A shell command in a guarded project may not name the event buffer
+  (`<home>/events`) or the orchestrator's folder (`<home>/orchestrator`),
+  beside the relay and the journal (`PROTECTED_DIRS`): a session cannot
+  append a forged prompt line the review would read, nor drop a proposal
+  there.
+- A session's folder is marked untrusted in the orchestrator's tools,
+  like its name and excerpts.
+- Proposal files dated ahead of the clock no longer count toward the
+  proposal tools' hourly limit, so files another program writes there
+  cannot stop the orchestrator's tools.
+- The meeting's recap and proposed answer, and the Proposals block, name
+  the orchestrator's proposals folder as their origin, not the
+  orchestrator: any program running as you can write a file there.
+- The console launcher (`start_in_new_console`) is held to the spawn
+  lint, like `std::process::Command::new`.
 - The injection battery (v0.5, story 5.7): `tests/vectors/injection.json`
   replays hostile inputs at the card launch, each tagged with its attack
   family (PRD section 7's Gesture row, declared once in the harness's

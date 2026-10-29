@@ -79,22 +79,6 @@ README, not here.
   and E25 (the review call: a marker `CLAUDE.md` in the folder's parent did
   not load); the triage call builds its flags with the same function, so
   one triage probe run would close this item for the record.
-- Epic 5 security audit (story 5.19, D-687), High, before the owner turns
-  auto approval on: the review of an `auto` request reads "the author's
-  last prompt" of the session the request claims, and nothing binds that
-  claim. `officina run` takes the session id from its own environment
-  without checking it, a shell command can append a forged event line to
-  `<home>/events/` (outside the gate's protected directories), and a
-  session can start a child `claude --bg` whose first prompt it wrote.
-  Within an approved `auto` action whose check passed, under its hourly cap
-  and the shadow gate, the requesting session can so steer the review's
-  main input. Waits for: `officina run` recording its ancestor pids in the
-  request, the window escalating with a new cause unless the claimed
-  session's `claude agents` pid is among them and its folder lies in the
-  request's project; `<home>/events` and `<home>/orchestrator` added to the
-  gate's protected directories; `review_excerpt` battery cases for a
-  spoofed session id and a forged event line.
-
 - Walking's cost (story 4.14 AC 5, E82): at one walk every 10 s, walking
   on took 1.95 % of the machine against 0.58 % with walking off, about a
   third of one core for the walks alone, so `DEFAULT_WALKING` is `false`
@@ -177,27 +161,22 @@ isolated workshop (v0.6) is the boundary.
 From the Epic 5 audits (story 5.19, D-687, D-799):
 
 - Security, Medium: any process running as the author can write a file in
-  `<home>/orchestrator/proposals/`, and the window shows a valid one as
-  the orchestrator's; the README says the label names the folder, not the
-  writer. Waits for: a per-start key the window gives `officina mcp`
-  through the MCP config's environment (never the model's), a MAC of each
-  file written by `officina mcp`, and files without a valid MAC shown as
-  of unknown origin; or at least the folder in the gate's protected
-  directories. A `proposal_file` battery case for a forged answer.
-- Security, Low: the proposal limits count from the id's time, which the
-  writer chooses: forged files dated in the past escape the hourly limit,
-  and files dated in the future count as "this hour" for `officina mcp`
-  until retention removes them, which stops the orchestrator's proposal
-  tools. Waits for: an id time far from the file's arrival stored
-  `invalid`, and the limits counted from `received_at_ms`.
-- Security, Low: `Card.cwd` reaches the orchestrator's tools without the
-  untrusted mark, though a session's folder name is the session's choice.
-  Waits for: `Untrusted<String>` on it (the bytes do not change) and an
-  `mcp_output` battery case.
-- Security, Low: `platform::windows::start_in_new_console` starts a process
-  outside the lint, which names `Command::new` only. Waits for: the
-  function `pub(crate)`, named in `disallowed-methods`, its one caller in
-  `spawn` holding the `expect`.
+  `<home>/orchestrator/proposals/`. Since D-961 and D-965 a guarded
+  session's shell cannot name the folder, and the window names the folder
+  as a proposal's origin, never the orchestrator. Waits for: a decision on
+  signing (a per-start key the window gives `officina mcp` through the MCP
+  configuration's environment, never the model's; a MAC of each file
+  `officina mcp` writes; files without a valid one shown as of unknown
+  origin), weighed against a key any program of the author's can read in
+  that process's environment; and a `proposal_file` battery case for a
+  forged answer.
+- Security, Low: at ingestion the proposal limits count from the id's
+  time, which the writer chooses, so files dated in the past escape the
+  hourly limit (the pending limit still bounds them; the tools' own count
+  ignores ids dated ahead since D-964). Waits for: an id time far from the
+  file's arrival stored `invalid`, and ingestion counting by
+  `received_at_ms` without refusing the backlog a window restart ingests
+  at once.
 - Security, Info: the pointer-only check reads `event.detail` and not
   `event.isTrusted`; the CSP and the absence of `{@html}` keep a script out,
   and Vitest's synthetic events would need the check behind a seam.

@@ -49,8 +49,10 @@ Findings of this story, all decided:
    before the fix (D-686).
 2. The review of an `auto` request reads the "author's last prompt" of
    whichever session the request claims, and nothing binds the claim:
-   recorded High in the backlog, to land before the owner turns auto
-   approval on (D-687, to confirm).
+   recorded High (D-687), then fixed before auto approval is turned on:
+   the claim binds through the caller's process ancestry or escalates
+   `session_unbound`, and the event buffer and the orchestrator's folder
+   joined the gate's protected folders (D-960, D-961).
 3. Doctor's orchestrator lines were spread over the output and
    `review_config_invalid` failed doctor: they now print as one section,
    last, and that cause warns (D-797, to confirm).
@@ -170,12 +172,12 @@ without inline script; the release marker check on `officina.exe`.
 | Finding | Severity | Outcome |
 |---|---|---|
 | The meeting's filter lookup missed a filter reached through `include.path`, `includeIf` or `config.worktree`: Receive could run a session's clean filter | High | **fixed** (D-686): `git config --includes --show-scope`, local and worktree scopes counted; `tests/git.rs` cases for the include and the worktree config, the include case red before the fix |
-| The review's "author's last prompt" follows the requesting session's unverified claim (session id from the environment, forged event lines, a child `--bg`) | High | backlog, High, to land before auto approval is turned on (D-687, to confirm) |
-| A proposal file written by any process shows as the orchestrator's | Medium | backlog; the README now says the label names the folder, not the writer (D-687, D-798) |
-| Proposal limits counted from the id's time | Low | backlog |
+| The review's "author's last prompt" follows the requesting session's unverified claim (session id from the environment, forged event lines, a child `--bg`) | High | **fixed** (D-960, D-961): `officina run` records its process ancestry, the review runs only for a live interactive session, or a work order's background session, among those ancestors, otherwise `session_unbound` with no call; `events/` and `orchestrator/` are protected folders; `auto.rs::a_forged_session_claim_is_never_reviewed` red with the rule disabled |
+| A proposal file written by any process shows as the orchestrator's | Medium | **fixed in the window** (D-965, D-961): the labels name the proposals folder, and a guarded session's shell cannot name it; signing stays in the backlog |
+| Proposal limits counted from the id's time | Low | **fixed for the tools** (D-964): ids dated ahead no longer count, `mcp.rs::proposals_dated_ahead_do_not_reach_the_hourly_limit` red before; past-dated files at ingestion stay in the backlog |
 | A review's approval re-reads the request file | Low | not a defect: the id binds 64 bits of the key and `rebuild` checks both (D-687) |
-| A console launcher outside the lint | Low | backlog |
-| `Card.cwd` unmarked in the orchestrator's tools | Low | backlog |
+| A console launcher outside the lint | Low | **fixed** (D-963): in `disallowed-methods`, its caller holds the `expect` |
+| `Card.cwd` unmarked in the orchestrator's tools | Low | **fixed** (D-962): marked inside an MCP output, `mcp_output` case `card_cwd` |
 | `event.isTrusted` not read by the pointer check | Info | backlog (defence in depth) |
 | A proposed answer is model text on a command line by design | Info | stated in the README beside the click it needs |
 
@@ -341,6 +343,8 @@ own sessions load no user or project configuration (`--setting-sources
 | A fake claude log line written in pieces interleaved with another process's line under load (stories 5.17 and 5.21): each line is now one append | story 5.21, `5e93f20` | `officina-fake-claude.rs` |
 | A test read a refused review's row before its cause was written (story 5.21): it now waits for the cause | story 5.21, `ded2b9f` | `crates/officina/tests` |
 | The meeting's filter lookup missed includes and the worktree config | D-686 | `crates/officina-host/src/git.rs` |
+| The review's input followed an unverified session claim | D-960, D-961 | `relay/review.rs`, `relay/run/request.rs`, `process_tree.rs`, `relay/gate.rs` (core), CHANGELOG Security |
+| `Card.cwd` unmarked, the console launcher outside the lint, proposal ids dated ahead counted, the proposals' origin labelled as the orchestrator | D-962 to D-965 | `board.rs`, `clippy.toml`, `orders/proposal.rs`, the meeting and Proposals components, CHANGELOG Security |
 
 ## Open owner items
 
@@ -410,7 +414,7 @@ From `epic-5-decisions.md`, every decision marked "(To confirm.)":
 - D-677: closing the window records the briefing's reading whatever view is shown.
 - D-679: no "contract held" in the header; 8 px view button sides.
 - D-680: the composer chooses nothing but a single-entry list.
-- D-687: the session binding of the review's input before auto approval is turned on.
+- D-687: the audit's remaining findings, now fixed by D-960 to D-965 but the Medium's signing and the past-dated ingestion limit, which stay in the backlog.
 - D-691: the orchestrator vector carries no first prompt.
 - D-770: `no_excerpts` withholds prompt and answer excerpts in `officina mcp`, not past command excerpts.
 - D-773: the orchestrator's presence from `claude agents` alone.

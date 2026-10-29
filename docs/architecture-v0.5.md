@@ -267,7 +267,7 @@ auto_max_per_hour = 6                  # auto only, 1..=60, default 6
 `EscalationCause` (`closed_enum!`) is recorded on the card, in `auto_review.cause` and in a journal line `auto_escalated`. The precheck order, each with a case in `tests/vectors/auto.json`, and a coverage test on `ALL`:
 
 1. `claude_shim`: `claude` resolves to `.cmd` or `.bat`;
-2. `no_session_id`: the request has no session id;
+2. `no_session_id`: the request has no session id; then `session_unbound` (D-960): the session it names is not live with a process among the ancestors `officina run` recorded, or is a background session no work order of the author's started;
 3. `no_excerpts`: excerpts are off, so on such a floor `auto` always escalates;
 4. `quota_high`: the latest known 5-hour `used_percentage` is at or above 90, stale data included, no data not blocking;
 5. `hourly_cap`: review `approve` answers for that project and action in the last 3,600 s, in shadow and live modes alike, have reached `auto_max_per_hour`. Counting shadow answers keeps the shadow statistics on the same cases live mode would review;
