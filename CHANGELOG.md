@@ -8,6 +8,17 @@ project uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- The permission router's hook path (v0.5.x, story 5.22; internal,
+  nothing changes for you yet): `officina hook` on a `PermissionRequest`
+  gives Claude Code its own prompt at once unless a window that routes
+  prompts runs, which none does until the routing story; with one, it
+  would write the request, wait for a decision only the window's authority
+  writes, bound to the session and the input's hash and used once, and
+  print only `allow` or `deny`, never anything that changes Claude Code's
+  settings, the call or the session. The window keeps a liveness marker,
+  `window/alive.json`, refreshed every 5 s and removed when it closes.
+  Doctor does not register `PermissionRequest` yet.
+
 - The orchestrator in the scene's decision office (v0.5, story 5.18):
   while `claude agents` lists it, it sits at the decider's desk in its own
   tunic (`--orch-tunic`, both themes), at its desk while busy, facing the

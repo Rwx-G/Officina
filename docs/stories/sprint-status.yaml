@@ -160,7 +160,8 @@ stories:
   # 5.21: done; D-860 and D-865 to confirm (Your turn read as live idle in Done; the panel's fixed proposal slot).
   - {id: "5.21", file: story-5.21-answer-proposals.md, slice: C, status: review}
   # Slice D, v0.5.x, after 5.19.
-  - {id: "5.22", file: story-5.22-permission-router-core-and-hook.md, slice: D, status: approved}
+  # 5.22: done ahead of 5.19 on the lead's parallel track (D-900, to confirm); inert until the routing story (no window routes prompts, no PermissionRequest registered); D-903 to confirm.
+  - {id: "5.22", file: story-5.22-permission-router-core-and-hook.md, slice: D, status: review}
   - {id: "5.23", file: story-5.23-auto-mode-denials.md, slice: D, status: approved}
 ---
 epic: 6

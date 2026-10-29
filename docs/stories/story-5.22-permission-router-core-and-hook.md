@@ -1,6 +1,6 @@
 # Story 5.22: The permission router's core and hook path (Slice D, v0.5.x)
 
-**Status:** Approved
+**Status:** Review
 
 ## Story
 
@@ -20,12 +20,12 @@ so that the routing story can put the prompt on a card later, and until then, an
 
 ## Tasks
 
-- [ ] `officina-core::relay::prompts`: types, canonical hash, cap, output, marker reading; `tests/vectors/prompts.json` and its tests (AC 1, 2)
-- [ ] Collector: the marker's write, refresh and removal; `prompt_routed`; the 24 h cleanup (AC 2, 5)
-- [ ] `officina hook`'s `PermissionRequest` branch; the wait function in `officina-host::relay::prompts` (AC 3, 4)
-- [ ] `authority::decide_prompt`; journal kinds (AC 5)
-- [ ] Doctor's non-registration case; zero-write (AC 6)
-- [ ] Update `CHANGELOG.md` (AC 7)
+- [x] `officina-core::relay::prompts`: types, canonical hash, cap, output, marker reading; `tests/vectors/prompts.json` and its tests (AC 1, 2)
+- [x] Collector: the marker's write, refresh and removal; `prompt_routed`; the 24 h cleanup (AC 2, 5)
+- [x] `officina hook`'s `PermissionRequest` branch; the wait function in `officina-host::relay::prompts` (AC 3, 4)
+- [x] `authority::decide_prompt`; journal kinds (AC 5)
+- [x] Doctor's non-registration case; zero-write (AC 6)
+- [x] Update `CHANGELOG.md` (AC 7)
 
 ## Dev Notes
 
@@ -45,10 +45,35 @@ so that the routing story can put the prompt on a card later, and until then, an
 
 ### Debug Log
 
+- Implemented on the lead's parallel track before 5.19 closes v0.5 (D-900, to confirm), rebased on story 5.21.
+- `approvals::consume`'s claim (a new `<id>.consumed.json`) replaces AC 4's "rename", which is not single-winner on Windows (D-902); the authority writes a decision through a temporary file hard-linked to its name, `create_new` semantics without a half-written file.
+- The hook's wait in the CLI tests is cut through `OFFICINA_TEST_PROMPT_WAIT_MS`, read only with `test-seams` (D-906); the local gate also checks the release `officina.exe` holds the name nowhere.
+- `perf.rs` failed once in a first run on the shared machine for the existing `hook_latency_p95` and the new case alike (own cost about 40 ms each, other gates running); rerun in the gate below, both well inside the budget.
+- Gate, Windows, on this story's code (rebased on `3c681b9`), every job of `.github/workflows/ci.yml` replayed: fmt; frontend install and build; clippy in both CI feature sets; `cargo test --workspace --features officina-core/ts` 1,672 passed, 0 failed, 15 ignored (TypeScript drift green); the spawn tests alone; `perf.rs` in release with CI's budgets, 6 passed (PermissionRequest without a window own cost 1.1 ms, hook own cost 8.9 ms, gate own cost 8.7 ms, in-process p95 3.2 ms); the lexer differential; `approvals_stress`; `registry_crash`; `proposals_crash` and the `officina mcp` kill; officina holds no authority (and no test seam) with its controls; registry dependencies; no bundled roots; e2e fixtures from the real CLI; `pnpm check`, `lint`, Vitest 350 passed; Playwright `--repeat-each=3` 1,326 passed, 6 skipped; the mutants job (each mutant caught, control green); `cargo deny`; `pnpm audit`. The `core-linux` job ran in a `rust:1-bookworm` container (toolchain from `rust-toolchain.toml`, source read-only): fmt and clippy clean; its first run failed `host::relay::prompts::tests::the_deadline_ends_the_wait_with_no_decision`, which measured the 200 ms deadline from after the request file was written (the container syncs slower), a test fault fixed to assert the wait never ends before `deadline_ms`; the rerun with `--no-fail-fast` passed 1,497 and failed once `watch.rs::a_re_instructed_auto_archived_session_counts_as_a_flip` (no event within 10 s, outside this story), which passed three reruns of `watch.rs` (67 each); the spawn tests alone passed.
+
 ### Completion Notes
 
+Decisions D-900 to D-906 (D-900 and D-903 to confirm). The path is inert: no window routes prompts (`ROUTES_PROMPTS` false in the collector) and doctor registers no `PermissionRequest`, so Claude Code's own prompt appears as before. The tests proving each AC:
+
+1. Core types and output: `crates/officina-core/src/relay/prompts.rs::tests::{the_output_holds_only_behavior_and_the_constant_message, the_input_hash_is_canonical, the_input_is_capped_on_a_character_boundary, a_decision_answers_its_own_request_by_its_deadline, answers_map_to_behaviours_and_ids_are_safe_names}` and the module's doctests; `tests/vectors/prompts.json` through `crates/officina-core/tests/prompts_vectors.rs::{payload_cases_match, the_output_schema_is_pinned}`.
+2. The marker: `prompts.rs::tests::{a_missing_stale_or_non_routing_marker_is_no_window, a_fresh_routing_marker_is_a_window}`; `crates/officina/tests/watch.rs::{the_window_writes_its_marker_and_refreshes_it, a_clean_exit_removes_the_marker}`; the app removes it on `RunEvent::Exit` (D-904).
+3. No window: `crates/officina/tests/hook.rs::{permission_request_without_a_window_prints_nothing_and_writes_nothing, a_malformed_permission_request_prints_nothing, the_hook_never_exits_2_on_permission_request}`; `crates/officina/tests/perf.rs::permission_request_without_a_window_is_within_the_hook_budget`; `crates/officina-host/src/relay/prompts.rs::tests::without_a_window_route_writes_nothing`.
+4. With a window: `crates/officina-host/src/relay/prompts.rs::tests::{a_matching_decision_is_consumed_once, a_decision_for_another_session_or_hash_is_ignored, a_stale_marker_ends_the_wait, a_declined_request_ends_the_wait, the_deadline_ends_the_wait_with_no_decision}`; `hook.rs::{an_allow_written_before_the_wait_is_printed, a_deny_prints_the_constant_message, the_request_file_is_removed_on_every_exit}` (D-906 for the first's reading).
+5. The authority: `crates/officina-host/tests/authority.rs::{a_prompt_decision_is_written_once, an_expired_prompt_cannot_be_decided, decline_writes_no_decision}`; `crates/officina-core/src/relay/journal.rs::tests::prompt_routed_and_decided_never_carry_the_input`; `watch.rs::{a_waiting_prompt_is_journaled_routed_once, prompt_files_older_than_24_h_are_removed}`; `crates/officina-host/src/relay/prompts.rs::tests::prune_takes_old_router_files_only`; CI's "officina holds no authority" step, replayed.
+6. Nothing registered, nothing written: `crates/officina-host/src/doctor.rs::tests::permission_request_is_not_registered_yet`; `crates/officina/tests/doctor.rs::the_printed_hooks_block_registers_no_permission_request`; `crates/officina/tests/quota_doctor.rs::no_command_writes_under_the_claude_config_dir` runs the hook through no window, allow, deny, decline and the deadline.
+7. Documentation: `CHANGELOG.md` `[Unreleased]` Added.
+
 ## File List
+
+- `crates/officina-core/src/relay/prompts.rs` (new), `relay/mod.rs`, `relay/journal.rs`, `relay/view.rs`, `relay/approvals.rs`
+- `crates/officina-core/tests/prompts_vectors.rs` (new), `tests/vectors/prompts.json` (new)
+- `crates/officina-host/src/relay/prompts.rs` (new), `relay/mod.rs`, `relay/home.rs`, `relay/approvals.rs`, `relay/authority.rs`, `watch.rs`, `doctor.rs`
+- `crates/officina-host/tests/authority.rs`
+- `crates/officina/src/main.rs`; `crates/officina/tests/hook.rs`, `watch.rs`, `doctor.rs`, `quota_doctor.rs`, `perf.rs`
+- `app/src-tauri/src/main.rs`
+- `CHANGELOG.md`, `docs/stories/epic-5-decisions.md`, `docs/stories/sprint-status.yaml`, this story
 
 ## Change Log
 
 - 2026-10-28 created for Slice D (AD-181; D-578 to D-580): the parts whose entry questions are answered
+- 2026-10-29 implemented, inert until the routing story; decisions D-900 to D-906; status review
