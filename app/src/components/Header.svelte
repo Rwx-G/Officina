@@ -226,9 +226,9 @@
           {toSort} to sort
         </button>
       {/if}
-      {#if contract?.held === true && contract.hook_missing.length === 0}
-        <span class="contract" data-testid="contract" title="Claude Code {contract.claude_version ?? ''}">contract held</span>
-      {:else if contract?.held === false}
+      <!-- The header shows exceptions only: a held contract shows nothing,
+           so the status slot keeps its room for what waits (D-679). -->
+      {#if contract?.held === false}
         <span class="contract broken" data-testid="contract">contract broken: {contract.missing.join(", ")}</span>
       {/if}
       {#if contract && contract.hook_missing.length > 0}
@@ -271,9 +271,11 @@
     border-radius: var(--radius-control);
     overflow: hidden;
   }
+  /* 8 px sides rather than the tools' 12: the fourth view leaves the
+     status slot its room on a Full HD screen (D-679). */
   .view {
     min-height: var(--target-min);
-    padding: 0 12px;
+    padding: 0 8px;
     border: none;
     background: var(--color-surface);
     font-weight: 600;

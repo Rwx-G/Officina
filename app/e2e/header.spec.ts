@@ -62,11 +62,12 @@ for (const [width, height] of [
 ] as const) {
   test(`the header is the same in every view and mode at ${width} x ${height}`, async ({ page }) => {
     await page.setViewportSize({ width, height });
-    // A board with chips (waiting, contract held), the relay in use, rows
-    // to sort: every kind of header control is shown.
+    // A board with the relay in use and rows to sort: every kind of header
+    // control is shown. Its contract holds, which the header does not show
+    // (D-679).
     await openBoard(page, loadBoard("triage-board"), {}, loadRelay("relay-clean"), loadRegistry("triage"));
-    await expect(page.getByTestId("contract")).toHaveText("contract held");
     await expect(page.getByTestId("to-sort-chip")).toBeVisible();
+    await expect(page.getByTestId("contract")).toHaveCount(0);
     const first = await headerBoxes(page);
     expect(Object.keys(first).some((k) => k.startsWith("gauge-5h"))).toBe(true);
     for (const shown of SHOWN) {

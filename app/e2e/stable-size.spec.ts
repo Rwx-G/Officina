@@ -279,7 +279,9 @@ test.describe("controls keep their size whatever their state", () => {
         ]),
       [board, clean] as const,
     );
-    await expect(page.getByTestId("header-status").locator(":scope > *")).toHaveCount(1);
+    // A held contract shows nothing (D-679): the quiet slot is empty.
+    await expect(page.getByTestId("waiting-pill")).toHaveCount(0);
+    await expect(page.getByTestId("header-status").locator(":scope > *")).toHaveCount(0);
     const quiet = await boxes();
     expect(quiet.length).toBeGreaterThan(3);
     const pending = loadRelay("relay-pending");

@@ -187,9 +187,13 @@ test.describe("degraded states", () => {
     await openBoard(page, board);
     await expect(page.getByTestId("contract-hook")).toHaveText(`hook fields missing: ${missing.join(", ")}`);
     await expect(page.getByTestId("contract")).toHaveCount(0);
-    await openBoard(page, loadBoard("busy"));
+    const held = loadBoard("busy");
+    expect(held.contract.held).toBe(true);
+    expect(held.contract.hook_missing).toEqual([]);
+    await openBoard(page, held);
     await expect(page.getByTestId("contract-hook")).toHaveCount(0);
-    await expect(page.getByTestId("contract")).toHaveText("contract held");
+    // The header shows exceptions only: a held contract shows nothing (D-679).
+    await expect(page.getByTestId("contract")).toHaveCount(0);
   });
 
   test("an unavailable registry is reported and the board still shows sessions", async ({ page }) => {
