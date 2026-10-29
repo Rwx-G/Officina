@@ -72,16 +72,16 @@ project uses [Semantic Versioning](https://semver.org/).
   mode the header keeps to one line, so eight projects fit a maximised
   Full HD window. The scene's light materials, figure and people colours
   join the tokens.
-- Walking in the scene (v0.4, in progress), off by default: a "Walking"
-  toggle in the header, kept for the next start, turns it on. An employee
-  whose place changes then walks there along the corridors, with a walk
-  cycle, and sits down at a seat; its halo appears when it arrives. A new
-  session fades in at the entrance and walks in; an ended one walks out
-  and fades. With walking off, employees glide to their places. Opening
-  the scene, a window brought back from behind another, and the system's
-  reduced motion place everyone at once; nothing runs once everyone has
-  arrived. Walking is off by default because the release's CPU measurement
-  put it over the scene's budget of 1 % of the machine.
+- Walking in the scene (v0.4, in progress), on by default: an employee
+  whose place changes walks there along the corridors, with a walk cycle,
+  and sits down at a seat; its halo appears when it arrives. A new session
+  fades in at the entrance and walks in; an ended one walks out and fades.
+  A "Walking" toggle in the header, kept for the next start, turns it off:
+  employees then glide to their places. Opening the scene, a window brought
+  back from behind another, and the system's reduced motion place everyone
+  at once; nothing runs once everyone has arrived. Walking sits at the
+  scene's CPU budget of 1 % of the machine on a deliberately harsh replay,
+  a cost the owner accepted.
 - Focus mode (v0.4, in progress): a third mode of the Sessions view, and
   `f`, hide the board and the scene and list only what waits for you: the
   approvals waiting (opened in Board mode), the Needs you sessions,
@@ -533,9 +533,9 @@ project uses [Semantic Versioning](https://semver.org/).
   screen draws 60 frames a second during a walk and a 60 Hz one every
   frame. Profiled in Chromium, a walk's main-thread time per second fell by
   about four fifths. Measured again on the release, walking's own CPU cost
-  fell from about 1.4 % to 0.5 % of the machine, but the scene with walking
-  on still took 1 % of it, not under the scene's budget, so walking stays
-  off by default.
+  fell from about 1.4 % to 0.5 % of the machine, and the scene with walking
+  on took 1 % of it, at the scene's budget; the owner then turned walking
+  back on by default.
 - `officina doctor` (v0.4) prints `SubagentStart` and `SubagentStop` in the
   hooks block and reports them missing until the block is pasted again: to
   paste again for the scene to show sub-agents. The hook records them with

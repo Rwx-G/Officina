@@ -178,20 +178,20 @@ test.describe("modes", () => {
     await sceneSettled(page);
   });
 
-  // Walking (story 4.10; AD-66 as amended, D-469, D-517): off by default
-  // since the AD-71 walking run measured it over FR-9 (E82; D-480, D-515);
-  // the toggle turns it on and the choice is kept.
-  test("walking is off by default", async ({ page }) => {
-    expect(DEFAULT_WALKING).toBe(false);
+  // Walking (story 4.10; AD-66 as amended, D-469, D-517): on by default,
+  // the owner having accepted its cost at FR-9's gate (E86; D-700); the
+  // toggle turns it off and the choice is kept.
+  test("walking is on by default", async ({ page }) => {
+    expect(DEFAULT_WALKING).toBe(true);
     await openScene(page, loadBoard("scene-c"));
     const toggle = page.getByRole("button", { name: "Walking" });
     await expect(toggle).toBeVisible();
-    await expect(toggle).toHaveAttribute("aria-pressed", "false");
+    await expect(toggle).toHaveAttribute("aria-pressed", "true");
     await expect(toggle).toHaveText("Walking");
     await toggle.click();
-    await expect(toggle).toHaveAttribute("aria-pressed", "true");
+    await expect(toggle).toHaveAttribute("aria-pressed", "false");
     await page.reload();
-    await expect(page.getByRole("button", { name: "Walking" })).toHaveAttribute("aria-pressed", "true");
+    await expect(page.getByRole("button", { name: "Walking" })).toHaveAttribute("aria-pressed", "false");
   });
 
   // One header in every view and mode (story 4.15, D-540): the Walking

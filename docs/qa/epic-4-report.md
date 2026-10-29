@@ -34,8 +34,9 @@ What closes the epic, in order:
    then cut a walk's cost at its cause (D-550 to D-552); E82's runs 4 and 5
    run again on its release (E86, same locked session) put the walking run
    at 1.00 % of the machine (0.9985 %, and 1.007 % run again), walking's
-   own cost from 1.4 % to 0.5 %: run 4 is not under 1 %, so walking stays
-   off by default (story 4.16 AC 6, D-553).
+   own cost from 1.4 % to 0.5 %: run 4 is not under 1 %, so D-553 left
+   walking off. The owner then accepted walking's cost at the gate and
+   turned it on by default (D-700, 2026-10-29).
 4. The owner's review of the README assets (story 4.14 AC 2), waiting on
    the same visual fixes (owner decision); story 4.15 rendered them again.
 
@@ -103,13 +104,13 @@ binary without the gate, process-start noise: the next run read 4.7 ms.
 | 4.7 Scene drawn in place | in progress | light baselines (CI run, owner comparison) |
 | 4.8 Targets, keys, file, strip | review | |
 | 4.9 Alert room and beacon | review | |
-| 4.10 Walking | review | the walking CPU run failed (E82), and again at 1.00 % after story 4.16 (E86): walking is off by default |
+| 4.10 Walking | review | the walking CPU run failed (E82), then sat at 1.00 % after story 4.16 (E86); on by default, the owner accepting its cost at the gate (D-700) |
 | 4.11 Focus mode and keys | review | |
 | 4.12 Sub-agents | review | gate 1 passed (E83); a teammate, `/btw`, `--bg` and nested sub-agents not observed by name |
 | 4.13 Dark theme | in progress | dark baselines (CI run, owner comparison) |
 | 4.14 Docs, checks, QA | in progress | AC 2 review, AC 6, 8 to 10 (owner), this report's closure; AC 5 measured (E82), AC 7 passed |
 | 4.15 First-use feedback | review | the owner's next use of the real window |
-| 4.16 Walking's cost | review | AC 6 measured (E86): the walking run at 1.00 % of the machine, not under 1 %; walking stays off by default |
+| 4.16 Walking's cost | review | AC 6 measured (E86): the walking run at 1.00 % of the machine, not under 1 %; walking on by default by the owner's decision (D-700) |
 | 4.17 Scene readability | review | the owner's two-second test (story 4.14 AC 9) on the screenshots it rendered again |
 
 ## Slice 0 order (story 4.14 AC 11)
@@ -134,7 +135,7 @@ run rewrites the installed window's stored view (E82).
 
 | AC | Run | Result |
 |---|---|---|
-| 5 | Idle and walking CPU, five 10-minute runs, both units (1 % of the machine, D-515) | E82, 2026-10-29, session locked (about 170 frames per second): mean 0.49 % of the machine (11.8 % of one core) halos breathing throughout, 0.12 % (2.9 %) the two-minute rule, 0.066 % (1.6 %) halos steady, 0.58 % (14.0 %) replay walking off: pass; **1.95 %** (46.9 %) replay walking on: **fail**, D-480's fallback shipped (`DEFAULT_WALKING` false). After story 4.16, E86, same condition: replay walking on 0.9985 % (24.0 %) and, run again, **1.007 %** (24.2 %): not under 1 %; walking off 0.51 % (12.1 %); `DEFAULT_WALKING` stays false (D-553) |
+| 5 | Idle and walking CPU, five 10-minute runs, both units (1 % of the machine, D-515) | E82, 2026-10-29, session locked (about 170 frames per second): mean 0.49 % of the machine (11.8 % of one core) halos breathing throughout, 0.12 % (2.9 %) the two-minute rule, 0.066 % (1.6 %) halos steady, 0.58 % (14.0 %) replay walking off: pass; **1.95 %** (46.9 %) replay walking on: **fail**, D-480's fallback shipped (`DEFAULT_WALKING` false). After story 4.16, E86, same condition: replay walking on 0.9985 % (24.0 %) and, run again, **1.007 %** (24.2 %): not under 1 %; walking off 0.51 % (12.1 %); `DEFAULT_WALKING` stayed false (D-553), then the owner turned it on, accepting the cost at the gate (D-700) |
 | 6 | Taskbar on the real app, 100 % and 150 % | open (gate 2 passed on the probe) |
 | 7 | Live theme switch in WebView2 | **pass** (owner, 2026-10-28): the window followed a Windows theme switch on Auto, no restart |
 | 8 | WebView2 look, 100 % and 150 %, light and dark, settled and walking | open |
@@ -154,7 +155,7 @@ run rewrites the installed window's stored view (E82).
 | FR-6 Keyboard and accessibility | 4.8, 4.11, 4.13 | `scene.spec.ts` (Tab, arrows, 44 px targets), `modes.spec.ts`, `tokens.test.ts` |
 | FR-7 Modes | 4.7, 4.11 | `modes.spec.ts`, `view.test.ts` |
 | FR-8 Dark theme | 4.13 | `themes.spec.ts`, `tokens.test.ts`, `alert.spec.ts > an alert changes no theme token` |
-| FR-9 Performance | 4.10, 4.14, 4.16 | AC 5, E82: the halo rule and walking off within 1 % of the machine; walking on over it, so off by default (`view.test.ts`, `modes.spec.ts > walking is off by default`). Story 4.16 AC 6, E86: walking on at 1.00 % of the machine after the cut (0.9985 %, 1.007 % run again), still not under 1 %, so still off by default; walking off 0.51 % |
+| FR-9 Performance | 4.10, 4.14, 4.16 | AC 5, E82: the halo rule and walking off within 1 % of the machine; walking on over it, so off by default. Story 4.16 AC 6, E86: walking on at 1.00 % of the machine after the cut (0.9985 %, 1.007 % run again), not under 1 %; walking off 0.51 %. **The owner accepted walking's cost at the gate** (D-700, 2026-10-29): the replay is deliberately harsh (one crossing walk every 10 s, 240 Hz ultrawide), so walking is on by default and the toggle turns it off (`view.test.ts`, `modes.spec.ts > walking is on by default`); the 1 % gate itself is unchanged (D-515) |
 | FR-10 Alert | 4.3, 4.5, 4.9 | the alert sections of `scene.json`, `components.test.ts` (the band's words), `alert.spec.ts` |
 | FR-11 Taskbar, no toast | 4.5 | `taskbar.rs` tests, E80; real app open (AC 6) |
 | FR-12 Sub-agents | 4.1 (tooling), 4.12 | shipped: gate 1 passed (E83); folding by `agent_id` (D-547), the 1 s hold (D-548), the targets (D-549); vectors, Vitest and Playwright cases in story 4.12 |

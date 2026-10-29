@@ -807,6 +807,10 @@ the toggle stays. Story 4.16 halved the walking run, which now sits on the
 gate: about 0.5 % of the machine for the walks and about 0.5 % for the
 rest of the scene (the breathing halos, the replay's changes).
 
+Owner decision, 2026-10-29 (epic-4-decisions.md D-700): given this
+result on a deliberately stressful replay, walking is on by default; the
+toggle turns it off. The 1 % gate is unchanged.
+
 ## E83. Sub-agent signals (v0.4 gate 1)
 
 Story 4.1 AC 1, AD-176, AD-178 row 1 as amended by D-518, D-507. Claude

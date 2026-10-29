@@ -6,6 +6,7 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import { loadBoard, loadRegistry, loadRelay, openBoard, openScene } from "./fixtures";
 import type { RegistryView } from "../src/lib/generated/RegistryView";
+import { DEFAULT_WALKING } from "../src/lib/view.svelte";
 
 /** Sub-pixel rounding between two layouts, never a real move. */
 const TOLERANCE_PX = 0.5;
@@ -68,8 +69,9 @@ const CASES: ToggleCase[] = [
   // The theme control (AD-67, D-517), in both header layouts.
   { name: "theme switch", selector: '[data-testid="theme-switch"]', scene: "board" },
   { name: "theme switch on one line", selector: '[data-testid="theme-switch"]', scene: "sceneMode" },
-  // The Walking toggle (D-469, D-517): a fixed control in every mode.
-  { name: "walking toggle", selector: '[data-testid="walking-toggle"]', scene: "sceneMode" },
+  // The Walking toggle (D-469, D-517): a fixed control in every mode, as
+  // the default leaves it (D-700).
+  { name: "walking toggle", selector: '[data-testid="walking-toggle"]', scene: "sceneMode", pressed: DEFAULT_WALKING },
   // To resume and Done in the header (D-541): a count that changes moves
   // nothing beside it.
   {

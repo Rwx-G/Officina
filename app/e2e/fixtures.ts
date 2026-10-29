@@ -165,7 +165,7 @@ export async function openScene(
 }
 
 /** Opens the window in Scene mode with walking on, both stored choices:
- *  for the cases about walking, which is off by default (D-480, E82). */
+ *  for the cases about walking, which hold whatever the default (D-700). */
 export async function openWalkingScene(page: Page, board: Board): Promise<void> {
   await load(page, board, {}, null, null, {
     [VIEW_STORAGE_KEY]: serialiseViewState({ ...defaultViewState(), base: "scene", walking: true }),

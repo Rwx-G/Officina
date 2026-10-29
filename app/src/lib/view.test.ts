@@ -89,14 +89,14 @@ describe("view state", () => {
     }
   });
 
-  // Walking is off by default: the AD-71 walking run measured it over
-  // FR-9's 1 % of the machine (E82; D-480, D-515).
-  it("a stored view without walking reads as walking off", () => {
-    expect(DEFAULT_WALKING).toBe(false);
+  // Walking is on by default: the owner accepted its cost at FR-9's 1 % of
+  // the machine (E86; D-700).
+  it("a stored view without walking reads as walking on", () => {
+    expect(DEFAULT_WALKING).toBe(true);
     for (const base of BASES) expect(readViewState(JSON.stringify({ v: 1, base }))).toEqual({ ...defaultViewState(), base });
     // An invalid value is the default; a valid one is kept.
-    for (const walking of ["yes", 1, null, {}]) expect(readViewState(JSON.stringify({ v: 1, walking })).walking).toBe(false);
-    expect(readViewState(JSON.stringify({ v: 1, walking: true })).walking).toBe(true);
+    for (const walking of ["no", 0, null, {}]) expect(readViewState(JSON.stringify({ v: 1, walking })).walking).toBe(true);
+    expect(readViewState(JSON.stringify({ v: 1, walking: false })).walking).toBe(false);
   });
 
   it("the walking setting is stored with the mode and the theme and read back", () => {
