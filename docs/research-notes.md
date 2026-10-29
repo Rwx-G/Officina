@@ -677,6 +677,34 @@ Story 5.1 AC 7, AD-96 row 1, D-126, D-164, D-561.
   changes how the briefing is first asked for. `ORCHESTRATOR_ENV_EXTRA`
   stays empty (D-561).
 
+## E25. Memory files in the review call (v0.5, story 5.13)
+
+Story 5.13 AC 14, D-164, D-126. **Verified** by the developer agent on
+2026-10-29, Claude Code 2.1.312, with
+`crates/officina-host/examples/review_probe.rs`: one real review of an
+`auto` request, the exact `ReviewCall` vector (`-p --model haiku --tools ""
+--strict-mcp-config --mcp-config {"mcpServers":{}} --setting-sources ""
+--settings {"crossSessionInbound":"refuse"} --no-session-persistence
+--output-format json --json-schema <review schema>`, the request on stdin
+between nonce markers), run by `relay::review::run_call` in
+`<home>/review/empty` with the contained allow list and
+`CLAUDE_CODE_DISABLE_ADVISOR_TOOL=1`, the probe's home a fresh folder under
+the worktree's ignored `target/`. A marker `CLAUDE.md` in `<home>/review/`,
+the folder's parent, asked every reason to start with one capitalised
+word.
+
+- The call answered in 6.3 s, schema-valid: decision `escalate`, reason
+  "Dry run passed and the prompt asks for this apply, but last_outcomes is
+  empty, so no prior run succeeded. Needs human review." No marker word:
+  the memory file of the folder's parent did not load with this flag set,
+  as E24 found for the orchestrator's.
+- `CLAUDE_CODE_DISABLE_ADVISOR_TOOL=1` (D-692) did not keep the call from
+  starting or answering.
+- **Outcome** (D-164's first branch, D-127): no flag is added to the
+  vector, and `workdir_not_empty` stays about the folder itself; nothing
+  outside `review/empty` is refused.
+- Cost: one Haiku call, USD 0.0015 (`total_cost_usd`).
+
 ## E80. The taskbar overlay badge and the attention request (v0.4 gate 2)
 
 Story 4.1 AC 2, AD-178 gate 2, numbered after the ranges Epics 5 to 7

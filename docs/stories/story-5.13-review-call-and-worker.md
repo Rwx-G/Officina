@@ -1,6 +1,6 @@
 # Story 5.13: The review call: causes, prompt, schema, worker and blind shadow
 
-**Status:** Approved
+**Status:** Review
 
 ## Story
 
@@ -28,16 +28,16 @@ so that evidence about the review accumulates on my own decisions without the re
 
 ## Tasks
 
-- [ ] `crates/officina-core/src/relay/auto.rs`: `EscalationCause`, precheck, `ReviewJob`, `ReviewInput` without answer excerpts, prompt, schema, validation, `rule_baseline` (AC 1, 2, 6, 15)
-- [ ] `tests/vectors/auto.json` (`precheck`, `prompt`, `output`, `baseline`) and `crates/officina-core/tests/auto_vectors.rs` (AC 1, 2, 6)
-- [ ] `VectorKind::ReviewCall`, golden case, `<home>/review/empty` (AC 3)
-- [ ] `crates/officina-host/src/relay/review.rs`: worker, queue, budget and cap counts, rows, author decision copy (AC 4, 6)
-- [ ] Blind views; journal kinds (AC 5, 7)
-- [ ] Fake claude `review-*` family beside the `triage-*` modes; `crates/officina/tests/auto.rs` (AC 2, 8)
-- [ ] `review_excerpt` section (AC 9)
-- [ ] Exclusion, retention, zero-write, doctor (AC 10-12)
-- [ ] Update `CHANGELOG.md` and the README (AC 13)
-- [ ] `examples/review_probe.rs`; run it; E25 and its branch (AC 14)
+- [x] `crates/officina-core/src/relay/auto.rs`: `EscalationCause`, precheck, `ReviewJob`, `ReviewInput` without answer excerpts, prompt, schema, validation, `rule_baseline` (AC 1, 2, 6, 15)
+- [x] `tests/vectors/auto.json` (`precheck`, `prompt`, `output`, `baseline`) and `crates/officina-core/tests/auto_vectors.rs` (AC 1, 2, 6)
+- [x] `VectorKind::ReviewCall`, golden case, `<home>/review/empty` (AC 3)
+- [x] `crates/officina-host/src/relay/review.rs`: worker, queue, budget and cap counts, rows, author decision copy (AC 4, 6)
+- [x] Blind views; journal kinds (AC 5, 7)
+- [x] Fake claude `review-*` family beside the `triage-*` modes; `crates/officina/tests/auto.rs` (AC 2, 8)
+- [x] `review_excerpt` section (AC 9)
+- [x] Exclusion, retention, zero-write, doctor (AC 10-12)
+- [x] Update `CHANGELOG.md` and the README (AC 13)
+- [x] `examples/review_probe.rs`; run it; E25 and its branch (AC 14)
 
 ## Dev Notes
 
@@ -62,12 +62,51 @@ so that evidence about the review accumulates on my own decisions without the re
 
 ### Debug Log
 
+- The first draft of the queue reviewed requests in the order of their file names, the request key's hex first: `the_cap_is_checked_again_right_before_each_call` caught the later request reviewed first. The discovery now orders by `created_at_ms`.
+- The injection harness first looked for the data marker anywhere in the stdin; the instruction names the markers mid-sentence, so it now takes the marker that opens a line.
+- `contained_kinds_receive_the_allow_list_only` and its sibling failed on the review's folder, which the spawn tests did not create; the test set-up now creates every `OfficinaDir` it compares with.
+
 ### Completion Notes
 
+Every AC is implemented and proven by the tests named. Decisions D-726 to D-733, none to confirm; E25 recorded (memory files do not load, no flag added). No new dependency or feature.
+
+- AC 1: `tests/vectors/auto.json` `precheck` section through `auto_vectors.rs::{precheck_cases_match, causes_are_checked_in_their_order, every_cause_has_a_case}` (the order test derives the precheck causes from `EscalationCause::ALL`; a case with a call one second earlier is reviewed, not escalated). `claude_not_found` joins the list first (D-726).
+- AC 2: core `relay/auto.rs::tests::{prompt_is_pinned_for_a_fixed_nonce, schema_is_pinned, input_holding_the_nonce_is_refused, the_input_holds_the_last_prompt_and_no_answer}`; the `prompt` and `output` sections through `auto_vectors.rs::{prompt_cases_match, output_cases_match}`; CLI `auto.rs::an_answer_excerpt_never_reaches_the_review`. The triage call's escaping, framing and structured-output reader are shared (`escaped_line`, `framed`, `read_structured`).
+- AC 3: the two `review_call` cases of `tests/vectors/spawn.json`; CLI `spawn.rs::{every_kind_reaches_the_fake_claude_as_its_golden_vector, contained_kinds_receive_the_allow_list_only, seeded_session_variables_never_reach_the_child}`; core `spawn.rs::tests::contained_kinds_turn_the_advisor_off` (D-692, D-731).
+- AC 4: CLI `watch.rs::{the_board_keeps_its_pace_while_a_review_hangs, a_triage_dry_run_does_not_delay_a_review, queued_reviews_are_paced_5_s_apart, the_cap_is_checked_again_right_before_each_call}`.
+- AC 5: core `board.rs::tests::approvals::a_pending_auto_request_with_a_stored_review_carries_no_review_field` (D-730); core `relay/view.rs::tests::an_undecided_request_shows_no_review_line`; CLI `auto.rs::an_approve_in_shadow_writes_no_approval_file`; Playwright `approvals.spec.ts > auto requests > an auto request's card says why it is yours`.
+- AC 6: core `auto.rs::tests::{baseline_needs_the_check_and_a_last_success, baseline_is_false_without_an_earlier_run, baseline_is_false_after_a_tree_change}`; the `baseline` section through `auto_vectors.rs::baseline_cases_match`; host `registry_review.rs::{a_review_writes_one_row_with_its_baseline, an_escalated_request_gets_one_row_and_its_line, the_author_decision_is_copied_onto_the_row, expiry_is_not_a_decision}` (D-727).
+- AC 7: core `journal.rs::tests::{auto_escalated_round_trips, auto_review_never_carries_the_reason, every_kind_round_trips_with_its_tag}`.
+- AC 8: CLI `auto.rs::{each_review_mode_records_its_outcome, each_precheck_cause_escalates_without_a_call, the_budget_holds_across_a_restart, the_hourly_cap_counts_shadow_approvals}` (the fake's `review`, `review-garbage`, `review-extra-field`, `review-exit1`, `review-hang`; D-732).
+- AC 9: `tests/vectors/injection.json` section `review_excerpt` through `injection.rs::{review_excerpt_cases, every_section_family_and_refusal_has_a_case}`: the prompt reaches the call's stdin only, inside the markers, cut to the hook's bound; the answer reaches it nowhere; the outcome is `structured_output`'s; no decision file, no `--bg`.
+- AC 10: host `registry_ingest.rs::{review_workdir_lines_are_skipped, other_lines_under_the_review_folder_are_recorded}`, `registry_retention.rs::{auto_review_rows_are_deleted_at_90_days, review_reasons_are_cleared_with_the_excerpt_ttl}`; core `ingestion::in_review_workdir` doctest.
+- AC 11: CLI `quota_doctor.rs::no_command_writes_under_the_claude_config_dir` runs a review through the fake.
+- AC 12: host `relay/doctor.rs::tests::{review_model_and_budget_are_reported, an_invalid_auto_review_table_is_reported}`.
+- AC 13: `CHANGELOG.md` `[Unreleased]` Added; README "The review, in shadow", which names `EscalationCause` and its families without listing it.
+- AC 14: `crates/officina-host/examples/review_probe.rs`, run once on 2.1.312 (one Haiku call, USD 0.0015): the marker `CLAUDE.md` in `<home>/review/` did not load; E25 and D-733.
+- AC 15: the `compile_fail` doctest on `ReviewJob`; core `auto.rs::tests::a_job_comes_only_from_an_auto_request_of_the_snapshot`.
+- Gate (2026-10-29), on `7a260fc`: the local replay of `ci.yml`. Windows: fmt and clippy clean; Rust 1360 passed, 0 failed, 11 ignored; the launch half without the authority 7 passed; perf (hook own cost 4.4 ms of 150, gate own cost 0 of 15), lexer differential, approvals stress, registry crash, authority markers, registry dependencies and bundled roots green; mutants: each of the three caught by its guarded case, the control green; e2e fixtures rebuilt; `pnpm check`, `lint` clean, Vitest 281; Playwright 1020 passed, 6 skipped, over three repeats; `cargo deny` ok; `pnpm audit` 1 low, ignored as before. Linux (`rust:1-bookworm`): fmt and clippy clean, 1205 passed, 0 failed, 9 ignored, and the spawn step alone; its first run caught three helpers of Windows-only tests unused off Windows, now `cfg(windows)`.
+
 ## File List
+
+- `CHANGELOG.md`, `README.md`, `docs/research-notes.md` (E25)
+- `crates/officina-core/src/{board,spawn}.rs`, `crates/officina-core/src/registry/{ingestion,retention,triage_call}.rs`
+- `crates/officina-core/src/relay/{approvals,auto,journal,mod,view}.rs`
+- `crates/officina-core/tests/auto_vectors.rs` (new), `crates/officina-core/tests/scene_vectors.rs`
+- `crates/officina-host/Cargo.toml`, `crates/officina-host/examples/review_probe.rs` (new)
+- `crates/officina-host/src/{collector,doctor,spawn,watch}.rs`, `crates/officina-host/src/registry/{ingest,mod,read,retention,triage,window}.rs`, `crates/officina-host/src/registry/review.rs` (new)
+- `crates/officina-host/src/relay/{doctor,mod}.rs`, `crates/officina-host/src/relay/review.rs` (new)
+- `crates/officina-host/tests/{registry_ingest,registry_retention}.rs`, `crates/officina-host/tests/registry_review.rs` (new)
+- `crates/officina/src/bin/officina-fake-claude.rs`
+- `crates/officina/tests/{injection,quota_doctor,spawn,triage,watch}.rs`, `crates/officina/tests/auto.rs` (new), `crates/officina/tests/common/mod.rs`, `crates/officina/tests/common/auto.rs` (new)
+- `tests/support/spawn_cases.rs`, `tests/vectors/{injection,spawn}.json`, `tests/vectors/auto.json` (new)
+- `app/src/components/ApprovalCard.svelte`, `app/src/components/components.test.ts`, `app/src/lib/{relay-text.ts,scene/testing.ts}`, `app/src/lib/generated/ApprovalView.ts`, `app/src/lib/generated/EscalationCause.ts` (new), `app/e2e/approvals.spec.ts`
+- `app/src-tauri/src/main.rs`
+- `docs/stories/epic-5-decisions.md`, `docs/stories/sprint-status.yaml`, this file
 
 ## Change Log
 
 - 2026-10-28 created
 - 2026-10-28 reworked after review: the baseline takes the tree, the consumption-time check is the guarantee (F6); the 5 s spacing paces the worker, caps and budget rechecked before each call (F15); `examples/review_probe.rs` and E25 for memory files (F23); HTTP actions excluded (F24); contained-kind environment (F1); exclusion narrowed to the workdir (F27); README describes cause families (F44)
 - 2026-10-28 reworked against the addendum and v0.3 and v0.4 as built: the input holds the author's last prompt and no answer excerpt (PRD section 9 item 4, D-569); the baseline's check is always present (D-570); the review takes the contained allow list and the job rule as built (D-561, D-562); the fake's `review-*` family beside its `triage-*` modes (D-582); AC 15, the judge stays narrow (item 6's first half, D-577)
+- 2026-10-29 implemented; decisions D-726 to D-733; E25; status Review
