@@ -62,6 +62,8 @@
 //! - `FAKE_CLAUDE_TRIAGE_LOG` (`triage_log`): each triage call appends one
 //!   JSON line with its argv, its environment, its config dir, its working
 //!   directory and its stdin, so tests can assert what reached it and how.
+//! - `FAKE_CLAUDE_COPY_TO`, from the environment only: the fake copies
+//!   itself to that path and exits, doing nothing else (D-884).
 //!
 //! As `claude` does (S7, E19), with `CLAUDE_CODE_DISABLE_AGENT_VIEW=1` a
 //! call holding `--bg`, or whose first argument is `agents` or `logs`,
@@ -573,6 +575,10 @@ fn review(mode: &str, args: &[String]) {
 }
 
 fn main() {
+    if let Some(to) = std::env::var_os("FAKE_CLAUDE_COPY_TO") {
+        let copied = std::env::current_exe().and_then(|me| std::fs::copy(me, to));
+        std::process::exit(i32::from(copied.is_err()));
+    }
     let mode = setting("mode").unwrap_or_else(|| "ok".into());
     if mode == "heartbeat" {
         heartbeat();
