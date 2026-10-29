@@ -13,7 +13,9 @@ use super::auto::{AutoMode, AutoOffReason, EscalationCause, ReviewDecision};
 use super::catalogue::ActionClass;
 use super::gate::DenyKind;
 use super::http::HttpMethod;
-use crate::registry::types::{AuthorReason, LaunchOutcome, ReviewMode, ReviewOutcome, Source};
+use crate::registry::types::{
+    AuthorReason, LaunchOutcome, OrchestratorStartOutcome, ReviewMode, ReviewOutcome, Source,
+};
 
 /// Version of the journal line format. Readers skip lines of another
 /// version without counting them corrupt.
@@ -138,6 +140,7 @@ pub enum JournalEntry {
     AutoEscalated(AutoEscalated),
     AutoReview(AutoReviewed),
     AutoApprovalSet(AutoApprovalSet),
+    OrchestratorStarted(OrchestratorStarted),
 }
 
 closed_enum! {
@@ -161,6 +164,7 @@ closed_enum! {
         AutoEscalated,
         AutoReview,
         AutoApprovalSet,
+        OrchestratorStarted,
     }
 }
 
@@ -183,6 +187,7 @@ impl JournalEntry {
             JournalEntry::AutoEscalated(_) => JournalKind::AutoEscalated,
             JournalEntry::AutoReview(_) => JournalKind::AutoReview,
             JournalEntry::AutoApprovalSet(_) => JournalKind::AutoApprovalSet,
+            JournalEntry::OrchestratorStarted(_) => JournalKind::OrchestratorStarted,
         }
     }
 }
@@ -546,6 +551,24 @@ pub struct WorkOrderLaunched {
     pub exit_code: Option<i64>,
 }
 
+/// A Start of the orchestrator (AD-89, D-144): how it ended, the pid it
+/// keeps when it spawned, the arguments it ran with, and why when it was
+/// refused or failed. The registry's `orchestrator_start` row holds the
+/// same start; the session itself is never resumed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OrchestratorStarted {
+    pub outcome: OrchestratorStartOutcome,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pid: Option<u32>,
+    /// The arguments after the binary, exactly as they ran; empty for a
+    /// refused start, which runs nothing.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub argv: Vec<String>,
+    /// A refusal's code, or what the spawn failed with.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
 /// An `auto` request sent to the author (AD-32 as amended, AD-87), with
 /// why.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -712,6 +735,9 @@ mod tests {
                 src: Source::Author,
                 reason: Some(AutoOffReason::ShouldNotHaveRun),
             }),
+            JournalKind::OrchestratorStarted => {
+                JournalEntry::OrchestratorStarted(started(OrchestratorStartOutcome::Spawned))
+            }
         }
     }
 
@@ -741,6 +767,46 @@ mod tests {
                     ParsedLine::Line(JournalLine::new(4, entry))
                 );
             }
+        }
+    }
+
+    fn started(outcome: OrchestratorStartOutcome) -> OrchestratorStarted {
+        let spawned = outcome == OrchestratorStartOutcome::Spawned;
+        OrchestratorStarted {
+            outcome,
+            pid: spawned.then_some(4242),
+            argv: if outcome == OrchestratorStartOutcome::Refused {
+                Vec::new()
+            } else {
+                vec!["--tools".into(), String::new(), "--name".into()]
+            },
+            error: (!spawned).then(|| "workdir_not_empty".into()),
+        }
+    }
+
+    /// Story 5.16 AC 4 (AD-89): `orchestrator_started` reads back as
+    /// written, for every outcome, and a field it does not have is left
+    /// out.
+    #[test]
+    fn orchestrator_started_round_trips() {
+        for outcome in OrchestratorStartOutcome::ALL.iter().copied() {
+            let entry = JournalEntry::OrchestratorStarted(started(outcome));
+            let line = JournalLine::new(9, entry.clone()).to_line();
+            let value: serde_json::Value = serde_json::from_str(&line).unwrap();
+            assert_eq!(value["kind"], "orchestrator_started");
+            assert_eq!(value["outcome"], outcome.code());
+            assert_eq!(
+                value.get("pid").is_some(),
+                outcome == OrchestratorStartOutcome::Spawned
+            );
+            assert_eq!(
+                value.get("argv").is_some(),
+                outcome != OrchestratorStartOutcome::Refused
+            );
+            assert_eq!(
+                parse_line(line.trim_end()),
+                ParsedLine::Line(JournalLine::new(9, entry))
+            );
         }
     }
 
