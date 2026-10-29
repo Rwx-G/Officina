@@ -163,7 +163,8 @@ stories:
   # Slice D, v0.5.x, after 5.19.
   # 5.22: done ahead of 5.19 on the lead's parallel track (D-900, to confirm); inert until the routing story (no window routes prompts, no PermissionRequest registered); D-903 to confirm.
   - {id: "5.22", file: story-5.22-permission-router-core-and-hook.md, slice: D, status: review}
-  - {id: "5.23", file: story-5.23-auto-mode-denials.md, slice: D, status: approved}
+  # 5.23: done ahead of 5.19 (D-900); D-910 to confirm (the file says "in the last 24 h", not "today").
+  - {id: "5.23", file: story-5.23-auto-mode-denials.md, slice: D, status: review}
 ---
 epic: 6
 version: v0.6

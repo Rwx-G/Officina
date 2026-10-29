@@ -8,6 +8,18 @@ project uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Auto-mode denials (v0.5.x, story 5.23): when Claude Code's auto mode
+  refuses a tool call, its `PermissionDenied` hook makes `officina hook`
+  journal `auto_mode_denied` with the session, the tool and the
+  classifier's reason (200 characters at most, its rule name only with
+  excerpts off), never the call's input,
+  and print nothing, so Officina never asks for a retry. The Relay view
+  lists each denial with its reason as text; a session's file in the scene
+  counts its denials of the last 24 hours in neutral text, never in the
+  title, the taskbar, the alert or the attention colour; `officina relay
+  --json` prints the same. Doctor's hooks block registers
+  `PermissionDenied`: paste it again.
+
 - The permission router's hook path (v0.5.x, story 5.22; internal,
   nothing changes for you yet): `officina hook` on a `PermissionRequest`
   gives Claude Code its own prompt at once unless a window that routes

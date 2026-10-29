@@ -1,6 +1,6 @@
 # Story 5.23: Auto-mode denials in the journal and the Relay view (Slice D, v0.5.x)
 
-**Status:** Approved
+**Status:** Review
 
 ## Story
 
@@ -19,12 +19,12 @@ so that I see how often the classifier stops my sessions and why, without Offici
 
 ## Tasks
 
-- [ ] Journal kind and the hook's `PermissionDenied` branch (AC 1)
-- [ ] Doctor's registration (AC 2)
-- [ ] `RelayView.auto_mode_denials`, `relay --json`, bindings (AC 3)
-- [ ] Relay view list, session file count (AC 4)
-- [ ] Zero-write (AC 5)
-- [ ] Update `CHANGELOG.md` and the README (AC 6)
+- [x] Journal kind and the hook's `PermissionDenied` branch (AC 1)
+- [x] Doctor's registration (AC 2)
+- [x] `RelayView.auto_mode_denials`, `relay --json`, bindings (AC 3)
+- [x] Relay view list, session file count (AC 4)
+- [x] Zero-write (AC 5)
+- [x] Update `CHANGELOG.md` and the README (AC 6)
 
 ## Dev Notes
 
@@ -45,10 +45,34 @@ so that I see how often the classifier stops my sessions and why, without Offici
 
 ### Debug Log
 
+- Implemented on the lead's parallel track before 5.19 closes v0.5 (D-900), after story 5.22 on `main`.
+- AC 4's "N auto-mode denials today" is worded "N auto-mode denials in the last 24 h", the window the count covers (D-910, to confirm).
+- With excerpts off a reason keeps its bracketed rule name only (D-911): the story keeps it whole and is silent on excerpts off.
+- The briefing's runs section reads the relay view's recent entries: the new `auto_mode_denied` entry is left out there (D-909).
+- Gate, Windows, on this story's code rebased on story 5.19's close (`b3b1d47`), every job of `.github/workflows/ci.yml` replayed: fmt; frontend install and build; clippy in both CI feature sets; the spawn tests alone; `perf.rs` in release with CI's budgets, 7 passed (PermissionDenied own cost 0.4 ms, PermissionRequest 0.4 ms, hook and gate within their budgets, in-process p95 3.4 ms); the lexer differential; `approvals_stress`; `registry_crash`; `proposals_crash` and the `officina mcp` kill; officina holds no authority (and no test seam) with its controls; registry dependencies; no bundled roots; e2e fixtures from the real CLI (`relay-denials` among them); `pnpm check`, `lint`, Vitest 352 passed; the mutants job (each mutant caught, control green); `cargo deny`; `pnpm audit`. The machine ran other gates: the gate's fail-fast workspace run stopped at `watch.rs::a_two_second_turn_is_confirmed` (not confirmed in its window, outside this story; 5.21 saw it too) and Playwright lost its preview server once (`ERR_CONNECTION_REFUSED` on one case); rerun, `cargo test --workspace --features officina-core/ts --no-fail-fast` 1,695 passed, 1 failed, 16 ignored (TypeScript drift green), the failure `spawn.rs::a_work_order_timeout_kills_only_claude` (its holder's heartbeat not written within the 2 s deadline, outside this story, also failing with its sibling in an earlier loaded run), which passed three reruns of `spawn.rs` (15 each); Playwright `--repeat-each=3` 1,344 passed, 6 skipped. The `core-linux` job in a `rust:1-bookworm` container (toolchain from `rust-toolchain.toml`, source read-only): fmt and clippy clean, 1,522 passed, 0 failed, 14 ignored, the spawn tests alone passed.
+
 ### Completion Notes
 
+Decisions D-907 to D-911 (D-910 to confirm). The tests proving each AC:
+
+1. The hook: `crates/officina-core/src/relay/journal.rs::tests::{auto_mode_denied_round_trips, the_reason_is_cut_to_200_characters}`, `journal.rs::tests::with_excerpts_off_only_the_rule_name_is_kept` (D-911) and the doctests of `AutoModeDenied::{from_payload, without_excerpts}`; `crates/officina/tests/hook.rs::{permission_denied_appends_one_line_and_prints_nothing, a_malformed_permission_denied_appends_nothing, permission_denied_without_excerpts_keeps_the_rule_name_only}`; `crates/officina/tests/perf.rs::permission_denied_is_within_the_hook_budget` (release, ignored run; the three hook timings now share `hook_own_cost_within_budget`).
+2. Registration: `crates/officina-host/src/doctor.rs::tests::{permission_denied_is_registered_once, a_missing_permission_denied_is_reported}`, and D-530's merge cases, `partially_registered_hooks_are_reported` now deriving its expectation from `registrations`.
+3. `RelayView`: `crates/officina-core/src/relay/view.rs::tests::{denials_are_counted_per_session_over_24_h, the_reasons_are_untrusted_and_capped}` and the every-kind case of `recent`; `crates/officina/tests/relay.rs::prints_auto_mode_denials`; `typescript_bindings.rs::committed_bindings_match_the_rust_types` (`AutoModeDenied.ts`, `SessionDenials.ts`, `RecentEvent.ts`, `RelayView.ts`).
+4. Where the author sees it: Playwright `app/e2e/relay-view.spec.ts > auto-mode denials in the {light,dark} theme > {auto-mode denials are listed with their reasons as text, denials never take the attention colour}` (D-163's computed-colour check, on the Relay view's rows and the file's count) and `app/e2e/scene.spec.ts > the file counts a session's auto-mode denials ({light,dark})` (title, waiting count and alert band unchanged against a relay view without denials; no line without denials), on the `relay-denials` fixture from the real hook and `officina relay --json`; Vitest `relay-text.test.ts > auto-mode denials`. No colour or token is added; the count is text, so no stable-size case.
+5. Zero write: `crates/officina/tests/quota_doctor.rs::no_command_writes_under_the_claude_config_dir` runs the hook's `PermissionDenied` branch.
+6. Documentation: `CHANGELOG.md` `[Unreleased]` Added; README "Wiring the hooks" (the block and its paragraph) and "Auto-mode denials"; `crates/officina/tests/readme.rs::readme_shows_every_registration_and_never_a_retry`.
+
 ## File List
+
+- `crates/officina-core/src/relay/journal.rs`, `relay/view.rs`, `orders/briefing.rs`
+- `crates/officina-host/src/relay/journal.rs`, `doctor.rs`
+- `crates/officina/src/main.rs`; `crates/officina/tests/hook.rs`, `relay.rs`, `quota_doctor.rs`, `readme.rs`, `perf.rs`
+- `app/src/lib/generated/AutoModeDenied.ts` (new), `SessionDenials.ts` (new), `RecentEvent.ts`, `RelayView.ts`
+- `app/src/lib/relay-text.ts`, `relay-text.test.ts`, `relay.test.ts`; `app/src/components/SessionFile.svelte`, `scene/Scene.svelte`; `app/src/App.svelte`
+- `app/e2e/relay-view.spec.ts`, `scene.spec.ts`, `fixtures.ts`; `app/scripts/e2e-fixtures.mjs`
+- `README.md`, `CHANGELOG.md`, `docs/stories/epic-5-decisions.md`, `docs/stories/sprint-status.yaml`, this story
 
 ## Change Log
 
 - 2026-10-28 created for Slice D (AD-181; D-578, D-580)
+- 2026-10-29 implemented; decisions D-907 to D-911; status review
