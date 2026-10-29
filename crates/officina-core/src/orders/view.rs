@@ -30,11 +30,7 @@ pub const ORCHESTRATOR_VIEW_SCHEMA: u32 = 1;
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub enum OrchestratorPresence {}
 
-/// One orchestrator proposal as the views carry it (D-576). Story 5.17
-/// gives it its fields; until then `proposals` is always empty.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
-pub enum ProposalView {}
+pub use crate::orders::proposal::ProposalView;
 
 /// An approved template, as the composer offers it (AD-93): every value
 /// comes from its closed list.
@@ -156,7 +152,9 @@ impl<'a> ViewInput<'a> {
     }
 }
 
-fn templates(catalogue: Option<&CanonicalCatalogue>) -> Vec<TemplateOption> {
+/// The approved snapshot's templates as the composer and `officina mcp`'s
+/// `templates` tool offer them, by name.
+pub fn template_options(catalogue: Option<&CanonicalCatalogue>) -> Vec<TemplateOption> {
     catalogue.map_or_else(Vec::new, |catalogue| {
         catalogue
             .templates
@@ -247,7 +245,7 @@ pub fn build(input: &ViewInput, cursor: Cursor, now_ms: i64) -> OrchestratorView
         generated_at_ms: now_ms,
         presence: None,
         briefing: briefing::build(&input.briefing, cursor, now_ms),
-        templates: templates(input.catalogue),
+        templates: template_options(input.catalogue),
         awaiting_templates: awaiting(input.pending),
         proposals: Vec::new(),
         work_orders: input

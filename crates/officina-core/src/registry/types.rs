@@ -185,6 +185,7 @@ closed_enum! {
     #[serde(rename_all = "snake_case")]
     /// What an orchestrator proposal file proposes (AD-82, D-575).
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+    #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
     pub enum ProposalKind {
         Recap,
         WorkOrder,
@@ -198,6 +199,7 @@ closed_enum! {
     #[serde(rename_all = "snake_case")]
     /// Where an orchestrator proposal stands (AD-82).
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+    #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
     pub enum ProposalStatus {
         Pending,
         Invalid,

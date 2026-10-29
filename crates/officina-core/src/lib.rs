@@ -94,6 +94,7 @@ pub mod events;
 pub mod floor;
 pub mod focus;
 pub mod ipc;
+pub mod mcp;
 pub mod orders;
 pub mod permissions;
 pub mod quota;
