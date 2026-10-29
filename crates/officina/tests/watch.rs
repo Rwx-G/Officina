@@ -1727,6 +1727,34 @@ fn a_missing_hook_field_reaches_the_board() {
     stop(handle);
 }
 
+/// D-880: a `claude --version` that failed, as one cut by its deadline
+/// under load, is asked again with the next session list, so the version
+/// a meeting's delivery and the contract need is not unknown until the
+/// binary changes.
+#[test]
+fn a_version_that_could_not_be_read_is_asked_again() {
+    let env = common::TestEnv::new();
+    let (handle, emitted) = watch_answering(
+        &env,
+        serde_json::json!({"version_exit": 1}),
+        Duration::from_secs(10),
+    );
+    let first = until(&emitted.boards, |_| true);
+    assert_eq!(first.contract.claude_version, None, "positive control");
+    let sidecar = env.root.path().join("bin").join("fake-claude.json");
+    let mut config: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&sidecar).unwrap()).unwrap();
+    config.as_object_mut().unwrap().remove("version_exit");
+    std::fs::write(&sidecar, config.to_string()).unwrap();
+    handle.sender.send(CollectorMsg::Refresh).unwrap();
+    let read = until(&emitted.boards, |b| b.contract.claude_version.is_some());
+    assert_eq!(
+        read.contract.claude_version.as_deref(),
+        Some("9.9.9 (Claude Code)")
+    );
+    stop(handle);
+}
+
 /// A confirmation the dry run can take: a session of `env` that saw a
 /// prompt, an answer and an end a day ago, confirmed `to_resume` from its
 /// default proposal through the window's writer, before the window starts.

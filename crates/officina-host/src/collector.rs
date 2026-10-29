@@ -505,11 +505,14 @@ impl Collector {
         }
     }
 
-    /// Reads the `claude` version, once per binary (a spawn), then re-runs the
-    /// contract check against the last sample (FR-12).
-    pub fn refresh_contract(&mut self, now_ms: i64) {
+    /// Reads the `claude` version (a spawn), then re-runs the contract check
+    /// against the last sample (FR-12). False when a `claude` is known and
+    /// its version could not be read: the caller asks again, so a call cut
+    /// by its deadline under load does not leave the version unknown until
+    /// the binary changes (D-880).
+    pub fn refresh_contract(&mut self, now_ms: i64) -> bool {
         let Some(bin) = &self.claude else {
-            return;
+            return true;
         };
         self.contract.claude_version = spawn::version(
             bin,
@@ -518,6 +521,7 @@ impl Collector {
         )
         .ok();
         self.check_contract(now_ms);
+        self.contract.claude_version.is_some()
     }
 
     /// `state/contract.json`, where each version's record lives.

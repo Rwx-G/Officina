@@ -578,6 +578,12 @@ impl<C: Fn() -> Instant> RefreshPlan<C> {
         self.contract_wanted = true;
     }
 
+    /// The version could not be read: it is asked again with the next
+    /// session list, which this does not bring forward (D-880).
+    fn version_unread(&mut self) {
+        self.contract_wanted = true;
+    }
+
     /// Today's journal changed: a new relay view, no spawn; the
     /// credentials wait for their poll (D-41).
     fn relay_changed(&mut self) {
@@ -1096,8 +1102,8 @@ fn run<E: Emit>(
             if collector.refresh_agents(now) {
                 apply_agents(collector, &mut registry, now);
             }
-            if due.contract {
-                collector.refresh_contract(now_ms());
+            if due.contract && !collector.refresh_contract(now_ms()) {
+                plan.version_unread();
             }
         }
         if !confirmations.is_empty() {

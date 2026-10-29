@@ -49,6 +49,8 @@
 //! - `FAKE_CLAUDE_HANG_MS` (`hang_ms`): how long `hang` sleeps, 60 s by
 //!   default.
 //! - `FAKE_CLAUDE_VERSION` (`version`): answer to `--version`.
+//! - `FAKE_CLAUDE_VERSION_EXIT` (`version_exit`): when set, `--version`
+//!   prints nothing and exits with this code, as a call that failed.
 //! - `FAKE_CLAUDE_LOG` (`log`): each call appends one line of JSON (D-129),
 //!   `{"argv": [...], "cwd": "...", "env_names": [...], "config_dir": ...}`,
 //!   the names sorted and never a value but `CLAUDE_CONFIG_DIR`'s, which
@@ -552,6 +554,9 @@ fn main() {
         std::process::exit(1);
     }
     if args.first().map(String::as_str) == Some("--version") {
+        if let Some(code) = setting("version_exit").and_then(|v| v.parse().ok()) {
+            std::process::exit(code);
+        }
         let version = setting("version").unwrap_or_else(|| "9.9.9".into());
         println!("{version} (Claude Code)");
         return;

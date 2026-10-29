@@ -1011,6 +1011,11 @@ project uses [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- A `claude --version` the window could not read, as one cut by its
+  5-second deadline on a loaded machine, left the version unknown until
+  `claude` changed or the window restarted, so a meeting's answer to a
+  live idle session fell back to the copy and `claude attach`: the window
+  now asks again with each session list until it reads it (D-880).
 - Two queued auto reviews could start their model calls less than 5
   seconds apart on a loaded machine: the spacing was counted from the
   window's tick that submitted the first call, which can precede the call
