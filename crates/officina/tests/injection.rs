@@ -13,8 +13,9 @@
 //! message names it, `guarded by <feature>`.
 //!
 //! Sections: `card_launch` (story 5.7), `review_excerpt` (story 5.13),
-//! `auto_approved_run` (story 5.14), `mcp_tool` and `mcp_output` (story 5.15);
-//! later stories add theirs.
+//! `auto_approved_run` (story 5.14), `mcp_tool` and `mcp_output` (story 5.15),
+//! `proposal_file` (story 5.17), whose answer cases and the `mcp_tool` ones
+//! of `propose_answer` story 5.21 adds, counting `--resume` spawns.
 
 mod common;
 
@@ -798,9 +799,14 @@ fn run_section(section: &str, work: fn(&Value) -> Result<(), String>) {
 /// `value` with each `mcp_tool` stand-in replaced, from its bound.
 fn with_mcp_bounds(value: &Value) -> Value {
     use officina_core::mcp::MAX_INPUT_BYTES;
-    use officina_core::orders::proposal::{PROPOSAL_TEXT_MAX_CHARS, PROPOSAL_VALUE_MAX_CHARS};
+    use officina_core::orders::proposal::{
+        PROPOSAL_ANSWER_MAX_CHARS, PROPOSAL_TEXT_MAX_CHARS, PROPOSAL_VALUE_MAX_CHARS,
+    };
     match value {
         Value::String(text) => match text.as_str() {
+            "<over PROPOSAL_ANSWER_MAX_CHARS>" => {
+                Value::from("a".repeat(PROPOSAL_ANSWER_MAX_CHARS + 1))
+            }
             "<over PROPOSAL_VALUE_MAX_CHARS>" => {
                 Value::from("a".repeat(PROPOSAL_VALUE_MAX_CHARS + 1))
             }
@@ -1028,6 +1034,9 @@ fn run_proposal_file(case: &Value) -> Result<(), String> {
     use officina_core::orders::proposal::{
         PROPOSAL_FILE_MAX_BYTES, PROPOSAL_HOUR_MS, PROPOSALS_PER_HOUR, file_name, proposal_id,
     };
+    if case["file"]["kind"] == "answer" {
+        return run_answer_file(case);
+    }
     let home = OrdersHome::start(serde_json::json!({"mode": "bg"}));
     let subjects = home.seed_subjects();
     let now = common::now_ms();
@@ -1143,6 +1152,195 @@ fn run_proposal_file(case: &Value) -> Result<(), String> {
         other => return Err(format!("unknown expectation {other:?}")),
     }
     check_spawns(&home, case)
+}
+
+/// The session an answer case lists, a canonical session id.
+const LISTED_SESSION: &str = "0f1e2d3c-4b5a-4978-8796-a5b4c3d2e1f0";
+
+/// `claude agents`' record of [`LISTED_SESSION`] in `folder`, in the
+/// state an answer case names (story 5.21 AC 8): a background session idle
+/// in its turn, waiting on a question or a permission prompt, or ended; an
+/// interactive session in its turn; or none (`unknown`).
+fn listed_session(state: &str, folder: &std::path::Path) -> Result<Value, String> {
+    let now = common::now_ms();
+    let mut entry = serde_json::json!({"id": "bg0001", "sessionId": LISTED_SESSION,
+        "name": "bump", "cwd": folder, "kind": "background", "pid": 4200,
+        "startedAt": now - 60_000, "status": "idle", "state": "done"});
+    match state {
+        "idle" => {}
+        "interactive" => {
+            entry["kind"] = "interactive".into();
+            entry.as_object_mut().unwrap().remove("id");
+        }
+        "question" => {
+            entry["status"] = "waiting".into();
+            entry["state"] = "blocked".into();
+            entry["waitingFor"] = "input needed".into();
+        }
+        "permission" => {
+            entry["status"] = "waiting".into();
+            entry["state"] = "blocked".into();
+            entry["waitingFor"] = "permission prompt".into();
+        }
+        "ended" => {
+            entry["state"] = "stopped".into();
+            entry.as_object_mut().unwrap().remove("pid");
+        }
+        "unknown" => return Ok(Value::Array(Vec::new())),
+        other => return Err(format!("unknown session state {other}")),
+    }
+    Ok(Value::Array(vec![entry]))
+}
+
+/// The `--resume` calls the fake logged.
+fn resume_calls(home: &OrdersHome) -> Vec<Value> {
+    common::fake_claude_calls(&home.env.fake_log())
+        .into_iter()
+        .filter(|call| common::logged_argv(call).iter().any(|a| a == "--resume"))
+        .collect()
+}
+
+/// One answer case of `proposal_file` (story 5.21 AC 8, AD-182, D-147):
+/// [`LISTED_SESSION`] listed in the case's `session` state, a file written
+/// by hand naming it, which the window's collector ingests against the
+/// board. An invalid one is stored with its reason and a click on it is
+/// refused; a valid one is pending and spawns nothing until the click,
+/// which, when the case clicks, spawns exactly one `--resume`, its vector
+/// the golden `Answer` rebuild with the stored text in the folder `claude
+/// agents` reported (a console start: Windows; elsewhere the start is
+/// refused as unsupported and nothing runs). Never a `--bg`.
+fn run_answer_file(case: &Value) -> Result<(), String> {
+    use officina_core::meeting::{AnswerRefused, AnswerResult, Delivery};
+    use officina_core::orders::proposal::{file_name, proposal_id};
+    use officina_host::meeting::{AnswerFrom, send_answer};
+    let home = OrdersHome::start(serde_json::json!({"mode": "resume"}));
+    let folder = home.env.root.path().join("work").join("answered");
+    std::fs::create_dir_all(&folder).unwrap();
+    let state = case["session"]
+        .as_str()
+        .ok_or("an answer case names its session")?;
+    home.env
+        .write_agents(&listed_session(state, &folder)?.to_string());
+    home.handle()
+        .sender
+        .send(officina_host::watch::CollectorMsg::Refresh)
+        .unwrap();
+    let key = if state == "unknown" {
+        format!("sid:{LISTED_SESSION}")
+    } else {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            let board = home
+                .emitted
+                .boards
+                .recv_timeout(deadline.saturating_duration_since(std::time::Instant::now()))
+                .map_err(|_| "the board never listed the session")?;
+            if let Some(card) = board
+                .columns
+                .all()
+                .find(|c| c.session_id.as_deref() == Some(LISTED_SESSION))
+            {
+                break card.key.clone();
+            }
+        }
+    };
+    let now = common::now_ms();
+    let id = proposal_id(now, 1);
+    let mut file = with_mcp_bounds(&case["file"]);
+    if file["session_id"] == "<listed session>" {
+        file["session_id"] = LISTED_SESSION.into();
+    }
+    file["written_at_ms"] = Value::from(now);
+    home.propose_file(&file_name(&id), &serde_json::to_vec(&file).unwrap());
+    let row = home
+        .proposals()
+        .into_iter()
+        .find(|p| p.id == id)
+        .ok_or("no row")?;
+    let stored = serde_json::to_value(&row).unwrap();
+    let expect = &case["expect"];
+    if stored["status"] != expect["stored"]
+        || stored["invalid_reason"] != expect.get("reason").cloned().unwrap_or(Value::Null)
+    {
+        return Err(format!(
+            "stored {} ({}), expected {expect}",
+            stored["status"], stored["invalid_reason"]
+        ));
+    }
+    if !resume_calls(&home).is_empty() {
+        return Err("a resume before the click".to_owned());
+    }
+    let click = || {
+        send_answer(
+            &home.handle().sender,
+            &key,
+            Delivery::ResumeLive,
+            AnswerFrom::Proposal(id.clone()),
+        )
+    };
+    if expect["stored"] == "invalid" {
+        let answer = click().map_err(|e| e.message)?;
+        let refused = [
+            AnswerResult::Refused(AnswerRefused::ProposalNotPending),
+            AnswerResult::Refused(AnswerRefused::UnknownSession),
+        ];
+        if !refused.contains(&answer) {
+            return Err(format!(
+                "a click on an invalid proposal answered {answer:?}"
+            ));
+        }
+    } else if case["click"] == true {
+        let answer = click().map_err(|e| e.message)?;
+        let text = file["text"].as_str().unwrap();
+        if cfg!(windows) {
+            if answer != AnswerResult::Confirmed {
+                return Err(format!("the click answered {answer:?}"));
+            }
+            let golden = officina_core::spawn::answer(
+                &officina_core::meeting::Answer::parse(text).map_err(|e| format!("{e:?}"))?,
+                &officina_core::spawn::SessionId::parse(LISTED_SESSION).unwrap(),
+                &folder.to_string_lossy(),
+                None,
+            );
+            let calls = resume_calls(&home);
+            let [call] = calls.as_slice() else {
+                return Err(format!("{} resumes after the click", calls.len()));
+            };
+            if common::logged_argv(call) != golden.args() {
+                return Err(format!(
+                    "ran {:?}, the golden rebuild is {:?}",
+                    common::logged_argv(call),
+                    golden.args()
+                ));
+            }
+            let ran_in = std::fs::canonicalize(call["cwd"].as_str().unwrap_or_default());
+            if ran_in.ok() != std::fs::canonicalize(&folder).ok() {
+                return Err(format!("resumed in {}", call["cwd"]));
+            }
+        } else if !matches!(answer, AnswerResult::SpawnFailed(_)) {
+            return Err(format!("a console start off Windows answered {answer:?}"));
+        }
+        // Clicked again, it never sends twice.
+        let again = click().map_err(|e| e.message)?;
+        if again != AnswerResult::Refused(AnswerRefused::ProposalNotPending) {
+            return Err(format!("a second click answered {again:?}"));
+        }
+    }
+    let resumes = resume_calls(&home).len() as u64;
+    let expected = if cfg!(windows) {
+        case["resume_spawns"]
+            .as_u64()
+            .ok_or("an answer case counts its resumes")?
+    } else {
+        0
+    };
+    if resumes != expected {
+        return Err(format!("{resumes} --resume spawns, expected {expected}"));
+    }
+    if !home.bg_calls().is_empty() {
+        return Err("an answer spawned a --bg".to_owned());
+    }
+    Ok(())
 }
 
 /// The case's count of `--bg` spawns, exactly.
