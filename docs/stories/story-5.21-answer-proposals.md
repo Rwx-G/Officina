@@ -1,6 +1,6 @@
 # Story 5.21: Answer proposals: the orchestrator drafts, the author sends with a click
 
-**Status:** Approved
+**Status:** Review
 
 ## Story
 
@@ -23,13 +23,13 @@ so that routine nudges cost me one look and one click, while no model text ever 
 
 ## Tasks
 
-- [ ] `McpTool::ProposeAnswer`, schema, bounds, `mcp.json` cases (AC 1)
-- [ ] `orders::proposal`: the `answer` kind's validation, reasons, statuses, expiry on the board (AC 2, 3)
-- [ ] `send_answer` with `proposal_id`; collector path; command signature, `ipc.ts`, mock (AC 5, 6)
-- [ ] `MeetingPanel.svelte` proposal block, `ProposalList.svelte` answer rows; stable-size case (AC 4)
-- [ ] `meeting_answer.source` and the proposal id (AC 7)
-- [ ] Injection cases, zero-write (AC 8, 9)
-- [ ] Update `CHANGELOG.md` and the README (AC 10)
+- [x] `McpTool::ProposeAnswer`, schema, bounds, `mcp.json` cases (AC 1)
+- [x] `orders::proposal`: the `answer` kind's validation, reasons, statuses, expiry on the board (AC 2, 3)
+- [x] `send_answer` with `proposal_id`; collector path; command signature, `ipc.ts`, mock (AC 5, 6)
+- [x] `MeetingPanel.svelte` proposal block, `ProposalList.svelte` answer rows; stable-size case (AC 4)
+- [x] `meeting_answer.source` and the proposal id (AC 7)
+- [x] Injection cases, zero-write (AC 8, 9)
+- [x] Update `CHANGELOG.md` and the README (AC 10)
 
 ## Dev Notes
 
@@ -50,11 +50,43 @@ so that routine nudges cost me one look and one click, while no model text ever 
 
 ### Debug Log
 
+- The board as built never puts a background session in Your turn: an idle one is placed by its state, Done for a finished turn (D-802). AD-182's "in Your turn" is read as live and idle in its turn, Done or Your turn with `ResumeLive` (D-860).
+- The rationale's "1 to 500 characters" needed a reason for an empty one: `rationale_missing`, a third unit variant beside the two the story names (D-861).
+- `cargo test -p officina-core --all-features` turns the mutants on and fails the launch tests by design; the gate's `--features officina-core/ts` is the run that counts.
+- `injection.rs::auto_approved_run_cases` failed once under load in a full parallel run (`a catalogue approved again during the review refuses its approval: cause None`) and passed alone: Slice B's, not touched here.
+
 ### Completion Notes
 
+Decisions D-860 to D-867 (D-860 and D-865 to confirm). The tests proving each AC:
+
+1. The tool: `tests/vectors/mcp.json`'s `propose_answer` cases through `crates/officina-core/tests/mcp_vectors.rs::{framing_cases_match, every_tool_and_error_has_a_case}`; `crates/officina-core/src/mcp.rs::tests::schemas_are_pinned` (hash pinned again, D-866); `crates/officina/tests/mcp.rs::{propose_answer_writes_one_file_and_returns_its_id, propose_answer_shares_the_rate_limits}`.
+2. Validation: the answer cases of `tests/vectors/orders.json`'s `proposal` section through `crates/officina-core/tests/orders_vectors.rs::{proposal_cases_match, every_invalid_reason_has_a_case}`; `crates/officina-core/src/orders/proposal.rs::tests::an_answer_proposal_uses_the_composers_rules` (every `AnswerRefusal::ALL` variant through a proposal, the rationale's bounds, a forged field).
+3. Statuses: `proposal.rs::tests::{an_answer_expires_when_the_session_leaves_your_turn, an_answer_expires_when_its_delivery_changes, a_newer_answer_supersedes_the_pending_one}`; the doctest of `meeting::takes_a_proposed_answer`; `crates/officina/tests/watch.rs::an_unsent_answer_expires_on_the_next_board`.
+4. The panel: Vitest `components.test.ts > ProposedAnswer > {the proposed answer renders markup as text, Send the proposed answer ignores a click with detail 0, the author's composer stays empty beside a proposal, a meeting without a proposal keeps the slot, saying so}` and `> ProposalList > an answer proposal names its session and opens its meeting`; Playwright `meeting.spec.ts > {a pending answer proposal shows under its label with its rationale, Send the proposed answer needs a pointer click, a keyboard press never sends a proposal, dismiss sends dismiss_proposal}` in the light and the dark theme (the first with the computed colours), `> no proposal slot for a delivery a proposal never takes`; `stable-size.spec.ts` cases "send the proposed answer" and "proposed answer slot" on the meeting scene; `orchestrator.spec.ts > an answer proposal opens its meeting from the list`; core `meeting.rs::tests::the_pending_answer_shows_beside_the_composer`.
+5. Sending: `watch.rs::{a_proposal_is_sent_with_its_stored_text, a_sent_proposal_is_accepted_and_confirmed}` (Windows: console starts), `watch.rs::{a_proposal_is_refused_once_the_state_changed, a_non_pending_proposal_is_refused}`; `app/src-tauri/src/main.rs::tests::every_declared_command_is_allowed` (the signature changed, `ipc.ts` calls `send_answer` twice).
+6. No unattended path: `watch.rs::an_answer_proposal_is_never_sent_without_the_click` (ingested, boards rebuilt, the window restarted: no `--resume`, no line); the injection cases of AC 8.
+7. Journal: `crates/officina-core/src/relay/journal.rs::tests::meeting_answer_source_round_trips_and_defaults_to_author`; `watch.rs::the_journal_holds_the_proposal_id_and_never_the_text`.
+8. Injection: `crates/officina/tests/injection.rs::{proposal_file_cases, mcp_tool_cases, every_section_family_and_refusal_has_a_case}` with the answer cases of both sections (D-867); the exact `--resume` vector check runs on Windows, where console starts exist.
+9. Zero write: `crates/officina/tests/quota_doctor.rs::no_command_writes_under_the_claude_config_dir` sends a proposal by its id through the fake (Windows).
+10. Documentation: `CHANGELOG.md` `[Unreleased]` Added, README "Proposed answers" under "The orchestrator (v0.5, in progress)" and the tools' paragraph.
+
 ## File List
+
+- `crates/officina-core/src/orders/proposal.rs`, `meeting.rs`, `mcp.rs`, `relay/journal.rs`, `relay/mod.rs`
+- `crates/officina-core/tests/orders_vectors.rs`, `mcp_vectors.rs`
+- `crates/officina-host/src/meeting.rs`, `mcp.rs`, `watch.rs`, `registry/proposals.rs`, `registry/read.rs`, `registry/window.rs`
+- `crates/officina-host/examples/orchestrator_fixture.rs`
+- `crates/officina/tests/watch.rs`, `mcp.rs`, `injection.rs`, `quota_doctor.rs`, `common/mcp.rs`
+- `app/src-tauri/src/main.rs`
+- `app/src/components/ProposedAnswer.svelte` (new), `MeetingPanel.svelte`, `ProposalList.svelte`, `OrchestratorView.svelte`, `components.test.ts`; `app/src/App.svelte`
+- `app/src/lib/ipc.ts`, `meeting.svelte.ts`, `meeting-text.ts`, `orchestrator-text.ts`, `app/src/e2e-mock.ts`
+- `app/src/lib/generated/AnswerRefused.ts`, `MeetingView.ts`, `ProposalContent.ts`, `ProposalInvalidReason.ts`
+- `app/e2e/meeting.spec.ts`, `orchestrator.spec.ts`, `stable-size.spec.ts`; `app/scripts/e2e-fixtures.mjs`
+- `tests/vectors/mcp.json`, `orders.json`, `injection.json`
+- `README.md`, `CHANGELOG.md`, `docs/stories/epic-5-decisions.md`, `docs/stories/sprint-status.yaml`, this story
 
 ## Change Log
 
 - 2026-10-28 created against the addendum (PRD section 9 item 3; AD-182; D-488, D-575)
 - 2026-10-28 after the rework's adversarial pass: the invalid reasons are unit variants (rework F2); sending by id and supersession recorded in D-575 (rework F5)
+- 2026-10-29 implemented; decisions D-860 to D-867; status review
