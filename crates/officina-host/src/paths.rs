@@ -37,10 +37,10 @@ pub fn officina_home_from_env() -> Option<PathBuf> {
     env_path(ENV_HOME).or_else(|| user_home().map(|h| h.join(HOME_DIR_NAME)))
 }
 
-/// Directory of the event buffer files of `officina_home`: the one place
-/// the folder's name is written.
+/// Directory of the event buffer files of `officina_home`, named by
+/// [`officina_core::events::EVENTS_DIR`].
 pub fn events_dir_of(officina_home: &Path) -> PathBuf {
-    officina_home.join("events")
+    officina_home.join(officina_core::events::EVENTS_DIR)
 }
 
 /// Resolved locations for one run.

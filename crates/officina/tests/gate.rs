@@ -674,22 +674,35 @@ fn reason_without_approval_names_floor_actions() {
     assert!(reason.contains(LIST_COMMAND), "{reason}");
 }
 
+/// D-13 as amended by D-961: each protected folder of the real home is
+/// denied by name, the event buffer and the orchestrator's proposals
+/// included, so a session cannot forge the prompt a review reads.
 #[test]
 fn relay_dir_in_a_command_is_denied() {
     let env = approved_env();
     let home = env.officina_home().to_string_lossy().into_owned();
-    for command in [
+    let mut commands = vec![
         format!("cat {home}/relay/approved.json"),
         format!("rm -f {}", env.relay_home().journal_dir().display()),
         format!("echo x > \"{}\"", env.relay_home().stopped_file().display()),
-    ] {
+        format!(
+            "echo '{{}}' >> \"{}\"",
+            env.events_dir().join("2026-10-29.jsonl").display()
+        ),
+    ];
+    commands.extend(
+        officina_core::relay::gate::PROTECTED_DIRS
+            .iter()
+            .map(|dir| format!("ls {home}/{dir}/")),
+    );
+    for command in &commands {
         let reason = denied(
             &env,
-            &bash(&command, r"C:\path\to\Supervision"),
+            &bash(command, r"C:\path\to\Supervision"),
             Some(GUARDED_ROOT),
         );
         assert!(
-            reason.contains("relay or journal directory"),
+            reason.contains("Officina's own folders"),
             "{command}: {reason}"
         );
     }

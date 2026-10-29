@@ -5,6 +5,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::contract::absent_hook_fields;
 
+/// The event buffer's directory under the Officina home (AD-9).
+pub const EVENTS_DIR: &str = "events";
+
 /// Version of the event buffer line format. Bumped on any incompatible change;
 /// readers skip lines carrying another version.
 pub const EVENT_LINE_VERSION: u32 = 1;

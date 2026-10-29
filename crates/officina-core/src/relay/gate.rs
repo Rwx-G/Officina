@@ -20,7 +20,9 @@ use super::catalogue::{
 use super::journal::GateFault;
 use super::shell::{self, Assignment, Lexed, Origin, Program};
 use super::{HOME_DIR_NAME, JOURNAL_DIR, RELAY_DIR};
+use crate::events::EVENTS_DIR;
 use crate::floor::{Autonomy, FloorFile, floor_dir_of, resolve_project_path};
+use crate::orders::ORCHESTRATOR_DIR;
 use crate::quota::normalise_path;
 
 /// Officina's own program, whose environment D-12 protects.
@@ -83,7 +85,7 @@ closed_enum! {
         OfficinaEnvironment,
         /// The text names an `OFFICINA_` variable.
         OfficinaVariable,
-        /// The text names Officina's relay or journal directory (D-13).
+        /// The text names one of Officina's [`PROTECTED_DIRS`] (D-13, D-961).
         ProtectedDir,
         /// A PowerShell tool call in a guarded project: Officina reads Bash
         /// commands only (D-171).
@@ -425,20 +427,28 @@ fn reassigned(lexed: &Lexed) -> Option<Deny> {
     })
 }
 
-/// The protected directories of a home (D-13): `<home>/relay` and
-/// `<home>/journal`, normalised, plus the `.officina/relay` and
-/// `.officina/journal` tails when the home is the default one. A bare
-/// `relay/` is never protected.
+/// The folders of the Officina home a shell command in a guarded project
+/// may not name (D-13 as amended by D-961): the relay and the journal,
+/// which hold the approvals and the record of what ran, and the event
+/// buffer and the orchestrator's folder, which hold what the review reads
+/// as the author's prompt and the proposals the window shows as the
+/// orchestrator's.
+pub const PROTECTED_DIRS: [&str; 4] = [RELAY_DIR, JOURNAL_DIR, EVENTS_DIR, ORCHESTRATOR_DIR];
+
+/// The protected directories of a home (D-13, D-961): each of
+/// [`PROTECTED_DIRS`] under `<home>`, normalised, plus its `.officina/`
+/// tail when the home is the default one. A bare `relay/` is never
+/// protected.
 pub fn protected_dirs(home: &str, default_home: bool) -> Vec<String> {
     let home = path_text(home);
     let home = home.trim_end_matches('/');
-    let mut dirs: Vec<String> = [RELAY_DIR, JOURNAL_DIR]
+    let mut dirs: Vec<String> = PROTECTED_DIRS
         .iter()
         .map(|dir| format!("{home}/{dir}"))
         .collect();
     if default_home {
         dirs.extend(
-            [RELAY_DIR, JOURNAL_DIR]
+            PROTECTED_DIRS
                 .iter()
                 .map(|dir| format!("{HOME_DIR_NAME}/{dir}")),
         );
@@ -961,9 +971,10 @@ fn why(deny: &Deny) -> String {
         DenyKind::OfficinaVariable => format!(
             "the command names an `{OFFICINA_VARIABLE_PREFIX}` variable, one of Officina's own settings"
         ),
-        DenyKind::ProtectedDir => {
-            "the command names Officina's relay or journal directory, which only the Officina window writes".to_owned()
-        }
+        DenyKind::ProtectedDir => format!(
+            "the command names one of Officina's own folders ({}), which only Officina writes",
+            PROTECTED_DIRS.join(", ")
+        ),
         DenyKind::PowershellInGuardedProject => {
             "Officina reads Bash commands only, so the PowerShell tool is refused in a guarded project; run the command with the Bash tool".to_owned()
         }
@@ -1413,17 +1424,28 @@ mod tests {
     #[test]
     fn protected_dirs_follow_the_home() {
         let default = protected_dirs(r"C:\Users\user01\.officina\", true);
-        assert_eq!(
-            default,
-            [
-                "c:/users/user01/.officina/relay",
-                "c:/users/user01/.officina/journal",
-                ".officina/relay",
-                ".officina/journal"
-            ]
-        );
+        let expected: Vec<String> = PROTECTED_DIRS
+            .iter()
+            .map(|dir| format!("c:/users/user01/.officina/{dir}"))
+            .chain(PROTECTED_DIRS.iter().map(|dir| format!(".officina/{dir}")))
+            .collect();
+        assert_eq!(default, expected);
         let custom = protected_dirs("D:/OfficinaHome", false);
-        assert_eq!(custom, ["d:/officinahome/relay", "d:/officinahome/journal"]);
+        let expected: Vec<String> = PROTECTED_DIRS
+            .iter()
+            .map(|dir| format!("d:/officinahome/{dir}"))
+            .collect();
+        assert_eq!(custom, expected);
+        for dir in PROTECTED_DIRS {
+            assert!(
+                names_protected_dir(&format!("cat ~/.officina/{dir}/x"), &default),
+                "{dir}"
+            );
+            assert!(
+                !names_protected_dir(&format!("ls {dir}/"), &custom),
+                "{dir}"
+            );
+        }
         for text in [
             "cat D:/OfficinaHome/relay/approved.json",
             r"type D:\OFFICINAHOME\Relay\approved.json",
