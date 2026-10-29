@@ -1186,6 +1186,33 @@ mod tests {
         assert!(board.columns.needs_you.is_empty());
     }
 
+    /// Story 5.18 AC 9 (review F40, D-565): whatever the orchestrator's
+    /// status, `waiting_count`, which the title and the taskbar overlay
+    /// draw, counts the author's waits only; and the board carries no
+    /// proposal, so neither can count one.
+    #[test]
+    fn the_orchestrator_and_proposals_never_count_as_waiting() {
+        let author = record(
+            r#"{"pid":5,"sessionId":"api","name":"api","kind":"interactive","status":"waiting","cwd":"C:/work/api","startedAt":1}"#,
+        );
+        for status in crate::agents::LiveStatus::ALL {
+            let wire = serde_json::to_value(status).unwrap();
+            let input = BoardInput {
+                agents: Some(vec![
+                    orchestrator_entry(wire.as_str().unwrap()),
+                    author.clone(),
+                ]),
+                officina_home: Some(HOME.to_owned()),
+                ..Default::default()
+            };
+            let board = build_board(&input, 10);
+            assert_eq!(board.orchestrator.and_then(|p| p.status), Some(status));
+            assert_eq!(board.waiting_count, 1, "{status:?}: the author's wait only");
+            let json = serde_json::to_string(&board).unwrap();
+            assert!(!json.contains("proposal"), "{status:?}: {json}");
+        }
+    }
+
     /// Story 5.16 AC 5 (D-166): another session under the orchestrator's
     /// folder, or named like it elsewhere, is an ordinary card.
     #[test]

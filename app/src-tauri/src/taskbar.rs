@@ -461,6 +461,43 @@ mod tests {
         }
     }
 
+    /// Story 5.18 AC 9 (D-565, review F40): the orchestrator, waiting or
+    /// not, leaves the title and the overlay as the author's waits make
+    /// them; proposals are no board input, so they cannot reach either.
+    #[test]
+    fn the_orchestrator_leaves_the_title_and_the_overlay_unchanged() {
+        let home = r"C:\Users\user01\.officina";
+        for waiting in [0, 2] {
+            let plain = board(waiting, 0);
+            for status in ["busy", "waiting", "idle"] {
+                let mut agents: Vec<serde_json::Value> = (0..waiting)
+                    .map(|i| {
+                        serde_json::json!({"pid": 100 + i, "sessionId": format!("s{i}"), "kind": "interactive",
+                            "status": "waiting", "cwd": "C:/work/calm", "startedAt": 1})
+                    })
+                    .collect();
+                agents.push(serde_json::json!({"pid": 9, "sessionId": "orch", "name": "officina-orchestrator",
+                    "kind": "interactive", "status": status, "cwd": format!("{home}/orchestrator/workdir"), "startedAt": 1}));
+                let with = build_board(
+                    &BoardInput {
+                        officina_home: Some(home.to_owned()),
+                        ..input(&agents)
+                    },
+                    NOW,
+                );
+                assert!(with.orchestrator.is_some(), "{status}");
+                assert_eq!(window_title(&with), window_title(&plain), "{status}");
+                for size in sizes() {
+                    assert_eq!(
+                        overlay_for(&with, size),
+                        overlay_for(&plain, size),
+                        "{status}"
+                    );
+                }
+            }
+        }
+    }
+
     #[test]
     fn the_badge_turns_to_the_alert_colour() {
         for size in sizes() {
