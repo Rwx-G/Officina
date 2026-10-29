@@ -145,7 +145,8 @@ test.describe("themes", () => {
     await expect.poll(isDarkLogo).toBe(false);
     await cycleTo(page, "dark");
     await expect.poll(isDarkLogo).toBe(true);
-    // The image loads under the window's policy.
-    expect(await logo.evaluate((img: HTMLImageElement) => img.complete && img.naturalWidth > 0)).toBe(true);
+    // The image loads under the window's policy; a switched source loads
+    // after the attribute changes, so the check waits for it.
+    await expect.poll(() => logo.evaluate((img: HTMLImageElement) => img.complete && img.naturalWidth > 0)).toBe(true);
   });
 });
