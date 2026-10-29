@@ -315,6 +315,30 @@ fn journal_append_recomputes_the_relay_view() {
     stop(handle);
 }
 
+/// D-760: a line spilled beside the day file, while another writer holds
+/// the lock, rebuilds the view as an append does.
+#[test]
+fn journal_spill_recomputes_the_relay_view() {
+    let env = common::TestEnv::new();
+    let (handle, _boards, views) = watch(&env, None);
+    let first = until(&views, |_| true);
+    assert!(first.recent.is_empty());
+    let held = officina_host::relay::journal::JournalLock::acquire(&env.relay_home()).unwrap();
+    officina_host::relay::journal::record(
+        &env.relay_home(),
+        &[approved_line("01")],
+        officina_host::files::now_ms(),
+    )
+    .unwrap();
+    let next = until(&views, |v| !v.recent.is_empty());
+    drop(held);
+    assert!(matches!(
+        next.recent[0].event,
+        RecentEvent::CatalogueApproved(_)
+    ));
+    stop(handle);
+}
+
 #[test]
 fn relay_view_is_emitted_only_on_change() {
     let env = common::TestEnv::new();

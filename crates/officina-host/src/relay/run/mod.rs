@@ -229,9 +229,9 @@ struct Context<'a> {
 }
 
 impl Context<'_> {
-    /// One line on `err` and one `refused` line (PRD amendment 11). A
-    /// journal that cannot be written does not add a second line: the
-    /// refusal stands.
+    /// One line on `err` and one `refused` line (PRD amendment 11), spilled
+    /// when the journal stays locked (D-760). A journal that cannot be
+    /// written at all does not add a second line: the refusal stands.
     fn refuse(&self, err: &mut dyn Write, refusal: &Refusal) -> i32 {
         let _ = writeln!(
             err,
@@ -247,7 +247,7 @@ impl Context<'_> {
             reason: refusal.reason,
             detail: refusal.detail.clone(),
         });
-        let _ = journal::append(self.home, &[line], now_ms());
+        let _ = journal::record(self.home, &[line], now_ms());
         EXIT_REFUSED
     }
 }

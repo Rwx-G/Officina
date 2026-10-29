@@ -749,8 +749,10 @@ fn excerpt_dropped_when_excerpts_are_off() {
     assert!(journaled.iter().all(|d| d.matched.is_some()));
 }
 
+/// D-760: a lock held past the timeout delays the deny's line, then spills
+/// it; it loses neither the deny nor the line.
 #[test]
-fn deny_stands_when_the_journal_lock_is_held() {
+fn deny_and_its_line_stand_when_the_journal_lock_is_held() {
     let env = approved_env();
     let held = JournalLock::acquire(&env.relay_home()).unwrap();
     let started = std::time::Instant::now();
@@ -761,10 +763,7 @@ fn deny_stands_when_the_journal_lock_is_held() {
     );
     assert!(started.elapsed() >= officina_host::relay::journal::LOCK_TIMEOUT);
     drop(held);
-    assert!(
-        gate_denied(&env).is_empty(),
-        "the line is lost, not the deny"
-    );
+    assert_eq!(gate_denied(&env).len(), 1, "the line is spilled, not lost");
 }
 
 /// Story 2.4 AC 13 (AD-28): the gate reads the floor's phase 1 and compiles

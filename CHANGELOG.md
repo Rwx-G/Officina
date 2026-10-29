@@ -851,6 +851,12 @@ project uses [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- The relay journal no longer loses a line when its lock stays held past
+  2 seconds, as two loaded writers can on a busy machine: a gate refusal or
+  fault, a refusal, a run's end, an auto review, a work order's launch
+  outcome and the known-projects fault then go to a spill file beside the
+  day file, read with it, pruned with it and watched by the window, instead
+  of being dropped without a word (D-760).
 - A waiting session's ticket could hide behind the alert room's beacon
   when the queue reached the corridor: tickets are drawn above everything
   on the floor (story 4.17).

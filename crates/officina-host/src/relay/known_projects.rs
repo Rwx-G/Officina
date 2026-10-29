@@ -84,7 +84,7 @@ impl KnownProjectsKeeper {
                         detail: detail.clone(),
                         command_excerpt: None,
                     });
-                    let _ = journal::append(home, &[line], now_ms);
+                    let _ = journal::record(home, &[line], now_ms);
                 }
                 self.failing = Some(detail);
             }

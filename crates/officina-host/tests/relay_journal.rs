@@ -1,5 +1,5 @@
-//! The journal's locked append and two-day reader (AD-32). Every test works
-//! in its own temp home.
+//! The journal's locked append, its spill (D-760) and two-day reader
+//! (AD-32). Every test works in its own temp home.
 
 use std::fs::{self, OpenOptions};
 use std::time::{Duration, Instant};
@@ -7,10 +7,11 @@ use std::time::{Duration, Instant};
 use officina_core::dates::event_file_name;
 use officina_core::relay::journal::{
     CatalogueApproved, JOURNAL_RETENTION_DAYS, JournalEntry, JournalKind, JournalLine,
+    spill_file_name, spilled_day_file,
 };
 use officina_host::relay::home::RelayHome;
 use officina_host::relay::journal::{
-    JournalError, JournalLock, LOCK_TIMEOUT, append, prune, read_recent,
+    JournalError, JournalLock, LOCK_TIMEOUT, append, prune, read_recent, record,
 };
 
 const DAY: i64 = 86_400_000;
@@ -107,6 +108,126 @@ fn lock_held_past_2_s_times_out() {
     assert!(!day_file(&home, NOW).exists());
 }
 
+/// The spill files in `home`'s journal, by name.
+fn spill_files(home: &RelayHome) -> Vec<String> {
+    let mut names: Vec<String> = fs::read_dir(home.journal_dir())
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|name| spilled_day_file(name).is_some())
+        .collect();
+    names.sort();
+    names
+}
+
+fn hashes(lines: &[JournalLine]) -> Vec<String> {
+    lines
+        .iter()
+        .map(|l| match &l.entry {
+            JournalEntry::CatalogueApproved(a) => a.hash.clone(),
+            other => panic!("{other:?}"),
+        })
+        .collect()
+}
+
+#[test]
+fn record_appends_to_the_day_file_when_the_lock_is_free() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = RelayHome::new(dir.path(), None);
+    record(&home, &[approved("01")], NOW).unwrap();
+    record(&home, &[], NOW).unwrap();
+    assert!(day_file(&home, NOW).exists());
+    assert!(spill_files(&home).is_empty());
+    assert_eq!(hashes(&read_recent(&home, NOW).0), ["01"]);
+}
+
+/// D-760: a line that records what already happened survives a lock held
+/// past the timeout, in a spill file of its own that the reader reads with
+/// its day, after the day file, in the order the spills were written.
+#[test]
+fn record_spills_when_the_lock_stays_held() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = RelayHome::new(dir.path(), None);
+    append(&home, &[approved("locked")], NOW).unwrap();
+    let held = hold_lock(&home);
+    let started = Instant::now();
+    record(
+        &home,
+        &[approved("spilled-1"), JournalEntry::RelayStopped],
+        NOW,
+    )
+    .unwrap();
+    assert!(
+        started.elapsed() >= LOCK_TIMEOUT,
+        "it waited for the lock first"
+    );
+    record(&home, &[approved("spilled-2")], NOW).unwrap();
+    drop(held);
+
+    let spills = spill_files(&home);
+    assert_eq!(spills.len(), 2, "one file per write, same millisecond");
+    let today = event_file_name(NOW);
+    assert!(
+        spills
+            .iter()
+            .all(|name| spilled_day_file(name).as_deref() == Some(today.as_str())),
+        "{spills:?}"
+    );
+    let (lines, corrupt) = read_recent(&home, NOW);
+    assert_eq!(corrupt, 0);
+    let kinds: Vec<JournalKind> = lines.iter().map(|l| l.entry.kind()).collect();
+    assert_eq!(
+        kinds,
+        [
+            JournalKind::CatalogueApproved,
+            JournalKind::CatalogueApproved,
+            JournalKind::RelayStopped,
+            JournalKind::CatalogueApproved,
+        ]
+    );
+    assert!(lines.iter().all(|l| l.ts == NOW));
+}
+
+#[test]
+fn reader_takes_each_days_spills_after_its_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = RelayHome::new(dir.path(), None);
+    let spill = |ts: i64, writer: &str, hash: &str| {
+        fs::create_dir_all(home.journal_dir()).unwrap();
+        fs::write(
+            home.journal_dir().join(spill_file_name(ts, writer)),
+            JournalLine::new(ts, approved(hash)).to_line(),
+        )
+        .unwrap();
+    };
+    spill(NOW - 2 * DAY, "1-1-0", "spill-two-days-ago");
+    spill(NOW - DAY, "1-1-0", "spill-yesterday");
+    append(&home, &[approved("yesterday")], NOW - DAY).unwrap();
+    spill(NOW, "2-1-0", "spill-today-second");
+    spill(NOW, "1-1-0", "spill-today-first");
+    append(&home, &[approved("today")], NOW).unwrap();
+    // A spill file cut by a killed writer: its partial line is skipped,
+    // as in a day file.
+    fs::write(
+        home.journal_dir().join(spill_file_name(NOW, "3-1-0")),
+        b"{\"v\":1,\"ts\":5,\"kind\":\"catalogue_appr",
+    )
+    .unwrap();
+
+    let (lines, corrupt) = read_recent(&home, NOW);
+    assert_eq!(
+        hashes(&lines),
+        [
+            "yesterday",
+            "spill-yesterday",
+            "today",
+            "spill-today-first",
+            "spill-today-second"
+        ]
+    );
+    assert_eq!(corrupt, 0);
+}
+
 #[test]
 fn reader_spans_two_days_and_counts_corrupt() {
     let dir = tempfile::tempdir().unwrap();
@@ -158,6 +279,21 @@ fn retention_keeps_90_days() {
     let gone: Vec<_> = [JOURNAL_RETENTION_DAYS + 1, 400]
         .iter()
         .map(|days| seed_day(&home, NOW - days * DAY))
+        .collect();
+
+    let spill = |days: i64| {
+        let ts = NOW - days * DAY;
+        let path = home.journal_dir().join(spill_file_name(ts, "1-1-0"));
+        fs::write(&path, JournalLine::new(ts, approved("spilled")).to_line()).unwrap();
+        path
+    };
+    let kept: Vec<_> = kept
+        .into_iter()
+        .chain([spill(JOURNAL_RETENTION_DAYS)])
+        .collect();
+    let gone: Vec<_> = gone
+        .into_iter()
+        .chain([spill(JOURNAL_RETENTION_DAYS + 1)])
         .collect();
 
     assert_eq!(prune(&home, NOW), gone.len());

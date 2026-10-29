@@ -458,8 +458,9 @@ fn panic_text(payload: &(dyn std::any::Any + Send)) -> String {
 /// lies; in a guarded project, or when `locate` panics too and the gate
 /// cannot tell, the call is denied with [`fault_reason`]; outside every
 /// guarded project it gets no decision, as the gate has nothing to protect
-/// there. A journal that stays locked loses the lines, never the decision
-/// (AD-32).
+/// there. A journal that stays locked gets the lines in a spill file
+/// (D-760); one that cannot be written at all loses them, never the
+/// decision (AD-32).
 pub fn answer_with(
     home: &RelayHome,
     call: &ToolCall,
@@ -516,7 +517,7 @@ pub fn answer_with(
             command_excerpt: command_excerpt.clone(),
         })
     }));
-    let _ = journal::append(home, &lines, now_ms);
+    let _ = journal::record(home, &lines, now_ms);
     evaluation.deny.map(|deny| deny_json(&deny.reason))
 }
 
@@ -534,7 +535,7 @@ fn journal_panic(
         detail,
         command_excerpt: None,
     });
-    let _ = journal::append(home, &[line], now_ms);
+    let _ = journal::record(home, &[line], now_ms);
 }
 
 /// The gate for one `PreToolUse` payload: `None` is no decision, which

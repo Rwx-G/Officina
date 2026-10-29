@@ -118,8 +118,9 @@ pub(super) fn http_finished(
 
 /// The one ending of every run, in this order: a check run's kept output,
 /// then the `run_finished` line, so a reader that sees the end finds the
-/// output it pairs with (D-170). A write that fails is said on `err`; the
-/// run stands either way, and a journal that stays locked loses the line.
+/// output it pairs with (D-170). A journal that stays locked gets the line
+/// in a spill file (D-760); a write that fails even so is said on `err`, and
+/// the run stands either way.
 pub(super) fn end_run(
     home: &RelayHome,
     err: &mut dyn Write,
@@ -130,10 +131,10 @@ pub(super) fn end_run(
     if let Some(bytes) = kept {
         keep(home, err, run_id, &bytes);
     }
-    if journal::append(home, &[line], now_ms()).is_err() {
+    if let Err(e) = journal::record(home, &[line], now_ms()) {
         let _ = writeln!(
             err,
-            "officina: the journal stayed locked: this run's end is not recorded"
+            "officina: cannot write the journal ({e}): this run's end is not recorded"
         );
     }
 }

@@ -20,6 +20,7 @@ use officina_core::registry::confirm::{AuthorAction, ConfirmItem, ItemAnswer};
 use officina_core::registry::model::{ModelEnv, unavailable};
 use officina_core::registry::retention::PASS_INTERVAL_MS;
 use officina_core::registry::view::{DiscardedSession, RegistryView, SubjectView};
+use officina_core::relay::journal::spilled_day_file;
 use officina_core::relay::view::RelayView;
 
 use crate::collector::Collector;
@@ -576,7 +577,7 @@ struct WatchedPaths {
     floor: Stamp,
     relay_tree: u64,
     relay_floor: Stamp,
-    journal_file: Stamp,
+    journal: (Stamp, u64),
 }
 
 impl WatchedPaths {
@@ -596,7 +597,7 @@ impl WatchedPaths {
             floor: stamp(&floor_file),
             relay_tree: relay_fingerprint(&relay.relay_dir()),
             relay_floor: stamp(&relay_floor_file),
-            journal_file: stamp(&today_journal(&relay)),
+            journal: journal_stamps(&relay),
             events_dir,
             sessions_dir,
             quota_file,
@@ -623,9 +624,9 @@ impl WatchedPaths {
             self.relay_floor = current;
             plan.relay_floor_changed();
         }
-        let current = stamp(&today_journal(&self.relay));
-        if current != self.journal_file {
-            self.journal_file = current;
+        let current = journal_stamps(&self.relay);
+        if current != self.journal {
+            self.journal = current;
             plan.relay_changed();
         }
         let current = stamp(&self.floor_file);
@@ -657,9 +658,21 @@ impl WatchedPaths {
     }
 }
 
-/// Today's journal file (AD-32), the one appends go to.
-fn today_journal(relay: &RelayHome) -> PathBuf {
-    relay.journal_dir().join(event_file_name(now_ms()))
+/// Today's journal file (AD-32), the one appends go to, and the
+/// fingerprint of the spill files beside it (D-760).
+fn journal_stamps(relay: &RelayHome) -> (Stamp, u64) {
+    let dir = relay.journal_dir();
+    let mut spills = Vec::new();
+    dir_entries(
+        &dir,
+        false,
+        &|name| spilled_day_file(name).is_some(),
+        &mut spills,
+    );
+    (
+        stamp(&dir.join(event_file_name(now_ms()))),
+        fingerprint_of(spills),
+    )
 }
 
 /// One payload the collector shares with the window's commands and emits:

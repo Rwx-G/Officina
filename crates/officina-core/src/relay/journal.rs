@@ -1,7 +1,8 @@
 //! The relay's journal (AD-32, FR-13): one JSON line per run start and end,
 //! refusal, gate deny or error, and authority decision, in
-//! `journal/YYYY-MM-DD.jsonl` (UTC). The host appends under `journal/.lock`
-//! and reads two days back; this module holds the line types only.
+//! `journal/YYYY-MM-DD.jsonl` (UTC). The host appends under `journal/.lock`,
+//! spills what cannot wait for the lock beside the day file (D-760), and
+//! reads two days back; this module holds the line types and file names.
 
 use std::collections::BTreeMap;
 
@@ -26,19 +27,66 @@ pub const COMMAND_EXCERPT_CHARS: usize = crate::events::EXCERPT_CHARS;
 /// 10). `officina run` and the gate never delete.
 pub const JOURNAL_RETENTION_DAYS: i64 = 90;
 
-/// True when a journal file name is a day older than
-/// [`JOURNAL_RETENTION_DAYS`] and may be deleted by the window's hourly
-/// pass. The lock file and any name that is not a day file never are.
+/// What separates a spill file's day from its writer's mark.
+const SPILL_INFIX: &str = ".spill-";
+
+/// The name of a spill file (D-760): lines that could not wait for the
+/// journal lock, written to a file of their own beside the day file of
+/// `now_ms`. `writer` makes the name unique to one write.
+///
+/// ```
+/// use officina_core::relay::journal::{spill_file_name, spilled_day_file};
+/// let now = 1_793_102_400_000; // 2026-10-27
+/// let name = spill_file_name(now, "1793102400000-4242-0");
+/// assert_eq!(name, "2026-10-27.spill-1793102400000-4242-0.jsonl");
+/// assert_eq!(spilled_day_file(&name).as_deref(), Some("2026-10-27.jsonl"));
+/// ```
+pub fn spill_file_name(now_ms: i64, writer: &str) -> String {
+    format!(
+        "{}{SPILL_INFIX}{writer}.jsonl",
+        crate::dates::utc_day_text(now_ms)
+    )
+}
+
+/// The day file a spill file's lines belong to; `None` for any name that
+/// is not a spill file, a day file and the lock file included.
+///
+/// ```
+/// use officina_core::relay::journal::spilled_day_file;
+/// assert_eq!(spilled_day_file("2026-10-27.jsonl"), None);
+/// assert_eq!(spilled_day_file("2026-10-27.spill-.jsonl"), None);
+/// assert_eq!(spilled_day_file("notaday.spill-1-2-0.jsonl"), None);
+/// assert_eq!(spilled_day_file(".lock"), None);
+/// ```
+pub fn spilled_day_file(name: &str) -> Option<String> {
+    let (day, writer) = name.split_once(SPILL_INFIX)?;
+    if writer.strip_suffix(".jsonl")?.is_empty() {
+        return None;
+    }
+    let day_file = format!("{day}.jsonl");
+    crate::dates::dated_file_day(&day_file).map(|_| day_file)
+}
+
+/// True when a journal file name, a day file or one of its spill files, is
+/// a day older than [`JOURNAL_RETENTION_DAYS`] and may be deleted by the
+/// window's hourly pass. The lock file and any other name never are.
 ///
 /// ```
 /// use officina_core::relay::journal::is_expired_journal_file;
 /// let now = 1_793_102_400_000; // 2026-10-27
 /// assert!(is_expired_journal_file("2026-07-28.jsonl", now));
 /// assert!(!is_expired_journal_file("2026-07-29.jsonl", now));
+/// assert!(is_expired_journal_file("2026-07-28.spill-1-2-0.jsonl", now));
+/// assert!(!is_expired_journal_file("2026-07-29.spill-1-2-0.jsonl", now));
 /// assert!(!is_expired_journal_file(".lock", now));
 /// ```
 pub fn is_expired_journal_file(name: &str, now_ms: i64) -> bool {
-    crate::dates::is_dated_file_older_than(name, now_ms, JOURNAL_RETENTION_DAYS)
+    let day_file = spilled_day_file(name);
+    crate::dates::is_dated_file_older_than(
+        day_file.as_deref().unwrap_or(name),
+        now_ms,
+        JOURNAL_RETENTION_DAYS,
+    )
 }
 
 /// One journal line: the version, the time it was written and its entry.

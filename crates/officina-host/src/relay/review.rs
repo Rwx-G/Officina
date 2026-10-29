@@ -616,7 +616,8 @@ fn review_records(
 
 /// Writes `review`'s row, then its journal lines: `auto_review` for a
 /// call, `auto_escalated` with its cause; never the reason (AD-32 as
-/// amended). A journal that cannot be written loses the line, not the row.
+/// amended). A journal that cannot be written, even by a spill (D-760),
+/// loses the line, not the row.
 fn record(relay: &RelayHome, registry: &mut WindowRegistry, review: &NewReview, now_ms: i64) {
     registry.insert_review(review);
     let mut lines = Vec::new();
@@ -635,7 +636,7 @@ fn record(relay: &RelayHome, registry: &mut WindowRegistry, review: &NewReview, 
             cause,
         }));
     }
-    let _ = journal::append(relay, &lines, now_ms);
+    let _ = journal::record(relay, &lines, now_ms);
 }
 
 /// The author's decision on each reviewed request, copied onto its row

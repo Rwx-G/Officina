@@ -413,7 +413,7 @@ pub(crate) fn record(
         exit_code: report.result.exit_code.map(i64::from),
         ..report.line.clone()
     };
-    crate::relay::journal::append(
+    crate::relay::journal::record(
         collector.relay(),
         &[JournalEntry::WorkOrderLaunched(line)],
         now_ms,

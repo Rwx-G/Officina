@@ -1,19 +1,24 @@
-//! The journal's files (AD-32): locked appends and the two-day reader.
+//! The journal's files (AD-32): locked appends, spills and the two-day
+//! reader.
 //!
 //! Every writer (`officina run`, the gate, the window) takes an exclusive
 //! lock on `journal/.lock` with `File::try_lock`, retried every
 //! [`LOCK_RETRY`] up to [`LOCK_TIMEOUT`], writes its lines with one
 //! `append_line`, then releases it. A separate lock file means readers never
-//! meet a locked range, and lines of any length never interleave. The
-//! window alone deletes old day files ([`prune`]).
+//! meet a locked range, and lines of any length never interleave. Lines that
+//! record what already happened cannot be given up when the lock stays held:
+//! [`record`] then spills them to a file of their own, which [`read_recent`]
+//! reads with its day (D-760). The window alone deletes old files
+//! ([`prune`]).
 
 use std::fs::{self, File, OpenOptions};
-use std::io;
+use std::io::{self, Write};
 use std::time::{Duration, Instant};
 
 use officina_core::dates::{event_file_name, event_files_to_read};
 use officina_core::relay::journal::{
-    JournalEntry, JournalLine, ParsedLine, is_expired_journal_file, parse_line,
+    JournalEntry, JournalLine, ParsedLine, is_expired_journal_file, parse_line, spill_file_name,
+    spilled_day_file,
 };
 
 use super::home::RelayHome;
@@ -84,13 +89,9 @@ impl JournalLock {
         if entries.is_empty() {
             return Ok(());
         }
-        let text: String = entries
-            .iter()
-            .map(|entry| JournalLine::new(now_ms, entry.clone()).to_line())
-            .collect();
         append_line(
             &self.home.journal_dir().join(event_file_name(now_ms)),
-            &text,
+            &lines_text(entries, now_ms),
         )
     }
 }
@@ -103,9 +104,18 @@ impl Drop for JournalLock {
     }
 }
 
+fn lines_text(entries: &[JournalEntry], now_ms: i64) -> String {
+    entries
+        .iter()
+        .map(|entry| JournalLine::new(now_ms, entry.clone()).to_line())
+        .collect()
+}
+
 /// Takes the lock, appends `entries` with one write and releases it. With
 /// nothing to write it takes no lock and touches no file: the gate calls it
 /// on every gated tool call and locks only to record something (AD-28).
+/// For a line written before acting, so that a writer that cannot lock does
+/// not act; what already happened goes through [`record`].
 pub fn append(home: &RelayHome, entries: &[JournalEntry], now_ms: i64) -> Result<(), JournalError> {
     if entries.is_empty() {
         return Ok(());
@@ -114,9 +124,42 @@ pub fn append(home: &RelayHome, entries: &[JournalEntry], now_ms: i64) -> Result
     Ok(())
 }
 
+/// Journals `entries` that record something already done or decided (a
+/// gate deny, a refusal, a run's end), which a held lock must not lose
+/// (D-760): [`append`] first; when the lock stays held past
+/// [`LOCK_TIMEOUT`] or the locked write fails, one write to a spill file of
+/// their own beside the day file, created new so it has a single writer and
+/// needs no lock. Fails only when the spill fails too.
+pub fn record(home: &RelayHome, entries: &[JournalEntry], now_ms: i64) -> io::Result<()> {
+    match append(home, entries, now_ms) {
+        Ok(()) => Ok(()),
+        Err(_) => spill(home, entries, now_ms),
+    }
+}
+
+fn spill(home: &RelayHome, entries: &[JournalEntry], now_ms: i64) -> io::Result<()> {
+    let dir = home.journal_dir();
+    fs::create_dir_all(&dir)?;
+    let text = lines_text(entries, now_ms);
+    let pid = std::process::id();
+    let mut attempt = 0u32;
+    loop {
+        let name = spill_file_name(now_ms, &format!("{now_ms}-{pid}-{attempt}"));
+        match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(dir.join(name))
+        {
+            Ok(mut file) => return file.write_all(text.as_bytes()),
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => attempt += 1,
+            Err(e) => return Err(e),
+        }
+    }
+}
+
 /// The window's retention pass over the journal (AD-32): deletes the day
-/// files older than [`JOURNAL_RETENTION_DAYS`] days, never the lock file or
-/// a name that is not a day file. Returns how many files went. Only the
+/// files and spill files older than [`JOURNAL_RETENTION_DAYS`] days, never
+/// the lock file or any other name. Returns how many files went. Only the
 /// window calls it: `officina run` and the gate never delete.
 ///
 /// [`JOURNAL_RETENTION_DAYS`]: officina_core::relay::journal::JOURNAL_RETENTION_DAYS
@@ -132,39 +175,64 @@ pub fn prune(home: &RelayHome, now_ms: i64) -> usize {
         .count()
 }
 
-/// The journal lines of the last two UTC days, in file order, plus the
-/// number of lines that could not be read (AD-10, AD-32). A partial last
-/// line (a writer killed mid-write), a line of another version and a line of
-/// a `kind` this version does not know are skipped without being counted.
+/// The journal lines of the last two UTC days, plus the number of lines
+/// that could not be read (AD-10, AD-32): each day's file in file order,
+/// then that day's spill files (D-760) in name order, which starts with
+/// the millisecond they were written in. A partial last line (a writer killed mid-write), a
+/// line of another version and a line of a `kind` this version does not
+/// know are skipped without being counted.
 pub fn read_recent(home: &RelayHome, now_ms: i64) -> (Vec<JournalLine>, u32) {
+    let dir = home.journal_dir();
+    let mut spills: Vec<(String, String)> = fs::read_dir(&dir)
+        .map(|entries| {
+            entries
+                .flatten()
+                .filter_map(|entry| {
+                    let name = entry.file_name().to_string_lossy().into_owned();
+                    spilled_day_file(&name).map(|day_file| (day_file, name))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    spills.sort();
     let mut lines = Vec::new();
     let mut corrupt = 0u32;
-    for name in event_files_to_read(now_ms) {
-        let bytes = match fs::read(home.journal_dir().join(&name)) {
-            Ok(bytes) => bytes,
-            Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
-            Err(_) => {
-                corrupt += 1;
-                continue;
-            }
-        };
-        let ends_with_newline = bytes.ends_with(b"\n");
-        let raw_lines: Vec<&[u8]> = bytes.split(|b| *b == b'\n').collect();
-        let last_index = raw_lines.len().saturating_sub(1);
-        for (index, raw) in raw_lines.iter().enumerate() {
-            let partial_tail = index == last_index && !ends_with_newline;
-            let parsed = match std::str::from_utf8(raw) {
-                Ok(text) if text.trim().is_empty() => continue,
-                Ok(text) => parse_line(text.trim_end_matches('\r')),
-                Err(_) => ParsedLine::Corrupt,
-            };
-            match parsed {
-                ParsedLine::Line(line) => lines.push(line),
-                ParsedLine::Foreign => {}
-                ParsedLine::Corrupt if partial_tail => {}
-                ParsedLine::Corrupt => corrupt += 1,
-            }
+    for day_file in event_files_to_read(now_ms) {
+        let of_the_day = spills
+            .iter()
+            .filter(|(day, _)| *day == day_file)
+            .map(|(_, name)| name.as_str());
+        for name in std::iter::once(day_file.as_str()).chain(of_the_day) {
+            read_file(&dir.join(name), &mut lines, &mut corrupt);
         }
     }
     (lines, corrupt)
+}
+
+fn read_file(path: &std::path::Path, lines: &mut Vec<JournalLine>, corrupt: &mut u32) {
+    let bytes = match fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return,
+        Err(_) => {
+            *corrupt += 1;
+            return;
+        }
+    };
+    let ends_with_newline = bytes.ends_with(b"\n");
+    let raw_lines: Vec<&[u8]> = bytes.split(|b| *b == b'\n').collect();
+    let last_index = raw_lines.len().saturating_sub(1);
+    for (index, raw) in raw_lines.iter().enumerate() {
+        let partial_tail = index == last_index && !ends_with_newline;
+        let parsed = match std::str::from_utf8(raw) {
+            Ok(text) if text.trim().is_empty() => continue,
+            Ok(text) => parse_line(text.trim_end_matches('\r')),
+            Err(_) => ParsedLine::Corrupt,
+        };
+        match parsed {
+            ParsedLine::Line(line) => lines.push(line),
+            ParsedLine::Foreign => {}
+            ParsedLine::Corrupt if partial_tail => {}
+            ParsedLine::Corrupt => *corrupt += 1,
+        }
+    }
 }

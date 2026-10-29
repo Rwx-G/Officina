@@ -379,7 +379,9 @@ Once the relay is in use, the header's view switch gains **Relay**; the chips an
 
 Approval requests are not listed there: you decide them on their cards in Needs you. Everything the view shows is rendered as text, never as markup.
 
-The journal keeps 90 days of history (`JOURNAL_RETENTION_DAYS`): the window deletes older day files when it starts and then every hour. `officina run` and the gate never delete a journal file.
+Writers take turns on the journal through a lock. A line that records something already done or decided (a gate refusal, a refusal, a run's end) is never given up when another writer holds the lock past 2 seconds, as a heavily loaded machine can: it goes to a spill file of its own beside the day file (`YYYY-MM-DD.spill-*.jsonl`), which every reader takes with its day. A line written before acting (a run's start, an approval request or decision) still refuses when the lock stays held, so nothing happens unjournaled.
+
+The journal keeps 90 days of history (`JOURNAL_RETENTION_DAYS`): the window deletes older day files and their spill files when it starts and then every hour. `officina run` and the gate never delete a journal file.
 
 ### What works today
 

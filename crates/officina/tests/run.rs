@@ -1224,6 +1224,46 @@ fn journal_lock_timeout_refuses_before_spawn() {
     assert!(relay.entries().is_empty());
 }
 
+/// D-760: a refusal stands whatever the journal does, and its line is not
+/// lost to a lock held past the timeout: it goes to a spill file.
+#[test]
+fn refusal_is_journaled_when_the_lock_stays_held() {
+    let relay = Relay::new();
+    std::fs::write(
+        relay.env.relay_home().stopped_file(),
+        br#"{"since_ms":1793102400000}"#,
+    )
+    .unwrap();
+    let held = JournalLock::acquire(&relay.env.relay_home()).unwrap();
+    let out = relay.run(&["probe", "host=web01"]);
+    drop(held);
+    assert_refused(&relay, &out, RefusalReason::Stopped);
+    assert_eq!(relay.refused().len(), 1);
+}
+
+/// D-760: a run whose end finds the journal locked past the timeout still
+/// records `run_finished`, and says nothing on stderr since nothing is lost.
+#[test]
+fn run_end_is_journaled_when_the_lock_is_taken_meanwhile() {
+    let relay = Relay::new();
+    let mut cmd = relay.command(&relay.project(), &["probe", "host=web01"]);
+    cmd.env("FAKE_TOOL_MODE", "sleep:1");
+    let child = cmd.spawn().unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while relay.started().is_empty() {
+        assert!(Instant::now() < deadline, "the run never started");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let held = JournalLock::acquire(&relay.env.relay_home()).unwrap();
+    let out = child.wait_with_output().unwrap();
+    drop(held);
+    assert_eq!(out.status.code(), Some(0), "{:?}", stderr_lines(&out));
+    assert!(out.stderr.is_empty(), "{:?}", stderr_lines(&out));
+    let finished = relay.finished();
+    assert_eq!(finished.len(), 1);
+    assert_eq!(finished[0].run_id, relay.started()[0].run_id);
+}
+
 #[test]
 fn session_id_from_env_or_null() {
     let relay = Relay::new();
