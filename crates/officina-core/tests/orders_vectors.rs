@@ -24,8 +24,8 @@ use officina_core::orders::card::{
     issue,
 };
 use officina_core::orders::proposal::{
-    FileRead, PROPOSAL_TEXT_MAX_CHARS, ProposalInvalidReason, ProposalRecord, ProposalView,
-    RegistryRefs, record_of,
+    FileRead, PROPOSAL_ANSWER_MAX_CHARS, PROPOSAL_TEXT_MAX_CHARS, ProposalInvalidReason,
+    ProposalRecord, ProposalView, RegistryRefs, record_of,
 };
 use officina_core::orders::work_order::{WorkOrder, WorkOrderRefusal};
 use officina_core::registry::types::{
@@ -59,6 +59,9 @@ struct VectorSet {
     /// The registry the `proposal` cases are validated against.
     proposal_subjects: Vec<SubjectRow>,
     proposal_sessions: Vec<String>,
+    /// The sessions that take a proposed answer now (AD-182), as the
+    /// latest board gives them.
+    proposal_answerable: Vec<String>,
     proposal: Vec<ProposalCase>,
 }
 
@@ -986,6 +989,9 @@ fn with_proposal_bounds(value: &Value) -> Value {
         Value::String(text) if text == "<over PROPOSAL_TEXT_MAX_CHARS>" => {
             Value::from("a".repeat(PROPOSAL_TEXT_MAX_CHARS + 1))
         }
+        Value::String(text) if text == "<over PROPOSAL_ANSWER_MAX_CHARS>" => {
+            Value::from("a".repeat(PROPOSAL_ANSWER_MAX_CHARS + 1))
+        }
         Value::Array(items) => Value::Array(items.iter().map(with_proposal_bounds).collect()),
         Value::Object(map) => Value::Object(
             map.iter()
@@ -1019,9 +1025,11 @@ fn proposal_record(set: &VectorSet, case: &ProposalCase) -> ProposalRecord {
         })
         .collect();
     let sessions: BTreeSet<String> = set.proposal_sessions.iter().cloned().collect();
+    let answerable: BTreeSet<String> = set.proposal_answerable.iter().cloned().collect();
     let refs = RegistryRefs {
         subjects: &subjects,
         sessions: &sessions,
+        answerable: &answerable,
     };
     let bytes = match (&case.file, &case.raw) {
         (Some(file), None) => serde_json::to_vec(&with_proposal_bounds(file)).unwrap(),

@@ -427,7 +427,7 @@ fn no_command_writes_under_the_claude_config_dir() {
                 &watch.sender,
                 "bg:bg0042",
                 Delivery::ResumeLive,
-                "Keep going.",
+                officina_host::meeting::AnswerFrom::Author("Keep going.".to_owned()),
             )
             .unwrap();
             let unseen = matches!(
@@ -445,6 +445,64 @@ fn no_command_writes_under_the_claude_config_dir() {
                 AnswerResult::Confirmed | AnswerResult::NotConfirmed
             ),
             "{answered:?}"
+        );
+
+        // An answer proposal sent by its id through the fake (story 5.21
+        // AC 9, D-80): a second session idle in its turn, the proposal
+        // ingested once the board shows it, then the click's resume.
+        use officina_core::orders::proposal::{AnswerProposal, ProposalFile, file_name};
+        use officina_core::registry::types::ProposalStatus;
+        let proposed_session = "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d";
+        let mut listed: Vec<serde_json::Value> =
+            serde_json::from_str(&std::fs::read_to_string(env.fixture()).unwrap()).unwrap();
+        listed.push(
+            serde_json::json!({"id": "bg0043", "sessionId": proposed_session,
+            "cwd": folder, "kind": "background", "pid": 4243, "startedAt": now_ms() - 60_000,
+            "status": "idle", "state": "done"}),
+        );
+        env.write_agents(&serde_json::Value::from(listed).to_string());
+        watch.sender.send(CollectorMsg::Refresh).unwrap();
+        let dir = officina_host::paths::orchestrator_proposals_dir(&env.officina_home());
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let pending = loop {
+            let at = now_ms();
+            let file = ProposalFile::answer(
+                AnswerProposal {
+                    session_id: proposed_session.to_owned(),
+                    text: "Keep the 1.x line.".to_owned(),
+                    rationale: "It asked which line.".to_owned(),
+                },
+                None,
+                at,
+            );
+            let id = officina_host::mcp::write_proposal(&dir, &file, at).unwrap();
+            while dir.join(file_name(&id)).exists() {
+                assert!(Instant::now() < deadline, "the window did not ingest {id}");
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            let status = officina_host::registry::store::open_reader(&env.officina_home(), &[])
+                .unwrap()
+                .proposals()
+                .unwrap()
+                .into_iter()
+                .find(|p| p.id == id)
+                .map(|p| p.status);
+            if status == Some(ProposalStatus::Pending) {
+                break id;
+            }
+            assert!(Instant::now() < deadline, "no proposal stayed pending");
+            std::thread::sleep(Duration::from_millis(200));
+        };
+        let sent = officina_host::meeting::send_answer(
+            &watch.sender,
+            "bg:bg0043",
+            Delivery::ResumeLive,
+            officina_host::meeting::AnswerFrom::Proposal(pending),
+        )
+        .unwrap();
+        assert!(
+            matches!(sent, AnswerResult::Confirmed | AnswerResult::NotConfirmed),
+            "{sent:?}"
         );
     }
 

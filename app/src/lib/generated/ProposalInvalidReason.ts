@@ -6,4 +6,4 @@
  * in its order. `proposal.invalid_reason` has no `CHECK`, so a reason
  * added here needs no migration.
  */
-export type ProposalInvalidReason = "unparsable" | "oversized" | "text_too_long" | "forbidden_characters" | "unknown_session" | "unknown_subject" | "subject_closed" | "subject_other_project" | "subject_name_invalid" | "unknown_template" | "project_not_allowed" | "unknown_parameter" | "missing_parameter" | "value_not_in_list";
+export type ProposalInvalidReason = "unparsable" | "oversized" | "text_too_long" | "forbidden_characters" | "unknown_session" | "unknown_subject" | "subject_closed" | "subject_other_project" | "subject_name_invalid" | "unknown_template" | "project_not_allowed" | "unknown_parameter" | "missing_parameter" | "value_not_in_list" | "rationale_missing" | "answer_refused" | "session_not_answerable";

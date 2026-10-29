@@ -4,4 +4,4 @@ import type { AnswerRefusal } from "./AnswerRefusal";
 /**
  * Why `send_answer` sent nothing (AD-85).
  */
-export type AnswerRefused = { "kind": "state_changed" } | { "kind": "answer", "detail": AnswerRefusal } | { "kind": "no_composer" } | { "kind": "unknown_session" };
+export type AnswerRefused = { "kind": "state_changed" } | { "kind": "answer", "detail": AnswerRefusal } | { "kind": "no_composer" } | { "kind": "unknown_session" } | { "kind": "proposal_not_pending" };

@@ -1,4 +1,4 @@
-//! Proposal ingestion (AD-91, D-133, D-145, D-152, D-155): the window
+//! Proposal ingestion (AD-91, AD-182, D-133, D-145, D-152, D-155): the window
 //! reads `<home>/orchestrator/proposals/`, validates each file through
 //! `orders::proposal`, stores it once by its id and deletes it. Compiled
 //! only with the `window-authority` feature: only the window writes, and
@@ -20,8 +20,8 @@ use officina_core::orders::card::{ProposalOrder, ProposalRefusal};
 use officina_core::orders::proposal::{
     FileRead, KnownProposal, PROPOSAL_FILE_MAX_BYTES, PROPOSAL_HOUR_MS, ProposalFile,
     ProposalRecord, ProposalTarget, ProposedSubject, ProposedSubjectView, RegistryRefs,
-    TMP_FILE_TTL_MS, id_of_file, ingestion_refusal, is_expired, is_temporary_file, proposal_id,
-    record_of, superseded_recaps, written_at,
+    TMP_FILE_TTL_MS, expired_answers, id_of_file, ingestion_refusal, is_expired, is_temporary_file,
+    proposal_id, record_of, superseded_pending, written_at,
 };
 use officina_core::registry::types::{ProposalKind, ProposalStatus};
 use officina_core::relay::catalogue::CanonicalCatalogue;
@@ -45,7 +45,8 @@ pub struct ProposalPass {
     pub stale_tmp: u32,
     /// Pending work order proposals turned `expired`.
     pub expired: u32,
-    /// Pending recaps a newer one on the same target superseded.
+    /// Pending recaps and answers a newer one of the same kind on the
+    /// same target superseded.
     pub superseded: u32,
 }
 
@@ -159,10 +160,12 @@ fn insert(tx: &Transaction, record: &ProposalRecord) -> rusqlite::Result<bool> {
     Ok(inserted == 1)
 }
 
-/// Supersedes, inside the caller's transaction, every pending recap on
-/// `target` but the newest (D-145); returns the ids superseded.
+/// Supersedes, inside the caller's transaction, every pending proposal of
+/// `kind` on `target` but the newest (D-145, D-575); returns the ids
+/// superseded.
 fn supersede(
     tx: &Transaction,
+    kind: ProposalKind,
     target: &ProposalTarget,
     now_ms: i64,
 ) -> rusqlite::Result<Vec<String>> {
@@ -175,15 +178,11 @@ fn supersede(
             "SELECT id FROM proposal WHERE kind = ?1 AND status = ?2 AND {column} = ?3"
         ))?
         .query_map(
-            params![
-                ProposalKind::Recap.code(),
-                ProposalStatus::Pending.code(),
-                value
-            ],
+            params![kind.code(), ProposalStatus::Pending.code(), value],
             |row| Ok((row.get::<_, String>(0)?, target.clone())),
         )?
         .collect::<rusqlite::Result<_>>()?;
-    let superseded = superseded_recaps(&pending);
+    let superseded = superseded_pending(&pending);
     for id in &superseded {
         tx.execute(
             "UPDATE proposal SET status = ?2, decided_at_ms = ?3 WHERE id = ?1",
@@ -218,11 +217,26 @@ impl Writer {
     /// (a valid recap superseding the pending one on its target), and only
     /// then deleted. The pending work order proposals past their 24 hours
     /// are expired last. A file that cannot be read now is left for the
-    /// next pass.
+    /// next pass. No session takes a proposed answer in this pass: the
+    /// window's passes name them ([`Writer::ingest_proposals_for`]).
     pub fn ingest_proposals(
         &mut self,
         dir: &Path,
         catalogue: Option<&CanonicalCatalogue>,
+        now_ms: i64,
+    ) -> Result<ProposalPass, RegistryError> {
+        self.ingest_proposals_for(dir, catalogue, &BTreeSet::new(), now_ms)
+    }
+
+    /// [`Writer::ingest_proposals`] with `answerable`, the sessions that
+    /// take a proposed answer on the latest board (AD-182): an answer
+    /// naming another is stored `invalid`; a valid one supersedes the
+    /// pending answer of its session (D-575).
+    pub fn ingest_proposals_for(
+        &mut self,
+        dir: &Path,
+        catalogue: Option<&CanonicalCatalogue>,
+        answerable: &BTreeSet<String>,
         now_ms: i64,
     ) -> Result<ProposalPass, RegistryError> {
         let mut pass = ProposalPass::default();
@@ -259,12 +273,13 @@ impl Writer {
                     let refs = RegistryRefs {
                         subjects: &subjects,
                         sessions: &sessions,
+                        answerable,
                     };
                     let record = record_of(id, read, catalogue, &refs, now_ms);
                     let tx = self.conn.transaction()?;
                     let inserted = insert(&tx, &record)?;
-                    let superseded = match record.recap_target() {
-                        Some(target) if inserted => supersede(&tx, target, now_ms)?,
+                    let superseded = match record.superseding() {
+                        Some((kind, target)) if inserted => supersede(&tx, kind, target, now_ms)?,
                         _ => Vec::new(),
                     };
                     tx.commit()?;
@@ -303,6 +318,80 @@ impl Writer {
             ],
         )?;
         Ok(u32::try_from(expired).unwrap_or(u32::MAX))
+    }
+
+    /// Turns the pending answer proposals whose session is not in
+    /// `answerable`, the sessions that take a proposed answer on the board
+    /// just built, into `expired` (AD-182); returns how many.
+    pub fn expire_answers(
+        &mut self,
+        answerable: &BTreeSet<String>,
+        now_ms: i64,
+    ) -> Result<u32, RegistryError> {
+        let pending: Vec<(String, String)> = self
+            .conn
+            .prepare_cached(
+                "SELECT id, COALESCE(target_session_id, '') FROM proposal
+                 WHERE kind = ?1 AND status = ?2",
+            )?
+            .query_map(
+                params![ProposalKind::Answer.code(), ProposalStatus::Pending.code()],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )?
+            .collect::<rusqlite::Result<_>>()?;
+        let expired = expired_answers(&pending, answerable);
+        for id in &expired {
+            self.decide_pending(id, ProposalStatus::Expired, now_ms)?;
+        }
+        Ok(u32::try_from(expired.len()).unwrap_or(u32::MAX))
+    }
+
+    /// Moves the pending proposal `id` to `status` at `now_ms`: an answer
+    /// `accepted` when the author's click sent it, `expired` when its
+    /// session no longer takes it (AD-182); false when it was not pending.
+    pub fn decide_pending(
+        &mut self,
+        id: &str,
+        status: ProposalStatus,
+        now_ms: i64,
+    ) -> Result<bool, RegistryError> {
+        let changed = self.conn.execute(
+            "UPDATE proposal SET status = ?2, decided_at_ms = ?3 WHERE id = ?1 AND status = ?4",
+            params![id, status.code(), now_ms, ProposalStatus::Pending.code()],
+        )?;
+        Ok(changed == 1)
+    }
+
+    /// The stored text of `id` when it is a pending answer proposal to
+    /// `session_id` (AD-182, D-575): the text the window sends, never one
+    /// the page gives back; `None` for any other proposal.
+    pub fn pending_answer(
+        &mut self,
+        id: &str,
+        session_id: &str,
+    ) -> Result<Option<String>, RegistryError> {
+        let texts: Option<Option<String>> = self
+            .conn
+            .prepare_cached(
+                "SELECT texts_json FROM proposal
+                 WHERE id = ?1 AND kind = ?2 AND status = ?3 AND target_session_id = ?4",
+            )?
+            .query_row(
+                params![
+                    id,
+                    ProposalKind::Answer.code(),
+                    ProposalStatus::Pending.code(),
+                    session_id
+                ],
+                |row| row.get(0),
+            )
+            .optional()?;
+        Ok(texts
+            .flatten()
+            .and_then(|json| {
+                serde_json::from_str::<std::collections::BTreeMap<String, String>>(&json).ok()
+            })
+            .and_then(|mut texts| texts.remove("text")))
     }
 
     /// Dismisses proposal `id` at `now_ms` (FR-12): a pending or invalid

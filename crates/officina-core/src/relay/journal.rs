@@ -630,8 +630,24 @@ closed_enum! {
     }
 }
 
-/// An answer to a session from the meeting (AD-85): the session, the
-/// delivery, the SHA-256 of the text and how it went; never the text.
+closed_enum! {
+    #[serde(rename_all = "snake_case")]
+    /// Who wrote an answer the author sent (AD-182): his composer, or an
+    /// orchestrator's proposal he sent with a click.
+    #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+    pub enum AnswerSource {
+        /// The author's composer; a line written before story 5.21 reads
+        /// so.
+        #[default]
+        Author,
+        /// An answer proposal, sent by the author's click.
+        Proposal,
+    }
+}
+
+/// An answer to a session from the meeting (AD-85, AD-182): the session,
+/// the delivery, the SHA-256 of the text, how it went, who wrote it and,
+/// for a proposal, its id; never the text.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MeetingAnswer {
     #[serde(default)]
@@ -639,6 +655,10 @@ pub struct MeetingAnswer {
     pub delivery: crate::meeting::Delivery,
     pub answer_sha256: String,
     pub outcome: AnswerOutcome,
+    #[serde(default)]
+    pub source: AnswerSource,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proposal_id: Option<String>,
 }
 
 /// How a reader classifies one raw line.
@@ -780,6 +800,8 @@ mod tests {
                 delivery: crate::meeting::Delivery::ResumeLive,
                 answer_sha256: "00".repeat(32),
                 outcome: AnswerOutcome::Spawned,
+                source: AnswerSource::Proposal,
+                proposal_id: Some("1761700000000-00000000000000ab".into()),
             }),
         }
     }
@@ -800,6 +822,8 @@ mod tests {
                         delivery: *delivery,
                         answer_sha256: crate::sha256_hex(b"Keep the 1.x line."),
                         outcome: *outcome,
+                        source: AnswerSource::Author,
+                        proposal_id: None,
                     });
                     let line = JournalLine::new(4, entry.clone()).to_line();
                     let value: serde_json::Value = serde_json::from_str(&line).unwrap();
@@ -814,6 +838,52 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// Story 5.21 AC 7 (AD-182): `meeting_answer.source` reads back for
+    /// each source, with a proposal's id; a line without it, as story 5.11
+    /// wrote them, reads `author` with no id; the text is never there.
+    #[test]
+    fn meeting_answer_source_round_trips_and_defaults_to_author() {
+        let id = "1761700000000-00000000000000ab";
+        for source in AnswerSource::ALL {
+            let proposal_id = (*source == AnswerSource::Proposal).then(|| id.to_owned());
+            let entry = JournalEntry::MeetingAnswer(MeetingAnswer {
+                session_id: Some("0f1e2d3c-4b5a-4978-8796-a5b4c3d2e1f0".into()),
+                delivery: crate::meeting::Delivery::ResumeLive,
+                answer_sha256: crate::sha256_hex(b"Keep the 1.x line."),
+                outcome: AnswerOutcome::Spawned,
+                source: *source,
+                proposal_id: proposal_id.clone(),
+            });
+            let line = JournalLine::new(4, entry.clone()).to_line();
+            let value: serde_json::Value = serde_json::from_str(&line).unwrap();
+            assert_eq!(value["source"], source.code());
+            assert_eq!(
+                value.get("proposal_id").and_then(|v| v.as_str()),
+                proposal_id.as_deref()
+            );
+            assert!(!line.contains("1.x line"), "never the text");
+            assert_eq!(
+                parse_line(line.trim_end()),
+                ParsedLine::Line(JournalLine::new(4, entry))
+            );
+        }
+        let before = format!(
+            r#"{{"v":1,"ts":4,"kind":"meeting_answer","session_id":null,"delivery":"resume_live","answer_sha256":"{}","outcome":"spawned"}}"#,
+            "00".repeat(32)
+        );
+        let ParsedLine::Line(JournalLine {
+            entry: JournalEntry::MeetingAnswer(read),
+            ..
+        }) = parse_line(&before)
+        else {
+            panic!("{before}")
+        };
+        assert_eq!(
+            (read.source, read.proposal_id),
+            (AnswerSource::Author, None)
+        );
     }
 
     /// Story 5.14 AC 2 (AD-88): `auto_approval_set` reads back with its

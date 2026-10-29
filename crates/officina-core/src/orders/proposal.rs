@@ -1,4 +1,4 @@
-//! Orchestrator proposals (AD-90, AD-91, FR-11, FR-12): what a proposal
+//! Orchestrator proposals (AD-90, AD-91, AD-182, FR-11, FR-12): what a proposal
 //! tool of `officina mcp` asks for, the file it writes under
 //! `<home>/orchestrator/proposals/`, its name, its bounds and the rate
 //! limits, and the view the window and the `proposals` tool carry
@@ -13,6 +13,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
+use crate::meeting::{ANSWER_MAX_CHARS, Answer};
 use crate::registry::confirm::{NAME_MAX_CHARS, checked_name};
 use crate::registry::types::{
     AuthorRefusal, ProposalKind, ProposalStatus, SubjectRecord, SubjectStatus,
@@ -31,6 +32,10 @@ pub const PROPOSAL_FILE_MAX_BYTES: usize = 16 * 1024;
 /// The most characters of a proposal's text: each recap field and a work
 /// order's rationale (AD-90).
 pub const PROPOSAL_TEXT_MAX_CHARS: usize = 500;
+
+/// The most characters of a proposed answer's text: the composer's own
+/// bound (AD-182, FR-6).
+pub const PROPOSAL_ANSWER_MAX_CHARS: usize = ANSWER_MAX_CHARS;
 
 /// The most characters of a proposed value: a template value's own bound
 /// (AD-90, FR-2).
@@ -173,6 +178,16 @@ pub struct WorkOrderProposal {
     pub rationale: String,
 }
 
+/// `propose_answer`'s arguments (AD-182): the session to answer, the text
+/// proposed as its next prompt and why.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AnswerProposal {
+    pub session_id: String,
+    pub text: String,
+    pub rationale: String,
+}
+
 /// A recap's file (AD-91): its schema, its fields, the session that wrote
 /// it and when.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -203,6 +218,18 @@ pub struct WorkOrderFile {
     pub written_at_ms: i64,
 }
 
+/// An answer proposal's file (AD-182).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AnswerFile {
+    pub schema: u32,
+    pub session_id: String,
+    pub text: String,
+    pub rationale: String,
+    pub orchestrator_session_id: Option<String>,
+    pub written_at_ms: i64,
+}
+
 /// A proposal file as written and parsed (AD-91), its kind the tag:
 /// one flat object, unknown fields refused.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -210,6 +237,7 @@ pub struct WorkOrderFile {
 pub enum ProposalFile {
     Recap(RecapFile),
     WorkOrder(WorkOrderFile),
+    Answer(AnswerFile),
 }
 
 impl ProposalFile {
@@ -244,11 +272,24 @@ impl ProposalFile {
         })
     }
 
+    /// The file of an answer proposed at `now_ms` by `session` (AD-182).
+    pub fn answer(proposal: AnswerProposal, session: Option<String>, now_ms: i64) -> ProposalFile {
+        ProposalFile::Answer(AnswerFile {
+            schema: PROPOSAL_FILE_SCHEMA,
+            session_id: proposal.session_id,
+            text: proposal.text,
+            rationale: proposal.rationale,
+            orchestrator_session_id: session,
+            written_at_ms: now_ms,
+        })
+    }
+
     /// Its kind.
     pub fn kind(&self) -> ProposalKind {
         match self {
             ProposalFile::Recap(_) => ProposalKind::Recap,
             ProposalFile::WorkOrder(_) => ProposalKind::WorkOrder,
+            ProposalFile::Answer(_) => ProposalKind::Answer,
         }
     }
 
@@ -279,6 +320,15 @@ impl ProposalFile {
                     project: untrusted(&file.project),
                     values: Untrusted::new(file.values.clone()),
                     subject: ProposedSubjectView::of(&file.subject),
+                    rationale: untrusted(&file.rationale),
+                },
+            ),
+            ProposalFile::Answer(file) => (
+                &file.orchestrator_session_id,
+                file.written_at_ms,
+                ProposalContent::Answer {
+                    session_id: untrusted(&file.session_id),
+                    text: untrusted(&file.text),
                     rationale: untrusted(&file.rationale),
                 },
             ),
@@ -357,6 +407,13 @@ pub enum ProposalContent {
         /// is the orchestrator's text.
         values: Untrusted<BTreeMap<String, String>>,
         subject: ProposedSubjectView,
+        rationale: Untrusted<String>,
+    },
+    /// A text proposed as a session's next prompt (AD-182): shown beside
+    /// the author's composer, never copied into it, sent only by his click.
+    Answer {
+        session_id: Untrusted<String>,
+        text: Untrusted<String>,
         rationale: Untrusted<String>,
     },
 }
@@ -523,8 +580,8 @@ closed_enum! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
     #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
     pub enum ProposalInvalidReason {
-        /// Not JSON, an unknown field or kind (`answer` until story 5.21,
-        /// D-575), or another schema: stored with no kind (D-133).
+        /// Not JSON, an unknown field or kind, or another schema: stored
+        /// with no kind (D-133).
         Unparsable,
         /// Over [`PROPOSAL_FILE_MAX_BYTES`]: stored with no kind and no
         /// texts (D-155).
@@ -553,16 +610,28 @@ closed_enum! {
         MissingParameter,
         /// A value is not, byte for byte, an entry of its list.
         ValueNotInList,
+        /// An answer proposal's rationale is empty (AD-182).
+        RationaleMissing,
+        /// An answer proposal's text breaks one of the composer's rules
+        /// ([`Answer::parse`]); which one is not stored, since the panel
+        /// shows the text itself (AD-182).
+        AnswerRefused,
+        /// The session an answer names takes none now: not a live
+        /// background session idle in its turn whose delivery is
+        /// `ResumeLive` (AD-182).
+        SessionNotAnswerable,
     }
 }
 
-/// What a proposal's names are checked against in the registry (AD-91):
-/// every subject row, and the sessions it holds among those the files
-/// name.
+/// What a proposal's names are checked against (AD-91, AD-182): every
+/// subject row, the sessions the registry holds among those the files
+/// name, and the sessions that take a proposed answer now, from the
+/// latest board ([`crate::meeting::takes_a_proposed_answer`]).
 #[derive(Debug, Clone, Copy)]
 pub struct RegistryRefs<'a> {
     pub subjects: &'a [SubjectRecord],
     pub sessions: &'a BTreeSet<String>,
+    pub answerable: &'a BTreeSet<String>,
 }
 
 /// A proposal that passed [`validate`]: a work order's names and values
@@ -570,6 +639,7 @@ pub struct RegistryRefs<'a> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Validated {
     Recap,
+    Answer,
     WorkOrder {
         template: String,
         project: String,
@@ -601,7 +671,10 @@ fn checked_text(text: &str) -> Result<(), ProposalInvalidReason> {
 /// of the template's, each declared parameter given once with a value of
 /// its list, and its subject an open subject of the project or a new name
 /// D-57 accepts (a taken name files into the subject holding it, D-158).
-/// The first failure is the reason.
+/// An answer's rationale is 1 to [`PROPOSAL_TEXT_MAX_CHARS`] characters
+/// under the texts' character rules, its text passes the composer's
+/// [`Answer::parse`] unchanged, and its session takes a proposed answer
+/// now (AD-182). The first failure is the reason.
 pub fn validate(
     raw: &ProposalFile,
     catalogue: Option<&CanonicalCatalogue>,
@@ -620,6 +693,18 @@ pub fn validate(
                     Err(ProposalInvalidReason::UnknownSubject)
                 }
                 _ => Ok(Validated::Recap),
+            }
+        }
+        ProposalFile::Answer(file) => {
+            if file.rationale.is_empty() {
+                return Err(ProposalInvalidReason::RationaleMissing);
+            }
+            checked_text(&file.rationale)?;
+            Answer::parse(&file.text).map_err(|_| ProposalInvalidReason::AnswerRefused)?;
+            if refs.answerable.contains(&file.session_id) {
+                Ok(Validated::Answer)
+            } else {
+                Err(ProposalInvalidReason::SessionNotAnswerable)
             }
         }
         ProposalFile::WorkOrder(file) => {
@@ -690,8 +775,9 @@ fn checked_subject(
 }
 
 /// When a proposal of `kind` received at `received_at_ms` expires: a work
-/// order's [`WORK_ORDER_PROPOSAL_TTL_MS`] later; a recap never (D-145).
-/// An answer's expiry is story 5.21's (D-575).
+/// order's [`WORK_ORDER_PROPOSAL_TTL_MS`] later; a recap never (D-145); an
+/// answer at no set time, but as soon as its session no longer takes one
+/// (AD-182), which each board checks ([`expired_answers`]).
 pub fn expires_at_ms(kind: ProposalKind, received_at_ms: i64) -> Option<i64> {
     match kind {
         ProposalKind::WorkOrder => Some(received_at_ms + WORK_ORDER_PROPOSAL_TTL_MS),
@@ -755,11 +841,16 @@ impl ProposalRecord {
         }
     }
 
-    /// A recap's target, when it is one: what supersession compares.
-    pub fn recap_target(&self) -> Option<&ProposalTarget> {
-        (self.kind == Some(ProposalKind::Recap) && self.status == ProposalStatus::Pending)
+    /// What a valid recap or answer supersedes on (D-145, D-575): its
+    /// kind and its target, for a pending recap or answer only.
+    pub fn superseding(&self) -> Option<(ProposalKind, &ProposalTarget)> {
+        let kind = self
+            .kind
+            .filter(|k| matches!(k, ProposalKind::Recap | ProposalKind::Answer))?;
+        (self.status == ProposalStatus::Pending)
             .then_some(self.target.as_ref())
             .flatten()
+            .map(|target| (kind, target))
     }
 }
 
@@ -834,6 +925,14 @@ pub fn record_of(
             record.subject = Some(file.subject);
             record.texts = Some(BTreeMap::from([("rationale".to_owned(), file.rationale)]));
         }
+        ProposalFile::Answer(file) => {
+            record.orchestrator_session_id = file.orchestrator_session_id;
+            record.target = Some(ProposalTarget::SessionId(file.session_id));
+            record.texts = Some(BTreeMap::from([
+                ("text".to_owned(), file.text),
+                ("rationale".to_owned(), file.rationale),
+            ]));
+        }
     }
     record
 }
@@ -844,23 +943,25 @@ impl ProposalFile {
         match self {
             ProposalFile::Recap(file) => file.schema,
             ProposalFile::WorkOrder(file) => file.schema,
+            ProposalFile::Answer(file) => file.schema,
         }
     }
 }
 
-/// The pending recaps a newer valid recap on the same target supersedes
-/// (D-145): of `pending`, every recap but the newest by id of its target.
+/// The pending proposals a newer valid one of the same kind on the same
+/// target supersedes (D-145, D-575): of `pending`, all of one kind, every
+/// one but the newest by id of its target.
 ///
 /// ```
-/// use officina_core::orders::proposal::{ProposalTarget, superseded_recaps};
+/// use officina_core::orders::proposal::{ProposalTarget, superseded_pending};
 /// let pending = vec![
 ///     ("0000000000001-0000000000000001".to_owned(), ProposalTarget::SubjectId(4)),
 ///     ("0000000000002-0000000000000001".to_owned(), ProposalTarget::SubjectId(4)),
 ///     ("0000000000001-0000000000000002".to_owned(), ProposalTarget::SubjectId(5)),
 /// ];
-/// assert_eq!(superseded_recaps(&pending), ["0000000000001-0000000000000001"]);
+/// assert_eq!(superseded_pending(&pending), ["0000000000001-0000000000000001"]);
 /// ```
-pub fn superseded_recaps(pending: &[(String, ProposalTarget)]) -> Vec<String> {
+pub fn superseded_pending(pending: &[(String, ProposalTarget)]) -> Vec<String> {
     let mut newest: BTreeMap<&ProposalTarget, &str> = BTreeMap::new();
     for (id, target) in pending {
         let kept = newest.entry(target).or_insert(id);
@@ -941,6 +1042,40 @@ pub fn latest_recap<'a>(
             },
             _ => false,
         })
+}
+
+/// The latest pending answer proposal for `session_id` (AD-182): what
+/// `meeting::build` puts beside the composer. `rows` run newest first; a
+/// newer valid one supersedes the older at ingestion (D-575), so one shows.
+pub fn latest_answer<'a>(rows: &'a [ProposalView], session_id: &str) -> Option<&'a ProposalView> {
+    let session = Untrusted::new(session_id.to_owned());
+    rows.iter()
+        .filter(|row| row.status == ProposalStatus::Pending)
+        .find(|row| {
+            matches!(&row.content, Some(ProposalContent::Answer { session_id, .. })
+                if *session_id == session)
+        })
+}
+
+/// The pending answer proposals that expire now (AD-182): of `pending`,
+/// each `(id, session id)`, those whose session is not in `answerable`, the
+/// sessions that take a proposed answer on the latest board. A session
+/// that left Your turn, started waiting, ended or left the board, or whose
+/// delivery is no longer `ResumeLive`, takes none.
+///
+/// ```
+/// use std::collections::BTreeSet;
+/// use officina_core::orders::proposal::expired_answers;
+/// let pending = vec![("p1".to_owned(), "s-1".to_owned()), ("p2".to_owned(), "s-2".to_owned())];
+/// let answerable = BTreeSet::from(["s-2".to_owned()]);
+/// assert_eq!(expired_answers(&pending, &answerable), ["p1"]);
+/// ```
+pub fn expired_answers(pending: &[(String, String)], answerable: &BTreeSet<String>) -> Vec<String> {
+    pending
+        .iter()
+        .filter(|(_, session)| !answerable.contains(session))
+        .map(|(id, _)| id.clone())
+        .collect()
 }
 
 #[cfg(test)]
@@ -1135,9 +1270,11 @@ mod tests {
             subject(4, "backend", SubjectStatus::ToResume),
         ];
         let sessions = BTreeSet::from(["s-9".to_owned()]);
+        let answerable = BTreeSet::from([ANSWERED.to_owned()]);
         let refs = RegistryRefs {
             subjects: &subjects,
             sessions: &sessions,
+            answerable: &answerable,
         };
         record_of(
             &proposal_id(now, 1),
@@ -1197,15 +1334,18 @@ mod tests {
         ] {
             let mut all = pending;
             all.push((other.clone(), session.clone()));
-            assert_eq!(superseded_recaps(&all), std::slice::from_ref(&older));
+            assert_eq!(superseded_pending(&all), std::slice::from_ref(&older));
         }
         // A recap only supersedes once valid: an invalid one names none.
         let mut invalid = recap();
         invalid.target = ProposalTarget::SessionId("s-unknown".into());
         let row = record_at(&ProposalFile::recap(invalid, None, NOW), NOW);
-        assert_eq!(row.recap_target(), None);
+        assert_eq!(row.superseding(), None);
         let valid = record_at(&ProposalFile::recap(recap(), None, NOW), NOW);
-        assert_eq!(valid.recap_target(), Some(&ProposalTarget::SubjectId(4)));
+        assert_eq!(
+            valid.superseding(),
+            Some((ProposalKind::Recap, &ProposalTarget::SubjectId(4)))
+        );
     }
 
     /// AD-91: the stored names and values are the template's strings, the
@@ -1323,6 +1463,7 @@ mod tests {
         let refs = RegistryRefs {
             subjects: &[],
             sessions: &BTreeSet::new(),
+            answerable: &BTreeSet::new(),
         };
         let row = record_of(
             "0000000000001-0000000000000001",
@@ -1339,12 +1480,13 @@ mod tests {
 
     /// D-133, D-155: a file that holds no proposal is invalid with no kind
     /// and no texts: oversized, not JSON, another schema, an unknown field
-    /// or the `answer` kind (D-575).
+    /// or an answer holding a recap's fields.
     #[test]
     fn unread_files_have_no_kind() {
         let refs = RegistryRefs {
             subjects: &[],
             sessions: &BTreeSet::new(),
+            answerable: &BTreeSet::new(),
         };
         let unread =
             |read: FileRead| record_of("0000000000001-0000000000000001", read, None, &refs, NOW);
@@ -1472,5 +1614,236 @@ mod tests {
             Some("0000000000002-0000000000000001")
         );
         assert!(latest_recap(&rows, "s-2", Some(5)).is_none());
+    }
+
+    /// The session [`record_at`] holds as taking a proposed answer.
+    const ANSWERED: &str = "0f1e2d3c-4b5a-4978-8796-a5b4c3d2e1f0";
+
+    fn answer(text: &str, rationale: &str, session: &str, at: i64) -> ProposalFile {
+        ProposalFile::answer(
+            AnswerProposal {
+                session_id: session.to_owned(),
+                text: text.to_owned(),
+                rationale: rationale.to_owned(),
+            },
+            Some("s-1".into()),
+            at,
+        )
+    }
+
+    /// A text the composer refuses with `refusal`, built from its rule.
+    fn breaking(refusal: AnswerRefusal) -> String {
+        match refusal {
+            AnswerRefusal::Empty => " \n\t".to_owned(),
+            AnswerRefusal::TooLong => "a".repeat(PROPOSAL_ANSWER_MAX_CHARS + 1),
+            AnswerRefusal::ControlCharacter => "keep\u{7}it".to_owned(),
+            AnswerRefusal::FormatCharacter => "keep\u{202e}it".to_owned(),
+            AnswerRefusal::LeadingSlash => "  /clear".to_owned(),
+            AnswerRefusal::LeadingBang => "\n!rm -rf .".to_owned(),
+        }
+    }
+
+    use crate::meeting::AnswerRefusal;
+
+    /// Story 5.21 AC 2 (AD-182, D-168): an answer's text meets the
+    /// composer's own function: every refusal of [`Answer::parse`] reached
+    /// through a proposal stores it `answer_refused`, its texts kept as
+    /// written; the rationale holds the texts' bounds, 1 character at
+    /// least; a valid text for a session that takes no answer now is
+    /// `session_not_answerable`; a valid one is pending, with no expiry.
+    #[test]
+    fn an_answer_proposal_uses_the_composers_rules() {
+        for refusal in AnswerRefusal::ALL {
+            let text = breaking(*refusal);
+            assert_eq!(Answer::parse(&text).unwrap_err(), *refusal);
+            let row = record_at(&answer(&text, "Why.", ANSWERED, NOW), NOW);
+            assert_eq!(
+                (row.kind, row.status, row.invalid_reason),
+                (
+                    Some(ProposalKind::Answer),
+                    ProposalStatus::Invalid,
+                    Some(ProposalInvalidReason::AnswerRefused)
+                ),
+                "{refusal:?}"
+            );
+            assert_eq!(row.texts.as_ref().unwrap()["text"], text);
+        }
+        let reason = |file: &ProposalFile| record_at(file, NOW).invalid_reason;
+        let text = "Keep the 1.x line, then -x run the tests.\nThanks";
+        for (rationale, expected) in [
+            (String::new(), ProposalInvalidReason::RationaleMissing),
+            (
+                "a".repeat(PROPOSAL_TEXT_MAX_CHARS + 1),
+                ProposalInvalidReason::TextTooLong,
+            ),
+            (
+                "why\u{2066}".to_owned(),
+                ProposalInvalidReason::ForbiddenCharacters,
+            ),
+        ] {
+            assert_eq!(
+                reason(&answer(text, &rationale, ANSWERED, NOW)),
+                Some(expected)
+            );
+        }
+        assert_eq!(
+            reason(&answer(text, "Why.", "s-9", NOW)),
+            Some(ProposalInvalidReason::SessionNotAnswerable),
+            "a session the registry holds but no board shows idle"
+        );
+        let row = record_at(
+            &answer(text, &"é".repeat(PROPOSAL_TEXT_MAX_CHARS), ANSWERED, NOW),
+            NOW,
+        );
+        assert_eq!(row.status, ProposalStatus::Pending);
+        assert_eq!(row.expires_at_ms, None);
+        assert_eq!(row.target, Some(ProposalTarget::SessionId(ANSWERED.into())));
+        assert_eq!(row.texts.as_ref().unwrap()["text"], text);
+        // A forged field, `source` among them, makes the file unreadable.
+        let mut forged = serde_json::to_value(answer(text, "Why.", ANSWERED, NOW)).unwrap();
+        forged["source"] = json!("author");
+        let refs = RegistryRefs {
+            subjects: &[],
+            sessions: &BTreeSet::new(),
+            answerable: &BTreeSet::from([ANSWERED.to_owned()]),
+        };
+        let row = record_of(
+            &proposal_id(NOW, 1),
+            FileRead::Bytes(&serde_json::to_vec(&forged).unwrap()),
+            None,
+            &refs,
+            NOW,
+        );
+        assert_eq!(row.invalid_reason, Some(ProposalInvalidReason::Unparsable));
+    }
+
+    /// The board of one background session listed with `status`, `state`,
+    /// `cwd` (when given) and a pid, the session [`ANSWERED`].
+    fn board_of(
+        status: &str,
+        state: &str,
+        cwd: Option<&str>,
+    ) -> (crate::board::Board, Vec<crate::agents::AgentRecord>) {
+        let mut entry = json!({"id": "bg01", "sessionId": ANSWERED, "kind": "background",
+            "status": status, "state": state, "pid": 7, "startedAt": NOW - 1_000});
+        if let Some(cwd) = cwd {
+            entry["cwd"] = json!(cwd);
+        }
+        let agents = crate::agents::parse_agents(&json!([entry]).to_string()).unwrap();
+        let input = crate::board::BoardInput {
+            agents: Some(agents.clone()),
+            ..Default::default()
+        };
+        (crate::board::build_board(&input, NOW), agents)
+    }
+
+    const NEW_CLAUDE: Option<&str> = Some("2.1.312 (Claude Code)");
+
+    /// Story 5.21 AC 3 (AD-182): a pending answer expires on the first
+    /// board that shows its session out of its turn: working, waiting on a
+    /// question, ended, or gone from the board.
+    #[test]
+    fn an_answer_expires_when_the_session_leaves_your_turn() {
+        let pending = vec![(proposal_id(NOW, 1), ANSWERED.to_owned())];
+        let expired = |status: &str, state: &str| {
+            let (board, agents) = board_of(status, state, Some("C:/path/to/repo"));
+            expired_answers(
+                &pending,
+                &crate::meeting::answerable_sessions(&board, &agents, NEW_CLAUDE),
+            )
+        };
+        assert!(expired("idle", "done").is_empty(), "idle in its turn");
+        for (status, state) in [
+            ("busy", "working"),
+            ("waiting", "blocked"),
+            ("idle", "stopped"),
+            ("idle", "failed"),
+        ] {
+            assert_eq!(
+                expired(status, state),
+                [pending[0].0.clone()],
+                "{status} {state}"
+            );
+        }
+        let empty = crate::board::build_board(&crate::board::BoardInput::default(), NOW);
+        assert_eq!(
+            expired_answers(
+                &pending,
+                &crate::meeting::answerable_sessions(&empty, &[], NEW_CLAUDE)
+            ),
+            [pending[0].0.clone()],
+            "gone from the board"
+        );
+    }
+
+    /// Story 5.21 AC 3 (AD-182, D-139, D-168): idle in its turn, a pending
+    /// answer still expires once its delivery stops being `ResumeLive`: a
+    /// `claude` too old or unread, or no folder `claude agents` reported.
+    #[test]
+    fn an_answer_expires_when_its_delivery_changes() {
+        let pending = vec![(proposal_id(NOW, 1), ANSWERED.to_owned())];
+        let answerable = |cwd: Option<&str>, version: Option<&str>| {
+            let (board, agents) = board_of("idle", "done", cwd);
+            crate::meeting::answerable_sessions(&board, &agents, version)
+        };
+        let folder = Some("C:/path/to/repo");
+        assert!(expired_answers(&pending, &answerable(folder, NEW_CLAUDE)).is_empty());
+        for (cwd, version) in [
+            (folder, Some("2.1.284 (Claude Code)")),
+            (folder, None),
+            (None, NEW_CLAUDE),
+        ] {
+            assert_eq!(
+                expired_answers(&pending, &answerable(cwd, version)),
+                [pending[0].0.clone()],
+                "{cwd:?} {version:?}"
+            );
+        }
+    }
+
+    /// Story 5.21 AC 3 (D-575): a newer valid answer for the same session
+    /// supersedes the pending one, whatever order the files came in; an
+    /// invalid one supersedes none; answers and recaps on one session never
+    /// supersede each other, each kind compared apart.
+    #[test]
+    fn a_newer_answer_supersedes_the_pending_one() {
+        let older = record_at(&answer("First.", "Why.", ANSWERED, NOW), NOW);
+        assert_eq!(
+            older.superseding(),
+            Some((
+                ProposalKind::Answer,
+                &ProposalTarget::SessionId(ANSWERED.into())
+            ))
+        );
+        let invalid = record_at(&answer("/clear", "Why.", ANSWERED, NOW), NOW);
+        assert_eq!(invalid.superseding(), None);
+        let target = ProposalTarget::SessionId(ANSWERED.into());
+        let first = proposal_id(NOW, 1);
+        let second = proposal_id(NOW + 1, 1);
+        for pending in [
+            vec![
+                (first.clone(), target.clone()),
+                (second.clone(), target.clone()),
+            ],
+            vec![
+                (second.clone(), target.clone()),
+                (first.clone(), target.clone()),
+            ],
+        ] {
+            assert_eq!(superseded_pending(&pending), std::slice::from_ref(&first));
+        }
+        let recap_on_session = record_at(
+            &ProposalFile::recap(
+                RecapProposal {
+                    target: ProposalTarget::SessionId("s-9".into()),
+                    ..recap()
+                },
+                None,
+                NOW,
+            ),
+            NOW,
+        );
+        let (recap_kind, _) = recap_on_session.superseding().unwrap();
+        assert_ne!(recap_kind, ProposalKind::Answer);
     }
 }

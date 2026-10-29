@@ -32,7 +32,13 @@ approvals: Array<ApprovalView>,
  * subject ([`latest_recap`]), shown under its label; a proposal, never
  * the author's text.
  */
-recap: ProposalView | null, changes: Changes, 
+recap: ProposalView | null, 
+/**
+ * The orchestrator's pending answer proposal for this session
+ * ([`latest_answer`], AD-182): shown beside the composer under its
+ * label, never copied into it, sent only by the author's click.
+ */
+proposed_answer: ProposalView | null, changes: Changes, 
 /**
  * `claude logs`, for a background session only.
  */

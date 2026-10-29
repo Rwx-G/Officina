@@ -15,17 +15,19 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::agents::LifecycleState;
-use crate::board::{Badge, Card, Column, SessionKindView};
+use std::collections::BTreeSet;
+
+use crate::agents::{AgentRecord, LifecycleState};
+use crate::board::{Badge, Board, Card, Column, SessionKindView, card_key};
 use crate::dates::{DAY_MS, event_file_name, utc_date};
-use crate::orders::proposal::{ProposalView, latest_recap};
+use crate::orders::proposal::{ProposalView, latest_answer, latest_recap};
 use crate::registry::types::{ExcerptRecord, SessionRecord, Source};
 use crate::relay::approvals::ApprovalView;
 use crate::relay::journal::{JournalEntry, JournalLine};
 use crate::untrusted::Untrusted;
 
 /// The meeting view's format; a field change bumps it.
-pub const MEETING_VIEW_SCHEMA: u32 = 2;
+pub const MEETING_VIEW_SCHEMA: u32 = 3;
 
 /// The most diff text a meeting shows (AD-84): the diff is cut at the last
 /// whole line within it, and says so.
@@ -275,6 +277,72 @@ pub fn delivery(target: &MeetingTarget<'_>) -> Delivery {
     }
 }
 
+/// True when the session of `target` takes an answer the orchestrator
+/// proposes (AD-182, PRD section 9 item 3): a background session live and
+/// idle in its turn, waiting on no question or dialog, whose answer goes
+/// as its next turn (`ResumeLive`). The board puts such a session in Done
+/// with a pid (E1, D-802); Your turn is named too, for a background card a
+/// later classification would put there. A busy one (Working) takes none,
+/// although its delivery reads `ResumeLive` too.
+///
+/// ```
+/// use officina_core::agents::parse_agents;
+/// use officina_core::board::{BoardInput, build_board};
+/// use officina_core::meeting::{MeetingCard, MeetingTarget, takes_a_proposed_answer};
+/// let listed = |status: &str, state: &str| BoardInput {
+///     agents: Some(parse_agents(&format!(
+///         r#"[{{"id":"bg1","pid":7,"sessionId":"s","kind":"background","cwd":"C:/w","status":"{status}","state":"{state}","startedAt":1}}]"#,
+///     )).unwrap()),
+///     ..Default::default()
+/// };
+/// for (status, state, takes) in [("idle", "done", true), ("busy", "working", false), ("waiting", "blocked", false)] {
+///     let board = build_board(&listed(status, state), 10);
+///     let card = MeetingCard::from(board.columns.all().next().unwrap());
+///     let target = MeetingTarget { card: &card, agents_folder: Some("C:/w"), claude_version: Some("2.1.312") };
+///     assert_eq!(takes_a_proposed_answer(&target), takes, "{status}");
+/// }
+/// ```
+pub fn takes_a_proposed_answer(target: &MeetingTarget<'_>) -> bool {
+    matches!(target.card.column, Column::YourTurn | Column::Done)
+        && delivery(target) == Delivery::ResumeLive
+}
+
+/// The sessions of `board` that take a proposed answer now
+/// ([`takes_a_proposed_answer`]), each card's folder the `cwd` of the
+/// `agents` record listing it, by its key, else its session id (D-804),
+/// and the `claude` version the collector last read (D-139). What
+/// ingestion validates an answer proposal against, and what each board
+/// keeps a pending one alive with (AD-182).
+pub fn answerable_sessions(
+    board: &Board,
+    agents: &[AgentRecord],
+    claude_version: Option<&str>,
+) -> BTreeSet<String> {
+    board
+        .columns
+        .all()
+        .filter_map(|card| {
+            let session = card.session_id.as_deref()?;
+            let folder = agents
+                .iter()
+                .find(|r| card_key(r).as_deref() == Some(card.key.as_str()))
+                .or_else(|| {
+                    agents
+                        .iter()
+                        .find(|r| r.session_id.as_deref() == Some(session))
+                })
+                .and_then(|r| r.cwd.as_deref());
+            let meeting = MeetingCard::from(card);
+            let target = MeetingTarget {
+                card: &meeting,
+                agents_folder: folder,
+                claude_version,
+            };
+            takes_a_proposed_answer(&target).then(|| session.to_owned())
+        })
+        .collect()
+}
+
 /// `unix_ms` as ISO 8601 in UTC to the second, as `git log --since` reads
 /// it: `YYYY-MM-DDTHH:MM:SSZ`.
 ///
@@ -329,6 +397,10 @@ pub struct MeetingView {
     /// subject ([`latest_recap`]), shown under its label; a proposal, never
     /// the author's text.
     pub recap: Option<ProposalView>,
+    /// The orchestrator's pending answer proposal for this session
+    /// ([`latest_answer`], AD-182): shown beside the composer under its
+    /// label, never copied into it, sent only by the author's click.
+    pub proposed_answer: Option<ProposalView>,
     pub changes: Changes,
     /// `claude logs`, for a background session only.
     pub logs: Option<Logs>,
@@ -623,6 +695,10 @@ pub enum AnswerRefused {
     NoComposer,
     /// The session is no longer on the board, nor in the registry.
     UnknownSession,
+    /// The proposal sent is not a pending answer proposal for this
+    /// session: unknown, of another kind or session, or already decided
+    /// (AD-182, D-575).
+    ProposalNotPending,
 }
 
 /// How an answer went (AD-85): what the window shows.
@@ -732,6 +808,9 @@ pub fn build(input: &MeetingInput<'_>) -> MeetingView {
         }),
         recap: session
             .and_then(|sid| latest_recap(input.proposals, sid, card.subject_id))
+            .cloned(),
+        proposed_answer: session
+            .and_then(|sid| latest_answer(input.proposals, sid))
             .cloned(),
         changes: changes_of(&input.git),
         logs: is_background(card).then(|| logs_of(input.logs.as_ref())),
@@ -1377,6 +1456,67 @@ mod tests {
         // No pending recap of its own or its subject's: none.
         assert!(with(&card, &never).recap.is_none());
         assert!(build(&input(&card, &[])).recap.is_none());
+    }
+
+    /// Story 5.21 AC 4 (AD-182): the meeting carries the session's pending
+    /// answer proposal, its texts the orchestrator's; a decided one and
+    /// another session's never show, and the recap section ignores it.
+    #[test]
+    fn the_pending_answer_shows_beside_the_composer() {
+        use crate::orders::proposal::{AnswerProposal, ProposalContent, ProposalFile, proposal_id};
+        use crate::registry::types::ProposalStatus;
+        let card = background("idle", "done", r#","pid":7"#);
+        let sid = card.session_id.clone().unwrap();
+        let answer = |at: i64, session: &str, text: &str, status| ProposalView {
+            status,
+            ..ProposalFile::answer(
+                AnswerProposal {
+                    session_id: session.to_owned(),
+                    text: text.to_owned(),
+                    rationale: "It asked which line.".to_owned(),
+                },
+                None,
+                at,
+            )
+            .pending_view(&proposal_id(at, 1))
+        };
+        let rows = vec![
+            answer(NOW - 1, &sid, "dismissed", ProposalStatus::Dismissed),
+            answer(
+                NOW - 2,
+                "another-session",
+                "theirs",
+                ProposalStatus::Pending,
+            ),
+            answer(
+                NOW - 3,
+                &sid,
+                "Keep the <b>1.x</b> line.",
+                ProposalStatus::Pending,
+            ),
+        ];
+        let view = build(&MeetingInput {
+            proposals: &rows,
+            ..input(&card, &[])
+        });
+        assert!(view.recap.is_none());
+        let shown = view.proposed_answer.as_ref().expect("the pending answer");
+        assert_eq!(shown.id, rows[2].id);
+        let Some(ProposalContent::Answer { text, .. }) = &shown.content else {
+            panic!("{shown:?}")
+        };
+        assert_eq!(
+            serde_json::to_value(text).unwrap(),
+            "Keep the <b>1.x</b> line."
+        );
+        assert!(
+            build(&MeetingInput {
+                proposals: &rows[..2],
+                ..input(&card, &[])
+            })
+            .proposed_answer
+            .is_none()
+        );
     }
 
     #[test]

@@ -57,7 +57,7 @@ use officina_core::relay::view::{RecentEvent, RelayView};
 use officina_core::spawn::VectorKind;
 use officina_core::untrusted::Untrusted;
 use officina_host::collector::{Collector, LoadedFloor, load_floor};
-use officina_host::meeting::send_answer;
+use officina_host::meeting::{AnswerFrom, send_answer};
 use officina_host::orders::{LaunchGrant, LaunchReport, LaunchResult};
 use officina_host::paths::Paths;
 use officina_host::registry::ingest::IngestContext;
@@ -3363,6 +3363,11 @@ fn answer_calls_at_least(env: &common::TestEnv, count: usize) -> Vec<serde_json:
 
 const ANSWER: &str = "Keep the 1.x line, then -x \"run\" the tests & commit.\nThanks";
 
+/// The author's `text`, as the composer's Send carries it.
+fn author(text: &str) -> AnswerFrom {
+    AnswerFrom::Author(text.to_owned())
+}
+
 /// AD-79, AD-85, D-635: a live idle background session gets the `Answer`
 /// vector, its text one argument after `--`, from the folder `claude
 /// agents` reported for it.
@@ -3380,7 +3385,7 @@ fn resume_live_spawns_the_answer_vector() {
         Duration::from_secs(10),
     );
     let key = meeting_key(&emitted);
-    let result = send_answer(&handle.sender, &key, Delivery::ResumeLive, ANSWER).unwrap();
+    let result = send_answer(&handle.sender, &key, Delivery::ResumeLive, author(ANSWER)).unwrap();
     assert_eq!(result, AnswerResult::Confirmed);
     let calls = answer_calls_at_least(&env, 1);
     assert_eq!(calls.len(), 1, "{calls:?}");
@@ -3412,7 +3417,7 @@ fn an_answer_is_confirmed_when_the_session_turns_busy() {
     );
     let key = meeting_key(&emitted);
     assert_eq!(
-        send_answer(&handle.sender, &key, Delivery::ResumeLive, ANSWER).unwrap(),
+        send_answer(&handle.sender, &key, Delivery::ResumeLive, author(ANSWER)).unwrap(),
         AnswerResult::Confirmed
     );
     let outcomes: Vec<AnswerOutcome> = answer_lines(&env).iter().map(|l| l.outcome).collect();
@@ -3437,7 +3442,7 @@ fn a_two_second_turn_is_confirmed() {
     );
     let key = meeting_key(&emitted);
     assert_eq!(
-        send_answer(&handle.sender, &key, Delivery::ResumeLive, ANSWER).unwrap(),
+        send_answer(&handle.sender, &key, Delivery::ResumeLive, author(ANSWER)).unwrap(),
         AnswerResult::Confirmed
     );
     stop(handle);
@@ -3463,7 +3468,7 @@ fn an_answer_is_not_confirmed_after_30_s() {
     let key = meeting_key(&emitted);
     let started = Instant::now();
     assert_eq!(
-        send_answer(&handle.sender, &key, Delivery::ResumeLive, ANSWER).unwrap(),
+        send_answer(&handle.sender, &key, Delivery::ResumeLive, author(ANSWER)).unwrap(),
         AnswerResult::NotConfirmed
     );
     assert!(started.elapsed() >= Duration::from_secs(2));
@@ -3492,7 +3497,7 @@ fn a_changed_state_refuses_the_answer() {
     );
     let key = meeting_key(&emitted);
     assert_eq!(
-        send_answer(&handle.sender, &key, Delivery::ResumeLive, ANSWER).unwrap(),
+        send_answer(&handle.sender, &key, Delivery::ResumeLive, author(ANSWER)).unwrap(),
         AnswerResult::Refused(AnswerRefused::StateChanged)
     );
     assert!(answer_calls(&env).is_empty());
@@ -3522,7 +3527,13 @@ fn copy_and_attach_puts_no_text_on_a_command_line() {
     );
     let key = meeting_key(&emitted);
     assert_eq!(
-        send_answer(&handle.sender, &key, Delivery::CopyAndAttach, ANSWER).unwrap(),
+        send_answer(
+            &handle.sender,
+            &key,
+            Delivery::CopyAndAttach,
+            author(ANSWER)
+        )
+        .unwrap(),
         AnswerResult::Attached
     );
     let calls = answer_calls_at_least(&env, 1);
@@ -3569,7 +3580,13 @@ fn copy_only_spawns_nothing() {
     );
     until(&emitted.boards, |b| shows(b, "s-ended"));
     assert_eq!(
-        send_answer(&handle.sender, "sid:s-ended", Delivery::CopyOnly, ANSWER).unwrap(),
+        send_answer(
+            &handle.sender,
+            "sid:s-ended",
+            Delivery::CopyOnly,
+            author(ANSWER)
+        )
+        .unwrap(),
         AnswerResult::Copied
     );
     assert!(answer_calls(&env).is_empty());
@@ -3595,7 +3612,7 @@ fn resume_ended_runs_in_the_agents_folder() {
     );
     let key = meeting_key(&emitted);
     assert_eq!(
-        send_answer(&handle.sender, &key, Delivery::ResumeEnded, ANSWER).unwrap(),
+        send_answer(&handle.sender, &key, Delivery::ResumeEnded, author(ANSWER)).unwrap(),
         AnswerResult::Confirmed
     );
     let calls = answer_calls_at_least(&env, 1);
@@ -3622,7 +3639,7 @@ fn the_journal_holds_the_hash_never_the_text() {
     );
     let key = meeting_key(&emitted);
     // Refused for its changed state, the line is still written.
-    let _ = send_answer(&handle.sender, &key, Delivery::ResumeLive, ANSWER).unwrap();
+    let _ = send_answer(&handle.sender, &key, Delivery::ResumeLive, author(ANSWER)).unwrap();
     stop(handle);
     let lines = answer_lines(&env);
     assert_eq!(lines.len(), 1);
@@ -3826,4 +3843,334 @@ fn an_invalid_or_expired_proposal_opens_no_card() {
     assert_eq!(refused(&dismissed), ProposalRefusal::NotPending);
     assert!(home.dismiss(&dismissed).is_err(), "decided once");
     assert!(home.bg_calls().is_empty());
+}
+
+// ------------------------------------------------------- answer proposals
+
+/// Writes an answer proposal of `text` to [`MEETING_SESSION`], as
+/// `propose_answer` does, and waits for the window to ingest it; its id.
+fn propose_answer(env: &common::TestEnv, text: &str) -> String {
+    use officina_core::orders::proposal::{AnswerProposal, ProposalFile, file_name};
+    let dir = officina_host::paths::orchestrator_proposals_dir(&env.officina_home());
+    let at = common::now_ms();
+    let file = ProposalFile::answer(
+        AnswerProposal {
+            session_id: MEETING_SESSION.to_owned(),
+            text: text.to_owned(),
+            rationale: "It asked which <b>line</b> to keep.".to_owned(),
+        },
+        Some("s-orchestrator".to_owned()),
+        at,
+    );
+    let id = officina_host::mcp::write_proposal(&dir, &file, at).unwrap();
+    let path = dir.join(file_name(&id));
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while path.exists() {
+        assert!(Instant::now() < deadline, "the window did not ingest {id}");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    id
+}
+
+/// The status of proposal `id`, read as a command line reads the
+/// registry; `None` before the window stored it.
+fn status_of(env: &common::TestEnv, id: &str) -> Option<ProposalStatus> {
+    open_reader(&env.officina_home(), &[])
+        .unwrap()
+        .proposals()
+        .unwrap()
+        .into_iter()
+        .find(|p| p.id == id)
+        .map(|p| p.status)
+}
+
+/// The status of proposal `id`, which the window stored.
+fn proposal_status(env: &common::TestEnv, id: &str) -> ProposalStatus {
+    status_of(env, id).unwrap_or_else(|| panic!("no row for {id}"))
+}
+
+/// Waits up to 10 s for proposal `id` to read `status`.
+fn until_status(env: &common::TestEnv, id: &str, status: ProposalStatus) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while status_of(env, id) != Some(status) {
+        assert!(
+            Instant::now() < deadline,
+            "{id} stayed {:?}",
+            status_of(env, id)
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// A collector on a live idle background session in its folder, its board
+/// shown, and an answer proposal of `text` ingested for it: the handle,
+/// what it emits, the card's key and the proposal's id.
+fn answer_proposed(
+    env: &common::TestEnv,
+    sidecar: serde_json::Value,
+    text: &str,
+) -> (WatchHandle, common::Emitted, String, String) {
+    let work = env.root.path().join("work");
+    std::fs::create_dir_all(&work).unwrap();
+    env.write_agents(&listed_background(
+        &work,
+        "idle",
+        "done",
+        true,
+        common::now_ms(),
+    ));
+    let (handle, emitted) = watch_answering(env, sidecar, Duration::from_secs(10));
+    let key = meeting_key(&emitted);
+    let id = propose_answer(env, text);
+    assert_eq!(proposal_status(env, &id), ProposalStatus::Pending);
+    (handle, emitted, key, id)
+}
+
+fn proposal(id: &str) -> AnswerFrom {
+    AnswerFrom::Proposal(id.to_owned())
+}
+
+/// Story 5.21 AC 3 (AD-182): a pending answer expires on the first board
+/// that shows its session out of its turn, unsent.
+#[test]
+fn an_unsent_answer_expires_on_the_next_board() {
+    let env = common::TestEnv::new();
+    let (handle, _emitted, _key, id) =
+        answer_proposed(&env, serde_json::json!({"mode": "resume"}), ANSWER);
+    let work = env.root.path().join("work");
+    env.write_agents(&listed_background(
+        &work,
+        "busy",
+        "working",
+        true,
+        common::now_ms(),
+    ));
+    handle.sender.send(CollectorMsg::Refresh).unwrap();
+    until_status(&env, &id, ProposalStatus::Expired);
+    assert!(answer_calls(&env).is_empty());
+    stop(handle);
+}
+
+/// Story 5.21 AC 5 (AD-182, D-575): Send the proposed answer carries the
+/// proposal's id only: the vector holds the text stored at ingestion, one
+/// argument after `--`, in the folder `claude agents` reported.
+#[cfg(windows)]
+#[test]
+fn a_proposal_is_sent_with_its_stored_text() {
+    let env = common::TestEnv::new();
+    let (handle, _emitted, key, id) =
+        answer_proposed(&env, serde_json::json!({"mode": "resume"}), ANSWER);
+    let result = send_answer(&handle.sender, &key, Delivery::ResumeLive, proposal(&id)).unwrap();
+    assert_eq!(result, AnswerResult::Confirmed);
+    let calls = answer_calls_at_least(&env, 1);
+    assert_eq!(calls.len(), 1, "{calls:?}");
+    assert_eq!(
+        common::logged_argv(&calls[0]),
+        ["--resume", MEETING_SESSION, "--", ANSWER]
+    );
+    assert_eq!(
+        std::fs::canonicalize(calls[0]["cwd"].as_str().unwrap()).unwrap(),
+        std::fs::canonicalize(env.root.path().join("work")).unwrap()
+    );
+    stop(handle);
+}
+
+/// Story 5.21 AC 5 and 7 (AD-85, AD-182): a sent proposal is `accepted`,
+/// confirmed as the author's answers are, its two lines `source =
+/// proposal` with its id; a second click finds it decided and sends
+/// nothing more.
+#[cfg(windows)]
+#[test]
+fn a_sent_proposal_is_accepted_and_confirmed() {
+    use officina_core::relay::journal::AnswerSource;
+    let env = common::TestEnv::new();
+    let (handle, _emitted, key, id) =
+        answer_proposed(&env, serde_json::json!({"mode": "resume"}), ANSWER);
+    assert_eq!(
+        send_answer(&handle.sender, &key, Delivery::ResumeLive, proposal(&id)).unwrap(),
+        AnswerResult::Confirmed
+    );
+    assert_eq!(proposal_status(&env, &id), ProposalStatus::Accepted);
+    let lines = answer_lines(&env);
+    let outcomes: Vec<AnswerOutcome> = lines.iter().map(|l| l.outcome).collect();
+    assert_eq!(outcomes, [AnswerOutcome::Spawned, AnswerOutcome::Confirmed]);
+    assert!(lines.iter().all(|l| l.source == AnswerSource::Proposal
+        && l.proposal_id.as_deref() == Some(id.as_str())
+        && l.answer_sha256 == officina_core::sha256_hex(ANSWER.as_bytes())));
+    assert_eq!(
+        send_answer(&handle.sender, &key, Delivery::ResumeLive, proposal(&id)).unwrap(),
+        AnswerResult::Refused(AnswerRefused::ProposalNotPending)
+    );
+    assert_eq!(answer_calls(&env).len(), 1);
+    stop(handle);
+}
+
+/// Story 5.21 AC 5 (AD-182, D-63's pattern): a click whose shown delivery
+/// is no longer the session's is refused `state_changed`, journaled, and
+/// the proposal expires; nothing is spawned.
+#[test]
+fn a_proposal_is_refused_once_the_state_changed() {
+    let env = common::TestEnv::new();
+    let (handle, _emitted, key, id) =
+        answer_proposed(&env, serde_json::json!({"mode": "resume"}), ANSWER);
+    assert_eq!(
+        send_answer(&handle.sender, &key, Delivery::CopyAndAttach, proposal(&id)).unwrap(),
+        AnswerResult::Refused(AnswerRefused::StateChanged)
+    );
+    assert_eq!(proposal_status(&env, &id), ProposalStatus::Expired);
+    let lines = answer_lines(&env);
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0].outcome, AnswerOutcome::Refused);
+    assert!(answer_calls(&env).is_empty());
+    stop(handle);
+}
+
+/// Story 5.21 AC 5 (AD-182, D-575): a dismissed proposal, an unknown id
+/// and another kind's proposal are refused `proposal_not_pending`, and so
+/// is a pending answer sent to another session's meeting: nothing is
+/// spawned, and no line is written, no proposal having been sent.
+#[test]
+fn a_non_pending_proposal_is_refused() {
+    use officina_core::orders::proposal::{ProposalFile, ProposalTarget, RecapProposal};
+    let env = common::TestEnv::new();
+    let (handle, _emitted, key, id) =
+        answer_proposed(&env, serde_json::json!({"mode": "resume"}), ANSWER);
+    let not_pending = AnswerResult::Refused(AnswerRefused::ProposalNotPending);
+    // Another session's meeting: the proposal names this one.
+    for (event, at) in [
+        ("UserPromptSubmit", common::now_ms() - 3_602_000),
+        ("Stop", common::now_ms() - 3_601_000),
+    ] {
+        hook_line(
+            &env,
+            serde_json::json!({"hook_event_name": event, "session_id": "s-other",
+                "cwd": "C:/work/api", "prompt": "draft"}),
+            at,
+        );
+    }
+    let dir = officina_host::paths::orchestrator_proposals_dir(&env.officina_home());
+    let recap = officina_host::mcp::write_proposal(
+        &dir,
+        &ProposalFile::recap(
+            RecapProposal {
+                target: ProposalTarget::SessionId(MEETING_SESSION.into()),
+                done: "done".into(),
+                blocking: "none".into(),
+                decision_expected: "none".into(),
+            },
+            None,
+            common::now_ms(),
+        ),
+        common::now_ms(),
+    )
+    .unwrap();
+    until_status(&env, &recap, ProposalStatus::Pending);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let other = loop {
+        let result = send_answer(
+            &handle.sender,
+            "sid:s-other",
+            Delivery::CopyOnly,
+            proposal(&id),
+        )
+        .unwrap();
+        if result != AnswerResult::Refused(AnswerRefused::UnknownSession)
+            || Instant::now() > deadline
+        {
+            break result;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    };
+    assert_eq!(other, not_pending, "another session's meeting");
+    assert_eq!(proposal_status(&env, &id), ProposalStatus::Pending);
+    for unknown in [recap.as_str(), "1761700000000-00000000000000ab"] {
+        assert_eq!(
+            send_answer(
+                &handle.sender,
+                &key,
+                Delivery::ResumeLive,
+                proposal(unknown)
+            )
+            .unwrap(),
+            not_pending,
+            "{unknown}"
+        );
+    }
+    officina_host::watch::ask(
+        &handle.sender,
+        AuthorCommand::DismissProposal {
+            proposal_id: id.clone(),
+        },
+        AUTHOR_WAIT,
+    )
+    .unwrap()
+    .into_done()
+    .unwrap();
+    assert_eq!(
+        send_answer(&handle.sender, &key, Delivery::ResumeLive, proposal(&id)).unwrap(),
+        not_pending
+    );
+    assert!(answer_calls(&env).is_empty());
+    assert!(answer_lines(&env).is_empty());
+    stop(handle);
+}
+
+/// Story 5.21 AC 6 (principle 8, AD-182, R109): nothing sends a proposal
+/// but the click: a valid one ingested, boards rebuilt, the window
+/// restarted, and the fake claude logs no `--resume`.
+#[test]
+fn an_answer_proposal_is_never_sent_without_the_click() {
+    let env = common::TestEnv::new();
+    let (handle, emitted, _key, id) =
+        answer_proposed(&env, serde_json::json!({"mode": "resume"}), ANSWER);
+    for _ in 0..3 {
+        handle.sender.send(CollectorMsg::Refresh).unwrap();
+        let _ = emitted.boards.recv_timeout(SETTLE);
+    }
+    stop(handle);
+    let (handle, emitted) = watch_answering(
+        &env,
+        serde_json::json!({"mode": "resume"}),
+        Duration::from_secs(10),
+    );
+    let _ = meeting_key(&emitted);
+    handle.sender.send(CollectorMsg::Refresh).unwrap();
+    let _ = emitted.boards.recv_timeout(SETTLE);
+    stop(handle);
+    assert_eq!(proposal_status(&env, &id), ProposalStatus::Pending);
+    assert!(answer_calls(&env).is_empty(), "{:?}", answer_calls(&env));
+    assert!(answer_lines(&env).is_empty());
+}
+
+/// Story 5.21 AC 7 (AD-85, AD-182): the journal holds a proposal's source
+/// and id and the SHA-256 of its stored text, never the text.
+#[test]
+fn the_journal_holds_the_proposal_id_and_never_the_text() {
+    use officina_core::relay::journal::AnswerSource;
+    let env = common::TestEnv::new();
+    let (handle, _emitted, key, id) =
+        answer_proposed(&env, serde_json::json!({"mode": "resume"}), ANSWER);
+    // Refused for a stale delivery, the line is still written.
+    let _ = send_answer(&handle.sender, &key, Delivery::ResumeEnded, proposal(&id)).unwrap();
+    stop(handle);
+    let lines = answer_lines(&env);
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0].source, AnswerSource::Proposal);
+    assert_eq!(lines[0].proposal_id.as_deref(), Some(id.as_str()));
+    assert_eq!(
+        lines[0].answer_sha256,
+        officina_core::sha256_hex(ANSWER.as_bytes())
+    );
+    let mut journal = Vec::new();
+    for entry in std::fs::read_dir(env.relay_home().journal_dir()).unwrap() {
+        journal.extend(std::fs::read(entry.unwrap().path()).unwrap());
+    }
+    let text = String::from_utf8_lossy(&journal);
+    for fragment in ANSWER.split('\n') {
+        assert!(!text.contains(fragment), "{fragment:?} reached the journal");
+    }
+    assert!(
+        !text.contains("to keep"),
+        "the rationale reached the journal"
+    );
 }

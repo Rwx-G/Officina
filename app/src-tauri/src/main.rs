@@ -17,7 +17,7 @@ use std::time::Duration;
 
 use officina_core::board::Board;
 use officina_core::focus::FocusOutcome;
-use officina_core::ipc::IpcError;
+use officina_core::ipc::{IpcError, IpcErrorCode};
 use officina_core::meeting::{AnswerResult, Delivery, MeetingView};
 use officina_core::orders::card::{CardAnswer, CardChange, CardRequest, LaunchAnswer};
 use officina_core::orders::orchestrator::StartAnswer;
@@ -32,6 +32,7 @@ use officina_host::files::now_ms;
 use officina_host::focus::{
     FocusContext, attach_command, focus_card, log_outcome, log_wrong_window,
 };
+use officina_host::meeting::AnswerFrom;
 use officina_host::orders;
 use officina_host::paths::Paths;
 use officina_host::relay::authority::{self, AuthorityError};
@@ -504,23 +505,35 @@ async fn open_meeting(state: State<'_, AppState>, key: String) -> Result<Meeting
     .map_err(|e| IpcError::internal(e.to_string()))?
 }
 
-/// Sends the author's answer to the meeting of `key` (AD-85): the
-/// collector checks the delivery the panel showed against the latest board
-/// and grants the start; the console starts on this command's blocking
-/// thread; a resume is answered once the session turned busy or its window
-/// passed.
+/// Sends the author's answer to the meeting of `key` (AD-85), or the
+/// answer proposal `proposal_id` (AD-182), never both: a proposal carries
+/// no text, the collector reading the stored one (D-575). The collector
+/// checks the delivery the panel showed against the latest board and
+/// grants the start; the console starts on this command's blocking thread;
+/// a resume is answered once the session turned busy or its window passed.
 #[tauri::command]
 async fn send_answer(
     state: State<'_, AppState>,
     key: String,
     expected: Delivery,
-    text: String,
+    text: Option<String>,
+    proposal_id: Option<String>,
 ) -> Result<AnswerResult, IpcError> {
+    let from = match (text, proposal_id) {
+        (Some(text), None) => AnswerFrom::Author(text),
+        (None, Some(id)) => AnswerFrom::Proposal(id),
+        _ => {
+            return Err(IpcError::new(
+                IpcErrorCode::Refused,
+                "an answer carries either the author's text or a proposal's id",
+            ));
+        }
+    };
     let sender = state
         .collector()
         .ok_or_else(|| IpcError::internal("the collector is not running"))?;
     tauri::async_runtime::spawn_blocking(move || {
-        officina_host::meeting::send_answer(&sender, &key, expected, &text)
+        officina_host::meeting::send_answer(&sender, &key, expected, from)
     })
     .await
     .map_err(|e| IpcError::internal(e.to_string()))?

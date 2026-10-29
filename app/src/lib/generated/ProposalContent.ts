@@ -10,4 +10,4 @@ export type ProposalContent = { "recap": { target: TargetView, done: string, blo
  * Each parameter's proposed value, names included: the whole map
  * is the orchestrator's text.
  */
-values: { [key in string]: string }, subject: ProposedSubjectView, rationale: string, } };
+values: { [key in string]: string }, subject: ProposedSubjectView, rationale: string, } } | { "answer": { session_id: string, text: string, rationale: string, } };

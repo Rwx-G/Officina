@@ -314,7 +314,8 @@ const PROPOSAL_COLUMNS: &str = "id, kind, status, invalid_reason, received_at_ms
 /// file's fields as ingestion stores them: the target in its two columns,
 /// `values_json` the values' map, `subject_choice_json` the subject as the
 /// file writes it, and `texts_json` an object of the kind's texts by field
-/// name (a recap's three, a work order's `rationale`). A row whose fields
+/// name (a recap's three, a work order's `rationale`, an answer's `text`
+/// and `rationale`, its session in `target_session_id`). A row whose fields
 /// do not read back that way, or with no kind, shows without its content.
 pub(crate) fn proposals(conn: &Connection) -> rusqlite::Result<Vec<ProposalView>> {
     conn.prepare_cached(&format!(
@@ -378,7 +379,14 @@ fn proposal_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ProposalView> {
                 _ => None,
             }
         }
-        Some(ProposalKind::Answer) | None => None,
+        Some(ProposalKind::Answer) => text(7)?.zip(field("text")).and_then(|(session, text)| {
+            Some(ProposalContent::Answer {
+                session_id: Untrusted::new(session),
+                text,
+                rationale: field("rationale")?,
+            })
+        }),
+        None => None,
     };
     let received_at_ms: i64 = row.get(4)?;
     Ok(ProposalView {

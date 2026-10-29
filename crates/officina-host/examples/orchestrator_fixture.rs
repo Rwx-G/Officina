@@ -231,11 +231,16 @@ fn print_meeting(
         .apply_agents(collector.agents().unwrap_or_default(), &[], now_ms)
         .ok_or("the registry cannot be written")?;
     let dir = orchestrator_proposals_dir(home);
+    // An answer is validated against the sessions the board shows taking
+    // one, as the window's ingestion validates it (AD-182).
+    let answerable = board
+        .map(|board| meeting::answerable(&collector, board))
+        .unwrap_or_default();
     for (index, proposal) in proposals.iter().enumerate() {
         write_seeded(&dir, proposal, index)?;
-        // A recap needs no catalogue.
+        // A recap or an answer needs no catalogue.
         registry
-            .ingest_proposals(&dir, None, proposal.received_at_ms)
+            .ingest_proposals(&dir, None, &answerable, proposal.received_at_ms)
             .ok_or("the registry cannot be written")?;
     }
     let grant =

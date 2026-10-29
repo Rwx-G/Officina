@@ -144,12 +144,13 @@ pub enum AuthorCommand {
     /// (D-138): what the collector holds for its meeting, read nowhere
     /// else.
     OpenMeeting(String),
-    /// Send on the meeting's composer (AD-85): the delivery the panel
-    /// showed and the author's text.
+    /// Send on the meeting's composer (AD-85), or Send the proposed answer
+    /// (AD-182): the delivery the panel showed and the author's text, or
+    /// the proposal's id, whose text the collector reads (D-575).
     SendAnswer {
         key: String,
         expected: officina_core::meeting::Delivery,
-        text: String,
+        from: crate::meeting::AnswerFrom,
     },
     /// How a granted answer's start went. Like a launch's outcome it
     /// carries no deadline and is never dropped; for a resume, it is
@@ -932,16 +933,24 @@ fn apply_agents(collector: &mut Collector, registry: &mut WindowRegistry, now_ms
 
 /// One ingestion pass of the orchestrator's proposal files (AD-91, D-155),
 /// validated against the approved snapshot the window's record confirms,
-/// read only when a file waits; the pass also expires the old ones. True
-/// when it changed what the Orchestrator view shows.
-fn ingest_proposals(collector: &Collector, registry: &mut WindowRegistry) -> bool {
+/// read only when a file waits, and an answer against the sessions the
+/// latest `board` shows taking one (AD-182); the pass also expires the old
+/// ones. True when it changed what the Orchestrator view shows.
+fn ingest_proposals(
+    collector: &Collector,
+    registry: &mut WindowRegistry,
+    board: Option<&Board>,
+) -> bool {
     let dir = orchestrator_proposals_dir(&collector.paths().officina_home);
     let waiting = std::fs::read_dir(&dir).is_ok_and(|mut entries| entries.next().is_some());
     let catalogue = waiting
         .then(|| crate::orders::approved_catalogue(collector.relay()))
         .flatten();
+    let answerable = board
+        .map(|board| crate::meeting::answerable(collector, board))
+        .unwrap_or_default();
     registry
-        .ingest_proposals(&dir, catalogue.as_ref(), now_ms())
+        .ingest_proposals(&dir, catalogue.as_ref(), &answerable, now_ms())
         .is_some_and(|pass| pass != ProposalPass::default())
 }
 
@@ -1053,7 +1062,9 @@ fn run<E: Emit>(
         if due.retention {
             hourly_pass(collector, &mut registry);
         }
-        if due.proposals && ingest_proposals(collector, &mut registry) {
+        if due.proposals
+            && ingest_proposals(collector, &mut registry, outputs.board.current().as_ref())
+        {
             publish_orchestrator(&mut registry, outputs, false, now_ms());
         }
         // A wait reaching the alert threshold is a state change the clock
@@ -1116,6 +1127,9 @@ fn rebuild_and_publish<E: Emit>(
     now: i64,
 ) {
     let board = collector.board(now);
+    // Each board ends the answer proposals whose session no longer takes
+    // one (AD-182), before the views show them.
+    registry.expire_answers(&crate::meeting::answerable(collector, &board), now);
     let view = registry.view(Some(&board), &collector.paths().events_dir(), now);
     publish(board, outputs);
     publish_registry(view, outputs, force);
@@ -1165,7 +1179,10 @@ fn answer_author<E: Emit>(
         AuthorCommand::ListArchived
             | AuthorCommand::ListDiscarded
             | AuthorCommand::OpenMeeting(_)
-            | AuthorCommand::SendAnswer { .. }
+            | AuthorCommand::SendAnswer {
+                from: crate::meeting::AnswerFrom::Author(_),
+                ..
+            }
             | AuthorCommand::AnswerOutcome(_)
             | AuthorCommand::IssueCard(_)
             | AuthorCommand::EditCard { .. }
@@ -1277,7 +1294,7 @@ fn answer_author<E: Emit>(
         AuthorCommand::SendAnswer {
             key,
             expected,
-            text,
+            from,
         } => {
             let board = outputs.board.current();
             crate::meeting::grant_answer(
@@ -1286,7 +1303,7 @@ fn answer_author<E: Emit>(
                 board.as_ref(),
                 &key,
                 expected,
-                &text,
+                &from,
                 now,
             )
             .map(|grant| AuthorAnswer::AnswerGrant(Box::new(grant)))

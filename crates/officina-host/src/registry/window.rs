@@ -19,8 +19,8 @@ use officina_core::registry::dry_run::DryRunState;
 use officina_core::registry::fold::{AgentsChanges, AgentsSnapshot};
 use officina_core::registry::model::{EnableRefusal, ModelEnv};
 use officina_core::registry::types::{
-    ExcerptRecord, OrchestratorStartOutcome, RegistryReport, RegistryState, SessionRecord,
-    SubjectRecord, SubjectRef, WorkOrderRecord,
+    ExcerptRecord, OrchestratorStartOutcome, ProposalStatus, RegistryReport, RegistryState,
+    SessionRecord, SubjectRecord, SubjectRef, WorkOrderRecord,
 };
 use officina_core::registry::view::{DiscardedSession, RegistryView, SubjectView, unread_view};
 use officina_core::relay::catalogue::CanonicalCatalogue;
@@ -653,16 +653,20 @@ impl WindowRegistry {
     }
 
     /// One ingestion pass of the proposal files of `dir` at `now_ms`
-    /// (AD-91, D-155), when the registry is writable; the files it deleted
-    /// unread are counted for the view. `None` when the registry cannot
-    /// be written: the files wait.
+    /// (AD-91, D-155), an answer validated against `answerable`, the
+    /// sessions that take one on the latest board (AD-182), when the
+    /// registry is writable; the files it deleted unread are counted for
+    /// the view. `None` when the registry cannot be written: the files
+    /// wait.
     pub fn ingest_proposals(
         &mut self,
         dir: &Path,
         catalogue: Option<&CanonicalCatalogue>,
+        answerable: &BTreeSet<String>,
         now_ms: i64,
     ) -> Option<ProposalPass> {
-        let pass = self.on_writer(|writer| writer.ingest_proposals(dir, catalogue, now_ms))?;
+        let pass = self
+            .on_writer(|writer| writer.ingest_proposals_for(dir, catalogue, answerable, now_ms))?;
         let deleted = &mut self.deleted_proposal_files;
         deleted.misnamed = deleted.misnamed.saturating_add(pass.misnamed);
         deleted.over_limit = deleted.over_limit.saturating_add(pass.over_limit);
@@ -677,6 +681,28 @@ impl WindowRegistry {
         now_ms: i64,
     ) -> Result<Result<ProposalOrder, ProposalRefusal>, IpcError> {
         self.with_writer(|writer| Ok(Ok(writer.proposal_order(id, now_ms)?)))
+    }
+
+    /// Expires the pending answer proposals whose session is not in
+    /// `answerable` (AD-182), when the registry is writable: how many.
+    pub fn expire_answers(&mut self, answerable: &BTreeSet<String>, now_ms: i64) -> u32 {
+        self.on_writer(|writer| writer.expire_answers(answerable, now_ms))
+            .unwrap_or_default()
+    }
+
+    /// The stored text of the pending answer proposal `id` to
+    /// `session_id` (D-575); `None` for any other proposal, or when the
+    /// registry cannot be written, so nothing is sent then.
+    pub fn pending_answer(&mut self, id: &str, session_id: &str) -> Option<String> {
+        self.on_writer(|writer| writer.pending_answer(id, session_id))
+            .flatten()
+    }
+
+    /// Moves the pending proposal `id` to `status` (AD-182): false when it
+    /// was not pending or the registry cannot be written.
+    pub fn decide_pending(&mut self, id: &str, status: ProposalStatus, now_ms: i64) -> bool {
+        self.on_writer(|writer| writer.decide_pending(id, status, now_ms))
+            .unwrap_or(false)
     }
 
     /// Dismisses proposal `id` at `now_ms` (FR-12); refused, with why,

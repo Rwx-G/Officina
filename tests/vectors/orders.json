@@ -333,7 +333,48 @@
     {"id": 3, "project": "lab", "name": "Elsewhere", "status": "active"}
   ],
   "proposal_sessions": ["s-1"],
+  "proposal_answerable": ["s-2"],
   "proposal": [
+    {
+      "name": "an answer to a session idle in its turn",
+      "file": {"kind": "answer", "schema": 1, "session_id": "s-2", "text": "Keep the 1.x line, then run the tests.", "rationale": "It asked which line to keep.", "orchestrator_session_id": "s-orchestrator", "written_at_ms": 1800000000000},
+      "expect": {"status": "pending", "kind": "answer"}
+    },
+    {
+      "name": "an answer without a rationale",
+      "file": {"kind": "answer", "schema": 1, "session_id": "s-2", "text": "Keep the 1.x line.", "rationale": "", "orchestrator_session_id": "s-orchestrator", "written_at_ms": 1800000000000},
+      "expect": {"status": "invalid", "kind": "answer", "reason": "rationale_missing"}
+    },
+    {
+      "name": "an answer whose rationale is over its bound",
+      "file": {"kind": "answer", "schema": 1, "session_id": "s-2", "text": "Keep the 1.x line.", "rationale": "<over PROPOSAL_TEXT_MAX_CHARS>", "orchestrator_session_id": "s-orchestrator", "written_at_ms": 1800000000000},
+      "expect": {"status": "invalid", "kind": "answer", "reason": "text_too_long"}
+    },
+    {
+      "name": "an answer starting with a slash after whitespace",
+      "file": {"kind": "answer", "schema": 1, "session_id": "s-2", "text": "  /clear", "rationale": "Start afresh.", "orchestrator_session_id": "s-orchestrator", "written_at_ms": 1800000000000},
+      "expect": {"status": "invalid", "kind": "answer", "reason": "answer_refused"}
+    },
+    {
+      "name": "an answer over the composer's bound",
+      "file": {"kind": "answer", "schema": 1, "session_id": "s-2", "text": "<over PROPOSAL_ANSWER_MAX_CHARS>", "rationale": "Long.", "orchestrator_session_id": "s-orchestrator", "written_at_ms": 1800000000000},
+      "expect": {"status": "invalid", "kind": "answer", "reason": "answer_refused"}
+    },
+    {
+      "name": "an answer to a session the registry holds that takes none now",
+      "file": {"kind": "answer", "schema": 1, "session_id": "s-1", "text": "Keep the 1.x line.", "rationale": "Why not.", "orchestrator_session_id": "s-orchestrator", "written_at_ms": 1800000000000},
+      "expect": {"status": "invalid", "kind": "answer", "reason": "session_not_answerable"}
+    },
+    {
+      "name": "an answer to an unknown session",
+      "file": {"kind": "answer", "schema": 1, "session_id": "s-unknown", "text": "Keep the 1.x line.", "rationale": "Why not.", "orchestrator_session_id": "s-orchestrator", "written_at_ms": 1800000000000},
+      "expect": {"status": "invalid", "kind": "answer", "reason": "session_not_answerable"}
+    },
+    {
+      "name": "an answer with a forged source",
+      "file": {"kind": "answer", "schema": 1, "session_id": "s-2", "text": "Keep the 1.x line.", "rationale": "Why not.", "orchestrator_session_id": "s-orchestrator", "written_at_ms": 1800000000000, "source": "author"},
+      "expect": {"status": "invalid", "kind": null, "reason": "unparsable"}
+    },
     {
       "name": "a work order of the approved catalogue, its subject open in its project",
       "file": {"kind": "work_order", "schema": 1, "template": "dependency-bump", "project": "backend", "values": {"package": "serde_json", "level": "minor"}, "subject": {"id": 1}, "rationale": "The tests fail on the old release.", "orchestrator_session_id": "s-orchestrator", "written_at_ms": 1800000000000},
@@ -430,7 +471,7 @@
       "expect": {"status": "invalid", "kind": null, "reason": "unparsable"}
     },
     {
-      "name": "an answer, a kind this build does not read",
+      "name": "an answer without its rationale field",
       "file": {"kind": "answer", "schema": 1, "session_id": "s-1", "text": "yes", "orchestrator_session_id": null, "written_at_ms": 1800000000000},
       "expect": {"status": "invalid", "kind": null, "reason": "unparsable"}
     },

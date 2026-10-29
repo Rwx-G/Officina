@@ -20,10 +20,14 @@ mod window {
     use std::time::{Duration, Instant};
 
     use officina_core::agents::LiveStatus;
+    use std::collections::BTreeSet;
+
     use officina_core::meeting::{
-        Answer, AnswerRefused, AnswerResult, CONFIRM_WINDOW_MS, Delivery,
+        Answer, AnswerRefused, AnswerResult, CONFIRM_WINDOW_MS, Delivery, answerable_sessions,
+        takes_a_proposed_answer,
     };
-    use officina_core::relay::journal::{AnswerOutcome, JournalEntry, MeetingAnswer};
+    use officina_core::registry::types::ProposalStatus;
+    use officina_core::relay::journal::{AnswerOutcome, AnswerSource, JournalEntry, MeetingAnswer};
     use officina_core::spawn::{ClaudeVector, SessionId};
 
     use officina_core::board::{Board, group_events};
@@ -313,18 +317,46 @@ mod window {
         );
     }
 
+    /// The sessions of `board` that take a proposed answer now (AD-182):
+    /// each card's folder from the session list the collector holds, and
+    /// the `claude` version it last read.
+    pub fn answerable(collector: &Collector, board: &Board) -> BTreeSet<String> {
+        answerable_sessions(
+            board,
+            collector.agents().unwrap_or_default(),
+            collector.claude_version(),
+        )
+    }
+
+    /// Whose text an answer sends (AD-182, D-575): the author's, as the
+    /// page sent it, or an answer proposal's, by its id only, the text
+    /// read from the registry.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub enum AnswerFrom {
+        Author(String),
+        Proposal(String),
+    }
+
     /// The collector's half of `send_answer` (AD-85, D-139): the delivery
     /// computed again from the latest board, the claude version and the
     /// agents-reported folder; refused `state_changed` when it differs from
     /// the one the panel showed. Every refusal and every copy is journaled
     /// here, never the text.
+    ///
+    /// A proposal (AD-182, D-575) sends the text stored for its id, when it
+    /// is a pending answer proposal to this session (else
+    /// `proposal_not_pending`, journaled nothing, since no proposal was
+    /// sent); a session that no longer takes it is refused `state_changed`
+    /// and the proposal expires; a granted one is `accepted` here, before
+    /// the start, so a second click finds it decided and never sends it
+    /// twice.
     pub fn grant_answer(
         collector: &Collector,
         registry: &mut WindowRegistry,
         board: Option<&Board>,
         key: &str,
         expected: Delivery,
-        text: &str,
+        from: &AnswerFrom,
         now_ms: i64,
     ) -> Result<AnswerGrant, IpcError> {
         let meeting = match grant(collector, registry, board, key) {
@@ -335,26 +367,57 @@ mod window {
                 )));
             }
         };
-        let delivery = delivery(&MeetingTarget {
+        let refused = |reason| AnswerResult::Refused(reason);
+        let target = MeetingTarget {
             card: &meeting.card,
             agents_folder: meeting.agents_folder.as_deref(),
             claude_version: collector.claude_version(),
-        });
+        };
+        let delivery = delivery(&target);
+        let (text, proposal) = match from {
+            AnswerFrom::Author(text) => (text.clone(), None),
+            AnswerFrom::Proposal(id) => {
+                let stored = meeting
+                    .card
+                    .session_id
+                    .as_deref()
+                    .and_then(|session| registry.pending_answer(id, session));
+                match stored {
+                    Some(text) => (text, Some(id.as_str())),
+                    None => {
+                        return Ok(AnswerGrant::Settled(refused(
+                            AnswerRefused::ProposalNotPending,
+                        )));
+                    }
+                }
+            }
+        };
         let mut line = MeetingAnswer {
             session_id: meeting.card.session_id.clone(),
             delivery,
             answer_sha256: officina_core::sha256_hex(text.as_bytes()),
             outcome: AnswerOutcome::Refused,
+            source: if proposal.is_some() {
+                AnswerSource::Proposal
+            } else {
+                AnswerSource::Author
+            },
+            proposal_id: proposal.map(str::to_owned),
         };
         let settle = |line: &MeetingAnswer, result: AnswerResult| {
             journal_answer(collector, line, now_ms);
             Ok(AnswerGrant::Settled(result))
         };
-        let refused = |reason| AnswerResult::Refused(reason);
+        if let Some(id) = proposal
+            && (delivery != expected || !takes_a_proposed_answer(&target))
+        {
+            registry.decide_pending(id, ProposalStatus::Expired, now_ms);
+            return settle(&line, refused(AnswerRefused::StateChanged));
+        }
         if delivery != expected {
             return settle(&line, refused(AnswerRefused::StateChanged));
         }
-        let answer = match Answer::parse(text) {
+        let answer = match Answer::parse(&text) {
             Ok(answer) => answer,
             Err(refusal) => return settle(&line, refused(AnswerRefused::Answer(refusal))),
         };
@@ -396,6 +459,13 @@ mod window {
                 officina_core::spawn::answer(&answer, &session, folder, config.as_deref())
             }
         };
+        if let Some(id) = proposal
+            && !registry.decide_pending(id, ProposalStatus::Accepted, now_ms)
+        {
+            return Ok(AnswerGrant::Settled(refused(
+                AnswerRefused::ProposalNotPending,
+            )));
+        }
         let Some(claude) = meeting.claude else {
             line.outcome = AnswerOutcome::SpawnFailed;
             return settle(
@@ -488,20 +558,20 @@ mod window {
         *pending = kept;
     }
 
-    /// `send_answer(key, expected, text)` (AD-85): the collector's grant,
-    /// then the start on this, the command's blocking, thread, then its
-    /// record, which for a resume answers once the session confirmed it or
-    /// the window passed.
+    /// `send_answer(key, expected, text | proposal_id)` (AD-85, AD-182):
+    /// the collector's grant, then the start on this, the command's
+    /// blocking, thread, then its record, which for a resume answers once
+    /// the session confirmed it or the window passed.
     pub fn send_answer(
         collector: &Sender<CollectorMsg>,
         key: &str,
         expected: Delivery,
-        text: &str,
+        from: AnswerFrom,
     ) -> Result<AnswerResult, IpcError> {
         let command = AuthorCommand::SendAnswer {
             key: key.to_owned(),
             expected,
-            text: text.to_owned(),
+            from,
         };
         let ticket = match ask(collector, command, AUTHOR_WAIT)?.into_answer_grant()? {
             AnswerGrant::Settled(result) => return Ok(result),
