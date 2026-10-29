@@ -134,9 +134,14 @@ function card(): CardAnswer {
 
 /** Mirrors the collector's answer to `launch_work_order` (AD-81): the
  *  outcome or refusal the test sets in `__officinaLaunchAnswer`, else
- *  `started`. */
-function launch(): LaunchAnswer {
-  return window.__officinaLaunchAnswer ?? { outcome: "launched", value: "started" };
+ *  `started`. With `__officinaLaunchHeld` set, the answer waits until the
+ *  test calls `__officinaReleaseLaunch`, as a spawn in progress does. */
+function launch(): Promise<LaunchAnswer> {
+  const answer = (): LaunchAnswer => window.__officinaLaunchAnswer ?? { outcome: "launched", value: "started" };
+  if (!window.__officinaLaunchHeld) return Promise.resolve(answer());
+  return new Promise((resolve) => {
+    window.__officinaReleaseLaunch = () => resolve(answer());
+  });
 }
 
 /** Mirrors the collector's answer to `confirm_triage` (AD-49): each item is

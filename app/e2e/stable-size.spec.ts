@@ -4,8 +4,11 @@
 // `StableLabel`, or a slot marked `data-stable-slot`. Each scene fails when it shows a toggle no
 // case below stands for, so a new toggle cannot go untested silently.
 import { expect, test, type Locator, type Page } from "@playwright/test";
+import { fixtureOf } from "./fixture-index";
 import { loadBoard, loadRegistry, loadRelay, openBoard, openScene } from "./fixtures";
+import type { OrchestratorView } from "../src/lib/generated/OrchestratorView";
 import type { RegistryView } from "../src/lib/generated/RegistryView";
+import type { WorkOrderCard } from "../src/lib/generated/WorkOrderCard";
 import { DEFAULT_WALKING } from "../src/lib/view.svelte";
 
 /** Sub-pixel rounding between two layouts, never a real move. */
@@ -14,7 +17,7 @@ const TOLERANCE_PX = 0.5;
 /** What makes an element a toggle this spec must cover. */
 const TOGGLE = '[aria-pressed], [role="radio"], [data-stable-slot], :has(> [data-stable-label])';
 
-type SceneName = "board" | "autoApproval" | "sceneMode" | "relay" | "relayAuto" | "subjects" | "triage";
+type SceneName = "board" | "autoApproval" | "sceneMode" | "relay" | "relayAuto" | "subjects" | "triage" | "orchestrator";
 
 const SCENES: Record<SceneName, (page: Page) => Promise<void>> = {
   board: async (page) => {
@@ -50,6 +53,27 @@ const SCENES: Record<SceneName, (page: Page) => Promise<void>> = {
     await openBoard(page, loadBoard("triage-board"), {}, null, loadRegistry("triage"));
     await page.getByTestId("view-subjects").click();
     await expect(page.getByTestId("triage-panel")).toBeVisible();
+  },
+  // A work order card composed in the Orchestrator view (story 5.9), on
+  // the day's view and a card core issued from its home.
+  orchestrator: async (page) => {
+    const view = fixtureOf<OrchestratorView>("orchestrator", "orchestrator-day");
+    const card = fixtureOf<WorkOrderCard>("card", "card-bump");
+    await page.addInitScript(
+      ([v, c]) => {
+        window.__officinaOrchestrator = v;
+        window.__officinaCardAnswer = { outcome: "issued", value: c };
+      },
+      [view, card] as const,
+    );
+    await openBoard(page, loadBoard("busy"), {}, loadRelay("relay-clean"));
+    await page.getByTestId("view-orchestrator").click();
+    await page.getByTestId("composer-template").selectOption(card.template);
+    await page.getByTestId("composer-project").selectOption(card.project);
+    for (const param of card.values) {
+      await page.locator(`[data-testid="composer-param"][data-param="${param.name}"]`).selectOption(param.value);
+    }
+    await expect(page.getByTestId("work-order-card")).toBeVisible();
   },
 };
 
@@ -100,6 +124,16 @@ const CASES: ToggleCase[] = [
       }),
   },
   { name: "copy attach command", selector: '[data-testid="copy-attach"]', scene: "board" },
+  {
+    name: "work order Launch",
+    selector: '[data-testid="launch"]',
+    scene: "orchestrator",
+    // Held in flight, its label reads Launching (D-564).
+    act: async (page, control) => {
+      await page.evaluate(() => (window.__officinaLaunchHeld = true));
+      await control.click();
+    },
+  },
   {
     name: "auto rejection reasons",
     selector: '[data-testid="reject-reasons"]',

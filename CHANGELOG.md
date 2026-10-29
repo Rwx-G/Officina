@@ -144,6 +144,18 @@ project uses [Semantic Versioning](https://semver.org/).
   "unbound" and "printed id differs" flags and its session's state.
   Commands `get_orchestrator` and `mark_briefing_read`, event
   `orchestrator://updated`.
+- The work order composer (v0.5, story 5.9): in the Orchestrator view, a
+  template picker with each template's description, the template's
+  projects and one list per parameter holding exactly its values, with no
+  field to type a value; the subject picker with the card's open subjects
+  and a new name. Each choice issues or edits a card through core and shows
+  it, or the refusal. The card shows the template, the project, each value
+  as a chip, the whole prompt as text, one chip per argument, the folder,
+  the subject and the quota gauges, never in the attention colour. Launch
+  acts on a pointer click only, reads Launching while it runs, and the card
+  then shows the outcome: started with its session once bound, a folder
+  never trusted with what to do, failed with its exit code and error as
+  text, or the refusal. Nothing retries.
 
 - Sub-agents in the scene (v0.4, story 4.12): each running sub-agent of a
   session stands beside its desk, a smaller figure without a cap, from its

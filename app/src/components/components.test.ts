@@ -27,7 +27,7 @@ import { RELAY_TOGGLE_TEXT } from "../lib/relay-text";
 import { alertedCards, CAUSE_TEXT, causeText, LAST_KNOWN, waitText } from "../lib/alert";
 import type { ApprovalView } from "../lib/generated/ApprovalView";
 import type { Board } from "../lib/generated/Board";
-import { fixturesOf } from "../../e2e/fixture-index";
+import { fixtureOf, fixturesOf } from "../../e2e/fixture-index";
 import type { AuthorRefusal } from "../lib/generated/AuthorRefusal";
 import type { Card } from "../lib/generated/Card";
 import type { Column } from "../lib/generated/Column";
@@ -39,6 +39,14 @@ import type { TriageRow as Row } from "../lib/generated/TriageRow";
 // The generated union itself, read as text: its values come from Rust's
 // `ReasonCode::ALL`, so a new code is iterated here without a list to edit.
 import reasonCodeSource from "../lib/generated/ReasonCode.ts?raw";
+import launchRefusalSource from "../lib/generated/LaunchRefusal.ts?raw";
+import Composer from "./Composer.svelte";
+import WorkOrderCard from "./WorkOrderCard.svelte";
+import { OrchestratorStore } from "../lib/orchestrator.svelte";
+import { LAUNCH_REFUSAL_TEXT } from "../lib/orchestrator-text";
+import type { LaunchRefusal } from "../lib/generated/LaunchRefusal";
+import type { OrchestratorView } from "../lib/generated/OrchestratorView";
+import type { WorkOrderCard as WorkOrderCardPayload } from "../lib/generated/WorkOrderCard";
 
 vi.mock("../lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../lib/ipc")>()),
@@ -1007,5 +1015,140 @@ describe("Briefing", () => {
     }
     expect(getByTestId("briefing-dropped-changed").textContent).toContain("3 older items");
     expect(getByTestId("briefing-since").textContent).toContain("first reading");
+  });
+});
+
+describe("Composer", () => {
+  function composer(): { store: OrchestratorStore; view: OrchestratorView } {
+    const store = new OrchestratorStore();
+    const view = fixtureOf<OrchestratorView>("orchestrator", "orchestrator-day");
+    store.view = view;
+    return { store, view };
+  }
+
+  /** The values a select offers: its options but the disabled placeholder. */
+  const offered = (select: HTMLElement): string[] =>
+    Array.from((select as HTMLSelectElement).options)
+      .filter((o) => !o.disabled)
+      .map((o) => o.value);
+
+  it("Composer offers one select per parameter with its list", async () => {
+    const { store, view } = composer();
+    const { getByTestId, getAllByTestId, queryAllByTestId } = render(Composer, { store });
+    const template = view.templates.find((t) => Object.keys(t.params).length > 1)!;
+    expect(queryAllByTestId("composer-param")).toHaveLength(0);
+    expect(offered(getByTestId("composer-template"))).toEqual(view.templates.map((t) => t.name));
+    await fireEvent.change(getByTestId("composer-template"), { target: { value: template.name } });
+    expect(offered(getByTestId("composer-project"))).toEqual(template.projects);
+    const selects = getAllByTestId("composer-param");
+    expect(selects.map((s) => s.dataset.param)).toEqual(Object.keys(template.params));
+    for (const select of selects) {
+      expect(select.tagName).toBe("SELECT");
+      expect(offered(select)).toEqual(template.params[select.dataset.param!]);
+      // The placeholder is no value: it cannot be chosen.
+      for (const placeholder of Array.from((select as HTMLSelectElement).options).filter((o) => o.disabled)) {
+        expect(placeholder.value).toBe("");
+      }
+    }
+  });
+
+  it("Composer has no text input for a value", () => {
+    const { store } = composer();
+    const card = fixtureOf<WorkOrderCardPayload>("card", "card-bump");
+    store.choices = {
+      template: card.template,
+      project: card.project,
+      values: Object.fromEntries(card.values.map((p) => [p.name, p.value])),
+    };
+    store.card = card;
+    const { container, getByTestId } = render(Composer, { store });
+    expect(getByTestId("subject-picker")).toBeTruthy();
+    const typed = Array.from(container.querySelectorAll("input, textarea, [contenteditable]")).filter(
+      (e) => !(e instanceof HTMLInputElement) || !["checkbox", "radio", "button", "submit"].includes(e.type),
+    );
+    // The only text field names a new subject, never a value.
+    expect(typed.map((e) => e.getAttribute("data-testid"))).toEqual(["picker-new-name"]);
+    expect(container.querySelectorAll("select")).toHaveLength(2 + card.values.length);
+  });
+});
+
+describe("WorkOrderCard", () => {
+  const onLaunch = vi.fn();
+  beforeEach(() => onLaunch.mockReset());
+
+  const bump = (): WorkOrderCardPayload => fixtureOf<WorkOrderCardPayload>("card", "card-bump");
+
+  function props(card: WorkOrderCardPayload = bump()) {
+    return { card, order: null, launching: false, launch: null, nowMs: NOW, onLaunch };
+  }
+
+  it("WorkOrderCard shows one chip per argument", () => {
+    const card = bump();
+    const { getAllByTestId, getByTestId } = render(WorkOrderCard, props(card));
+    const chips = getAllByTestId("card-arg");
+    expect(chips.map((chip) => chip.textContent)).toEqual(card.argv);
+    expect(chips.every((chip) => chip.children.length === 0)).toBe(true);
+    expect(getAllByTestId("card-value").map((chip) => chip.dataset.param)).toEqual(card.values.map((p) => p.name));
+    expect(getByTestId("card-cwd").textContent).toContain(card.cwd);
+  });
+
+  it("WorkOrderCard renders the prompt as text", () => {
+    const hostile = `<img src=x onerror="window.__hit = 1"> ‮gnp.exe`;
+    const card = { ...bump(), prompt: hostile, description: "<b>bold</b>" };
+    const { container, getByTestId } = render(WorkOrderCard, props(card));
+    expect(container.querySelector("img")).toBeNull();
+    expect(container.querySelector("b")).toBeNull();
+    const prompt = getByTestId("card-prompt");
+    expect(prompt.tagName).toBe("PRE");
+    expect(prompt.textContent).toBe(hostile);
+    expect(prompt.children).toHaveLength(0);
+  });
+
+  it("Launch ignores a click with detail 0", async () => {
+    const { getByTestId } = render(WorkOrderCard, props());
+    await fireEvent.click(getByTestId("launch"), { detail: 0 });
+    expect(onLaunch).not.toHaveBeenCalled();
+    await fireEvent.click(getByTestId("launch"), { detail: 1 });
+    expect(onLaunch).toHaveBeenCalledTimes(1);
+  });
+
+  it("Enter and Space on Launch do nothing", async () => {
+    const { getByTestId } = render(WorkOrderCard, props());
+    const button = getByTestId("launch");
+    expect(button.hasAttribute("tabindex")).toBe(false);
+    button.focus();
+    for (const key of ["Enter", " "]) {
+      const keydown = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true });
+      button.dispatchEvent(keydown);
+      expect(keydown.defaultPrevented).toBe(true);
+    }
+    // What a browser does for a key activation: a click with detail 0.
+    await fireEvent.click(button, { detail: 0 });
+    expect(onLaunch).not.toHaveBeenCalled();
+  });
+
+  it("a launch in flight disables Launch and says so", () => {
+    const { getByTestId } = render(WorkOrderCard, { ...props(), launching: true });
+    const button = getByTestId("launch") as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
+    expect(button.querySelector("[data-stable-label]")).not.toBeNull();
+    expect(getByTestId("card-launching")).toBeTruthy();
+  });
+
+  it("every launch refusal has a wording", () => {
+    // The generated union, read as text: its values come from Rust's
+    // `LaunchRefusal::ALL`, so a new refusal is iterated here.
+    const refusals = Array.from(launchRefusalSource.matchAll(/"([a-z_]+)"/g), (m) => m[1]! as LaunchRefusal);
+    expect(refusals.length).toBeGreaterThan(0);
+    expect(Object.keys(LAUNCH_REFUSAL_TEXT).sort()).toEqual([...refusals].sort());
+    const texts = refusals.map((r) => LAUNCH_REFUSAL_TEXT[r]);
+    for (const text of texts) expect(text.trim()).not.toBe("");
+    expect(new Set(texts).size).toBe(texts.length);
+    for (const refusal of refusals) {
+      cleanup();
+      const { getByTestId } = render(WorkOrderCard, { ...props(), launch: { outcome: "refused", value: refusal } });
+      expect(getByTestId("card-launch-refused").textContent).toBe(LAUNCH_REFUSAL_TEXT[refusal]);
+      expect((getByTestId("launch") as HTMLButtonElement).disabled).toBe(true);
+    }
   });
 });

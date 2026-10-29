@@ -42,6 +42,11 @@ declare global {
     __officinaCardAnswer?: CardAnswer;
     /** What `launch_work_order` answers (story 5.7). */
     __officinaLaunchAnswer?: LaunchAnswer;
+    /** Holds `launch_work_order`'s answer until `__officinaReleaseLaunch`
+     *  is called (story 5.9): a launch in flight. */
+    __officinaLaunchHeld?: boolean;
+    /** Sends the held launch's answer; set by the mock while one is held. */
+    __officinaReleaseLaunch?: () => void;
     /** The Orchestrator view `get_orchestrator` answers (story 5.8). */
     __officinaOrchestrator?: OrchestratorView | null;
     /** Sets the Orchestrator view and emits `orchestrator://updated`. */

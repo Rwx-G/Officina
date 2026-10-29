@@ -3,13 +3,63 @@
 // (D-72's pattern), found through the fixture index (D-181): the briefing
 // with each section and since when, the history with its outcomes and
 // binding, the fourth view button, and the briefing's reading on leaving.
+// Story 5.9: the composer and the work order card, on cards core issued
+// from the day's home through the same example (kind `card`); the mock
+// answers issue, edit and launch as the test sets them.
 import { expect, test, type Page } from "@playwright/test";
 import { fixtureOf } from "./fixture-index";
 import { calls, loadBoard, loadRelay, openBoard, openScene, transitionsDone } from "./fixtures";
+import type { CardAnswer } from "../src/lib/generated/CardAnswer";
+import type { LaunchAnswer } from "../src/lib/generated/LaunchAnswer";
 import type { OrchestratorView } from "../src/lib/generated/OrchestratorView";
+import type { WorkOrderCard } from "../src/lib/generated/WorkOrderCard";
+import type { WorkOrderView } from "../src/lib/generated/WorkOrderView";
 
 function orchestrator(name: "orchestrator-empty" | "orchestrator-day"): OrchestratorView {
   return fixtureOf<OrchestratorView>("orchestrator", name);
+}
+
+function card(name: "card-bump" | "card-bump-minor" | "card-bump-new-subject"): WorkOrderCard {
+  return fixtureOf<WorkOrderCard>("card", name);
+}
+
+async function answerCards(page: Page, answer: CardAnswer): Promise<void> {
+  await page.evaluate((a) => (window.__officinaCardAnswer = a), answer);
+}
+
+async function answerLaunch(page: Page, answer: LaunchAnswer): Promise<void> {
+  await page.evaluate((a) => (window.__officinaLaunchAnswer = a), answer);
+}
+
+async function callsOf(page: Page, cmd: string): Promise<unknown[]> {
+  return (await calls(page)).filter((call) => call.cmd === cmd).map((call) => call.args);
+}
+
+/** Opens the day's view and composes `issued`'s template, project and
+ *  values in the composer; the backend answers with `issued`. */
+async function composeCard(page: Page, issued: WorkOrderCard): Promise<void> {
+  await openOrchestrator(page, orchestrator("orchestrator-day"));
+  await answerCards(page, { outcome: "issued", value: issued });
+  await page.getByTestId("composer-template").selectOption(issued.template);
+  await page.getByTestId("composer-project").selectOption(issued.project);
+  for (const param of issued.values) {
+    await page.locator(`[data-testid="composer-param"][data-param="${param.name}"]`).selectOption(param.value);
+  }
+  await expect(page.getByTestId("work-order-card")).toHaveAttribute("data-card", issued.id);
+}
+
+/** The history row the launch of `launched` recorded, taken from the
+ *  day's row that `pick` finds: the same row under the card's id. */
+function rowFor(launched: WorkOrderCard, pick: (order: WorkOrderView) => boolean): WorkOrderView {
+  const row = orchestrator("orchestrator-day").work_orders.find(pick)!;
+  return { ...row, id: launched.id, name: launched.name };
+}
+
+async function pushRow(page: Page, row: WorkOrderView): Promise<void> {
+  await page.evaluate(async (order) => {
+    const view = window.__officinaOrchestrator!;
+    await window.__officinaPushOrchestrator?.({ ...view, work_orders: [order, ...view.work_orders] });
+  }, row);
 }
 
 async function answering(page: Page, view: OrchestratorView): Promise<void> {
@@ -201,4 +251,209 @@ test("the history shows outcome, binding and unbound orders", async ({ page }) =
   await expect(orders.nth(day.work_orders.indexOf(offBoard)).getByTestId("work-order-binding")).toContainText(
     "state unknown",
   );
+});
+
+test("composing sends issue_card with the chosen template, project and values", async ({ page }) => {
+  const issued = card("card-bump");
+  await composeCard(page, issued);
+  const sent = (await callsOf(page, "issue_card")) as { request: { template: string; project: string; values: [string, string][]; subject: unknown } }[];
+  // One request, once every choice is made, with nothing but the choices.
+  expect(sent).toHaveLength(1);
+  const { request } = sent[0]!;
+  expect(request.template).toBe(issued.template);
+  expect(request.project).toBe(issued.project);
+  expect(Object.fromEntries(request.values)).toEqual(Object.fromEntries(issued.values.map((p) => [p.name, p.value])));
+  expect(request.subject).toBeNull();
+  expect(await callsOf(page, "edit_card")).toEqual([]);
+});
+
+test("changing a value sends edit_card and shows the new card", async ({ page }) => {
+  const first = card("card-bump");
+  const edited = card("card-bump-minor");
+  await composeCard(page, first);
+  const changed = edited.values.find((p) => p.value !== first.values.find((q) => q.name === p.name)!.value)!;
+  await answerCards(page, { outcome: "issued", value: edited });
+  await page.locator(`[data-testid="composer-param"][data-param="${changed.name}"]`).selectOption(changed.value);
+  await expect(page.getByTestId("work-order-card")).toHaveAttribute("data-card", edited.id);
+  await expect(page.getByTestId("card-prompt")).toHaveText(edited.prompt);
+  expect(await callsOf(page, "edit_card")).toEqual([
+    { cardId: first.id, change: { kind: "value", name: changed.name, value: changed.value } },
+  ]);
+
+  // A new subject's name is an edit too; the name shows as text.
+  const renamed = card("card-bump-new-subject");
+  const name = renamed.subject.kind === "new" ? renamed.subject.value : "";
+  await answerCards(page, { outcome: "issued", value: renamed });
+  await page.getByTestId("picker-new-name").fill(name);
+  await page.getByTestId("picker-create").click();
+  await expect(page.getByTestId("work-order-card")).toHaveAttribute("data-card", renamed.id);
+  await expect(page.getByTestId("card-subject")).toContainText(name);
+  await expect(page.locator('[data-testid="work-order-card"] b')).toHaveCount(0);
+  expect((await callsOf(page, "edit_card")).at(-1)).toEqual({
+    cardId: edited.id,
+    change: { kind: "subject", subject: { kind: "new", value: name } },
+  });
+});
+
+test("a refusal is shown on the composer", async ({ page }) => {
+  const first = card("card-bump");
+  await composeCard(page, first);
+  // The catalogue changed since: the edit is refused, the card is kept and
+  // the select goes back to its value.
+  const param = first.values[0]!;
+  const other = param.options.find((o) => o !== param.value)!;
+  await answerCards(page, { outcome: "refused", value: { kind: "template", detail: "catalogue_changed" } });
+  const select = page.locator(`[data-testid="composer-param"][data-param="${param.name}"]`);
+  await select.selectOption(other);
+  await expect(page.getByTestId("composer-refusal")).toContainText("the catalogue changed since its approval");
+  await expect(page.getByTestId("work-order-card")).toHaveAttribute("data-card", first.id);
+  await expect(select).toHaveValue(param.value);
+  // A card the backend no longer knows leaves the screen with its refusal.
+  await answerCards(page, { outcome: "refused", value: { kind: "unknown_card" } });
+  await select.selectOption(other);
+  await expect(page.getByTestId("composer-refusal")).toContainText("no longer knows this card");
+  await expect(page.getByTestId("work-order-card")).toHaveCount(0);
+});
+
+test("the card shows the prompt, the argument chips, the folder and the subject", async ({ page }) => {
+  const issued = card("card-bump");
+  await composeCard(page, issued);
+  const shown = page.getByTestId("work-order-card");
+  await expect(shown.getByTestId("card-template")).toHaveText(issued.template);
+  await expect(shown.getByTestId("card-description")).toHaveText(issued.description);
+  await expect(shown.getByTestId("card-project")).toHaveText(issued.project);
+  await expect(shown.getByTestId("card-prompt")).toHaveText(issued.prompt);
+  await expect(shown.getByTestId("card-arg")).toHaveText(issued.argv);
+  await expect(shown.getByTestId("card-value")).toHaveCount(issued.values.length);
+  await expect(shown.getByTestId("card-cwd")).toContainText(issued.cwd);
+  const subject = issued.subject.kind === "existing" ? issued.subject.value : -1;
+  await expect(shown.getByTestId("card-subject")).toContainText(issued.subject_options.find((s) => s.id === subject)!.name);
+  await expect(shown.locator('[data-testid^="gauge-"]')).toHaveCount(2);
+  await expect(shown.getByTestId("gauge-5h")).toContainText(`${Math.round(issued.quota!.five_hour!.used_percentage)} %`);
+  // The card's subject is the one the picker shows chosen.
+  await expect(page.locator(`[data-testid="pick-subject"][data-subject="${subject}"]`)).toHaveAttribute("aria-pressed", "true");
+});
+
+// D-163, review F22: computed colours in the real browser, against the
+// value of `--color-attention` resolved on the document root.
+for (const theme of ["light", "dark"] as const) {
+  test(`the card and its chips never take the attention colour (${theme})`, async ({ page }) => {
+    await page.emulateMedia({ colorScheme: theme });
+    await composeCard(page, card("card-bump"));
+    await expect(page.getByTestId("theme-switch")).toHaveAttribute("data-theme-resolved", theme);
+    const seen = await page.evaluate(() => {
+      const resolve = (token: string): string => {
+        const probe = document.createElement("span");
+        probe.style.color = `var(${token})`;
+        document.body.append(probe);
+        const colour = getComputedStyle(probe).color;
+        probe.remove();
+        return colour;
+      };
+      const shown = document.querySelector('[data-testid="work-order-card"]')!;
+      const colours = new Set<string>();
+      for (const element of [shown, ...Array.from(shown.querySelectorAll("*"))]) {
+        const style = getComputedStyle(element);
+        for (const colour of [
+          style.color,
+          style.backgroundColor,
+          style.borderTopColor,
+          style.borderRightColor,
+          style.borderBottomColor,
+          style.borderLeftColor,
+        ]) {
+          colours.add(colour);
+        }
+      }
+      const chip = getComputedStyle(shown.querySelector('[data-testid="card-arg"]')!);
+      const own = getComputedStyle(shown);
+      return {
+        attention: resolve("--color-attention"),
+        attentionBorder: resolve("--color-attention-border"),
+        border: resolve("--color-border"),
+        bg: resolve("--color-bg"),
+        surface: resolve("--color-surface"),
+        colours: [...colours],
+        chips: shown.querySelectorAll('[data-testid="card-arg"], [data-testid="card-value"]').length,
+        chip: { background: chip.backgroundColor, border: chip.borderTopColor },
+        card: { background: own.backgroundColor, border: own.borderTopColor },
+      };
+    });
+    expect(seen.chips).toBeGreaterThan(0);
+    expect(seen.colours).not.toContain(seen.attention);
+    expect(seen.colours).not.toContain(seen.attentionBorder);
+    expect(seen.card).toEqual({ background: seen.surface, border: seen.border });
+    expect(seen.chip).toEqual({ background: seen.bg, border: seen.border });
+  });
+}
+
+test("Launch sends the card id and the prompt hash", async ({ page }) => {
+  const issued = card("card-bump");
+  await composeCard(page, issued);
+  await page.evaluate(() => (window.__officinaLaunchHeld = true));
+  const launch = page.getByTestId("launch");
+  await launch.click();
+  // In flight: the card says so and the button is disabled.
+  await expect(page.getByTestId("card-launching")).toBeVisible();
+  await expect(launch).toBeDisabled();
+  await expect(launch).toHaveAccessibleName("Launching");
+  await page.evaluate(() => window.__officinaReleaseLaunch?.());
+  await expect(page.getByTestId("card-outcome")).toHaveAttribute("data-outcome", "started");
+  await expect(launch).toBeDisabled();
+  await expect(launch).toHaveAccessibleName("Launch");
+  expect(await callsOf(page, "launch_work_order")).toEqual([{ cardId: issued.id, promptSha256: issued.prompt_sha256 }]);
+});
+
+test("a keyboard press never launches", async ({ page }) => {
+  await composeCard(page, card("card-bump"));
+  const launch = page.getByTestId("launch");
+  await launch.focus();
+  await expect(launch).toBeFocused();
+  await page.keyboard.press("Enter");
+  await page.keyboard.press("Space");
+  await expect(launch).toBeEnabled();
+  await expect(page.getByTestId("card-outcome")).toHaveCount(0);
+  expect(await callsOf(page, "launch_work_order")).toEqual([]);
+});
+
+test("a started launch shows its session once bound", async ({ page }) => {
+  const issued = card("card-bump");
+  await composeCard(page, issued);
+  await answerLaunch(page, { outcome: "launched", value: "started" });
+  await page.getByTestId("launch").click();
+  await expect(page.getByTestId("card-session")).toContainText("Waiting for its background session");
+  const bound = rowFor(issued, (order) => order.session !== null && order.session.phase !== "unknown");
+  await pushRow(page, bound);
+  await expect(page.getByTestId("card-session")).toContainText(bound.session!.name ?? bound.session!.session_id);
+  await expect(page.getByTestId("card-session")).toContainText("working");
+});
+
+test("workspace not trusted is explained, not retried", async ({ page }) => {
+  const issued = card("card-bump");
+  await composeCard(page, issued);
+  await answerLaunch(page, { outcome: "launched", value: "untrusted_workspace" });
+  const launch = page.getByTestId("launch");
+  await launch.click();
+  const outcome = page.getByTestId("card-outcome");
+  await expect(outcome).toHaveAttribute("data-outcome", "untrusted_workspace");
+  await expect(outcome).toContainText("trust dialog");
+  await expect(outcome).toContainText(issued.cwd);
+  await expect(launch).toBeDisabled();
+  await launch.click({ force: true });
+  expect(await callsOf(page, "launch_work_order")).toHaveLength(1);
+});
+
+test("a failed launch shows its exit code and error as text", async ({ page }) => {
+  const issued = card("card-bump");
+  await composeCard(page, issued);
+  await answerLaunch(page, { outcome: "launched", value: "failed" });
+  await page.getByTestId("launch").click();
+  const outcome = page.getByTestId("card-outcome");
+  await expect(outcome).toHaveAttribute("data-outcome", "failed");
+  const failed = rowFor(issued, (order) => order.outcome === "failed");
+  await pushRow(page, failed);
+  await expect(outcome).toContainText(`Exit code ${failed.exit_code}`);
+  await expect(page.getByTestId("card-error")).toHaveText(failed.error!);
+  await expect(page.locator('[data-testid="work-order-card"] img')).toHaveCount(0);
+  expect(await page.evaluate(() => (window as { __officinaXss?: number }).__officinaXss)).toBeUndefined();
 });
