@@ -15,7 +15,8 @@
 //! collector thread, a subject's meeting on its latest prompted session,
 //! and no git where only an event line names the folder (story 5.10);
 //! answers sent, refused, copied, attached, confirmed or not, and
-//! journaled by their hash (story 5.11).
+//! journaled by their hash (story 5.11); the window's liveness marker, the
+//! routed prompts journaled and their files cleaned (story 5.22).
 //!
 //! The tests of stories 1.5 and 2.7 give the fake claude no fixture (it
 //! then lists no session). Story 3.2's run a copy of the fake configured by
@@ -52,7 +53,13 @@ use officina_core::registry::types::{
 };
 use officina_core::registry::view::RegistryView;
 use officina_core::relay::journal::{AnswerOutcome, MeetingAnswer};
-use officina_core::relay::journal::{CatalogueApproved, JournalEntry, WorkOrderLaunched};
+use officina_core::relay::journal::{
+    CatalogueApproved, JournalEntry, PromptRouted, WorkOrderLaunched,
+};
+use officina_core::relay::prompts::{
+    MARKER_REFRESH_MS, MARKER_STALE_MS, PROMPT_FILE_TTL_MS, PROMPT_WAIT_MS, PromptRequest,
+    WindowMarker,
+};
 use officina_core::relay::view::{RecentEvent, RelayView};
 use officina_core::spawn::VectorKind;
 use officina_core::untrusted::Untrusted;
@@ -4173,4 +4180,163 @@ fn the_journal_holds_the_proposal_id_and_never_the_text() {
         !text.contains("to keep"),
         "the rationale reached the journal"
     );
+}
+
+/// The window's marker as it is now: its content and its age in ms.
+fn marker_now(env: &common::TestEnv) -> Option<(WindowMarker, i64)> {
+    let path = env.relay_home().window_marker_file();
+    let content = std::fs::read(&path).ok()?;
+    let modified = std::fs::metadata(&path).ok()?.modified().ok()?;
+    let age = std::time::SystemTime::now()
+        .duration_since(modified)
+        .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX));
+    Some((serde_json::from_slice(&content).unwrap(), age))
+}
+
+/// Story 5.22 AC 2 (D-579): the collector writes `window/alive.json` as it
+/// starts, with its pid and `routes_prompts` false (the routing story turns
+/// it on), and refreshes its modification time within
+/// [`MARKER_REFRESH_MS`]: a marker set a minute back is fresh again.
+#[test]
+fn the_window_writes_its_marker_and_refreshes_it() {
+    let env = common::TestEnv::new();
+    let started = officina_host::files::now_ms();
+    let (handle, boards, _views) = watch(&env, None);
+    next(&boards);
+    let (marker, age) = marker_now(&env).expect("the marker is written at start");
+    assert_eq!(marker.pid, std::process::id());
+    assert!(!marker.routes_prompts, "D-580: no routing yet");
+    assert!(marker.started_at_ms >= started);
+    assert!(age < MARKER_STALE_MS);
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(env.relay_home().window_marker_file())
+        .unwrap()
+        .set_modified(std::time::SystemTime::now() - Duration::from_secs(60))
+        .unwrap();
+    let refresh = Duration::from_millis(MARKER_REFRESH_MS.unsigned_abs());
+    let deadline = Instant::now() + refresh * 3;
+    loop {
+        let (again, age) = marker_now(&env).expect("the marker stays");
+        if age < MARKER_STALE_MS {
+            assert_eq!(again, marker, "a refresh changes the time only");
+            break;
+        }
+        assert!(Instant::now() < deadline, "the marker was not refreshed");
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    stop(handle);
+}
+
+/// Story 5.22 AC 2 (D-579): a collector that stops leaves no marker.
+#[test]
+fn a_clean_exit_removes_the_marker() {
+    let env = common::TestEnv::new();
+    let (handle, boards, _views) = watch(&env, None);
+    next(&boards);
+    assert!(env.relay_home().window_marker_file().exists());
+    stop(handle);
+    assert!(!env.relay_home().window_marker_file().exists());
+}
+
+/// A `PermissionRequest` waiting as the hook writes it, at `at_ms`.
+fn waiting_prompt(env: &common::TestEnv, session_id: &str, at_ms: i64) -> PromptRequest {
+    let request = PromptRequest::from_payload(
+        &serde_json::json!({
+            "session_id": session_id,
+            "tool_name": "Bash",
+            "tool_input": {"command": "deploy --token sk-placeholder-0000"},
+        }),
+        None,
+        7,
+        at_ms,
+        PROMPT_WAIT_MS,
+    )
+    .unwrap();
+    write(
+        &env.relay_home()
+            .prompts_dir()
+            .join(format!("{}.json", request.id)),
+        &serde_json::to_string(&request).unwrap(),
+    );
+    request
+}
+
+fn routed_lines(env: &common::TestEnv) -> Vec<PromptRouted> {
+    env.journal()
+        .into_iter()
+        .filter_map(|line| match line.entry {
+            JournalEntry::PromptRouted(routed) => Some(routed),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Story 5.22 AC 5 (AD-181): the collector journals `prompt_routed` once
+/// per request it sees, with the session, tool and input hash, never the
+/// input, however many times the relay is read again.
+#[test]
+fn a_waiting_prompt_is_journaled_routed_once() {
+    let env = common::TestEnv::new();
+    let (handle, _boards, views) = watch(&env, None);
+    until(&views, |_| true);
+    let request = waiting_prompt(&env, "s-prompt", officina_host::files::now_ms());
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while routed_lines(&env).is_empty() {
+        assert!(Instant::now() < deadline, "no prompt_routed line");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    handle.sender.send(CollectorMsg::RelayChanged).unwrap();
+    std::thread::sleep(RELAY_POLL.min(Duration::from_secs(2)));
+    stop(handle);
+    let lines = routed_lines(&env);
+    assert_eq!(
+        lines,
+        [PromptRouted {
+            session_id: "s-prompt".into(),
+            tool_name: Some("Bash".into()),
+            input_sha256: request.input_sha256,
+        }]
+    );
+    let journal: String = std::fs::read_dir(env.relay_home().journal_dir())
+        .unwrap()
+        .flatten()
+        .map(|e| std::fs::read_to_string(e.path()).unwrap_or_default())
+        .collect();
+    assert!(!journal.contains("sk-placeholder"), "never the input");
+}
+
+/// Story 5.22 AC 5 (AD-33's cleanup): the collector's pass at start
+/// deletes the router's files older than a day and keeps newer ones.
+#[test]
+fn prompt_files_older_than_24_h_are_removed() {
+    let env = common::TestEnv::new();
+    let old = waiting_prompt(&env, "s-old", officina_host::files::now_ms() - 2 * DAY_MS);
+    let fresh = waiting_prompt(&env, "s-fresh", officina_host::files::now_ms());
+    let dir = env.relay_home().prompts_dir();
+    let decided = dir.join(format!("{}.decided.json", old.id));
+    write(&decided, "{}");
+    let a_day_back = std::time::SystemTime::now()
+        - Duration::from_millis(u64::try_from(PROMPT_FILE_TTL_MS).unwrap() + 60_000);
+    for name in [
+        format!("{}.json", old.id),
+        format!("{}.decided.json", old.id),
+    ] {
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(dir.join(name))
+            .unwrap()
+            .set_modified(a_day_back)
+            .unwrap();
+    }
+    let (handle, boards, _views) = watch(&env, None);
+    next(&boards);
+    stop(handle);
+    let mut left: Vec<String> = std::fs::read_dir(&dir)
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    left.sort();
+    assert_eq!(left, [format!("{}.json", fresh.id)]);
 }

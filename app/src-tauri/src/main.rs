@@ -39,7 +39,7 @@ use officina_host::relay::authority::{self, AuthorityError};
 use officina_host::relay::home::RelayHome;
 use officina_host::spawn::BaseEnv;
 use officina_host::watch::{AUTHOR_WAIT, AuthorAnswer, AuthorCommand, CollectorMsg, Emit, spawn};
-use tauri::{AppHandle, Emitter, Manager, State, WindowEvent};
+use tauri::{AppHandle, Emitter, Manager, RunEvent, State, WindowEvent};
 
 /// Event carrying each new board to the window.
 const BOARD_EVENT: &str = "board://updated";
@@ -760,8 +760,17 @@ fn main() {
             open_meeting,
             send_answer
         ])
-        .run(tauri::generate_context!())
-        .expect("failed to run the Officina window");
+        .build(tauri::generate_context!())
+        .expect("failed to build the Officina window")
+        .run(|app, event| {
+            // A clean exit leaves no liveness marker (D-579): the collector
+            // thread ends with the process, before its own removal runs.
+            if let RunEvent::Exit = event
+                && let Some(state) = app.try_state::<AppState>()
+            {
+                officina_host::relay::prompts::remove_marker(&state.relay_home);
+            }
+        });
 }
 
 #[cfg(test)]

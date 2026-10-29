@@ -5,7 +5,7 @@
 //! ingests the event files before anything reads or deletes them, and runs
 //! the author's actions the window's commands send it (D-92).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, RwLock};
@@ -37,11 +37,13 @@ use crate::registry::store::onedrive_roots_from_env;
 use crate::registry::triage::{CallLimits, NextCall, TriageJob, TriageWorker, binary_stamp};
 use crate::registry::window::WindowRegistry;
 use crate::relay::home::RelayHome;
+use crate::relay::prompts::{self, MarkerFile};
 use crate::relay::review::{ReviewEnv, ReviewWorker, Reviews, link_runs};
 use crate::relay::view::{AutoRead, credential_presence, read_view_with};
 use officina_core::registry::types::Source;
 use officina_core::relay::auto::{AutoMode, STATS_WINDOW_MS};
-use officina_core::relay::journal::{AutoApprovalSet, JournalEntry};
+use officina_core::relay::journal::{AutoApprovalSet, JournalEntry, PromptRouted};
+use officina_core::relay::prompts::WindowMarker;
 
 /// How often the watched paths are stat'ed. A handful of `metadata` calls:
 /// cheap enough to run four times a second.
@@ -968,7 +970,33 @@ fn hourly_pass(collector: &mut Collector, registry: &mut WindowRegistry) {
     crate::focus::prune_focus_log(&collector.paths().state_dir(), now_ms());
     crate::relay::approvals::prune(collector.relay(), SystemTime::now());
     crate::relay::journal::prune(collector.relay(), now_ms());
+    prompts::prune(collector.relay(), SystemTime::now());
     report_registry(collector, registry);
+}
+
+/// Whether the window routes `PermissionRequest`s, which its marker says
+/// (D-579). False until the routing story ships and the owner turns
+/// routing on (D-580): the hook then always gives Claude Code's own prompt.
+const ROUTES_PROMPTS: bool = false;
+
+/// Journals `prompt_routed` for each request in `relay/prompts/` this
+/// collector has not seen yet (AD-181), never its input, and forgets the
+/// ones gone, so `routed` stays as small as the folder.
+fn journal_routed_prompts(relay: &RelayHome, routed: &mut BTreeSet<String>) {
+    let waiting = prompts::read_requests(relay);
+    routed.retain(|id| waiting.iter().any(|request| &request.id == id));
+    let lines: Vec<JournalEntry> = waiting
+        .into_iter()
+        .filter(|request| routed.insert(request.id.clone()))
+        .map(|request| {
+            JournalEntry::PromptRouted(PromptRouted {
+                session_id: request.session_id,
+                tool_name: request.tool_name,
+                input_sha256: request.input_sha256,
+            })
+        })
+        .collect();
+    let _ = crate::relay::journal::record(relay, &lines, now_ms());
 }
 
 fn run<E: Emit>(
@@ -976,6 +1004,19 @@ fn run<E: Emit>(
     receiver: &Receiver<CollectorMsg>,
     outputs: &mut Outputs<E>,
 ) {
+    // D-579: the window's liveness marker, refreshed by this loop and
+    // removed when it returns. Without one, hooks give Claude Code's own
+    // prompt, the safe side.
+    let mut marker = MarkerFile::write(
+        collector.relay(),
+        &WindowMarker {
+            pid: std::process::id(),
+            started_at_ms: now_ms(),
+            routes_prompts: ROUTES_PROMPTS,
+        },
+    )
+    .ok();
+    let mut routed_prompts = BTreeSet::new();
     // At start, every incomplete file is ingested and the privacy bounds
     // applied before the first board is built (D-85).
     let mut registry = WindowRegistry::open(
@@ -1021,6 +1062,9 @@ fn run<E: Emit>(
                 }
             }
             Err(RecvTimeoutError::Timeout) => {}
+        }
+        if let Some(marker) = &mut marker {
+            marker.refresh_if_due(Instant::now());
         }
         if watched.poll(&mut plan) {
             let had_excerpts = !collector.no_excerpts();
@@ -1082,6 +1126,7 @@ fn run<E: Emit>(
         }
         let reviewed = pump_review(collector, &mut registry, &mut reviews, outputs);
         if due.relay || reviewed {
+            journal_routed_prompts(collector.relay(), &mut routed_prompts);
             collector.keep_known_projects(now_ms());
             if due.credentials {
                 presence = credential_presence(collector.relay(), collector.credential_store());
