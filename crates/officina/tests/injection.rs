@@ -54,6 +54,7 @@ const SECTIONS: &[&str] = &[
     "card_launch",
     "mcp_output",
     "mcp_tool",
+    "proposal_file",
     "review_excerpt",
 ];
 
@@ -76,6 +77,9 @@ const FAMILIES: &[&str] = &[
     "edited_snapshot",
     "launch_conditions",
     "markup",
+    "unknown_reference",
+    "malformed",
+    "rate_limit",
     "control",
 ];
 
@@ -865,6 +869,8 @@ fn run_mcp_tool(case: &Value) -> Result<(), String> {
                     ));
                 }
             }
+            // Story 5.17 AC 8: the window validates what the tool wrote.
+            ingested_as(&home, &case["ingested"])?;
         }
         expect => {
             if answer["result"]["isError"] != true || out["refused"] != expect["refused"] {
@@ -876,6 +882,43 @@ fn run_mcp_tool(case: &Value) -> Result<(), String> {
         }
     }
     only_agents_ran(&home)
+}
+
+/// What the window stored of the one proposal file `home` holds, ingested
+/// by its writer against the approved snapshot: its status and invalid
+/// reason, as `ingested` names them (story 5.17 AC 8).
+fn ingested_as(home: &common::mcp::McpHome, expected: &Value) -> Result<(), String> {
+    use officina_host::registry::store::{open_reader, open_writer};
+    let now = common::now_ms();
+    let catalogue = home
+        .env
+        .relay_home()
+        .read_approved()
+        .approved()
+        .map(|approved| approved.canonical.clone());
+    let pass = open_writer(&home.env.officina_home(), &[], now)
+        .writer()
+        .ok_or("the registry cannot be written")?
+        .ingest_proposals(&home.proposals_dir(), catalogue.as_ref(), now)
+        .map_err(|e| e.to_string())?;
+    if pass.ingested != 1 {
+        return Err(format!("{} rows ingested", pass.ingested));
+    }
+    let rows = open_reader(&home.env.officina_home(), &[])
+        .map_err(|e| format!("{e:?}"))?
+        .proposals()
+        .map_err(|e| e.to_string())?;
+    let row = serde_json::to_value(&rows[0]).unwrap();
+    if row["status"] != expected["status"] {
+        return Err(format!("stored {}, expected {expected}", row["status"]));
+    }
+    if row["invalid_reason"] != expected.get("reason").cloned().unwrap_or(Value::Null) {
+        return Err(format!(
+            "reason {}, expected {expected}",
+            row["invalid_reason"]
+        ));
+    }
+    Ok(())
 }
 
 /// Story 5.15 AC 8 (AD-95, D-147): every case of `mcp_tool`.
@@ -895,26 +938,228 @@ fn run_mcp_output(case: &Value) -> Result<(), String> {
     let home = McpHome::new();
     let sources = Sources::neutral().with(source, marker);
     let subject = home.seed(&sources);
+    let wrapped_in = |responses: &[Value]| -> Result<usize, String> {
+        let mut wrapped = 0;
+        for answer in responses.iter().filter(|r| r["id"].as_u64() >= Some(100)) {
+            if answer["result"]["isError"] != false {
+                return Err(format!("a tool refused: {answer}"));
+            }
+            let out = output(answer);
+            let (inside, plain) = marker_places(&out, marker);
+            if !plain.is_empty() {
+                return Err(format!(
+                    "{} shows the marker unwrapped at {plain:?}",
+                    out["tool"]
+                ));
+            }
+            wrapped += inside;
+        }
+        Ok(wrapped)
+    };
     let (_, responses) = home.session(&every_tool(&sources, subject));
-    let mut wrapped = 0;
-    for answer in responses.iter().filter(|r| r["id"].as_u64() >= Some(100)) {
-        if answer["result"]["isError"] != false {
-            return Err(format!("a tool refused: {answer}"));
-        }
-        let out = output(answer);
-        let (inside, plain) = marker_places(&out, marker);
-        if !plain.is_empty() {
-            return Err(format!(
-                "{} shows the marker unwrapped at {plain:?}",
-                out["tool"]
-            ));
-        }
-        wrapped += inside;
-    }
-    if wrapped == 0 {
+    if wrapped_in(&responses)? == 0 {
         return Err(format!("the marker of {source} reached no output"));
     }
+    // Story 5.17 (D-771): once the window ingested the proposals, their
+    // rows read back, texts and invalid reasons, stay wrapped too.
+    if source.starts_with("proposal_") {
+        let now = common::now_ms();
+        let catalogue = home
+            .env
+            .relay_home()
+            .read_approved()
+            .approved()
+            .map(|approved| approved.canonical.clone());
+        let mut writer =
+            officina_host::registry::store::open_writer(&home.env.officina_home(), &[], now)
+                .writer()
+                .ok_or("the registry cannot be written")?;
+        let pass = writer
+            .ingest_proposals(&home.proposals_dir(), catalogue.as_ref(), now)
+            .map_err(|e| e.to_string())?;
+        drop(writer);
+        if pass.ingested == 0 {
+            return Err("no proposal ingested".to_owned());
+        }
+        let (_, responses) = home.session(&every_tool(&sources, subject));
+        if wrapped_in(&responses)? == 0 {
+            return Err(format!(
+                "the marker of {source} reached no output from the rows"
+            ));
+        }
+    }
     only_agents_ran(&home)
+}
+
+/// `value` with the seeded subjects' stand-ins replaced by their ids and
+/// the bounds' stand-ins by texts one character over them.
+fn with_proposal_refs(value: &Value, subjects: [i64; 3]) -> Value {
+    match value {
+        Value::String(text) => match text.as_str() {
+            "<open subject>" => Value::from(subjects[0]),
+            "<archived subject>" => Value::from(subjects[1]),
+            "<lab subject>" => Value::from(subjects[2]),
+            _ => with_mcp_bounds(value),
+        },
+        Value::Array(items) => Value::Array(
+            items
+                .iter()
+                .map(|item| with_proposal_refs(item, subjects))
+                .collect(),
+        ),
+        Value::Object(map) => Value::Object(
+            map.iter()
+                .map(|(key, value)| (key.clone(), with_proposal_refs(value, subjects)))
+                .collect(),
+        ),
+        other => other.clone(),
+    }
+}
+
+/// One `proposal_file` case (story 5.17 AC 8, D-147, D-152, D-155): a file
+/// written by hand into `orchestrator/proposals/`, which the window's
+/// collector ingests. An invalid one is stored with its reason and opens
+/// no card; a misnamed one, or one past the hourly limit, leaves no row; a
+/// valid one opens a card through the author's validation, whose subject
+/// never carries a suggested name, and launches once after the click, its
+/// vector the golden rebuild's.
+fn run_proposal_file(case: &Value) -> Result<(), String> {
+    use officina_core::orders::card::IssueRefusal;
+    use officina_core::orders::proposal::{
+        PROPOSAL_FILE_MAX_BYTES, PROPOSAL_HOUR_MS, PROPOSALS_PER_HOUR, file_name, proposal_id,
+    };
+    let home = OrdersHome::start(serde_json::json!({"mode": "bg"}));
+    let subjects = home.seed_subjects();
+    let now = common::now_ms();
+    let id = proposal_id(now, 1);
+    let mut bytes = match (&case["file"], &case["raw"]) {
+        (Value::Object(_), Value::Null) => {
+            let mut file = with_proposal_refs(&case["file"], subjects);
+            file["written_at_ms"] = Value::from(now);
+            serde_json::to_vec(&file).unwrap()
+        }
+        (Value::Null, Value::String(raw)) => raw.as_bytes().to_vec(),
+        _ => return Err("a file or raw bytes, one of them".to_owned()),
+    };
+    if case["oversized"] == true {
+        bytes.resize(PROPOSAL_FILE_MAX_BYTES + 1, b' ');
+    }
+    if case["hourly_limit"] == true {
+        let dir = home.proposals_dir();
+        std::fs::create_dir_all(&dir).unwrap();
+        for n in 0..PROPOSALS_PER_HOUR as i64 {
+            let earlier = proposal_id(now - PROPOSAL_HOUR_MS / 2 + n, 2);
+            std::fs::write(dir.join(file_name(&earlier)), &bytes).unwrap();
+        }
+    }
+    let name = case["file_name"]
+        .as_str()
+        .map_or_else(|| file_name(&id), str::to_owned);
+    home.propose_file(&name, &bytes);
+    let expect = &case["expect"];
+    let row = home.proposals().into_iter().find(|p| p.id == id);
+    match expect["stored"].as_str() {
+        Some("none") => {
+            if row.is_some() {
+                return Err("a row for a file that must leave none".to_owned());
+            }
+            let rows = home.proposals().len();
+            let expected = if case["hourly_limit"] == true {
+                PROPOSALS_PER_HOUR
+            } else {
+                0
+            };
+            if rows != expected {
+                return Err(format!("{rows} rows, expected {expected}"));
+            }
+        }
+        Some("invalid") => {
+            let row = row.ok_or("no row")?;
+            let stored = serde_json::to_value(&row).unwrap();
+            if stored["status"] != "invalid" || stored["invalid_reason"] != expect["reason"] {
+                return Err(format!(
+                    "stored {} ({}), expected {expect}",
+                    stored["status"], stored["invalid_reason"]
+                ));
+            }
+            let unread = matches!(expect["reason"].as_str(), Some("unparsable" | "oversized"));
+            if unread && (row.kind.is_some() || row.content.is_some()) {
+                return Err("an unread file kept a kind or texts".to_owned());
+            }
+            if let CardAnswer::Issued(_) = home.issue_from_proposal(&id) {
+                return Err("an invalid proposal opened a card".to_owned());
+            }
+        }
+        Some("pending") => {
+            let row = row.ok_or("no row")?;
+            if serde_json::to_value(row.status).unwrap() != "pending" {
+                return Err(format!("stored {:?}", row.status));
+            }
+            let answer = home.issue_from_proposal(&id);
+            let card = match answer {
+                CardAnswer::Issued(card) => *card,
+                CardAnswer::Refused(IssueRefusal::Proposal(refusal))
+                    if row.kind == Some(officina_core::registry::types::ProposalKind::Recap) =>
+                {
+                    if format!("{refusal:?}") != "NotAWorkOrder" {
+                        return Err(format!("a recap refused {refusal:?}"));
+                    }
+                    return check_spawns(&home, case);
+                }
+                other => return Err(format!("no card: {other:?}")),
+            };
+            // D-152: the suggested name is never the card's subject nor
+            // one of its choices.
+            if let Some(suggested) = case["file"]["subject"]["new"].as_str() {
+                let carried = match &card.subject {
+                    SubjectChoice::New(name) => name == suggested,
+                    SubjectChoice::Existing(_) => false,
+                } || card.subject_options.iter().any(|s| s.name == suggested);
+                if carried {
+                    return Err("the card's subject carries the suggested name".to_owned());
+                }
+            }
+            if !home.bg_calls().is_empty() {
+                return Err("a spawn before the click".to_owned());
+            }
+            if expect["launch"] == true {
+                let answer =
+                    serde_json::to_value(home.launch(&card.id, &card.prompt_sha256)).unwrap();
+                if answer != serde_json::json!({"outcome": "launched", "value": "started"}) {
+                    return Err(format!("launch answered {answer}"));
+                }
+                let ran = home
+                    .bg_calls()
+                    .first()
+                    .map(common::logged_argv)
+                    .ok_or("a launch that spawned nothing")?;
+                if ran != card.argv || ran != rebuilt(&home, &card) {
+                    return Err(format!("ran {ran:?}, the card shows {:?}", card.argv));
+                }
+                // Clicked again, it never launches twice.
+                home.launch(&card.id, &card.prompt_sha256);
+            }
+        }
+        other => return Err(format!("unknown expectation {other:?}")),
+    }
+    check_spawns(&home, case)
+}
+
+/// The case's count of `--bg` spawns, exactly.
+fn check_spawns(home: &OrdersHome, case: &Value) -> Result<(), String> {
+    let spawns = home.bg_calls().len() as u64;
+    let expected = case["bg_spawns"].as_u64().unwrap();
+    if spawns != expected {
+        return Err(format!("{spawns} --bg spawns, expected {expected}"));
+    }
+    Ok(())
+}
+
+/// Story 5.17 AC 8 (AD-95, D-147, D-152, D-155): every case of
+/// `proposal_file`.
+#[test]
+fn proposal_file_cases() {
+    run_section("proposal_file", run_proposal_file);
 }
 
 /// Story 5.15 AC 8 (AD-95, D-147): every case of `mcp_output`, and every
@@ -935,7 +1180,8 @@ fn mcp_output_cases() {
 
 /// D-147: every section has a case, every family a case and every case a
 /// declared family; every variant of `WorkOrderRefusal` and
-/// `LaunchRefusal` is some case's refusal; and every mutant of core is
+/// `LaunchRefusal` is some case's refusal, and every variant of
+/// `ProposalInvalidReason` some `proposal_file` case's; and every mutant of core is
 /// guarded by a case, forwarded under its name by the host and the CLI
 /// crates, and counted by `MUTANTS_ENABLED` (D-148).
 #[test]
@@ -991,6 +1237,16 @@ fn every_section_family_and_refusal_has_a_case() {
             "{refusal:?} has no case in injection.json"
         );
     }
+    let files = cases(&set, "proposal_file");
+    for reason in officina_core::orders::proposal::ProposalInvalidReason::ALL {
+        assert!(
+            files
+                .iter()
+                .any(|case| case["expect"]["reason"] == reason.code()),
+            "{reason:?} has no proposal_file case in injection.json"
+        );
+    }
+
     let mutants = mutant_features();
     assert!(!mutants.is_empty(), "officina-core declares the mutants");
     for case in &all {
