@@ -76,6 +76,10 @@ const SESSION_MARKERS: &[&str] = &["CLAUDECODE", "CLAUDE_CODE_SESSION_ID"];
 const INVOKER_MARK: &str = "GATES_V05_INVOKER_MARK";
 
 const CREATE_NEW_CONSOLE: u32 = 0x0000_0010;
+
+/// The first argument of the process [`start_in_console`] starts in a new
+/// console; the second is its spec file.
+const CONSOLE_MODE: &str = "--on-this-console";
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 /// The stub server of gate 1 (D-126): `server/discover` answered `-32601`,
@@ -386,16 +390,48 @@ fn claude_command(ctx: &Ctx) -> Command {
 }
 
 /// Starts `claude <args>` in a new console the owner types into, with
-/// exactly `env`.
+/// exactly `env`. The standard library hands a child its parent's standard
+/// handles, so a claude started straight into a new console drew there but
+/// read its keys from this companion's console. This executable starts
+/// itself in the new console instead, in [`CONSOLE_MODE`], with exactly
+/// `env` and no standard handles; that process gives claude the new
+/// console's own input and output.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the companion restarts itself to own the new console (D-128)"
+)]
 fn start_in_console(
     ctx: &Ctx,
     args: &[String],
     cwd: &Path,
     env: &[(String, String)],
 ) -> Option<std::process::Child> {
-    let mut command = claude_command(ctx);
-    command.args(args).current_dir(cwd).env_clear();
-    command.envs(env.iter().map(|(k, v)| (k, v)));
+    let spec = serde_json::json!({ "claude": ctx.claude, "args": args, "cwd": cwd });
+    let dir = std::env::temp_dir().join("officina-gates-v05");
+    let spec_path = dir.join(format!("console-{}-{}.json", std::process::id(), now_ms()));
+    if let Err(e) =
+        std::fs::create_dir_all(&dir).and_then(|()| std::fs::write(&spec_path, spec.to_string()))
+    {
+        eprintln!("gates_v05: the console spec could not be written: {e}");
+        return None;
+    }
+    let exe = match std::env::current_exe() {
+        Ok(exe) => exe,
+        Err(e) => {
+            eprintln!("gates_v05: this executable's path is unknown: {e}");
+            return None;
+        }
+    };
+    let mut command = Command::new(exe);
+    command
+        .arg(CONSOLE_MODE)
+        .arg(&spec_path)
+        .current_dir(cwd)
+        .env_clear()
+        .envs(env.iter().map(|(k, v)| (k, v)))
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
     creation_flags(&mut command, CREATE_NEW_CONSOLE);
     match command.spawn() {
         Ok(child) => Some(child),
@@ -403,6 +439,53 @@ fn start_in_console(
             eprintln!("gates_v05: claude could not start: {e}");
             None
         }
+    }
+}
+
+/// [`CONSOLE_MODE`]: runs the claude a spec file describes on the console
+/// this process was started in, and waits for it. Its environment, set by
+/// [`start_in_console`], passes to claude unchanged.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a workstation probe starts claude by hand, outside spawn (D-128)"
+)]
+fn run_on_this_console(spec_path: &Path) -> ExitCode {
+    let spec: Option<serde_json::Value> = std::fs::read_to_string(spec_path)
+        .ok()
+        .and_then(|text| serde_json::from_str(&text).ok());
+    let _ = std::fs::remove_file(spec_path);
+    let Some(spec) = spec else {
+        return ExitCode::FAILURE;
+    };
+    let (Some(claude), Some(cwd)) = (spec["claude"].as_str(), spec["cwd"].as_str()) else {
+        return ExitCode::FAILURE;
+    };
+    let args: Vec<&str> = spec["args"]
+        .as_array()
+        .map(|list| list.iter().filter_map(serde_json::Value::as_str).collect())
+        .unwrap_or_default();
+    let console = |name: &str| {
+        std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(name)
+    };
+    let (Ok(input), Ok(output)) = (console("CONIN$"), console("CONOUT$")) else {
+        return ExitCode::FAILURE;
+    };
+    let Ok(error) = output.try_clone() else {
+        return ExitCode::FAILURE;
+    };
+    let status = Command::new(claude)
+        .args(args)
+        .current_dir(cwd)
+        .stdin(Stdio::from(input))
+        .stdout(Stdio::from(output))
+        .stderr(Stdio::from(error))
+        .status();
+    match status {
+        Ok(status) if status.success() => ExitCode::SUCCESS,
+        _ => ExitCode::FAILURE,
     }
 }
 
@@ -1120,6 +1203,11 @@ fn gate8(ctx: &Ctx) -> Report {
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if let [mode, spec] = args.as_slice()
+        && mode == CONSOLE_MODE
+    {
+        return run_on_this_console(Path::new(spec));
+    }
     let dry_run = args.iter().any(|a| a == "--dry-run");
     let gates: Vec<&str> = args
         .iter()
