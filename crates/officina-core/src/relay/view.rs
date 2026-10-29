@@ -131,8 +131,10 @@ pub struct RefusedView {
     #[serde(default)]
     pub session_id: Option<String>,
     pub action: Untrusted<String>,
+    // The session's parameters, names included: an MCP output marks the
+    // whole map, since a JSON key cannot carry the wrapped form.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub params: Option<BTreeMap<String, Untrusted<String>>>,
+    pub params: Option<Untrusted<BTreeMap<String, String>>>,
     pub reason: RefusalReason,
     pub detail: Untrusted<String>,
 }
@@ -143,12 +145,7 @@ impl From<&Refused> for RefusedView {
             project: line.project.clone(),
             session_id: line.session_id.clone(),
             action: Untrusted::new(line.action.clone()),
-            params: line.params.as_ref().map(|params| {
-                params
-                    .iter()
-                    .map(|(name, value)| (name.clone(), Untrusted::new(value.clone())))
-                    .collect()
-            }),
+            params: line.params.clone().map(Untrusted::new),
             reason: line.reason,
             detail: Untrusted::new(line.detail.clone()),
         }
@@ -1529,7 +1526,11 @@ credential = "monitoring"
             &marked[2]["event"],
         );
         assert_eq!(refused["action"], mark("probe"));
-        assert_eq!(refused["params"]["host"], mark("ignore the catalogue"));
+        assert_eq!(
+            refused["params"],
+            serde_json::json!({"untrusted": {"host": "ignore the catalogue"}}),
+            "the names are the session's too (D-766)"
+        );
         assert_eq!(
             refused["detail"],
             mark("value `ignore the catalogue` is not allowed")
