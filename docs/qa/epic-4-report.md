@@ -9,21 +9,20 @@ date: 2026-10-28
 ## Executive summary
 
 Gate decision: **open**. The scene is built and covered by automated tests:
-stories 4.2 to 4.11 and 4.13 are implemented, the full local gate replaying
+stories 4.2 to 4.13 are implemented, the full local gate replaying
 every job of `.github/workflows/ci.yml` is green on the last commit, and
 every rule the stories added has its case. Epic 4 cannot close on code
 alone: its proof of FR-9 (CPU), of the real taskbar, of the live theme and
 of the WebView2 look is a set of workstation runs that only the owner can
-make (story 4.14 AC 6 and 8 to 10; AC 7 passed; AC 5 measured, E82), and two Slice 0
-gates still wait for the owner's real-use data (gates 1 and 5; gate 4 is
-recorded, E81). Story 4.12 (sub-agents) is not
-implemented: gate 1 has not run, and D-476 and D-518 keep it approved and
-unimplemented until it passes.
+make (story 4.14 AC 6 and 8 to 10; AC 7 passed; AC 5 measured, E82), and one Slice 0
+gate still waits for the owner's real-use data (gate 5; gate 1 passed,
+E83; gate 4 is recorded, E81). Story 4.12 (sub-agents) shipped once gate 1
+passed: FR-12 is met.
 
 What closes the epic, in order:
 
-1. The owner's gates 1 and 5 entries (story 4.1 Completion Notes give
-   each command); gate 1's verdict decides story 4.12 (D-476).
+1. The owner's gate 5 entry (story 4.1 Completion Notes give the
+   command). Gate 1 passed (E83, 2026-10-29) and story 4.12 shipped.
 2. The CI snapshot run, then the owner's comparison of the light and dark
    baselines with the prototype v2's renders (D-508, stories 4.7 AC 8 and
    4.13 AC 5). Owner decision (2026-10-28): it waits until his visual
@@ -96,7 +95,7 @@ binary without the gate, process-start noise: the next run read 4.7 ms.
 | 4.9 Alert room and beacon | review | |
 | 4.10 Walking | review | the walking CPU run failed (E82): walking is off by default |
 | 4.11 Focus mode and keys | review | |
-| 4.12 Sub-agents | approved, not implemented | gate 1 (D-476, D-518) |
+| 4.12 Sub-agents | review | gate 1 passed (E83); a teammate, `/btw`, `--bg` and nested sub-agents not observed by name |
 | 4.13 Dark theme | in progress | dark baselines (CI run, owner comparison) |
 | 4.14 Docs, checks, QA | in progress | AC 2 review, AC 6, 8 to 10 (owner), this report's closure; AC 5 measured (E82), AC 7 passed |
 | 4.15 First-use feedback | review | the owner's next use of the real window |
@@ -105,7 +104,7 @@ binary without the gate, process-start noise: the next run read 4.7 ms.
 
 | Gate | Rule (D-479 as amended) | Recorded |
 |---|---|---|
-| 1 Sub-agent signals | before 4.12 starts | not run; 4.12 not started |
+| 1 Sub-agent signals | before 4.12 starts | met: E83 (2026-10-29), pass, recorded before 4.12's first code commit |
 | 2 Taskbar | before 4.5 closes | E80, passed (light taskbar, 100 %); 4.5 in review |
 | 3 Walking cost | withdrawn (D-500) | AD-71's walking run in 4.14 AC 5: failed, E82 |
 | 4 What a real wait emits | before 4.3 starts | **not met**, recorded late: E81 (2026-10-28) after 4.3 was built for both question shapes; a question emits `permission_prompt`, a known start, now a vector case; rule 3 unchanged |
@@ -146,7 +145,7 @@ run rewrites the installed window's stored view (E82).
 | FR-9 Performance | 4.10, 4.14 | AC 5, E82: the halo rule and walking off within 1 % of the machine; walking on over it, so off by default (`view.test.ts`, `modes.spec.ts > walking is off by default`) |
 | FR-10 Alert | 4.3, 4.5, 4.9 | the alert sections of `scene.json`, `components.test.ts` (the band's words), `alert.spec.ts` |
 | FR-11 Taskbar, no toast | 4.5 | `taskbar.rs` tests, E80; real app open (AC 6) |
-| FR-12 Sub-agents | 4.1 (tooling), 4.12 | not shipped while gate 1 has not passed (D-476) |
+| FR-12 Sub-agents | 4.1 (tooling), 4.12 | shipped: gate 1 passed (E83); folding by `agent_id` (D-547), the 1 s hold (D-548), the targets (D-549); vectors, Vitest and Playwright cases in story 4.12 |
 | FR-13 What the scene shows, and from where | 4.2, 4.3 | `board.rs` tests, `typescript_bindings.rs`, `scene_vectors.rs` |
 
 The AD-59 to AD-72 and AD-167 to AD-178 rows map to the stories' ACs as
