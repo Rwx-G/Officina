@@ -8,7 +8,7 @@ name = "supervision"
 path = "Supervision"
 color = "green"
 autonomy = "guarded"
-actions = ["check", "apply", "apply-sensitive", "status", "health", "ping"]
+actions = ["check", "apply", "apply-sensitive", "apply-auto", "status", "health", "ping"]
 
 [[project]]
 name = "notes"
@@ -104,8 +104,56 @@ url = "http://status.example.com/{page}"
 [action.params.page]
 values = ["index"]
 
+[[action]]
+name = "apply-auto"
+description = "Apply the alerting playbook unattended after its dry run"
+class = "auto"
+check = "check"
+runner = "wsl"
+distro = "Ubuntu"
+program = "/home/user01/venv/bin/ansible-playbook"
+env = { ANSIBLE_CONFIG = "/home/user01/ansible.cfg" }
+args = ["--diff", "-i", "inventory/lab", "--limit", "{group}", "playbooks/{playbook}"]
+auto_max_per_hour = 4
+
+[action.params.playbook]
+values = ["alerting.yml"]
+
+[action.params.group]
+pattern = "lab-[a-z0-9-]{1,30}"
+
 [[credential]]
 name = "monitoring"
 hosts = ["monitoring.example.com", "mon2.example.com"]
 header = "Authorization"
 scheme = "Bearer"
+
+[[template]]
+name = "dependency-bump"
+description = "Bump one dependency and fix what breaks"
+projects = ["supervision"]
+prompt = "Bump {package} to its latest {level} release, run the tests, fix what breaks, commit."
+model = "sonnet"
+
+[template.params.package]
+values = ["serde_json", "@scope/pkg"]
+
+[template.params.level]
+values = ["patch", "minor"]
+
+[[template]]
+name = "release-notes"
+description = "Draft the release notes"
+projects = ["supervision", "notes"]
+prompt = """
+Draft the release notes of the last {span}
+in docs/notes.md."""
+
+[template.params.span]
+values = ["week", "month"]
+
+[orchestrator]
+model = "opus"
+
+[auto_review]
+model = "sonnet"

@@ -1,5 +1,7 @@
-//! The canonical catalogue and its hash (AD-24): a golden fixture pins the
-//! hash, cosmetic edits keep it, and every canonical leaf moves it.
+//! The canonical catalogue and its hash (AD-24, AD-76): a golden fixture,
+//! which declares templates, an `auto` action with its check and
+//! `[auto_review]`, pins the hash, cosmetic edits keep it, and every
+//! canonical leaf moves it.
 
 use std::collections::BTreeSet;
 
@@ -20,8 +22,8 @@ const FLOOR_PATH: &str = "C:/path/to/work/officina.toml";
 /// and the new pair pinned here: every approval is then invalidated on
 /// purpose (AD-24).
 const PINNED: (u32, &str) = (
-    3,
-    "2309c2c749a5c6395b1640eb47741dbaedbf642de50205e23f25db27877f1829",
+    4,
+    "57fbcb0f0a65b38417844d061976344a3820343a731d4e185cb22072b1f2d88c",
 );
 
 fn golden() -> RelayFloor {

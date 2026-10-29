@@ -6,6 +6,8 @@
 
 #[path = "../../../../tests/support/git.rs"]
 pub mod git_support;
+#[path = "../../../../tests/support/previous_format.rs"]
+pub mod previous_format;
 #[cfg(feature = "window-authority")]
 pub mod registry;
 

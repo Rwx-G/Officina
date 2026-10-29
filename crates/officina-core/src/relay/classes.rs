@@ -1,12 +1,14 @@
-//! Action classes (FR-8, AD-33): the check rule an `after-check` action, and
-//! a `human` action naming its dry run (D-170), must meet. `free`,
-//! `after-check` and `human` run, the last once per approval
-//! (`relay::approvals`); `auto` is reserved for the orchestrator (v0.5), and
-//! phase 2 drops every action that declares it, so no catalogue offers one.
+//! Action classes (FR-8, AD-33): which classes this build runs, and the
+//! check rule an `after-check` action, and a `human` or `auto` action
+//! naming its dry run (D-170, AD-180), must meet. `free`, `after-check` and
+//! `human` run, the last once per approval (`relay::approvals`); `auto`
+//! validates from v0.5 (story 5.4) and runs once story 5.12 makes it
+//! available (D-132).
 
 use std::collections::{BTreeMap, HashSet};
 use std::ops::RangeInclusive;
 
+use super::catalogue::ActionClass;
 use super::journal::{JournalEntry, JournalLine, RunOutcome, RunStarted, TreeFingerprint};
 
 /// How long a successful check lets its `after-check` action run (AD-33).
@@ -15,6 +17,23 @@ pub const CHECK_VALID_MS: i64 = 30 * 60 * 1000;
 /// Accepted `officina run --wait <s>` for a `human` action (AD-33): how long
 /// a call waits for the author's decision before it gives up.
 pub const WAIT_RANGE_S: RangeInclusive<u32> = 1..=540;
+
+/// True when this build runs actions of `class`: `officina run` refuses
+/// another with `class_not_available`, and `run --list` marks it (D-17,
+/// D-20, D-132).
+///
+/// ```
+/// use officina_core::relay::catalogue::ActionClass;
+/// use officina_core::relay::classes::is_available;
+/// assert!(is_available(ActionClass::Human));
+/// assert!(!is_available(ActionClass::Auto));
+/// ```
+pub fn is_available(class: ActionClass) -> bool {
+    match class {
+        ActionClass::Free | ActionClass::AfterCheck | ActionClass::Human => true,
+        ActionClass::Auto => false,
+    }
+}
 
 /// The `after-check` rule (AD-33, P-3): true only when the journal holds a
 /// `run_started` of `check_action` in `project`, with exactly `params`,
@@ -89,7 +108,6 @@ pub fn satisfying_check<'l>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::relay::catalogue::ActionClass;
     use crate::relay::journal::{RunFinished, RunStarted, StreamSummary};
 
     const NOW: i64 = 1_793_102_400_000;

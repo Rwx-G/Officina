@@ -26,10 +26,10 @@ use officina_core::quota::normalise_path;
 use officina_core::relay::approvals::DEFAULT_WAIT_S;
 use officina_core::relay::argv::{WSL_ENV_PROGRAM, WSL_EXE, WSL_REMOVED_ENV, WSL_TIMEOUT_PROGRAM};
 use officina_core::relay::catalogue::{
-    ActionClass, CanonicalAction, CanonicalCatalogue, CatalogueDiff, RelayFloor, Runner,
-    SectionDiff, diff, notices, relay_in_use,
+    ActionClass, ActionIssue, CanonicalAction, CanonicalCatalogue, CatalogueDiff, IssueTable,
+    RelayFloor, Runner, SectionDiff, diff, notices, relay_in_use,
 };
-use officina_core::relay::classes::{CHECK_VALID_MS, WAIT_RANGE_S};
+use officina_core::relay::classes::{CHECK_VALID_MS, WAIT_RANGE_S, is_available};
 use officina_core::relay::credential::{cmdkey_line, target};
 use officina_core::relay::gate::{LIST_COMMAND, SHELL_TOOLS, ToolRule};
 use officina_core::relay::http::MAX_HTTP_TIMEOUT_S;
@@ -339,8 +339,9 @@ fn catalogue_checks(relay: &RelayFloor) -> Vec<Check> {
         Level::Ok,
         "relay catalogue",
         format!(
-            "{} valid actions, {} projects; guarded programs ({source}): {}",
+            "{} valid actions, {} valid templates, {} projects; guarded programs ({source}): {}",
             catalogue.actions.len(),
+            catalogue.templates.len(),
             catalogue.projects.len(),
             catalogue.guarded_programs.join(", ")
         ),
@@ -354,13 +355,29 @@ fn catalogue_checks(relay: &RelayFloor) -> Vec<Check> {
             "relay issue",
             format!(
                 "{at}{}: {} ({})",
-                issue.name,
+                issue_subject(issue),
                 issue.message,
                 issue.kind.code()
             ),
         )
     }));
     checks
+}
+
+/// What an issue is about, as the floor names it: `action probe`,
+/// `template dependency-bump`; a key or a single table by its name alone.
+fn issue_subject(issue: &ActionIssue) -> String {
+    match issue.table {
+        IssueTable::GuardedPrograms | IssueTable::Orchestrator | IssueTable::AutoReview => {
+            issue.name.clone()
+        }
+        IssueTable::Action
+        | IssueTable::Credential
+        | IssueTable::Project
+        | IssueTable::Template => {
+            format!("{} {}", issue.table.code(), issue.name)
+        }
+    }
 }
 
 fn section_parts(label: &str, section: &SectionDiff, parts: &mut Vec<String>) {
@@ -387,7 +404,22 @@ fn section_parts(label: &str, section: &SectionDiff, parts: &mut Vec<String>) {
 fn change_summary(change: &CatalogueDiff) -> String {
     let mut parts = Vec::new();
     section_parts("actions", &change.actions, &mut parts);
+    section_parts("templates", &change.templates, &mut parts);
     section_parts("projects", &change.projects, &mut parts);
+    section_parts("credentials", &change.credentials, &mut parts);
+    if let Some(review) = &change.auto_review {
+        // A model is a string; `null` records a failing `[auto_review]`.
+        let shown = |model: &serde_json::Value| {
+            model
+                .as_str()
+                .map_or_else(|| "a failing table".to_owned(), str::to_owned)
+        };
+        parts.push(format!(
+            "the review model changed from {} to {}",
+            shown(&review.before),
+            shown(&review.after)
+        ));
+    }
     if !change.guarded_programs.added.is_empty() {
         parts.push(format!(
             "guarded programs added: {}",
@@ -928,6 +960,12 @@ fn paragraph_action(name: &str, action: &CanonicalAction) -> String {
         notes.push(format!("{description}."));
     }
     let minutes = CHECK_VALID_MS / 60_000;
+    if !is_available(action.class) {
+        notes.push(format!(
+            "Class `{}` is not available in this build of Officina: `officina run` refuses it.",
+            action.class.code()
+        ));
+    }
     match (action.class, &action.check) {
         (ActionClass::AfterCheck, Some(check)) => notes.push(format!(
             "Runs only after `officina run {check}` succeeded with the same values on the same code in the last {minutes} minutes."
@@ -1066,6 +1104,146 @@ mod tests {
 
     fn summary(checks: &[Check]) -> Vec<(String, Level)> {
         checks.iter().map(|c| (c.title.clone(), c.level)).collect()
+    }
+
+    /// A floor of one guarded project, its `check`, an `auto` action
+    /// naming it, and the template of `template`.
+    fn template_floor(template: &str) -> String {
+        format!(
+            "schema = 2\n[[project]]\nname = \"lab\"\npath = \"Lab\"\nactions = [\"check\", \"apply\"]\n[[action]]\nname = \"check\"\nclass = \"free\"\nprogram = \"C:/path/to/tool.exe\"\n[[action]]\nname = \"apply\"\nclass = \"auto\"\ncheck = \"check\"\nprogram = \"C:/path/to/tool.exe\"\n[[template]]\n{template}"
+        )
+    }
+
+    const TEMPLATE: &str = "name = \"bump\"\ndescription = \"Bump one dependency\"\nprojects = [\"lab\"]\nprompt = \"Bump {package}.\"\n[template.params.package]\nvalues = [\"serde_json\"]\n";
+
+    /// The `relay issue` lines of `relay`'s catalogue checks.
+    fn issue_lines(relay: &RelayFloor) -> Vec<String> {
+        catalogue_checks(relay)
+            .into_iter()
+            .filter(|c| c.title == "relay issue")
+            .map(|c| c.detail)
+            .collect()
+    }
+
+    /// Story 5.4 AC 10: a template's issues are listed with the line of its
+    /// table, its name and its rule.
+    #[test]
+    fn template_issues_are_listed_with_their_lines() {
+        let content = template_floor(&TEMPLATE.replace("prompt = \"Bump", "prompt = \"/Bump"));
+        let relay = load(&content, FLOOR_PATH).unwrap();
+        let line = content.lines().position(|l| l == "[[template]]").unwrap() + 1;
+        let issues = issue_lines(&relay);
+        assert_eq!(issues.len(), 1, "{issues:?}");
+        assert!(
+            issues[0].starts_with(&format!("line {line}, template bump: ")),
+            "{issues:?}"
+        );
+        assert!(issues[0].ends_with("(template_prompt_start)"), "{issues:?}");
+        let summary = &catalogue_checks(&relay)[0];
+        assert!(
+            summary
+                .detail
+                .starts_with("2 valid actions, 0 valid templates"),
+            "{}",
+            summary.detail
+        );
+        let valid = load(&template_floor(TEMPLATE), FLOOR_PATH).unwrap();
+        assert!(issue_lines(&valid).is_empty());
+        assert!(
+            catalogue_checks(&valid)[0]
+                .detail
+                .contains("1 valid templates")
+        );
+    }
+
+    #[test]
+    fn an_auto_action_without_a_check_is_listed() {
+        let content = template_floor(TEMPLATE).replace("check = \"check\"\n", "");
+        let relay = load(&content, FLOOR_PATH).unwrap();
+        let line = content
+            .lines()
+            .enumerate()
+            .filter(|(_, l)| *l == "[[action]]")
+            .map(|(index, _)| index + 1)
+            .nth(1)
+            .unwrap();
+        let issues = issue_lines(&relay);
+        assert_eq!(
+            issues.len(),
+            2,
+            "the action, and the project naming it: {issues:?}"
+        );
+        let auto = issues
+            .iter()
+            .find(|i| i.ends_with("(auto_without_check)"))
+            .unwrap_or_else(|| panic!("{issues:?}"));
+        assert!(
+            auto.starts_with(&format!("line {line}, action apply: ")),
+            "{issues:?}"
+        );
+        assert!(
+            issues
+                .iter()
+                .any(|i| i.starts_with("line 2, project lab: "))
+        );
+    }
+
+    #[test]
+    fn templates_awaiting_approval_are_listed() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = RelayHome::new(dir.path(), None);
+        let without = load(
+            &template_floor(TEMPLATE)
+                .replace("[[template]]\n", "")
+                .replace(TEMPLATE, ""),
+            FLOOR_PATH,
+        )
+        .unwrap();
+        assert!(without.catalogue.templates.is_empty());
+        let approved = officina_core::relay::catalogue::ApprovedCatalogue::approving(
+            &without,
+            FLOOR_PATH,
+            1_793_102_400_000,
+        );
+        let current = load(
+            &format!(
+                "{}\n[auto_review]\nmodel = \"sonnet\"\n",
+                template_floor(TEMPLATE)
+            ),
+            FLOOR_PATH,
+        )
+        .unwrap();
+        let check = approval_check(
+            &home,
+            &ApprovedState::Valid(approved),
+            true,
+            Some(&current),
+            1_793_102_400_000,
+        );
+        assert_eq!(check.level, Level::Warn);
+        assert!(
+            check.detail.contains("templates added: bump"),
+            "{}",
+            check.detail
+        );
+        assert!(
+            check
+                .detail
+                .contains("the review model changed from haiku to sonnet"),
+            "{}",
+            check.detail
+        );
+    }
+
+    /// The `CLAUDE.md` paragraph says an `auto` action does not run in this
+    /// build (D-132).
+    #[test]
+    fn the_paragraph_marks_an_auto_action_unavailable() {
+        let relay = load(&template_floor(TEMPLATE), FLOOR_PATH).unwrap();
+        let line = paragraph_action("apply", &relay.canonical.actions["apply"]);
+        assert!(line.contains("not available in this build"), "{line}");
+        let check = paragraph_action("check", &relay.canonical.actions["check"]);
+        assert!(!check.contains("not available"), "{check}");
     }
 
     #[test]

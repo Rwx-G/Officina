@@ -13,4 +13,9 @@ export type CanonicalAction = { description: string, class: ActionClass, runner:
 /**
  * Absent unless the author accepted forwarded values (D-173).
  */
-forwarded_values?: ForwardedValues, };
+forwarded_values?: ForwardedValues, 
+/**
+ * An `auto` action's hourly cap, the default explicit; absent for
+ * every other class (AD-76).
+ */
+auto_max_per_hour?: number, };

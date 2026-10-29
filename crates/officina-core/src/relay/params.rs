@@ -213,6 +213,29 @@ impl From<Runner> for ValueTarget {
 /// assert_eq!(check_value_for(ValueTarget::Http, ".."), Err(ValueRefusal::DotSegment));
 /// ```
 pub fn check_value_for(target: ValueTarget, value: &str) -> Result<(), ValueRefusal> {
+    check_shape(value)?;
+    if target == ValueTarget::Native && value.starts_with(['/', '@']) {
+        return Err(ValueRefusal::NativeSwitch);
+    }
+    check_characters(value)
+}
+
+/// AD-30's rules, which hold whatever reads the value: [`check_value_for`]
+/// without the native runner's refusal of a leading `/` or `@` (D-5).
+///
+/// ```
+/// use officina_core::relay::params::{check_runner_independent, ValueRefusal};
+/// assert_eq!(check_runner_independent("@scope/pkg"), Ok(()));
+/// assert_eq!(check_runner_independent("-x"), Err(ValueRefusal::LeadingDash));
+/// ```
+pub fn check_runner_independent(value: &str) -> Result<(), ValueRefusal> {
+    check_shape(value)?;
+    check_characters(value)
+}
+
+/// The length and the leading `-`, checked before D-5's rule so a value
+/// that breaks both is refused as it always was.
+fn check_shape(value: &str) -> Result<(), ValueRefusal> {
     let length = value.chars().count();
     if length < *VALUE_LENGTH.start() {
         return Err(ValueRefusal::Empty);
@@ -223,9 +246,11 @@ pub fn check_value_for(target: ValueTarget, value: &str) -> Result<(), ValueRefu
     if value.starts_with('-') {
         return Err(ValueRefusal::LeadingDash);
     }
-    if target == ValueTarget::Native && value.starts_with(['/', '@']) {
-        return Err(ValueRefusal::NativeSwitch);
-    }
+    Ok(())
+}
+
+/// Control and formatting characters, and `.` or `..` path segments.
+fn check_characters(value: &str) -> Result<(), ValueRefusal> {
     if value.chars().any(char::is_control) {
         return Err(ValueRefusal::ControlCharacter);
     }
@@ -252,6 +277,50 @@ pub fn accept_for(param: &Param, target: ValueTarget, value: &str) -> Result<(),
         ParamRule::Pattern(pattern) if pattern.matches(value) => Ok(()),
         ParamRule::Pattern(_) => Err(ValueRefusal::PatternMismatch),
     }
+}
+
+/// Longest template value, in characters (FR-2).
+pub const TEMPLATE_VALUE_MAX_CHARS: usize = 64;
+
+/// What a template value may hold besides ASCII letters and digits (FR-2):
+/// no space, nothing a prompt or a shell reads as structure.
+pub const TEMPLATE_VALUE_PUNCTUATION: &str = "._:/@+-";
+
+/// Why a template value was refused (FR-2, AD-75).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum TemplateValueRefusal {
+    #[error("the value is longer than {TEMPLATE_VALUE_MAX_CHARS} characters")]
+    TooLong,
+    #[error(
+        "the value holds {0:?}: a template value holds ASCII letters, digits and `{TEMPLATE_VALUE_PUNCTUATION}` only"
+    )]
+    Character(char),
+    #[error("{0}")]
+    Rule(ValueRefusal),
+}
+
+/// A template value (FR-2, AD-75): at most [`TEMPLATE_VALUE_MAX_CHARS`]
+/// characters of ASCII letters, digits and [`TEMPLATE_VALUE_PUNCTUATION`],
+/// then [`check_runner_independent`]. It lands in a prompt, never in an
+/// argument vector, so D-5's native refusal of a leading `/` or `@` does
+/// not apply.
+///
+/// ```
+/// use officina_core::relay::params::{template_value, TemplateValueRefusal};
+/// assert_eq!(template_value("@scope/pkg"), Ok(()));
+/// assert_eq!(template_value("a b"), Err(TemplateValueRefusal::Character(' ')));
+/// ```
+pub fn template_value(value: &str) -> Result<(), TemplateValueRefusal> {
+    if value.chars().count() > TEMPLATE_VALUE_MAX_CHARS {
+        return Err(TemplateValueRefusal::TooLong);
+    }
+    if let Some(c) = value
+        .chars()
+        .find(|c| !c.is_ascii_alphanumeric() && !TEMPLATE_VALUE_PUNCTUATION.contains(*c))
+    {
+        return Err(TemplateValueRefusal::Character(c));
+    }
+    check_runner_independent(value).map_err(TemplateValueRefusal::Rule)
 }
 
 #[cfg(test)]
@@ -437,6 +506,84 @@ mod tests {
                 "{broken}"
             );
         }
+    }
+
+    /// Story 5.4 AC 4: a template value lands in a prompt, so a scoped
+    /// package name is one, every character of the set included.
+    #[test]
+    fn template_value_accepts_a_scoped_package() {
+        for value in ["@scope/pkg", "serde_json", "tokio-util", "v1.2.3+build:4"] {
+            assert_eq!(template_value(value), Ok(()), "{value}");
+        }
+        let every_character: String = TEMPLATE_VALUE_PUNCTUATION
+            .chars()
+            .filter(|c| *c != '-')
+            .chain(['a', 'Z', '0'])
+            .collect();
+        assert_eq!(template_value(&every_character), Ok(()));
+        assert_eq!(
+            template_value(&"a".repeat(TEMPLATE_VALUE_MAX_CHARS)),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn template_value_refuses_a_space_and_65_characters() {
+        assert_eq!(
+            template_value("two words"),
+            Err(TemplateValueRefusal::Character(' '))
+        );
+        assert_eq!(
+            template_value(&"a".repeat(TEMPLATE_VALUE_MAX_CHARS + 1)),
+            Err(TemplateValueRefusal::TooLong)
+        );
+        for c in ['{', '}', ';', '$', '\'', '"', '\n', '\u{200B}', 'é'] {
+            assert_eq!(
+                template_value(&format!("a{c}b")),
+                Err(TemplateValueRefusal::Character(c)),
+                "{c:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn template_value_refuses_a_leading_dash_and_a_dot_segment() {
+        assert_eq!(
+            template_value("-x"),
+            Err(TemplateValueRefusal::Rule(ValueRefusal::LeadingDash))
+        );
+        for value in ["..", "a/../b", "./a"] {
+            assert_eq!(
+                template_value(value),
+                Err(TemplateValueRefusal::Rule(ValueRefusal::DotSegment)),
+                "{value}"
+            );
+        }
+        assert_eq!(
+            template_value(""),
+            Err(TemplateValueRefusal::Rule(ValueRefusal::Empty))
+        );
+    }
+
+    /// The split keeps D-5 on argument vectors: a native argument still
+    /// refuses what a template value accepts.
+    #[test]
+    fn native_argument_values_still_refuse_a_leading_slash_or_at() {
+        for value in ["/S", "@scope/pkg"] {
+            assert_eq!(template_value(value), Ok(()), "{value}");
+            assert_eq!(check_runner_independent(value), Ok(()), "{value}");
+            assert_eq!(
+                check_value(Runner::Native, value),
+                Err(ValueRefusal::NativeSwitch),
+                "{value}"
+            );
+            assert_eq!(check_value(Runner::Wsl, value), Ok(()), "{value}");
+        }
+        assert_eq!(
+            check_value(Runner::Native, "/a\u{7}"),
+            Err(ValueRefusal::NativeSwitch),
+            "D-5 still comes before the character rules"
+        );
     }
 
     impl Param {

@@ -1,7 +1,8 @@
 # The golden floor with the same meaning and a different text: comments,
-# key order, action order, values order, colours, floor name, config_dir,
-# no_excerpts, defaults written out, and an invalid action. Its canonical
-# form must equal the golden one.
+# key order, action and template order, values order, colours, floor name,
+# config_dir, no_excerpts, defaults written out, another orchestrator model,
+# and an invalid action and template. Its canonical form must equal the
+# golden one.
 schema = 2
 no_excerpts = true
 config_dir = "D:/elsewhere/claude-config"
@@ -9,7 +10,7 @@ name = "home"
 guarded_programs = ["wsl", "SSH", "ansible*", "scp", "ssh"]
 
 [[project]]
-actions = ["ping", "status", "broken", "health", "apply-sensitive", "apply", "check"]
+actions = ["ping", "status", "broken", "health", "apply-auto", "apply-sensitive", "apply", "check"]
 autonomy = "guarded"
 color = "terracotta"
 path = "Supervision"
@@ -117,3 +118,50 @@ url = "https://monitoring.example.com/api/v1/{check}?host={host}&verbose=1"
 description = "Read one check of the monitoring API"
 timeout_s = 30
 params = { host = { pattern = "[a-z0-9-]+" }, check = { values = ["ready", "health", "ready"] } }
+
+[orchestrator]
+model = "haiku"
+
+[[template]]
+projects = ["notes", "supervision", "notes"]
+name = "release-notes"
+prompt = "Draft the release notes of the last {span}\nin docs/notes.md."
+description = "Draft the release notes"
+params = { span = { values = ["month", "week"] } }
+
+# Not part of the catalogue: its prompt starts with a slash.
+[[template]]
+name = "compact"
+description = "Compact the session"
+projects = ["supervision"]
+prompt = "/compact"
+
+[[action]]
+auto_max_per_hour = 4
+args = ["--diff", "-i", "inventory/lab", "--limit", "{group}", "playbooks/{playbook}"]
+check = "check"
+class = "auto"
+description = "Apply the alerting playbook unattended after its dry run"
+distro = "Ubuntu"
+env = { ANSIBLE_CONFIG = "/home/user01/ansible.cfg" }
+name = "apply-auto"
+program = "/home/user01/venv/bin/ansible-playbook"
+runner = "wsl"
+timeout_s = 540
+params = { group = { pattern = "lab-[a-z0-9-]{1,30}" }, playbook = { values = ["alerting.yml", "alerting.yml"] } }
+
+[[template]]
+model = "sonnet"
+name = "dependency-bump"
+description = "Bump one dependency and fix what breaks"
+projects = ["supervision"]
+prompt = "Bump {package} to its latest {level} release, run the tests, fix what breaks, commit."
+
+[template.params.level]
+values = ["minor", "patch"]
+
+[template.params.package]
+values = ["@scope/pkg", "serde_json", "@scope/pkg"]
+
+[auto_review]
+model = "sonnet"

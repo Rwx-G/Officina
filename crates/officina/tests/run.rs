@@ -13,7 +13,9 @@ use std::process::{Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
 use common::fake_output::{stderr_byte, stdout_byte, stream};
-use common::relay::{Relay, assert_refused, assert_refused_after, slashed, stderr_lines};
+use common::relay::{
+    Relay, assert_refused, assert_refused_after, slashed, stderr_lines, stderr_text,
+};
 use common::{git, git_dir_or_skip, heartbeat_len, heartbeat_stopped, stop_heartbeat};
 use officina_core::relay::argv::{
     ArgvRefusal, Launch, WSL_KILL_AFTER_S, WSL_TIMEOUT_MARGIN_S, WSL_TIMEOUT_PROGRAM,
@@ -35,7 +37,7 @@ const FLOOR: &str = r#"schema = 2
 [[project]]
 name = "supervision"
 path = "{project}"
-actions = ["probe", "tool", "short", "capped", "verify", "apply", "approve-me", "apply-sensitive"]
+actions = ["probe", "tool", "short", "capped", "verify", "apply", "approve-me", "apply-sensitive", "apply-auto"]
 
 [[project]]
 name = "notes"
@@ -103,6 +105,16 @@ pattern = "lab-[a-z0-9-]{1,30}"
 [[action]]
 name = "apply-sensitive"
 class = "human"
+check = "verify"
+program = "{tool}"
+args = ["{group}"]
+
+[action.params.group]
+pattern = "lab-[a-z0-9-]{1,30}"
+
+[[action]]
+name = "apply-auto"
+class = "auto"
 check = "verify"
 program = "{tool}"
 args = ["{group}"]
@@ -376,6 +388,7 @@ fn scenario(reason: RefusalReason) -> Option<Scenario> {
         RefusalReason::MissingParameter => (project, vec!["probe"]),
         RefusalReason::UnknownParameter => (project, vec!["probe", "host=web01", "x=1"]),
         RefusalReason::InvalidValue => (project, vec!["probe", "host=web02"]),
+        RefusalReason::ClassNotAvailable => (project, vec!["apply-auto", "group=lab-web"]),
         RefusalReason::CheckRequired => (project, vec!["apply", "group=lab-web"]),
         RefusalReason::ApprovalRejected => {
             during = Some(Box::new(|relay: &Relay, id: &str| {
@@ -1270,6 +1283,87 @@ fn list_explains_human_actions_and_their_dry_run() {
         text.contains("asks for approval only after its dry run `officina run verify` succeeded"),
         "{text}"
     );
+}
+
+/// Story 5.4 AC 5 (D-132): an approved `auto` action validates, and this
+/// build refuses it with `class_not_available` before anything starts;
+/// `run --list` marks it.
+#[test]
+fn auto_is_refused_as_not_available() {
+    let relay = Relay::new();
+    let out = relay.run(&["apply-auto", "group=lab-web"]);
+    assert_refused(&relay, &out, RefusalReason::ClassNotAvailable);
+    assert!(
+        stderr_text(&out).contains("class `auto`"),
+        "{}",
+        stderr_text(&out)
+    );
+    let refused = relay.refused();
+    assert_eq!(refused[0].action, "apply-auto");
+    let text = list(&relay, &relay.project());
+    let line = text
+        .lines()
+        .find(|line| line.contains("officina run apply-auto"))
+        .unwrap_or_else(|| panic!("{text}"));
+    assert!(
+        line.ends_with("(class auto, not available in this build)"),
+        "{line}"
+    );
+    assert_eq!(
+        text.matches("not available in this build").count(),
+        1,
+        "{text}"
+    );
+}
+
+/// Story 5.4 AC 7 (AD-76, D-131): an approval in the previous format
+/// parses, keeps its hash, and `officina run` refuses every action as a
+/// pending change until the author approves once; the approval then holds
+/// the new format.
+#[test]
+fn previous_format_approval_refuses_as_pending() {
+    use officina_core::relay::catalogue::{ApprovedCatalogue, CANONICAL_FORMAT};
+    use officina_host::relay::home::ApprovedState;
+
+    let relay = Relay::approved_in_the_previous_format();
+    let home = relay.env.relay_home();
+    let previous: ApprovedCatalogue =
+        serde_json::from_str(common::previous_format::PREVIOUS_APPROVAL).unwrap();
+    let ApprovedState::Valid(read) = home.read_approved() else {
+        panic!("the previous format reads");
+    };
+    assert_eq!(
+        read.hash, previous.hash,
+        "its stored hash, never recomputed"
+    );
+    assert_eq!(read.canonical.format, CANONICAL_FORMAT - 1);
+
+    let dir = relay.golden_project();
+    let out = relay.run_in(&dir, &["status", "host=web01", "unit=nginx.service"]);
+    assert_refused(&relay, &out, RefusalReason::CatalogueChanged);
+    assert!(
+        stderr_text(&out).contains("catalogue changed, approval pending"),
+        "{}",
+        stderr_text(&out)
+    );
+    let text = list(&relay, &dir);
+    assert!(
+        text.contains("A catalogue change awaits approval"),
+        "{text}"
+    );
+
+    let approved = relay.env.approve();
+    assert_ne!(approved, previous.hash);
+    let ApprovedState::Valid(now) = home.read_approved() else {
+        panic!("the new approval reads");
+    };
+    assert_eq!(now.canonical.format, CANONICAL_FORMAT);
+    assert!(
+        !now.canonical.templates.is_empty(),
+        "the templates are approved"
+    );
+    let after = list(&relay, &dir);
+    assert!(!after.contains("awaits approval"), "{after}");
 }
 
 #[test]

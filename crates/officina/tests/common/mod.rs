@@ -7,6 +7,8 @@
 pub mod fake_output;
 #[path = "../../../../tests/support/git.rs"]
 pub mod git_support;
+#[path = "../../../../tests/support/previous_format.rs"]
+pub mod previous_format;
 pub mod relay;
 
 #[allow(unused_imports)] // a re-export each test file uses or not, as for dead_code above

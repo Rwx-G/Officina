@@ -7,8 +7,8 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 use super::catalogue::{
-    ActionIssue, ApprovedCatalogue, CANONICAL_FORMAT, CanonicalCatalogue, CatalogueDiff, Notice,
-    RelayFloor, TIMEOUT_RANGE_S, diff, notices, relay_in_use,
+    ActionIssue, ApprovedCatalogue, CANONICAL_FORMAT, CanonicalAutoReview, CanonicalCatalogue,
+    CatalogueDiff, Notice, RelayFloor, TIMEOUT_RANGE_S, diff, notices, relay_in_use,
 };
 use super::gate::DenyKind;
 // Named by `GateDeniedView`'s documentation, which is its TypeScript
@@ -23,8 +23,9 @@ use super::record::Anomaly;
 use super::run::SnapshotState;
 use crate::untrusted::Untrusted;
 
-/// Version of the relay view contract.
-pub const RELAY_VIEW_SCHEMA: u32 = 1;
+/// Version of the relay view contract: 2 added templates, the review model,
+/// `auto_max_per_hour` and each issue's table (story 5.4, P-26).
+pub const RELAY_VIEW_SCHEMA: u32 = 2;
 /// How many entries [`RelayView::recent`] keeps, a run counting once.
 pub const RECENT_ENTRIES: usize = 50;
 /// A run with no end line this long past its timeout reads abandoned
@@ -336,6 +337,8 @@ fn nothing_approved() -> CanonicalCatalogue {
         projects: BTreeMap::new(),
         actions: BTreeMap::new(),
         credentials: BTreeMap::new(),
+        templates: BTreeMap::new(),
+        auto_review: CanonicalAutoReview::default(),
     }
 }
 

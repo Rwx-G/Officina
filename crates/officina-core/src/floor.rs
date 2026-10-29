@@ -3,9 +3,10 @@
 //! schema 2 the relay's catalogue.
 //!
 //! [`parse_floor`] is phase 1 of AD-23: projects are parsed strictly, as in
-//! v0.1, while actions stay raw spanned values that phase 2
-//! (`relay::catalogue::validate`) converts one by one, so a broken action can
-//! never invalidate the floor the board uses.
+//! v0.1, while actions, credentials, templates and the `[orchestrator]` and
+//! `[auto_review]` tables stay raw spanned values that phase 2
+//! (`relay::catalogue::validate`) converts one by one, so a broken one can
+//! never invalidate the floor the board uses (AD-75).
 
 use serde::{Deserialize, Serialize};
 
@@ -18,10 +19,13 @@ pub const FLOOR_SCHEMA_V1: u32 = 1;
 /// Keys only a schema 2 floor may carry. A dotted key names a key of every
 /// `[[project]]` table. Asserted against [`FloorFile`] by a test, so a new
 /// relay key cannot be forgotten here (D-7).
-pub const RELAY_KEYS: [&str; 5] = [
+pub const RELAY_KEYS: [&str; 8] = [
     "guarded_programs",
     "action",
     "credential",
+    "template",
+    "orchestrator",
+    "auto_review",
     "project.autonomy",
     "project.actions",
 ];
@@ -157,6 +161,15 @@ pub struct FloorFile {
     /// actions.
     #[serde(default, rename = "credential", skip_serializing_if = "Vec::is_empty")]
     pub credentials: Vec<toml::Spanned<toml::Value>>,
+    /// Raw `[[template]]` tables (AD-75), converted by phase 2 one by one.
+    #[serde(default, rename = "template", skip_serializing_if = "Vec::is_empty")]
+    pub templates: Vec<toml::Spanned<toml::Value>>,
+    /// The raw `[orchestrator]` table (AD-75), validated by phase 2.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub orchestrator: Option<toml::Spanned<toml::Value>>,
+    /// The raw `[auto_review]` table (AD-75), validated by phase 2.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_review: Option<toml::Spanned<toml::Value>>,
     /// The escalation threshold of the alert (AD-168).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub alert: Option<AlertTable>,
@@ -521,11 +534,28 @@ program = "C:/path/to/tool.exe"
             Some(("project", "autonomy")) => format!("schema = 1\n{project}autonomy = \"free\"\n"),
             Some(("project", "actions")) => format!("schema = 1\n{project}actions = [\"x\"]\n"),
             Some((table, field)) => panic!("no sample for the relay key {table}.{field}"),
-            None if key == "action" => {
-                format!("schema = 1\n{project}[[action]]\nname = \"x\"\n")
+            None if ["action", "credential", "template"].contains(&key) => {
+                format!("schema = 1\n{project}[[{key}]]\nname = \"x\"\n")
+            }
+            None if ["orchestrator", "auto_review"].contains(&key) => {
+                format!("schema = 1\n{project}[{key}]\nmodel = \"x\"\n")
             }
             None => format!("schema = 1\n{key} = [\"x\"]\n{project}"),
         }
+    }
+
+    /// Story 5.4 AC 1: a template is a schema 2 key, and phase 1 keeps it
+    /// raw, so a schema 2 floor with a broken one still parses.
+    #[test]
+    fn a_schema_1_floor_with_a_template_names_schema_2() {
+        let error = parse_floor(&schema_1_with("template")).unwrap_err();
+        assert_eq!(error, FloorError::RelayKeyNeedsSchema2("template"));
+        assert!(error.to_string().contains("schema = 2"));
+        let broken = "schema = 2\n[[project]]\nname = \"a\"\npath = \"a\"\n[[template]]\nname = 7\nunknown = true\n[orchestrator]\nmodel = 3\n[auto_review]\nwhatever = \"x\"\n";
+        let floor = parse_floor(broken).expect("phase 1 keeps the new tables raw");
+        assert_eq!(floor.templates.len(), 1);
+        assert!(floor.orchestrator.is_some() && floor.auto_review.is_some());
+        assert_eq!(floor.projects.len(), 1);
     }
 
     #[test]
@@ -585,7 +615,10 @@ program = "C:/path/to/tool.exe"
                 priority: Some(toml::Spanned::new(0..0, toml::Value::from("high"))),
             }],
             actions: vec![toml::Spanned::new(0..0, action.clone())],
-            credentials: vec![toml::Spanned::new(0..0, action)],
+            credentials: vec![toml::Spanned::new(0..0, action.clone())],
+            templates: vec![toml::Spanned::new(0..0, action.clone())],
+            orchestrator: Some(toml::Spanned::new(0..0, action.clone())),
+            auto_review: Some(toml::Spanned::new(0..0, action)),
             alert: Some(AlertTable {
                 after_minutes: Some(toml::Spanned::new(0..0, toml::Value::from(10))),
             }),

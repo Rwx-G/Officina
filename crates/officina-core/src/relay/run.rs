@@ -385,7 +385,9 @@ fn unconfirmed(record: &RecordState, hash: &str) -> bool {
 /// 4. that project lists the action;
 /// 5. every declared parameter is given, none other, each value accepted
 ///    (AD-30, D-5);
-/// 6. an action naming a check then needs [`check_step`], which reads the
+/// 6. the action's class is one this build runs
+///    ([`classes::is_available`], D-132); an action naming a check then
+///    needs [`check_step`], which reads the
 ///    journal and the tree; a `human` action then needs the author's
 ///    approval (`relay::approvals`).
 ///
@@ -507,6 +509,16 @@ pub fn plan(
             project: Some((*project).to_owned()),
         }
     })?;
+    if !classes::is_available(validated.class) {
+        return refuse(
+            RefusalReason::ClassNotAvailable,
+            format!(
+                "the action {action} is of class `{}`, which this build of Officina does not run yet",
+                validated.class.code()
+            ),
+            Some(project),
+        );
+    }
     let names_a_check = validated.check.is_some();
     let waits_for_the_author = matches!(validated.class, ActionClass::Human | ActionClass::Auto);
     let is_a_check = relay
@@ -578,6 +590,12 @@ fn action_lines(text: &mut String, name: &str, action: &CanonicalAction) {
     for param in action.params.keys() {
         text.push_str(&format!(" {param}=<...>"));
     }
+    if !classes::is_available(action.class) {
+        text.push_str(&format!(
+            "  (class {}, not available in this build)",
+            action.class.code()
+        ));
+    }
     text.push('\n');
     if !action.description.is_empty() {
         text.push_str(&format!("      {}\n", action.description));
@@ -617,7 +635,7 @@ fn action_lines(text: &mut String, name: &str, action: &CanonicalAction) {
 
 /// The text of `officina run --list` (D-21): the approved actions of the
 /// project the working directory lies in, with their parameters and what
-/// each accepts (D-17); a stopped relay, a
+/// each accepts, unavailable classes marked (D-17, D-132); a stopped relay, a
 /// pending catalogue change or an unreadable file stated first. It always
 /// exits 0, whatever it says.
 pub fn list_text(inputs: &RunInputs<'_>) -> String {
@@ -1119,5 +1137,52 @@ program = \"C:/path/to/tool.exe\"
             Ok(None),
             "a plan without a check passes"
         );
+    }
+
+    /// Story 5.4 AC 5 (D-132): an approved `auto` action validates, but
+    /// this build refuses to run it, after its parameters are checked, and
+    /// `run --list` marks it.
+    #[test]
+    fn auto_is_not_available_yet() {
+        let floor_text = FLOOR.replace(
+            "actions = [\"probe\", \"apply\"]",
+            "actions = [\"probe\", \"apply\", \"auto-apply\"]",
+        ) + "[[action]]\nname = \"auto-apply\"\nclass = \"auto\"\ncheck = \"probe\"\nprogram = \"C:/path/to/tool.exe\"\nargs = [\"--apply\", \"{host}\"]\n[action.params.host]\nvalues = [\"web01\"]\n";
+        let current = load(&floor_text, FLOOR_PATH).unwrap();
+        assert!(
+            current.catalogue.issues.is_empty(),
+            "{:#?}",
+            current.catalogue.issues
+        );
+        let approved = approved_of(&current);
+        let floor = FloorState::Valid {
+            relay: &current,
+            path: FLOOR_PATH,
+        };
+        let ready = inputs(
+            false,
+            SnapshotState::Valid(&approved),
+            floor,
+            "C:/path/to/Lab",
+        );
+        let refusal = plan(&ready, "auto-apply", &params(&[("host", "web01")])).unwrap_err();
+        assert_eq!(refusal.reason, RefusalReason::ClassNotAvailable);
+        assert!(refusal.detail.contains("`auto`"), "{}", refusal.detail);
+        let bad_value = plan(&ready, "auto-apply", &params(&[("host", "db01")])).unwrap_err();
+        assert_eq!(
+            bad_value.reason,
+            RefusalReason::InvalidValue,
+            "values first"
+        );
+        let listed = list_text(&ready);
+        let line = listed
+            .lines()
+            .find(|line| line.contains("officina run auto-apply"))
+            .unwrap();
+        assert!(
+            line.ends_with("(class auto, not available in this build)"),
+            "{line}"
+        );
+        assert!(!listed.contains("(class human"), "{listed}");
     }
 }

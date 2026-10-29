@@ -627,3 +627,87 @@ fn an_authority_error_reaches_the_window_with_its_code() {
     let unknown = decide_approval(&relay, "0123456789abcdef-1", true).unwrap_err();
     assert_eq!(unknown.ipc().code, IpcErrorCode::Refused);
 }
+
+/// Story 5.4 AC 7 (AD-76's four facts, D-131): an `approved.json` written in
+/// the previous canonical format parses with its stored hash; the gate keeps
+/// applying that snapshot's guarded projects while the current floor, read
+/// in the new format, differs; the pending diff shows the format change and
+/// the templates added; one approval by the author then holds the new
+/// format.
+#[test]
+fn an_approval_in_the_previous_format_keeps_guarding_and_waits_for_one_approval() {
+    use common::previous_format::{GOLDEN_FLOOR, PREVIOUS_APPROVAL, previous_approval_at};
+    use officina_core::relay::catalogue::{CANONICAL_FORMAT, diff};
+    use officina_core::relay::record::record_anomaly_key;
+    use officina_host::relay::authority::acknowledge_anomaly;
+    use officina_host::relay::gate::{ToolCall, evaluate};
+
+    let home = TestHome::new();
+    let relay = home.relay(None);
+    // The supervision project, guarded by the previous approval, turned
+    // free in the floor read today: only the snapshot still guards it.
+    let current_floor = GOLDEN_FLOOR.replacen("autonomy = \"guarded\"", "autonomy = \"free\"", 1);
+    assert_ne!(current_floor, GOLDEN_FLOOR);
+    home.write(&relay.default_floor(), &current_floor);
+    home.write(
+        &relay.approved_file(),
+        &previous_approval_at(&relay.default_floor()),
+    );
+    acknowledge_anomaly(&relay, &record_anomaly_key()).unwrap();
+    let previous: serde_json::Value = serde_json::from_str(PREVIOUS_APPROVAL).unwrap();
+    let on_disk: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(relay.approved_file()).unwrap()).unwrap();
+    assert!(
+        on_disk["canonical"].get("templates").is_none(),
+        "the file is in the previous format"
+    );
+
+    // It parses, and its stored hash is kept.
+    let ApprovedState::Valid(approved) = relay.read_approved() else {
+        panic!("the previous format reads");
+    };
+    assert_eq!(approved.hash, previous["hash"].as_str().unwrap());
+    assert_eq!(approved.canonical.format, CANONICAL_FORMAT - 1);
+
+    // Its hash differs from the floor's, read in the new format, so
+    // `officina run` refuses as pending (CLI `run.rs`).
+    let current = load_relay_floor(&relay.default_floor()).unwrap();
+    assert_eq!(current.canonical.format, CANONICAL_FORMAT);
+    assert_ne!(current.hash, approved.hash);
+
+    // The gate keeps guarding the snapshot's project.
+    let project = relay.officina_home().join("Supervision");
+    std::fs::create_dir_all(&project).unwrap();
+    let call = ToolCall {
+        tool: "Bash".to_owned(),
+        command: Some("ssh web01 uptime".to_owned()),
+        target: None,
+        cwd: Some(project.to_string_lossy().into_owned()),
+        session_id: None,
+    };
+    let deny = evaluate(&relay, &call, None)
+        .deny
+        .expect("the snapshot's guarded project stays guarded");
+    assert_eq!(deny.project, "supervision");
+
+    // The pending diff shows the format change and the templates added.
+    let pending = diff(&approved.canonical, &current.canonical);
+    let format = pending.format.expect("the format changed");
+    assert_eq!(format.before, CANONICAL_FORMAT - 1);
+    assert_eq!(format.after, CANONICAL_FORMAT);
+    let templates: Vec<&String> = current.canonical.templates.keys().collect();
+    assert!(!templates.is_empty());
+    assert_eq!(
+        pending.templates.added.iter().collect::<Vec<_>>(),
+        templates
+    );
+
+    // One approval of what the window shows; the gate then follows it.
+    let renewed = approve_catalogue(&relay, &current.hash).unwrap();
+    assert_eq!(renewed.canonical.format, CANONICAL_FORMAT);
+    assert_eq!(renewed.hash, current.hash);
+    assert!(
+        evaluate(&relay, &call, None).deny.is_none(),
+        "the project the author made free is free once approved"
+    );
+}

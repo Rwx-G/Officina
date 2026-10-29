@@ -8,6 +8,28 @@ project uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Templates in the floor file (v0.5, story 5.4): `[[template]]` declares a
+  prompt with placeholders, the catalogue projects it may run in, a closed
+  `values` list per parameter (never a `pattern`) and an optional model.
+  Each rule (name, description, projects, braces, placeholders, characters,
+  the first character after leading whitespace, the longest rendering,
+  values, model) is an `IssueKind`; a failing template is skipped and
+  reported with its line and table, never invalidating the floor.
+  Templates belong to the approved catalogue: the Relay view lists them,
+  the change banner shows them added, removed or changed.
+- `[orchestrator]` and `[auto_review]` tables, each with an optional
+  `model`; a failing table is reported. `[auto_review]` belongs to the
+  approved catalogue (its model defaults to haiku), `[orchestrator]` does
+  not.
+- `class = "auto"` validates, and must name its `check` (`auto_without_check`
+  otherwise), so an unattended apply always runs after its dry run;
+  `auto_max_per_hour` (1 to 60, default 6) on `auto` actions only; an HTTP
+  action cannot be `auto`. Until the review ships, `officina run` refuses an
+  `auto` action with `class_not_available` and `run --list` marks it.
+- `officina doctor` names each issue's table (`template bump`, `action
+  apply`), counts valid templates, and lists templates, credentials and the
+  review model in a pending change.
+
 - Sub-agents in the scene (v0.4, story 4.12): each running sub-agent of a
   session stands beside its desk, a smaller figure without a cap, from its
   `SubagentStart` to its `SubagentStop`, three at most, wherever its lead
@@ -358,6 +380,14 @@ project uses [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- The catalogue's canonical format goes up by one (v0.5, story 5.4):
+  templates, the review model and `auto_max_per_hour` join what the author
+  approves. The first start of v0.5 therefore asks for one catalogue
+  approval even with an unchanged floor; until then `officina run` refuses
+  as "catalogue changed, approval pending" and the gate keeps guarding the
+  projects of the last approval. `officina relay --json` is schema 2: each
+  issue carries its `table`, the catalogue its `templates` and
+  `auto_review`.
 - Sober corners: controls round 4 px and surfaces 6 px, from one radius
   family in `app.css`; pills are kept for count badges (story 4.15).
 - One header in every view and mode: the same quota gauges (150 px wide,
@@ -438,9 +468,10 @@ project uses [Semantic Versioning](https://semver.org/).
   relay's keys in it are an error naming `schema = 2`.
 - Approval journal lines name their project and action, and a request says
   whether its action has a dry run; lines written before still read.
-- The canonical catalogue is format 3: it covers credentials, HTTP actions
-  and `forwarded_values`, so a catalogue approved before shows as changed
-  once and is approved again.
+- The canonical catalogue is format 4: it covers credentials, HTTP actions,
+  `forwarded_values`, templates, the review model and `auto_max_per_hour`,
+  so a catalogue approved before shows as changed once and is approved
+  again.
 - The board contract (`officina board --json`) is schema 2: it carries the
   pending approval requests, and `waiting_count` counts the approvable ones
   beside the sessions that wait.

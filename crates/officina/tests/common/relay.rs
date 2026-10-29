@@ -55,6 +55,34 @@ impl Relay {
         relay
     }
 
+    /// The golden floor, approved by the previous version in the previous
+    /// canonical format (AD-76, D-131): its `approved.json` as that version
+    /// wrote it, and the window's record started from it as the window
+    /// starts one for a record it finds missing.
+    pub fn approved_in_the_previous_format() -> Relay {
+        let relay = Relay::unapproved(super::previous_format::GOLDEN_FLOOR);
+        let home = relay.env.relay_home();
+        std::fs::create_dir_all(home.relay_dir()).unwrap();
+        std::fs::write(
+            home.approved_file(),
+            super::previous_format::previous_approval_at(&relay.env.floor_file()),
+        )
+        .unwrap();
+        officina_host::relay::authority::acknowledge_anomaly(
+            &home,
+            &officina_core::relay::record::record_anomaly_key(),
+        )
+        .unwrap();
+        relay
+    }
+
+    /// The golden floor's guarded project, `supervision`, beside the floor.
+    pub fn golden_project(&self) -> PathBuf {
+        let dir = self.env.officina_home().join("Supervision");
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
     /// Writes `floor` unapproved, `{project}` and `{notes}` filled in.
     pub fn write(&self, floor: &str) {
         self.env.write_floor(&fill(

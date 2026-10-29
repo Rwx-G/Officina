@@ -10,4 +10,12 @@ export type CatalogueDiff = { format: FieldChange | null, floor_path: FieldChang
 /**
  * Credentials added, removed and changed per field (D-39).
  */
-credentials: SectionDiff, };
+credentials: SectionDiff, 
+/**
+ * Templates added, removed and changed per field (AD-76).
+ */
+templates: SectionDiff, 
+/**
+ * The review's model, `field` being `model` (AD-76).
+ */
+auto_review: FieldChange | null, };

@@ -308,6 +308,9 @@ closed_enum! {
         UnknownParameter,
         /// A value breaks a rule of AD-30 or the parameter's own.
         InvalidValue,
+        /// The action's class is one this build does not run yet
+        /// (`classes::is_available`): `auto` until story 5.12 (D-132).
+        ClassNotAvailable,
         /// The project is a git work tree, and no `git` is installed where
         /// Git for Windows records it: its files cannot be bound (D-173).
         GitUnavailable,

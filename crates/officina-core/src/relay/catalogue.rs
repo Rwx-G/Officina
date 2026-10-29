@@ -1,9 +1,11 @@
 //! The catalogue (FR-1, FR-2, FR-4, AD-22 to AD-24): phase 2 of the floor
 //! parse, the canonical form the author approves, its hash and its diff.
 //!
-//! Phase 2 converts each raw `[[action]]` alone and validates it; a failure
-//! becomes an [`ActionIssue`] and drops that action, never the floor. Issues
-//! go to the relay view and doctor, never to the board's `floor_error`.
+//! Phase 2 converts each raw `[[action]]`, `[[credential]]` and
+//! `[[template]]` alone and validates it, then the `[orchestrator]` and
+//! `[auto_review]` tables (AD-75); a failure becomes an [`ActionIssue`]
+//! naming its table and drops that entry, never the floor. Issues go to the
+//! relay view and doctor, never to the board's `floor_error`.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::RangeInclusive;
@@ -12,6 +14,10 @@ use serde::{Deserialize, Serialize};
 
 use super::http::HttpMethod;
 use super::params::{self, Param, ParamRule, Pattern, PatternError, ValueTarget};
+use super::template::{
+    DEFAULT_REVIEW_MODEL, DESCRIPTION_CHARS, FORBIDDEN_PROMPT_STARTS, MAX_PROMPT_CHARS, ModelAlias,
+    PROMPT_CONTROL_ALLOWED, Piece, Template, pieces, worst_case_chars,
+};
 use super::url::{UrlIssue, UrlScheme, UrlTemplate, host_entry};
 use crate::floor::{
     Autonomy, FloorError, FloorFile, floor_dir_of, is_windows_absolute, join_project_path,
@@ -86,8 +92,14 @@ pub const MAX_DISTRO_CHARS: usize = 64;
 
 /// Version of the canonical form. Bumping it invalidates every approval on
 /// purpose (AD-24); 2 added credentials and HTTP actions (D-39), 3 an
-/// action's `forwarded_values` (D-173).
-pub const CANONICAL_FORMAT: u32 = 3;
+/// action's `forwarded_values` (D-173), 4 templates, `auto_review` and
+/// `auto_max_per_hour` (AD-76, D-131).
+pub const CANONICAL_FORMAT: u32 = 4;
+
+/// `auto_max_per_hour` when an `auto` action does not set it (AD-75).
+pub const DEFAULT_AUTO_MAX_PER_HOUR: u32 = 6;
+/// Accepted `auto_max_per_hour` (AD-75).
+pub const AUTO_MAX_PER_HOUR_RANGE: RangeInclusive<i64> = 1..=60;
 
 /// Version of `relay/known-projects.json` (D-15).
 pub const KNOWN_PROJECTS_SCHEMA: u32 = 1;
@@ -118,20 +130,24 @@ closed_enum! {
         Free,
         AfterCheck,
         Human,
-        /// Reserved for the orchestrator (v0.5): always an issue.
+        /// Approved unattended after its check (AD-86, story 5.12); valid
+        /// from v0.5 with a `check` (AD-180), not yet run
+        /// (`classes::is_available`).
         Auto,
     }
 }
 
 closed_enum! {
     #[serde(rename_all = "snake_case")]
-    /// One rule of AD-23 or of D-1 to D-5. Every variant has a failing
-    /// fixture in this module's tests.
+    /// One rule of AD-23, AD-75 or of D-1 to D-5. Every variant has a
+    /// failing fixture in this module's tests. A rule that holds for
+    /// actions and templates alike is one variant; the issue's
+    /// [`IssueTable`] says which table broke it.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
     #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
     pub enum IssueKind {
         /// The table does not convert: unknown key, wrong type, missing key,
-        /// or a `kind` other than `http`.
+        /// or an action's `kind` other than `http`.
         Malformed,
         /// An HTTP action declaring `runner`, `distro`, `program`, `env` or
         /// `args` (AD-36).
@@ -160,11 +176,19 @@ closed_enum! {
         CredentialScheme,
         /// Two credentials share a name: both are dropped.
         DuplicateCredential,
-        /// `class = "auto"`: reserved for v0.5.
-        AutoReserved,
-        /// The name is not `[a-z][a-z0-9-]` of at most 32 characters.
+        /// An `auto` action without a `check`: an unattended apply is
+        /// always preceded by its dry run (AD-180, D-570).
+        AutoWithoutCheck,
+        /// `auto_max_per_hour` out of range, or set on a class other than
+        /// `auto` (AD-75).
+        AutoMaxPerHour,
+        /// `class = "auto"` on an HTTP action, which stays on the `human`
+        /// path (D-156).
+        AutoOnHttp,
+        /// An action's or a template's name breaks [`NAME_RULE`].
         Name,
-        /// Two actions share a name: both are dropped.
+        /// Two actions, or two templates, share a name: both are dropped.
+        /// Actions and templates are separate namespaces.
         DuplicateName,
         /// `program` is not absolute for its runner.
         ProgramNotAbsolute,
@@ -181,17 +205,20 @@ closed_enum! {
         EnvKey,
         /// An `env` value holds a brace: values are literals (D-1).
         EnvValuePlaceholder,
-        /// An unbalanced brace or a second placeholder in an `args` item (D-2).
+        /// An unbalanced brace or a second placeholder in an `args` item, or
+        /// a brace in a template's prompt that delimits no placeholder (D-2).
         Braces,
         /// A placeholder names no declared parameter.
         UndeclaredPlaceholder,
-        /// A declared parameter no `args` item uses.
+        /// A declared parameter no placeholder uses.
         UnusedParameter,
-        /// A parameter name is not `[a-z][a-z0-9_-]` of at most 32 characters.
+        /// A parameter name breaks [`PARAM_NAME_RULE`].
         ParamName,
-        /// A parameter declares both or neither of `values` and `pattern`.
+        /// An action's parameter declares both or neither of `values` and
+        /// `pattern`.
         ValuesOrPattern,
-        /// A `values` entry breaks a value rule for the action's runner.
+        /// A `values` entry breaks a value rule for the action's runner, or
+        /// a template value breaks `params::template_value`.
         InvalidValue,
         /// A `pattern` over the length limit.
         PatternTooLong,
@@ -204,8 +231,8 @@ closed_enum! {
         /// [`FORWARDED_PROBE_CHARS`], without `forwarded_values =
         /// "accepted"` (D-173).
         ForwardedPattern,
-        /// `check` is missing on an `after-check` action, set on another
-        /// class, or does not name a valid `free` action with the same
+        /// `check` is missing on an `after-check` action, set on a `free`
+        /// one, or does not name a valid `free` action with the same
         /// parameter names.
         Check,
         /// `timeout_s` out of range.
@@ -219,14 +246,58 @@ closed_enum! {
         UnknownProjectAction,
         /// Two projects share a name: both leave the catalogue.
         DuplicateProject,
+        /// A template's `description` is empty, longer than
+        /// [`DESCRIPTION_CHARS`], or holds a control or formatting
+        /// character.
+        TemplateDescription,
+        /// A template's `projects` is empty, or none of its projects is in
+        /// the catalogue: the template is dropped.
+        TemplateProjects,
+        /// A template names a project that is not in the catalogue: the
+        /// template stays with its other projects.
+        UnknownTemplateProject,
+        /// A template's prompt holds a control character other than newline
+        /// and tab, or a formatting character.
+        TemplatePromptCharacter,
+        /// A template's prompt holds only whitespace, or its first character
+        /// after leading whitespace is a placeholder or one of
+        /// [`FORBIDDEN_PROMPT_STARTS`] (D-159).
+        TemplatePromptStart,
+        /// A template's longest rendering is over [`MAX_PROMPT_CHARS`].
+        TemplatePromptTooLong,
+        /// A template parameter without `values`, or with an empty list.
+        TemplateValues,
+        /// A template parameter declares `pattern`: templates take closed
+        /// lists only (FR-2).
+        TemplatePattern,
+        /// A `model` is not a [`ModelAlias`].
+        Model,
     }
 }
 
-/// A problem found in phase 2. `name` is the action's, or for a project or
-/// `guarded_programs` issue the project's name or the key.
+closed_enum! {
+    #[serde(rename_all = "snake_case")]
+    /// The floor table an issue comes from (D-132).
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+    #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+    pub enum IssueTable {
+        Action,
+        Credential,
+        Project,
+        GuardedPrograms,
+        Template,
+        Orchestrator,
+        AutoReview,
+    }
+}
+
+/// A problem found in phase 2. `name` is the entry's (action, credential,
+/// template, project), or the key for `guarded_programs`, `[orchestrator]`
+/// and `[auto_review]`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct ActionIssue {
+    pub table: IssueTable,
     pub name: String,
     /// 1-based line in the floor file, when the issue comes from one.
     pub line: Option<u32>,
@@ -346,6 +417,8 @@ pub struct Action {
     pub timeout_s: u32,
     pub max_output_kib: u32,
     pub forwarded_values: Option<ForwardedValues>,
+    /// `Some` for an `auto` action, the default applied; `None` otherwise.
+    pub auto_max_per_hour: Option<u32>,
 }
 
 closed_enum! {
@@ -392,7 +465,7 @@ pub struct CatalogueProject {
 }
 
 /// The result of phase 2: what may run, and what was dropped and why.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct Catalogue {
     /// Defaults applied, lowercase, sorted, deduplicated.
     pub guarded_programs: Vec<String>,
@@ -401,6 +474,15 @@ pub struct Catalogue {
     pub actions: BTreeMap<String, Action>,
     /// Valid credentials, by name.
     pub credentials: BTreeMap<String, Credential>,
+    /// Valid templates, by name (AD-75).
+    pub templates: BTreeMap<String, Template>,
+    /// `[orchestrator] model`; `None` when absent or when the table fails,
+    /// and the orchestrator then starts with no model flag (AD-75).
+    pub orchestrator_model: Option<ModelAlias>,
+    /// `[auto_review] model`, [`DEFAULT_REVIEW_MODEL`] when absent; `None`
+    /// when the table fails, and every `auto` request then escalates
+    /// (AD-75, AD-87's `review_config_invalid`).
+    pub auto_review_model: Option<ModelAlias>,
     /// In file order; issues without a line last.
     pub issues: Vec<ActionIssue>,
 }
@@ -427,6 +509,8 @@ struct RawHttpAction {
     timeout_s: Option<i64>,
     #[serde(default)]
     max_output_kib: Option<i64>,
+    #[serde(default)]
+    auto_max_per_hour: Option<i64>,
 }
 
 #[derive(Deserialize)]
@@ -464,6 +548,8 @@ struct RawAction {
     max_output_kib: Option<i64>,
     #[serde(default)]
     forwarded_values: Option<ForwardedValues>,
+    #[serde(default)]
+    auto_max_per_hour: Option<i64>,
 }
 
 #[derive(Deserialize)]
@@ -473,6 +559,27 @@ struct RawParam {
     values: Option<Vec<String>>,
     #[serde(default)]
     pattern: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawTemplate {
+    name: String,
+    description: String,
+    projects: Vec<String>,
+    prompt: String,
+    #[serde(default)]
+    params: BTreeMap<String, RawParam>,
+    #[serde(default)]
+    model: Option<String>,
+}
+
+/// `[orchestrator]` and `[auto_review]`: an optional model each (AD-75).
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawModelTable {
+    #[serde(default)]
+    model: Option<String>,
 }
 
 /// Why a `guarded_programs` entry is refused (D-3), if it is.
@@ -606,15 +713,25 @@ pub fn is_http_token(text: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || "!#$%&'*+-.^_`|~".contains(c))
 }
 
-/// The issues of one action, all carrying its name.
+/// The issues of one entry, all carrying its table and name.
 struct Report<'a> {
+    table: IssueTable,
     name: &'a str,
     issues: Vec<ActionIssue>,
 }
 
 impl Report<'_> {
+    fn new(table: IssueTable, name: &str) -> Report<'_> {
+        Report {
+            table,
+            name,
+            issues: Vec::new(),
+        }
+    }
+
     fn issue(&self, kind: IssueKind, message: String) -> ActionIssue {
         ActionIssue {
+            table: self.table,
             name: self.name.to_owned(),
             line: None,
             kind,
@@ -667,6 +784,7 @@ struct Common<'a> {
     check: Option<&'a str>,
     timeout_s: Option<i64>,
     max_output_kib: Option<i64>,
+    auto_max_per_hour: Option<i64>,
 }
 
 /// What the rules of every action leave: the parameters, the limits.
@@ -674,41 +792,61 @@ struct Checked {
     params: BTreeMap<String, Param>,
     timeout_s: u32,
     max_output_kib: u32,
+    auto_max_per_hour: Option<u32>,
 }
 
-/// The rules every action follows, whatever runs it: its name and class,
-/// its parameters (each value passing the rules of `target`), every
-/// placeholder in `used` declared and every parameter used, its limits and
-/// its `check`.
+/// The rules every action follows, whatever runs it: its name, its
+/// parameters (each value passing the rules of `target`), every placeholder
+/// in `used` declared and every parameter used, its limits, its `check` and
+/// its hourly cap.
 fn check_common(
     report: &mut Report<'_>,
     common: &Common<'_>,
     target: ValueTarget,
     used: &BTreeSet<&str>,
 ) -> Checked {
-    check_name_and_class(report, common);
+    if !is_valid_action_name(common.name) {
+        report.add(IssueKind::Name, format!("the name must be {NAME_RULE}"));
+    }
     let params = check_params(report, common.params, target);
     check_placeholders(report, common.params, used);
     let (timeout_s, max_output_kib) = check_limits(report, common);
     check_check(report, common);
+    let auto_max_per_hour = check_auto_max_per_hour(report, common);
     Checked {
         params,
         timeout_s,
         max_output_kib,
+        auto_max_per_hour,
     }
 }
 
-/// The action's name follows [`NAME_RULE`]; class `auto` is reserved.
-fn check_name_and_class(report: &mut Report<'_>, common: &Common<'_>) {
-    if !is_valid_action_name(common.name) {
-        report.add(IssueKind::Name, format!("the name must be {NAME_RULE}"));
+/// `auto_max_per_hour`: an `auto` action's, in [`AUTO_MAX_PER_HOUR_RANGE`],
+/// [`DEFAULT_AUTO_MAX_PER_HOUR`] when absent; no other class sets it.
+fn check_auto_max_per_hour(report: &mut Report<'_>, common: &Common<'_>) -> Option<u32> {
+    if common.class != ActionClass::Auto {
+        if common.auto_max_per_hour.is_some() {
+            report.add(
+                IssueKind::AutoMaxPerHour,
+                "only an `auto` action sets `auto_max_per_hour`".to_owned(),
+            );
+        }
+        return None;
     }
-    if common.class == ActionClass::Auto {
+    let cap = common
+        .auto_max_per_hour
+        .unwrap_or(i64::from(DEFAULT_AUTO_MAX_PER_HOUR));
+    if !AUTO_MAX_PER_HOUR_RANGE.contains(&cap) {
         report.add(
-            IssueKind::AutoReserved,
-            "class `auto` is reserved for the orchestrator (v0.5)".to_owned(),
+            IssueKind::AutoMaxPerHour,
+            format!(
+                "`auto_max_per_hour` must be {} to {}",
+                AUTO_MAX_PER_HOUR_RANGE.start(),
+                AUTO_MAX_PER_HOUR_RANGE.end()
+            ),
         );
     }
+    Some(u32::try_from(cap).unwrap_or(DEFAULT_AUTO_MAX_PER_HOUR))
 }
 
 /// Each parameter's name follows [`PARAM_NAME_RULE`] and its rule holds
@@ -836,19 +974,25 @@ fn check_limits(report: &mut Report<'_>, common: &Common<'_>) -> (u32, u32) {
     )
 }
 
-/// An `after-check` action needs its check; a `human` action may name one,
-/// its dry run (D-170); a `free` action runs without any, so naming one
-/// would promise a binding it never has.
+/// An `after-check` action needs its check; so does an `auto` one, so an
+/// unattended apply is always preceded by its dry run (AD-180, D-570); a
+/// `human` action may name one, its dry run (D-170); a `free` action runs
+/// without any, so naming one would promise a binding it never has.
 fn check_check(report: &mut Report<'_>, common: &Common<'_>) {
     match (common.class, common.check) {
         (ActionClass::AfterCheck, None) => report.add(
             IssueKind::Check,
             "an `after-check` action names its check action in `check`".to_owned(),
         ),
-        (ActionClass::AfterCheck | ActionClass::Human, _) | (_, None) => {}
-        (_, Some(_)) => report.add(
+        (ActionClass::Auto, None) => report.add(
+            IssueKind::AutoWithoutCheck,
+            "an `auto` action names its dry run in `check`: an unattended apply always runs after its check".to_owned(),
+        ),
+        (ActionClass::AfterCheck | ActionClass::Human | ActionClass::Auto, Some(_))
+        | (ActionClass::Free | ActionClass::Human, None) => {}
+        (ActionClass::Free, Some(_)) => report.add(
             IssueKind::Check,
-            "only an `after-check` or `human` action names a `check`".to_owned(),
+            "a `free` action names no `check`: only `after-check`, `human` and `auto` actions run after one".to_owned(),
         ),
     }
 }
@@ -866,10 +1010,7 @@ fn check_check(report: &mut Report<'_>, common: &Common<'_>) {
 /// ```
 pub fn action_from_value(value: &toml::Value) -> Result<Action, Vec<ActionIssue>> {
     let name = name_of(value);
-    let mut report = Report {
-        name: &name,
-        issues: Vec::new(),
-    };
+    let mut report = Report::new(IssueTable::Action, &name);
     match value.get("kind") {
         None => {}
         Some(kind) if kind.as_str() == Some(HTTP_KIND) => {
@@ -897,6 +1038,7 @@ pub fn action_from_value(value: &toml::Value) -> Result<Action, Vec<ActionIssue>
         check: raw.check.as_deref(),
         timeout_s: raw.timeout_s,
         max_output_kib: raw.max_output_kib,
+        auto_max_per_hour: raw.auto_max_per_hour,
     };
     let checked = check_common(&mut report, &common, ValueTarget::from(raw.runner), &used);
     if raw.forwarded_values != Some(ForwardedValues::Accepted) {
@@ -921,6 +1063,7 @@ pub fn action_from_value(value: &toml::Value) -> Result<Action, Vec<ActionIssue>
         timeout_s: checked.timeout_s,
         max_output_kib: checked.max_output_kib,
         forwarded_values: raw.forwarded_values,
+        auto_max_per_hour: checked.auto_max_per_hour,
     })
 }
 
@@ -1051,8 +1194,15 @@ fn http_action_from_value(
         check: raw.check.as_deref(),
         timeout_s: raw.timeout_s,
         max_output_kib: raw.max_output_kib,
+        auto_max_per_hour: raw.auto_max_per_hour,
     };
     let checked = check_common(&mut report, &common, ValueTarget::Http, &used);
+    if raw.class == ActionClass::Auto {
+        report.add(
+            IssueKind::AutoOnHttp,
+            "an HTTP action is `free`, `after-check` or `human`: its requests stay on the author's approval path, never `auto`".to_owned(),
+        );
+    }
 
     let Some(url) = template else {
         return Err(report.issues);
@@ -1079,6 +1229,7 @@ fn http_action_from_value(
         timeout_s: checked.timeout_s,
         max_output_kib: checked.max_output_kib,
         forwarded_values: None,
+        auto_max_per_hour: checked.auto_max_per_hour,
     })
 }
 
@@ -1132,10 +1283,7 @@ fn url_template(report: &mut Report<'_>, raw: &RawHttpAction) -> Option<UrlTempl
 /// Converts and validates one `[[credential]]` alone (AD-36, D-37, D-40).
 fn credential_from_value(value: &toml::Value) -> Result<Credential, Vec<ActionIssue>> {
     let name = name_of(value);
-    let mut report = Report {
-        name: &name,
-        issues: Vec::new(),
-    };
+    let mut report = Report::new(IssueTable::Credential, &name);
     let raw: RawCredential = parse_raw(value, &report)?;
     if !is_valid_action_name(&raw.name) {
         report.add(
@@ -1236,22 +1384,326 @@ struct Positions {
     project: Vec<toml::Spanned<toml::Value>>,
 }
 
-/// Phase 2 of AD-23: converts and validates each action alone, then the
-/// rules across actions (unique names, `check` targets), then the projects'
-/// action lists. `content` is the text `floor` was parsed from, for lines.
+/// Phase 2 of AD-23 and AD-75: converts and validates each action alone,
+/// then the rules across actions (unique names, `check` targets), then the
+/// projects' action lists, then each template against the projects, then
+/// the `[orchestrator]` and `[auto_review]` tables. `content` is the text
+/// `floor` was parsed from, for lines.
 pub fn validate(floor: &FloorFile, content: &str) -> Catalogue {
     let positions: Positions = toml::from_str(content).unwrap_or_default();
     let mut issues = validate_guarded_programs(floor, &positions, content);
     let credentials = validate_credentials(floor, content, &mut issues);
     let actions = validate_actions(floor, content, &credentials, &mut issues);
     let projects = validate_projects(floor, &positions, content, &actions, &mut issues);
+    let templates = validate_templates(floor, content, &projects, &mut issues);
+    let orchestrator_model = model_table(
+        floor.orchestrator.as_ref(),
+        IssueTable::Orchestrator,
+        content,
+        &mut issues,
+    )
+    .unwrap_or_default();
+    let auto_review_model = model_table(
+        floor.auto_review.as_ref(),
+        IssueTable::AutoReview,
+        content,
+        &mut issues,
+    )
+    .map(|model| model.unwrap_or(DEFAULT_REVIEW_MODEL));
     issues.sort_by_key(|issue| issue.line.unwrap_or(u32::MAX));
     Catalogue {
         guarded_programs: guarded_programs(floor),
         projects,
         actions,
         credentials,
+        templates,
+        orchestrator_model,
+        auto_review_model,
         issues,
+    }
+}
+
+/// `[orchestrator]` or `[auto_review]` (AD-75): `Some(model)` when the
+/// table is absent (no model) or valid, `None` with its issue when it
+/// fails.
+fn model_table(
+    table: Option<&toml::Spanned<toml::Value>>,
+    kind: IssueTable,
+    content: &str,
+    issues: &mut Vec<ActionIssue>,
+) -> Option<Option<ModelAlias>> {
+    let Some(table) = table else {
+        return Some(None);
+    };
+    let report = Report::new(kind, kind.code());
+    let line = Some(line_at(content, table.span().start));
+    let found = parse_raw::<RawModelTable>(table.get_ref(), &report).and_then(|raw| {
+        raw.model
+            .map(|model| parse_model(&report, &model))
+            .transpose()
+            .map_err(|issue| vec![issue])
+    });
+    match found {
+        Ok(model) => Some(model),
+        Err(found) => {
+            issues.extend(found.into_iter().map(|issue| ActionIssue { line, ..issue }));
+            None
+        }
+    }
+}
+
+/// A `model` as a [`ModelAlias`], or the issue naming the aliases.
+fn parse_model(report: &Report<'_>, model: &str) -> Result<ModelAlias, ActionIssue> {
+    ModelAlias::from_code(model).ok_or_else(|| {
+        let aliases: Vec<&str> = ModelAlias::ALL.iter().map(|m| m.code()).collect();
+        report.issue(
+            IssueKind::Model,
+            format!("`model` is one of {}, not {model:?}", aliases.join(", ")),
+        )
+    })
+}
+
+/// Converts and validates each `[[template]]` alone, drops every copy of a
+/// duplicated name, then checks its projects against the catalogue's: an
+/// unknown project leaves the template, which is dropped once none is left.
+fn validate_templates(
+    floor: &FloorFile,
+    content: &str,
+    projects: &[CatalogueProject],
+    issues: &mut Vec<ActionIssue>,
+) -> BTreeMap<String, Template> {
+    let duplicates = duplicated(
+        floor
+            .templates
+            .iter()
+            .filter_map(|raw| raw.get_ref().get("name").and_then(toml::Value::as_str)),
+    );
+    let known: BTreeSet<&str> = projects.iter().map(|p| p.name.as_str()).collect();
+    let mut templates = BTreeMap::new();
+    for raw in &floor.templates {
+        let line = Some(line_at(content, raw.span().start));
+        let at_line = |issue: ActionIssue| ActionIssue { line, ..issue };
+        let mut template = match template_from_value(raw.get_ref()) {
+            Ok(template) => template,
+            Err(found) => {
+                issues.extend(found.into_iter().map(at_line));
+                continue;
+            }
+        };
+        let report = Report::new(IssueTable::Template, &template.name);
+        if duplicates.contains(template.name.as_str()) {
+            issues.push(at_line(report.issue(
+                IssueKind::DuplicateName,
+                format!(
+                    "another template is also named {}: both are dropped",
+                    template.name
+                ),
+            )));
+            continue;
+        }
+        let (kept, unknown): (Vec<String>, Vec<String>) = template
+            .projects
+            .iter()
+            .cloned()
+            .partition(|p| known.contains(p.as_str()));
+        for project in &unknown {
+            issues.push(at_line(report.issue(
+                IssueKind::UnknownTemplateProject,
+                format!("project {project} is not in the catalogue: the template leaves it"),
+            )));
+        }
+        if kept.is_empty() {
+            issues.push(at_line(report.issue(
+                IssueKind::TemplateProjects,
+                "no project of the template is in the catalogue: it is dropped".to_owned(),
+            )));
+            continue;
+        }
+        template.projects = kept;
+        templates.insert(template.name.clone(), template);
+    }
+    templates
+}
+
+/// Converts and validates one `[[template]]` alone (AD-75): every rule
+/// that needs no other table. Its projects are checked by
+/// [`validate_templates`]; the issues carry no line.
+fn template_from_value(value: &toml::Value) -> Result<Template, Vec<ActionIssue>> {
+    let name = name_of(value);
+    let mut report = Report::new(IssueTable::Template, &name);
+    let raw: RawTemplate = parse_raw(value, &report)?;
+    if !is_valid_action_name(&raw.name) {
+        report.add(IssueKind::Name, format!("the name must be {NAME_RULE}"));
+    }
+    check_description(&mut report, &raw.description);
+    if raw.projects.is_empty() {
+        report.add(
+            IssueKind::TemplateProjects,
+            "`projects` names at least one catalogue project".to_owned(),
+        );
+    }
+    let params = template_params(&mut report, &raw.params);
+    check_prompt(&mut report, &raw.prompt, &raw.params, &params);
+    let model = raw
+        .model
+        .as_deref()
+        .map(|model| parse_model(&report, model))
+        .transpose()
+        .unwrap_or_else(|issue| {
+            report.issues.push(issue);
+            None
+        });
+    if !report.issues.is_empty() {
+        return Err(report.issues);
+    }
+    let mut projects = raw.projects;
+    projects.sort();
+    projects.dedup();
+    Ok(Template {
+        name: raw.name,
+        description: raw.description,
+        projects,
+        prompt: raw.prompt,
+        params,
+        model,
+    })
+}
+
+/// A control or formatting character, other than those `allowed`.
+fn hidden_character(text: &str, allowed: &[char]) -> Option<char> {
+    text.chars()
+        .find(|c| (c.is_control() && !allowed.contains(c)) || params::is_forbidden_format(*c))
+}
+
+/// `description`: [`DESCRIPTION_CHARS`] long, one readable line.
+fn check_description(report: &mut Report<'_>, description: &str) {
+    let length = description.chars().count();
+    if !DESCRIPTION_CHARS.contains(&length) {
+        report.add(
+            IssueKind::TemplateDescription,
+            format!(
+                "`description` is {} to {} characters",
+                DESCRIPTION_CHARS.start(),
+                DESCRIPTION_CHARS.end()
+            ),
+        );
+    }
+    if let Some(c) = hidden_character(description, &[]) {
+        report.add(
+            IssueKind::TemplateDescription,
+            format!(
+                "`description` holds the control or formatting character U+{:04X}",
+                u32::from(c)
+            ),
+        );
+    }
+}
+
+/// Each parameter: a valid name, `values` only, at least one, each passing
+/// [`params::template_value`]; sorted and deduplicated. A parameter without
+/// a usable list is left out.
+fn template_params(
+    report: &mut Report<'_>,
+    raw_params: &BTreeMap<String, RawParam>,
+) -> BTreeMap<String, Vec<String>> {
+    let mut checked = BTreeMap::new();
+    for (param_name, raw_param) in raw_params {
+        if !is_valid_param_name(param_name) {
+            report.add(
+                IssueKind::ParamName,
+                format!("parameter {param_name:?} must be {PARAM_NAME_RULE}"),
+            );
+        }
+        if raw_param.pattern.is_some() {
+            report.add(
+                IssueKind::TemplatePattern,
+                format!(
+                    "parameter {param_name}: a template takes a `values` list only, never a `pattern`"
+                ),
+            );
+        }
+        let values = raw_param.values.as_deref().unwrap_or_default();
+        if values.is_empty() {
+            report.add(
+                IssueKind::TemplateValues,
+                format!("parameter {param_name} lists at least one value in `values`"),
+            );
+            continue;
+        }
+        for value in values {
+            if let Err(refusal) = params::template_value(value) {
+                report.add(
+                    IssueKind::InvalidValue,
+                    format!("value {value:?} of parameter {param_name}: {refusal}"),
+                );
+            }
+        }
+        let mut sorted = values.to_vec();
+        sorted.sort();
+        sorted.dedup();
+        checked.insert(param_name.clone(), sorted);
+    }
+    checked
+}
+
+/// `prompt` (AD-75, D-2, D-159): readable characters, author text first,
+/// braces delimiting placeholders that name declared parameters, every
+/// parameter used, and a longest rendering within [`MAX_PROMPT_CHARS`].
+fn check_prompt(
+    report: &mut Report<'_>,
+    prompt: &str,
+    raw_params: &BTreeMap<String, RawParam>,
+    params: &BTreeMap<String, Vec<String>>,
+) {
+    // A floor saved with Windows line ends may keep them in a multi-line
+    // string: a carriage return before a newline is part of that newline.
+    if let Some(c) = hidden_character(&prompt.replace("\r\n", "\n"), PROMPT_CONTROL_ALLOWED) {
+        report.add(
+            IssueKind::TemplatePromptCharacter,
+            format!(
+                "the prompt holds the control or formatting character U+{:04X}; only newline and tab are allowed",
+                u32::from(c)
+            ),
+        );
+    }
+    let start = prompt.trim_start().chars().next();
+    let starts_badly = match start {
+        None => Some("the prompt holds only whitespace".to_owned()),
+        Some('{') => Some(
+            "the prompt starts with a placeholder: its first character after leading whitespace is the author's text".to_owned(),
+        ),
+        Some(c) if FORBIDDEN_PROMPT_STARTS.contains(&c) => Some(format!(
+            "the prompt starts with `{c}`, which Claude Code would read as a command, a shell escape or an option"
+        )),
+        Some(_) => None,
+    };
+    if let Some(message) = starts_badly {
+        report.add(IssueKind::TemplatePromptStart, message);
+    }
+    let found = match pieces(prompt) {
+        Ok(found) => found,
+        Err(error) => {
+            report.add(IssueKind::Braces, format!("the prompt: {error}"));
+            return;
+        }
+    };
+    let used: BTreeSet<&str> = found
+        .iter()
+        .filter_map(|piece| match piece {
+            Piece::Placeholder(name) => Some(*name),
+            Piece::Text(_) => None,
+        })
+        .collect();
+    check_placeholders(report, raw_params, &used);
+    if let Some(longest) = worst_case_chars(prompt, params)
+        && longest > MAX_PROMPT_CHARS
+    {
+        report.add(
+            IssueKind::TemplatePromptTooLong,
+            format!(
+                "the longest rendering is {longest} characters, over {MAX_PROMPT_CHARS}: shorten the prompt or the longest values"
+            ),
+        );
     }
 }
 
@@ -1270,6 +1722,7 @@ fn validate_guarded_programs(
         .filter_map(|(index, entry)| {
             let problem = guarded_program_problem(entry)?;
             Some(ActionIssue {
+                table: IssueTable::GuardedPrograms,
                 name: "guarded_programs".to_owned(),
                 line: line_of(content, positions.guarded_programs.get(index)),
                 kind: IssueKind::GuardedProgram,
@@ -1298,6 +1751,7 @@ fn validate_credentials(
         match credential_from_value(raw.get_ref()) {
             Ok(credential) if duplicates.contains(credential.name.as_str()) => {
                 issues.push(ActionIssue {
+                    table: IssueTable::Credential,
                     name: credential.name.clone(),
                     line: Some(line),
                     kind: IssueKind::DuplicateCredential,
@@ -1340,6 +1794,7 @@ fn validate_actions(
         match action_from_value(raw.get_ref()) {
             Ok(action) if duplicates.contains(action.name.as_str()) => {
                 issues.push(ActionIssue {
+                    table: IssueTable::Action,
                     name: action.name.clone(),
                     line: Some(line),
                     kind: IssueKind::DuplicateName,
@@ -1366,6 +1821,7 @@ fn validate_actions(
             return true;
         };
         issues.push(ActionIssue {
+            table: IssueTable::Action,
             name: name.clone(),
             line: Some(*line),
             kind,
@@ -1377,6 +1833,7 @@ fn validate_actions(
     for (name, (action, line)) in &candidates {
         if let Some(problem) = check_target_problem(action, &candidates) {
             issues.push(ActionIssue {
+                table: IssueTable::Action,
                 name: name.clone(),
                 line: Some(*line),
                 kind: IssueKind::Check,
@@ -1405,6 +1862,7 @@ fn validate_projects(
         let line = line_of(content, positions.project.get(index));
         if duplicates.contains(project.name.as_str()) {
             issues.push(ActionIssue {
+                table: IssueTable::Project,
                 name: project.name.clone(),
                 line,
                 kind: IssueKind::DuplicateProject,
@@ -1421,6 +1879,7 @@ fn validate_projects(
                 names.insert(action.clone());
             } else {
                 issues.push(ActionIssue {
+                    table: IssueTable::Project,
                     name: project.name.clone(),
                     line,
                     kind: IssueKind::UnknownProjectAction,
@@ -1540,6 +1999,56 @@ pub struct CanonicalAction {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "ts", ts(optional))]
     pub forwarded_values: Option<ForwardedValues>,
+    /// An `auto` action's hourly cap, the default explicit; absent for
+    /// every other class (AD-76).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
+    pub auto_max_per_hour: Option<u32>,
+}
+
+/// The canonical form of one valid template (AD-76): projects and values
+/// sorted, the prompt as written.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(deny_unknown_fields)]
+pub struct CanonicalTemplate {
+    pub description: String,
+    pub projects: Vec<String>,
+    pub prompt: String,
+    /// Each parameter's closed list.
+    pub params: BTreeMap<String, Vec<String>>,
+    pub model: Option<ModelAlias>,
+}
+
+impl From<&Template> for CanonicalTemplate {
+    fn from(template: &Template) -> CanonicalTemplate {
+        CanonicalTemplate {
+            description: template.description.clone(),
+            projects: template.projects.clone(),
+            prompt: template.prompt.clone(),
+            params: template.params.clone(),
+            model: template.model,
+        }
+    }
+}
+
+/// The canonical form of `[auto_review]` (AD-76): the review's model,
+/// [`DEFAULT_REVIEW_MODEL`] when the table is absent; `null` when the
+/// table fails phase 2, so an approval records that every `auto` request
+/// escalates (AD-75, AD-87).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(deny_unknown_fields)]
+pub struct CanonicalAutoReview {
+    pub model: Option<ModelAlias>,
+}
+
+impl Default for CanonicalAutoReview {
+    fn default() -> CanonicalAutoReview {
+        CanonicalAutoReview {
+            model: Some(DEFAULT_REVIEW_MODEL),
+        }
+    }
 }
 
 /// The canonical form of one valid credential (D-39): hosts lowercase,
@@ -1585,6 +2094,7 @@ impl From<&Action> for CanonicalAction {
             timeout_s: action.timeout_s,
             max_output_kib: action.max_output_kib,
             forwarded_values: action.forwarded_values,
+            auto_max_per_hour: action.auto_max_per_hour,
         }
     }
 }
@@ -1602,8 +2112,9 @@ pub struct CanonicalProject {
 }
 
 /// What the author approves (AD-24): the catalogue's meaning, not its text.
-/// Colours, the floor's `name`, `config_dir`, `no_excerpts`, comments and
-/// invalid actions are not part of it.
+/// Colours, the floor's `name`, `config_dir`, `no_excerpts`, comments,
+/// invalid actions and templates, and `[orchestrator]`, which approves and
+/// launches nothing (AD-76), are not part of it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(deny_unknown_fields)]
@@ -1620,6 +2131,13 @@ pub struct CanonicalCatalogue {
     /// differs anyway, so they are approved again (D-39).
     #[serde(default)]
     pub credentials: BTreeMap<String, CanonicalCredential>,
+    /// Absent from snapshots before format 4, which read as none (AD-76,
+    /// D-131).
+    #[serde(default)]
+    pub templates: BTreeMap<String, CanonicalTemplate>,
+    /// Absent from snapshots before format 4, which read as the default.
+    #[serde(default)]
+    pub auto_review: CanonicalAutoReview,
 }
 
 /// The canonical form of a validated catalogue read from `floor_path`.
@@ -1658,6 +2176,14 @@ pub fn canonical(catalogue: &Catalogue, floor_path: &str) -> CanonicalCatalogue 
                 (name.clone(), canonical)
             })
             .collect(),
+        templates: catalogue
+            .templates
+            .iter()
+            .map(|(name, template)| (name.clone(), CanonicalTemplate::from(template)))
+            .collect(),
+        auto_review: CanonicalAutoReview {
+            model: catalogue.auto_review_model,
+        },
     }
 }
 
@@ -1740,6 +2266,7 @@ pub fn action_from_canonical(
     fields.insert("name".to_owned(), name.into());
     let value = toml::Value::try_from(serde_json::Value::Object(fields)).map_err(|e| {
         vec![ActionIssue {
+            table: IssueTable::Action,
             name: name.to_owned(),
             line: None,
             kind: IssueKind::Malformed,
@@ -1814,6 +2341,10 @@ pub struct CatalogueDiff {
     pub actions: SectionDiff,
     /// Credentials added, removed and changed per field (D-39).
     pub credentials: SectionDiff,
+    /// Templates added, removed and changed per field (AD-76).
+    pub templates: SectionDiff,
+    /// The review's model, `field` being `model` (AD-76).
+    pub auto_review: Option<FieldChange>,
 }
 
 impl CatalogueDiff {
@@ -1826,6 +2357,8 @@ impl CatalogueDiff {
             && self.projects.is_empty()
             && self.actions.is_empty()
             && self.credentials.is_empty()
+            && self.templates.is_empty()
+            && self.auto_review.is_none()
     }
 }
 
@@ -1901,6 +2434,12 @@ pub fn diff(approved: &CanonicalCatalogue, current: &CanonicalCatalogue) -> Cata
         projects: section_diff(&approved.projects, &current.projects),
         actions: section_diff(&approved.actions, &current.actions),
         credentials: section_diff(&approved.credentials, &current.credentials),
+        templates: section_diff(&approved.templates, &current.templates),
+        auto_review: scalar_change(
+            "model",
+            &approved.auto_review.model,
+            &current.auto_review.model,
+        ),
     }
 }
 
@@ -2322,6 +2861,31 @@ mod tests {
     /// it, sending [`CREDENTIAL`].
     const VALID_HEALTH: &str = "name = \"probe\"\nkind = \"http\"\nclass = \"free\"\nmethod = \"GET\"\nurl = \"https://monitoring.example.com/api/{host}\"\ncredential = \"monitoring\"\n[action.params.host]\nvalues = [\"web01\", \"db01\"]\n";
 
+    /// A valid template for the project of [`PROJECT`].
+    const VALID_TEMPLATE: &str = "name = \"bump\"\ndescription = \"Bump one dependency\"\nprojects = [\"lab\"]\nprompt = \"Bump {package} to its latest {level} release.\"\nmodel = \"sonnet\"\n[template.params.package]\nvalues = [\"serde_json\", \"@scope/pkg\"]\n[template.params.level]\nvalues = [\"patch\", \"minor\"]\n";
+
+    /// [`VALID_TEMPLATE`] with `from` replaced by `to`, which must occur.
+    fn template_with(from: &str, to: &str) -> String {
+        assert!(VALID_TEMPLATE.contains(from), "{from}");
+        VALID_TEMPLATE.replacen(from, to, 1)
+    }
+
+    /// [`floor_with`] holding [`VALID_PROBE`], plus the given
+    /// `[[template]]` tables.
+    fn with_templates(templates: &[&str]) -> String {
+        let mut text = floor_with(&[VALID_PROBE]);
+        for template in templates {
+            text.push_str("\n[[template]]\n");
+            text.push_str(template);
+        }
+        text
+    }
+
+    /// An `auto` action naming [`CHECK`] as its dry run.
+    fn auto_apply() -> String {
+        apply("check").replace("\"after-check\"", "\"auto\"")
+    }
+
     /// [`floor_with`] plus the given `[[credential]]` tables.
     fn with_credentials(actions: &[&str], credentials: &[&str]) -> String {
         let mut text = floor_with(actions);
@@ -2433,7 +2997,53 @@ mod tests {
             IssueKind::DuplicateCredential => {
                 with_credentials(&[VALID_HEALTH], &[CREDENTIAL, CREDENTIAL])
             }
-            IssueKind::AutoReserved => floor_with(&[&replaced("\"free\"", "\"auto\"")]),
+            IssueKind::AutoWithoutCheck => {
+                bare(&[CHECK, &auto_apply().replace("check = \"check\"\n", "")])
+            }
+            IssueKind::AutoMaxPerHour => bare(&[
+                CHECK,
+                &auto_apply().replace(
+                    "class = \"auto\"\n",
+                    "class = \"auto\"\nauto_max_per_hour = 61\n",
+                ),
+            ]),
+            IssueKind::AutoOnHttp => with_credentials(
+                &[&VALID_HEALTH.replace("\"free\"", "\"auto\"")],
+                &[CREDENTIAL],
+            ),
+            IssueKind::TemplateDescription => with_templates(&[&template_with(
+                "description = \"Bump one dependency\"",
+                "description = \"\"",
+            )]),
+            IssueKind::TemplateProjects => {
+                with_templates(&[&template_with("projects = [\"lab\"]", "projects = []")])
+            }
+            IssueKind::UnknownTemplateProject => with_templates(&[&template_with(
+                "projects = [\"lab\"]",
+                "projects = [\"lab\", \"missing\"]",
+            )]),
+            IssueKind::TemplatePromptCharacter => {
+                with_templates(&[&template_with("release.\"", "release.\\u0007\"")])
+            }
+            IssueKind::TemplatePromptStart => with_templates(&[&template_with(
+                "prompt = \"Bump",
+                "prompt = \"/compact Bump",
+            )]),
+            IssueKind::TemplatePromptTooLong => with_templates(&[&template_with(
+                "release.\"",
+                &format!("release. {}\"", "a".repeat(MAX_PROMPT_CHARS)),
+            )]),
+            IssueKind::TemplateValues => with_templates(&[&template_with(
+                "values = [\"patch\", \"minor\"]",
+                "values = []",
+            )]),
+            IssueKind::TemplatePattern => with_templates(&[&template_with(
+                "values = [\"patch\", \"minor\"]",
+                "pattern = \"[a-z]+\"",
+            )]),
+            IssueKind::Model => {
+                with_templates(&[&template_with("model = \"sonnet\"", "model = \"gpt\"")])
+            }
             IssueKind::Name => floor_with(&[&replaced("\"probe\"", "\"Probe\"")]),
             IssueKind::DuplicateName => floor_with(&[VALID_PROBE, VALID_PROBE]),
             IssueKind::ProgramNotAbsolute => {
@@ -2519,7 +3129,13 @@ mod tests {
 
     /// `text` as a TOML basic string.
     fn toml_string(text: &str) -> String {
-        format!("\"{}\"", text.replace('\\', "\\\\").replace('"', "\\\""))
+        let escaped = text
+            .replace('\\', "\\\\")
+            .replace('"', "\\\"")
+            .replace('\n', "\\n")
+            .replace('\r', "\\r")
+            .replace('\t', "\\t");
+        format!("\"{escaped}\"")
     }
 
     /// AC 9 of story 2.14 (D-173): a pattern admitting any character of the
@@ -2974,11 +3590,6 @@ mod tests {
     }
 
     #[test]
-    fn auto_is_reserved() {
-        dropped(IssueKind::AutoReserved);
-    }
-
-    #[test]
     fn name_rule() {
         dropped(IssueKind::Name);
         for valid in ["a", "check-lab-2", &"a".repeat(MAX_NAME_CHARS)] {
@@ -3239,6 +3850,10 @@ mod tests {
         let content = bare(&[
             CHECK,
             &human,
+            &auto_apply().replace("\"apply\"", "\"apply-auto\"").replace(
+                "class = \"auto\"\n",
+                "class = \"auto\"\nauto_max_per_hour = 12\n",
+            ),
             &probe_top(
                 "runner = \"wsl\"\ndistro = \"Debian\"\nenv = { MODE = \"x\" }\ntimeout_s = 30\n",
             )
@@ -3257,10 +3872,11 @@ mod tests {
             catalogue.actions["health"].http.is_some() && catalogue.actions["ping"].http.is_some()
         );
         assert!(
-            catalogue.actions.len() >= 6,
+            catalogue.actions.len() >= 7,
             "{:?}",
             catalogue.actions.keys()
         );
+        assert_eq!(catalogue.actions["apply-auto"].auto_max_per_hour, Some(12));
         for (name, action) in &catalogue.actions {
             let back = action_from_canonical(name, action).unwrap();
             assert_eq!(&CanonicalAction::from(&back), action, "{name}");
@@ -3575,7 +4191,8 @@ mod tests {
 
     #[test]
     fn diff_covers_every_canonical_field() {
-        let canonical = canonical_of(&floor_with(&[VALID_PROBE]));
+        let canonical = canonical_of(&with_templates(&[VALID_TEMPLATE]));
+        assert!(!canonical.templates.is_empty());
         let canonical_keys: BTreeSet<String> = serde_json::to_value(&canonical)
             .unwrap()
             .as_object()
@@ -3594,9 +4211,13 @@ mod tests {
         let mut moved = canonical.clone();
         moved.floor_path = "d:/other/officina.toml".into();
         moved.format += 1;
+        moved.auto_review.model = Some(ModelAlias::Opus);
+        moved.templates.get_mut("bump").unwrap().model = None;
         let d = diff(&canonical, &moved);
         assert_eq!(d.floor_path.unwrap().after, "d:/other/officina.toml");
         assert_eq!(d.format.unwrap().before, CANONICAL_FORMAT);
+        assert_eq!(d.auto_review.unwrap().after, "opus");
+        assert_eq!(d.templates.changed[0].fields[0].field, "model");
     }
 
     /// A floor whose one action runs `program` with `args`, its parameters
@@ -3767,6 +4388,592 @@ mod tests {
                 "the canonical form carries a notice"
             );
         }
+    }
+
+    // ---- Story 5.4: templates, the new tables and `auto` ----
+
+    /// The issues of `table`, as `(name, kind)`.
+    fn issues_of(catalogue: &Catalogue, table: IssueTable) -> Vec<(String, IssueKind)> {
+        catalogue
+            .issues
+            .iter()
+            .filter(|i| i.table == table)
+            .map(|i| (i.name.clone(), i.kind))
+            .collect()
+    }
+
+    #[test]
+    fn the_base_template_is_valid() {
+        let catalogue = validated(&with_templates(&[VALID_TEMPLATE]));
+        assert!(catalogue.issues.is_empty(), "{:#?}", catalogue.issues);
+        let template = &catalogue.templates["bump"];
+        assert_eq!(template.projects, ["lab"]);
+        assert_eq!(template.params["level"], ["minor", "patch"], "sorted");
+        assert_eq!(template.params["package"], ["@scope/pkg", "serde_json"]);
+        assert_eq!(template.model, Some(ModelAlias::Sonnet));
+        assert_eq!(catalogue.orchestrator_model, None);
+        assert_eq!(catalogue.auto_review_model, Some(DEFAULT_REVIEW_MODEL));
+    }
+
+    /// Every template rule drops the template with its issue, which names
+    /// its table and line, and leaves the actions and the floor as they
+    /// are; an unknown project only leaves the template.
+    #[test]
+    fn every_template_issue_names_its_table_and_line() {
+        for kind in IssueKind::ALL {
+            let content = failing_fixture(*kind);
+            if !content.contains("[[template]]") {
+                continue;
+            }
+            let catalogue = with_issue(&content, *kind);
+            let issue = issue_of(&catalogue, *kind);
+            assert_eq!(issue.table, IssueTable::Template, "{kind:?}");
+            assert_eq!(issue.name, "bump", "{kind:?}");
+            assert_eq!(
+                issue.line,
+                line_of_text(&content, "[[template]]"),
+                "{kind:?}"
+            );
+            assert_eq!(
+                catalogue.templates.contains_key("bump"),
+                *kind == IssueKind::UnknownTemplateProject,
+                "{kind:?}"
+            );
+            assert!(catalogue.actions.contains_key("probe"), "{kind:?}");
+        }
+    }
+
+    #[test]
+    fn a_malformed_template_never_invalidates_the_floor() {
+        for broken in [
+            "name = 7\n",
+            "name = \"bump\"\n",
+            &template_with("model = \"sonnet\"\n", "model = \"sonnet\"\nunknown = 1\n"),
+            &template_with("projects = [\"lab\"]", "projects = \"lab\""),
+            &template_with(
+                "values = [\"patch\", \"minor\"]",
+                "values = [\"patch\"]\nextra = 1",
+            ),
+        ] {
+            let content = with_templates(&[broken]);
+            let floor = parse_floor(&content).expect("phase 1 keeps templates raw");
+            let catalogue = validate(&floor, &content);
+            assert!(catalogue.templates.is_empty(), "{broken}");
+            assert_eq!(
+                issue_of(&catalogue, IssueKind::Malformed).table,
+                IssueTable::Template,
+                "{broken}"
+            );
+            assert!(catalogue.actions.contains_key("probe"));
+            assert_eq!(catalogue.projects.len(), 1);
+        }
+    }
+
+    #[test]
+    fn template_names_are_separate_from_action_names() {
+        let same_as_action = template_with("name = \"bump\"", "name = \"probe\"");
+        let catalogue = validated(&with_templates(&[&same_as_action]));
+        assert!(catalogue.issues.is_empty(), "{:#?}", catalogue.issues);
+        assert!(
+            catalogue.templates.contains_key("probe") && catalogue.actions.contains_key("probe")
+        );
+
+        let twice = validated(&with_templates(&[VALID_TEMPLATE, VALID_TEMPLATE]));
+        assert!(twice.templates.is_empty(), "both copies are dropped");
+        assert_eq!(
+            issues_of(&twice, IssueTable::Template),
+            [
+                ("bump".to_owned(), IssueKind::DuplicateName),
+                ("bump".to_owned(), IssueKind::DuplicateName)
+            ]
+        );
+        assert!(twice.actions.contains_key("probe"));
+
+        let bad_name = validated(&with_templates(&[&template_with("\"bump\"", "\"Bump\"")]));
+        assert_eq!(
+            issues_of(&bad_name, IssueTable::Template),
+            [("Bump".to_owned(), IssueKind::Name)]
+        );
+        assert!(
+            issue_of(&bad_name, IssueKind::Name)
+                .message
+                .ends_with(NAME_RULE)
+        );
+    }
+
+    #[test]
+    fn an_unknown_project_leaves_the_template() {
+        let catalogue = with_issue(
+            &failing_fixture(IssueKind::UnknownTemplateProject),
+            IssueKind::UnknownTemplateProject,
+        );
+        assert_eq!(catalogue.templates["bump"].projects, ["lab"]);
+        assert!(
+            issue_of(&catalogue, IssueKind::UnknownTemplateProject)
+                .message
+                .contains("missing")
+        );
+        // A project dropped as a duplicate is unknown to templates too.
+        let duplicated = with_templates(&[VALID_TEMPLATE]).replacen(
+            "\n[[action]]",
+            &format!("{PROJECT}\n[[action]]"),
+            1,
+        );
+        let catalogue = validated(&duplicated);
+        assert!(catalogue.templates.is_empty());
+        issue_of(&catalogue, IssueKind::TemplateProjects);
+    }
+
+    #[test]
+    fn a_template_left_with_no_project_is_dropped() {
+        let only_unknown =
+            template_with("projects = [\"lab\"]", "projects = [\"missing\", \"gone\"]");
+        let catalogue = validated(&with_templates(&[&only_unknown]));
+        assert!(catalogue.templates.is_empty());
+        let kinds: Vec<IssueKind> = issues_of(&catalogue, IssueTable::Template)
+            .into_iter()
+            .map(|(_, kind)| kind)
+            .collect();
+        assert_eq!(
+            kinds,
+            [
+                IssueKind::UnknownTemplateProject,
+                IssueKind::UnknownTemplateProject,
+                IssueKind::TemplateProjects
+            ]
+        );
+        let empty = validated(&failing_fixture(IssueKind::TemplateProjects));
+        assert!(empty.templates.is_empty());
+    }
+
+    #[test]
+    fn a_prompt_starting_with_a_placeholder_is_refused() {
+        for prompt in ["{package} and {level}", "  \n{package} {level}"] {
+            let template = template_with(
+                "\"Bump {package} to its latest {level} release.\"",
+                &toml_string(prompt),
+            );
+            let catalogue = with_issue(
+                &with_templates(&[&template]),
+                IssueKind::TemplatePromptStart,
+            );
+            assert!(catalogue.templates.is_empty(), "{prompt:?}");
+        }
+        for prompt in ["", " \n\t "] {
+            let template = template_with(
+                "\"Bump {package} to its latest {level} release.\"",
+                &toml_string(prompt),
+            );
+            let catalogue = with_issue(
+                &with_templates(&[&template]),
+                IssueKind::TemplatePromptStart,
+            );
+            assert!(
+                issue_of(&catalogue, IssueKind::TemplatePromptStart)
+                    .message
+                    .contains("only whitespace"),
+                "{prompt:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_leading_slash_bang_or_dash_after_whitespace_is_refused() {
+        for start in FORBIDDEN_PROMPT_STARTS {
+            for lead in ["", "   ", "\n\t "] {
+                let prompt = format!("{lead}{start}x {{package}} {{level}}");
+                let template = template_with(
+                    "\"Bump {package} to its latest {level} release.\"",
+                    &toml_string(&prompt),
+                );
+                let catalogue = with_issue(
+                    &with_templates(&[&template]),
+                    IssueKind::TemplatePromptStart,
+                );
+                assert!(catalogue.templates.is_empty(), "{prompt:?}");
+            }
+            let inside = format!("Run x{start}y {{package}} {{level}}");
+            let template = template_with(
+                "\"Bump {package} to its latest {level} release.\"",
+                &toml_string(&inside),
+            );
+            let fine = validated(&with_templates(&[&template]));
+            assert!(fine.issues.is_empty(), "{inside:?}: {:#?}", fine.issues);
+        }
+        let windows_lines = template_with(
+            "\"Bump {package} to its latest {level} release.\"",
+            &toml_string("Bump {package}\r\nto {level}.\tDone."),
+        );
+        let fine = validated(&with_templates(&[&windows_lines]));
+        assert!(fine.issues.is_empty(), "{:#?}", fine.issues);
+    }
+
+    #[test]
+    fn the_longest_rendering_is_checked() {
+        // Rendered with the longest values, the prompt is exactly the limit.
+        let rendered_base = "Bump serde_json patch.".chars().count();
+        let at_limit = format!(
+            "Bump {{package}} {{level}}.{}",
+            "a".repeat(MAX_PROMPT_CHARS - rendered_base)
+        );
+        let template = template_with(
+            "\"Bump {package} to its latest {level} release.\"",
+            &toml_string(&at_limit),
+        );
+        let fits = validated(&with_templates(&[&template]));
+        assert!(fits.issues.is_empty(), "{:#?}", fits.issues);
+        let params = &fits.templates["bump"].params;
+        assert_eq!(worst_case_chars(&at_limit, params), Some(MAX_PROMPT_CHARS));
+
+        let longer_value = template.replace("\"serde_json\"", "\"serde_jsonx\"");
+        let over = with_issue(
+            &with_templates(&[&longer_value]),
+            IssueKind::TemplatePromptTooLong,
+        );
+        assert!(over.templates.is_empty());
+        assert!(
+            issue_of(&over, IssueKind::TemplatePromptTooLong)
+                .message
+                .contains(&(MAX_PROMPT_CHARS + 1).to_string())
+        );
+    }
+
+    #[test]
+    fn pattern_is_refused_for_templates() {
+        let catalogue = with_issue(
+            &failing_fixture(IssueKind::TemplatePattern),
+            IssueKind::TemplatePattern,
+        );
+        assert!(catalogue.templates.is_empty());
+        let both = template_with(
+            "values = [\"patch\", \"minor\"]",
+            "values = [\"patch\"]\npattern = \"[a-z]+\"",
+        );
+        let catalogue = with_issue(&with_templates(&[&both]), IssueKind::TemplatePattern);
+        assert!(catalogue.templates.is_empty());
+    }
+
+    /// Template values follow `params::template_value`: a scoped package is
+    /// one, a space is not; the other value rules hold.
+    #[test]
+    fn template_values_follow_the_template_value_rule() {
+        for (value, valid) in [
+            ("@scope/pkg", true),
+            ("/srv/data", true),
+            ("two words", false),
+            ("-x", false),
+            ("..", false),
+        ] {
+            let template = template_with("\"serde_json\"", &toml_string(value));
+            let catalogue = validated(&with_templates(&[&template]));
+            assert_eq!(catalogue.templates.contains_key("bump"), valid, "{value}");
+            if !valid {
+                issue_of(&catalogue, IssueKind::InvalidValue);
+            }
+        }
+        for (from, to, kind) in [
+            ("{level}", "{other}", IssueKind::UndeclaredPlaceholder),
+            (" {level}", "", IssueKind::UnusedParameter),
+            ("{level}", "{level", IssueKind::Braces),
+            (
+                "[template.params.level]",
+                "[template.params.Level]",
+                IssueKind::ParamName,
+            ),
+        ] {
+            let template = template_with(from, to);
+            let catalogue = with_issue(&with_templates(&[&template]), kind);
+            assert_eq!(issue_of(&catalogue, kind).table, IssueTable::Template);
+            assert!(catalogue.templates.is_empty(), "{kind:?}");
+        }
+    }
+
+    #[test]
+    fn auto_is_a_valid_class() {
+        let catalogue = validated(&bare(&[CHECK, &auto_apply()]));
+        assert!(catalogue.issues.is_empty(), "{:#?}", catalogue.issues);
+        let action = &catalogue.actions["apply"];
+        assert_eq!(action.class, ActionClass::Auto);
+        assert_eq!(action.check.as_deref(), Some("check"));
+        assert_eq!(action.auto_max_per_hour, Some(DEFAULT_AUTO_MAX_PER_HOUR));
+        let canonical = canonical(&catalogue, "C:/path/to/officina.toml");
+        assert_eq!(
+            canonical.actions["apply"].auto_max_per_hour,
+            Some(DEFAULT_AUTO_MAX_PER_HOUR),
+            "the default is explicit"
+        );
+        assert_eq!(canonical.actions["check"].auto_max_per_hour, None);
+        let value = serde_json::to_value(&canonical.actions["check"]).unwrap();
+        assert!(
+            value.get("auto_max_per_hour").is_none(),
+            "absent off `auto`"
+        );
+    }
+
+    #[test]
+    fn auto_without_a_check_is_an_issue() {
+        let catalogue = with_issue(
+            &failing_fixture(IssueKind::AutoWithoutCheck),
+            IssueKind::AutoWithoutCheck,
+        );
+        assert!(!catalogue.actions.contains_key("apply"), "dropped");
+        assert!(catalogue.actions.contains_key("check"));
+        let issue = issue_of(&catalogue, IssueKind::AutoWithoutCheck);
+        assert_eq!(
+            (issue.table, issue.name.as_str()),
+            (IssueTable::Action, "apply")
+        );
+        let content = failing_fixture(IssueKind::AutoWithoutCheck);
+        let lines: Vec<u32> = content
+            .lines()
+            .enumerate()
+            .filter(|(_, line)| *line == "[[action]]")
+            .map(|(index, _)| u32::try_from(index + 1).unwrap())
+            .collect();
+        assert_eq!(issue.line, Some(lines[1]));
+    }
+
+    #[test]
+    fn auto_check_names_a_valid_free_action() {
+        for broken in [
+            bare(&[CHECK, &auto_apply().replace("\"check\"\n", "\"nope\"\n")]),
+            bare(&[&CHECK.replace("\"free\"", "\"human\""), &auto_apply()]),
+            bare(&[&CHECK.replace("host", "group"), &auto_apply()]),
+        ] {
+            let catalogue = with_issue(&broken, IssueKind::Check);
+            assert!(!catalogue.actions.contains_key("apply"), "{broken}");
+        }
+    }
+
+    #[test]
+    fn auto_max_per_hour_range_and_class() {
+        for (cap, valid) in [(0, false), (1, true), (60, true), (61, false), (-1, false)] {
+            let action = auto_apply().replace(
+                "class = \"auto\"\n",
+                &format!("class = \"auto\"\nauto_max_per_hour = {cap}\n"),
+            );
+            let catalogue = validated(&bare(&[CHECK, &action]));
+            assert_eq!(catalogue.actions.contains_key("apply"), valid, "{cap}");
+            if valid {
+                assert_eq!(
+                    catalogue.actions["apply"].auto_max_per_hour,
+                    Some(u32::try_from(cap).unwrap())
+                );
+            } else {
+                issue_of(&catalogue, IssueKind::AutoMaxPerHour);
+            }
+        }
+        for class in ["free", "after-check", "human"] {
+            let action = auto_apply().replace(
+                "class = \"auto\"\n",
+                &format!("class = \"{class}\"\nauto_max_per_hour = 6\n"),
+            );
+            let action = if class == "free" {
+                action.replace("check = \"check\"\n", "")
+            } else {
+                action
+            };
+            let catalogue = with_issue(&bare(&[CHECK, &action]), IssueKind::AutoMaxPerHour);
+            assert!(!catalogue.actions.contains_key("apply"), "{class}");
+        }
+    }
+
+    #[test]
+    fn auto_on_an_http_action_is_an_issue() {
+        let catalogue = with_issue(
+            &failing_fixture(IssueKind::AutoOnHttp),
+            IssueKind::AutoOnHttp,
+        );
+        assert!(catalogue.actions.is_empty());
+        let human = with_credentials(
+            &[&VALID_HEALTH.replace("\"free\"", "\"human\"")],
+            &[CREDENTIAL],
+        );
+        assert!(validated(&human).issues.is_empty(), "HTTP stays on `human`");
+    }
+
+    #[test]
+    fn a_failing_orchestrator_table_is_an_issue() {
+        let floor =
+            |table: &str| format!("{}\n[orchestrator]\n{table}", floor_with(&[VALID_PROBE]));
+        let valid = validated(&floor("model = \"opus\"\n"));
+        assert!(valid.issues.is_empty(), "{:#?}", valid.issues);
+        assert_eq!(valid.orchestrator_model, Some(ModelAlias::Opus));
+        assert_eq!(validated(&floor("")).orchestrator_model, None);
+        for (table, kind) in [
+            ("model = \"gpt\"\n", IssueKind::Model),
+            ("model = 3\n", IssueKind::Malformed),
+            ("modle = \"opus\"\n", IssueKind::Malformed),
+        ] {
+            let content = floor(table);
+            let catalogue = with_issue(&content, kind);
+            let issue = issue_of(&catalogue, kind);
+            assert_eq!(
+                (issue.table, issue.name.as_str()),
+                (IssueTable::Orchestrator, "orchestrator")
+            );
+            assert_eq!(
+                issue.line,
+                line_of_text(&content, "[orchestrator]"),
+                "{table}"
+            );
+            assert_eq!(catalogue.orchestrator_model, None, "no model flag");
+            assert!(catalogue.actions.contains_key("probe"));
+        }
+    }
+
+    #[test]
+    fn a_failing_auto_review_table_is_an_issue() {
+        let floor = |table: &str| format!("{}\n[auto_review]\n{table}", floor_with(&[VALID_PROBE]));
+        let valid = load(&floor("model = \"sonnet\"\n"), "C:/path/to/officina.toml").unwrap();
+        assert!(valid.catalogue.issues.is_empty());
+        assert_eq!(valid.canonical.auto_review.model, Some(ModelAlias::Sonnet));
+        let empty = load(&floor(""), "C:/path/to/officina.toml").unwrap();
+        let absent = load(&floor_with(&[VALID_PROBE]), "C:/path/to/officina.toml").unwrap();
+        assert_eq!(
+            absent.canonical.auto_review.model,
+            Some(DEFAULT_REVIEW_MODEL),
+            "explicit when absent"
+        );
+        assert_eq!(empty.hash, absent.hash, "an empty table is the default");
+        for (table, kind) in [
+            ("model = \"gpt\"\n", IssueKind::Model),
+            ("model = [\"haiku\"]\n", IssueKind::Malformed),
+        ] {
+            let content = floor(table);
+            let relay = load(&content, "C:/path/to/officina.toml").unwrap();
+            let issue = issue_of(&relay.catalogue, kind);
+            assert_eq!(
+                (issue.table, issue.name.as_str()),
+                (IssueTable::AutoReview, "auto_review")
+            );
+            assert_eq!(issue.line, line_of_text(&content, "[auto_review]"));
+            assert_eq!(
+                relay.canonical.auto_review.model, None,
+                "recorded as failing"
+            );
+            assert_ne!(relay.hash, absent.hash);
+        }
+    }
+
+    #[test]
+    fn orchestrator_table_is_not_canonical() {
+        let plain = load(
+            &with_templates(&[VALID_TEMPLATE]),
+            "C:/path/to/officina.toml",
+        )
+        .unwrap();
+        for table in ["model = \"opus\"\n", "model = \"gpt\"\n", ""] {
+            let content = format!(
+                "{}\n[orchestrator]\n{table}",
+                with_templates(&[VALID_TEMPLATE])
+            );
+            let with_table = load(&content, "C:/path/to/officina.toml").unwrap();
+            assert_eq!(with_table.canonical, plain.canonical, "{table}");
+            assert_eq!(with_table.hash, plain.hash, "{table}");
+        }
+        let serialized = serde_json::to_value(&plain.canonical).unwrap();
+        assert!(serialized.get("orchestrator").is_none());
+    }
+
+    #[test]
+    fn templates_are_canonical_and_change_the_hash() {
+        let path = "C:/path/to/officina.toml";
+        let without = load(&floor_with(&[VALID_PROBE]), path).unwrap();
+        let with = load(&with_templates(&[VALID_TEMPLATE]), path).unwrap();
+        assert_ne!(without.hash, with.hash);
+        let template = &with.canonical.templates["bump"];
+        assert_eq!(
+            template.prompt,
+            "Bump {package} to its latest {level} release."
+        );
+        assert_eq!(template.params["level"], ["minor", "patch"]);
+        let reordered = template_with(
+            "[\"patch\", \"minor\"]",
+            "[\"minor\", \"patch\", \"minor\"]",
+        );
+        let same = load(&with_templates(&[&reordered]), path).unwrap();
+        assert_eq!(same.hash, with.hash, "values are sorted and deduplicated");
+        let invalid = load(&failing_fixture(IssueKind::TemplatePattern), path).unwrap();
+        assert_eq!(
+            invalid.hash, without.hash,
+            "a dropped template is not canonical"
+        );
+    }
+
+    /// The previous format's approval, as `main` wrote it for the golden
+    /// floor before this format (D-131): it parses, and against the same
+    /// floor today its diff shows the format change and the templates added.
+    #[test]
+    fn diff_reports_the_format_change() {
+        let previous: ApprovedCatalogue = serde_json::from_str(include_str!(
+            "../../tests/data/relay/approved-previous-format.json"
+        ))
+        .expect("an approval in the previous format parses");
+        assert_eq!(previous.canonical.format, CANONICAL_FORMAT - 1);
+        assert!(previous.canonical.templates.is_empty());
+        assert_eq!(
+            previous.canonical.auto_review,
+            CanonicalAutoReview::default()
+        );
+        assert_ne!(
+            hash(&previous.canonical),
+            previous.hash,
+            "its stored hash is its own"
+        );
+        let current = load(
+            include_str!("../../tests/data/relay/golden-floor.toml"),
+            "C:/path/to/work/officina.toml",
+        )
+        .unwrap();
+        let d = diff(&previous.canonical, &current.canonical);
+        let format = d.format.as_ref().expect("the format changed");
+        assert_eq!(
+            (format.before.clone(), format.after.clone()),
+            (
+                serde_json::json!(CANONICAL_FORMAT - 1),
+                serde_json::json!(CANONICAL_FORMAT)
+            )
+        );
+        let added: Vec<&String> = current.canonical.templates.keys().collect();
+        assert!(!added.is_empty());
+        assert_eq!(d.templates.added.iter().collect::<Vec<_>>(), added);
+        assert!(d.floor_path.is_none() && d.projects.removed.is_empty());
+    }
+
+    #[test]
+    fn diff_reports_templates_added_removed_and_changed() {
+        let before = canonical_of(&with_templates(&[VALID_TEMPLATE]));
+        let other = template_with("name = \"bump\"", "name = \"audit\"");
+        let changed = template_with("model = \"sonnet\"", "model = \"opus\"")
+            .replace("\"patch\", \"minor\"", "\"patch\", \"minor\", \"major\"");
+        let after = canonical_of(&with_templates(&[&changed, &other]));
+        let d = diff(&before, &after);
+        assert_eq!(d.templates.added, ["audit"]);
+        let entry = &d.templates.changed[0];
+        assert_eq!(entry.name, "bump");
+        let fields: Vec<&str> = entry.fields.iter().map(|f| f.field.as_str()).collect();
+        assert_eq!(fields, ["model", "params"]);
+        assert!(!d.is_empty() && d.actions.is_empty());
+        let removed = diff(&after, &before);
+        assert_eq!(removed.templates.removed, ["audit"]);
+    }
+
+    #[test]
+    fn diff_reports_the_review_model() {
+        let before = canonical_of(&floor_with(&[VALID_PROBE]));
+        let after = canonical_of(&format!(
+            "{}\n[auto_review]\nmodel = \"sonnet\"\n",
+            floor_with(&[VALID_PROBE])
+        ));
+        let d = diff(&before, &after);
+        assert!(!d.is_empty());
+        let change = d.auto_review.expect("the review model changed");
+        assert_eq!(change.field, "model");
+        assert_eq!(
+            (change.before, change.after),
+            (serde_json::json!("haiku"), serde_json::json!("sonnet"))
+        );
     }
 
     #[test]

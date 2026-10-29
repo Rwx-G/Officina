@@ -545,6 +545,50 @@ A session's running sub-agents stand beside its desk as smaller figures without 
 
 The whole window, board and scene alike, follows Windows' light or dark theme. The theme control at the right of the header's buttons cycles **Auto** (the system's theme, shown in brackets), **Light** and **Dark**; your choice is kept for the next start and applied before the window draws, so a dark window never flashes light. The header logo follows the theme. An alert never changes it.
 
+## The orchestrator (v0.5, in progress)
+
+v0.5 lets you delegate routine subjects: a work order starts a background session from a template you wrote and approved, and an `auto` action can be approved without you once its dry run passed. What is built so far is the floor file's part; the work orders, the review of `auto` requests and the orchestrator itself follow.
+
+### Templates
+
+A template is a prompt with placeholders, declared in the floor file next to the actions, with a closed list of values for each placeholder:
+
+```toml
+[[template]]
+name = "dependency-bump"
+description = "Bump one dependency and fix what breaks"
+projects = ["backend"]                 # catalogue projects it may run in
+prompt = "Bump {package} to its latest {level} release, run the tests, fix what breaks, commit."
+model = "sonnet"                       # optional: one alias of ModelAlias
+
+[template.params.package]
+values = ["serde_json", "@scope/pkg"]
+
+[template.params.level]
+values = ["patch", "minor"]
+
+[orchestrator]
+model = "sonnet"                       # optional: the orchestrator's model
+
+[auto_review]
+model = "haiku"                        # optional: the review's model, haiku when absent
+```
+
+- A parameter takes a `values` list only, never a `pattern`: a work order can only fill a placeholder with one of the values you wrote. A value is at most 64 characters of letters, digits and `._:/@+-`, and meets the relay's value rules, except that it may start with `/` or `@` (it lands in a prompt, not in a command line), so `@scope/pkg` is a value.
+- Every placeholder names a parameter and every parameter is used; braces only delimit placeholders. The prompt holds no control character but newlines and tabs, and no invisible or bidirectional formatting character. Its first character after leading whitespace is your own text, never a placeholder, `/`, `!` or `-`, so a value can never become a command. With each placeholder replaced by its longest value, the prompt is at most 8,000 characters.
+- `projects` names catalogue projects; a name that is not one is reported and left out, and a template left with none is dropped. Templates and actions have separate names.
+- A template that breaks a rule is skipped and reported with its line (`officina doctor`, the Relay view), like an invalid action; it never invalidates the floor. Each rule is a variant of `IssueKind`, and each issue names the table it comes from.
+
+Templates belong to the catalogue you approve: the Relay view lists them with their projects, prompt, values and model, and the change banner shows a template added, removed or changed field by field. `[orchestrator]` is not part of the approval: the orchestrator approves and launches nothing.
+
+### The `auto` class
+
+An action may now be `class = "auto"`. It must name its `check`, a `free` action with the same parameters, as an `after-check` action does: an unattended apply always runs after its dry run, and an `auto` action without one is skipped with the issue `auto_without_check`. `auto_max_per_hour` (1 to 60, 6 when not set) caps how many such runs can be approved in an hour; it applies to `auto` actions only. An HTTP action cannot be `auto`: it stays on the `human` path. Until the review of `auto` requests ships, `officina run` refuses an `auto` action with `class_not_available`, and `officina run --list` marks it as not available in this build.
+
+### Upgrading from v0.4
+
+Templates, `[auto_review]` and `auto_max_per_hour` change the catalogue's canonical format, so the first start of v0.5 shows a catalogue change even if you edited nothing: the banner names the format change and lists the templates added. Until you approve it once, `officina run` refuses every action with "catalogue changed, approval pending" and the gate keeps guarding the projects of your last approval; one click on **Approve this catalogue** covers it, and nothing else is voided.
+
 ## Command line
 
 | Command | Purpose |

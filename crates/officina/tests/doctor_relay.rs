@@ -245,7 +245,7 @@ fn issues_are_reported_with_lines() {
     assert!(
         issues[0]
             .detail
-            .starts_with(&format!("line {header_line}, broken: ")),
+            .starts_with(&format!("line {header_line}, action broken: ")),
         "{issues:?}"
     );
     assert!(issues[0].detail.ends_with("(program_not_absolute)"));

@@ -15,6 +15,7 @@ pub mod params;
 pub mod record;
 pub mod run;
 pub mod shell;
+pub mod template;
 pub mod url;
 pub mod view;
 
@@ -106,12 +107,15 @@ mod tests {
 
     use serde::Serialize;
 
-    use super::catalogue::{ActionClass, ForwardedValues, IssueKind, NoticeKind, Runner};
+    use super::catalogue::{
+        ActionClass, ForwardedValues, IssueKind, IssueTable, NoticeKind, Runner,
+    };
     use super::gate::DenyKind;
     use super::http::HttpMethod;
     use super::journal::{GateFault, JournalKind, RefusalReason, RunOutcome};
     use super::params::ValueRefusal;
     use super::record::{AnomalyKind, Verdict};
+    use super::template::ModelAlias;
     use super::url::UrlIssue;
     use super::view::Tone;
     use crate::floor::{Autonomy, Priority};
@@ -131,8 +135,10 @@ mod tests {
     /// of this crate without a line here.
     #[test]
     fn code_equals_the_serde_name_for_every_variant() {
-        let checked: [fn(); 21] = [
+        let checked: [fn(); 23] = [
             || assert_codes(ActionClass::ALL, ActionClass::code),
+            || assert_codes(IssueTable::ALL, IssueTable::code),
+            || assert_codes(ModelAlias::ALL, ModelAlias::code),
             || assert_codes(Autonomy::ALL, Autonomy::code),
             || assert_codes(Priority::ALL, Priority::code),
             || assert_codes(Zone::ALL, Zone::code),
@@ -175,6 +181,7 @@ mod tests {
             include_str!("record.rs"),
             include_str!("run.rs"),
             include_str!("shell.rs"),
+            include_str!("template.rs"),
             include_str!("url.rs"),
             include_str!("view.rs"),
         ];
