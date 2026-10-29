@@ -1,6 +1,6 @@
 # Story 4.14: Documentation, README assets, workstation checks and QA closure
 
-**Status:** In progress (the owner's workstation runs, AC 6 and 8 to 10, and his review of the README assets are open; AC 5 measured with its fallback, AC 7 passed; see Completion Notes)
+**Status:** In progress (the owner's workstation runs, AC 6, 8 and 10, and his review of the README assets are open; AC 5 measured, AC 7 passed, AC 9 passed with a caveat; see Completion Notes)
 
 ## Story
 
@@ -31,7 +31,8 @@ so that v0.4 is understood without guessing, its CPU promise is a number, and no
 - [x] CHANGELOG consolidation (AC 3)
 - [x] `e2e-fixtures.mjs` `--home`, `scene-measure`; `scene-replay.mjs` and its test; the Vitest include gains `scripts/*.test.ts` (AC 4): built in story 4.2
 - [x] AC 5 CPU runs (E82) and D-480's walking fallback
-- [ ] Workstation runs and research-notes entries (AC 6, 8-10): the owner's
+- [x] AC 9 readability run (E87): pass with a caveat, the re-run of two floors pending
+- [ ] Workstation runs and research-notes entries (AC 6, 8, 10): the owner's
 - [ ] Audits, `docs/qa/epic-4-report.md`, backlog (AC 11, 13): the report is written, open until the owner's entries; the five audits run at closure
 
 ## Dev Notes
@@ -68,7 +69,8 @@ so that v0.4 is understood without guessing, its CPU promise is a number, and no
 - AC 4: Vitest `app/scripts/scene-replay.test.ts > the replay schedules one crossing change every 10 s`; the CI step "e2e fixtures from the real CLI" unchanged.
 - AC 7: **pass** (owner, 2026-10-28): with the installed build open on Auto, he switched the Windows theme and the window followed by itself, no restart; D-118's fallback is not needed. The WebView2 runtime version was not noted.
 - AC 5: **walking run failed, fallback shipped** (2026-10-29, research notes E82): mean CPU in % of the machine (gate under 1 %, D-515) and of one core (information): halos breathing throughout 0.49 % (11.8 %), the real two-minute rule 0.12 % (2.9 %), halos steady 0.066 % (1.6 %), replay with walking on **1.95 %** (46.9 %), replay with walking off 0.58 % (14.0 %). `DEFAULT_WALKING` is `false` in the same change (D-480): `view.test.ts > a stored view without walking reads as walking off`, `modes.spec.ts > walking is off by default`; the cases about walking open the scene with walking on (`openWalkingScene`); README and CHANGELOG follow. `HALO_BREATHING_MS` stays. Measured with the session locked (the owner asleep): the WebView stayed visible but drew about 170 frames per second instead of the screen's 240, so the passes are under that condition (E82 gives the figures scaled by 1.4); the failure holds either way. After story 4.16 cut a walk's cost, runs 4 and 5 were run again (research notes E86, same condition): replay with walking on 0.9985 % and, run again, 1.007 % of the machine (about 24 % of one core), walking off 0.51 % (12.1 %); run 4 is not under 1 %, so `DEFAULT_WALKING` stayed `false` (D-553). The owner then accepted walking's cost at the gate and turned it on by default (D-700, 2026-10-29): `view.test.ts > a stored view without walking reads as walking on`, `modes.spec.ts > walking is on by default`.
-- AC 6, 8 to 10: **open (owner)**. Build the release window from `main`, quit any running Officina, then `node app/scripts/e2e-fixtures.mjs --home <new folder> scene-measure` and start `officina-app.exe` with the environment it prints, plus `WEBVIEW2_USER_DATA_FOLDER=<that folder>webview` so the run does not rewrite the installed window's stored view (E82); `node app/scripts/scene-replay.mjs --home <that folder>` drives the walks. Then the taskbar at 100 % and 150 % (AC 6), the look at 100 % and 150 %, light and dark, settled and walking (AC 8), the 2 s readability on five fixtures (AC 9), and the day Scene becomes the chosen mode (AC 10), each a research-notes entry.
+- AC 9: **pass, with a caveat** (owner, 2026-10-29, research notes E87, D-701): screenshots at 1920 x 1032, Scene mode, light theme, rendered from `2a2fb94`, each floor flashed 2 s in a random order, then the count and the oldest name among four. Count right on 5 of 5; oldest name right on 3 of 5, the two misses (`scene-subagents`, `scene-b`) being the first two floors shown, before the owner knew what to look at; 3 of 3 after. Pending: those two floors again in a random order. No scene change follows (D-701).
+- AC 6, 8 and 10: **open (owner)**. Build the release window from `main`, quit any running Officina, then `node app/scripts/e2e-fixtures.mjs --home <new folder> scene-measure` and start `officina-app.exe` with the environment it prints, plus `WEBVIEW2_USER_DATA_FOLDER=<that folder>webview` so the run does not rewrite the installed window's stored view (E82); `node app/scripts/scene-replay.mjs --home <that folder>` drives the walks. Then the taskbar at 100 % and 150 % (AC 6), the look at 100 % and 150 %, light and dark, settled and walking (AC 8), and the day Scene becomes the chosen mode (AC 10), each a research-notes entry.
 - AC 11: `docs/qa/epic-4-report.md` "Slice 0 order": gate 2 before 4.5's close, gate 3 withdrawn, gate 1 not run and 4.12 not started; gate 4 did not precede 4.3 (recorded in story 4.3); gate 5's answers preceded 4.6, its counts open.
 - AC 12: the `windows` job's Playwright step runs `--repeat-each=3`; the local replay of it passed (783 passed, 6 skipped).
 - AC 13: `docs/qa/epic-4-report.md`, gate decision open; the per-AD traceability, the audits and the closure wait for the owner's entries.
@@ -82,7 +84,7 @@ so that v0.4 is understood without guessing, its CPU promise is a number, and no
 - `docs/assets/scene-dark.png` (new)
 - `docs/assets/scene.gif` (new)
 - `docs/qa/epic-4-report.md` (new)
-- `docs/research-notes.md` (E82, E86)
+- `docs/research-notes.md` (E82, E86, E87)
 - `app/src/lib/view.svelte.ts`, `app/src/lib/view.test.ts`, `app/src/components/Header.svelte`, `app/src/components/scene/scene.test.ts` (AC 5 fallback)
 - `app/e2e/fixtures.ts`, `app/e2e/modes.spec.ts`, `app/e2e/walk.spec.ts`, `app/e2e/scene.spec.ts`, `app/e2e/stable-size.spec.ts`, `app/e2e/readme-assets.spec.ts` (AC 5 fallback)
 - `CHANGELOG.md`
@@ -99,3 +101,4 @@ so that v0.4 is understood without guessing, its CPU promise is a number, and no
 - 2026-10-29 AC 5 measured (E82): the walking run over 1 % of the machine; `DEFAULT_WALKING` is `false` (D-480)
 - 2026-10-29 AC 5's walking runs measured again after story 4.16 (E86): run 4 at 1.00 % of the machine, still not under 1 %; walking stays off by default
 - 2026-10-29 walking on by default, the owner accepting its cost at the gate (D-700)
+- 2026-10-29 AC 9 run by the owner (E87): pass with a caveat, a re-run of the first two floors pending (D-701)

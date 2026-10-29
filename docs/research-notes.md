@@ -811,6 +811,51 @@ Owner decision, 2026-10-29 (epic-4-decisions.md D-700): given this
 result on a deliberately stressful replay, walking is on by default; the
 toggle turns it off. The 1 % gate is unchanged.
 
+## E87. Reading the scene in two seconds (story 4.14 AC 9)
+
+Story 4.14 AC 9 (PRD section 7): on five fixtures with someone waiting,
+the Needs you count and the oldest waiting name read in under 2 s in Scene
+mode. Run by the owner on 2026-10-29.
+
+Method. Screenshots of the window at 1920 x 1032 CSS px (the owner's Full
+HD screen, maximised, D-520), Scene mode, light theme (the owner's
+choice), settled, rendered from `2a2fb94` (story 4.17) by the e2e build
+with each fixture's real `officina board --json` output. A test page
+showed the five floors in a random order, each for 2 s, then hid it and
+asked two questions: how many sessions need you (a number), and which
+project has waited longest (one of four names, the expected one among
+them). Its introduction named both questions before the first floor.
+
+Expected answers, from the lead's answer sheet, which takes them from the
+fixtures:
+
+| Fixture | Needs you | Oldest waiting | Where the scene shows it |
+|---|---|---|---|
+| `scene-subagents` | 1 | web-portal | register row 1; the decision office's figure with badge 1 |
+| `scene-b` | 2 | billing-api | register row 1; the decision office's figure with badge 1 |
+| `scene-c` | 6 | billing-api | register row 1; the decision office's figure with badge 1 |
+| `scene-alert` | 3 | web-portal | register row 1 (red); the alert room's figure with badge 1; the alert band |
+| `scene-eight` | 5 | billing-api | register row 1; the decision office's figure with badge 1 |
+
+Result line: `OFC-AC9 l sub:1+- b:2+- c:6++ al:3++ 8p:5++` (theme, then
+per fixture the count given, count right, oldest right).
+
+- Count: 5 of 5 right.
+- Oldest waiting name: 3 of 5 right (`scene-c`, `scene-alert`,
+  `scene-eight`); missed on `scene-subagents` and `scene-b`.
+- The owner's explanation: `scene-subagents` and `scene-b` were the first
+  two floors shown, and he did not yet know what to look at: he took in the
+  whole scene; after two rounds of questions he knew and looked for what
+  was asked, and read the three remaining floors right. So 3 of 3 once the
+  questions were known; the two misses are a learning effect of the test's
+  order, not a reading of those floors.
+
+Outcome: **pass, with that caveat** (epic-4-decisions.md D-701): the
+count reads at a glance on every floor, and the oldest name on every
+floor shown once the reader knew the questions. Pending: the first two
+floors run again in a random order, the result to be added here. The
+scene is unchanged by this run.
+
 ## E83. Sub-agent signals (v0.4 gate 1)
 
 Story 4.1 AC 1, AD-176, AD-178 row 1 as amended by D-518, D-507. Claude

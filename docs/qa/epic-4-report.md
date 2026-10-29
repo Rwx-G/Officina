@@ -14,7 +14,7 @@ every job of `.github/workflows/ci.yml` is green on the last commit, and
 every rule the stories added has its case. Epic 4 cannot close on code
 alone: its proof of FR-9 (CPU), of the real taskbar, of the live theme and
 of the WebView2 look is a set of workstation runs that only the owner can
-make (story 4.14 AC 6 and 8 to 10; AC 7 passed; AC 5 measured, E82), and one Slice 0
+make (story 4.14 AC 6, 8 and 10; AC 7 passed; AC 5 measured, E82; AC 9 passed with a caveat, E87), and one Slice 0
 gate still waits for the owner's real-use data (gate 5; gate 1 passed,
 E83; gate 4 is recorded, E81). Story 4.12 (sub-agents) shipped once gate 1
 passed: FR-12 is met.
@@ -27,7 +27,8 @@ What closes the epic, in order:
    baselines with the prototype v2's renders (D-508, stories 4.7 AC 8 and
    4.13 AC 5). Owner decision (2026-10-28): it waits until his visual
    fixes are done (story 4.15 is the first set).
-3. The workstation runs of story 4.14 AC 6 and 8 to 10. AC 5 is measured
+3. The workstation runs of story 4.14 AC 6, 8 and 10, and AC 9's re-run of
+   its first two floors (E87, D-701). AC 5 is measured
    (E82): the walking run failed and `DEFAULT_WALKING` is `false` (D-480);
    its passes were taken with the session locked, at about 170 frames per
    second, and a run on the unlocked screen would confirm them. Story 4.16
@@ -108,10 +109,10 @@ binary without the gate, process-start noise: the next run read 4.7 ms.
 | 4.11 Focus mode and keys | review | |
 | 4.12 Sub-agents | review | gate 1 passed (E83); a teammate, `/btw`, `--bg` and nested sub-agents not observed by name |
 | 4.13 Dark theme | in progress | dark baselines (CI run, owner comparison) |
-| 4.14 Docs, checks, QA | in progress | AC 2 review, AC 6, 8 to 10 (owner), this report's closure; AC 5 measured (E82), AC 7 passed |
+| 4.14 Docs, checks, QA | in progress | AC 2 review, AC 6, 8 and 10 (owner), AC 9's re-run of two floors, this report's closure; AC 5 measured (E82, E86), AC 7 passed, AC 9 passed with a caveat (E87) |
 | 4.15 First-use feedback | review | the owner's next use of the real window |
 | 4.16 Walking's cost | review | AC 6 measured (E86): the walking run at 1.00 % of the machine, not under 1 %; walking on by default by the owner's decision (D-700) |
-| 4.17 Scene readability | review | the owner's two-second test (story 4.14 AC 9) on the screenshots it rendered again |
+| 4.17 Scene readability | review | the owner's two-second test on its screenshots passed with a caveat (story 4.14 AC 9, E87) |
 
 ## Slice 0 order (story 4.14 AC 11)
 
@@ -125,7 +126,7 @@ binary without the gate, process-start noise: the next run read 4.7 ms.
 
 ## Workstation runs (story 4.14 AC 5 to 10)
 
-AC 5 measured (E82), AC 7 passed; the others open, the owner's. The measurement home is ready:
+AC 5 measured (E82, E86), AC 7 passed, AC 9 passed with a caveat (E87); the others open, the owner's. The measurement home is ready:
 `node app/scripts/e2e-fixtures.mjs --home <new folder> scene-measure`
 prints the environment for `officina-app.exe`; `node
 app/scripts/scene-replay.mjs --home <that folder>` drives one crossing
@@ -139,7 +140,7 @@ run rewrites the installed window's stored view (E82).
 | 6 | Taskbar on the real app, 100 % and 150 % | open (gate 2 passed on the probe) |
 | 7 | Live theme switch in WebView2 | **pass** (owner, 2026-10-28): the window followed a Windows theme switch on Auto, no restart |
 | 8 | WebView2 look, 100 % and 150 %, light and dark, settled and walking | open |
-| 9 | Readability, five fixtures, under 2 s | open |
+| 9 | Readability, five fixtures, under 2 s | **pass, with a caveat** (owner, 2026-10-29, E87, D-701): 1920 x 1032, Scene, light, from `2a2fb94`, 2 s per floor in a random order. Count 5 of 5; oldest name 3 of 5, the two misses (`scene-subagents`, `scene-b`) the first two floors shown, before the owner knew what to look at, then 3 of 3. Re-run of those two floors in a random order pending; no scene change follows |
 | 10 | Adoption day | open |
 
 ## Traceability
@@ -214,8 +215,10 @@ each, with the decisions D-554 to D-559:
 
 The minor findings, a plaque on a waiting head and the "high priority"
 pill on its plaque, are fixed too (D-559). `readability.spec.ts` holds
-each fix with a hit test on what is painted. The owner's AC 9 run itself
-stays open.
+each fix with a hit test on what is painted. The owner's AC 9 run on
+these screenshots passed with a caveat (E87, D-701): every count read
+right, the oldest name read right on every floor once he knew the
+questions; the first two floors are to be run again in a random order.
 
 ## Decisions taken under delegation, for the owner to confirm
 

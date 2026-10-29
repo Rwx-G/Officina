@@ -1,6 +1,6 @@
 # Story 4.17: Scene readability
 
-**Status:** Review (code done; story 4.14 AC 9, the owner's two-second test, is run on the screenshots this story renders again)
+**Status:** Review (code done; story 4.14 AC 9, the owner's two-second test on the screenshots this story rendered again, passed with a caveat: research notes E87, D-701)
 
 ## Story
 
@@ -73,3 +73,4 @@ And two minor ones: in `scene-c` figure 3's head touches the bottom of the "Deci
 ## Change Log
 
 - 2026-10-29 created from the readability screenshots of story 4.14 AC 9; implemented (D-554 to D-559)
+- 2026-10-29 story 4.14 AC 9 run on its screenshots: pass with a caveat (E87, D-701)
