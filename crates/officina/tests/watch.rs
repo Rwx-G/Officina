@@ -2884,7 +2884,8 @@ impl OrchestratorWindow {
     }
 
     /// The first board within 10 s that `wanted` accepts, the session list
-    /// refreshed meanwhile.
+    /// refreshed meanwhile. Only the Windows tests start a session.
+    #[cfg(windows)]
     fn board_until(&self, wanted: impl Fn(&Board) -> bool) -> Board {
         let deadline = Instant::now() + Duration::from_secs(10);
         let boards = &self.emitted.as_ref().unwrap().boards;
