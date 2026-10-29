@@ -208,9 +208,11 @@ fn started(run_id: &str, timeout_s: u32) -> JournalEntry {
 
 #[test]
 fn recent_pairs_runs_and_marks_abandoned() {
+    // Read before the approval is stamped, so the approval stays the newest
+    // entry however long its subprocess takes to return.
+    let now = now_ms();
     let env = approved_env();
     let home = env.relay_home();
-    let now = now_ms();
     let finished = JournalEntry::RunFinished(RunFinished {
         body_broke_off: false,
         run_id: "done".to_owned(),
