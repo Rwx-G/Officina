@@ -1,0 +1,54 @@
+{
+  "schema": 1,
+  "_doc": "Hand-written cases of the PermissionRequest router's request (AD-181, story 5.22), replayed by crates/officina-core/tests/prompts_vectors.rs through PromptRequest::from_payload. A payload case gives what Claude Code sends and the request it makes, or null for none; pad appends count copies of char to tool_input.command before the replay, so an oversized input stays readable here. canonical is the input the hash covers; kept_bytes the length of the input the request keeps. output_properties pins every property name the hook's output may hold, at every depth. Placeholders only.",
+  "payload_cases": [
+    {
+      "name": "the documented payload, extra fields ignored",
+      "payload": {"session_id": "0f1e2d3c-4b5a-4978-8796-a5b4c3d2e1f0", "transcript_path": "/path/to/transcript.jsonl", "cwd": "C:/path/to/repo", "permission_mode": "default", "hook_event_name": "PermissionRequest", "tool_name": "Bash", "tool_input": {"description": "Remove the build folder", "command": "rm -rf build"}, "permission_suggestions": [{"type": "addRules", "rules": [{"toolName": "Bash", "ruleContent": "rm -rf build"}], "behavior": "allow", "destination": "localSettings"}]},
+      "expect": {"session_id": "0f1e2d3c-4b5a-4978-8796-a5b4c3d2e1f0", "tool_name": "Bash", "permission_mode": "default", "canonical": "{\"command\":\"rm -rf build\",\"description\":\"Remove the build folder\"}"}
+    },
+    {
+      "name": "keys are sorted at every depth and spacing is dropped",
+      "payload": {"session_id": "s1", "tool_name": "mcp__tracker__create", "tool_input": {"z": [3, {"b": true, "a": null}], "a": {"y": 1.5, "x": "two words"}}},
+      "expect": {"session_id": "s1", "tool_name": "mcp__tracker__create", "canonical": "{\"a\":{\"x\":\"two words\",\"y\":1.5},\"z\":[3,{\"a\":null,\"b\":true}]}"}
+    },
+    {
+      "name": "no tool name and no permission mode are recorded absent",
+      "payload": {"session_id": "s2", "tool_input": {"file_path": "C:/path/to/notes.md"}},
+      "expect": {"session_id": "s2", "canonical": "{\"file_path\":\"C:/path/to/notes.md\"}"}
+    },
+    {
+      "name": "no tool input is hashed as null",
+      "payload": {"session_id": "s3", "tool_name": "WebFetch"},
+      "expect": {"session_id": "s3", "tool_name": "WebFetch", "canonical": "null"}
+    },
+    {
+      "name": "an oversized input is kept up to the cap on a character boundary",
+      "payload": {"session_id": "s4", "tool_name": "Bash", "tool_input": {"command": "x"}},
+      "pad": {"char": "é", "count": 2100},
+      "expect": {"session_id": "s4", "tool_name": "Bash", "kept_bytes": 4095}
+    },
+    {
+      "name": "no session id makes no request",
+      "payload": {"tool_name": "Bash", "tool_input": {"command": "ls"}},
+      "expect": null
+    },
+    {
+      "name": "an empty session id makes no request",
+      "payload": {"session_id": "", "tool_name": "Bash", "tool_input": {"command": "ls"}},
+      "expect": null
+    },
+    {
+      "name": "a session id that is not text makes no request",
+      "payload": {"session_id": 7, "tool_name": "Bash", "tool_input": {"command": "ls"}},
+      "expect": null
+    }
+  ],
+  "output_properties": [
+    "hookSpecificOutput",
+    "hookSpecificOutput.decision",
+    "hookSpecificOutput.decision.behavior",
+    "hookSpecificOutput.decision.message",
+    "hookSpecificOutput.hookEventName"
+  ]
+}

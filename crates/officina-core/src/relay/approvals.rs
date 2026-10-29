@@ -506,6 +506,9 @@ pub enum DecideRefusal {
     /// `auto_max_per_hour` (D-142, review F15).
     #[error("request {0}: its action reached its hourly cap of review approvals")]
     HourlyCap(String),
+    /// No routed permission prompt of that id waits (AD-181).
+    #[error("no permission prompt {0} waits in the relay")]
+    UnknownPrompt(String),
 }
 
 /// The request the window may decide now, with its class, or why not: it

@@ -13,6 +13,7 @@ pub mod gate;
 pub mod http;
 pub mod journal;
 pub mod params;
+pub mod prompts;
 pub mod record;
 pub mod run;
 pub mod shell;

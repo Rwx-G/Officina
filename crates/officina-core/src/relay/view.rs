@@ -718,8 +718,11 @@ fn recent(lines: &[JournalLine], now_ms: i64, rows: &[AutoRow]) -> Vec<RecentEnt
                 // A launch is no relay entry: the Orchestrator view's
                 // history shows work orders, from the registry (AD-92).
                 // A review shows on its request's decision, and the
-                // switch's state in the `auto` section.
+                // switch's state in the `auto` section. A routed prompt
+                // has no window surface until the routing story (D-580).
                 JournalEntry::WorkOrderLaunched(_)
+                | JournalEntry::PromptRouted(_)
+                | JournalEntry::PromptDecided(_)
                 | JournalEntry::AutoEscalated(_)
                 | JournalEntry::AutoReview(_)
                 | JournalEntry::AutoApprovalSet(_)
@@ -1201,6 +1204,8 @@ mod tests {
                 // Left out of the relay view, which `recent` checks by its
                 // match: work orders show in the Orchestrator view.
                 JournalKind::WorkOrderLaunched
+                | JournalKind::PromptRouted
+                | JournalKind::PromptDecided
                 | JournalKind::AutoEscalated
                 | JournalKind::AutoReview
                 | JournalKind::AutoApprovalSet

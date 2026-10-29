@@ -142,6 +142,8 @@ pub enum JournalEntry {
     AutoApprovalSet(AutoApprovalSet),
     OrchestratorStarted(OrchestratorStarted),
     MeetingAnswer(MeetingAnswer),
+    PromptRouted(PromptRouted),
+    PromptDecided(PromptDecided),
 }
 
 closed_enum! {
@@ -167,6 +169,8 @@ closed_enum! {
         AutoApprovalSet,
         OrchestratorStarted,
         MeetingAnswer,
+        PromptRouted,
+        PromptDecided,
     }
 }
 
@@ -191,6 +195,8 @@ impl JournalEntry {
             JournalEntry::AutoApprovalSet(_) => JournalKind::AutoApprovalSet,
             JournalEntry::OrchestratorStarted(_) => JournalKind::OrchestratorStarted,
             JournalEntry::MeetingAnswer(_) => JournalKind::MeetingAnswer,
+            JournalEntry::PromptRouted(_) => JournalKind::PromptRouted,
+            JournalEntry::PromptDecided(_) => JournalKind::PromptDecided,
         }
     }
 }
@@ -661,6 +667,27 @@ pub struct MeetingAnswer {
     pub proposal_id: Option<String>,
 }
 
+/// The window saw a `PermissionRequest` waiting for it (AD-181): the
+/// session, the tool and the input's hash; never the input.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PromptRouted {
+    pub session_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_name: Option<String>,
+    pub input_sha256: String,
+}
+
+/// The author answered a routed `PermissionRequest` (AD-181): the session,
+/// the tool, the input's hash and the answer; never the input.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PromptDecided {
+    pub session_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_name: Option<String>,
+    pub input_sha256: String,
+    pub decision: super::prompts::PromptAnswer,
+}
+
 /// How a reader classifies one raw line.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[allow(clippy::large_enum_variant)] // returned by value and consumed at once, never stored
@@ -803,6 +830,66 @@ mod tests {
                 source: AnswerSource::Proposal,
                 proposal_id: Some("1761700000000-00000000000000ab".into()),
             }),
+            JournalKind::PromptRouted => JournalEntry::PromptRouted(PromptRouted {
+                session_id: "0f1e2d3c-4b5a-4978-8796-a5b4c3d2e1f0".into(),
+                tool_name: Some("Bash".into()),
+                input_sha256: "00".repeat(32),
+            }),
+            JournalKind::PromptDecided => JournalEntry::PromptDecided(PromptDecided {
+                session_id: "0f1e2d3c-4b5a-4978-8796-a5b4c3d2e1f0".into(),
+                tool_name: None,
+                input_sha256: "00".repeat(32),
+                decision: super::super::prompts::PromptAnswer::Deny,
+            }),
+        }
+    }
+
+    /// Story 5.22 AC 5 (AD-181): `prompt_routed` and `prompt_decided` read
+    /// back with the session, tool and hash, for every answer, and no line
+    /// carries the request's input, though the request held it.
+    #[test]
+    fn prompt_routed_and_decided_never_carry_the_input() {
+        use crate::relay::prompts::{PROMPT_WAIT_MS, PromptAnswer, PromptRequest};
+        let secret = "deploy --token sk-placeholder-0000";
+        let request = PromptRequest::from_payload(
+            &serde_json::json!({
+                "session_id": "0f1e2d3c-4b5a-4978-8796-a5b4c3d2e1f0",
+                "tool_name": "Bash",
+                "tool_input": {"command": secret},
+            }),
+            None,
+            1,
+            5,
+            PROMPT_WAIT_MS,
+        )
+        .unwrap();
+        let routed = JournalEntry::PromptRouted(PromptRouted {
+            session_id: request.session_id.clone(),
+            tool_name: request.tool_name.clone(),
+            input_sha256: request.input_sha256.clone(),
+        });
+        let decided = PromptAnswer::ALL.iter().map(|answer| {
+            JournalEntry::PromptDecided(PromptDecided {
+                session_id: request.session_id.clone(),
+                tool_name: request.tool_name.clone(),
+                input_sha256: request.input_sha256.clone(),
+                decision: *answer,
+            })
+        });
+        for entry in std::iter::once(routed).chain(decided) {
+            let line = JournalLine::new(6, entry.clone()).to_line();
+            assert!(
+                !line.contains("deploy") && !line.contains("sk-placeholder"),
+                "{line}"
+            );
+            let value: serde_json::Value = serde_json::from_str(&line).unwrap();
+            assert_eq!(value["input_sha256"], request.input_sha256.as_str());
+            assert_eq!(value["tool_name"], "Bash");
+            assert!(value.get("tool_input").is_none());
+            assert_eq!(
+                parse_line(line.trim_end()),
+                ParsedLine::Line(JournalLine::new(6, entry))
+            );
         }
     }
 
