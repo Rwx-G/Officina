@@ -14,7 +14,7 @@ every job of `.github/workflows/ci.yml` is green on the last commit, and
 every rule the stories added has its case. Epic 4 cannot close on code
 alone: its proof of FR-9 (CPU), of the real taskbar, of the live theme and
 of the WebView2 look is a set of workstation runs that only the owner can
-make (story 4.14 AC 5, 6 and 8 to 10; AC 7 passed), and two Slice 0
+make (story 4.14 AC 6 and 8 to 10; AC 7 passed; AC 5 measured, E82), and two Slice 0
 gates still wait for the owner's real-use data (gates 1 and 5; gate 4 is
 recorded, E81). Story 4.12 (sub-agents) is not
 implemented: gate 1 has not run, and D-476 and D-518 keep it approved and
@@ -28,8 +28,10 @@ What closes the epic, in order:
    baselines with the prototype v2's renders (D-508, stories 4.7 AC 8 and
    4.13 AC 5). Owner decision (2026-10-28): it waits until his visual
    fixes are done (story 4.15 is the first set).
-3. The workstation runs of story 4.14 AC 5, 6 and 8 to 10, the walking run
-   first: it alone decides `DEFAULT_WALKING` (D-480, D-500, D-515).
+3. The workstation runs of story 4.14 AC 6 and 8 to 10. AC 5 is measured
+   (E82): the walking run failed and `DEFAULT_WALKING` is `false` (D-480);
+   its passes were taken with the session locked, at about 170 frames per
+   second, and a run on the unlocked screen would confirm them.
 4. The owner's review of the README assets (story 4.14 AC 2), waiting on
    the same visual fixes (owner decision); story 4.15 rendered them again.
 
@@ -92,11 +94,11 @@ binary without the gate, process-start noise: the next run read 4.7 ms.
 | 4.7 Scene drawn in place | in progress | light baselines (CI run, owner comparison) |
 | 4.8 Targets, keys, file, strip | review | |
 | 4.9 Alert room and beacon | review | |
-| 4.10 Walking | review | the walking CPU run (4.14 AC 5) decides the default |
+| 4.10 Walking | review | the walking CPU run failed (E82): walking is off by default |
 | 4.11 Focus mode and keys | review | |
 | 4.12 Sub-agents | approved, not implemented | gate 1 (D-476, D-518) |
 | 4.13 Dark theme | in progress | dark baselines (CI run, owner comparison) |
-| 4.14 Docs, checks, QA | in progress | AC 2 review, AC 5, 6, 8 to 10 (owner), this report's closure; AC 7 passed |
+| 4.14 Docs, checks, QA | in progress | AC 2 review, AC 6, 8 to 10 (owner), this report's closure; AC 5 measured (E82), AC 7 passed |
 | 4.15 First-use feedback | review | the owner's next use of the real window |
 
 ## Slice 0 order (story 4.14 AC 11)
@@ -105,21 +107,23 @@ binary without the gate, process-start noise: the next run read 4.7 ms.
 |---|---|---|
 | 1 Sub-agent signals | before 4.12 starts | not run; 4.12 not started |
 | 2 Taskbar | before 4.5 closes | E80, passed (light taskbar, 100 %); 4.5 in review |
-| 3 Walking cost | withdrawn (D-500) | AD-71's walking run in 4.14 AC 5 |
+| 3 Walking cost | withdrawn (D-500) | AD-71's walking run in 4.14 AC 5: failed, E82 |
 | 4 What a real wait emits | before 4.3 starts | **not met**, recorded late: E81 (2026-10-28) after 4.3 was built for both question shapes; a question emits `permission_prompt`, a known start, now a vector case; rule 3 unchanged |
 | 5 Floor and window | before 4.6 merges | the owner's answers before 4.6 (D-519, D-520); the real-use counts open |
 
 ## Workstation runs (story 4.14 AC 5 to 10)
 
-All open, the owner's. The measurement home is ready:
+AC 5 measured (E82), AC 7 passed; the others open, the owner's. The measurement home is ready:
 `node app/scripts/e2e-fixtures.mjs --home <new folder> scene-measure`
 prints the environment for `officina-app.exe`; `node
 app/scripts/scene-replay.mjs --home <that folder>` drives one crossing
-change every 10 s for 10 minutes.
+change every 10 s for 10 minutes. Start the window with
+`WEBVIEW2_USER_DATA_FOLDER` set to a folder of that home as well, or the
+run rewrites the installed window's stored view (E82).
 
 | AC | Run | Result |
 |---|---|---|
-| 5 | Idle and walking CPU, five 10-minute runs, both units (1 % of the machine, D-515) | open |
+| 5 | Idle and walking CPU, five 10-minute runs, both units (1 % of the machine, D-515) | E82, 2026-10-29, session locked (about 170 frames per second): mean 0.49 % of the machine (11.8 % of one core) halos breathing throughout, 0.12 % (2.9 %) the two-minute rule, 0.066 % (1.6 %) halos steady, 0.58 % (14.0 %) replay walking off: pass; **1.95 %** (46.9 %) replay walking on: **fail**, D-480's fallback shipped (`DEFAULT_WALKING` false) |
 | 6 | Taskbar on the real app, 100 % and 150 % | open (gate 2 passed on the probe) |
 | 7 | Live theme switch in WebView2 | **pass** (owner, 2026-10-28): the window followed a Windows theme switch on Auto, no restart |
 | 8 | WebView2 look, 100 % and 150 %, light and dark, settled and walking | open |
@@ -139,7 +143,7 @@ change every 10 s for 10 minutes.
 | FR-6 Keyboard and accessibility | 4.8, 4.11, 4.13 | `scene.spec.ts` (Tab, arrows, 44 px targets), `modes.spec.ts`, `tokens.test.ts` |
 | FR-7 Modes | 4.7, 4.11 | `modes.spec.ts`, `view.test.ts` |
 | FR-8 Dark theme | 4.13 | `themes.spec.ts`, `tokens.test.ts`, `alert.spec.ts > an alert changes no theme token` |
-| FR-9 Performance | 4.10, 4.14 | open: AC 5's run |
+| FR-9 Performance | 4.10, 4.14 | AC 5, E82: the halo rule and walking off within 1 % of the machine; walking on over it, so off by default (`view.test.ts`, `modes.spec.ts > walking is off by default`) |
 | FR-10 Alert | 4.3, 4.5, 4.9 | the alert sections of `scene.json`, `components.test.ts` (the band's words), `alert.spec.ts` |
 | FR-11 Taskbar, no toast | 4.5 | `taskbar.rs` tests, E80; real app open (AC 6) |
 | FR-12 Sub-agents | 4.1 (tooling), 4.12 | not shipped while gate 1 has not passed (D-476) |

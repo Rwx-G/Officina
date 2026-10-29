@@ -76,6 +76,15 @@ README, not here.
   check the input tokens do not move; if they do, refuse a call while a
   `CLAUDE.md` or `.claude/` sits in those folders, with a vector case.
 
+- Walking's cost (story 4.14 AC 5, E82): at one walk every 10 s, walking
+  on took 1.95 % of the machine against 0.58 % with walking off, about a
+  third of one core for the walks alone, so `DEFAULT_WALKING` is `false`
+  (D-480) although the owner wants walking on (D-515). Before turning it
+  back on: profile a walk frame in the release window (what each frame
+  redraws, layout or paint, and the figures' DOM work), cut it, and run
+  AC 5's walking run again, this time with the session unlocked on the
+  240 Hz screen (E82 ran locked, at about 170 frames per second).
+
 ## Owner requested
 
 - French UI (owner request, 2026-10-28; after v0.4, not a v0.4 story):

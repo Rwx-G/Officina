@@ -1,6 +1,6 @@
 # Story 4.14: Documentation, README assets, workstation checks and QA closure
 
-**Status:** In progress (the owner's workstation runs, AC 5, 6 and 8 to 10, and his review of the README assets are open; AC 7 passed; see Completion Notes)
+**Status:** In progress (the owner's workstation runs, AC 6 and 8 to 10, and his review of the README assets are open; AC 5 measured with its fallback, AC 7 passed; see Completion Notes)
 
 ## Story
 
@@ -30,7 +30,8 @@ so that v0.4 is understood without guessing, its CPU promise is a number, and no
 - [x] `readme-assets.spec.ts` cases; `pnpm readme-assets`; commit the assets (AC 2). The owner's review is open
 - [x] CHANGELOG consolidation (AC 3)
 - [x] `e2e-fixtures.mjs` `--home`, `scene-measure`; `scene-replay.mjs` and its test; the Vitest include gains `scripts/*.test.ts` (AC 4): built in story 4.2
-- [ ] Workstation runs and research-notes entries (AC 5-10); the fallbacks if a check fails (AC 5, 7): the owner's
+- [x] AC 5 CPU runs (E82) and D-480's walking fallback
+- [ ] Workstation runs and research-notes entries (AC 6, 8-10): the owner's
 - [ ] Audits, `docs/qa/epic-4-report.md`, backlog (AC 11, 13): the report is written, open until the owner's entries; the five audits run at closure
 
 ## Dev Notes
@@ -66,7 +67,8 @@ so that v0.4 is understood without guessing, its CPU promise is a number, and no
 - AC 3: review.
 - AC 4: Vitest `app/scripts/scene-replay.test.ts > the replay schedules one crossing change every 10 s`; the CI step "e2e fixtures from the real CLI" unchanged.
 - AC 7: **pass** (owner, 2026-10-28): with the installed build open on Auto, he switched the Windows theme and the window followed by itself, no restart; D-118's fallback is not needed. The WebView2 runtime version was not noted.
-- AC 5, 6, 8 to 10: **open (owner)**. Build the release window from `main`, quit any running Officina, then `node app/scripts/e2e-fixtures.mjs --home <new folder> scene-measure` and start `officina-app.exe` with the environment it prints; `node app/scripts/scene-replay.mjs --home <that folder>` drives the walks. Measure the `officina-app` process and its `msedgewebview2.exe` children, in % of the machine and of one core, over 10 minutes each: halos breathing, the two-minute rule, halos steady, the replay with walking on, the replay with walking off (AC 5; if the walking run reaches 1 % of the machine, `DEFAULT_WALKING` becomes `false` in the same change). Then the taskbar at 100 % and 150 % (AC 6), the look at 100 % and 150 %, light and dark, settled and walking (AC 8), the 2 s readability on five fixtures (AC 9), and the day Scene becomes the chosen mode (AC 10), each a research-notes entry.
+- AC 5: **walking run failed, fallback shipped** (2026-10-29, research notes E82): mean CPU in % of the machine (gate under 1 %, D-515) and of one core (information): halos breathing throughout 0.49 % (11.8 %), the real two-minute rule 0.12 % (2.9 %), halos steady 0.066 % (1.6 %), replay with walking on **1.95 %** (46.9 %), replay with walking off 0.58 % (14.0 %). `DEFAULT_WALKING` is `false` in the same change (D-480): `view.test.ts > a stored view without walking reads as walking off`, `modes.spec.ts > walking is off by default`; the cases about walking open the scene with walking on (`openWalkingScene`); README and CHANGELOG follow. `HALO_BREATHING_MS` stays. Measured with the session locked (the owner asleep): the WebView stayed visible but drew about 170 frames per second instead of the screen's 240, so the passes are under that condition (E82 gives the figures scaled by 1.4); the failure holds either way.
+- AC 6, 8 to 10: **open (owner)**. Build the release window from `main`, quit any running Officina, then `node app/scripts/e2e-fixtures.mjs --home <new folder> scene-measure` and start `officina-app.exe` with the environment it prints, plus `WEBVIEW2_USER_DATA_FOLDER=<that folder>webview` so the run does not rewrite the installed window's stored view (E82); `node app/scripts/scene-replay.mjs --home <that folder>` drives the walks. Then the taskbar at 100 % and 150 % (AC 6), the look at 100 % and 150 %, light and dark, settled and walking (AC 8), the 2 s readability on five fixtures (AC 9), and the day Scene becomes the chosen mode (AC 10), each a research-notes entry.
 - AC 11: `docs/qa/epic-4-report.md` "Slice 0 order": gate 2 before 4.5's close, gate 3 withdrawn, gate 1 not run and 4.12 not started; gate 4 did not precede 4.3 (recorded in story 4.3); gate 5's answers preceded 4.6, its counts open.
 - AC 12: the `windows` job's Playwright step runs `--repeat-each=3`; the local replay of it passed (783 passed, 6 skipped).
 - AC 13: `docs/qa/epic-4-report.md`, gate decision open; the per-AD traceability, the audits and the closure wait for the owner's entries.
@@ -80,6 +82,10 @@ so that v0.4 is understood without guessing, its CPU promise is a number, and no
 - `docs/assets/scene-dark.png` (new)
 - `docs/assets/scene.gif` (new)
 - `docs/qa/epic-4-report.md` (new)
+- `docs/research-notes.md` (E82)
+- `app/src/lib/view.svelte.ts`, `app/src/lib/view.test.ts`, `app/src/components/Header.svelte`, `app/src/components/scene/scene.test.ts` (AC 5 fallback)
+- `app/e2e/fixtures.ts`, `app/e2e/modes.spec.ts`, `app/e2e/walk.spec.ts`, `app/e2e/scene.spec.ts`, `app/e2e/stable-size.spec.ts`, `app/e2e/readme-assets.spec.ts` (AC 5 fallback)
+- `CHANGELOG.md`
 - `docs/stories/sprint-status.yaml`
 
 ## Change Log
@@ -90,3 +96,4 @@ so that v0.4 is understood without guessing, its CPU promise is a number, and no
 - 2026-10-28 renumbered 4.14 after the plan challenge (D-497 to D-501, D-506): the former AC 11 (what a real wait emits) moved to story 4.1's gate 4; the CPU threshold in both units and the only walking measurement; Slice 0's order for gates 1, 2, 4 and 5; the challenge's outcomes in the report
 - 2026-10-28 started: README pass, the scene's README assets, the QA report written open; the workstation runs and the assets' review are the owner's
 - 2026-10-28 AC 7 passed: the window followed a Windows theme switch on Auto (owner)
+- 2026-10-29 AC 5 measured (E82): the walking run over 1 % of the machine; `DEFAULT_WALKING` is `false` (D-480)

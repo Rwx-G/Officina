@@ -415,6 +415,102 @@ about 70 s at each dialog before answering.
   give. Rule 3 is unchanged. Gate 4 is recorded after story 4.3 was built
   (D-499's order not met, already in the Epic 4 report).
 
+## E82. Idle and walking CPU of the scene (story 4.14 AC 5)
+
+Story 4.14 AC 5, AD-71 as amended, D-120, D-480, D-515. Run on
+2026-10-29 at night with the owner's leave, his installed Officina
+closed and nothing else heavy running on the machine.
+
+Machine: Intel Core Ultra 9 285K, 24 logical processors (24 cores, no
+SMT), 95 GB RAM, NVIDIA GeForce RTX 5090. Windows 11 25H2, build
+26200.9711; WebView2 runtime 156.0.4314.50. The window maximised on the
+primary screen, 3440 x 1440 at 240 Hz, 100 % scaling (96 DPI); theme
+Auto, Windows dark.
+
+Binary: the release window of `main` at `5efc8a0`, built by `pnpm bundle`.
+Run 1 used a local build of the same commit with `HALO_BREATHING_MS` at
+one hour, D-120's worst-case build, never committed.
+
+**Condition: the session was locked.** The owner was asleep and the
+console showed the lock screen; the window was shown, maximised, not
+minimised and not in front. A local probe build (a frame counter written
+to the window title, never committed) read, in the same state:
+`document.visibilityState` "visible", reduced motion off, Scene mode and
+the seeded walking value, five `halo-breathe` animations running in the
+breathing setup and none in the steady one, and `requestAnimationFrame`
+at about 170 frames per second, not the screen's 240. So the WebView is
+not throttled under the lock, but it draws about 30 % fewer frames than
+on the unlocked screen: a per-frame cost would be up to 240/170 = 1.4
+times the figures below.
+
+Method:
+
+- Each run on a new home from `node app/scripts/e2e-fixtures.mjs --home
+  <dir> scene-measure`, the window started with the printed environment
+  plus `WEBVIEW2_USER_DATA_FOLDER=<dir>\webview`. Without that variable
+  the release window keeps its WebView2 profile, and with it the stored
+  view, in the installed app's folder under the user's local app data,
+  whatever `USERPROFILE` says: a measurement run would rewrite the
+  owner's stored mode and walking choice.
+- The stored view (Scene; walking on, or off for run 5) was written into
+  that profile once by a throwaway build, never committed, and copied
+  into each run's profile; the measured binary only read it.
+- Window maximised 3 s after the start, 15 s to settle, then 60 samples
+  10 s apart; for runs 4 and 5, `node app/scripts/scene-replay.mjs --home
+  <dir>` started with the first sample (one crossing change every 10 s,
+  60 changes).
+- A sample sums the CPU time (`TotalProcessorTime`) of `officina-app` and
+  of every `msedgewebview2.exe` below it in the parent chain (7 processes),
+  over the sample's wall time: % of one logical core, and that over 24
+  for the machine. Mean: total CPU time over total wall time; max: the
+  largest 10 s sample. The fake claude processes the collector starts are
+  stand-ins for `claude` and are not counted.
+- `scene-measure`'s waits are 3 to 9 minutes old when it is written and
+  the alert threshold defaults to 10 minutes, so in any 10-minute idle
+  run the waits escalate one by one (a walk to the alert room each, the
+  band, the taskbar). The idle runs 1 to 3 add `[alert] after_minutes =
+  30` to the home's floor file, so nothing changes during them.
+- Those waits being past two minutes, the shipped binary shows them
+  steady from the start: run 3 is that, rather than D-120's build at 0.
+  Run 2 re-dates the five waits to the start (their prompt two minutes
+  before), so each breathes its two minutes during the run, then rests.
+  Runs 4 and 5 use the home as written: the replay ends the old waits in
+  its first minute, before any reaches 10 minutes.
+
+| Run | Setup | Mean, machine | Max, machine | Mean, one core | Max, one core | Gate: under 1 % of the machine |
+|---|---|---|---|---|---|---|
+| 1 Halos breathing throughout | breathing build, five waits breathing | 0.49 % | 0.80 % | 11.8 % | 19.2 % | pass |
+| 2 The real two-minute rule | shipped, five waits from the start | 0.12 % | 0.63 % | 2.9 % | 15.1 % | pass |
+| 3 Halos steady | shipped, five waits past two minutes | 0.066 % | 0.15 % | 1.6 % | 3.6 % | pass |
+| 4 Replay, walking on | shipped | 1.95 % | 3.39 % | 46.9 % | 81.3 % | **fail** |
+| 5 Replay, walking off | shipped | 0.58 % | 0.84 % | 14.0 % | 20.2 % | pass |
+
+- Run 2: 0.48 % of the machine (11.4 % of one core) over the first 100 s,
+  while the halos breathe, then 0.048 % (1.2 %).
+- Run 5 climbs from 0.13 % to about 0.6 % over its first two minutes: the
+  replay's new waits each breathe their two minutes, so about two halos
+  breathe at any time. The glides add little.
+- Run 4 less run 5, walking's own cost at one walk every 10 s: about
+  1.4 % of the machine (33 % of one core). The frame loop stops once
+  everyone has arrived, but at this pace a walk is under way most of the
+  time.
+- The per-core figure is information only (D-515): every run with a
+  breathing halo is over 8 % of one core.
+- Times 1.4 for the unlocked screen, an upper bound since not every cost
+  is per frame: run 1 0.69 %, run 2 0.17 %, run 5 0.82 % on average; run
+  5's largest sample 1.18 %. Run 4 fails at 170 frames per second, so its
+  verdict holds on the unlocked screen.
+- Synology Drive's daemon used about one core during the runs; it is not
+  in the measured processes.
+
+Outcome: the walking run fails FR-9's gate, so D-480's fallback ships in
+the same change: `DEFAULT_WALKING` is `false`, the Walking toggle stays,
+and the README and the default-mode cases follow
+(`modes.spec.ts > walking is off by default`). The two-minute halo run
+passes: `HALO_BREATHING_MS` stays 120 000 ms. A run on the unlocked
+240 Hz screen would put the passes in the AC's own condition; it cannot
+reverse run 4.
+
 ## E7. Configuration directory
 
 - **Documented.** `CLAUDE_CONFIG_DIR` redirects settings, session history and

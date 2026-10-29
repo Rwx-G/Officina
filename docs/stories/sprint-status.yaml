@@ -98,12 +98,12 @@ stories:
   - {id: "4.7", file: story-4.7-scene-drawn-in-place-and-scene-mode.md, slice: A, status: in-progress}
   - {id: "4.8", file: story-4.8-scene-targets-keyboard-file-and-strip.md, slice: A, status: review}
   - {id: "4.9", file: story-4.9-alert-room-and-beacon.md, slice: A, status: review}
-  - {id: "4.10", file: story-4.10-walking.md, slice: A, status: review}  # AD-71 walking run (D-515) is story 4.14's
+  - {id: "4.10", file: story-4.10-walking.md, slice: A, status: review}  # AD-71 walking run failed (E82): DEFAULT_WALKING is false since story 4.14
   - {id: "4.11", file: story-4.11-focus-mode-and-keys.md, slice: A, status: review}
   - {id: "4.12", file: story-4.12-subagents.md, slice: B, status: approved}
   # 4.13: code done; AC 5's dark baselines wait for the CI snapshot run and the owner's comparison with the prototype's dark render (D-508).
   - {id: "4.13", file: story-4.13-dark-theme.md, slice: B, status: in-progress}
-  - {id: "4.14", file: story-4.14-docs-workstation-checks-and-qa.md, slice: B, status: in-progress}  # AC 7 passed; AC 2 review and AC 5, 6, 8-10 are the owner's
+  - {id: "4.14", file: story-4.14-docs-workstation-checks-and-qa.md, slice: B, status: in-progress}  # AC 7 passed; AC 5 measured (E82), walking fallback shipped; AC 2 review and AC 6, 8-10 are the owner's
   # 4.15: the owner's first-use feedback on the installed build (D-535 to D-546).
   - {id: "4.15", file: story-4.15-first-use-feedback.md, slice: B, status: review}
 ---

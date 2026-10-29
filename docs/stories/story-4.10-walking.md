@@ -85,7 +85,7 @@ AC to test:
 - AC 10: Playwright `app/e2e/scene.spec.ts > a walking figure's target is at its destination from the first frame`, on story 4.8's layer 5.
 - AC 11: Playwright `scene.spec.ts > nothing in the scene changes while the payloads are unchanged`, unchanged, `openScene` waiting for `data-moving="0"`.
 - AC 12: `pnpm lint`; Vitest `app/src/lib/scene/lint.test.ts > the mover alone may use the frame loop and performance.now`, and the existing case, which now also covers files beside and named like the mover.
-- AC 13: `modes.spec.ts > walking is on by default`; story 4.14's AD-71 walking run is the fallback's trigger.
+- AC 13: `modes.spec.ts > walking is on by default`; story 4.14's AD-71 walking run is the fallback's trigger. The run failed on 2026-10-29 (research notes E82, 1.95 % of the machine): story 4.14 shipped the fallback, and the case is now `modes.spec.ts > walking is off by default`.
 - AC 14: `CHANGELOG.md` `[Unreleased]` Added (walking and the toggle); README "The scene (v0.4, in progress)": a Walking section (walking, walking off, reduced motion, arrivals and departures through the entrance).
 
 Gates run: `pnpm check`, `pnpm lint`, `pnpm test` (241), `pnpm build`, `cargo test -p officina-app`, the whole Playwright suite with `--repeat-each=3` (720 passed, 3 skipped: the baseline case of story 4.7, D-508).
