@@ -370,6 +370,14 @@ project uses [Semantic Versioning](https://semver.org/).
   session file docks beside the scene when the window leaves room for it
   (story 4.15).
 - No shadow under the scene's floor (story 4.15).
+- The scene reads in one glance (story 4.17): the register is fixed-size
+  overlay UI over the scene's top-right corner, its heading counting
+  everyone who waits ("Needs you: 6"), one row per number key, an
+  approval-only wait marked by an amber diamond and the word "approval";
+  it no longer shrinks with the floor at eight projects. A desk is named
+  by its letter on a square tag, so a digit on a round badge is always a
+  board number. The decision office's extra waits are a "+n" on its
+  plaque, which hangs at the office's back.
 
 - `officina doctor` prints complete blocks to paste, never fragments to
   merge by hand. For the hooks, the whole `"hooks"` key of the user
@@ -668,6 +676,9 @@ project uses [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- A waiting session's ticket could hide behind the alert room's beacon
+  when the queue reached the corridor: tickets are drawn above everything
+  on the floor (story 4.17).
 - Archiving a subject in the Subjects view left its ended session in To
   resume: the board now reads the subject's status, so the session moves
   to Done, tagged "subject archived", and comes back if the subject is
