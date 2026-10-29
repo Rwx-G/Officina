@@ -767,7 +767,7 @@ impl RelayActivity<'_> {
 ///
 /// ```
 /// use officina_core::mcp::serves_in;
-/// assert!(serves_in("C:\Home\orchestrator\workdir\\", "c:/home"));
+/// assert!(serves_in(r"C:\Home\orchestrator\workdir\", "c:/home"));
 /// assert!(!serves_in("C:/home/orchestrator", "C:/home"));
 /// assert!(!serves_in("C:/home/orchestrator/workdir/sub", "C:/home"));
 /// ```
