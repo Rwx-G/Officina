@@ -22,9 +22,8 @@ pub const HOOK_FIELDS: &[(&str, &[&str])] = &[
         "Notification",
         &["session_id", "cwd", "notification_type", "message"],
     ),
-    // From the hooks reference (AD-176), not yet from a research note:
-    // Slice 0's gate 1 records them observed on the workstation, and the
-    // canary reports a field a version leaves out meanwhile.
+    // From the hooks reference (AD-176), observed on every line of gate 1
+    // (research notes E83).
     ("SubagentStart", &["session_id", "agent_id", "agent_type"]),
     ("SubagentStop", &["session_id", "agent_id", "agent_type"]),
 ];
@@ -311,5 +310,25 @@ mod tests {
             );
         }
         assert!(absent_hook_fields("PreToolUse", &json!({})).is_empty());
+    }
+
+    /// Story 4.12 AC 4 (AD-12): a sub-agent payload holding only its
+    /// contract's fields gives a line with everything the sub-agent folding
+    /// reads, so a release that drops one shows as missing.
+    #[test]
+    fn subagent_fields_are_in_the_contract() {
+        for event in crate::events::SUBAGENT_EVENTS {
+            let mut payload: serde_json::Map<String, serde_json::Value> = hook_fields(event)
+                .iter()
+                .map(|f| ((*f).to_owned(), json!("x")))
+                .collect();
+            payload.insert("hook_event_name".to_owned(), json!(event));
+            let line = crate::events::reduce_payload(&serde_json::Value::Object(payload), 1, true)
+                .unwrap();
+            assert!(line.absent.is_empty(), "{event}");
+            assert!(line.session_id.is_some(), "{event}");
+            assert!(line.agent_id.is_some(), "{event}");
+            assert!(line.agent_type.is_some(), "{event}");
+        }
     }
 }
