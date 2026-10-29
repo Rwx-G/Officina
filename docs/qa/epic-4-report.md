@@ -113,6 +113,7 @@ binary without the gate, process-start noise: the next run read 4.7 ms.
 | 4.15 First-use feedback | review | the owner's next use of the real window |
 | 4.16 Walking's cost | review | AC 6 measured (E86): the walking run at 1.00 % of the machine, not under 1 %; walking on by default by the owner's decision (D-700) |
 | 4.17 Scene readability | review | the owner's two-second test on its screenshots passed with a caveat (story 4.14 AC 9, E87) |
+| 4.19 Session panel polish | review | the owner's look at the panel's edge and the exchange on the installed build (screenshots before and after, both screens, both themes) |
 
 ## Slice 0 order (story 4.14 AC 11)
 
@@ -220,6 +221,35 @@ these screenshots passed with a caveat (E87, D-701): every count read
 right, the oldest name read right on every floor once he knew the
 questions; the first two floors are to be run again in a random order.
 
+## Story 4.19 (the session panel's polish)
+
+The owner's two remarks on the installed v0.4 (2026-10-29), with the
+decisions D-702 to D-709:
+
+1. The session file cut off abruptly against the header: it is now a
+   surface inset in the sessions area, a gap under the header, its right
+   edge on the header's last control, its shadow whole (D-702, D-703); over
+   the scene it covers the register whole (D-704).
+2. The exchange hard to read: it is a conversation, the author's last
+   prompt on the right, Claude's last answer on the left, each labelled,
+   the text as written (D-705, D-706), after the file's buttons (D-707),
+   without invented times (D-708).
+
+`session-file.spec.ts` holds both, at 1920 x 1032 and 3440 x 1392 in both
+themes, with a fixture round written through the real hook.
+
+The full local gate on its code (`4a3a0a8`, on `b86051d`): fmt and clippy
+clean; 1,312 Rust tests passed, 0 failed, 11 ignored; the release perf run
+passed with CI's budgets (run without them first, under the shared
+machine's load, the gate's own cost read 5.8 ms against the 5 ms
+workstation bound, then the hook's p95 32.5 ms against 30 ms with an empty
+process at 29.9 ms); the lexer, stress, crash, authority, registry and
+roots checks passed; svelte-check, ESLint clean, Vitest 281 passed;
+Playwright `--repeat-each=3` 1,041 passed, 6 skipped (the baseline cases,
+D-508); the mutants job caught each of its three mutants and its control
+run passed; `cargo deny` ok, `pnpm audit` 1 low, ignored; `core-linux` in
+`rust:1-bookworm`: fmt and clippy clean, 1,168 passed, 0 failed, 9 ignored.
+
 ## Decisions taken under delegation, for the owner to confirm
 
 - D-529: the "relay stopped" chip in the danger colour.
@@ -238,3 +268,7 @@ questions; the first two floors are to be run again in a random order.
 - D-554 to D-559 (story 4.17): above all D-555 (the register in the
   top-right corner, which the session file covers on a Full HD screen
   while it is open) and D-558 (desks named by letters instead of numbers).
+- D-702 to D-709 (story 4.19): above all D-702 (the session file as an
+  inset surface rather than a header and panel sharing one edge), D-705
+  (the labels "Your last prompt" and "Claude's last answer") and D-708 (no
+  time on a message, since the card carries none).

@@ -433,6 +433,15 @@ project uses [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- The session file in Scene mode stands under the header as a panel of its
+  own: a gap under the header, its right edge on the header's last control,
+  four bordered rounded edges and a whole shadow, instead of running into
+  the header and the window's edges (story 4.19). Over the scene it covers
+  the register whole.
+- The session file shows the last exchange as a conversation: your last
+  prompt in a bubble on the right, Claude's last answer on the left, each
+  labelled, the text exactly as written (story 4.19). It comes after the
+  file's buttons, so Bring to front stays in view.
 - The board JSON contract is schema 5 (v0.5, story 5.12): each approval
   carries its `class` (`human`, `auto`) and its `state` (`pending`,
   `reviewing`); only a pending request counts as waiting and makes a session
