@@ -14,7 +14,8 @@
 //! board's floor check does; catalogue issues, a pending change and every
 //! warning of D-32 warn. The gate's registration is the hooks check of
 //! [`crate::doctor`] (D-18). A workstation that does not use the relay gets
-//! no relay line at all.
+//! no relay line at all. The template and `auto` lines are printed in
+//! doctor's Orchestrator section ([`crate::doctor::ORCHESTRATOR_SECTION`]).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -232,6 +233,7 @@ fn checks_with(
         current,
         inputs.now_ms,
     ));
+    checks.extend(template_check(&approved, current));
     if let Some(relay) = current {
         let dirs = project_dirs(relay, &floor_path);
         checks.extend(project_checks(&relay.canonical, &dirs));
@@ -349,9 +351,16 @@ fn catalogue_checks(relay: &RelayFloor) -> Vec<Check> {
         let at = issue
             .line
             .map_or_else(String::new, |line| format!("line {line}, "));
+        // A template's issue belongs to the work orders: doctor prints it in
+        // the Orchestrator section (story 5.19 AC 1).
+        let title = if issue.table == IssueTable::Template {
+            "template issue"
+        } else {
+            "relay issue"
+        };
         check(
             Level::Warn,
-            "relay issue",
+            title,
             format!(
                 "{at}{}: {} ({})",
                 issue_subject(issue),
@@ -501,6 +510,55 @@ fn approval_check(
             format!("nothing approved yet: approve the catalogue in the window; {REFUSES}"),
         ),
     }
+}
+
+/// The templates (AD-94 part A, story 5.4 AC 10): how many the approved
+/// catalogue holds, which the composer offers, and the floor's changes to
+/// them awaiting the author's approval, which it does not offer until he
+/// approves them in the window. None when neither holds a template.
+fn template_check(approved: &ApprovedState, current: Option<&RelayFloor>) -> Option<Check> {
+    const TITLE: &str = "templates";
+    let snapshot = approved.approved().map(|a| &a.canonical);
+    let approved_count = snapshot.map_or(0, |c| c.templates.len());
+    let in_floor = current.map_or(0, |relay| relay.canonical.templates.len());
+    if approved_count == 0 && in_floor == 0 {
+        return None;
+    }
+    let mut pending = Vec::new();
+    match (snapshot, current) {
+        (Some(snapshot), Some(relay)) => section_parts(
+            "templates",
+            &diff(snapshot, &relay.canonical).templates,
+            &mut pending,
+        ),
+        (None, Some(relay)) => pending.push(format!(
+            "templates added: {}",
+            relay
+                .canonical
+                .templates
+                .keys()
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(", ")
+        )),
+        (_, None) => {}
+    }
+    Some(if pending.is_empty() {
+        check(
+            Level::Ok,
+            TITLE,
+            format!("{approved_count} approved, offered by the composer"),
+        )
+    } else {
+        check(
+            Level::Warn,
+            TITLE,
+            format!(
+                "{approved_count} approved; awaiting your approval in the window: {}; the composer offers the approved ones only",
+                pending.join("; ")
+            ),
+        )
+    })
 }
 
 /// Each floor project's folder as the floor declares it (D-6), by name.
@@ -822,7 +880,7 @@ fn review_checks(
     }
     let Some(model) = catalogue.auto_review.model else {
         return vec![check(
-            Level::Fail,
+            Level::Warn,
             TITLE,
             format!(
                 "{}: the [auto_review] table fails validation, so every auto request comes to you without a review; fix the table and approve the catalogue",
@@ -1223,7 +1281,7 @@ mod tests {
     fn issue_lines(relay: &RelayFloor) -> Vec<String> {
         catalogue_checks(relay)
             .into_iter()
-            .filter(|c| c.title == "relay issue")
+            .filter(|c| c.title == "relay issue" || c.title == "template issue")
             .map(|c| c.detail)
             .collect()
     }
@@ -1316,13 +1374,8 @@ mod tests {
             FLOOR_PATH,
         )
         .unwrap();
-        let check = approval_check(
-            &home,
-            &ApprovedState::Valid(approved),
-            true,
-            Some(&current),
-            1_793_102_400_000,
-        );
+        let state = ApprovedState::Valid(approved);
+        let check = approval_check(&home, &state, true, Some(&current), 1_793_102_400_000);
         assert_eq!(check.level, Level::Warn);
         assert!(
             check.detail.contains("templates added: bump"),
@@ -1335,6 +1388,33 @@ mod tests {
                 .contains("the review model changed from haiku to sonnet"),
             "{}",
             check.detail
+        );
+        // The Orchestrator section's own line (story 5.19 AC 1): what the
+        // composer offers and what waits.
+        let templates = template_check(&state, Some(&current)).unwrap();
+        assert_eq!(templates.level, Level::Warn);
+        assert!(
+            templates.detail.starts_with(
+                "0 approved; awaiting your approval in the window: templates added: bump;"
+            ),
+            "{}",
+            templates.detail
+        );
+        let approved = officina_core::relay::catalogue::ApprovedCatalogue::approving(
+            &current,
+            FLOOR_PATH,
+            1_793_102_400_000,
+        );
+        let settled = template_check(&ApprovedState::Valid(approved), Some(&current)).unwrap();
+        assert_eq!(settled.level, Level::Ok);
+        assert_eq!(settled.detail, "1 approved, offered by the composer");
+        assert_eq!(template_check(&state, Some(&without)), None);
+        let nothing_approved = template_check(&ApprovedState::Missing, Some(&current)).unwrap();
+        assert_eq!(nothing_approved.level, Level::Warn);
+        assert!(
+            nothing_approved.detail.contains("templates added: bump"),
+            "{}",
+            nothing_approved.detail
         );
     }
 
@@ -1486,8 +1566,9 @@ mod tests {
         );
     }
 
-    /// Story 5.13 AC 12 (AD-75, D-638): a failing `[auto_review]` fails
-    /// doctor with `review_config_invalid`.
+    /// Story 5.13 AC 12 (AD-75, D-638): a failing `[auto_review]` is
+    /// reported as `review_config_invalid`, a warning since every `auto`
+    /// request then goes to the author (story 5.19 AC 1, D-797).
     #[test]
     fn an_invalid_auto_review_table_is_reported() {
         let floor = template_floor(TEMPLATE).replace(
@@ -1497,7 +1578,7 @@ mod tests {
         let relay = load(&floor, FLOOR_PATH).unwrap();
         assert_eq!(relay.canonical.auto_review.model, None);
         let checks = review_checks(&relay.canonical, Some(&[]), None, 0);
-        assert_eq!(checks[0].level, Level::Fail);
+        assert_eq!(checks[0].level, Level::Warn);
         assert!(
             checks[0].detail.starts_with("review_config_invalid:"),
             "{}",

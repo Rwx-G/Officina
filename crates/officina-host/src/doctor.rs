@@ -728,7 +728,8 @@ pub fn run_with(collector: &Collector, exe: &Path, permissions: bool) -> Vec<Che
     let gate = gate_required(&relay);
     let required = registrations(gate);
     let (mut checks, version, agents) = check_claude(collector);
-    checks.extend(check_agent_view(
+    let mut orchestrator: Vec<Check> = Vec::new();
+    orchestrator.extend(check_agent_view(
         collector.base_env().vars(),
         &SettingsFile::read(&user_settings),
         &user_settings,
@@ -740,12 +741,12 @@ pub fn run_with(collector: &Collector, exe: &Path, permissions: bool) -> Vec<Che
         checks.push(check_gate_failure_mode(version));
     }
     if let Some(answers) = version.as_deref().and_then(check_answers) {
-        checks.push(answers);
+        orchestrator.push(answers);
     }
     checks.extend(check_hook_activity(&paths.events_dir(), now));
     let onedrive_roots = onedrive_roots_from_env();
     let (events, _) = read_recent_events(&paths.events_dir(), now);
-    checks.extend(permission_mode_check(
+    orchestrator.extend(permission_mode_check(
         &events,
         &session_kinds(&paths.officina_home, &onedrive_roots),
         now,
@@ -755,14 +756,14 @@ pub fn run_with(collector: &Collector, exe: &Path, permissions: bool) -> Vec<Che
     let mut files: Vec<PasteFile> = hooks_file.into_iter().chain(quota_files).collect();
     if permissions {
         let (permission_checks, permission_files) = permissions_checks(&user_settings, &doctor_dir);
-        checks.extend(permission_checks);
+        orchestrator.extend(permission_checks);
         files.extend(permission_files);
     } else {
-        checks.push(permissions_pointer());
+        orchestrator.push(permissions_pointer());
     }
     checks.extend(write_paste_files(&doctor_dir, &files));
     checks.push(check_officina_home(&paths.officina_home));
-    checks.extend(check_orchestrator(
+    orchestrator.extend(check_orchestrator(
         &paths.officina_home,
         exe.parent().unwrap_or(Path::new("")),
         agents.as_deref(),
@@ -772,7 +773,7 @@ pub fn run_with(collector: &Collector, exe: &Path, permissions: bool) -> Vec<Che
             .ok()
             .and_then(|reader| reader.proposals().ok())
             .map(|rows| rows.into_iter().map(|row| row.status).collect());
-    checks.push(check_proposals(
+    orchestrator.push(check_proposals(
         &paths.officina_home,
         statuses.as_deref(),
         now,
@@ -795,14 +796,54 @@ pub fn run_with(collector: &Collector, exe: &Path, permissions: bool) -> Vec<Che
         .as_ref()
         .and_then(|reader| reader.review_rows(now - STATS_WINDOW_MS).ok());
     let auto = reader.as_ref().and_then(|reader| reader.auto_state().ok());
-    checks.extend(relay_doctor::checks(&RelayDoctor {
-        home: &relay,
-        doctor_floor: collector.floor().path.as_deref(),
-        system_dir: system_dir.as_deref(),
-        now_ms: now,
-        reviews: reviews.as_deref(),
-        auto,
-    }));
+    let (relay_orchestrator, relay_checks): (Vec<Check>, Vec<Check>) =
+        relay_doctor::checks(&RelayDoctor {
+            home: &relay,
+            doctor_floor: collector.floor().path.as_deref(),
+            system_dir: system_dir.as_deref(),
+            now_ms: now,
+            reviews: reviews.as_deref(),
+            auto,
+        })
+        .into_iter()
+        .partition(|check| ORCHESTRATOR_SECTION.contains(&check.title.as_str()));
+    checks.extend(relay_checks);
+    orchestrator.extend(relay_orchestrator);
+    checks.extend(orchestrator_section(orchestrator));
+    checks
+}
+
+/// The titles of the Orchestrator section (story 5.19 AC 1, AD-94), the
+/// last section doctor prints, in its order: AD-94's parts A, B and C,
+/// with story 5.20's permission lines between B and C. The `claude` line is
+/// not in it: it opens doctor, since every section reads it (D-797).
+pub const ORCHESTRATOR_SECTION: &[&str] = &[
+    "agent view",
+    "answers",
+    "template issue",
+    "templates",
+    "relay auto actions",
+    "relay auto review",
+    "permission mode",
+    "permission mode switch",
+    "permissions block",
+    "autoMode block",
+    "orchestrator workdir",
+    "officina.exe",
+    "orchestrator folder",
+    "orchestrator proposals",
+];
+
+/// The Orchestrator section's checks in [`ORCHESTRATOR_SECTION`]'s order,
+/// a title's several lines (one per template issue, one per stranger) kept
+/// in the order they came: the section reads the same on every run.
+fn orchestrator_section(mut checks: Vec<Check>) -> Vec<Check> {
+    checks.sort_by_key(|check| {
+        ORCHESTRATOR_SECTION
+            .iter()
+            .position(|title| *title == check.title)
+            .unwrap_or(ORCHESTRATOR_SECTION.len())
+    });
     checks
 }
 
@@ -2484,15 +2525,16 @@ mod tests {
                 ("hook activity", Level::Ok, false),
                 ("event buffer", Level::Warn, false),
                 ("quota", Level::Warn, true),
-                ("permissions block", Level::Ok, false),
                 ("officina home", Level::Ok, false),
-                ("orchestrator workdir", Level::Ok, false),
-                ("officina.exe", Level::Fail, false),
-                ("orchestrator proposals", Level::Ok, false),
                 ("registry location", Level::Ok, false),
                 ("registry", Level::Ok, false),
                 ("triage model", Level::Ok, false),
                 ("floor", Level::Ok, false),
+                // The Orchestrator section, last (story 5.19 AC 1).
+                ("permissions block", Level::Ok, false),
+                ("orchestrator workdir", Level::Ok, false),
+                ("officina.exe", Level::Fail, false),
+                ("orchestrator proposals", Level::Ok, false),
             ]
         );
         assert!(
@@ -2507,7 +2549,7 @@ mod tests {
         };
         let collector = Collector::from_parts(paths, broken_floor, None);
         let checks = run(&collector, &exe);
-        let floor = checks.last().unwrap();
+        let floor = checks.iter().find(|c| c.title == "floor").unwrap();
         assert_eq!((floor.title.as_str(), floor.level), ("floor", Level::Fail));
         assert_eq!(floor.detail, "invalid floor file");
     }
