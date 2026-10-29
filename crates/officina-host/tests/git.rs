@@ -369,6 +369,13 @@ fn marker_program(dir: &Path) -> (PathBuf, PathBuf) {
         format!("#!/bin/sh\necho ran >> \"{}\"\nexit 0\n", posix(&ran)),
     )
     .unwrap();
+    // Off Windows a program runs only with its execute bit, which a
+    // repository's own marker program would carry.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
     (program, ran)
 }
 
