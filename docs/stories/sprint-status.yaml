@@ -124,7 +124,7 @@ version: v0.5
 stories:
   - {id: "5.1", file: story-5.1-workstation-gates.md, slice: "0", status: approved}
   - {id: "5.2", file: story-5.2-spawn-module.md, slice: A, status: approved}
-  - {id: "5.3", file: story-5.3-untrusted-text.md, slice: A, status: approved}
+  - {id: "5.3", file: story-5.3-untrusted-text.md, slice: A, status: review}
   - {id: "5.4", file: story-5.4-templates-and-catalogue-format.md, slice: A, status: approved}
   - {id: "5.5", file: story-5.5-work-order-validation-and-vector.md, slice: A, status: approved}
   - {id: "5.6", file: story-5.6-migration-2-and-work-order-records.md, slice: A, status: approved}

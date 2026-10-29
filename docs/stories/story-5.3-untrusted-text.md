@@ -1,6 +1,6 @@
 # Story 5.3: `Untrusted<T>` and the display type
 
-**Status:** Approved
+**Status:** Review
 
 ## Story
 
@@ -20,11 +20,11 @@ so that the only ways from session text to a process are the ones the launch pat
 
 ## Tasks
 
-- [ ] `crates/officina-core/src/untrusted.rs`: type, `DisplayText`, facts, serde and ts-rs handling, doctests (AC 1, 2)
-- [ ] Convert the payload fields in `board`, `relay::approvals`, `relay::view` and `registry::view`; wrap where each field is built (AC 3)
-- [ ] `untrusted::wrapped` and its guard (AC 4)
-- [ ] Check bindings and fixtures are byte-identical (AC 5, 6)
-- [ ] Update `CHANGELOG.md` (AC 7)
+- [x] `crates/officina-core/src/untrusted.rs`: type, `DisplayText`, facts, serde and ts-rs handling, doctests (AC 1, 2)
+- [x] Convert the payload fields in `board`, `relay::approvals`, `relay::view` and `registry::view`; wrap where each field is built (AC 3)
+- [x] `untrusted::wrapped` and its guard (AC 4)
+- [x] Check bindings and fixtures are byte-identical (AC 5, 6)
+- [x] Update `CHANGELOG.md` (AC 7)
 
 ## Dev Notes
 
@@ -47,12 +47,36 @@ so that the only ways from session text to a process are the ones the launch pat
 
 ### Debug Log
 
+- The `compile_fail` doctests carry the error code each snippet must fail with (E0614, E0599, E0277, E0308), but stable rustdoc does not check codes: each snippet was compiled once as a plain doctest and gave exactly that one error, so none fails for an unrelated reason.
+- The relay view's recent entries were the journal types themselves. Wrapping their fields in place would have changed the parse records D-130 keeps plain, so the view got its own three types under the journal types' TypeScript names (D-632); `typescript_bindings` was the check that their names, fields and docs match to the byte.
+- `refused.params` keys stay plain: in the wrapped mode a map key cannot be an object, and serde_json would refuse it. Recorded in D-632 for 5.15.
+- Host code needed no `display()`: the only host changes wrap where the host builds a payload (`registry::read::discarded`, `platform::windows::focus_session_window`) and adjust tests that compared a field with a `&str`.
+
 ### Completion Notes
 
+- AC 1: `crates/officina-core/src/untrusted.rs::tests::{serializes_as_its_inner_value, deserializes_from_its_inner_value, display_serializes_as_the_text, truncated_cuts_on_a_char_boundary, first_line_matching_counts_from_one, first_line_matching_is_none_without_a_match}`; ts-rs through one `impl TS` delegating to the inner type (D-631), `Debug` without the text (D-630).
+- AC 2: the seven `compile_fail` doctests and the positive doctest on the `untrusted` module, plus the doctests of `Untrusted`, `char_count`, `truncated`, `first_line_matching` and `wrapped`: `cargo test -p officina-core --doc`. The doctests on `WorkOrder::validate` arrive with story 5.5.
+- AC 3: `board.rs::tests::card_texts_serialize_as_plain_strings`, `relay/view.rs::tests::session_supplied_journal_texts_are_untrusted`, `registry/view.rs::tests::excerpts_and_model_reason_serialize_as_plain_strings`, and `focus.rs::tests::candidate_titles_are_untrusted` for the fields D-633 adds. Beyond AC 3's list: `refused.action`, `gate_error.command_excerpt` (D-632), a discarded session's name and prompt and the focus candidates' titles (D-633). `SubagentView.agent_type` does not exist on this branch (story 4.12 not merged): it joins in whichever of the two stories merges second.
+- AC 4: `untrusted.rs::tests::{wrapped_mode_wraps_every_untrusted_field_of_a_nested_payload, outside_wrapped_mode_the_bytes_are_unchanged, the_flag_is_reset_after_a_panic, the_flag_does_not_cross_threads}`; nested calls restore the outer mode (D-634). Nothing calls `wrapped` yet; `mcp::dispatch` (5.15) will.
+- AC 5: `typescript_bindings.rs::committed_bindings_match_the_rust_types` passes with no file under `app/src/lib/generated/` changed; `classification_vectors.rs` and `crates/officina/tests/{board,subjects,relay}.rs` pass with no change to them; the gate regenerated the e2e fixtures from the real CLI with no diff, and Playwright passes on them.
+- AC 6: no file under `app/` changed; `pnpm check`, `pnpm lint` and the Vitest suite pass in the gate.
+- AC 7: `CHANGELOG.md` `[Unreleased]`, Security. No README change: nothing a user sees changes.
+
 ## File List
+
+- `crates/officina-core/src/untrusted.rs` (new), `crates/officina-core/src/lib.rs`
+- `crates/officina-core/src/{board.rs, focus.rs}`
+- `crates/officina-core/src/relay/{approvals.rs, journal.rs, view.rs}`
+- `crates/officina-core/src/registry/view.rs`
+- `crates/officina-host/src/{focus.rs, platform/windows.rs, registry/read.rs}`
+- `crates/officina-host/tests/{registry_write.rs, relay_home.rs}`
+- `crates/officina/tests/watch.rs`
+- `CHANGELOG.md`
+- `docs/stories/epic-5-decisions.md` (D-630 to D-634), `docs/stories/sprint-status.yaml`
 
 ## Change Log
 
 - 2026-10-28 created
 - 2026-10-28 reworked after review: `last_message_tail` and the relay view's session-supplied texts are untrusted; the wrapped serialization mode for MCP outputs (F8); stored payloads hold `Untrusted<String>` (F43)
 - 2026-10-28 checked against the addendum and v0.3 and v0.4 as built: v0.4's one possible new session text, `SubagentView.agent_type`, joins the list if story 4.12 ships (D-563)
+- 2026-10-29 implemented; decisions D-630 to D-634. Status review
