@@ -51,6 +51,9 @@ values = ["web01"]
 pub struct Sources {
     /// The live session's name in `claude agents`.
     pub card_name: String,
+    /// A folder under the project the live session runs in, as `claude
+    /// agents` lists it; empty for the project's own folder.
+    pub card_cwd: String,
     /// Its prompt, which the board and the registry's excerpts show.
     pub prompt: String,
     /// Its last answer: head and tail on the card, and in the registry.
@@ -74,6 +77,7 @@ impl Sources {
     pub fn neutral() -> Sources {
         Sources {
             card_name: "api".into(),
+            card_cwd: String::new(),
             prompt: "tighten the alert rules".into(),
             answer: "Rules tightened.".into(),
             model_reason: "The work is done.".into(),
@@ -99,6 +103,7 @@ impl Sources {
     pub fn with(mut self, source: &str, marker: &str) -> Sources {
         let field = match source {
             "card_name" => &mut self.card_name,
+            "card_cwd" => &mut self.card_cwd,
             "prompt" => &mut self.prompt,
             "answer" => &mut self.answer,
             "model_reason" => &mut self.model_reason,
@@ -122,6 +127,7 @@ impl Sources {
 /// Every source of session text a test can seed (story 5.15 AC 8).
 pub const SOURCES: &[&str] = &[
     "card_name",
+    "card_cwd",
     "prompt",
     "answer",
     "model_reason",
@@ -279,7 +285,8 @@ impl McpHome {
             self.hook(payload);
         }
         self.env.write_agents(
-            &json!([{"pid": 4100, "cwd": lab, "kind": "interactive", "startedAt": now - 60_000,
+            &json!([{"pid": 4100, "kind": "interactive", "startedAt": now - 60_000,
+                "cwd": if sources.card_cwd.is_empty() { lab.clone() } else { format!("{lab}/{}", sources.card_cwd) },
                 "sessionId": "s-live", "name": sources.card_name, "status": "idle"}])
             .to_string(),
         );

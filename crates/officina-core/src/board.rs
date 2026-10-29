@@ -157,6 +157,10 @@ pub struct Card {
     /// Background session id, the argument of `claude attach`.
     pub background_id: Option<String>,
     pub pid: Option<u32>,
+    /// The session's folder, which the session chose: marked untrusted in
+    /// the orchestrator's tools (D-962), read as a path by the focus and the
+    /// work order binding.
+    #[serde(serialize_with = "crate::untrusted::marked_option")]
     pub cwd: Option<String>,
     pub waiting_for: Option<String>,
     pub last_prompt: Option<Untrusted<String>>,
@@ -2442,10 +2446,10 @@ values = [\"web01\"]
         assert_eq!(kept.last_message_tail, Some(text("…old tail")));
     }
 
-    /// AD-74, D-130: a card's name and excerpts and an approval's session
-    /// name are untrusted (marked inside `untrusted::wrapped`), while Claude
-    /// Code's values and the project stay plain; outside it every one is the
-    /// plain string it was.
+    /// AD-74, D-130: a card's name, excerpts and folder (D-962) and an
+    /// approval's session name are untrusted (marked inside
+    /// `untrusted::wrapped`), while Claude Code's values and the project
+    /// stay plain; outside it every one is the plain string it was.
     #[test]
     fn card_texts_serialize_as_plain_strings() {
         use serde_json::{Value, json};
@@ -2487,10 +2491,18 @@ values = [\"web01\"]
                 card["last_prompt"].clone(),
                 card["last_message"].clone(),
                 card["last_message_tail"].clone(),
+                card["cwd"].clone(),
                 board["approvals"][0]["session_name"].clone(),
             ]
         };
-        let expected = ["deploy-lab", "deploy", "head…", "…tail", "deploy-lab"];
+        let expected = [
+            "deploy-lab",
+            "deploy",
+            "head…",
+            "…tail",
+            "C:/work/api",
+            "deploy-lab",
+        ];
         let plain = serde_json::to_value(&board).unwrap();
         assert_eq!(texts(&plain), expected.map(|t| json!(t)));
         let marked = crate::untrusted::wrapped(|| serde_json::to_value(&board)).unwrap();
@@ -2499,7 +2511,6 @@ values = [\"web01\"]
             let card = &board["columns"]["your_turn"][0];
             assert_eq!(card["key"], "pid:7:1");
             assert_eq!(card["session_id"], "s");
-            assert_eq!(card["cwd"], "C:/work/api");
             assert_eq!(card["project"]["name"], "api");
             assert_eq!(board["approvals"][0]["action"], "restart");
         }

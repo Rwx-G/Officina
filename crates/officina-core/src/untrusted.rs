@@ -203,6 +203,37 @@ impl<'de, T: Deserialize<'de>> Deserialize<'de> for Untrusted<T> {
     }
 }
 
+/// A `serialize_with` for a field Officina reads as data although a session
+/// chose it, such as a session's folder, which the focus and the work
+/// order binding compare (D-962): plain in the window's and the CLI's
+/// payloads, `{"untrusted": "..."}` inside [`wrapped`] as an
+/// [`Untrusted`] value is; `None` stays `null`.
+///
+/// ```
+/// use officina_core::untrusted::{marked_option, wrapped};
+/// #[derive(serde::Serialize)]
+/// struct Card {
+///     #[serde(serialize_with = "marked_option")]
+///     cwd: Option<String>,
+/// }
+/// let card = Card { cwd: Some("C:/work".into()) };
+/// assert_eq!(serde_json::to_string(&card).unwrap(), r#"{"cwd":"C:/work"}"#);
+/// let marked = wrapped(|| serde_json::to_string(&card)).unwrap();
+/// assert_eq!(marked, r#"{"cwd":{"untrusted":"C:/work"}}"#);
+/// let none = wrapped(|| serde_json::to_string(&Card { cwd: None })).unwrap();
+/// assert_eq!(none, r#"{"cwd":null}"#);
+/// ```
+pub fn marked_option<T, S>(value: &Option<T>, serializer: S) -> Result<S::Ok, S::Error>
+where
+    T: Serialize,
+    S: Serializer,
+{
+    match value {
+        Some(text) => serialize_text(text, serializer),
+        None => serializer.serialize_none(),
+    }
+}
+
 /// An untrusted text's read access (AD-74): it implements `Serialize` and
 /// nothing else, so it lives only inside a serialization (D-130).
 pub struct DisplayText<'a>(&'a str);
