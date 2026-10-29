@@ -141,7 +141,8 @@ stories:
   - {id: "5.8", file: story-5.8-briefing-and-orchestrator-view.md, slice: A, status: review}
   # 5.9: done; D-680 to confirm (no value chosen by default but a single-entry list).
   - {id: "5.9", file: story-5.9-composer-and-work-order-cards.md, slice: A, status: review}
-  - {id: "5.10", file: story-5.10-meeting-receive.md, slice: A, status: approved}
+  # 5.10: ACs 1 to 8 done; AC 4's readability reading on one of the owner's sessions (D-126) is his, the agent's live check recorded in E23.
+  - {id: "5.10", file: story-5.10-meeting-receive.md, slice: A, status: review}
   - {id: "5.11", file: story-5.11-meeting-answers.md, slice: A, status: approved}
   - {id: "5.12", file: story-5.12-auto-class-in-run-and-approvals.md, slice: B, status: review}
   - {id: "5.13", file: story-5.13-review-call-and-worker.md, slice: B, status: review}

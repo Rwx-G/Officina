@@ -548,6 +548,25 @@ stdout redirected to a file, no console.
   exited (E19).
 - **Outcome: pass** (exit 0 in under 2 s): story 5.10 keeps the `Logs`
   kind; readability after AD-84's stripping is judged there.
+- **Readability, agent check (story 5.10, 2026-10-29, 2.1.312).** One
+  Haiku background session in a scratch folder under the worktree's
+  `target/` (two short turns: three colours, then a shell command exiting
+  3), read through `crates/officina-host/examples/logs_probe.rs`, the exact
+  `Logs` vector: exit 0 in 0.56 s, 169,204 bytes, 6,549 ESC bytes; all
+  6,549 sequences removed, 65,332 bytes kept and 75,523 dropped from the
+  start. What remains is the session's rendered screen as text: the
+  prompt line, the answer, `Ran 1 shell command` and its summary, the
+  `Crunched for 12s` line and the mode footer, repeated once per repaint,
+  with box-drawing rules and the logo's block characters; no escape byte
+  and no stray control character. Blank padding lines took most of the
+  kept bytes, so the meeting now squeezes trailing spaces and runs of
+  blank lines (D-806). No error marker matched that output (the shell's
+  exit 3 prints none). The session was stopped and removed; nothing left
+  behind. Cost: two Haiku turns, well under USD 0.01.
+- **Readability, owner check: pending** (D-126). On one of his background
+  sessions: `cargo run -p officina-host --example logs_probe -- <id>`,
+  the id from `claude agents --json`; readable keeps the section,
+  unreadable removes it and the kind.
 
 ## E24. The orchestrator's flag set (v0.5 gate 1)
 

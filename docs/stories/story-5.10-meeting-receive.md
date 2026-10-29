@@ -1,6 +1,6 @@
 # Story 5.10: The meeting: Receive, changes and logs
 
-**Status:** Approved
+**Status:** Review
 
 ## Story
 
@@ -21,15 +21,15 @@ so that I decide from facts in front of me, without opening its terminal or read
 
 ## Tasks
 
-- [ ] `crates/officina-core/src/meeting.rs`: view, sections, date, diff shaping, stripping, markers, `Delivery` (AC 1, 3, 4, 6)
-- [ ] `SessionEvents` notification message (AC 2)
-- [ ] `open_meeting`: collector read, blocking-thread `git` and `Logs`, build; command, capability, `ipc.ts`, mock (AC 2)
-- [ ] `crates/officina-host/src/git.rs` meeting reads, `--no-show-signature`, the filter-driver check, the agents-sourced folder (AC 3)
-- [ ] Journal read back to the session's start for the meeting (AC 1)
-- [ ] `Logs` kind, golden case, fake `logs` mode, `examples/logs_probe.rs`; E23 readability with the owner (AC 4)
-- [ ] `MeetingPanel.svelte`, `DiffView.svelte`, `lib/meeting.svelte.ts`, Receive buttons (AC 5)
-- [ ] Scene `received_key` (AC 7)
-- [ ] Update `CHANGELOG.md` and the README (AC 8)
+- [x] `crates/officina-core/src/meeting.rs`: view, sections, date, diff shaping, stripping, markers, `Delivery` (AC 1, 3, 4, 6)
+- [x] `SessionEvents` notification message (AC 2)
+- [x] `open_meeting`: collector read, blocking-thread `git` and `Logs`, build; command, capability, `ipc.ts`, mock (AC 2)
+- [x] `crates/officina-host/src/git.rs` meeting reads, `--no-show-signature`, the filter-driver check, the agents-sourced folder (AC 3)
+- [x] Journal read back to the session's start for the meeting (AC 1)
+- [x] `Logs` kind, golden case, fake `logs` mode, `examples/logs_probe.rs`; E23 readability with the owner (AC 4: the agent's live check done, the owner's reading pending)
+- [x] `MeetingPanel.svelte`, `DiffView.svelte`, `lib/meeting.svelte.ts`, Receive buttons (AC 5)
+- [x] Scene `received_key` (AC 7)
+- [x] Update `CHANGELOG.md` and the README (AC 8)
 
 ## Dev Notes
 
@@ -52,12 +52,41 @@ so that I decide from facts in front of me, without opening its terminal or read
 
 ### Debug Log
 
+- The first live `logs_probe` run kept 65 KiB of mostly blank screen padding; the stripping now squeezes trailing spaces and blank runs (D-806).
+- An unlisted session shows on the board only past its grace, as To resume: the forged-folder test dates its lines an hour back.
+
 ### Completion Notes
 
+Every AC is implemented and proven by the tests named, AC 4's owner reading aside. Decisions D-800 to D-810; D-802 (Receive also on a background card idle in Done) to confirm. No new dependency or feature.
+
+- AC 1: core `meeting.rs::tests::{decision_expected_holds_waiting_for_notification_tail_and_prompt, runs_are_this_session_only_with_their_journal_reference, every_text_is_untrusted}`; host `relay_journal.rs::a_meeting_reads_runs_back_to_the_session_start`; `typescript_bindings.rs::committed_bindings_match_the_rust_types` (13 new bindings, `MeetingView` and its parts).
+- AC 2: core `board.rs::tests::the_latest_notification_message_is_kept_per_session`; CLI `watch.rs::{a_meeting_reads_its_inputs_without_blocking_the_board, a_subject_to_resume_opens_its_latest_prompted_session}`; `app/src-tauri/src/main.rs::tests::every_declared_command_is_allowed` (`open_meeting`). The reads split as D-800 records.
+- AC 3: core `meeting.rs::tests::{since_is_iso_8601_utc_of_started_at, the_diff_is_capped_with_per_file_offsets, outside_git_is_said}`; host `git.rs::{commits_since_start_and_one_diff_to_the_working_tree, untracked_files_are_listed_never_read, a_meeting_leaves_a_stale_index_unchanged, no_configured_program_runs_on_receive, a_folder_outside_git_is_said}` (each neutralised configuration with its plain-git control); CLI `watch.rs::a_folder_from_an_event_line_runs_no_git`.
+- AC 4: E23 kept the kind (exit 0 in 0.89 s). Core `meeting.rs::tests::{escape_sequences_are_stripped, only_the_last_64_kib_is_kept, the_first_error_line_is_found, logs_are_shown_for_a_background_session_only}`, `spawn.rs::tests::logs_takes_only_a_parsed_background_id`; the `Logs` case of `tests/vectors/spawn.json`; CLI `spawn.rs::{every_kind_reaches_the_fake_claude_as_its_golden_vector, the_logs_screen_strips_to_text_with_its_error_line}`; `examples/logs_probe.rs`. The agent's live readability check is recorded in E23; the owner's reading on one of his sessions is pending (one-liner in E23).
+- AC 5: Playwright `meeting.spec.ts > Receive opens the panel from a Needs you card, a Your turn card, the file and a subject to resume`, `> opening the panel resizes nothing and Close returns focus`, `> the panel reads the same in both themes but for its tokens` (light, dark), `> the panel shows each section from the fixture`, `> a file jumps to its hunks and a failed run to its journal entry`, `> the panel asks again when the card's state changes`; Vitest `components.test.ts > MeetingPanel renders markup in commit subjects, paths and logs as text`. Fixtures `meeting-background` and `meeting-interactive` from `orchestrator_fixture` (kind `meeting` in D-181's index).
+- AC 6: core `meeting.rs::tests::{each_card_shape_gets_its_delivery, a_done_background_session_with_a_pid_is_resume_live, an_ended_session_without_an_agents_folder_is_never_resumed, every_delivery_has_a_case}`; the panel shows the delivery and Focus for `FocusOnly` (`meeting.spec.ts > the panel shows each section from the fixture`).
+- AC 7: Vitest `layout.test.ts > the received figure is marked wherever it stands`, `> a received key in a group marks the group's name only`, `> no received key, no marker`; `objects.test.ts > the received ring is hidden while walking`; `tokens.test.ts` (the ring's pairs); Playwright `scene.spec.ts > opening a meeting marks the figure once`, and `> nothing in the scene changes while the payloads are unchanged` green.
+- AC 8: `CHANGELOG.md` `[Unreleased]` Added; README "Receiving a session (the meeting)".
+- Gate (2026-10-29), on `a77bce8` plus this story: the local replay of `ci.yml`. Windows: fmt and clippy clean (both feature sets); the workspace's Rust tests all green; the launch half without the authority 7 passed; perf green (hook own cost 9.1 ms of 150, the gate 3.1 ms of 15, in process 3.4 ms); lexer differential, approvals stress, registry crash, the authority and registry markers, registry dependencies and bundled roots green; mutants: each of the three caught by its guarded case, the control green; `cargo deny` ok; e2e fixtures rebuilt (49 files); `pnpm check`, `lint` clean, Vitest 305; Playwright 1188 passed, 6 skipped, over three repeats; `pnpm audit` 1 low, ignored as before. Linux (`rust:1-bookworm`): fmt, clippy, tests and the spawn step green; one run of `spawn.rs::every_kind_reaches_the_fake_claude_as_its_golden_vector` failed while the Windows release builds ran beside it, and passed alone and twice more in full (timing under load, not investigated further).
+
 ## File List
+
+- `CHANGELOG.md`, `README.md`
+- `crates/officina-core/src/{board,lib,meeting,spawn}.rs`, `crates/officina-core/tests/typescript_bindings.rs`
+- `crates/officina-host/src/{git,lib,meeting,spawn,watch}.rs`, `crates/officina-host/src/registry/window.rs`, `crates/officina-host/examples/{logs_probe,orchestrator_fixture}.rs`, `crates/officina-host/tests/{git,relay_journal}.rs`
+- `crates/officina/src/bin/officina-fake-claude.rs`, `crates/officina/tests/{spawn,watch}.rs`
+- `tests/support/spawn_cases.rs`, `tests/vectors/spawn.json`
+- `app/src-tauri/build.rs`, `app/src-tauri/capabilities/default.json`, `app/src-tauri/src/main.rs`
+- `app/src/App.svelte`, `app/src/e2e-mock.ts`, `app/src/e2e-globals.d.ts`, `app/src/tokens.test.ts`
+- `app/src/components/{DiffView,MeetingPanel}.svelte` (new), `app/src/components/{SessionCard,SessionFile,SubjectCard,RecentActivity}.svelte`, `app/src/components/scene/Scene.svelte`, `app/src/components/components.test.ts`
+- `app/src/lib/{meeting.svelte,meeting-text}.ts` (new), `app/src/lib/ipc.ts`, `app/src/lib/generated/` (13 new files)
+- `app/src/lib/scene/{layout,mover,objects,rig,text}.ts`, `app/src/lib/scene/{layout,objects,rig}.test.ts`
+- `app/scripts/e2e-fixtures.mjs`, `app/e2e/fixture-index.ts`, `app/e2e/meeting.spec.ts` (new), `app/e2e/scene.spec.ts`
+- `docs/research-notes.md` (E23), `docs/stories/epic-5-decisions.md`, `docs/stories/sprint-status.yaml`, this file
 
 ## Change Log
 
 - 2026-10-28 created
 - 2026-10-28 reworked after review: git hardened (`--no-show-signature`, filter drivers, marker programs) (F19); folders only from `claude agents`, `CopyOnly` (F20); index test with precondition (F22); fixtures in D-181's index (F30); runs read back to the session's start (F32); logs fixture marker derived (F42)
 - 2026-10-28 checked against the addendum and v0.3 and v0.4 as built: the received marker follows the figure wherever v0.4 places it (D-566); the panel takes `SessionFile`'s slot as built, with Close, both themes and no new colour (D-563, D-564)
+- 2026-10-29 implemented; decisions D-800 to D-810; status Review, AC 4's owner reading pending
