@@ -30,7 +30,10 @@ What closes the epic, in order:
 3. The workstation runs of story 4.14 AC 6 and 8 to 10. AC 5 is measured
    (E82): the walking run failed and `DEFAULT_WALKING` is `false` (D-480);
    its passes were taken with the session locked, at about 170 frames per
-   second, and a run on the unlocked screen would confirm them.
+   second, and a run on the unlocked screen would confirm them. Story 4.16
+   then cut a walk's cost at its cause (D-550 to D-552); E82's runs 4 and 5
+   are to run again on its release, and walking turns back on by default
+   only if run 4 passes (story 4.16 AC 6, D-553).
 4. The owner's review of the README assets (story 4.14 AC 2), waiting on
    the same visual fixes (owner decision); story 4.15 rendered them again.
 
@@ -99,6 +102,7 @@ binary without the gate, process-start noise: the next run read 4.7 ms.
 | 4.13 Dark theme | in progress | dark baselines (CI run, owner comparison) |
 | 4.14 Docs, checks, QA | in progress | AC 2 review, AC 6, 8 to 10 (owner), this report's closure; AC 5 measured (E82), AC 7 passed |
 | 4.15 First-use feedback | review | the owner's next use of the real window |
+| 4.16 Walking's cost | in progress | AC 6: E82's runs 4 and 5 again on the owner's screen (lead) |
 
 ## Slice 0 order (story 4.14 AC 11)
 

@@ -106,6 +106,8 @@ stories:
   - {id: "4.14", file: story-4.14-docs-workstation-checks-and-qa.md, slice: B, status: in-progress}  # AC 7 passed; AC 5 measured (E82), walking fallback shipped; AC 2 review and AC 6, 8-10 are the owner's
   # 4.15: the owner's first-use feedback on the installed build (D-535 to D-546).
   - {id: "4.15", file: story-4.15-first-use-feedback.md, slice: B, status: review}
+  # 4.16: walking's cost after E82 (D-550 to D-553); code done, AC 6 (E82's runs 4 and 5 again) is the lead's.
+  - {id: "4.16", file: story-4.16-walking-cost.md, slice: B, status: in-progress}
 ---
 epic: 5
 version: v0.5
