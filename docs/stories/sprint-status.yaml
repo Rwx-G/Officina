@@ -148,7 +148,8 @@ stories:
   - {id: "5.14", file: story-5.14-shadow-gate-toggle-and-relay-auto.md, slice: B, status: review}
   # 5.15: done; D-770 to confirm (no_excerpts withholds prompt and answer excerpts, not past command excerpts).
   - {id: "5.15", file: story-5.15-officina-mcp.md, slice: C, status: review}
-  - {id: "5.16", file: story-5.16-orchestrator-session.md, slice: C, status: approved}
+  # 5.16: ACs 1 to 9 and 11 done; AC 10 (gate 1's window half, the owner's) runs with gates_v05 gate1-window; D-773 and D-780 to confirm.
+  - {id: "5.16", file: story-5.16-orchestrator-session.md, slice: C, status: in-progress}
   - {id: "5.17", file: story-5.17-proposals-and-restart.md, slice: C, status: approved}
   - {id: "5.18", file: story-5.18-orchestrator-in-the-decision-office.md, slice: C, status: approved}
   - {id: "5.19", file: story-5.19-docs-doctor-use-and-qa.md, slice: C, status: approved}

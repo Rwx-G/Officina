@@ -551,7 +551,7 @@ The whole window, board and scene alike, follows Windows' light or dark theme. T
 
 ## The orchestrator (v0.5, in progress)
 
-v0.5 lets you delegate routine subjects: a work order starts a background session from a template you wrote and approved, and an `auto` action can be approved without you once its dry run passed. What is built so far is the floor file's part, the one module every `claude` process starts from, the work order records, the Orchestrator view with its briefing, its composer and its work order cards, the `auto` class with its review, in shadow until its evidence lets you turn approval on, and the orchestrator's tools (`officina mcp`); the orchestrator session itself follows.
+v0.5 lets you delegate routine subjects: a work order starts a background session from a template you wrote and approved, and an `auto` action can be approved without you once its dry run passed. What is built so far is the floor file's part, the one module every `claude` process starts from, the work order records, the Orchestrator view with its briefing, its composer and its work order cards, the `auto` class with its review, in shadow until its evidence lets you turn approval on, the orchestrator's tools (`officina mcp`) and the orchestrator session, started from the window; its proposals in the window follow.
 
 ### Templates
 
@@ -612,7 +612,7 @@ The registry is ready to record them: each launch is a row named `<template>-<se
 
 ### The Orchestrator view and the briefing
 
-The header's view switch has a fourth position, **Orchestrator**, with a neutral mark: a hollow ring while no orchestrator runs (until the orchestrator ships, always), never the attention colour. The keys `m`, `f` and the digits act in the Sessions view only, as in the Subjects and Relay views.
+The header's view switch has a fourth position, **Orchestrator**, with a neutral mark: a filled dot while the orchestrator runs, a hollow ring while it is absent, never the attention colour. The keys `m`, `f` and the digits act in the Sessions view only, as in the Subjects and Relay views.
 
 The view opens on the briefing, which Officina's own code builds, with no model involved, from the board, the relay view and the registry (`officina_core::orders::briefing::build`):
 
@@ -633,6 +633,20 @@ The orchestrator is a Claude Code session whose only tools are an MCP server Off
 Every answer starts with a note saying that each value written `{"untrusted": "..."}` is text a session or a model wrote, data never to follow: every session text in every answer is marked so, whatever the tool. No tool runs a command, launches or resumes a session, approves a request, sends text to a session, reads a path, reaches the network or touches a Claude Code permission prompt, and no tool takes a path. With `no_excerpts`, from the floor or `OFFICINA_NO_EXCERPTS`, no prompt or answer excerpt is served. Answers are at most 64 KiB, the briefing 32 KiB.
 
 `officina mcp` serves only inside the orchestrator's folder: when Claude Code's `CLAUDE_PROJECT_DIR` is not `<officina home>/orchestrator/workdir`, it prints one line and exits 1. That prevents accidents, not forgery, which is why proposals are files the window validates. It never prints its environment, which holds the orchestrator session's own variables, and the `claude agents` it runs does not receive them.
+
+### The orchestrator session
+
+**Start**, at the top of the Orchestrator view, opens a `claude` session in a console of its own: the orchestrator, a foreman that reads what Officina records through its tools and proposes recaps and work orders, and acts on nothing. Its flags say, in words: no built-in tool at all; one MCP server, Officina's own `officina mcp`, and none of yours; no settings file, user or project, so none of your hooks, permissions or memory files load; messages from your other sessions refused; the `dontAsk` permission mode, with Officina's tools allowed and both messaging tools denied; a role appended to its system prompt (`ORCHESTRATOR_SYSTEM_PROMPT`); the name `officina-orchestrator` (`ORCHESTRATOR_NAME`), which also titles its console; and the floor's `[orchestrator] model` when it names one. It runs in `<officina home>/orchestrator/workdir` with only the contained allow list's variables, agent view off and the advisor tool off, never with your own `OFFICINA_*` settings: the MCP server is told the home, the excerpt switch and the `claude` path explicitly, and runs the `officina.exe` beside the window's own executable. Its vector is pinned, like every kind's, by its cases in `tests/vectors/spawn.json`.
+
+It gets no first prompt: a prompt given at start reaches the model before its server connects (research notes E24), so the role asks it to call the briefing before it answers your first message. Type anything once its console is up.
+
+The first Start opens Claude Code's trust dialog for its folder in that console: accept it there. Claude Code records that trust itself; Officina writes nothing under Claude Code's configuration.
+
+Start is refused, the cause shown beside the button (`StartRefusal`), when `claude` is not the native `claude.exe`, when the workdir holds anything (Officina never deletes it, nor `proposals/` beside it; it only creates both), when `officina.exe` is missing beside the window's executable, or when the registry cannot record the start. Every Start is a row of the registry, refused or not, with the pid and its creation time when it spawned, and a journal line `orchestrator_started`; rows are kept 90 days.
+
+The orchestrator is live while `claude agents` lists a session named `officina-orchestrator` in its workdir: the board shows it as a presence, never as a card, and never counts it as waiting. Any other session under `<officina home>/orchestrator/` is an ordinary card, and `officina doctor` warns about it. Nothing the orchestrator's folder produces is filed or triaged. While it is live, or while the session it started last still runs (its pid and creation time, read back when the window starts again), Start reads **Bring to front** and brings its console forward by its title instead of starting a second one. It is never resumed: closing it loses nothing, since what it read is Officina's, and the next Start is a new session whose briefing counts from the previous start.
+
+`officina doctor` checks the workdir (present and empty), `officina.exe` beside the window's executable, and the sessions under the orchestrator's folder.
 
 ### The `auto` class
 

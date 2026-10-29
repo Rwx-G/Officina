@@ -8,6 +8,25 @@ project uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- The orchestrator session (v0.5, story 5.16): **Start** in the
+  Orchestrator view opens `claude` in a console of its own, in
+  `<officina home>/orchestrator/workdir`, with no built-in tool, Officina's
+  MCP server only (run from the `officina.exe` beside the window), no
+  settings source, inbound messages refused, `dontAsk` with Officina's
+  tools allowed and both messaging tools denied, its role appended and the
+  name `officina-orchestrator`; the contained allow list's variables only,
+  agent view and the advisor tool off. No first prompt: the role asks for
+  the briefing before the first answer. Refused, with the cause shown and
+  recorded, for a `claude` that is not `.exe`, a non-empty workdir, a
+  missing `officina.exe` or an unwritable registry. Each Start is an
+  `orchestrator_start` row (pid and creation time kept, read back at window
+  start, deleted after 90 days) and an `orchestrator_started` journal line;
+  never a resume. The agents entry named `officina-orchestrator` in its
+  workdir is `Board.orchestrator` and the view's presence (the filled dot
+  on the view switch), never a card; a second Start while it runs brings
+  its console to the front by title. Its lines and its agents entry are
+  never filed. `officina doctor` checks the workdir, `officina.exe` and the
+  sessions under the orchestrator's folder.
 - `officina mcp` (v0.5, story 5.15): the orchestrator's MCP server on stdio,
   newline-delimited JSON-RPC answered by hand, a line over 1 MiB discarded
   and refused. It serves only when `CLAUDE_PROJECT_DIR` is
