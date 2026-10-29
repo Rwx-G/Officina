@@ -136,21 +136,72 @@ fn subagents(events: &[EventLine]) -> ExitCode {
     for (field, count) in &absent_fields {
         println!("  absent {field}: {count}");
     }
-    let pass = starts > 0
-        && starts_naming_a_lead == starts
-        && with_a_later_stop == started.len()
-        && without_id == 0;
-    println!(
-        "  reading: {}",
-        if starts == 0 {
-            "no sub-agent seen yet: paste the hooks block again and run sessions with sub-agents"
-        } else if pass {
-            "every start names a lead and has a later stop (gate 1's pass, the /btw and teammate cases still to read)"
-        } else {
-            "a start names no lead or has no stop: gate 1 does not pass on these lines"
-        }
-    );
+    print_pairing(&lines, start_event);
+    let named = starts > 0 && starts_naming_a_lead == starts && without_id == 0;
+    let unstopped = started.len() - with_a_later_stop;
+    let reading = if starts == 0 {
+        "no sub-agent seen yet: paste the hooks block again and run sessions with sub-agents"
+            .to_owned()
+    } else if !named {
+        "a start names no lead or carries no agent_id: gate 1 does not pass on these lines"
+            .to_owned()
+    } else if unstopped == 0 {
+        "every start names a lead and has a later stop (gate 1's pass, the /btw and teammate cases still to read)".to_owned()
+    } else {
+        format!(
+            "every start names a lead; {unstopped} started ids have no stop yet: still running, or a lost stop (run again once they end)"
+        )
+    };
+    println!("  reading: {reading}");
     ExitCode::SUCCESS
+}
+
+/// How the starts and stops of one agent id interleave, which story 4.12's
+/// folding rests on: a start while the id already runs, the time from a stop
+/// to the same id's next start (a resumed helper), the most helpers running
+/// at once under one session, and how long ago the ids still running started.
+fn print_pairing(lines: &[&EventLine], start_event: &str) {
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX));
+    let mut running: BTreeMap<(&str, &str), i64> = BTreeMap::new();
+    let mut stopped_at: BTreeMap<(&str, &str), i64> = BTreeMap::new();
+    let mut started_while_running = 0;
+    let mut resume_gaps_ms: Vec<i64> = Vec::new();
+    let mut most_at_once = 0;
+    for line in lines {
+        let (Some(id), Some(sid)) = (line.agent_id.as_deref(), line.session_id.as_deref()) else {
+            continue;
+        };
+        let key = (sid, id);
+        if line.event == start_event {
+            if running.insert(key, line.ts).is_some() {
+                started_while_running += 1;
+            } else if let Some(stop) = stopped_at.remove(&key) {
+                resume_gaps_ms.push(line.ts - stop);
+            }
+            let at_once = running.keys().filter(|(s, _)| *s == sid).count();
+            most_at_once = most_at_once.max(at_once);
+        } else if running.remove(&key).is_some() {
+            stopped_at.insert(key, line.ts);
+        }
+    }
+    resume_gaps_ms.sort_unstable();
+    println!("  starts of an id already running (no stop between): {started_while_running}");
+    if let (Some(first), Some(last)) = (resume_gaps_ms.first(), resume_gaps_ms.last()) {
+        let median = resume_gaps_ms[resume_gaps_ms.len() / 2];
+        println!(
+            "  stop to the same id's next start: {} gaps; shortest {first} ms, median {median} ms, longest {last} ms",
+            resume_gaps_ms.len()
+        );
+    }
+    println!("  most sub-agents running at once under one session: {most_at_once}");
+    let mut ages_s: Vec<i64> = running.values().map(|t| (now_ms - t) / 1000).collect();
+    ages_s.sort_unstable();
+    println!(
+        "  ids still running (no stop after their last start): {}; seconds since that start: {ages_s:?}",
+        ages_s.len()
+    );
 }
 
 fn notifications(events: &[EventLine]) -> ExitCode {
