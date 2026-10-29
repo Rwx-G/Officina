@@ -152,6 +152,7 @@ closed_enum! {
     #[serde(rename_all = "snake_case")]
     /// Where a work order came from (AD-82).
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+    #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
     pub enum WorkOrderSource {
         /// The author's composer.
         Composer,

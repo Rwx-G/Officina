@@ -19,6 +19,7 @@ use officina_core::board::Board;
 use officina_core::focus::FocusOutcome;
 use officina_core::ipc::IpcError;
 use officina_core::orders::card::{CardAnswer, CardChange, CardRequest, LaunchAnswer};
+use officina_core::orders::view::OrchestratorView;
 use officina_core::registry::confirm::{ConfirmItem, ItemAnswer, SubjectOrigin};
 use officina_core::registry::types::Settlement;
 use officina_core::registry::view::{DiscardedSession, RegistryView};
@@ -62,6 +63,7 @@ fn export(dir: &Path) {
     CardChange::export_all(&cfg).unwrap();
     CardAnswer::export_all(&cfg).unwrap();
     LaunchAnswer::export_all(&cfg).unwrap();
+    OrchestratorView::export_all(&cfg).unwrap();
 }
 
 #[test]

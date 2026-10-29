@@ -222,5 +222,94 @@
     {"name": "the subject archived since", "launch": {"subject_open": false}, "expect": {"refused": "subject_closed"}},
     {"name": "the registry holds the name", "launch": {"name_taken": true}, "expect": {"refused": "name_taken"}},
     {"name": "the hash is checked before the catalogue", "launch": {"clicked": "other", "current": "other"}, "expect": {"refused": "prompt_hash_mismatch"}}
+    ],
+  "briefing": [
+    {
+      "name": "read at a cursor: every section whole, changed only after it",
+      "now_ms": 1800000000000,
+      "cursor": {"kind": "read_at", "at_ms": 1799998500000},
+      "cards": [
+        {"key": "a", "column": "needs_you", "name": "<script>a</script>", "at": 1799999700000},
+        {"key": "b", "column": "your_turn", "name": "turn", "at": 1799998200000},
+        {"key": "c", "column": "working", "name": "busy", "at": 1799999940000}
+      ],
+      "approvals": [{"id": "req1", "at": 1799999820000}],
+      "runs": [
+        {"ts": 1799999880000, "kind": "failed"},
+        {"ts": 1799997600000, "kind": "refused", "action": "<img src=x>"},
+        {"ts": 1799997000000, "kind": "succeeded"}
+      ],
+      "subjects": [
+        {"id": 1, "name": "Rollout", "at": 1799992800000, "sessions": [
+          {"id": "s-c", "card": "working"},
+          {"id": "s-old", "ended": true},
+          {"id": "s-lost"}
+        ]}
+      ],
+      "triage": [{"key": "session:s-t", "at": 1799994600000}],
+      "subject_rows": [
+        {"id": 1, "status": "active", "at": 1799964000000},
+        {"id": 2, "status": "archived", "at": 1799998800000},
+        {"id": 3, "status": "to_resume", "at": 1799988000000}
+      ],
+      "orders": [{"id": "o1", "at": 1799999100000, "session": "s-c"}],
+      "expect": {
+        "subjects": {"count": 1, "dropped": 0, "items": ["1"]},
+        "waiting": {"count": 2, "dropped": 0, "items": ["a", "b"]},
+        "approvals": {"count": 1, "dropped": 0, "items": ["req1"]},
+        "triage": {"count": 1, "dropped": 0, "items": ["session:s-t"]},
+        "runs": {"count": 2, "dropped": 0, "items": ["failed", "refused"]},
+        "work_orders": {"count": 1, "dropped": 0, "items": ["o1"]},
+        "changed": {"count": 4, "dropped": 0, "items": ["run_finished:failed", "started_waiting:a", "order_launched:o1", "subject_status:2"]}
+      }
+    },
+    {
+      "name": "no cursor: everything with a time is new; the gate's entries and an abandoned run fail",
+      "now_ms": 1800000000000,
+      "cursor": {"kind": "none"},
+      "cards": [
+        {"key": "a", "column": "needs_you", "name": "first", "at": 1799999700000},
+        {"key": "d", "column": "your_turn", "name": "no time", "at": null}
+      ],
+      "runs": [
+        {"ts": 1799999400000, "kind": "gate_error"},
+        {"ts": 1799998800000, "kind": "gate_denied"},
+        {"ts": 1799998200000, "kind": "abandoned"},
+        {"ts": 1799996400000, "kind": "succeeded"}
+      ],
+      "subject_rows": [{"id": 5, "status": "to_resume", "at": 1799994000000}],
+      "orders": [{"id": "o2", "at": 1799997300000, "session": null}],
+      "expect": {
+        "waiting": {"count": 2, "dropped": 0, "items": ["a", "d"]},
+        "runs": {"count": 3, "dropped": 0, "items": ["gate_error", "gate_denied", "abandoned"]},
+        "work_orders": {"count": 1, "dropped": 0, "items": ["o2"]},
+        "changed": {"count": 5, "dropped": 0, "items": ["started_waiting:a", "run_finished:failed", "order_launched:o2", "run_finished:ok", "subject_status:5"]}
+      }
+    },
+    {
+      "name": "the previous orchestrator start: an order launched at the cursor is not after it",
+      "now_ms": 1800000000000,
+      "cursor": {"kind": "previous_start", "at_ms": 1799999400000},
+      "cards": [{"key": "a", "column": "needs_you", "name": "first", "at": 1799999700000}],
+      "orders": [{"id": "o3", "at": 1799999400000, "session": null}],
+      "expect": {
+        "waiting": {"count": 1, "dropped": 0, "items": ["a"]},
+        "work_orders": {"count": 1, "dropped": 0, "items": ["o3"]},
+        "changed": {"count": 1, "dropped": 0, "items": ["started_waiting:a"]}
+      }
+    },
+    {
+      "name": "over the bound: the globally oldest items go first, the counts stay",
+      "now_ms": 1800000000000,
+      "cursor": {"kind": "none"},
+      "cards": [{"key": "b", "column": "your_turn", "name": "turn", "at": 1799998200000}],
+      "orders": [{"id": "o1", "at": 1799999100000, "session": null}],
+      "crowd": {"cards": 300, "name_chars": 200, "first_at": 1799400000000, "step_ms": 60000},
+      "expect": {
+        "waiting": {"count": 301, "dropped": 251},
+        "work_orders": {"count": 1, "dropped": 0, "items": ["o1"]},
+        "changed": {"count": 302, "dropped": 250}
+      }
+    }
   ]
 }
