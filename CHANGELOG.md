@@ -25,6 +25,22 @@ project uses [Semantic Versioning](https://semver.org/).
   tooltip too; neither reaches the title, the taskbar badge or the
   attention colour.
 
+- Answer proposals (v0.5, story 5.21): `officina mcp` gains
+  `propose_answer {session_id, text, rationale}`, bounded like your own
+  answers and sharing the other proposal tools' limits. The window stores
+  a proposed answer `pending` only for a background session live and idle
+  in its turn whose answer goes as its next turn, its text passing the
+  composer's own rules and its rationale given; otherwise `invalid` with
+  its reason. It shows in that session's meeting beside your composer,
+  under the "proposal" label and as text, never copied into it; **Send the
+  proposed answer** acts on a pointer click only and sends the proposal's
+  id, the window sending the text it stored, copied to the clipboard on the
+  same click and confirmed as your own answers are; nothing else ever
+  sends it. It expires on the first board where its session moved on, a
+  newer one for the same session supersedes it, and a sent one is
+  `accepted`. The Orchestrator view lists them with their session and an
+  Open meeting button; `meeting_answer` lines carry `source` (`author` or
+  `proposal`) and the proposal's id, never the text.
 - The orchestrator's proposals in the window (v0.5, story 5.17): the
   window reads `orchestrator/proposals/` (a name that is no proposal's is
   deleted and counted, a file read at most 16 KiB plus a byte, the hourly

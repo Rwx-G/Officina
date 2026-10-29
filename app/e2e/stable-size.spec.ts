@@ -93,7 +93,8 @@ const SCENES: Record<SceneName, (page: Page) => Promise<void>> = {
     await expect(page.getByTestId("work-order-card")).toBeVisible();
   },
   // The busy board's first Needs you card received, its meeting the
-  // background fixture's (story 5.11): the composer's Send.
+  // background fixture's (story 5.11): the composer's Send, and the
+  // proposed answer's slot and Send (story 5.21).
   meeting: async (page) => {
     const board = loadBoard("busy");
     const key = board.columns.needs_you[0]!.key;
@@ -220,6 +221,25 @@ const CASES: ToggleCase[] = [
       await page.evaluate(() => (window.__officinaAnswerHeld = true));
       await control.click();
     },
+  },
+  // Story 5.21 (D-564): Send the proposed answer, held in flight, reads
+  // Sending in its own box; the proposal's slot keeps its box when the
+  // proposal goes.
+  {
+    name: "send the proposed answer",
+    selector: '[data-testid="proposal-send"]',
+    scene: "meeting",
+    act: async (page, control) => {
+      await page.evaluate(() => (window.__officinaAnswerHeld = true));
+      await control.click();
+    },
+  },
+  {
+    name: "proposed answer slot",
+    selector: '[data-testid="meeting-proposal-slot"]',
+    scene: "meeting",
+    // Dismissed, the proposal leaves the meeting read again.
+    act: (page) => page.getByTestId("meeting-proposal-dismiss").click(),
   },
   // Story 5.14 (D-564): the `auto` section's toggles and their slots, with
   // approval on and the gate holding; turning it off keeps it offered.

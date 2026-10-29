@@ -2,7 +2,7 @@
 // panel's slot. Receive asks the backend for the meeting of a card key, a
 // `sid:` session or a `subject:` to resume; the panel asks again whenever
 // the board shows that card's state changed. Nothing is stored.
-import { openMeeting, sendAnswer } from "./ipc";
+import { dismissProposal, openMeeting, sendAnswer, sendProposedAnswer } from "./ipc";
 import type { AnswerResult } from "./generated/AnswerResult";
 import type { Delivery } from "./generated/Delivery";
 import type { Board } from "./generated/Board";
@@ -46,6 +46,13 @@ export class MeetingStore {
   sending = $state<string | null>(null);
   /** What became of the last answer sent, by card key. */
   results = $state<Record<string, AnswerResult>>({});
+  /** The answer proposal being sent, by its id (AD-182). */
+  proposalSending = $state<string | null>(null);
+  /** What became of the last proposal sent from a meeting, by card key:
+   *  it outlives the proposal, which leaves the meeting once decided. */
+  proposalResults = $state<Record<string, { id: string; result: AnswerResult }>>({});
+  /** Why the last dismissal from a meeting failed, by proposal id. */
+  proposalError = $state<{ id: string; message: string } | null>(null);
   /** Called when a meeting opens, so the window shows the sessions. */
   onOpen: () => void = () => {};
   #asked = 0;
@@ -130,6 +137,39 @@ export class MeetingStore {
     } finally {
       this.sending = null;
     }
+  }
+
+  /** Sends the answer proposal `id` to the meeting of `key` (AD-182):
+   *  its id only, the collector reading the stored text (D-575). Whatever
+   *  the outcome, the meeting is read again: a sent proposal is accepted,
+   *  a refused one expired or decided, and the panel shows where it is. */
+  async sendProposal(key: string, delivery: Delivery, id: string): Promise<void> {
+    if (this.sending !== null || this.proposalSending !== null) return;
+    this.proposalSending = id;
+    try {
+      const result = await sendProposedAnswer(key, delivery, id);
+      this.proposalResults[key] = { id, result };
+    } catch (error) {
+      this.proposalResults[key] = {
+        id,
+        result: { outcome: "spawn_failed", value: (error as { message?: string }).message ?? String(error) },
+      };
+    } finally {
+      this.proposalSending = null;
+    }
+    if (this.key !== null) void this.#ask(this.key);
+  }
+
+  /** Dismisses the answer proposal `id` shown in the meeting (FR-12),
+   *  then reads the meeting again. */
+  async dismissProposal(id: string): Promise<void> {
+    this.proposalError = null;
+    try {
+      await dismissProposal(id);
+    } catch (error) {
+      this.proposalError = { id, message: (error as { message?: string }).message ?? String(error) };
+    }
+    if (this.key !== null) void this.#ask(this.key);
   }
 
   /** Each new board: the meeting asks again when its card's state there

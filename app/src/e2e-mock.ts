@@ -100,7 +100,7 @@ export function installE2eMock(): void {
         case "open_meeting":
           return meetingOf((args as { key: string }).key);
         case "send_answer":
-          return answer();
+          return answer((args as { proposalId?: string }).proposalId ?? null);
         default:
           if (AUTHOR_COMMANDS.includes(cmd)) return author(cmd);
           return null;
@@ -129,13 +129,31 @@ export function installE2eMock(): void {
 /** Mirrors `send_answer` (AD-85): what the test set in
  *  `__officinaAnswerResult`, else a confirmed resume. With
  *  `__officinaAnswerHeld` set, the answer waits until the test calls
- *  `__officinaReleaseAnswer`, as a resume awaiting its confirmation does. */
-function answer(): Promise<AnswerResult> {
-  const result = (): AnswerResult => window.__officinaAnswerResult ?? { outcome: "confirmed" };
+ *  `__officinaReleaseAnswer`, as a resume awaiting its confirmation does.
+ *  A proposal sent by its id (AD-182) and not refused is accepted: it
+ *  leaves the meetings served. */
+function answer(proposalId: string | null): Promise<AnswerResult> {
+  const result = (): AnswerResult => {
+    const settled = window.__officinaAnswerResult ?? { outcome: "confirmed" };
+    if (proposalId !== null && settled.outcome !== "refused") withoutProposal(proposalId);
+    return settled;
+  };
   if (!window.__officinaAnswerHeld) return Promise.resolve(result());
   return new Promise((resolve) => {
     window.__officinaReleaseAnswer = () => resolve(result());
   });
+}
+
+/** The meetings served, the answer proposal `id` gone from them; true
+ *  when one showed it. */
+function withoutProposal(id: string): boolean {
+  const meetings = window.__officinaMeetings;
+  if (!meetings) return false;
+  const shown = Object.values(meetings).some((m) => m.proposed_answer?.id === id);
+  window.__officinaMeetings = Object.fromEntries(
+    Object.entries(meetings).map(([key, m]) => [key, m.proposed_answer?.id === id ? { ...m, proposed_answer: null } : m]),
+  );
+  return shown;
 }
 
 /** Mirrors `open_meeting` (AD-84): the meeting the test set for the key,
@@ -169,8 +187,10 @@ function card(): CardAnswer {
  *  pending or invalid proposal of the view is dismissed and the next view
  *  shows it decided; anything else is refused. */
 async function dismissProposal(id: string): Promise<void> {
+  const inMeeting = withoutProposal(id);
   const current = window.__officinaOrchestrator;
   const found = current?.proposals.find((p) => p.id === id);
+  if (inMeeting && !found) return;
   if (!current || !found || (found.status !== "pending" && found.status !== "invalid")) {
     return refused("the proposal is neither pending nor invalid: the next view shows where it stands");
   }

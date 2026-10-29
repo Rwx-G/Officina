@@ -23,6 +23,9 @@ export const CHANGES_TEXT: Record<Exclude<Changes["state"], "read" | "unavailabl
 /** Send's labels: the button keeps the box of the longer (D-564). */
 export const SEND_LABELS = { send: "Send", sending: "Sending" } as const;
 
+/** Send the proposed answer's labels, one box for both (AD-182, D-564). */
+export const SEND_PROPOSAL_LABELS = { send: "Send the proposed answer", sending: "Sending" } as const;
+
 export const ANSWER_REFUSAL_TEXT: Record<AnswerRefusal, string> = {
   empty: "It is empty.",
   too_long: "It is longer than an answer may be.",
@@ -53,6 +56,8 @@ export function answerResultText(result: AnswerResult): string {
           return "Not sent: this session runs in your terminal; answer it there.";
         case "unknown_session":
           return "Not sent: the session is no longer known.";
+        case "proposal_not_pending":
+          return "Not sent: the proposal is no longer pending; the meeting was read again.";
         case "answer":
           return "Not sent: ";
       }

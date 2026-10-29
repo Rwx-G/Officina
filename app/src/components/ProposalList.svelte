@@ -3,9 +3,11 @@
   // "proposal" label, with its kind, its status and, when invalid, why.
   // Every text is the orchestrator's and rendered as text (D-130). A
   // proposal acts on nothing: a valid work order proposal opens as a card,
-  // which the author launches or not; a pending or invalid one can be
-  // dismissed. Neutral throughout: no colour, never the attention colour
-  // (D-564, D-565). Decided ones are listed apart, without controls.
+  // which the author launches or not; a pending answer proposal opens its
+  // session's meeting, where only the author's click sends it (AD-182); a
+  // pending or invalid one can be dismissed. Neutral throughout: no colour,
+  // never the attention colour (D-564, D-565). Decided ones are listed
+  // apart, without controls.
   import type { DeletedFiles } from "../lib/generated/DeletedFiles";
   import type { ProposalView } from "../lib/generated/ProposalView";
   import {
@@ -20,14 +22,19 @@
     deleted: DeletedFiles;
     /** The open subjects' names by id, for a proposal naming one. */
     subjectNames: Map<number, string>;
+    /** The board's session names by session id, for an answer's session. */
+    sessionNames: Map<string, string>;
     nowMs: number;
     busy: boolean;
     /** Why the last dismissal failed, and which proposal. */
     error: { id: string; message: string } | null;
     onOpen: (id: string) => void;
     onDismiss: (id: string) => void;
+    /** Opens the meeting of the session an answer proposal names. */
+    onOpenMeeting: (sessionId: string) => void;
   }
-  let { proposals, deleted, subjectNames, nowMs, busy, error, onOpen, onDismiss }: Props = $props();
+  let { proposals, deleted, subjectNames, sessionNames, nowMs, busy, error, onOpen, onDismiss, onOpenMeeting }: Props =
+    $props();
 
   let open = $derived(proposals.filter((p) => p.status === "pending" || p.status === "invalid"));
   let decided = $derived(proposals.filter((p) => p.status !== "pending" && p.status !== "invalid"));
@@ -78,6 +85,15 @@
           <span class="text">{order.subject.new}</span>{/if}
       </p>
       <p><span class="label">Rationale</span> <span class="text" data-testid="proposal-text">{order.rationale}</span></p>
+    {:else if item.content && "answer" in item.content}
+      {@const answer = item.content.answer}
+      <p data-testid="proposal-session">
+        <span class="label">To</span>
+        {#if sessionNames.has(answer.session_id)}<span class="text">{sessionNames.get(answer.session_id)}</span>{:else}session
+          <span class="text">{answer.session_id}</span>{/if}
+      </p>
+      <p><span class="label">Answer</span> <span class="text" data-testid="proposal-text">{answer.text}</span></p>
+      <p><span class="label">Rationale</span> <span class="text" data-testid="proposal-text">{answer.rationale}</span></p>
     {/if}
     {#if controls}
       <div class="controls">
@@ -85,6 +101,10 @@
           <button type="button" data-testid="proposal-open" disabled={busy} onclick={() => onOpen(item.id)}>
             Open as card
           </button>
+        {/if}
+        {#if item.status === "pending" && item.content && "answer" in item.content}
+          {@const session = item.content.answer.session_id}
+          <button type="button" data-testid="proposal-open-meeting" onclick={() => onOpenMeeting(session)}>Open meeting</button>
         {/if}
         <button type="button" data-testid="proposal-dismiss" onclick={() => onDismiss(item.id)}>Dismiss</button>
       </div>
@@ -99,7 +119,7 @@
   <h2 id="proposals-title">Proposals <span class="count">{open.length}</span></h2>
   <p class="muted">
     The orchestrator's suggestions. A proposal runs nothing: a work order proposal opens as a card, which you launch or
-    not.
+    not; a proposed answer waits in its session's meeting, which you send or not.
   </p>
   {#if deleted.misnamed + deleted.over_limit > 0}
     <p class="muted" data-testid="proposals-deleted">

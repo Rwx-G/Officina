@@ -8,7 +8,10 @@
   // it. Every session text, subject, path and log line renders as text.
   // The orchestrator's latest recap for the session shows under a neutral
   // "proposal" label (story 5.17, D-564): its texts are the orchestrator's,
-  // rendered as text, and never reach the composer.
+  // rendered as text, and never reach the composer. So does its proposed
+  // answer (story 5.21, AD-182), in a reserved slot beside the composer for
+  // a session whose answer goes as its next turn, sent only by a pointer
+  // click on its own button.
   import { onMount } from "svelte";
   import type { Board } from "../lib/generated/Board";
   import type { Card } from "../lib/generated/Card";
@@ -19,6 +22,7 @@
   import { clock } from "../lib/time";
   import DiffView from "./DiffView.svelte";
   import AnswerComposer from "./AnswerComposer.svelte";
+  import ProposedAnswer from "./ProposedAnswer.svelte";
 
   interface Props {
     board: Board | null;
@@ -126,6 +130,9 @@
         {/if}
       {:else}
         <AnswerComposer {view} />
+        {#if view.delivery === "resume_live"}
+          <ProposedAnswer {view} nowMs={store.nowMs} />
+        {/if}
       {/if}
     </section>
 

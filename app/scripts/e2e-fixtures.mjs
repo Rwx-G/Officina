@@ -1754,7 +1754,8 @@ model = "haiku"
 // --json`; then the `MeetingView` the window builds for that card, printed
 // by the window's own functions, its logs from the fake claude's `logs`
 // mode. The background session's recap (story 5.17) is a proposal file the
-// window ingests once the session is listed, superseding an older one.
+// window ingests once the session is listed, superseding an older one; so
+// is its proposed answer (story 5.21), validated against the board.
 // Redacted placeholders only.
 const meetingScenarios = {
   "meeting-background": {
@@ -1791,6 +1792,10 @@ const meetingScenarios = {
       [view.runs.some((r) => r.result === "failed") && view.runs.some((r) => r.result === "refused"), "a failed run and a refusal"],
       [view.decision.notification !== null, "the notification message"],
       [view.recap?.status === "pending" && view.recap.content?.recap?.done === hostile, "the latest recap, its markup text"],
+      [
+        view.proposed_answer?.status === "pending" && view.proposed_answer.content?.answer?.text === hostile,
+        "the latest proposed answer, its markup text",
+      ],
     ],
     proposals: [
       proposalFile("p-meeting-old", "recap", { target: { session_id: sid(601) }, done: "Bumped serde_json.", blocking: "Nothing.", decision_expected: "None." }, 20 * MIN),
@@ -1799,6 +1804,13 @@ const meetingScenarios = {
         "recap",
         { target: { session_id: sid(601) }, done: hostile, blocking: "One fixture test fails.", decision_expected: "Which fixture wins." },
         10 * MIN,
+      ),
+      proposalFile("p-meeting-answer-old", "answer", { session_id: sid(601), text: "Keep the old fixture.", rationale: "It asked which fixture wins." }, 8 * MIN),
+      proposalFile(
+        "p-meeting-answer",
+        "answer",
+        { session_id: sid(601), text: hostile, rationale: `The new fixture matches the release notes. ${hostile}` },
+        3 * MIN,
       ),
     ],
   },

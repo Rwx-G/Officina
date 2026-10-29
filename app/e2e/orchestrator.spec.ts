@@ -23,6 +23,7 @@ import {
 import { PROPOSAL_STATUS_TEXT, invalidReasonText } from "../src/lib/orchestrator-text";
 import type { CardAnswer } from "../src/lib/generated/CardAnswer";
 import type { LaunchAnswer } from "../src/lib/generated/LaunchAnswer";
+import type { MeetingView } from "../src/lib/generated/MeetingView";
 import type { OrchestratorView } from "../src/lib/generated/OrchestratorView";
 import type { StartAnswer } from "../src/lib/generated/StartAnswer";
 import type { WorkOrderCard } from "../src/lib/generated/WorkOrderCard";
@@ -755,3 +756,40 @@ for (const theme of ["light", "dark"] as const) {
   });
 }
 
+
+// Story 5.21 (AD-182): an answer proposal, the meeting fixture's as the
+// window ingested it, lists its session's name and opens its meeting; it
+// has no Open as card, and only the meeting's click sends it.
+test("an answer proposal opens its meeting from the list", async ({ page }) => {
+  const meeting = fixtureOf<MeetingView>("meeting", "meeting-background");
+  const proposal = meeting.proposed_answer;
+  if (!proposal?.content || !("answer" in proposal.content)) throw new Error("the meeting fixture has a proposed answer");
+  const session = proposal.content.answer.session_id;
+  const day = orchestrator("orchestrator-day");
+  const board = loadBoard("busy");
+  const named = board.columns.needs_you[0]!;
+  const withSession = {
+    ...board,
+    columns: { ...board.columns, needs_you: [{ ...named, session_id: session }, ...board.columns.needs_you.slice(1)] },
+  };
+  const key = `sid:${session}`;
+  await page.addInitScript(
+    ([view, m]) => {
+      window.__officinaOrchestrator = view;
+      window.__officinaMeetings = { [m.key]: m };
+    },
+    [{ ...day, proposals: [proposal, ...day.proposals] }, { ...meeting, key }] as [OrchestratorView, MeetingView],
+  );
+  await openBoard(page, withSession, {}, loadRelay("relay-clean"));
+  await page.getByTestId("view-orchestrator").click();
+  const item = page.locator(`[data-testid="proposal"][data-id="${proposal.id}"]`);
+  await expect(item).toHaveAttribute("data-kind", "answer");
+  await expect(item.getByTestId("proposal-session")).toContainText(named.name);
+  await expect(item.getByTestId("proposal-open")).toHaveCount(0);
+  await expect(item.locator("img")).toHaveCount(0);
+  await item.getByTestId("proposal-open-meeting").click();
+  expect(await callsOf(page, "open_meeting")).toEqual([{ key }]);
+  await expect(page.getByTestId("meeting-panel")).toHaveAttribute("data-key", key);
+  await expect(page.getByTestId("meeting-proposal")).toHaveAttribute("data-id", proposal.id);
+  expect(await callsOf(page, "send_answer")).toEqual([]);
+});

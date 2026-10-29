@@ -339,3 +339,108 @@ test("a live interactive session offers Focus and no composer", async ({ page })
   await panel(page).getByTestId("meeting-focus").click();
   expect((await calls(page)).some((c) => c.cmd === "focus")).toBe(true);
 });
+
+// ---- story 5.21: answer proposals (AD-182, D-28, D-488, D-564, D-575) ----
+
+/** The background meeting's proposed answer, from the fixture. */
+function proposedOf(view: MeetingView): { id: string; text: string; rationale: string } {
+  const proposal = view.proposed_answer;
+  if (!proposal?.content || !("answer" in proposal.content)) throw new Error("the background meeting has a proposed answer");
+  return { id: proposal.id, ...proposal.content.answer };
+}
+
+const proposalCalls = async (page: Page) =>
+  (await calls(page)).filter((c) => c.cmd === "send_answer").map((c) => c.args as Record<string, unknown>);
+
+for (const theme of ["light", "dark"] as const) {
+  test(`a pending answer proposal shows under its label with its rationale, ${theme}`, async ({ page }) => {
+    await page.emulateMedia({ colorScheme: theme });
+    const meeting = await openAnswering(page, "resume_live");
+    const proposed = proposedOf(meeting);
+    const slot = panel(page).getByTestId("meeting-proposal-slot");
+    await expect(slot.getByTestId("meeting-proposal-label")).toHaveText("proposal");
+    await expect(slot.getByTestId("meeting-proposal-text")).toHaveText(proposed.text);
+    await expect(slot.getByTestId("meeting-proposal-rationale")).toHaveText(proposed.rationale);
+    // The fixture's text is markup: it renders as text and runs nothing.
+    expect(proposed.text).toContain("<img");
+    await expect(slot.locator("img")).toHaveCount(0);
+    expect(await page.evaluate(() => (window as { __officinaXss?: number }).__officinaXss)).toBeUndefined();
+    // Beside the composer, which stays empty: nothing is copied into it.
+    await expect(panel(page).getByTestId("answer-text")).toHaveValue("");
+    // Neutral: the slot takes the panel's text, muted and surface tokens,
+    // never the attention colour.
+    await transitionsDone(page);
+    const found = await slot.evaluate((el) => {
+      const root = getComputedStyle(document.documentElement);
+      const probe = document.createElement("span");
+      document.body.append(probe);
+      const resolve = (token: string) => {
+        probe.style.color = root.getPropertyValue(token).trim();
+        return getComputedStyle(probe).color;
+      };
+      const tokens = Object.fromEntries(
+        ["--color-text", "--color-text-muted", "--color-surface", "--color-bg", "--color-attention"].map((t) => [t, resolve(t)]),
+      );
+      probe.remove();
+      const colours = new Set<string>();
+      for (const e of [el, ...Array.from(el.querySelectorAll("*"))]) {
+        const style = getComputedStyle(e);
+        colours.add(style.color);
+        if (style.backgroundColor !== "rgba(0, 0, 0, 0)") colours.add(style.backgroundColor);
+      }
+      return { tokens, colours: [...colours] };
+    });
+    const allowed = ["--color-text", "--color-text-muted", "--color-surface", "--color-bg"].map((t) => found.tokens[t]);
+    for (const colour of found.colours) expect(allowed, `${theme}: ${colour}`).toContain(colour);
+    expect(found.colours).not.toContain(found.tokens["--color-attention"]);
+  });
+
+  test(`Send the proposed answer needs a pointer click, ${theme}`, async ({ page }) => {
+    await page.emulateMedia({ colorScheme: theme });
+    const meeting = await openAnswering(page, "resume_live");
+    const proposed = proposedOf(meeting);
+    await panel(page).getByTestId("proposal-send").click();
+    await expect(panel(page).getByTestId("meeting-proposal-result")).toHaveAttribute("data-outcome", "confirmed");
+    // Its id goes to the backend, never a text (D-575); the same click
+    // copies the text.
+    expect(await proposalCalls(page)).toEqual([{ key: meeting.key, expected: "resume_live", proposalId: proposed.id }]);
+    expect(await clipboard(page)).toBe(proposed.text);
+    // Sent, it leaves the meeting read again, its result kept.
+    await expect(panel(page).getByTestId("meeting-proposal-none")).toBeVisible();
+    await expect(panel(page).getByTestId("answer-text")).toHaveValue("");
+  });
+
+  test(`a keyboard press never sends a proposal, ${theme}`, async ({ page }) => {
+    await page.emulateMedia({ colorScheme: theme });
+    await openAnswering(page, "resume_live");
+    const send = panel(page).getByTestId("proposal-send");
+    await send.focus();
+    await page.keyboard.press("Enter");
+    await page.keyboard.press("Space");
+    await send.dispatchEvent("click", { detail: 0 });
+    await page.waitForTimeout(200);
+    expect(await proposalCalls(page)).toEqual([]);
+    await expect(panel(page).getByTestId("meeting-proposal-result")).toHaveCount(0);
+  });
+
+  test(`dismiss sends dismiss_proposal, ${theme}`, async ({ page }) => {
+    await page.emulateMedia({ colorScheme: theme });
+    const meeting = await openAnswering(page, "resume_live");
+    const proposed = proposedOf(meeting);
+    const slot = panel(page).getByTestId("meeting-proposal-slot");
+    const before = (await slot.boundingBox())!;
+    await panel(page).getByTestId("meeting-proposal-dismiss").click();
+    await expect(panel(page).getByTestId("meeting-proposal-none")).toBeVisible();
+    const dismissed = (await calls(page)).filter((c) => c.cmd === "dismiss_proposal").map((c) => c.args);
+    expect(dismissed).toEqual([{ proposalId: proposed.id }]);
+    expect(await proposalCalls(page)).toEqual([]);
+    // Its going moves nothing: the slot keeps its box.
+    expect(await slot.boundingBox()).toEqual(before);
+  });
+}
+
+test("no proposal slot for a delivery a proposal never takes", async ({ page }) => {
+  await openAnswering(page, "copy_and_attach");
+  await expect(panel(page).getByTestId("answer-composer")).toBeVisible();
+  await expect(panel(page).getByTestId("meeting-proposal-slot")).toHaveCount(0);
+});

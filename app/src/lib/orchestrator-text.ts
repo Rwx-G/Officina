@@ -188,6 +188,9 @@ export const PROPOSAL_INVALID_TEXT: Record<ProposalInvalidReason, string> = {
   unknown_parameter: "it gives a parameter the template does not have",
   missing_parameter: "a parameter of the template has no value",
   value_not_in_list: "a value is not in its parameter's list",
+  rationale_missing: "the answer it proposes gives no rationale",
+  answer_refused: "the answer it proposes breaks a rule your own answers follow",
+  session_not_answerable: "the session it names was not a background session idle in its turn",
 };
 
 /** The invalid reason the row carries, worded; a code this window does

@@ -4,6 +4,9 @@
   // with the card core issued for its choices or for a proposal, and the
   // work order history. No model is involved. Leaving the view records the
   // briefing's reading (App.svelte).
+  import type { Board } from "../lib/generated/Board";
+  import type { Card } from "../lib/generated/Card";
+  import { meeting } from "../lib/meeting.svelte";
   import { fadeMotion } from "../lib/motion";
   import type { OrchestratorStore } from "../lib/orchestrator.svelte";
   import Briefing from "./Briefing.svelte";
@@ -15,15 +18,24 @@
 
   interface Props {
     store: OrchestratorStore;
+    /** The board, for the names of the sessions answer proposals name. */
+    board: Board | null;
     nowMs: number;
   }
-  let { store, nowMs }: Props = $props();
+  let { store, board, nowMs }: Props = $props();
 
   let view = $derived(store.view);
   let card = $derived(store.card);
   /** The history's row for the card, once its launch recorded one. */
   let order = $derived(card ? (view?.work_orders.find((o) => o.id === card.id) ?? null) : null);
   let subjectNames = $derived(new Map((view?.briefing.subjects.items ?? []).map((s) => [s.id, s.name])));
+  let sessionNames = $derived(
+    new Map(
+      (board ? (Object.values(board.columns).flat() as Card[]) : [])
+        .filter((c) => c.session_id !== null)
+        .map((c) => [c.session_id!, c.name]),
+    ),
+  );
 </script>
 
 <main class="orchestrator-view" data-testid="orchestrator-view" in:fadeMotion|global>
@@ -36,11 +48,13 @@
       proposals={view.proposals}
       deleted={view.deleted_proposal_files}
       {subjectNames}
+      {sessionNames}
       {nowMs}
       busy={store.composing || store.launching}
       error={store.proposalError}
       onOpen={(id) => void store.openProposal(id)}
       onDismiss={(id) => void store.dismissProposal(id)}
+      onOpenMeeting={(session) => void meeting.receive(`sid:${session}`)}
     />
     <Composer {store} />
     {#if card}

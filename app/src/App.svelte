@@ -166,7 +166,7 @@
   {#if view === "relay"}
     <RelayView store={relay} nowMs={store.nowMs} />
   {:else if view === "orchestrator"}
-    <OrchestratorView store={orchestrator} nowMs={store.nowMs} />
+    <OrchestratorView store={orchestrator} {board} nowMs={store.nowMs} />
   {:else if view === "subjects"}
     <SubjectsView store={registry} nowMs={store.nowMs} />
   {:else}

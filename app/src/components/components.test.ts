@@ -1285,6 +1285,92 @@ describe("AnswerComposer", () => {
   });
 });
 
+describe("ProposedAnswer", () => {
+  const hostile = `<img src=x onerror="window.__officinaXss = 1"><b>x</b>`;
+  const withProposal = (): MeetingView => {
+    const base = fixtureOf<MeetingView>("meeting", "meeting-background");
+    const proposal = base.proposed_answer;
+    if (!proposal?.content || !("answer" in proposal.content)) throw new Error("the fixture's meeting has a proposed answer");
+    const session_id = proposal.content.answer.session_id;
+    return {
+      ...base,
+      key: "bg:proposed",
+      proposed_answer: { ...proposal, content: { answer: { session_id, text: hostile, rationale: hostile } } },
+    };
+  };
+  let writeText: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    writeText = vi.fn(async () => undefined);
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+    meeting.close(false);
+    delete meeting.proposalResults["bg:proposed"];
+  });
+
+  it("the proposed answer renders markup as text", () => {
+    const view = withProposal();
+    meeting.key = view.key;
+    meeting.view = view;
+    const { container, getByTestId } = render(MeetingPanel, { board: null, store: store(), onJournal: () => {} });
+    expect(container.querySelector("img, b")).toBeNull();
+    expect(getByTestId("meeting-proposal-text").textContent).toBe(hostile);
+    expect(getByTestId("meeting-proposal-rationale").textContent).toBe(hostile);
+    expect(getByTestId("meeting-proposal-label").textContent).toBe("proposal");
+    expect((window as { __officinaXss?: number }).__officinaXss).toBeUndefined();
+  });
+
+  it("Send the proposed answer ignores a click with detail 0", async () => {
+    const view = withProposal();
+    meeting.key = view.key;
+    meeting.view = view;
+    const sent = vi.spyOn(ipc, "sendProposedAnswer").mockResolvedValue({ outcome: "confirmed" });
+    vi.spyOn(ipc, "openMeeting").mockResolvedValue(view);
+    const { getByTestId } = render(MeetingPanel, { board: null, store: store(), onJournal: () => {} });
+    const button = getByTestId("proposal-send");
+    // Enter and Space on a focused button fire `click` with `detail` 0.
+    await fireEvent.click(button, { detail: 0 });
+    await fireEvent.keyDown(button, { key: "Enter" });
+    await fireEvent.keyDown(button, { key: " " });
+    expect(sent).not.toHaveBeenCalled();
+    expect(writeText).not.toHaveBeenCalled();
+    await fireEvent.click(button, { detail: 1 });
+    await vi.waitFor(() => expect(sent).toHaveBeenCalledWith(view.key, view.delivery, view.proposed_answer!.id));
+    // The id goes to the backend, never the text; the text goes to the clipboard.
+    expect(sent.mock.calls[0]).not.toContain(hostile);
+    expect(writeText).toHaveBeenCalledWith(hostile);
+    await vi.waitFor(() => expect(getByTestId("meeting-proposal-result").getAttribute("data-outcome")).toBe("confirmed"));
+  });
+
+  it("the author's composer stays empty beside a proposal", async () => {
+    const view = withProposal();
+    meeting.key = view.key;
+    meeting.view = view;
+    vi.spyOn(ipc, "sendProposedAnswer").mockResolvedValue({ outcome: "confirmed" });
+    vi.spyOn(ipc, "openMeeting").mockResolvedValue(view);
+    const { getByTestId } = render(MeetingPanel, { board: null, store: store(), onJournal: () => {} });
+    const text = () => (getByTestId("answer-text") as HTMLTextAreaElement).value;
+    expect(text()).toBe("");
+    await fireEvent.click(getByTestId("proposal-send"), { detail: 1 });
+    await vi.waitFor(() => expect(getByTestId("meeting-proposal-result")).toBeTruthy());
+    expect(text()).toBe("");
+    expect(meeting.draftOf(view.key)).toBe("");
+  });
+
+  it("a meeting without a proposal keeps the slot, saying so", () => {
+    const view = { ...withProposal(), proposed_answer: null };
+    meeting.key = view.key;
+    meeting.view = view;
+    const { getByTestId, queryByTestId } = render(MeetingPanel, { board: null, store: store(), onJournal: () => {} });
+    expect(getByTestId("meeting-proposal-slot")).toBeTruthy();
+    expect(getByTestId("meeting-proposal-none")).toBeTruthy();
+    expect(queryByTestId("proposal-send")).toBeNull();
+  });
+});
+
 describe("ProposalList", () => {
   const hostile = `<img src=x onerror="window.__officinaXss = 1">`;
 
@@ -1293,13 +1379,28 @@ describe("ProposalList", () => {
       proposals,
       deleted: { misnamed: 2, over_limit: 1 },
       subjectNames: new Map<number, string>(),
+      sessionNames: new Map<string, string>(),
       nowMs: NOW,
       busy: false,
       error: null,
       onOpen: vi.fn(),
       onDismiss: vi.fn(),
+      onOpenMeeting: vi.fn(),
     };
   }
+
+  it("an answer proposal names its session and opens its meeting", async () => {
+    const answer = fixtureOf<MeetingView>("meeting", "meeting-background").proposed_answer!;
+    if (!answer.content || !("answer" in answer.content)) throw new Error("the fixture's meeting has a proposed answer");
+    const session = answer.content.answer.session_id;
+    const shown = { ...props([answer]), sessionNames: new Map([[session, "dependency-bump-3"]]) };
+    const { container, getByTestId, queryByTestId } = render(ProposalList, shown);
+    expect(container.querySelector("img")).toBeNull();
+    expect(getByTestId("proposal-session").textContent).toContain("dependency-bump-3");
+    expect(queryByTestId("proposal-open")).toBeNull();
+    await fireEvent.click(getByTestId("proposal-open-meeting"));
+    expect(shown.onOpenMeeting).toHaveBeenCalledWith(session);
+  });
 
   it("ProposalList renders markup in proposal texts as text", () => {
     const view = fixtureOf<OrchestratorView>("orchestrator", "orchestrator-day");

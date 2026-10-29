@@ -250,6 +250,14 @@ export function sendAnswer(key: string, expected: Delivery, text: string): Promi
   return invoke<AnswerResult>("send_answer", { key, expected, text });
 }
 
+/** Sends the orchestrator's answer proposal `proposalId` to the meeting
+ *  of `key` (AD-182, D-575): its id only, never a text, so what runs is
+ *  the text the collector stored. The caller sends it on a pointer click
+ *  only (D-28). */
+export function sendProposedAnswer(key: string, expected: Delivery, proposalId: string): Promise<AnswerResult> {
+  return invoke<AnswerResult>("send_answer", { key, expected, proposalId });
+}
+
 export function getBoard(): Promise<Board | null> {
   return invoke<Board | null>("get_board");
 }
