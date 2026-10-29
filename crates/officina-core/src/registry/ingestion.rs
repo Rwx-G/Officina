@@ -192,9 +192,36 @@ pub fn in_triage_workdir(cwd: &str, officina_home: &str) -> bool {
 /// assert!(!in_review_workdir(r"C:\Users\user01\.officina\review\notes", home));
 /// ```
 pub fn in_review_workdir(cwd: &str, officina_home: &str) -> bool {
-    let segments = crate::spawn::OfficinaDir::ReviewWorkdir
-        .segments()
-        .join("/");
+    in_officina_dir(cwd, officina_home, crate::spawn::OfficinaDir::ReviewWorkdir)
+}
+
+/// True when `cwd` is exactly `<officina_home>/orchestrator/workdir`, the
+/// orchestrator's folder, compared as [`normalise_path`] does (AD-43 as
+/// amended, D-166): a session working elsewhere under `orchestrator/` is
+/// recorded like any other.
+///
+/// ```
+/// use officina_core::registry::ingestion::in_orchestrator_workdir;
+/// let home = r"C:\Users\user01\.officina";
+/// assert!(in_orchestrator_workdir(r"c:/users/USER01/.officina/orchestrator/workdir", home));
+/// assert!(!in_orchestrator_workdir(r"C:\Users\user01\.officina\orchestrator\notes", home));
+/// ```
+pub fn in_orchestrator_workdir(cwd: &str, officina_home: &str) -> bool {
+    in_officina_dir(
+        cwd,
+        officina_home,
+        crate::spawn::OfficinaDir::OrchestratorWorkdir,
+    )
+}
+
+/// True when `cwd` is exactly `dir` under `officina_home`, both
+/// normalised.
+pub(crate) fn in_officina_dir(
+    cwd: &str,
+    officina_home: &str,
+    dir: crate::spawn::OfficinaDir,
+) -> bool {
+    let segments = dir.segments().join("/");
     normalise_path(cwd) == format!("{}/{segments}", normalise_path(officina_home))
 }
 

@@ -3,6 +3,7 @@ import type { ApprovalView } from "./ApprovalView";
 import type { Columns } from "./Columns";
 import type { ContractView } from "./ContractView";
 import type { Diagnostics } from "./Diagnostics";
+import type { OrchestratorPresence } from "./OrchestratorPresence";
 import type { ProjectView } from "./ProjectView";
 import type { QuotaView } from "./QuotaView";
 import type { Staleness } from "./Staleness";
@@ -41,4 +42,9 @@ alert_count: number,
  * When a Needs you wait next reaches the threshold, for the collector
  * to recompute then (AD-168).
  */
-next_escalation_at_ms: number | null, };
+next_escalation_at_ms: number | null, 
+/**
+ * The orchestrator while an agents entry shows it (AD-89, D-166):
+ * never a card, never counted in `waiting_count`.
+ */
+orchestrator: OrchestratorPresence | null, };

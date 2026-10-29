@@ -24,11 +24,7 @@ use crate::untrusted::Untrusted;
 /// The payload's version; P-13's rule moves it.
 pub const ORCHESTRATOR_VIEW_SCHEMA: u32 = 1;
 
-/// The orchestrator session as the window sees it. Story 5.16 gives it its
-/// fields; until then no value exists and `presence` is always null.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
-pub enum OrchestratorPresence {}
+pub use crate::orders::orchestrator::OrchestratorPresence;
 
 pub use crate::orders::proposal::ProposalView;
 
@@ -103,7 +99,8 @@ pub struct WorkOrderView {
 pub struct OrchestratorView {
     pub schema: u32,
     pub generated_at_ms: i64,
-    /// Null until story 5.16.
+    /// The orchestrator while an agents entry shows it (AD-89), as the
+    /// board carries it; null while it is absent.
     pub presence: Option<OrchestratorPresence>,
     /// The window's briefing, from its last reading.
     pub briefing: Briefing,
@@ -117,11 +114,12 @@ pub struct OrchestratorView {
     pub work_orders: Vec<WorkOrderView>,
 }
 
-/// What the view is built from: the briefing's input, and the relay
-/// view's approved snapshot and pending change.
+/// What the view is built from: the briefing's input, the relay view's
+/// approved snapshot and pending change, and the board's orchestrator.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ViewInput<'a> {
     pub briefing: BriefingInput<'a>,
+    pub presence: Option<OrchestratorPresence>,
     pub catalogue: Option<&'a CanonicalCatalogue>,
     pub pending: Option<&'a PendingChange>,
 }
@@ -146,6 +144,7 @@ impl<'a> ViewInput<'a> {
                 subjects,
                 work_orders,
             },
+            presence: board.and_then(|b| b.orchestrator),
             catalogue: relay.and_then(|r| r.catalogue.as_ref()),
             pending: relay.and_then(|r| r.pending.as_ref()),
         }
@@ -243,7 +242,7 @@ pub fn build(input: &ViewInput, cursor: Cursor, now_ms: i64) -> OrchestratorView
     OrchestratorView {
         schema: ORCHESTRATOR_VIEW_SCHEMA,
         generated_at_ms: now_ms,
-        presence: None,
+        presence: input.presence,
         briefing: briefing::build(&input.briefing, cursor, now_ms),
         templates: template_options(input.catalogue),
         awaiting_templates: awaiting(input.pending),
@@ -453,5 +452,31 @@ values = ["minor"]
         assert_eq!(view.schema, ORCHESTRATOR_VIEW_SCHEMA);
         assert_eq!(view.presence, None);
         assert!(view.proposals.is_empty());
+    }
+
+    /// Story 5.16 AC 5 (AD-92): the view's presence is the board's.
+    #[test]
+    fn the_view_carries_the_boards_presence() {
+        use crate::agents::parse_agents;
+        use crate::board::{BoardInput, build_board};
+        let home = "C:/path/to/home";
+        let input = BoardInput {
+            agents: Some(
+                parse_agents(
+                    r#"[{"pid":9,"sessionId":"o","name":"officina-orchestrator","kind":"interactive","status":"busy","cwd":"C:/path/to/home/orchestrator/workdir","startedAt":4}]"#,
+                )
+                .unwrap(),
+            ),
+            officina_home: Some(home.to_owned()),
+            ..Default::default()
+        };
+        let board = build_board(&input, NOW);
+        assert!(board.orchestrator.is_some());
+        let view = build(
+            &ViewInput::of(Some(&board), None, None, &[], &[]),
+            Cursor::None,
+            NOW,
+        );
+        assert_eq!(view.presence, board.orchestrator);
     }
 }

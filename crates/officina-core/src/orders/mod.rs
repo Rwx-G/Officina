@@ -16,6 +16,7 @@ pub const PROPOSALS_DIR: &str = "proposals";
 
 pub mod briefing;
 pub mod card;
+pub mod orchestrator;
 pub mod proposal;
 pub mod view;
 pub mod work_order;

@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use crate::agents::{AgentRecord, LifecycleState, LiveStatus, SessionKind};
 use crate::events::EventLine;
 use crate::floor::{ALERT_AFTER_MINUTES_DEFAULT, Priority, ProjectColor};
+use crate::orders::orchestrator::{OrchestratorPresence, is_orchestrator};
 use crate::quota::{QuotaFile, QuotaWindow};
 use crate::registry::types::{RegistryReport, ReviewMode, Settlement, SubjectRef};
 use crate::relay::approvals::{ApprovalState, ApprovalView};
@@ -25,7 +26,7 @@ use crate::untrusted::Untrusted;
 /// scene's inputs (v0.4, AD-68), extended under this number by the later
 /// v0.4 stories (P-22 as amended by D-461). 5: an approval's class and
 /// state (v0.5, AD-92), extended under this number by the later v0.5
-/// stories (P-26).
+/// stories (P-26), the orchestrator's presence among them (story 5.16).
 pub const BOARD_SCHEMA: u32 = 5;
 
 /// What a pending `auto` request's card says of why it is the author's
@@ -357,6 +358,10 @@ pub struct Board {
     /// to recompute then (AD-168).
     #[cfg_attr(feature = "ts", ts(type = "number | null"))]
     pub next_escalation_at_ms: Option<i64>,
+    /// The orchestrator while an agents entry shows it (AD-89, D-166):
+    /// never a card, never counted in `waiting_count`.
+    #[serde(default)]
+    pub orchestrator: Option<OrchestratorPresence>,
 }
 
 /// A declared project, path already resolved and normalised.
@@ -416,6 +421,9 @@ pub struct BoardInput {
     /// last (D-494): an unknown card keeps its alert from it. Empty for a
     /// first board.
     pub previous_scene: BTreeMap<String, SceneState>,
+    /// The Officina home, whose `orchestrator/workdir` the orchestrator's
+    /// agents entry works in (AD-89); `None` shows it as any session.
+    pub officina_home: Option<String>,
 }
 
 /// Events of one session, reduced to what a card shows.
@@ -933,10 +941,22 @@ pub fn build_board(input: &BoardInput, now_ms: i64) -> Board {
     let mut card_events: crate::scene::CardEvents = BTreeMap::new();
     let mut listed: HashSet<&str> = HashSet::new();
     let mut unrecognized: Vec<String> = Vec::new();
+    let mut orchestrator: Option<OrchestratorPresence> = None;
 
     for record in input.agents.iter().flatten() {
         unrecognized.extend(record.unrecognized.iter().cloned());
         let own = record.session_id.as_deref();
+        // The orchestrator is a presence, never a card (AD-89, D-166); its
+        // session is listed, so no line of it makes an unlisted card.
+        if input
+            .officina_home
+            .as_deref()
+            .is_some_and(|home| is_orchestrator(record, home))
+        {
+            orchestrator = orchestrator.or(Some(OrchestratorPresence::of(record)));
+            listed.extend(own);
+            continue;
+        }
         // Sessions run by this live process (E14): after `/clear` the hook
         // reports a new session id while the process, and its card, stay.
         // Only sessions that began after the process started count, so a
@@ -1061,6 +1081,7 @@ pub fn build_board(input: &BoardInput, now_ms: i64) -> Board {
         alert_count: crate::scene::alert_count(&columns),
         next_escalation_at_ms: crate::scene::next_escalation_at_ms(&columns, alert_after_ms),
         columns,
+        orchestrator,
     }
 }
 
@@ -1095,6 +1116,94 @@ mod tests {
             absent: Vec::new(),
             truncated: false,
         }
+    }
+
+    const HOME: &str = r"C:\Users\user01\.officina";
+
+    /// The orchestrator's agents entry with `status`, in its workdir.
+    fn orchestrator_entry(status: &str) -> AgentRecord {
+        record(&format!(
+            r#"{{"pid":41,"sessionId":"orch","name":"officina-orchestrator","kind":"interactive","status":"{status}","cwd":"c:/users/USER01/.officina/orchestrator/workdir/","startedAt":3}}"#
+        ))
+    }
+
+    /// Story 5.16 AC 5 (AD-89, D-166): the agents entry named
+    /// `officina-orchestrator` in the workdir is the board's presence,
+    /// never a card, and its hook lines make no card either.
+    #[test]
+    fn the_orchestrator_is_presence_not_a_card() {
+        use crate::orders::orchestrator::OrchestratorPresence;
+        let input = BoardInput {
+            agents: Some(vec![orchestrator_entry("idle")]),
+            events: vec![event(2, "orch", "UserPromptSubmit")],
+            officina_home: Some(HOME.to_owned()),
+            ..Default::default()
+        };
+        let board = build_board(&input, 10);
+        assert_eq!(
+            board.orchestrator,
+            Some(OrchestratorPresence {
+                pid: Some(41),
+                status: Some(crate::agents::LiveStatus::Idle),
+                started_at_ms: Some(3),
+            })
+        );
+        assert_eq!(board.columns.all().count(), 0, "no card");
+        // Without the home, the same entry is an ordinary session.
+        let plain = build_board(
+            &BoardInput {
+                officina_home: None,
+                ..input
+            },
+            10,
+        );
+        assert_eq!(plain.orchestrator, None);
+        assert_eq!(plain.columns.all().count(), 1);
+    }
+
+    /// Story 5.16 AC 5 (AD-89): a waiting orchestrator is shown waiting
+    /// and is no wait on the author's count.
+    #[test]
+    fn a_waiting_orchestrator_is_not_counted() {
+        let input = BoardInput {
+            agents: Some(vec![orchestrator_entry("waiting")]),
+            officina_home: Some(HOME.to_owned()),
+            ..Default::default()
+        };
+        let board = build_board(&input, 10);
+        assert_eq!(
+            board.orchestrator.and_then(|p| p.status),
+            Some(crate::agents::LiveStatus::Waiting)
+        );
+        assert_eq!(board.waiting_count, 0);
+        assert!(board.columns.needs_you.is_empty());
+    }
+
+    /// Story 5.16 AC 5 (D-166): another session under the orchestrator's
+    /// folder, or named like it elsewhere, is an ordinary card.
+    #[test]
+    fn another_session_under_the_orchestrator_folder_is_a_card() {
+        let input = BoardInput {
+            agents: Some(vec![
+                record(
+                    r#"{"pid":5,"sessionId":"notes","name":"notes","kind":"interactive","status":"waiting","cwd":"C:/Users/user01/.officina/orchestrator/workdir","startedAt":1}"#,
+                ),
+                record(
+                    r#"{"pid":6,"sessionId":"elsewhere","name":"officina-orchestrator","kind":"interactive","status":"idle","cwd":"C:/Users/user01/.officina/orchestrator/proposals","startedAt":1}"#,
+                ),
+            ]),
+            officina_home: Some(HOME.to_owned()),
+            ..Default::default()
+        };
+        let board = build_board(&input, 10);
+        assert_eq!(board.orchestrator, None);
+        let ids: Vec<&str> = board
+            .columns
+            .all()
+            .filter_map(|c| c.session_id.as_deref())
+            .collect();
+        assert_eq!(ids.len(), 2, "{ids:?}");
+        assert_eq!(board.waiting_count, 1, "the waiting one is the author's");
     }
 
     /// AD-54, D-47: the registry's state reaches the board as the caller

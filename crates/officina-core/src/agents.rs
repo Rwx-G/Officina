@@ -17,6 +17,7 @@ pub enum SessionKind {
 
 /// Live process activity, present only while the process runs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "lowercase")]
 pub enum LiveStatus {
     Busy,

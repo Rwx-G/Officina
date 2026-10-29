@@ -11,7 +11,8 @@ import type { WorkOrderView } from "./WorkOrderView";
  */
 export type OrchestratorView = { schema: number, generated_at_ms: number, 
 /**
- * Null until story 5.16.
+ * The orchestrator while an agents entry shows it (AD-89), as the
+ * board carries it; null while it is absent.
  */
 presence: OrchestratorPresence | null, 
 /**

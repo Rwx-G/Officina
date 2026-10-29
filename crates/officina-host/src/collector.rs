@@ -604,6 +604,7 @@ impl Collector {
             settlements: self.settlements.clone(),
             alert_after_minutes: floor_file.map(FloorFile::alert_after_minutes),
             previous_scene: self.last_scene.borrow().clone(),
+            officina_home: Some(self.paths.officina_home.to_string_lossy().into_owned()),
         };
         let mut board = build_board(&input, now_ms);
         *self.last_scene.borrow_mut() = states_by_key(&board.columns);
