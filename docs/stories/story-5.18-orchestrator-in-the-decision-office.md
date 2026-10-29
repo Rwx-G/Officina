@@ -1,6 +1,6 @@
 # Story 5.18: The orchestrator in the decision office, the briefing walk and the view switch's mark
 
-**Status:** Approved
+**Status:** In progress (ACs 2 to 9 and 11 done; AC 1 and AC 10's baselines are the owner's steps; the entry also waits on 5.16 AC 10, gate 1's window half, D-841)
 
 ## Story
 
@@ -25,14 +25,15 @@ so that I see at a glance whether the orchestrator is there and what it suggeste
 ## Tasks
 
 - [ ] Owner's comparison of the baselines with the prototype's target mode (AC 1, AC 10)
-- [ ] `lib/scene/layout.ts`: `SceneInput` fields, the orchestrator's place and pose, briefings, plaque name, screen and whiteboard content (AC 2, 3, 5, 7)
-- [ ] `lib/scene/rig.ts` role, `objects.ts` node; `app.css` tokens, `furniture.ts` `PAINTS`, `tokens.test.ts` pairs (AC 3, 4)
-- [ ] `lib/scene/text.ts` names; `geometry.ts` screen and whiteboard boxes; `SceneOverlay.svelte`, `SceneTargets.svelte` (AC 5, 6)
-- [ ] `lib/scene/places.ts` staff nodes; `memory.ts` `briefed`; `mover.ts` detour and `BRIEFING_DWELL_MS` (AC 7)
-- [ ] `Scene.svelte` inputs; `Header.svelte`'s Orchestrator button mark and count (AC 2, 9)
-- [ ] `scene-orchestrator` fixture; baselines through D-119's path (AC 10)
-- [ ] Vitest and Playwright cases (AC 2-10)
-- [ ] Update `CHANGELOG.md` and the README (AC 11)
+- [x] `lib/scene/layout.ts`: `SceneInput` fields, the orchestrator's place and pose, briefings, plaque name, screen and whiteboard content (AC 2, 3, 5, 7)
+- [x] `lib/scene/rig.ts` role, `objects.ts` node; `app.css` tokens, `furniture.ts` `PAINTS`, `tokens.test.ts` pairs (AC 3, 4)
+- [x] `lib/scene/text.ts` names; `geometry.ts` screen and whiteboard boxes; `SceneOverlay.svelte`, `SceneTargets.svelte` (AC 5, 6)
+- [x] `lib/scene/places.ts` staff nodes; `memory.ts` `briefed`; `mover.ts` detour and `BRIEFING_DWELL_MS` (AC 7)
+- [x] `Scene.svelte` inputs; `Header.svelte`'s Orchestrator button mark and count (AC 2, 9)
+- [x] `scene-orchestrator` fixture (AC 10)
+- [ ] Baselines through D-119's path (AC 10): the owner's `workflow_dispatch` run, comparison and commit
+- [x] Vitest and Playwright cases (AC 2-10)
+- [x] Update `CHANGELOG.md` and the README (AC 11)
 
 ## Dev Notes
 
@@ -56,12 +57,47 @@ so that I see at a glance whether the orchestrator is there and what it suggeste
 
 ### Debug Log
 
+- The header's margin, measured before any change at 1920 x 1001 with `scene-eight`, the relay in use and the alert band: status slot 94.6 px, waiting pill 87.2 px, view switch 345.1 px, header 72.7 px. An inline three-digit count would take about 20 px; the count went to the button's corner instead (D-833), and the Full HD case passes with the orchestrator live and the pending limit's count.
+- The left screen's text surface met the orchestrator's target below z 1.18; the surfaces are inset (`DISPLAY_TEXT`), and the whiteboard's text starts at gx 7.05, clear of the queue's "+n" (`geometry.test.ts` checks the quadrilaterals against every target and plaque).
+- The briefing e2e first counted the samples where both had just set off back (still on the snapped pixel, turned to walk); the case now stops the dwell at the first turned sample, at most two.
+- The chair's file Start stable-size case measured during the panel's slide-in; its scene now waits until the button stands still.
+
 ### Completion Notes
 
+Decisions D-830 to D-841 (`epic-5-decisions.md`); to confirm: D-830 (screens and whiteboard only while live), D-832 (the prototype's staff chain), D-833 (the count in the button's corner).
+
+Tests per AC:
+
+- AC 1: not done, the owner's comparison (with AC 10's baselines).
+- AC 2: `layout.test.ts > no orchestrator input draws v0.4's decision office`, `> the layout is a fixed point with the orchestrator inputs`, `> the same inputs give a deep-equal layout`.
+- AC 3: `layout.test.ts > a live orchestrator sits at the decider's chair in the pose of its status`, `> a waiting orchestrator is never ringed and never raises a hand`, `> the orchestrator is never counted or grouped`, `> an absent orchestrator leaves the chair empty`; `rig.test.ts > the orchestrator's rig takes its tunic, a surface collar and no cap`; `objects.test.ts > the orchestrator's node is created once and only its pose changes`.
+- AC 4: `src/tokens.test.ts` (its existing cases, with the new pairs).
+- AC 5: `text.test.ts > the decision office's plaque names the orchestrator only while it is live`; `layout.test.ts > the screens carry the proposal and Needs you counts`, `> the whiteboard shows the four latest labels`; `scene.test.ts > whiteboard labels render markup as text`; `geometry.test.ts > the screen and whiteboard boxes meet no target at any column count`.
+- AC 6: `layout.test.ts > the orchestrator's target follows the queue and the register in tab order`, `> an absent orchestrator offers a Start target`, `> arrows follow the vectors of a full office and a full queue` (D-839); `text.test.ts > the orchestrator's target names presence, status and proposals`; `geometry.test.ts`'s property cases with the orchestrator's target at every column count; Playwright `scene.spec.ts > Tab reaches the orchestrator after the decision office's queue`, `> the empty chair's file offers Start, which sends start_orchestrator`, `> Start is reachable by keyboard from the chair's file`, `> Enter on the orchestrator opens the Orchestrator view`; `stable-size.spec.ts > chair file Start keeps its box and moves nothing after it`.
+- AC 7: `places.test.ts > no route between two employee spots passes a staff node`, `> a staff route joins the decider's chair and the counter`; `layout.test.ts > a newly bound order is briefed once`, `> orders bound before the first layout are never briefed`, `> no briefing while the orchestrator is absent`; `memory.test.ts > briefed orders are kept for the run and never stored`; `mover.test.ts > the briefing detours to the counter and dwells 1.6 s`, `> once per order`, `> none with walking off`, `> none under reduced motion`, `> none on a hidden window`, `> the orchestrator walks for nothing else, and comes and goes at its chair`; Playwright `walk.spec.ts > a bound work order is briefed at the counter once, then both return`, `> with walking off a bound order goes straight to its place`.
+- AC 8: Playwright `scene.spec.ts > nothing in the scene changes while the payloads are unchanged, the orchestrator live` (pending proposals and a bound order), `> a presence or proposal change changes the decision office once`.
+- AC 9: Playwright `orchestrator.spec.ts > the view switch shows presence and the proposal count`, `> the view switch's mark is not colour alone`, `> proposals leave the title unchanged`, `> the view switch, the proposal list and the decision office never take the attention colour (light)` and `(dark)`; `stable-size.spec.ts > orchestrator view switch mark keeps its box and moves nothing after it`; `scene.spec.ts > eight projects fit a maximised Full HD window` and `with the alert band`, both with the orchestrator live and `PROPOSALS_PENDING_MAX` pending; core `board.rs::tests::the_orchestrator_and_proposals_never_count_as_waiting`; app `taskbar.rs::tests::the_orchestrator_leaves_the_title_and_the_overlay_unchanged`.
+- AC 10: `e2e-fixtures.mjs` writes `scene-orchestrator` (board) and `scene-orchestrator-view` (view) from one home, both in the index, with their own checks; `fixture-index.test.ts` and every fixture-board case run on it. `scene.spec.ts > the densities match their light/dark baselines` draws the densities with the orchestrator live and `scene-orchestrator`, `fixme` until the owner's `workflow_dispatch` run, comparison and commit (D-840).
+- AC 11: CHANGELOG `[Unreleased]` Added; README "The orchestrator in the scene" and a line in the scene section.
+
+Screenshots of the decision office with the orchestrator live, light and dark, at 1920 x 1032 and 3440 x 1392, were produced for the lead outside the repository; they are no baselines (D-119).
+
 ## File List
+
+- `app/scripts/e2e-fixtures.mjs`
+- `app/e2e/fixtures.ts`, `app/e2e/orchestrator.spec.ts`, `app/e2e/scene.spec.ts`, `app/e2e/stable-size.spec.ts`, `app/e2e/walk.spec.ts`
+- `app/src/App.svelte`, `app/src/app.css`, `app/src/tokens.test.ts`
+- `app/src/components/Header.svelte`, `app/src/components/OrchestratorStart.svelte`, `app/src/components/SessionFile.svelte`
+- `app/src/components/scene/Scene.svelte`, `app/src/components/scene/SceneOverlay.svelte`, `app/src/components/scene/scene.test.ts`
+- `app/src/lib/orchestrator-text.ts`
+- `app/src/lib/scene/furniture.ts`, `geometry.ts`, `geometry.test.ts`, `layout.ts`, `layout.test.ts`, `memory.ts`, `memory.test.ts`, `mover.ts`, `mover.test.ts`, `objects.ts`, `objects.test.ts`, `paths.test.ts`, `places.ts`, `places.test.ts`, `rig.ts`, `rig.test.ts`, `testing.ts`, `text.ts`, `text.test.ts`
+- `app/src-tauri/src/taskbar.rs`
+- `crates/officina-core/src/board.rs`
+- `CHANGELOG.md`, `README.md`, `docs/stories/epic-5-decisions.md`, `docs/stories/sprint-status.yaml`, this story
 
 ## Change Log
 
 - 2026-10-28 created
 - 2026-10-28 reworked after review: the attention-colour check is a Playwright computed-style case (F22); presence by name and folder (F27); baselines through D-119's `workflow_dispatch` path (F31); sole owner of the title and overlay assertion (F40)
 - 2026-10-28 rewritten against the addendum and v0.4 as built (file renamed from `story-5.18-orchestrator-room-and-chips.md`): the orchestrator takes v0.4's decision office at the decider's desk instead of an eighth cell, with its rig, tokens in both themes, plaque, screens and whiteboard (PRD section 9 item 1, AD-179, D-567); the briefing walk and the staff nodes (item 2, D-568); presence and proposals on the view switch instead of two chips; the empty chair's file offers Start, as PRD section 9 item 1 says (rework F1); under the header's stable-size and Full HD fit rules (D-564, D-565); the prototype v2's target mode is the reference (D-146 superseded)
+- 2026-10-29 implemented: ACs 2 to 9 and 11, AC 10's fixture; decisions D-830 to D-841; AC 1 and AC 10's baselines left to the owner, and the entry's wait on 5.16 AC 10 noted (D-841)
