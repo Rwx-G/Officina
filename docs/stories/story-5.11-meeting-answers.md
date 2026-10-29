@@ -1,6 +1,6 @@
 # Story 5.11: Answers: the composer, delivery and confirmation
 
-**Status:** Approved
+**Status:** Review
 
 ## Story
 
@@ -23,14 +23,14 @@ so that answering a background session costs me one sentence, and an answer is n
 
 ## Tasks
 
-- [ ] `Answer`, `AnswerRefusal` in `meeting.rs` (AC 1)
-- [ ] `VectorKind::Answer`, `spawn::answer`, golden cases, `SessionId` (AC 2)
-- [ ] Version and E21 in `delivery` (AC 3)
-- [ ] `send_answer` through the collector, spawns, `CopyOnly`, confirmation watch at the minimum spawn interval, journal lines; command, capability, `ipc.ts`, mock (AC 4-6)
-- [ ] Fake claude `resume` mode (AC 5)
-- [ ] `AnswerComposer.svelte`, drafts in `lib/meeting.svelte.ts` (AC 7)
-- [ ] Zero-write, doctor (AC 8, 9)
-- [ ] Update `CHANGELOG.md` and the README (AC 10)
+- [x] `Answer`, `AnswerRefusal` in `meeting.rs` (AC 1)
+- [x] `VectorKind::Answer`, `spawn::answer`, golden cases, `SessionId` (AC 2)
+- [x] Version and E21 in `delivery` (AC 3)
+- [x] `send_answer` through the collector, spawns, `CopyOnly`, confirmation watch at the minimum spawn interval, journal lines; command, capability, `ipc.ts`, mock (AC 4-6)
+- [x] Fake claude `resume` mode (AC 5)
+- [x] `AnswerComposer.svelte`, drafts in `lib/meeting.svelte.ts` (AC 7)
+- [x] Zero-write, doctor (AC 8, 9)
+- [x] Update `CHANGELOG.md` and the README (AC 10)
 
 ## Dev Notes
 
@@ -52,12 +52,41 @@ so that answering a background session costs me one sentence, and an answer is n
 
 ### Debug Log
 
+- The confirmation's reply is deferred: `AuthorCommand::AnswerOutcome` moves its reply sender into the collector's watch list, answered when the session turns busy or the window passes (D-814).
+- A copy of the fake in mode `interactive` lists no session; the tests that resume nothing use mode `ok`.
+
 ### Completion Notes
 
+Every AC is implemented and proven by the tests named. Gates' branches (D-127): E20's `--resume` cases passed, so the `Answer` vector keeps `--` and there is no `AnswerRefusal::LeadingDash`; E21 passed, so `delivery` returns `ResumeLive` (`RESUME_LIVE_DELIVERS`), from the session's folder as D-635 has it. Decisions D-811 to D-819; D-815 (the `copied` outcome) and D-635 (applied, D-812) to confirm. No new dependency or feature.
+
+- AC 1: core `meeting.rs::tests::{answer_bounds, answer_refuses_controls_and_format_characters, answer_refuses_a_leading_slash_or_bang_after_whitespace, every_answer_refusal_has_a_case}` and the doctest of `Answer::parse`.
+- AC 2: the two `Answer` cases of `tests/vectors/spawn.json` (live and ended, each in its session's folder) through `spawn_vectors.rs`; core `spawn.rs::tests::{session_id_must_be_a_canonical_uuid, the_answer_is_one_argument}`; CLI `spawn.rs::{every_kind_reaches_the_fake_claude_as_its_golden_vector, a_console_kind_gets_a_console, session_kinds_keep_the_authors_officina_settings}` cover `Answer` by iteration.
+- AC 3: core `meeting.rs::tests::{an_old_claude_falls_back_to_copy_and_attach, an_unknown_version_falls_back_to_copy_and_attach, resume_live_follows_gate_3}`, and the doctest of `resumes_with_a_prompt`.
+- AC 4: CLI `watch.rs::{a_changed_state_refuses_the_answer, copy_and_attach_puts_no_text_on_a_command_line, copy_only_spawns_nothing, resume_live_spawns_the_answer_vector, resume_ended_runs_in_the_agents_folder}`; `app/src-tauri/src/main.rs::tests::every_declared_command_is_allowed` (`send_answer`).
+- AC 5: CLI `watch.rs::{an_answer_is_confirmed_when_the_session_turns_busy, a_two_second_turn_is_confirmed, an_answer_is_not_confirmed_after_30_s}` with the fake's `resume` mode (and `turn_ms`).
+- AC 6: core `relay/journal.rs::tests::meeting_answer_round_trips`; CLI `watch.rs::the_journal_holds_the_hash_never_the_text`.
+- AC 7: Vitest `components.test.ts > AnswerComposer starts empty and counts characters`, `> Ctrl+Enter sends and copies`, `> a refused answer shows its reason and keeps the text`; `stable-size.spec.ts` case "answer Send" on the new `meeting` scene; Playwright `meeting.spec.ts > an answer to a live background session is sent and confirmed`, `> an unconfirmed answer stays in the panel and on the clipboard`, `> a waiting background session copies and opens attach`, `> an ended session never seen by claude agents is copy only`, `> a live interactive session offers Focus and no composer`.
+- AC 8: `quota_doctor.rs::no_command_writes_under_the_claude_config_dir` resumes an answer through the fake.
+- AC 9: host `doctor.rs::tests::an_old_claude_warns_about_answers`.
+- AC 10: `CHANGELOG.md` `[Unreleased]` Added; README "Receiving a session (the meeting)", "Answering in writing".
+- Gate (2026-10-29), on `2a98103` plus this story: the local replay of `ci.yml`. Windows: fmt and clippy clean (both feature sets); the workspace's Rust tests all green; the launch half without the authority 7 passed; perf green (hook own cost 12.5 ms of 150, the gate 3.5 ms of 15, in process 3.1 ms); lexer differential, approvals stress, registry crash, the markers, registry dependencies and bundled roots green; mutants: each of the three caught, the control green; `cargo deny` ok; e2e fixtures rebuilt; `pnpm check`, `lint` clean, Vitest 308; Playwright 1209 passed, 6 skipped, over three repeats (a first run beside the Linux container build saw `wide.spec.ts`'s 3440 x 1392 case fail twice; green three times alone and in the quiet full run); `pnpm audit` unchanged. Linux (`rust:1-bookworm`): fmt, clippy, tests and the spawn step green, after the test fix pushed with this story: story 5.10's `git.rs::no_configured_program_runs_on_receive` wrote its marker program without the execute bit, which Linux needs (green there since).
+
 ## File List
+
+- `CHANGELOG.md`, `README.md`
+- `crates/officina-core/src/{meeting,spawn}.rs`, `crates/officina-core/src/relay/{journal,mod,view}.rs`, `crates/officina-core/tests/typescript_bindings.rs`
+- `crates/officina-host/src/{collector,doctor,meeting,spawn,watch}.rs`, `crates/officina-host/examples/orchestrator_fixture.rs`, `crates/officina-host/tests/relay_journal.rs`
+- `crates/officina/src/bin/officina-fake-claude.rs`, `crates/officina/tests/{quota_doctor,spawn,watch}.rs`
+- `tests/support/spawn_cases.rs`, `tests/vectors/spawn.json`
+- `app/src-tauri/build.rs`, `app/src-tauri/capabilities/default.json`, `app/src-tauri/src/main.rs`
+- `app/src/components/AnswerComposer.svelte` (new), `app/src/components/MeetingPanel.svelte`, `app/src/components/components.test.ts`
+- `app/src/lib/{meeting.svelte,meeting-text,ipc}.ts`, `app/src/lib/generated/` (`AnswerRefusal`, `AnswerRefused`, `AnswerResult` new; `MeetingView`), `app/src/e2e-mock.ts`, `app/src/e2e-globals.d.ts`
+- `app/e2e/{meeting,stable-size}.spec.ts`
+- `docs/stories/epic-5-decisions.md`, `docs/stories/sprint-status.yaml`, this file
 
 ## Change Log
 
 - 2026-10-28 created
 - 2026-10-28 reworked after review: session-kind environment keeps `OFFICINA_*` (F1); console proven (F11); confirmation requests never dropped (F14); ended sessions resume only in an agents-reported folder, `CopyOnly` (F20); confirmation refreshes at the minimum spawn interval (F37); README describes deliveries without copying the table (F44)
 - 2026-10-28 checked against the addendum and v0.3 and v0.4 as built: Send keeps its box through `StableLabel` with a stable-size case (D-564); answer proposals left to story 5.21 (D-575); seams cited by file (D-563)
+- 2026-10-29 implemented, E20's and E21's passing branches, D-635 applied; decisions D-811 to D-819; status Review
