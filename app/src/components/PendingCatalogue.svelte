@@ -4,10 +4,13 @@
   // the Relay view. Catalogue text comes from a floor a session may have
   // edited: it is rendered as text only.
   import { isPointerClick } from "../lib/pointer";
-  import { fieldLines, shown, type RelayStore } from "../lib/relay.svelte";
+  import { classText, fieldLines, reviewModelText, shown, type RelayStore } from "../lib/relay.svelte";
+  import { issueSubject } from "../lib/relay-text";
   import type { CanonicalAction } from "../lib/generated/CanonicalAction";
   import type { CanonicalParam } from "../lib/generated/CanonicalParam";
+  import type { CanonicalTemplate } from "../lib/generated/CanonicalTemplate";
   import type { FieldChange } from "../lib/generated/FieldChange";
+  import type { ModelAlias } from "../lib/generated/ModelAlias";
   import ActionRuns from "./ActionRuns.svelte";
 
   interface Props {
@@ -47,7 +50,7 @@
 {#snippet actionDetail(action: CanonicalAction)}
   <dl class="detail">
     <dt>class</dt>
-    <dd>{action.class}{action.check ? ` (after ${action.check})` : ""}</dd>
+    <dd>{classText(action)}</dd>
     <dt>runs</dt>
     <dd><ActionRuns {action} /></dd>
     {#if Object.keys(action.env).length > 0}
@@ -66,6 +69,23 @@
     {/if}
     <dt>limits</dt>
     <dd>{action.timeout_s} s, {action.max_output_kib} KiB of output</dd>
+  </dl>
+{/snippet}
+
+{#snippet templateDetail(template: CanonicalTemplate)}
+  <dl class="detail">
+    <dt>description</dt>
+    <dd>{template.description}</dd>
+    <dt>projects</dt>
+    <dd data-testid="template-added-projects">{template.projects.join(", ")}</dd>
+    <dt>prompt</dt>
+    <dd class="prompt" data-testid="template-added-prompt">{template.prompt}</dd>
+    {#each Object.entries(template.params) as [name, values] (name)}
+      <dt>{name}</dt>
+      <dd>one of {values.join(", ")}</dd>
+    {/each}
+    <dt>model</dt>
+    <dd>{template.model ?? "default"}</dd>
   </dl>
 {/snippet}
 
@@ -90,13 +110,27 @@
       <p class="refusal" role="alert" data-testid="approval-refused">Nothing was approved: {store.refused.message}</p>
     {/if}
 
-    {#if diff.format || diff.floor_path}
+    {#if diff.format || diff.floor_path || diff.auto_review}
       <ul class="changes">
         {#each [diff.format, diff.floor_path] as change, i (i)}
           {#if change}
-            <li data-testid="catalogue-field">{change.field}: {shown(change.before)} to {shown(change.after)}</li>
+            <li data-testid="catalogue-field" data-field={change.field}>
+              {change.field}: {shown(change.before)} to {shown(change.after)}
+            </li>
           {/if}
         {/each}
+        {#if diff.format}
+          <li data-testid="catalogue-format-note">
+            This version of Officina approves catalogues in a new format: approving once covers it, and until then the
+            approved catalogue keeps guarding its projects.
+          </li>
+        {/if}
+        {#if diff.auto_review}
+          <li data-testid="catalogue-review-model-change">
+            review model of auto requests: {reviewModelText(diff.auto_review.before as ModelAlias | null)} to
+            {reviewModelText(diff.auto_review.after as ModelAlias | null)}
+          </li>
+        {/if}
       </ul>
     {/if}
 
@@ -125,6 +159,27 @@
         {/each}
         {#each diff.actions.removed as name (name)}
           <li data-testid="action-removed" data-name={name}><strong>{name}</strong> removed</li>
+        {/each}
+      </ul>
+    {/if}
+
+    {#if diff.templates.added.length + diff.templates.removed.length + diff.templates.changed.length > 0}
+      <h3>Templates</h3>
+      <ul class="changes">
+        {#each diff.templates.added as name (name)}
+          <li data-testid="template-added" data-name={name}>
+            <strong>{name}</strong> added
+            {#if pending.current.templates[name]}{@render templateDetail(pending.current.templates[name])}{/if}
+          </li>
+        {/each}
+        {#each diff.templates.changed as entry (entry.name)}
+          <li data-testid="template-changed" data-name={entry.name}>
+            <strong>{entry.name}</strong> changed
+            {@render fieldChanges(entry.fields)}
+          </li>
+        {/each}
+        {#each diff.templates.removed as name (name)}
+          <li data-testid="template-removed" data-name={name}><strong>{name}</strong> removed</li>
         {/each}
       </ul>
     {/if}
@@ -188,7 +243,7 @@
       <h3>Not part of the catalogue</h3>
       <ul class="changes" data-testid="catalogue-issues">
         {#each relay.issues as issue, i (i)}
-          <li>{issue.name}{issue.line !== null ? ` (line ${issue.line})` : ""}: {issue.message}</li>
+          <li>{issueSubject(issue)}{issue.line !== null ? ` (line ${issue.line})` : ""}: {issue.message}</li>
         {/each}
       </ul>
     {/if}
@@ -258,6 +313,9 @@
   }
   .detail dd {
     margin: 0;
+  }
+  .prompt {
+    white-space: pre-wrap;
   }
   code {
     font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;

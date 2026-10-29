@@ -235,3 +235,98 @@ test.describe("Relay view", () => {
     await expect(page.getByTestId("relay-stopped-chip")).toBeVisible();
   });
 });
+
+/** The colour `token` resolves to on the document root, as a computed
+ *  `color` (D-163): jsdom resolves no `var()`, the browser does. */
+async function tokenColour(page: Page, token: string): Promise<string> {
+  return page.evaluate((name) => {
+    const probe = document.createElement("span");
+    probe.style.color = `var(${name})`;
+    document.body.append(probe);
+    const colour = getComputedStyle(probe).color;
+    probe.remove();
+    return colour;
+  }, token);
+}
+
+// Story 5.4 (AD-76, D-564): templates, the review model and the `auto`
+// class in the catalogue table and the pending diff, on views printed by
+// the real `officina relay --json`. They add no colour: the text takes the
+// catalogue's tokens in both themes, set as themes.spec.ts sets them.
+for (const theme of ["light", "dark"] as const) {
+  test.describe(`templates and auto in the ${theme} theme`, () => {
+    test.beforeEach(async ({ page }) => {
+      await page.emulateMedia({ colorScheme: theme });
+    });
+
+    test("the catalogue lists templates with their projects, values and model", async ({ page }) => {
+      const relay = loadRelay("relay-clean");
+      const templates = Object.entries(relay.catalogue!.templates);
+      expect(templates.length).toBeGreaterThan(0);
+      await openRelayView(page, relay);
+      await expect(page.getByTestId("theme-switch")).toHaveAttribute("data-theme-resolved", theme);
+      const table = page.getByTestId("catalogue-templates-table");
+      await expect(table.getByTestId("catalogue-template")).toHaveCount(templates.length);
+      for (const [name, template] of templates) {
+        const row = table.locator(`[data-testid="catalogue-template"][data-name="${name}"]`);
+        await expect(row.getByTestId("template-description")).toHaveText(template.description);
+        await expect(row.getByTestId("template-projects")).toHaveText(template.projects.join(", "));
+        await expect(row.getByTestId("template-prompt")).toHaveText(template.prompt);
+        for (const [param, values] of Object.entries(template.params)) {
+          await expect(row.locator(`[data-testid="template-param"][data-name="${param}"]`)).toHaveText(
+            `${param}: one of ${values.join(", ")}`,
+          );
+        }
+        await expect(row.getByTestId("template-model")).toHaveText(template.model ?? "default");
+      }
+      await expect(page.getByTestId("catalogue-review-model")).toContainText(relay.catalogue!.auto_review.model!);
+
+      const text = await tokenColour(page, "--color-text");
+      const muted = await tokenColour(page, "--color-text-muted");
+      const first = table.getByTestId("catalogue-template").first();
+      await expect(first.getByTestId("template-projects")).toHaveCSS("color", text);
+      await expect(first.getByTestId("template-description")).toHaveCSS("color", muted);
+      await expect(table.locator("th").first()).toHaveCSS("color", muted);
+    });
+
+    test("an auto action shows its check and hourly cap", async ({ page }) => {
+      const relay = loadRelay("relay-clean");
+      const auto = Object.entries(relay.catalogue!.actions).find(([, action]) => action.class === "auto");
+      expect(auto).toBeDefined();
+      const [name, action] = auto!;
+      expect(action.check).not.toBeNull();
+      expect(action.auto_max_per_hour).toBeDefined();
+      await openRelayView(page, relay);
+      const cell = page.locator(`[data-testid="catalogue-action"][data-name="${name}"]`).getByTestId("catalogue-class");
+      await expect(cell).toHaveText(`auto (after ${action.check}, at most ${action.auto_max_per_hour} per hour)`);
+      await expect(cell).toHaveCSS("color", await tokenColour(page, "--color-text"));
+    });
+
+    test("the pending diff shows the format change and the templates added", async ({ page }) => {
+      const relay = loadRelay("relay-previous-format");
+      const pending = relay.pending!;
+      expect(pending.diff.format).not.toBeNull();
+      expect(pending.diff.templates.added.length).toBeGreaterThan(0);
+      await openRelayView(page, relay);
+      const banner = page.getByTestId("catalogue-banner");
+      await expect(banner.locator('[data-testid="catalogue-field"][data-field="format"]')).toHaveText(
+        `format: ${pending.diff.format!.before} to ${pending.diff.format!.after}`,
+      );
+      await expect(banner.getByTestId("catalogue-format-note")).toContainText("approving once covers it");
+      await expect(banner.getByTestId("template-added")).toHaveCount(pending.diff.templates.added.length);
+      for (const name of pending.diff.templates.added) {
+        const added = banner.locator(`[data-testid="template-added"][data-name="${name}"]`);
+        const template = pending.current.templates[name]!;
+        await expect(added.getByTestId("template-added-projects")).toHaveText(template.projects.join(", "));
+        await expect(added.getByTestId("template-added-prompt")).toHaveText(template.prompt);
+      }
+      // The previous approval still stands until the author approves.
+      expect(relay.catalogue!.format).toBe(pending.diff.format!.before);
+      await expect(page.getByTestId("catalogue-table")).toBeVisible();
+      await expect(banner.getByTestId("template-added").first()).toHaveCSS(
+        "color",
+        await tokenColour(page, "--color-text"),
+      );
+    });
+  });
+}

@@ -168,7 +168,7 @@ const relayFloor = `schema = 2
 [[project]]
 name = "infra-scripts"
 path = "C:/work/infra-scripts"
-actions = ["check", "apply"]
+actions = ["check", "apply", "apply-unattended"]
 
 [[project]]
 name = "docs-site"
@@ -208,6 +208,40 @@ pattern = "lab-[a-z0-9-]{1,30}"
 
 [action.params.playbook]
 values = ["alerting.yml", "node-exporter.yml"]
+
+[[action]]
+name = "apply-unattended"
+description = "Apply the alerting playbook after its dry run, without asking"
+class = "auto"
+check = "check"
+auto_max_per_hour = 4
+runner = "wsl"
+distro = "Debian"
+program = "/home/user01/venv/bin/ansible-playbook"
+env = { ANSIBLE_CONFIG = "/home/user01/ansible.cfg" }
+args = ["-i", "inventory/lab", "--limit", "{group}", "playbooks/{playbook}"]
+
+[action.params.group]
+pattern = "lab-[a-z0-9-]{1,30}"
+
+[action.params.playbook]
+values = ["alerting.yml"]
+
+[[template]]
+name = "dependency-bump"
+description = "Bump one dependency and fix what breaks"
+projects = ["infra-scripts", "docs-site"]
+prompt = "Bump {package} to its latest {level} release, run the tests, fix what breaks, commit."
+model = "sonnet"
+
+[template.params.package]
+values = ["serde_json", "@scope/pkg"]
+
+[template.params.level]
+values = ["patch", "minor"]
+
+[auto_review]
+model = "haiku"
 
 [[action]]
 name = "linkcheck"
@@ -260,8 +294,14 @@ const againFloor = pendingFloor.replace(
   `check = "check"\ntimeout_s = 600\n`,
 );
 
+// Story 5.4 (AD-76, D-131): the golden floor of the catalogue hash test,
+// approved by the previous version in the previous canonical format, read
+// today: the pending change shows the format change and the templates added.
+const goldenFloor = readFileSync(join(root, "crates", "officina-core", "tests", "data", "relay", "golden-floor.toml"), "utf8");
+
 const relayScenarios = {
   "relay-clean": [["floor", relayFloor], ["approve"]],
+  "relay-previous-format": [["floor", goldenFloor], ["previous-format"]],
   "relay-pending": [["floor", relayFloor], ["approve"], ["floor", pendingFloor]],
   "relay-pending-again": [["floor", relayFloor], ["approve"], ["floor", againFloor]],
   "relay-pending-approved": [["floor", relayFloor], ["approve"], ["floor", pendingFloor], ["approve"]],

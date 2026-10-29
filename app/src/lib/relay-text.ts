@@ -2,10 +2,12 @@
 // vocabulary the view shows is mapped through an exhaustive `Record`, so a
 // variant added on the Rust side fails `pnpm check` until it has a text. No
 // relay rule is computed here: the entries come paired and dated from Rust.
+import type { ActionIssue } from "./generated/ActionIssue";
 import type { AnomalyKind } from "./generated/AnomalyKind";
 import type { ApprovalView } from "./generated/ApprovalView";
 import type { DenyKind } from "./generated/DenyKind";
 import type { GateFault } from "./generated/GateFault";
+import type { IssueTable } from "./generated/IssueTable";
 import type { RecentEntry } from "./generated/RecentEntry";
 import type { RefusalReason } from "./generated/RefusalReason";
 import type { RunOutcome } from "./generated/RunOutcome";
@@ -30,6 +32,7 @@ export const REFUSAL_TEXT: Record<RefusalReason, string> = {
   missing_parameter: "missing parameter",
   unknown_parameter: "unknown parameter",
   invalid_value: "invalid value",
+  class_not_available: "class not available in this build",
   git_unavailable: "no git to bind the files",
   tree_too_large: "work tree too large to bind",
   tree_unreadable: "work tree could not be read",
@@ -43,6 +46,25 @@ export const REFUSAL_TEXT: Record<RefusalReason, string> = {
   credential_missing: "credential not in the Credential Manager",
   credential_unreadable: "credential cannot be read",
 };
+
+/** What an issue's table is called before the entry's name (D-132); a key
+ *  or a single table is named by itself. */
+const ISSUE_TABLE_TEXT: Record<IssueTable, string | null> = {
+  action: "action",
+  credential: "credential",
+  project: "project",
+  template: "template",
+  guarded_programs: null,
+  orchestrator: null,
+  auto_review: null,
+};
+
+/** What a floor issue is about, as the floor names it: `template bump`,
+ *  `action probe`, `auto_review`. */
+export function issueSubject(issue: ActionIssue): string {
+  const table = ISSUE_TABLE_TEXT[issue.table];
+  return table === null ? issue.name : `${table} ${issue.name}`;
+}
 
 export const DENY_TEXT: Record<DenyKind, string> = {
   unparsable: "command could not be read",

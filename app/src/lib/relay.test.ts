@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render } from "@testing-library/svelte";
 import { isPointerClick } from "./pointer";
-import { fieldLines, relayInUse, RelayStore, shown } from "./relay.svelte";
+import { classText, fieldLines, relayInUse, RelayStore, reviewModelText, shown } from "./relay.svelte";
+import { issueSubject } from "./relay-text";
 import RelayBanners from "../components/RelayBanners.svelte";
 import type { RelayView } from "./generated/RelayView";
 import type { CanonicalCatalogue } from "./generated/CanonicalCatalogue";
@@ -40,6 +41,16 @@ function catalogue(description: string): CanonicalCatalogue {
       },
     },
     credentials: {},
+    templates: {
+      bump: {
+        description,
+        projects: ["lab"],
+        prompt: `Bump {package}. ${description}`,
+        params: { package: ["serde_json"] },
+        model: null,
+      },
+    },
+    auto_review: { model: "haiku" },
   };
 }
 
@@ -63,10 +74,12 @@ function view(overrides: Partial<RelayView> = {}): RelayView {
         projects: { added: ["lab"], removed: [], changed: [] },
         actions: { added: ["restart"], removed: [], changed: [] },
         credentials: { added: [], removed: [], changed: [] },
+        templates: { added: ["bump"], removed: [], changed: [] },
+        auto_review: null,
       },
       current: catalogue(HOSTILE),
     },
-    issues: [{ name: HOSTILE, line: 12, kind: "name", message: "invalid name" }],
+    issues: [{ table: "template", name: HOSTILE, line: 12, kind: "name", message: "invalid name" }],
     recent: [],
     journal_corrupt_lines: 0,
     gate_errors: 0,
@@ -115,6 +128,26 @@ describe("relay helpers", () => {
       { label: "timeout_s", before: "540", after: "600" },
     ]);
     expect(fieldLines({ field: "args", before: ["a"], after: ["b"] })).toHaveLength(1);
+  });
+
+  it("names an action's check and an auto action's hourly cap", () => {
+    const action = catalogue("x").actions.restart!;
+    expect(classText(action)).toBe("free");
+    expect(classText({ ...action, class: "after-check", check: "verify" })).toBe("after-check (after verify)");
+    expect(classText({ ...action, class: "auto", check: "verify", auto_max_per_hour: 6 })).toBe(
+      "auto (after verify, at most 6 per hour)",
+    );
+  });
+
+  it("says a failing review table has no model", () => {
+    expect(reviewModelText("sonnet")).toBe("sonnet");
+    expect(reviewModelText(null)).toContain("[auto_review] table is invalid");
+  });
+
+  it("names an issue by its table and entry", () => {
+    const issue = { table: "template", name: "bump", line: 3, kind: "name", message: "m" } as const;
+    expect(issueSubject(issue)).toBe("template bump");
+    expect(issueSubject({ ...issue, table: "auto_review", name: "auto_review" })).toBe("auto_review");
   });
 });
 
@@ -176,7 +209,9 @@ describe("RelayBanners", () => {
     expect(container.querySelector("img")).toBeNull();
     expect(container.querySelector("b")).toBeNull();
     expect(getByTestId("action-added").textContent).toContain(HOSTILE);
-    expect(getByTestId("catalogue-issues").textContent).toContain(HOSTILE);
+    expect(getByTestId("template-added").textContent).toContain(HOSTILE);
+    expect(getByTestId("template-added-prompt").textContent).toContain(HOSTILE);
+    expect(getByTestId("catalogue-issues").textContent).toContain(`template ${HOSTILE}`);
   });
 
   it("shows a stopped relay without a pending change", () => {

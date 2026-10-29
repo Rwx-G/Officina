@@ -7,7 +7,7 @@
   import { fadeMotion } from "../lib/motion";
   import { isPointerClick } from "../lib/pointer";
   import type { RelayStore } from "../lib/relay.svelte";
-  import { ANOMALY_TEXT, RELAY_TOGGLE_TEXT } from "../lib/relay-text";
+  import { ANOMALY_TEXT, RELAY_TOGGLE_TEXT, issueSubject } from "../lib/relay-text";
   import { clock, hours } from "../lib/time";
   import CatalogueTable from "./CatalogueTable.svelte";
   import PendingCatalogue from "./PendingCatalogue.svelte";
@@ -101,13 +101,13 @@
     <section class="block" data-testid="relay-issues" aria-labelledby="relay-issues-title">
       <h2 id="relay-issues-title">Issues in the floor</h2>
       {#if relay.issues.length === 0}
-        <p class="muted">None: every action of the floor is valid.</p>
+        <p class="muted">None: every entry of the floor is valid.</p>
       {:else}
         <p class="muted">These entries are not part of any catalogue until they are fixed.</p>
         <ul class="issues">
           {#each relay.issues as issue, i (i)}
-            <li data-testid="relay-issue">
-              <strong>{issue.name}</strong>
+            <li data-testid="relay-issue" data-table={issue.table}>
+              <strong>{issueSubject(issue)}</strong>
               {#if issue.line !== null}<span data-testid="relay-issue-line">line {issue.line}</span>{/if}:
               {issue.message}
             </li>

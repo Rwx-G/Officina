@@ -1,9 +1,11 @@
 <script lang="ts">
   // The approved catalogue (D-24), what `officina run` serves: one row per
   // action with its class, the projects that list it, what it starts, its
-  // parameters and limits; then the projects and the guarded programs.
-  // Catalogue text comes from a floor a session may have edited: it is
-  // rendered as text only.
+  // parameters and limits; then the templates (AD-76), the projects, the
+  // credentials, the guarded programs and the review's model. Catalogue
+  // text comes from a floor a session may have edited: it is rendered as
+  // text only.
+  import { classText, reviewModelText } from "../lib/relay.svelte";
   import type { CanonicalCatalogue } from "../lib/generated/CanonicalCatalogue";
   import type { CanonicalParam } from "../lib/generated/CanonicalParam";
   import type { CredentialView } from "../lib/generated/CredentialView";
@@ -24,6 +26,7 @@
 
   let actions = $derived(Object.entries(catalogue.actions));
   let projects = $derived(Object.entries(catalogue.projects));
+  let templates = $derived(Object.entries(catalogue.templates));
 
   function projectsOf(action: string): string[] {
     return projects.filter(([, project]) => project.actions.includes(action)).map(([name]) => name);
@@ -52,7 +55,7 @@
           <strong>{name}</strong>
           {#if action.description}<div class="muted">{action.description}</div>{/if}
         </td>
-        <td data-testid="catalogue-class">{action.class}{action.check ? ` (after ${action.check})` : ""}</td>
+        <td data-testid="catalogue-class">{classText(action)}</td>
         <td data-testid="catalogue-projects">{projectsOf(name).join(", ") || "(none)"}</td>
         <td><ActionRuns {action} /></td>
         <td>
@@ -67,6 +70,38 @@
 </table>
 {#if actions.length === 0}
   <p class="muted">The approved catalogue declares no action.</p>
+{/if}
+
+{#if templates.length > 0}
+  <table class="catalogue" data-testid="catalogue-templates-table">
+    <thead>
+      <tr>
+        <th scope="col">Template</th>
+        <th scope="col">Projects</th>
+        <th scope="col">Prompt</th>
+        <th scope="col">Parameters</th>
+        <th scope="col">Model</th>
+      </tr>
+    </thead>
+    <tbody>
+      {#each templates as [name, template] (name)}
+        <tr data-testid="catalogue-template" data-name={name}>
+          <td>
+            <strong>{name}</strong>
+            <div class="muted" data-testid="template-description">{template.description}</div>
+          </td>
+          <td data-testid="template-projects">{template.projects.join(", ")}</td>
+          <td><div class="prompt" data-testid="template-prompt">{template.prompt}</div></td>
+          <td data-testid="template-params">
+            {#each Object.entries(template.params) as [param, values] (param)}
+              <div data-testid="template-param" data-name={param}>{param}: one of {values.join(", ")}</div>
+            {/each}
+          </td>
+          <td data-testid="template-model">{template.model ?? "default"}</td>
+        </tr>
+      {/each}
+    </tbody>
+  </table>
 {/if}
 
 <table class="catalogue projects" data-testid="catalogue-projects-table">
@@ -118,6 +153,9 @@
 <p class="muted" data-testid="catalogue-guarded-programs">
   Guarded programs: {catalogue.guarded_programs.join(", ") || "(none)"}
 </p>
+<p class="muted" data-testid="catalogue-review-model">
+  Review model of auto requests: {reviewModelText(catalogue.auto_review.model)}
+</p>
 
 <style>
   .catalogue {
@@ -142,6 +180,9 @@
   .muted {
     color: var(--color-text-muted);
     font-size: 13px;
+  }
+  .prompt {
+    white-space: pre-wrap;
   }
   .presence.missing {
     color: var(--color-stopped-text);

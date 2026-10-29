@@ -1,8 +1,25 @@
 // The relay's state in the window (AD-35): the last relay view, and the
 // outcome of the author's approve and stop clicks.
+import type { CanonicalAction } from "./generated/CanonicalAction";
 import type { FieldChange } from "./generated/FieldChange";
+import type { ModelAlias } from "./generated/ModelAlias";
 import type { RelayView } from "./generated/RelayView";
 import * as ipc from "./ipc";
+
+/** An action's class as the catalogue shows it: the check it runs after,
+ *  and an `auto` action's hourly cap (AD-76). */
+export function classText(action: CanonicalAction): string {
+  const terms: string[] = [];
+  if (action.check) terms.push(`after ${action.check}`);
+  if (action.auto_max_per_hour !== undefined) terms.push(`at most ${action.auto_max_per_hour} per hour`);
+  return terms.length > 0 ? `${action.class} (${terms.join(", ")})` : action.class;
+}
+
+/** The review's model (AD-75): `null` records a failing `[auto_review]`
+ *  table, which makes every `auto` request escalate. */
+export function reviewModelText(model: ModelAlias | null): string {
+  return model ?? "none, the [auto_review] table is invalid: every auto request escalates";
+}
 
 /** An approval the backend refused, kept to explain the banner. */
 export interface RefusedApproval {
