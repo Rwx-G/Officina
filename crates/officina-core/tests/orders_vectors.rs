@@ -583,7 +583,8 @@ fn columns_of(case: &BriefingCase) -> Columns {
 
 fn approval_of(row: &TimedRow) -> ApprovalView {
     serde_json::from_value(serde_json::json!({
-        "id": row.id, "project": "backend", "action": "deploy", "description": "",
+        "id": row.id, "project": "backend", "action": "deploy",
+        "class": "human", "state": "pending", "description": "",
         "argv": [], "http": null, "valid": true, "invalid_reason": null,
         "session_id": "s-a", "session_name": "deployer",
         "requested_at_ms": row.at, "expires_at_ms": row.at + 600_000,

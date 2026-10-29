@@ -954,6 +954,8 @@ mod tests {
             "id": id,
             "project": "backend",
             "action": "deploy",
+            "class": "human",
+            "state": "pending",
             "description": "",
             "argv": [],
             "http": null,
