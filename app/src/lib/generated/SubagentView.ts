@@ -6,6 +6,6 @@
  */
 export type SubagentView = { agent_id: string, 
 /**
- * Untrusted text: the frontend renders it as text only.
+ * Session-supplied text (D-130): the frontend renders it as text only.
  */
 agent_type: string | null, };

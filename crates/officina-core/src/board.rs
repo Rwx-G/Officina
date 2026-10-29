@@ -163,8 +163,8 @@ pub struct Card {
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct SubagentView {
     pub agent_id: String,
-    /// Untrusted text: the frontend renders it as text only.
-    pub agent_type: Option<String>,
+    /// Session-supplied text (D-130): the frontend renders it as text only.
+    pub agent_type: Option<Untrusted<String>>,
 }
 
 /// Why the author's verdict, not Claude Code, put an ended card in Done
@@ -454,7 +454,7 @@ impl SubagentFold {
             .filter_map(|id| {
                 self.running.get(id).map(|agent_type| SubagentView {
                     agent_id: id.clone(),
-                    agent_type: agent_type.clone(),
+                    agent_type: agent_type.clone().map(Untrusted::new),
                 })
             })
             .take(MAX_SUBAGENTS)
