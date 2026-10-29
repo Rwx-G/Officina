@@ -1,7 +1,8 @@
 //! Work order records (story 5.6 AC 4, 6 and 7; AD-81, AD-82, D-135,
 //! D-136, D-158): the row a launch inserts, its outcome, the expiry of
 //! stale `launching` rows, the subject created at `started`, the binding
-//! that re-files a session the rules filed elsewhere, and the read-back.
+//! that re-files a session the rules filed elsewhere, and the read-back;
+//! the briefing's cursor (story 5.8 AC 3).
 //! Every write runs at an explicit `now_ms`.
 
 mod common;
@@ -15,7 +16,7 @@ use officina_core::orders::work_order::{
 };
 use officina_core::registry::confirm::SubjectOrigin;
 use officina_core::registry::types::{
-    LaunchOutcome, Source, SubjectStatus, WorkOrderRecord, WorkOrderSource,
+    LaunchOutcome, SettingKey, Source, SubjectStatus, WorkOrderRecord, WorkOrderSource,
 };
 use officina_core::spawn::{self, VectorKind};
 use officina_core::untrusted::Untrusted;
@@ -516,4 +517,35 @@ fn work_orders_read_back_newest_first_with_untrusted_texts() {
     let session = latest.session.as_ref().expect("the bound session's record");
     assert_eq!(session.session_id, "s-latest");
     assert!(orders[1].session.is_none());
+}
+
+/// Story 5.8 AC 3, AD-83: the author's reading is `briefing_read_at_ms`,
+/// source `author`, the time its value; none before the first, and a later
+/// reading replaces it. A command line reads it back.
+#[test]
+fn briefing_read_at_is_written_and_read_back() {
+    let home = Home::new();
+    let mut writer = home.writer(NOW);
+    assert_eq!(writer.briefing_read_at().unwrap(), None, "no reading yet");
+    writer.mark_briefing_read(NOW).unwrap();
+    assert_eq!(writer.briefing_read_at().unwrap(), Some(NOW));
+    writer.mark_briefing_read(NOW + 60_000).unwrap();
+    assert_eq!(writer.briefing_read_at().unwrap(), Some(NOW + 60_000));
+    let setting = writer
+        .settings()
+        .unwrap()
+        .into_iter()
+        .find(|row| row.key == SettingKey::BriefingReadAtMs)
+        .expect("the setting row");
+    assert_eq!(
+        (setting.src, setting.at_ms, setting.value.as_str()),
+        (
+            Source::Author,
+            NOW + 60_000,
+            (NOW + 60_000).to_string().as_str()
+        )
+    );
+    drop(writer);
+    let reader = open_reader(&home.home, &[]).unwrap();
+    assert_eq!(reader.briefing_read_at().unwrap(), Some(NOW + 60_000));
 }

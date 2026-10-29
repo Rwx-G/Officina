@@ -307,8 +307,8 @@ pub fn now_ms() -> i64 {
         .as_millis() as i64
 }
 
-/// Where a collector thread under test emits (AD-5): each board, relay view
-/// and registry view on its channel, every board through `on_board` first,
+/// Where a collector thread under test emits (AD-5): each board, relay view,
+/// registry view and Orchestrator view on its channel, every board through `on_board` first,
 /// on the collector thread. A receiver dropped by the test just stops
 /// receiving.
 pub struct Sink {
@@ -316,6 +316,7 @@ pub struct Sink {
     boards: std::sync::mpsc::Sender<officina_core::board::Board>,
     relays: std::sync::mpsc::Sender<officina_core::relay::view::RelayView>,
     registries: std::sync::mpsc::Sender<officina_core::registry::view::RegistryView>,
+    orchestrators: std::sync::mpsc::Sender<officina_core::orders::view::OrchestratorView>,
 }
 
 /// What a [`Sink`] emits, as the test receives it.
@@ -323,6 +324,7 @@ pub struct Emitted {
     pub boards: std::sync::mpsc::Receiver<officina_core::board::Board>,
     pub relays: std::sync::mpsc::Receiver<officina_core::relay::view::RelayView>,
     pub registries: std::sync::mpsc::Receiver<officina_core::registry::view::RegistryView>,
+    pub orchestrators: std::sync::mpsc::Receiver<officina_core::orders::view::OrchestratorView>,
 }
 
 /// A sink whose boards go through `on_board` before their channel.
@@ -331,17 +333,20 @@ pub fn sink(on_board: impl Fn(&officina_core::board::Board) + Send + 'static) ->
     let (boards, board_rx) = channel();
     let (relays, relay_rx) = channel();
     let (registries, registry_rx) = channel();
+    let (orchestrators, orchestrator_rx) = channel();
     (
         Sink {
             on_board: Box::new(on_board),
             boards,
             relays,
             registries,
+            orchestrators,
         },
         Emitted {
             boards: board_rx,
             relays: relay_rx,
             registries: registry_rx,
+            orchestrators: orchestrator_rx,
         },
     )
 }
@@ -358,5 +363,9 @@ impl officina_host::watch::Emit for Sink {
 
     fn registry(&self, view: &officina_core::registry::view::RegistryView) {
         let _ = self.registries.send(view.clone());
+    }
+
+    fn orchestrator(&self, view: &officina_core::orders::view::OrchestratorView) {
+        let _ = self.orchestrators.send(view.clone());
     }
 }

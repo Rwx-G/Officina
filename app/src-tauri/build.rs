@@ -29,6 +29,8 @@ const COMMANDS: &[&str] = &[
     "issue_card",
     "edit_card",
     "launch_work_order",
+    "get_orchestrator",
+    "mark_briefing_read",
 ];
 
 fn main() {

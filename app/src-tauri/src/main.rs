@@ -19,6 +19,7 @@ use officina_core::board::Board;
 use officina_core::focus::FocusOutcome;
 use officina_core::ipc::IpcError;
 use officina_core::orders::card::{CardAnswer, CardChange, CardRequest, LaunchAnswer};
+use officina_core::orders::view::OrchestratorView;
 use officina_core::registry::confirm::{AuthorAction, ConfirmItem, ItemAnswer, SubjectOrigin};
 use officina_core::registry::types::{AuthorReason, Settlement};
 use officina_core::registry::view::{DiscardedSession, RegistryView, SubjectView};
@@ -42,12 +43,21 @@ const BOARD_EVENT: &str = "board://updated";
 const RELAY_EVENT: &str = "relay://updated";
 /// Event carrying each new registry view to the window (AD-54).
 const REGISTRY_EVENT: &str = "registry://updated";
+/// Event carrying each new Orchestrator view to the window (AD-92).
+const ORCHESTRATOR_EVENT: &str = "orchestrator://updated";
+/// How long closing the window waits for the briefing's reading to be
+/// recorded (AD-83): the collector drops a request within
+/// `AUTHOR_HEADROOM` of its deadline, so this leaves it a second to start,
+/// and a busy collector costs the close two seconds at most.
+const CLOSE_WAIT: Duration = Duration::from_secs(2);
 
 struct AppState {
     board: Arc<RwLock<Option<Board>>>,
     relay: Arc<RwLock<Option<RelayView>>>,
     /// The last registry view, for `get_registry`'s first paint.
     registry: Arc<RwLock<Option<RegistryView>>>,
+    /// The last Orchestrator view, for `get_orchestrator`'s first paint.
+    orchestrator: Arc<RwLock<Option<OrchestratorView>>>,
     /// The relay home the collector reads, which the authority writes.
     relay_home: RelayHome,
     sender: std::sync::Mutex<std::sync::mpsc::Sender<CollectorMsg>>,
@@ -115,6 +125,10 @@ impl Emit for WindowEvents {
     fn registry(&self, view: &RegistryView) {
         let _ = self.app.emit(REGISTRY_EVENT, view);
     }
+
+    fn orchestrator(&self, view: &OrchestratorView) {
+        let _ = self.app.emit(ORCHESTRATOR_EVENT, view);
+    }
 }
 
 /// Sends `command` to the collector thread, the registry's only writer
@@ -170,6 +184,23 @@ fn get_relay(state: State<'_, AppState>) -> Option<RelayView> {
 #[tauri::command]
 fn get_registry(state: State<'_, AppState>) -> Option<RegistryView> {
     state.registry.read().ok().and_then(|r| r.clone())
+}
+
+/// The last Orchestrator view, for the first paint, from the cache: never
+/// through the collector; later ones come as events (AD-92).
+#[tauri::command]
+fn get_orchestrator(state: State<'_, AppState>) -> Option<OrchestratorView> {
+    state.orchestrator.read().ok().and_then(|o| o.clone())
+}
+
+/// Records that the author read the briefing now, on leaving the
+/// Orchestrator view (AD-83): the next briefing counts from here.
+#[tauri::command]
+async fn mark_briefing_read(state: State<'_, AppState>) -> Result<(), IpcError> {
+    ask(state, AuthorCommand::MarkBriefingRead)
+        .await?
+        .into_done()
+        .map(|_| ())
 }
 
 /// The archived subjects the author may reopen, read on the collector's
@@ -518,6 +549,7 @@ fn main() {
                 board: watch.board,
                 relay: watch.relay,
                 registry: watch.registry,
+                orchestrator: watch.orchestrator,
                 relay_home,
                 sender: std::sync::Mutex::new(watch.sender),
                 paths: watch.paths,
@@ -527,6 +559,17 @@ fn main() {
             Ok(())
         })
         .on_window_event(|window, event| {
+            // Closing the window is a reading of the briefing (AD-83).
+            if let WindowEvent::CloseRequested { .. } = event {
+                if let Some(state) = window.try_state::<AppState>() {
+                    let _ = ask_collector(
+                        state.collector(),
+                        AuthorCommand::MarkBriefingRead,
+                        CLOSE_WAIT,
+                    );
+                }
+                return;
+            }
             let visible = match event {
                 WindowEvent::Resized(_) => !window.is_minimized().unwrap_or(false),
                 WindowEvent::Focused(true) => true,
@@ -565,7 +608,9 @@ fn main() {
             list_discarded,
             issue_card,
             edit_card,
-            launch_work_order
+            launch_work_order,
+            get_orchestrator,
+            mark_briefing_read
         ])
         .run(tauri::generate_context!())
         .expect("failed to run the Officina window");

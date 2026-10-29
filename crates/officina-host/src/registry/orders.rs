@@ -1,7 +1,8 @@
 //! Work order records (AD-81, AD-82, D-135, D-136, D-158): the row a
 //! launch inserts, its outcome, the expiry of rows whose outcome never came
 //! back, the binding to the session the order started and the filing of
-//! that session under the order's subject. Compiled only with the
+//! that session under the order's subject; and the briefing's cursor, when
+//! the author last read it (AD-83). Compiled only with the
 //! `window-authority` feature: only the window writes.
 
 use officina_core::agents::AgentRecord;
@@ -11,14 +12,14 @@ use officina_core::orders::work_order::{
 };
 use officina_core::registry::filing::{NewSubjectFiling, refiles_on_binding, subject_for_new};
 use officina_core::registry::types::{
-    LaunchOutcome, Source, SubjectStatus, WorkOrderRecord, WorkOrderSource,
+    LaunchOutcome, SettingKey, Source, SubjectStatus, WorkOrderRecord, WorkOrderSource,
 };
 use officina_core::spawn;
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 
 use super::read;
 use super::store::Writer;
-use super::write::{RegistryError, prune_excerpts};
+use super::write::{RegistryError, prune_excerpts, setting_json};
 
 /// What a launch records (AD-81 step 1): the validated order, the card it
 /// consumed and what the card held.
@@ -301,6 +302,24 @@ impl Writer {
     /// bound session's record (AD-82, D-130).
     pub fn work_orders(&self) -> Result<Vec<WorkOrderRecord>, RegistryError> {
         Ok(read::work_orders(&self.conn)?)
+    }
+
+    /// Records that the author read the briefing at `now_ms` (AD-83):
+    /// `setting.briefing_read_at_ms`, source `author`, the time as its
+    /// value. The window's next briefing counts its changes from there.
+    pub fn mark_briefing_read(&mut self, now_ms: i64) -> Result<(), RegistryError> {
+        self.set_setting(
+            SettingKey::BriefingReadAtMs,
+            &setting_json(&now_ms),
+            Source::Author,
+            now_ms,
+        )
+    }
+
+    /// When the author last read the briefing, `None` before the first
+    /// reading (AD-83).
+    pub fn briefing_read_at(&self) -> Result<Option<i64>, RegistryError> {
+        Ok(read::briefing_read_at(&self.conn)?)
     }
 }
 

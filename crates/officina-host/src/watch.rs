@@ -1,6 +1,7 @@
-//! The collector thread of the window (AD-3 to AD-5, AD-35, AD-43, AD-44):
-//! stat polling, refresh plan, diff before emit, for the board, the relay
-//! view and the registry view; the registry's only writer (AD-38), which
+//! The collector thread of the window (AD-3 to AD-5, AD-35, AD-43, AD-44,
+//! AD-92): stat polling, refresh plan, diff before emit, for the board, the
+//! relay view, the registry view and the Orchestrator view; the registry's
+//! only writer (AD-38), which
 //! ingests the event files before anything reads or deletes them, and runs
 //! the author's actions the window's commands send it (D-92).
 
@@ -14,6 +15,7 @@ use officina_core::board::Board;
 use officina_core::dates::event_file_name;
 use officina_core::ipc::{IpcError, IpcErrorCode};
 use officina_core::orders::card::{CardAnswer, CardChange, CardRequest};
+use officina_core::orders::view::OrchestratorView;
 use officina_core::registry::confirm::{AuthorAction, ConfirmItem, ItemAnswer};
 use officina_core::registry::model::{ModelEnv, unavailable};
 use officina_core::registry::retention::PASS_INTERVAL_MS;
@@ -103,6 +105,9 @@ pub enum AuthorCommand {
     /// the collector records it however late it comes, and never drops it
     /// (D-135, review F14).
     LaunchOutcome(Box<LaunchReport>),
+    /// The author read the briefing: left the Orchestrator view, or closed
+    /// the window (AD-83).
+    MarkBriefingRead,
 }
 
 impl AuthorAnswer {
@@ -260,11 +265,13 @@ pub enum CollectorMsg {
 
 /// Where the collector thread sends what changed (AD-5): each method is
 /// called from the collector thread with a value that differs from the last
-/// one it was given, and `registry` also right after each author action.
+/// one it was given, and `registry` and `orchestrator` also right after
+/// each author action.
 pub trait Emit: Send + 'static {
     fn board(&self, board: &Board);
     fn relay(&self, view: &RelayView);
     fn registry(&self, view: &RegistryView);
+    fn orchestrator(&self, view: &OrchestratorView);
 }
 
 /// Handle on a running collector thread.
@@ -276,6 +283,9 @@ pub struct WatchHandle {
     /// The last registry view, for the window's first paint
     /// (`get_registry`), which never goes through the collector (D-92).
     pub registry: Arc<RwLock<Option<RegistryView>>>,
+    /// The last Orchestrator view, for the window's first paint
+    /// (`get_orchestrator`), which never goes through the collector.
+    pub orchestrator: Arc<RwLock<Option<OrchestratorView>>>,
     /// The collector's paths, updated when a reloaded floor moves the config
     /// dir, so the window's focus and attach commands follow it.
     pub paths: Arc<RwLock<Paths>>,
@@ -698,24 +708,27 @@ struct Outputs<E> {
     next_escalation_at_ms: Option<i64>,
     relay: Published<RelayView>,
     registry: Published<RegistryView>,
+    orchestrator: Published<OrchestratorView>,
     paths: Arc<RwLock<Paths>>,
     emit: E,
 }
 
-/// Starts the collector thread. `emit` receives each board, relay view and
-/// registry view that differs from the previous one, from the collector
-/// thread (AD-5).
+/// Starts the collector thread. `emit` receives each board, relay view,
+/// registry view and Orchestrator view that differs from the previous one,
+/// from the collector thread (AD-5).
 pub fn spawn(mut collector: Collector, emit: impl Emit) -> std::io::Result<WatchHandle> {
     let (sender, receiver) = mpsc::channel();
     let board = Arc::new(RwLock::new(None));
     let relay = Arc::new(RwLock::new(None));
     let registry = Arc::new(RwLock::new(None));
+    let orchestrator = Arc::new(RwLock::new(None));
     let paths = Arc::new(RwLock::new(collector.paths().clone()));
     let mut outputs = Outputs {
         board: Published::new(&board),
         next_escalation_at_ms: None,
         relay: Published::new(&relay),
         registry: Published::new(&registry),
+        orchestrator: Published::new(&orchestrator),
         paths: Arc::clone(&paths),
         emit,
     };
@@ -727,6 +740,7 @@ pub fn spawn(mut collector: Collector, emit: impl Emit) -> std::io::Result<Watch
         board,
         relay,
         registry,
+        orchestrator,
         paths,
         thread,
     })
@@ -883,9 +897,12 @@ fn run<E: Emit>(
             if due.credentials {
                 presence = credential_presence(collector.relay(), collector.credential_store());
             }
-            // A home that cannot be read keeps the last view.
-            if let Ok(view) = read_view_with(collector.relay(), now_ms(), Some(&presence)) {
-                publish_relay(view, outputs);
+            // A home that cannot be read keeps the last view. A new one
+            // changes the briefing's runs and the composer's templates.
+            if let Ok(view) = read_view_with(collector.relay(), now_ms(), Some(&presence))
+                && publish_relay(view, outputs)
+            {
+                publish_orchestrator(&mut registry, outputs, false, now_ms());
             }
         }
     }
@@ -922,6 +939,7 @@ fn rebuild_and_publish<E: Emit>(
     let view = registry.view(Some(&board), &collector.paths().events_dir(), now);
     publish(board, outputs);
     publish_registry(view, outputs, force);
+    publish_orchestrator(registry, outputs, force, now);
 }
 
 /// Runs one author request on the registry's writer (AD-38), unless its
@@ -997,6 +1015,9 @@ fn answer_author<E: Emit>(
             crate::orders::record(collector, registry, &report, now)
                 .map(|()| AuthorAnswer::Done { created: None })
         }
+        AuthorCommand::MarkBriefingRead => registry
+            .mark_briefing_read(now)
+            .map(|()| AuthorAnswer::Done { created: None }),
     };
     // Every command reports the registry's state, a failure included
     // (quality audit M3); those that write publish the views at once.
@@ -1107,10 +1128,38 @@ fn publish<E: Emit>(board: Board, outputs: &mut Outputs<E>) {
 }
 
 /// Shares `view` with the window's commands, and emits it when its bytes
-/// differ from the last one emitted (AD-5, AD-35).
-fn publish_relay<E: Emit>(view: RelayView, outputs: &mut Outputs<E>) {
-    if outputs.relay.share(&view, &view, false) {
+/// differ from the last one emitted (AD-5, AD-35); true when it did.
+fn publish_relay<E: Emit>(view: RelayView, outputs: &mut Outputs<E>) -> bool {
+    let changed = outputs.relay.share(&view, &view, false);
+    if changed {
         outputs.emit.relay(&view);
+    }
+    changed
+}
+
+/// Builds the Orchestrator view at `now` from the payloads just shared and
+/// the registry's orders state (AD-92), shares it with `get_orchestrator`,
+/// and emits it when it differs from the last one emitted, generation
+/// times aside, or when `force` (AD-5).
+fn publish_orchestrator<E: Emit>(
+    registry: &mut WindowRegistry,
+    outputs: &mut Outputs<E>,
+    force: bool,
+    now: i64,
+) {
+    let board = outputs.board.current();
+    let relay = outputs.relay.current();
+    let view = outputs.registry.current();
+    let orchestrator =
+        registry.orchestrator_view(board.as_ref(), relay.as_ref(), view.as_ref(), now);
+    let mut comparable = orchestrator.clone();
+    comparable.generated_at_ms = 0;
+    comparable.briefing.generated_at_ms = 0;
+    if outputs
+        .orchestrator
+        .share(&orchestrator, &comparable, force)
+    {
+        outputs.emit.orchestrator(&orchestrator);
     }
 }
 

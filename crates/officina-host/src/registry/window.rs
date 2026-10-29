@@ -10,12 +10,17 @@ use std::path::{Path, PathBuf};
 use officina_core::agents::AgentRecord;
 use officina_core::board::{Board, ProjectRule, SessionSettlement};
 use officina_core::ipc::{IpcError, IpcErrorCode};
+use officina_core::orders::briefing::Cursor;
+use officina_core::orders::view::{self, OrchestratorView, ViewInput};
 use officina_core::registry::confirm::{AuthorAction, ConfirmItem, ItemAnswer};
 use officina_core::registry::dry_run::DryRunState;
 use officina_core::registry::fold::{AgentsChanges, AgentsSnapshot};
 use officina_core::registry::model::{EnableRefusal, ModelEnv};
-use officina_core::registry::types::{RegistryReport, RegistryState, SubjectRecord, SubjectRef};
+use officina_core::registry::types::{
+    RegistryReport, RegistryState, SubjectRecord, SubjectRef, WorkOrderRecord,
+};
 use officina_core::registry::view::{DiscardedSession, RegistryView, SubjectView, unread_view};
+use officina_core::relay::view::RelayView;
 
 use super::ingest::{IngestContext, IngestReport};
 use super::orders::{LaunchRecord, NameTaken};
@@ -25,6 +30,23 @@ use super::store::{Writer, WriterOpen, open_writer};
 use super::triage::{CallResult, DryRunRefusal, NextCall, Triage};
 use super::write::{AuthorError, RegistryError};
 use crate::orders::LaunchResult;
+
+/// What the briefing reads of the registry (AD-83).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct OrdersState {
+    pub subjects: Vec<SubjectRecord>,
+    pub work_orders: Vec<WorkOrderRecord>,
+    /// `setting.briefing_read_at_ms`.
+    pub read_at_ms: Option<i64>,
+}
+
+impl OrdersState {
+    /// The window's cursor: its last reading, or none before the first.
+    pub fn cursor(&self) -> Cursor {
+        self.read_at_ms
+            .map_or(Cursor::None, |at_ms| Cursor::ReadAt { at_ms })
+    }
+}
 
 #[derive(Debug)]
 enum Slot {
@@ -497,6 +519,56 @@ impl WindowRegistry {
         at_ms: i64,
     ) {
         self.on_writer(|writer| writer.copy_author_decision(id, decision, reason, at_ms));
+    }
+
+    /// Records that the author read the briefing at `now_ms` (AD-83): on
+    /// leaving the Orchestrator view and when the window closes.
+    pub fn mark_briefing_read(&mut self, now_ms: i64) -> Result<(), IpcError> {
+        self.with_writer(|writer| Ok(Ok(writer.mark_briefing_read(now_ms)?)))
+    }
+
+    /// What the briefing reads of the registry (AD-83): every subject row,
+    /// the latest work orders and the window's cursor, from the writer or
+    /// the read-only connection of a registry written by a newer Officina;
+    /// nothing, and no cursor, when it cannot be read, which the board's
+    /// report says.
+    pub fn orders_state(&mut self) -> OrdersState {
+        let read = |conn: &rusqlite::Connection| -> rusqlite::Result<OrdersState> {
+            Ok(OrdersState {
+                subjects: read::subjects(conn)?,
+                work_orders: read::work_orders(conn)?,
+                read_at_ms: read::briefing_read_at(conn)?,
+            })
+        };
+        match &self.slot {
+            Slot::Writable(_) => self
+                .on_writer(|writer| Ok(read(&writer.conn)?))
+                .unwrap_or_default(),
+            Slot::ReadOnly(reader) => (|| {
+                Ok::<_, rusqlite::Error>(OrdersState {
+                    subjects: reader.subjects()?,
+                    work_orders: reader.work_orders()?,
+                    read_at_ms: reader.briefing_read_at()?,
+                })
+            })()
+            .unwrap_or_default(),
+            Slot::Unavailable(_) | Slot::Network => OrdersState::default(),
+        }
+    }
+
+    /// The Orchestrator view at `now_ms` (AD-92), from the window's
+    /// payloads and the registry's orders state, its briefing counted from
+    /// the author's last reading (AD-83).
+    pub fn orchestrator_view(
+        &mut self,
+        board: Option<&Board>,
+        relay: Option<&RelayView>,
+        registry: Option<&RegistryView>,
+        now_ms: i64,
+    ) -> OrchestratorView {
+        let state = self.orders_state();
+        let input = ViewInput::of(board, relay, registry, &state.subjects, &state.work_orders);
+        view::build(&input, state.cursor(), now_ms)
     }
 
     /// The registry's hourly pass, when the registry is writable: read-only

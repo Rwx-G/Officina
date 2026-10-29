@@ -14,6 +14,7 @@ import type { FocusOutcome } from "./generated/FocusOutcome";
 import type { IpcError } from "./generated/IpcError";
 import type { ItemAnswer } from "./generated/ItemAnswer";
 import type { LaunchAnswer } from "./generated/LaunchAnswer";
+import type { OrchestratorView } from "./generated/OrchestratorView";
 import type { RegistryView } from "./generated/RegistryView";
 import type { RelayView } from "./generated/RelayView";
 import type { Settlement } from "./generated/Settlement";
@@ -172,6 +173,24 @@ export function editCard(cardId: string, change: CardChange): Promise<CardAnswer
  *  pointer click only (D-28). */
 export function launchWorkOrder(cardId: string, promptSha256: string): Promise<LaunchAnswer> {
   return invoke<LaunchAnswer>("launch_work_order", { cardId, promptSha256 });
+}
+
+export const ORCHESTRATOR_EVENT = "orchestrator://updated";
+
+/** The last Orchestrator view, for the first paint; later ones come as
+ *  events (AD-92). */
+export function getOrchestrator(): Promise<OrchestratorView | null> {
+  return invoke<OrchestratorView | null>("get_orchestrator");
+}
+
+export function onOrchestrator(handler: (view: OrchestratorView) => void): Promise<UnlistenFn> {
+  return listen<OrchestratorView>(ORCHESTRATOR_EVENT, (event) => handler(event.payload));
+}
+
+/** Records that the author read the briefing, on leaving the Orchestrator
+ *  view (AD-83): the next briefing counts its changes from now. */
+export function markBriefingRead(): Promise<void> {
+  return invoke("mark_briefing_read");
 }
 
 export function getBoard(): Promise<Board | null> {

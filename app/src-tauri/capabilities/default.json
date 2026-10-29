@@ -32,6 +32,8 @@
     "allow-list-discarded",
     "allow-issue-card",
     "allow-edit-card",
-    "allow-launch-work-order"
+    "allow-launch-work-order",
+    "allow-get-orchestrator",
+    "allow-mark-briefing-read"
   ]
 }

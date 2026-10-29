@@ -115,6 +115,13 @@ required-features = ["window-authority"]
 name = "registry_fixture"
 required-features = ["window-authority"]
 
+# Writes the work orders of an e2e fixture home through the window's writer
+# and prints the Orchestrator view the window would build (story 5.8,
+# D-72's pattern); never part of a shipped binary.
+[[example]]
+name = "orchestrator_fixture"
+required-features = ["window-authority"]
+
 # One real triage call, the workstation gate of story 3.9 (AD-58), run by
 # the owner by hand; never by a test, never part of a shipped binary.
 [[example]]

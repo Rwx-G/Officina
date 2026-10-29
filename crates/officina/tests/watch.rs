@@ -10,7 +10,8 @@
 //! and started ones bound on the collector's tick (story 5.6); cards
 //! launched from the collector's store, their outcome recorded and
 //! journaled once, the board at its pace while `claude --bg` runs (story
-//! 5.7).
+//! 5.7); the Orchestrator view emitted on change and its briefing counted
+//! from the author's last reading (story 5.8).
 //!
 //! The tests of stories 1.5 and 2.7 give the fake claude no fixture (it
 //! then lists no session). Story 3.2's run a copy of the fake configured by
@@ -30,7 +31,9 @@ use std::time::{Duration, Instant};
 
 use officina_core::board::{Board, Column, Settled};
 use officina_core::ipc::IpcErrorCode;
+use officina_core::orders::briefing::Cursor;
 use officina_core::orders::card::{LaunchAnswer, LaunchRefusal};
+use officina_core::orders::view::ORCHESTRATOR_VIEW_SCHEMA;
 use officina_core::orders::work_order::{LAUNCHING_EXPIRY_MS, SubjectChoice, WorkOrder};
 use officina_core::registry::confirm::{
     AuthorAction, ConfirmItem, FileUnder, ItemOutcome, SubjectOrigin,
@@ -2631,4 +2634,87 @@ fn the_cap_is_checked_again_right_before_each_call() {
     assert_eq!(b.cause, Some(EscalationCause::HourlyCap));
     assert_eq!(b.call_started_at_ms, None);
     assert_eq!(auto.calls().len(), 1);
+}
+
+/// AD-92, AD-5: the Orchestrator view is built after each recompute,
+/// cached for `get_orchestrator`, and emitted only when its bytes change,
+/// its generation times aside; an author's reading is such a change.
+#[test]
+fn the_orchestrator_view_is_emitted_only_on_change() {
+    let env = common::TestEnv::new();
+    let now = officina_host::files::now_ms();
+    env.write_agents(&listed_session("s-live", now));
+    let (handle, emitted, _) = watch_all(&env, |_| {});
+    let first = until(&emitted.orchestrators, |v| {
+        v.briefing.subjects.count == 0 && v.briefing.cursor == Cursor::None
+    });
+    assert_eq!(first.schema, ORCHESTRATOR_VIEW_SCHEMA);
+    // The startup's spawns and their follow-up settle first.
+    std::thread::sleep(SETTLE);
+    while emitted.orchestrators.try_recv().is_ok() {}
+    let cached = handle
+        .orchestrator
+        .read()
+        .unwrap()
+        .as_ref()
+        .map(|v| v.briefing.cursor);
+    assert_eq!(cached, Some(Cursor::None), "cached for the first paint");
+    assert!(
+        emitted
+            .orchestrators
+            .recv_timeout(Duration::from_millis(1600))
+            .is_err(),
+        "an unchanged view must not be emitted again"
+    );
+    let reply = ask(&handle, AuthorCommand::MarkBriefingRead, AUTHOR_WAIT);
+    let read = next(&emitted.orchestrators);
+    assert!(
+        matches!(read.briefing.cursor, Cursor::ReadAt { .. }),
+        "the next view is the reading, not a repeat"
+    );
+    assert!(reply.recv_timeout(AUTHOR_WAIT).unwrap().is_ok());
+    assert!(
+        emitted
+            .orchestrators
+            .recv_timeout(Duration::from_millis(1600))
+            .is_err(),
+        "nothing else changed"
+    );
+    stop(handle);
+}
+
+/// AD-83: the window's briefing counts from the author's last reading,
+/// stored by the writer, and a window started again reads it back; before
+/// the first reading it has no cursor.
+#[test]
+fn the_window_briefing_starts_at_the_last_reading() {
+    let env = common::TestEnv::new();
+    env.write_agents("[]");
+    let (handle, emitted, _) = watch_all(&env, |_| {});
+    let first = until(&emitted.orchestrators, |_| true);
+    assert_eq!(first.briefing.cursor, Cursor::None, "no reading yet");
+    let before = officina_host::files::now_ms();
+    let reply = ask(&handle, AuthorCommand::MarkBriefingRead, AUTHOR_WAIT);
+    assert!(reply.recv_timeout(AUTHOR_WAIT).unwrap().is_ok());
+    let read = until(&emitted.orchestrators, |v| {
+        v.briefing.cursor != Cursor::None
+    });
+    let Cursor::ReadAt { at_ms } = read.briefing.cursor else {
+        panic!(
+            "the window's cursor is its reading: {:?}",
+            read.briefing.cursor
+        );
+    };
+    assert!(at_ms >= before && at_ms <= officina_host::files::now_ms());
+    stop(handle);
+    let stored = open_reader(&env.officina_home(), &[])
+        .unwrap()
+        .briefing_read_at()
+        .unwrap();
+    assert_eq!(stored, Some(at_ms), "setting.briefing_read_at_ms");
+
+    let (again, emitted, _) = watch_all(&env, |_| {});
+    let restarted = until(&emitted.orchestrators, |_| true);
+    assert_eq!(restarted.briefing.cursor, Cursor::ReadAt { at_ms });
+    stop(again);
 }

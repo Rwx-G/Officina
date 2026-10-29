@@ -265,6 +265,18 @@ impl Reader {
     pub fn work_orders(&self) -> rusqlite::Result<Vec<WorkOrderRecord>> {
         work_orders(&self.conn)
     }
+
+    /// When the author last read the briefing in the window (AD-83).
+    pub fn briefing_read_at(&self) -> rusqlite::Result<Option<i64>> {
+        briefing_read_at(&self.conn)
+    }
+}
+
+/// When the author last left the Orchestrator view or closed the window
+/// (AD-83): `setting.briefing_read_at_ms`, `None` before the first reading
+/// or when this build cannot read its value.
+pub(crate) fn briefing_read_at(conn: &Connection) -> rusqlite::Result<Option<i64>> {
+    Ok(setting_of::<i64>(conn, SettingKey::BriefingReadAtMs)?.map(|read| read.value))
 }
 
 const SUBJECT_COLUMNS: &str =
