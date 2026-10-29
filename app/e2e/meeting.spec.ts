@@ -5,7 +5,9 @@
 // the window's own functions (`orchestrator_fixture`, kind `meeting`), jumps
 // to a file's hunks and to a failed run's journal entry, and asks again when
 // the board shows its card changed. Its composer (story 5.11) sends the
-// author's answer by its delivery, copying it on the same gesture.
+// author's answer by its delivery, copying it on the same gesture. The
+// orchestrator's latest recap for the session (story 5.17) shows under a
+// neutral "proposal" label, as text.
 import { expect, test, type Page } from "@playwright/test";
 import type { Board } from "../src/lib/generated/Board";
 import type { Card } from "../src/lib/generated/Card";
@@ -109,6 +111,8 @@ for (const theme of ["light", "dark"] as const) {
     await serveMeetings(page, { [needs.key]: as(background(), needs.key) });
     await cardOf(page, needs.key).getByTestId("receive").click();
     await expect(panel(page).getByTestId("diff-text")).toBeVisible();
+    // The recap's label and texts are among the colours checked.
+    await expect(panel(page).getByTestId("meeting-recap-label")).toBeVisible();
     await transitionsDone(page);
     const found = await page.evaluate(() => {
       const root = getComputedStyle(document.documentElement);
@@ -171,6 +175,37 @@ test("the panel shows each section from the fixture", async ({ page }) => {
   await cardOf(page, turn.key).getByTestId("receive").click();
   await expect(p.getByTestId("meeting-logs")).toHaveCount(0);
   await expect(p.getByTestId("meeting-focus")).toBeVisible();
+});
+
+test("the latest recap shows under its proposal label, as text, after the runs", async ({ page }) => {
+  const board = loadBoard("busy");
+  const needs = board.columns.needs_you[0]!;
+  const view = as(background(), needs.key);
+  if (!view.recap?.content || !("recap" in view.recap.content)) throw new Error("the background meeting has a recap");
+  const recap = view.recap.content.recap;
+  await openBoard(page, board);
+  await serveMeetings(page, { [needs.key]: view, [board.columns.your_turn[0]!.key]: as(interactive(), board.columns.your_turn[0]!.key) });
+  await cardOf(page, needs.key).getByTestId("receive").click();
+  const section = panel(page).getByTestId("meeting-recap");
+  await expect(section.getByTestId("meeting-recap-label")).toHaveText("proposal");
+  await expect(section.getByTestId("meeting-recap-done")).toHaveText(recap.done);
+  await expect(section.getByTestId("meeting-recap-blocking")).toHaveText(recap.blocking);
+  await expect(section.getByTestId("meeting-recap-decision")).toHaveText(recap.decision_expected);
+  // The fixture's done text is markup: it renders as text and runs nothing.
+  expect(recap.done).toContain("<img");
+  await expect(section.locator("img")).toHaveCount(0);
+  expect(await page.evaluate(() => (window as { __officinaXss?: number }).__officinaXss)).toBeUndefined();
+  // AD-84's order: runs and approvals, then the recap, then the changes.
+  const order = await panel(page).evaluate((el) => Array.from(el.querySelectorAll("section"), (s) => s.dataset.testid));
+  expect(order.indexOf("meeting-recap")).toBe(order.indexOf("meeting-runs") + 1);
+  expect(order.indexOf("meeting-changes")).toBe(order.indexOf("meeting-recap") + 1);
+  // A proposal, never the author's answer.
+  await expect(panel(page).getByTestId("answer-text")).toHaveValue("");
+  // A meeting without a recap shows no section.
+  await panel(page).getByTestId("meeting-close").click();
+  await cardOf(page, board.columns.your_turn[0]!.key).getByTestId("receive").click();
+  await expect(panel(page).getByTestId("meeting-decision")).toBeVisible();
+  await expect(panel(page).getByTestId("meeting-recap")).toHaveCount(0);
 });
 
 test("a file jumps to its hunks and a failed run to its journal entry", async ({ page }) => {

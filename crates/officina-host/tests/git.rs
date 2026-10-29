@@ -245,6 +245,7 @@ fn build_changes(read: GitRead) -> Changes {
         notification: None,
         journal: &[],
         approvals: &[],
+        proposals: &[],
         git: read,
         logs: None,
         delivery: Delivery::FocusOnly,

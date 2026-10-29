@@ -25,7 +25,9 @@ project uses [Semantic Versioning](https://semver.org/).
   proposal and accepts it. The briefing lists the pending ones and counts
   those received. Rows go after 90 days, their texts with the excerpts.
   `officina doctor` reports the pending and invalid counts and old
-  temporary files. The meeting panel's recap waits for the meeting room.
+  temporary files. The meeting shows the latest pending recap for the
+  received session or its subject after its runs, under the same label,
+  its texts as text, never copied into the answer composer.
 - Written answers from the meeting (v0.5, story 5.11): a composer, never
   prefilled, sends with Send or Ctrl+Enter and copies the text on the same
   gesture. A live idle background session or an ended one gets the

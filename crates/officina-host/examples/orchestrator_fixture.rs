@@ -14,7 +14,9 @@
 //! working-tree change, and prints the `MeetingView` the window builds for
 //! that card, its logs read from the fake claude. Story 5.17 adds proposal
 //! files, each ingested by the window's writer when received, and cards
-//! issued from a seeded proposal by name. Never SQL from Node, never a
+//! issued from a seeded proposal by name; a meeting's proposals are
+//! ingested once the registry holds its listed session, for its recap.
+//! Never SQL from Node, never a
 //! command line write path. Built only with `window-authority`, linked into neither
 //! shipped binary.
 //!
@@ -181,12 +183,15 @@ fn write_file(repo: &Path, file: &SeededFile) -> Result<(), String> {
 
 /// Builds the repository of `meeting`, then the meeting of its key as the
 /// window builds it: the collector's half on a collector that listed the
-/// sessions through the `claude` of `OFFICINA_CLAUDE_BIN`, then the reads
-/// and the view (`meeting::grant`, `meeting::gather`).
+/// sessions through the `claude` of `OFFICINA_CLAUDE_BIN`, the listing
+/// folded into the registry and `proposals` ingested after it, as the
+/// window's tick does, then the reads and the view (`meeting::grant`,
+/// `meeting::gather`).
 fn print_meeting(
     home: &Path,
     board: Option<&Board>,
     meeting: &MeetingScript,
+    proposals: &[SeededProposal],
     now_ms: i64,
 ) -> Result<String, String> {
     let git = officina_host::relay::tree::resolve_git().ok_or("no git installed")?;
@@ -222,6 +227,17 @@ fn print_meeting(
     // The version decides whether a live answer resumes (D-139).
     collector.refresh_contract(now_ms);
     let mut registry = WindowRegistry::open(home, &[], now_ms);
+    registry
+        .apply_agents(collector.agents().unwrap_or_default(), &[], now_ms)
+        .ok_or("the registry cannot be written")?;
+    let dir = orchestrator_proposals_dir(home);
+    for (index, proposal) in proposals.iter().enumerate() {
+        write_seeded(&dir, proposal, index)?;
+        // A recap needs no catalogue.
+        registry
+            .ingest_proposals(&dir, None, proposal.received_at_ms)
+            .ok_or("the registry cannot be written")?;
+    }
     let grant =
         meeting::grant(&collector, &mut registry, board, &meeting.key).map_err(|e| e.message)?;
     let view = meeting::gather(&grant, now_ms);
@@ -252,6 +268,24 @@ fn seeded_id(proposal: &SeededProposal, index: usize) -> String {
     proposal_id(proposal.written_at_ms, index as u64 + 1)
 }
 
+/// Writes the file of the seeded `proposal` at `index` into `dir`, as
+/// `officina mcp` or a hand would.
+fn write_seeded(dir: &Path, proposal: &SeededProposal, index: usize) -> Result<(), String> {
+    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    let bytes = match (&proposal.file, &proposal.raw) {
+        (Some(file), None) => serde_json::to_vec(file).map_err(|e| e.to_string())?,
+        (None, Some(raw)) => raw.as_bytes().to_vec(),
+        _ => {
+            return Err(format!(
+                "{}: a file or raw bytes, one of them",
+                proposal.name
+            ));
+        }
+    };
+    std::fs::write(dir.join(file_name(&seeded_id(proposal, index))), bytes)
+        .map_err(|e| e.to_string())
+}
+
 /// Writes and ingests the script's proposals through the window's writer,
 /// against the home's approved snapshot, then expires what is due at
 /// `now_ms`.
@@ -265,24 +299,13 @@ fn seed_proposals(
         return Ok(());
     }
     let dir = orchestrator_proposals_dir(home);
-    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let catalogue = relay
         .read_approved()
         .approved()
         .map(|approved| approved.canonical.clone());
     for (index, proposal) in script.proposals.iter().enumerate() {
         let id = seeded_id(proposal, index);
-        let bytes = match (&proposal.file, &proposal.raw) {
-            (Some(file), None) => serde_json::to_vec(file).map_err(|e| e.to_string())?,
-            (None, Some(raw)) => raw.as_bytes().to_vec(),
-            _ => {
-                return Err(format!(
-                    "{}: a file or raw bytes, one of them",
-                    proposal.name
-                ));
-            }
-        };
-        std::fs::write(dir.join(file_name(&id)), bytes).map_err(|e| e.to_string())?;
+        write_seeded(&dir, proposal, index)?;
         writer
             .ingest_proposals(&dir, catalogue.as_ref(), proposal.received_at_ms)
             .map_err(|e| e.to_string())?;
@@ -657,8 +680,9 @@ fn run(home: &Path, script: &Script) -> Result<String, String> {
             writer.mark_briefing_read(at).map_err(|e| e.to_string())?;
         }
         seed_auto(&mut writer, &relay, script)?;
-        // A script of cards names proposals an earlier run seeded.
-        if script.cards.is_empty() {
+        // A script of cards names proposals an earlier run seeded; a
+        // meeting's wait for its listed session (`print_meeting`).
+        if script.cards.is_empty() && script.meeting.is_none() {
             seed_proposals(&mut writer, home, &relay, script)?;
         }
     }
@@ -674,7 +698,13 @@ fn run(home: &Path, script: &Script) -> Result<String, String> {
         return serde_json::to_string_pretty(&cards).map_err(|e| e.to_string());
     }
     if let Some(meeting) = &script.meeting {
-        return print_meeting(home, board.as_ref(), meeting, script.now_ms);
+        return print_meeting(
+            home,
+            board.as_ref(),
+            meeting,
+            &script.proposals,
+            script.now_ms,
+        );
     }
     let auto = AutoRead::read_only(home, script.now_ms);
     let relay_view =

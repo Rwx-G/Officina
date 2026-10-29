@@ -32,6 +32,7 @@ mod window {
         GitRead, LogsRead, MeetingCard, MeetingInput, MeetingTarget, MeetingView, agents_folder_of,
         build, delivery, latest_prompted, since_iso,
     };
+    use officina_core::orders::proposal::ProposalView;
     use officina_core::relay::approvals::ApprovalView;
     use officina_core::spawn::BackgroundId;
 
@@ -57,6 +58,8 @@ mod window {
         /// The folder `claude agents` reported for the session (D-168).
         pub agents_folder: Option<String>,
         pub approvals: Vec<ApprovalView>,
+        /// The registry's proposal rows, for the recap section (AD-84).
+        pub proposals: Vec<ProposalView>,
         pub claude: Option<ResolvedClaude>,
         pub config_dir: Option<PathBuf>,
         pub base_env: BaseEnv,
@@ -78,7 +81,8 @@ mod window {
     /// record of that session; for a `subject:` key, the subject's latest
     /// session that saw a prompt, as `sid:`. The folder comes from `claude
     /// agents` only: the listed record of the card's session, else the
-    /// registry's agents-sourced `cwd` (D-168).
+    /// registry's agents-sourced `cwd` (D-168). The registry's proposal
+    /// rows go with it, none when it cannot be read.
     pub fn grant(
         collector: &Collector,
         registry: &mut WindowRegistry,
@@ -148,6 +152,7 @@ mod window {
         let paths = collector.paths();
         Ok(MeetingGrant {
             approvals: board.map(|b| b.approvals.clone()).unwrap_or_default(),
+            proposals: registry.proposals(),
             agents_folder,
             claude: collector.resolved_claude().cloned(),
             config_dir: paths.claude_config_override.clone(),
@@ -195,6 +200,7 @@ mod window {
             notification: notification.as_deref(),
             journal: &journal,
             approvals: &grant.approvals,
+            proposals: &grant.proposals,
             git,
             logs,
             delivery: delivery(&target),

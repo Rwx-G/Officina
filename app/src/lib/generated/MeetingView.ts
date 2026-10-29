@@ -7,6 +7,7 @@ import type { DecisionExpected } from "./DecisionExpected";
 import type { Delivery } from "./Delivery";
 import type { Logs } from "./Logs";
 import type { MeetingRun } from "./MeetingRun";
+import type { ProposalView } from "./ProposalView";
 import type { SessionKindView } from "./SessionKindView";
 
 /**
@@ -25,7 +26,13 @@ runs: Array<MeetingRun>,
 /**
  * Its pending approval requests.
  */
-approvals: Array<ApprovalView>, changes: Changes, 
+approvals: Array<ApprovalView>, 
+/**
+ * The orchestrator's latest pending recap for this session or its
+ * subject ([`latest_recap`]), shown under its label; a proposal, never
+ * the author's text.
+ */
+recap: ProposalView | null, changes: Changes, 
 /**
  * `claude logs`, for a background session only.
  */

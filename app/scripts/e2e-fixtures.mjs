@@ -1721,7 +1721,9 @@ model = "haiku"
 // `officina run` write them; the board from the real `officina board
 // --json`; then the `MeetingView` the window builds for that card, printed
 // by the window's own functions, its logs from the fake claude's `logs`
-// mode. Redacted placeholders only.
+// mode. The background session's recap (story 5.17) is a proposal file the
+// window ingests once the session is listed, superseding an older one.
+// Redacted placeholders only.
 const meetingScenarios = {
   "meeting-background": {
     session: sid(601),
@@ -1756,6 +1758,16 @@ const meetingScenarios = {
       [view.logs?.state === "shown" && view.logs.first_error_line !== null, "logs with an error line"],
       [view.runs.some((r) => r.result === "failed") && view.runs.some((r) => r.result === "refused"), "a failed run and a refusal"],
       [view.decision.notification !== null, "the notification message"],
+      [view.recap?.status === "pending" && view.recap.content?.recap?.done === hostile, "the latest recap, its markup text"],
+    ],
+    proposals: [
+      proposalFile("p-meeting-old", "recap", { target: { session_id: sid(601) }, done: "Bumped serde_json.", blocking: "Nothing.", decision_expected: "None." }, 20 * MIN),
+      proposalFile(
+        "p-meeting-recap",
+        "recap",
+        { target: { session_id: sid(601) }, done: hostile, blocking: "One fixture test fails.", decision_expected: "Which fixture wins." },
+        10 * MIN,
+      ),
     ],
   },
   "meeting-interactive": {
@@ -1818,7 +1830,12 @@ for (const [name, scenario] of Object.entries(meetingScenarios)) {
   const script = join(tmp, "meeting.json");
   writeFileSync(
     script,
-    JSON.stringify({ now_ms: now, board_file: boardFile, meeting: { key: scenario.key, repo, commits, working_tree: scenario.working_tree } }),
+    JSON.stringify({
+      now_ms: now,
+      board_file: boardFile,
+      meeting: { key: scenario.key, repo, commits, working_tree: scenario.working_tree },
+      proposals: scenario.proposals ?? [],
+    }),
   );
   const view = spawnSync(orchestratorFixture, [officinaHome, script], { encoding: "utf8", env: { ...process.env, ...env } });
   if (view.status !== 0) throw new Error(`${name}: orchestrator_fixture exited ${view.status}: ${view.stderr}`);

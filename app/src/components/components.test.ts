@@ -1202,6 +1202,37 @@ describe("MeetingPanel", () => {
     expect(getByTestId("diff-file").textContent).toBe(hostile);
     expect((window as { __officinaXss?: number }).__officinaXss).toBeUndefined();
   });
+
+  it("MeetingPanel renders markup in recap texts as text, under the proposal label", () => {
+    const hostile = `<img src=x onerror="window.__officinaXss = 1"><b>x</b>`;
+    const base = fixtureOf<MeetingView>("meeting", "meeting-background");
+    if (!base.recap?.content || !("recap" in base.recap.content)) throw new Error("the fixture's meeting has a recap");
+    const target = base.recap.content.recap.target;
+    const view: MeetingView = {
+      ...base,
+      key: "bg:recap",
+      recap: { ...base.recap, content: { recap: { target, done: hostile, blocking: hostile, decision_expected: hostile } } },
+    };
+    meeting.key = view.key;
+    meeting.view = view;
+    const { container, getByTestId } = render(MeetingPanel, { board: null, store: store(), onJournal: () => {} });
+    expect(container.querySelector("img, b")).toBeNull();
+    for (const id of ["meeting-recap-done", "meeting-recap-blocking", "meeting-recap-decision"]) {
+      expect(getByTestId(id).textContent, id).toBe(hostile);
+    }
+    expect(getByTestId("meeting-recap-label").textContent).toBe("proposal");
+    // A proposal, never the author's answer.
+    expect((getByTestId("answer-text") as HTMLTextAreaElement).value).toBe("");
+    expect((window as { __officinaXss?: number }).__officinaXss).toBeUndefined();
+  });
+
+  it("MeetingPanel shows no recap section without one", () => {
+    const view: MeetingView = { ...fixtureOf<MeetingView>("meeting", "meeting-background"), recap: null };
+    meeting.key = view.key;
+    meeting.view = view;
+    const { queryByTestId } = render(MeetingPanel, { board: null, store: store(), onJournal: () => {} });
+    expect(queryByTestId("meeting-recap")).toBeNull();
+  });
 });
 
 describe("AnswerComposer", () => {

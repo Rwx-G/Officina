@@ -9,20 +9,23 @@
 //! No input carries a transcript path or its content (framing principle
 //! 3): every text comes from the board, the journal, `git` or `claude
 //! logs`, and every session text, commit subject, path and log line is
-//! [`Untrusted`].
+//! [`Untrusted`]. The recap section is the orchestrator's latest pending
+//! recap for the session or its subject (story 5.17), its texts untrusted
+//! too.
 
 use serde::{Deserialize, Serialize};
 
 use crate::agents::LifecycleState;
 use crate::board::{Badge, Card, Column, SessionKindView};
 use crate::dates::{DAY_MS, event_file_name, utc_date};
+use crate::orders::proposal::{ProposalView, latest_recap};
 use crate::registry::types::{ExcerptRecord, SessionRecord, Source};
 use crate::relay::approvals::ApprovalView;
 use crate::relay::journal::{JournalEntry, JournalLine};
 use crate::untrusted::Untrusted;
 
 /// The meeting view's format; a field change bumps it.
-pub const MEETING_VIEW_SCHEMA: u32 = 1;
+pub const MEETING_VIEW_SCHEMA: u32 = 2;
 
 /// The most diff text a meeting shows (AD-84): the diff is cut at the last
 /// whole line within it, and says so.
@@ -88,6 +91,8 @@ pub struct MeetingCard {
     pub column: Column,
     pub badge: Option<Badge>,
     pub session_id: Option<String>,
+    /// The subject the session is filed under, for the recap section.
+    pub subject_id: Option<i64>,
     pub background_id: Option<String>,
     pub pid: Option<u32>,
     pub waiting_for: Option<String>,
@@ -106,6 +111,7 @@ impl From<&Card> for MeetingCard {
             column: card.column,
             badge: card.badge,
             session_id: card.session_id.clone(),
+            subject_id: card.subject.as_ref().map(|subject| subject.id),
             background_id: card.background_id.clone(),
             pid: card.pid,
             waiting_for: card.waiting_for.clone(),
@@ -152,6 +158,7 @@ impl MeetingCard {
             column: Column::ToResume,
             badge,
             session_id: Some(record.session_id.clone()),
+            subject_id: record.subject.as_ref().and_then(|s| s.value),
             background_id: record.background_id.as_ref().map(|b| b.value.clone()),
             pid: None,
             waiting_for: None,
@@ -318,6 +325,10 @@ pub struct MeetingView {
     pub runs: Vec<MeetingRun>,
     /// Its pending approval requests.
     pub approvals: Vec<ApprovalView>,
+    /// The orchestrator's latest pending recap for this session or its
+    /// subject ([`latest_recap`]), shown under its label; a proposal, never
+    /// the author's text.
+    pub recap: Option<ProposalView>,
     pub changes: Changes,
     /// `claude logs`, for a background session only.
     pub logs: Option<Logs>,
@@ -677,6 +688,8 @@ pub struct MeetingInput<'a> {
     /// Journal lines read back to the session's start (D-169).
     pub journal: &'a [JournalLine],
     pub approvals: &'a [ApprovalView],
+    /// The registry's proposal rows, newest first (AD-91).
+    pub proposals: &'a [ProposalView],
     pub git: GitRead,
     pub logs: Option<LogsRead>,
     pub delivery: Delivery,
@@ -717,6 +730,9 @@ pub fn build(input: &MeetingInput<'_>) -> MeetingView {
                 .cloned()
                 .collect()
         }),
+        recap: session
+            .and_then(|sid| latest_recap(input.proposals, sid, card.subject_id))
+            .cloned(),
         changes: changes_of(&input.git),
         logs: is_background(card).then(|| logs_of(input.logs.as_ref())),
         delivery: input.delivery,
@@ -1114,6 +1130,7 @@ mod tests {
             notification: Some("Claude needs your permission to use Bash"),
             journal,
             approvals: &[],
+            proposals: &[],
             git: GitRead::FolderUnknown,
             logs: None,
             delivery: Delivery::ResumeLive,
@@ -1255,6 +1272,111 @@ mod tests {
         // No field holds a transcript: nothing named so reaches the view.
         let json = serde_json::to_string(&view).unwrap();
         assert!(!json.contains("transcript"), "{json}");
+    }
+
+    /// Story 5.17 AC 5 (AD-84, FR-5, D-791): the recap section is the
+    /// latest pending recap for the session or its subject, a proposal
+    /// whose texts stay the orchestrator's; a decided one, another
+    /// session's and a work order proposal are never it.
+    #[test]
+    fn the_latest_recap_shows_under_its_label() {
+        use crate::orders::proposal::{
+            ProposalContent, ProposalFile, ProposalTarget, ProposedSubject, RecapProposal,
+            WorkOrderProposal, proposal_id,
+        };
+        use crate::registry::types::{ProposalKind, ProposalStatus};
+        let mut card = background("idle", "done", r#","pid":7"#);
+        let sid = card.session_id.clone().unwrap();
+        let recap = |at: i64, target: ProposalTarget, done: &str, status| ProposalView {
+            status,
+            ..ProposalFile::recap(
+                RecapProposal {
+                    target,
+                    done: done.to_owned(),
+                    blocking: "nothing".to_owned(),
+                    decision_expected: "merge?".to_owned(),
+                },
+                None,
+                at,
+            )
+            .pending_view(&proposal_id(at, 1))
+        };
+        let order = ProposalFile::work_order(
+            WorkOrderProposal {
+                template: "dependency-bump".to_owned(),
+                project: "backend".to_owned(),
+                values: std::collections::BTreeMap::new(),
+                subject: ProposedSubject::Id(4),
+                rationale: "later".to_owned(),
+            },
+            None,
+            NOW - 1,
+        )
+        .pending_view(&proposal_id(NOW - 1, 1));
+        // Never the recap: a work order, a decided recap of the session,
+        // another session's pending recap.
+        let never = vec![
+            order,
+            recap(
+                NOW - 2,
+                ProposalTarget::SessionId(sid.clone()),
+                "dismissed",
+                ProposalStatus::Dismissed,
+            ),
+            recap(
+                NOW - 3,
+                ProposalTarget::SessionId("another-session".to_owned()),
+                "theirs",
+                ProposalStatus::Pending,
+            ),
+        ];
+        let mut rows = never.clone();
+        rows.extend([
+            recap(
+                NOW - 4,
+                ProposalTarget::SubjectId(4),
+                "the subject's <b>recap</b>",
+                ProposalStatus::Pending,
+            ),
+            recap(
+                NOW - 5,
+                ProposalTarget::SessionId(sid.clone()),
+                "the session's recap",
+                ProposalStatus::Pending,
+            ),
+        ]);
+        let done_of = |view: &MeetingView| match view.recap.as_ref().and_then(|r| r.content.clone())
+        {
+            Some(ProposalContent::Recap { done, .. }) => serde_json::to_value(&done).unwrap(),
+            other => panic!("{other:?}"),
+        };
+        let with = |card: &MeetingCard, rows: &[ProposalView]| {
+            build(&MeetingInput {
+                proposals: rows,
+                ..input(card, &[])
+            })
+        };
+        // Unfiled, the session's own recap.
+        let view = with(&card, &rows);
+        assert_eq!(done_of(&view), "the session's recap");
+        // Filed under subject 4, the subject's newer one.
+        card.subject_id = Some(4);
+        let view = with(&card, &rows);
+        let shown = view.recap.as_ref().unwrap();
+        assert_eq!(
+            (shown.kind, shown.status),
+            (Some(ProposalKind::Recap), ProposalStatus::Pending)
+        );
+        assert_eq!(done_of(&view), "the subject's <b>recap</b>");
+        // Its texts go out as the orchestrator wrote them, under `recap`.
+        let json = serde_json::to_value(&view).unwrap();
+        assert_eq!(
+            json["recap"]["content"]["recap"]["done"],
+            "the subject's <b>recap</b>"
+        );
+        // No pending recap of its own or its subject's: none.
+        assert!(with(&card, &never).recap.is_none());
+        assert!(build(&input(&card, &[])).recap.is_none());
     }
 
     #[test]

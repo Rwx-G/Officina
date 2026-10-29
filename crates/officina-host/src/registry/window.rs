@@ -616,6 +616,19 @@ impl WindowRegistry {
         }
     }
 
+    /// Every proposal row, newest first (AD-91), for the meeting's recap
+    /// (AD-84): from the writer or the read-only connection of a registry
+    /// written by a newer Officina; none when it cannot be read.
+    pub fn proposals(&mut self) -> Vec<ProposalView> {
+        match &self.slot {
+            Slot::Writable(_) => self
+                .on_writer(|writer| Ok(read::proposals(&writer.conn)?))
+                .unwrap_or_default(),
+            Slot::ReadOnly(reader) => reader.proposals().unwrap_or_default(),
+            Slot::Unavailable(_) | Slot::Network => Vec::new(),
+        }
+    }
+
     /// The Orchestrator view at `now_ms` (AD-92), from the window's
     /// payloads and the registry's orders state, its briefing counted from
     /// the author's last reading (AD-83).

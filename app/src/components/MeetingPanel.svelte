@@ -6,6 +6,9 @@
   // what blocked, the commits and the diff since it started and, for a
   // background session, its recent output; then how an answer would reach
   // it. Every session text, subject, path and log line renders as text.
+  // The orchestrator's latest recap for the session shows under a neutral
+  // "proposal" label (story 5.17, D-564): its texts are the orchestrator's,
+  // rendered as text, and never reach the composer.
   import { onMount } from "svelte";
   import type { Board } from "../lib/generated/Board";
   import type { Card } from "../lib/generated/Card";
@@ -31,6 +34,7 @@
     view && board ? (Object.values(board.columns).flat().find((c: Card) => c.key === view.key) ?? null) : null,
   );
   let changes = $derived(view?.changes ?? null);
+  let recap = $derived(view?.recap?.content && "recap" in view.recap.content ? view.recap.content.recap : null);
   let logLines = $derived(view?.logs?.state === "shown" ? view.logs.text.replace(/\n$/, "").split("\n") : []);
 
   let panel: HTMLElement;
@@ -150,6 +154,24 @@
         {/each}
       </ul>
     </section>
+
+    {#if recap && view.recap}
+      <section data-testid="meeting-recap" aria-label="Recap">
+        <h3>Recap</h3>
+        <p class="byline">
+          <span class="chip" data-testid="meeting-recap-label">proposal</span>
+          <span class="muted">from the orchestrator, {clock(view.recap.received_at_ms ?? view.recap.written_at_ms, store.nowMs)}</span>
+        </p>
+        <dl>
+          <dt>Done</dt>
+          <dd class="text" data-testid="meeting-recap-done">{recap.done}</dd>
+          <dt>Blocking</dt>
+          <dd class="text" data-testid="meeting-recap-blocking">{recap.blocking}</dd>
+          <dt>Decision expected</dt>
+          <dd class="text" data-testid="meeting-recap-decision">{recap.decision_expected}</dd>
+        </dl>
+      </section>
+    {/if}
 
     <section data-testid="meeting-changes" data-state={changes?.state} aria-label="Changes">
       <h3>Changes</h3>
@@ -273,6 +295,23 @@
   }
   .text {
     white-space: pre-wrap;
+  }
+  /* A bidirectional control in the orchestrator's text stays inside it. */
+  [data-testid="meeting-recap"] .text {
+    unicode-bidi: isolate;
+  }
+  .byline {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 4px 10px;
+  }
+  .chip {
+    font-size: 12.5px;
+    padding: 1px 7px;
+    border-radius: var(--radius-surface);
+    border: 1px solid var(--color-border);
+    background: var(--color-surface);
   }
   p {
     margin: 0 0 6px;

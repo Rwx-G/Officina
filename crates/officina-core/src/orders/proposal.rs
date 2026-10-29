@@ -923,8 +923,8 @@ pub fn shown(rows: &[ProposalView]) -> Vec<ProposalView> {
 }
 
 /// The latest pending recap whose target is `session_id` or its subject
-/// `subject_id` (AD-84's recap section, FR-5): what the meeting panel
-/// shows under its label once story 5.10's meeting builds it. `rows` run
+/// `subject_id` (AD-84's recap section, FR-5): what `meeting::build` puts
+/// in the meeting, which the panel shows under its label. `rows` run
 /// newest first.
 pub fn latest_recap<'a>(
     rows: &'a [ProposalView],

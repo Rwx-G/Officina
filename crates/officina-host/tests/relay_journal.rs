@@ -409,6 +409,7 @@ fn a_meeting_reads_runs_back_to_the_session_start() {
             card: MeetingCard::from(&board.columns.your_turn[0]),
             agents_folder: None,
             approvals: Vec::new(),
+            proposals: Vec::new(),
             claude: None,
             config_dir: None,
             base_env: officina_host::spawn::BaseEnv::default(),
