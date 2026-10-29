@@ -5,7 +5,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use officina_core::agents::parse_agents;
-use officina_core::board::{BoardInput, ProjectRule, Staleness, build_board};
+use officina_core::board::{BoardInput, ProjectRule, Staleness, SubagentView, build_board};
 use officina_core::events::EventLine;
 use officina_core::floor::Priority;
 use officina_core::relay::approvals::ApprovalView;
@@ -64,6 +64,9 @@ struct KeyedExpected {
     key: String,
     #[serde(flatten)]
     scene: SceneState,
+    /// The card's running sub-agents (AD-176); none when absent.
+    #[serde(default)]
+    subagents: Vec<SubagentView>,
 }
 
 fn load() -> Vec<Case> {
@@ -137,6 +140,17 @@ fn every_case_places_its_cards() {
             .map(|e| (e.key.clone(), Some(e.scene)))
             .collect();
         assert_eq!(actual, expected, "case: {}", case.name);
+        let actual_subagents: BTreeMap<&str, &[SubagentView]> = board
+            .columns
+            .all()
+            .map(|card| (card.key.as_str(), card.subagents.as_slice()))
+            .collect();
+        let expected_subagents: BTreeMap<&str, &[SubagentView]> = case
+            .expect
+            .iter()
+            .map(|e| (e.key.as_str(), e.subagents.as_slice()))
+            .collect();
+        assert_eq!(actual_subagents, expected_subagents, "case: {}", case.name);
         assert_eq!(
             board.alert_count, case.expect_alert_count,
             "case: {}",

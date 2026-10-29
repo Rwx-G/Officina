@@ -234,6 +234,7 @@ mod tests {
             subject: None,
             scene: None,
             settled: None,
+            subagents: Vec::new(),
         }
     }
 

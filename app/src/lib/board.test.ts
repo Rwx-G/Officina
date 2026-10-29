@@ -40,6 +40,7 @@ function card(key: string): Card {
     subject: null,
     scene: null,
     settled: null,
+    subagents: [],
   };
 }
 

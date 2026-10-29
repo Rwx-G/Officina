@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "_doc": "Hand-written cases of the scene state (AD-167, D-462 to D-465, D-494 to D-496), replayed through build_board by crates/officina-core/tests/scene_vectors.rs. Times are Unix ms; agents use the shapes of research notes E1, redacted. A case's floor gives projects and their priority, approvals are valid pending relay requests by session id, previous is the scene state of each card key on the board built before.",
+  "_doc": "Hand-written cases of the scene state (AD-167, D-462 to D-465, D-494 to D-496), replayed through build_board by crates/officina-core/tests/scene_vectors.rs. Times are Unix ms; agents use the shapes of research notes E1, redacted. A case's floor gives projects and their priority, approvals are valid pending relay requests by session id, previous is the scene state of each card key on the board built before. An expected card's subagents, absent for none, are the running sub-agents its session's SubagentStart and SubagentStop lines leave (AD-176, D-507, D-547).",
   "cases": [
     {
       "name": "a working session sits in its office",
@@ -367,6 +367,182 @@
         {"v": 1, "ts": 1793102000000, "event": "Stop", "session_id": "00000000-0000-0000-0000-000000000001"}
       ],
       "expect": [{"key": "pid:4101:1793095200000", "zone": "lounge", "waiting_since_ms": null, "alert": null, "approval": false}],
+      "expect_alert_count": 0,
+      "expect_next_escalation_at_ms": null
+    },
+    {
+      "name": "a sub-agent started is listed beside its lead with its type (gate 1, E83)",
+      "now_ms": 1793102400000,
+      "agents": [{"pid": 4100, "cwd": "C:/work/api", "kind": "interactive", "startedAt": 1793095200000, "sessionId": "00000000-0000-0000-0000-000000000001", "status": "busy"}],
+      "events": [
+        {"v": 1, "ts": 1793102000000, "event": "UserPromptSubmit", "session_id": "00000000-0000-0000-0000-000000000001"},
+        {"v": 1, "ts": 1793102010000, "event": "SubagentStart", "session_id": "00000000-0000-0000-0000-000000000001", "agent_id": "agent-a", "agent_type": "Explore"}
+      ],
+      "expect": [{"key": "pid:4100:1793095200000", "zone": "office", "waiting_since_ms": null, "alert": null, "approval": false, "subagents": [{"agent_id": "agent-a", "agent_type": "Explore"}]}],
+      "expect_alert_count": 0,
+      "expect_next_escalation_at_ms": null
+    },
+    {
+      "name": "a sub-agent stopped is gone",
+      "now_ms": 1793102400000,
+      "agents": [{"pid": 4100, "cwd": "C:/work/api", "kind": "interactive", "startedAt": 1793095200000, "sessionId": "00000000-0000-0000-0000-000000000001", "status": "busy"}],
+      "events": [
+        {"v": 1, "ts": 1793102000000, "event": "UserPromptSubmit", "session_id": "00000000-0000-0000-0000-000000000001"},
+        {"v": 1, "ts": 1793102010000, "event": "SubagentStart", "session_id": "00000000-0000-0000-0000-000000000001", "agent_id": "agent-a", "agent_type": "Explore"},
+        {"v": 1, "ts": 1793102070000, "event": "SubagentStop", "session_id": "00000000-0000-0000-0000-000000000001", "agent_id": "agent-a", "agent_type": "Explore"}
+      ],
+      "expect": [{"key": "pid:4100:1793095200000", "zone": "office", "waiting_since_ms": null, "alert": null, "approval": false, "subagents": []}],
+      "expect_alert_count": 0,
+      "expect_next_escalation_at_ms": null
+    },
+    {
+      "name": "two sub-agents in parallel are listed in start order",
+      "now_ms": 1793102400000,
+      "agents": [{"pid": 4100, "cwd": "C:/work/api", "kind": "interactive", "startedAt": 1793095200000, "sessionId": "00000000-0000-0000-0000-000000000001", "status": "busy"}],
+      "events": [
+        {"v": 1, "ts": 1793102000000, "event": "UserPromptSubmit", "session_id": "00000000-0000-0000-0000-000000000001"},
+        {"v": 1, "ts": 1793102010000, "event": "SubagentStart", "session_id": "00000000-0000-0000-0000-000000000001", "agent_id": "agent-b", "agent_type": "general-purpose"},
+        {"v": 1, "ts": 1793102011000, "event": "SubagentStart", "session_id": "00000000-0000-0000-0000-000000000001", "agent_id": "agent-a", "agent_type": "Explore"}
+      ],
+      "expect": [{"key": "pid:4100:1793095200000", "zone": "office", "waiting_since_ms": null, "alert": null, "approval": false, "subagents": [{"agent_id": "agent-b", "agent_type": "general-purpose"}, {"agent_id": "agent-a", "agent_type": "Explore"}]}],
+      "expect_alert_count": 0,
+      "expect_next_escalation_at_ms": null
+    },
+    {
+      "name": "a repeated start is the same sub-agent",
+      "now_ms": 1793102400000,
+      "agents": [{"pid": 4100, "cwd": "C:/work/api", "kind": "interactive", "startedAt": 1793095200000, "sessionId": "00000000-0000-0000-0000-000000000001", "status": "busy"}],
+      "events": [
+        {"v": 1, "ts": 1793102000000, "event": "UserPromptSubmit", "session_id": "00000000-0000-0000-0000-000000000001"},
+        {"v": 1, "ts": 1793102010000, "event": "SubagentStart", "session_id": "00000000-0000-0000-0000-000000000001", "agent_id": "agent-a", "agent_type": "Explore"},
+        {"v": 1, "ts": 1793102015000, "event": "SubagentStart", "session_id": "00000000-0000-0000-0000-000000000001", "agent_id": "agent-a", "agent_type": "Explore"}
+      ],
+      "expect": [{"key": "pid:4100:1793095200000", "zone": "office", "waiting_since_ms": null, "alert": null, "approval": false, "subagents": [{"agent_id": "agent-a", "agent_type": "Explore"}]}],
+      "expect_alert_count": 0,
+      "expect_next_escalation_at_ms": null
+    },
+    {
+      "name": "a stop without a start (a prompt suggestion or /btw) is ignored",
+      "now_ms": 1793102400000,
+      "agents": [{"pid": 4100, "cwd": "C:/work/api", "kind": "interactive", "startedAt": 1793095200000, "sessionId": "00000000-0000-0000-0000-000000000001", "status": "busy"}],
+      "events": [
+        {"v": 1, "ts": 1793102000000, "event": "UserPromptSubmit", "session_id": "00000000-0000-0000-0000-000000000001"},
+        {"v": 1, "ts": 1793102010000, "event": "SubagentStop", "session_id": "00000000-0000-0000-0000-000000000001", "agent_id": "agent-x", "agent_type": ""}
+      ],
+      "expect": [{"key": "pid:4100:1793095200000", "zone": "office", "waiting_since_ms": null, "alert": null, "approval": false, "subagents": []}],
+      "expect_alert_count": 0,
+      "expect_next_escalation_at_ms": null
+    },
+    {
+      "name": "a sub-agent resumed by a message is the same helper, back at its first start's rank (E83, D-547)",
+      "now_ms": 1793102400000,
+      "agents": [{"pid": 4100, "cwd": "C:/work/api", "kind": "interactive", "startedAt": 1793095200000, "sessionId": "00000000-0000-0000-0000-000000000001", "status": "busy"}],
+      "events": [
+        {"v": 1, "ts": 1793102000000, "event": "UserPromptSubmit", "session_id": "00000000-0000-0000-0000-000000000001"},
+        {"v": 1, "ts": 1793102010000, "event": "SubagentStart", "session_id": "00000000-0000-0000-0000-000000000001", "agent_id": "agent-a", "agent_type": "Explore"},
+        {"v": 1, "ts": 1793102011000, "event": "SubagentStart", "session_id": "00000000-0000-0000-0000-000000000001", "agent_id": "agent-b", "agent_type": "Explore"},
+        {"v": 1, "ts": 1793102012000, "event": "SubagentStop", "session_id": "00000000-0000-0000-0000-000000000001", "agent_id": "agent-a", "agent_type": "Explore"},
+        {"v": 1, "ts": 1793102012119, "event": "SubagentStart", "session_id": "00000000-0000-0000-0000-000000000001", "agent_id": "agent-a", "agent_type": "Explore"}
+      ],
+      "expect": [{"key": "pid:4100:1793095200000", "zone": "office", "waiting_since_ms": null, "alert": null, "approval": false, "subagents": [{"agent_id": "agent-a", "agent_type": "Explore"}, {"agent_id": "agent-b", "agent_type": "Explore"}]}],
+      "expect_alert_count": 0,
+      "expect_next_escalation_at_ms": null
+    },
+    {
+      "name": "an agent-team teammate handling messages is listed once while it runs, as start and stop pairs or as a start per message (D-507)",
+      "now_ms": 1793102400000,
+      "agents": [{"pid": 4100, "cwd": "C:/work/api", "kind": "interactive", "startedAt": 1793095200000, "sessionId": "00000000-0000-0000-0000-000000000001", "status": "busy"}],
+      "events": [
+        {"v": 1, "ts": 1793102000000, "event": "UserPromptSubmit", "session_id": "00000000-0000-0000-0000-000000000001"},
+        {"v": 1, "ts": 1793102010000, "event": "SubagentStart", "session_id": "00000000-0000-0000-0000-000000000001", "agent_id": "teammate-1", "agent_type": "researcher"},
+        {"v": 1, "ts": 1793102011000, "event": "SubagentStop", "session_id": "00000000-0000-0000-0000-000000000001", "agent_id": "teammate-1", "agent_type": "researcher"},
+        {"v": 1, "ts": 1793102130000, "event": "SubagentStart", "session_id": "00000000-0000-0000-0000-000000000001", "agent_id": "teammate-1", "agent_type": "researcher"},
+        {"v": 1, "ts": 1793102190000, "event": "SubagentStart", "session_id": "00000000-0000-0000-0000-000000000001", "agent_id": "teammate-1", "agent_type": "researcher"}
+      ],
+      "expect": [{"key": "pid:4100:1793095200000", "zone": "office", "waiting_since_ms": null, "alert": null, "approval": false, "subagents": [{"agent_id": "teammate-1", "agent_type": "researcher"}]}],
+      "expect_alert_count": 0,
+      "expect_next_escalation_at_ms": null
+    },
+    {
+      "name": "a session end ends its sub-agents, and a prompt after it does not bring them back",
+      "now_ms": 1793102400000,
+      "agents": [{"pid": 4100, "cwd": "C:/work/api", "kind": "interactive", "startedAt": 1793095200000, "sessionId": "00000000-0000-0000-0000-000000000001", "status": "busy"}],
+      "events": [
+        {"v": 1, "ts": 1793101000000, "event": "UserPromptSubmit", "session_id": "00000000-0000-0000-0000-000000000001"},
+        {"v": 1, "ts": 1793101010000, "event": "SubagentStart", "session_id": "00000000-0000-0000-0000-000000000001", "agent_id": "agent-a", "agent_type": "Explore"},
+        {"v": 1, "ts": 1793101500000, "event": "SessionEnd", "session_id": "00000000-0000-0000-0000-000000000001", "reason": "other"},
+        {"v": 1, "ts": 1793102000000, "event": "UserPromptSubmit", "session_id": "00000000-0000-0000-0000-000000000001"}
+      ],
+      "expect": [{"key": "pid:4100:1793095200000", "zone": "office", "waiting_since_ms": null, "alert": null, "approval": false, "subagents": []}],
+      "expect_alert_count": 0,
+      "expect_next_escalation_at_ms": null
+    },
+    {
+      "name": "at most sixteen sub-agents are listed, the first started",
+      "now_ms": 1793102400000,
+      "agents": [{"pid": 4100, "cwd": "C:/work/api", "kind": "interactive", "startedAt": 1793095200000, "sessionId": "00000000-0000-0000-0000-000000000001", "status": "busy"}],
+      "events": [
+        {"v": 1, "ts": 1793102000000, "event": "UserPromptSubmit", "session_id": "00000000-0000-0000-0000-000000000001"},
+        {"v": 1, "ts": 1793102010000, "event": "SubagentStart", "session_id": "00000000-0000-0000-0000-000000000001", "agent_id": "agent-00", "agent_type": "Explore"},
+        {"v": 1, "ts": 1793102011000, "event": "SubagentStart", "session_id": "00000000-0000-0000-0000-000000000001", "agent_id": "agent-01", "agent_type": "Explore"},
+        {"v": 1, "ts": 1793102012000, "event": "SubagentStart", "session_id": "00000000-0000-0000-0000-000000000001", "agent_id": "agent-02", "agent_type": "Explore"},
+        {"v": 1, "ts": 1793102013000, "event": "SubagentStart", "session_id": "00000000-0000-0000-0000-000000000001", "agent_id": "agent-03", "agent_type": "Explore"},
+        {"v": 1, "ts": 1793102014000, "event": "SubagentStart", "session_id": "00000000-0000-0000-0000-000000000001", "agent_id": "agent-04", "agent_type": "Explore"},
+        {"v": 1, "ts": 1793102015000, "event": "SubagentStart", "session_id": "00000000-0000-0000-0000-000000000001", "agent_id": "agent-05", "agent_type": "Explore"},
+        {"v": 1, "ts": 1793102016000, "event": "SubagentStart", "session_id": "00000000-0000-0000-0000-000000000001", "agent_id": "agent-06", "agent_type": "Explore"},
+        {"v": 1, "ts": 1793102017000, "event": "SubagentStart", "session_id": "00000000-0000-0000-0000-000000000001", "agent_id": "agent-07", "agent_type": "Explore"},
+        {"v": 1, "ts": 1793102018000, "event": "SubagentStart", "session_id": "00000000-0000-0000-0000-000000000001", "agent_id": "agent-08", "agent_type": "Explore"},
+        {"v": 1, "ts": 1793102019000, "event": "SubagentStart", "session_id": "00000000-0000-0000-0000-000000000001", "agent_id": "agent-09", "agent_type": "Explore"},
+        {"v": 1, "ts": 1793102020000, "event": "SubagentStart", "session_id": "00000000-0000-0000-0000-000000000001", "agent_id": "agent-10", "agent_type": "Explore"},
+        {"v": 1, "ts": 1793102021000, "event": "SubagentStart", "session_id": "00000000-0000-0000-0000-000000000001", "agent_id": "agent-11", "agent_type": "Explore"},
+        {"v": 1, "ts": 1793102022000, "event": "SubagentStart", "session_id": "00000000-0000-0000-0000-000000000001", "agent_id": "agent-12", "agent_type": "Explore"},
+        {"v": 1, "ts": 1793102023000, "event": "SubagentStart", "session_id": "00000000-0000-0000-0000-000000000001", "agent_id": "agent-13", "agent_type": "Explore"},
+        {"v": 1, "ts": 1793102024000, "event": "SubagentStart", "session_id": "00000000-0000-0000-0000-000000000001", "agent_id": "agent-14", "agent_type": "Explore"},
+        {"v": 1, "ts": 1793102025000, "event": "SubagentStart", "session_id": "00000000-0000-0000-0000-000000000001", "agent_id": "agent-15", "agent_type": "Explore"},
+        {"v": 1, "ts": 1793102026000, "event": "SubagentStart", "session_id": "00000000-0000-0000-0000-000000000001", "agent_id": "agent-16", "agent_type": "Explore"}
+      ],
+      "expect": [{"key": "pid:4100:1793095200000", "zone": "office", "waiting_since_ms": null, "alert": null, "approval": false, "subagents": [{"agent_id": "agent-00", "agent_type": "Explore"}, {"agent_id": "agent-01", "agent_type": "Explore"}, {"agent_id": "agent-02", "agent_type": "Explore"}, {"agent_id": "agent-03", "agent_type": "Explore"}, {"agent_id": "agent-04", "agent_type": "Explore"}, {"agent_id": "agent-05", "agent_type": "Explore"}, {"agent_id": "agent-06", "agent_type": "Explore"}, {"agent_id": "agent-07", "agent_type": "Explore"}, {"agent_id": "agent-08", "agent_type": "Explore"}, {"agent_id": "agent-09", "agent_type": "Explore"}, {"agent_id": "agent-10", "agent_type": "Explore"}, {"agent_id": "agent-11", "agent_type": "Explore"}, {"agent_id": "agent-12", "agent_type": "Explore"}, {"agent_id": "agent-13", "agent_type": "Explore"}, {"agent_id": "agent-14", "agent_type": "Explore"}, {"agent_id": "agent-15", "agent_type": "Explore"}]}],
+      "expect_alert_count": 0,
+      "expect_next_escalation_at_ms": null
+    },
+    {
+      "name": "a sub-agent line of another session or without agent_id changes nothing",
+      "now_ms": 1793102400000,
+      "agents": [{"pid": 4100, "cwd": "C:/work/api", "kind": "interactive", "startedAt": 1793095200000, "sessionId": "00000000-0000-0000-0000-000000000001", "status": "busy"}],
+      "events": [
+        {"v": 1, "ts": 1793102000000, "event": "UserPromptSubmit", "session_id": "00000000-0000-0000-0000-000000000001"},
+        {"v": 1, "ts": 1793102010000, "event": "SubagentStart", "session_id": "00000000-0000-0000-0000-000000000002", "agent_id": "agent-a", "agent_type": "Explore"},
+        {"v": 1, "ts": 1793102010001, "event": "SubagentStart", "session_id": "00000000-0000-0000-0000-000000000001", "agent_type": "Explore"}
+      ],
+      "expect": [{"key": "pid:4100:1793095200000", "zone": "office", "waiting_since_ms": null, "alert": null, "approval": false, "subagents": []}],
+      "expect_alert_count": 0,
+      "expect_next_escalation_at_ms": null
+    },
+    {
+      "name": "a /clear that supersedes the session ends its sub-agents",
+      "now_ms": 1793102400000,
+      "agents": [{"pid": 4100, "cwd": "C:/work/api", "kind": "interactive", "startedAt": 1793095200000, "sessionId": "00000000-0000-0000-0000-000000000001", "status": "busy"}],
+      "events": [
+        {"v": 1, "ts": 1793101000000, "event": "UserPromptSubmit", "session_id": "00000000-0000-0000-0000-000000000001", "claude_pid": 4100},
+        {"v": 1, "ts": 1793101010000, "event": "SubagentStart", "session_id": "00000000-0000-0000-0000-000000000001", "agent_id": "agent-a", "agent_type": "Explore"},
+        {"v": 1, "ts": 1793101500000, "event": "SessionEnd", "session_id": "00000000-0000-0000-0000-000000000001", "reason": "clear", "claude_pid": 4100},
+        {"v": 1, "ts": 1793101500100, "event": "SessionStart", "session_id": "00000000-0000-0000-0000-000000000002", "source": "clear", "claude_pid": 4100},
+        {"v": 1, "ts": 1793102000000, "event": "UserPromptSubmit", "session_id": "00000000-0000-0000-0000-000000000002", "claude_pid": 4100}
+      ],
+      "expect": [{"key": "pid:4100:1793095200000", "zone": "office", "waiting_since_ms": null, "alert": null, "approval": false, "subagents": []}],
+      "expect_alert_count": 0,
+      "expect_next_escalation_at_ms": null
+    },
+    {
+      "name": "a stale board keeps the sub-agents the buffer gives: missing data never ends one",
+      "now_ms": 1793102400000,
+      "stale": true,
+      "agents": [{"pid": 4100, "cwd": "C:/work/api", "kind": "interactive", "startedAt": 1793095200000, "sessionId": "00000000-0000-0000-0000-000000000001", "status": "busy"}],
+      "events": [
+        {"v": 1, "ts": 1793102000000, "event": "UserPromptSubmit", "session_id": "00000000-0000-0000-0000-000000000001"},
+        {"v": 1, "ts": 1793102010000, "event": "SubagentStart", "session_id": "00000000-0000-0000-0000-000000000001", "agent_id": "agent-a", "agent_type": "Explore"}
+      ],
+      "expect": [{"key": "pid:4100:1793095200000", "zone": "unknown", "waiting_since_ms": null, "alert": null, "approval": false, "subagents": [{"agent_id": "agent-a", "agent_type": "Explore"}]}],
       "expect_alert_count": 0,
       "expect_next_escalation_at_ms": null
     }

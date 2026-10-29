@@ -8,6 +8,7 @@ import type { ApprovalView } from "../generated/ApprovalView";
 import type { Board } from "../generated/Board";
 import type { Card } from "../generated/Card";
 import type { Column } from "../generated/Column";
+import type { SubagentView } from "../generated/SubagentView";
 import type { Zone } from "../generated/Zone";
 
 /** Every board of the fixture index. */
@@ -32,6 +33,7 @@ export interface CardOptions {
   column?: Column;
   approval?: boolean;
   alert?: AlertCause | null;
+  subagents?: SubagentView[];
 }
 
 /** A live card of `zone`; its name is its key. */
@@ -57,6 +59,7 @@ export function card(key: string, zone: Zone, o: CardOptions = {}): Card {
     attach_available: false,
     subject: null,
     settled: null,
+    subagents: o.subagents ?? [],
     scene: {
       zone,
       waiting_since_ms: null,

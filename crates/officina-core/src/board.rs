@@ -44,6 +44,9 @@ pub const UNKNOWN_PROJECT: &str = "unknown";
 /// (D-53).
 pub const NEVER_FILED_PROJECTS: [&str; 2] = [OTHER_PROJECT, UNKNOWN_PROJECT];
 
+/// The most running sub-agents a card lists (AD-176).
+pub const MAX_SUBAGENTS: usize = 16;
+
 /// Notification types that mean a decision blocks the session.
 pub const BLOCKING_NOTIFICATIONS: [&str; 2] = ["permission_prompt", "elicitation_dialog"];
 
@@ -146,6 +149,21 @@ pub struct Card {
     /// Why an ended card sits in Done although Claude Code did not say it
     /// finished (story 4.15): the author's verdict; `None` otherwise.
     pub settled: Option<Settled>,
+    /// The sub-agents of a live card's session that Claude Code reported
+    /// started and not yet stopped (AD-176, D-547), in the order of each
+    /// one's first start, at most [`MAX_SUBAGENTS`]; empty for To resume
+    /// and Done.
+    pub subagents: Vec<SubagentView>,
+}
+
+/// A running sub-agent of a card's session (AD-176): only what its
+/// `SubagentStart` line carries, each cut to 64 characters by the hook.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct SubagentView {
+    pub agent_id: String,
+    /// Untrusted text: the frontend renders it as text only.
+    pub agent_type: Option<String>,
 }
 
 /// Why the author's verdict, not Claude Code, put an ended card in Done
@@ -388,6 +406,59 @@ pub struct SessionEvents {
     pub claude_pid: Option<u32>,
     /// Time of the session's first event.
     pub first_event_at_ms: Option<i64>,
+    /// Its running sub-agents, as [`Card::subagents`] lists them.
+    pub subagents: Vec<SubagentView>,
+}
+
+/// One session's sub-agents as its `SubagentStart` and `SubagentStop`
+/// lines leave them (AD-176, D-547): each `agent_id` runs from a start to
+/// the next stop, a start while it runs is the same sub-agent, and a later
+/// start brings it back with its first start's rank.
+#[derive(Debug, Default)]
+struct SubagentFold {
+    /// Every id ever started, by first start.
+    order: Vec<String>,
+    /// The running ids and their latest known type.
+    running: BTreeMap<String, Option<String>>,
+}
+
+impl SubagentFold {
+    fn apply(&mut self, event: &EventLine) {
+        let Some(id) = &event.agent_id else {
+            return;
+        };
+        if event.event == crate::events::SUBAGENT_EVENTS[0] {
+            if !self.order.contains(id) {
+                self.order.push(id.clone());
+            }
+            let known = self.running.entry(id.clone()).or_default();
+            if event.agent_type.is_some() {
+                known.clone_from(&event.agent_type);
+            }
+        } else {
+            // A stop without a start (a prompt suggestion, `/btw`) finds
+            // nothing to end.
+            self.running.remove(id);
+        }
+    }
+
+    /// The session ended: so did every sub-agent it ran.
+    fn end(&mut self) {
+        self.running.clear();
+    }
+
+    fn running(&self) -> Vec<SubagentView> {
+        self.order
+            .iter()
+            .filter_map(|id| {
+                self.running.get(id).map(|agent_type| SubagentView {
+                    agent_id: id.clone(),
+                    agent_type: agent_type.clone(),
+                })
+            })
+            .take(MAX_SUBAGENTS)
+            .collect()
+    }
 }
 
 fn later(a: Option<i64>, b: i64) -> Option<i64> {
@@ -399,13 +470,16 @@ pub fn group_events(events: &[EventLine]) -> BTreeMap<String, SessionEvents> {
     let mut sorted: Vec<&EventLine> = events.iter().collect();
     sorted.sort_by_key(|e| e.ts);
     let mut grouped: BTreeMap<String, SessionEvents> = BTreeMap::new();
+    let mut folds: BTreeMap<String, SubagentFold> = BTreeMap::new();
     for event in sorted {
         let Some(sid) = &event.session_id else {
             continue;
         };
         // A sub-agent's start or stop is not the session's own activity
-        // (AD-176): it would reorder Needs you and move a waiting lead.
+        // (AD-176): it would reorder Needs you and move a waiting lead. It
+        // only folds into the session's sub-agents.
         if crate::events::is_subagent_event(&event.event) {
+            folds.entry(sid.clone()).or_default().apply(event);
             continue;
         }
         let entry = grouped.entry(sid.clone()).or_default();
@@ -452,12 +526,22 @@ pub fn group_events(events: &[EventLine]) -> BTreeMap<String, SessionEvents> {
             "SessionEnd" => {
                 entry.end_reason = Some(event.reason.clone().unwrap_or_default());
                 entry.ended_at_ms = Some(event.ts);
+                if let Some(fold) = folds.get_mut(sid) {
+                    fold.end();
+                }
             }
             "SessionStart" => {
                 entry.last_session_start_at_ms = Some(event.ts);
                 entry.last_session_start_source.clone_from(&event.source);
             }
             _ => {}
+        }
+    }
+    // Sub-agent lines alone make no session: only a session with its own
+    // events gets its sub-agents.
+    for (sid, fold) in folds {
+        if let Some(entry) = grouped.get_mut(&sid) {
+            entry.subagents = fold.running();
         }
     }
     grouped
@@ -682,6 +766,16 @@ fn new_card(
         subject,
         scene: None,
         settled: None,
+        // An ended lead has no running helper, whatever the buffer holds
+        // (D-547).
+        subagents: if matches!(
+            placement.column,
+            Column::NeedsYou | Column::YourTurn | Column::Working
+        ) {
+            events.subagents.clone()
+        } else {
+            Vec::new()
+        },
     }
 }
 
@@ -1754,6 +1848,27 @@ values = [\"web01\"]
         assert_eq!(group_events(&with), group_events(&base));
         let only_subagents: Vec<EventLine> = with[2..].to_vec();
         assert!(group_events(&only_subagents).is_empty());
+    }
+
+    /// D-547: an ended lead lists no sub-agent, though the buffer holds a
+    /// start without a stop; the same lines on a live lead list it.
+    #[test]
+    fn an_ended_card_lists_no_subagent() {
+        let mut start = event(20, "s", crate::events::SUBAGENT_EVENTS[0]);
+        start.agent_id = Some("a1".into());
+        let input = |state: &str| BoardInput {
+            agents: Some(vec![record(&format!(
+                r#"{{"id":"b1","sessionId":"s","kind":"background","state":"{state}","cwd":"C:/work/api","startedAt":1}}"#
+            ))]),
+            events: vec![event(5, "s", "UserPromptSubmit"), start.clone()],
+            ..Default::default()
+        };
+        let live = build_board(&input("working"), 100);
+        assert_eq!(live.columns.working[0].subagents.len(), 1);
+        let ended = build_board(&input("done"), 100);
+        let card = ended.columns.all().next().expect("the ended card");
+        assert!(!matches!(card.column, Column::Working), "{:?}", card.column);
+        assert!(card.subagents.is_empty());
     }
 
     fn rule(

@@ -70,6 +70,7 @@ function card(overrides: Partial<Card> = {}): Card {
     subject: null,
     scene: null,
     settled: null,
+    subagents: [],
     ...overrides,
   };
 }
@@ -716,6 +717,23 @@ describe("SessionFile", () => {
       expect(getByTestId(id).textContent, id).toContain(hostile);
     }
     expect((window as { __officinaXss?: number }).__officinaXss).toBeUndefined();
+  });
+
+  it("SessionFile lists sub-agents as text", () => {
+    expect(file(waiting()).queryByTestId("file-subagents")).toBeNull();
+    cleanup();
+    const hostile = `<img src=x onerror="window.__officinaXss = 1">`;
+    const c = waiting({
+      subagents: [
+        { agent_id: "a1", agent_type: "Explore" },
+        { agent_id: "a2", agent_type: hostile },
+        { agent_id: "a3", agent_type: null },
+      ],
+    });
+    const { container, getByTestId } = file(c);
+    const items = [...getByTestId("file-subagents").querySelectorAll("li")].map((li) => li.textContent);
+    expect(items).toEqual(["Explore", hostile, "sub-agent"]);
+    expect(container.querySelector("img")).toBeNull();
   });
 
   it("SessionFile is a dialog labelled by the session name", () => {

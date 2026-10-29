@@ -5,6 +5,7 @@ import type { ProjectView } from "./ProjectView";
 import type { SceneState } from "./SceneState";
 import type { SessionKindView } from "./SessionKindView";
 import type { Settled } from "./Settled";
+import type { SubagentView } from "./SubagentView";
 import type { SubjectRef } from "./SubjectRef";
 
 /**
@@ -41,4 +42,11 @@ scene: SceneState | null,
  * Why an ended card sits in Done although Claude Code did not say it
  * finished (story 4.15): the author's verdict; `None` otherwise.
  */
-settled: Settled | null, };
+settled: Settled | null, 
+/**
+ * The sub-agents of a live card's session that Claude Code reported
+ * started and not yet stopped (AD-176, D-547), in the order of each
+ * one's first start, at most [`MAX_SUBAGENTS`]; empty for To resume
+ * and Done.
+ */
+subagents: Array<SubagentView>, };
