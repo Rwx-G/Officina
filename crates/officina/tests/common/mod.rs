@@ -158,23 +158,32 @@ impl TestEnv {
 /// in its own process points it at this copy, since no test may set the
 /// process environment.
 ///
-/// The fake writes the copy itself, in a process of its own (D-884): a
-/// copy this process wrote would be open for writing in every child
-/// another test thread forks meanwhile, until that child's `exec`, and on
-/// Linux running the copy then fails with "Text file busy". The child's
-/// handle is closed once it has exited.
+/// The copy is a hard link to the built fake (D-885): a new file is
+/// scanned by Windows Defender at its first start, inside the
+/// `CreateProcessW` that the standard library runs under one lock for the
+/// whole test process, so every test's fresh copy held every other test's
+/// spawns. Where no link can be made (another filesystem), the fake writes
+/// the copy itself, in a process of its own (D-884): a copy this process
+/// wrote would be open for writing in every child another test thread
+/// forks meanwhile, until that child's `exec`, and on Linux running the
+/// copy then fails with "Text file busy". The child's handle is closed
+/// once it has exited.
 pub fn fake_claude_in(dir: &Path, sidecar: &serde_json::Value) -> PathBuf {
     std::fs::create_dir_all(dir).unwrap();
     let exe = dir.join(Path::new(FAKE_CLAUDE).file_name().unwrap());
-    let copied = Command::new(FAKE_CLAUDE)
-        .env("FAKE_CLAUDE_COPY_TO", &exe)
-        .stdin(Stdio::null())
-        .status()
-        .unwrap();
-    assert!(
-        copied.success(),
-        "the fake could not copy itself to {exe:?}"
-    );
+    // A second call for the same folder keeps its fake: writing through a
+    // link would write into the built fake itself.
+    if !exe.exists() && std::fs::hard_link(FAKE_CLAUDE, &exe).is_err() {
+        let copied = Command::new(FAKE_CLAUDE)
+            .env("FAKE_CLAUDE_COPY_TO", &exe)
+            .stdin(Stdio::null())
+            .status()
+            .unwrap();
+        assert!(
+            copied.success(),
+            "the fake could not copy itself to {exe:?}"
+        );
+    }
     std::fs::write(dir.join("fake-claude.json"), sidecar.to_string()).unwrap();
     exe
 }
