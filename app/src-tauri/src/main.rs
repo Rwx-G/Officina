@@ -19,6 +19,7 @@ use officina_core::board::Board;
 use officina_core::focus::FocusOutcome;
 use officina_core::ipc::IpcError;
 use officina_core::orders::card::{CardAnswer, CardChange, CardRequest, LaunchAnswer};
+use officina_core::orders::orchestrator::StartAnswer;
 use officina_core::orders::view::OrchestratorView;
 use officina_core::registry::confirm::{AuthorAction, ConfirmItem, ItemAnswer, SubjectOrigin};
 use officina_core::registry::types::{AuthorReason, Settlement};
@@ -68,6 +69,10 @@ struct AppState {
     claude: Option<PathBuf>,
     /// The environment the attach console's own is built from (D-86).
     base_env: BaseEnv,
+    /// The window's executable directory, read once at start from
+    /// `current_exe()`: the `officina.exe` the orchestrator's MCP config
+    /// runs sits there (D-144, D-167).
+    exe_dir: Option<PathBuf>,
 }
 
 impl AppState {
@@ -441,6 +446,25 @@ async fn launch_work_order(
     .map_err(|e| IpcError::internal(e.to_string()))?
 }
 
+/// Starts the orchestrator in a console of its own, or brings the live one
+/// to the front (AD-89, AD-92): the decision and the record on the
+/// collector thread, the spawn on this command's blocking thread (AD-3).
+#[tauri::command]
+async fn start_orchestrator(state: State<'_, AppState>) -> Result<StartAnswer, IpcError> {
+    let sender = state
+        .collector()
+        .ok_or_else(|| IpcError::internal("the collector is not running"))?;
+    let exe_dir = state
+        .exe_dir
+        .clone()
+        .ok_or_else(|| IpcError::internal("the window's executable directory is unknown"))?;
+    tauri::async_runtime::spawn_blocking(move || {
+        orders::orchestrator::start_orchestrator(&sender, &exe_dir)
+    })
+    .await
+    .map_err(|e| IpcError::internal(e.to_string()))?
+}
+
 #[tauri::command]
 fn refresh(state: State<'_, AppState>) {
     if let Ok(sender) = state.sender.lock() {
@@ -573,6 +597,10 @@ fn main() {
             let claude = collector.claude().map(std::path::Path::to_path_buf);
             let base_env = collector.base_env().clone();
             let relay_home = collector.relay().clone();
+            // D-167: read once here; tests pass a folder of their own.
+            let exe_dir = std::env::current_exe()
+                .ok()
+                .and_then(|exe| exe.parent().map(std::path::Path::to_path_buf));
             // From now on, a decision the window did not make shows (D-173).
             if let Err(e) = authority::ensure_record(&relay_home) {
                 eprintln!("officina: the decision record could not be started: {e}");
@@ -592,6 +620,7 @@ fn main() {
                 paths: watch.paths,
                 claude,
                 base_env,
+                exe_dir,
             });
             Ok(())
         })
@@ -650,7 +679,8 @@ fn main() {
             edit_card,
             launch_work_order,
             get_orchestrator,
-            mark_briefing_read
+            mark_briefing_read,
+            start_orchestrator
         ])
         .run(tauri::generate_context!())
         .expect("failed to run the Officina window");

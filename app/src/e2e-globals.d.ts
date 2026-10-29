@@ -10,6 +10,7 @@ import type { LaunchAnswer } from "./lib/generated/LaunchAnswer";
 import type { OrchestratorView } from "./lib/generated/OrchestratorView";
 import type { RegistryView } from "./lib/generated/RegistryView";
 import type { RelayView } from "./lib/generated/RelayView";
+import type { StartAnswer } from "./lib/generated/StartAnswer";
 import type { SubjectView } from "./lib/generated/SubjectView";
 
 declare global {
@@ -51,6 +52,13 @@ declare global {
     __officinaOrchestrator?: OrchestratorView | null;
     /** Sets the Orchestrator view and emits `orchestrator://updated`. */
     __officinaPushOrchestrator?: (view: OrchestratorView) => Promise<void>;
+    /** What `start_orchestrator` answers (story 5.16). */
+    __officinaStartAnswer?: StartAnswer;
+    /** Holds `start_orchestrator`'s answer until `__officinaReleaseStart`
+     *  is called (story 5.16): a Start in flight. */
+    __officinaStartHeld?: boolean;
+    /** Sends the held Start's answer; set by the mock while one is held. */
+    __officinaReleaseStart?: () => void;
   }
 }
 

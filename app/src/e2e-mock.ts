@@ -13,6 +13,7 @@ import type { LaunchAnswer } from "./lib/generated/LaunchAnswer";
 import type { OrchestratorView } from "./lib/generated/OrchestratorView";
 import type { RegistryView } from "./lib/generated/RegistryView";
 import type { RelayView } from "./lib/generated/RelayView";
+import type { StartAnswer } from "./lib/generated/StartAnswer";
 
 /** The author's commands on subjects (story 3.5): each is recorded, then
  *  refused when the test says so, else accepted with nothing changed; a test
@@ -89,6 +90,8 @@ export function installE2eMock(): void {
           return window.__officinaOrchestrator ?? null;
         case "mark_briefing_read":
           return null;
+        case "start_orchestrator":
+          return startOrchestrator();
         default:
           if (AUTHOR_COMMANDS.includes(cmd)) return author(cmd);
           return null;
@@ -141,6 +144,18 @@ function launch(): Promise<LaunchAnswer> {
   if (!window.__officinaLaunchHeld) return Promise.resolve(answer());
   return new Promise((resolve) => {
     window.__officinaReleaseLaunch = () => resolve(answer());
+  });
+}
+
+/** Mirrors the answer to `start_orchestrator` (AD-89): the answer the
+ *  test sets in `__officinaStartAnswer`, else `started`. With
+ *  `__officinaStartHeld` set, it waits until the test calls
+ *  `__officinaReleaseStart`, as a spawn in progress does. */
+function startOrchestrator(): Promise<StartAnswer> {
+  const answer = (): StartAnswer => window.__officinaStartAnswer ?? { outcome: "started" };
+  if (!window.__officinaStartHeld) return Promise.resolve(answer());
+  return new Promise((resolve) => {
+    window.__officinaReleaseStart = () => resolve(answer());
   });
 }
 

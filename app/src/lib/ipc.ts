@@ -18,6 +18,7 @@ import type { LaunchAnswer } from "./generated/LaunchAnswer";
 import type { OrchestratorView } from "./generated/OrchestratorView";
 import type { RegistryView } from "./generated/RegistryView";
 import type { RelayView } from "./generated/RelayView";
+import type { StartAnswer } from "./generated/StartAnswer";
 import type { Settlement } from "./generated/Settlement";
 import type { SubjectOrigin } from "./generated/SubjectOrigin";
 import type { SubjectView } from "./generated/SubjectView";
@@ -212,6 +213,12 @@ export function onOrchestrator(handler: (view: OrchestratorView) => void): Promi
  *  view (AD-83): the next briefing counts its changes from now. */
 export function markBriefingRead(): Promise<void> {
   return invoke("mark_briefing_read");
+}
+
+/** Starts the orchestrator session in a console of its own, or brings the
+ *  live one forward (AD-89): how the Start was answered. */
+export function startOrchestrator(): Promise<StartAnswer> {
+  return invoke<StartAnswer>("start_orchestrator");
 }
 
 export function getBoard(): Promise<Board | null> {

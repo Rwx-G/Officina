@@ -37,6 +37,7 @@
     "allow-edit-card",
     "allow-launch-work-order",
     "allow-get-orchestrator",
-    "allow-mark-briefing-read"
+    "allow-mark-briefing-read",
+    "allow-start-orchestrator"
   ]
 }
