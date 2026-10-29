@@ -683,6 +683,112 @@ fn no_tool_reads_or_writes_a_permission_prompt() {
     assert_eq!(fingerprint(&prompts), before);
 }
 
+/// Story 5.17 AC 7 (PRD section 7 Restart row, D-165, review F45): a
+/// scripted client kills the real `officina mcp` while a `propose_recap`
+/// call is in flight, several times at random delays; then the window
+/// ingests. No temporary file is ingested, and every proposal whose
+/// rename completed (seen in the folder before ingestion) is stored once.
+/// Ignored by default: CI runs it in release with the crash tests.
+#[test]
+#[ignore = "release build, run alone by CI's crash step"]
+fn killing_officina_mcp_during_propose_recap_loses_and_duplicates_nothing() {
+    use std::io::Write;
+    use std::process::Stdio;
+    use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+    const KILLS: u64 = 8;
+    let home = McpHome::new();
+    let lines = |n: u64| -> String {
+        let mut requests = handshake();
+        requests.push(call(
+            2,
+            McpTool::ProposeRecap,
+            json!({"target": {"session_id": format!("s-{n}")}, "done": "Done.",
+                "blocking": "None.", "decision_expected": "None."}),
+        ));
+        requests.iter().map(|r| format!("{r}\n")).collect()
+    };
+    let start = |n: u64| {
+        let mut child = home
+            .command(&[])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .as_mut()
+            .unwrap()
+            .write_all(lines(n).as_bytes())
+            .unwrap();
+        child
+    };
+    // One run to its end, timed: the window the kills fall in.
+    let begun = Instant::now();
+    let mut whole = start(0);
+    drop(whole.stdin.take());
+    assert!(whole.wait().unwrap().success());
+    let window = u64::try_from(begun.elapsed().as_millis())
+        .unwrap_or(100)
+        .max(5);
+    let mut seed = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos() as u64
+        | 1;
+    println!("seed {seed}, kills within {window} ms of each start");
+    for n in 1..=KILLS {
+        let mut child = start(n);
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        std::thread::sleep(Duration::from_millis(seed % window));
+        let _ = child.kill();
+        child.wait().unwrap();
+    }
+    let mut complete = std::collections::BTreeSet::new();
+    let mut temporary = std::collections::BTreeSet::new();
+    for entry in std::fs::read_dir(home.proposals_dir()).unwrap().flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        match id_of_file(&name) {
+            Some(id) => {
+                complete.insert(id.to_owned());
+            }
+            None => {
+                temporary.insert(name.split(".json").next().unwrap_or_default().to_owned());
+            }
+        }
+    }
+    println!("{} complete, {} temporary", complete.len(), temporary.len());
+    assert!(
+        !complete.is_empty(),
+        "the uninterrupted run wrote its proposal"
+    );
+    let now = now_ms();
+    officina_host::registry::store::open_writer(&home.env.officina_home(), &[], now)
+        .writer()
+        .unwrap()
+        .ingest_proposals(&home.proposals_dir(), None, now)
+        .unwrap();
+    let rows: Vec<String> =
+        officina_host::registry::store::open_reader(&home.env.officina_home(), &[])
+            .unwrap()
+            .proposals()
+            .unwrap()
+            .into_iter()
+            .map(|p| p.id)
+            .collect();
+    let stored: std::collections::BTreeSet<String> = rows.iter().cloned().collect();
+    assert_eq!(rows.len(), stored.len(), "a proposal stored twice");
+    assert_eq!(
+        stored, complete,
+        "each completed rename stored once, nothing else"
+    );
+    for id in temporary.difference(&complete) {
+        assert!(!stored.contains(id), "a temporary file was ingested: {id}");
+    }
+}
+
 fn text_or_raw(response: &Value) -> String {
     response["result"]["content"][0]["text"]
         .as_str()

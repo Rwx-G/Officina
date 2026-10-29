@@ -108,6 +108,16 @@ jobs:
         run: |
           cargo build --locked --release -p officina-host --features window-authority --example registry_crash_helper
           cargo test --locked --release -p officina-host --features window-authority --test registry_crash -- --ignored --nocapture
+      - name: A restart loses and duplicates no proposal
+        # Story 5.17 AC 7, D-89, D-165: `officina mcp`'s writer killed
+        # between a temporary file and its rename and at 20 random points,
+        # then the real `officina mcp` killed during `propose_recap`; the
+        # window's ingestion, run twice and after a restart, stores every
+        # renamed proposal once and no temporary file.
+        run: |
+          cargo build --locked --release -p officina-host --example mcp_crash_helper
+          cargo test --locked --release -p officina-host --features window-authority --test proposals_crash -- --ignored --nocapture
+          cargo test --locked --release -p officina --test mcp killing_officina_mcp_during_propose_recap -- --ignored --nocapture
       - name: officina holds no authority
         # AD-21, P-5, D-9. The exe a session can call is built alone, as the
         # release builds it, right before the search: the test build above

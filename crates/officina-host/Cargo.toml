@@ -94,6 +94,10 @@ name = "proposal_ingest"
 required-features = ["window-authority"]
 
 [[test]]
+name = "proposals_crash"
+required-features = ["window-authority"]
+
+[[test]]
 name = "registry_orders"
 required-features = ["window-authority"]
 
@@ -106,6 +110,11 @@ required-features = ["window-authority"]
 [[example]]
 name = "approve_fixture"
 required-features = ["window-authority"]
+
+# Writes proposals through `officina mcp`'s writer in a process the restart
+# test kills (story 5.17); never part of a shipped binary.
+[[example]]
+name = "mcp_crash_helper"
 
 # Plays the window's registry writer in a process the registry tests kill
 # (stories 3.1 and 3.2); never part of a shipped binary.
