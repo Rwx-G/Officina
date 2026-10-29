@@ -17,6 +17,7 @@ use officina_core::registry::triage_call::{
 use officina_core::registry::types::RegistryState;
 use officina_core::registry::view::RESTORE_NOTICE_MS;
 use officina_core::relay::gate::gated_tools;
+use officina_core::spawn::AGENT_VIEW_VAR;
 
 use crate::collector::{Collector, ContractStore};
 use crate::files::{now_ms, read_recent_events};
@@ -580,6 +581,11 @@ pub fn run(collector: &Collector, exe: &Path) -> Vec<Check> {
     let gate = gate_required(&relay);
     let required = registrations(gate);
     let (mut checks, version) = check_claude(collector);
+    checks.extend(check_agent_view(
+        collector.base_env().vars(),
+        &SettingsFile::read(&user_settings),
+        &user_settings,
+    ));
     let doctor_dir = paths.doctor_dir();
     let (hooks, hooks_file) = check_hooks(&user_settings, exe, &required, &doctor_dir);
     checks.push(hooks);
@@ -703,6 +709,60 @@ fn check_claude(collector: &Collector) -> (Vec<Check>, Option<String>) {
             None,
         ),
     }
+}
+
+/// True when a value of [`AGENT_VIEW_VAR`] turns agent view off: set, not
+/// empty and not `0` (D-137).
+fn turns_agent_view_off(value: &serde_json::Value) -> bool {
+    match value {
+        serde_json::Value::String(text) => !text.is_empty() && text != "0",
+        serde_json::Value::Number(number) => number.to_string() != "0",
+        serde_json::Value::Bool(on) => *on,
+        _ => false,
+    }
+}
+
+/// Agent view turned off where Officina's launches meet it (AD-94 part A,
+/// FR-15 as amended, D-137): [`AGENT_VIEW_VAR`] set to a value other than
+/// empty or `0` in `base`, doctor's own environment, or in the `env`
+/// object of the user settings at `settings_path`, read, never written.
+/// `claude --bg` and `--resume` refuse to run with it (E19), so work
+/// orders and answers fail. Officina removes the variable from what it
+/// starts, but a setting of the user settings applies inside `claude`,
+/// where it also turns off `claude agents`, the board's refresh (E19).
+/// `None` when agent view is on; a warning otherwise.
+pub fn check_agent_view(
+    base: &[(String, String)],
+    user_settings: &SettingsFile,
+    settings_path: &Path,
+) -> Option<Check> {
+    let in_environment = base.iter().any(|(name, value)| {
+        name.eq_ignore_ascii_case(AGENT_VIEW_VAR)
+            && turns_agent_view_off(&serde_json::Value::from(value.as_str()))
+    });
+    let in_settings = user_settings
+        .get("env")
+        .and_then(|env| env.get(AGENT_VIEW_VAR))
+        .is_some_and(turns_agent_view_off);
+    let place = match (in_environment, in_settings) {
+        (false, false) => return None,
+        (true, false) => "doctor's environment".to_owned(),
+        (false, true) => format!("the \"env\" object of {}", settings_path.display()),
+        (true, true) => format!(
+            "doctor's environment and the \"env\" object of {}",
+            settings_path.display()
+        ),
+    };
+    let mut detail = format!(
+        "{AGENT_VIEW_VAR} turns agent view off in {place}: work orders and answers will fail, since claude --bg and --resume refuse to run with it"
+    );
+    if in_settings {
+        detail.push_str(
+            "; set in the settings file it also applies inside claude agents, which Officina's board runs, so the board's refresh fails too",
+        );
+    }
+    detail.push_str("; remove it, or set it to 0, to launch work orders");
+    Some(check(Level::Warn, "agent view", detail))
 }
 
 /// The hook payload fields of `HOOK_FIELDS` the running version left out,
@@ -1795,6 +1855,128 @@ mod tests {
             }
         }
         assert!(!ran.exists(), "a shim ran");
+    }
+
+    fn settings_with(env: serde_json::Value) -> SettingsFile {
+        let serde_json::Value::Object(map) = serde_json::json!({"env": env, "permissions": {}})
+        else {
+            unreachable!()
+        };
+        SettingsFile::Object(map)
+    }
+
+    fn base(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
+        pairs
+            .iter()
+            .map(|(n, v)| ((*n).to_owned(), (*v).to_owned()))
+            .collect()
+    }
+
+    const SETTINGS: &str = "C:/path/to/claude/settings.json";
+
+    /// D-137: agent view turned off in doctor's environment warns that
+    /// work orders and answers will fail, whatever the name's case.
+    #[test]
+    fn agent_view_off_in_the_environment_warns() {
+        for name in [
+            AGENT_VIEW_VAR.to_owned(),
+            AGENT_VIEW_VAR.to_ascii_lowercase(),
+        ] {
+            let warned = check_agent_view(
+                &base(&[("PATH", "C:/bin"), (&name, "1")]),
+                &SettingsFile::Absent,
+                Path::new(SETTINGS),
+            )
+            .expect("a warning");
+            assert_eq!(
+                (warned.title.as_str(), warned.level),
+                ("agent view", Level::Warn)
+            );
+            assert!(
+                warned.detail.contains("doctor's environment"),
+                "{}",
+                warned.detail
+            );
+            assert!(warned.detail.contains("work orders and answers will fail"));
+            assert!(
+                !warned.detail.contains("board's refresh"),
+                "Officina removes it"
+            );
+        }
+    }
+
+    /// D-137: the `env` object of the user settings, read, turns it off
+    /// inside claude, the board's refresh included (E19).
+    #[test]
+    fn agent_view_off_in_user_settings_warns() {
+        for value in [
+            serde_json::json!("1"),
+            serde_json::json!(1),
+            serde_json::json!("true"),
+        ] {
+            let settings = settings_with(serde_json::json!({ AGENT_VIEW_VAR: value }));
+            let warned = check_agent_view(&base(&[]), &settings, Path::new(SETTINGS))
+                .unwrap_or_else(|| panic!("{value}: no warning"));
+            assert!(warned.detail.contains(SETTINGS), "{}", warned.detail);
+            assert!(
+                warned.detail.contains("board's refresh"),
+                "{}",
+                warned.detail
+            );
+        }
+        let both = check_agent_view(
+            &base(&[(AGENT_VIEW_VAR, "1")]),
+            &settings_with(serde_json::json!({ AGENT_VIEW_VAR: "1" })),
+            Path::new(SETTINGS),
+        )
+        .unwrap();
+        assert!(
+            both.detail.contains("doctor's environment and"),
+            "{}",
+            both.detail
+        );
+    }
+
+    /// D-137: `0`, an empty value, another name or an unreadable settings
+    /// file leave agent view on: no line.
+    #[test]
+    fn agent_view_set_to_0_does_not_warn() {
+        for value in ["0", ""] {
+            assert_eq!(
+                check_agent_view(
+                    &base(&[(AGENT_VIEW_VAR, value)]),
+                    &settings_with(serde_json::json!({ AGENT_VIEW_VAR: value })),
+                    Path::new(SETTINGS),
+                ),
+                None,
+                "{value:?}"
+            );
+        }
+        assert_eq!(
+            check_agent_view(
+                &base(&[("CLAUDE_CODE_DISABLE_TERMINAL_TITLE", "1")]),
+                &settings_with(serde_json::json!({ "CLAUDE_CODE_DISABLE_TERMINAL_TITLE": "1" })),
+                Path::new(SETTINGS),
+            ),
+            None
+        );
+        assert_eq!(
+            check_agent_view(
+                &base(&[]),
+                &SettingsFile::Unreadable("line 1".into()),
+                Path::new(SETTINGS)
+            ),
+            None
+        );
+        // A key outside `env` is not an environment variable.
+        let SettingsFile::Object(mut top) = settings_with(serde_json::json!({})) else {
+            unreachable!()
+        };
+        top.insert(AGENT_VIEW_VAR.to_owned(), serde_json::json!("1"));
+        assert_eq!(
+            check_agent_view(&base(&[]), &SettingsFile::Object(top), Path::new(SETTINGS)),
+            None
+        );
     }
 
     #[test]

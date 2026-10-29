@@ -54,6 +54,10 @@ project uses [Semantic Versioning](https://semver.org/).
   rules; a new subject is created at `started`, never at the click, or the
   open subject of that name is used. Rows are kept 90 days, their texts
   cleared with the excerpts.
+- `officina doctor` warns, under "agent view", when
+  `CLAUDE_CODE_DISABLE_AGENT_VIEW` turns agent view off in its environment
+  or in the `env` object of the user settings: work orders and answers
+  will fail, and set in the settings file the board's own refresh too.
 
 - Sub-agents in the scene (v0.4, story 4.12): each running sub-agent of a
   session stands beside its desk, a smaller figure without a cap, from its
