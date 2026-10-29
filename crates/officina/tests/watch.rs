@@ -3003,7 +3003,9 @@ fn start_is_refused_without_officina_exe() {
 }
 
 /// Story 5.16 AC 3 (D-144): Start creates the workdir and the proposals
-/// folder, refused or not, and never deletes them.
+/// folder, refused or not, and never deletes them. The marker is a
+/// folder: the window's proposal pass deletes any file there that is no
+/// proposal's (D-882).
 #[test]
 fn start_creates_the_two_folders() {
     let window = OrchestratorWindow::new(serde_json::json!({}), "claude", false);
@@ -3013,9 +3015,10 @@ fn start_creates_the_two_folders() {
     window.start();
     assert!(window.workdir().is_dir());
     assert!(proposals.is_dir());
-    write(&proposals.join("kept.json"), "{}");
+    let kept = proposals.join("kept");
+    std::fs::create_dir(&kept).unwrap();
     window.start();
-    assert!(proposals.join("kept.json").is_file(), "never deleted");
+    assert!(kept.is_dir(), "never deleted");
 }
 
 /// Story 5.16 AC 4 (AD-89, D-144): a spawned Start records its row with
