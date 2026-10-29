@@ -151,7 +151,15 @@ fn log_call(log: &str, args: &[String], interactive: bool) {
             "stdout": std::io::stdout().is_terminal(),
         });
     }
-    let _ = writeln!(f, "{entry}");
+    append_line(&mut f, &entry);
+}
+
+/// Appends `entry` and its newline in one write: `writeln!` writes a
+/// value in pieces, and the pieces of two fakes running at once (a
+/// console's resume beside the collector's `claude agents`) would
+/// interleave into lines no reader parses.
+fn append_line(f: &mut std::fs::File, entry: &serde_json::Value) {
+    let _ = f.write_all(format!("{entry}\n").as_bytes());
 }
 
 /// The setting `name`: `FAKE_CLAUDE_<NAME>` when set, even empty, else the
@@ -416,7 +424,7 @@ fn log_triage(args: &[String], stdin: &str) {
         "cwd": std::env::current_dir().ok(),
         "stdin": stdin,
     });
-    let _ = writeln!(f, "{entry}");
+    append_line(&mut f, &entry);
 }
 
 /// One triage call (`-p`) in `mode`.
