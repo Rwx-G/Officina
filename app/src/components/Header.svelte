@@ -292,7 +292,7 @@
     height: 8px;
     margin-left: 6px;
     border: 1.5px solid var(--color-text-muted);
-    border-radius: 50%;
+    border-radius: var(--radius-round);
     vertical-align: middle;
   }
   .presence.live {

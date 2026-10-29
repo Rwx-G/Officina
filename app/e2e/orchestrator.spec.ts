@@ -89,7 +89,7 @@ for (const theme of ["light", "dark"] as const) {
       const view = document.querySelector('[data-testid="orchestrator-view"]')!;
       const colours = new Set<string>();
       const backgrounds = new Set<string>();
-      for (const element of [view, ...view.querySelectorAll("*")]) {
+      for (const element of [view, ...Array.from(view.querySelectorAll("*"))]) {
         const style = getComputedStyle(element);
         colours.add(style.color);
         if (style.backgroundColor !== "rgba(0, 0, 0, 0)") backgrounds.add(style.backgroundColor);
