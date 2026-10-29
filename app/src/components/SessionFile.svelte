@@ -154,16 +154,6 @@
       <button type="button" class="action" data-testid="open-in-board" onclick={onBoard}>Open in Board</button>
     {/if}
 
-    {#if card.last_prompt}
-      <p class="excerpt prompt" data-testid="file-prompt">{card.last_prompt}</p>
-    {/if}
-    {#if card.last_message}
-      <p class="excerpt" data-testid="file-answer">{card.last_message}</p>
-    {/if}
-    {#if card.last_message_tail}
-      <p class="excerpt tail" data-testid="file-answer-tail">{card.last_message_tail}</p>
-    {/if}
-
     <div class="actions">
       <button
         type="button"
@@ -192,6 +182,28 @@
           <button type="button" class="link" onclick={() => store.wrongWindow(card!)}>Wrong window?</button>
         {/if}
       </div>
+    {/if}
+
+    <!-- The exchange as a conversation (D-705): the author's last prompt on
+         the right, Claude's last answer on the left, each labelled by its
+         author; a side the card does not carry shows nothing. Last, after
+         the actions, as the longest part (D-707). -->
+    {#if card.last_prompt || card.last_message || card.last_message_tail}
+      <ol class="exchange" aria-label="Last exchange" data-testid="file-exchange">
+        {#if card.last_prompt}
+          <li class="message human" data-testid="file-message" data-author="human">
+            <span class="author">Your last prompt</span>
+            <p class="text" data-testid="file-prompt">{card.last_prompt}</p>
+          </li>
+        {/if}
+        {#if card.last_message || card.last_message_tail}
+          <li class="message agent" data-testid="file-message" data-author="agent">
+            <span class="author">Claude's last answer</span>
+            {#if card.last_message}<p class="text" data-testid="file-answer">{card.last_message}</p>{/if}
+            {#if card.last_message_tail}<p class="text" data-testid="file-answer-tail">{card.last_message_tail}</p>{/if}
+          </li>
+        {/if}
+      </ol>
     {/if}
   {/if}
 </div>
@@ -306,19 +318,48 @@
     margin: 0;
     overflow-wrap: anywhere;
   }
-  .excerpt {
-    margin: 10px 0 0;
-    font-size: 13.5px;
+  .exchange {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin: 16px 0 0;
+    padding: 0;
+    list-style: none;
+  }
+  /* A bubble on its author's side, its top corner on that side square, as
+     a messaging app draws it. */
+  .message {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    max-width: 85%;
+    padding: 8px 12px 10px;
+    border-radius: var(--radius-surface);
+  }
+  .human {
+    align-self: flex-end;
+    background: var(--color-bubble-human);
+    border-top-right-radius: 0;
+  }
+  .agent {
+    align-self: flex-start;
+    background: var(--color-bubble-agent);
+    border-top-left-radius: 0;
+  }
+  .author {
     color: var(--color-text-muted);
+    font-size: 12px;
+    font-weight: 600;
+  }
+  .human .author {
+    text-align: right;
+  }
+  /* Untrusted text kept as written: its line breaks shown, nothing parsed. */
+  .text {
+    margin: 0;
+    font-size: 14px;
     overflow-wrap: anywhere;
     white-space: pre-wrap;
-  }
-  .prompt::before {
-    content: "> ";
-    font-weight: 700;
-  }
-  .tail::before {
-    content: "... ";
   }
   .actions {
     display: flex;

@@ -139,6 +139,12 @@ const PAIRS: [Side, Side, number][] = [
   ["--color-surface", "--color-danger", 4.5],
   ["--color-text", ["--color-column", "--color-bg"], 7],
   ["--color-text", ["--color-attention-wash", "--color-bg"], 7],
+  // The session file's exchange (D-705): each message's text and its
+  // author's label on its bubble.
+  ["--color-text", "--color-bubble-human", 7],
+  ["--color-text-muted", "--color-bubble-human", 4.5],
+  ["--color-text", "--color-bubble-agent", 7],
+  ["--color-text-muted", "--color-bubble-agent", 4.5],
   // The figures on what they stand or sit on (the prototype v2's
   // `scenePairs` and build.mjs): tunic and trousers on the room floor, the
   // alert room's floor and each rug, the tunic on the sofas.

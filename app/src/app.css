@@ -45,6 +45,10 @@
   --color-attention-wash: rgb(245 183 49 / 0.12);
   /* The shadow a panel casts over the page. */
   --color-shadow: rgb(42 36 28 / 0.12);
+  /* The session file's exchange (D-705): the author's bubble and
+     Claude's, neither amber, which marks what waits on the author. */
+  --color-bubble-human: #e4ebf1;
+  --color-bubble-agent: #f1e8d6;
 
   /* The scene's materials (prototype v2, light): what the floor, the
      furniture and the figures are drawn with. */
@@ -174,6 +178,8 @@
   --color-column: rgb(38 34 28 / 0.55);
   --color-attention-wash: rgb(245 183 49 / 0.12);
   --color-shadow: rgb(0 0 0 / 0.4);
+  --color-bubble-human: #2a3542;
+  --color-bubble-agent: #332d25;
   --scene-ground: #24201a;
   --scene-slab-l: #1f1b16;
   --scene-slab-r: #171410;
@@ -248,6 +254,8 @@
     --color-column: rgb(38 34 28 / 0.55);
     --color-attention-wash: rgb(245 183 49 / 0.12);
     --color-shadow: rgb(0 0 0 / 0.4);
+    --color-bubble-human: #2a3542;
+    --color-bubble-agent: #332d25;
     --scene-ground: #24201a;
     --scene-slab-l: #1f1b16;
     --scene-slab-r: #171410;

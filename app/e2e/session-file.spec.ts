@@ -1,7 +1,9 @@
 // The session file's polish (story 4.19): the owner found the panel cut off
-// abruptly against the header. The panel is a surface standing in the
-// sessions area, a gap under the header and its right edge on the header's
-// last control, its shadow whole (D-702).
+// abruptly against the header, and the exchange hard to read. The panel is
+// a surface standing in the sessions area, a gap under the header and its
+// right edge on the header's last control, its shadow whole (D-702); the
+// exchange reads as a conversation, each message on its author's side and
+// labelled by its author, the text kept as written (D-705, D-706).
 import { expect, test, type Page } from "@playwright/test";
 import type { Board } from "../src/lib/generated/Board";
 import type { Card } from "../src/lib/generated/Card";
@@ -17,6 +19,7 @@ const THEMES = ["light", "dark"] as const;
 
 const cards = (board: Board): Card[] => Object.values(board.columns).flat();
 const file = (page: Page) => page.getByTestId("session-file");
+const exchange = (page: Page) => file(page).getByRole("list", { name: "Last exchange" });
 
 async function openFile(page: Page, card: Card): Promise<void> {
   await page.getByTestId("scene").locator(`[data-layer="targets"] [data-key=${JSON.stringify(card.key)}]`).click();
@@ -42,7 +45,8 @@ function named(board: Board, name: string): Card {
   return card;
 }
 
-/** A scene-c session in the lounge, its file opened over the scene. */
+/** scene-c's session whose last round went through the real hook with
+ *  markup in its prompt and a long markdown answer (story 4.19). */
 const MARKUP_SESSION = "link-fixes";
 
 for (const { width, height, docked } of SCREENS) {
@@ -105,3 +109,85 @@ for (const { width, height, docked } of SCREENS) {
     });
   }
 }
+
+for (const theme of THEMES) {
+  test(`the exchange puts each message on its author's side, labelled by its author, ${theme}`, async ({ page }) => {
+    await page.emulateMedia({ colorScheme: theme });
+    await page.setViewportSize({ width: 1920, height: 1032 });
+    const board = loadBoard("scene-c");
+    await openScene(page, board);
+    await openFile(page, named(board, MARKUP_SESSION));
+
+    const list = exchange(page);
+    await expect(list.getByRole("listitem")).toHaveCount(2);
+    const human = list.locator('[data-author="human"]');
+    const agent = list.locator('[data-author="agent"]');
+    // Read in order by assistive technology: the author's label, then the text.
+    expect(await human.evaluate((li) => li.textContent!.trim().startsWith("Your last prompt"))).toBe(true);
+    expect(await agent.evaluate((li) => li.textContent!.trim().startsWith("Claude's last answer"))).toBe(true);
+
+    const listBox = (await list.boundingBox())!;
+    const humanBox = (await human.boundingBox())!;
+    const agentBox = (await agent.boundingBox())!;
+    // The author's on the right, Claude's on the left, neither across.
+    expect(Math.abs(humanBox.x + humanBox.width - (listBox.x + listBox.width))).toBeLessThanOrEqual(1);
+    expect(humanBox.x).toBeGreaterThan(listBox.x + 8);
+    expect(Math.abs(agentBox.x - listBox.x)).toBeLessThanOrEqual(1);
+    expect(agentBox.x + agentBox.width).toBeLessThan(listBox.x + listBox.width - 8);
+    expect(humanBox.y).toBeLessThan(agentBox.y);
+
+    // Two bubble styles, each distinct from the panel's surface.
+    const fills = await page.evaluate(() =>
+      ["[data-author=human]", "[data-author=agent]", "[data-testid=session-file]"].map((s) => getComputedStyle(document.querySelector(s)!).backgroundColor),
+    );
+    expect(new Set(fills).size).toBe(3);
+  });
+}
+
+test("the exchange shows markup and markdown as written, never rendered", async ({ page }) => {
+  await page.setViewportSize({ width: 1920, height: 1032 });
+  const board = loadBoard("scene-c");
+  const card = named(board, MARKUP_SESSION);
+  // The fixture holds what the test is about: markup in the prompt, a
+  // markdown answer the hook kept as head and tail.
+  expect(card.last_prompt).toContain("<img");
+  expect(card.last_prompt).toContain("**");
+  expect(card.last_message).toContain("## ");
+  expect(card.last_message).toContain("<b>");
+  expect(card.last_message_tail).toContain("<img");
+  await openScene(page, board);
+  await openFile(page, card);
+
+  const shown = await page.evaluate(() =>
+    ["file-prompt", "file-answer", "file-answer-tail"].map((id) => document.querySelector(`[data-testid=${id}]`)!.textContent),
+  );
+  expect(shown).toEqual([card.last_prompt, card.last_message, card.last_message_tail]);
+  // Nothing parsed: the list holds its items, their labels and their text
+  // paragraphs only, and no link is made of a markdown or HTML one.
+  const tags = await exchange(page).evaluate((list) => [...new Set(Array.from(list.querySelectorAll("*")).map((e) => e.tagName))].sort());
+  expect(tags).toEqual(["LI", "P", "SPAN"]);
+  await expect(file(page).locator("a, img")).toHaveCount(0);
+  // The line breaks of the text are kept, as written.
+  expect(await page.getByTestId("file-answer").evaluate((p) => getComputedStyle(p).whiteSpace)).toBe("pre-wrap");
+  expect(await page.evaluate(() => (window as { __officinaXss?: number }).__officinaXss)).toBeUndefined();
+});
+
+test("a side the card does not carry shows nothing", async ({ page }) => {
+  const board = loadBoard("scene-c");
+  const live = cards(board).filter((c) => c.scene !== null);
+  const promptOnly = live.find((c) => c.last_prompt !== null && c.last_message === null && c.last_message_tail === null);
+  const neither = live.find((c) => c.last_prompt === null && c.last_message === null && c.last_message_tail === null);
+  expect(promptOnly, "a session with a prompt and no answer yet").toBeDefined();
+  expect(neither, "a session with no prompt and no answer").toBeDefined();
+  await openScene(page, board);
+
+  await openFile(page, promptOnly!);
+  await expect(exchange(page).getByRole("listitem")).toHaveCount(1);
+  await expect(exchange(page).locator('[data-author="human"]')).toHaveCount(1);
+  await expect(page.getByTestId("file-answer")).toHaveCount(0);
+  await page.keyboard.press("Escape");
+  await expect(file(page)).toHaveCount(0);
+
+  await openFile(page, neither!);
+  await expect(page.getByTestId("file-exchange")).toHaveCount(0);
+});

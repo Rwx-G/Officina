@@ -117,6 +117,33 @@ export function sceneScenarios(now) {
     last_assistant_message: "Found the three call sites.",
   });
 
+  /** A round's prompt and answer as hook payloads: `officina hook` keeps
+   *  the answer's head and tail as it does for a real session (D-182). */
+  const promptPayload = (prompt) => ({ hook_event_name: "UserPromptSubmit", prompt });
+  const stopPayload = (answer) => ({ hook_event_name: "Stop", stop_hook_active: false, last_assistant_message: answer });
+  /** Session text that looks like markup and markdown, which the window
+   *  must show as written (story 4.19). */
+  const markupPrompt = 'Check the <img src=x onerror="window.__officinaXss = 1"> tag in **install.md** and fix the [docs](https://example.com/docs) links';
+  const markupAnswer = [
+    "## Link fixes",
+    "",
+    "Fixed **14** broken links in `install.md`; <b>none</b> left.",
+    "",
+    "- [changelog](https://example.com/changelog): moved, link updated",
+    '- <a href="https://example.com">home</a>: kept as it was',
+    "- `docs/api.md`: three anchors renamed after the headings changed",
+    "- `docs/faq.md`: two links to the old forum now point at the discussions page",
+    "- `README.md`: the badge links follow the renamed workflow files",
+    "",
+    "| file | links |",
+    "| --- | --- |",
+    "| install.md | 9 |",
+    "| api.md | 5 |",
+    "",
+    'The <img src=x onerror="window.__officinaXss = 1"> tag in your prompt is plain text in the guide, so I left it.',
+    "Ready for review: *run the link checker again* before merging.",
+  ].join("\n");
+
   /** Your turn, compacted after its round, no prompt since. */
   const compacted = (n, project, name) =>
     sceneSession(n, project, "your_turn", "lounge", name, [prompt(30), stopAt(25), startAt(20, "compact")]);
@@ -176,7 +203,9 @@ export function sceneScenarios(now) {
         workingOn(8, P.docs, "install-guide"),
         workingOn(9, P.infra, "rotate-certs", 6, { request: true }),
         resting(10, P.web, "session-middleware"),
-        resting(11, P.docs, "link-fixes"),
+        // Its last round through the real hook: markup in the prompt, a long
+        // markdown answer kept as head and tail (story 4.19).
+        { ...resting(11, P.docs, "link-fixes"), hook: [promptPayload(markupPrompt), stopPayload(markupAnswer)] },
         arriving(12, P.billing, "audit-ledger"),
       ],
     },
