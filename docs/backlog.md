@@ -162,4 +162,5 @@ From the Epic 4 plan challenge (`docs/stories/epic-4-decisions.md` D-509):
   v0.4's rule that every wait queues at the decision office (a package to
   review queues there like a pending approval, `architecture-v0.4.md`
   section 4), and it cites Epic 4 story numbers from before D-460 and
-  D-498.
+  D-498. Done on 2026-10-29: story 6.23 reworked on v0.4's zones
+  (`docs/stories/epic-6-decisions.md` D-619).

@@ -449,7 +449,7 @@ Manual, on the workstation, recorded in research notes: AD-126's gates; the batt
 
 ### AD-126: The gates of PRD section 8, exact procedures
 
-Each records an E-entry from E26 on (E18 to E25 are Epic 5's, D-125), in FR-0's order, with the date, versions and who ran it. An agent runs the probes that need no credential and mounts no real folder; the owner runs the rest. From Git Bash, `MSYS_NO_PATHCONV=1` (section 1, item 14). Every probe removes its containers, networks, volumes and images.
+Each records an E-entry in FR-0's order, with the date, versions and who ran it; no number is reserved: each entry takes the next free one when it is recorded (stories/epic-6-decisions.md D-600; E18 is story 2.17's and Epic 5 keeps E19 to E25, stories/epic-5-decisions.md D-560). An agent runs the probes that need no credential and mounts no real folder; the owner runs the rest. From Git Bash, `MSYS_NO_PATHCONV=1` (section 1, item 14). Every probe removes its containers, networks, volumes and images.
 
 | # | Procedure | Pass | On failure |
 |---|---|---|---|
