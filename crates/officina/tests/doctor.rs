@@ -33,3 +33,52 @@ fn doctor_reports_a_bad_priority_and_threshold() {
         .unwrap_or_else(|| panic!("no floor line: {clean}"));
     assert!(floor.starts_with("[ok"), "{floor}");
 }
+
+/// Story 4.12 AC 2 (AD-176, AD-16 as amended): the printed hooks block
+/// registers the sub-agent events like the other buffered events, and the
+/// hooks check fails until the author has pasted them; doctor writes
+/// nothing under the Claude config dir.
+#[test]
+fn doctor_asks_for_the_sub_agent_events() {
+    use officina_core::events::SUBAGENT_EVENTS;
+
+    let env = TestEnv::new();
+    env.write_agents("[]");
+    let hooks_line = |stdout: &[u8]| -> String {
+        String::from_utf8_lossy(stdout)
+            .lines()
+            .find(|line| line.contains("] hooks"))
+            .unwrap_or_else(|| panic!("no hooks line"))
+            .to_owned()
+    };
+    let block = common::printed_hooks_block(&env.run(&["doctor"], b"").stdout);
+    for event in SUBAGENT_EVENTS {
+        let entry = &block["hooks"][event][0]["hooks"][0];
+        assert_eq!(entry["type"], "command", "{event}: {entry}");
+        assert_eq!(entry["timeout"], 5, "{event}: {entry}");
+        assert!(entry.get("onFailure").is_none(), "{event}: {entry}");
+        assert!(
+            entry["command"].as_str().unwrap().ends_with(" hook"),
+            "{entry}"
+        );
+    }
+
+    let settings = env.claude_config().join("settings.json");
+    let mut without = block.clone();
+    for event in SUBAGENT_EVENTS {
+        without["hooks"].as_object_mut().unwrap().remove(event);
+    }
+    std::fs::write(&settings, without.to_string()).unwrap();
+    let before = common::fingerprint(&env.claude_config());
+    let out = env.run(&["doctor"], b"");
+    let line = hooks_line(&out.stdout);
+    assert!(line.starts_with("[FAIL"), "{line}");
+    for event in SUBAGENT_EVENTS {
+        assert!(line.contains(event), "{line}");
+    }
+    assert_eq!(common::fingerprint(&env.claude_config()), before);
+
+    std::fs::write(&settings, block.to_string()).unwrap();
+    let line = hooks_line(&env.run(&["doctor"], b"").stdout);
+    assert!(line.starts_with("[ok"), "{line}");
+}
