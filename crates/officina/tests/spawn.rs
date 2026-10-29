@@ -87,6 +87,7 @@ impl Setup {
             VectorKind::ReviewCall => "review",
             VectorKind::WorkOrder => "bg",
             VectorKind::Logs => "logs",
+            VectorKind::Answer => "interactive",
         };
         self.fake(kind.code(), serde_json::json!({"mode": mode}))
     }
@@ -105,7 +106,7 @@ impl Setup {
     /// work order runs in created under it.
     fn build(&self, case: &spawn_cases::Case) -> ClaudeVector {
         let vector = case.build(Some(&self.home().to_string_lossy()));
-        if let CwdRule::Project { folder } = vector.cwd() {
+        if let CwdRule::Project { folder } | CwdRule::SessionFolder { folder } = vector.cwd() {
             std::fs::create_dir_all(folder).unwrap();
         }
         vector
@@ -301,6 +302,7 @@ fn every_kind_reaches_the_fake_claude_as_its_golden_vector() {
             VectorKind::ReviewCall => "review",
             VectorKind::WorkOrder => "bg",
             VectorKind::Logs => "logs",
+            VectorKind::Answer => "interactive",
             VectorKind::Agents | VectorKind::Version => "ok",
         };
         let fake = setup.fake(&name, serde_json::json!({"mode": mode}));
@@ -321,7 +323,9 @@ fn every_kind_reaches_the_fake_claude_as_its_golden_vector() {
             CwdRule::Inherited => std::env::current_dir().unwrap(),
             CwdRule::BinaryFolder => fake.path().parent().unwrap().to_path_buf(),
             CwdRule::Officina { dir, .. } => setup.officina_dir(*dir),
-            CwdRule::Project { folder } => PathBuf::from(folder),
+            CwdRule::Project { folder } | CwdRule::SessionFolder { folder } => {
+                PathBuf::from(folder)
+            }
         };
         assert_eq!(
             std::fs::canonicalize(&cwd).unwrap(),

@@ -13,7 +13,9 @@
 //! 5.7); the Orchestrator view emitted on change and its briefing counted
 //! from the author's last reading (story 5.8); a meeting's reads off the
 //! collector thread, a subject's meeting on its latest prompted session,
-//! and no git where only an event line names the folder (story 5.10).
+//! and no git where only an event line names the folder (story 5.10);
+//! answers sent, refused, copied, attached, confirmed or not, and
+//! journaled by their hash (story 5.11).
 //!
 //! The tests of stories 1.5 and 2.7 give the fake claude no fixture (it
 //! then lists no session). Story 3.2's run a copy of the fake configured by
@@ -33,7 +35,7 @@ use std::time::{Duration, Instant};
 
 use officina_core::board::{Board, Column, Settled};
 use officina_core::ipc::IpcErrorCode;
-use officina_core::meeting::{Changes, Delivery, Logs};
+use officina_core::meeting::{AnswerRefused, AnswerResult, Changes, Delivery, Logs};
 use officina_core::orders::briefing::Cursor;
 use officina_core::orders::card::{LaunchAnswer, LaunchRefusal};
 use officina_core::orders::view::ORCHESTRATOR_VIEW_SCHEMA;
@@ -48,11 +50,13 @@ use officina_core::registry::types::{
     SessionRecord, SettingKey, Settlement, Source, Verdict, WorkOrderRecord, WorkOrderSource,
 };
 use officina_core::registry::view::RegistryView;
+use officina_core::relay::journal::{AnswerOutcome, MeetingAnswer};
 use officina_core::relay::journal::{CatalogueApproved, JournalEntry, WorkOrderLaunched};
 use officina_core::relay::view::{RecentEvent, RelayView};
 use officina_core::spawn::VectorKind;
 use officina_core::untrusted::Untrusted;
 use officina_host::collector::{Collector, LoadedFloor, load_floor};
+use officina_host::meeting::send_answer;
 use officina_host::orders::{LaunchGrant, LaunchReport, LaunchResult};
 use officina_host::paths::Paths;
 use officina_host::registry::ingest::IngestContext;
@@ -3272,4 +3276,366 @@ fn a_folder_from_an_event_line_runs_no_git() {
     assert_eq!(view.changes, Changes::FolderUnknown);
     assert_eq!(view.delivery, Delivery::CopyOnly);
     stop(handle);
+}
+
+// ------------------------------------------------------------ the answers
+
+/// A collector on `env` whose `claude` is a copy of the fake configured by
+/// `sidecar` (the agents fixture and the log added), its answers watched
+/// for `window`.
+fn watch_answering(
+    env: &common::TestEnv,
+    mut sidecar: serde_json::Value,
+    window: Duration,
+) -> (WatchHandle, common::Emitted) {
+    sidecar["fixture"] = env.fixture().to_string_lossy().into();
+    sidecar["log"] = env.fake_log().to_string_lossy().into();
+    let fake = common::fake_claude_in(&env.root.path().join("bin"), &sidecar);
+    let collector = Collector::from_parts(paths_of(env, None), LoadedFloor::default(), Some(fake))
+        .with_credential_store(OwnedStore(Box::new(FakeStore::empty())))
+        .with_confirm_window(window);
+    let (sink, emitted) = common::sink(|_| {});
+    (spawn(collector, sink).unwrap(), emitted)
+}
+
+/// [`MEETING_SESSION`] as `claude agents` lists it in `cwd`, with `status`
+/// and `state`, a pid when `pid` is true.
+fn listed_background(cwd: &Path, status: &str, state: &str, pid: bool, now: i64) -> String {
+    let mut entry = serde_json::json!({"id": "bg0001", "sessionId": MEETING_SESSION, "name": "bump",
+        "cwd": cwd, "kind": "background", "startedAt": now - 60_000, "status": status, "state": state});
+    if pid {
+        entry["pid"] = 4200.into();
+    }
+    serde_json::Value::from(vec![entry]).to_string()
+}
+
+/// The board's key of [`MEETING_SESSION`], once the board shows it.
+fn meeting_key(emitted: &common::Emitted) -> String {
+    let board = until(&emitted.boards, |b| shows(b, MEETING_SESSION));
+    board
+        .columns
+        .all()
+        .find(|c| c.session_id.as_deref() == Some(MEETING_SESSION))
+        .unwrap()
+        .key
+        .clone()
+}
+
+/// The `claude` calls the fake logged, past `claude agents` and `--version`.
+fn answer_calls(env: &common::TestEnv) -> Vec<serde_json::Value> {
+    common::fake_claude_calls(&env.fake_log())
+        .into_iter()
+        .filter(|call| {
+            let argv = common::logged_argv(call);
+            !matches!(
+                argv.first().map(String::as_str),
+                Some("agents" | "--version")
+            )
+        })
+        .collect()
+}
+
+/// The answer lines of the journal, in order.
+fn answer_lines(env: &common::TestEnv) -> Vec<MeetingAnswer> {
+    env.journal()
+        .into_iter()
+        .filter_map(|line| match line.entry {
+            JournalEntry::MeetingAnswer(answer) => Some(answer),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Waits up to 10 s for the fake's `count`th answer call: a console's,
+/// so Windows only.
+#[cfg(windows)]
+fn answer_calls_at_least(env: &common::TestEnv, count: usize) -> Vec<serde_json::Value> {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let calls = answer_calls(env);
+        if calls.len() >= count || Instant::now() > deadline {
+            return calls;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+const ANSWER: &str = "Keep the 1.x line, then -x \"run\" the tests & commit.\nThanks";
+
+/// AD-79, AD-85, D-635: a live idle background session gets the `Answer`
+/// vector, its text one argument after `--`, from the folder `claude
+/// agents` reported for it.
+#[cfg(windows)]
+#[test]
+fn resume_live_spawns_the_answer_vector() {
+    let env = common::TestEnv::new();
+    let now = common::now_ms();
+    let work = env.root.path().join("work");
+    std::fs::create_dir_all(&work).unwrap();
+    env.write_agents(&listed_background(&work, "idle", "done", true, now));
+    let (handle, emitted) = watch_answering(
+        &env,
+        serde_json::json!({"mode": "resume"}),
+        Duration::from_secs(10),
+    );
+    let key = meeting_key(&emitted);
+    let result = send_answer(&handle.sender, &key, Delivery::ResumeLive, ANSWER).unwrap();
+    assert_eq!(result, AnswerResult::Confirmed);
+    let calls = answer_calls_at_least(&env, 1);
+    assert_eq!(calls.len(), 1, "{calls:?}");
+    assert_eq!(
+        common::logged_argv(&calls[0]),
+        ["--resume", MEETING_SESSION, "--", ANSWER]
+    );
+    assert_eq!(
+        std::fs::canonicalize(calls[0]["cwd"].as_str().unwrap()).unwrap(),
+        std::fs::canonicalize(&work).unwrap()
+    );
+    stop(handle);
+}
+
+/// AD-85, D-160: the session turning busy confirms the answer; the journal
+/// holds its two lines, spawned then confirmed.
+#[cfg(windows)]
+#[test]
+fn an_answer_is_confirmed_when_the_session_turns_busy() {
+    let env = common::TestEnv::new();
+    let now = common::now_ms();
+    let work = env.root.path().join("work");
+    std::fs::create_dir_all(&work).unwrap();
+    env.write_agents(&listed_background(&work, "idle", "done", true, now));
+    let (handle, emitted) = watch_answering(
+        &env,
+        serde_json::json!({"mode": "resume"}),
+        Duration::from_secs(10),
+    );
+    let key = meeting_key(&emitted);
+    assert_eq!(
+        send_answer(&handle.sender, &key, Delivery::ResumeLive, ANSWER).unwrap(),
+        AnswerResult::Confirmed
+    );
+    let outcomes: Vec<AnswerOutcome> = answer_lines(&env).iter().map(|l| l.outcome).collect();
+    assert_eq!(outcomes, [AnswerOutcome::Spawned, AnswerOutcome::Confirmed]);
+    stop(handle);
+}
+
+/// D-160, review F37: a turn of under two seconds is still seen, the
+/// collector refreshing at its minimum spawn interval while it watches.
+#[cfg(windows)]
+#[test]
+fn a_two_second_turn_is_confirmed() {
+    let env = common::TestEnv::new();
+    let now = common::now_ms();
+    let work = env.root.path().join("work");
+    std::fs::create_dir_all(&work).unwrap();
+    env.write_agents(&listed_background(&work, "idle", "done", true, now));
+    let (handle, emitted) = watch_answering(
+        &env,
+        serde_json::json!({"mode": "resume", "turn_ms": 1_500}),
+        Duration::from_secs(10),
+    );
+    let key = meeting_key(&emitted);
+    assert_eq!(
+        send_answer(&handle.sender, &key, Delivery::ResumeLive, ANSWER).unwrap(),
+        AnswerResult::Confirmed
+    );
+    stop(handle);
+}
+
+/// AD-85: a session never seen busy within the window leaves the answer
+/// not confirmed, its second line saying so; the window
+/// (`CONFIRM_WINDOW_MS` in the window) is shortened for the test, the
+/// rule is the same.
+#[cfg(windows)]
+#[test]
+fn an_answer_is_not_confirmed_after_30_s() {
+    let env = common::TestEnv::new();
+    let now = common::now_ms();
+    let work = env.root.path().join("work");
+    std::fs::create_dir_all(&work).unwrap();
+    env.write_agents(&listed_background(&work, "idle", "done", true, now));
+    let (handle, emitted) = watch_answering(
+        &env,
+        serde_json::json!({"mode": "ok"}),
+        Duration::from_secs(2),
+    );
+    let key = meeting_key(&emitted);
+    let started = Instant::now();
+    assert_eq!(
+        send_answer(&handle.sender, &key, Delivery::ResumeLive, ANSWER).unwrap(),
+        AnswerResult::NotConfirmed
+    );
+    assert!(started.elapsed() >= Duration::from_secs(2));
+    let outcomes: Vec<AnswerOutcome> = answer_lines(&env).iter().map(|l| l.outcome).collect();
+    assert_eq!(
+        outcomes,
+        [AnswerOutcome::Spawned, AnswerOutcome::NotConfirmed]
+    );
+    stop(handle);
+}
+
+/// D-63's pattern: the delivery the panel showed is checked against the
+/// latest board; a session that started waiting meanwhile refuses the
+/// answer `state_changed`, journaled, nothing spawned.
+#[test]
+fn a_changed_state_refuses_the_answer() {
+    let env = common::TestEnv::new();
+    let now = common::now_ms();
+    let work = env.root.path().join("work");
+    std::fs::create_dir_all(&work).unwrap();
+    env.write_agents(&listed_background(&work, "waiting", "blocked", true, now));
+    let (handle, emitted) = watch_answering(
+        &env,
+        serde_json::json!({"mode": "resume"}),
+        Duration::from_secs(10),
+    );
+    let key = meeting_key(&emitted);
+    assert_eq!(
+        send_answer(&handle.sender, &key, Delivery::ResumeLive, ANSWER).unwrap(),
+        AnswerResult::Refused(AnswerRefused::StateChanged)
+    );
+    assert!(answer_calls(&env).is_empty());
+    let lines = answer_lines(&env);
+    assert_eq!(lines.len(), 1);
+    assert_eq!(
+        (lines[0].outcome, lines[0].delivery),
+        (AnswerOutcome::Refused, Delivery::CopyAndAttach)
+    );
+    stop(handle);
+}
+
+/// AD-85: a session waiting on a question gets `claude attach`, and the
+/// answer reaches no command line.
+#[cfg(windows)]
+#[test]
+fn copy_and_attach_puts_no_text_on_a_command_line() {
+    let env = common::TestEnv::new();
+    let now = common::now_ms();
+    let work = env.root.path().join("work");
+    std::fs::create_dir_all(&work).unwrap();
+    env.write_agents(&listed_background(&work, "waiting", "blocked", true, now));
+    let (handle, emitted) = watch_answering(
+        &env,
+        serde_json::json!({"mode": "ok"}),
+        Duration::from_secs(10),
+    );
+    let key = meeting_key(&emitted);
+    assert_eq!(
+        send_answer(&handle.sender, &key, Delivery::CopyAndAttach, ANSWER).unwrap(),
+        AnswerResult::Attached
+    );
+    let calls = answer_calls_at_least(&env, 1);
+    assert_eq!(calls.len(), 1, "{calls:?}");
+    assert_eq!(common::logged_argv(&calls[0]), ["attach", "bg0001"]);
+    for call in common::fake_claude_calls(&env.fake_log()) {
+        assert!(
+            common::logged_argv(&call)
+                .iter()
+                .all(|arg| !arg.contains("1.x line")),
+            "{call}"
+        );
+    }
+    let outcomes: Vec<AnswerOutcome> = answer_lines(&env).iter().map(|l| l.outcome).collect();
+    assert_eq!(
+        outcomes,
+        [AnswerOutcome::Spawned],
+        "an attach gets no second line"
+    );
+    stop(handle);
+}
+
+/// D-168: an ended session `claude agents` never reported a folder for is
+/// copy only: nothing is spawned, the copy is journaled.
+#[test]
+fn copy_only_spawns_nothing() {
+    let env = common::TestEnv::new();
+    let now = common::now_ms();
+    for (event, at) in [
+        ("UserPromptSubmit", now - 3_602_000),
+        ("Stop", now - 3_601_000),
+    ] {
+        hook_line(
+            &env,
+            serde_json::json!({"hook_event_name": event, "session_id": "s-ended", "cwd": "C:/work/api",
+                "prompt": "draft"}),
+            at,
+        );
+    }
+    let (handle, emitted) = watch_answering(
+        &env,
+        serde_json::json!({"mode": "resume"}),
+        Duration::from_secs(10),
+    );
+    until(&emitted.boards, |b| shows(b, "s-ended"));
+    assert_eq!(
+        send_answer(&handle.sender, "sid:s-ended", Delivery::CopyOnly, ANSWER).unwrap(),
+        AnswerResult::Copied
+    );
+    assert!(answer_calls(&env).is_empty());
+    let outcomes: Vec<AnswerOutcome> = answer_lines(&env).iter().map(|l| l.outcome).collect();
+    assert_eq!(outcomes, [AnswerOutcome::Copied]);
+    stop(handle);
+}
+
+/// D-168: an ended background session resumes in the folder `claude
+/// agents` reported for it.
+#[cfg(windows)]
+#[test]
+fn resume_ended_runs_in_the_agents_folder() {
+    let env = common::TestEnv::new();
+    let now = common::now_ms();
+    let work = env.root.path().join("ended-work");
+    std::fs::create_dir_all(&work).unwrap();
+    env.write_agents(&listed_background(&work, "idle", "stopped", false, now));
+    let (handle, emitted) = watch_answering(
+        &env,
+        serde_json::json!({"mode": "resume"}),
+        Duration::from_secs(10),
+    );
+    let key = meeting_key(&emitted);
+    assert_eq!(
+        send_answer(&handle.sender, &key, Delivery::ResumeEnded, ANSWER).unwrap(),
+        AnswerResult::Confirmed
+    );
+    let calls = answer_calls_at_least(&env, 1);
+    assert_eq!(common::logged_argv(&calls[0])[0], "--resume");
+    assert_eq!(
+        std::fs::canonicalize(calls[0]["cwd"].as_str().unwrap()).unwrap(),
+        std::fs::canonicalize(&work).unwrap()
+    );
+    stop(handle);
+}
+
+/// AD-85: the journal keeps the answer's SHA-256, never its bytes.
+#[test]
+fn the_journal_holds_the_hash_never_the_text() {
+    let env = common::TestEnv::new();
+    let now = common::now_ms();
+    let work = env.root.path().join("work");
+    std::fs::create_dir_all(&work).unwrap();
+    env.write_agents(&listed_background(&work, "waiting", "blocked", true, now));
+    let (handle, emitted) = watch_answering(
+        &env,
+        serde_json::json!({"mode": "resume"}),
+        Duration::from_secs(10),
+    );
+    let key = meeting_key(&emitted);
+    // Refused for its changed state, the line is still written.
+    let _ = send_answer(&handle.sender, &key, Delivery::ResumeLive, ANSWER).unwrap();
+    stop(handle);
+    let lines = answer_lines(&env);
+    assert_eq!(lines.len(), 1);
+    assert_eq!(
+        lines[0].answer_sha256,
+        officina_core::sha256_hex(ANSWER.as_bytes())
+    );
+    let mut journal = Vec::new();
+    for entry in std::fs::read_dir(env.relay_home().journal_dir()).unwrap() {
+        journal.extend(std::fs::read(entry.unwrap().path()).unwrap());
+    }
+    let text = String::from_utf8_lossy(&journal);
+    assert!(text.contains("meeting_answer"), "{text}");
+    for fragment in ANSWER.split('\n') {
+        assert!(!text.contains(fragment), "{fragment:?} reached the journal");
+    }
 }

@@ -79,7 +79,7 @@ pub const AUTHOR_WAIT: Duration = Duration::from_secs(10);
 pub const AUTHOR_HEADROOM: Duration = Duration::from_secs(1);
 
 /// What an author request asks of the registry (AD-54).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum AuthorCommand {
     /// The archived subjects, read on the collector's connection, so the
     /// window holds one connection.
@@ -134,6 +134,18 @@ pub enum AuthorCommand {
     /// (D-138): what the collector holds for its meeting, read nowhere
     /// else.
     OpenMeeting(String),
+    /// Send on the meeting's composer (AD-85): the delivery the panel
+    /// showed and the author's text.
+    SendAnswer {
+        key: String,
+        expected: officina_core::meeting::Delivery,
+        text: String,
+    },
+    /// How a granted answer's start went. Like a launch's outcome it
+    /// carries no deadline and is never dropped; for a resume, it is
+    /// answered once the session is confirmed or its window passed
+    /// (D-135, D-139, review F14).
+    AnswerOutcome(Box<crate::meeting::AnswerReport>),
 }
 
 impl AuthorAnswer {
@@ -191,6 +203,22 @@ impl AuthorAnswer {
         }
     }
 
+    /// The answer's grant, for `SendAnswer`'s answer.
+    pub fn into_answer_grant(self) -> Result<crate::meeting::AnswerGrant, IpcError> {
+        match self {
+            AuthorAnswer::AnswerGrant(grant) => Ok(*grant),
+            other => Err(other.unexpected()),
+        }
+    }
+
+    /// How an answer went, for `AnswerOutcome`'s answer.
+    pub fn into_answered(self) -> Result<officina_core::meeting::AnswerResult, IpcError> {
+        match self {
+            AuthorAnswer::Answered(result) => Ok(result),
+            other => Err(other.unexpected()),
+        }
+    }
+
     /// What the collector holds for a meeting, for `OpenMeeting`'s
     /// answer.
     pub fn into_meeting(self) -> Result<MeetingGrant, IpcError> {
@@ -238,6 +266,8 @@ pub enum AuthorAnswer {
     Launch(LaunchGrant),
     Start(StartGrant),
     Meeting(Box<MeetingGrant>),
+    AnswerGrant(Box<crate::meeting::AnswerGrant>),
+    Answered(officina_core::meeting::AnswerResult),
 }
 
 /// The collector's answer, or why there is none to give.
@@ -273,7 +303,9 @@ impl AuthorRequest {
     fn expired(&self, now: Instant) -> bool {
         !matches!(
             self.command,
-            AuthorCommand::LaunchOutcome(_) | AuthorCommand::OrchestratorStarted(_)
+            AuthorCommand::LaunchOutcome(_)
+                | AuthorCommand::OrchestratorStarted(_)
+                | AuthorCommand::AnswerOutcome(_)
         ) && now + AUTHOR_HEADROOM >= self.deadline
     }
 }
@@ -897,6 +929,7 @@ fn run<E: Emit>(
     // D-144: the pid the newest spawned start kept, read back, so a Start
     // after a window restart still finds the session it started.
     let mut keeper = OrchestratorKeeper::new(registry.kept_orchestrator());
+    let mut confirmations: Vec<crate::meeting::PendingConfirmation> = Vec::new();
 
     loop {
         registry.set_model_env(model_env(collector));
@@ -909,6 +942,7 @@ fn run<E: Emit>(
                 let held = Held {
                     cards: &mut cards,
                     keeper: &mut keeper,
+                    confirmations: &mut confirmations,
                 };
                 if answer_author(collector, &mut registry, held, request, outputs) {
                     plan.relay_files_changed();
@@ -931,6 +965,11 @@ fn run<E: Emit>(
         // D-136: a launch whose outcome never came back reads `unknown`
         // within a tick of its expiry, whatever else is due.
         registry.expire_launching(now_ms());
+        // An answer awaiting its confirmation refreshes the session list at
+        // the minimum spawn interval, not the safety poll (D-160).
+        if !confirmations.is_empty() {
+            plan.refresh_requested();
+        }
         let due = plan.due();
         // Before the session list and the board read anything (D-78).
         if due.ingest {
@@ -944,6 +983,9 @@ fn run<E: Emit>(
             if due.contract {
                 collector.refresh_contract(now_ms());
             }
+        }
+        if !confirmations.is_empty() {
+            crate::meeting::settle_confirmations(collector, &mut confirmations, now_ms());
         }
         if due.retention {
             hourly_pass(collector, &mut registry);
@@ -1019,6 +1061,8 @@ fn rebuild_and_publish<E: Emit>(
 struct Held<'a> {
     cards: &'a mut CardStore,
     keeper: &'a mut OrchestratorKeeper,
+    /// The resumed answers watched for `busy` (AD-85, D-160).
+    confirmations: &'a mut Vec<crate::meeting::PendingConfirmation>,
 }
 
 /// Runs one author request on the registry's writer (AD-38), unless its
@@ -1033,7 +1077,11 @@ fn answer_author<E: Emit>(
     request: AuthorRequest,
     outputs: &mut Outputs<E>,
 ) -> bool {
-    let Held { cards, keeper } = held;
+    let Held {
+        cards,
+        keeper,
+        confirmations,
+    } = held;
     if request.expired(Instant::now()) {
         return false;
     }
@@ -1051,6 +1099,8 @@ fn answer_author<E: Emit>(
         AuthorCommand::ListArchived
             | AuthorCommand::ListDiscarded
             | AuthorCommand::OpenMeeting(_)
+            | AuthorCommand::SendAnswer { .. }
+            | AuthorCommand::AnswerOutcome(_)
             | AuthorCommand::IssueCard(_)
             | AuthorCommand::EditCard { .. }
     );
@@ -1145,6 +1195,34 @@ fn answer_author<E: Emit>(
             let board = outputs.board.current();
             crate::meeting::grant(collector, registry, board.as_ref(), &key)
                 .map(|grant| AuthorAnswer::Meeting(Box::new(grant)))
+        }
+        AuthorCommand::SendAnswer {
+            key,
+            expected,
+            text,
+        } => {
+            let board = outputs.board.current();
+            crate::meeting::grant_answer(
+                collector,
+                registry,
+                board.as_ref(),
+                &key,
+                expected,
+                &text,
+                now,
+            )
+            .map(|grant| AuthorAnswer::AnswerGrant(Box::new(grant)))
+        }
+        // Answered once the answer settles: at once, or, for a resume,
+        // once the session was seen busy or its window passed (AD-85).
+        AuthorCommand::AnswerOutcome(report) => {
+            let window = collector.confirm_window();
+            if let Some(pending) =
+                crate::meeting::record_answer(collector, &report, request.reply, window, now)
+            {
+                confirmations.push(pending);
+            }
+            return false;
         }
     };
     // Every command reports the registry's state, a failure included

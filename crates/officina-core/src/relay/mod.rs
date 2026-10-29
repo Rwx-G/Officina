@@ -115,7 +115,7 @@ mod tests {
     };
     use super::gate::DenyKind;
     use super::http::HttpMethod;
-    use super::journal::{GateFault, JournalKind, RefusalReason, RunOutcome};
+    use super::journal::{AnswerOutcome, GateFault, JournalKind, RefusalReason, RunOutcome};
     use super::params::ValueRefusal;
     use super::record::{AnomalyKind, Verdict};
     use super::template::{ModelAlias, TemplateUnavailable};
@@ -139,7 +139,7 @@ mod tests {
     /// of this crate without a line here.
     #[test]
     fn code_equals_the_serde_name_for_every_variant() {
-        let checked: [fn(); 31] = [
+        let checked: [fn(); 32] = [
             || assert_codes(EscalationCause::ALL, EscalationCause::code),
             || assert_codes(AutoMode::ALL, AutoMode::code),
             || assert_codes(AutoOffReason::ALL, AutoOffReason::code),
@@ -163,6 +163,7 @@ mod tests {
             || assert_codes(HttpMethod::ALL, HttpMethod::code),
             || assert_codes(GateFault::ALL, GateFault::code),
             || assert_codes(JournalKind::ALL, JournalKind::code),
+            || assert_codes(AnswerOutcome::ALL, AnswerOutcome::code),
             || assert_codes(RefusalReason::ALL, RefusalReason::code),
             || assert_codes(RunOutcome::ALL, RunOutcome::code),
             || assert_codes(ValueRefusal::ALL, ValueRefusal::code),

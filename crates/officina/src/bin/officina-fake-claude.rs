@@ -42,6 +42,10 @@
 //!   (never a typed string); any other call prints the fixture.
 //!   `logs-hang` sleeps `hang_ms` on `logs <id>` and prints the fixture
 //!   for any other call, for a meeting whose logs take their deadline.
+//!   `resume` (story 5.11, D-129) answers `--resume <session id>` by
+//!   marking that session `busy` in the fixture, as a delivered answer
+//!   makes it, and, with `turn_ms` set, `idle` again that long after; any
+//!   other call prints the fixture.
 //! - `FAKE_CLAUDE_HANG_MS` (`hang_ms`): how long `hang` sleeps, 60 s by
 //!   default.
 //! - `FAKE_CLAUDE_VERSION` (`version`): answer to `--version`.
@@ -313,6 +317,44 @@ fn logs_screen() -> String {
     .concat()
 }
 
+/// Sets the fixture's entry whose `sessionId` is `session` to `status` and
+/// `state`, as `claude agents` would list it.
+fn set_status(session: &str, status: &str, state: &str) {
+    let Some(fixture) = setting("fixture") else {
+        return;
+    };
+    let mut entries: Vec<serde_json::Value> = std::fs::read(&fixture)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .unwrap_or_default();
+    for entry in &mut entries {
+        if entry["sessionId"] == session {
+            entry["status"] = status.into();
+            entry["state"] = state.into();
+        }
+    }
+    let _ = std::fs::write(&fixture, serde_json::Value::from(entries).to_string());
+}
+
+/// A `--resume <session id>` call in mode `resume` (story 5.11, D-129):
+/// the session turns `busy` in the fixture, as a delivered answer makes
+/// it; with `turn_ms` set, it turns back `idle` that long after, a short
+/// turn the confirmation must still see.
+fn resume(args: &[String]) {
+    let Some(session) = args
+        .iter()
+        .position(|a| a == "--resume")
+        .and_then(|at| args.get(at + 1))
+    else {
+        return;
+    };
+    set_status(session, "busy", "working");
+    if let Some(ms) = setting("turn_ms").and_then(|v| v.parse().ok()) {
+        std::thread::sleep(Duration::from_millis(ms));
+        set_status(session, "idle", "done");
+    }
+}
+
 /// What `claude --bg` prints in a folder never trusted (E19).
 const NOT_TRUSTED: &str = "Workspace not trusted. Run `claude` in this folder once and accept the trust prompt, then retry.";
 
@@ -539,6 +581,7 @@ fn main() {
             }
         }
         "logs" if args.first().map(String::as_str) == Some("logs") => print!("{}", logs_screen()),
+        "resume" if args.iter().any(|a| a == "--resume") => resume(&args),
         "logs-hang" if args.first().map(String::as_str) == Some("logs") => {
             let ms = setting("hang_ms")
                 .and_then(|v| v.parse().ok())

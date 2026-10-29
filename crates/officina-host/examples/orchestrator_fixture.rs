@@ -212,6 +212,8 @@ fn print_meeting(
     if !collector.refresh_agents(now_ms) {
         return Err("claude agents did not answer".to_owned());
     }
+    // The version decides whether a live answer resumes (D-139).
+    collector.refresh_contract(now_ms);
     let mut registry = WindowRegistry::open(home, &[], now_ms);
     let grant =
         meeting::grant(&collector, &mut registry, board, &meeting.key).map_err(|e| e.message)?;

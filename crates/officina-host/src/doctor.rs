@@ -738,6 +738,9 @@ pub fn run_with(collector: &Collector, exe: &Path, permissions: bool) -> Vec<Che
     if let Some(version) = version.as_deref().filter(|_| gate) {
         checks.push(check_gate_failure_mode(version));
     }
+    if let Some(answers) = version.as_deref().and_then(check_answers) {
+        checks.push(answers);
+    }
     checks.extend(check_hook_activity(&paths.events_dir(), now));
     let onedrive_roots = onedrive_roots_from_env();
     let (events, _) = read_recent_events(&paths.events_dir(), now);
@@ -1175,6 +1178,26 @@ pub fn check_gate_failure_mode(version: &str) -> Check {
             ),
         ),
     }
+}
+
+/// The warning of a Claude Code older than
+/// [`officina_core::meeting::RESUME_PROMPT_MIN_VERSION`], or one whose
+/// version doctor cannot read (FR-15, AD-94 part A, D-139): the meeting's
+/// answers to live background sessions are copied and `claude attach`
+/// opens instead of a resume. `None` when the version resumes with a
+/// prompt.
+pub fn check_answers(version: &str) -> Option<Check> {
+    if officina_core::meeting::resumes_with_a_prompt(Some(version)) {
+        return None;
+    }
+    let [major, minor, patch] = officina_core::meeting::RESUME_PROMPT_MIN_VERSION;
+    Some(check(
+        Level::Warn,
+        "answers",
+        format!(
+            "{version} predates {major}.{minor}.{patch}, whose `claude --resume` sends a prompt to a running background session: answers to live background sessions fall back to copy and attach. Update Claude Code"
+        ),
+    ))
 }
 
 /// The last hook event of the day, plus unparsable lines when there are any.
@@ -2991,6 +3014,26 @@ mod tests {
     /// Story 2.17 AC 3, D-452: a Claude Code older than the first version
     /// honouring `onFailure` fails, that version and later pass, a version
     /// doctor cannot read warns.
+    /// AD-94 part A, FR-15: below the version whose resume sends a prompt,
+    /// doctor warns that answers to background sessions fall back to copy
+    /// and attach; from it on, no line.
+    #[test]
+    fn an_old_claude_warns_about_answers() {
+        let [major, minor, patch] = officina_core::meeting::RESUME_PROMPT_MIN_VERSION;
+        let old = check_answers(&format!("{major}.{minor}.{} (Claude Code)", patch - 1)).unwrap();
+        assert_eq!(old.level, Level::Warn);
+        assert!(old.detail.contains("copy and attach"), "{}", old.detail);
+        assert!(check_answers("not a version").is_some());
+        assert_eq!(
+            check_answers(&format!("{major}.{minor}.{patch} (Claude Code)")),
+            None
+        );
+        assert_eq!(
+            check_answers(&format!("{major}.{}.0 (Claude Code)", minor + 1)),
+            None
+        );
+    }
+
     #[test]
     fn a_claude_code_without_on_failure_fails() {
         let [major, minor, patch] = ON_FAILURE_SINCE;

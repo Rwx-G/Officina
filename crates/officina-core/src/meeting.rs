@@ -185,13 +185,15 @@ pub fn latest_prompted(records: &[SessionRecord], subject: i64) -> Option<&str> 
         .map(|(_, r)| r.session_id.as_str())
 }
 
-/// What [`delivery`] decides from: the card, and the folder `claude
-/// agents` reported for its session, if any (D-168). A folder an event
-/// line names is never one: any session can append event lines.
+/// What [`delivery`] decides from: the card, the folder `claude agents`
+/// reported for its session, if any (D-168), and the `claude` version the
+/// collector last read (D-139). A folder an event line names is never
+/// one: any session can append event lines.
 #[derive(Debug, Clone, Copy)]
 pub struct MeetingTarget<'a> {
     pub card: &'a MeetingCard,
     pub agents_folder: Option<&'a str>,
+    pub claude_version: Option<&'a str>,
 }
 
 /// True when `card` is a background session.
@@ -224,7 +226,8 @@ fn waits(card: &MeetingCard) -> bool {
     card.column == Column::NeedsYou || card.waiting_for.is_some()
 }
 
-/// How an answer would reach the session of `target` (AD-84, D-168).
+/// How an answer would reach the session of `target` (AD-84, AD-85,
+/// D-139, D-168, D-635).
 ///
 /// ```
 /// use officina_core::agents::parse_agents;
@@ -238,7 +241,7 @@ fn waits(card: &MeetingCard) -> bool {
 /// };
 /// let board = build_board(&input, 10);
 /// let card = MeetingCard::from(&board.columns.your_turn[0]);
-/// let target = MeetingTarget { card: &card, agents_folder: None };
+/// let target = MeetingTarget { card: &card, agents_folder: None, claude_version: None };
 /// assert_eq!(delivery(&target), Delivery::FocusOnly);
 /// ```
 pub fn delivery(target: &MeetingTarget<'_>) -> Delivery {
@@ -246,7 +249,18 @@ pub fn delivery(target: &MeetingTarget<'_>) -> Delivery {
     let ended = has_ended(card);
     match (is_background(card), ended) {
         (true, false) if waits(card) => Delivery::CopyAndAttach,
-        (true, false) => Delivery::ResumeLive,
+        // A live idle background session takes the answer as its next
+        // turn only where gate 3 found it delivered: on a recent enough
+        // `claude` (D-139), from the folder `claude agents` reported
+        // (D-635); else the answer is copied and attach opens (FR-15).
+        (true, false)
+            if RESUME_LIVE_DELIVERS
+                && resumes_with_a_prompt(target.claude_version)
+                && target.agents_folder.is_some() =>
+        {
+            Delivery::ResumeLive
+        }
+        (true, false) => Delivery::CopyAndAttach,
         (false, false) => Delivery::FocusOnly,
         (_, true) if target.agents_folder.is_some() => Delivery::ResumeEnded,
         (true, true) => Delivery::CopyAndAttach,
@@ -308,6 +322,9 @@ pub struct MeetingView {
     /// `claude logs`, for a background session only.
     pub logs: Option<Logs>,
     pub delivery: Delivery,
+    /// The most characters an answer holds ([`ANSWER_MAX_CHARS`]), for
+    /// the composer's counter.
+    pub answer_max_chars: u32,
     #[cfg_attr(feature = "ts", ts(type = "number"))]
     pub generated_at_ms: i64,
 }
@@ -465,6 +482,156 @@ pub struct LogsText {
     pub first_error_line: Option<u32>,
 }
 
+// ---------------------------------------------------------------- answers
+
+/// The most characters an answer holds (FR-6).
+pub const ANSWER_MAX_CHARS: usize = 4_000;
+
+/// The first Claude Code version whose `claude --resume` sends a prompt to
+/// a live background session as its next turn (S3, FR-15, D-139): below
+/// it, or when the version is unknown, a live idle background session's
+/// answer is copied and `claude attach` opens.
+pub const RESUME_PROMPT_MIN_VERSION: [u32; 3] = [2, 1, 285];
+
+/// What gate 3 recorded (research notes E21, D-127): a resume delivers the
+/// answer to a live background session as its next turn, from the
+/// session's folder. Were it false, [`delivery`] would never return
+/// [`Delivery::ResumeLive`].
+pub const RESUME_LIVE_DELIVERS: bool = true;
+
+/// How long after an answer's spawn the collector watches the session for
+/// `busy`, its confirmation (AD-85, D-160).
+pub const CONFIRM_WINDOW_MS: u64 = 30_000;
+
+closed_enum! {
+    #[serde(rename_all = "snake_case")]
+    /// Why an answer's text is refused (AD-85, FR-6). E20 found the text
+    /// delivered byte for byte after `--`, so a leading `-` is allowed
+    /// (D-127).
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+    #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+    pub enum AnswerRefusal {
+        /// No character, or whitespace only.
+        Empty,
+        /// Over [`ANSWER_MAX_CHARS`] characters.
+        TooLong,
+        /// A control character other than newline and tab.
+        ControlCharacter,
+        /// A character of `FORBIDDEN_FORMAT_RANGES`: bidi or invisible
+        /// formatting (AD-30).
+        FormatCharacter,
+        /// Starts, after leading whitespace, with `/`: Claude Code would
+        /// read a command (S3).
+        LeadingSlash,
+        /// Starts, after leading whitespace, with `!`: Claude Code would
+        /// run a shell command (S3).
+        LeadingBang,
+    }
+}
+
+/// The author's answer to a session, validated (AD-85, FR-6): the only
+/// text the `Answer` vector puts on a command line.
+#[derive(Clone, PartialEq, Eq)]
+pub struct Answer(String);
+
+impl std::fmt::Debug for Answer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Answer({} chars)", self.0.chars().count())
+    }
+}
+
+impl Answer {
+    /// `text` as an answer, or the first rule it breaks, in the order of
+    /// [`AnswerRefusal`].
+    ///
+    /// ```
+    /// use officina_core::meeting::{Answer, AnswerRefusal};
+    /// assert!(Answer::parse("Keep the 1.x line.").is_ok());
+    /// assert_eq!(Answer::parse("  /clear").unwrap_err(), AnswerRefusal::LeadingSlash);
+    /// ```
+    pub fn parse(text: &str) -> Result<Answer, AnswerRefusal> {
+        if text.trim().is_empty() {
+            return Err(AnswerRefusal::Empty);
+        }
+        if text.chars().count() > ANSWER_MAX_CHARS {
+            return Err(AnswerRefusal::TooLong);
+        }
+        if text
+            .chars()
+            .any(|c| c.is_control() && c != '\n' && c != '\t')
+        {
+            return Err(AnswerRefusal::ControlCharacter);
+        }
+        if text.chars().any(crate::relay::params::is_forbidden_format) {
+            return Err(AnswerRefusal::FormatCharacter);
+        }
+        match text.trim_start().chars().next() {
+            Some('/') => Err(AnswerRefusal::LeadingSlash),
+            Some('!') => Err(AnswerRefusal::LeadingBang),
+            _ => Ok(Answer(text.to_owned())),
+        }
+    }
+
+    /// The text, for the `Answer` vector only.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// SHA-256 of the text, lowercase hex: what the journal keeps of it.
+    pub fn sha256(&self) -> String {
+        crate::sha256_hex(self.0.as_bytes())
+    }
+}
+
+/// True when `version`, as `claude --version` prints it, sends a resumed
+/// prompt to a live background session; false when older or unreadable.
+///
+/// ```
+/// use officina_core::meeting::resumes_with_a_prompt;
+/// assert!(resumes_with_a_prompt(Some("2.1.312 (Claude Code)")));
+/// assert!(!resumes_with_a_prompt(Some("2.1.284 (Claude Code)")));
+/// assert!(!resumes_with_a_prompt(None));
+/// ```
+pub fn resumes_with_a_prompt(version: Option<&str>) -> bool {
+    version
+        .and_then(crate::contract::claude_version)
+        .is_some_and(|v| v >= RESUME_PROMPT_MIN_VERSION)
+}
+
+/// Why `send_answer` sent nothing (AD-85).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(tag = "kind", content = "detail", rename_all = "snake_case")]
+pub enum AnswerRefused {
+    /// The delivery the latest board gives differs from the one shown
+    /// (D-63's pattern): the panel reads the meeting again.
+    StateChanged,
+    /// The text breaks a rule.
+    Answer(AnswerRefusal),
+    /// A live interactive session: Focus only, no composer.
+    NoComposer,
+    /// The session is no longer on the board, nor in the registry.
+    UnknownSession,
+}
+
+/// How an answer went (AD-85): what the window shows.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(tag = "outcome", content = "value", rename_all = "snake_case")]
+pub enum AnswerResult {
+    Refused(AnswerRefused),
+    /// Copied only: nothing was started (D-168).
+    Copied,
+    /// Copied, and `claude attach` opened.
+    Attached,
+    /// Resumed, and the session turned busy within the window.
+    Confirmed,
+    /// Resumed, but the session was not seen busy within the window.
+    NotConfirmed,
+    /// The console could not start, with why.
+    SpawnFailed(String),
+}
+
 // ---------------------------------------------------------------- inputs
 
 /// What `git` printed on Receive, as the host read it (AD-84, D-154).
@@ -553,6 +720,7 @@ pub fn build(input: &MeetingInput<'_>) -> MeetingView {
         changes: changes_of(&input.git),
         logs: is_background(card).then(|| logs_of(input.logs.as_ref())),
         delivery: input.delivery,
+        answer_max_chars: u32::try_from(ANSWER_MAX_CHARS).unwrap_or(u32::MAX),
         generated_at_ms: input.now_ms,
     }
 }
@@ -887,6 +1055,9 @@ mod tests {
     use crate::relay::journal::{RefusalReason, Refused, RunFinished, RunStarted};
 
     const NOW: i64 = 1_793_102_400_000;
+
+    /// A `claude` that resumes with a prompt.
+    const NEW_CLAUDE: &str = "2.1.312 (Claude Code)";
 
     /// The one card of a board built from `agents_json`.
     fn card_of(agents_json: &str) -> MeetingCard {
@@ -1261,12 +1432,12 @@ mod tests {
         let cases: [(MeetingCard, Option<&str>, Delivery); 9] = [
             (
                 background("idle", "done", r#","pid":7"#),
-                None,
+                folder,
                 Delivery::ResumeLive,
             ),
             (
                 background("busy", "working", r#","pid":7"#),
-                None,
+                folder,
                 Delivery::ResumeLive,
             ),
             (
@@ -1303,6 +1474,7 @@ mod tests {
             let target = MeetingTarget {
                 card,
                 agents_folder: *agents_folder,
+                claude_version: Some(NEW_CLAUDE),
             };
             assert_eq!(delivery(&target), *expected, "{}", card.key);
         }
@@ -1325,7 +1497,8 @@ mod tests {
         assert!(!has_ended(&live));
         let target = MeetingTarget {
             card: &live,
-            agents_folder: None,
+            agents_folder: Some("C:/path/to/repo"),
+            claude_version: Some(NEW_CLAUDE),
         };
         assert_eq!(delivery(&target), Delivery::ResumeLive);
         let gone = background("idle", "done", "");
@@ -1343,6 +1516,7 @@ mod tests {
             let target = MeetingTarget {
                 card: &card,
                 agents_folder: None,
+                claude_version: Some(NEW_CLAUDE),
             };
             let found = delivery(&target);
             assert!(
@@ -1357,7 +1531,7 @@ mod tests {
     fn every_delivery_has_a_case() {
         let folder = Some("C:/path/to/repo");
         let reached: Vec<Delivery> = [
-            (background("idle", "done", r#","pid":7"#), None),
+            (background("idle", "done", r#","pid":7"#), folder),
             (background("waiting", "blocked", r#","pid":7"#), None),
             (background("idle", "stopped", ""), folder),
             (ended_interactive(), None),
@@ -1371,11 +1545,152 @@ mod tests {
             delivery(&MeetingTarget {
                 card,
                 agents_folder: *agents_folder,
+                claude_version: Some(NEW_CLAUDE),
             })
         })
         .collect();
         for variant in Delivery::ALL {
             assert!(reached.contains(variant), "{variant:?} has no case");
         }
+    }
+
+    #[test]
+    fn answer_bounds() {
+        assert_eq!(Answer::parse("").unwrap_err(), AnswerRefusal::Empty);
+        assert_eq!(Answer::parse(" \n\t ").unwrap_err(), AnswerRefusal::Empty);
+        assert!(Answer::parse("y").is_ok());
+        let longest = "é".repeat(ANSWER_MAX_CHARS);
+        assert!(
+            Answer::parse(&longest).is_ok(),
+            "the limit counts characters"
+        );
+        let over = format!("{longest}a");
+        assert_eq!(Answer::parse(&over).unwrap_err(), AnswerRefusal::TooLong);
+        // A leading dash stays allowed: E20's `--resume` cases passed.
+        assert!(Answer::parse("-x keep it").is_ok());
+        assert!(Answer::parse("line one\n\tline two").is_ok());
+    }
+
+    #[test]
+    fn answer_refuses_controls_and_format_characters() {
+        for c in ('\u{0}'..='\u{9f}').filter(|c| c.is_control() && *c != '\n' && *c != '\t') {
+            assert_eq!(
+                Answer::parse(&format!("ok {c} ok")).unwrap_err(),
+                AnswerRefusal::ControlCharacter,
+                "{:?}",
+                c
+            );
+        }
+        for range in &crate::relay::params::FORBIDDEN_FORMAT_RANGES {
+            for c in [*range.start(), *range.end()] {
+                let found = Answer::parse(&format!("ok {c} ok")).unwrap_err();
+                // A format character that is also a control is refused as
+                // one or the other, never accepted.
+                assert!(
+                    matches!(
+                        found,
+                        AnswerRefusal::FormatCharacter | AnswerRefusal::ControlCharacter
+                    ),
+                    "{c:?}: {found:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn answer_refuses_a_leading_slash_or_bang_after_whitespace() {
+        for (text, refusal) in [
+            ("/clear", AnswerRefusal::LeadingSlash),
+            ("  \n\t/compact", AnswerRefusal::LeadingSlash),
+            ("!rm -rf x", AnswerRefusal::LeadingBang),
+            ("\n !ls", AnswerRefusal::LeadingBang),
+        ] {
+            assert_eq!(Answer::parse(text).unwrap_err(), refusal, "{text:?}");
+        }
+        assert!(Answer::parse("Use /tmp, then run !important checks.").is_ok());
+    }
+
+    #[test]
+    fn every_answer_refusal_has_a_case() {
+        let cases = [
+            String::new(),
+            "x".repeat(ANSWER_MAX_CHARS + 1),
+            "a\u{7}b".to_owned(),
+            "a\u{202e}b".to_owned(),
+            "/x".to_owned(),
+            "!x".to_owned(),
+        ];
+        let reached: Vec<AnswerRefusal> = cases
+            .iter()
+            .map(|text| Answer::parse(text).unwrap_err())
+            .collect();
+        for refusal in AnswerRefusal::ALL {
+            assert!(reached.contains(refusal), "{refusal:?} has no case");
+        }
+    }
+
+    /// A live idle background session, listed with its folder.
+    fn live_idle() -> MeetingCard {
+        background("idle", "done", r#","pid":7"#)
+    }
+
+    #[test]
+    fn an_old_claude_falls_back_to_copy_and_attach() {
+        let card = live_idle();
+        let at = |version: &str| {
+            delivery(&MeetingTarget {
+                card: &card,
+                agents_folder: Some("C:/path/to/repo"),
+                claude_version: Some(version),
+            })
+        };
+        assert_eq!(at("2.1.284 (Claude Code)"), Delivery::CopyAndAttach);
+        assert_eq!(at("2.1.285 (Claude Code)"), Delivery::ResumeLive);
+        assert_eq!(at("2.2.0 (Claude Code)"), Delivery::ResumeLive);
+        // An ended session resumes whatever the version.
+        let ended = background("idle", "stopped", "");
+        let target = MeetingTarget {
+            card: &ended,
+            agents_folder: Some("C:/path/to/repo"),
+            claude_version: Some("2.1.200 (Claude Code)"),
+        };
+        assert_eq!(delivery(&target), Delivery::ResumeEnded);
+    }
+
+    #[test]
+    fn an_unknown_version_falls_back_to_copy_and_attach() {
+        let card = live_idle();
+        for version in [None, Some("Claude Code"), Some("")] {
+            let target = MeetingTarget {
+                card: &card,
+                agents_folder: Some("C:/path/to/repo"),
+                claude_version: version,
+            };
+            assert_eq!(delivery(&target), Delivery::CopyAndAttach, "{version:?}");
+        }
+    }
+
+    /// D-127, E21: a live idle background session in a folder `claude
+    /// agents` reported, on a recent enough `claude`, is resumed live
+    /// exactly while the recorded gate 3 says a resume delivers (E21
+    /// passed); without that folder, D-635 copies and attaches whatever the
+    /// gate.
+    #[test]
+    fn resume_live_follows_gate_3() {
+        let live = if RESUME_LIVE_DELIVERS {
+            Delivery::ResumeLive
+        } else {
+            Delivery::CopyAndAttach
+        };
+        let card = live_idle();
+        let with = |folder| {
+            delivery(&MeetingTarget {
+                card: &card,
+                agents_folder: folder,
+                claude_version: Some(NEW_CLAUDE),
+            })
+        };
+        assert_eq!(with(Some("C:/path/to/repo")), live);
+        assert_eq!(with(None), Delivery::CopyAndAttach);
     }
 }

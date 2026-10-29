@@ -8,6 +8,7 @@ import type { FocusOutcome } from "./lib/generated/FocusOutcome";
 import type { ItemOutcome } from "./lib/generated/ItemOutcome";
 import type { LaunchAnswer } from "./lib/generated/LaunchAnswer";
 import type { MeetingView } from "./lib/generated/MeetingView";
+import type { AnswerResult } from "./lib/generated/AnswerResult";
 import type { OrchestratorView } from "./lib/generated/OrchestratorView";
 import type { RegistryView } from "./lib/generated/RegistryView";
 import type { RelayView } from "./lib/generated/RelayView";
@@ -54,6 +55,12 @@ declare global {
     /** What `open_meeting` answers, by key (story 5.10); a key not named
      *  is refused. */
     __officinaMeetings?: Record<string, MeetingView>;
+    /** What `send_answer` answers (story 5.11); a confirmed resume when
+     *  unset. */
+    __officinaAnswerResult?: AnswerResult;
+    /** Holds `send_answer`'s answer until `__officinaReleaseAnswer`. */
+    __officinaAnswerHeld?: boolean;
+    __officinaReleaseAnswer?: () => void;
     /** Sets the Orchestrator view and emits `orchestrator://updated`. */
     __officinaPushOrchestrator?: (view: OrchestratorView) => Promise<void>;
     /** What `start_orchestrator` answers (story 5.16). */

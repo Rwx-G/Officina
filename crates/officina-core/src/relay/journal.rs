@@ -141,6 +141,7 @@ pub enum JournalEntry {
     AutoReview(AutoReviewed),
     AutoApprovalSet(AutoApprovalSet),
     OrchestratorStarted(OrchestratorStarted),
+    MeetingAnswer(MeetingAnswer),
 }
 
 closed_enum! {
@@ -165,6 +166,7 @@ closed_enum! {
         AutoReview,
         AutoApprovalSet,
         OrchestratorStarted,
+        MeetingAnswer,
     }
 }
 
@@ -188,6 +190,7 @@ impl JournalEntry {
             JournalEntry::AutoReview(_) => JournalKind::AutoReview,
             JournalEntry::AutoApprovalSet(_) => JournalKind::AutoApprovalSet,
             JournalEntry::OrchestratorStarted(_) => JournalKind::OrchestratorStarted,
+            JournalEntry::MeetingAnswer(_) => JournalKind::MeetingAnswer,
         }
     }
 }
@@ -604,6 +607,40 @@ pub struct AutoApprovalSet {
     pub reason: Option<AutoOffReason>,
 }
 
+closed_enum! {
+    #[serde(rename_all = "snake_case")]
+    /// How an answer to a session went (AD-85, AD-32 as amended): the
+    /// first line says what was done, a resume's second line whether the
+    /// session took it.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+    pub enum AnswerOutcome {
+        /// The console started: a resume, or `claude attach`.
+        Spawned,
+        /// The console could not start.
+        SpawnFailed,
+        /// Nothing was sent: the delivery changed, the text broke a rule, or
+        /// the session takes no answer.
+        Refused,
+        /// Copied only, nothing started (D-168).
+        Copied,
+        /// A resume's session turned busy within the window.
+        Confirmed,
+        /// A resume's session was not seen busy within the window.
+        NotConfirmed,
+    }
+}
+
+/// An answer to a session from the meeting (AD-85): the session, the
+/// delivery, the SHA-256 of the text and how it went; never the text.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MeetingAnswer {
+    #[serde(default)]
+    pub session_id: Option<String>,
+    pub delivery: crate::meeting::Delivery,
+    pub answer_sha256: String,
+    pub outcome: AnswerOutcome,
+}
+
 /// How a reader classifies one raw line.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[allow(clippy::large_enum_variant)] // returned by value and consumed at once, never stored
@@ -737,6 +774,44 @@ mod tests {
             }),
             JournalKind::OrchestratorStarted => {
                 JournalEntry::OrchestratorStarted(started(OrchestratorStartOutcome::Spawned))
+            }
+            JournalKind::MeetingAnswer => JournalEntry::MeetingAnswer(MeetingAnswer {
+                session_id: Some("0f1e2d3c-4b5a-4978-8796-a5b4c3d2e1f0".into()),
+                delivery: crate::meeting::Delivery::ResumeLive,
+                answer_sha256: "00".repeat(32),
+                outcome: AnswerOutcome::Spawned,
+            }),
+        }
+    }
+
+    /// Story 5.11 AC 6 (AD-85): `meeting_answer` reads back with its
+    /// session, delivery, hash and outcome, for every outcome and delivery,
+    /// and a line without a session reads back without one.
+    #[test]
+    fn meeting_answer_round_trips() {
+        for outcome in AnswerOutcome::ALL {
+            for delivery in crate::meeting::Delivery::ALL {
+                for session_id in [
+                    None,
+                    Some("0f1e2d3c-4b5a-4978-8796-a5b4c3d2e1f0".to_owned()),
+                ] {
+                    let entry = JournalEntry::MeetingAnswer(MeetingAnswer {
+                        session_id: session_id.clone(),
+                        delivery: *delivery,
+                        answer_sha256: crate::sha256_hex(b"Keep the 1.x line."),
+                        outcome: *outcome,
+                    });
+                    let line = JournalLine::new(4, entry.clone()).to_line();
+                    let value: serde_json::Value = serde_json::from_str(&line).unwrap();
+                    assert_eq!(value["kind"], "meeting_answer");
+                    assert_eq!(value["outcome"], outcome.code());
+                    assert_eq!(value["delivery"], delivery.code());
+                    assert!(!line.contains("1.x line"), "never the text");
+                    assert_eq!(
+                        parse_line(line.trim_end()),
+                        ParsedLine::Line(JournalLine::new(4, entry))
+                    );
+                }
             }
         }
     }

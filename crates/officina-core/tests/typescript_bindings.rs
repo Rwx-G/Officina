@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 use officina_core::board::Board;
 use officina_core::focus::FocusOutcome;
 use officina_core::ipc::IpcError;
-use officina_core::meeting::MeetingView;
+use officina_core::meeting::{AnswerResult, MeetingView};
 use officina_core::orders::card::{CardAnswer, CardChange, CardRequest, LaunchAnswer};
 use officina_core::orders::orchestrator::StartAnswer;
 use officina_core::orders::view::OrchestratorView;
@@ -68,6 +68,7 @@ fn export(dir: &Path) {
     OrchestratorView::export_all(&cfg).unwrap();
     StartAnswer::export_all(&cfg).unwrap();
     MeetingView::export_all(&cfg).unwrap();
+    AnswerResult::export_all(&cfg).unwrap();
 }
 
 #[test]

@@ -34,6 +34,9 @@ const INPUT_KEYS: &[&str] = &[
     "floor_file",
     "no_excerpts",
     "claude_bin",
+    "answer",
+    "session_id",
+    "folder",
 ];
 
 #[derive(Debug)]
@@ -222,6 +225,22 @@ impl Case {
                 let id = BackgroundId::parse(self.required("background_id"))
                     .unwrap_or_else(|| panic!("case {}: invalid background_id", self.name));
                 spawn::logs(&id, config_dir)
+            }
+            VectorKind::Answer => {
+                let answer = officina_core::meeting::Answer::parse(self.required("answer"))
+                    .unwrap_or_else(|e| panic!("case {}: answer {e:?}", self.name));
+                let session = spawn::SessionId::parse(self.required("session_id"))
+                    .unwrap_or_else(|| panic!("case {}: invalid session_id", self.name));
+                // With a home, the session's folder is its last segment
+                // under it, so a test can create it.
+                let folder = match home {
+                    Some(home) => {
+                        let last = self.required("folder").rsplit(['/', '\\']).next();
+                        format!("{home}/{}", last.unwrap_or_default())
+                    }
+                    None => self.required("folder").to_owned(),
+                };
+                spawn::answer(&answer, &session, &folder, config_dir)
             }
         }
     }

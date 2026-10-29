@@ -16,6 +16,8 @@ import type { IpcError } from "./generated/IpcError";
 import type { ItemAnswer } from "./generated/ItemAnswer";
 import type { LaunchAnswer } from "./generated/LaunchAnswer";
 import type { MeetingView } from "./generated/MeetingView";
+import type { AnswerResult } from "./generated/AnswerResult";
+import type { Delivery } from "./generated/Delivery";
 import type { OrchestratorView } from "./generated/OrchestratorView";
 import type { RegistryView } from "./generated/RegistryView";
 import type { RelayView } from "./generated/RelayView";
@@ -227,6 +229,13 @@ export function startOrchestrator(): Promise<StartAnswer> {
  *  changes. */
 export function openMeeting(key: string): Promise<MeetingView> {
   return invoke<MeetingView>("open_meeting", { key });
+}
+
+/** Sends the author's answer to the meeting of `key` (AD-85), the
+ *  delivery the panel showed: the collector refuses it when the session's
+ *  delivery changed. Waits for a resume's confirmation, up to 30 s. */
+export function sendAnswer(key: string, expected: Delivery, text: string): Promise<AnswerResult> {
+  return invoke<AnswerResult>("send_answer", { key, expected, text });
 }
 
 export function getBoard(): Promise<Board | null> {

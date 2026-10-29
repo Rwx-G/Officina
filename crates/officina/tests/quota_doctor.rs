@@ -286,12 +286,12 @@ fn no_command_writes_under_the_claude_config_dir() {
         &env.root.path().join("bin"),
         &serde_json::json!({"fixture": env.fixture(), "mode": "triage"}),
     );
-    let collector = Collector::from_parts(paths, LoadedFloor::default(), Some(fake)).with_base_env(
-        officina_host::spawn::BaseEnv::new(vec![(
+    let collector = Collector::from_parts(paths, LoadedFloor::default(), Some(fake))
+        .with_confirm_window(Duration::from_secs(1))
+        .with_base_env(officina_host::spawn::BaseEnv::new(vec![(
             "SYSTEMROOT".to_owned(),
             std::env::var("SYSTEMROOT").unwrap_or_default(),
-        )]),
-    );
+        )]));
     let (sink, emitted) = common::sink(|_| {});
     let watch = spawn(collector, sink).unwrap();
     emitted
@@ -403,6 +403,50 @@ fn no_command_writes_under_the_claude_config_dir() {
         officina_host::orders::launch_card(&watch.sender, &card.id, &card.prompt_sha256),
         Ok(LaunchAnswer::Launched(LaunchOutcome::Started))
     );
+
+    // An answer resumed through the fake, as the meeting's Send does
+    // (story 5.11 AC 8, D-80): a background session listed in its folder,
+    // the console started there, its confirmation watched.
+    #[cfg(windows)]
+    {
+        use officina_core::meeting::{AnswerRefused, AnswerResult, Delivery};
+        let folder = env.root.path().join("work").join("answered");
+        std::fs::create_dir_all(&folder).unwrap();
+        let mut listed: Vec<serde_json::Value> =
+            serde_json::from_str(&std::fs::read_to_string(env.fixture()).unwrap()).unwrap();
+        listed.push(
+            serde_json::json!({"id": "bg0042", "sessionId": "0f1e2d3c-4b5a-4978-8796-a5b4c3d2e1f0",
+            "cwd": folder, "kind": "background", "pid": 4242, "startedAt": now_ms() - 60_000,
+            "status": "idle", "state": "done"}),
+        );
+        env.write_agents(&serde_json::Value::from(listed).to_string());
+        watch.sender.send(CollectorMsg::Refresh).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let answered = loop {
+            let result = officina_host::meeting::send_answer(
+                &watch.sender,
+                "bg:bg0042",
+                Delivery::ResumeLive,
+                "Keep going.",
+            )
+            .unwrap();
+            let unseen = matches!(
+                result,
+                AnswerResult::Refused(AnswerRefused::UnknownSession | AnswerRefused::StateChanged)
+            );
+            if !unseen || Instant::now() > deadline {
+                break result;
+            }
+            std::thread::sleep(Duration::from_millis(200));
+        };
+        assert!(
+            matches!(
+                answered,
+                AnswerResult::Confirmed | AnswerResult::NotConfirmed
+            ),
+            "{answered:?}"
+        );
+    }
 
     // A triage call through the fake, pointed at the same config dir as a
     // floor's `config_dir` would point it (story 3.9 AC 12, D-80).

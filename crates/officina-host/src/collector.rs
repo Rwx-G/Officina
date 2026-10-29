@@ -248,6 +248,8 @@ pub struct Collector {
     /// How long a review call may run: `REVIEW_TIMEOUT_MS` unless a test
     /// lowers it.
     review_timeout: Duration,
+    /// How long an answer's resume is watched for `busy` (AD-85).
+    confirm_window: Duration,
 }
 
 impl Collector {
@@ -304,6 +306,7 @@ impl Collector {
             last_scene: RefCell::new(BTreeMap::new()),
             auto_escalations: BTreeMap::new(),
             review_timeout: Duration::from_millis(officina_core::relay::auto::REVIEW_TIMEOUT_MS),
+            confirm_window: Duration::from_millis(officina_core::meeting::CONFIRM_WINDOW_MS),
         }
     }
 
@@ -442,6 +445,24 @@ impl Collector {
             .base_paths
             .clone()
             .with_floor_config_dir(config_dir.as_deref());
+    }
+
+    /// The `claude` version last read, as `claude --version` printed it.
+    pub fn claude_version(&self) -> Option<&str> {
+        self.contract.claude_version.as_deref()
+    }
+
+    /// How long an answer's resume is watched for `busy` (AD-85).
+    pub fn confirm_window(&self) -> Duration {
+        self.confirm_window
+    }
+
+    /// A collector whose answers' resumes are watched for `window`, for
+    /// tests (D-160); [`officina_core::meeting::CONFIRM_WINDOW_MS`]
+    /// otherwise.
+    pub fn with_confirm_window(mut self, window: Duration) -> Collector {
+        self.confirm_window = window;
+        self
     }
 
     /// The session list of the last successful `claude agents` call.

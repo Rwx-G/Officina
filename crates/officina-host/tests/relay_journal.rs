@@ -414,6 +414,7 @@ fn a_meeting_reads_runs_back_to_the_session_start() {
             base_env: officina_host::spawn::BaseEnv::default(),
             relay: home.clone(),
             events_dir: dir.path().join("events"),
+            claude_version: None,
         };
         gather(&grant, NOW)
             .runs

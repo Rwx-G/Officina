@@ -29,4 +29,9 @@ approvals: Array<ApprovalView>, changes: Changes,
 /**
  * `claude logs`, for a background session only.
  */
-logs: Logs | null, delivery: Delivery, generated_at_ms: number, };
+logs: Logs | null, delivery: Delivery, 
+/**
+ * The most characters an answer holds ([`ANSWER_MAX_CHARS`]), for
+ * the composer's counter.
+ */
+answer_max_chars: number, generated_at_ms: number, };

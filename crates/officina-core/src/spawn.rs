@@ -51,6 +51,9 @@ closed_enum! {
         /// `claude logs <id>`, a background session's recent output for
         /// the meeting (AD-84, E23).
         Logs,
+        /// `claude --resume <id> -- <answer>` in a console of its own: the
+        /// author's answer as the session's next turn (AD-85, FR-6).
+        Answer,
     }
 }
 
@@ -72,7 +75,8 @@ impl VectorKind {
             VectorKind::TriageCall
             | VectorKind::WorkOrder
             | VectorKind::ReviewCall
-            | VectorKind::Orchestrator => true,
+            | VectorKind::Orchestrator
+            | VectorKind::Answer => true,
         }
     }
 
@@ -83,7 +87,8 @@ impl VectorKind {
             | VectorKind::Version
             | VectorKind::Attach
             | VectorKind::WorkOrder
-            | VectorKind::Logs => EnvRule::Session,
+            | VectorKind::Logs
+            | VectorKind::Answer => EnvRule::Session,
             VectorKind::TriageCall | VectorKind::ReviewCall | VectorKind::Orchestrator => {
                 EnvRule::Contained
             }
@@ -102,7 +107,8 @@ impl VectorKind {
             | VectorKind::TriageCall
             | VectorKind::WorkOrder
             | VectorKind::ReviewCall
-            | VectorKind::Logs => &[],
+            | VectorKind::Logs
+            | VectorKind::Answer => &[],
         }
     }
 }
@@ -186,6 +192,9 @@ pub enum CwdRule {
     Officina { home: String, dir: OfficinaDir },
     /// A catalogue project's folder as the floor declares it (D-6).
     Project { folder: String },
+    /// The folder `claude agents` reported for the session an answer
+    /// resumes (D-168, D-635).
+    SessionFolder { folder: String },
 }
 
 /// What a captured kind keeps of its output; both streams are drained to
@@ -516,7 +525,7 @@ impl BackgroundId {
 /// One `claude` process, as data. Its fields are private: the per-kind
 /// builders of this module ([`agents`], [`version`], [`attach`],
 /// [`triage_call`], [`work_order`], [`review_call`], [`orchestrator`],
-/// [`logs`]) are its only constructors.
+/// [`logs`], [`answer`]) are its only constructors.
 ///
 /// ```compile_fail
 /// use officina_core::spawn::{ClaudeVector, Console, CwdRule, EnvRule, StdinRule, VectorKind};
@@ -776,6 +785,69 @@ pub fn logs(id: &BackgroundId, config_dir: Option<&str>) -> ClaudeVector {
     }
 }
 
+/// A session's id as `claude --resume` takes it: a canonical lowercase
+/// UUID (AD-79), nothing else, so no option or path can stand in for it.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct SessionId(String);
+
+impl SessionId {
+    /// The id, when it is a canonical lowercase UUID.
+    ///
+    /// ```
+    /// use officina_core::spawn::SessionId;
+    /// assert!(SessionId::parse("0f1e2d3c-4b5a-4978-8796-a5b4c3d2e1f0").is_some());
+    /// assert!(SessionId::parse("0F1E2D3C-4B5A-4978-8796-A5B4C3D2E1F0").is_none());
+    /// assert!(SessionId::parse("--model").is_none());
+    /// ```
+    pub fn parse(id: &str) -> Option<SessionId> {
+        let groups: Vec<&str> = id.split('-').collect();
+        let canonical = groups.iter().map(|g| g.len()).eq([8, 4, 4, 4, 12])
+            && id
+                .chars()
+                .all(|c| c == '-' || c.is_ascii_digit() || ('a'..='f').contains(&c));
+        canonical.then(|| SessionId(id.to_owned()))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+/// The author's answer to a session (AD-79, AD-85, FR-6 as amended):
+/// `--resume <session id>`, then `--` and the answer as exactly one
+/// argument, in a new console the author sees, not waited on. It runs in
+/// `folder`, the one `claude agents` reported for that session (D-168),
+/// for a live background session as for an ended one: E20 saw a resume
+/// from the `claude` binary's folder stop at its trust dialog and deliver
+/// nothing (D-635). A session kind: the author's own settings reach the
+/// hooks the resumed session runs (review F1).
+pub fn answer(
+    answer: &crate::meeting::Answer,
+    session: &SessionId,
+    folder: &str,
+    config_dir: Option<&str>,
+) -> ClaudeVector {
+    ClaudeVector {
+        kind: VectorKind::Answer,
+        args: vec![
+            "--resume".to_owned(),
+            session.as_str().to_owned(),
+            "--".to_owned(),
+            answer.as_str().to_owned(),
+        ],
+        cwd: CwdRule::SessionFolder {
+            folder: folder.to_owned(),
+        },
+        console: Console::New,
+        stdin: StdinRule::Console,
+        capture: None,
+        deadline_ms: None,
+        env_set: env_set(config_dir),
+        env_rule: VectorKind::Answer.env_rule(),
+        stdin_data: Vec::new(),
+    }
+}
+
 /// The triage call (AD-51 as amended, E16): print mode, `model`, no tool,
 /// no MCP server, no settings source, the inbox refused
 /// ([`CONTAINED_SETTINGS`]), no session persistence, a JSON answer
@@ -960,6 +1032,12 @@ mod tests {
                 "C:/path/to/home",
             ),
             VectorKind::Logs => logs(&BackgroundId::parse("bg01").unwrap(), config_dir),
+            VectorKind::Answer => answer(
+                &crate::meeting::Answer::parse("Keep the 1.x line.").unwrap(),
+                &SessionId::parse("0f1e2d3c-4b5a-4978-8796-a5b4c3d2e1f0").unwrap(),
+                "C:/path/to/repo",
+                config_dir,
+            ),
             VectorKind::Orchestrator => orchestrator(&server(None), None, config_dir),
         }
     }
@@ -1355,6 +1433,50 @@ mod tests {
                 "{name}"
             );
         }
+    }
+
+    #[test]
+    fn session_id_must_be_a_canonical_uuid() {
+        assert!(SessionId::parse("0f1e2d3c-4b5a-4978-8796-a5b4c3d2e1f0").is_some());
+        for bad in [
+            "",
+            "0F1E2D3C-4B5A-4978-8796-A5B4C3D2E1F0",
+            "0f1e2d3c4b5a49788796a5b4c3d2e1f0",
+            "{0f1e2d3c-4b5a-4978-8796-a5b4c3d2e1f0}",
+            "0f1e2d3c-4b5a-4978-8796-a5b4c3d2e1f",
+            "0f1e2d3c-4b5a-4978-8796-a5b4c3d2e1f0x",
+            "0f1e2d3c-4b5a-4978-8796-a5b4c3d2e1fg",
+            "--model opus",
+            "../0f1e2d3c-4b5a-4978-8796-a5b4c3",
+        ] {
+            assert_eq!(SessionId::parse(bad), None, "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn the_answer_is_one_argument() {
+        let text = "-x \"quoted\" & | < > ^ !\n--bg -- --model opus\nC:\\dir\\";
+        let answered = crate::meeting::Answer::parse(text).unwrap();
+        let session = SessionId::parse("0f1e2d3c-4b5a-4978-8796-a5b4c3d2e1f0").unwrap();
+        let vector = answer(&answered, &session, "C:/path/to/repo", None);
+        assert_eq!(
+            vector.args(),
+            ["--resume", session.as_str(), "--", text],
+            "the text is the last argument, whole, after the separator"
+        );
+        assert_eq!(
+            vector.cwd(),
+            &CwdRule::SessionFolder {
+                folder: "C:/path/to/repo".to_owned()
+            }
+        );
+        assert_eq!(
+            (vector.console(), vector.stdin()),
+            (Console::New, StdinRule::Console)
+        );
+        assert_eq!((vector.capture(), vector.deadline_ms()), (None, None));
+        assert_eq!(vector.env_rule(), EnvRule::Session);
+        assert!(VectorKind::Answer.is_launch());
     }
 
     #[test]

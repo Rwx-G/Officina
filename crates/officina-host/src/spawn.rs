@@ -213,7 +213,10 @@ pub const fn job_rule(kind: VectorKind) -> JobRule {
     match kind {
         VectorKind::Agents | VectorKind::Version | VectorKind::Logs => JobRule::TreeOnTimeout,
         VectorKind::TriageCall | VectorKind::ReviewCall => JobRule::KillOnClose,
-        VectorKind::Attach | VectorKind::WorkOrder | VectorKind::Orchestrator => JobRule::NoJob,
+        VectorKind::Attach
+        | VectorKind::WorkOrder
+        | VectorKind::Orchestrator
+        | VectorKind::Answer => JobRule::NoJob,
     }
 }
 
@@ -231,7 +234,8 @@ pub const fn keeps_held_output(kind: VectorKind) -> bool {
         | VectorKind::ReviewCall
         | VectorKind::Attach
         | VectorKind::Orchestrator
-        | VectorKind::Logs => false,
+        | VectorKind::Logs
+        | VectorKind::Answer => false,
     }
 }
 
@@ -308,7 +312,9 @@ fn working_dir(claude: &ResolvedClaude, rule: &CwdRule) -> Option<PathBuf> {
                 .iter()
                 .fold(PathBuf::from(home), |path, segment| path.join(segment)),
         ),
-        CwdRule::Project { folder } => Some(PathBuf::from(folder)),
+        CwdRule::Project { folder } | CwdRule::SessionFolder { folder } => {
+            Some(PathBuf::from(folder))
+        }
     }
 }
 
@@ -499,6 +505,13 @@ mod tests {
             VectorKind::Logs => {
                 officina_core::spawn::logs(&BackgroundId::parse("bg01").unwrap(), None)
             }
+            VectorKind::Answer => officina_core::spawn::answer(
+                &officina_core::meeting::Answer::parse("Keep the 1.x line.").unwrap(),
+                &officina_core::spawn::SessionId::parse("0f1e2d3c-4b5a-4978-8796-a5b4c3d2e1f0")
+                    .unwrap(),
+                "C:/path/to/repo",
+                None,
+            ),
         }
     }
 

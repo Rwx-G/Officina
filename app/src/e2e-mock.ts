@@ -11,6 +11,7 @@ import type { IpcError } from "./lib/generated/IpcError";
 import type { ItemAnswer } from "./lib/generated/ItemAnswer";
 import type { LaunchAnswer } from "./lib/generated/LaunchAnswer";
 import type { MeetingView } from "./lib/generated/MeetingView";
+import type { AnswerResult } from "./lib/generated/AnswerResult";
 import type { OrchestratorView } from "./lib/generated/OrchestratorView";
 import type { RegistryView } from "./lib/generated/RegistryView";
 import type { RelayView } from "./lib/generated/RelayView";
@@ -95,6 +96,8 @@ export function installE2eMock(): void {
           return startOrchestrator();
         case "open_meeting":
           return meetingOf((args as { key: string }).key);
+        case "send_answer":
+          return answer();
         default:
           if (AUTHOR_COMMANDS.includes(cmd)) return author(cmd);
           return null;
@@ -118,6 +121,18 @@ export function installE2eMock(): void {
     window.__officinaOrchestrator = view;
     await emit("orchestrator://updated", view);
   };
+}
+
+/** Mirrors `send_answer` (AD-85): what the test set in
+ *  `__officinaAnswerResult`, else a confirmed resume. With
+ *  `__officinaAnswerHeld` set, the answer waits until the test calls
+ *  `__officinaReleaseAnswer`, as a resume awaiting its confirmation does. */
+function answer(): Promise<AnswerResult> {
+  const result = (): AnswerResult => window.__officinaAnswerResult ?? { outcome: "confirmed" };
+  if (!window.__officinaAnswerHeld) return Promise.resolve(result());
+  return new Promise((resolve) => {
+    window.__officinaReleaseAnswer = () => resolve(result());
+  });
 }
 
 /** Mirrors `open_meeting` (AD-84): the meeting the test set for the key,

@@ -723,7 +723,8 @@ fn recent(lines: &[JournalLine], now_ms: i64, rows: &[AutoRow]) -> Vec<RecentEnt
                 | JournalEntry::AutoEscalated(_)
                 | JournalEntry::AutoReview(_)
                 | JournalEntry::AutoApprovalSet(_)
-                | JournalEntry::OrchestratorStarted(_) => return None,
+                | JournalEntry::OrchestratorStarted(_)
+                | JournalEntry::MeetingAnswer(_) => return None,
             };
             let review = match &event {
                 RecentEvent::ApprovalGiven(decision) | RecentEvent::ApprovalRejected(decision)
@@ -1203,7 +1204,8 @@ mod tests {
                 | JournalKind::AutoEscalated
                 | JournalKind::AutoReview
                 | JournalKind::AutoApprovalSet
-                | JournalKind::OrchestratorStarted => continue,
+                | JournalKind::OrchestratorStarted
+                | JournalKind::MeetingAnswer => continue,
             };
             let lines = [JournalLine::new(NOW, entry)];
             let view = build(&inputs(SnapshotState::Missing, FloorRead::Missing, &lines));
