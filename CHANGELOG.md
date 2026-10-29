@@ -8,6 +8,21 @@ project uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- `officina mcp` (v0.5, story 5.15): the orchestrator's MCP server on stdio,
+  newline-delimited JSON-RPC answered by hand, a line over 1 MiB discarded
+  and refused. It serves only when `CLAUDE_PROJECT_DIR` is
+  `<officina home>/orchestrator/workdir` (else one line, exit 1). Read
+  tools, read-only with the window open or closed: the briefing (cursor:
+  the previous orchestrator start), the subjects, one subject, the board,
+  the relay's recent activity, the approved templates and the proposals
+  of the last seven days. Proposal tools (`propose_recap`,
+  `propose_work_order`) write one file each under
+  `orchestrator/proposals/`, bounded and limited to 30 an hour and 200
+  pending, and validate nothing else. Every answer starts with a note and
+  marks every session text `{"untrusted": "..."}`; no excerpt with
+  `no_excerpts`; answers at most 64 KiB. No tool runs, launches, approves,
+  sends text, reads a path or touches a permission prompt; its `claude
+  agents` child receives none of the orchestrator's session variables.
 - Templates in the floor file (v0.5, story 5.4): `[[template]]` declares a
   prompt with placeholders, the catalogue projects it may run in, a closed
   `values` list per parameter (never a `pattern`) and an optional model.

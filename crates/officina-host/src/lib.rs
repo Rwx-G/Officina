@@ -6,6 +6,7 @@ pub mod doctor;
 pub mod files;
 pub mod focus;
 pub mod git;
+pub mod mcp;
 #[cfg(feature = "window-authority")]
 pub mod orders;
 pub mod paths;

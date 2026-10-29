@@ -1,6 +1,7 @@
 //! `officina`: the console binary. Claude Code runs `hook` and `quota write`;
-//! sessions run `run`; the author runs `doctor`, `board --json`,
-//! `relay --json` and `subjects --json`.
+//! sessions run `run`; the orchestrator's MCP config runs `mcp`; the
+//! author runs `doctor`, `board --json`, `relay --json` and
+//! `subjects --json`.
 //! Arguments are parsed by hand (AD-16, AD-29): a few subcommands do not
 //! justify a parser in the hook's image.
 //!
@@ -35,6 +36,8 @@ usage: officina <command>
                                   permissions and autoMode keys set for auto
                                   mode (your decision; nothing is written)
   hook                            record a Claude Code hook payload (stdin)
+  mcp [--floor <path>]            serve the orchestrator's tools on stdio;
+                                  runs only in the orchestrator's folder
   quota write [--tee]             record a statusline payload (stdin)
   relay --json                    print the relay's state once: approved
                                   catalogue, pending change, recent activity
@@ -319,6 +322,24 @@ fn relay_json() -> ExitCode {
     }
 }
 
+/// `officina mcp [--floor <path>]` (AD-90): the orchestrator's MCP server.
+/// Exit 0 at the end of stdin, 1 with one line on stderr when it does not
+/// run as the orchestrator's server or its streams fail, 64 on usage.
+fn mcp_cmd(rest: &[String]) -> ExitCode {
+    let floor = match rest {
+        [] => None,
+        [flag, path] if flag == "--floor" => Some(PathBuf::from(path)),
+        _ => return usage_error(),
+    };
+    match officina_host::mcp::run(floor.as_deref(), env!("CARGO_PKG_VERSION")) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(refusal) => {
+            eprintln!("officina mcp: {refusal}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
 /// `--floor` given as the last argument, without its path: a usage error.
 struct FloorWithoutPath;
 
@@ -366,6 +387,7 @@ fn main() -> ExitCode {
             with_floor(rest, doctor_permissions_cmd)
         }
         Some("doctor") => with_floor(rest, doctor_cmd),
+        Some("mcp") => mcp_cmd(rest),
         Some("run") => run_cmd(rest),
         Some("relay") if rest == ["--json"] => relay_json(),
         Some("subjects") if rest.iter().any(|a| a == "--json") => with_floor(rest, subjects_json),

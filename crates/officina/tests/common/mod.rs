@@ -8,6 +8,7 @@ pub mod auto;
 pub mod fake_output;
 #[path = "../../../../tests/support/git.rs"]
 pub mod git_support;
+pub mod mcp;
 pub mod orders;
 #[path = "../../../../tests/support/previous_format.rs"]
 pub mod previous_format;

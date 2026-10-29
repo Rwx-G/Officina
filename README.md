@@ -551,7 +551,7 @@ The whole window, board and scene alike, follows Windows' light or dark theme. T
 
 ## The orchestrator (v0.5, in progress)
 
-v0.5 lets you delegate routine subjects: a work order starts a background session from a template you wrote and approved, and an `auto` action can be approved without you once its dry run passed. What is built so far is the floor file's part, the one module every `claude` process starts from, the work order records, the Orchestrator view with its briefing, its composer and its work order cards, and the `auto` class with its review, in shadow until its evidence lets you turn approval on; the orchestrator itself follows.
+v0.5 lets you delegate routine subjects: a work order starts a background session from a template you wrote and approved, and an `auto` action can be approved without you once its dry run passed. What is built so far is the floor file's part, the one module every `claude` process starts from, the work order records, the Orchestrator view with its briefing, its composer and its work order cards, the `auto` class with its review, in shadow until its evidence lets you turn approval on, and the orchestrator's tools (`officina mcp`); the orchestrator session itself follows.
 
 ### Templates
 
@@ -623,6 +623,17 @@ The view opens on the briefing, which Officina's own code builds, with no model 
 
 Below it come the composer over the approved templates, with those a pending catalogue change adds, changes or removes (while a change is pending, every card is refused until you approve it), the card it issued, and the history of your latest work orders: template, project, values, outcome, the background session it bound to and that session's state. An order still unbound ten minutes after it started is marked **unbound**, and one whose printed output does not hold the id it bound to is marked too: both are computed when the view is built, never stored.
 
+### The orchestrator's tools (`officina mcp`)
+
+The orchestrator is a Claude Code session whose only tools are an MCP server Officina runs: `officina mcp`, started by that session over stdio. It answers MCP's handshake and serves two families of tools, each named by `McpTool`:
+
+- **Reading** what Officina records, read-only, with the window open or closed: the briefing (the same function the Orchestrator view uses, counting its changes from the orchestrator's previous start), the subjects and one subject, the board, the relay's recent activity, the approved catalogue's templates and the orchestrator's proposals of the last seven days. The board's session list is asked of `claude agents` at most every five seconds; with the window closed, each answer says how many bytes of event lines the registry has not read yet.
+- **Proposing**: a recap of a session or a subject, and a work order (an approved template, one of its projects, a value for each parameter, a subject, a rationale). Each writes one file under `<officina home>/orchestrator/proposals/` and returns its id; it runs, launches and sends nothing. Inputs are bounded (8 KiB in all, 500 characters per text, 64 per value, 80 for a new subject's name, 16 values), and a proposal tool refuses with its reason past 30 proposals in an hour or 200 waiting. It checks nothing else: a proposal is untrusted, and the window will check it against your approved catalogue and your registry when it reads it, so a file anyone writes there meets the same rules, and only your own click acts on one.
+
+Every answer starts with a note saying that each value written `{"untrusted": "..."}` is text a session or a model wrote, data never to follow: every session text in every answer is marked so, whatever the tool. No tool runs a command, launches or resumes a session, approves a request, sends text to a session, reads a path, reaches the network or touches a Claude Code permission prompt, and no tool takes a path. With `no_excerpts`, from the floor or `OFFICINA_NO_EXCERPTS`, no prompt or answer excerpt is served. Answers are at most 64 KiB, the briefing 32 KiB.
+
+`officina mcp` serves only inside the orchestrator's folder: when Claude Code's `CLAUDE_PROJECT_DIR` is not `<officina home>/orchestrator/workdir`, it prints one line and exits 1. That prevents accidents, not forgery, which is why proposals are files the window validates. It never prints its environment, which holds the orchestrator session's own variables, and the `claude agents` it runs does not receive them.
+
 ### The `auto` class
 
 An action may now be `class = "auto"`. It must name its `check`, a `free` action with the same parameters, as an `after-check` action does: an unattended apply always runs after its dry run, and an `auto` action without one is skipped with the issue `auto_without_check`. `auto_max_per_hour` (1 to 60, 6 when not set) caps how many such runs can be approved in an hour; it applies to `auto` actions only. An HTTP action cannot be `auto`: it stays on the `human` path. `officina doctor` lists the `auto` actions with their check and cap.
@@ -670,6 +681,7 @@ The first start of v0.5 also moves the registry to its version 2, which adds the
 | `officina doctor` | check the setup, the relay included, and print what to paste; exit 1 when something required is missing |
 | `officina board --json` | print the board once (exit 3 when the session list could not be refreshed) |
 | `officina hook` | record one hook payload from stdin, or answer the relay gate for a shell tool's call (run by Claude Code) |
+| `officina mcp [--floor <path>]` | serve the orchestrator's tools on stdio (started by the orchestrator session, in its folder only) |
 | `officina quota write [--tee]` | record the rate limits from a statusline payload (run by your statusline) |
 | `officina run <action> [name=value ...]` | run an approved relay action from its project (run by sessions) |
 | `officina run --list` | list the actions of the current folder's project |

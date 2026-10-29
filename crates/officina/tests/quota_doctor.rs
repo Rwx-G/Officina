@@ -216,8 +216,9 @@ fn doctor_with_a_guarded_project_requires_every_gated_tool() {
 /// collector running beside them, ingesting into its registry and sending a
 /// row to the enabled model through the fake (story 3.11, story 3.12
 /// AC 6), a dry run's call made through the fake (story 3.9 AC 12), and a
-/// work order launched from a card through the fake (story 5.7 AC 8), and
-/// a review of an `auto` request through the fake (story 5.13 AC 11).
+/// work order launched from a card through the fake (story 5.7 AC 8), a
+/// review of an `auto` request through the fake (story 5.13 AC 11), and a
+/// scripted `officina mcp` session calling every tool (story 5.15 AC 9).
 #[test]
 fn no_command_writes_under_the_claude_config_dir() {
     let env = TestEnv::new();
@@ -355,6 +356,26 @@ fn no_command_writes_under_the_claude_config_dir() {
             String::from_utf8_lossy(&out.stderr)
         );
     }
+
+    // A scripted `officina mcp` session in the orchestrator's folder,
+    // calling every tool, the proposal tools included (story 5.15 AC 9).
+    let workdir = env
+        .officina_home()
+        .join(officina_core::orders::ORCHESTRATOR_DIR)
+        .join(officina_core::orders::ORCHESTRATOR_WORKDIR);
+    std::fs::create_dir_all(&workdir).unwrap();
+    let mut mcp = env.officina(&["mcp"]);
+    mcp.env("CLAUDE_PROJECT_DIR", &workdir)
+        .current_dir(&workdir);
+    let mut requests = common::mcp::handshake();
+    requests.extend(common::mcp::every_tool(&common::mcp::Sources::neutral(), 1));
+    let (out, responses) = common::mcp::McpHome::exchange(mcp, &requests);
+    assert_eq!(out.status.code(), Some(0));
+    assert_eq!(
+        responses.len(),
+        requests.len() - 1,
+        "every request but the notification answered"
+    );
 
     // A work order launched from a card, as the window's commands do, with
     // the collector's fake answering `--bg` (story 5.7 AC 8, D-80).
