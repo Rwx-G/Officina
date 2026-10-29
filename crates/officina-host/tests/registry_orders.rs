@@ -431,7 +431,9 @@ fn a_session_seen_before_binding_is_refiled() {
 }
 
 /// AD-81 step 5, D-79: a session first seen in the refresh that binds its
-/// order is created filed under the order's subject, source `author`.
+/// order is created filed under the order's subject, source `author`; and
+/// (D-960) only from then on is it a work order's session, whose prompts
+/// a review may take as the author's.
 #[test]
 fn a_session_first_seen_at_binding_is_filed_under_its_order() {
     let home = Home::new();
@@ -440,6 +442,7 @@ fn a_session_first_seen_at_binding_is_filed_under_its_order() {
     launch(&mut writer, &bump, "card", 1, &new_subject("Rollout"), NOW).unwrap();
     started(&mut writer, "card", NOW + 800);
     let chosen = writer.work_orders().unwrap()[0].subject_id.unwrap();
+    assert!(!writer.is_work_order_session("s-new").unwrap());
     writer
         .apply_agents(
             &mut None,
@@ -456,6 +459,8 @@ fn a_session_first_seen_at_binding_is_filed_under_its_order() {
         .unwrap();
     let filing = session.subject.unwrap();
     assert_eq!((filing.value, filing.src), (Some(chosen), Source::Author));
+    assert!(writer.is_work_order_session("s-new").unwrap());
+    assert!(!writer.is_work_order_session("s-other").unwrap());
 }
 
 /// AD-82, D-130: the latest 50 work orders, newest first, with their

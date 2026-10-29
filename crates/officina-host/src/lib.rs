@@ -13,6 +13,7 @@ pub mod orders;
 pub mod paths;
 pub mod platform;
 pub mod process;
+pub mod process_tree;
 pub mod registry;
 pub mod relay;
 pub mod spawn;

@@ -13,12 +13,14 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 use common::TestHome;
+use officina_core::agents::parse_agents;
+use officina_core::board::{Board, BoardInput, build_board};
 use officina_core::registry::triage_call::CALL_SPACING_MS;
 use officina_core::registry::types::{
     AuthorDecision, AuthorReason, ReviewMode, ReviewOutcome, Source,
 };
 use officina_core::relay::approvals::{
-    ApprovalRequest, KeyInputs, PENDING_MS, request_id, request_key,
+    ApprovalRequest, CallerProcess, KeyInputs, PENDING_MS, request_id, request_key,
 };
 use officina_core::relay::auto::{
     AutoMode, AutoOffReason, EscalationCause, ReviewDecision, STATS_WINDOW_MS,
@@ -49,8 +51,25 @@ fn relay(home: &TestHome) -> RelayHome {
 }
 
 /// The request `officina run apply group=<group>` writes after its check,
-/// created `ago` milliseconds ago.
+/// created `ago` milliseconds ago, from [`SESSION`] through this process.
 fn write_request(relay: &RelayHome, group: &str, ago: i64) -> String {
+    write_request_as(
+        relay,
+        group,
+        ago,
+        SESSION,
+        officina_host::process_tree::own_chain(),
+    )
+}
+
+/// [`write_request`] claiming `session`, with `caller` as its caller chain.
+fn write_request_as(
+    relay: &RelayHome,
+    group: &str,
+    ago: i64,
+    session: &str,
+    caller: Vec<CallerProcess>,
+) -> String {
     let hash = relay.read_approved().approved().unwrap().hash.clone();
     let params = BTreeMap::from([("group".to_owned(), group.to_owned())]);
     let key = request_key(&KeyInputs {
@@ -76,12 +95,42 @@ fn write_request(relay: &RelayHome, group: &str, ago: i64) -> String {
         ],
         http: None,
         catalogue_hash: hash,
-        session_id: Some("00000000-0000-0000-0000-000000000001".to_owned()),
+        session_id: Some(session.to_owned()),
         check_run_id: Some("19a2b3c4d5e-1f".to_owned()),
         tree: None,
+        caller,
     };
     approvals::create_request(relay, &id, &request).unwrap();
     id
+}
+
+/// The session the requests claim, unless a test says otherwise.
+const SESSION: &str = "00000000-0000-0000-0000-000000000001";
+/// A background session no work order started, run by the same process.
+const BACKGROUND: &str = "00000000-0000-0000-0000-000000000002";
+/// An interactive session whose process is this test process itself, the
+/// caller, never its ancestor.
+const ITSELF: &str = "00000000-0000-0000-0000-000000000003";
+
+/// The board the window reviews with (D-960): [`SESSION`] live and
+/// interactive, its process the test runner's parent, which the caller
+/// chain of a request this process writes holds as its ancestor; and
+/// [`BACKGROUND`] and [`ITSELF`], which never bind.
+fn board() -> Board {
+    let chain = officina_host::process_tree::own_chain();
+    let (own, parent) = (chain[0].pid, chain[1].pid);
+    let agents = format!(
+        r#"[{{"pid":{parent},"sessionId":"{SESSION}","kind":"interactive","status":"busy","cwd":"C:/path/to/Lab","startedAt":1}},
+            {{"pid":{parent},"id":"bg2","sessionId":"{BACKGROUND}","kind":"background","status":"busy","state":"working","cwd":"C:/path/to/Lab","startedAt":1}},
+            {{"pid":{own},"sessionId":"{ITSELF}","kind":"interactive","status":"busy","cwd":"C:/path/to/Lab","startedAt":1}}]"#
+    );
+    build_board(
+        &BoardInput {
+            agents: Some(parse_agents(&agents).unwrap()),
+            ..Default::default()
+        },
+        now_ms(),
+    )
 }
 
 /// One review tick of the window, with no `claude` and no thread.
@@ -98,6 +147,7 @@ fn tick_at(
     now: i64,
 ) -> bool {
     let base_env = BaseEnv::new(Vec::new());
+    let board = board();
     let env = ReviewEnv {
         relay,
         officina_home: relay.officina_home(),
@@ -106,7 +156,7 @@ fn tick_at(
         base_env: &base_env,
         no_excerpts: false,
         five_hour_used: None,
-        board: None,
+        board: Some(&board),
         timeout: officina_host::relay::review::review_timeout(),
     };
     reviews.tick(&env, registry, now)
@@ -201,6 +251,76 @@ fn an_escalated_request_gets_one_row_and_its_line() {
     tick(&mut restarted, &relay, &mut again);
     drop(again);
     assert_eq!(rows(relay.officina_home()).len(), 1);
+}
+
+/// D-960: a request whose session claim does not bind to its caller is the
+/// author's at once, `session_unbound` with its row, its line and no call;
+/// the same request from the bound session is queued for its review.
+#[test]
+fn an_unbound_session_claim_escalates_before_any_call() {
+    let home = TestHome::new();
+    let relay = relay(&home);
+    let own = officina_host::process_tree::own_chain();
+    let unbound = [
+        ("no caller chain", SESSION, Vec::new()),
+        (
+            "a session the board does not show",
+            "s-not-listed",
+            own.clone(),
+        ),
+        (
+            "a background session no work order started",
+            BACKGROUND,
+            own.clone(),
+        ),
+        ("the caller itself as the session", ITSELF, own.clone()),
+    ];
+    let ids: Vec<(&str, String)> = unbound
+        .into_iter()
+        .zip(["lab-web", "lab-db"].iter().cycle())
+        .enumerate()
+        .map(|(at, ((name, session, caller), group))| {
+            let ago = 10_000 + 1_000 * i64::try_from(at).unwrap();
+            (name, write_request_as(&relay, group, ago, session, caller))
+        })
+        .collect();
+    let bound = write_request(&relay, "lab-web", 1_000);
+    let claude = relay.officina_home().join("missing").join("claude.exe");
+    let mut registry = open(&relay);
+    let mut reviews = Reviews::new(None);
+    tick_at(&mut reviews, &relay, &mut registry, Some(&claude), now_ms());
+    drop(registry);
+    let found = rows(relay.officina_home());
+    for (name, id) in &ids {
+        let row = found.iter().find(|r| &r.approval_id == id);
+        assert_eq!(
+            row.map(|r| (r.outcome, r.cause)),
+            Some((ReviewOutcome::NoCall, Some(EscalationCause::SessionUnbound))),
+            "{name}"
+        );
+        assert_eq!(
+            reviews.escalations().get(id).map(|e| e.cause),
+            Some(EscalationCause::SessionUnbound),
+            "{name}"
+        );
+    }
+    assert!(
+        found.iter().all(|r| r.approval_id != bound),
+        "the bound request waits for its call"
+    );
+    assert_eq!(
+        reviews.escalations().get(&bound).map(|e| e.cause),
+        Some(EscalationCause::AutoApprovalOff)
+    );
+    let (lines, _) = read_recent(&relay, now_ms());
+    let journaled = lines
+        .iter()
+        .filter(|line| {
+            matches!(&line.entry, JournalEntry::AutoEscalated(a)
+                if a.cause == EscalationCause::SessionUnbound)
+        })
+        .count();
+    assert_eq!(journaled, ids.len());
 }
 
 /// AC 6 (AD-88): the author's decision, approve or reject with its reason,

@@ -113,6 +113,7 @@ fn main() -> ExitCode {
         session_id: Some("00000000-0000-0000-0000-000000000001".to_owned()),
         check_run_id: Some("19a2b3c4d5e-1f".to_owned()),
         tree: None,
+        caller: Vec::new(),
     };
     let dirs = BTreeMap::from([("lab".to_owned(), format!("{}/Lab", home.display()))]);
     let ctx = ApprovalContext {
@@ -124,6 +125,9 @@ fn main() -> ExitCode {
     let facts = PrecheckFacts {
         claude: Some(&claude_path),
         workdir_empty: true,
+        // The probe checks the call, not the binding: its request stands
+        // for one a bound session made (D-960).
+        session_bound: true,
         no_excerpts: false,
         five_hour_used: None,
         rows: &[],

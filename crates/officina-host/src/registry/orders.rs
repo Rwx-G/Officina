@@ -342,6 +342,18 @@ impl Writer {
         Ok(read::briefing_read_at(&self.conn)?)
     }
 
+    /// True when a work order the window launched is bound to background
+    /// session `session_id` (AD-81 step 4): its prompts are the order's,
+    /// which the author approved (D-960).
+    pub fn is_work_order_session(&self, session_id: &str) -> Result<bool, RegistryError> {
+        Ok(self
+            .conn
+            .prepare_cached("SELECT 1 FROM work_order WHERE session_id = ?1 LIMIT 1")?
+            .query_row([session_id], |_| Ok(()))
+            .optional()?
+            .is_some())
+    }
+
     /// Every `orchestrator_start` row, newest first (D-144).
     pub fn orchestrator_starts(&self) -> Result<Vec<read::OrchestratorStartRow>, RegistryError> {
         Ok(read::orchestrator_starts(&self.conn)?)

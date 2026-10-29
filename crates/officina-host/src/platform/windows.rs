@@ -445,6 +445,27 @@ fn ancestors(pid: u32) -> Vec<u32> {
     chain
 }
 
+/// The start stamp of process `pid` in 100 ns ticks while it runs; `None`
+/// once it has exited, or when it cannot be opened (D-960).
+pub fn running_since(pid: u32) -> Option<u64> {
+    process_state(pid).and_then(|(created, running)| running.then_some(created))
+}
+
+/// `pid` and its ancestors with their start stamps, nearest first, by
+/// [`ancestors`]'s walk (D-960). Empty when `pid`'s own stamp cannot be
+/// read, so the chain always starts with `pid`; an ancestor whose stamp
+/// cannot be read is left out, since nothing could match it.
+pub fn ancestry(pid: u32) -> Vec<(u32, u64)> {
+    let chain = ancestors(pid);
+    if creation_time(pid).is_none() {
+        return Vec::new();
+    }
+    chain
+        .into_iter()
+        .filter_map(|process| creation_time(process).map(|started| (process, started)))
+        .collect()
+}
+
 /// A visible, unowned, titled top-level window.
 struct TopWindow {
     hwnd: HWND,

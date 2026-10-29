@@ -13,11 +13,12 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use super::approvals::{ApprovalContext, ApprovalRequest, rebuild};
+use super::approvals::{ApprovalContext, ApprovalRequest, CallerProcess, rebuild};
 use super::catalogue::ActionClass;
 use super::classes::satisfying_check;
 use super::journal::{JournalEntry, JournalLine, RunOutcome, TreeFingerprint};
 use super::template::ModelAlias;
+use crate::board::SessionKindView;
 use crate::dates::HOUR_MS;
 use crate::events::EXCERPT_CHARS;
 use crate::registry::triage_call::{
@@ -57,6 +58,10 @@ closed_enum! {
         WorkdirNotEmpty,
         /// The request names no session.
         NoSessionId,
+        /// The session the request names could not be bound to the
+        /// process that made it, or is not one whose prompts are the
+        /// author's ([`session_bound`], D-960).
+        SessionUnbound,
         /// Excerpts are off: nothing may be sent to a model.
         NoExcerpts,
         /// The latest known 5-hour use is at or above
@@ -99,6 +104,7 @@ impl EscalationCause {
             | EscalationCause::ClaudeShim
             | EscalationCause::WorkdirNotEmpty
             | EscalationCause::NoSessionId
+            | EscalationCause::SessionUnbound
             | EscalationCause::NoExcerpts
             | EscalationCause::QuotaHigh
             | EscalationCause::HourlyCap
@@ -158,6 +164,9 @@ pub struct PrecheckFacts<'a> {
     pub claude: Option<&'a str>,
     /// `<home>/review/empty` is empty or missing.
     pub workdir_empty: bool,
+    /// What [`session_bound`] says of the request's session; read by the
+    /// precheck only, not by [`recheck`].
+    pub session_bound: bool,
     pub no_excerpts: bool,
     /// The latest known 5-hour `used_percentage`, stale or not; `None`
     /// without any quota file.
@@ -308,11 +317,71 @@ pub fn review_budget(rows: &[ReviewRecord], now_ms: i64) -> Budget {
     )
 }
 
-/// AD-87's precheck for request `id`: [`Precheck::NotAuto`] unless it
-/// rebuilds from the approved snapshot as an `auto` action; then, in order,
-/// `claude_not_found`, `claude_shim`, `workdir_not_empty`, `no_session_id`,
-/// `no_excerpts`, `quota_high`, `hourly_cap`, `budget_spent`,
-/// `review_config_invalid`; otherwise a [`ReviewJob`].
+/// The session a request claims, as the window knows it when it prechecks
+/// (D-960): the kind and pid of its live card, as `claude agents` reports
+/// them, the start stamp of that pid read now, and whether the registry
+/// binds the session to a work order the author launched.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ClaimedSession {
+    pub kind: Option<SessionKindView>,
+    pub pid: Option<u32>,
+    /// `None` when the process is gone or cannot be read.
+    pub started: Option<u64>,
+    pub work_order: bool,
+}
+
+/// True when the request's caller chain binds the session it claims
+/// (D-960): the session is live with a pid whose start stamp reads now,
+/// that very process is an ancestor of the `officina run` that wrote the
+/// request (an entry of `caller` past the first, with the same pid and
+/// stamp), and its prompts are the author's. An interactive session's are
+/// what the author typed; a background session's only when the window
+/// launched it for a work order he approved, since any session can start
+/// `claude --bg` with a first prompt of its own. Whatever is unknown is
+/// unbound.
+///
+/// ```
+/// use officina_core::board::SessionKindView;
+/// use officina_core::relay::approvals::CallerProcess;
+/// use officina_core::relay::auto::{ClaimedSession, session_bound};
+/// let caller = [
+///     CallerProcess { pid: 30, started: 300 },
+///     CallerProcess { pid: 20, started: 200 },
+///     CallerProcess { pid: 7, started: 70 },
+/// ];
+/// let session = ClaimedSession {
+///     kind: Some(SessionKindView::Interactive),
+///     pid: Some(7),
+///     started: Some(70),
+///     work_order: false,
+/// };
+/// assert!(session_bound(&caller, Some(&session)));
+/// let reused = ClaimedSession { started: Some(71), ..session };
+/// assert!(!session_bound(&caller, Some(&reused)));
+/// ```
+pub fn session_bound(caller: &[CallerProcess], claimed: Option<&ClaimedSession>) -> bool {
+    let Some(claimed) = claimed else {
+        return false;
+    };
+    let authors_prompts = match claimed.kind {
+        Some(SessionKindView::Interactive) => true,
+        Some(SessionKindView::Background) => claimed.work_order,
+        None => false,
+    };
+    let (Some(pid), Some(started)) = (claimed.pid, claimed.started) else {
+        return false;
+    };
+    authors_prompts
+        && caller
+            .iter()
+            .skip(1)
+            .any(|process| process.pid == pid && process.started == started)
+}
+
+/// AD-87's precheck for request `id`:[`Precheck::NotAuto`] unless it
+/// rebuilds from the approved snapshot as an `auto` action; then the causes
+/// before any call in [`EscalationCause`]'s order; otherwise a
+/// [`ReviewJob`].
 pub fn precheck(
     ctx: &ApprovalContext<'_>,
     id: &str,
@@ -336,6 +405,9 @@ pub fn precheck(
     if job.session_id.is_empty() {
         return escalate(EscalationCause::NoSessionId);
     }
+    if !facts.session_bound {
+        return escalate(EscalationCause::SessionUnbound);
+    }
     if facts.no_excerpts {
         return escalate(EscalationCause::NoExcerpts);
     }
@@ -349,13 +421,15 @@ pub fn precheck(
 }
 
 /// Rule mode's precheck (D-141): [`Precheck::NotAuto`] as [`precheck`]
-/// gives it; then only `no_session_id` and `hourly_cap` apply, the causes
-/// about a call having nothing to guard; otherwise the job, whose request
-/// the rule baseline then decides ([`rule_decision`]).
+/// gives it; then only `no_session_id`, `session_unbound` (`session_bound`
+/// is [`session_bound`]'s verdict, D-960) and `hourly_cap` apply, the
+/// causes about a call having nothing to guard; otherwise the job, whose
+/// request the rule baseline then decides ([`rule_decision`]).
 pub fn precheck_rule(
     ctx: &ApprovalContext<'_>,
     id: &str,
     request: &ApprovalRequest,
+    session_bound: bool,
     rows: &[ReviewRecord],
     now_ms: i64,
 ) -> Precheck {
@@ -364,6 +438,9 @@ pub fn precheck_rule(
     };
     if job.session_id.is_empty() {
         return Precheck::Escalate(EscalationCause::NoSessionId);
+    }
+    if !session_bound {
+        return Precheck::Escalate(EscalationCause::SessionUnbound);
     }
     if approvals_in_hour(rows, &job.project, &job.action, now_ms) >= job.max_per_hour as usize {
         return Precheck::Escalate(EscalationCause::HourlyCap);
@@ -974,6 +1051,7 @@ values = [\"lab-web\"]
                 session_id: Some("00000000-0000-0000-0000-000000000001".to_owned()),
                 check_run_id,
                 tree: None,
+                caller: Vec::new(),
             },
         )
     }
@@ -984,6 +1062,7 @@ values = [\"lab-web\"]
         PrecheckFacts {
             claude: Some("C:/bin/claude.exe"),
             workdir_empty: true,
+            session_bound: true,
             no_excerpts: false,
             five_hour_used: Some(10.0),
             rows,
@@ -1294,8 +1373,9 @@ values = [\"lab-web\"]
         }
     }
 
-    /// Story 5.14 AC 4 (D-141): rule mode prechecks `no_session_id` and
-    /// `hourly_cap` only; a call's causes never stop it.
+    /// Story 5.14 AC 4 (D-141): rule mode prechecks `no_session_id`,
+    /// `session_unbound` (D-960) and `hourly_cap` only; a call's causes
+    /// never stop it.
     #[test]
     fn rule_mode_prechecks_the_session_and_the_cap_only() {
         let approved = approved();
@@ -1306,7 +1386,7 @@ values = [\"lab-web\"]
             system_dir: "C:/Windows/System32",
         };
         let (id, apply) = request(&approved, "apply", &APPLY);
-        let Precheck::Review(job) = precheck_rule(&ctx, &id, &apply, &[], NOW) else {
+        let Precheck::Review(job) = precheck_rule(&ctx, &id, &apply, true, &[], NOW) else {
             panic!("a request with a session and room under its cap is decided by the rule");
         };
         assert_eq!(job.approval_id(), id);
@@ -1315,8 +1395,12 @@ values = [\"lab-web\"]
             ..apply.clone()
         };
         assert_eq!(
-            precheck_rule(&ctx, &id, &no_session, &[], NOW),
+            precheck_rule(&ctx, &id, &no_session, true, &[], NOW),
             Precheck::Escalate(EscalationCause::NoSessionId)
+        );
+        assert_eq!(
+            precheck_rule(&ctx, &id, &apply, false, &[], NOW),
+            Precheck::Escalate(EscalationCause::SessionUnbound)
         );
         let full: Vec<ReviewRecord> = (0..job.max_per_hour())
             .map(|i| ReviewRecord {
@@ -1329,13 +1413,110 @@ values = [\"lab-web\"]
             })
             .collect();
         assert_eq!(
-            precheck_rule(&ctx, &id, &apply, &full, NOW),
+            precheck_rule(&ctx, &id, &apply, true, &full, NOW),
             Precheck::Escalate(EscalationCause::HourlyCap)
         );
         let (human_id, human) = request(&approved, "restart", &["C:/path/to/tool.exe", "lab-web"]);
         assert_eq!(
-            precheck_rule(&ctx, &human_id, &human, &[], NOW),
+            precheck_rule(&ctx, &human_id, &human, true, &[], NOW),
             Precheck::NotAuto
+        );
+    }
+
+    /// D-960: the claimed session binds only when its live process, with
+    /// the stamp it has now, is an ancestor of the caller, and its prompts
+    /// are the author's.
+    #[test]
+    fn a_session_binds_only_through_its_live_process_among_the_callers_ancestors() {
+        let caller = [
+            CallerProcess {
+                pid: 30,
+                started: 300,
+            },
+            CallerProcess {
+                pid: 20,
+                started: 200,
+            },
+            CallerProcess {
+                pid: 7,
+                started: 70,
+            },
+        ];
+        let interactive = ClaimedSession {
+            kind: Some(SessionKindView::Interactive),
+            pid: Some(7),
+            started: Some(70),
+            work_order: false,
+        };
+        assert!(session_bound(&caller, Some(&interactive)));
+        let unbound = [
+            ("no live card", None),
+            (
+                "no pid",
+                Some(ClaimedSession {
+                    pid: None,
+                    ..interactive
+                }),
+            ),
+            (
+                "a process gone",
+                Some(ClaimedSession {
+                    started: None,
+                    ..interactive
+                }),
+            ),
+            (
+                "a reused pid",
+                Some(ClaimedSession {
+                    started: Some(71),
+                    ..interactive
+                }),
+            ),
+            (
+                "another process",
+                Some(ClaimedSession {
+                    pid: Some(8),
+                    ..interactive
+                }),
+            ),
+            (
+                "the caller itself",
+                Some(ClaimedSession {
+                    pid: Some(30),
+                    started: Some(300),
+                    ..interactive
+                }),
+            ),
+            (
+                "an unknown kind",
+                Some(ClaimedSession {
+                    kind: None,
+                    ..interactive
+                }),
+            ),
+            (
+                "a background session no work order started",
+                Some(ClaimedSession {
+                    kind: Some(SessionKindView::Background),
+                    ..interactive
+                }),
+            ),
+        ];
+        for (name, claimed) in unbound {
+            assert!(!session_bound(&caller, claimed.as_ref()), "{name}");
+        }
+        assert!(
+            !session_bound(&[], Some(&interactive)),
+            "a request without its chain"
+        );
+        let order = ClaimedSession {
+            kind: Some(SessionKindView::Background),
+            work_order: true,
+            ..interactive
+        };
+        assert!(
+            session_bound(&caller, Some(&order)),
+            "a work order's session"
         );
     }
 

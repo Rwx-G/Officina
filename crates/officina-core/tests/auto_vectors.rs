@@ -94,6 +94,7 @@ fn request(
             session_id: session.map(str::to_owned),
             check_run_id,
             tree: None,
+            caller: Vec::new(),
         },
     )
 }
@@ -131,6 +132,10 @@ fn facts<'a>(set: &Set, raw: &'a Value, rows: &'a [ReviewRecord]) -> PrecheckFac
         claude: text("claude", Some("C:/bin/claude.exe")),
         workdir_empty: raw
             .get("workdir_empty")
+            .and_then(Value::as_bool)
+            .unwrap_or(true),
+        session_bound: raw
+            .get("session_bound")
             .and_then(Value::as_bool)
             .unwrap_or(true),
         no_excerpts: raw
@@ -212,6 +217,7 @@ fn causes_are_checked_in_their_order() {
             EscalationCause::ClaudeShim => ("claude", "C:/npm/claude.cmd".into()),
             EscalationCause::WorkdirNotEmpty => ("workdir_empty", false.into()),
             EscalationCause::NoSessionId => ("session_id", Value::Null),
+            EscalationCause::SessionUnbound => ("session_bound", false.into()),
             EscalationCause::NoExcerpts => ("no_excerpts", true.into()),
             EscalationCause::QuotaHigh => ("five_hour_used", 95.0.into()),
             EscalationCause::HourlyCap => ("cap", true.into()),
@@ -439,7 +445,8 @@ fn rule_cases_match() {
         };
         let (id, request) = request(&set, case["action"].as_str().unwrap(), session, None);
         let rows = rows(&set, &case["facts"]);
-        let found = match precheck_rule(&ctx, &id, &request, &rows, set.now_ms) {
+        let bound = facts(&set, &case["facts"], &rows).session_bound;
+        let found = match precheck_rule(&ctx, &id, &request, bound, &rows, set.now_ms) {
             Precheck::Review(_) => match rule_decision(case["baseline"].as_bool().unwrap()) {
                 (decision, None) => decision.code().to_owned(),
                 (_, Some(cause)) => cause.code().to_owned(),

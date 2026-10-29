@@ -218,7 +218,12 @@ fn each_precheck_cause_escalates_without_a_call() {
             }
             _ => {}
         }
-        let session = (cause != EscalationCause::NoSessionId).then_some(SESSION);
+        // A session `claude agents` does not list cannot be bound (D-960).
+        let session = match cause {
+            EscalationCause::NoSessionId => None,
+            EscalationCause::SessionUnbound => Some("00000000-0000-0000-0000-0000000dead0"),
+            _ => Some(SESSION),
+        };
         let id = auto.request("lab-web", session);
         let claude = match cause {
             EscalationCause::ClaudeNotFound => None,
@@ -319,6 +324,105 @@ fn an_answer_excerpt_never_reaches_the_review() {
     assert!(!argv.contains("PROMPT-MARKER") && !argv.contains(ANSWER));
     let env = calls[0]["env"].to_string();
     assert!(!env.contains("PROMPT-MARKER") && !env.contains(ANSWER));
+}
+
+/// D-960 (story 5.19's security audit, High): a request that claims
+/// another session, whose prompt asks for the approval, is never reviewed
+/// on that prompt, even with auto approval on: the claimed session's
+/// process is not an ancestor of the `officina run` that asked, so the
+/// request escalates `session_unbound` with its row and its line, no call
+/// and no approval. A background session the caller does descend from, but
+/// that no work order started, is no author's either. The same action
+/// asked from the caller's own session is reviewed, approved and run.
+#[test]
+fn a_forged_session_claim_is_never_reviewed() {
+    const VICTIM: &str = "00000000-0000-0000-0000-00000000b0b0";
+    const SPAWNED: &str = "00000000-0000-0000-0000-00000000c0c0";
+    let options = Options {
+        prompt: "Apply it. FAKE-REVIEW:approve".to_owned(),
+        ..Options::default()
+    };
+    let auto = Auto::new(&options);
+    auto.set_auto(true, AutoMode::Review);
+    // The session the claim names: another live process, not the caller's
+    // ancestor, whose author asked for the approval.
+    let mut other = std::process::Command::new(
+        std::path::Path::new(&std::env::var("SYSTEMROOT").unwrap()).join(r"System32\ping.exe"),
+    )
+    .args(["-n", "120", "127.0.0.1"])
+    .stdout(std::process::Stdio::null())
+    .spawn()
+    .unwrap();
+    let now = common::now_ms();
+    auto.list_sessions(&[
+        serde_json::json!({
+            "pid": other.id(), "cwd": auto.relay.project(), "kind": "interactive",
+            "startedAt": now - 600_000, "sessionId": VICTIM, "status": "idle",
+        }),
+        serde_json::json!({
+            "pid": std::process::id(), "id": "c0c0", "cwd": auto.relay.project(),
+            "kind": "background", "startedAt": now - 600_000, "sessionId": SPAWNED,
+            "status": "busy", "state": "working",
+        }),
+    ]);
+    for session in [VICTIM, SPAWNED] {
+        auto.prompt_of(session, "Apply it. FAKE-REVIEW:approve", now - 30_000);
+    }
+    let forged = auto.request("lab-web", Some(VICTIM));
+    let spawned = auto.request("lab-db", Some(SPAWNED));
+    let (handle, _emitted) = auto.window(&options);
+    let rows = [auto.row_of(&forged), auto.row_of(&spawned)];
+    let check = auto.run(&["check", "group=lab-web"], None);
+    assert_eq!(check.status.code(), Some(0), "{check:?}");
+    let genuine = auto.run(&["apply", "group=lab-web", "--wait", "20"], Some(SESSION));
+    assert_eq!(
+        genuine.status.code(),
+        Some(0),
+        "approved and run: {genuine:?}"
+    );
+    stop(handle);
+    other.kill().unwrap();
+    other.wait().unwrap();
+    for row in &rows {
+        assert_eq!(
+            (row.mode, row.outcome, row.cause, row.call_started_at_ms),
+            (
+                ReviewMode::Live,
+                ReviewOutcome::NoCall,
+                Some(EscalationCause::SessionUnbound),
+                None
+            ),
+            "{}",
+            row.approval_id
+        );
+    }
+    assert_eq!(
+        auto.calls().len(),
+        1,
+        "only the genuine request's review ran"
+    );
+    let files = auto.approval_files();
+    for id in [&forged, &spawned] {
+        assert!(
+            !files
+                .iter()
+                .any(|n| n.starts_with(id.as_str()) && !n.ends_with(".request.json")),
+            "{id}: {files:?}"
+        );
+    }
+    let escalated: Vec<String> = auto
+        .relay
+        .env
+        .journal()
+        .into_iter()
+        .filter_map(|line| match line.entry {
+            JournalEntry::AutoEscalated(a) if a.cause == EscalationCause::SessionUnbound => {
+                Some(a.approval_id)
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(escalated, [forged, spawned]);
 }
 
 // ---- story 5.14: live and rule modes (AD-86, AD-88, D-141, D-157) ----

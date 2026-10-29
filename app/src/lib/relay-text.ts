@@ -74,6 +74,8 @@ export const ESCALATION_TEXT: Record<EscalationCause, string> = {
   claude_shim: "claude is not the native claude.exe, so no review ran",
   workdir_not_empty: "the review's empty folder holds a file, so no review ran",
   no_session_id: "the request names no session, so no review ran",
+  session_unbound:
+    "the session the request names did not make it, or is a background session Officina did not launch, so no review ran",
   no_excerpts: "excerpts are off, so nothing may be sent to a review",
   quota_high: "the 5-hour window is nearly spent, so no review ran",
   hourly_cap: "this action reached its approvals for the hour",

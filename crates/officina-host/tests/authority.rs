@@ -375,6 +375,7 @@ fn write_request(relay: &RelayHome, service: &str, ago: i64) -> (String, Approva
         session_id: None,
         check_run_id: None,
         tree: None,
+        caller: Vec::new(),
     };
     approvals::create_request(relay, &id, &request).unwrap();
     (id, request)
@@ -483,6 +484,7 @@ fn write_auto_request(relay: &RelayHome, service: &str) -> String {
         session_id: None,
         check_run_id: Some("19a2b3c4d5e-1f".to_owned()),
         tree: None,
+        caller: Vec::new(),
     };
     approvals::create_request(relay, &id, &request).unwrap();
     id

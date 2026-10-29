@@ -575,6 +575,14 @@ impl WindowRegistry {
         self.with_writer(|writer| Ok(Ok(writer.record_orchestrator_start(start)?)))
     }
 
+    /// True when a work order the window launched is bound to
+    /// `session_id` (D-960); false too when the registry cannot be read,
+    /// which leaves the session unbound.
+    pub fn is_work_order_session(&mut self, session_id: &str) -> bool {
+        self.on_writer(|writer| writer.is_work_order_session(session_id))
+            .unwrap_or(false)
+    }
+
     /// The pid and creation time the newest spawned start kept (D-144),
     /// read back at window start; `None` without one, or when the registry
     /// cannot be read.

@@ -179,6 +179,23 @@ pub struct ApprovalRequest {
     /// on when it names one; absent outside a git work tree (D-170, D-173).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tree: Option<TreeFingerprint>,
+    /// `officina run` and its ancestors when it wrote the request, nearest
+    /// first, as it read them itself: what binds the session it claims to
+    /// the process that asked (D-960). Empty in a request written another
+    /// way, which no review then takes.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub caller: Vec<CallerProcess>,
+}
+
+/// One process of a request's caller chain (D-960): its id and its start
+/// stamp, in the platform's own units (Windows `FILETIME` ticks, Linux
+/// clock ticks since boot). A stamp is compared only with one read on the
+/// same machine; it tells a process from a later one given the same id.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CallerProcess {
+    pub pid: u32,
+    pub started: u64,
 }
 
 impl ApprovalRequest {
@@ -984,6 +1001,7 @@ pattern = \"lab-[a-z]+\"
             session_id: Some("s1".to_owned()),
             check_run_id,
             tree: bound,
+            caller: Vec::new(),
         };
         (id, request)
     }

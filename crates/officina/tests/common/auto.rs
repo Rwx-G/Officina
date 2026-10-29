@@ -113,21 +113,36 @@ impl Auto {
         let review_log = relay.env.root.path().join("review.log");
         let auto = Auto { relay, review_log };
         let now = now_ms();
-        auto.relay.env.write_agents(
-            &serde_json::json!([{
-                "pid": 4242, "cwd": auto.relay.project(), "kind": "interactive",
-                "startedAt": now - 600_000, "sessionId": SESSION, "status": "busy",
-            }])
-            .to_string(),
-        );
+        auto.list_sessions(&[]);
         auto.prompt(&options.prompt, now - 60_000);
         auto
     }
 
+    /// Has `claude agents` list [`SESSION`], busy and interactive, and each
+    /// of `others`. [`SESSION`]'s process is this test process, which
+    /// starts every `officina run` of [`Auto::run`]: the session each
+    /// request claims is an ancestor of its caller, as the Bash tool's
+    /// `claude` is (D-960).
+    pub fn list_sessions(&self, others: &[serde_json::Value]) {
+        let mut listed = vec![serde_json::json!({
+            "pid": std::process::id(), "cwd": self.relay.project(), "kind": "interactive",
+            "startedAt": now_ms() - 600_000, "sessionId": SESSION, "status": "busy",
+        })];
+        listed.extend(others.iter().cloned());
+        self.relay
+            .env
+            .write_agents(&serde_json::Value::Array(listed).to_string());
+    }
+
     /// Writes a `UserPromptSubmit` of the session, the author's prompt.
     pub fn prompt(&self, text: &str, ts: i64) {
+        self.prompt_of(SESSION, text, ts);
+    }
+
+    /// Writes a `UserPromptSubmit` of `session`.
+    pub fn prompt_of(&self, session: &str, text: &str, ts: i64) {
         self.event(serde_json::json!({
-            "v": 1, "ts": ts, "event": "UserPromptSubmit", "session_id": SESSION,
+            "v": 1, "ts": ts, "event": "UserPromptSubmit", "session_id": session,
             "cwd": self.relay.project(), "prompt": text,
         }));
     }

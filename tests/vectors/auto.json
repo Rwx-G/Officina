@@ -11,6 +11,7 @@
     {"name": "a cmd shim", "action": "apply", "facts": {"claude": "C:/npm/claude.cmd"}, "expect": "claude_shim"},
     {"name": "something in the review folder", "action": "apply", "facts": {"workdir_empty": false}, "expect": "workdir_not_empty"},
     {"name": "a request from a terminal", "action": "apply", "session_id": null, "facts": {}, "expect": "no_session_id"},
+    {"name": "a session claim not bound to the caller", "action": "apply", "facts": {"session_bound": false}, "expect": "session_unbound"},
     {"name": "excerpts are off", "action": "apply", "facts": {"no_excerpts": true}, "expect": "no_excerpts"},
     {"name": "the 5-hour window at 90 percent", "action": "apply", "facts": {"five_hour_used": 90.0}, "expect": "quota_high"},
     {"name": "just under 90 percent is reviewed", "action": "apply", "facts": {"five_hour_used": 89.9}, "expect": "review"},
@@ -62,6 +63,7 @@
     {"name": "a true baseline approves by the rule", "action": "apply", "facts": {}, "baseline": true, "expect": "approve"},
     {"name": "a false baseline escalates", "action": "apply", "facts": {}, "baseline": false, "expect": "rule_baseline_false"},
     {"name": "a request from a terminal", "action": "apply", "session_id": null, "facts": {}, "baseline": true, "expect": "no_session_id"},
+    {"name": "a session claim not bound to the caller, with a true baseline", "action": "apply", "facts": {"session_bound": false}, "baseline": true, "expect": "session_unbound"},
     {"name": "two approvals this hour reach the cap of two, rule rows counting as review rows", "action": "apply", "facts": {"rows": [
       {"project": "lab", "action": "apply", "requested_at_ms": 1793101000000, "outcome": "no_call", "decision": "approve", "call_started_at_ms": null},
       {"project": "lab", "action": "apply", "requested_at_ms": 1793102000000, "outcome": "answered", "decision": "approve", "call_started_at_ms": 1793102000000}
@@ -78,6 +80,7 @@
     {"name": "an expired request is no case", "rows": [{"n": 19}, {"author_decision": null}], "expect": {"cases": 19, "disagreements": 0, "rule_diff": 0, "gate": false, "rule_offer": false}},
     {"name": "a rejection without its reason is no case", "rows": [{"n": 19}, {"author_decision": "rejected"}], "expect": {"cases": 19, "disagreements": 0, "rule_diff": 0, "gate": false, "rule_offer": false}},
     {"name": "live and rule rows never count", "rows": [{"n": 19}, {"mode": "live"}, {"mode": "rule", "outcome": "no_call"}], "expect": {"cases": 19, "disagreements": 0, "rule_diff": 0, "gate": false, "rule_offer": false}},
+    {"name": "a request escalated before any call, as an unbound session's is, is no case even once the author approved it", "rows": [{"n": 19}, {"outcome": "no_call", "decision": null}], "expect": {"cases": 19, "disagreements": 0, "rule_diff": 0, "gate": false, "rule_offer": false}},
     {"name": "a row without an answer is no case", "rows": [{"n": 19}, {"outcome": "timeout", "decision": null}], "expect": {"cases": 19, "disagreements": 0, "rule_diff": 0, "gate": false, "rule_offer": false}},
     {"name": "a should not have run mark is a disagreement, whatever its row", "rows": [{"n": 20}, {"mode": "live", "marked_at_ms": 1793098800000}], "expect": {"cases": 20, "disagreements": 1, "rule_diff": 0, "gate": false, "rule_offer": false}},
     {"name": "a mark older than 30 days no longer counts", "rows": [{"n": 20}, {"mode": "live", "requested_at_ms": 1790424000000, "marked_at_ms": 1790424000000}], "expect": {"cases": 20, "disagreements": 0, "rule_diff": 0, "gate": true, "rule_offer": true}},

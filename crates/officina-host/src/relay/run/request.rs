@@ -136,6 +136,7 @@ fn create(
         session_id: ctx.session_id.map(str::to_owned),
         check_run_id: bound.check_run_id.map(str::to_owned),
         tree: bound.tree.cloned(),
+        caller: crate::process_tree::own_chain(),
     };
     if let Err(e) = approvals::create_request(ctx.home, &id, &request) {
         drop(lock);

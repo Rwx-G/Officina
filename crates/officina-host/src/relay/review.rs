@@ -17,17 +17,17 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::time::Duration;
 
-use officina_core::board::Board;
+use officina_core::board::{Board, SessionKindView};
 use officina_core::registry::triage_call::{CALL_SPACING_MS, CallUsage, PromptError};
 use officina_core::registry::types::{AuthorDecision, ReviewMode, ReviewOutcome};
 use officina_core::relay::approvals::{
-    ApprovalBy, ApprovalFiles, DecideRefusal, Decision, PENDING_MS, is_live,
+    ApprovalBy, ApprovalFiles, ApprovalRequest, DecideRefusal, Decision, PENDING_MS, is_live,
 };
 use officina_core::relay::auto::{
-    Escalation, EscalationCause, MARK_WINDOW_MS, Precheck, PrecheckFacts, REVIEW_TIMEOUT_MS,
-    ReviewAnswer, ReviewContext, ReviewDecision, ReviewJob, check_status, decide, mode,
-    output_error_cause, past_outcomes, precheck, precheck_rule, prompt, read_output, recheck,
-    rule_baseline, rule_decision, schema,
+    ClaimedSession, Escalation, EscalationCause, MARK_WINDOW_MS, Precheck, PrecheckFacts,
+    REVIEW_TIMEOUT_MS, ReviewAnswer, ReviewContext, ReviewDecision, ReviewJob, check_status,
+    decide, mode, output_error_cause, past_outcomes, precheck, precheck_rule, prompt, read_output,
+    recheck, rule_baseline, rule_decision, schema, session_bound,
 };
 use officina_core::relay::journal::{
     AutoEscalated, AutoReviewed, JournalEntry, JournalLine, TreeFingerprint,
@@ -40,6 +40,7 @@ use super::authority::{self, AuthorityError};
 use super::home::RelayHome;
 use super::journal;
 use super::tree;
+use crate::process_tree;
 use crate::registry::review::{AutoState, NewReview, ReviewRow};
 use crate::registry::triage::{NONCE_DRAWS, draw_nonce};
 use crate::registry::window::WindowRegistry;
@@ -465,6 +466,7 @@ impl Reviews {
         let facts = PrecheckFacts {
             claude: claude.as_deref(),
             workdir_empty: workdir_empty(env.officina_home),
+            session_bound: false,
             no_excerpts: env.no_excerpts,
             five_hour_used: env.five_hour_used,
             rows: &records,
@@ -479,11 +481,20 @@ impl Reviews {
                 continue;
             }
             let request = &files.requests[id];
+            let session_bound = binds_session(env.board, registry, request);
             let found = if current == ReviewMode::Rule {
                 let records = review_records(registry, now_ms);
-                precheck_rule(&ctx, id, request, &records, now_ms)
+                precheck_rule(&ctx, id, request, session_bound, &records, now_ms)
             } else {
-                precheck(&ctx, id, request, &facts)
+                precheck(
+                    &ctx,
+                    id,
+                    request,
+                    &PrecheckFacts {
+                        session_bound,
+                        ..facts
+                    },
+                )
             };
             match found {
                 Precheck::NotAuto => {}
@@ -625,6 +636,7 @@ impl Reviews {
             let facts = PrecheckFacts {
                 claude: None,
                 workdir_empty: true,
+                session_bound: true,
                 no_excerpts: env.no_excerpts,
                 five_hour_used: env.five_hour_used,
                 rows: &records,
@@ -770,6 +782,33 @@ impl Reviews {
                 .is_some_and(|r| is_live(r.created_at_ms, now_ms))
         });
     }
+}
+
+/// True when `request`'s session claim binds to the process that made it
+/// ([`session_bound`], D-960): the claimed session's live card on `board`,
+/// the start stamp its pid has now, and, for a background session, whether
+/// a work order the window launched is bound to it. Read when the request
+/// is prechecked, while the session runs; no board, no live card or no
+/// readable process leaves it unbound.
+fn binds_session(
+    board: Option<&Board>,
+    registry: &mut WindowRegistry,
+    request: &ApprovalRequest,
+) -> bool {
+    let claimed = request.session_id.as_deref().and_then(|session_id| {
+        let card = board?
+            .columns
+            .all()
+            .find(|card| card.session_id.as_deref() == Some(session_id) && card.pid.is_some())?;
+        Some(ClaimedSession {
+            kind: card.kind,
+            pid: card.pid,
+            started: card.pid.and_then(process_tree::running_since),
+            work_order: card.kind == Some(SessionKindView::Background)
+                && registry.is_work_order_session(session_id),
+        })
+    });
+    session_bound(&request.caller, claimed.as_ref())
 }
 
 /// The card of `session_id` on `board`, when it shows one.
