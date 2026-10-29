@@ -519,6 +519,13 @@ Story 5.1 AC 5, AD-96 row 4, D-126, D-127, D-573.
   before removing the file and the session. Report:
   `target/gates-v05/report-gate4.md`. It runs again once the owner
   switches his default mode (D-573).
+- **Window half: pending** (story 5.7 AC 11, D-673). The launch path is
+  built with story 5.7; the window's controls come with story 5.9. Once
+  it merges: with a template approved on a trusted scratch repository,
+  issue its card in the Orchestrator view and click Launch, then record
+  the outcome, `printed`, whether the row binds within 10 minutes and the
+  names of the variables the session's Bash sees, here. The branch above
+  is recorded in epic-5-decisions.md D-671 and stated in the README.
 
 ## E23. `claude logs` (v0.5 gate 7)
 
