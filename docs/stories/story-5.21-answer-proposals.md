@@ -53,7 +53,8 @@ so that routine nudges cost me one look and one click, while no model text ever 
 - The board as built never puts a background session in Your turn: an idle one is placed by its state, Done for a finished turn (D-802). AD-182's "in Your turn" is read as live and idle in its turn, Done or Your turn with `ResumeLive` (D-860).
 - The rationale's "1 to 500 characters" needed a reason for an empty one: `rationale_missing`, a third unit variant beside the two the story names (D-861).
 - `cargo test -p officina-core --all-features` turns the mutants on and fails the launch tests by design; the gate's `--features officina-core/ts` is the run that counts.
-- `injection.rs::auto_approved_run_cases` failed once under load in a full parallel run (`a catalogue approved again during the review refuses its approval: cause None`) and passed alone: Slice B's, not touched here.
+- Two races the answer cases' added load exposed in the battery, fixed in the tests: the fake claude wrote a log line in pieces, so a console's resume and the collector's `claude agents` interleaved into an unparsable line (each line is now one write); `auto_approved_run_cases`'s catalogue change read the review row before a refused approval set its cause (D-734; the case now waits for the cause).
+- Gate, Windows, on this branch's final code: fmt, build, clippy green; the workspace tests 1,628 passed, 0 of this story failed, 14 ignored, with machine-load flakes outside the story across the runs: `watch.rs::queued_reviews_are_paced_5_s_apart` (4,793 ms then 4,696 ms, the pacing agent's), `watch.rs::a_two_second_turn_is_confirmed` once, `board.rs::{hanging_claude_times_out_instead_of_blocking, a_process_claude_leaves_running_cannot_hold_the_board}` once (8.49 s and 4.18 s), each green when its binary ran alone; perf's `hook_latency_p95` own cost 42.6 ms over its 30 ms (the hook is untouched here), the gate's own cost 6.0 ms within 15 ms; every later step green: lexer differential, approvals stress, both crash suites, authority markers, dependencies, fixtures, `pnpm check`, lint, Vitest 318, Playwright 1,263 (x3), the three mutants caught, `cargo deny`, `pnpm audit` (one low, ignored). Linux (rust:1-bookworm): 1,450 passed, 0 failed, 12 ignored, green.
 
 ### Completion Notes
 
@@ -76,7 +77,7 @@ Decisions D-860 to D-867 (D-860 and D-865 to confirm). The tests proving each AC
 - `crates/officina-core/tests/orders_vectors.rs`, `mcp_vectors.rs`
 - `crates/officina-host/src/meeting.rs`, `mcp.rs`, `watch.rs`, `registry/proposals.rs`, `registry/read.rs`, `registry/window.rs`
 - `crates/officina-host/examples/orchestrator_fixture.rs`
-- `crates/officina/tests/watch.rs`, `mcp.rs`, `injection.rs`, `quota_doctor.rs`, `common/mcp.rs`
+- `crates/officina/tests/watch.rs`, `mcp.rs`, `injection.rs`, `quota_doctor.rs`, `common/mcp.rs`; `crates/officina/src/bin/officina-fake-claude.rs` (one write per log line)
 - `app/src-tauri/src/main.rs`
 - `app/src/components/ProposedAnswer.svelte` (new), `MeetingPanel.svelte`, `ProposalList.svelte`, `OrchestratorView.svelte`, `components.test.ts`; `app/src/App.svelte`
 - `app/src/lib/ipc.ts`, `meeting.svelte.ts`, `meeting-text.ts`, `orchestrator-text.ts`, `app/src/e2e-mock.ts`
