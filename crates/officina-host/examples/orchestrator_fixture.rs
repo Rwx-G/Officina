@@ -4,11 +4,13 @@
 //! writer at explicit times, binds the started ones as the window binds
 //! them (AD-81 step 4), records the author's last reading of the briefing,
 //! then prints the `OrchestratorView` the window would build, from the same
-//! functions the collector calls. Story 5.14 adds the `auto` class's
-//! review rows with the author's decisions, its switches and the decision
-//! lines, which `officina relay --json` then prints (the `relay-auto`
-//! scenario). Never SQL from Node, never a command line
-//! write path. Built only with `window-authority`, linked into neither
+//! functions the collector calls. A script with cards prints those instead:
+//! work order cards issued and edited by core from the home's approved
+//! catalogue, as the window's card store issues them (story 5.9). Story 5.14
+//! adds the `auto` class's review rows with the author's decisions, its
+//! switches and the decision lines, which `officina relay --json` then
+//! prints (the `relay-auto` scenario). Never SQL from Node, never a command
+//! line write path. Built only with `window-authority`, linked into neither
 //! shipped binary.
 //!
 //! Usage: `orchestrator_fixture <officina home> <script.json>`, where the
@@ -17,11 +19,15 @@
 //!
 //! Exit 0, 1 when a step fails, 64 on usage.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use officina_core::agents::parse_agents;
 use officina_core::board::Board;
+use officina_core::orders::card::{
+    self, CardChange, CardInputs, CardRequest, IssuedCard, WorkOrderCard, reserved_seq,
+};
 use officina_core::orders::work_order::{SubjectChoice, WorkOrder, order_name};
 use officina_core::registry::fold::AgentsSnapshot;
 use officina_core::registry::types::{
@@ -76,6 +82,10 @@ struct Script {
     /// for the decisions per day (AD-92).
     #[serde(default)]
     decisions: Vec<SeededDecision>,
+    /// Cards to issue, in order; when there are any, they are printed by
+    /// name instead of the view.
+    #[serde(default)]
+    cards: Vec<CardStep>,
 }
 
 /// One review row, as the window's review would have written it.
@@ -186,6 +196,25 @@ fn seed_auto(writer: &mut Writer, relay: &RelayHome, script: &Script) -> Result<
         journal::append(relay, &[line], decision.at_ms).map_err(|e| e.to_string())?;
     }
     Ok(())
+}
+
+/// One card, named for its fixture: issued for a request, or issued by an
+/// edit of a card an earlier step named.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CardStep {
+    name: String,
+    #[serde(default)]
+    request: Option<CardRequest>,
+    #[serde(default)]
+    edit: Option<CardEdit>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CardEdit {
+    of: String,
+    change: CardChange,
 }
 
 /// One work order, launched from a card of the approved catalogue.
@@ -301,6 +330,72 @@ fn record(
     Ok(())
 }
 
+/// Issues the script's cards through core's `card::issue` and `card::edit`
+/// with the approved catalogue, the registry's subjects and `seq`, and the
+/// board's quota, as the window's store does; the ids are fixed, so a card
+/// fixture names the same card on every run.
+fn issue_cards(
+    home: &Path,
+    relay: &RelayHome,
+    board: Option<&Board>,
+    steps: &[CardStep],
+    now_ms: i64,
+) -> Result<BTreeMap<String, WorkOrderCard>, String> {
+    let state = relay.read_approved();
+    let approved = state
+        .approved()
+        .ok_or("the home's catalogue is not approved")?
+        .clone();
+    let current =
+        load_relay_floor(&relay.relay_floor(&state)).map_err(|e| format!("relay floor: {e}"))?;
+    let mut registry = WindowRegistry::open(home, &[], now_ms);
+    let mut issued: BTreeMap<String, IssuedCard> = BTreeMap::new();
+    for (index, step) in steps.iter().enumerate() {
+        let id = format!("{:032x}", index + 1);
+        let previous = match &step.edit {
+            Some(edit) => Some(
+                issued
+                    .get(&edit.of)
+                    .ok_or_else(|| format!("{}: no card named {}", step.name, edit.of))?,
+            ),
+            None => None,
+        };
+        let template = match (&step.request, previous) {
+            (Some(request), None) => request.template.clone(),
+            (None, Some(previous)) => previous.card().template.clone(),
+            _ => return Err(format!("{}: a request or an edit, one of them", step.name)),
+        };
+        let (subjects, highest) = registry
+            .card_reads(&template)
+            .map_err(|e| format!("{}: {}", step.name, e.message))?;
+        let inputs = CardInputs {
+            approved: &approved,
+            current: &current,
+            subjects: &subjects,
+            quota: board.map(|b| &b.quota),
+            config_dir: None,
+            now_ms,
+        };
+        let answer = match (&step.request, previous, &step.edit) {
+            (Some(request), _, _) => {
+                let held = issued
+                    .values()
+                    .filter(|card| card.card().template == template)
+                    .map(IssuedCard::seq);
+                card::issue(&id, reserved_seq(highest, held), request, &inputs)
+            }
+            (None, Some(previous), Some(edit)) => card::edit(previous, &edit.change, &id, &inputs),
+            _ => return Err(format!("{}: a request or an edit, one of them", step.name)),
+        };
+        let card = answer.map_err(|refusal| format!("{}: refused {refusal:?}", step.name))?;
+        issued.insert(step.name.clone(), card);
+    }
+    Ok(issued
+        .into_iter()
+        .map(|(name, issued)| (name, issued.card().clone()))
+        .collect())
+}
+
 fn run(home: &Path, script: &Script) -> Result<String, String> {
     let relay = RelayHome::new(home, None);
     {
@@ -324,6 +419,10 @@ fn run(home: &Path, script: &Script) -> Result<String, String> {
         ),
         None => None,
     };
+    if !script.cards.is_empty() {
+        let cards = issue_cards(home, &relay, board.as_ref(), &script.cards, script.now_ms)?;
+        return serde_json::to_string_pretty(&cards).map_err(|e| e.to_string());
+    }
     let auto = AutoRead::read_only(home, script.now_ms);
     let relay_view =
         read_view_with(&relay, script.now_ms, None, &auto).map_err(|e| e.to_string())?;

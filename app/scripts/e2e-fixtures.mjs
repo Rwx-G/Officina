@@ -1418,6 +1418,22 @@ const orchestratorScenarios = {
     ],
     readAt: now - HOUR,
     pending: true,
+    // The board the cards take their quota windows from.
+    quota: quotaPayload(Math.floor((now + 2 * HOUR) / 1000), Math.floor((now + 3 * 24 * HOUR) / 1000)),
+    // Work order cards issued from this home by core (story 5.9, kind
+    // `card`): a first card, the card a value edit issues in its place,
+    // and the card a new subject's name issues in place of that one.
+    cards: [
+      {
+        name: "card-bump",
+        request: { template: "dependency-bump", project: "billing-api", values: [["package", "serde_json"], ["level", "patch"]], subject: null },
+      },
+      { name: "card-bump-minor", edit: { of: "card-bump", change: { kind: "value", name: "level", value: "minor" } } },
+      {
+        name: "card-bump-new-subject",
+        edit: { of: "card-bump-minor", change: { kind: "subject", subject: { kind: "new", value: "<b>serde</b> upgrades" } } },
+      },
+    ],
   },
 };
 
@@ -1461,6 +1477,7 @@ for (const [name, scenario] of Object.entries(orchestratorScenarios)) {
     FAKE_CLAUDE_FIXTURE: fixture,
     FAKE_CLAUDE_MODE: "ok",
   };
+  if (scenario.quota) execFileSync(officina, ["quota", "write"], { env, input: scenario.quota });
   const board = officinaJson(["board", "--json"], env);
   if (board.status !== 0) throw new Error(`${name}: officina board exited ${board.status}: ${board.stderr}`);
   const boardFile = join(tmp, "board.json");
@@ -1488,6 +1505,30 @@ for (const [name, scenario] of Object.entries(orchestratorScenarios)) {
     if (!held) throw new Error(`${name}: expected ${what}: ${view.stdout}`);
   }
   writeFixture(name, "orchestrator", view.stdout);
+  if (scenario.cards) {
+    // A pending change refuses every card (catalogue_changed): they are
+    // issued from the floor the catalogue was approved for.
+    writeFileSync(join(officinaHome, "floor.toml"), orchestratorFloor);
+    writeFileSync(script, JSON.stringify({ now_ms: now, board_file: boardFile, cards: scenario.cards }));
+    const issued = spawnSync(orchestratorFixture, [officinaHome, script], { encoding: "utf8" });
+    if (issued.status !== 0) throw new Error(`${name}: orchestrator_fixture exited ${issued.status} on its cards: ${issued.stderr}`);
+    const cards = JSON.parse(issued.stdout);
+    const first = cards["card-bump"];
+    const edited = cards["card-bump-minor"];
+    const renamed = cards["card-bump-new-subject"];
+    const cardChecks = [
+      [Object.keys(cards).length === scenario.cards.length, "one card per step"],
+      [first.argv.length > 1 && first.prompt.length > 0, "a vector and a prompt"],
+      [first.quota?.five_hour != null && first.quota?.seven_day != null, "the board's quota windows"],
+      [first.subject.kind === "existing" && first.subject_options.length > 0, "the project's open subject as the default"],
+      [edited.seq === first.seq && edited.id !== first.id && edited.prompt !== first.prompt, "a value edit under the same seq"],
+      [renamed.subject.kind === "new" && renamed.prompt === edited.prompt, "a subject edit that keeps the prompt"],
+    ];
+    for (const [held, what] of cardChecks) {
+      if (!held) throw new Error(`${name}: expected ${what}: ${issued.stdout}`);
+    }
+    for (const [cardName, card] of Object.entries(cards)) writeFixture(cardName, "card", JSON.stringify(card, null, 2));
+  }
   rmSync(tmp, { recursive: true, force: true });
   console.log(`fixture ${name}: exit ${view.status}`);
 }
