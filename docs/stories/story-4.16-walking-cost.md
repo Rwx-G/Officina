@@ -1,6 +1,6 @@
 # Story 4.16: Walking's cost
 
-**Status:** In progress (code done; AC 6, the walking runs of E82 measured again on the owner's screen, is the lead's to schedule)
+**Status:** Review (code done; AC 6 measured, research notes E86: the walking run sits on the 1 % gate without passing it, so walking stays off by default)
 
 ## Story
 
@@ -28,7 +28,7 @@ E82 measured, on the owner's 3440 x 1440 240 Hz screen, walking's own cost at ab
 - [x] Resting frames handed out again and skipped (AC 4)
 - [x] Guards: the band locality case, the frame floor cases (AC 2, 3)
 - [x] Profile after; the scene's tests green (AC 1, 5)
-- [ ] E82's runs 4 and 5 again on the owner's screen; the default decided by run 4 (AC 6) (lead)
+- [x] E82's runs 4 and 5 again on the owner's screen; the default decided by run 4 (AC 6)
 - [x] Documentation (AC 7)
 
 ## Dev Notes
@@ -78,7 +78,7 @@ E82 measured, on the owner's 3440 x 1440 240 Hz screen, walking's own cost at ab
 - AC 3: `mover.test.ts > a fast display draws one frame per MIN_FRAME_MS, a 60 Hz one every vsync`, `> speed never exceeds WALK.vmax`; `walk.spec.ts > a walking figure stays one stable node`.
 - AC 4: `mover.test.ts > an object at rest is handed out again unchanged, a walking one anew`.
 - AC 5: the gate's figures (the Epic 4 report).
-- AC 6: open, the lead's. The commands and the environment are E82's method; the story's final report lists them.
+- AC 6: **measured, gate not passed** (2026-10-29, research notes E86), the release window of `d33d0c2` (this story's code), session locked as in E82 (about 170 frames per second): run 4, replay with walking on, 0.9985 % of the machine (24.0 % of one core) and 1.007 % (24.2 %) when run again, both over 1 % from minute 2 on; run 5, walking off, 0.51 % (12.1 %). Walking's own cost fell from about 1.4 % to 0.5 % of the machine. Run 4 is not under 1 %, so D-553 does not apply: `DEFAULT_WALKING` stays `false`.
 
 ## File List
 
@@ -87,7 +87,9 @@ E82 measured, on the owner's 3440 x 1440 240 Hz screen, walking's own cost at ab
 - `app/src/lib/scene/objects.test.ts`, `mover.test.ts`
 - `app/e2e/walk.spec.ts`
 - `README.md`, `CHANGELOG.md`
+- `docs/research-notes.md` (E86)
 
 ## Change Log
 
 - 2026-10-29 created after E82's walking run failed and the owner asked to keep walking; implemented (D-550 to D-553); AC 6 open for the lead
+- 2026-10-29 AC 6 measured (E86): run 4 at 1.00 % of the machine, not under the gate; walking stays off by default

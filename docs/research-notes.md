@@ -511,6 +511,55 @@ passes: `HALO_BREATHING_MS` stays 120 000 ms. A run on the unlocked
 240 Hz screen would put the passes in the AC's own condition; it cannot
 reverse run 4.
 
+## E86. The walking runs again after story 4.16
+
+Story 4.16 AC 6, D-515, D-553. E82's runs 4 (replay, walking on) and 5
+(replay, walking off) run again on 2026-10-29 at night, by E82's method
+unchanged (fresh `scene-measure` home per run, the same stored views copied
+into each run's WebView2 profile, maximised, 15 s to settle, 60 samples
+10 s apart from the replay's start, `officina-app` and its 7 WebView2
+processes counted). Same machine, screen, WebView2 runtime
+(156.0.4314.50) and theme as E82; the owner's installed Officina closed,
+no build, test or container running; Synology Drive's daemon used up to
+about one core, outside the measured processes.
+
+Binary: the release window of `main` at `d33d0c2`, built by `pnpm bundle`;
+its code is story 4.16's commit `0effd0d` (depth bands, the 13 ms frame
+floor, resting frames not redrawn). Run 4 was run twice, its first result
+being within a thousandth of the gate.
+
+**Condition: the session was locked again**, the window shown, maximised,
+not minimised, not in front. E82's probe build read
+`requestAnimationFrame` at about 170 frames per second (129 to 171 over
+30 s). With the 13 ms floor the mover draws every third refresh at 170 Hz
+(about 57 frames a second) and every fourth at 240 Hz (60): the lock now
+changes the frames drawn by about 5 %, not 30 %, and the unlocked screen
+adds empty callbacks, so it would not lower these figures.
+
+| Run | Mean, machine | Max, machine | Mean, one core | Max, one core | Gate: under 1 % of the machine |
+|---|---|---|---|---|---|
+| 4 Replay, walking on | 0.9985 % | 1.63 % | 24.0 % | 39.1 % | at the threshold |
+| 4 again | 1.007 % | 1.57 % | 24.2 % | 37.6 % | **fail** |
+| 5 Replay, walking off | 0.51 % | 0.70 % | 12.1 % | 16.9 % | pass |
+
+- Against E82: run 4 from 1.95 % to about 1.00 % of the machine (46.9 %
+  to 24 % of one core), run 5 from 0.58 % to 0.51 %.
+- Walking's own cost, run 4 less run 5 at one walk every 10 s: about
+  0.50 % of the machine (12 % of one core), from E82's 1.4 %, a cut of
+  about 64 %.
+- Over time, both run 4s: 0.84 % in the first two minutes, then 1.01 to
+  1.06 % from minute 2 to 10, once about two halos breathe at a time (run
+  5: 0.34 % then 0.55 %). The whole-run mean is at 1 % only because the
+  first two minutes are lighter.
+- The per-core figure is information only (D-515).
+
+Outcome: run 4 is not under 1 % of the machine: one run at 0.9985 %, its
+repeat at 1.007 %, and the steady part of both over 1 %. D-553's condition
+is not met, so walking stays off by default (`DEFAULT_WALKING` `false`);
+the toggle stays. Story 4.16 halved the walking run, which now sits on the
+gate: about 0.5 % of the machine for the walks and about 0.5 % for the
+rest of the scene (the breathing halos, the replay's changes).
+
 ## E83. Sub-agent signals (v0.4 gate 1)
 
 Story 4.1 AC 1, AD-176, AD-178 row 1 as amended by D-518, D-507. Claude

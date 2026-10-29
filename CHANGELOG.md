@@ -469,8 +469,10 @@ project uses [Semantic Versioning](https://semver.org/).
   redrawn, and the walk draws at most one frame per 13 ms, so a 240 Hz
   screen draws 60 frames a second during a walk and a 60 Hz one every
   frame. Profiled in Chromium, a walk's main-thread time per second fell by
-  about four fifths. Walking stays off by default until the release's CPU
-  measurement is run again.
+  about four fifths. Measured again on the release, walking's own CPU cost
+  fell from about 1.4 % to 0.5 % of the machine, but the scene with walking
+  on still took 1 % of it, not under the scene's budget, so walking stays
+  off by default.
 - `officina doctor` (v0.4) prints `SubagentStart` and `SubagentStop` in the
   hooks block and reports them missing until the block is pasted again: to
   paste again for the scene to show sub-agents. The hook records them with
