@@ -8,6 +8,24 @@ project uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- The orchestrator's proposals in the window (v0.5, story 5.17): the
+  window reads `orchestrator/proposals/` (a name that is no proposal's is
+  deleted and counted, a file read at most 16 KiB plus a byte, the hourly
+  and pending limits held again by deletion, a temporary file never read
+  and deleted after a day), validates each against the approved catalogue
+  and the registry (`orders::proposal::validate`), stores it once by its id
+  and deletes it. A proposal is `pending`, `invalid` with its reason
+  (`ProposalInvalidReason`), `accepted`, `dismissed`, `expired` (a work
+  order proposal a day after its receipt) or `superseded` (a newer recap
+  on the same target); recaps do not expire. The Orchestrator view lists
+  them under a "proposal" label, texts as text, with Open as card for a
+  valid work order proposal (the same validation and the same click as
+  your own cards; a proposed new subject's name is a suggestion beside the
+  picker, never the default) and Dismiss; launching such a card records the
+  proposal and accepts it. The briefing lists the pending ones and counts
+  those received. Rows go after 90 days, their texts with the excerpts.
+  `officina doctor` reports the pending and invalid counts and old
+  temporary files. The meeting panel's recap waits for the meeting room.
 - Written answers from the meeting (v0.5, story 5.11): a composer, never
   prefilled, sends with Send or Ctrl+Enter and copies the text on the same
   gesture. A live idle background session or an ended one gets the

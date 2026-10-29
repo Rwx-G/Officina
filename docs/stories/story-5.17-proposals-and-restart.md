@@ -1,6 +1,6 @@
 # Story 5.17: Proposals: ingestion, statuses, cards from proposals and the restart e2e
 
-**Status:** Approved
+**Status:** In progress (AC 5's meeting recap waits for story 5.10)
 
 ## Story
 
@@ -24,16 +24,17 @@ so that the orchestrator's suggestions save me typing without ever acting, and a
 
 ## Tasks
 
-- [ ] `crates/officina-core/src/orders/proposal.rs`: schema, `validate`, `ProposalInvalidReason`, statuses (AC 2, 3)
-- [ ] `proposal` section of `orders.json` (AC 2)
-- [ ] Host ingestion in the collector: name check, bounded read, limits by deletion, diagnostics; `.tmp` cleanup; expiry and supersession (AC 1, 3)
-- [ ] `IssueCardFromProposal`, dismiss; commands, `ipc.ts`, mock (AC 4)
-- [ ] Briefing section, view proposals, meeting recap (AC 5)
-- [ ] `ProposalList.svelte`; card label and rationale (AC 6)
-- [ ] `examples/mcp_crash_helper.rs`, `tests/proposals_crash.rs`, the killed `officina mcp` case in `tests/mcp.rs` (AC 7)
-- [ ] `proposal_file` section (AC 8)
-- [ ] Retention, doctor (AC 9, 10)
-- [ ] Update `CHANGELOG.md` and the README (AC 11)
+- [x] `crates/officina-core/src/orders/proposal.rs`: schema, `validate`, `ProposalInvalidReason`, statuses (AC 2, 3)
+- [x] `proposal` section of `orders.json` (AC 2)
+- [x] Host ingestion in the collector: name check, bounded read, limits by deletion, diagnostics; `.tmp` cleanup; expiry and supersession (AC 1, 3)
+- [x] `IssueCardFromProposal`, dismiss; commands, `ipc.ts`, mock (AC 4)
+- [x] Briefing section, view proposals (AC 5)
+- [ ] Meeting recap (AC 5): waits for story 5.10's `MeetingView` (D-791)
+- [x] `ProposalList.svelte`; card label and rationale (AC 6)
+- [x] `examples/mcp_crash_helper.rs`, `tests/proposals_crash.rs`, the killed `officina mcp` case in `tests/mcp.rs` (AC 7)
+- [x] `proposal_file` section (AC 8)
+- [x] Retention, doctor (AC 9, 10)
+- [x] Update `CHANGELOG.md` and the README (AC 11)
 
 ## Dev Notes
 
@@ -57,12 +58,42 @@ so that the orchestrator's suggestions save me typing without ever acting, and a
 
 ### Debug Log
 
+- The view's two-theme test allows only the surface as a background: a proposal item drawn on `--color-bg` broke it, so items take no background of their own.
+- The doctor's order test gained the `orchestrator proposals` line (`doctor.rs::tests::run_reports_every_check_in_order`); the refresh plan's start test gained `proposals` (`watch.rs::tests::startup_lists_sessions_checks_the_contract_and_builds_a_board`).
+- One `mcp_tool` case (`launch-now text as rationale and new subject`) is a valid proposal: AC 8's "asserted invalid" is held as each written case's `ingested` outcome (D-793).
+
 ### Completion Notes
 
+Every AC but AC 5's meeting recap is implemented and proven by the tests named in it, with these as built (decisions D-782 to D-795, epic-5-decisions.md "Implementation (2026-10-29)"; D-785, D-787, D-790, D-793 and D-794 to confirm):
+
+- AC 1: host `proposal_ingest.rs::{a_file_is_ingested_once_then_deleted, a_file_left_after_its_commit_is_ignored_by_the_key, tmp_files_are_never_read_and_go_after_24_h, an_unparsable_file_is_kept_as_invalid_without_kind, a_misnamed_file_is_deleted_and_counted, a_file_over_16_kib_is_oversized_without_texts, ten_thousand_files_past_the_limit_create_no_row}`; host `watch.rs::tests::proposal_files_are_ingested_at_start_on_change_and_with_their_poll` (D-784, D-786).
+- AC 2: core `orders_vectors.rs::{proposal_cases_match, every_invalid_reason_has_a_case}` over the `proposal` section of `tests/vectors/orders.json`; core `orders/proposal.rs::tests::{each_check_has_its_reason, a_valid_order_stores_the_templates_strings, unread_files_have_no_kind, ingestion_holds_the_limits_on_earlier_proposals}` (D-782, D-783).
+- AC 3: core `orders/proposal.rs::tests::{a_work_order_proposal_expires_after_24_h, a_newer_recap_supersedes_the_pending_one, recaps_do_not_expire}`; host `proposal_ingest.rs::{texts_read_back_untrusted, a_newer_recap_supersedes_and_an_order_expires}` (D-787).
+- AC 4: core `orders/card.rs::tests::{a_proposal_new_name_is_a_suggestion_not_a_default, a_proposal_existing_subject_is_the_default}`; CLI `watch.rs::{a_valid_proposal_opens_as_a_card_through_validate, launching_a_proposal_card_accepts_the_proposal, an_invalid_or_expired_proposal_opens_no_card}`; `app/src-tauri/src/main.rs::tests::every_declared_command_is_allowed` (D-788).
+- AC 5: core `orders/briefing.rs::tests::pending_proposals_are_listed_and_received_ones_are_changed`, `orders/view.rs::tests::proposals_are_pending_invalid_and_last_50_decided`, the `proposals` briefing case of `orders.json` (`every_change_and_run_kind_has_a_briefing_case` covers `proposal_received`) (D-789). **Open: the meeting's recap section**, which waits for story 5.10's `MeetingView`, not on this branch. Built for it: `orders::proposal::latest_recap(rows, session_id, subject_id)`, tested by `orders/proposal.rs::tests::the_latest_pending_recap_of_a_session_or_its_subject`. To add once 5.10 merges: `MeetingView.recap: Option<ProposalView>`, filled in `meeting::build` from `latest_recap` over the orders state's proposal rows, shown under the "proposal" label in the meeting panel, and the test `meeting.rs::tests::the_latest_recap_shows_under_its_label` (D-791).
+- AC 6: `orchestrator.spec.ts > proposals are listed with their status and reason (light, dark)`, `> a valid proposal opens as a card with its rationale under the label`, `> dismiss sends dismiss_proposal`, `> a suggested subject name is shown, never preselected`; Vitest `components.test.ts > ProposalList renders markup in proposal texts as text`, `> every invalid reason has a wording`, `> Open as card and Dismiss call back with the proposal's id`; fixtures `orchestrator-day` (proposals ingested by the window's writer) and `card-proposal` (issued from one) through `orchestrator_fixture` (D-790).
+- AC 7: host `proposals_crash.rs::{killed_writers_lose_and_duplicate_nothing, the_cursor_after_restart_is_the_previous_start}` with `examples/mcp_crash_helper.rs`; CLI `mcp.rs::killing_officina_mcp_during_propose_recap_loses_and_duplicates_nothing`; all ignored, run by CI's new step "A restart loses and duplicates no proposal" (D-792).
+- AC 8: CLI `injection.rs::{proposal_file_cases, mcp_tool_cases, mcp_output_cases, every_section_family_and_refusal_has_a_case}` (D-793).
+- AC 9: host `registry_retention.rs::{proposal_rows_are_deleted_at_90_days, proposal_texts_are_cleared_with_the_excerpt_ttl}` (D-794).
+- AC 10: host `doctor.rs::tests::proposal_counts_and_stale_tmp_files_are_reported` (D-785).
+- AC 11: `CHANGELOG.md` `[Unreleased]` Added; README "Proposals" under "The orchestrator (v0.5, in progress)".
+
+No new dependency and no new feature (Cargo or npm).
+
 ## File List
+
+- `crates/officina-core/src/orders/{proposal,card,briefing,view}.rs`, `src/registry/retention.rs`, `tests/{orders_vectors,typescript_bindings}.rs`
+- `crates/officina-host/src/registry/proposals.rs` (new), `src/registry/{mod,orders,retention,window}.rs`, `src/{watch,orders,mcp,files,doctor}.rs`, `examples/mcp_crash_helper.rs` (new), `examples/orchestrator_fixture.rs`, `tests/proposal_ingest.rs` (new), `tests/proposals_crash.rs` (new), `tests/registry_retention.rs`, `Cargo.toml`
+- `crates/officina/tests/{watch,injection,mcp}.rs`, `tests/common/orders.rs`
+- `tests/vectors/{orders,injection}.json`
+- `app/src-tauri/{build.rs,capabilities/default.json,src/main.rs}`
+- `app/src/components/ProposalList.svelte` (new), `app/src/components/{OrchestratorView,WorkOrderCard,Composer,Briefing}.svelte`, `app/src/lib/{ipc.ts,orchestrator.svelte.ts,orchestrator-text.ts}`, `app/src/lib/generated/` (regenerated), `app/src/e2e-mock.ts`, `app/src/components/components.test.ts`, `app/scripts/e2e-fixtures.mjs`, `app/e2e/orchestrator.spec.ts`
+- `.github/workflows/ci.yml`
+- `README.md`, `CHANGELOG.md`, `docs/stories/epic-5-decisions.md`, `docs/stories/sprint-status.yaml`, this file
 
 ## Change Log
 
 - 2026-10-28 created
 - 2026-10-28 reworked after review: unparsable files keep a null `kind` (F3); a proposed new subject name is a suggestion, never a default (F7); bounded, named and rate-limited ingestion by deletion (F21); the title and overlay assertion left to 5.18 (F40); rationale held as `Untrusted<String>` (F43); the real `officina mcp` killed during `propose_recap` (F45)
 - 2026-10-28 checked against the addendum and v0.3 and v0.4 as built: `ProposalView` (D-576); an `answer` file is invalid until story 5.21 (D-575); no colour or toggle added, both themes (D-564)
+- 2026-10-29 implemented, every AC but AC 5's meeting recap (waits for story 5.10); decisions D-782 to D-795
