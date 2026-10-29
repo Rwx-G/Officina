@@ -34,6 +34,7 @@ import { ZONE_WORDS } from "../src/lib/scene/text";
 import { causeText } from "../src/lib/alert";
 import { outcomeText } from "../src/lib/outcome";
 import { hours } from "../src/lib/time";
+import { denialsText } from "../src/lib/relay-text";
 import type { Board } from "../src/lib/generated/Board";
 import type { Card } from "../src/lib/generated/Card";
 import type { FocusOutcome } from "../src/lib/generated/FocusOutcome";
@@ -1371,3 +1372,49 @@ test.describe("the orchestrator in the decision office", () => {
     expect(await settledCount()).toBeGreaterThan(afterProposal);
   });
 });
+
+// Story 5.23 (AD-181, D-564): a session's auto-mode denials in its file, as
+// neutral text, from the real `officina relay --json` of `relay-denials`,
+// whose sessions are `scene-a`'s; a session without any shows no line.
+for (const theme of ["light", "dark"] as const) {
+  test(`the file counts a session's auto-mode denials (${theme})`, async ({ page }) => {
+    await page.emulateMedia({ colorScheme: theme });
+    const board = loadBoard("scene-a");
+    const relay = loadRelay("relay-denials");
+    await openScene(page, board, relay);
+    await expect(page.getByTestId("theme-switch")).toHaveAttribute("data-theme-resolved", theme);
+    const cards = liveCards(board);
+    expect(cards.length).toBeGreaterThan(1);
+    // Nothing of the denials reaches the title, the alert or the waiting
+    // count: the same as with a relay view that holds none.
+    const shown = async () => ({
+      title: await page.title(),
+      waiting: await page.getByTestId("waiting-pill").textContent(),
+      alert: await page.getByTestId("alert-band").count(),
+    });
+    const withDenials = await shown();
+    for (const card of cards) {
+      const counted = relay.auto_mode_denials.find((d) => d.session_id === card.session_id);
+      expect(counted, card.key).toBeDefined();
+      await figureOf(page, card.key).click();
+      await expect(page.getByRole("dialog", { name: card.name })).toBeVisible();
+      await expect(page.getByTestId("file-denials")).toHaveText(denialsText(counted!.count, relay.auto_mode_denials_window_ms));
+      await expect(page.getByTestId("file-denials")).toHaveCSS("color", await page.evaluate(() => {
+        const probe = document.createElement("span");
+        probe.style.color = "var(--color-text)";
+        document.body.append(probe);
+        const colour = getComputedStyle(probe).color;
+        probe.remove();
+        return colour;
+      }));
+      await page.getByTestId("file-close").click();
+      await expect(sessionFile(page)).toHaveCount(0);
+    }
+    // No denial, no line: the same board with a relay view holding none.
+    await openScene(page, board, loadRelay("relay-clean"));
+    expect(await shown()).toEqual(withDenials);
+    await figureOf(page, cards[0]!.key).click();
+    await expect(sessionFile(page)).toBeVisible();
+    await expect(page.getByTestId("file-denials")).toHaveCount(0);
+  });
+}

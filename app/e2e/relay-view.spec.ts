@@ -4,7 +4,8 @@
 // unreadable line, and a pending change with issues.
 import { expect, test, type Page } from "@playwright/test";
 import { runDuration } from "../src/lib/time";
-import { calls, loadBoard, loadRelay, openBoard } from "./fixtures";
+import { calls, loadBoard, loadRelay, openBoard, openScene } from "./fixtures";
+import { denialsText } from "../src/lib/relay-text";
 import type { RelayView } from "../src/lib/generated/RelayView";
 
 async function openRelayView(page: Page, relay: RelayView): Promise<void> {
@@ -438,6 +439,76 @@ for (const theme of ["light", "dark"] as const) {
       await expect(toggle).toHaveAttribute("aria-pressed", "true");
       expect(await autoCalls(page, "set_auto_mode")).toEqual([{ mode: "rule" }]);
       await expect(page.getByTestId("auto-state")).toContainText("mode rule");
+    });
+  });
+}
+
+// Story 5.23 (AD-181, D-564, the research note's tier 2): auto mode's
+// denials, from the real `officina hook` and `officina relay --json`
+// (`relay-denials`), are listed with their reasons as text, and neither the
+// list nor a session file's count ever takes the attention colour (D-163's
+// computed-colour check against `--color-attention` resolved on the root).
+for (const theme of ["light", "dark"] as const) {
+  test.describe(`auto-mode denials in the ${theme} theme`, () => {
+    test.beforeEach(async ({ page }) => {
+      await page.emulateMedia({ colorScheme: theme });
+    });
+
+    test("auto-mode denials are listed with their reasons as text", async ({ page }) => {
+      const relay = loadRelay("relay-denials");
+      const denied = relay.recent.flatMap((entry) => (entry.event.kind === "auto_mode_denied" ? [entry.event] : []));
+      expect(denied.length).toBeGreaterThan(1);
+      await openRelayView(page, relay);
+      await expect(page.getByTestId("theme-switch")).toHaveAttribute("data-theme-resolved", theme);
+      const rows = page.locator('[data-testid="recent-entry"][data-kind="auto_mode_denied"]');
+      await expect(rows).toHaveCount(denied.length);
+      for (const [i, event] of denied.entries()) {
+        await expect(rows.nth(i).getByTestId("recent-detail")).toHaveText(event.reason);
+        await expect(rows.nth(i).getByTestId("recent-outcome")).toHaveText(`denied ${event.tool_name}`);
+      }
+      // A reason holding markup is shown as its characters.
+      expect(denied.some((event) => event.reason.includes("<img"))).toBe(true);
+      await expect(page.getByTestId("recent-table").locator("img")).toHaveCount(0);
+      expect(await page.evaluate(() => (window as { __officinaXss?: number }).__officinaXss)).toBeUndefined();
+    });
+
+    test("denials never take the attention colour", async ({ page }) => {
+      const colours = (selector: string) =>
+        page.evaluate((sel) => {
+          const probe = document.createElement("span");
+          probe.style.color = "var(--color-attention)";
+          document.body.append(probe);
+          const attention = getComputedStyle(probe).color;
+          probe.remove();
+          const seen = new Set<string>();
+          for (const root of Array.from(document.querySelectorAll(sel))) {
+            for (const element of [root, ...Array.from(root.querySelectorAll("*"))]) {
+              const s = getComputedStyle(element);
+              for (const value of [s.color, s.backgroundColor, s.borderTopColor, s.outlineColor]) seen.add(value);
+            }
+          }
+          return { attention, seen: [...seen], count: document.querySelectorAll(sel).length };
+        }, selector);
+      // The session file's count, in the scene, on the board whose sessions
+      // the fixture's denials name; then the Relay view's rows.
+      const relay = loadRelay("relay-denials");
+      const board = loadBoard("scene-a");
+      const denials = relay.auto_mode_denials[0]!;
+      const card = [...Object.values(board.columns).flat()].find((c) => c.session_id === denials.session_id)!;
+      await openScene(page, board, relay);
+      await expect(page.getByTestId("theme-switch")).toHaveAttribute("data-theme-resolved", theme);
+      await page.getByTestId("scene").locator(`[data-layer="targets"] [data-key=${JSON.stringify(card.key)}]`).click();
+      await expect(page.getByTestId("file-denials")).toHaveText(denialsText(denials.count, relay.auto_mode_denials_window_ms));
+      const file = await colours('[data-testid="file-denials"]');
+      expect(file.count).toBe(1);
+      expect(file.seen).not.toContain(file.attention);
+
+      await page.getByTestId("file-close").click();
+      await page.getByTestId("view-relay").click();
+      await expect(page.getByTestId("relay-view")).toBeVisible();
+      const rows = await colours('[data-testid="recent-entry"][data-kind="auto_mode_denied"]');
+      expect(rows.count).toBeGreaterThan(0);
+      expect(rows.seen).not.toContain(rows.attention);
     });
   });
 }

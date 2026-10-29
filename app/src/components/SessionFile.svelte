@@ -19,6 +19,8 @@
   import { onMount } from "svelte";
   import { slideMotion } from "../lib/motion";
   import type { Board } from "../lib/generated/Board";
+  import type { RelayView } from "../lib/generated/RelayView";
+  import { denialsText } from "../lib/relay-text";
   import type { BoardStore } from "../lib/board.svelte";
   import { causeText, waitText } from "../lib/alert";
   import { projectColor } from "../lib/colors";
@@ -46,8 +48,10 @@
     orchestrator?: OrchestratorStore;
     /** Shows the Orchestrator view. */
     onOrchestrator?: () => void;
+    /** The relay view, for the session's auto-mode denials (story 5.23). */
+    relay?: RelayView | null;
   }
-  let { form, board, store, onClose, onOpen, onBoard, orchestrator, onOrchestrator }: Props = $props();
+  let { form, board, store, onClose, onOpen, onBoard, orchestrator, onOrchestrator, relay = null }: Props = $props();
 
   const START_LABELS = { start: "Start", starting: "Starting" };
   let startAnswer = $derived(orchestrator?.startError ? `Start failed: ${orchestrator.startError}` : orchestrator?.started ? startAnswerText(orchestrator.started) : null);
@@ -68,6 +72,11 @@
   let since = $derived(card?.scene?.waiting_since_ms ?? null);
   let approvals = $derived(card ? board.approvals.filter((a) => a.session_id !== null && a.session_id === card.session_id) : []);
   let shown = $derived(card ? visibleOutcome(store.outcomes, card.key) : undefined);
+  // Neutral text, never the attention colour: auto mode decided, and
+  // nothing waits on the author (the research note's tier 2).
+  let denials = $derived(
+    card?.session_id ? (relay?.auto_mode_denials.find((d) => d.session_id === card.session_id) ?? null) : null,
+  );
 
   let panel: HTMLElement;
 
@@ -169,6 +178,10 @@
       {#if card.subject}
         <dt>Subject</dt>
         <dd data-testid="file-subject">{card.subject.name}</dd>
+      {/if}
+      {#if denials && relay && denials.count > 0}
+        <dt>Auto mode</dt>
+        <dd data-testid="file-denials">{denialsText(denials.count, relay.auto_mode_denials_window_ms)}</dd>
       {/if}
       {#if card.subagents.length > 0}
         <dt>Sub-agents</dt>

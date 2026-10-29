@@ -18,6 +18,7 @@
   import { fitScale } from "../../lib/scene/geometry";
   import { layoutScene, liveCards, sceneBriefings, sceneProposals, type Target } from "../../lib/scene/layout";
   import type { OrchestratorStore } from "../../lib/orchestrator.svelte";
+  import type { RelayView } from "../../lib/generated/RelayView";
   import * as memory from "../../lib/scene/memory";
   import { Mover } from "../../lib/scene/mover";
   import { DEFAULT_WALKING } from "../../lib/view.svelte";
@@ -43,8 +44,10 @@
     orchestrator?: OrchestratorStore;
     /** Shows the Orchestrator view. */
     onOrchestrator?: () => void;
+    /** The relay view, whose auto-mode denials the file counts. */
+    relay?: RelayView | null;
   }
-  let { board, store, onBoard, walking = DEFAULT_WALKING, orchestrator, onOrchestrator }: Props = $props();
+  let { board, store, onBoard, walking = DEFAULT_WALKING, orchestrator, onOrchestrator, relay = null }: Props = $props();
 
   // One mover per mounted scene: its first layout places everyone at once,
   // so a new run or a mode switch never makes the company walk in (D-469).
@@ -266,6 +269,7 @@
       {onBoard}
       {orchestrator}
       {onOrchestrator}
+      {relay}
     />
   {/key}
 {/if}

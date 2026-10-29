@@ -210,6 +210,7 @@
           walking={windowView.walking}
           {orchestrator}
           onOrchestrator={() => (windowView.view = "orchestrator")}
+          relay={relay.relay}
         />
       </main>
     {:else if columns}
