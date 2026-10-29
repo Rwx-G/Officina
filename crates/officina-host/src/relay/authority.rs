@@ -20,7 +20,12 @@ use officina_core::relay::auto::{ReviewRecord, approvals_in_hour};
 use officina_core::relay::catalogue::{
     ApprovedCatalogue, DEFAULT_AUTO_MAX_PER_HOUR, KnownProjects,
 };
-use officina_core::relay::journal::{ApprovalEvent, CatalogueApproved, JournalEntry};
+use officina_core::relay::journal::{
+    ApprovalEvent, CatalogueApproved, JournalEntry, PromptDecided,
+};
+use officina_core::relay::prompts::{
+    PromptAnswer, PromptDecision, PromptFileKind, is_prompt_id, prompt_file_name,
+};
 use officina_core::relay::record::{
     DecisionRecord, RecordState, RecordedDecision, Verdict, holds_decisions, record_anomaly_key,
 };
@@ -30,6 +35,7 @@ use serde::Serialize;
 use super::approvals::{self, ContextSources};
 use super::home::{ApprovedState, RelayFloorError, RelayHome, load_relay_floor};
 use super::journal::JournalLock;
+use super::prompts;
 use crate::files::{atomic_write, now_ms};
 
 /// Text every authority error carries. CI searches the release binaries for
@@ -446,4 +452,89 @@ pub fn set_relay_stopped(home: &RelayHome, stopped: bool) -> Result<bool, Author
         .append(&[line], now)
         .map_err(|e| AuthorityError::Journal(e.to_string()))?;
     Ok(true)
+}
+
+/// Writes `bytes` to `path` only when nothing is there yet, and whole: a
+/// temporary file linked to `path`, which fails when `path` exists, so the
+/// first writer wins and a reader never sees half a decision. `Ok(false)`
+/// when `path` already existed.
+fn create_new_whole(path: &Path, bytes: &[u8]) -> io::Result<bool> {
+    let dir = path
+        .parent()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "path has no parent"))?;
+    std::fs::create_dir_all(dir)?;
+    let tmp = dir.join(format!(
+        "{}.{}.tmp",
+        path.file_name().unwrap_or_default().to_string_lossy(),
+        std::process::id()
+    ));
+    std::fs::write(&tmp, bytes)?;
+    let linked = std::fs::hard_link(&tmp, path);
+    let _ = std::fs::remove_file(&tmp);
+    match linked {
+        Ok(()) => Ok(true),
+        Err(e) if e.kind() == io::ErrorKind::AlreadyExists => Ok(false),
+        Err(e) => Err(e),
+    }
+}
+
+/// Answers routed permission prompt `id` as the author (AD-181, AD-21,
+/// D-157's pattern), at `now_ms`: allow or deny writes
+/// `relay/prompts/<id>.decided.json`, bound to the request's session and
+/// input hash; decline writes `<id>.declined`, which sends the request
+/// back to Claude Code's own prompt. Each is created new, so the first
+/// answer wins and a second is refused `already_decided`; an id of another
+/// shape or without a request is refused, and so is a request past its
+/// deadline. Journals `prompt_decided` (session, tool, input hash,
+/// answer), never the input, under the lock held across the check and the
+/// write, so an answer and its line go together.
+pub fn decide_prompt(
+    home: &RelayHome,
+    id: &str,
+    answer: PromptAnswer,
+    now_ms: i64,
+) -> Result<(), AuthorityError> {
+    let unknown = || AuthorityError::Decide(DecideRefusal::UnknownPrompt(id.to_owned()));
+    if !is_prompt_id(id) {
+        return Err(unknown());
+    }
+    let journal = JournalLock::acquire(home).map_err(|e| AuthorityError::Journal(e.to_string()))?;
+    let request = prompts::read_request(home, id).ok_or_else(unknown)?;
+    if request.expired(now_ms) {
+        return Err(AuthorityError::Decide(DecideRefusal::Expired(
+            id.to_owned(),
+        )));
+    }
+    let decided = || AuthorityError::Decide(DecideRefusal::Decided(id.to_owned()));
+    if prompts::answered(home, id) {
+        return Err(decided());
+    }
+    let (kind, bytes) = match answer.behavior() {
+        Some(behavior) => (
+            PromptFileKind::Decided,
+            serde_json::to_vec_pretty(&PromptDecision::on(&request, behavior, now_ms))
+                .unwrap_or_default(),
+        ),
+        None => (PromptFileKind::Declined, Vec::new()),
+    };
+    let path = home.prompts_dir().join(prompt_file_name(id, kind));
+    match create_new_whole(&path, &bytes) {
+        Ok(true) => {}
+        Ok(false) => return Err(decided()),
+        Err(e) => {
+            return Err(AuthorityError::Write {
+                path: path.display().to_string(),
+                error: e.to_string(),
+            });
+        }
+    }
+    let line = JournalEntry::PromptDecided(PromptDecided {
+        session_id: request.session_id,
+        tool_name: request.tool_name,
+        input_sha256: request.input_sha256,
+        decision: answer,
+    });
+    journal
+        .append(&[line], now_ms)
+        .map_err(|e| AuthorityError::Journal(e.to_string()))
 }

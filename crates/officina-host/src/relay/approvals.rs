@@ -198,7 +198,12 @@ fn older_than(path: &Path, now: SystemTime, age: Duration) -> bool {
         .is_some_and(|elapsed| elapsed > age)
 }
 
-fn prune_dir(dir: &Path, now: SystemTime, age: Duration, ours: impl Fn(&str) -> bool) -> usize {
+pub(crate) fn prune_dir(
+    dir: &Path,
+    now: SystemTime,
+    age: Duration,
+    ours: impl Fn(&str) -> bool,
+) -> usize {
     let Ok(entries) = fs::read_dir(dir) else {
         return 0;
     };

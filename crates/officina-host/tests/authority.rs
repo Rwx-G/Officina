@@ -1065,3 +1065,145 @@ fn an_approval_in_the_previous_format_keeps_guarding_and_waits_for_one_approval(
         "the project the author made free is free once approved"
     );
 }
+
+/// A routed `PermissionRequest` written as the hook writes it, waiting
+/// `wait_ms` from `at_ms`.
+fn prompt_request(
+    relay: &RelayHome,
+    at_ms: i64,
+    wait_ms: i64,
+) -> officina_core::relay::prompts::PromptRequest {
+    let request = officina_core::relay::prompts::PromptRequest::from_payload(
+        &serde_json::json!({
+            "session_id": "0f1e2d3c-4b5a-4978-8796-a5b4c3d2e1f0",
+            "tool_name": "Bash",
+            "tool_input": {"command": "deploy --token sk-placeholder-0000"},
+        }),
+        None,
+        7,
+        at_ms,
+        wait_ms,
+    )
+    .unwrap();
+    std::fs::create_dir_all(relay.prompts_dir()).unwrap();
+    std::fs::write(
+        relay.prompts_dir().join(format!("{}.json", request.id)),
+        serde_json::to_vec(&request).unwrap(),
+    )
+    .unwrap();
+    request
+}
+
+fn prompt_lines(relay: &RelayHome) -> Vec<officina_core::relay::journal::PromptDecided> {
+    read_recent(relay, now_ms())
+        .0
+        .into_iter()
+        .filter_map(|line| match line.entry {
+            JournalEntry::PromptDecided(decided) => Some(decided),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Story 5.22 AC 5 (AD-181, D-157's pattern): the first answer writes the
+/// decision, bound to the request's session and input hash, and journals
+/// `prompt_decided` without the input; a second answer, of either kind, is
+/// refused `already_decided` and writes and journals nothing; an id of
+/// another shape or without a request is refused.
+#[test]
+fn a_prompt_decision_is_written_once() {
+    use officina_core::relay::prompts::{PromptAnswer, PromptBehavior, PromptDecision};
+    use officina_host::relay::authority::decide_prompt;
+    let home = TestHome::new();
+    let relay = home.relay(None);
+    let now = now_ms();
+    let request = prompt_request(&relay, now, 60_000);
+    decide_prompt(&relay, &request.id, PromptAnswer::Deny, now + 1).unwrap();
+    let decided = relay
+        .prompts_dir()
+        .join(format!("{}.decided.json", request.id));
+    let decision: PromptDecision =
+        serde_json::from_slice(&std::fs::read(&decided).unwrap()).unwrap();
+    assert_eq!(
+        decision,
+        PromptDecision::on(&request, PromptBehavior::Deny, now + 1)
+    );
+    for again in PromptAnswer::ALL {
+        let refused = decide_prompt(&relay, &request.id, *again, now + 2).unwrap_err();
+        assert!(
+            matches!(refused, AuthorityError::Decide(DecideRefusal::Decided(_))),
+            "{refused}"
+        );
+        assert!(refused.to_string().contains(AUTHORITY_MARKER));
+    }
+    assert!(
+        !relay
+            .prompts_dir()
+            .join(format!("{}.declined", request.id))
+            .exists()
+    );
+    let lines = prompt_lines(&relay);
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0].decision, PromptAnswer::Deny);
+    assert_eq!(lines[0].input_sha256, request.input_sha256);
+    let journal: String = std::fs::read_dir(relay.journal_dir())
+        .unwrap()
+        .flatten()
+        .map(|e| std::fs::read_to_string(e.path()).unwrap_or_default())
+        .collect();
+    assert!(!journal.contains("sk-placeholder"), "never the input");
+    for unknown in ["0a-1", "../approved", ""] {
+        assert!(matches!(
+            decide_prompt(&relay, unknown, PromptAnswer::Allow, now),
+            Err(AuthorityError::Decide(DecideRefusal::UnknownPrompt(_)))
+        ));
+    }
+}
+
+/// Story 5.22 AC 5: a request past its deadline cannot be answered, by
+/// any answer, and nothing is written or journaled.
+#[test]
+fn an_expired_prompt_cannot_be_decided() {
+    use officina_core::relay::prompts::PromptAnswer;
+    use officina_host::relay::authority::decide_prompt;
+    let home = TestHome::new();
+    let relay = home.relay(None);
+    let now = now_ms();
+    let request = prompt_request(&relay, now - 10_000, 5_000);
+    for answer in PromptAnswer::ALL {
+        assert!(matches!(
+            decide_prompt(&relay, &request.id, *answer, now),
+            Err(AuthorityError::Decide(DecideRefusal::Expired(_)))
+        ));
+    }
+    let names: Vec<String> = std::fs::read_dir(relay.prompts_dir())
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(names, [format!("{}.json", request.id)]);
+    assert!(prompt_lines(&relay).is_empty());
+}
+
+/// Story 5.22 AC 5: a decline writes `<id>.declined` and no decision file,
+/// journals `prompt_decided` with `decline`, and leaves nothing to answer.
+#[test]
+fn decline_writes_no_decision() {
+    use officina_core::relay::prompts::PromptAnswer;
+    use officina_host::relay::authority::decide_prompt;
+    let home = TestHome::new();
+    let relay = home.relay(None);
+    let now = now_ms();
+    let request = prompt_request(&relay, now, 60_000);
+    decide_prompt(&relay, &request.id, PromptAnswer::Decline, now).unwrap();
+    let dir = relay.prompts_dir();
+    assert!(dir.join(format!("{}.declined", request.id)).exists());
+    assert!(!dir.join(format!("{}.decided.json", request.id)).exists());
+    assert!(matches!(
+        decide_prompt(&relay, &request.id, PromptAnswer::Allow, now),
+        Err(AuthorityError::Decide(DecideRefusal::Decided(_)))
+    ));
+    let lines = prompt_lines(&relay);
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0].decision, PromptAnswer::Decline);
+}

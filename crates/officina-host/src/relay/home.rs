@@ -10,6 +10,7 @@ use officina_core::relay::approvals::OUTPUTS_DIR;
 use officina_core::relay::catalogue::{
     self, ApprovedCatalogue, KnownProjects, RelayFloor, parse_known_projects,
 };
+use officina_core::relay::prompts::{PROMPTS_DIR, WINDOW_DIR, WINDOW_MARKER_FILE};
 use officina_core::relay::record::{DECISION_RECORD_FILE, RecordState, parse_record};
 use officina_core::relay::{JOURNAL_DIR, RELAY_DIR};
 
@@ -122,6 +123,17 @@ impl RelayHome {
     /// `relay/approvals/`: requests and decisions of `human` actions (AD-33).
     pub fn approvals_dir(&self) -> PathBuf {
         self.relay_dir().join("approvals")
+    }
+
+    /// `relay/prompts/`: routed `PermissionRequest`s and their decisions
+    /// (AD-181).
+    pub fn prompts_dir(&self) -> PathBuf {
+        self.relay_dir().join(PROMPTS_DIR)
+    }
+
+    /// `window/alive.json`: the window's liveness marker (D-579).
+    pub fn window_marker_file(&self) -> PathBuf {
+        self.officina_home.join(WINDOW_DIR).join(WINDOW_MARKER_FILE)
     }
 
     /// `relay/outputs/`: the kept output of check runs, one file per run id
