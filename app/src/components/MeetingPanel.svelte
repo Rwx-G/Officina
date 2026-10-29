@@ -167,7 +167,7 @@
         <h3>Recap</h3>
         <p class="byline">
           <span class="chip" data-testid="meeting-recap-label">proposal</span>
-          <span class="muted">from the orchestrator, {clock(view.recap.received_at_ms ?? view.recap.written_at_ms, store.nowMs)}</span>
+          <span class="muted" data-testid="meeting-recap-origin">from the orchestrator's proposals folder, {clock(view.recap.received_at_ms ?? view.recap.written_at_ms, store.nowMs)}</span>
         </p>
         <dl>
           <dt>Done</dt>

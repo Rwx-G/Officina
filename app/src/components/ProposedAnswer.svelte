@@ -48,7 +48,7 @@
     <div class="proposal" data-testid="meeting-proposal" data-id={proposal.id}>
       <p class="byline">
         <span class="chip" data-testid="meeting-proposal-label">proposal</span>
-        <span class="muted">an answer from the orchestrator, {clock(proposal.received_at_ms ?? proposal.written_at_ms, nowMs)}</span>
+        <span class="muted" data-testid="meeting-proposal-origin">an answer from the orchestrator's proposals folder, {clock(proposal.received_at_ms ?? proposal.written_at_ms, nowMs)}</span>
       </p>
       <p class="text answer" data-testid="meeting-proposal-text">{answer.text}</p>
       <p class="why"><span class="label">Why</span> <span class="text" data-testid="meeting-proposal-rationale">{answer.rationale}</span></p>

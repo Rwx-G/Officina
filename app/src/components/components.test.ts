@@ -1221,6 +1221,8 @@ describe("MeetingPanel", () => {
       expect(getByTestId(id).textContent, id).toBe(hostile);
     }
     expect(getByTestId("meeting-recap-label").textContent).toBe("proposal");
+    // D-965: the byline names the folder the file came from, not a writer.
+    expect(getByTestId("meeting-recap-origin").textContent).toMatch(/^from the orchestrator's proposals folder, /);
     // A proposal, never the author's answer.
     expect((getByTestId("answer-text") as HTMLTextAreaElement).value).toBe("");
     expect((window as { __officinaXss?: number }).__officinaXss).toBeUndefined();
@@ -1320,6 +1322,9 @@ describe("ProposedAnswer", () => {
     expect(getByTestId("meeting-proposal-text").textContent).toBe(hostile);
     expect(getByTestId("meeting-proposal-rationale").textContent).toBe(hostile);
     expect(getByTestId("meeting-proposal-label").textContent).toBe("proposal");
+    expect(getByTestId("meeting-proposal-origin").textContent).toMatch(
+      /^an answer from the orchestrator's proposals folder, /,
+    );
     expect((window as { __officinaXss?: number }).__officinaXss).toBeUndefined();
   });
 
@@ -1396,6 +1401,9 @@ describe("ProposalList", () => {
     const shown = { ...props([answer]), sessionNames: new Map([[session, "dependency-bump-3"]]) };
     const { container, getByTestId, queryByTestId } = render(ProposalList, shown);
     expect(container.querySelector("img")).toBeNull();
+    // D-965: the list says where the files come from, and that the
+    // orchestrator is not the only possible writer.
+    expect(getByTestId("proposals-origin").textContent).toContain("any program running as you");
     expect(getByTestId("proposal-session").textContent).toContain("dependency-bump-3");
     expect(queryByTestId("proposal-open")).toBeNull();
     await fireEvent.click(getByTestId("proposal-open-meeting"));

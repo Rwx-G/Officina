@@ -117,9 +117,10 @@
 
 <section class="block" data-testid="proposals" aria-labelledby="proposals-title">
   <h2 id="proposals-title">Proposals <span class="count">{open.length}</span></h2>
-  <p class="muted">
-    The orchestrator's suggestions. A proposal runs nothing: a work order proposal opens as a card, which you launch or
-    not; a proposed answer waits in its session's meeting, which you send or not.
+  <p class="muted" data-testid="proposals-origin">
+    Files from the orchestrator's proposals folder: its tools write them there, and so could any program running as you.
+    A proposal runs nothing: a work order proposal opens as a card, which you launch or not; a proposed answer waits in
+    its session's meeting, which you send or not.
   </p>
   {#if deleted.misnamed + deleted.over_limit > 0}
     <p class="muted" data-testid="proposals-deleted">
