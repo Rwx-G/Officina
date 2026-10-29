@@ -284,7 +284,12 @@ pub struct Reviews {
     /// Why each `auto` request is the author's, and in which mode, for the
     /// board (D-143).
     escalations: BTreeMap<String, Escalation>,
-    /// When the last call started: the next waits [`CALL_SPACING_MS`].
+    /// When the last call started, as the `review` thread stamped it and
+    /// its row records it: the next waits [`CALL_SPACING_MS`] from there.
+    /// Not the submitting tick's stamp, which is taken before the tick's
+    /// reads and prechecks and so, under load, seconds before the call;
+    /// no call is submitted while one is in flight, so the start is known
+    /// before the next is due.
     last_call_ms: Option<i64>,
     /// True once this run cleared the marks an earlier window left
     /// (D-157): a mark only holds while the window that wrote it reviews.
@@ -354,6 +359,7 @@ impl Reviews {
         let results: Vec<CallResult> = std::iter::from_fn(|| worker.try_result()).collect();
         let mut changed = false;
         for result in results {
+            self.last_call_ms = Some(result.started_at_ms);
             let Some(flight) = self.in_flight.take() else {
                 continue;
             };
@@ -694,7 +700,6 @@ impl Reviews {
                 break;
             };
             if worker.submit(call) {
-                self.last_call_ms = Some(now_ms);
                 self.in_flight = Some(InFlight {
                     job,
                     mode,

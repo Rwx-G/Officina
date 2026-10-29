@@ -2,15 +2,18 @@
 //! row per request with its baseline and reason, the author's decision
 //! copied onto it, an expiry left as no decision; driven through the
 //! window's review tick without a `review` thread, so every request
-//! escalates before any call. Story 5.14: the switches under the shadow
+//! escalates before any call, but for the pacing case, which runs one.
+//! Story 5.14: the switches under the shadow
 //! gate, the mark that takes approval back, and runs linked to their row.
 
 mod common;
 
 use std::collections::BTreeMap;
 use std::path::Path;
+use std::time::{Duration, Instant};
 
 use common::TestHome;
+use officina_core::registry::triage_call::CALL_SPACING_MS;
 use officina_core::registry::types::{
     AuthorDecision, AuthorReason, ReviewMode, ReviewOutcome, Source,
 };
@@ -31,7 +34,7 @@ use officina_host::relay::authority::{approve_catalogue, decide_approval};
 use officina_host::relay::home::{RelayHome, load_relay_floor};
 use officina_host::relay::journal::read_recent;
 use officina_host::relay::review::link_runs;
-use officina_host::relay::review::{ReviewEnv, Reviews};
+use officina_host::relay::review::{ReviewEnv, ReviewWorker, Reviews};
 use officina_host::spawn::BaseEnv;
 
 const FLOOR: &str = "schema = 2\n\n[[project]]\nname = \"lab\"\npath = \"Lab\"\nactions = [\"check\", \"apply\"]\n\n[[action]]\nname = \"check\"\nclass = \"free\"\nprogram = \"C:/path/to/tool.exe\"\nargs = [\"--check\", \"{group}\"]\n\n[action.params.group]\nvalues = [\"lab-web\", \"lab-db\"]\n\n[[action]]\nname = \"apply\"\nclass = \"auto\"\ncheck = \"check\"\nprogram = \"C:/path/to/tool.exe\"\nargs = [\"--apply\", \"{group}\"]\n\n[action.params.group]\nvalues = [\"lab-web\", \"lab-db\"]\n";
@@ -83,11 +86,22 @@ fn write_request(relay: &RelayHome, group: &str, ago: i64) -> String {
 
 /// One review tick of the window, with no `claude` and no thread.
 fn tick(reviews: &mut Reviews, relay: &RelayHome, registry: &mut WindowRegistry) -> bool {
+    tick_at(reviews, relay, registry, None, now_ms())
+}
+
+/// One review tick of the window stamped `now`, with `claude`.
+fn tick_at(
+    reviews: &mut Reviews,
+    relay: &RelayHome,
+    registry: &mut WindowRegistry,
+    claude: Option<&Path>,
+    now: i64,
+) -> bool {
     let base_env = BaseEnv::new(Vec::new());
     let env = ReviewEnv {
         relay,
         officina_home: relay.officina_home(),
-        claude: None,
+        claude,
         config_dir: None,
         base_env: &base_env,
         no_excerpts: false,
@@ -95,7 +109,7 @@ fn tick(reviews: &mut Reviews, relay: &RelayHome, registry: &mut WindowRegistry)
         board: None,
         timeout: officina_host::relay::review::review_timeout(),
     };
-    reviews.tick(&env, registry, now_ms())
+    reviews.tick(&env, registry, now)
 }
 
 fn open(relay: &RelayHome) -> WindowRegistry {
@@ -237,6 +251,48 @@ fn expiry_is_not_a_decision() {
     assert_eq!(found[0].approval_id, id);
     assert_eq!(found[0].author_decision, None);
     assert!(found.iter().all(|r| r.approval_id != expired));
+}
+
+/// Story 5.13 AC 4 (D-142): the spacing runs from the instant the last
+/// call started, the one its row records, not from the stamp of the tick
+/// that submitted it. A tick's stamp is taken before its reads and
+/// prechecks, so under load it is older than the call it starts; a first
+/// tick 3 s stale, then prompt ones, must not start the second call 2 s
+/// after the first. The `claude` named does not exist: each call starts,
+/// fails and records its start all the same.
+#[test]
+fn the_spacing_runs_from_the_call_start_not_the_tick_stamp() {
+    const STALE_MS: i64 = 3_000;
+    let home = TestHome::new();
+    let relay = relay(&home);
+    write_request(&relay, "lab-web", 10_000);
+    write_request(&relay, "lab-db", 10_000);
+    let claude = relay.officina_home().join("missing").join("claude.exe");
+    let mut registry = open(&relay);
+    let mut reviews = Reviews::new(Some(ReviewWorker::spawn().unwrap()));
+    tick_at(
+        &mut reviews,
+        &relay,
+        &mut registry,
+        Some(&claude),
+        now_ms() - STALE_MS,
+    );
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let started = loop {
+        tick_at(&mut reviews, &relay, &mut registry, Some(&claude), now_ms());
+        let started: Vec<i64> = registry
+            .review_rows(0)
+            .iter()
+            .filter_map(|row| row.call_started_at_ms)
+            .collect();
+        if started.len() == 2 {
+            break started;
+        }
+        assert!(Instant::now() < deadline, "{started:?}");
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    let gap = (started[0] - started[1]).abs();
+    assert!(gap >= CALL_SPACING_MS, "{gap} ms apart");
 }
 
 /// One row of `mode` for request `approval_id`, requested `ago` ms ago:

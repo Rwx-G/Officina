@@ -970,6 +970,11 @@ project uses [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Two queued auto reviews could start their model calls less than 5
+  seconds apart on a loaded machine: the spacing was counted from the
+  window's tick that submitted the first call, which can precede the call
+  by seconds, rather than from the call's own start; it now counts from
+  the start the review row records (D-850).
 - The relay journal no longer loses a line when its lock stays held past
   2 seconds, as two loaded writers can on a busy machine: a gate refusal or
   fault, a refusal, a run's end, an auto review, a work order's launch
