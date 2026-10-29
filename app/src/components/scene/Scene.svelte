@@ -73,15 +73,18 @@
   let scale = $derived(fitScale(area, layout.canvas));
   let width = $derived(Math.floor(layout.canvas.w * scale));
   let height = $derived(Math.floor(layout.canvas.h * scale));
-  /** The session file's width, from app.css's `--file-width`. */
-  let fileWidth = $state(0);
+  /** Where the session file's left edge stands in the area, from
+   *  app.css's `--file-width` and `--file-inset` (D-702): the panel is
+   *  placed from the area's outer right edge, its scrollbar's room
+   *  included. */
+  let fileLeft = $state(0);
   /** Centred; where the area leaves room beside the scene for the file,
    *  far enough left that the file docks there instead of covering it
    *  (D-543). A whole-pixel offset keeps the snapped figures on device
    *  pixels. */
   let left = $derived.by(() => {
     const centred = Math.max(0, Math.floor((area.w - width) / 2));
-    const docked = area.w - fileWidth - width;
+    const docked = fileLeft - width;
     return docked >= 0 ? Math.min(centred, Math.floor(docked)) : centred;
   });
 
@@ -93,7 +96,9 @@
       const next = { w: holder.clientWidth, h: holder.clientHeight };
       if (next.w !== area.w || next.h !== area.h) area = next;
       pixelRatio = globalThis.devicePixelRatio || 1;
-      fileWidth = parseFloat(getComputedStyle(holder).getPropertyValue("--file-width")) || 0;
+      const style = getComputedStyle(holder);
+      const length = (name: string) => parseFloat(style.getPropertyValue(name)) || 0;
+      fileLeft = holder.offsetWidth - length("--file-inset") - length("--file-width");
     };
     measure();
     const observer = new ResizeObserver(measure);

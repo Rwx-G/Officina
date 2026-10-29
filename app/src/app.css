@@ -128,6 +128,13 @@
   /* The session file beside the scene: docked in the room the scene
      leaves when there is enough, laid over its right edge otherwise. */
   --file-width: 420px;
+  /* Its insets in the sessions area (D-702): from the area's right and
+     bottom edges, the header's side padding, so its right edge meets the
+     header's last control; from the area's top, a gap that with the
+     header's bottom padding makes the same distance. Each holds the
+     panel's shadow whole (session-file.spec.ts). */
+  --file-inset: 20px;
+  --file-gap: 12px;
   /* The halo's opacity at rest: after breathing, and from the start under
      reduced motion. */
   --halo-rest: 0.8;

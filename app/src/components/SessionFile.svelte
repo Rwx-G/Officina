@@ -7,7 +7,7 @@
 </script>
 
 <script lang="ts">
-  // The session file (FR-5, AD-69, D-111): a non-modal side panel over the
+  // The session file (FR-5, AD-69, D-111): a non-modal side panel at the
   // sessions area's right edge, outside the scene element, so opening it
   // resizes nothing and writes nothing in the scene. It reads the live card
   // and acts on it as its board card does, with the same outcome words
@@ -197,19 +197,24 @@
 </div>
 
 <style>
+  /* A surface standing in the sessions area (D-702): a gap under the
+     header, its right edge on the header's last control, four bordered
+     rounded edges, and a shadow the insets hold whole, so nothing of it is
+     cut at the area's edge. */
   .file {
     position: absolute;
-    top: 0;
-    right: 0;
-    bottom: 0;
+    top: var(--file-gap);
+    right: var(--file-inset);
+    bottom: var(--file-inset);
     z-index: 1;
     width: var(--file-width);
-    max-width: 100%;
+    max-width: calc(100% - 2 * var(--file-inset));
     overflow: auto;
     padding: 16px 20px 20px;
     background: var(--color-surface);
-    border-left: 1px solid var(--color-border);
-    box-shadow: -6px 0 18px var(--color-shadow);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-surface);
+    box-shadow: 0 6px 16px -4px var(--color-shadow);
   }
   header {
     display: flex;

@@ -708,13 +708,14 @@ test.describe("acting from the scene", () => {
     await expect(page.getByTestId("file-number")).toHaveText("1");
     await expect(page.getByTestId("file-zone")).toHaveText(ZONE_WORDS.decision);
     await expect(page.getByTestId("file-waiting-for")).toHaveText(first.waiting_for!);
-    // At the sessions area's right edge, 420 px wide, the scene unscaled,
-    // once its slide in ended (D-545).
+    // At the sessions area's right edge, its inset from it (D-702), 420 px
+    // wide, the scene unscaled, once its slide in ended (D-545).
     await transitionsDone(page);
     const file = (await sessionFile(page).boundingBox())!;
     const area = (await page.getByTestId("sessions-area").boundingBox())!;
+    const inset = await page.evaluate(() => parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--file-inset")));
     expect(file.width).toBe(420);
-    expect(Math.abs(file.x + file.width - (area.x + area.width))).toBeLessThan(1);
+    expect(Math.abs(file.x + file.width - (area.x + area.width - inset))).toBeLessThan(1);
     expect(await scene(page).getAttribute("data-scale")).toBe(scale);
     expect(await scene(page).evaluate((s, f) => s.contains(document.querySelector(f)), "[data-testid=session-file]")).toBe(false);
   });

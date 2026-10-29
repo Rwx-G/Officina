@@ -246,8 +246,10 @@ export const PLAQUE_GROUP_TARGET = { w: 48, h: 48 } as const;
  *  CSS px, never scaled with the floor, `top` and `right` px inside the
  *  scene's top-right corner, `w` px wide; a heading of `head` px, then up
  *  to `rows` rows of `rowH` px and one more for the rest: a row per board
- *  key (`layout.ts` `MAX_NUMBER`, D-107; a test holds them equal). */
-export const REGISTER = { top: 8, right: 12, w: 212, head: 30, rowH: 23, rows: 9 } as const;
+ *  key (`layout.ts` `MAX_NUMBER`, D-107; a test holds them equal). Its
+ *  `top` is no less than the session file's gap under the header, so a
+ *  file lying over it covers it whole (story 4.19, D-704). */
+export const REGISTER = { top: 12, right: 12, w: 212, head: 30, rowH: 23, rows: 9 } as const;
 /** The register's tallest box, in CSS px: its heading, its rows and the
  *  "+n more" line, and its frame (`Register.svelte`). */
 export const REGISTER_MAX_H = REGISTER.head + (REGISTER.rows + 1) * REGISTER.rowH + 10;
