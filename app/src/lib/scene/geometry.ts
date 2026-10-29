@@ -203,6 +203,80 @@ export function beaconPoint(columns: number): Point {
   return projector(columns)(gx + BEACON.lx, gy + BEACON.ly, BEACON.z);
 }
 
+/** The decider's desk and chair in the decision office (D-503), room-local
+ *  tiles: empty in v0.4, the orchestrator's from v0.5 (AD-179, D-567).
+ *  Its two screens stand on the desk, `dy` behind the chair, each centred
+ *  `offsets` from it along gx, `half` wide each side, from `z0` to `z1`.
+ *  `furniture.ts` draws them; the overlay writes on them. */
+export const DECIDER = {
+  chair: { lx: 2.4, ly: 1.9 },
+  desk: { lx: 1.4, ly: 0.82, w: 2.0, d: 0.58 },
+  screens: { offsets: [-0.5, 0.5], half: 0.42, dy: -0.94, z0: 0.92, z1: 1.54 },
+} as const;
+
+/** The whiteboard on the back wall above the decision office, grid gx from
+ *  `gx0` to `gx1`, `gy` off the wall, `z0` to `z1` (static in v0.4). */
+export const WHITEBOARD = { gx0: 6.5, gx1: 10.0, gy: 0.02, z0: 0.95, z1: 2.7 } as const;
+
+/** Where the overlay writes on the decider's screens and the whiteboard
+ *  while the orchestrator is live (D-567), inside each surface: the
+ *  screens `inset` tiles in from each side and from `z0` to `z1`, below
+ *  which the left one would meet the orchestrator's target; the
+ *  whiteboard's text from `gx0` (clear of the queue's "+n" target) to `gx1`
+ *  and `z0` to `z1`. */
+export const DISPLAY_TEXT = {
+  screen: { inset: 0.05, z0: 1.18, z1: 1.5 },
+  board: { gx0: 7.05, gx1: 9.9, z0: 1.05, z1: 2.6 },
+} as const;
+
+/** A flat surface of a wall plane, at a fixed gy, as the overlay draws on
+ *  it: a box of `w` by `h` px mapped by `matrix` (an SVG transform) onto
+ *  the surface's screen parallelogram, whose corners are listed top left,
+ *  top right, bottom right, bottom left, and its bounding rectangle. */
+export interface Plane {
+  w: number;
+  h: number;
+  matrix: readonly [a: number, b: number, c: number, d: number, e: number, f: number];
+  corners: Point[];
+  rect: Rect;
+}
+
+/** The surface at grid `gy` from `gx0` to `gx1` and `z0` to `z1`. A unit
+ *  along the box's width is a pixel along gx, a unit down its height a
+ *  pixel down z. */
+function wallPlane(columns: number, gx0: number, gx1: number, gy: number, z0: number, z1: number): Plane {
+  const p = projector(columns);
+  const corners = [p(gx0, gy, z1), p(gx1, gy, z1), p(gx1, gy, z0), p(gx0, gy, z0)];
+  const xs = corners.map((c) => c.x);
+  const ys = corners.map((c) => c.y);
+  const x = Math.min(...xs);
+  const y = Math.min(...ys);
+  return {
+    w: (gx1 - gx0) * HW,
+    h: (z1 - z0) * ZS,
+    matrix: [1, HH / HW, 0, 1, corners[0]!.x, corners[0]!.y],
+    corners,
+    rect: { x, y, w: Math.max(...xs) - x, h: Math.max(...ys) - y },
+  };
+}
+
+/** The text surfaces of the decider's two screens, left then right. */
+export function deciderScreens(columns: number): Plane[] {
+  const { gx, gy } = roomOrigin(SHARED_CELLS.decision);
+  const { chair, screens } = DECIDER;
+  const { inset, z0, z1 } = DISPLAY_TEXT.screen;
+  return screens.offsets.map((off) => {
+    const mx = gx + chair.lx + off;
+    return wallPlane(columns, mx - screens.half + inset, mx + screens.half - inset, gy + chair.ly + screens.dy, z0, z1);
+  });
+}
+
+/** The whiteboard's text surface. */
+export function whiteboardPlane(columns: number): Plane {
+  const { gx0, gx1, z0, z1 } = DISPLAY_TEXT.board;
+  return wallPlane(columns, gx0, gx1, WHITEBOARD.gy, z0, z1);
+}
+
 /** The "Entrance and exit" sign above the door, at grid (0, gy, z). */
 export const ENTRANCE_SIGN = { gy: M + 1.6, z: 2.75 } as const;
 

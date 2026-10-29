@@ -13,7 +13,11 @@ import { REGISTER } from "../../lib/scene/geometry";
 import { SIGN_WORDS, registerHead, registerMore } from "../../lib/scene/text";
 import * as memory from "../../lib/scene/memory";
 import { emptyMemory } from "../../lib/scene/memory";
-import { board, card, fixtureBoards, project } from "../../lib/scene/testing";
+import { board, card, fixtureBoards, presence, project } from "../../lib/scene/testing";
+import { OrchestratorStore } from "../../lib/orchestrator.svelte";
+import type { OrchestratorView } from "../../lib/generated/OrchestratorView";
+import type { ProposalContent } from "../../lib/generated/ProposalContent";
+import { fixtureOf } from "../../../e2e/fixture-index";
 
 afterEach(cleanup);
 
@@ -85,6 +89,30 @@ describe("Scene", () => {
     const target = buttonsOf(scene).find((b) => b.dataset.key === waiting.key)!;
     expect(target.getAttribute("aria-label")).toContain(markup);
     expect(target.querySelector("[data-tag]")!.textContent).toContain(markup);
+    expect((globalThis as { __pwned?: number }).__pwned).toBeUndefined();
+  });
+
+  // Story 5.18 AC 5 (D-130): a proposal's label is the orchestrator's
+  // text, so it reaches the whiteboard as text only.
+  it("whiteboard labels render markup as text", async () => {
+    const markup = '<img src="x" onerror="globalThis.__pwned = 2"><b>bold</b>';
+    const day = fixtureOf<OrchestratorView>("orchestrator", "orchestrator-day");
+    const pending = day.proposals.find((p) => p.status === "pending" && p.content !== null && "work_order" in p.content)!;
+    const content = structuredClone(pending.content!) as Extract<ProposalContent, { work_order: unknown }>;
+    content.work_order.template = markup;
+    const orchestrator = new OrchestratorStore();
+    orchestrator.view = { ...day, proposals: [{ ...pending, content }] };
+    const b = board([card("d", "decision")], { orchestrator: presence("busy") });
+    const { getByTestId } = render(Scene, { board: b, store: new BoardStore(), onBoard: () => {}, orchestrator });
+    await tick();
+    const scene = getByTestId("scene");
+    expect(scene.querySelector("img, b, script")).toBeNull();
+    const labels = [...scene.querySelectorAll("[data-whiteboard] [data-label]")].map((l) => l.textContent);
+    expect(labels).toEqual([`${markup}, ${content.work_order.project}`]);
+    expect([...scene.querySelectorAll("[data-display-screen]")].map((s) => s.textContent)).toEqual(["1", String(b.waiting_count)]);
+    // The orchestrator's target names the label as text too.
+    const target = buttonsOf(scene).find((t) => t.dataset.target === "orchestrator")!;
+    expect(target.getAttribute("aria-label")).toContain(markup);
     expect((globalThis as { __pwned?: number }).__pwned).toBeUndefined();
   });
 

@@ -7,8 +7,10 @@ import type { Badge } from "../generated/Badge";
 import type { Board } from "../generated/Board";
 import type { Card } from "../generated/Card";
 import type { Column } from "../generated/Column";
+import type { OrchestratorPresence } from "../generated/OrchestratorPresence";
 import type { SubagentView } from "../generated/SubagentView";
 import type { Zone } from "../generated/Zone";
+import { LIVE_STATUS_TEXT, pendingText } from "../orchestrator-text";
 import type { SharedZone } from "./geometry";
 import type { Employee } from "./layout";
 
@@ -50,8 +52,35 @@ export const ROOM_NAMES: Record<SharedZone | "more", string> = {
   more: "More offices",
 };
 
-export function plaqueText(room: SharedZone | "more"): string {
-  return ROOM_NAMES[room];
+/** The decision office's name while the orchestrator is live (AD-179,
+ *  D-567): it presides there, while Needs you still queue for the author. */
+export const ORCHESTRATOR_ROOM_NAME = "Orchestrator";
+
+/** A room's plaque: the decision office names the orchestrator only while
+ *  it is live (R110). */
+export function plaqueText(room: SharedZone | "more", orchestratorLive = false): string {
+  return room === "decision" && orchestratorLive ? ORCHESTRATOR_ROOM_NAME : ROOM_NAMES[room];
+}
+
+/** What the orchestrator is, in its figure's name (R110): it reads and
+ *  proposes, the author decides what runs. */
+export const ORCHESTRATOR_ROLE = "Orchestrator, reads and proposes; decides nothing that runs";
+
+/** The orchestrator's target (D-567): the figure while it is live, the
+ *  empty chair while it is absent. Its name states presence, status and
+ *  the pending proposals; the figure's adds the whiteboard's labels, which
+ *  the overlay may cut short. */
+export function orchestratorWords(
+  presence: OrchestratorPresence | null,
+  proposals: { pending: number; latest: string[] } | null,
+): { label: string; tag: string } {
+  const pending = pendingText(proposals?.pending ?? 0);
+  if (presence === null) {
+    return { label: `Orchestrator: absent, ${pending}; its chair opens its file, which can start it`, tag: "Orchestrator: absent" };
+  }
+  const parts = [ORCHESTRATOR_ROLE, presence.status ? LIVE_STATUS_TEXT[presence.status] : "status unknown", pending];
+  if (proposals && proposals.latest.length > 0) parts.push(`latest: ${proposals.latest.join("; ")}`);
+  return { label: parts.join(", "), tag: ORCHESTRATOR_ROOM_NAME };
 }
 
 /** The scene's fixed signs: the door's, the high-priority pill's, and the

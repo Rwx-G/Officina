@@ -9,6 +9,7 @@ import type { IssueRefusal } from "./generated/IssueRefusal";
 import type { LaunchOutcome } from "./generated/LaunchOutcome";
 import type { LaunchRefusal } from "./generated/LaunchRefusal";
 import type { LiveStatus } from "./generated/LiveStatus";
+import type { ProposalContent } from "./generated/ProposalContent";
 import type { ProposalInvalidReason } from "./generated/ProposalInvalidReason";
 import type { ProposalKind } from "./generated/ProposalKind";
 import type { ProposalRefusal } from "./generated/ProposalRefusal";
@@ -19,6 +20,7 @@ import type { RunKind } from "./generated/RunKind";
 import type { SessionPhase } from "./generated/SessionPhase";
 import type { SubjectRefusal } from "./generated/SubjectRefusal";
 import type { SubjectStatus } from "./generated/SubjectStatus";
+import type { TargetView } from "./generated/TargetView";
 import type { TemplateChange } from "./generated/TemplateChange";
 import type { TemplateUnavailable } from "./generated/TemplateUnavailable";
 import type { WorkOrderRefusal } from "./generated/WorkOrderRefusal";
@@ -280,4 +282,40 @@ export function launchOutcomeText(outcome: LaunchOutcome, cwd: string): string {
     case "unknown":
       return "Outcome unknown: the launch was recorded, its end was not. The history shows what the registry knows.";
   }
+}
+
+/** What the orchestrator is, beside its Start (AD-89, R110). */
+export const ORCHESTRATOR_ABOUT =
+  "A claude session in a console of its own, whose only tools are Officina's: it reads and proposes, and acts on nothing.";
+
+/** A count of pending proposals as words. */
+export function pendingText(pending: number): string {
+  return `${pending} ${pending === 1 ? "proposal" : "proposals"} pending`;
+}
+
+/** The view switch's Orchestrator button (D-565): its accessible name and
+ *  tooltip, presence first, then what is pending. */
+export function switchText(live: boolean, pending: number): string {
+  const head = `Orchestrator: ${live ? "live" : "absent"}`;
+  return pending > 0 ? `${head}, ${pendingText(pending)}` : head;
+}
+
+/** What a proposal is about, in a few words, for the decision office's
+ *  whiteboard (D-567, D-831): a recap's or an answer's target by name, a
+ *  work order's template and project. Every word comes from the
+ *  orchestrator or from a session, so it renders as text only. `names`
+ *  finds a session's name, `subjects` a subject's; an unknown one is named
+ *  by its id. */
+export function proposalLabel(
+  content: ProposalContent,
+  names: ReadonlyMap<string, string>,
+  subjects: ReadonlyMap<number, string>,
+): string {
+  // One variant, one body: what a kind carries decides its label, so a
+  // kind that names a target reads like a recap.
+  const body: { template?: string; project?: string; target?: TargetView } = Object.values(content)[0]!;
+  if (body.template !== undefined) return `${body.template}, ${body.project ?? ""}`;
+  const target = body.target!;
+  if ("subject_id" in target) return subjects.get(target.subject_id) ?? `subject ${target.subject_id}`;
+  return names.get(target.session_id) ?? `session ${target.session_id}`;
 }

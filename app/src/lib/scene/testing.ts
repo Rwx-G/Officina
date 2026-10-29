@@ -8,6 +8,8 @@ import type { ApprovalView } from "../generated/ApprovalView";
 import type { Board } from "../generated/Board";
 import type { Card } from "../generated/Card";
 import type { Column } from "../generated/Column";
+import type { LiveStatus } from "../generated/LiveStatus";
+import type { OrchestratorPresence } from "../generated/OrchestratorPresence";
 import type { SubagentView } from "../generated/SubagentView";
 import type { Zone } from "../generated/Zone";
 
@@ -116,6 +118,12 @@ export function board(cards: Card[], o: Partial<Board> = {}): Board {
     columns,
     waiting_count: columns.needs_you.length,
   };
+}
+
+/** The orchestrator as `Board.orchestrator` carries it while it is live
+ *  (story 5.16), started at `startedAt`. */
+export function presence(status: LiveStatus | null, startedAt: number | null = 0): OrchestratorPresence {
+  return { pid: 4510, status, started_at_ms: startedAt };
 }
 
 /** A floor project. */

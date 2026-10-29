@@ -20,6 +20,7 @@ import {
   SHARED_CELLS,
   SLAB,
   WALL,
+  WHITEBOARD,
   floorWidth,
   officeCells,
   projector,
@@ -28,7 +29,7 @@ import {
   type Projector,
   type SharedZone,
 } from "./geometry";
-import { DECIDER, officeCell, officeSpots, sharedSpots } from "./places";
+import { COUNTER, DECIDER, officeCell, officeSpots, sharedSpots } from "./places";
 
 // ------------------------------------------------------------ paints
 
@@ -87,6 +88,8 @@ export const PAINTS = [
   "scene-shadow",
   "figure-tunic",
   "figure-tunic-shade",
+  "orch-tunic",
+  "orch-tunic-shade",
   "figure-legs",
   "figure-shoe",
   "figure-eye",
@@ -542,7 +545,7 @@ function door(p: Projector, gy0: number, gy1: number): FloorShape[] {
 
 /** The whiteboard above the decision office, static in v0.4. */
 function whiteboard(p: Projector, gx0: number, gx1: number, z0: number, z1: number): FloorShape[] {
-  const W = (a: number, z: number) => at(p, a, 0.02, z);
+  const W = (a: number, z: number) => at(p, a, WHITEBOARD.gy, z);
   const out = [
     polygon([W(gx0 - 0.08, z0 - 0.08), W(gx1 + 0.08, z0 - 0.08), W(gx1 + 0.08, z1 + 0.08), W(gx0 - 0.08, z1 + 0.08)], paint("scene-wood-r")),
     polygon([W(gx0, z0), W(gx1, z0), W(gx1, z1), W(gx0, z1)], paint("scene-board")),
@@ -553,7 +556,7 @@ function whiteboard(p: Projector, gx0: number, gx1: number, z0: number, z1: numb
     out.push(line(W(a, z), W(a + 0.18, z), PROJECT_PAINTS[i % PROJECT_PAINTS.length]!, 5, { round: true }));
     out.push(line(W(a + 0.4, z), W(a + 0.4 + len * (gx1 - gx0 - 0.9), z), paint("color-text-muted"), 2, { round: true }));
   });
-  out.push(polygon([at(p, gx0 + 0.3, 0.02, z0 - 0.02), at(p, gx1 - 0.3, 0.02, z0 - 0.02), at(p, gx1 - 0.3, 0.02, z0 + 0.12), at(p, gx0 + 0.3, 0.02, z0 + 0.12)], paint("scene-metal-2")));
+  out.push(polygon([W(gx0 + 0.3, z0 - 0.02), W(gx1 - 0.3, z0 - 0.02), W(gx1 - 0.3, z0 + 0.12), W(gx0 + 0.3, z0 + 0.12)], paint("scene-metal-2")));
   return out;
 }
 
@@ -639,7 +642,7 @@ export function floorShapes(columns: number): FloorShape[] {
   out.push(...wallFrame(p, "l", 3.5, 4.25, 1.4, 2.2, 11));
   out.push(...wallFrame(p, "l", 9.75, 10.4, 1.5, 2.3, 12));
   out.push(...wallWindow(p, "r", 0.9, 2.5, 1.25, 2.65));
-  out.push(...whiteboard(p, 6.5, 10.0, 0.95, 2.7));
+  out.push(...whiteboard(p, WHITEBOARD.gx0, WHITEBOARD.gx1, WHITEBOARD.z0, WHITEBOARD.z1));
   out.push(...wallWindow(p, "r", 12.4, 14.2, 1.25, 2.65));
   out.push(...wallFrame(p, "r", 14.9, 15.7, 1.45, 2.35, 13));
   out.push(...wallWindow(p, "r", 17.9, 19.7, 1.25, 2.65));
@@ -730,8 +733,8 @@ function addPlant(out: Static[], p: Projector, kind: PlantKind, [gx, gy]: XY, se
 function receptionStatics(p: Projector): Static[] {
   const cell = SHARED_CELLS.reception;
   const out: Static[] = [];
-  const [gx, gy] = local(cell, 1.5, 1.25);
-  let s = box(p, gx, gy, 2.0, 0.55, 0, 0.95, WOOD);
+  const [gx, gy] = local(cell, COUNTER.lx, COUNTER.ly);
+  let s = box(p, gx, gy, COUNTER.w, COUNTER.d, 0, 0.95, WOOD);
   s += box(p, gx - 0.05, gy - 0.05, 2.1, 0.65, 0.95, 0.07, [paint("scene-wood-t"), paint("scene-wood-r"), paint("scene-wood-r")]);
   s += poly([at(p, gx, gy + 0.55, 0.62), at(p, gx + 2.0, gy + 0.55, 0.62), at(p, gx + 2.0, gy + 0.55, 0.74), at(p, gx, gy + 0.55, 0.74)], paint("color-working"));
   s += box(p, gx + 1.35, gy + 0.08, 0.5, 0.08, 1.02, 0.38, METAL);
@@ -756,11 +759,13 @@ function decisionStatics(p: Projector): Static[] {
   let s = box(p, dx, dy, w, d, 0.68, 0.06, WOOD);
   s += box(p, dx + 0.04, dy + 0.04, 0.36, 0.5, 0, 0.68, WOOD) + box(p, dx + w - 0.4, dy + 0.04, 0.36, 0.5, 0, 0.68, WOOD);
   s += poly([at(p, dx, cy - 0.5, 0.62), at(p, dx + w, cy - 0.5, 0.62), at(p, dx + w, cy - 0.5, 0.74), at(p, dx, cy - 0.5, 0.74)], paint("color-working"));
-  for (const off of [-0.5, 0.5]) {
+  const sc = DECIDER.screens;
+  for (const off of sc.offsets) {
     const mx = cx + off;
-    s += box(p, mx - 0.08, cy - 0.98, 0.16, 0.1, 0.74, 0.14, METAL);
-    s += box(p, mx - 0.48, cy - 1.02, 0.96, 0.08, 0.86, 0.74, METAL);
-    s += poly([at(p, mx - 0.42, cy - 0.94, 0.92), at(p, mx + 0.42, cy - 0.94, 0.92), at(p, mx + 0.42, cy - 0.94, 1.54), at(p, mx - 0.42, cy - 0.94, 1.54)], paint("scene-screen-off"));
+    const sy = cy + sc.dy;
+    s += box(p, mx - 0.08, sy - 0.04, 0.16, 0.1, 0.74, 0.14, METAL);
+    s += box(p, mx - 0.48, sy - 0.08, 0.96, 0.08, 0.86, 0.74, METAL);
+    s += poly([at(p, mx - sc.half, sy, sc.z0), at(p, mx + sc.half, sy, sc.z0), at(p, mx + sc.half, sy, sc.z1), at(p, mx - sc.half, sy, sc.z1)], paint("scene-screen-off"));
   }
   s += box(p, cx - 0.28, cy - 0.78, 0.56, 0.14, 0.74, 0.02, [paint("scene-ceramic"), paint("scene-chair"), paint("scene-chair-2")]);
   const [mx, my] = at(p, cx + 0.78, cy - 0.68, 0.74);

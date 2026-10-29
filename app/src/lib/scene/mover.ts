@@ -7,10 +7,17 @@
 // and the scene element's `data-moving` says whether it runs. Ported from
 // the prototype v2's "movement" (`setGoal`, `advance`, `stepGlide`,
 // `arrive`) and its frame loop.
+// The orchestrator (AD-179, D-568) is one more walker, at the decider's
+// chair; it walks only to brief: when a layout names a briefing, the
+// employee detours by reception's counter and the orchestrator comes to
+// the counter's staff side, both hold `BRIEFING_DWELL_MS`, then each goes
+// on to its place. Once per work order, and never when a walk would not
+// be drawn.
 import { HH, HW } from "./geometry";
-import type { Employee, Helper, Marks, Pose, SceneLayout } from "./layout";
-import { allSpots, navGraph, restPoint, type Facing, type NavGraph, type Spot } from "./places";
+import { ORCHESTRATOR_KEY, type Employee, type Helper, type Marks, type Pose, type SceneLayout, type Staff } from "./layout";
+import { allSpots, briefingSpot, navGraph, restPoint, staffSpots, type Facing, type NavGraph, type Spot } from "./places";
 import { route, smooth, type RoutePoint, type RouteStart } from "./paths";
+import type { Role } from "./rig";
 
 /** One frame of the walk cycle: the legs' and the arms' angles in degrees,
  *  in opposition, and the bob in px. */
@@ -64,6 +71,9 @@ export const FRAME_GAP_S = 0.25;
  *  the fastest screen direction moves about 97 px/s, 1.6 px at 60 frames a
  *  second and 1.9 at the 50 a 100 Hz screen gets. */
 export const MIN_FRAME_MS = 13;
+/** How long the employee and the orchestrator stand at the counter once
+ *  both are there, in ms (D-568). */
+export const BRIEFING_DWELL_MS = 1600;
 /** The walk advances in steps no longer than this, in s. */
 const SUBSTEP_S = 0.05;
 
@@ -123,9 +133,26 @@ export interface FigureFrame {
   /** A sub-agent beside its lead's desk (AD-176): smaller, without a cap,
    *  never walking. */
   helper: boolean;
+  /** The orchestrator's figure takes its own rig (D-567). */
+  role: Role;
 }
 
 const NO_MARKS: Marks = { ticket: null, approval: false, deskBadge: null, hand: false, ring: false, question: false, received: false };
+
+/** The orchestrator as the mover walks it: an employee without a card,
+ *  marks or alert. */
+function staffEmployee(s: Staff): Employee {
+  return { key: s.key, zone: "decision", project: "", spot: s.spot, group: null, at: s.at, pose: s.pose, facing: s.facing, marks: NO_MARKS, alert: null, briefing: null };
+}
+
+const roleOf = (key: string): Role => (key === ORCHESTRATOR_KEY ? "orchestrator" : "employee");
+
+/** The spots the mover places figures at: every employee's, and the
+ *  orchestrator's chair and counter place. */
+function moverSpots(columns: number): Map<string, Spot> {
+  const { chair, counter } = staffSpots();
+  return new Map([...allSpots(columns), chair, counter].map((s) => [s.id, s]));
+}
 
 /** A sub-agent standing at its place, at `opacity`. */
 function helperFrame(h: Helper, opacity: number): FigureFrame {
@@ -145,6 +172,7 @@ function helperFrame(h: Helper, opacity: number): FigureFrame {
     marks: NO_MARKS,
     alerted: false,
     helper: true,
+    role: "employee",
   };
 }
 
@@ -157,9 +185,10 @@ export function walkingMarks(marks: Marks): Marks {
 /** Every placed employee at rest at its place: the mover's output once
  *  nothing moves and nobody has walked yet. */
 export function restingFrames(layout: SceneLayout): Map<string, FigureFrame> {
-  const spots = new Map(allSpots(layout.columns).map((s) => [s.id, s]));
+  const spots = moverSpots(layout.columns);
   const out = new Map<string, FigureFrame>();
-  for (const e of layout.employees) {
+  const placed = layout.orchestrator ? [...layout.employees, staffEmployee(layout.orchestrator)] : layout.employees;
+  for (const e of placed) {
     const spot = e.spot === null ? undefined : spots.get(e.spot);
     if (!spot) continue;
     const rest = restPoint(spot);
@@ -179,6 +208,7 @@ export function restingFrames(layout: SceneLayout): Map<string, FigureFrame> {
       marks: e.marks,
       alerted: e.alert !== null,
       helper: false,
+      role: roleOf(e.key),
     });
   }
   for (const h of layout.helpers) out.set(h.key, helperFrame(h, 1));
@@ -220,6 +250,16 @@ interface Walker {
   /** Its frame once at rest, handed out again, the same object, until a
    *  layout or a settle changes it: `objects.ts` skips a frame it drew. */
   still: FigureFrame | null;
+  /** On a briefing's detour, the spot it goes on to afterwards; `goal` is
+   *  then the counter. `null` otherwise. */
+  home: string | null;
+}
+
+/** The briefing under way: the employee's key, and when both stand at the
+ *  counter, the end of their dwell. */
+interface Detour {
+  key: string;
+  dwellUntil: number | null;
 }
 
 /** A sub-agent's figure: it never walks, it fades in where it stands and
@@ -253,6 +293,11 @@ export class Mover {
   readonly #helpers = new Map<string, Standing>();
   /** The live keys of the last layout: a key outside it is new. */
   #seen = new Set<string>();
+  /** The work orders already briefed, or let go unbriefed, this mount. */
+  readonly #briefed = new Set<string>();
+  /** Briefings waiting their turn: one at the counter at a time. */
+  #queue: { orderId: string; key: string }[] = [];
+  #detour: Detour | null = null;
   #started = false;
   #walking = true;
   #columns = -1;
@@ -305,12 +350,14 @@ export class Mover {
     this.#listeners.clear();
     this.#walkers.clear();
     this.#helpers.clear();
+    this.#queue = [];
+    this.#detour = null;
   }
 
-  /** The keys on their way to a place. */
+  /** The keys on their way to a place, a briefing's detour included. */
   transit(): Set<string> {
     const out = new Set<string>();
-    for (const w of this.#walkers.values()) if (!w.leaving && (w.route || w.glide)) out.add(w.key);
+    for (const w of this.#walkers.values()) if (!w.leaving && (w.route || w.glide || w.home !== null)) out.add(w.key);
     return out;
   }
 
@@ -320,7 +367,7 @@ export class Mover {
   update(layout: SceneLayout, walking: boolean): void {
     if (layout.columns !== this.#columns) {
       this.#graph = navGraph(layout.columns);
-      this.#spots = new Map(allSpots(layout.columns).map((s) => [s.id, s]));
+      this.#spots = moverSpots(layout.columns);
       this.#columns = layout.columns;
     }
     const now = this.#env.now();
@@ -330,13 +377,15 @@ export class Mover {
     this.#walking = walking;
     const instant = !this.#started || this.#env.reducedMotion() || this.#env.hidden();
     const placed = new Map<string, { e: Employee; spot: Spot }>();
-    for (const e of layout.employees) {
+    const everyone = layout.orchestrator ? [...layout.employees, staffEmployee(layout.orchestrator)] : layout.employees;
+    for (const e of everyone) {
       const spot = e.spot === null ? undefined : this.#spots.get(e.spot);
       if (spot) placed.set(e.key, { e, spot });
     }
     const live = new Set(layout.employees.map((e) => e.key));
     for (const w of [...this.#walkers.values()]) {
-      if (!placed.has(w.key)) this.#leave(w, live.has(w.key), instant, now);
+      // The orchestrator fades where it is: it never walks out (D-568).
+      if (!placed.has(w.key)) this.#leave(w, live.has(w.key) || w.key === ORCHESTRATOR_KEY, instant, now);
     }
     for (const { e, spot } of placed.values()) {
       const w = this.#walkers.get(e.key);
@@ -349,12 +398,83 @@ export class Mover {
         w.leaving = false;
         if (w.fade) w.fade = { t0: now, from: this.#opacity(w, now), to: 1 };
       }
+      // A walker on a detour goes on to its new place afterwards, unless
+      // nothing may walk now.
+      if (w.home !== null && !instant) {
+        w.home = spot.id;
+        continue;
+      }
+      w.home = null;
       if (w.goal !== spot.id) this.#setGoal(w, spot.id, instant, now);
     }
     this.#updateHelpers(layout.helpers, instant, now);
     this.#seen = live;
+    this.#takeBriefings(layout, instant, now);
     this.#started = true;
     this.#afterChange(now);
+  }
+
+  /** Each briefing a layout names is taken once per work order: queued
+   *  when a walk would be drawn (walking on, motion allowed, the window
+   *  shown, a layout before this one), let go otherwise (D-568). */
+  #takeBriefings(layout: SceneLayout, instant: boolean, now: number): void {
+    for (const e of layout.employees) {
+      const orderId = e.briefing?.orderId;
+      if (orderId === undefined || this.#briefed.has(orderId)) continue;
+      this.#briefed.add(orderId);
+      if (!instant && this.#walking && this.#walkers.has(e.key)) this.#queue.push({ orderId, key: e.key });
+    }
+    this.#keepDetour(now);
+  }
+
+  /** Ends a detour whose employee or orchestrator is gone or back home,
+   *  sending the other home; then starts the next briefing, if any. */
+  #keepDetour(now: number): void {
+    const d = this.#detour;
+    if (d) {
+      const pair = [this.#walkers.get(d.key), this.#walkers.get(ORCHESTRATOR_KEY)];
+      if (pair.some((w) => !w || w.leaving || w.home === null)) {
+        for (const w of pair) if (w && w.home !== null) this.#goHome(w, now);
+        this.#detour = null;
+      }
+    }
+    while (!this.#detour && this.#queue.length > 0) {
+      const { key } = this.#queue.shift()!;
+      const w = this.#walkers.get(key);
+      const o = this.#walkers.get(ORCHESTRATOR_KEY);
+      if (!w || w.leaving || !o || o.leaving) continue;
+      this.#detour = { key, dwellUntil: null };
+      for (const [walker, via] of [
+        [w, briefingSpot().id],
+        [o, staffSpots().counter.id],
+      ] as const) {
+        walker.home = walker.goal;
+        this.#setGoal(walker, via, false, now);
+      }
+    }
+  }
+
+  /** A walker back from the counter to its place. */
+  #goHome(w: Walker, now: number): void {
+    const home = w.home!;
+    w.home = null;
+    this.#setGoal(w, home, false, now);
+  }
+
+  /** The dwell starts once both stand at the counter, and ends after
+   *  `BRIEFING_DWELL_MS`, each going on to its place. */
+  #stepDetour(now: number): void {
+    const d = this.#detour;
+    if (!d) return;
+    const pair = [this.#walkers.get(d.key), this.#walkers.get(ORCHESTRATOR_KEY)];
+    if (d.dwellUntil === null) {
+      if (pair.every((w) => w && w.home !== null && !w.route && !w.glide && w.at === w.goal)) d.dwellUntil = now + BRIEFING_DWELL_MS;
+      return;
+    }
+    if (now < d.dwellUntil) return;
+    for (const w of pair) if (w && w.home !== null) this.#goHome(w, now);
+    this.#detour = null;
+    this.#keepDetour(now);
   }
 
   /** A new sub-agent fades in at its place; one gone from the layout holds,
@@ -437,6 +557,7 @@ export class Mover {
       fade: null,
       leaving: false,
       still: null,
+      home: null,
     };
     this.#walkers.set(e.key, w);
     return w;
@@ -444,13 +565,14 @@ export class Mover {
 
   /** A key without a figure: placed at once, or faded in on the exit and
    *  walked in when it is new to the board (D-483), or faded in at its
-   *  place when it comes from a group or walking is off. */
+   *  place when it comes from a group or walking is off. The orchestrator
+   *  fades in at its chair: it does not come through the entrance. */
   #enter(e: Employee, spot: Spot, instant: boolean, now: number): void {
     if (instant) {
       this.#arrive(this.#walker(e, spot.id), now, true);
       return;
     }
-    if (this.#walking && !this.#seen.has(e.key)) {
+    if (this.#walking && !this.#seen.has(e.key) && e.key !== ORCHESTRATOR_KEY) {
       const w = this.#walker(e, this.#graph!.exit);
       w.fade = { t0: now, from: 0, to: 1 };
       this.#setGoal(w, spot.id, false, now);
@@ -472,6 +594,7 @@ export class Mover {
     if (w.leaving) return;
     this.#standUp(w, now);
     w.leaving = true;
+    w.home = null;
     if (!live && this.#walking) {
       this.#setGoal(w, this.#graph!.exit, false, now);
       return;
@@ -572,7 +695,8 @@ export class Mover {
       w.fade = { t0: now, from: this.#opacity(w, now), to: 0 };
       return;
     }
-    if (w.employee.pose === "standing") {
+    // At the counter it stands, whatever its place's pose.
+    if (w.employee.pose === "standing" || w.home !== null) {
       w.sitAt = null;
       return;
     }
@@ -660,7 +784,11 @@ export class Mover {
     let pose: Pose = "standing";
     let facing = w.view;
     let marks = walkingMarks(e.marks);
-    if (!moving && spot) {
+    if (!moving && spot && w.home !== null) {
+      // At the counter: standing, facing across it, its marks kept for
+      // its place.
+      facing = spot.facing;
+    } else if (!moving && spot) {
       const seated = w.sitAt !== null && now >= w.sitAt;
       if (spot.sit && w.sitAt !== null) {
         const u = this.#slide(w, now);
@@ -688,6 +816,7 @@ export class Mover {
       marks,
       alerted: e.alert !== null,
       helper: false,
+      role: roleOf(w.key),
     };
   }
 
@@ -702,9 +831,15 @@ export class Mover {
       }
       w.fade = null;
       w.still = null;
+      if (w.home !== null) {
+        w.goal = w.home;
+        w.home = null;
+      }
       if (w.route || w.glide || w.at !== w.goal) this.#place(w, w.goal);
       this.#arrive(w, now, true);
     }
+    this.#detour = null;
+    this.#queue = [];
     for (const [key, h] of this.#helpers) {
       if (h.leaving) this.#helpers.delete(key);
       h.fade = null;
@@ -715,7 +850,7 @@ export class Mover {
   }
 
   #busy(w: Walker, now: number): boolean {
-    return w.route !== null || w.glide !== null || w.fade !== null || (w.sitAt !== null && now < w.sitAt + SLIDE_MS / 2);
+    return w.route !== null || w.glide !== null || w.fade !== null || w.home !== null || (w.sitAt !== null && now < w.sitAt + SLIDE_MS / 2);
   }
 
   /** Starts or stops the loop, and tells the host and the halos. */
@@ -766,6 +901,7 @@ export class Mover {
         left -= step;
       }
       for (const w of this.#walkers.values()) if (w.glide) this.#stepGlide(w, now);
+      this.#stepDetour(now);
       for (const w of [...this.#walkers.values()]) {
         if (!w.fade || now - w.fade.t0 < FADE_MS) continue;
         if (w.fade.to === 0) this.#walkers.delete(w.key);

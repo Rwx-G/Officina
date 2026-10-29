@@ -5,7 +5,8 @@
 // pose change shows one group and hides the others; it never rebuilds
 // markup, and every attribute goes through the rig's cache, so a figure
 // whose pose is unchanged receives no write. The markup takes closed types
-// only: a look, a project colour, the cap flag and the scale, never text.
+// only: a look, a project colour, the cap flag, the scale and the role,
+// never text.
 import type { ProjectColor } from "../generated/ProjectColor";
 import { CAPACITY, type Facing } from "./places";
 import type { Marks, Pose } from "./layout";
@@ -49,6 +50,10 @@ export function lookOf(key: string): Look {
   return { skin, hair, style: HAIR_STYLES[(h >>> 8) % HAIR_STYLES.length]! };
 }
 
+/** Whose figure a rig draws: a session's or a sub-agent's, or the
+ *  orchestrator's (AD-179, D-567). */
+export type Role = "employee" | "orchestrator";
+
 export interface RigOptions {
   look: Look;
   /** The project's colour: collar, cap and working chair. */
@@ -57,7 +62,14 @@ export interface RigOptions {
   cap: boolean;
   /** 1 for a session, smaller for a sub-agent (AD-176). */
   scale: number;
+  /** The orchestrator's rig takes its own tunic, a collar in the surface
+   *  colour and no cap, whatever `colour` and `cap` say (D-567). */
+  role: Role;
 }
+
+/** The orchestrator's look, the prototype v2's: one figure, so it is not
+ *  drawn from a key's hash (D-834). */
+export const ORCHESTRATOR_LOOK: Look = { skin: 2, hair: 0, style: "crop" };
 
 const r1 = (n: number): number => Math.round(n * 10) / 10;
 
@@ -120,9 +132,18 @@ function head(cy: number, look: Look, cap: string | null, view: Facing): string 
   return s + "</g>";
 }
 
-function torso(top: number, bottom: number, collar: string, view: Facing): string {
-  const T = paint("figure-tunic");
-  const TS = paint("figure-tunic-shade");
+/** A tunic's fill and its shaded side. */
+interface Tunic {
+  T: string;
+  TS: string;
+}
+
+const TUNICS: Record<Role, Tunic> = {
+  employee: { T: paint("figure-tunic"), TS: paint("figure-tunic-shade") },
+  orchestrator: { T: paint("orch-tunic"), TS: paint("orch-tunic-shade") },
+};
+
+function torso(top: number, bottom: number, collar: string, view: Facing, { T, TS }: Tunic): string {
   let s = `<g${RIM}><path fill="${T}" d="M-7.6 ${bottom} L-9.8 ${top + 5.5} Q-10.6 ${top} -5 ${top - 0.4} L5 ${top - 0.4} Q10.6 ${top} 9.8 ${top + 5.5} L7.6 ${bottom} Z"/>`;
   s += `<path fill="${TS}" d="M1.5 ${bottom} L1.5 ${top - 0.4} L5 ${top - 0.4} Q10.6 ${top} 9.8 ${top + 5.5} L7.6 ${bottom} Z"/>`;
   s += `<rect fill="${paint("figure-legs")}" x="-7.9" y="${bottom - 2.4}" width="15.8" height="2.8" rx="1.2"/>`;
@@ -142,17 +163,21 @@ function leg(part: string, x: number, hip: number, shade: boolean): string {
 }
 
 /** The figure's markup, origin at its floor point. */
-export function rigMarkup({ look, colour, cap, scale }: RigOptions): string {
-  const tone = projectPaint(colour);
-  const capFill = cap ? tone : null;
-  const T = paint("figure-tunic");
-  const TS = paint("figure-tunic-shade");
+export function rigMarkup({ look, colour, cap, scale, role }: RigOptions): string {
+  const orchestrator = role === "orchestrator";
+  const tunic = TUNICS[role];
+  const { T, TS } = tunic;
+  const tone = orchestrator ? paint("color-surface") : projectPaint(colour);
+  const capFill = cap && !orchestrator ? tone : null;
+  // The working chair's back: the project's colour, or the decider's
+  // chair's for the orchestrator.
+  const chairBack = orchestrator ? paint("color-working") : tone;
   const neck = (y: number) => `<rect fill="${skinOf(look)}" x="-2.6" y="${y}" width="5.2" height="5.5"/>`;
   let s = `<g data-part="under"></g><g data-part="rig"${scale !== 1 ? ` transform="scale(${scale})"` : ""}>`;
   s += `<g data-part="stand"><g data-part="flip"><g data-part="bob">`;
   s += leg("leg-far", -3.2, -21, true) + leg("leg-near", 3.2, -21, false);
   s += arm("arm-far", -10.6, -40, look, TS);
-  s += `<g data-view="front">${torso(-40.5, -19.5, tone, "front")}</g><g data-view="back" display="none">${torso(-40.5, -19.5, tone, "back")}</g>`;
+  s += `<g data-view="front">${torso(-40.5, -19.5, tone, "front", tunic)}</g><g data-view="back" display="none">${torso(-40.5, -19.5, tone, "back", tunic)}</g>`;
   s += neck(-45.5) + `<rect fill="${SHADE_1}" x="-2.6" y="-45.5" width="5.2" height="2.4"/>`;
   s += `<g data-view="front">${head(-52.5, look, capFill, "front")}</g><g data-view="back" display="none">${head(-52.5, look, capFill, "back")}</g>`;
   s += arm("arm-near", 10.6, -40, look, T);
@@ -162,17 +187,17 @@ export function rigMarkup({ look, colour, cap, scale }: RigOptions): string {
   s += `<ellipse fill="${paint("figure-shoe")}" cx="-3.4" cy="3.4" rx="3.6" ry="2"/><ellipse fill="${paint("figure-shoe")}" cx="4.2" cy="3.4" rx="3.6" ry="2"/>`;
   s += `<rect fill="${paint("figure-legs")}" x="-7" y="-16" width="6" height="7.5" rx="3"/><rect fill="${paint("figure-legs")}" x="1" y="-16" width="6" height="7.5" rx="3"/>`;
   s += arm("seated-arm-far", -10.6, -36, look, TS);
-  s += torso(-36, -13.5, tone, "front");
+  s += torso(-36, -13.5, tone, "front", tunic);
   s += neck(-41);
   s += head(-48, look, capFill, "front");
   s += arm("seated-arm-near", 10.6, -36, look, T);
   s += `</g>`;
   s += `<g data-part="seated-working" display="none">`;
   s += `<ellipse fill="${TS}" cx="-11.6" cy="-24" rx="3.2" ry="5"/><ellipse fill="${TS}" cx="11.6" cy="-24" rx="3.2" ry="5"/>`;
-  s += torso(-37.5, -16.5, tone, "back");
+  s += torso(-37.5, -16.5, tone, "back", tunic);
   s += neck(-42.5);
   s += head(-49.5, look, capFill, "back");
-  s += `<rect x="-11.5" y="-32" width="23" height="20" rx="7" fill="${tone}"/><rect fill="${SHADE_1}" x="-11.5" y="-32" width="23" height="20" rx="7"/><rect fill="${SHADE_2}" x="-11.5" y="-16" width="23" height="4" rx="2"/>`;
+  s += `<rect x="-11.5" y="-32" width="23" height="20" rx="7" fill="${chairBack}"/><rect fill="${SHADE_1}" x="-11.5" y="-32" width="23" height="20" rx="7"/><rect fill="${SHADE_2}" x="-11.5" y="-16" width="23" height="4" rx="2"/>`;
   s += `</g></g><g data-part="marks"></g>`;
   return s;
 }

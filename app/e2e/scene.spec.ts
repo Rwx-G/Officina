@@ -8,12 +8,26 @@
 // from `layoutScene`, imported, never retyped.
 import { existsSync } from "node:fs";
 import { expect, test, type Page } from "@playwright/test";
-import { SCREENSHOT_MAX_DIFF_RATIO, calls, loadBoard, loadRelay, openScene, openWalkingScene, sceneSettled, transitionsDone } from "./fixtures";
+import {
+  PENDING_LIMIT,
+  SCREENSHOT_MAX_DIFF_RATIO,
+  answerOrchestrator,
+  calls,
+  loadBoard,
+  loadRelay,
+  openScene,
+  openWalkingScene,
+  sceneBoardOrchestrator,
+  sceneSettled,
+  sceneView,
+  transitionsDone,
+  withPending,
+} from "./fixtures";
 import { fixtureOf, fixturesOf } from "./fixture-index";
 import { beaconPair } from "../src/lib/alert";
 import { HALO_BREATHING_MS, HALO_CYCLE_MS } from "../src/lib/halo";
 import { MIN_SCALE, TARGET_CSS_MIN } from "../src/lib/scene/geometry";
-import { SUBAGENT_SCALE, layoutScene, liveCards, nearestTarget, type Direction, type SceneLayout, type Target } from "../src/lib/scene/layout";
+import { ORCHESTRATOR_KEY, SUBAGENT_SCALE, layoutScene, liveCards, nearestTarget, type Direction, type SceneLayout, type Target } from "../src/lib/scene/layout";
 import { STORAGE_KEY, emptyMemory, type SceneMemory } from "../src/lib/scene/memory";
 import { FADE_MS, HELPER_HOLD_MS } from "../src/lib/scene/mover";
 import { ZONE_WORDS } from "../src/lib/scene/text";
@@ -164,8 +178,12 @@ test.describe("the scene draws every live session of each fixture", () => {
     test(name, async ({ page }) => {
       await openScene(page, board);
       const [layout] = layouts(board);
-      const drawn = Object.keys(await figures(page)).sort();
+      const drawn = Object.keys(await figures(page))
+        .filter((key) => key !== ORCHESTRATOR_KEY)
+        .sort();
       expect(drawn).toEqual(layout!.employees.filter((e) => e.spot !== null).map((e) => e.key).sort());
+      // The orchestrator is drawn while the board lists it (D-567).
+      await expect(scene(page).locator("[data-orchestrator]")).toHaveCount(board.orchestrator ? 1 : 0);
       expect((await helpers(page)).map((h) => h.key).sort()).toEqual(layout!.helpers.map((h) => h.key).sort());
       const listed = layout!.groups.flatMap((g) => g.keys);
       const all = [...drawn, ...listed].sort();
@@ -457,11 +475,14 @@ test.describe("scene", () => {
 
   // The owner's screen (D-520, D-525): 1920 x 1080 at 100 %, the window
   // maximised (an inner height of 1001), eight projects, no scrolling,
-  // every target at least 44 CSS px.
+  // every target at least 44 CSS px; the orchestrator live, its count at
+  // the 200 pending proposals a view can hold (story 5.18 AC 9, D-833).
   for (const alert of [false, true]) {
     test(`eight projects fit a maximised Full HD window${alert ? " with the alert band" : ""}`, async ({ page }) => {
       await page.setViewportSize({ width: 1920, height: 1001 });
       const board = loadBoard("scene-eight");
+      board.orchestrator = sceneBoardOrchestrator();
+      await answerOrchestrator(page, withPending(sceneView(), PENDING_LIMIT));
       if (alert) {
         const first = board.columns.needs_you[0]!;
         first.scene = { ...first.scene!, zone: "alert", alert: "priority" };
@@ -471,6 +492,7 @@ test.describe("scene", () => {
       // controls, beside the theme control (story 4.13).
       await openScene(page, board, loadRelay("relay-clean"));
       if (alert) await expect(page.getByTestId("alert-band")).toBeVisible();
+      await expect(scene(page).locator("[data-orchestrator]")).toHaveCount(1);
       // The header on one line (D-526), every fixed control included.
       const tops = await page.locator("header.bar > *").evaluateAll((items) => items.map((e) => Math.round(e.getBoundingClientRect().top)));
       expect(new Set(tops).size, `the header's items start at ${tops.join(", ")}`).toBe(1);
@@ -488,19 +510,23 @@ test.describe("scene", () => {
 
   // The dark ones (story 4.13) are compared with the prototype's dark
   // render, `scene-interactive-dark-target.png`.
+  // Story 5.18 AC 10: each density with the orchestrator live and the
+  // proposals of `scene-orchestrator`, and that scenario itself.
   for (const theme of ["light", "dark"] as const) {
-    test(`the three densities match their ${theme} baselines`, async ({ page }, testInfo) => {
-      const densities = ["scene-a", "scene-b", "scene-c"] as const;
+    test(`the densities match their ${theme} baselines`, async ({ page }, testInfo) => {
+      const densities = ["scene-a", "scene-b", "scene-c", "scene-orchestrator"] as const;
       const updating = testInfo.config.updateSnapshots === "all" || testInfo.config.updateSnapshots === "changed";
       const missing = densities.filter((name) => !existsSync(testInfo.snapshotPath(`${name}-${theme}.png`)));
       // D-508: the baselines come from the CI snapshot run and are committed
       // only after the owner compared them with the prototype's render.
       test.fixme(missing.length > 0 && !updating, `baselines not committed yet (D-508): ${missing.join(", ")}`);
+      const live = (name: (typeof densities)[number]) => ({ ...loadBoard(name), orchestrator: sceneBoardOrchestrator() });
       await page.emulateMedia({ colorScheme: theme });
-      await openScene(page, loadBoard(densities[0]));
+      await answerOrchestrator(page, sceneView());
+      await openScene(page, live(densities[0]));
       await expect(page.getByTestId("theme-switch")).toHaveAttribute("data-theme-resolved", theme);
       for (const name of densities) {
-        await reopenScene(page, loadBoard(name));
+        await reopenScene(page, live(name));
         await expect(scene(page)).toHaveScreenshot(`${name}-${theme}.png`, {
           maxDiffPixelRatio: SCREENSHOT_MAX_DIFF_RATIO,
           animations: "disabled",
@@ -603,9 +629,10 @@ test.describe("acting from the scene", () => {
     const offices = layout!.rooms.filter((r) => r.kind === "office" && layout!.targets.some((t) => t.group === r.id)).map((r) => r.id);
     expect(rooms).toEqual(["reception", "decision", "alert", ...offices, "lounge", "more"]);
     // The decision office's group comes right after the queue's figures
-    // (D-103), at its plaque's end (D-557).
+    // (D-103), at its plaque's end (D-557), then the orchestrator's empty
+    // chair (D-567).
     const decision = layout!.targets.filter((t) => t.group === "decision");
-    expect(decision.map((t) => t.kind)).toEqual([...decision.slice(0, -1).map(() => "figure"), "group"]);
+    expect(decision.map((t) => t.kind)).toEqual([...decision.slice(0, -2).map(() => "figure"), "group", "chair"]);
   });
 
   test("a focused target shows the two-tone ring", async ({ page }) => {
@@ -978,11 +1005,13 @@ test.describe("acting from the scene", () => {
     await expect(scene(page)).toBeFocused();
   });
 
-  test("an empty board has no target and the header's counts say zero", async ({ page }) => {
+  test("an empty board has no session target and the header's counts say zero", async ({ page }) => {
     const board = loadBoard("empty");
     expect(liveCards(board)).toEqual([]);
     await openScene(page, board);
-    await expect(scene(page).locator("[data-target]")).toHaveCount(0);
+    // Only the orchestrator's empty chair, which is no session (D-567).
+    await expect(scene(page).locator("[data-target]")).toHaveCount(1);
+    await expect(scene(page).locator('[data-target="chair"]')).toHaveCount(1);
     await expect(page.getByTestId("ended-to-resume")).toHaveAccessibleName("0 to resume");
     await expect(page.getByTestId("ended-done")).toHaveAccessibleName("0 done");
     await expect(page.getByTestId("ended-done")).toHaveAttribute("title", new RegExp(`in the last ${hours(board.done_window_ms)}:`));
@@ -1211,4 +1240,133 @@ test("opening a meeting marks the figure once", async ({ page }) => {
   expect(await records()).toBe(marked);
   await page.getByTestId("meeting-close").click();
   await expect(ring).toHaveCount(0);
+});
+
+// Story 5.18 (AD-179, D-567, AC 6 and AC 8): the orchestrator at the
+// decider's desk, its targets, its file and its screens, on the
+// `scene-orchestrator` board and view printed from one home.
+test.describe("the orchestrator in the decision office", () => {
+  const orchestratorTarget = (page: Page) => scene(page).locator('[data-target="orchestrator"]');
+  const chairTarget = (page: Page) => scene(page).locator('[data-target="chair"]');
+  const absent = (): Board => ({ ...loadBoard("scene-orchestrator"), orchestrator: null });
+
+  async function openLive(page: Page): Promise<Board> {
+    const board = loadBoard("scene-orchestrator");
+    await answerOrchestrator(page, sceneView());
+    await openScene(page, board);
+    await expect(scene(page).locator("[data-orchestrator]")).toHaveCount(1);
+    return board;
+  }
+
+  test("Tab reaches the orchestrator after the decision office's queue", async ({ page }) => {
+    await openLive(page);
+    const ids = await scene(page).locator("[data-target]").evaluateAll((all) => all.map((t) => t.getAttribute("data-target")!));
+    const at = ids.indexOf("orchestrator");
+    expect(at).toBeGreaterThan(0);
+    await scene(page).focus();
+    for (let i = 0; i <= at; i++) await page.keyboard.press("Tab");
+    expect(await focusedTarget(page)).toBe("orchestrator");
+    // What comes before it is the queue's: a waiting figure or its "+n".
+    const before = ids[at - 1]!;
+    const queued = await scene(page).locator(`[data-target=${JSON.stringify(before)}]`).getAttribute("data-key");
+    const board = loadBoard("scene-orchestrator");
+    expect(before.startsWith("group:decision") || board.columns.needs_you.some((c) => c.key === queued)).toBe(true);
+    await expect(orchestratorTarget(page)).toHaveAccessibleName(/^Orchestrator, reads and proposes; decides nothing that runs, working, \d+ proposals? pending/);
+    // After it, the alert room or the offices: never the queue again.
+    const after = ids[at + 1];
+    if (after) expect(after.startsWith("group:decision")).toBe(false);
+  });
+
+  test("Enter on the orchestrator opens the Orchestrator view", async ({ page }) => {
+    await openLive(page);
+    await orchestratorTarget(page).focus();
+    await page.keyboard.press("Enter");
+    await expect(page.getByTestId("orchestrator-view")).toBeVisible();
+    await expect(page.getByTestId("view-orchestrator")).toHaveAttribute("aria-pressed", "true");
+    expect((await calls(page)).filter((c) => c.cmd === "start_orchestrator")).toEqual([]);
+  });
+
+  test("the empty chair's file offers Start, which sends start_orchestrator", async ({ page }) => {
+    await answerOrchestrator(page, { ...sceneView(), presence: null });
+    await openScene(page, absent());
+    await expect(scene(page).locator("[data-orchestrator]")).toHaveCount(0);
+    await expect(orchestratorTarget(page)).toHaveCount(0);
+    await expect(chairTarget(page)).toHaveAccessibleName(/^Orchestrator: absent/);
+    await chairTarget(page).click();
+    const file = sessionFile(page);
+    await expect(file).toHaveAttribute("data-form", "orchestrator");
+    await expect(file.getByRole("heading")).toHaveText("Orchestrator: absent");
+    await expect(file.getByTestId("chair-about")).toContainText("decides nothing that runs");
+    expect((await calls(page)).filter((c) => c.cmd === "start_orchestrator")).toEqual([]);
+    await file.getByTestId("chair-start").click();
+    await expect(file.getByTestId("chair-answer")).toContainText("type any first message");
+    expect((await calls(page)).filter((c) => c.cmd === "start_orchestrator")).toHaveLength(1);
+    // The link shows the Orchestrator view.
+    await expect(file.getByTestId("chair-view")).toBeVisible();
+    // Once the board lists it, the file closes and the figure sits there.
+    await push(page, loadBoard("scene-orchestrator"));
+    await expect(file).toHaveCount(0);
+    await expect(scene(page).locator("[data-orchestrator]")).toHaveCount(1);
+    await expect(orchestratorTarget(page)).toHaveCount(1);
+  });
+
+  test("Start is reachable by keyboard from the chair's file", async ({ page }) => {
+    await answerOrchestrator(page, { ...sceneView(), presence: null });
+    await openScene(page, absent());
+    await chairTarget(page).focus();
+    // Enter on the chair opens its file and starts nothing (rework F1).
+    await page.keyboard.press("Enter");
+    await expect(sessionFile(page)).toHaveAttribute("data-form", "orchestrator");
+    expect(await focusedTestId(page)).toBe("file-close");
+    expect((await calls(page)).filter((c) => c.cmd === "start_orchestrator")).toEqual([]);
+    await page.keyboard.press("Tab");
+    expect(await focusedTestId(page)).toBe("chair-start");
+    await page.keyboard.press("Enter");
+    await expect.poll(async () => (await calls(page)).filter((c) => c.cmd === "start_orchestrator").length).toBe(1);
+    // Escape closes the file, focus back on the chair.
+    await page.keyboard.press("Escape");
+    await expect(sessionFile(page)).toHaveCount(0);
+    expect(await focusedTarget(page)).toBe("chair");
+  });
+
+  test("nothing in the scene changes while the payloads are unchanged, the orchestrator live", async ({ page }) => {
+    const board = await openLive(page);
+    const view = sceneView();
+    expect(view.proposals.some((p) => p.status === "pending")).toBe(true);
+    expect(view.work_orders.some((o) => o.bound_at_ms !== null)).toBe(true);
+    await expect(scene(page).locator("[data-whiteboard] [data-label]").first()).toBeVisible();
+    const records = await observeScene(page);
+    await page.clock.runFor(150_000);
+    await push(page, structuredClone(board));
+    await page.evaluate((v) => window.__officinaPushOrchestrator!(v), structuredClone(view));
+    await page.clock.runFor(1_000);
+    expect(await records()).toBe(0);
+  });
+
+  test("a presence or proposal change changes the decision office once", async ({ page }) => {
+    const board = await openLive(page);
+    const view = sceneView();
+    const records = await observeScene(page);
+    const settledCount = async () => {
+      await sceneSettled(page);
+      const count = await records();
+      // Then nothing more, however long nothing changes.
+      await page.clock.runFor(60_000);
+      expect(await records()).toBe(count);
+      return count;
+    };
+    // Fewer proposals: the left screen and the whiteboard, once.
+    const fewer = { ...view, proposals: view.proposals.filter((p) => p.status === "pending").slice(0, 1) };
+    await page.evaluate((v) => window.__officinaPushOrchestrator!(v), fewer);
+    await expect(scene(page).locator('[data-display-screen="proposals"]')).toHaveText("1");
+    await expect(scene(page).locator("[data-whiteboard] [data-label]")).toHaveCount(1);
+    const afterProposal = await settledCount();
+    expect(afterProposal).toBeGreaterThan(0);
+    // Absent: the figure, the screens and the plaque's name, once.
+    await push(page, { ...board, orchestrator: null });
+    await expect(scene(page).locator("[data-orchestrator]")).toHaveCount(0);
+    await expect(scene(page).locator("[data-display-screen]")).toHaveCount(0);
+    await expect(scene(page).locator('[data-plaque="decision"]')).toContainText("Decisions: you");
+    expect(await settledCount()).toBeGreaterThan(afterProposal);
+  });
 });

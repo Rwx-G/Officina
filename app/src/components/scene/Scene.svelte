@@ -16,7 +16,8 @@
   import type { Card } from "../../lib/generated/Card";
   import type { ProjectColor } from "../../lib/generated/ProjectColor";
   import { fitScale } from "../../lib/scene/geometry";
-  import { layoutScene, liveCards, type Target } from "../../lib/scene/layout";
+  import { layoutScene, liveCards, sceneBriefings, sceneProposals, type Target } from "../../lib/scene/layout";
+  import type { OrchestratorStore } from "../../lib/orchestrator.svelte";
   import * as memory from "../../lib/scene/memory";
   import { Mover } from "../../lib/scene/mover";
   import { DEFAULT_WALKING } from "../../lib/view.svelte";
@@ -37,8 +38,13 @@
     onBoard: () => void;
     /** Figures walk to their places, or glide there (AD-66). */
     walking?: boolean;
+    /** The Orchestrator view's store: what the orchestrator proposed and
+     *  the bound work orders, and its Start (D-567, D-568). */
+    orchestrator?: OrchestratorStore;
+    /** Shows the Orchestrator view. */
+    onOrchestrator?: () => void;
   }
-  let { board, store, onBoard, walking = DEFAULT_WALKING }: Props = $props();
+  let { board, store, onBoard, walking = DEFAULT_WALKING, orchestrator, onOrchestrator }: Props = $props();
 
   // One mover per mounted scene: its first layout places everyone at once,
   // so a new run or a mode switch never makes the company walk in (D-469).
@@ -57,7 +63,15 @@
   // committed memory after that.
   // The open meeting's figure is marked received wherever it stands
   // (D-566): opening and closing a meeting each change the scene once.
-  let layout = $derived(layoutScene({ board, received: meeting.view?.key ?? meeting.key }, memory.load(board)));
+  let view = $derived(orchestrator?.view ?? null);
+  let proposals = $derived(view ? sceneProposals(view, board) : null);
+  let briefings = $derived(view ? sceneBriefings(view) : null);
+  let layout = $derived(
+    layoutScene(
+      { board, received: meeting.view?.key ?? meeting.key, orchestrator: board.orchestrator, proposals, briefings },
+      memory.load(board),
+    ),
+  );
   $effect(() => memory.commit(layout.memory));
 
   let cards = $derived(new Map(liveCards(board).map((card) => [card.key, card])));
@@ -113,7 +127,10 @@
 
   /** What the file panel holds: a session's file, by key, opened from a
    *  figure or from a group's list; or a group's list, by its target. */
-  type Open = { kind: "file"; key: string; from: string | null } | { kind: "list"; target: string; focusKey: string | null };
+  type Open =
+    | { kind: "file"; key: string; from: string | null }
+    | { kind: "list"; target: string; focusKey: string | null }
+    | { kind: "orchestrator"; target: string };
   let open = $state<Open | null>(null);
 
   let sceneElement: HTMLElement;
@@ -129,6 +146,10 @@
       const card = allCards.get(open.key);
       return card ? { kind: "file", card, back: open.from !== null } : null;
     }
+    // The absent orchestrator's file closes once it is live (D-567).
+    if (open.kind === "orchestrator") {
+      return board.orchestrator ? null : { kind: "orchestrator", title: "Orchestrator: absent", pending: proposals?.pending ?? 0 };
+    }
     const opened = open;
     const target = layout.targets.find((t) => t.id === opened.target);
     if (!target) return null;
@@ -142,7 +163,7 @@
   });
   /** Remounts the panel, which focuses its first control, on each new
    *  file or list, never on a board update of the one shown. */
-  let formId = $derived(open === null ? "" : open.kind === "file" ? `file:${open.key}` : `list:${open.target}`);
+  let formId = $derived(open === null ? "" : open.kind === "file" ? `file:${open.key}` : `${open.kind}:${open.target}`);
 
   // The card left the board, or the group emptied: the panel closes, and
   // focus, which it held or which nothing holds, goes to the scene element.
@@ -159,8 +180,14 @@
   });
 
   function activate(target: Target): void {
+    if (target.kind === "orchestrator") {
+      onOrchestrator?.();
+      return;
+    }
     meeting.close(false);
-    open = target.kind === "group" ? { kind: "list", target: target.id, focusKey: null } : { kind: "file", key: target.keys[0]!, from: null };
+    if (target.kind === "chair") open = { kind: "orchestrator", target: target.id };
+    else if (target.kind === "group") open = { kind: "list", target: target.id, focusKey: null };
+    else open = { kind: "file", key: target.keys[0]!, from: null };
   }
 
   /** The target that now represents `key`: its figure, else its group. */
@@ -179,7 +206,10 @@
       return;
     }
     open = null;
-    const id = was.kind === "file" ? representing(was.key) : was.target;
+    // The orchestrator's file returns to its chair, or to the orchestrator
+    // once it is live.
+    const orchestratorTarget = () => layout.targets.find((t) => t.kind === "chair" || t.kind === "orchestrator")?.id ?? null;
+    const id = was.kind === "file" ? representing(was.key) : was.kind === "orchestrator" ? orchestratorTarget() : was.target;
     await tick();
     if (id === null || !targetsLayer.focusTarget(id)) sceneElement.focus();
   }
@@ -227,7 +257,16 @@
 </div>
 {#if form}
   {#key formId}
-    <SessionFile {form} {board} {store} onClose={() => void back()} onOpen={(key) => (open = { kind: "file", key, from: open?.kind === "list" ? open.target : null })} {onBoard} />
+    <SessionFile
+      {form}
+      {board}
+      {store}
+      onClose={() => void back()}
+      onOpen={(key) => (open = { kind: "file", key, from: open?.kind === "list" ? open.target : null })}
+      {onBoard}
+      {orchestrator}
+      {onOrchestrator}
+    />
   {/key}
 {/if}
 

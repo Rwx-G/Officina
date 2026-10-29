@@ -6,7 +6,11 @@
 import type { AlertCause } from "../generated/AlertCause";
 import type { Board } from "../generated/Board";
 import type { Card } from "../generated/Card";
+import type { LiveStatus } from "../generated/LiveStatus";
+import type { OrchestratorPresence } from "../generated/OrchestratorPresence";
+import type { OrchestratorView } from "../generated/OrchestratorView";
 import type { ProjectView } from "../generated/ProjectView";
+import { proposalLabel } from "../orchestrator-text";
 import type { Zone } from "../generated/Zone";
 import {
   MAX_OFFICES,
@@ -28,14 +32,65 @@ import {
   type SharedZone,
 } from "./geometry";
 import type { LastPlace, SceneMemory } from "./memory";
-import { CAPACITY, officeSpots, restPoint, sharedSpots, type Facing, type Spot } from "./places";
-import { figureWords, groupWords, helperWords, plaqueText, summaryText, type FigureFacts } from "./text";
+import { CAPACITY, officeSpots, restPoint, sharedSpots, staffSpots, type Facing, type Spot } from "./places";
+import { figureWords, groupWords, helperWords, orchestratorWords, plaqueText, summaryText, type FigureFacts } from "./text";
+
+/** What the orchestrator proposed (story 5.17): how many proposals are
+ *  pending, and the labels of the latest, newest first, each the
+ *  orchestrator's or a session's text (D-831). */
+export interface SceneProposals {
+  pending: number;
+  latest: string[];
+}
+
+/** A work order bound to its session (AD-81), as the Orchestrator view
+ *  lists it (story 5.8): what a briefing is drawn from (D-568). */
+export interface SceneBriefing {
+  orderId: string;
+  sessionId: string;
+  boundAtMs: number;
+}
+
+/** The most proposal labels the whiteboard shows (D-567). */
+export const MAX_LABELS = 4;
+
+/** What the scene takes of the Orchestrator view's proposals (D-831): the
+ *  pending count, and the labels of the latest pending ones, newest first
+ *  as the view lists them. A session is named as its card names it. */
+export function sceneProposals(view: OrchestratorView, board: Board): SceneProposals {
+  const pending = view.proposals.filter((p) => p.status === "pending");
+  const names = new Map<string, string>();
+  for (const card of Object.values(board.columns).flat()) if (card.session_id !== null) names.set(card.session_id, card.name);
+  const subjects = new Map(view.briefing.subjects.items.map((s) => [s.id, s.name]));
+  return {
+    pending: pending.length,
+    latest: pending.flatMap((p) => (p.content ? [proposalLabel(p.content, names, subjects)] : [])).slice(0, MAX_LABELS),
+  };
+}
+
+/** The Orchestrator view's bound work orders (AD-81, D-568). */
+export function sceneBriefings(view: OrchestratorView): SceneBriefing[] {
+  return view.work_orders.flatMap((o) =>
+    o.bound_at_ms !== null && o.session !== null ? [{ orderId: o.id, sessionId: o.session.session_id, boundAtMs: o.bound_at_ms }] : [],
+  );
+}
 
 export interface SceneInput {
   board: Board;
   /** The card key of the open meeting (D-566): its figure is marked
    *  received wherever it stands; absent or `null`, nobody is. */
   received?: string | null;
+  /** The orchestrator while `claude agents` lists it (`Board.orchestrator`,
+   *  story 5.16): drawn at the decider's chair. Absent or `null`, the chair
+   *  stays empty, as v0.4 draws it. */
+  orchestrator?: OrchestratorPresence | null;
+  /** Absent or `null`, the screens show none pending and the whiteboard
+   *  no label. */
+  proposals?: SceneProposals | null;
+  /** The bound work orders. Absent or `null` while the Orchestrator view
+   *  is not known yet: then no order is briefed, and the first layout that
+   *  knows them takes every one as already briefed (D-836). */
+  briefings?: SceneBriefing[] | null;
 }
 
 /** Which of a figure's pose groups shows (AD-171). */
@@ -71,6 +126,36 @@ export interface Employee {
   facing: Facing;
   marks: Marks;
   alert: AlertCause | null;
+  /** A work order bound to this session since the orchestrator came, not
+   *  yet briefed (D-568): the mover detours it by the counter once. Its
+   *  place and target stay its final ones (D-471). */
+  briefing: { orderId: string } | null;
+}
+
+/** The orchestrator at the decider's chair (AD-179, D-567): never a card,
+ *  never counted, ringed, numbered or grouped. */
+export interface Staff {
+  /** Its figure's key, which no card key can be. */
+  key: string;
+  spot: string;
+  /** Its resting floor point on screen. */
+  at: Point;
+  pose: Pose;
+  facing: Facing;
+  status: LiveStatus | null;
+}
+
+/** The figure key of the orchestrator: card keys start `pid:` or `sid:`. */
+export const ORCHESTRATOR_KEY = "officina:orchestrator";
+
+/** What the decider's screens and the whiteboard show while the
+ *  orchestrator is live (D-567, D-830): the pending proposals on the left
+ *  screen, the Needs you count on the right, the latest labels on the
+ *  whiteboard, newest first. */
+export interface DecisionDisplay {
+  proposals: number;
+  needsYou: number;
+  labels: string[];
 }
 
 /** A running sub-agent drawn beside its lead's desk (AD-176, D-476). */
@@ -148,8 +233,10 @@ export interface Group {
 }
 
 /** A figure's target opens its session's file, a sub-agent's (`helper`)
- *  its lead's, a group's lists its members. */
-export type TargetKind = "figure" | "helper" | "group";
+ *  its lead's, a group's lists its members; the live orchestrator's opens
+ *  the Orchestrator view, its empty chair's (`chair`) the orchestrator's
+ *  file, which offers Start (D-567). */
+export type TargetKind = "figure" | "helper" | "group" | "orchestrator" | "chair";
 
 export interface Target {
   id: string;
@@ -172,6 +259,10 @@ export interface SceneLayout {
   desks: Desk[];
   groups: Group[];
   targets: Target[];
+  /** The orchestrator, while it is live. */
+  orchestrator: Staff | null;
+  /** The screens' and the whiteboard's words, while it is live. */
+  display: DecisionDisplay | null;
   summary: string;
   memory: SceneMemory;
 }
@@ -218,8 +309,24 @@ export const MAX_NUMBER = 9;
 export function layoutScene(input: SceneInput, memory: SceneMemory): SceneLayout {
   const { board } = input;
   const received = input.received ?? null;
+  const presence = input.orchestrator ?? null;
+  const proposals = input.proposals ?? null;
   const live = liveCards(board);
   const cardOf = new Map(live.map((c) => [c.key, c]));
+
+  // Briefings (D-568, D-836): an order bound while the orchestrator is
+  // live, after it came, and not already bound when the run's layouts
+  // first knew the bindings.
+  const known = input.briefings ?? null;
+  const briefed = memory.briefed ?? (known ? known.map((b) => b.orderId) : null);
+  const briefingOf = new Map<string, string>();
+  if (presence && known && briefed) {
+    const done = new Set(briefed);
+    for (const b of known) {
+      if (done.has(b.orderId) || (presence.started_at_ms !== null && b.boundAtMs < presence.started_at_ms)) continue;
+      if (!briefingOf.has(b.sessionId)) briefingOf.set(b.sessionId, b.orderId);
+    }
+  }
 
   // Offices (AD-62): floor projects in file order, then remembered ones
   // with a live card, then first appearance; kept until restart.
@@ -401,6 +508,7 @@ export function layoutScene(input: SceneInput, memory: SceneMemory): SceneLayout
       received: card.key === received && at.spot !== null,
     };
     const rest = at.spot ? restPoint(at.spot) : null;
+    const orderId = card.session_id !== null ? briefingOf.get(card.session_id) : undefined;
     return {
       key: card.key,
       zone,
@@ -412,8 +520,28 @@ export function layoutScene(input: SceneInput, memory: SceneMemory): SceneLayout
       facing: at.facing,
       marks,
       alert: card.scene?.alert ?? null,
+      briefing: orderId !== undefined ? { orderId } : null,
     };
   });
+
+  // The orchestrator (D-567): seated at the decider's chair, at its desk
+  // while busy, facing the room otherwise; a waiting one waits on nobody.
+  const chair = staffSpots().chair;
+  const chairRest = restPoint(chair);
+  const chairAt = p(chairRest.gx, chairRest.gy);
+  const orchestrator: Staff | null = presence
+    ? {
+        key: ORCHESTRATOR_KEY,
+        spot: chair.id,
+        at: chairAt,
+        pose: presence.status === "busy" ? "seated-working" : "seated-facing",
+        facing: presence.status === "busy" ? chair.facing : "front",
+        status: presence.status,
+      }
+    : null;
+  const display: DecisionDisplay | null = presence
+    ? { proposals: proposals?.pending ?? 0, needsYou: board.waiting_count, labels: (proposals?.latest ?? []).slice(0, MAX_LABELS) }
+    : null;
   const employeeOf = new Map(employees.map((e) => [e.key, e]));
   const bySpot = new Map(employees.filter((e) => e.spot !== null).map((e) => [e.spot!, e]));
 
@@ -499,7 +627,7 @@ export function layoutScene(input: SceneInput, memory: SceneMemory): SceneLayout
       slot: null,
       project: null,
       projects: [],
-      plaque: { text: plaqueText(zone), count: n, state: sharedState[zone](n), highPriority: false, more: groupKeys.get(zone)?.length ?? 0 },
+      plaque: { text: plaqueText(zone, presence !== null), count: n, state: sharedState[zone](n), highPriority: false, more: groupKeys.get(zone)?.length ?? 0 },
     };
   });
   const cells = officeCells(columns);
@@ -530,8 +658,10 @@ export function layoutScene(input: SceneInput, memory: SceneMemory): SceneLayout
   }
 
   // Targets in tab order (AD-63): reception, the queue and its register,
-  // the alert room, offices by slot (desks front to back, chip spots, the
-  // chip), the lounge, More offices.
+  // the orchestrator or its empty chair, the alert room, offices by slot
+  // (desks front to back, chip spots, the chip), the lounge, More offices.
+  // A group names its room as v0.4 did: the queue's members wait on the
+  // author, whatever the plaque says (R110).
   const facts = (e: Employee): FigureFacts => ({ card: cardOf.get(e.key)!, employee: e });
   const targets: Target[] = [];
   const figure = (spot: Spot, group: string) => {
@@ -557,6 +687,11 @@ export function layoutScene(input: SceneInput, memory: SceneMemory): SceneLayout
   };
   sharedGroup("reception");
   sharedGroup("decision");
+  {
+    const words = orchestratorWords(presence, proposals);
+    const kind: TargetKind = presence ? "orchestrator" : "chair";
+    targets.push({ id: kind, group: "decision", kind, rect: figureTarget(chairAt), label: words.label, tag: words.tag, keys: [] });
+  }
   sharedGroup("alert");
   regular.forEach((project, slot) => {
     const { desks: d, chips: c } = spotsOf[slot]!;
@@ -596,6 +731,8 @@ export function layoutScene(input: SceneInput, memory: SceneMemory): SceneLayout
     desks: deskList,
     groups,
     targets,
+    orchestrator,
+    display,
     summary: summaryText(board, employees),
     memory: {
       floor: board.floor,
@@ -605,6 +742,7 @@ export function layoutScene(input: SceneInput, memory: SceneMemory): SceneLayout
       chips,
       sticky,
       last: nextLast,
+      briefed,
     },
   };
 }

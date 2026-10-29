@@ -5,7 +5,7 @@
 // case below stands for, so a new toggle cannot go untested silently.
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import { fixtureOf } from "./fixture-index";
-import { loadBoard, loadRegistry, loadRelay, openBoard, openScene } from "./fixtures";
+import { PENDING_LIMIT, loadBoard, loadRegistry, loadRelay, openBoard, openScene, sceneBoardOrchestrator, sceneView, transitionsDone, withPending } from "./fixtures";
 import type { MeetingView } from "../src/lib/generated/MeetingView";
 import type { OrchestratorView } from "../src/lib/generated/OrchestratorView";
 import type { RegistryView } from "../src/lib/generated/RegistryView";
@@ -18,7 +18,7 @@ const TOLERANCE_PX = 0.5;
 /** What makes an element a toggle this spec must cover. */
 const TOGGLE = '[aria-pressed], [role="radio"], [data-stable-slot], :has(> [data-stable-label])';
 
-type SceneName = "board" | "autoApproval" | "sceneMode" | "relay" | "relayAuto" | "subjects" | "triage" | "orchestrator" | "meeting";
+type SceneName = "board" | "autoApproval" | "sceneMode" | "chairFile" | "relay" | "relayAuto" | "subjects" | "triage" | "orchestrator" | "meeting";
 
 const SCENES: Record<SceneName, (page: Page) => Promise<void>> = {
   board: async (page) => {
@@ -32,6 +32,22 @@ const SCENES: Record<SceneName, (page: Page) => Promise<void>> = {
   // The Sessions view's Scene mode: the header on one line (D-525).
   sceneMode: async (page) => {
     await openScene(page, loadBoard("busy"), loadRelay("relay-clean"));
+  },
+  // The orchestrator's empty chair, its file open (story 5.18).
+  chairFile: async (page) => {
+    await openScene(page, loadBoard("busy"), loadRelay("relay-clean"));
+    await page.getByTestId("scene").locator('[data-target="chair"]').click();
+    await expect(page.getByTestId("chair-start")).toBeVisible();
+    // The panel slides in (D-545): measured once it stands still.
+    const start = page.getByTestId("chair-start");
+    await expect
+      .poll(async () => {
+        const before = (await start.boundingBox())!.x;
+        await page.clock.runFor(500);
+        await transitionsDone(page);
+        return (await start.boundingBox())!.x - before;
+      })
+      .toBe(0);
   },
   relay: async (page) => {
     await openBoard(page, loadBoard("busy"), {}, loadRelay("relay-clean"));
@@ -103,6 +119,31 @@ interface ToggleCase {
 
 const CASES: ToggleCase[] = [
   { name: "view switch", selector: '[data-testid="view-switch"] > button', scene: "board" },
+  // Story 5.18 AC 9 (D-565, D-833): presence turns live and the count
+  // goes to the most proposals that can be pending; the button keeps its
+  // box and the mode switch after it stays.
+  {
+    name: "orchestrator view switch mark",
+    selector: '[data-testid="view-orchestrator"]',
+    scene: "board",
+    act: (page) =>
+      page.evaluate(
+        ([presence, view]) =>
+          Promise.all([window.__officinaPushBoard?.({ ...window.__officinaBoard!, orchestrator: presence }), window.__officinaPushOrchestrator?.(view)]),
+        [sceneBoardOrchestrator(), withPending(sceneView(), PENDING_LIMIT)] as const,
+      ),
+  },
+  // The absent orchestrator's file in the scene (story 5.18 AC 6): held in
+  // flight, Start reads Starting.
+  {
+    name: "chair file Start",
+    selector: '[data-testid="chair-start"]',
+    scene: "chairFile",
+    act: async (page, control) => {
+      await page.evaluate(() => (window.__officinaStartHeld = true));
+      await control.click();
+    },
+  },
   { name: "header relay toggle", selector: '[data-testid="relay-toggle"]', scene: "board" },
   { name: "pin on top", selector: '[data-testid="pin-toggle"]', scene: "board" },
   {

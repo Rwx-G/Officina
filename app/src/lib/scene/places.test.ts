@@ -19,8 +19,13 @@ import {
 import { route } from "./paths";
 import {
   CAPACITY,
+  COUNTER,
   DECIDER,
+  STAFF_CHAIR,
+  STAFF_COUNTER,
   allSpots,
+  briefingSpot,
+  staffSpots,
   navGraph,
   officeCell,
   officeSpots,
@@ -156,9 +161,68 @@ describe("navigation graph", () => {
         const inside = route(graph, graph.doors.get(roomOf(s))!, s.id)!;
         for (const id of inside) expect(graph.nodes.get(id)!.room, `${s.id} via ${id}`).toBe(roomOf(s));
       }
-      // Nothing of the graph is cut off.
-      for (const id of graph.nodes.keys()) expect(route(graph, graph.exit, id), id).not.toBeNull();
+      // Nothing of the graph is cut off but the staff chain (D-568).
+      for (const node of graph.nodes.values()) if (!node.staff) expect(route(graph, graph.exit, node.id), node.id).not.toBeNull();
     }
+  });
+
+  // Story 5.18 AC 7 (D-568): every pair of employee spots, at every
+  // column count. A route stays within the nodes its ends reach, so the
+  // nodes every employee spot reaches holding no staff node covers every
+  // pair; each spot's route to the next one is also walked.
+  it("no route between two employee spots passes a staff node", () => {
+    for (const columns of COLUMN_COUNTS) {
+      const graph = navGraph(columns);
+      const spots = allSpots(columns);
+      const reached = new Set([spots[0]!.id]);
+      const todo = [spots[0]!.id];
+      while (todo.length > 0) {
+        for (const id of graph.nodes.get(todo.pop()!)!.adj) {
+          if (!reached.has(id)) {
+            reached.add(id);
+            todo.push(id);
+          }
+        }
+      }
+      for (const s of spots) expect(reached.has(s.id), `${columns} columns: ${s.id}`).toBe(true);
+      for (const id of reached) expect(graph.nodes.get(id)!.staff, `${columns} columns: ${id}`).toBe(false);
+      spots.forEach((from, i) => {
+        const to = spots[(i + 1) % spots.length]!;
+        for (const id of route(graph, from.id, to.id)!) expect(graph.nodes.get(id)!.staff, `${from.id} to ${to.id}`).toBe(false);
+      });
+      expect([...graph.nodes.values()].some((n) => n.staff)).toBe(true);
+    }
+  });
+
+  it("a staff route joins the decider's chair and the counter", () => {
+    const decision = roomOrigin(SHARED_CELLS.decision);
+    const { chair, counter } = staffSpots();
+    expect([chair.gx, chair.gy]).toEqual([decision.gx + DECIDER.chair.lx, decision.gy + DECIDER.chair.ly]);
+    expect(chair.posture).toBe("seated");
+    for (const columns of COLUMN_COUNTS) {
+      const graph = navGraph(columns);
+      for (const [from, to] of [
+        [STAFF_CHAIR, STAFF_COUNTER],
+        [STAFF_COUNTER, STAFF_CHAIR],
+      ] as const) {
+        const ids = route(graph, from, to)!;
+        expect(ids[0]).toBe(from);
+        expect(ids[ids.length - 1]).toBe(to);
+        for (const id of ids) expect(graph.nodes.get(id)!.staff, id).toBe(true);
+        // It leaves the decision office for reception, nowhere else.
+        expect(new Set(ids.map((id) => graph.nodes.get(id)!.room))).toEqual(new Set(["decision", "reception"]));
+      }
+      expect([graph.nodes.get(STAFF_CHAIR)!.gx, graph.nodes.get(STAFF_COUNTER)!.gy]).toEqual([chair.gx, counter.gy]);
+    }
+    // The counter's staff side is behind the counter, facing the visitor
+    // spot a briefed employee stands at, across it.
+    const reception = roomOrigin(SHARED_CELLS.reception);
+    expect(counter.gy).toBeLessThan(reception.gy + COUNTER.ly);
+    expect(counter.facing).toBe("front");
+    const visitor = briefingSpot();
+    expect(visitor.room).toBe("reception");
+    expect(visitor.gy).toBeGreaterThan(reception.gy + COUNTER.ly + COUNTER.d);
+    expect(visitor.facing).toBe("back");
   });
 
   it("each door links its room to the corridor", () => {
@@ -176,7 +240,7 @@ describe("navigation graph", () => {
         // No other node of the room leaves it, but the entrance to the exit
         // and the queue's places on the centre line, which are corridor.
         for (const other of graph.nodes.values()) {
-          if (other.room !== room || other.id === door || onCentreLine(graph, other.id)) continue;
+          if (other.room !== room || other.staff || other.id === door || onCentreLine(graph, other.id)) continue;
           for (const id of other.adj) {
             const to = graph.nodes.get(id)!;
             if (to.room !== room) expect([other.id, to.id], room).toEqual(["reception:entry", graph.exit]);

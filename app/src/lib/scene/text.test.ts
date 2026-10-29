@@ -8,11 +8,61 @@ import type { Board } from "../generated/Board";
 import { MAX_NUMBER, layoutScene, type SceneLayout } from "./layout";
 import { emptyMemory, type SceneMemory } from "./memory";
 import { CAPACITY } from "./places";
-import { approval, board, card, fixtureBoards } from "./testing";
-import { ALERT_WORDS, BADGE_WORDS, COLUMN_WORDS, ROOM_NAMES, ZONE_WORDS } from "./text";
+import { approval, board, card, fixtureBoards, presence } from "./testing";
+import { LIVE_STATUS_TEXT, pendingText } from "../orchestrator-text";
+import {
+  ALERT_WORDS,
+  BADGE_WORDS,
+  COLUMN_WORDS,
+  ORCHESTRATOR_ROLE,
+  ORCHESTRATOR_ROOM_NAME,
+  ROOM_NAMES,
+  ZONE_WORDS,
+  orchestratorWords,
+  plaqueText,
+} from "./text";
 
 const lay = (b: Board, memory: SceneMemory = emptyMemory()) => layoutScene({ board: b }, memory);
 const label = (l: SceneLayout, key: string) => l.targets.find((t) => t.keys.includes(key) && t.kind === "figure")!.label;
+
+// Story 5.18 AC 5, AC 6 (D-567, R110).
+describe("text: the orchestrator", () => {
+  it("the decision office's plaque names the orchestrator only while it is live", () => {
+    const b = board([card("d", "decision")]);
+    const plaque = (l: SceneLayout) => l.rooms.find((r) => r.kind === "decision")!.plaque;
+    const absent = layoutScene({ board: b, orchestrator: null }, emptyMemory());
+    expect(plaque(absent).text).toBe(ROOM_NAMES.decision);
+    for (const status of ["busy", "waiting", "idle", null] as const) {
+      const live = layoutScene({ board: b, orchestrator: presence(status) }, emptyMemory());
+      expect(plaque(live).text).toBe(ORCHESTRATOR_ROOM_NAME);
+      // Its count and state stay the queue's.
+      expect({ ...plaque(live), text: null }).toEqual({ ...plaque(absent), text: null });
+    }
+    expect(ORCHESTRATOR_ROOM_NAME).not.toBe(ROOM_NAMES.decision);
+    for (const room of Object.keys(ROOM_NAMES) as (keyof typeof ROOM_NAMES)[]) {
+      if (room !== "decision") expect(plaqueText(room, true)).toBe(ROOM_NAMES[room]);
+    }
+  });
+
+  it("the orchestrator's target names presence, status and proposals", () => {
+    const proposals = { pending: 2, latest: ["dependency-bump, billing-api", "install guide"] };
+    const absent = orchestratorWords(null, proposals);
+    expect(absent.label).toContain("absent");
+    expect(absent.label).toContain(pendingText(2));
+    expect(absent.tag).toContain("absent");
+    for (const status of ["busy", "waiting", "idle"] as const) {
+      const live = orchestratorWords(presence(status), proposals);
+      expect(live.label).toContain(ORCHESTRATOR_ROLE);
+      expect(live.label).toContain(LIVE_STATUS_TEXT[status]);
+      expect(live.label).toContain(pendingText(2));
+      for (const label of proposals.latest) expect(live.label).toContain(label);
+      expect(live.label).not.toContain("absent");
+    }
+    expect(orchestratorWords(presence(null), null).label).toContain("status unknown");
+    expect(orchestratorWords(presence("idle"), null).label).toContain(pendingText(0));
+    expect(pendingText(1)).toBe("1 proposal pending");
+  });
+});
 
 describe("text", () => {
   it("the summary names the waiting count, the alert count and the oldest waiting session", () => {

@@ -20,7 +20,7 @@ import { ALERT_PAINTS, buildStatics, paint, type OfficeUse, type Static } from "
 import { SUBAGENT_SCALE, alertLit, type SceneLayout } from "./layout";
 import type { FigureFrame } from "./mover";
 import { allSpots, type Spot } from "./places";
-import { createRig, deskTagMarkup, lookOf, marksMarkup, setPose, ticketMarkup, ticketOn, underMarkup, write, type Rig } from "./rig";
+import { ORCHESTRATOR_LOOK, createRig, deskTagMarkup, lookOf, marksMarkup, setPose, ticketMarkup, ticketOn, underMarkup, write, type Rig } from "./rig";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 
@@ -319,9 +319,17 @@ export class SceneObjects {
         figure = undefined;
       }
       if (!figure) {
-        const rig = createRig(this.#doc, { look: lookOf(f.key), colour, cap: !f.helper, scale: f.helper ? SUBAGENT_SCALE : 1 });
+        const orchestrator = f.role === "orchestrator";
+        const rig = createRig(this.#doc, {
+          look: orchestrator ? ORCHESTRATOR_LOOK : lookOf(f.key),
+          colour,
+          cap: !f.helper && !orchestrator,
+          scale: f.helper ? SUBAGENT_SCALE : 1,
+          role: f.role,
+        });
         rig.node.setAttribute("data-figure", f.key);
         if (f.helper) rig.node.setAttribute("data-helper", "");
+        if (orchestrator) rig.node.setAttribute("data-orchestrator", "");
         rig.node.setAttribute("aria-hidden", "true");
         const badge = this.#doc.createElementNS(SVG_NS, "g");
         badge.setAttribute("data-ticket-of", f.key);

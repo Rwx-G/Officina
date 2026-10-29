@@ -162,6 +162,16 @@ const PAIRS: [Side, Side, number][] = [
   ["--color-working", "--scene-alert-floor", 3],
   ["--color-working", "--scene-rug", 3],
   ["--color-working", "--scene-rug-2", 3],
+  // The orchestrator's tunic (D-567) on each floor it sits or walks on:
+  // the decision office's floor and rug, reception's floor, and the
+  // ground between the two rooms its staff chain crosses (D-832).
+  ["--orch-tunic", "--scene-room", 3],
+  ["--orch-tunic", "--scene-rug", 3],
+  ["--orch-tunic", "--scene-ground", 3],
+  // What the overlay writes while it is live (D-567): the counts on the
+  // lit screens, the labels on the whiteboard.
+  ["--color-surface", "--color-working", 4.5],
+  ["--scene-metal", "--scene-board", 4.5],
 ];
 
 /** Hair against the rim the head is outlined with, on each floor a figure

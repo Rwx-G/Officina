@@ -3,12 +3,12 @@
 import { describe, expect, it } from "vitest";
 import type { Board } from "../generated/Board";
 import { HH, HW } from "./geometry";
-import { layoutScene, type SceneLayout } from "./layout";
+import { ORCHESTRATOR_KEY, layoutScene, type SceneBriefing, type SceneLayout } from "./layout";
 import { emptyMemory, type SceneMemory } from "./memory";
-import { FADE_MS, FRAME_CAP_S, FRAME_GAP_S, GLIDE_MS, HELPER_HOLD_MS, MIN_FRAME_MS, Mover, WALK, restingFrames, type FigureFrame, type MotionEnv } from "./mover";
+import { BRIEFING_DWELL_MS, FADE_MS, FRAME_CAP_S, FRAME_GAP_S, GLIDE_MS, HELPER_HOLD_MS, MIN_FRAME_MS, Mover, WALK, restingFrames, type FigureFrame, type MotionEnv } from "./mover";
 import { CORNER_RADIUS, route } from "./paths";
-import { allSpots, navGraph, restPoint } from "./places";
-import { board, card, fixtureBoards } from "./testing";
+import { STAFF_CHAIR, STAFF_COUNTER, allSpots, briefingSpot, navGraph, restPoint, staffSpots } from "./places";
+import { board, card, fixtureBoards, presence } from "./testing";
 
 /** A frame source and clock the test steps by hand. */
 class Frames implements MotionEnv {
@@ -517,6 +517,155 @@ describe("mover: sub-agents (story 4.12, D-548)", () => {
     expect(helperOf(reduced.mover)!.opacity).toBe(1);
     reduced.mover.update(none!, true);
     expect(helperOf(reduced.mover)).toBeNull();
+  });
+});
+
+// Story 5.18 AC 7 (D-568): a bound work order's briefing at the counter.
+describe("mover: the briefing", () => {
+  const office = board([card("w", "office"), card("other", "office", { started: 1 })]);
+  const live = presence("idle");
+  const bound: SceneBriefing = { orderId: "o1", sessionId: "session-w", boundAtMs: 5 };
+  /** The layout before the binding, then the one that names it. */
+  function briefing(): [SceneLayout, SceneLayout] {
+    const before = layoutScene({ board: office, orchestrator: live, briefings: [] }, emptyMemory(office.floor));
+    const after = layoutScene({ board: office, orchestrator: live, briefings: [bound] }, before.memory);
+    expect(after.employees.find((e) => e.key === "w")!.briefing).toEqual({ orderId: "o1" });
+    return [before, after];
+  }
+  const at = (f: FigureFrame | undefined, s: { gx: number; gy: number }) => !!f && !f.moving && Math.hypot(f.gx - s.gx, f.gy - s.gy) < 1e-6;
+  /** Each step's frames of the employee and the orchestrator, until rest. */
+  function run(frames: Frames, mover: Mover): { t: number; w: FigureFrame; o: FigureFrame }[] {
+    const out: { t: number; w: FigureFrame; o: FigureFrame }[] = [];
+    for (let i = 0; i < 4_000 && mover.moving; i++) {
+      frames.step(16);
+      const figures = mover.figures();
+      out.push({ t: frames.t, w: figures.get("w")!, o: figures.get(ORCHESTRATOR_KEY)! });
+    }
+    expect(mover.moving, "still moving").toBe(false);
+    return out;
+  }
+
+  it("the briefing detours to the counter and dwells 1.6 s", () => {
+    const { frames, mover } = setup();
+    const [before, after] = briefing();
+    mover.update(before, true);
+    const home = restingFrames(before);
+    mover.update(after, true);
+    expect(mover.moving).toBe(true);
+    expect(mover.transit()).toEqual(new Set(["w", ORCHESTRATOR_KEY]));
+    const path = run(frames, mover);
+    const visitor = briefingSpot();
+    const counter = staffSpots().counter;
+    // Both at the counter at once, standing, each facing across it.
+    const together = path.filter((p) => at(p.w, visitor) && at(p.o, counter));
+    expect(together.length).toBeGreaterThan(0);
+    for (const p of together) {
+      expect(p.w.pose).toBe("standing");
+      expect(p.w.facing).toBe(visitor.facing);
+      expect(p.o.pose).toBe("standing");
+      expect(p.o.facing).toBe(counter.facing);
+      expect(p.o.role).toBe("orchestrator");
+    }
+    const dwell = together[together.length - 1]!.t - together[0]!.t;
+    expect(dwell).toBeGreaterThanOrEqual(BRIEFING_DWELL_MS - 16);
+    expect(dwell).toBeLessThanOrEqual(BRIEFING_DWELL_MS + 32);
+    // The orchestrator walked the staff chain, the employee never did.
+    const graph = navGraph(after.columns);
+    const staff = [...graph.nodes.values()].filter((n) => n.staff);
+    expect(path.some((p) => staff.some((n) => Math.hypot(p.o.gx - n.gx, p.o.gy - n.gy) < 0.05 && n.id !== STAFF_CHAIR && n.id !== STAFF_COUNTER))).toBe(true);
+    // Then each back to its place, as it rested before.
+    const end = mover.figures();
+    for (const key of ["w", ORCHESTRATOR_KEY]) {
+      const rest = home.get(key)!;
+      expect([end.get(key)!.gx, end.get(key)!.gy, end.get(key)!.pose], key).toEqual([rest.gx, rest.gy, rest.pose]);
+    }
+  });
+
+  it("once per order", () => {
+    const { frames, mover } = setup();
+    const [before, after] = briefing();
+    mover.update(before, true);
+    mover.update(after, true);
+    run(frames, mover);
+    // The same entry on later layouts, or after a turn of walking off and
+    // on, never detours again.
+    mover.update(after, true);
+    expect(mover.moving).toBe(false);
+    mover.update(after, false);
+    mover.update(after, true);
+    expect(mover.moving).toBe(false);
+    // A remounted scene's first layout takes it as briefed too.
+    const again = setup();
+    again.mover.update(after, true);
+    again.mover.update(after, true);
+    expect(again.mover.moving).toBe(false);
+  });
+
+  it("none with walking off", () => {
+    const { frames, mover } = setup();
+    const [before, after] = briefing();
+    mover.update(before, false);
+    mover.update(after, false);
+    expect(mover.moving).toBe(false);
+    frames.step(16);
+    mover.update(after, true);
+    expect(mover.moving).toBe(false);
+  });
+
+  it("none under reduced motion", () => {
+    const { frames, mover } = setup();
+    const [before, after] = briefing();
+    mover.update(before, true);
+    frames.reduced = true;
+    mover.update(after, true);
+    expect(mover.moving).toBe(false);
+    frames.reduced = false;
+    mover.update(after, true);
+    expect(mover.moving).toBe(false);
+  });
+
+  it("none on a hidden window", () => {
+    const { frames, mover } = setup();
+    const [before, after] = briefing();
+    mover.update(before, true);
+    frames.isHidden = true;
+    mover.update(after, true);
+    expect(mover.moving).toBe(false);
+    // Hidden mid-briefing: both are placed home at once.
+    const shown = setup();
+    shown.mover.update(before, true);
+    shown.mover.update(after, true);
+    shown.frames.step(16);
+    expect(shown.mover.moving).toBe(true);
+    shown.frames.hide();
+    expect(shown.mover.moving).toBe(false);
+    const rest = restingFrames(before);
+    for (const key of ["w", ORCHESTRATOR_KEY]) {
+      const f = shown.mover.figures().get(key)!;
+      expect([f.gx, f.gy], key).toEqual([rest.get(key)!.gx, rest.get(key)!.gy]);
+    }
+  });
+
+  it("the orchestrator walks for nothing else, and comes and goes at its chair", () => {
+    const { frames, mover } = setup();
+    const absent = layoutScene({ board: office }, emptyMemory(office.floor));
+    const [before] = briefing();
+    mover.update(absent, true);
+    mover.update(before, true);
+    const path = run(frames, mover);
+    const chair = staffSpots().chair;
+    for (const p of path) expect([p.o.gx, p.o.gy]).toEqual([chair.gx, chair.gy]);
+    expect(path[0]!.o.opacity).toBeLessThan(1);
+    // A board change elsewhere moves it not.
+    const next = layoutScene({ board: board([card("w", "decision"), card("other", "office", { started: 1 })]), orchestrator: live, briefings: [] }, before.memory);
+    mover.update(next, true);
+    for (const p of run(frames, mover)) if (p.o) expect([p.o.gx, p.o.gy]).toEqual([chair.gx, chair.gy]);
+    // Gone, it fades where it sits.
+    mover.update(layoutScene({ board: office }, next.memory), true);
+    const leaving = mover.figures().get(ORCHESTRATOR_KEY)!;
+    expect([leaving.gx, leaving.gy]).toEqual([chair.gx, chair.gy]);
+    run(frames, mover);
+    expect(mover.figures().has(ORCHESTRATOR_KEY)).toBe(false);
   });
 });
 

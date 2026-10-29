@@ -203,7 +203,14 @@
       <FocusList {board} {store} onApprovals={() => windowView.setMode("board")} />
     {:else if scene}
       <main class="sessions-area" data-testid="sessions-area" in:fadeMotion>
-        <Scene {board} {store} onBoard={() => windowView.setBase("board")} walking={windowView.walking} />
+        <Scene
+          {board}
+          {store}
+          onBoard={() => windowView.setBase("board")}
+          walking={windowView.walking}
+          {orchestrator}
+          onOrchestrator={() => (windowView.view = "orchestrator")}
+        />
       </main>
     {:else if columns}
       <main class="board" in:fadeMotion>

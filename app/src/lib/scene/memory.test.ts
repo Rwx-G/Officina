@@ -32,6 +32,25 @@ function storeWith(raw: Record<string, string>) {
 const lay = (b: Board, memory = emptyMemory(b.floor)) => layoutScene({ board: b }, memory);
 
 describe("memory", () => {
+  // Story 5.18 AC 7 (D-568, D-836): the run's seed of bound orders goes
+  // from layout to layout and survives a commit, but never reaches storage.
+  it("briefed orders are kept for the run and never stored", () => {
+    const { storage, store } = storeWith({});
+    const b = board([card("a", "office")]);
+    const input = { board: b, orchestrator: { pid: 1, status: "idle" as const, started_at_ms: 0 } };
+    const first = layoutScene({ ...input, briefings: [{ orderId: "o1", sessionId: "session-a", boundAtMs: 1 }] }, store.load(b));
+    expect(first.memory.briefed).toEqual(["o1"]);
+    store.commit(first.memory);
+    expect(store.current().briefed).toEqual(["o1"]);
+    const next = layoutScene({ ...input, briefings: [] }, store.current());
+    expect(next.memory.briefed).toEqual(["o1"]);
+    for (const value of storage.items.values()) expect(value).not.toContain("o1");
+    expect(Object.keys(JSON.parse(serialise(first.memory)) as object)).not.toContain("briefed");
+    // A new run starts without a seed.
+    const again = storeWith(Object.fromEntries(storage.items));
+    expect(again.store.load(b).briefed).toBeNull();
+  });
+
   it("load prunes offices and desks without a live card on the first board", () => {
     const { storage, store } = storeWith({
       [STORAGE_KEY]: stored("main", ["gone", "beta", "alpha"], { gone: ["g", null], beta: ["b-ended", "b"], alpha: ["a", null, null, null] }),

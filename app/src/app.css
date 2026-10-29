@@ -95,6 +95,8 @@
   --scene-shadow: rgb(42 36 28 / 0.1);
   --figure-tunic: #625849;
   --figure-tunic-shade: #4e4538;
+  --orch-tunic: #3d6b8e;
+  --orch-tunic-shade: #30566f;
   --figure-legs: #3e372e;
   --figure-shoe: #211c17;
   --figure-eye: #211a14;
@@ -223,6 +225,8 @@
   --scene-shadow: rgb(0 0 0 / 0.28);
   --figure-tunic: #b9ac97;
   --figure-tunic-shade: #9d9079;
+  --orch-tunic: #7fa8c9;
+  --orch-tunic-shade: #6a93b4;
   --figure-legs: #8c8170;
   --figure-shoe: #1c1814;
   --figure-eye: #211a14;
@@ -299,6 +303,8 @@
     --scene-shadow: rgb(0 0 0 / 0.28);
     --figure-tunic: #b9ac97;
     --figure-tunic-shade: #9d9079;
+    --orch-tunic: #7fa8c9;
+    --orch-tunic-shade: #6a93b4;
     --figure-legs: #8c8170;
     --figure-shoe: #1c1814;
     --figure-eye: #211a14;

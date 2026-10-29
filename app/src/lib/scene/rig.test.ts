@@ -3,14 +3,28 @@ import type { ProjectColor } from "../generated/ProjectColor";
 import { PROJECT_COLORS } from "../colors";
 import type { Pose } from "./layout";
 import { CAPACITY, type Facing } from "./places";
-import { HAIR_STYLES, LOOKS, createRig, deskLetter, deskTagMarkup, lookOf, marksMarkup, setPose, ticketMarkup, ticketOn, type Rig } from "./rig";
+import { paint } from "./furniture";
+import {
+  HAIR_STYLES,
+  LOOKS,
+  ORCHESTRATOR_LOOK,
+  createRig,
+  deskLetter,
+  deskTagMarkup,
+  lookOf,
+  marksMarkup,
+  setPose,
+  ticketMarkup,
+  ticketOn,
+  type Rig,
+} from "./rig";
 
 const POSES: Pose[] = ["standing", "seated-facing", "seated-working"];
 const FACINGS: Facing[] = ["front", "back"];
 const COLOURS: (ProjectColor | null)[] = [...(Object.keys(PROJECT_COLORS) as ProjectColor[]), null];
 
 function rig(colour: ProjectColor | null = "green", cap = true): Rig {
-  const r = createRig(document, { look: lookOf("pid:1:1"), colour, cap, scale: 1 });
+  const r = createRig(document, { look: lookOf("pid:1:1"), colour, cap, scale: 1, role: "employee" });
   document.createElementNS("http://www.w3.org/2000/svg", "svg").append(r.node);
   return r;
 }
@@ -74,7 +88,7 @@ describe("rig", () => {
       for (const style of HAIR_STYLES) {
         for (const colour of COLOURS) {
           for (const cap of [true, false]) {
-            const r = createRig(document, { look: { skin, hair, style }, colour, cap, scale: 1 });
+            const r = createRig(document, { look: { skin, hair, style }, colour, cap, scale: 1, role: "employee" });
             for (const pose of POSES) {
               setPose(r, pose, "front", false);
               expect(textNodes(r.node), `${skin}/${hair}/${style}/${colour}/${cap}/${pose}`).toEqual([]);
@@ -83,6 +97,35 @@ describe("rig", () => {
         }
       }
     }
+  });
+
+  // Story 5.18 AC 3 (D-567): told from an employee by its tunic, its
+  // collar and its bare head, with the same three pose groups.
+  it("the orchestrator's rig takes its tunic, a surface collar and no cap", () => {
+    const fills = (r: Rig) => new Set([...r.node.querySelectorAll("[fill]")].map((el) => el.getAttribute("fill")!));
+    for (const colour of COLOURS) {
+      for (const cap of [true, false]) {
+        const r = createRig(document, { look: ORCHESTRATOR_LOOK, colour, cap, scale: 1, role: "orchestrator" });
+        const used = fills(r);
+        expect(used).toContain(paint("orch-tunic"));
+        expect(used).toContain(paint("orch-tunic-shade"));
+        expect(used).not.toContain(paint("figure-tunic"));
+        expect(used).not.toContain(paint("figure-tunic-shade"));
+        // Its collar, the surface; no project colour anywhere, so no cap.
+        expect(used).toContain(paint("color-surface"));
+        for (const project of Object.values(PROJECT_COLORS)) expect(used, `${colour}/${cap}`).not.toContain(project);
+        expect(new Set(Object.values(r.poses)).size).toBe(POSES.length);
+        for (const pose of POSES) {
+          setPose(r, pose, "front", false);
+          expect(textNodes(r.node)).toEqual([]);
+        }
+      }
+    }
+    // An employee's rig of the same look keeps the employee's tunic.
+    const employee = fills(createRig(document, { look: ORCHESTRATOR_LOOK, colour: null, cap: true, scale: 1, role: "employee" }));
+    expect(employee).toContain(paint("figure-tunic"));
+    expect(employee).not.toContain(paint("orch-tunic"));
+    expect(LOOKS.some(([skin, hair]) => skin === ORCHESTRATOR_LOOK.skin && hair === ORCHESTRATOR_LOOK.hair)).toBe(true);
   });
 
   it("a look comes from the card key, among the allowed pairs only", () => {

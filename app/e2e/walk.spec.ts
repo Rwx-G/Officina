@@ -6,13 +6,14 @@
 // `requestAnimationFrame`. Boards are `officina board --json` output;
 // places come from `layoutScene`, imported, never retyped.
 import { expect, test, type Page } from "@playwright/test";
-import { loadBoard, openWalkingScene, sceneSettled } from "./fixtures";
+import { answerOrchestrator, loadBoard, openWalkingScene, sceneSettled, sceneView } from "./fixtures";
 import { DEPTH_BANDS, projector } from "../src/lib/scene/geometry";
-import { layoutScene, type SceneLayout } from "../src/lib/scene/layout";
+import { ORCHESTRATOR_KEY, layoutScene, liveCards, type SceneLayout } from "../src/lib/scene/layout";
 import { STORAGE_KEY, emptyMemory, parse, prune, type SceneMemory } from "../src/lib/scene/memory";
-import { GLIDE_MS } from "../src/lib/scene/mover";
-import { navGraph } from "../src/lib/scene/places";
+import { BRIEFING_DWELL_MS, GLIDE_MS } from "../src/lib/scene/mover";
+import { briefingSpot, navGraph, staffSpots } from "../src/lib/scene/places";
 import type { Board } from "../src/lib/generated/Board";
+import type { OrchestratorView } from "../src/lib/generated/OrchestratorView";
 import type { Card } from "../src/lib/generated/Card";
 
 const FRAME_MS = 16;
@@ -410,5 +411,88 @@ test.describe("walking", () => {
     const at = after!.employees.find((e) => e.key === key)!.at!;
     const s = (await sample(page, key))!;
     expect([s.x, s.y]).toEqual([snapped(at.x, scale), snapped(at.y, scale)]);
+  });
+});
+
+// Story 5.18 AC 7 (D-568): a work order bound while the orchestrator is
+// live is briefed at reception's counter once, on the `scene-orchestrator`
+// board and view; its order is first shown unbound, then bound.
+test.describe("the briefing walk", () => {
+  function briefingCase(): { board: Board; before: OrchestratorView; after: OrchestratorView; key: string } {
+    const board = loadBoard("scene-orchestrator");
+    const after = sceneView();
+    const live = liveCards(board);
+    const order = after.work_orders.find((o) => o.bound_at_ms !== null && live.some((c) => c.session_id === o.session?.session_id))!;
+    const key = live.find((c) => c.session_id === order.session!.session_id)!.key;
+    const before = { ...after, work_orders: after.work_orders.map((o) => (o.id === order.id ? { ...o, bound_at_ms: null, bg_id: null, session: null } : o)) };
+    return { board, before, after, key };
+  }
+  const pushView = (page: Page, view: OrchestratorView) => page.evaluate((v) => window.__officinaPushOrchestrator!(v), view);
+
+  test("a bound work order is briefed at the counter once, then both return", async ({ page }) => {
+    const { board, before, after, key } = briefingCase();
+    await answerOrchestrator(page, before);
+    const scale = await openPaused(page, board);
+    const home = { w: (await sample(page, key))!, o: (await sample(page, ORCHESTRATOR_KEY))! };
+    expect(home.o).not.toBeNull();
+    const columns = Number(await scene(page).getAttribute("data-columns"));
+    const point = (s: { gx: number; gy: number }) => {
+      const at = projector(columns)(s.gx, s.gy);
+      return [snapped(at.x, scale), snapped(at.y, scale)];
+    };
+    const visitor = point(briefingSpot());
+    const counter = point(staffSpots().counter);
+    await pushView(page, after);
+    const both: { w: Sample; o: Sample }[] = [];
+    for (let i = 0; i < MAX_FRAMES; i += SPARSE) {
+      await page.clock.runFor(FRAME_MS * SPARSE);
+      both.push({ w: (await sample(page, key))!, o: (await sample(page, ORCHESTRATOR_KEY))! });
+      if (both.at(-1)!.w.moving === "0") break;
+    }
+    await expect(scene(page)).toHaveAttribute("data-moving", "0");
+    const atCounter = both.filter(({ w, o }) => w.x === visitor[0] && w.y === visitor[1] && o.x === counter[0] && o.y === counter[1]);
+    // The last samples there may catch them setting off, not yet a snapped
+    // pixel away and already turned to walk back: the dwell ends there.
+    const setOff = atCounter.findIndex(({ o }) => o.views[0] !== "front");
+    const there = setOff < 0 ? atCounter : atCounter.slice(0, setOff);
+    expect(atCounter.length - there.length).toBeLessThanOrEqual(2);
+    expect(there.length, "both at the counter together").toBeGreaterThan(0);
+    for (const { w, o } of there) {
+      expect(w.poses).toEqual(["stand"]);
+      expect(o.poses).toEqual(["stand"]);
+      // The employee's back to the author, facing the counter; the
+      // orchestrator across it, facing the author.
+      expect(w.views).toEqual(["back"]);
+      expect(o.views).toEqual(["front"]);
+    }
+    // They hold BRIEFING_DWELL_MS, sampled every SPARSE frames.
+    const held = there.length * SPARSE * FRAME_MS;
+    expect(held).toBeGreaterThanOrEqual(BRIEFING_DWELL_MS - 2 * SPARSE * FRAME_MS);
+    expect(held).toBeLessThanOrEqual(BRIEFING_DWELL_MS + 2 * SPARSE * FRAME_MS);
+    // Then both are back, as they sat.
+    const end = { w: (await sample(page, key))!, o: (await sample(page, ORCHESTRATOR_KEY))! };
+    for (const who of ["w", "o"] as const) {
+      expect([end[who].x, end[who].y, end[who].poses], who).toEqual([home[who].x, home[who].y, home[who].poses]);
+    }
+    // Once: the same binding again moves nobody.
+    await pushView(page, structuredClone(after));
+    await page.clock.runFor(FRAME_MS * 10);
+    await expect(scene(page)).toHaveAttribute("data-moving", "0");
+  });
+
+  test("with walking off a bound order goes straight to its place", async ({ page }) => {
+    const { board, before, after, key } = briefingCase();
+    await answerOrchestrator(page, before);
+    await openPaused(page, board);
+    await page.getByTestId("walking-toggle").click();
+    await expect(page.getByTestId("walking-toggle")).toHaveAttribute("aria-pressed", "false");
+    const home = { w: (await sample(page, key))!, o: (await sample(page, ORCHESTRATOR_KEY))! };
+    await pushView(page, after);
+    for (let i = 0; i < 20; i++) {
+      await page.clock.runFor(FRAME_MS);
+      await expect(scene(page)).toHaveAttribute("data-moving", "0");
+    }
+    const end = { w: (await sample(page, key))!, o: (await sample(page, ORCHESTRATOR_KEY))! };
+    for (const who of ["w", "o"] as const) expect([end[who].x, end[who].y], who).toEqual([home[who].x, home[who].y]);
   });
 });

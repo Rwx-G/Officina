@@ -7,6 +7,7 @@
 // door on the centre line.
 import {
   CORR_Y,
+  DECIDER,
   OFFICE_CELLS,
   ROWS,
   SHARED_CELLS,
@@ -186,12 +187,55 @@ export function restPoint(s: Spot): { gx: number; gy: number } {
   return s.sit ? { gx: s.gx + s.sit.dx, gy: s.gy + s.sit.dy } : { gx: s.gx, gy: s.gy };
 }
 
-/** The decider's desk and chair, drawn empty in v0.4 (the author is the
- *  decider): furniture, never a spot (D-503). Room-local tiles. */
-export const DECIDER = {
-  chair: { lx: 2.4, ly: 1.9 },
-  desk: { lx: 1.4, ly: 0.82, w: 2.0, d: 0.58 },
-} as const;
+/** The decider's desk and chair: the orchestrator's while it is live
+ *  (AD-179), never an employee's spot (D-503). */
+export { DECIDER };
+
+/** Reception's counter, room-local tiles: its back corner, its width
+ *  along gx and its depth along gy. */
+export const COUNTER = { lx: 1.5, ly: 1.25, w: 2.0, d: 0.55 } as const;
+
+// ------------------------------------------------------------ staff
+
+/** The orchestrator's two places (D-568): the decider's chair, where it
+ *  sits, and the counter's staff side, where it briefs. Neither is ever
+ *  an employee's spot. */
+export const STAFF_CHAIR = "staff:chair";
+export const STAFF_COUNTER = "staff:counter";
+
+/** The staff chain, the prototype v2's (D-832): from the counter's staff
+ *  side, out past reception's open side into the corridor between the
+ *  two rooms, through the decision office's side door, along its back to
+ *  the decider's chair. Each room-local to the room named. */
+const STAFF_CHAIN: readonly { id: string; room: SharedZone; at: Local }[] = [
+  { id: STAFF_COUNTER, room: "reception", at: [2.5, 0.8] },
+  { id: "staff:reception-side", room: "reception", at: [4.95, 0.8] },
+  { id: "staff:decision-door", room: "decision", at: [0.4, 1.0] },
+  { id: "staff:decision-back", room: "decision", at: [0.8, 1.9] },
+  { id: STAFF_CHAIR, room: "decision", at: [DECIDER.chair.lx, DECIDER.chair.ly] },
+];
+
+/** The orchestrator's chair, a seat facing its desk, and its place at the
+ *  counter, facing the visitors. */
+export function staffSpots(): { chair: Spot; counter: Spot } {
+  const at = (id: string) => STAFF_CHAIN.find((n) => n.id === id)!;
+  const chair = at(STAFF_CHAIR);
+  const counter = at(STAFF_COUNTER);
+  return {
+    chair: spot(chair.id, chair.room, null, SHARED_CELLS[chair.room], seatBack(chair.at)),
+    counter: spot(counter.id, counter.room, null, SHARED_CELLS[counter.room], standFront(counter.at)),
+  };
+}
+
+/** Reception's visitor spot nearest the counter's centre: where a briefed
+ *  employee stands (D-568). */
+export function briefingSpot(): Spot {
+  const { gx, gy } = roomOrigin(SHARED_CELLS.reception);
+  const cx = gx + COUNTER.lx + COUNTER.w / 2;
+  const cy = gy + COUNTER.ly + COUNTER.d / 2;
+  const d = (s: Spot) => Math.hypot(s.gx - cx, s.gy - cy);
+  return sharedSpots("reception").reduce((a, b) => (d(b) < d(a) ? b : a));
+}
 
 // ------------------------------------------------------------ navigation graph
 
@@ -205,6 +249,8 @@ export interface NavNode {
    *  a corridor node of its own, `outside` for the exit. */
   room: string;
   adj: string[];
+  /** On the orchestrator's chain (D-568), which no employee walks. */
+  staff: boolean;
 }
 
 export interface NavGraph {
@@ -250,14 +296,15 @@ const BACK_DOOR_LY = 4.4;
 const SAME_GX = 0.05;
 
 /** The navigation graph of a floor of `columns` columns (AD-170 as
- *  amended, D-503: no staff node, no consult spot), ported from the
- *  prototype v2 and linked to this module's spots. Pure: the same column
- *  count gives the same graph. */
+ *  amended, D-503, D-568: no consult spot; the staff chain joins nothing
+ *  else, so no employee's route can take it), ported from the prototype
+ *  v2 and linked to this module's spots. Pure: the same column count gives
+ *  the same graph. */
 export function navGraph(columns: number): NavGraph {
   const nodes = new Map<string, NavNode>();
   const doors = new Map<string, string>();
-  const add = (id: string, room: string, gx: number, gy: number): string => {
-    nodes.set(id, { id, gx, gy, room, adj: [] });
+  const add = (id: string, room: string, gx: number, gy: number, staff = false): string => {
+    nodes.set(id, { id, gx, gy, room, adj: [], staff });
     return id;
   };
   const local = (id: string, room: string, cell: Cell, [lx, ly]: Local): string => {
@@ -333,6 +380,13 @@ export function navGraph(columns: number): NavGraph {
   }
   corridor.sort((a, b) => nodes.get(a)!.gx - nodes.get(b)!.gx);
   chain(corridor);
+
+  chain(
+    STAFF_CHAIN.map(({ id, room, at: [lx, ly] }) => {
+      const o = roomOrigin(SHARED_CELLS[room]);
+      return add(id, room, o.gx + lx, o.gy + ly, true);
+    }),
+  );
 
   return { nodes, exit: EXIT, doors };
 }

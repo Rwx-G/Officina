@@ -1,9 +1,13 @@
 <script lang="ts" module>
   import type { Card } from "../lib/generated/Card";
 
-  /** What the file panel shows: one session's file, or a group's list of
-   *  its sessions in board order (D-103). */
-  export type FileForm = { kind: "file"; card: Card; back: boolean } | { kind: "list"; title: string; cards: Card[]; focusKey: string | null };
+  /** What the file panel shows: one session's file, a group's list of its
+   *  sessions in board order (D-103), or the absent orchestrator's file,
+   *  which offers Start (D-567). */
+  export type FileForm =
+    | { kind: "file"; card: Card; back: boolean }
+    | { kind: "list"; title: string; cards: Card[]; focusKey: string | null }
+    | { kind: "orchestrator"; title: string; pending: number };
 </script>
 
 <script lang="ts">
@@ -24,6 +28,8 @@
   import { clock, duration } from "../lib/time";
   import StableLabel from "./StableLabel.svelte";
   import { meeting } from "../lib/meeting.svelte";
+  import type { OrchestratorStore } from "../lib/orchestrator.svelte";
+  import { ORCHESTRATOR_ABOUT, pendingText, startAnswerText } from "../lib/orchestrator-text";
 
   interface Props {
     form: FileForm;
@@ -36,8 +42,15 @@
     /** Switches the Sessions view to Board mode, where approvals are
      *  approved on their cards (D-28). */
     onBoard: () => void;
+    /** What the orchestrator's file starts it through (AD-89). */
+    orchestrator?: OrchestratorStore;
+    /** Shows the Orchestrator view. */
+    onOrchestrator?: () => void;
   }
-  let { form, board, store, onClose, onOpen, onBoard }: Props = $props();
+  let { form, board, store, onClose, onOpen, onBoard, orchestrator, onOrchestrator }: Props = $props();
+
+  const START_LABELS = { start: "Start", starting: "Starting" };
+  let startAnswer = $derived(orchestrator?.startError ? `Start failed: ${orchestrator.startError}` : orchestrator?.started ? startAnswerText(orchestrator.started) : null);
 
   const titleId = $props.id();
 
@@ -60,9 +73,15 @@
 
   // Bring to front has focus when the file opens; a list focuses the row
   // it was left from, else its first row.
+  // The orchestrator's file focuses its Close: a key held on the chair
+  // never reaches Start (rework F1); Tab does.
   onMount(() => {
     if (form.kind === "file") {
       panel.querySelector<HTMLElement>("[data-testid=bring-to-front]")?.focus();
+      return;
+    }
+    if (form.kind === "orchestrator") {
+      panel.querySelector<HTMLElement>("[data-testid=file-close]")?.focus();
       return;
     }
     const rows = [...panel.querySelectorAll<HTMLElement>("[data-row]")];
@@ -79,7 +98,27 @@
     </button>
   </header>
 
-  {#if form.kind === "list"}
+  {#if form.kind === "orchestrator"}
+    <p data-testid="chair-about">{ORCHESTRATOR_ABOUT} It decides nothing that runs: Needs you still waits for you.</p>
+    <p class="muted" data-testid="chair-pending">{pendingText(form.pending)}</p>
+    <div class="actions">
+      <button
+        type="button"
+        class="action primary"
+        data-testid="chair-start"
+        disabled={orchestrator?.starting ?? true}
+        onclick={() => void orchestrator?.startOrchestrator()}
+      >
+        <StableLabel labels={START_LABELS} current={orchestrator?.starting ? "starting" : "start"} />
+      </button>
+      {#if onOrchestrator}
+        <button type="button" class="link" data-testid="chair-view" onclick={onOrchestrator}>Open the Orchestrator view</button>
+      {/if}
+    </div>
+    {#if startAnswer}
+      <div class="outcome" role="status" data-testid="chair-answer">{startAnswer}</div>
+    {/if}
+  {:else if form.kind === "list"}
     <p class="muted" data-testid="list-count">{form.cards.length} {form.cards.length === 1 ? "session" : "sessions"}, board order</p>
     <ul class="rows">
       {#each form.cards as row (row.key)}
@@ -263,6 +302,10 @@
     background: var(--color-text);
     color: var(--color-bg);
     border-color: var(--color-text);
+  }
+  .action:disabled {
+    cursor: default;
+    opacity: 0.6;
   }
   dl {
     display: grid;

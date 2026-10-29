@@ -17,10 +17,30 @@ import {
   projector,
   type SharedZone,
 } from "./geometry";
-import { HELPER_OFFSETS, MAX_NUMBER, alertLit, helperKey, layoutScene, liveCards, nearestTarget, zoneOf, type Direction, type Pose, type SceneLayout } from "./layout";
+import type { LiveStatus } from "../generated/LiveStatus";
+import {
+  HELPER_OFFSETS,
+  MAX_LABELS,
+  MAX_NUMBER,
+  ORCHESTRATOR_KEY,
+  alertLit,
+  helperKey,
+  layoutScene,
+  liveCards,
+  nearestTarget,
+  zoneOf,
+  type Direction,
+  type Pose,
+  type SceneBriefing,
+  type SceneInput,
+  type SceneLayout,
+  type SceneProposals,
+} from "./layout";
 import { emptyMemory, type SceneMemory } from "./memory";
-import { CAPACITY, allSpots, officeSpots, restPoint, sharedSpots } from "./places";
-import { approval, board, card, fixtureBoards, project } from "./testing";
+import { restingFrames } from "./mover";
+import { CAPACITY, allSpots, officeSpots, restPoint, sharedSpots, staffSpots } from "./places";
+import { plaqueText } from "./text";
+import { approval, board, card, fixtureBoards, presence, project } from "./testing";
 
 const SHARED = Object.keys(SHARED_CELLS) as SharedZone[];
 
@@ -683,7 +703,7 @@ describe("layoutScene: targets", () => {
     const rooms = ["reception", "decision", "alert", "office0", "office1", "lounge"];
     const groups = l.targets.map((t) => t.group).filter((g, i, all) => all.indexOf(g) === i);
     expect(groups).toEqual(rooms);
-    expect(l.targets.filter((t) => t.group === "decision").map((t) => t.id)).toEqual(["figure:d1", "figure:d2"]);
+    expect(l.targets.filter((t) => t.group === "decision").map((t) => t.id)).toEqual(["figure:d1", "figure:d2", "chair"]);
     // Desks front to back: the nearest the author first.
     const office = l.targets.filter((t) => t.group === "office0").map((t) => t.keys[0]!);
     const depth = (key: string) => {
@@ -749,13 +769,15 @@ describe("layoutScene: targets", () => {
 
     // A full queue: every queue spot taken, one more in the group, whose
     // "+n" is at the right end of the office's plaque, above the queue's
-    // first places (D-557).
+    // first places (D-557); the orchestrator's empty chair between them
+    // (story 5.18, D-567), whose target the live figure's takes over.
     const queue = Array.from({ length: CAPACITY.decision + 1 }, (_, i) => card(`n${i}`, "decision", { started: i, project: `p${i}` }));
     const queueLayout = lay(board(queue));
     const q = (i: number) => `figure:n${i}`;
     const group = "group:decision";
+    const chair = "chair";
     const queueVectors: [string, Direction, string | null][] = [
-      [q(0), "up", group],
+      [q(0), "up", chair],
       [q(0), "down", null],
       [q(0), "left", q(1)],
       [q(0), "right", null],
@@ -780,13 +802,48 @@ describe("layoutScene: targets", () => {
       [q(5), "left", null],
       [q(5), "right", q(4)],
       [group, "up", null],
-      [group, "down", q(1)],
+      [group, "down", chair],
       [group, "left", q(2)],
       [group, "right", null],
+      [chair, "up", group],
+      [chair, "down", q(0)],
+      [chair, "left", q(1)],
+      [chair, "right", null],
     ];
     for (const [from, direction, to] of queueVectors) {
       expect(nearestTarget(queueLayout.targets, from, direction), `${from} ${direction}`).toBe(to);
     }
+    const live = layoutScene({ board: board(queue), orchestrator: presence("idle") }, emptyMemory(null));
+    const swap = (id: string | null) => (id === chair ? "orchestrator" : id);
+    for (const [from, direction, to] of queueVectors) {
+      expect(nearestTarget(live.targets, swap(from)!, direction), `live: ${from} ${direction}`).toBe(swap(to));
+    }
+  });
+
+  it("the orchestrator's target follows the queue and the register in tab order", () => {
+    const cards = [card("r", "reception"), card("d1", "decision", { started: 1 }), card("a", "alert", { started: 2 })];
+    for (const live of [presence("busy"), null]) {
+      const l = layoutScene({ board: board(cards), orchestrator: live }, emptyMemory(null));
+      const ids = l.targets.map((t) => t.id);
+      const kind = live ? "orchestrator" : "chair";
+      // After the queue's figures and its "+n", before the alert room.
+      expect(ids.slice(ids.indexOf("figure:d1"), ids.indexOf("figure:a") + 1)).toEqual(["figure:d1", kind, "figure:a"]);
+      const target = l.targets.find((t) => t.id === kind)!;
+      expect(target.kind).toBe(kind);
+      expect(target.group).toBe("decision");
+      expect(target.keys).toEqual([]);
+      const chair = staffSpots().chair;
+      const rest = restPoint(chair);
+      expect(target.rect).toEqual(figureTarget(projector(l.columns)(rest.gx, rest.gy)));
+    }
+  });
+
+  it("an absent orchestrator offers a Start target", () => {
+    const l = lay(board([card("d1", "decision")]));
+    const chair = l.targets.filter((t) => t.kind === "chair" || t.kind === "orchestrator");
+    expect(chair.map((t) => t.id)).toEqual(["chair"]);
+    expect(chair[0]!.label).toContain("absent");
+    expect(chair[0]!.label).toContain("start");
   });
 
   it("an arrow with no target within 45 degrees goes nowhere", () => {
@@ -797,5 +854,157 @@ describe("layoutScene: targets", () => {
     // Arrows stay in the focused target's group.
     expect(nearestTarget(l.targets, "figure:r", "right")).toBeNull();
     expect(nearestTarget(l.targets, "no such target", "left")).toBeNull();
+  });
+});
+
+// Story 5.18 (AD-179, D-567, D-568, D-830, D-836): the orchestrator in the
+// decision office.
+describe("layoutScene: the orchestrator", () => {
+  const queue = [card("d1", "decision", { started: 1 }), card("d2", "decision", { started: 2 }), card("w", "office", { started: 3 })];
+  const day = board(queue);
+  const proposals: SceneProposals = { pending: 3, latest: ["dependency-bump, billing-api", "install guide", "<b>bold</b>"] };
+  const bound = (sessionId: string, orderId: string, boundAtMs = 10): SceneBriefing => ({ orderId, sessionId, boundAtMs });
+  const withOrchestrator = (b: Board, extra: Partial<SceneInput> = {}, memory: SceneMemory = emptyMemory(b.floor)) =>
+    layoutScene({ board: b, orchestrator: presence("idle"), proposals, briefings: [], ...extra }, memory);
+  /** A layout without its targets: what is drawn. */
+  const drawn = (l: SceneLayout) => ({ ...l, targets: null });
+
+  it("no orchestrator input draws v0.4's decision office", () => {
+    for (const { name, board: b } of fixtureBoards()) {
+      const plain = lay(b);
+      for (const absent of [{}, { orchestrator: null, proposals: null, briefings: null }, { orchestrator: null, proposals, briefings: [] }]) {
+        const l = layoutScene({ board: b, ...absent }, emptyMemory(b.floor));
+        expect({ ...drawn(l), memory: null }, name).toEqual({ ...drawn(plain), memory: null });
+        expect(l.orchestrator, name).toBeNull();
+        expect(l.display, name).toBeNull();
+        expect(l.rooms.find((r) => r.kind === "decision")!.plaque.text, name).toBe(plaqueText("decision"));
+        // The empty chair's target is the one target v0.4 did not have.
+        expect(l.targets.filter((t) => t.kind !== "chair"), name).toEqual(plain.targets.filter((t) => t.kind !== "chair"));
+        expect(l.targets.filter((t) => t.kind === "chair").length, name).toBe(1);
+      }
+    }
+  });
+
+  it("the same inputs give a deep-equal layout", () => {
+    for (const { name, board: b } of fixtureBoards()) {
+      const input = { board: b, orchestrator: presence("busy"), proposals, briefings: [bound("x", "o1")] };
+      expect(layoutScene(structuredClone(input), emptyMemory(b.floor)), name).toEqual(layoutScene(input, emptyMemory(b.floor)));
+    }
+  });
+
+  it("the layout is a fixed point with the orchestrator inputs", () => {
+    for (const { name, board: b } of fixtureBoards()) {
+      const session = liveCards(b)[0]?.session_id ?? "none";
+      const first = withOrchestrator(b, { briefings: [] });
+      // A binding after the first layout is briefed, and stays so.
+      const second = withOrchestrator(b, { briefings: [bound(session, "o1")] }, first.memory);
+      const third = withOrchestrator(b, { briefings: [bound(session, "o1")] }, second.memory);
+      expect(third, name).toEqual(second);
+    }
+  });
+
+  it("a live orchestrator sits at the decider's chair in the pose of its status", () => {
+    const chair = staffSpots().chair;
+    const rest = restPoint(chair);
+    const poses: Record<LiveStatus, Pose> = { busy: "seated-working", waiting: "seated-facing", idle: "seated-facing" };
+    for (const status of [...(Object.keys(poses) as LiveStatus[]), null]) {
+      const l = withOrchestrator(day, { orchestrator: presence(status) });
+      const o = l.orchestrator!;
+      expect(o.key).toBe(ORCHESTRATOR_KEY);
+      expect(o.spot).toBe(chair.id);
+      expect(o.at).toEqual(projector(l.columns)(rest.gx, rest.gy));
+      expect(o.pose).toBe(status === null ? "seated-facing" : poses[status]);
+      // At its desk its back is turned to the author; otherwise it faces him.
+      expect(o.facing).toBe(o.pose === "seated-working" ? "back" : "front");
+      expect(o.status).toBe(status);
+      expect(l.rooms.find((r) => r.kind === "decision")!.plaque.text).toBe(plaqueText("decision", true));
+    }
+  });
+
+  it("a waiting orchestrator is never ringed and never raises a hand", () => {
+    const l = withOrchestrator(day, { orchestrator: presence("waiting") });
+    // It is no employee and carries no marks: the mover draws it with none
+    // (mover.test.ts).
+    expect(l.employees.map((e) => e.key)).not.toContain(ORCHESTRATOR_KEY);
+    expect(l.orchestrator).not.toHaveProperty("marks");
+    expect(l.orchestrator!.pose).toBe("seated-facing");
+    const frame = restingFrames(l).get(ORCHESTRATOR_KEY)!;
+    expect(frame.marks).toEqual({ ticket: null, approval: false, deskBadge: null, hand: false, ring: false, question: false, received: false });
+    expect(frame.alerted).toBe(false);
+    expect(frame.role).toBe("orchestrator");
+  });
+
+  it("the orchestrator is never counted or grouped", () => {
+    const full = board(Array.from({ length: CAPACITY.decision + 2 }, (_, i) => card(`n${i}`, "decision", { started: i })));
+    for (const b of [day, full]) {
+      const plain = lay(b);
+      for (const status of ["busy", "waiting", "idle"] as const) {
+        const l = withOrchestrator(b, { orchestrator: presence(status) });
+        const plaques = (x: SceneLayout) => x.rooms.map((r) => ({ ...r.plaque, text: null }));
+        expect(plaques(l)).toEqual(plaques(plain));
+        expect(l.groups).toEqual(plain.groups);
+        for (const g of l.groups) expect(g.keys).not.toContain(ORCHESTRATOR_KEY);
+        expect(l.summary).toBe(plain.summary);
+        expect(l.employees).toEqual(plain.employees);
+      }
+    }
+  });
+
+  it("an absent orchestrator leaves the chair empty", () => {
+    const l = withOrchestrator(day, { orchestrator: null });
+    expect(l.orchestrator).toBeNull();
+    expect(l.display).toBeNull();
+    expect(restingFrames(l).has(ORCHESTRATOR_KEY)).toBe(false);
+  });
+
+  it("the screens carry the proposal and Needs you counts", () => {
+    const l = withOrchestrator(day);
+    expect(l.display).toMatchObject({ proposals: proposals.pending, needsYou: day.waiting_count });
+    expect(withOrchestrator(day, { proposals: null }).display).toMatchObject({ proposals: 0, labels: [] });
+  });
+
+  it("the whiteboard shows the four latest labels", () => {
+    const latest = ["e", "d", "c", "b", "a"];
+    const l = withOrchestrator(day, { proposals: { pending: latest.length, latest } });
+    // Newest first; past the board's four, the oldest go.
+    expect(l.display!.labels).toEqual(latest.slice(0, MAX_LABELS));
+    expect(withOrchestrator(day).display!.labels).toEqual(proposals.latest);
+  });
+
+  it("a newly bound order is briefed once", () => {
+    const d1 = queue[0]!;
+    const first = withOrchestrator(day, { briefings: [] });
+    const second = withOrchestrator(day, { briefings: [bound(d1.session_id!, "o1")] }, first.memory);
+    expect(employee(second, "d1").briefing).toEqual({ orderId: "o1" });
+    // Its place and target stay its final ones (D-471).
+    expect(employee(second, "d1").spot).toBe(employee(first, "d1").spot);
+    expect(second.targets).toEqual(first.targets);
+    expect(second.employees.filter((e) => e.briefing !== null).map((e) => e.key)).toEqual(["d1"]);
+    // One entry for the run's layouts: the mover briefs it once.
+    const third = withOrchestrator(day, { briefings: [bound(d1.session_id!, "o1")] }, second.memory);
+    expect(third.employees.filter((e) => e.briefing !== null)).toEqual(second.employees.filter((e) => e.briefing !== null));
+    // An order bound before the orchestrator came is not briefed.
+    const before = withOrchestrator(day, { orchestrator: presence("idle", 100), briefings: [bound(d1.session_id!, "o1", 50)] }, first.memory);
+    expect(employee(before, "d1").briefing).toBeNull();
+  });
+
+  it("orders bound before the first layout are never briefed", () => {
+    const d1 = queue[0]!;
+    // Bound already when the run's layouts first knew the bindings, after
+    // layouts that did not know them yet.
+    const unknown = withOrchestrator(day, { briefings: null });
+    expect(unknown.memory.briefed).toBeNull();
+    const first = withOrchestrator(day, { briefings: [bound(d1.session_id!, "o1")] }, unknown.memory);
+    expect(first.memory.briefed).toEqual(["o1"]);
+    expect(first.employees.every((e) => e.briefing === null)).toBe(true);
+    const later = withOrchestrator(day, { briefings: [bound(d1.session_id!, "o1"), bound("session-w", "o2")] }, first.memory);
+    expect(employee(later, "d1").briefing).toBeNull();
+    expect(employee(later, "w").briefing).toEqual({ orderId: "o2" });
+  });
+
+  it("no briefing while the orchestrator is absent", () => {
+    const first = withOrchestrator(day, { orchestrator: null, briefings: [] });
+    const second = withOrchestrator(day, { orchestrator: null, briefings: [bound("session-d1", "o1")] }, first.memory);
+    expect(second.employees.every((e) => e.briefing === null)).toBe(true);
   });
 });

@@ -38,10 +38,15 @@ export interface SceneMemory extends PersistedMemory {
    *  the lounge and an office's chip list; `null` is the zone's group. */
   sticky: Record<string, { zone: Zone; spot: string | null }>;
   last: Record<string, LastPlace>;
+  /** The work orders already bound on the run's first layout that knew
+   *  the bindings (D-568, D-836): never briefed, so a restart or a late
+   *  Orchestrator view replays nothing. `null` until that layout. Kept for
+   *  the run, never stored. */
+  briefed: string[] | null;
 }
 
 export function emptyMemory(floor: string | null = null): SceneMemory {
-  return { floor, offices: [], desks: {}, inRun: false, chips: {}, sticky: {}, last: {} };
+  return { floor, offices: [], desks: {}, inRun: false, chips: {}, sticky: {}, last: {}, briefed: null };
 }
 
 /** The persisted part, serialised as `localStorage` holds it. */

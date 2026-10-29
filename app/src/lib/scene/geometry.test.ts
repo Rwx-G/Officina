@@ -16,6 +16,7 @@ import {
   canvas,
   chipTarget,
   columnsFor,
+  deciderScreens,
   entranceSignRect,
   figureTarget,
   fitScale,
@@ -28,11 +29,35 @@ import {
   priorityPillRect,
   projector,
   roomCorners,
+  whiteboardPlane,
   zoneGroupTarget,
+  type Point,
   type Rect,
   type SharedZone,
 } from "./geometry";
-import { allSpots, officeCell, restPoint } from "./places";
+import { allSpots, officeCell, restPoint, staffSpots } from "./places";
+
+/** True when the convex polygon `quad` and `rect` share interior area: no
+ *  axis of either separates them. */
+function quadMeetsRect(quad: readonly Point[], rect: Rect): boolean {
+  const box: Point[] = [
+    { x: rect.x, y: rect.y },
+    { x: rect.x + rect.w, y: rect.y },
+    { x: rect.x + rect.w, y: rect.y + rect.h },
+    { x: rect.x, y: rect.y + rect.h },
+  ];
+  for (const shape of [quad, box]) {
+    for (let i = 0; i < shape.length; i++) {
+      const a = shape[i]!;
+      const b = shape[(i + 1) % shape.length]!;
+      const axis = { x: a.y - b.y, y: b.x - a.x };
+      const span = (points: readonly Point[]) => points.map((q) => q.x * axis.x + q.y * axis.y);
+      const [p, r] = [span(quad), span(box)];
+      if (Math.max(...p) <= Math.min(...r) + 1e-9 || Math.max(...r) <= Math.min(...p) + 1e-9) return false;
+    }
+  }
+  return true;
+}
 
 interface Owned {
   id: string;
@@ -65,6 +90,9 @@ function fullOccupancy(columns: number, more: boolean): Owned[] {
     const rest = restPoint(s);
     out.push({ id: s.id, rect: figureTarget(p(rest.gx, rest.gy)), owns: [] });
   }
+  // The orchestrator's figure, or its empty chair: one rectangle (D-567).
+  const chair = restPoint(staffSpots().chair);
+  out.push({ id: "orchestrator", rect: figureTarget(p(chair.gx, chair.gy)), owns: [] });
   for (const zone of SHARED) out.push({ id: `group:${zone}`, rect: zoneGroupTarget(columns, zone), owns: [zone] });
   officeCells(columns).forEach((cell, slot) => {
     const owns = [`office${slot}`, `office${slot}:priority`];
@@ -143,6 +171,22 @@ describe("geometry", () => {
           expect(Math.min(t.rect.w, t.rect.h), t.id).toBeGreaterThanOrEqual(TARGET_MIN);
           expect(Math.min(t.rect.w, t.rect.h) * MIN_SCALE, t.id).toBeGreaterThanOrEqual(TARGET_CSS_MIN - 1e-9);
         }
+      });
+
+      // Story 5.18 AC 5 (D-567): what the overlay writes on the screens
+      // and the whiteboard covers no target and no plaque, so no focus
+      // ring, name tag or plaque is ever under it.
+      it("the screen and whiteboard boxes meet no target at any column count", () => {
+        const surfaces = [...deciderScreens(floor.columns).map((plane, i) => ({ id: `screen${i}`, plane })), { id: "whiteboard", plane: whiteboardPlane(floor.columns) }];
+        const meets: string[] = [];
+        for (const { id, plane } of surfaces) {
+          expect(plane.w * plane.h, id).toBeGreaterThan(0);
+          for (const t of [...targets, ...plaques(floor.columns)]) if (quadMeetsRect(plane.corners, t.rect)) meets.push(`${id} x ${t.id}`);
+        }
+        expect(meets).toEqual([]);
+        // The test sees a meeting where there is one.
+        const left = surfaces[0]!.plane;
+        expect(quadMeetsRect(left.corners, { ...left.rect, w: 4, h: 4, x: left.corners[0]!.x, y: left.corners[0]!.y })).toBe(true);
       });
 
       it("every target lies inside the canvas", () => {

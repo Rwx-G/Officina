@@ -8,6 +8,9 @@ import type { Board } from "../src/lib/generated/Board";
 import type { FocusOutcome } from "../src/lib/generated/FocusOutcome";
 import type { RegistryView } from "../src/lib/generated/RegistryView";
 import type { RelayView } from "../src/lib/generated/RelayView";
+import type { OrchestratorPresence } from "../src/lib/generated/OrchestratorPresence";
+import type { OrchestratorView } from "../src/lib/generated/OrchestratorView";
+import { fixtureOf } from "./fixture-index";
 
 const dir = join(dirname(fileURLToPath(import.meta.url)), ".fixtures");
 
@@ -33,7 +36,8 @@ export type Scenario =
   | "scene-alert-early"
   | "scene-eight"
   | "scene-overflow"
-  | "scene-subagents";
+  | "scene-subagents"
+  | "scene-orchestrator";
 
 /** Registry views printed by `officina subjects --json` after the
  *  `registry_fixture` example wrote the registry (stories 3.5, 3.7, 3.9 and
@@ -184,6 +188,42 @@ export async function transitionsDone(page: Page): Promise<void> {
   await expect
     .poll(() => page.evaluate(() => document.getAnimations().filter((a) => !(a instanceof CSSAnimation) && a.playState === "running").length))
     .toBe(0);
+}
+
+// ------------------------------------------------------------ the orchestrator (story 5.18)
+
+/** The Orchestrator view printed from the `scene-orchestrator` home: the
+ *  orchestrator live, its pending proposals and a bound work order. */
+export function sceneView(): OrchestratorView {
+  return fixtureOf<OrchestratorView>("orchestrator", "scene-orchestrator-view");
+}
+
+/** The orchestrator as the `scene-orchestrator` board carries it. */
+export function sceneBoardOrchestrator(): OrchestratorPresence {
+  return loadBoard("scene-orchestrator").orchestrator!;
+}
+
+/** The most proposals that can be pending (AD-90, D-145), read from
+ *  core's constant, which the window's count is sized against. */
+export const PENDING_LIMIT = Number(
+  /pub const PROPOSALS_PENDING_MAX: usize = (\d+);/.exec(
+    readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "..", "crates", "officina-core", "src", "orders", "proposal.rs"), "utf8"),
+  )![1],
+);
+
+/** `view` with `count` pending proposals, copies of its first pending one
+ *  under new ids, newest first. */
+export function withPending(view: OrchestratorView, count: number): OrchestratorView {
+  const first = view.proposals.find((p) => p.status === "pending")!;
+  const pending = Array.from({ length: count }, (_, i) => ({ ...first, id: `${first.id}-${i}`, written_at_ms: first.written_at_ms - i }));
+  return { ...view, proposals: [...pending, ...view.proposals.filter((p) => p.status !== "pending")] };
+}
+
+/** What `get_orchestrator` answers from the next load on. */
+export async function answerOrchestrator(page: Page, view: OrchestratorView | null): Promise<void> {
+  await page.addInitScript((v) => {
+    window.__officinaOrchestrator = v;
+  }, view);
 }
 
 export async function calls(page: Page): Promise<{ cmd: string; args: unknown }[]> {

@@ -1495,6 +1495,19 @@ const orchestratorScenarios = {
   },
 };
 
+// Story 5.18 (D-181, AC 10): the decision office with the orchestrator
+// live. The day's home, the orchestrator listed busy in its own folder,
+// its pending proposals and a bound work order; written as the board
+// `scene-orchestrator` and the view `scene-orchestrator-view` from the
+// same home.
+orchestratorScenarios["scene-orchestrator"] = {
+  ...orchestratorScenarios["orchestrator-day"],
+  orchestrator: { pid: 4510, startedAt: now - 2 * HOUR, sessionId: sid(510), status: "busy" },
+  cards: undefined,
+  board: "scene-orchestrator",
+  view: "scene-orchestrator-view",
+};
+
 for (const [name, scenario] of Object.entries(orchestratorScenarios)) {
   const tmp = mkdtempSync(join(tmpdir(), `officina-fixture-${name}-`));
   const home = join(tmp, "home");
@@ -1551,6 +1564,25 @@ for (const [name, scenario] of Object.entries(orchestratorScenarios)) {
   if (view.status !== 0) throw new Error(`${name}: orchestrator_fixture exited ${view.status}: ${view.stderr}`);
   const printed = JSON.parse(view.stdout);
   const { briefing } = printed;
+  if (scenario.board) {
+    const sceneBoard = JSON.parse(board.stdout);
+    const sceneChecks = [
+      [sceneBoard.orchestrator?.status === scenario.orchestrator.status, "the board's presence, busy"],
+      [printed.presence !== null, "the view's presence"],
+      [printed.proposals.some((p) => p.status === "pending"), "a pending proposal"],
+      [printed.work_orders.some((o) => o.bound_at_ms !== null && o.session !== null), "a bound order"],
+      [Object.values(sceneBoard.columns).flat().some((c) => printed.work_orders.some((o) => o.session?.session_id === c.session_id)), "the bound order's card"],
+      [Object.values(sceneBoard.columns).flat().every((c) => c.name !== "officina-orchestrator"), "no orchestrator card"],
+    ];
+    for (const [held, what] of sceneChecks) {
+      if (!held) throw new Error(`${name}: expected ${what}: ${board.stdout}`);
+    }
+    writeFixture(scenario.board, "board", board.stdout);
+    writeFixture(scenario.view, "orchestrator", view.stdout);
+    rmSync(tmp, { recursive: true, force: true });
+    console.log(`fixture ${name}: exit ${view.status}`);
+    continue;
+  }
   const day = name === "orchestrator-day";
   const checks = [
     [printed.templates.length === 2, "the two approved templates"],

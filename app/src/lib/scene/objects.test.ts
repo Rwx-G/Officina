@@ -1,14 +1,14 @@
 import { describe, expect, it } from "vitest";
 import type { Board } from "../generated/Board";
 import type { ProjectColor } from "../generated/ProjectColor";
-import { layoutScene, liveCards, type SceneLayout } from "./layout";
+import { ORCHESTRATOR_KEY, layoutScene, liveCards, type SceneLayout } from "./layout";
 import { emptyMemory, type SceneMemory } from "./memory";
 import { restingFrames, walkingMarks, type FigureFrame } from "./mover";
 import { DEPTH_BANDS } from "./geometry";
 import { DEPTH_QUANTUM, DEPTH_WINDOW, SceneObjects } from "./objects";
 import { deskLetter } from "./rig";
 import { allSpots } from "./places";
-import { board, card, fixtureBoards } from "./testing";
+import { board, card, fixtureBoards, presence } from "./testing";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 
@@ -132,6 +132,38 @@ describe("objects", () => {
         expect(node.contains(target), `${e.key} written`).toBe(false);
       }
     }
+    observer.disconnect();
+  });
+
+  // Story 5.18 AC 3 (D-567): one node for the run, its pose the only write.
+  it("the orchestrator's node is created once and only its pose changes", () => {
+    const b = board([card("a", "office")]);
+    const lay = (status: "busy" | "idle") => layoutScene({ board: b, orchestrator: presence(status) }, emptyMemory(b.floor));
+    const { root, objects } = mount();
+    const idle = lay("idle");
+    objects.update({ layout: idle, colours: colours(b), snap: 1, figures: restingFrames(idle) });
+    const node = figure(root, ORCHESTRATOR_KEY)!;
+    expect(node.hasAttribute("data-orchestrator")).toBe(true);
+    expect(root.querySelectorAll("[data-orchestrator]").length).toBe(1);
+    expect(node.innerHTML).toContain("orch-tunic");
+    const shown = () => [...node.querySelectorAll('[data-part="stand"], [data-part="seated-facing"], [data-part="seated-working"]')].filter((g) => g.getAttribute("display") !== "none").map((g) => g.getAttribute("data-part"));
+    expect(shown()).toEqual(["seated-facing"]);
+    const observer = new MutationObserver(() => undefined);
+    observer.observe(root, { subtree: true, childList: true, attributes: true, characterData: true });
+    const busy = lay("busy");
+    objects.update({ layout: busy, colours: colours(b), snap: 1, figures: restingFrames(busy) });
+    expect(figure(root, ORCHESTRATOR_KEY)).toBe(node);
+    expect(shown()).toEqual(["seated-working"]);
+    const records = observer.takeRecords().filter((r) => node.contains(r.target as Node));
+    expect(records.length).toBeGreaterThan(0);
+    for (const r of records) {
+      expect(r.type).toBe("attributes");
+      expect(r.attributeName).toBe("display");
+    }
+    // Absent, its node goes.
+    const [gone] = layouts(b);
+    objects.update({ layout: gone!, colours: colours(b), snap: 1, figures: restingFrames(gone!) });
+    expect(figure(root, ORCHESTRATOR_KEY)).toBeNull();
     observer.disconnect();
   });
 

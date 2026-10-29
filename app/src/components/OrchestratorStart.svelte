@@ -5,7 +5,7 @@
   // the front. The button keeps its box through StableLabel and takes no
   // colour of its own; what the last Start answered shows beside it.
   import type { OrchestratorStore } from "../lib/orchestrator.svelte";
-  import { LIVE_STATUS_TEXT, startAnswerText } from "../lib/orchestrator-text";
+  import { LIVE_STATUS_TEXT, ORCHESTRATOR_ABOUT, startAnswerText } from "../lib/orchestrator-text";
   import { clock } from "../lib/time";
   import StableLabel from "./StableLabel.svelte";
 
@@ -48,7 +48,7 @@
     {:else if answer}
       <span class:fault={answerIsFault} role="status" data-testid="orchestrator-start-answer">{answer}</span>
     {:else}
-      <span class="muted">A claude session in a console of its own, whose only tools are Officina's: it reads and proposes, and acts on nothing.</span>
+      <span class="muted">{ORCHESTRATOR_ABOUT}</span>
     {/if}
   </div>
 </section>

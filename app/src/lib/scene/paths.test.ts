@@ -57,7 +57,9 @@ describe("paths", () => {
     // chain, heading for each end of the floor.
     const exit = graph.exit;
     const far = spots[spots.length - 1]!.id;
+    // The staff chain reaches neither (D-568).
     for (const node of graph.nodes.values()) {
+      if (node.staff) continue;
       for (const next of node.adj) {
         const a = node;
         const b = graph.nodes.get(next)!;
