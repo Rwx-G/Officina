@@ -6,8 +6,11 @@
 //! window's command on a blocking thread, runs that vector through
 //! `spawn::execute` there, never on the collector thread, and sends the
 //! outcome back, which the collector records and journals once. Nothing
-//! retries: a failed spawn burns its card (FR-4, D-29). Compiled only
-//! with the `window-authority` feature: only the window launches.
+//! retries: a failed spawn burns its card (FR-4, D-29). The orchestrator's
+//! Start follows the same split ([`orchestrator`]). Compiled only with the
+//! `window-authority` feature: only the window launches.
+
+pub mod orchestrator;
 
 use std::collections::VecDeque;
 use std::collections::hash_map::RandomState;

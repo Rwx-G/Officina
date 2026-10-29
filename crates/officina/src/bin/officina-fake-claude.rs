@@ -28,7 +28,14 @@
 //!   sleeps that long before exiting 0, for a deadline.
 //!   `bg-untrusted` (story 5.7) answers a `--bg` call as `claude` does in
 //!   a folder whose trust dialog was never accepted (E19): the message on
-//!   stderr, exit 1.
+//!   stderr, exit 1. `orchestrator` (story 5.16) answers a call holding
+//!   `--name` without `--bg` as an interactive session does: it records in
+//!   its log line whether its stdin and stdout are a console, appends to
+//!   the fixture an interactive entry with the `--name` value, its working
+//!   directory as `cwd`, its pid, `idle` and the current time as
+//!   `startedAt` (as E24 found the orchestrator listed), unless `unlisted`
+//!   is `true`, then sleeps `hang_ms` (none by default) so its pid stays
+//!   alive; any other call prints the fixture.
 //! - `FAKE_CLAUDE_HANG_MS` (`hang_ms`): how long `hang` sleeps, 60 s by
 //!   default.
 //! - `FAKE_CLAUDE_VERSION` (`version`): answer to `--version`.
@@ -245,6 +252,43 @@ fn hold_the_pipes() {
     }
 }
 
+/// A session started in a console of its own in mode `orchestrator`: an
+/// interactive entry in the fixture, as `claude agents` lists one (E24),
+/// unless the sidecar says it is unlisted, then the session's lifetime.
+fn interactive_session(args: &[String]) {
+    let started_at = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    let name = args
+        .iter()
+        .position(|a| a == "--name")
+        .and_then(|at| args.get(at + 1))
+        .cloned()
+        .unwrap_or_default();
+    let listed = setting("unlisted").is_none_or(|unlisted| unlisted != "true");
+    if listed && let Some(fixture) = setting("fixture") {
+        let entry = serde_json::json!({
+            "sessionId": format!("{:08x}-0000-4000-8000-{started_at:012x}", std::process::id()),
+            "name": name,
+            "cwd": std::env::current_dir().ok(),
+            "kind": "interactive",
+            "pid": std::process::id(),
+            "startedAt": u64::try_from(started_at).unwrap_or(u64::MAX),
+            "status": "idle",
+        });
+        let mut entries: Vec<serde_json::Value> = std::fs::read(&fixture)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+            .unwrap_or_default();
+        entries.push(entry);
+        let _ = std::fs::write(&fixture, serde_json::Value::from(entries).to_string());
+    }
+    if let Some(ms) = setting("hang_ms").and_then(|v| v.parse().ok()) {
+        std::thread::sleep(Duration::from_millis(ms));
+    }
+}
+
 /// What `claude --bg` prints in a folder never trusted (E19).
 const NOT_TRUSTED: &str = "Workspace not trusted. Run `claude` in this folder once and accept the trust prompt, then retry.";
 
@@ -425,7 +469,7 @@ fn main() {
     }
     let args: Vec<String> = std::env::args().skip(1).collect();
     if let Some(log) = setting("log").filter(|log| !log.is_empty()) {
-        log_call(&log, &args, mode == "interactive");
+        log_call(&log, &args, mode == "interactive" || mode == "orchestrator");
     }
     if std::env::var(AGENT_VIEW_OFF).is_ok_and(|v| v == "1")
         && let Some(refused) = refused_without_agent_view(&args)
@@ -457,6 +501,11 @@ fn main() {
     }
     match mode.as_str() {
         "interactive" => {}
+        "orchestrator"
+            if args.iter().any(|a| a == "--name") && !args.iter().any(|a| a == "--bg") =>
+        {
+            interactive_session(&args);
+        }
         "bg" if args.iter().any(|a| a == "--bg") => background(&args),
         "bg-hold" if args.iter().any(|a| a == "--bg") => {
             background(&args);

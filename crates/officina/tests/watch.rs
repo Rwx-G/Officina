@@ -2742,3 +2742,370 @@ fn the_window_briefing_starts_at_the_last_reading() {
     assert_eq!(restarted.briefing.cursor, Cursor::ReadAt { at_ms });
     stop(again);
 }
+
+// ---- story 5.16: the orchestrator's lifecycle (AD-89, D-144, D-167) ----
+
+/// A window on its own home whose `claude` is a copy of the fake in mode
+/// `orchestrator`, with an executable directory of its own (D-167): the
+/// functions the window's Start command calls, without Tauri.
+struct OrchestratorWindow {
+    env: common::TestEnv,
+    /// The window's executable directory, holding an `officina.exe` unless
+    /// the test says not.
+    exe_dir: PathBuf,
+    claude: PathBuf,
+    handle: Option<WatchHandle>,
+    emitted: Option<common::Emitted>,
+}
+
+impl OrchestratorWindow {
+    /// The fake's sidecar holds `sidecar` beside its fixture and log; the
+    /// copy is named `claude_name` (`claude.cmd` for a shim).
+    fn new(sidecar: serde_json::Value, claude_name: &str, with_officina_exe: bool) -> Self {
+        let env = common::TestEnv::new();
+        env.write_agents("[]");
+        let mut sidecar = sidecar;
+        sidecar["mode"] = "orchestrator".into();
+        sidecar["fixture"] = env.fixture().to_string_lossy().into();
+        sidecar["log"] = env.fake_log().to_string_lossy().into();
+        let bin = env.root.path().join("bin");
+        let fake = common::fake_claude_in(&bin, &sidecar);
+        let claude = if claude_name == "claude" {
+            fake
+        } else {
+            let renamed = bin.join(claude_name);
+            std::fs::copy(&fake, &renamed).unwrap();
+            renamed
+        };
+        let exe_dir = env.root.path().join("app");
+        std::fs::create_dir_all(&exe_dir).unwrap();
+        if with_officina_exe {
+            let name = officina_host::orders::orchestrator::officina_exe_name();
+            std::fs::write(exe_dir.join(name), b"").unwrap();
+        }
+        let mut window = OrchestratorWindow {
+            env,
+            exe_dir,
+            claude,
+            handle: None,
+            emitted: None,
+        };
+        window.open();
+        window
+    }
+
+    /// Starts the window's collector thread, as a window start does.
+    fn open(&mut self) {
+        let collector = Collector::from_parts(
+            paths_of(&self.env, None),
+            LoadedFloor::default(),
+            Some(self.claude.clone()),
+        )
+        .with_base_env(officina_host::spawn::BaseEnv::new(vec![(
+            "SYSTEMROOT".to_owned(),
+            std::env::var("SYSTEMROOT").unwrap_or_default(),
+        )]))
+        .with_credential_store(OwnedStore(Box::new(FakeStore::empty())));
+        let (sink, emitted) = common::sink(|_| {});
+        let handle = spawn(collector, sink).unwrap();
+        emitted
+            .boards
+            .recv_timeout(Duration::from_secs(10))
+            .expect("first board");
+        self.handle = Some(handle);
+        self.emitted = Some(emitted);
+    }
+
+    /// Stops the collector thread, as closing the window does.
+    fn close(&mut self) {
+        if let Some(handle) = self.handle.take() {
+            stop(handle);
+        }
+        self.emitted = None;
+    }
+
+    fn handle(&self) -> &WatchHandle {
+        self.handle.as_ref().unwrap()
+    }
+
+    /// What `start_orchestrator` answers.
+    fn start(&self) -> officina_core::orders::orchestrator::StartAnswer {
+        officina_host::orders::orchestrator::start_orchestrator(
+            &self.handle().sender,
+            &self.exe_dir,
+        )
+        .expect("the collector answers")
+    }
+
+    fn workdir(&self) -> PathBuf {
+        officina_host::orders::orchestrator::workdir(&self.env.officina_home())
+    }
+
+    /// The `orchestrator_start` rows, newest first, as another process
+    /// reads them.
+    fn rows(&self) -> Vec<officina_host::registry::read::OrchestratorStartRow> {
+        open_reader(&self.env.officina_home(), &[])
+            .unwrap()
+            .orchestrator_starts()
+            .unwrap()
+    }
+
+    /// The `orchestrator_started` lines.
+    fn lines(&self) -> Vec<officina_core::relay::journal::OrchestratorStarted> {
+        self.env
+            .journal()
+            .into_iter()
+            .filter_map(|line| match line.entry {
+                JournalEntry::OrchestratorStarted(started) => Some(started),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The fake's calls holding `--name`: the orchestrator's spawns,
+    /// waiting up to 10 s for `count` of them, since a console is not
+    /// waited on.
+    fn spawns(&self, count: usize) -> Vec<serde_json::Value> {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let calls: Vec<serde_json::Value> = common::fake_claude_calls(&self.env.fake_log())
+                .into_iter()
+                .filter(|c| {
+                    c["argv"]
+                        .as_array()
+                        .is_some_and(|a| a.iter().any(|x| x == "--name"))
+                })
+                .collect();
+            if calls.len() >= count || Instant::now() > deadline {
+                return calls;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+
+    /// The first board within 10 s that `wanted` accepts, the session list
+    /// refreshed meanwhile.
+    fn board_until(&self, wanted: impl Fn(&Board) -> bool) -> Board {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let boards = &self.emitted.as_ref().unwrap().boards;
+        loop {
+            let _ = self.handle().sender.send(CollectorMsg::Refresh);
+            if let Ok(board) = boards.recv_timeout(Duration::from_millis(700))
+                && wanted(&board)
+            {
+                return board;
+            }
+            assert!(Instant::now() < deadline, "no board matched");
+        }
+    }
+}
+
+impl Drop for OrchestratorWindow {
+    fn drop(&mut self) {
+        self.close();
+    }
+}
+
+/// Story 5.16 AC 3: a refusal records its row with its cause and its
+/// line, and starts nothing.
+fn assert_refused(
+    window: &OrchestratorWindow,
+    cause: officina_core::orders::orchestrator::StartRefusal,
+) {
+    use officina_core::orders::orchestrator::StartAnswer;
+    use officina_core::registry::types::OrchestratorStartOutcome;
+    assert_eq!(window.start(), StartAnswer::Refused(cause));
+    let rows = window.rows();
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!(rows[0].outcome, OrchestratorStartOutcome::Refused);
+    assert_eq!(rows[0].error.as_deref(), Some(cause.code()));
+    assert_eq!((rows[0].pid, rows[0].pid_created_at_ms), (None, None));
+    let lines = window.lines();
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    assert_eq!(lines[0].outcome, OrchestratorStartOutcome::Refused);
+    assert!(lines[0].argv.is_empty());
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(window.spawns(0).is_empty(), "the fake started");
+}
+
+/// Story 5.16 AC 3 (AD-89, D-562): a `claude` that is no `.exe` is
+/// refused before anything starts: the fake's log stays absent.
+#[test]
+fn start_is_refused_with_a_shim() {
+    use officina_core::orders::orchestrator::StartRefusal;
+    let window = OrchestratorWindow::new(serde_json::json!({}), "claude.cmd", true);
+    assert_refused(&window, StartRefusal::ClaudeNotExe);
+    assert!(!window.env.fake_log().exists(), "nothing ran");
+}
+
+/// Story 5.16 AC 3 (AD-89): a workdir holding anything is refused, and
+/// what it holds is kept.
+#[test]
+fn start_is_refused_with_a_non_empty_workdir() {
+    use officina_core::orders::orchestrator::StartRefusal;
+    let window = OrchestratorWindow::new(serde_json::json!({}), "claude", true);
+    write(&window.workdir().join("left.txt"), "left behind");
+    assert_refused(&window, StartRefusal::WorkdirNotEmpty);
+    assert!(window.workdir().join("left.txt").is_file(), "never deleted");
+}
+
+/// Story 5.16 AC 3 (D-144, D-167): no `officina.exe` in the window's
+/// executable directory is refused, since the MCP config would name it.
+#[test]
+fn start_is_refused_without_officina_exe() {
+    use officina_core::orders::orchestrator::StartRefusal;
+    let window = OrchestratorWindow::new(serde_json::json!({}), "claude", false);
+    assert_refused(&window, StartRefusal::OfficinaExeMissing);
+}
+
+/// Story 5.16 AC 3 (D-144): Start creates the workdir and the proposals
+/// folder, refused or not, and never deletes them.
+#[test]
+fn start_creates_the_two_folders() {
+    let window = OrchestratorWindow::new(serde_json::json!({}), "claude", false);
+    let home = window.env.officina_home();
+    let proposals = officina_host::orders::orchestrator::proposals_dir(&home);
+    assert!(!window.workdir().exists() && !proposals.exists());
+    window.start();
+    assert!(window.workdir().is_dir());
+    assert!(proposals.is_dir());
+    write(&proposals.join("kept.json"), "{}");
+    window.start();
+    assert!(proposals.join("kept.json").is_file(), "never deleted");
+}
+
+/// Story 5.16 AC 4 (AD-89, D-144): a spawned Start records its row with
+/// the pid and its creation time and one `orchestrator_started` line; the
+/// session runs in the workdir, in a console of its own, with the vector
+/// core built.
+#[cfg(windows)]
+#[test]
+fn a_start_records_a_row_and_a_journal_line() {
+    use officina_core::orders::orchestrator::StartAnswer;
+    use officina_core::registry::types::OrchestratorStartOutcome;
+    use officina_core::spawn::ORCHESTRATOR_NAME;
+    let before = officina_host::files::now_ms();
+    let window = OrchestratorWindow::new(serde_json::json!({"unlisted": true}), "claude", true);
+    assert_eq!(window.start(), StartAnswer::Started);
+    let calls = window.spawns(1);
+    assert_eq!(calls.len(), 1, "{calls:?}");
+    let call = &calls[0];
+    assert_eq!(
+        call["console"],
+        serde_json::json!({"stdin": true, "stdout": true})
+    );
+    assert_eq!(
+        std::fs::canonicalize(call["cwd"].as_str().unwrap()).unwrap(),
+        std::fs::canonicalize(window.workdir()).unwrap()
+    );
+    let argv = common::logged_argv(call);
+    let name = argv.iter().position(|a| a == "--name").unwrap();
+    assert_eq!(argv[name + 1], ORCHESTRATOR_NAME);
+    let rows = window.rows();
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    let row = &rows[0];
+    assert_eq!(row.outcome, OrchestratorStartOutcome::Spawned);
+    assert!(row.pid.is_some_and(|pid| pid > 0));
+    let created = row.pid_created_at_ms.expect("the creation time");
+    assert!(created >= before - 1_000 && created <= officina_host::files::now_ms());
+    assert!(row.started_at_ms >= before);
+    let lines = window.lines();
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    assert_eq!(lines[0].outcome, OrchestratorStartOutcome::Spawned);
+    assert_eq!(lines[0].pid, row.pid);
+    assert_eq!(lines[0].argv, argv, "the line holds what ran");
+}
+
+/// Story 5.16 AC 4 and 5 (AD-89, D-166): the agents entry named
+/// `officina-orchestrator` in the workdir is the board's presence and the
+/// Orchestrator view's, no card; a second Start while it is live spawns
+/// nothing and answers "already running" with what bringing it forward did.
+#[cfg(windows)]
+#[test]
+fn the_orchestrator_is_live_by_its_name_and_folder() {
+    use officina_core::orders::orchestrator::StartAnswer;
+    let window = OrchestratorWindow::new(serde_json::json!({"hang_ms": 6000}), "claude", true);
+    assert_eq!(window.start(), StartAnswer::Started);
+    let board = window.board_until(|b| b.orchestrator.is_some());
+    let presence = board.orchestrator.unwrap();
+    assert!(presence.pid.is_some() && presence.started_at_ms.is_some());
+    assert_eq!(board.columns.all().count(), 0, "never a card");
+    assert_eq!(board.waiting_count, 0);
+    let view = until(&window.emitted.as_ref().unwrap().orchestrators, |v| {
+        v.presence.is_some()
+    });
+    assert_eq!(view.presence, board.orchestrator);
+    let StartAnswer::AlreadyRunning(focus) = window.start() else {
+        panic!("a live orchestrator is not started again");
+    };
+    // No console here is titled with the name: nothing to bring forward,
+    // and it is said so, never as a fresh start.
+    assert_eq!(focus, officina_core::focus::FocusOutcome::NoWindow);
+    assert_eq!(window.spawns(1).len(), 1, "one spawn");
+    assert_eq!(window.rows().len(), 1, "a live check records no start");
+}
+
+/// Story 5.16 AC 4 (FR-14, AD-89): a Start after the orchestrator ended
+/// is a new row and a new session: no resume, no continue; the briefing
+/// cursor of the new session is the previous start (D-144).
+#[cfg(windows)]
+#[test]
+fn a_restart_is_a_new_row_never_a_resume() {
+    use officina_core::orders::orchestrator::StartAnswer;
+    use officina_core::registry::types::OrchestratorStartOutcome;
+    let window = OrchestratorWindow::new(serde_json::json!({"unlisted": true}), "claude", true);
+    assert_eq!(window.start(), StartAnswer::Started);
+    assert_eq!(window.spawns(1).len(), 1);
+    // The first session ended at once (no `hang_ms`): its kept pid is gone.
+    std::thread::sleep(Duration::from_millis(500));
+    assert_eq!(window.start(), StartAnswer::Started);
+    let calls = window.spawns(2);
+    assert_eq!(calls.len(), 2, "{calls:?}");
+    for call in &calls {
+        let argv = common::logged_argv(call);
+        for resume in ["--resume", "--continue", "-r", "-c"] {
+            assert!(!argv.iter().any(|a| a == resume), "{argv:?}");
+        }
+    }
+    assert_eq!(
+        common::logged_argv(&calls[0]),
+        common::logged_argv(&calls[1]),
+        "the same vector"
+    );
+    let rows = window.rows();
+    assert_eq!(rows.len(), 2);
+    assert!(
+        rows.iter()
+            .all(|r| r.outcome == OrchestratorStartOutcome::Spawned)
+    );
+    assert_ne!(rows[0].id, rows[1].id);
+    let cursor = open_reader(&window.env.officina_home(), &[])
+        .unwrap()
+        .previous_orchestrator_start()
+        .unwrap();
+    assert_eq!(cursor, Some(rows[1].started_at_ms), "the earlier start");
+}
+
+/// Story 5.16 AC 4 (D-144, D-773): the kept pid and its creation time are
+/// read back at window start, so a Start after a window restart finds the
+/// session it started, listed or not, and starts no second one.
+#[cfg(windows)]
+#[test]
+fn a_live_pid_fallback_survives_a_window_restart() {
+    use officina_core::orders::orchestrator::StartAnswer;
+    let mut window = OrchestratorWindow::new(
+        serde_json::json!({"unlisted": true, "hang_ms": 8000}),
+        "claude",
+        true,
+    );
+    assert_eq!(window.start(), StartAnswer::Started);
+    assert_eq!(window.spawns(1).len(), 1);
+    window.close();
+    window.open();
+    assert!(
+        matches!(window.start(), StartAnswer::AlreadyRunning(_)),
+        "the kept pid still runs"
+    );
+    assert_eq!(window.spawns(1).len(), 1, "no second session");
+    assert_eq!(window.rows().len(), 1);
+}

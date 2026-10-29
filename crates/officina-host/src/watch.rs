@@ -25,6 +25,7 @@ use officina_core::relay::view::RelayView;
 
 use crate::collector::Collector;
 use crate::files::{event_file_for, now_ms};
+use crate::orders::orchestrator::{OrchestratorKeeper, StartGrant, StartReport};
 use crate::orders::{CardStore, LaunchGrant, LaunchReport};
 use crate::paths::Paths;
 use crate::registry::ingest::IngestContext;
@@ -121,6 +122,13 @@ pub enum AuthorCommand {
     /// The author read the briefing: left the Orchestrator view, or closed
     /// the window (AD-83).
     MarkBriefingRead,
+    /// A click on the orchestrator's Start, with the window's executable
+    /// directory (AD-89, D-167).
+    StartOrchestrator { exe_dir: PathBuf },
+    /// How a granted orchestrator spawn ended. Like a launch's outcome it
+    /// carries no deadline: the session runs, so its row and line are
+    /// recorded however late (D-144).
+    OrchestratorStarted(Box<StartReport>),
 }
 
 impl AuthorAnswer {
@@ -185,6 +193,15 @@ impl AuthorAnswer {
             other => Err(other.unexpected()),
         }
     }
+
+    /// The Start's ticket, refusal or "running", for `StartOrchestrator`'s
+    /// answer.
+    pub fn into_start(self) -> Result<StartGrant, IpcError> {
+        match self {
+            AuthorAnswer::Start(grant) => Ok(grant),
+            other => Err(other.unexpected()),
+        }
+    }
 }
 
 /// What the collector answers to an author request.
@@ -205,6 +222,7 @@ pub enum AuthorAnswer {
     },
     Card(CardAnswer),
     Launch(LaunchGrant),
+    Start(StartGrant),
 }
 
 /// The collector's answer, or why there is none to give.
@@ -234,11 +252,14 @@ impl AuthorRequest {
     }
 
     /// True when the collector must drop the request unrun (D-92). A
-    /// launch's outcome never expires: the launch happened, and its row and
-    /// line are recorded however late (D-135, review F14).
+    /// launch's outcome and an orchestrator spawn's end never expire: the
+    /// process started, and its row and line are recorded however late
+    /// (D-135, review F14, D-144).
     fn expired(&self, now: Instant) -> bool {
-        !matches!(self.command, AuthorCommand::LaunchOutcome(_))
-            && now + AUTHOR_HEADROOM >= self.deadline
+        !matches!(
+            self.command,
+            AuthorCommand::LaunchOutcome(_) | AuthorCommand::OrchestratorStarted(_)
+        ) && now + AUTHOR_HEADROOM >= self.deadline
     }
 }
 
@@ -858,6 +879,9 @@ fn run<E: Emit>(
     let mut plan = RefreshPlan::new(Instant::now);
     let mut presence: BTreeMap<String, bool> = BTreeMap::new();
     let mut cards = CardStore::default();
+    // D-144: the pid the newest spawned start kept, read back, so a Start
+    // after a window restart still finds the session it started.
+    let mut keeper = OrchestratorKeeper::new(registry.kept_orchestrator());
 
     loop {
         registry.set_model_env(model_env(collector));
@@ -867,7 +891,11 @@ fn run<E: Emit>(
             Ok(CollectorMsg::Visibility(visible)) => plan.visibility_changed(visible),
             Ok(CollectorMsg::RelayChanged) => plan.relay_files_changed(),
             Ok(CollectorMsg::Author(request)) => {
-                if answer_author(collector, &mut registry, &mut cards, request, outputs) {
+                let held = Held {
+                    cards: &mut cards,
+                    keeper: &mut keeper,
+                };
+                if answer_author(collector, &mut registry, held, request, outputs) {
                     plan.relay_files_changed();
                 }
             }
@@ -971,6 +999,13 @@ fn rebuild_and_publish<E: Emit>(
     publish_orchestrator(registry, outputs, force, now);
 }
 
+/// What the collector thread holds for the author's requests beside the
+/// registry: the work order cards and the orchestrator's keeper.
+struct Held<'a> {
+    cards: &'a mut CardStore,
+    keeper: &'a mut OrchestratorKeeper,
+}
+
 /// Runs one author request on the registry's writer (AD-38), unless its
 /// deadline is too close (D-92): an action is written, the cards' subjects
 /// refreshed, and the board and the registry view emitted before the reply.
@@ -979,10 +1014,11 @@ fn rebuild_and_publish<E: Emit>(
 fn answer_author<E: Emit>(
     collector: &mut Collector,
     registry: &mut WindowRegistry,
-    cards: &mut CardStore,
+    held: Held<'_>,
     request: AuthorRequest,
     outputs: &mut Outputs<E>,
 ) -> bool {
+    let Held { cards, keeper } = held;
     if request.expired(Instant::now()) {
         return false;
     }
@@ -1073,6 +1109,22 @@ fn answer_author<E: Emit>(
         AuthorCommand::MarkBriefingRead => registry
             .mark_briefing_read(now)
             .map(|()| AuthorAnswer::Done { created: None }),
+        AuthorCommand::StartOrchestrator { exe_dir } => {
+            let board = outputs.board.current();
+            crate::orders::orchestrator::grant(
+                keeper,
+                collector,
+                registry,
+                board.as_ref(),
+                &exe_dir,
+                now,
+            )
+            .map(AuthorAnswer::Start)
+        }
+        AuthorCommand::OrchestratorStarted(report) => {
+            crate::orders::orchestrator::record_start(keeper, collector, registry, &report, now);
+            Ok(AuthorAnswer::Done { created: None })
+        }
     };
     // Every command reports the registry's state, a failure included
     // (quality audit M3); those that write publish the views at once.
