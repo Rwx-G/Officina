@@ -19,6 +19,7 @@ pub mod orders;
 pub mod read;
 #[cfg(feature = "window-authority")]
 pub mod retention;
+pub mod review;
 pub mod schema;
 pub mod store;
 #[cfg(feature = "window-authority")]

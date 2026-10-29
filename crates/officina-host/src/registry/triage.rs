@@ -36,7 +36,7 @@ use crate::spawn::{BaseEnv, ResolvedClaude, SpawnError, SpawnOutcome, execute};
 /// How many nonces are drawn before a case is given up (D-87's "host draws
 /// again"): one 16-digit nonce in an excerpt is chance; several in a row
 /// is a case built to collide.
-const NONCE_DRAWS: usize = 8;
+pub(crate) const NONCE_DRAWS: usize = 8;
 
 /// How long one call may run, and how much stdout it may write.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -154,7 +154,7 @@ pub fn binary_stamp(claude: &Path) -> Option<BinaryStamp> {
 
 /// Sixteen hex digits from std's randomly keyed hasher (AD-51): no
 /// dependency, and unguessable by what an excerpt was written with.
-fn draw_nonce() -> String {
+pub(crate) fn draw_nonce() -> String {
     let mut hasher = std::collections::hash_map::RandomState::new().build_hasher();
     hasher.write_u128(
         std::time::SystemTime::now()

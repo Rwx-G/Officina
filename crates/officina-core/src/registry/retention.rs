@@ -35,6 +35,10 @@ pub const TRIAGE_CALL_TTL_MS: i64 = 90 * DAY_MS;
 /// its untrusted texts go [`EXCERPT_TTL_MS`] after it, like an excerpt.
 pub const WORK_ORDER_TTL_MS: i64 = 90 * DAY_MS;
 
+/// How long an `auto_review` row is kept after its request (AD-82,
+/// D-134); its reason goes [`EXCERPT_TTL_MS`] after it, like an excerpt.
+pub const AUTO_REVIEW_TTL_MS: i64 = 90 * DAY_MS;
+
 /// True when an excerpt recorded for an event at `event_ms` has expired at
 /// `now_ms` (D-50: counted from the event, never from ingestion).
 pub fn excerpt_expired(event_ms: i64, now_ms: i64) -> bool {

@@ -17,6 +17,7 @@ use officina_core::contract::{
 use officina_core::floor::{FloorFile, ViewIssue, parse_floor, resolve_project_path};
 use officina_core::quota::{QuotaFile, parse_quota_file};
 use officina_core::registry::types::{RegistryReport, SubjectRef};
+use officina_core::relay::auto::EscalationCause;
 use officina_core::scene::{SceneState, states_by_key};
 use serde::{Deserialize, Serialize};
 
@@ -241,6 +242,12 @@ pub struct Collector {
     /// not: the next board's previous states, so an unknown card keeps its
     /// alert (D-494).
     last_scene: RefCell<BTreeMap<String, SceneState>>,
+    /// Why each pending `auto` request is the author's, from the window's
+    /// reviews (AD-87): the board shows it on the card.
+    auto_escalations: BTreeMap<String, EscalationCause>,
+    /// How long a review call may run: `REVIEW_TIMEOUT_MS` unless a test
+    /// lowers it.
+    review_timeout: Duration,
 }
 
 impl Collector {
@@ -295,6 +302,8 @@ impl Collector {
             hook_sightings: HookSightings::default(),
             base_env: BaseEnv::from_process(),
             last_scene: RefCell::new(BTreeMap::new()),
+            auto_escalations: BTreeMap::new(),
+            review_timeout: Duration::from_millis(officina_core::relay::auto::REVIEW_TIMEOUT_MS),
         }
     }
 
@@ -328,6 +337,32 @@ impl Collector {
     /// could not be read.
     pub fn set_settlements(&mut self, settlements: BTreeMap<String, SessionSettlement>) {
         self.settlements = settlements;
+    }
+
+    /// Records why each pending `auto` request is the author's, which the
+    /// next board's approval cards show (AD-87, D-143).
+    pub fn set_auto_escalations(&mut self, escalations: BTreeMap<String, EscalationCause>) {
+        self.auto_escalations = escalations;
+    }
+
+    /// The collector giving each review call at most `timeout` (a test's
+    /// `review-hang` case); `REVIEW_TIMEOUT_MS` by default.
+    pub fn with_review_timeout(mut self, timeout: Duration) -> Collector {
+        self.review_timeout = timeout;
+        self
+    }
+
+    /// How long a review call may run.
+    pub fn review_timeout(&self) -> Duration {
+        self.review_timeout
+    }
+
+    /// The latest known 5-hour use, stale or not; `None` without a quota
+    /// file (FR-8).
+    pub fn five_hour_used(&self) -> Option<f64> {
+        self.read_quota()?
+            .five_hour
+            .map(|window| window.used_percentage)
     }
 
     /// True when no prompt or answer text may be kept: the environment or
@@ -563,6 +598,7 @@ impl Collector {
             contract: self.contract.clone(),
             no_excerpts: self.no_excerpts(),
             approvals: board_approvals(&self.relay, now_ms, &mut |dir| self.trees.fingerprint(dir)),
+            auto_escalations: self.auto_escalations.clone(),
             registry: self.registry.clone(),
             subjects: self.subjects.clone(),
             settlements: self.settlements.clone(),

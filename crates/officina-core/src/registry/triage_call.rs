@@ -209,7 +209,13 @@ fn escaped_in_data(c: char) -> bool {
 /// assert_eq!(serde_json::from_str::<TriageCase>(&line).unwrap(), case);
 /// ```
 pub fn data_line(case: &TriageCase) -> String {
-    let json = serde_json::to_string(&case.bounded()).unwrap_or_default();
+    escaped_line(&serde_json::to_string(&case.bounded()).unwrap_or_default())
+}
+
+/// `json`, one line of JSON, with every character [`escaped_in_data`]
+/// names as a `\u` escape: what a contained call's data line carries, for
+/// the triage call and the `auto` review alike (AD-51).
+pub fn escaped_line(json: &str) -> String {
     let mut line = String::with_capacity(json.len());
     for c in json.chars() {
         if escaped_in_data(c) {
@@ -247,6 +253,13 @@ pub enum PromptError {
 /// assert!(prompt(&case, "fedcba9876543210").is_ok());
 /// ```
 pub fn prompt(case: &TriageCase, nonce: &str) -> Result<String, PromptError> {
+    framed(&instruction(nonce), &data_line(case), nonce)
+}
+
+/// `instruction`, then `line` between the two markers of `nonce`, each on
+/// its line: the stdin of a contained call (AD-51). Refused when the nonce
+/// is malformed or the line holds it, ignoring case.
+pub fn framed(instruction: &str, line: &str, nonce: &str) -> Result<String, PromptError> {
     let well_formed = nonce.len() == NONCE_LEN
         && nonce
             .bytes()
@@ -254,13 +267,11 @@ pub fn prompt(case: &TriageCase, nonce: &str) -> Result<String, PromptError> {
     if !well_formed {
         return Err(PromptError::BadNonce);
     }
-    let line = data_line(case);
     if line.to_ascii_lowercase().contains(nonce) {
         return Err(PromptError::NonceInInput);
     }
     Ok(format!(
-        "{}\n<<<{DATA_MARKER}{nonce}\n{line}\n{DATA_MARKER}{nonce}>>>\n",
-        instruction(nonce)
+        "{instruction}\n<<<{DATA_MARKER}{nonce}\n{line}\n{DATA_MARKER}{nonce}>>>\n"
     ))
 }
 
@@ -376,6 +387,16 @@ fn usage_of(value: &serde_json::Value) -> CallUsage {
 /// assert_eq!(read_output(b"Done.").0, Err(ModelOutputError::NotJson));
 /// ```
 pub fn read_output(stdout: &[u8]) -> (Result<CallAnswer, ModelOutputError>, CallUsage) {
+    read_structured(stdout, |answer: &CallAnswer| &answer.reason)
+}
+
+/// Reads a contained call's stdout as [`read_output`] does, for any answer
+/// type `T` (`deny_unknown_fields`) whose reason `reason_of` gives: the
+/// triage call's and the `auto` review's (AD-51, AD-86).
+pub fn read_structured<T: serde::de::DeserializeOwned>(
+    stdout: &[u8],
+    reason_of: impl Fn(&T) -> &str,
+) -> (Result<T, ModelOutputError>, CallUsage) {
     if stdout.len() > STDOUT_CAP_BYTES {
         return (Err(ModelOutputError::TooLarge), CallUsage::default());
     }
@@ -386,10 +407,13 @@ pub fn read_output(stdout: &[u8]) -> (Result<CallAnswer, ModelOutputError>, Call
         return (Err(ModelOutputError::NotJson), CallUsage::default());
     }
     let usage = usage_of(&value);
-    (answer_of(&value), usage)
+    (answer_of(&value, reason_of), usage)
 }
 
-fn answer_of(value: &serde_json::Value) -> Result<CallAnswer, ModelOutputError> {
+fn answer_of<T: serde::de::DeserializeOwned>(
+    value: &serde_json::Value,
+    reason_of: impl Fn(&T) -> &str,
+) -> Result<T, ModelOutputError> {
     if value.get("is_error").and_then(serde_json::Value::as_bool) == Some(true) {
         return Err(ModelOutputError::ReportedError);
     }
@@ -397,17 +421,17 @@ fn answer_of(value: &serde_json::Value) -> Result<CallAnswer, ModelOutputError> 
         .get("structured_output")
         .filter(|s| s.is_object())
         .ok_or(ModelOutputError::NoStructuredOutput)?;
-    let answer: CallAnswer =
+    let answer: T =
         serde_json::from_value(structured.clone()).map_err(|_| ModelOutputError::SchemaMismatch)?;
-    let chars = answer.reason.chars().count();
+    let reason = reason_of(&answer);
+    let chars = reason.chars().count();
     if chars == 0 {
         return Err(ModelOutputError::ReasonEmpty);
     }
     if chars > REASON_MAX_CHARS {
         return Err(ModelOutputError::ReasonTooLong);
     }
-    if answer
-        .reason
+    if reason
         .chars()
         .any(|c| c.is_control() || is_forbidden_format(c) || matches!(c, '\u{2028}' | '\u{2029}'))
     {
@@ -472,11 +496,20 @@ pub enum Budget {
 /// assert_eq!(budget(&[], 1_000), Budget::Open);
 /// ```
 pub fn budget(calls: &[CallRecord], now_ms: i64) -> Budget {
-    let mut starts: Vec<i64> = calls
-        .iter()
-        .filter(|c| c.spawned() && c.started_at_ms <= now_ms)
-        .map(|c| c.started_at_ms)
-        .collect();
+    budget_of_starts(
+        calls
+            .iter()
+            .filter(|c| c.spawned())
+            .map(|c| c.started_at_ms),
+        now_ms,
+    )
+}
+
+/// The budget at `now_ms` from the start times of the calls that spawned a
+/// process: the rule [`budget`] applies to the triage call, which the
+/// `auto` review applies to its own calls (AD-52 as amended, D-142).
+pub fn budget_of_starts(starts: impl Iterator<Item = i64>, now_ms: i64) -> Budget {
+    let mut starts: Vec<i64> = starts.filter(|at| *at <= now_ms).collect();
     starts.sort_unstable_by(|a, b| b.cmp(a));
     let day_start = day_start_ms(utc_date(now_ms));
     if starts.iter().filter(|&&at| at >= day_start).count() >= CALLS_PER_DAY {

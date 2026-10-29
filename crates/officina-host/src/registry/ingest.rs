@@ -18,8 +18,8 @@ use officina_core::registry::confirm::wake;
 use officina_core::registry::filing::filing_for_new_session;
 use officina_core::registry::fold::{candidates_needed, line_facts, link_for_line};
 use officina_core::registry::ingestion::{
-    ExcerptObservation, FileOpening, close_event_file, excerpt_observation, in_triage_workdir,
-    line_too_long, open_event_file, recorded_at, starts_a_chunk,
+    ExcerptObservation, FileOpening, close_event_file, excerpt_observation, in_review_workdir,
+    in_triage_workdir, line_too_long, open_event_file, recorded_at, starts_a_chunk,
 };
 use officina_core::registry::retention::excerpt_expired;
 use officina_core::registry::types::{EventFileRecord, SessionRecord};
@@ -421,7 +421,7 @@ fn apply(
     if line
         .cwd
         .as_deref()
-        .is_some_and(|cwd| in_triage_workdir(cwd, &home))
+        .is_some_and(|cwd| in_triage_workdir(cwd, &home) || in_review_workdir(cwd, &home))
     {
         return Ok(false);
     }

@@ -2482,3 +2482,153 @@ fn the_board_keeps_its_pace_while_a_launch_spawns() {
         LaunchAnswer::Launched(LaunchOutcome::Started)
     );
 }
+
+// ---- story 5.13: the review worker (AD-86, AD-3 as amended, D-142) ----
+
+/// The prompt of the board's session, once a board shows `text` as it.
+#[cfg(windows)]
+fn shows_prompt(board: &Board, text: &str) -> bool {
+    board.columns.all().any(|card| {
+        card.session_id.as_deref() == Some(common::auto::SESSION)
+            && card
+                .last_prompt
+                .as_ref()
+                .is_some_and(|p| serde_json::to_value(p).unwrap() == text)
+    })
+}
+
+/// Story 5.13 AC 4: a review call runs on the `review` thread; while it
+/// hangs, the author's prompts still reach the board at its pace.
+#[cfg(windows)]
+#[test]
+fn the_board_keeps_its_pace_while_a_review_hangs() {
+    use common::auto::{Auto, Options, SESSION, stop};
+    const HANG: Duration = Duration::from_secs(15);
+    let options = Options {
+        mode: "review-hang",
+        hang_ms: u64::try_from(HANG.as_millis()).unwrap(),
+        ..Options::default()
+    };
+    let auto = Auto::new(&options);
+    auto.request("lab-web", Some(SESSION));
+    let fake = auto.fake(&options, "bin");
+    let (handle, emitted) = auto.window_with(auto.collector(Some(fake), 2 * HANG));
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while auto.calls().is_empty() {
+        assert!(Instant::now() < deadline, "the review never started");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    for i in 0..3 {
+        let text = format!("next step {i}");
+        let written = Instant::now();
+        auto.prompt(&text, officina_host::files::now_ms());
+        until(&emitted.boards, |b| shows_prompt(b, &text));
+        assert!(
+            written.elapsed() < HANG / 3,
+            "a board waited on the review: {:?}",
+            written.elapsed()
+        );
+    }
+    assert!(auto.rows().is_empty(), "the review is still out");
+    stop(handle);
+}
+
+/// Story 5.13 AC 4 (AD-52 as amended): the triage model's dry run runs on
+/// its own thread; while its call hangs, a review still runs and answers.
+#[cfg(windows)]
+#[test]
+fn a_triage_dry_run_does_not_delay_a_review() {
+    use common::auto::{Auto, Options, SESSION, stop};
+    let options = Options {
+        triage_mode: Some("triage-hang"),
+        hang_ms: 20_000,
+        prompt: "Apply it. FAKE-REVIEW:reject".to_owned(),
+        ..Options::default()
+    };
+    let auto = Auto::new(&options);
+    seed_a_dry_run_case(&auto.relay.env);
+    let id = auto.request("lab-web", Some(SESSION));
+    let fake = auto.fake(&options, "bin");
+    let (handle, _emitted) = auto.window_with(auto.collector(Some(fake), Duration::from_secs(10)));
+    match ask(&handle, AuthorCommand::Evaluate, AUTHOR_WAIT)
+        .recv_timeout(AUTHOR_WAIT)
+        .unwrap()
+    {
+        Ok(AuthorAnswer::Evaluating { cases }) => assert_eq!(cases, 1),
+        other => panic!("{other:?}"),
+    }
+    let started = Instant::now();
+    let row = auto.row_of(&id);
+    assert_eq!(
+        row.decision,
+        Some(officina_core::relay::auto::ReviewDecision::Reject)
+    );
+    assert!(
+        started.elapsed() < Duration::from_secs(15),
+        "the review waited on the triage call: {:?}",
+        started.elapsed()
+    );
+    let calls = auto.calls();
+    assert!(
+        calls
+            .iter()
+            .any(|c| c["argv"].to_string().contains("verdict")),
+        "the triage call ran too"
+    );
+    stop(handle);
+}
+
+/// Story 5.13 AC 4 (D-142): two requests a second apart are both reviewed,
+/// their calls at least `CALL_SPACING_MS` apart: pacing, not escalation.
+#[cfg(windows)]
+#[test]
+fn queued_reviews_are_paced_5_s_apart() {
+    use common::auto::{Auto, Options, SESSION, stop};
+    use officina_core::registry::triage_call::CALL_SPACING_MS;
+    let options = Options::default();
+    let auto = Auto::new(&options);
+    let first = auto.request("lab-web", Some(SESSION));
+    let second = auto.request("lab-db", Some(SESSION));
+    let (handle, _emitted) = auto.window(&options);
+    let a = auto.row_of(&first);
+    let b = auto.row_of(&second);
+    stop(handle);
+    for row in [&a, &b] {
+        assert_eq!(
+            row.outcome,
+            officina_core::registry::types::ReviewOutcome::Answered
+        );
+    }
+    let gap = (b.call_started_at_ms.unwrap() - a.call_started_at_ms.unwrap()).abs();
+    assert!(gap >= CALL_SPACING_MS, "{gap} ms apart");
+    assert_eq!(auto.calls().len(), 2);
+}
+
+/// Story 5.13 AC 4 (D-142): both requests pass the precheck before any
+/// call; the first review's approve reaches the cap of one, and the cap,
+/// checked again right before the second call, escalates it with no call.
+#[cfg(windows)]
+#[test]
+fn the_cap_is_checked_again_right_before_each_call() {
+    use common::auto::{Auto, Options, SESSION, stop};
+    use officina_core::relay::auto::EscalationCause;
+    let options = Options {
+        cap: 1,
+        prompt: "Apply it. FAKE-REVIEW:approve".to_owned(),
+        ..Options::default()
+    };
+    let auto = Auto::new(&options);
+    let first = auto.request("lab-web", Some(SESSION));
+    let second = auto.request("lab-db", Some(SESSION));
+    let (handle, _emitted) = auto.window(&options);
+    let a = auto.row_of(&first);
+    let b = auto.row_of(&second);
+    stop(handle);
+    assert_eq!(
+        a.decision,
+        Some(officina_core::relay::auto::ReviewDecision::Approve)
+    );
+    assert_eq!(b.cause, Some(EscalationCause::HourlyCap));
+    assert_eq!(b.call_started_at_ms, None);
+    assert_eq!(auto.calls().len(), 1);
+}

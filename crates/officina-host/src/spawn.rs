@@ -212,7 +212,7 @@ pub struct LaunchError {
 pub const fn job_rule(kind: VectorKind) -> JobRule {
     match kind {
         VectorKind::Agents | VectorKind::Version => JobRule::TreeOnTimeout,
-        VectorKind::TriageCall => JobRule::KillOnClose,
+        VectorKind::TriageCall | VectorKind::ReviewCall => JobRule::KillOnClose,
         VectorKind::Attach | VectorKind::WorkOrder => JobRule::NoJob,
     }
 }
@@ -225,9 +225,11 @@ pub const fn job_rule(kind: VectorKind) -> JobRule {
 pub const fn keeps_held_output(kind: VectorKind) -> bool {
     match kind {
         VectorKind::WorkOrder => true,
-        VectorKind::Agents | VectorKind::Version | VectorKind::TriageCall | VectorKind::Attach => {
-            false
-        }
+        VectorKind::Agents
+        | VectorKind::Version
+        | VectorKind::TriageCall
+        | VectorKind::ReviewCall
+        | VectorKind::Attach => false,
     }
 }
 
@@ -455,6 +457,12 @@ mod tests {
                 officina_core::spawn::triage_call(TRIAGE_MODEL, &schema(), None, "C:/path/to/home")
             }
             VectorKind::WorkOrder => officina_core::spawn::work_order(&order(), 1, None),
+            VectorKind::ReviewCall => officina_core::spawn::review_call(
+                officina_core::relay::template::ModelAlias::Haiku,
+                &officina_core::relay::auto::schema(),
+                None,
+                "C:/path/to/home",
+            ),
         }
     }
 

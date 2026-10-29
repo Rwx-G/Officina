@@ -45,6 +45,10 @@ use super::tree::TreeError;
 use super::{journal, tree};
 use crate::doctor::{Check, Level, check};
 use crate::process::{Waited, wait_until};
+use crate::registry::review::ReviewRow;
+use officina_core::dates::{day_start_ms, utc_date};
+use officina_core::registry::triage_call::{CALLS_PER_DAY, CALLS_PER_HOUR};
+use officina_core::relay::auto::EscalationCause;
 
 /// The program the WSL probe runs inside the distro, by absolute path like
 /// the tools it probes (D-6): `test -x <path>` exits 0 when the path is an
@@ -66,6 +70,9 @@ pub struct RelayDoctor<'a> {
     /// `None` off Windows or when it cannot be read.
     pub system_dir: Option<&'a Path>,
     pub now_ms: i64,
+    /// The `auto` review rows of the last day, read-only, when the
+    /// registry could be read (AD-94 part B).
+    pub reviews: Option<&'a [ReviewRow]>,
 }
 
 /// How one probe call ended.
@@ -235,6 +242,11 @@ fn checks_with(
         checks.extend(credential_checks(&relay.canonical, snapshot, store));
         checks.extend(timeout_checks(&relay.canonical.actions));
         checks.extend(auto_action_checks(&relay.canonical.actions));
+        checks.extend(review_checks(
+            &relay.canonical,
+            inputs.reviews,
+            inputs.now_ms,
+        ));
         checks.extend(check_listing_checks(&relay.canonical));
         checks.extend(tree_checks(&relay.canonical, &dirs));
     }
@@ -784,6 +796,54 @@ fn auto_action_checks(actions: &BTreeMap<String, CanonicalAction>) -> Vec<Check>
     vec![check(Level::Ok, "relay auto actions", listed.join("; "))]
 }
 
+/// AD-94 part B: with an `auto` action in the catalogue, the review's model,
+/// or `review_config_invalid` when `[auto_review]` fails (every `auto`
+/// request then goes to the author), and the reviews and calls of today
+/// against the review's own budget (D-142).
+fn review_checks(
+    catalogue: &CanonicalCatalogue,
+    reviews: Option<&[ReviewRow]>,
+    now_ms: i64,
+) -> Vec<Check> {
+    const TITLE: &str = "relay auto review";
+    if !catalogue
+        .actions
+        .values()
+        .any(|action| action.class == ActionClass::Auto)
+    {
+        return Vec::new();
+    }
+    let Some(model) = catalogue.auto_review.model else {
+        return vec![check(
+            Level::Fail,
+            TITLE,
+            format!(
+                "{}: the [auto_review] table fails validation, so every auto request comes to you without a review; fix the table and approve the catalogue",
+                EscalationCause::ReviewConfigInvalid.code()
+            ),
+        )];
+    };
+    let mut detail = format!(
+        "model {}; auto approval off: each review runs in shadow and approves nothing",
+        model.code()
+    );
+    match reviews {
+        Some(rows) => {
+            let today = day_start_ms(utc_date(now_ms));
+            let reviewed = rows.iter().filter(|r| r.requested_at_ms >= today).count();
+            let calls = rows
+                .iter()
+                .filter(|r| r.call_started_at_ms.is_some_and(|at| at >= today))
+                .count();
+            detail.push_str(&format!(
+                "; today {reviewed} requests, {calls} calls of {CALLS_PER_DAY} a day ({CALLS_PER_HOUR} an hour)"
+            ));
+        }
+        None => detail.push_str("; no registry to count its calls in"),
+    }
+    vec![check(Level::Ok, TITLE, detail)]
+}
+
 /// An action naming a check (an `after-check` action, or a `human` action's
 /// dry run, D-170) goes on only after that check ran in the same project, so
 /// a project that lists it without its check can never run it.
@@ -1259,6 +1319,92 @@ mod tests {
         assert!(!line.contains("not available"), "{line}");
     }
 
+    /// A review row of `lab`'s `apply`, requested at `at_ms`, with a call
+    /// when `called`.
+    fn review_row(at_ms: i64, called: bool) -> ReviewRow {
+        use officina_core::registry::types::{ReviewMode, ReviewOutcome};
+        ReviewRow {
+            id: at_ms,
+            approval_id: format!("0123456789abcdef-{at_ms}"),
+            project: "lab".into(),
+            action: "apply".into(),
+            requested_at_ms: at_ms,
+            mode: ReviewMode::Shadow,
+            outcome: if called {
+                ReviewOutcome::Answered
+            } else {
+                ReviewOutcome::NoCall
+            },
+            cause: Some(EscalationCause::AutoApprovalOff),
+            decision: None,
+            reason: None,
+            rule_baseline: false,
+            call_started_at_ms: called.then_some(at_ms),
+            cost_microusd: None,
+            author_decision: None,
+            author_reason: None,
+            decided_at_ms: None,
+        }
+    }
+
+    /// Story 5.13 AC 12 (AD-94 part B): the review's model and today's
+    /// requests and calls against the budget; nothing without an `auto`
+    /// action.
+    #[test]
+    fn review_model_and_budget_are_reported() {
+        const NOW: i64 = 1_793_102_400_000;
+        let relay = load(&template_floor(TEMPLATE), FLOOR_PATH).unwrap();
+        let yesterday = NOW - 2 * 86_400_000;
+        let rows = [
+            review_row(NOW - 60_000, true),
+            review_row(NOW - 30_000, false),
+            review_row(yesterday, true),
+        ];
+        let checks = review_checks(&relay.canonical, Some(&rows), NOW);
+        assert_eq!(checks.len(), 1);
+        assert_eq!(checks[0].level, Level::Ok);
+        assert!(
+            checks[0].detail.starts_with("model haiku;"),
+            "{}",
+            checks[0].detail
+        );
+        assert!(
+            checks[0].detail.contains(&format!(
+                "today 2 requests, 1 calls of {CALLS_PER_DAY} a day ({CALLS_PER_HOUR} an hour)"
+            )),
+            "{}",
+            checks[0].detail
+        );
+        let unread = review_checks(&relay.canonical, None, NOW);
+        assert!(
+            unread[0].detail.contains("no registry"),
+            "{}",
+            unread[0].detail
+        );
+        let human = template_floor(TEMPLATE).replace("class = \"auto\"", "class = \"human\"");
+        let none = load(&human, FLOOR_PATH).unwrap();
+        assert!(review_checks(&none.canonical, Some(&rows), NOW).is_empty());
+    }
+
+    /// Story 5.13 AC 12 (AD-75, D-638): a failing `[auto_review]` fails
+    /// doctor with `review_config_invalid`.
+    #[test]
+    fn an_invalid_auto_review_table_is_reported() {
+        let floor = template_floor(TEMPLATE).replace(
+            "[[template]]",
+            "[auto_review]\nmodel = \"gpt\"\n[[template]]",
+        );
+        let relay = load(&floor, FLOOR_PATH).unwrap();
+        assert_eq!(relay.canonical.auto_review.model, None);
+        let checks = review_checks(&relay.canonical, Some(&[]), 0);
+        assert_eq!(checks[0].level, Level::Fail);
+        assert!(
+            checks[0].detail.starts_with("review_config_invalid:"),
+            "{}",
+            checks[0].detail
+        );
+    }
+
     /// Story 5.12 AC 7 (AD-94 part B): doctor lists the `auto` actions with
     /// their check and hourly cap, and says nothing without one.
     #[test]
@@ -1426,6 +1572,7 @@ mod tests {
             doctor_floor: None,
             system_dir: None,
             now_ms: 1_793_102_400_000,
+            reviews: None,
         };
         let floor = dir.path().join("officina.toml");
         std::fs::write(

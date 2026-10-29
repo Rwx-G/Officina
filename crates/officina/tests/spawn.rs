@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use officina_core::spawn::{
-    AGENT_VIEW_VAR, AGENTS_STDOUT_CAP, ClaudeVector, Console, CwdRule, EnvRule,
+    AGENT_VIEW_VAR, AGENTS_STDOUT_CAP, ClaudeVector, Console, CwdRule, EnvRule, OfficinaDir,
     SESSION_ENV_REMOVED, VectorKind, passed_to_contained, removed_from_sessions,
 };
 use officina_host::spawn::{BaseEnv, ResolvedClaude, SpawnError, SpawnOutcome, execute};
@@ -35,6 +35,7 @@ impl Setup {
             root: tempfile::tempdir().unwrap(),
         };
         std::fs::create_dir_all(setup.triage_workdir()).unwrap();
+        std::fs::create_dir_all(setup.officina_dir(OfficinaDir::ReviewWorkdir)).unwrap();
         setup
     }
 
@@ -44,6 +45,13 @@ impl Setup {
 
     fn triage_workdir(&self) -> PathBuf {
         officina_host::registry::triage::workdir(&self.home())
+    }
+
+    /// `dir` under this home.
+    fn officina_dir(&self, dir: OfficinaDir) -> PathBuf {
+        dir.segments()
+            .iter()
+            .fold(self.home(), |path, segment| path.join(segment))
     }
 
     fn log(&self, name: &str) -> PathBuf {
@@ -75,6 +83,7 @@ impl Setup {
             VectorKind::Agents | VectorKind::Version => "ok",
             VectorKind::Attach => "interactive",
             VectorKind::TriageCall => "triage",
+            VectorKind::ReviewCall => "review",
             VectorKind::WorkOrder => "bg",
         };
         self.fake(kind.code(), serde_json::json!({"mode": mode}))
@@ -278,6 +287,7 @@ fn every_kind_reaches_the_fake_claude_as_its_golden_vector() {
         let mode = match kind {
             VectorKind::Attach => "interactive",
             VectorKind::TriageCall => "triage",
+            VectorKind::ReviewCall => "review",
             VectorKind::WorkOrder => "bg",
             VectorKind::Agents | VectorKind::Version => "ok",
         };
@@ -298,7 +308,7 @@ fn every_kind_reaches_the_fake_claude_as_its_golden_vector() {
         let expected_cwd = match vector.cwd() {
             CwdRule::Inherited => std::env::current_dir().unwrap(),
             CwdRule::BinaryFolder => fake.path().parent().unwrap().to_path_buf(),
-            CwdRule::Officina { .. } => setup.triage_workdir(),
+            CwdRule::Officina { dir, .. } => setup.officina_dir(*dir),
             CwdRule::Project { folder } => PathBuf::from(folder),
         };
         assert_eq!(

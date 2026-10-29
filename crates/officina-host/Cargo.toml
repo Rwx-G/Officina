@@ -93,6 +93,10 @@ required-features = ["window-authority"]
 name = "registry_orders"
 required-features = ["window-authority"]
 
+[[test]]
+name = "registry_review"
+required-features = ["window-authority"]
+
 # Approves, stops or resumes the relay of a fixture home through the
 # authority, for the e2e fixtures (D-25); never part of a shipped binary.
 [[example]]
@@ -115,6 +119,12 @@ required-features = ["window-authority"]
 # the owner by hand; never by a test, never part of a shipped binary.
 [[example]]
 name = "triage_probe"
+required-features = ["window-authority"]
+
+# The review call's memory check (story 5.13 AC 14, D-164): one real call,
+# run by hand, recorded as research notes E25.
+[[example]]
+name = "review_probe"
 required-features = ["window-authority"]
 
 # The owner's halves of the v0.5 workstation gates (story 5.1: gates 1, 4

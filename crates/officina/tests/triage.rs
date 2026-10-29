@@ -251,7 +251,8 @@ fn only_the_allowed_variables_reach_the_child() {
         assert!(
             passed_to_contained(name)
                 || name.eq_ignore_ascii_case(NO_CURRENT_DIR_VAR)
-                || name.eq_ignore_ascii_case(CONFIG_DIR_VAR),
+                || name.eq_ignore_ascii_case(CONFIG_DIR_VAR)
+                || name.eq_ignore_ascii_case(officina_core::spawn::ADVISOR_OFF_VAR),
             "{name} reached the child"
         );
     }

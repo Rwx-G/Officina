@@ -481,6 +481,24 @@ impl WindowRegistry {
         self.on_writer(|writer| writer.expire_launching(now_ms));
     }
 
+    /// Records one review of an `auto` request (AD-86), when the registry
+    /// is writable; its id.
+    pub fn insert_review(&mut self, review: &crate::registry::review::NewReview) -> Option<i64> {
+        self.on_writer(|writer| writer.insert_review(review))
+    }
+
+    /// Copies the author's decision onto review row `id` (AD-88), when the
+    /// registry is writable.
+    pub fn copy_author_decision(
+        &mut self,
+        id: i64,
+        decision: officina_core::registry::types::AuthorDecision,
+        reason: Option<officina_core::registry::types::AuthorReason>,
+        at_ms: i64,
+    ) {
+        self.on_writer(|writer| writer.copy_author_decision(id, decision, reason, at_ms));
+    }
+
     /// The registry's hourly pass, when the registry is writable: read-only
     /// or unavailable, nothing is ingested and nothing deleted.
     pub fn hourly_pass(&mut self, ctx: &IngestContext, now_ms: i64) -> Option<PassReport> {

@@ -153,6 +153,23 @@ test.describe("auto requests", () => {
     await expect(card).toBeVisible();
   });
 
+  // Story 5.13 AC 5 (AD-87, D-143): the card says why the request is the
+  // author's, the precheck's cause or auto approval off; a human card says
+  // nothing of it.
+  test("an auto request's card says why it is yours", async ({ page }) => {
+    const withCause = (cause: "no_session_id" | "auto_approval_off") => ({
+      ...autoBoard,
+      approvals: autoBoard.approvals.map((a) => (a.id === auto.id ? { ...a, escalation: cause } : a)),
+    });
+    await openBoard(page, withCause("auto_approval_off"));
+    const line = autoCard(page).getByTestId("approval-escalation");
+    await expect(line).toContainText("auto approval is off");
+    await page.evaluate((b) => window.__officinaPushBoard?.(b), withCause("no_session_id"));
+    await expect(line).toContainText("names no session");
+    const human = autoBoard.approvals.find((a) => a.class === "human")!;
+    await expect(page.locator(`[data-id="${human.id}"]`).getByTestId("approval-escalation")).toHaveCount(0);
+  });
+
   for (const theme of ["light", "dark"] as const) {
     test(`the approval card is the same in both themes but for its tokens (${theme})`, async ({ page }) => {
       await page.emulateMedia({ colorScheme: theme });

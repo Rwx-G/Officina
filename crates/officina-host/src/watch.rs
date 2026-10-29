@@ -29,6 +29,7 @@ use crate::registry::store::onedrive_roots_from_env;
 use crate::registry::triage::{CallLimits, NextCall, TriageJob, TriageWorker, binary_stamp};
 use crate::registry::window::WindowRegistry;
 use crate::relay::home::RelayHome;
+use crate::relay::review::{ReviewEnv, ReviewWorker, Reviews};
 use crate::relay::view::{credential_presence, read_view_with};
 
 /// How often the watched paths are stat'ed. A handful of `metadata` calls:
@@ -811,6 +812,9 @@ fn run<E: Emit>(
     if worker.is_none() {
         registry.triage_worker_gone(now_ms());
     }
+    // No `review` thread: no request is reviewed, and every `auto` request
+    // is the author's, as a `human` one.
+    let mut reviews = Reviews::new(ReviewWorker::spawn().ok());
     let mut watched = WatchedPaths::new(collector);
     let mut plan = RefreshPlan::new(Instant::now);
     let mut presence: BTreeMap<String, bool> = BTreeMap::new();
@@ -873,6 +877,7 @@ fn run<E: Emit>(
         if let Some(worker) = &mut worker {
             pump_triage(collector, &mut registry, worker, outputs);
         }
+        pump_review(collector, &mut registry, &mut reviews, outputs);
         if due.relay {
             collector.keep_known_projects(now_ms());
             if due.credentials {
@@ -1058,6 +1063,34 @@ fn pump_triage<E: Emit>(
         registry.triage_worker_gone(now_ms());
     }
     if recorded || registry.triage_state() != before {
+        publish_both(collector, registry, outputs, false);
+    }
+}
+
+/// One tick of the `auto` review (AD-86): new requests prechecked, results
+/// recorded, the next call started; never a wait. The board is rebuilt
+/// when what it shows of the `auto` requests changed.
+fn pump_review<E: Emit>(
+    collector: &mut Collector,
+    registry: &mut WindowRegistry,
+    reviews: &mut Reviews,
+    outputs: &mut Outputs<E>,
+) {
+    let board = outputs.board.current();
+    let paths = collector.paths().clone();
+    let env = ReviewEnv {
+        relay: collector.relay(),
+        officina_home: &paths.officina_home,
+        claude: collector.claude(),
+        config_dir: paths.claude_config_override.as_deref(),
+        base_env: collector.base_env(),
+        no_excerpts: collector.no_excerpts(),
+        five_hour_used: collector.five_hour_used(),
+        board: board.as_ref(),
+        timeout: collector.review_timeout(),
+    };
+    if reviews.tick(&env, registry, now_ms()) {
+        collector.set_auto_escalations(reviews.escalations().clone());
         publish_both(collector, registry, outputs, false);
     }
 }

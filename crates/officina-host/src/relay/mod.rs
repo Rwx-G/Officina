@@ -15,6 +15,8 @@ pub mod home;
 pub mod http;
 pub mod journal;
 pub mod known_projects;
+#[cfg(feature = "window-authority")]
+pub mod review;
 pub mod run;
 pub mod tree;
 pub mod view;

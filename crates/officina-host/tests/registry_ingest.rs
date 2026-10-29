@@ -625,6 +625,56 @@ fn triage_workdir_lines_are_skipped() {
     assert_eq!(sessions, ["s1"]);
 }
 
+/// Story 5.13 AC 10 (AD-43 as amended, D-166): lines from the review's
+/// folder never reach the registry, however the path is spelled.
+#[test]
+fn review_workdir_lines_are_skipped() {
+    let home = Home::new();
+    let workdir = home.home.join("review").join("empty");
+    let backslash = workdir.to_string_lossy().replace('/', "\\");
+    let forward = backslash.replace('\\', "/");
+    home.append(
+        &day_file(NOW),
+        &[
+            prompt("r1", NOW - 2, &backslash, "review this"),
+            prompt("r2", NOW - 1, &forward.to_ascii_uppercase(), "review this"),
+            prompt("s1", NOW, CWD, "real work"),
+        ],
+    );
+    let mut writer = home.writer(NOW);
+    let report = writer.ingest(&home.ctx(), NOW).unwrap();
+    assert_eq!(report.lines, 1);
+    let sessions: Vec<String> = writer
+        .sessions()
+        .unwrap()
+        .into_iter()
+        .map(|s| s.session_id)
+        .collect();
+    assert_eq!(sessions, ["s1"]);
+}
+
+/// Story 5.13 AC 10 (D-166): only the review's own folder is skipped; a
+/// session working elsewhere under `review/` is recorded like any other.
+#[test]
+fn other_lines_under_the_review_folder_are_recorded() {
+    let home = Home::new();
+    let elsewhere = home.home.join("review").join("notes");
+    home.append(
+        &day_file(NOW),
+        &[prompt("n1", NOW, &elsewhere.to_string_lossy(), "notes")],
+    );
+    let mut writer = home.writer(NOW);
+    let report = writer.ingest(&home.ctx(), NOW).unwrap();
+    assert_eq!(report.lines, 1);
+    let sessions: Vec<String> = writer
+        .sessions()
+        .unwrap()
+        .into_iter()
+        .map(|s| s.session_id)
+        .collect();
+    assert_eq!(sessions, ["n1"]);
+}
+
 /// Adversarial pass: an entry named like an event file that cannot be read
 /// (a folder, or a file deleted between the listing and the read, as an
 /// older `board --json` still installed would do) must not stop the pass,

@@ -612,11 +612,15 @@ pub fn run(collector: &Collector, exe: &Path) -> Vec<Check> {
     checks.extend(registry_section(registry));
     checks.push(check_floor(collector));
     let system_dir = crate::relay::home::system_dir();
+    let reviews = registry_store::open_reader(&paths.officina_home, &onedrive_roots)
+        .ok()
+        .and_then(|reader| reader.review_rows(now - DAY_MS).ok());
     checks.extend(relay_doctor::checks(&RelayDoctor {
         home: &relay,
         doctor_floor: collector.floor().path.as_deref(),
         system_dir: system_dir.as_deref(),
         now_ms: now,
+        reviews: reviews.as_deref(),
     }));
     checks
 }

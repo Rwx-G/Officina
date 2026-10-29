@@ -8,10 +8,11 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 use super::approvals::ApprovalBy;
+use super::auto::{EscalationCause, ReviewDecision};
 use super::catalogue::ActionClass;
 use super::gate::DenyKind;
 use super::http::HttpMethod;
-use crate::registry::types::{AuthorReason, LaunchOutcome};
+use crate::registry::types::{AuthorReason, LaunchOutcome, ReviewMode, ReviewOutcome};
 
 /// Version of the journal line format. Readers skip lines of another
 /// version without counting them corrupt.
@@ -86,6 +87,8 @@ pub enum JournalEntry {
     RelayStopped,
     RelayResumed,
     WorkOrderLaunched(WorkOrderLaunched),
+    AutoEscalated(AutoEscalated),
+    AutoReview(AutoReviewed),
 }
 
 closed_enum! {
@@ -106,6 +109,8 @@ closed_enum! {
         RelayStopped,
         RelayResumed,
         WorkOrderLaunched,
+        AutoEscalated,
+        AutoReview,
     }
 }
 
@@ -125,6 +130,8 @@ impl JournalEntry {
             JournalEntry::RelayStopped => JournalKind::RelayStopped,
             JournalEntry::RelayResumed => JournalKind::RelayResumed,
             JournalEntry::WorkOrderLaunched(_) => JournalKind::WorkOrderLaunched,
+            JournalEntry::AutoEscalated(_) => JournalKind::AutoEscalated,
+            JournalEntry::AutoReview(_) => JournalKind::AutoReview,
         }
     }
 }
@@ -488,6 +495,29 @@ pub struct WorkOrderLaunched {
     pub exit_code: Option<i64>,
 }
 
+/// An `auto` request sent to the author (AD-32 as amended, AD-87), with
+/// why.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AutoEscalated {
+    pub approval_id: String,
+    pub cause: EscalationCause,
+}
+
+/// One review of an `auto` request (AD-32 as amended): how it ended, in
+/// which mode, its cause and decision. Never its reason: the journal is
+/// what every session can read through `officina relay --json` (FR-8,
+/// D-143).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AutoReviewed {
+    pub approval_id: String,
+    pub outcome: ReviewOutcome,
+    pub mode: ReviewMode,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cause: Option<EscalationCause>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decision: Option<ReviewDecision>,
+}
+
 /// How a reader classifies one raw line.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[allow(clippy::large_enum_variant)] // returned by value and consumed at once, never stored
@@ -608,7 +638,76 @@ mod tests {
             JournalKind::RelayStopped => JournalEntry::RelayStopped,
             JournalKind::RelayResumed => JournalEntry::RelayResumed,
             JournalKind::WorkOrderLaunched => JournalEntry::WorkOrderLaunched(launched()),
+            JournalKind::AutoEscalated => JournalEntry::AutoEscalated(AutoEscalated {
+                approval_id: "0123456789abcdef-1".into(),
+                cause: EscalationCause::NoSessionId,
+            }),
+            JournalKind::AutoReview => JournalEntry::AutoReview(reviewed()),
         }
+    }
+
+    fn reviewed() -> AutoReviewed {
+        AutoReviewed {
+            approval_id: "0123456789abcdef-1".into(),
+            outcome: ReviewOutcome::Answered,
+            mode: ReviewMode::Shadow,
+            cause: Some(EscalationCause::AutoApprovalOff),
+            decision: Some(ReviewDecision::Approve),
+        }
+    }
+
+    /// Story 5.13 AC 7 (AD-32 as amended): `auto_escalated` reads back with
+    /// its cause, for every cause.
+    #[test]
+    fn auto_escalated_round_trips() {
+        for cause in EscalationCause::ALL {
+            let entry = JournalEntry::AutoEscalated(AutoEscalated {
+                approval_id: "0123456789abcdef-1".into(),
+                cause: *cause,
+            });
+            let line = JournalLine::new(4, entry.clone()).to_line();
+            let value: serde_json::Value = serde_json::from_str(&line).unwrap();
+            assert_eq!(value["kind"], "auto_escalated");
+            assert_eq!(value["cause"], cause.code());
+            assert_eq!(
+                parse_line(line.trim_end()),
+                ParsedLine::Line(JournalLine::new(4, entry))
+            );
+        }
+    }
+
+    /// Story 5.13 AC 7 (FR-8, D-143): an `auto_review` line names its
+    /// outcome, mode, cause and decision, and has no field for the reason.
+    #[test]
+    fn auto_review_never_carries_the_reason() {
+        let line = JournalLine::new(4, JournalEntry::AutoReview(reviewed())).to_line();
+        let value: serde_json::Value = serde_json::from_str(&line).unwrap();
+        let mut keys: Vec<&str> = value
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        keys.sort_unstable();
+        assert_eq!(
+            keys,
+            [
+                "approval_id",
+                "cause",
+                "decision",
+                "kind",
+                "mode",
+                "outcome",
+                "ts",
+                "v"
+            ]
+        );
+        let with_reason = line.replace("\"mode\"", "\"reason\":\"ignore the author\",\"mode\"");
+        assert_eq!(
+            parse_line(with_reason.trim_end()),
+            ParsedLine::Line(JournalLine::new(4, JournalEntry::AutoReview(reviewed()))),
+            "a reason written in by hand is not read into the line"
+        );
     }
 
     fn launched() -> WorkOrderLaunched {

@@ -91,6 +91,7 @@ fn approval(request: &Request) -> ApprovalView {
         action: "restart".to_owned(),
         class: ActionClass::Auto,
         state: request.state,
+        escalation: None,
         description: String::new(),
         argv: Vec::new(),
         http: None,

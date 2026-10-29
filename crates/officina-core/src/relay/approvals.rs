@@ -12,6 +12,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 use super::argv;
+use super::auto::EscalationCause;
 use super::catalogue::{
     ActionClass, ApprovedCatalogue, action_from_canonical, credentials_from_canonical,
 };
@@ -594,6 +595,11 @@ pub struct ApprovalView {
     pub class: ActionClass,
     /// [`ApprovalState::Pending`] unless a live review is deciding it.
     pub state: ApprovalState,
+    /// Why a pending `auto` request is the author's, as the board shows it
+    /// (AD-87): before he decides, only a cause found before any call or
+    /// `auto_approval_off`, never what a review answered (D-143); `None`
+    /// for a `human` request, or before the window looked at it.
+    pub escalation: Option<EscalationCause>,
     /// From the approved catalogue; empty for an invalid request.
     pub description: String,
     /// Rebuilt from the approved catalogue (D-27); empty for an invalid
@@ -725,6 +731,7 @@ pub fn pending(
                 } else {
                     ApprovalState::Pending
                 },
+                escalation: None,
                 description,
                 argv,
                 http,

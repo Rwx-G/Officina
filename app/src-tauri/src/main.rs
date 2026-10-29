@@ -742,6 +742,7 @@ mod tests {
             action: "restart".to_owned(),
             class: officina_core::relay::catalogue::ActionClass::Human,
             state: officina_core::relay::approvals::ApprovalState::Pending,
+            escalation: None,
             description: String::new(),
             argv: Vec::new(),
             http: None,

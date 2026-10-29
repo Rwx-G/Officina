@@ -13,7 +13,9 @@ use crate::events::EventLine;
 use crate::floor::{ALERT_AFTER_MINUTES_DEFAULT, Priority, ProjectColor};
 use crate::quota::{QuotaFile, QuotaWindow};
 use crate::registry::types::{RegistryReport, Settlement, SubjectRef};
-use crate::relay::approvals::ApprovalView;
+use crate::relay::approvals::{ApprovalState, ApprovalView};
+use crate::relay::auto::EscalationCause;
+use crate::relay::catalogue::ActionClass;
 use crate::scene::{SceneFacts, SceneState};
 use crate::untrusted::Untrusted;
 
@@ -25,6 +27,28 @@ use crate::untrusted::Untrusted;
 /// state (v0.5, AD-92), extended under this number by the later v0.5
 /// stories (P-26).
 pub const BOARD_SCHEMA: u32 = 5;
+
+/// What a pending `auto` request's card says of why it is the author's
+/// (AD-87, D-143): a cause found before any call as it is; anything a
+/// call came to as `auto_approval_off`, the reason every `auto` request
+/// waits for the author while approval is off, so a review's answer never
+/// shows before the author decides.
+///
+/// ```
+/// use officina_core::board::shown_escalation;
+/// use officina_core::relay::auto::EscalationCause;
+/// assert_eq!(shown_escalation(Some(EscalationCause::NoSessionId)), Some(EscalationCause::NoSessionId));
+/// assert_eq!(shown_escalation(Some(EscalationCause::ReviewRejected)), Some(EscalationCause::AutoApprovalOff));
+/// ```
+pub fn shown_escalation(cause: Option<EscalationCause>) -> Option<EscalationCause> {
+    cause.map(|cause| {
+        if cause.before_any_call() {
+            cause
+        } else {
+            EscalationCause::AutoApprovalOff
+        }
+    })
+}
 
 /// Sessions that ended, failed or finished are listed for this long.
 pub const DONE_WINDOW_MS: i64 = 24 * 60 * 60 * 1000;
@@ -368,6 +392,10 @@ pub struct BoardInput {
     pub no_excerpts: bool,
     /// The pending approval requests, from `relay::approvals::pending`.
     pub approvals: Vec<ApprovalView>,
+    /// Why each `auto` request the window looked at is the author's, by
+    /// approval id (AD-87): the board shows only what [`shown_escalation`]
+    /// lets through.
+    pub auto_escalations: BTreeMap<String, EscalationCause>,
     /// The registry's state as the caller found it.
     pub registry: Option<RegistryReport>,
     /// The subject of each filed session, by session id, from the registry
@@ -976,6 +1004,10 @@ pub fn build_board(input: &BoardInput, now_ms: i64) -> Board {
                     .find(|card| card.session_id.as_deref() == Some(sid))
                     .map(|card| card.name.clone())
             }),
+            escalation: (approval.class == ActionClass::Auto
+                && approval.state == ApprovalState::Pending)
+                .then(|| shown_escalation(input.auto_escalations.get(&approval.id).copied()))
+                .flatten(),
             ..approval.clone()
         })
         .collect();
@@ -1798,6 +1830,69 @@ values = [\"web01\"]
             assert_eq!(board.waiting_count, 1, "only the pending one waits");
         }
 
+        /// Story 5.13 AC 5 (AD-88, D-143): a pending `auto` request whose
+        /// review answered shows `auto_approval_off`, and the board carries
+        /// no review field and no review text; a cause found before any call
+        /// shows as it is.
+        #[test]
+        fn a_pending_auto_request_with_a_stored_review_carries_no_review_field() {
+            use crate::relay::auto::EscalationCause;
+            use crate::relay::catalogue::ActionClass;
+            let approved = approved();
+            let dirs = BTreeMap::from([("lab".to_owned(), "C:/path/to/Lab".to_owned())]);
+            let ctx = ApprovalContext {
+                approved: Some(&approved),
+                project_dirs: &dirs,
+                system_dir: "C:/Windows/System32",
+            };
+            let all = files(vec![
+                request(&approved, "restart", "web01", NOW - MIN, None),
+                request(&approved, "restart", "db01", NOW - MIN, None),
+            ]);
+            let mut approvals = pending(&all, &ctx, &DryRunInputs::default(), NOW);
+            for approval in &mut approvals {
+                approval.class = ActionClass::Auto;
+            }
+            let reviewed = approvals[0].id.clone();
+            let prechecked = approvals[1].id.clone();
+            let board = build_board(
+                &BoardInput {
+                    approvals,
+                    auto_escalations: BTreeMap::from([
+                        (reviewed.clone(), EscalationCause::ReviewRejected),
+                        (prechecked.clone(), EscalationCause::NoSessionId),
+                    ]),
+                    ..Default::default()
+                },
+                NOW,
+            );
+            let by_id = |id: &str| board.approvals.iter().find(|a| a.id == id).unwrap();
+            assert_eq!(
+                by_id(&reviewed).escalation,
+                Some(EscalationCause::AutoApprovalOff)
+            );
+            assert_eq!(
+                by_id(&prechecked).escalation,
+                Some(EscalationCause::NoSessionId)
+            );
+            let text = serde_json::to_string(&board).unwrap();
+            for review_only in EscalationCause::ALL
+                .iter()
+                .filter(|c| !c.before_any_call() && **c != EscalationCause::AutoApprovalOff)
+            {
+                assert!(!text.contains(review_only.code()), "{review_only:?}");
+            }
+            for field in [
+                "\"decision\"",
+                "\"reason\"",
+                "\"rule_baseline\"",
+                "\"review_id\"",
+                "\"mode\"",
+            ] {
+                assert!(!text.contains(field), "{field}");
+            }
+        }
+
         #[test]
         fn invalid_requests_do_not_count() {
             let approved = approved();
@@ -2124,6 +2219,7 @@ values = [\"web01\"]
                 action: "restart".into(),
                 class: crate::relay::catalogue::ActionClass::Human,
                 state: crate::relay::approvals::ApprovalState::Pending,
+                escalation: None,
                 description: String::new(),
                 argv: Vec::new(),
                 http: None,

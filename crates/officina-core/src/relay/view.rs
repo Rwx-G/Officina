@@ -447,7 +447,9 @@ fn recent(lines: &[JournalLine], now_ms: i64) -> Vec<RecentEntry> {
                 JournalEntry::RelayResumed => RecentEvent::RelayResumed,
                 // A launch is no relay entry: the Orchestrator view's
                 // history shows work orders, from the registry (AD-92).
-                JournalEntry::WorkOrderLaunched(_) => return None,
+                JournalEntry::WorkOrderLaunched(_)
+                | JournalEntry::AutoEscalated(_)
+                | JournalEntry::AutoReview(_) => return None,
             };
             Some(RecentEntry {
                 ts: line.ts,
@@ -908,7 +910,9 @@ mod tests {
                 JournalKind::RelayResumed => JournalEntry::RelayResumed,
                 // Left out of the relay view, which `recent` checks by its
                 // match: work orders show in the Orchestrator view.
-                JournalKind::WorkOrderLaunched => continue,
+                JournalKind::WorkOrderLaunched
+                | JournalKind::AutoEscalated
+                | JournalKind::AutoReview => continue,
             };
             let lines = [JournalLine::new(NOW, entry)];
             let view = build(&inputs(SnapshotState::Missing, FloorRead::Missing, &lines));
@@ -918,6 +922,46 @@ mod tests {
                 other => serde_json::to_value(other).unwrap(),
             };
             assert_eq!(tag, expected, "{kind:?}");
+        }
+    }
+
+    /// Story 5.13 AC 5 (D-143): a review's lines never reach the Relay view
+    /// of a request the author has not decided: no entry, no cause a call
+    /// came to, no decision.
+    #[test]
+    fn an_undecided_request_shows_no_review_line() {
+        use crate::registry::types::{ReviewMode, ReviewOutcome};
+        use crate::relay::auto::{EscalationCause, ReviewDecision};
+        use crate::relay::journal::{AutoEscalated, AutoReviewed};
+        let lines = [
+            JournalLine::new(
+                NOW - 2,
+                JournalEntry::AutoReview(AutoReviewed {
+                    approval_id: "0123456789abcdef-1".to_owned(),
+                    outcome: ReviewOutcome::Answered,
+                    mode: ReviewMode::Shadow,
+                    cause: Some(EscalationCause::ReviewRejected),
+                    decision: Some(ReviewDecision::Reject),
+                }),
+            ),
+            JournalLine::new(
+                NOW - 1,
+                JournalEntry::AutoEscalated(AutoEscalated {
+                    approval_id: "0123456789abcdef-1".to_owned(),
+                    cause: EscalationCause::ReviewRejected,
+                }),
+            ),
+        ];
+        let view = build(&inputs(SnapshotState::Missing, FloorRead::Missing, &lines));
+        assert!(view.recent.is_empty());
+        let text = serde_json::to_string(&view).unwrap();
+        for hidden in [
+            "review_rejected",
+            "\"decision\"",
+            "auto_review",
+            "auto_escalated",
+        ] {
+            assert!(!text.contains(hidden), "{hidden}");
         }
     }
 

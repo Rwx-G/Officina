@@ -6,6 +6,7 @@ import type { ActionIssue } from "./generated/ActionIssue";
 import type { AnomalyKind } from "./generated/AnomalyKind";
 import type { ApprovalView } from "./generated/ApprovalView";
 import type { AuthorReason } from "./generated/AuthorReason";
+import type { EscalationCause } from "./generated/EscalationCause";
 import type { DenyKind } from "./generated/DenyKind";
 import type { GateFault } from "./generated/GateFault";
 import type { IssueTable } from "./generated/IssueTable";
@@ -55,6 +56,28 @@ const REJECT_REASON_TEXT: Record<AuthorReason, string> = {
 };
 
 export const REJECT_REASONS = Object.entries(REJECT_REASON_TEXT) as [AuthorReason, string][];
+
+/** Why an `auto` request is the author's, as its card says it (AD-87).
+ *  Before he decides, the board only ever sends a cause found before any
+ *  call or `auto_approval_off` (D-143); the other texts serve the Relay
+ *  view once he decided. */
+export const ESCALATION_TEXT: Record<EscalationCause, string> = {
+  claude_not_found: "no claude binary was found, so no review ran",
+  claude_shim: "claude is not the native claude.exe, so no review ran",
+  workdir_not_empty: "the review's empty folder holds a file, so no review ran",
+  no_session_id: "the request names no session, so no review ran",
+  no_excerpts: "excerpts are off, so nothing may be sent to a review",
+  quota_high: "the 5-hour window is nearly spent, so no review ran",
+  hourly_cap: "this action reached its approvals for the hour",
+  budget_spent: "the review's own budget is spent for now",
+  review_config_invalid: "the [auto_review] table fails validation",
+  call_failed: "the review call failed",
+  call_timeout: "the review did not answer in time",
+  invalid_answer: "the review's answer did not fit its schema",
+  review_rejected: "the review rejected it",
+  review_escalated: "the review left it to you",
+  auto_approval_off: "auto approval is off; its review runs in shadow and approves nothing",
+};
 
 /** What an issue's table is called before the entry's name (D-132); a key
  *  or a single table is named by itself. */

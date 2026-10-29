@@ -2,6 +2,7 @@
 import type { ActionClass } from "./ActionClass";
 import type { ApprovalState } from "./ApprovalState";
 import type { DryRunView } from "./DryRunView";
+import type { EscalationCause } from "./EscalationCause";
 import type { HttpRequestView } from "./HttpRequestView";
 import type { TreeBinding } from "./TreeBinding";
 
@@ -19,6 +20,13 @@ class: ActionClass,
  * [`ApprovalState::Pending`] unless a live review is deciding it.
  */
 state: ApprovalState, 
+/**
+ * Why a pending `auto` request is the author's, as the board shows it
+ * (AD-87): before he decides, only a cause found before any call or
+ * `auto_approval_off`, never what a review answered (D-143); `None`
+ * for a `human` request, or before the window looked at it.
+ */
+escalation: EscalationCause | null, 
 /**
  * From the approved catalogue; empty for an invalid request.
  */

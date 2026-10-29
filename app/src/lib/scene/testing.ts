@@ -77,6 +77,7 @@ export function approval(of: Card, requestedAt: number, valid = true): ApprovalV
     action: "deploy",
     class: "human",
     state: "pending",
+    escalation: null,
     description: "",
     argv: [],
     http: null,

@@ -9,7 +9,8 @@ use std::path::{Path, PathBuf};
 
 use officina_core::dates::{dated_file_day, utc_date};
 use officina_core::registry::retention::{
-    COPIES_KEPT, TRIAGE_CALL_TTL_MS, WORK_ORDER_TTL_MS, event_file_deletable, excerpt_cutoff, kept,
+    AUTO_REVIEW_TTL_MS, COPIES_KEPT, TRIAGE_CALL_TTL_MS, WORK_ORDER_TTL_MS, event_file_deletable,
+    excerpt_cutoff, kept,
 };
 
 use super::ingest::{IngestContext, IngestReport};
@@ -39,6 +40,10 @@ pub struct PassReport {
     pub deleted_work_orders: usize,
     /// `work_order` rows whose `printed` and `error` were cleared (D-134).
     pub cleared_work_order_texts: usize,
+    /// `auto_review` rows past their 90 days (D-134).
+    pub deleted_auto_reviews: usize,
+    /// `auto_review` rows whose reason was cleared (D-134).
+    pub cleared_review_reasons: usize,
     /// False when a reader kept the WAL from being truncated.
     pub checkpointed: bool,
 }
@@ -99,6 +104,8 @@ impl Writer {
         report.deleted_calls = self.retire_triage_calls(now_ms)?;
         (report.deleted_work_orders, report.cleared_work_order_texts) =
             self.retire_work_orders(now_ms)?;
+        (report.deleted_auto_reviews, report.cleared_review_reasons) =
+            self.retire_auto_reviews(now_ms)?;
         report.checkpointed = self.checkpoint()?;
         Ok(report)
     }
@@ -214,6 +221,27 @@ impl Writer {
         let cleared = tx.execute(
             "UPDATE work_order SET printed = NULL, error = NULL
              WHERE launched_at_ms <= ?1 AND (printed IS NOT NULL OR error IS NOT NULL)",
+            [excerpt_cutoff(now_ms)],
+        )?;
+        tx.commit()?;
+        Ok((deleted, cleared))
+    }
+
+    /// Deletes the `auto_review` rows requested [`AUTO_REVIEW_TTL_MS`] or
+    /// more before `now_ms`, and clears the reason, model text, of those
+    /// requested
+    /// [`EXCERPT_TTL_MS`](officina_core::registry::retention::EXCERPT_TTL_MS)
+    /// or more before it (D-134). Returns the rows deleted and the rows
+    /// whose reason was cleared.
+    fn retire_auto_reviews(&mut self, now_ms: i64) -> Result<(usize, usize), RegistryError> {
+        let tx = self.conn.transaction()?;
+        let deleted = tx.execute(
+            "DELETE FROM auto_review WHERE requested_at_ms <= ?1",
+            [now_ms - AUTO_REVIEW_TTL_MS],
+        )?;
+        let cleared = tx.execute(
+            "UPDATE auto_review SET reason = NULL
+             WHERE requested_at_ms <= ?1 AND reason IS NOT NULL",
             [excerpt_cutoff(now_ms)],
         )?;
         tx.commit()?;

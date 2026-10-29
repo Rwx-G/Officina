@@ -4,6 +4,7 @@
 
 #![allow(dead_code)] // each test file uses a different subset of the helpers
 
+pub mod auto;
 pub mod fake_output;
 #[path = "../../../../tests/support/git.rs"]
 pub mod git_support;

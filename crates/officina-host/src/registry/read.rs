@@ -143,6 +143,11 @@ impl Reader {
         Reader { conn, location }
     }
 
+    /// The read-only connection, for the readers of other modules.
+    pub(crate) fn conn(&self) -> &Connection {
+        &self.conn
+    }
+
     /// Where the registry lies; a synced folder names what to exclude.
     pub fn location(&self) -> &Location {
         &self.location

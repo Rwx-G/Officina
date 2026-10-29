@@ -37,6 +37,23 @@ project uses [Semantic Versioning](https://semver.org/).
   `already_decided`. The approval card and the session file show the class;
   `run --list` shows every action's class; doctor lists the `auto` actions
   with their check and cap.
+- The review of `auto` requests, in blind shadow (v0.5, story 5.13): each
+  new `auto` request is prechecked and either goes to the author at once
+  with its cause (`EscalationCause`: the binary, the session, privacy,
+  quota, the hourly cap, the review's own budget, configuration) or is
+  reviewed by a contained call on a `review` thread of its own, paced 5 s
+  apart, the cap and budget checked again right before each call. The
+  call sees the catalogue's rebuild of the request, the subject, the
+  author's last prompt, the last ten runs and the check's status, never
+  the session's answers, and can only answer approve, reject or escalate.
+  Auto approval is off: the card says so at once, the review's answer
+  stays hidden until the author decides and writes no approval. Each
+  review is an `auto_review` row with the rule baseline and the author's
+  decision copied onto it, journaled `auto_review` and `auto_escalated`
+  (never the reason), kept 90 days, its reason cleared with the excerpts.
+  Doctor reports the review's model, today's requests and calls against
+  the budget, and an invalid `[auto_review]` table. The triage call also
+  turns the advisor tool off (`CLAUDE_CODE_DISABLE_ADVISOR_TOOL=1`).
 - `officina doctor` names each issue's table (`template bump`, `action
   apply`), counts valid templates, and lists templates, credentials and the
   review model in a pending change.

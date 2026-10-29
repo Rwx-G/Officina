@@ -24,6 +24,7 @@ use crate::focus::is_valid_attach_id;
 use crate::orders::work_order::WorkOrder;
 use crate::registry::ingestion::TRIAGE_DIR;
 use crate::registry::triage_call::{CALL_TIMEOUT_MS, STDOUT_CAP_BYTES, WORKDIR_NAME};
+use crate::relay::auto::{REVIEW_DIR, REVIEW_TIMEOUT_MS};
 use crate::relay::template::ModelAlias;
 
 closed_enum! {
@@ -42,6 +43,8 @@ closed_enum! {
         TriageCall,
         /// `claude --bg` with a validated work order's prompt (FR-3).
         WorkOrder,
+        /// The contained review of one `auto` request (AD-86).
+        ReviewCall,
     }
 }
 
@@ -58,7 +61,7 @@ impl VectorKind {
     pub const fn is_launch(self) -> bool {
         match self {
             VectorKind::Agents | VectorKind::Version | VectorKind::Attach => false,
-            VectorKind::TriageCall | VectorKind::WorkOrder => true,
+            VectorKind::TriageCall | VectorKind::WorkOrder | VectorKind::ReviewCall => true,
         }
     }
 
@@ -69,7 +72,7 @@ impl VectorKind {
             | VectorKind::Version
             | VectorKind::Attach
             | VectorKind::WorkOrder => EnvRule::Session,
-            VectorKind::TriageCall => EnvRule::Contained,
+            VectorKind::TriageCall | VectorKind::ReviewCall => EnvRule::Contained,
         }
     }
 }
@@ -120,6 +123,9 @@ closed_enum! {
     pub enum OfficinaDir {
         /// `<home>/triage/empty` (AD-51), skipped by ingestion (AD-43).
         TriageWorkdir,
+        /// `<home>/review/empty` (AD-79), skipped by ingestion (AD-43 as
+        /// amended, D-166).
+        ReviewWorkdir,
     }
 }
 
@@ -128,6 +134,7 @@ impl OfficinaDir {
     pub const fn segments(self) -> &'static [&'static str] {
         match self {
             OfficinaDir::TriageWorkdir => &[TRIAGE_DIR, WORKDIR_NAME],
+            OfficinaDir::ReviewWorkdir => &[REVIEW_DIR, WORKDIR_NAME],
         }
     }
 }
@@ -296,6 +303,12 @@ pub const WORK_ORDER_DEADLINE_MS: u64 = 60_000;
 /// it mid-call.
 pub const CONTAINED_SETTINGS: &str = r#"{"crossSessionInbound":"refuse"}"#;
 
+/// Set to `1` on Officina's own calls (D-692): it removes the server-side
+/// `advisor` tool E24 saw in a contained session's requests, a tool beyond
+/// the call's and another model fed the call's text (environment variables
+/// page).
+pub const ADVISOR_OFF_VAR: &str = "CLAUDE_CODE_DISABLE_ADVISOR_TOOL";
+
 /// True when a contained kind receives `name` from the base: one of
 /// [`CONTAINED_ENV_SYSTEM`], [`CONTAINED_ENV_NETWORK`] or
 /// [`CONTAINED_ENV_AUTH`], ignoring ASCII case. [`CONFIG_DIR_VAR`] and
@@ -386,7 +399,8 @@ impl BackgroundId {
 
 /// One `claude` process, as data. Its fields are private: the per-kind
 /// builders of this module ([`agents`], [`version`], [`attach`],
-/// [`triage_call`], [`work_order`]) are its only constructors.
+/// [`triage_call`], [`work_order`], [`review_call`]) are its only
+/// constructors.
 ///
 /// ```compile_fail
 /// use officina_core::spawn::{ClaudeVector, Console, CwdRule, EnvRule, StdinRule, VectorKind};
@@ -521,6 +535,40 @@ fn env_set(config_dir: Option<&str>) -> Vec<(String, String)> {
         .collect()
 }
 
+/// [`env_set`], then [`ADVISOR_OFF_VAR`]` = 1`: what a contained call sets.
+fn contained_env_set(config_dir: Option<&str>) -> Vec<(String, String)> {
+    let mut set = env_set(config_dir);
+    set.push((ADVISOR_OFF_VAR.to_owned(), "1".to_owned()));
+    set
+}
+
+/// The print-mode flags both contained calls pass before their schema
+/// (AD-51 as amended, E16): `model`, no tool, no MCP server, no settings
+/// source, the inbox refused, no session persistence, a JSON answer.
+fn contained_args(model: ModelAlias, schema: &serde_json::Value) -> Vec<String> {
+    owned(&[
+        "-p",
+        "--model",
+        model.code(),
+        "--tools",
+        "",
+        "--strict-mcp-config",
+        "--mcp-config",
+        r#"{"mcpServers":{}}"#,
+        "--setting-sources",
+        "",
+        "--settings",
+        CONTAINED_SETTINGS,
+        "--no-session-persistence",
+        "--output-format",
+        "json",
+        "--json-schema",
+    ])
+    .into_iter()
+    .chain([schema.to_string()])
+    .collect()
+}
+
 fn owned(args: &[&str]) -> Vec<String> {
     args.iter().map(|a| (*a).to_owned()).collect()
 }
@@ -594,30 +642,9 @@ pub fn triage_call(
     config_dir: Option<&str>,
     officina_home: &str,
 ) -> ClaudeVector {
-    let args = owned(&[
-        "-p",
-        "--model",
-        model.code(),
-        "--tools",
-        "",
-        "--strict-mcp-config",
-        "--mcp-config",
-        r#"{"mcpServers":{}}"#,
-        "--setting-sources",
-        "",
-        "--settings",
-        CONTAINED_SETTINGS,
-        "--no-session-persistence",
-        "--output-format",
-        "json",
-        "--json-schema",
-    ])
-    .into_iter()
-    .chain([schema.to_string()])
-    .collect();
     ClaudeVector {
         kind: VectorKind::TriageCall,
-        args,
+        args: contained_args(model, schema),
         cwd: CwdRule::Officina {
             home: officina_home.to_owned(),
             dir: OfficinaDir::TriageWorkdir,
@@ -629,8 +656,38 @@ pub fn triage_call(
             stderr_cap: STDERR_CAP_BYTES,
         }),
         deadline_ms: Some(CALL_TIMEOUT_MS),
-        env_set: env_set(config_dir),
+        env_set: contained_env_set(config_dir),
         env_rule: VectorKind::TriageCall.env_rule(),
+        stdin_data: Vec::new(),
+    }
+}
+
+/// The review of one `auto` request (AD-79, AD-86): the triage call's flags
+/// with the floor's review `model` and the review's `schema`, in
+/// `<officina_home>/review/empty`, its data on stdin, within
+/// [`REVIEW_TIMEOUT_MS`].
+pub fn review_call(
+    model: ModelAlias,
+    schema: &serde_json::Value,
+    config_dir: Option<&str>,
+    officina_home: &str,
+) -> ClaudeVector {
+    ClaudeVector {
+        kind: VectorKind::ReviewCall,
+        args: contained_args(model, schema),
+        cwd: CwdRule::Officina {
+            home: officina_home.to_owned(),
+            dir: OfficinaDir::ReviewWorkdir,
+        },
+        console: Console::None,
+        stdin: StdinRule::Data,
+        capture: Some(Capture {
+            stdout_cap: STDOUT_CAP_BYTES,
+            stderr_cap: STDERR_CAP_BYTES,
+        }),
+        deadline_ms: Some(REVIEW_TIMEOUT_MS),
+        env_set: contained_env_set(config_dir),
+        env_rule: VectorKind::ReviewCall.env_rule(),
         stdin_data: Vec::new(),
     }
 }
@@ -694,6 +751,25 @@ mod tests {
                 triage_call(TRIAGE_MODEL, &schema(), config_dir, "C:/path/to/home")
             }
             VectorKind::WorkOrder => work_order(&sample_order(), 7, config_dir),
+            VectorKind::ReviewCall => review_call(
+                ModelAlias::Haiku,
+                &crate::relay::auto::schema(),
+                config_dir,
+                "C:/path/to/home",
+            ),
+        }
+    }
+
+    /// D-692: Officina's own calls turn the advisor tool off; a session
+    /// kind runs as the author's would and does not.
+    #[test]
+    fn contained_kinds_turn_the_advisor_off() {
+        for kind in VectorKind::ALL.iter().copied() {
+            let set = built(kind, None)
+                .env_set()
+                .iter()
+                .any(|(name, value)| name == ADVISOR_OFF_VAR && value == "1");
+            assert_eq!(set, kind.env_rule() == EnvRule::Contained, "{kind:?}");
         }
     }
 

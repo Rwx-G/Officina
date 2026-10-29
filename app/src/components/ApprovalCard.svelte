@@ -9,7 +9,7 @@
   import type { ApprovalView } from "../lib/generated/ApprovalView";
   import type { AuthorReason } from "../lib/generated/AuthorReason";
   import { isPointerClick } from "../lib/pointer";
-  import { REJECT_REASONS, bindingText } from "../lib/relay-text";
+  import { ESCALATION_TEXT, REJECT_REASONS, bindingText } from "../lib/relay-text";
   import { ago, duration } from "../lib/time";
 
   interface Props {
@@ -61,6 +61,9 @@
   <p class="class" data-testid="approval-class">
     class {approval.class}{#if approval.valid && dryRun}, after its check {dryRun.check}{/if}
   </p>
+  {#if approval.escalation}
+    <p class="class" data-testid="approval-escalation">Yours to decide: {ESCALATION_TEXT[approval.escalation]}</p>
+  {/if}
   {#if approval.description}
     <p class="description" data-testid="approval-description">{approval.description}</p>
   {/if}

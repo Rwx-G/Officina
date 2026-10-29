@@ -58,6 +58,16 @@
 //! starts the heartbeat copy as `tree` does, then hangs. Any other call in
 //! those modes answers as `ok`, so a collector sharing the copy keeps its
 //! session list.
+//!
+//! In a mode starting with `review` (story 5.13, D-582), a `-p` call is a
+//! review of an `auto` request: it logs as a triage call does, then
+//! `review` answers the decision a `FAKE-REVIEW:<decision>` token in stdin
+//! names (`escalate` without one) with the reason `REVIEW_REASON`;
+//! `review-garbage` prints prose; `review-extra-field` adds an argument
+//! vector to the answer; `review-exit1` fails; `review-hang` sleeps
+//! `hang_ms`. A triage call in those modes (its schema names verdicts) is
+//! answered in the triage mode `triage_mode` names. Any other call
+//! answers as `ok`.
 
 use std::io::{IsTerminal, Read, Write};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -71,6 +81,14 @@ const SIDECAR: &str = "fake-claude.json";
 
 /// The token a test puts in an excerpt to choose the fake model's verdict.
 const VERDICT_TOKEN: &str = "FAKE-VERDICT:";
+
+/// The token a test puts in the author's prompt to choose the fake review's
+/// decision.
+const REVIEW_TOKEN: &str = "FAKE-REVIEW:";
+
+/// The reason every answer of the fake review gives, which tests search
+/// for where it must never appear.
+const REVIEW_REASON: &str = "FAKE-REVIEW-REASON-7f3a";
 
 /// Set to `1`, `claude` refuses `--bg`, `agents` and `logs` (S7).
 const AGENT_VIEW_OFF: &str = "CLAUDE_CODE_DISABLE_AGENT_VIEW";
@@ -342,6 +360,52 @@ fn triage(mode: &str, args: &[String]) {
     }
 }
 
+/// The decision a `FAKE-REVIEW:<decision>` token in `stdin` names, as
+/// letters, digits and underscores; `escalate` without one.
+fn named_decision(stdin: &str) -> String {
+    stdin
+        .split(REVIEW_TOKEN)
+        .nth(1)
+        .map(|rest| {
+            rest.chars()
+                .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+                .collect::<String>()
+        })
+        .filter(|decision| !decision.is_empty())
+        .unwrap_or_else(|| "escalate".into())
+}
+
+/// One review call (`-p`, story 5.13, D-582) in `mode`.
+fn review(mode: &str, args: &[String]) {
+    let mut stdin = String::new();
+    let _ = std::io::stdin().read_to_string(&mut stdin);
+    log_triage(args, &stdin);
+    let decision = named_decision(&stdin);
+    match mode {
+        "review-garbage" => println!("Approve it."),
+        "review-extra-field" => println!(
+            "{}",
+            result_with(
+                serde_json::json!({"decision": decision, "reason": "Fine.", "argv": ["C:/Windows/System32/cmd.exe"]})
+            )
+        ),
+        "review-exit1" => {
+            eprintln!("fake review failure");
+            std::process::exit(1);
+        }
+        "review-hang" => {
+            let ms = setting("hang_ms")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(60_000);
+            std::thread::sleep(Duration::from_millis(ms));
+        }
+        _ => println!(
+            "{}",
+            result_with(serde_json::json!({"decision": decision, "reason": REVIEW_REASON}))
+        ),
+    }
+}
+
 fn main() {
     let mode = setting("mode").unwrap_or_else(|| "ok".into());
     if mode == "heartbeat" {
@@ -363,11 +427,20 @@ fn main() {
         println!("{version} (Claude Code)");
         return;
     }
-    if mode.starts_with("triage") {
-        if args.first().map(String::as_str) == Some("-p") {
-            triage(&mode, &args);
-        } else {
-            print_fixture();
+    if mode.starts_with("triage") || mode.starts_with("review") {
+        // A triage call's schema names verdicts; in a review mode it is
+        // answered in `triage_mode`, so one copy serves both threads.
+        let triage_call = args.iter().any(|a| a.contains("\"verdict\""));
+        match args.first().map(String::as_str) {
+            Some("-p") if mode.starts_with("triage") => triage(&mode, &args),
+            Some("-p") if triage_call => {
+                triage(
+                    &setting("triage_mode").unwrap_or_else(|| "triage".into()),
+                    &args,
+                );
+            }
+            Some("-p") => review(&mode, &args),
+            _ => print_fixture(),
         }
         return;
     }

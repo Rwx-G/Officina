@@ -46,7 +46,7 @@ const CLI_MANIFEST: &str = include_str!("../Cargo.toml");
 const CORE_LIB: &str = include_str!("../../officina-core/src/lib.rs");
 
 /// The entry points the battery covers, one section each (D-147).
-const SECTIONS: &[&str] = &["card_launch"];
+const SECTIONS: &[&str] = &["card_launch", "review_excerpt"];
 
 /// The attack families of PRD section 7's Gesture row the sections hold,
 /// declared here once (D-147), and what a case of none of them is.
@@ -415,6 +415,137 @@ fn card_launch_cases() {
     );
 }
 
+/// What every answer of the session carries besides its case's text: it
+/// must reach the review nowhere.
+#[cfg(windows)]
+const ANSWER_ONLY: &str = "ANSWER-ONLY-c0de";
+
+/// Stand for a text ten times the hook's excerpt bound (D-438).
+#[cfg(windows)]
+const OVER_EXCERPT: &str = "<over EXCERPT_CHARS>";
+
+/// One `review_excerpt` case (story 5.13 AC 9, D-569): the case's prompt
+/// as the author's last, its answer as the session's last, an `auto`
+/// request reviewed by the window through the fake; the prompt reaches the
+/// call on stdin only, between the markers and cut to the hook's bound;
+/// the answer nowhere; the outcome is the decision `structured_output`
+/// gave; no approval file and no `--bg` spawn.
+#[cfg(windows)]
+fn run_review_excerpt(case: &Value) -> Result<(), String> {
+    use common::auto::{Auto, Options, SESSION, stop};
+    use officina_core::events::EXCERPT_CHARS;
+    let filled = |text: &str| text.replace(OVER_EXCERPT, &"x".repeat(10 * EXCERPT_CHARS));
+    let marker = case["marker"].as_str().unwrap();
+    let options = Options {
+        prompt: filled(case["prompt"].as_str().unwrap()),
+        ..Options::default()
+    };
+    let auto = Auto::new(&options);
+    let now = common::now_ms();
+    let answer = format!("{} {ANSWER_ONLY}", filled(case["answer"].as_str().unwrap()));
+    auto.event(serde_json::json!({
+        "v": 1, "ts": now - 30_000, "event": "Stop", "session_id": SESSION,
+        "cwd": auto.relay.project(), "last_message": answer, "last_message_tail": answer,
+    }));
+    let id = auto.request("lab-web", Some(SESSION));
+    let (handle, _emitted) = auto.window(&options);
+    let row = auto.row_of(&id);
+    stop(handle);
+    let calls = auto.calls();
+    let [call] = calls.as_slice() else {
+        return Err(format!("{} review calls", calls.len()));
+    };
+    let stdin = call["stdin"].as_str().unwrap_or_default();
+    // The markers open a line; the instruction names them mid-sentence.
+    let open = stdin
+        .find("\n<<<OFFICINA-DATA-")
+        .ok_or("no opening marker")?
+        + 1;
+    let close = stdin.rfind("\nOFFICINA-DATA-").ok_or("no closing marker")?;
+    let data: Value = serde_json::from_str(stdin[open..close].lines().nth(1).unwrap_or_default())
+        .map_err(|e| format!("the data line does not parse: {e}"))?;
+    let sent = data["last_prompt"].as_str().unwrap_or_default();
+    if !sent.contains(marker) {
+        return Err(format!("the prompt did not reach the data line: {sent}"));
+    }
+    if sent.chars().count() > EXCERPT_CHARS {
+        return Err(format!(
+            "{} characters of prompt sent",
+            sent.chars().count()
+        ));
+    }
+    for (place, text) in [
+        ("argv", call["argv"].to_string()),
+        ("env", call["env"].to_string()),
+        ("instruction", stdin[..open].to_owned()),
+    ] {
+        if text.contains(marker) {
+            return Err(format!("the prompt reached the call's {place}"));
+        }
+    }
+    if stdin.contains(ANSWER_ONLY) || call.to_string().contains(ANSWER_ONLY) {
+        return Err("the session's answer reached the review".to_owned());
+    }
+    let decision = row.decision.map(|d| d.code().to_owned());
+    if decision.as_deref() != case["decision"].as_str() {
+        return Err(format!("decision {decision:?}"));
+    }
+    let names: Vec<String> = std::fs::read_dir(auto.relay.env.relay_home().approvals_dir())
+        .map(|entries| {
+            entries
+                .flatten()
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .collect()
+        })
+        .unwrap_or_default();
+    if names.iter().any(|n| !n.ends_with(".request.json")) {
+        return Err(format!("decision files written: {names:?}"));
+    }
+    let bg = common::fake_claude_calls(&auto.relay.env.fake_log())
+        .iter()
+        .filter(|c| common::logged_argv(c).iter().any(|a| a == "--bg"))
+        .count();
+    if bg != 0 {
+        return Err(format!("{bg} --bg spawns"));
+    }
+    Ok(())
+}
+
+/// Story 5.13 AC 9 (AD-95, D-147, D-569): every case of `review_excerpt`.
+#[cfg(windows)]
+#[test]
+fn review_excerpt_cases() {
+    let set = load();
+    let cases = cases(&set, "review_excerpt");
+    assert!(!cases.is_empty());
+    let mut failures = Vec::new();
+    for chunk in cases.chunks(PARALLEL_CASES) {
+        let results: Vec<(String, Result<(), String>)> = std::thread::scope(|scope| {
+            let runs: Vec<_> = chunk
+                .iter()
+                .map(|case| scope.spawn(move || run_review_excerpt(case)))
+                .collect();
+            chunk
+                .iter()
+                .zip(runs)
+                .map(|(case, run)| {
+                    (
+                        case["name"].as_str().unwrap().to_owned(),
+                        run.join()
+                            .unwrap_or_else(|_| Err("the case panicked".to_owned())),
+                    )
+                })
+                .collect()
+        });
+        failures.extend(
+            results
+                .into_iter()
+                .filter_map(|(name, result)| result.err().map(|why| format!("case {name}: {why}"))),
+        );
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
 /// D-147: every section has a case, every family a case and every case a
 /// declared family; every variant of `WorkOrderRefusal` and
 /// `LaunchRefusal` is some case's refusal; and every mutant of core is
@@ -455,7 +586,8 @@ fn every_section_family_and_refusal_has_a_case() {
     }
     let expectations: Vec<&Value> = all
         .iter()
-        .flat_map(|case| case["steps"].as_array().unwrap())
+        .filter_map(|case| case["steps"].as_array())
+        .flatten()
         .map(|step| &step["expect"])
         .collect();
     for refusal in WorkOrderRefusal::ALL {

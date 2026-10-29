@@ -216,7 +216,8 @@ fn doctor_with_a_guarded_project_requires_every_gated_tool() {
 /// collector running beside them, ingesting into its registry and sending a
 /// row to the enabled model through the fake (story 3.11, story 3.12
 /// AC 6), a dry run's call made through the fake (story 3.9 AC 12), and a
-/// work order launched from a card through the fake (story 5.7 AC 8).
+/// work order launched from a card through the fake (story 5.7 AC 8), and
+/// a review of an `auto` request through the fake (story 5.13 AC 11).
 #[test]
 fn no_command_writes_under_the_claude_config_dir() {
     let env = TestEnv::new();
@@ -407,6 +408,34 @@ fn no_command_writes_under_the_claude_config_dir() {
         call.outcome,
         officina_core::registry::types::TriageOutcome::Answer,
         "{call:?}"
+    );
+
+    // A review of an `auto` request through the fake, pointed at the same
+    // config dir (story 5.13 AC 11, D-80).
+    let review_fake = common::fake_claude_in(
+        &env.root.path().join("bin-review"),
+        &serde_json::json!({"mode": "review"}),
+    );
+    let reviewed = officina_host::relay::review::run_call(
+        &officina_host::relay::review::ReviewCall {
+            approval_id: "0123456789abcdef-1".into(),
+            model: officina_core::relay::template::ModelAlias::Haiku,
+            prompt: "FAKE-REVIEW:approve".into(),
+            claude: review_fake,
+            officina_home: env.officina_home(),
+            config_dir: Some(config.clone()),
+            base_env: officina_host::spawn::BaseEnv::new(vec![(
+                "SYSTEMROOT".to_owned(),
+                std::env::var("SYSTEMROOT").unwrap_or_default(),
+            )]),
+            timeout: officina_host::relay::review::review_timeout(),
+        },
+        &officina_host::files::now_ms,
+    );
+    assert_eq!(
+        reviewed.outcome,
+        officina_core::registry::types::ReviewOutcome::Answered,
+        "{reviewed:?}"
     );
 
     // Long enough for the collector to see the hook and quota writes, spawn

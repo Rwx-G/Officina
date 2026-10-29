@@ -509,6 +509,85 @@ fn work_order_rows_are_deleted_at_90_days() {
     assert!(writer.work_orders().unwrap().is_empty());
 }
 
+/// One review row of `id`, requested at `at`, with a reason naming `id`.
+fn reviewed(writer: &mut officina_host::registry::store::Writer, id: &str, at: i64) {
+    use officina_core::registry::types::{ReviewMode, ReviewOutcome};
+    use officina_core::relay::auto::{EscalationCause, ReviewDecision};
+    writer
+        .insert_review(&officina_host::registry::review::NewReview {
+            approval_id: id.into(),
+            request_key: "ab".into(),
+            project: "lab".into(),
+            action: "apply".into(),
+            requested_at_ms: at,
+            mode: ReviewMode::Shadow,
+            outcome: ReviewOutcome::Answered,
+            cause: Some(EscalationCause::ReviewEscalated),
+            decision: Some(ReviewDecision::Escalate),
+            reason: Some(format!("reason of {id}")),
+            rule_baseline: false,
+            call_started_at_ms: Some(at),
+            duration_ms: Some(1),
+            input_tokens: None,
+            output_tokens: None,
+            cost_microusd: None,
+        })
+        .unwrap();
+}
+
+/// Story 5.13 AC 10 (D-134): `auto_review` rows go 90 days after their
+/// request.
+#[test]
+fn auto_review_rows_are_deleted_at_90_days() {
+    use officina_core::registry::retention::AUTO_REVIEW_TTL_MS;
+    let home = Home::new();
+    let mut writer = home.writer(NOW);
+    reviewed(&mut writer, "kept", NOW - AUTO_REVIEW_TTL_MS + 1);
+    reviewed(&mut writer, "gone", NOW - AUTO_REVIEW_TTL_MS);
+    let report = writer.hourly_pass(&home.ctx(), NOW).unwrap();
+    assert_eq!(report.deleted_auto_reviews, 1);
+    let left: Vec<String> = writer
+        .review_rows(0)
+        .unwrap()
+        .into_iter()
+        .map(|r| r.approval_id)
+        .collect();
+    assert_eq!(left, ["kept"]);
+}
+
+/// Story 5.13 AC 10 (D-134): a review's reason, model text, is cleared
+/// `EXCERPT_TTL_MS` after the request, the row kept, and leaves the
+/// database and its WAL.
+#[test]
+fn review_reasons_are_cleared_with_the_excerpt_ttl() {
+    let home = Home::new();
+    let mut writer = home.writer(NOW);
+    reviewed(&mut writer, "kept", NOW - EXCERPT_TTL_MS + 1);
+    reviewed(&mut writer, "cleared", NOW - EXCERPT_TTL_MS);
+    let report = writer.hourly_pass(&home.ctx(), NOW).unwrap();
+    assert_eq!(report.cleared_review_reasons, 1);
+    let rows = writer.review_rows(0).unwrap();
+    let reason = |id: &str| {
+        rows.iter()
+            .find(|r| r.approval_id == id)
+            .unwrap()
+            .reason
+            .is_some()
+    };
+    assert!(reason("kept"));
+    assert!(!reason("cleared"), "the row stays, its reason gone");
+    drop(writer);
+    let db = home.paths().database();
+    assert!(file_contains(&db, "reason of kept"), "positive control");
+    for leftover in [&db, &home.paths().wal()] {
+        assert!(
+            !file_contains(leftover, "reason of cleared"),
+            "{}",
+            leftover.display()
+        );
+    }
+}
+
 /// Story 5.6 AC 8 (D-134): `printed` and `error` are cleared
 /// `EXCERPT_TTL_MS` after the launch, the row kept, so D-85's 30-day bound
 /// covers them; the cleared text leaves the database and its WAL.

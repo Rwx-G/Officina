@@ -166,6 +166,18 @@ impl Case {
                     .unwrap_or_else(|| panic!("case {}: no seq", self.name));
                 spawn::work_order(&self.work_order(home), seq, config_dir)
             }
+            VectorKind::ReviewCall => {
+                let model = ModelAlias::from_code(self.required("model"))
+                    .unwrap_or_else(|| panic!("case {}: unknown model", self.name));
+                assert_eq!(self.required("schema"), "review", "case {}", self.name);
+                let officina_home = home.unwrap_or_else(|| self.required("officina_home"));
+                spawn::review_call(
+                    model,
+                    &officina_core::relay::auto::schema(),
+                    config_dir,
+                    officina_home,
+                )
+            }
         }
     }
 }

@@ -180,6 +180,24 @@ pub fn in_triage_workdir(cwd: &str, officina_home: &str) -> bool {
             .is_some_and(|rest| rest.starts_with('/'))
 }
 
+/// True when `cwd` is exactly `<officina_home>/review/empty`, the review
+/// call's folder, compared as [`normalise_path`] does (AD-43 as amended,
+/// D-166): a session working elsewhere under `review/` is recorded like any
+/// other.
+///
+/// ```
+/// use officina_core::registry::ingestion::in_review_workdir;
+/// let home = r"C:\Users\user01\.officina";
+/// assert!(in_review_workdir(r"c:/users/USER01/.officina/review/empty", home));
+/// assert!(!in_review_workdir(r"C:\Users\user01\.officina\review\notes", home));
+/// ```
+pub fn in_review_workdir(cwd: &str, officina_home: &str) -> bool {
+    let segments = crate::spawn::OfficinaDir::ReviewWorkdir
+        .segments()
+        .join("/");
+    normalise_path(cwd) == format!("{}/{segments}", normalise_path(officina_home))
+}
+
 /// What one event line adds to its session's excerpts (AD-40, FR-4): the
 /// latest prompt, or the head and tail of the latest answer, each kept
 /// only when it is newer than the one stored.
