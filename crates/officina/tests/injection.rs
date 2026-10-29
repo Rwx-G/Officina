@@ -678,7 +678,15 @@ fn run_auto_approved_run(case: &Value) -> Result<(), String> {
                     .hash;
                 officina_host::relay::authority::approve_catalogue(&home, &hash)
                     .map_err(|e| e.to_string())?;
-                let row = auto.row_of(&id);
+                // The row is written before its approval is tried, and a
+                // refused approval sets its cause after (D-734): wait for
+                // the cause, not the row alone.
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+                let mut row = auto.row_of(&id);
+                while row.cause.is_none() && std::time::Instant::now() < deadline {
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                    row = auto.row_of(&id);
+                }
                 if row.cause != Some(EscalationCause::ApprovalRefused) {
                     return Err(format!("cause {:?}", row.cause));
                 }
