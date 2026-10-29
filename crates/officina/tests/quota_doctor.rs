@@ -217,8 +217,10 @@ fn doctor_with_a_guarded_project_requires_every_gated_tool() {
 /// row to the enabled model through the fake (story 3.11, story 3.12
 /// AC 6), a dry run's call made through the fake (story 3.9 AC 12), and a
 /// work order launched from a card through the fake (story 5.7 AC 8), a
-/// review of an `auto` request through the fake (story 5.13 AC 11), and a
-/// scripted `officina mcp` session calling every tool (story 5.15 AC 9).
+/// review of an `auto` request through the fake (story 5.13 AC 11), a
+/// scripted `officina mcp` session calling every tool (story 5.15 AC 9), and
+/// the orchestrator started from the window through the fake (story 5.16
+/// AC 8).
 #[test]
 fn no_command_writes_under_the_claude_config_dir() {
     let env = TestEnv::new();
@@ -461,6 +463,29 @@ fn no_command_writes_under_the_claude_config_dir() {
         officina_core::registry::types::ReviewOutcome::Answered,
         "{reviewed:?}"
     );
+
+    // The orchestrator started from the window, through the collector's
+    // fake, pointed at the same config dir (story 5.16 AC 8, D-80). Off
+    // Windows no console opens, and the Start says so.
+    let exe_dir = env.root.path().join("app");
+    std::fs::create_dir_all(&exe_dir).unwrap();
+    std::fs::write(
+        exe_dir.join(officina_host::orders::orchestrator::officina_exe_name()),
+        b"",
+    )
+    .unwrap();
+    {
+        use officina_core::orders::orchestrator::{StartAnswer, StartRefusal};
+        let expected = if cfg!(windows) {
+            StartAnswer::Started
+        } else {
+            StartAnswer::Refused(StartRefusal::Unsupported)
+        };
+        assert_eq!(
+            officina_host::orders::orchestrator::start_orchestrator(&watch.sender, &exe_dir),
+            Ok(expected)
+        );
+    }
 
     // Long enough for the collector to see the hook and quota writes, spawn
     // `claude` again and run its follow-up refresh, and for its model call
