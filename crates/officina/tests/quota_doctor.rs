@@ -220,7 +220,8 @@ fn doctor_with_a_guarded_project_requires_every_gated_tool() {
 /// review of an `auto` request through the fake (story 5.13 AC 11), a
 /// scripted `officina mcp` session calling every tool (story 5.15 AC 9), and
 /// the orchestrator started from the window through the fake (story 5.16
-/// AC 8).
+/// AC 8), and the hook's `PermissionRequest` path through no window, allow,
+/// deny, decline and the deadline (story 5.22 AC 6).
 #[test]
 fn no_command_writes_under_the_claude_config_dir() {
     let env = TestEnv::new();
@@ -589,6 +590,11 @@ fn no_command_writes_under_the_claude_config_dir() {
         );
     }
 
+    // The hook's `PermissionRequest` path (story 5.22 AC 6, D-80): with the
+    // collector's marker, which routes nothing yet, then with a routing
+    // one through allow, deny, decline and the deadline.
+    prompt_paths(&env);
+
     // Long enough for the collector to see the hook and quota writes, spawn
     // `claude` again and run its follow-up refresh, and for its model call
     // to come back.
@@ -771,4 +777,63 @@ fn doctor_reports_hook_fields_missing_and_not_observed() {
     let text = String::from_utf8_lossy(&out.stdout);
     assert!(text.contains("[FAIL] hooks"), "{text}");
     assert_eq!(out.status.code(), Some(1));
+}
+
+/// Runs `officina hook` on a `PermissionRequest` through every end of its
+/// path (story 5.22 AC 6): no window (the collector's marker routes
+/// nothing, D-580), then a routing marker with allow, deny and decline
+/// written while it waits, and the deadline.
+fn prompt_paths(env: &TestEnv) {
+    use officina_core::relay::prompts::{PromptAnswer, WindowMarker};
+    use officina_host::relay::authority::decide_prompt;
+    use officina_host::relay::prompts::{ENV_TEST_PROMPT_WAIT_MS, MarkerFile, read_requests};
+    use std::io::Write;
+    let payload = serde_json::json!({
+        "hook_event_name": "PermissionRequest",
+        "session_id": "s",
+        "permission_mode": "default",
+        "tool_name": "Bash",
+        "tool_input": {"command": "rm -rf build"},
+    })
+    .to_string();
+    let no_window = env.run(&["hook"], payload.as_bytes());
+    assert!(no_window.status.success() && no_window.stdout.is_empty());
+    let hook = |wait_ms: &str| {
+        let mut cmd = env.officina(&["hook"]);
+        cmd.env(ENV_TEST_PROMPT_WAIT_MS, wait_ms);
+        let mut child = cmd.spawn().unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(payload.as_bytes())
+            .unwrap();
+        child
+    };
+    let _window = MarkerFile::write(
+        &env.relay_home(),
+        &WindowMarker {
+            pid: std::process::id(),
+            started_at_ms: now_ms(),
+            routes_prompts: true,
+        },
+    )
+    .unwrap();
+    for answer in PromptAnswer::ALL {
+        let child = hook("20000");
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let id = loop {
+            if let Some(request) = read_requests(&env.relay_home()).into_iter().next() {
+                break request.id;
+            }
+            assert!(Instant::now() < deadline, "the hook wrote no request");
+            std::thread::sleep(Duration::from_millis(10));
+        };
+        decide_prompt(&env.relay_home(), &id, *answer, now_ms()).unwrap();
+        let out = child.wait_with_output().unwrap();
+        assert_eq!(out.status.code(), Some(0));
+        assert_eq!(out.stdout.is_empty(), answer.behavior().is_none());
+    }
+    let out = hook("300").wait_with_output().unwrap();
+    assert!(out.status.success() && out.stdout.is_empty());
 }

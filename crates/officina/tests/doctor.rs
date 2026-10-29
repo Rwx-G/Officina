@@ -82,3 +82,20 @@ fn doctor_asks_for_the_sub_agent_events() {
     let line = hooks_line(&env.run(&["doctor"], b"").stdout);
     assert!(line.starts_with("[ok"), "{line}");
 }
+
+/// Story 5.22 AC 6 (D-578, D-580): the router's hook path is inert. The
+/// block doctor prints and the paste file it writes register no
+/// `PermissionRequest`, whose registration is the routing story's.
+#[test]
+fn the_printed_hooks_block_registers_no_permission_request() {
+    use officina_core::relay::prompts::PROMPT_EVENT;
+    let env = TestEnv::new();
+    env.write_agents("[]");
+    let out = env.run(&["doctor"], b"");
+    let block = common::printed_hooks_block(&out.stdout);
+    assert!(block["hooks"].is_object(), "{block}");
+    assert!(block["hooks"].get(PROMPT_EVENT).is_none(), "{block}");
+    let saved = std::fs::read_to_string(env.officina_home().join("doctor").join("user-hooks.json"))
+        .unwrap();
+    assert!(!saved.contains(PROMPT_EVENT), "{saved}");
+}

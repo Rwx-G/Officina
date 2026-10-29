@@ -2894,6 +2894,27 @@ mod tests {
         }
     }
 
+    /// Story 5.22 AC 6 (D-578, D-580): the router's hook path is inert. No
+    /// registration doctor requires names `PermissionRequest`, with or
+    /// without the gate, so neither the printed block nor its merge into a
+    /// foreign `hooks` key carries it, and a settings file without it is
+    /// complete. The routing story registers it, with `routes_prompts`.
+    #[test]
+    fn permission_request_is_not_registered_yet() {
+        use officina_core::relay::prompts::PROMPT_EVENT;
+        let exe = PathBuf::from(r"C:\Program Files\Officina\officina.exe");
+        for gate in [false, true] {
+            let required = registrations(gate);
+            assert!(required.iter().all(|r| r.event != PROMPT_EVENT));
+            let block: serde_json::Value =
+                serde_json::from_str(&hooks_block(&exe, &required)).unwrap();
+            assert!(block["hooks"].get(PROMPT_EVENT).is_none(), "{block}");
+            let merged = merged_hooks(Some(&foreign_hooks()), &exe, &required).unwrap();
+            assert!(merged.get(PROMPT_EVENT).is_none(), "{merged}");
+            assert!(missing_hook_events(&block, &required).is_empty());
+        }
+    }
+
     /// AD-56, D-44: the canary checks the payload of every event the hook
     /// buffers, and names no event it does not.
     #[test]
