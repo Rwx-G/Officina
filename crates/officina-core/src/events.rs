@@ -34,6 +34,11 @@ pub const SUBAGENT_EVENTS: [&str; 2] = ["SubagentStart", "SubagentStop"];
 /// `agent_id` and `agent_type` are cut to this many characters (AD-176).
 pub const AGENT_FIELD_CHARS: usize = 64;
 
+/// `permission_mode` is cut to this many characters (D-574): every
+/// documented mode fits (`crate::permissions::PERMISSION_MODES`), and a
+/// value Claude Code adds later stays short.
+pub const PERMISSION_MODE_CHARS: usize = 32;
+
 /// True for a line of [`SUBAGENT_EVENTS`].
 pub fn is_subagent_event(event: &str) -> bool {
     SUBAGENT_EVENTS.contains(&event)
@@ -81,6 +86,11 @@ pub struct EventLine {
     /// The sub-agent's type, as [`agent_id`](EventLine::agent_id).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_type: Option<String>,
+    /// The session's permission mode, from the payload's `permission_mode`
+    /// (E2, E15), cut to [`PERMISSION_MODE_CHARS`] (D-574): an optional
+    /// field of version 1, which older readers ignore.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permission_mode: Option<String>,
     /// The fields of the event's [`HOOK_FIELDS`] entry the payload lacked
     /// (AD-45, AD-56): an optional field of version 1, omitted when none
     /// is missing, which older readers ignore.
@@ -276,6 +286,8 @@ pub fn reduce_payload(
         claude_pid: None,
         agent_id: agent_field("agent_id"),
         agent_type: agent_field("agent_type"),
+        permission_mode: text_field(payload, "permission_mode")
+            .map(|mode| mode.chars().take(PERMISSION_MODE_CHARS).collect()),
         absent: absent_hook_fields(&event, payload),
         truncated: false,
         event,
@@ -490,6 +502,51 @@ mod tests {
         )
         .unwrap();
         assert_eq!((other.agent_id, other.agent_type), (None, None));
+    }
+
+    /// Story 5.20 AC 1 (D-574, E2): the payload's `permission_mode` is kept
+    /// on any event, excerpts on or off, reads back as written, and is left
+    /// out of a line whose payload has none; an older line reads unchanged.
+    #[test]
+    fn permission_mode_round_trips_and_is_optional() {
+        for (event, with_excerpts) in [("UserPromptSubmit", true), ("Stop", false)] {
+            let payload = json!({
+                "hook_event_name": event,
+                "session_id": "s",
+                "permission_mode": "bypassPermissions",
+            });
+            let line = reduce_payload(&payload, 5, with_excerpts).unwrap();
+            assert_eq!(line.permission_mode.as_deref(), Some("bypassPermissions"));
+            let back: EventLine = serde_json::from_str(line.to_bounded_line().trim_end()).unwrap();
+            assert_eq!(back, line, "{event}");
+        }
+        let without = reduce_payload(&json!({"hook_event_name": "Stop"}), 5, true).unwrap();
+        assert_eq!(without.permission_mode, None);
+        assert!(!without.to_bounded_line().contains("permission_mode"));
+        let old: EventLine =
+            serde_json::from_str(r#"{"v":1,"ts":5,"event":"Stop","session_id":"s"}"#).unwrap();
+        assert_eq!(old.permission_mode, None);
+    }
+
+    /// Story 5.20 AC 1 (D-574): a mode longer than `PERMISSION_MODE_CHARS`
+    /// is cut on a character boundary.
+    #[test]
+    fn permission_mode_is_cut_to_32_characters() {
+        let long: String = "é".repeat(PERMISSION_MODE_CHARS + 3);
+        let line = reduce_payload(
+            &json!({"hook_event_name": "Stop", "permission_mode": long}),
+            5,
+            true,
+        )
+        .unwrap();
+        let mode = line.permission_mode.unwrap();
+        assert_eq!(mode.chars().count(), PERMISSION_MODE_CHARS);
+        assert!(long.starts_with(&mode));
+        assert!(
+            crate::permissions::PERMISSION_MODES
+                .iter()
+                .all(|known| known.chars().count() <= PERMISSION_MODE_CHARS)
+        );
     }
 
     /// AD-176: a sub-agent's answer and its transcript paths never reach

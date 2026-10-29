@@ -15,7 +15,12 @@ use crate::events::EventLine;
 /// payload without it is no hook call and is dropped.
 pub const HOOK_FIELDS: &[(&str, &[&str])] = &[
     ("SessionStart", &["session_id", "cwd", "source"]),
-    ("UserPromptSubmit", &["session_id", "cwd", "prompt"]),
+    // `permission_mode`: E2 shows it on this event, which every session
+    // fires; doctor's permission line reads it (story 5.20, D-574).
+    (
+        "UserPromptSubmit",
+        &["session_id", "cwd", "prompt", "permission_mode"],
+    ),
     ("Stop", &["session_id", "cwd", "last_assistant_message"]),
     ("SessionEnd", &["session_id", "cwd", "reason"]),
     (
@@ -223,6 +228,18 @@ mod tests {
 
     /// Story 2.17 AC 3: only a plain `major.minor.patch` first word is a
     /// version; anything else is unknown, never old or new.
+    /// Story 5.20 AC 1 (D-574): the canary watches `permission_mode` on the
+    /// event E2 shows it on, so a payload that drops it is reported.
+    #[test]
+    fn the_hook_fields_name_permission_mode() {
+        assert!(hook_fields("UserPromptSubmit").contains(&"permission_mode"));
+        let without = json!({"hook_event_name": "UserPromptSubmit", "session_id": "s", "cwd": "c", "prompt": "p"});
+        assert_eq!(
+            absent_hook_fields("UserPromptSubmit", &without),
+            ["permission_mode"]
+        );
+    }
+
     #[test]
     fn a_version_is_the_first_word_in_three_numbers() {
         assert_eq!(claude_version("2.1.295"), Some(ON_FAILURE_SINCE));

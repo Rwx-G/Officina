@@ -95,6 +95,7 @@ pub mod floor;
 pub mod focus;
 pub mod ipc;
 pub mod orders;
+pub mod permissions;
 pub mod quota;
 pub mod registry;
 pub mod relay;

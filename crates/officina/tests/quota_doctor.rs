@@ -341,6 +341,9 @@ fn no_command_writes_under_the_claude_config_dir() {
         (&["relay", "--json"], 0),
         // The hooks block is not merged in this config dir: doctor fails.
         (&["doctor"], 1),
+        // It reads the permissions and autoMode keys and writes neither
+        // (story 5.20 AC 5).
+        (&["doctor", "--permissions"], 1),
     ] {
         let mut cmd = env.officina(args);
         cmd.current_dir(&lab);
@@ -474,6 +477,43 @@ fn no_command_writes_under_the_claude_config_dir() {
     );
     assert_eq!(fingerprint(&config), before);
     assert_eq!(std::fs::read(&claude_json).unwrap(), claude_json_before);
+}
+
+/// Story 5.20 AC 3 (D-574): `officina doctor --permissions` prints both
+/// blocks, writes them under the Officina home and nothing in the config
+/// dir or `~/.claude.json`; a plain run then removes the two files.
+#[test]
+fn doctor_permissions_writes_no_settings_file() {
+    let env = TestEnv::new();
+    let config = env.claude_config();
+    std::fs::write(
+        config.join("settings.json"),
+        r#"{"permissions": {"allow": ["Read"], "defaultMode": "bypassPermissions"}}"#,
+    )
+    .unwrap();
+    let claude_json = env.user_home().join(".claude.json");
+    std::fs::write(&claude_json, r#"{"numStartups":1}"#).unwrap();
+    let before = fingerprint(&config);
+    let out = env.run(&["doctor", "--permissions"], b"");
+    let printed = String::from_utf8_lossy(&out.stdout);
+    assert!(printed.contains("\"defaultMode\": \"auto\""), "{printed}");
+    assert!(printed.contains("<trusted repository>"), "{printed}");
+    assert!(printed.contains("your decision"), "{printed}");
+    let doctor_dir = env.officina_home().join("doctor");
+    for name in ["user-permissions.json", "user-autoMode.json"] {
+        assert!(doctor_dir.join(name).is_file(), "{name}");
+    }
+    assert_eq!(fingerprint(&config), before);
+    assert_eq!(
+        std::fs::read(&claude_json).unwrap(),
+        br#"{"numStartups":1}"#
+    );
+    let plain = env.run(&["doctor"], b"");
+    assert!(String::from_utf8_lossy(&plain.stdout).contains("officina doctor --permissions"));
+    for name in ["user-permissions.json", "user-autoMode.json"] {
+        assert!(!doctor_dir.join(name).exists(), "{name}");
+    }
+    assert_eq!(fingerprint(&config), before);
 }
 
 /// Story 3.8 AC 4 (AD-56, D-71): doctor prints, for the running version,

@@ -29,7 +29,11 @@ const USAGE: &str = "\
 usage: officina <command>
 
   board --json [--floor <path>]   print the board once (exit 3 when stale)
-  doctor [--floor <path>]         check the setup, print what to paste
+  doctor [--floor <path>] [--permissions]
+                                  check the setup, print what to paste; with
+                                  --permissions, also the user settings'
+                                  permissions and autoMode keys set for auto
+                                  mode (your decision; nothing is written)
   hook                            record a Claude Code hook payload (stdin)
   quota write [--tee]             record a statusline payload (stdin)
   relay --json                    print the relay's state once: approved
@@ -204,12 +208,22 @@ fn subjects_json(floor: Option<&PathBuf>) -> ExitCode {
 }
 
 fn doctor_cmd(floor: Option<&PathBuf>) -> ExitCode {
+    doctor_with(floor, false)
+}
+
+/// `officina doctor --permissions` (D-574): doctor, plus the auto-mode
+/// blocks the author may paste.
+fn doctor_permissions_cmd(floor: Option<&PathBuf>) -> ExitCode {
+    doctor_with(floor, true)
+}
+
+fn doctor_with(floor: Option<&PathBuf>, permissions: bool) -> ExitCode {
     let collector = match collector(floor) {
         Ok(c) => c,
         Err(code) => return code,
     };
     let exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("officina"));
-    let checks = doctor::run(&collector, &exe);
+    let checks = doctor::run_with(&collector, &exe, permissions);
     for c in &checks {
         let tag = match c.level {
             Level::Ok => "ok  ",
@@ -348,6 +362,9 @@ fn main() -> ExitCode {
             quota_write(rest.iter().any(|a| a == "--tee"))
         }
         Some("board") if rest.iter().any(|a| a == "--json") => with_floor(rest, board),
+        Some("doctor") if rest.iter().any(|a| a == "--permissions") => {
+            with_floor(rest, doctor_permissions_cmd)
+        }
         Some("doctor") => with_floor(rest, doctor_cmd),
         Some("run") => run_cmd(rest),
         Some("relay") if rest == ["--json"] => relay_json(),

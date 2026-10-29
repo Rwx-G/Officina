@@ -798,6 +798,7 @@ mod tests {
             claude_pid: Some(PID),
             agent_id: None,
             agent_type: None,
+            permission_mode: None,
             absent: Vec::new(),
             truncated: false,
         }

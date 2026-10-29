@@ -72,6 +72,18 @@ project uses [Semantic Versioning](https://semver.org/).
   refuses escalates `approval_refused`. `officina relay --json` prints the
   section and each decision's review without any reason; doctor reports
   approval, mode, the gate's counts and the rule difference.
+- Permission modes in doctor (v0.5, story 5.20): the hook records each
+  session's `permission_mode` on its event lines (cut to 32 characters;
+  the canary watches it on `UserPromptSubmit`), and doctor prints a
+  "permission mode" line counting the sessions of the last 24 h in each
+  mode, interactive or background, an undocumented value named unknown.
+  `officina doctor --permissions` prints the user settings' whole
+  `permissions` key with `defaultMode` set to `"auto"` and the whole
+  `autoMode` key (Claude Code's defaults and two placeholders when there is
+  none), every entry kept, each also written to `doctor/`; switching is the
+  author's decision and no settings file is written. Gate 8 passed without
+  a rule, so nothing is added for the relay. Plain doctor reads neither key
+  and removes the two files.
 - `officina doctor` names each issue's table (`template bump`, `action
   apply`), counts valid templates, and lists templates, credentials and the
   review model in a pending change.

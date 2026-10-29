@@ -3,8 +3,12 @@
 //! change is printed for them to paste. The relay's checks (FR-14) are
 //! [`crate::relay::doctor`], after the v0.1 ones.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+
+use officina_core::agents::SessionKind;
+use officina_core::permissions::{SeenKind, auto_mode_block, permission_line, permissions_block};
 
 use officina_core::contract::{ON_FAILURE_SINCE, check_agents, claude_version};
 use officina_core::dates::{DAY_MS, dated_file_day, day_start_ms, utc_date, utc_day_text};
@@ -575,6 +579,142 @@ fn command_words(command: &str) -> Option<Vec<String>> {
 
 /// Runs every check. `exe` is the path of the running `officina` binary.
 pub fn run(collector: &Collector, exe: &Path) -> Vec<Check> {
+    run_with(collector, exe, false)
+}
+
+/// The "permission mode" line (story 5.20, D-574): for each mode the event
+/// lines of the last 24 h carry, the distinct sessions per kind, `kinds`
+/// from the registry's session records; none when no line carries a mode.
+/// Information only: gate 8 passed in case a (research notes E85), so no
+/// mode warns (D-573).
+pub fn permission_mode_check(
+    events: &[officina_core::events::EventLine],
+    kinds: &BTreeMap<String, SessionKind>,
+    now: i64,
+) -> Option<Check> {
+    let seen: Vec<(&str, &str)> = events
+        .iter()
+        .filter(|event| event.ts >= now - DAY_MS)
+        .filter_map(|event| {
+            Some((
+                event.session_id.as_deref()?,
+                event.permission_mode.as_deref()?,
+            ))
+        })
+        .collect();
+    let line = permission_line(&seen, |session| match kinds.get(session) {
+        Some(SessionKind::Interactive) => SeenKind::Interactive,
+        Some(SessionKind::Background) => SeenKind::Background,
+        None => SeenKind::Unknown,
+    })?;
+    Some(check(
+        Level::Ok,
+        "permission mode",
+        format!("sessions of the last 24 h: {line}"),
+    ))
+}
+
+/// The session kinds the registry records, read-only; none without a
+/// readable registry.
+fn session_kinds(
+    officina_home: &Path,
+    onedrive_roots: &[PathBuf],
+) -> BTreeMap<String, SessionKind> {
+    registry_store::open_reader(officina_home, onedrive_roots)
+        .ok()
+        .and_then(|reader| reader.session_records().ok())
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|record| Some((record.session_id, record.kind?.value)))
+        .collect()
+}
+
+/// What plain doctor says of the auto-mode block (D-574): that it exists
+/// and the flag that prints it. It reads neither key: D-530 never reads a
+/// key but `hooks` and `statusLine` unless the author asks.
+pub fn permissions_pointer() -> Check {
+    check(
+        Level::Ok,
+        "permissions block",
+        "`officina doctor --permissions` prints the user settings' permissions and autoMode keys set for auto mode, for you to paste if you switch; without the flag doctor reads neither key",
+    )
+}
+
+/// `officina doctor --permissions` (story 5.20, D-490, D-574): a line
+/// saying the switch is the author's decision, then the whole
+/// `permissions` key with `defaultMode` set to `auto` and the whole
+/// `autoMode` key, each from the user settings read-only, every entry
+/// kept, gate 8's addition included, and written to its paste file under
+/// `doctor_dir` (D-534). A key of another shape gets the reason and no
+/// block. No settings file is written.
+pub fn permissions_checks(user_settings: &Path, doctor_dir: &Path) -> (Vec<Check>, Vec<PasteFile>) {
+    let settings = SettingsFile::read(user_settings);
+    let mut checks = vec![check(
+        Level::Ok,
+        "permission mode switch",
+        "switching your sessions from bypassPermissions to auto mode is your decision: Officina never writes a mode, it prints the two keys that would; gate 8 (research notes E85) found `officina run` works in auto mode without a rule, so nothing is added for the relay",
+    )];
+    let mut files = Vec::new();
+    let mut block = |title: &str,
+                     key: &str,
+                     built: Result<serde_json::Value, String>,
+                     note: &str| {
+        let path = paste_file_path(doctor_dir, "user", key);
+        match built {
+            Ok(value) => {
+                let (instruction, paste) = key_paste(user_settings, &settings, key, &value);
+                let detail = match &paste {
+                    Some(text) => {
+                        files.push(PasteFile {
+                            path: path.clone(),
+                            text: text.clone(),
+                        });
+                        format!(
+                            "{note}{instruction} (also in {}, its lines whole):",
+                            path.display()
+                        )
+                    }
+                    None => format!("{instruction}."),
+                };
+                checks.push(Check {
+                    level: if paste.is_some() { Level::Ok } else { Level::Warn },
+                    title: title.to_owned(),
+                    detail,
+                    paste,
+                });
+            }
+            Err(why) => checks.push(check(
+                Level::Warn,
+                title,
+                format!(
+                    "{} {why}: no block is printed, since a merge into another shape could drop part of it; fix the key and run doctor --permissions again",
+                    user_settings.display()
+                ),
+            )),
+        }
+    };
+    block(
+        "permissions block",
+        "permissions",
+        permissions_block(settings.get("permissions")),
+        "",
+    );
+    let (auto_mode, proposed) = match auto_mode_block(settings.get("autoMode")) {
+        Ok((value, proposed)) => (Ok(value), proposed),
+        Err(why) => (Err(why), false),
+    };
+    let note = if proposed {
+        "the file holds no autoMode key: the environment below keeps Claude Code's defaults ($defaults) and two placeholders, <trusted repository> and <lab host group>, to replace with your own trusted repositories and hosts or to remove; "
+    } else {
+        ""
+    };
+    block("autoMode block", "autoMode", auto_mode, note);
+    (checks, files)
+}
+
+/// Runs every check, the auto-mode blocks too when `permissions` (story
+/// 5.20, D-574).
+pub fn run_with(collector: &Collector, exe: &Path, permissions: bool) -> Vec<Check> {
     let now = now_ms();
     let paths = collector.paths();
     let user_settings = paths.claude_config_dir.join("settings.json");
@@ -594,12 +734,25 @@ pub fn run(collector: &Collector, exe: &Path) -> Vec<Check> {
         checks.push(check_gate_failure_mode(version));
     }
     checks.extend(check_hook_activity(&paths.events_dir(), now));
+    let onedrive_roots = onedrive_roots_from_env();
+    let (events, _) = read_recent_events(&paths.events_dir(), now);
+    checks.extend(permission_mode_check(
+        &events,
+        &session_kinds(&paths.officina_home, &onedrive_roots),
+        now,
+    ));
     let (quota, quota_files) = check_quota(collector, &user_settings, exe, now, &doctor_dir);
     checks.push(quota);
-    let files: Vec<PasteFile> = hooks_file.into_iter().chain(quota_files).collect();
+    let mut files: Vec<PasteFile> = hooks_file.into_iter().chain(quota_files).collect();
+    if permissions {
+        let (permission_checks, permission_files) = permissions_checks(&user_settings, &doctor_dir);
+        checks.extend(permission_checks);
+        files.extend(permission_files);
+    } else {
+        checks.push(permissions_pointer());
+    }
     checks.extend(write_paste_files(&doctor_dir, &files));
     checks.push(check_officina_home(&paths.officina_home));
-    let onedrive_roots = onedrive_roots_from_env();
     let mut registry = check_registry(&paths.officina_home, &onedrive_roots, now);
     if let Some(version) = &version {
         registry.push(check_hook_fields(&collector.contract_file(), version));
@@ -2014,6 +2167,7 @@ mod tests {
                 ("hook activity", Level::Ok, false),
                 ("event buffer", Level::Warn, false),
                 ("quota", Level::Warn, true),
+                ("permissions block", Level::Ok, false),
                 ("officina home", Level::Ok, false),
                 ("registry location", Level::Ok, false),
                 ("registry", Level::Ok, false),
@@ -2036,6 +2190,327 @@ mod tests {
         let floor = checks.last().unwrap();
         assert_eq!((floor.title.as_str(), floor.level), ("floor", Level::Fail));
         assert_eq!(floor.detail, "invalid floor file");
+    }
+
+    // ---- story 5.20: permission modes (D-490, D-573, D-574) ----
+
+    fn mode_line(ts: i64, session: &str, mode: Option<&str>) -> officina_core::events::EventLine {
+        serde_json::from_value(serde_json::json!({
+            "v": 1, "ts": ts, "event": "UserPromptSubmit", "session_id": session,
+            "permission_mode": mode,
+        }))
+        .unwrap()
+    }
+
+    /// AC 2: distinct sessions per mode over the last 24 h, split by the
+    /// registry's kind; an older line and a repeated session count once or
+    /// not at all.
+    #[test]
+    fn the_permission_line_counts_sessions_per_mode_and_kind() {
+        let now = now_ms();
+        let events = [
+            mode_line(now - 1_000, "a", Some("bypassPermissions")),
+            mode_line(now - 2_000, "a", Some("bypassPermissions")),
+            mode_line(now - 3_000, "b", Some("bypassPermissions")),
+            mode_line(now - 4_000, "c", Some("auto")),
+            mode_line(now - DAY_MS - 1, "d", Some("plan")),
+        ];
+        let kinds = BTreeMap::from([
+            ("a".to_owned(), SessionKind::Interactive),
+            ("b".to_owned(), SessionKind::Background),
+            ("c".to_owned(), SessionKind::Background),
+        ]);
+        let line = permission_mode_check(&events, &kinds, now).unwrap();
+        assert_eq!(
+            (line.title.as_str(), line.level),
+            ("permission mode", Level::Ok)
+        );
+        assert_eq!(
+            line.detail,
+            "sessions of the last 24 h: auto 1 session (1 background); bypassPermissions 2 sessions (1 interactive, 1 background)"
+        );
+    }
+
+    /// AC 2: a value outside the documented modes is named as unknown.
+    #[test]
+    fn an_unknown_mode_is_named() {
+        let now = now_ms();
+        let line = permission_mode_check(
+            &[mode_line(now, "a", Some("yolo"))],
+            &BTreeMap::from([("a".to_owned(), SessionKind::Interactive)]),
+            now,
+        )
+        .unwrap();
+        assert!(
+            line.detail.contains("unknown mode \"yolo\" 1 session"),
+            "{}",
+            line.detail
+        );
+        assert_eq!(line.level, Level::Ok);
+    }
+
+    /// AC 2: a session the registry has no record of counts as unknown.
+    #[test]
+    fn a_session_without_a_record_is_unknown() {
+        let now = now_ms();
+        let line = permission_mode_check(
+            &[mode_line(now, "z", Some("default"))],
+            &BTreeMap::new(),
+            now,
+        )
+        .unwrap();
+        assert!(
+            line.detail.ends_with("default 1 session (1 unknown)"),
+            "{}",
+            line.detail
+        );
+    }
+
+    /// AC 2: no line at all when no event line carries the field.
+    #[test]
+    fn no_permission_mode_no_line() {
+        let now = now_ms();
+        assert_eq!(
+            permission_mode_check(&[mode_line(now, "a", None)], &BTreeMap::new(), now),
+            None
+        );
+        assert_eq!(permission_mode_check(&[], &BTreeMap::new(), now), None);
+    }
+
+    /// A home and user settings holding `settings`, or none.
+    fn settings_home(settings: Option<&str>) -> (tempfile::TempDir, PathBuf, PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("settings.json");
+        if let Some(text) = settings {
+            fs::write(&file, text).unwrap();
+        }
+        let doctor_dir = dir.path().join("officina").join("doctor");
+        (dir, file, doctor_dir)
+    }
+
+    fn block_of<'c>(checks: &'c [Check], title: &str) -> &'c Check {
+        checks.iter().find(|c| c.title == title).unwrap()
+    }
+
+    fn value_of(check: &Check, key: &str) -> serde_json::Value {
+        let block = check.paste.as_deref().unwrap();
+        let (name, value) = block.split_once(": ").unwrap();
+        assert_eq!(name, format!("\"{key}\""));
+        serde_json::from_str(value).unwrap()
+    }
+
+    /// AC 3: the whole `permissions` key, every entry and its order kept,
+    /// `defaultMode` set to `auto`, under the line saying the switch is the
+    /// author's.
+    #[test]
+    fn the_permissions_block_keeps_every_entry_and_sets_auto() {
+        let (_dir, file, doctor_dir) = settings_home(Some(
+            r#"{"env": {"TOKEN": "secret-1"}, "permissions": {"allow": ["Bash(git status)", "Read"], "deny": ["Bash(rm *)"], "defaultMode": "bypassPermissions", "additionalDirectories": ["C:/path/to/dir"]}}"#,
+        ));
+        let (checks, _) = permissions_checks(&file, &doctor_dir);
+        assert!(
+            checks[0].detail.contains("your decision"),
+            "{}",
+            checks[0].detail
+        );
+        let block = block_of(&checks, "permissions block");
+        assert_eq!(block.level, Level::Ok);
+        assert_eq!(
+            value_of(block, "permissions"),
+            serde_json::json!({"allow": ["Bash(git status)", "Read"], "deny": ["Bash(rm *)"], "defaultMode": "auto", "additionalDirectories": ["C:/path/to/dir"]})
+        );
+        let all: String = checks
+            .iter()
+            .map(|c| format!("{} {:?}", c.detail, c.paste))
+            .collect();
+        assert!(!all.contains("secret-1"), "another key never shows");
+    }
+
+    /// AC 3: without an `autoMode` key, the defaults and the two
+    /// placeholders, explained in the line above the block.
+    #[test]
+    fn an_absent_auto_mode_gets_defaults_and_placeholders() {
+        let (_dir, file, doctor_dir) = settings_home(Some(r#"{"permissions": {}}"#));
+        let (checks, _) = permissions_checks(&file, &doctor_dir);
+        let block = block_of(&checks, "autoMode block");
+        assert!(
+            block.detail.contains("<trusted repository>"),
+            "{}",
+            block.detail
+        );
+        assert_eq!(
+            value_of(block, "autoMode"),
+            serde_json::json!({"environment": officina_core::permissions::AUTO_MODE_ENVIRONMENT})
+        );
+    }
+
+    /// AC 3: an existing `autoMode` is kept whole, no placeholder added.
+    #[test]
+    fn an_existing_auto_mode_is_kept_whole() {
+        let current = serde_json::json!({"environment": ["$defaults", "Trusted repo: C:/path/to/repo"], "soft_deny": ["$defaults"], "allow": ["Running tests"]});
+        let (_dir, file, doctor_dir) =
+            settings_home(Some(&serde_json::json!({"autoMode": current}).to_string()));
+        let (checks, _) = permissions_checks(&file, &doctor_dir);
+        let block = block_of(&checks, "autoMode block");
+        assert!(!block.detail.contains("<trusted repository>"));
+        assert_eq!(value_of(block, "autoMode"), current);
+    }
+
+    /// AC 3: a key that is not the documented shape gets the reason and no
+    /// block, and no paste file.
+    #[test]
+    fn an_unparsable_key_gets_no_block() {
+        let (_dir, file, doctor_dir) = settings_home(Some(
+            r#"{"permissions": {"allow": "Bash"}, "autoMode": ["x"]}"#,
+        ));
+        let (checks, files) = permissions_checks(&file, &doctor_dir);
+        for (title, why) in [
+            (
+                "permissions block",
+                "\"permissions.allow\" is not a list of strings",
+            ),
+            ("autoMode block", "\"autoMode\" key is not an object"),
+        ] {
+            let check = block_of(&checks, title);
+            assert_eq!((check.level, check.paste.is_some()), (Level::Warn, false));
+            assert!(check.detail.contains(why), "{}", check.detail);
+        }
+        assert!(files.is_empty());
+    }
+
+    /// AC 3: a settings file that does not exist gets both keys, each as a
+    /// whole file to create.
+    #[test]
+    fn a_missing_settings_file_gets_both_keys() {
+        let (_dir, file, doctor_dir) = settings_home(None);
+        let (checks, files) = permissions_checks(&file, &doctor_dir);
+        for (title, key) in [
+            ("permissions block", "permissions"),
+            ("autoMode block", "autoMode"),
+        ] {
+            let check = block_of(&checks, title);
+            assert!(check.detail.contains("Create"), "{}", check.detail);
+            let whole: serde_json::Value =
+                serde_json::from_str(check.paste.as_deref().unwrap()).unwrap();
+            assert!(whole.get(key).is_some(), "{whole}");
+        }
+        assert_eq!(files.len(), 2);
+        assert!(!file.exists(), "no settings file is written");
+    }
+
+    /// AC 3 (D-534): each block is written whole to its paste file, named
+    /// in its line.
+    #[test]
+    fn each_permissions_block_is_written_to_its_file() {
+        let (_dir, file, doctor_dir) =
+            settings_home(Some(r#"{"permissions": {"allow": ["Read"]}}"#));
+        let before = fs::read(&file).unwrap();
+        let (checks, files) = permissions_checks(&file, &doctor_dir);
+        assert_eq!(write_paste_files(&doctor_dir, &files), None);
+        for (title, key) in [
+            ("permissions block", "permissions"),
+            ("autoMode block", "autoMode"),
+        ] {
+            let check = block_of(&checks, title);
+            let path = paste_file_path(&doctor_dir, "user", key);
+            assert!(
+                check.detail.contains(&path.display().to_string()),
+                "{}",
+                check.detail
+            );
+            assert_eq!(
+                fs::read_to_string(&path).unwrap(),
+                format!("{}\n", check.paste.as_deref().unwrap())
+            );
+        }
+        assert_eq!(
+            fs::read(&file).unwrap(),
+            before,
+            "the settings file is untouched"
+        );
+    }
+
+    /// AC 3: plain doctor prints the pointer line only: no block, nothing
+    /// of either key, whatever the settings hold.
+    #[test]
+    fn plain_doctor_reads_neither_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths {
+            officina_home: dir.path().join("officina"),
+            claude_config_dir: dir.path().join("config"),
+            claude_config_override: None,
+            floor_file: None,
+        };
+        fs::create_dir_all(&paths.claude_config_dir).unwrap();
+        fs::write(
+            paths.claude_config_dir.join("settings.json"),
+            r#"{"permissions": {"allow": ["Bash(curl https://example.com?t=MARK-PERM)"]}, "autoMode": {"environment": ["MARK-AUTO"]}}"#,
+        )
+        .unwrap();
+        let collector = Collector::from_parts(paths, LoadedFloor::default(), None);
+        let checks = run(&collector, Path::new("/opt/officina"));
+        let all: String = checks
+            .iter()
+            .map(|c| format!("{} {:?}\n", c.detail, c.paste))
+            .collect();
+        assert!(
+            !all.contains("MARK-PERM") && !all.contains("MARK-AUTO"),
+            "{all}"
+        );
+        let pointer = block_of(&checks, "permissions block");
+        assert_eq!(pointer, &permissions_pointer());
+        assert!(pointer.detail.contains("--permissions"));
+        assert!(checks.iter().all(|c| c.title != "autoMode block"));
+        let with = run_with(&collector, Path::new("/opt/officina"), true);
+        assert!(
+            with.iter().any(|c| c.title == "autoMode block"),
+            "the positive control"
+        );
+    }
+
+    /// AC 3 (D-534): a plain run removes the two paste files an earlier
+    /// `--permissions` run left.
+    #[test]
+    fn plain_doctor_removes_the_permissions_paste_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths {
+            officina_home: dir.path().join("officina"),
+            claude_config_dir: dir.path().join("config"),
+            claude_config_override: None,
+            floor_file: None,
+        };
+        let collector = Collector::from_parts(paths.clone(), LoadedFloor::default(), None);
+        run_with(&collector, Path::new("/opt/officina"), true);
+        let doctor_dir = paths.doctor_dir();
+        let written = [
+            paste_file_path(&doctor_dir, "user", "permissions"),
+            paste_file_path(&doctor_dir, "user", "autoMode"),
+        ];
+        assert!(written.iter().all(|p| p.is_file()));
+        run(&collector, Path::new("/opt/officina"));
+        assert!(written.iter().all(|p| !p.exists()));
+    }
+
+    /// AC 4 (D-573, research notes E85): gate 8 passed in case a, so the
+    /// blocks hold the author's entries and `defaultMode` alone; the
+    /// additions are the core constants, empty.
+    #[test]
+    fn the_gate_8_addition_is_the_recorded_one() {
+        use officina_core::permissions::{GATE_8_ALLOW_RULES, GATE_8_AUTO_MODE_ALLOW};
+        assert!(GATE_8_ALLOW_RULES.is_empty() && GATE_8_AUTO_MODE_ALLOW.is_empty());
+        let (_dir, file, doctor_dir) = settings_home(Some(
+            r#"{"permissions": {"allow": ["Read"]}, "autoMode": {"allow": ["Running tests"]}}"#,
+        ));
+        let (checks, _) = permissions_checks(&file, &doctor_dir);
+        assert_eq!(
+            value_of(block_of(&checks, "permissions block"), "permissions"),
+            serde_json::json!({"allow": ["Read"], "defaultMode": "auto"})
+        );
+        assert_eq!(
+            value_of(block_of(&checks, "autoMode block"), "autoMode"),
+            serde_json::json!({"allow": ["Running tests"]})
+        );
+        assert!(checks[0].detail.contains("nothing is added for the relay"));
     }
 
     /// Security audit L3: a floor that sets `no_excerpts` the hook cannot

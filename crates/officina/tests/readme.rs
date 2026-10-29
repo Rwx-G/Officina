@@ -76,6 +76,17 @@ fn readme_mentions_every_subcommand() {
     }
 }
 
+/// Story 5.20 AC 3 and 6 (D-574): the usage text and the README name the
+/// flag that prints the auto-mode blocks.
+#[test]
+fn usage_and_readme_name_the_permissions_flag() {
+    let out = TestEnv::new().run(&["--help"], b"");
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("doctor [--floor <path>] [--permissions]")
+    );
+    assert!(readme().contains("officina doctor --permissions"));
+}
+
 /// The default guarded list lives in core only; the README describes its
 /// families and points at `officina doctor`, which prints it. No inline code
 /// span names an entry of it, and no fenced example declares a

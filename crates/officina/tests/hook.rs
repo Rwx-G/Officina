@@ -20,8 +20,41 @@ fn payload(event: &str) -> String {
         "message": "Claude needs your permission to use Bash",
         "agent_id": "agent-0001",
         "agent_type": "Explore",
+        "permission_mode": "bypassPermissions",
     })
     .to_string()
+}
+
+/// Story 5.20 AC 1 (D-574, E2): the hook writes the payload's
+/// `permission_mode` on the event line, excerpts or not, and none for a
+/// payload without it.
+#[test]
+fn the_hook_records_the_permission_mode() {
+    let env = TestEnv::new();
+    assert!(
+        env.run(&["hook"], payload("UserPromptSubmit").as_bytes())
+            .status
+            .success()
+    );
+    let mut no_excerpts = env.officina(&["hook"]);
+    no_excerpts.env("OFFICINA_NO_EXCERPTS", "1");
+    assert!(
+        common::run_with(no_excerpts, payload("Stop").as_bytes())
+            .status
+            .success()
+    );
+    let mut without: serde_json::Value = serde_json::from_str(&payload("Stop")).unwrap();
+    without.as_object_mut().unwrap().remove("permission_mode");
+    assert!(
+        env.run(&["hook"], without.to_string().as_bytes())
+            .status
+            .success()
+    );
+    let lines = read_events(&env);
+    assert_eq!(lines[0]["permission_mode"], "bypassPermissions");
+    assert_eq!(lines[1]["permission_mode"], "bypassPermissions");
+    assert!(lines[1].get("last_message").is_none(), "excerpts off");
+    assert!(lines[2].get("permission_mode").is_none(), "{}", lines[2]);
 }
 
 /// AD-176, D-518: a sub-agent's start and stop are appended with the
