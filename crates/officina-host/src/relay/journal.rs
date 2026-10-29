@@ -17,9 +17,13 @@ use std::time::{Duration, Instant};
 
 use officina_core::dates::{DAY_MS, event_file_name, event_files_to_read};
 use officina_core::relay::journal::{
-    JournalEntry, JournalLine, ParsedLine, is_expired_journal_file, parse_line, spill_file_name,
-    spilled_day_file,
+    AutoModeDenied, JournalEntry, JournalLine, ParsedLine, is_expired_journal_file, parse_line,
+    spill_file_name, spilled_day_file,
 };
+
+/// What `officina hook` branches on, which does not link `officina-core`
+/// itself.
+pub use officina_core::relay::journal::DENIED_EVENT;
 
 use super::home::RelayHome;
 use crate::files::append_line;
@@ -135,6 +139,28 @@ pub fn record(home: &RelayHome, entries: &[JournalEntry], now_ms: i64) -> io::Re
         Ok(()) => Ok(()),
         Err(_) => spill(home, entries, now_ms),
     }
+}
+
+/// The hook's `PermissionDenied` path (AD-181, story 5.23): one
+/// `auto_mode_denied` line, recorded as the gate records its denies, since
+/// auto mode already decided (D-760), its reason cut to the rule name when
+/// excerpts are off (D-911); nothing for a payload without a session id.
+/// Prints nothing: Officina never asks for a retry.
+pub fn record_denial(
+    home: &RelayHome,
+    payload: &serde_json::Value,
+    with_excerpts: bool,
+    now_ms: i64,
+) -> io::Result<()> {
+    let Some(denied) = AutoModeDenied::from_payload(payload) else {
+        return Ok(());
+    };
+    let denied = if with_excerpts {
+        denied
+    } else {
+        denied.without_excerpts()
+    };
+    record(home, &[JournalEntry::AutoModeDenied(denied)], now_ms)
 }
 
 fn spill(home: &RelayHome, entries: &[JournalEntry], now_ms: i64) -> io::Result<()> {

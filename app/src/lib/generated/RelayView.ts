@@ -7,6 +7,7 @@ import type { CredentialView } from "./CredentialView";
 import type { Notice } from "./Notice";
 import type { PendingChange } from "./PendingChange";
 import type { RecentEntry } from "./RecentEntry";
+import type { SessionDenials } from "./SessionDenials";
 
 /**
  * The relay contract shared by `officina relay --json` and the window.
@@ -77,4 +78,13 @@ anomalies: Array<Anomaly>,
 /**
  * The `auto` class: approval, mode, gate and the runs it approved.
  */
-auto: AutoView, };
+auto: AutoView, 
+/**
+ * Claude Code's auto-mode denials by session (AD-181, story 5.23),
+ * shown as neutral text: no schema number moves (P-26).
+ */
+auto_mode_denials: Array<SessionDenials>, 
+/**
+ * The window `auto_mode_denials` covers: [`DENIALS_WINDOW_MS`].
+ */
+auto_mode_denials_window_ms: number, };

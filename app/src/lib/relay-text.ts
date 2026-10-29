@@ -21,6 +21,7 @@ import type { RunOutcome } from "./generated/RunOutcome";
 import type { RunState } from "./generated/RunState";
 import type { Tone } from "./generated/Tone";
 import type { TreeBinding } from "./generated/TreeBinding";
+import { hours } from "./time";
 
 /** The stop toggle's label in each relay state, in the header and the
  *  Relay view alike: it names what a click does. */
@@ -327,5 +328,17 @@ export function activityRow(entry: RecentEntry): ActivityRow {
       row.action = "relay";
       row.outcome = "resumed";
       return row;
+    case "auto_mode_denied":
+      row.action = "auto mode";
+      row.outcome = event.tool_name ? `denied ${event.tool_name}` : "denied";
+      row.detail = event.reason;
+      return row;
   }
+}
+
+/** A session's auto-mode denials, as neutral text (AD-181, story 5.23):
+ *  "2 auto-mode denials in the last 24 h", over the window the backend
+ *  sends. */
+export function denialsText(count: number, windowMs: number): string {
+  return `${count} auto-mode ${count === 1 ? "denial" : "denials"} in the last ${hours(windowMs)}`;
 }

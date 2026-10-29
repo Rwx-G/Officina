@@ -220,8 +220,9 @@ fn doctor_with_a_guarded_project_requires_every_gated_tool() {
 /// review of an `auto` request through the fake (story 5.13 AC 11), a
 /// scripted `officina mcp` session calling every tool (story 5.15 AC 9), and
 /// the orchestrator started from the window through the fake (story 5.16
-/// AC 8), and the hook's `PermissionRequest` path through no window, allow,
-/// deny, decline and the deadline (story 5.22 AC 6).
+/// AC 8), the hook's `PermissionRequest` path through no window, allow,
+/// deny, decline and the deadline (story 5.22 AC 6), and its
+/// `PermissionDenied` line (story 5.23 AC 5).
 #[test]
 fn no_command_writes_under_the_claude_config_dir() {
     let env = TestEnv::new();
@@ -835,5 +836,16 @@ fn prompt_paths(env: &TestEnv) {
         assert_eq!(out.stdout.is_empty(), answer.behavior().is_none());
     }
     let out = hook("300").wait_with_output().unwrap();
+    assert!(out.status.success() && out.stdout.is_empty());
+    // Story 5.23 AC 5: auto mode's denial, journaled.
+    let denied = serde_json::json!({
+        "hook_event_name": "PermissionDenied",
+        "session_id": "s",
+        "permission_mode": "auto",
+        "tool_name": "Bash",
+        "tool_input": {"command": "rm -rf build"},
+        "reason": "[Irreversible Local Destruction]",
+    });
+    let out = env.run(&["hook"], denied.to_string().as_bytes());
     assert!(out.status.success() && out.stdout.is_empty());
 }

@@ -519,7 +519,10 @@ fn run_item(entry: &RecentEntry) -> Option<RunItem> {
         | RecentEvent::ApprovalGiven(_)
         | RecentEvent::ApprovalRejected(_)
         | RecentEvent::RelayStopped
-        | RecentEvent::RelayResumed => None,
+        | RecentEvent::RelayResumed
+        // Auto mode's refusals are no run of the relay, and the
+        // orchestrator answers no permission prompt (D-489).
+        | RecentEvent::AutoModeDenied(_) => None,
     }
 }
 

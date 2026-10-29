@@ -515,3 +515,57 @@ fn relay_json_writes_nothing() {
         "not even the home is created"
     );
 }
+
+/// Story 5.23 AC 3 (AD-181, P-26): denials the real hook journaled are
+/// printed per session, with their reasons, and as recent entries, the
+/// schema unchanged.
+#[test]
+fn prints_auto_mode_denials() {
+    use officina_core::untrusted::Untrusted;
+    let env = approved_env();
+    for (session, reason) in [
+        ("s-a", "[Data Exfiltration]"),
+        ("s-b", "[Code from External]"),
+        ("s-a", "[Irreversible Local Destruction]"),
+    ] {
+        let payload = serde_json::json!({
+            "hook_event_name": "PermissionDenied",
+            "session_id": session,
+            "tool_name": "Bash",
+            "tool_input": {"command": "rm -rf build"},
+            "reason": reason,
+        });
+        assert!(
+            env.run(&["hook"], payload.to_string().as_bytes())
+                .status
+                .success()
+        );
+    }
+    let shown = view(&env);
+    assert_eq!(shown.schema, officina_core::relay::view::RELAY_VIEW_SCHEMA);
+    let counts: BTreeMap<&str, u32> = shown
+        .auto_mode_denials
+        .iter()
+        .map(|d| (d.session_id.as_str(), d.count))
+        .collect();
+    assert_eq!(counts, BTreeMap::from([("s-a", 2), ("s-b", 1)]));
+    let a = shown
+        .auto_mode_denials
+        .iter()
+        .find(|d| d.session_id == "s-a")
+        .unwrap();
+    assert_eq!(
+        a.reasons,
+        [
+            Untrusted::new("[Irreversible Local Destruction]".to_owned()),
+            Untrusted::new("[Data Exfiltration]".to_owned())
+        ]
+    );
+    let denied = shown
+        .recent
+        .iter()
+        .filter(|e| matches!(e.event, RecentEvent::AutoModeDenied(_)))
+        .count();
+    assert_eq!(denied, 3);
+    assert!(!String::from_utf8_lossy(&relay_json(&env).stdout).contains("rm -rf"));
+}

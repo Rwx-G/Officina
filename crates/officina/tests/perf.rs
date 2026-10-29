@@ -1,5 +1,5 @@
 //! Hook and gate latency, the `PermissionRequest` path without a window
-//! (story 5.22), concurrent appends to the event buffer and the
+//! (story 5.22) and the `PermissionDenied` line (story 5.23), concurrent appends to the event buffer and the
 //! journal (stories 1.3 and 2.4, AD-10, AD-17, AD-28, AD-32, D-19). Ignored
 //! by default: run with `cargo test --release -p officina -- --ignored`.
 //!
@@ -81,60 +81,18 @@ fn timed(runs: usize, mut f: impl FnMut()) -> Vec<Duration> {
 fn hook_latency_p95() {
     let _serial = serial();
     let env = TestEnv::new();
-    let payload = big_payload();
-    for _ in 0..5 {
-        env.run(&["hook"], &payload);
-    }
-    let hook = p95(timed(200, || {
-        assert!(env.run(&["hook"], &payload).status.success());
-    }));
-    let baseline = p95(timed(200, || {
-        let out = std::process::Command::new(common::FAKE_CLAUDE)
-            .arg("--version")
-            .output()
-            .unwrap();
-        assert!(out.status.success());
-    }));
-    let own_cost = hook.saturating_sub(baseline);
-    let budget = Duration::from_millis(
-        std::env::var("OFFICINA_HOOK_P95_BUDGET_MS")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(30),
-    );
-    println!(
-        "hook p95 {hook:?}, empty process p95 {baseline:?}, own cost {own_cost:?}, budget {budget:?}"
-    );
-    assert!(
-        own_cost < Duration::from_millis(30),
-        "own cost {own_cost:?}"
-    );
-    assert!(hook < budget, "p95 {hook:?} over {budget:?}");
+    hook_own_cost_within_budget(&env, "hook", &big_payload());
 }
 
-/// Story 5.22 AC 3 (D-511, D-579): with no window, a `PermissionRequest`
-/// costs the hook what any event does, the marker's one open included,
-/// so Claude Code's own prompt appears without delay. The same budgets as
-/// [`hook_latency_p95`], measured the same way.
-#[test]
-#[ignore = "timing test, run in release by CI"]
-fn permission_request_without_a_window_is_within_the_hook_budget() {
-    let _serial = serial();
-    let env = TestEnv::new();
-    let payload = serde_json::json!({
-        "hook_event_name": "PermissionRequest",
-        "session_id": "00000000-0000-0000-0000-000000000001",
-        "permission_mode": "default",
-        "tool_name": "Bash",
-        "tool_input": {"command": "x".repeat(64 * 1024)},
-    })
-    .to_string()
-    .into_bytes();
+/// Times `payload` through the hook: p95 of 200 runs against an empty
+/// process's, Officina's own cost under 30 ms and the p95 under
+/// `OFFICINA_HOOK_P95_BUDGET_MS` (see [`hook_latency_p95`]).
+fn hook_own_cost_within_budget(env: &TestEnv, label: &str, payload: &[u8]) {
     for _ in 0..5 {
-        env.run(&["hook"], &payload);
+        env.run(&["hook"], payload);
     }
     let hook = p95(timed(200, || {
-        let out = env.run(&["hook"], &payload);
+        let out = env.run(&["hook"], payload);
         assert!(out.status.success() && out.stdout.is_empty());
     }));
     let baseline = p95(timed(200, || {
@@ -152,17 +110,58 @@ fn permission_request_without_a_window_is_within_the_hook_budget() {
             .unwrap_or(30),
     );
     println!(
-        "permission request p95 {hook:?}, empty process p95 {baseline:?}, own cost {own_cost:?}, budget {budget:?}"
+        "{label} p95 {hook:?}, empty process p95 {baseline:?}, own cost {own_cost:?}, budget {budget:?}"
     );
     assert!(
         own_cost < Duration::from_millis(30),
         "own cost {own_cost:?}"
     );
     assert!(hook < budget, "p95 {hook:?} over {budget:?}");
+}
+
+/// Story 5.22 AC 3 (D-511, D-579): with no window, a `PermissionRequest`
+/// costs the hook what any event does, the marker's one open included,
+/// so Claude Code's own prompt appears without delay.
+#[test]
+#[ignore = "timing test, run in release by CI"]
+fn permission_request_without_a_window_is_within_the_hook_budget() {
+    let _serial = serial();
+    let env = TestEnv::new();
+    let payload = serde_json::json!({
+        "hook_event_name": "PermissionRequest",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "permission_mode": "default",
+        "tool_name": "Bash",
+        "tool_input": {"command": "x".repeat(64 * 1024)},
+    })
+    .to_string()
+    .into_bytes();
+    hook_own_cost_within_budget(&env, "permission request", &payload);
     assert!(
         !env.relay_home().prompts_dir().exists(),
         "no window, no request"
     );
+}
+
+/// Story 5.23 AC 1: a `PermissionDenied`, its journal line under the lock
+/// included, costs the hook no more than any event.
+#[test]
+#[ignore = "timing test, run in release by CI"]
+fn permission_denied_is_within_the_hook_budget() {
+    let _serial = serial();
+    let env = TestEnv::new();
+    let payload = serde_json::json!({
+        "hook_event_name": "PermissionDenied",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "permission_mode": "auto",
+        "tool_name": "Bash",
+        "tool_input": {"command": "x".repeat(64 * 1024)},
+        "reason": "[Irreversible Local Destruction]",
+    })
+    .to_string()
+    .into_bytes();
+    hook_own_cost_within_budget(&env, "permission denied", &payload);
+    assert!(env.journal().len() >= 200, "every denial journaled");
 }
 
 const GATE_ACTIONS: usize = 50;

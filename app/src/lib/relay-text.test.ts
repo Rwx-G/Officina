@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanup, render } from "@testing-library/svelte";
-import { activityRow, boundText, reviewText } from "./relay-text";
+import { activityRow, boundText, denialsText, reviewText } from "./relay-text";
 import RecentActivity from "../components/RecentActivity.svelte";
 import type { RecentEntry } from "./generated/RecentEntry";
 import type { RunFinished } from "./generated/RunFinished";
@@ -123,6 +123,26 @@ describe("activityRow", () => {
 
 // Story 5.14 AC 7 and 8 (D-143): a decision says who gave it and, once the
 // author decided, what its review said; the bound is the payload's.
+describe("auto-mode denials", () => {
+  it("an entry reads as auto mode, its tool and its reason as text, with no tone", () => {
+    const entry: RecentEntry = {
+      ts: NOW - 1_000,
+      tone: null,
+      review: null,
+      event: { kind: "auto_mode_denied", session_id: "s1", tool_name: "Bash", reason: HOSTILE },
+    };
+    expect(activityRow(entry)).toMatchObject({ action: "auto mode", outcome: "denied Bash", detail: HOSTILE, tone: "neutral" });
+    const { tool_name: _dropped, ...withoutTool } = entry.event as { tool_name?: string };
+    expect(activityRow({ ...entry, event: withoutTool as RecentEntry["event"] }).outcome).toBe("denied");
+  });
+
+  it("the file's count names the window it covers", () => {
+    const day = 24 * 60 * 60 * 1000;
+    expect(denialsText(1, day)).toBe("1 auto-mode denial in the last 24 h");
+    expect(denialsText(3, day)).toBe("3 auto-mode denials in the last 24 h");
+  });
+});
+
 describe("auto texts", () => {
   const decision = (by: "author" | "review" | null, review: RecentEntry["review"]): RecentEntry => ({
     ts: NOW,

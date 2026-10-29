@@ -1,5 +1,6 @@
-//! `officina hook` end to end (story 1.3, FR-3), and its
-//! `PermissionRequest` path (story 5.22, AD-181).
+//! `officina hook` end to end (story 1.3, FR-3), its `PermissionRequest`
+//! path (story 5.22, AD-181) and its `PermissionDenied` journal line
+//! (story 5.23).
 
 mod common;
 
@@ -7,6 +8,7 @@ use std::io::Write;
 use std::time::{Duration, Instant};
 
 use common::{TestEnv, read_events};
+use officina_core::relay::journal::{AutoModeDenied, JournalEntry};
 use officina_core::relay::prompts::{
     DENY_MESSAGE, PromptAnswer, PromptBehavior, PromptFileKind, PromptOutput, WindowMarker,
     parse_prompt_file_name,
@@ -625,4 +627,109 @@ fn the_request_file_is_removed_on_every_exit() {
     assert!(gone.wait_with_output().unwrap().stdout.is_empty());
     no_request(&env);
     assert!(read_events(&env).is_empty(), "never the event buffer");
+}
+
+/// A `PermissionDenied` payload as the hooks reference documents it,
+/// redacted.
+fn permission_denied() -> serde_json::Value {
+    serde_json::json!({
+        "session_id": PROMPT_SESSION,
+        "transcript_path": "/path/to/transcript.jsonl",
+        "cwd": "C:/work/repo-a",
+        "permission_mode": "auto",
+        "hook_event_name": "PermissionDenied",
+        "tool_name": "Bash",
+        "tool_input": {"command": "rm -rf /tmp/build", "description": "Clean build directory"},
+        "tool_use_id": "toolu_placeholder",
+        "reason": "[Irreversible Local Destruction]",
+    })
+}
+
+/// Story 5.23 AC 1 (AD-181, D-580): a denial appends one
+/// `auto_mode_denied` line with the session, the tool and the reason, never
+/// the input; the hook prints nothing (never `retry`), exits 0 and writes
+/// no event line.
+#[test]
+fn permission_denied_appends_one_line_and_prints_nothing() {
+    let env = TestEnv::new();
+    let out = env.run(&["hook"], permission_denied().to_string().as_bytes());
+    assert_eq!(out.status.code(), Some(0));
+    assert!(out.stdout.is_empty() && out.stderr.is_empty());
+    let lines: Vec<AutoModeDenied> = env
+        .journal()
+        .into_iter()
+        .filter_map(|line| match line.entry {
+            JournalEntry::AutoModeDenied(denied) => Some(denied),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        lines,
+        [AutoModeDenied {
+            session_id: PROMPT_SESSION.to_owned(),
+            tool_name: Some("Bash".to_owned()),
+            reason: "[Irreversible Local Destruction]".to_owned(),
+        }]
+    );
+    assert_eq!(env.journal().len(), 1);
+    let journal: String = std::fs::read_dir(env.relay_home().journal_dir())
+        .unwrap()
+        .flatten()
+        .map(|e| std::fs::read_to_string(e.path()).unwrap_or_default())
+        .collect();
+    assert!(
+        !journal.contains("/tmp/build") && !journal.contains("toolu_"),
+        "{journal}"
+    );
+    assert!(read_events(&env).is_empty(), "never the event buffer");
+}
+
+/// D-911 (AD-8): with `OFFICINA_NO_EXCERPTS` the line keeps the reason's
+/// rule name only, and nothing of a reason of another form.
+#[test]
+fn permission_denied_without_excerpts_keeps_the_rule_name_only() {
+    let env = TestEnv::new();
+    for reason in [
+        "[Data Exfiltration] posting C:/path/to/notes.md",
+        "Classifier unavailable",
+    ] {
+        let mut payload = permission_denied();
+        payload["reason"] = reason.into();
+        let mut cmd = env.officina(&["hook"]);
+        cmd.env("OFFICINA_NO_EXCERPTS", "1");
+        let out = common::run_with(cmd, payload.to_string().as_bytes());
+        assert!(out.status.success() && out.stdout.is_empty());
+    }
+    let reasons: Vec<String> = env
+        .journal()
+        .into_iter()
+        .filter_map(|line| match line.entry {
+            JournalEntry::AutoModeDenied(denied) => Some(denied.reason),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(reasons, ["[Data Exfiltration]", ""]);
+}
+
+/// Story 5.23 AC 1: a payload that does not parse, or has no session id,
+/// appends nothing and still exits 0 with no output.
+#[test]
+fn a_malformed_permission_denied_appends_nothing() {
+    let env = TestEnv::new();
+    let mut no_session = permission_denied();
+    no_session.as_object_mut().unwrap().remove("session_id");
+    let mut empty_session = permission_denied();
+    empty_session["session_id"] = "".into();
+    for stdin in [
+        b"{\"hook_event_name\":\"PermissionDenied\"".to_vec(),
+        no_session.to_string().into_bytes(),
+        empty_session.to_string().into_bytes(),
+    ] {
+        let out = env.run(&["hook"], &stdin);
+        assert_eq!(out.status.code(), Some(0));
+        assert!(out.stdout.is_empty() && out.stderr.is_empty());
+    }
+    assert!(env.journal().is_empty());
+    assert!(!env.relay_home().journal_dir().exists());
+    assert!(read_events(&env).is_empty());
 }

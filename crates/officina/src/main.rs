@@ -22,6 +22,7 @@ use officina_host::paths::Paths;
 use officina_host::registry::commands::{ViewRead, read_registry, subjects_view};
 use officina_host::relay::gate::{self, GATE_EVENT, GateEnv};
 use officina_host::relay::home::RelayHome;
+use officina_host::relay::journal::{DENIED_EVENT, record_denial};
 use officina_host::relay::prompts::{self, PROMPT_EVENT, PROMPT_POLL_MS};
 use officina_host::relay::run::{self as relay_run, RunArgs};
 use officina_host::relay::view::read_view;
@@ -70,8 +71,8 @@ fn read_stdin() -> Vec<u8> {
 /// stdin is parsed once (AD-26): `PreToolUse` goes to the gate, which prints
 /// a deny or nothing and is never appended to the event buffer (volume, and
 /// `tool_input` can carry secrets); `PermissionRequest` goes to the
-/// router's path, never to the buffer either (AD-181); every other event is
-/// recorded as in v0.1.
+/// router's path and `PermissionDenied` to the journal, never to the buffer
+/// either (AD-181); every other event is recorded as in v0.1.
 /// The gate fails closed in a guarded project (D-452): its own panic prints
 /// a deny there, and its registration carries `onFailure: "block"`, so a
 /// hook that cannot start, times out or dies blocks the call too.
@@ -94,6 +95,14 @@ fn hook() -> ExitCode {
             }
             Some(PROMPT_EVENT) => {
                 prompt_hook(&payload, claude_pid);
+                return;
+            }
+            Some(DENIED_EVENT) => {
+                if let Some(home) = RelayHome::from_env() {
+                    let with_excerpts =
+                        Paths::from_env(None).is_some_and(|p| hook_keeps_excerpts(&p));
+                    let _ = record_denial(&home, &payload, with_excerpts, now_ms());
+                }
                 return;
             }
             _ => {}

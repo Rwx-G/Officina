@@ -23,8 +23,8 @@ use super::auto::{
 #[cfg(doc)]
 use super::journal::COMMAND_EXCERPT_CHARS;
 use super::journal::{
-    ApprovalEvent, CatalogueApproved, GateDenied, GateError, GateFault, JournalEntry, JournalLine,
-    RefusalReason, Refused, RunFinished, RunStarted,
+    ApprovalEvent, AutoModeDenied, CatalogueApproved, GateDenied, GateError, GateFault,
+    JournalEntry, JournalLine, RefusalReason, Refused, RunFinished, RunStarted,
 };
 use super::record::Anomaly;
 use super::run::SnapshotState;
@@ -45,6 +45,10 @@ pub const RECENT_ENTRIES: usize = 50;
 pub const ABANDONED_GRACE_MS: i64 = 60_000;
 /// The window over which gate errors are counted.
 pub const GATE_ERRORS_WINDOW_MS: i64 = 24 * 60 * 60 * 1000;
+/// The window over which auto-mode denials are counted per session.
+pub const DENIALS_WINDOW_MS: i64 = 24 * 60 * 60 * 1000;
+/// How many of a session's latest denial reasons the view carries.
+pub const DENIAL_REASONS_SHOWN: usize = 5;
 
 /// A catalogue change waiting for the author: the hash the Approve button
 /// sends (AD-24), what changed since the approved snapshot, and the
@@ -112,7 +116,8 @@ pub fn tone_of(event: &RecentEvent) -> Option<Tone> {
         | RecentEvent::ApprovalGiven(_)
         | RecentEvent::ApprovalRejected(_)
         | RecentEvent::RelayStopped
-        | RecentEvent::RelayResumed => None,
+        | RecentEvent::RelayResumed
+        | RecentEvent::AutoModeDenied(_) => None,
     }
 }
 
@@ -208,6 +213,71 @@ impl From<&GateError> for GateErrorView {
     }
 }
 
+/// Claude Code's auto mode denied a tool call (AD-181): the session, the
+/// tool and the classifier's reason, which is shown as text only.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(rename = "AutoModeDenied"))]
+pub struct AutoModeDeniedView {
+    pub session_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_name: Option<String>,
+    pub reason: Untrusted<String>,
+}
+
+impl From<&AutoModeDenied> for AutoModeDeniedView {
+    fn from(line: &AutoModeDenied) -> AutoModeDeniedView {
+        AutoModeDeniedView {
+            session_id: line.session_id.clone(),
+            tool_name: line.tool_name.clone(),
+            reason: Untrusted::new(line.reason.clone()),
+        }
+    }
+}
+
+/// One session's auto-mode denials over the last [`DENIALS_WINDOW_MS`]
+/// (AD-181): how many, when the latest was, and the latest reasons, at
+/// most [`DENIAL_REASONS_SHOWN`], newest first.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct SessionDenials {
+    pub session_id: String,
+    pub count: u32,
+    pub last_at_ms: i64,
+    pub reasons: Vec<Untrusted<String>>,
+}
+
+/// The auto-mode denials of the last [`DENIALS_WINDOW_MS`] by session, the
+/// session denied most recently first.
+fn denials(lines: &[JournalLine], now_ms: i64) -> Vec<SessionDenials> {
+    let since = now_ms - DENIALS_WINDOW_MS;
+    let mut sessions: Vec<SessionDenials> = Vec::new();
+    for line in lines.iter().rev().filter(|line| line.ts >= since) {
+        let JournalEntry::AutoModeDenied(denied) = &line.entry else {
+            continue;
+        };
+        let at = sessions
+            .iter()
+            .position(|s| s.session_id == denied.session_id)
+            .unwrap_or_else(|| {
+                sessions.push(SessionDenials {
+                    session_id: denied.session_id.clone(),
+                    count: 0,
+                    last_at_ms: line.ts,
+                    reasons: Vec::new(),
+                });
+                sessions.len() - 1
+            });
+        let session = &mut sessions[at];
+        session.count = session.count.saturating_add(1);
+        session.last_at_ms = session.last_at_ms.max(line.ts);
+        if session.reasons.len() < DENIAL_REASONS_SHOWN {
+            session.reasons.push(Untrusted::new(denied.reason.clone()));
+        }
+    }
+    sessions.sort_by_key(|s| std::cmp::Reverse(s.last_at_ms));
+    sessions
+}
+
 /// What one recent entry records: a journal line, runs paired.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
@@ -224,6 +294,7 @@ pub enum RecentEvent {
     ApprovalRejected(ApprovalEvent),
     RelayStopped,
     RelayResumed,
+    AutoModeDenied(AutoModeDeniedView),
 }
 
 /// One entry of the recent activity: when it happened (a run's start) and
@@ -554,6 +625,11 @@ pub struct RelayView {
     pub anomalies: Vec<Anomaly>,
     /// The `auto` class: approval, mode, gate and the runs it approved.
     pub auto: AutoView,
+    /// Claude Code's auto-mode denials by session (AD-181, story 5.23),
+    /// shown as neutral text: no schema number moves (P-26).
+    pub auto_mode_denials: Vec<SessionDenials>,
+    /// The window `auto_mode_denials` covers: [`DENIALS_WINDOW_MS`].
+    pub auto_mode_denials_window_ms: i64,
 }
 
 /// `relay/stopped` as the host found it (AD-34).
@@ -715,6 +791,7 @@ fn recent(lines: &[JournalLine], now_ms: i64, rows: &[AutoRow]) -> Vec<RecentEnt
                 }
                 JournalEntry::RelayStopped => RecentEvent::RelayStopped,
                 JournalEntry::RelayResumed => RecentEvent::RelayResumed,
+                JournalEntry::AutoModeDenied(denied) => RecentEvent::AutoModeDenied(denied.into()),
                 // A launch is no relay entry: the Orchestrator view's
                 // history shows work orders, from the registry (AD-92).
                 // A review shows on its request's decision, and the
@@ -826,6 +903,8 @@ pub fn build(inputs: &ViewInputs<'_>) -> RelayView {
         },
         anomalies: inputs.anomalies.to_vec(),
         auto: auto_view(inputs.auto, inputs.lines, approved, inputs.now_ms),
+        auto_mode_denials: denials(inputs.lines, inputs.now_ms),
+        auto_mode_denials_window_ms: DENIALS_WINDOW_MS,
     }
 }
 
@@ -908,6 +987,82 @@ mod tests {
                 detail: None,
             }),
         )
+    }
+
+    fn denied(ts: i64, session: &str, reason: &str) -> JournalLine {
+        JournalLine::new(
+            ts,
+            JournalEntry::AutoModeDenied(AutoModeDenied {
+                session_id: session.to_owned(),
+                tool_name: Some("Bash".to_owned()),
+                reason: reason.to_owned(),
+            }),
+        )
+    }
+
+    /// Story 5.23 AC 3 (AD-181): the denials of the last
+    /// [`DENIALS_WINDOW_MS`] are counted per session, at the bound
+    /// included, the session denied most recently first; an older line
+    /// counts for nothing, and the window is carried with the counts.
+    #[test]
+    fn denials_are_counted_per_session_over_24_h() {
+        let lines = [
+            denied(NOW - DENIALS_WINDOW_MS - 1, "s-a", "[Too Old]"),
+            denied(NOW - DENIALS_WINDOW_MS, "s-a", "[Data Exfiltration]"),
+            denied(NOW - 5_000, "s-b", "[Code from External]"),
+            denied(NOW - 1_000, "s-a", "[Irreversible Local Destruction]"),
+        ];
+        let view = build(&inputs(SnapshotState::Missing, FloorRead::Missing, &lines));
+        let counts: Vec<(&str, u32, i64)> = view
+            .auto_mode_denials
+            .iter()
+            .map(|d| (d.session_id.as_str(), d.count, d.last_at_ms))
+            .collect();
+        assert_eq!(counts, [("s-a", 2, NOW - 1_000), ("s-b", 1, NOW - 5_000)]);
+        assert_eq!(view.auto_mode_denials_window_ms, DENIALS_WINDOW_MS);
+        assert_eq!(view.schema, RELAY_VIEW_SCHEMA);
+        // Every line, the old one included, is a recent entry, toneless.
+        let recent: Vec<&RecentEntry> = view
+            .recent
+            .iter()
+            .filter(|e| matches!(e.event, RecentEvent::AutoModeDenied(_)))
+            .collect();
+        assert_eq!(recent.len(), lines.len());
+        assert!(recent.iter().all(|e| e.tone.is_none()));
+        let empty = build(&inputs(SnapshotState::Missing, FloorRead::Missing, &[]));
+        assert!(empty.auto_mode_denials.is_empty());
+    }
+
+    /// Story 5.23 AC 3: a session keeps its latest
+    /// [`DENIAL_REASONS_SHOWN`] reasons, newest first, each serialized as
+    /// untrusted text, and the recent entry's reason too.
+    #[test]
+    fn the_reasons_are_untrusted_and_capped() {
+        let lines: Vec<JournalLine> = (0..DENIAL_REASONS_SHOWN as i64 + 3)
+            .map(|i| denied(NOW - 10_000 + i, "s-a", &format!("<b>reason {i}</b>")))
+            .collect();
+        let view = build(&inputs(SnapshotState::Missing, FloorRead::Missing, &lines));
+        let session = &view.auto_mode_denials[0];
+        assert_eq!(session.count as usize, lines.len());
+        assert_eq!(session.reasons.len(), DENIAL_REASONS_SHOWN);
+        let newest = lines.len() - 1;
+        let expected: Vec<Untrusted<String>> = (0..DENIAL_REASONS_SHOWN)
+            .map(|k| Untrusted::new(format!("<b>reason {}</b>", newest - k)))
+            .collect();
+        assert_eq!(session.reasons, expected);
+        let wrapped =
+            crate::untrusted::wrapped(|| serde_json::to_value(&view.auto_mode_denials).unwrap());
+        assert_eq!(
+            wrapped[0]["reasons"][0],
+            serde_json::json!({"untrusted": format!("<b>reason {newest}</b>")})
+        );
+        let entry =
+            crate::untrusted::wrapped(|| serde_json::to_value(&view.recent[0].event).unwrap());
+        assert_eq!(entry["kind"], "auto_mode_denied");
+        assert_eq!(
+            entry["reason"],
+            serde_json::json!({"untrusted": format!("<b>reason {newest}</b>")})
+        );
     }
 
     fn gate_error(ts: i64) -> JournalLine {
@@ -1201,6 +1356,11 @@ mod tests {
                 }
                 JournalKind::RelayStopped => JournalEntry::RelayStopped,
                 JournalKind::RelayResumed => JournalEntry::RelayResumed,
+                JournalKind::AutoModeDenied => JournalEntry::AutoModeDenied(AutoModeDenied {
+                    session_id: "s".to_owned(),
+                    tool_name: None,
+                    reason: "[Data Exfiltration]".to_owned(),
+                }),
                 // Left out of the relay view, which `recent` checks by its
                 // match: work orders show in the Orchestrator view.
                 JournalKind::WorkOrderLaunched

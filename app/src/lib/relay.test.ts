@@ -110,6 +110,8 @@ function view(overrides: Partial<RelayView> = {}): RelayView {
       mark_window_ms: 7 * 24 * 60 * 60 * 1000,
       decisions: [],
     },
+    auto_mode_denials: [],
+    auto_mode_denials_window_ms: 24 * 60 * 60 * 1000,
     ...overrides,
   };
 }
