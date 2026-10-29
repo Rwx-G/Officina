@@ -543,7 +543,7 @@ impl WindowRegistry {
     /// read back at window start; `None` without one, or when the registry
     /// cannot be read.
     pub fn kept_orchestrator(&mut self) -> Option<(u32, i64)> {
-        self.on_writer(|writer| Ok(writer.orchestrator_starts()?))?
+        self.on_writer(|writer| writer.orchestrator_starts())?
             .into_iter()
             .find(|row| row.outcome == OrchestratorStartOutcome::Spawned)
             .and_then(|row| row.pid.zip(row.pid_created_at_ms))
