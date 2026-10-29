@@ -7,7 +7,7 @@
 // whose pose is unchanged receives no write. The markup takes closed types
 // only: a look, a project colour, the cap flag and the scale, never text.
 import type { ProjectColor } from "../generated/ProjectColor";
-import type { Facing } from "./places";
+import { CAPACITY, type Facing } from "./places";
 import type { Marks, Pose } from "./layout";
 import type { Stride } from "./mover";
 import { SHADE_1, SHADE_2, fnv1a, paint, projectPaint } from "./furniture";
@@ -281,18 +281,32 @@ export function setPose(rig: Rig, pose: Pose, facing: Facing, hand: boolean, mot
 export function ticketMarkup(number: number | null, alert: boolean): string {
   const [bg, fg] = alert ? [paint("color-alert"), paint("color-on-alert")] : [paint("color-attention"), paint("color-attention-text")];
   const circle = `<circle fill="${bg}" stroke="${paint("color-attention-text")}" cx="0" cy="0" r="7.6" stroke-width="1.3"/>`;
-  return number === null ? circle : circle + digits(number, fg);
+  return number === null ? circle : circle + glyph(String(integer(number)), fg);
 }
 
-/** A desk number on the surface, ringed in the project's colour. */
-export function badgeMarkup(number: number, colour: ProjectColor | null): string {
-  return `<circle fill="${paint("color-surface")}" stroke="${projectPaint(colour)}" cx="0" cy="0" r="7.8" stroke-width="2.4"/>${digits(number, paint("color-text"))}`;
+/** The letter that names desk `desk` of an office, A for the first:
+ *  desks are named by letters, never digits, so a digit on a badge is
+ *  always a board key (story 4.17, D-558). */
+export function deskLetter(desk: number): string {
+  if (!Number.isInteger(desk) || desk < 1 || desk > CAPACITY.desks) throw new RangeError(`no desk ${desk} in an office`);
+  return String.fromCharCode("A".charCodeAt(0) + desk - 1);
 }
 
-/** A number as text: an integer only, so no payload text reaches markup. */
-function digits(number: number, fill: string): string {
+/** A desk's tag (D-558): its letter on a square in the surface colour,
+ *  edged in the project's colour; never a disc, never a digit. */
+export function deskTagMarkup(desk: number, colour: ProjectColor | null): string {
+  return `<rect fill="${paint("color-surface")}" stroke="${projectPaint(colour)}" x="-7.4" y="-7.4" width="14.8" height="14.8" rx="2" stroke-width="2.2"/>${glyph(deskLetter(desk), paint("color-text"))}`;
+}
+
+function integer(number: number): number {
   if (!Number.isInteger(number)) throw new TypeError("a mark's number must be an integer");
-  return `<text fill="${fill}" x="0" y="3.8" text-anchor="middle" font-size="10.5" font-weight="800">${number}</text>`;
+  return number;
+}
+
+/** A number or a desk letter, never payload text, so no session text
+ *  reaches markup. */
+function glyph(text: string, fill: string): string {
+  return `<text fill="${fill}" x="0" y="3.8" text-anchor="middle" font-size="10.5" font-weight="800">${text}</text>`;
 }
 
 /** The question mark of an employee whose state is unknown, drawn. */
@@ -319,12 +333,12 @@ export function ticketOn(marks: Marks, pose: Pose, facing: Facing, alert: boolea
   return `<g data-mark="ticket" transform="translate(0 ${y})">${ticketMarkup(marks.ticket, alert)}</g>`;
 }
 
-/** The marks drawn with the figure: its desk badge on the chest while the
+/** The marks drawn with the figure: its desk's tag on the chest while the
  *  chest shows, and the question mark. */
 export function marksMarkup(marks: Marks, pose: Pose, facing: Facing, colour: ProjectColor | null): string {
   const y = chestY(pose, facing);
   let s = "";
-  if (y !== null && marks.deskBadge !== null) s += `<g data-mark="desk" transform="translate(0 ${y})">${badgeMarkup(marks.deskBadge, colour)}</g>`;
+  if (y !== null && marks.deskBadge !== null) s += `<g data-mark="desk" transform="translate(0 ${y})">${deskTagMarkup(marks.deskBadge, colour)}</g>`;
   if (marks.question) s += `<g data-mark="question">${unknownMarkup(pose !== "standing" ? -66 : -72)}</g>`;
   return s;
 }

@@ -43,7 +43,8 @@ export interface Marks {
   ticket: number | null;
   /** An approval-only wait: an amber ticket without a digit (D-464). */
   approval: boolean;
-  /** The desk number of a Your turn session that has a desk. */
+  /** The desk, 1 for an office's first, of a Your turn session that has
+   *  one: drawn as its letter on a square tag (D-558). */
   deskBadge: number | null;
   hand: boolean;
   ring: boolean;
@@ -104,7 +105,8 @@ export interface Desk {
   state: DeskState;
   key: string | null;
   /** On a kept desk's empty chair: the board number while its session
-   *  waits, the desk number while it is in the lounge. */
+   *  waits, its own desk (drawn as a letter, D-558) while it is in the
+   *  lounge. */
   number: number | null;
   /** The screen is lit while its session works there. */
   lit: boolean;

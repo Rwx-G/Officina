@@ -6,6 +6,7 @@ import { emptyMemory, type SceneMemory } from "./memory";
 import { restingFrames, type FigureFrame } from "./mover";
 import { DEPTH_BANDS } from "./geometry";
 import { DEPTH_QUANTUM, DEPTH_WINDOW, SceneObjects } from "./objects";
+import { deskLetter } from "./rig";
 import { allSpots } from "./places";
 import { board, card, fixtureBoards } from "./testing";
 
@@ -185,6 +186,20 @@ describe("objects", () => {
     expect(badges.querySelector('[data-away-ticket="0:0"]')!.textContent).toBe("1");
     expect(desk(0, "chair").querySelector("[data-away]")!.textContent).toBe("");
     expect(desk(0, "desk").querySelector("[data-lines]")!.getAttribute("display")).toBe("none");
+  });
+
+  it("a kept desk whose session rests in the lounge shows the desk's letter on its chair", () => {
+    const working = board([card("a", "office")]);
+    const resting = board([card("a", "lounge")]);
+    const [l1, l2] = layouts(working, resting);
+    const { root, badges, objects } = mount();
+    objects.update({ layout: l1!, colours: colours(working), snap: 1, figures: restingFrames(l1!) });
+    objects.update({ layout: l2!, colours: colours(resting), snap: 1, figures: restingFrames(l2!) });
+    const away = root.querySelector('[data-desk="0:0"][data-desk-part="chair"] [data-away]')!;
+    expect(away.textContent).toBe(deskLetter(l2!.employees[0]!.marks.deskBadge!));
+    expect(away.querySelector("rect")).not.toBeNull();
+    expect(away.querySelector("circle")).toBeNull();
+    expect(badges.textContent).toBe("");
   });
 
   it("queue badges are drawn in the badge layer, above every object, at their figure", () => {

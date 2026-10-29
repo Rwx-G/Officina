@@ -74,10 +74,10 @@ describe("Scene", () => {
     const plaques = [...scene.querySelectorAll("[data-plaque]")].map((p) => p.textContent ?? "");
     expect(plaques.some((text) => text.includes(markup))).toBe(true);
     expect(getByTestId("register").textContent).toContain(markup);
-    // Layer 3 and the badges hold no text but digits.
+    // Layer 3 and the badges hold no text but board numbers and desk letters.
     for (const name of ["objects", "badges"]) {
       const walker = document.createTreeWalker(scene.querySelector(`[data-layer="${name}"]`)!, NodeFilter.SHOW_TEXT);
-      for (let n = walker.nextNode(); n; n = walker.nextNode()) expect(n.textContent!.trim()).toMatch(/^\d*$/);
+      for (let n = walker.nextNode(); n; n = walker.nextNode()) expect(n.textContent!.trim()).toMatch(/^(\d*|[A-Z])$/);
     }
     // Targets and their name tags carry the name as text.
     const target = buttonsOf(scene).find((b) => b.dataset.key === waiting.key)!;

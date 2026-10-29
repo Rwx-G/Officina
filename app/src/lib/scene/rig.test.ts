@@ -2,8 +2,8 @@ import { describe, expect, it } from "vitest";
 import type { ProjectColor } from "../generated/ProjectColor";
 import { PROJECT_COLORS } from "../colors";
 import type { Pose } from "./layout";
-import type { Facing } from "./places";
-import { HAIR_STYLES, LOOKS, badgeMarkup, createRig, lookOf, marksMarkup, setPose, ticketMarkup, ticketOn, type Rig } from "./rig";
+import { CAPACITY, type Facing } from "./places";
+import { HAIR_STYLES, LOOKS, createRig, deskLetter, deskTagMarkup, lookOf, marksMarkup, setPose, ticketMarkup, ticketOn, type Rig } from "./rig";
 
 const POSES: Pose[] = ["standing", "seated-facing", "seated-working"];
 const FACINGS: Facing[] = ["front", "back"];
@@ -97,12 +97,14 @@ describe("rig", () => {
     expect(new Set(keys.map((key) => JSON.stringify(lookOf(key)))).size).toBeGreaterThan(LOOKS.length);
   });
 
-  it("marks carry numbers only, as digits", () => {
+  it("marks carry numbers and desk letters only", () => {
     expect(() => ticketMarkup(1.5, false)).toThrow();
-    expect(() => badgeMarkup(Number.NaN, "green")).toThrow();
+    expect(() => deskTagMarkup(Number.NaN, "green")).toThrow();
+    expect(() => deskLetter(0)).toThrow();
+    expect(() => deskLetter(CAPACITY.desks + 1)).toThrow();
     const holder = document.createElementNS("http://www.w3.org/2000/svg", "g");
-    holder.innerHTML = ticketMarkup(7, false) + badgeMarkup(3, null) + ticketMarkup(null, false);
-    expect(textNodes(holder)).toEqual(["7", "3"]);
+    holder.innerHTML = ticketMarkup(7, false) + deskTagMarkup(3, null) + ticketMarkup(null, false);
+    expect(textNodes(holder)).toEqual(["7", deskLetter(3)]);
     // No chest mark on a back turned to the author.
     const marks = { ticket: 2, approval: false, deskBadge: null, hand: false, ring: false, question: false };
     expect(ticketOn(marks, "standing", "back", false)).toBe("");
@@ -110,5 +112,27 @@ describe("rig", () => {
     expect(ticketOn(marks, "standing", "front", false)).toContain(">2<");
     // The ticket is the badge layer's, never among the figure's own marks.
     expect(marksMarkup(marks, "standing", "front", "green")).toBe("");
+  });
+
+  it("a digit on a disc is a board number, a desk a letter on a square", () => {
+    const parse = (markup: string) => {
+      const holder = document.createElementNS("http://www.w3.org/2000/svg", "g");
+      holder.innerHTML = markup;
+      return holder;
+    };
+    const letters = Array.from({ length: CAPACITY.desks }, (_, i) => deskLetter(i + 1));
+    expect(new Set(letters).size).toBe(CAPACITY.desks);
+    for (let desk = 1; desk <= CAPACITY.desks; desk++) {
+      expect(deskLetter(desk)).toMatch(/^[A-Z]$/);
+      const tag = parse(deskTagMarkup(desk, "blue"));
+      expect(tag.querySelector("circle")).toBeNull();
+      expect(tag.querySelector("rect")).not.toBeNull();
+      expect(textNodes(tag)).toEqual([deskLetter(desk)]);
+    }
+    for (const alert of [false, true]) {
+      const numbered = parse(ticketMarkup(1, alert));
+      expect(numbered.querySelector("circle")).not.toBeNull();
+      expect(textNodes(numbered)).toEqual(["1"]);
+    }
   });
 });

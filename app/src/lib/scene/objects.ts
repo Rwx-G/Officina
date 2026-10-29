@@ -20,7 +20,7 @@ import { ALERT_PAINTS, buildStatics, paint, type OfficeUse, type Static } from "
 import { SUBAGENT_SCALE, alertLit, type SceneLayout } from "./layout";
 import type { FigureFrame } from "./mover";
 import { allSpots, type Spot } from "./places";
-import { badgeMarkup, createRig, lookOf, marksMarkup, setPose, ticketMarkup, ticketOn, underMarkup, write, type Rig } from "./rig";
+import { createRig, deskTagMarkup, lookOf, marksMarkup, setPose, ticketMarkup, ticketOn, underMarkup, write, type Rig } from "./rig";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 
@@ -32,7 +32,7 @@ export const DEPTH_WINDOW = 0.05;
 /** A moving figure's depth, as ties among figures read it, changes only
  *  past this step, in tiles (AD-171). */
 export const DEPTH_QUANTUM = 0.06;
-/** Where a kept desk's badges float above its empty chair, in px. */
+/** Where a kept desk's badge or tag floats above its empty chair, in px. */
 const AWAY_LIFT = 25;
 /** A free desk is drawn faded. */
 const FREE_OPACITY = "0.42";
@@ -71,7 +71,7 @@ interface DeskParts {
   chair: Element;
   screens: Element[];
   lines: Element[];
-  /** Where a kept desk's own number floats, in the chair's static. */
+  /** Where a kept desk's tag floats, in the chair's static. */
   away: Element;
   /** Where a kept desk's queue badge floats, in the badge layer. */
   ticket: Element;
@@ -271,7 +271,7 @@ export class SceneObjects {
       let ticket = "";
       if (away !== "" && desk?.number != null) {
         const at = (inner: string) => `<g transform="translate(${parts.x} ${parts.y - AWAY_LIFT})">${inner}</g>`;
-        if (away.startsWith("badge")) tag = at(badgeMarkup(desk.number, this.#deskColours[parts.slot] ?? null));
+        if (away.startsWith("badge")) tag = at(deskTagMarkup(desk.number, this.#deskColours[parts.slot] ?? null));
         else ticket = at(ticketMarkup(desk.number, away.endsWith("true")));
       }
       parts.away.innerHTML = tag;
