@@ -7,6 +7,7 @@ pub mod files;
 pub mod focus;
 pub mod git;
 pub mod mcp;
+pub mod meeting;
 #[cfg(feature = "window-authority")]
 pub mod orders;
 pub mod paths;

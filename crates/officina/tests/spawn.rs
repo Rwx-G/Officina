@@ -86,6 +86,7 @@ impl Setup {
             VectorKind::TriageCall => "triage",
             VectorKind::ReviewCall => "review",
             VectorKind::WorkOrder => "bg",
+            VectorKind::Logs => "logs",
         };
         self.fake(kind.code(), serde_json::json!({"mode": mode}))
     }
@@ -299,6 +300,7 @@ fn every_kind_reaches_the_fake_claude_as_its_golden_vector() {
             VectorKind::TriageCall => "triage",
             VectorKind::ReviewCall => "review",
             VectorKind::WorkOrder => "bg",
+            VectorKind::Logs => "logs",
             VectorKind::Agents | VectorKind::Version => "ok",
         };
         let fake = setup.fake(&name, serde_json::json!({"mode": mode}));
@@ -683,4 +685,35 @@ fn a_work_order_timeout_kills_only_claude() {
     let running = !common::heartbeat_stopped(&heartbeat);
     common::stop_heartbeat(&heartbeat);
     assert!(running, "the deadline ended what claude started");
+}
+
+/// AD-84, D-129: the fake's rendered screen, read through the `Logs` kind,
+/// strips to text without an escape byte, and its error line, built from
+/// the first of `LOG_ERROR_MARKERS`, is the one the meeting jumps to.
+#[test]
+fn the_logs_screen_strips_to_text_with_its_error_line() {
+    use officina_core::meeting::{LOG_ERROR_MARKERS, Logs, LogsRead, logs_of};
+    use officina_core::spawn::BackgroundId;
+
+    let setup = Setup::new();
+    let fake = setup.fake("logs-screen", serde_json::json!({"mode": "logs"}));
+    let id = BackgroundId::parse("bg0001").unwrap();
+    let stdout =
+        officina_host::spawn::logs(&fake, &id, None, &BaseEnv::new(seeded_base())).unwrap();
+    assert!(stdout.contains(&0x1b), "the fixture holds escape sequences");
+    let Logs::Shown(shown) = logs_of(Some(&LogsRead::Output(stdout))) else {
+        panic!("no logs shown");
+    };
+    let text = serde_json::to_value(&shown.text).unwrap();
+    let text = text.as_str().unwrap();
+    assert!(!text.contains('\u{1b}') && !text.contains('\r'), "{text:?}");
+    assert!(shown.escapes_stripped > 0);
+    let line = shown.first_error_line.expect("an error line") as usize;
+    assert!(
+        text.lines()
+            .nth(line - 1)
+            .unwrap()
+            .contains(LOG_ERROR_MARKERS[0]),
+        "{text}"
+    );
 }

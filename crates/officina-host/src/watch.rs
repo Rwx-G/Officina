@@ -25,6 +25,7 @@ use officina_core::relay::view::RelayView;
 
 use crate::collector::Collector;
 use crate::files::{event_file_for, now_ms};
+use crate::meeting::MeetingGrant;
 use crate::orders::orchestrator::{OrchestratorKeeper, StartGrant, StartReport};
 use crate::orders::{CardStore, LaunchGrant, LaunchReport};
 use crate::paths::Paths;
@@ -129,6 +130,10 @@ pub enum AuthorCommand {
     /// carries no deadline: the session runs, so its row and line are
     /// recorded however late (D-144).
     OrchestratorStarted(Box<StartReport>),
+    /// Receive on a card, a `sid:` session or a `subject:` to resume
+    /// (D-138): what the collector holds for its meeting, read nowhere
+    /// else.
+    OpenMeeting(String),
 }
 
 impl AuthorAnswer {
@@ -186,6 +191,15 @@ impl AuthorAnswer {
         }
     }
 
+    /// What the collector holds for a meeting, for `OpenMeeting`'s
+    /// answer.
+    pub fn into_meeting(self) -> Result<MeetingGrant, IpcError> {
+        match self {
+            AuthorAnswer::Meeting(grant) => Ok(*grant),
+            other => Err(other.unexpected()),
+        }
+    }
+
     /// The launch's ticket or its refusal, for `LaunchCard`'s answer.
     pub fn into_launch(self) -> Result<LaunchGrant, IpcError> {
         match self {
@@ -223,6 +237,7 @@ pub enum AuthorAnswer {
     Card(CardAnswer),
     Launch(LaunchGrant),
     Start(StartGrant),
+    Meeting(Box<MeetingGrant>),
 }
 
 /// The collector's answer, or why there is none to give.
@@ -1035,6 +1050,7 @@ fn answer_author<E: Emit>(
         request.command,
         AuthorCommand::ListArchived
             | AuthorCommand::ListDiscarded
+            | AuthorCommand::OpenMeeting(_)
             | AuthorCommand::IssueCard(_)
             | AuthorCommand::EditCard { .. }
     );
@@ -1124,6 +1140,11 @@ fn answer_author<E: Emit>(
         AuthorCommand::OrchestratorStarted(report) => {
             crate::orders::orchestrator::record_start(keeper, collector, registry, &report, now);
             Ok(AuthorAnswer::Done { created: None })
+        }
+        AuthorCommand::OpenMeeting(key) => {
+            let board = outputs.board.current();
+            crate::meeting::grant(collector, registry, board.as_ref(), &key)
+                .map(|grant| AuthorAnswer::Meeting(Box::new(grant)))
         }
     };
     // Every command reports the registry's state, a failure included

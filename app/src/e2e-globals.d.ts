@@ -7,6 +7,7 @@ import type { DiscardedSession } from "./lib/generated/DiscardedSession";
 import type { FocusOutcome } from "./lib/generated/FocusOutcome";
 import type { ItemOutcome } from "./lib/generated/ItemOutcome";
 import type { LaunchAnswer } from "./lib/generated/LaunchAnswer";
+import type { MeetingView } from "./lib/generated/MeetingView";
 import type { OrchestratorView } from "./lib/generated/OrchestratorView";
 import type { RegistryView } from "./lib/generated/RegistryView";
 import type { RelayView } from "./lib/generated/RelayView";
@@ -50,6 +51,9 @@ declare global {
     __officinaReleaseLaunch?: () => void;
     /** The Orchestrator view `get_orchestrator` answers (story 5.8). */
     __officinaOrchestrator?: OrchestratorView | null;
+    /** What `open_meeting` answers, by key (story 5.10); a key not named
+     *  is refused. */
+    __officinaMeetings?: Record<string, MeetingView>;
     /** Sets the Orchestrator view and emits `orchestrator://updated`. */
     __officinaPushOrchestrator?: (view: OrchestratorView) => Promise<void>;
     /** What `start_orchestrator` answers (story 5.16). */

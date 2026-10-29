@@ -36,6 +36,12 @@
 //!   `startedAt` (as E24 found the orchestrator listed), unless `unlisted`
 //!   is `true`, then sleeps `hang_ms` (none by default) so its pid stays
 //!   alive; any other call prints the fixture.
+//!   `logs` (story 5.10, D-129) answers `logs <id>` with a
+//!   rendered screen holding CSI, OSC and other escape sequences and an
+//!   error line built from the first of the meeting's `LOG_ERROR_MARKERS`
+//!   (never a typed string); any other call prints the fixture.
+//!   `logs-hang` sleeps `hang_ms` on `logs <id>` and prints the fixture
+//!   for any other call, for a meeting whose logs take their deadline.
 //! - `FAKE_CLAUDE_HANG_MS` (`hang_ms`): how long `hang` sleeps, 60 s by
 //!   default.
 //! - `FAKE_CLAUDE_VERSION` (`version`): answer to `--version`.
@@ -289,6 +295,24 @@ fn interactive_session(args: &[String]) {
     }
 }
 
+/// What `claude logs <id>` prints in mode `logs`: a rendered screen as E23
+/// saw it, each line wrapped in sequences of one family (CSI colours and
+/// cursor moves, OSC titles and links, a character set designation, a
+/// string control), its line ends `\r\n`, and an error line built from the
+/// first of the meeting's error markers.
+fn logs_screen() -> String {
+    let marker = officina_host::meeting::LOG_ERROR_MARKERS[0];
+    [
+        "\u{1b}]0;claude\u{7}\u{1b}[?25l\u{1b}[2J\u{1b}[H".to_owned(),
+        "\u{1b}[1m\u{1b}[38;5;208m> \u{1b}[0mBump the dependency\r\n".to_owned(),
+        "\u{1b}(B\u{1b}[2mRunning the tests\u{1b}[0m\r\n".to_owned(),
+        format!("\u{1b}[31m  {marker} the build failed\u{1b}[39m\r\n"),
+        "\u{1b}]8;;https://example.com/run\u{1b}\\the run\u{1b}]8;;\u{1b}\\\r\n".to_owned(),
+        "\u{1b}P1$r0m\u{1b}\\\u{1b}[7mbypass permissions on\u{1b}[27m\r\n".to_owned(),
+    ]
+    .concat()
+}
+
 /// What `claude --bg` prints in a folder never trusted (E19).
 const NOT_TRUSTED: &str = "Workspace not trusted. Run `claude` in this folder once and accept the trust prompt, then retry.";
 
@@ -513,6 +537,13 @@ fn main() {
             if let Some(ms) = setting("hang_ms").and_then(|v| v.parse().ok()) {
                 std::thread::sleep(Duration::from_millis(ms));
             }
+        }
+        "logs" if args.first().map(String::as_str) == Some("logs") => print!("{}", logs_screen()),
+        "logs-hang" if args.first().map(String::as_str) == Some("logs") => {
+            let ms = setting("hang_ms")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(60_000);
+            std::thread::sleep(Duration::from_millis(ms));
         }
         "bg-untrusted" if args.iter().any(|a| a == "--bg") => {
             eprintln!("{NOT_TRUSTED}");

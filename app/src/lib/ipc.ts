@@ -15,6 +15,7 @@ import type { FocusOutcome } from "./generated/FocusOutcome";
 import type { IpcError } from "./generated/IpcError";
 import type { ItemAnswer } from "./generated/ItemAnswer";
 import type { LaunchAnswer } from "./generated/LaunchAnswer";
+import type { MeetingView } from "./generated/MeetingView";
 import type { OrchestratorView } from "./generated/OrchestratorView";
 import type { RegistryView } from "./generated/RegistryView";
 import type { RelayView } from "./generated/RelayView";
@@ -219,6 +220,13 @@ export function markBriefingRead(): Promise<void> {
  *  live one forward (AD-89): how the Start was answered. */
 export function startOrchestrator(): Promise<StartAnswer> {
   return invoke<StartAnswer>("start_orchestrator");
+}
+
+/** The meeting of `key` (AD-84, D-138): a card key, `sid:<session id>`
+ *  or `subject:<id>`; read on Receive, and again when the card's state
+ *  changes. */
+export function openMeeting(key: string): Promise<MeetingView> {
+  return invoke<MeetingView>("open_meeting", { key });
 }
 
 export function getBoard(): Promise<Board | null> {

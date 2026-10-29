@@ -211,7 +211,7 @@ pub struct LaunchError {
 /// and a console kind run in no job.
 pub const fn job_rule(kind: VectorKind) -> JobRule {
     match kind {
-        VectorKind::Agents | VectorKind::Version => JobRule::TreeOnTimeout,
+        VectorKind::Agents | VectorKind::Version | VectorKind::Logs => JobRule::TreeOnTimeout,
         VectorKind::TriageCall | VectorKind::ReviewCall => JobRule::KillOnClose,
         VectorKind::Attach | VectorKind::WorkOrder | VectorKind::Orchestrator => JobRule::NoJob,
     }
@@ -230,7 +230,8 @@ pub const fn keeps_held_output(kind: VectorKind) -> bool {
         | VectorKind::TriageCall
         | VectorKind::ReviewCall
         | VectorKind::Attach
-        | VectorKind::Orchestrator => false,
+        | VectorKind::Orchestrator
+        | VectorKind::Logs => false,
     }
 }
 
@@ -426,6 +427,26 @@ pub fn agents_json(
     answered(execute(claude, &vector, base)?)
 }
 
+/// `claude logs <id>`: its stdout, at most
+/// [`officina_core::spawn::LOGS_STDOUT_CAP`] of it, within about
+/// [`officina_core::spawn::LOGS_DEADLINE_MS`] plus [`OUTPUT_GRACE`].
+pub fn logs(
+    claude: &ResolvedClaude,
+    id: &officina_core::spawn::BackgroundId,
+    config_dir: Option<&Path>,
+    base: &BaseEnv,
+) -> Result<Vec<u8>, SpawnError> {
+    let vector = officina_core::spawn::logs(id, config_text(config_dir).as_deref());
+    match execute(claude, &vector, base)? {
+        SpawnOutcome::Captured(ran) if ran.status.success() => Ok(ran.stdout),
+        SpawnOutcome::Captured(ran) => Err(SpawnError::Failed {
+            code: crate::process::exit_code_text(ran.status),
+            stderr: ran.quoted_stderr(),
+        }),
+        SpawnOutcome::Started { .. } => Err(SpawnError::Spawn("it was not captured".into())),
+    }
+}
+
 /// `claude --version`, first line trimmed.
 pub fn version(
     claude: &ResolvedClaude,
@@ -475,6 +496,9 @@ mod tests {
                 None,
                 None,
             ),
+            VectorKind::Logs => {
+                officina_core::spawn::logs(&BackgroundId::parse("bg01").unwrap(), None)
+            }
         }
     }
 

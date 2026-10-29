@@ -48,6 +48,9 @@ closed_enum! {
         ReviewCall,
         /// The orchestrator session, in a console of its own (AD-89).
         Orchestrator,
+        /// `claude logs <id>`, a background session's recent output for
+        /// the meeting (AD-84, E23).
+        Logs,
     }
 }
 
@@ -63,7 +66,9 @@ impl VectorKind {
     /// ```
     pub const fn is_launch(self) -> bool {
         match self {
-            VectorKind::Agents | VectorKind::Version | VectorKind::Attach => false,
+            VectorKind::Agents | VectorKind::Version | VectorKind::Attach | VectorKind::Logs => {
+                false
+            }
             VectorKind::TriageCall
             | VectorKind::WorkOrder
             | VectorKind::ReviewCall
@@ -77,7 +82,8 @@ impl VectorKind {
             VectorKind::Agents
             | VectorKind::Version
             | VectorKind::Attach
-            | VectorKind::WorkOrder => EnvRule::Session,
+            | VectorKind::WorkOrder
+            | VectorKind::Logs => EnvRule::Session,
             VectorKind::TriageCall | VectorKind::ReviewCall | VectorKind::Orchestrator => {
                 EnvRule::Contained
             }
@@ -95,7 +101,8 @@ impl VectorKind {
             | VectorKind::Attach
             | VectorKind::TriageCall
             | VectorKind::WorkOrder
-            | VectorKind::ReviewCall => &[],
+            | VectorKind::ReviewCall
+            | VectorKind::Logs => &[],
         }
     }
 }
@@ -316,6 +323,13 @@ pub const AGENTS_STDOUT_CAP: usize = 8 * 1024 * 1024;
 /// How much of a captured child's stderr is kept, for a failure's message.
 pub const STDERR_CAP_BYTES: usize = 4 * 1024;
 
+/// How long `claude logs` may run (AD-79): E23 saw it answer in 0.9 s.
+pub const LOGS_DEADLINE_MS: u64 = 5_000;
+
+/// The most stdout `claude logs` keeps (AD-79): E23 saw 128 KB, the
+/// session's rendered screen; the meeting keeps the end of it.
+pub const LOGS_STDOUT_CAP: usize = 256 * 1024;
+
 /// What a work order keeps of each output stream (AD-79): `claude --bg`
 /// prints a few lines and exits (E20).
 pub const WORK_ORDER_OUTPUT_CAP: usize = 64 * 1024;
@@ -501,8 +515,8 @@ impl BackgroundId {
 
 /// One `claude` process, as data. Its fields are private: the per-kind
 /// builders of this module ([`agents`], [`version`], [`attach`],
-/// [`triage_call`], [`work_order`], [`review_call`], [`orchestrator`]) are
-/// its only constructors.
+/// [`triage_call`], [`work_order`], [`review_call`], [`orchestrator`],
+/// [`logs`]) are its only constructors.
 ///
 /// ```compile_fail
 /// use officina_core::spawn::{ClaudeVector, Console, CwdRule, EnvRule, StdinRule, VectorKind};
@@ -740,6 +754,28 @@ pub fn attach(id: &BackgroundId, config_dir: Option<&str>) -> ClaudeVector {
     }
 }
 
+/// `claude logs <id>` (AD-79, AD-84, E23): from the binary's folder, as
+/// attach runs, no console, stdin null, stdout captured within
+/// [`LOGS_STDOUT_CAP`] and [`LOGS_DEADLINE_MS`]. It needs no trusted folder
+/// (E23) and reads the session's output, display only.
+pub fn logs(id: &BackgroundId, config_dir: Option<&str>) -> ClaudeVector {
+    ClaudeVector {
+        kind: VectorKind::Logs,
+        args: vec!["logs".to_owned(), id.as_str().to_owned()],
+        cwd: CwdRule::BinaryFolder,
+        console: Console::None,
+        stdin: StdinRule::Null,
+        capture: Some(Capture {
+            stdout_cap: LOGS_STDOUT_CAP,
+            stderr_cap: STDERR_CAP_BYTES,
+        }),
+        deadline_ms: Some(LOGS_DEADLINE_MS),
+        env_set: env_set(config_dir),
+        env_rule: VectorKind::Logs.env_rule(),
+        stdin_data: Vec::new(),
+    }
+}
+
 /// The triage call (AD-51 as amended, E16): print mode, `model`, no tool,
 /// no MCP server, no settings source, the inbox refused
 /// ([`CONTAINED_SETTINGS`]), no session persistence, a JSON answer
@@ -923,6 +959,7 @@ mod tests {
                 config_dir,
                 "C:/path/to/home",
             ),
+            VectorKind::Logs => logs(&BackgroundId::parse("bg01").unwrap(), config_dir),
             VectorKind::Orchestrator => orchestrator(&server(None), None, config_dir),
         }
     }
@@ -1042,7 +1079,7 @@ mod tests {
             // the read half is what the board and focus need.
             let read_half = matches!(
                 kind,
-                VectorKind::Agents | VectorKind::Version | VectorKind::Attach
+                VectorKind::Agents | VectorKind::Version | VectorKind::Attach | VectorKind::Logs
             );
             assert_eq!(kind.is_launch(), !read_half, "{kind:?}");
         }
@@ -1318,6 +1355,23 @@ mod tests {
                 "{name}"
             );
         }
+    }
+
+    #[test]
+    fn logs_takes_only_a_parsed_background_id() {
+        let vector = logs(&BackgroundId::parse("0f1e2d3c").unwrap(), None);
+        assert_eq!(vector.args(), ["logs", "0f1e2d3c"]);
+        assert_eq!(vector.cwd(), &CwdRule::BinaryFolder);
+        assert_eq!(
+            (vector.console(), vector.stdin()),
+            (Console::None, StdinRule::Null)
+        );
+        assert_eq!(vector.deadline_ms(), Some(LOGS_DEADLINE_MS));
+        assert_eq!(
+            vector.capture().map(|c| c.stdout_cap),
+            Some(LOGS_STDOUT_CAP)
+        );
+        assert!(!VectorKind::Logs.is_launch());
     }
 
     #[test]

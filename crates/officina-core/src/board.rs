@@ -433,6 +433,10 @@ pub struct SessionEvents {
     pub last_prompt_at_ms: Option<i64>,
     pub last_stop_at_ms: Option<i64>,
     pub last_blocking_notification_at_ms: Option<i64>,
+    /// The latest `Notification` line's message, whatever its type: what
+    /// the meeting shows as Claude Code's last word to the author (D-138).
+    /// The board's cards do not carry it.
+    pub last_notification_message: Option<String>,
     pub last_prompt: Option<String>,
     pub last_message: Option<String>,
     /// The tail of the answer `last_message` holds the head of.
@@ -559,6 +563,9 @@ pub fn group_events(events: &[EventLine]) -> BTreeMap<String, SessionEvents> {
                 }
             }
             "Notification" => {
+                if event.message.is_some() {
+                    entry.last_notification_message.clone_from(&event.message);
+                }
                 if event
                     .notification_type
                     .as_deref()
@@ -1446,6 +1453,37 @@ mod tests {
         assert_eq!(classify(&busy, &events["s"]).column, Column::Working);
         let no_status = record(r#"{"sessionId":"s","kind":"interactive"}"#);
         assert_eq!(classify(&no_status, &events["s"]).column, Column::NeedsYou);
+    }
+
+    /// D-138: each session keeps its latest `Notification` message,
+    /// whatever its type, and a later line without one keeps the earlier.
+    #[test]
+    fn the_latest_notification_message_is_kept_per_session() {
+        let notified = |ts, sid, message: Option<&str>| {
+            let mut n = event(ts, sid, "Notification");
+            n.notification_type = Some("idle_prompt".into());
+            n.message = message.map(str::to_owned);
+            n
+        };
+        let events = group_events(&[
+            notified(30, "a", Some("Claude is waiting for your input")),
+            notified(10, "a", Some("older")),
+            notified(40, "a", None),
+            notified(20, "b", Some("Claude needs your permission to use Bash")),
+            event(50, "b", "Stop"),
+        ]);
+        assert_eq!(
+            events["a"].last_notification_message.as_deref(),
+            Some("Claude is waiting for your input")
+        );
+        assert_eq!(
+            events["b"].last_notification_message.as_deref(),
+            Some("Claude needs your permission to use Bash")
+        );
+        assert_eq!(
+            group_events(&[event(5, "c", "Stop")])["c"].last_notification_message,
+            None
+        );
     }
 
     #[test]

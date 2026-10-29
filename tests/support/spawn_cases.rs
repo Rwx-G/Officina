@@ -218,6 +218,11 @@ impl Case {
                 };
                 spawn::orchestrator(&server, model, config_dir)
             }
+            VectorKind::Logs => {
+                let id = BackgroundId::parse(self.required("background_id"))
+                    .unwrap_or_else(|| panic!("case {}: invalid background_id", self.name));
+                spawn::logs(&id, config_dir)
+            }
         }
     }
 }

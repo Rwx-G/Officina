@@ -10,6 +10,7 @@ import type { ConfirmItem } from "./lib/generated/ConfirmItem";
 import type { IpcError } from "./lib/generated/IpcError";
 import type { ItemAnswer } from "./lib/generated/ItemAnswer";
 import type { LaunchAnswer } from "./lib/generated/LaunchAnswer";
+import type { MeetingView } from "./lib/generated/MeetingView";
 import type { OrchestratorView } from "./lib/generated/OrchestratorView";
 import type { RegistryView } from "./lib/generated/RegistryView";
 import type { RelayView } from "./lib/generated/RelayView";
@@ -92,6 +93,8 @@ export function installE2eMock(): void {
           return null;
         case "start_orchestrator":
           return startOrchestrator();
+        case "open_meeting":
+          return meetingOf((args as { key: string }).key);
         default:
           if (AUTHOR_COMMANDS.includes(cmd)) return author(cmd);
           return null;
@@ -115,6 +118,15 @@ export function installE2eMock(): void {
     window.__officinaOrchestrator = view;
     await emit("orchestrator://updated", view);
   };
+}
+
+/** Mirrors `open_meeting` (AD-84): the meeting the test set for the key,
+ *  else the backend's refusal of a key it does not know. */
+function meetingOf(key: string): Promise<MeetingView> {
+  const view = window.__officinaMeetings?.[key];
+  if (view) return Promise.resolve(view);
+  const error: IpcError = { code: "refused", message: `${key} is no longer on the board, and the registry does not hold it`, refusal: null };
+  return Promise.reject(error);
 }
 
 /** Mirrors the collector's answer to an author request: a refusal names

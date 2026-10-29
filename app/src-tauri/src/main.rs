@@ -18,6 +18,7 @@ use std::time::Duration;
 use officina_core::board::Board;
 use officina_core::focus::FocusOutcome;
 use officina_core::ipc::IpcError;
+use officina_core::meeting::MeetingView;
 use officina_core::orders::card::{CardAnswer, CardChange, CardRequest, LaunchAnswer};
 use officina_core::orders::orchestrator::StartAnswer;
 use officina_core::orders::view::OrchestratorView;
@@ -465,6 +466,22 @@ async fn start_orchestrator(state: State<'_, AppState>) -> Result<StartAnswer, I
     .map_err(|e| IpcError::internal(e.to_string()))?
 }
 
+/// The meeting of `key` (AD-84, D-138): a card key, `sid:<session id>`
+/// or `subject:<id>`. The collector answers what it holds; the event
+/// lines, the journal, `git` and `claude logs` are read on this command's
+/// blocking thread, never the collector's (AD-3).
+#[tauri::command]
+async fn open_meeting(state: State<'_, AppState>, key: String) -> Result<MeetingView, IpcError> {
+    let sender = state
+        .collector()
+        .ok_or_else(|| IpcError::internal("the collector is not running"))?;
+    tauri::async_runtime::spawn_blocking(move || {
+        officina_host::meeting::open_meeting(&sender, &key)
+    })
+    .await
+    .map_err(|e| IpcError::internal(e.to_string()))?
+}
+
 #[tauri::command]
 fn refresh(state: State<'_, AppState>) {
     if let Ok(sender) = state.sender.lock() {
@@ -680,7 +697,8 @@ fn main() {
             launch_work_order,
             get_orchestrator,
             mark_briefing_read,
-            start_orchestrator
+            start_orchestrator,
+            open_meeting
         ])
         .run(tauri::generate_context!())
         .expect("failed to run the Officina window");

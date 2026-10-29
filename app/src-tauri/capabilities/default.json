@@ -38,6 +38,7 @@
     "allow-launch-work-order",
     "allow-get-orchestrator",
     "allow-mark-briefing-read",
-    "allow-start-orchestrator"
+    "allow-start-orchestrator",
+    "allow-open-meeting"
   ]
 }

@@ -17,8 +17,8 @@ use officina_core::registry::dry_run::DryRunState;
 use officina_core::registry::fold::{AgentsChanges, AgentsSnapshot};
 use officina_core::registry::model::{EnableRefusal, ModelEnv};
 use officina_core::registry::types::{
-    OrchestratorStartOutcome, RegistryReport, RegistryState, SubjectRecord, SubjectRef,
-    WorkOrderRecord,
+    ExcerptRecord, OrchestratorStartOutcome, RegistryReport, RegistryState, SessionRecord,
+    SubjectRecord, SubjectRef, WorkOrderRecord,
 };
 use officina_core::registry::view::{DiscardedSession, RegistryView, SubjectView, unread_view};
 use officina_core::relay::view::RelayView;
@@ -281,6 +281,32 @@ impl WindowRegistry {
             Ok(listed) => {
                 self.last_error = None;
                 Ok(listed)
+            }
+            Err(error) => {
+                Err(self.access_failed(&RegistryError::from(error), IpcErrorCode::ReadFailed))
+            }
+        }
+    }
+
+    /// Every session record and excerpt, for a meeting on a session the
+    /// board no longer shows or on a subject (D-138); read from the writer,
+    /// or from the read-only connection of a registry written by a newer
+    /// Officina.
+    pub fn meeting_records(
+        &mut self,
+    ) -> Result<(Vec<SessionRecord>, Vec<ExcerptRecord>), IpcError> {
+        let read = match &self.slot {
+            Slot::Writable(writer) => read::session_records(&writer.conn)
+                .and_then(|records| Ok((records, read::excerpts(&writer.conn)?))),
+            Slot::ReadOnly(reader) => reader
+                .session_records()
+                .and_then(|records| Ok((records, reader.excerpts()?))),
+            Slot::Unavailable(_) | Slot::Network => return Err(self.not_writable()),
+        };
+        match read {
+            Ok(found) => {
+                self.last_error = None;
+                Ok(found)
             }
             Err(error) => {
                 Err(self.access_failed(&RegistryError::from(error), IpcErrorCode::ReadFailed))

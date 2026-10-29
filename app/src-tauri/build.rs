@@ -35,6 +35,7 @@ const COMMANDS: &[&str] = &[
     "get_orchestrator",
     "mark_briefing_read",
     "start_orchestrator",
+    "open_meeting",
 ];
 
 fn main() {

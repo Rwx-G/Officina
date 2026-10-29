@@ -1,5 +1,6 @@
 //! The journal's locked append, its spill (D-760) and two-day reader
-//! (AD-32). Every test works in its own temp home.
+//! (AD-32), and the meeting's read back to a session's start (D-169).
+//! Every test works in its own temp home.
 
 use std::fs::{self, OpenOptions};
 use std::time::{Duration, Instant};
@@ -352,4 +353,85 @@ fn unknown_kind_is_not_corrupt() {
     fs::write(day_file(&home, NOW), today).unwrap();
     let (lines, corrupt) = read_recent(&home, NOW);
     assert_eq!((lines.len(), corrupt), (1, 0));
+}
+
+/// One `refused` line of `session`, for the meeting's read-back.
+#[cfg(feature = "window-authority")]
+fn refused_by(session: &str, action: &str) -> JournalEntry {
+    JournalEntry::Refused(
+        serde_json::from_value(serde_json::json!({
+            "session_id": session, "action": action,
+            "reason": officina_core::relay::journal::RefusalReason::ALL[0], "detail": "no",
+        }))
+        .unwrap(),
+    )
+}
+
+/// D-169: the meeting reads the journal back to the session's start, past
+/// the readers' two days, and no further than the journal's 90 days: a
+/// session started ten days ago shows its refusal of nine days ago, which
+/// `read_recent` does not reach, and one started 120 days ago shows
+/// nothing older than 90 days.
+#[cfg(feature = "window-authority")]
+#[test]
+fn a_meeting_reads_runs_back_to_the_session_start() {
+    use officina_core::board::{BoardInput, build_board};
+    use officina_core::meeting::MeetingCard;
+    use officina_host::meeting::{MeetingGrant, gather};
+
+    let dir = tempfile::tempdir().unwrap();
+    let home = RelayHome::new(dir.path(), None);
+    let session = "0f1e2d3c-4b5a-4978-8796-a5b4c3d2e1f0";
+    for (back, action) in [(9, "nine-days-ago"), (95, "past-retention"), (0, "today")] {
+        let ts = NOW - back * DAY;
+        fs::create_dir_all(home.journal_dir()).unwrap();
+        fs::write(
+            day_file(&home, ts),
+            JournalLine::new(ts, refused_by(session, action)).to_line(),
+        )
+        .unwrap();
+    }
+    let (recent, _) = read_recent(&home, NOW);
+    assert_eq!(recent.len(), 1, "the readers' two days hold today's only");
+    let actions = |started_days_ago: i64| -> Vec<String> {
+        let agents = format!(
+            r#"[{{"pid":7,"sessionId":"{session}","kind":"interactive","status":"idle","startedAt":{}}}]"#,
+            NOW - started_days_ago * DAY
+        );
+        let board = build_board(
+            &BoardInput {
+                agents: Some(officina_core::agents::parse_agents(&agents).unwrap()),
+                ..Default::default()
+            },
+            NOW,
+        );
+        let grant = MeetingGrant {
+            card: MeetingCard::from(&board.columns.your_turn[0]),
+            agents_folder: None,
+            approvals: Vec::new(),
+            claude: None,
+            config_dir: None,
+            base_env: officina_host::spawn::BaseEnv::default(),
+            relay: home.clone(),
+            events_dir: dir.path().join("events"),
+        };
+        gather(&grant, NOW)
+            .runs
+            .iter()
+            .map(|run| {
+                serde_json::to_value(&run.action)
+                    .unwrap()
+                    .as_str()
+                    .unwrap()
+                    .to_owned()
+            })
+            .collect()
+    };
+    assert_eq!(actions(10), ["today", "nine-days-ago"]);
+    assert_eq!(
+        actions(120),
+        ["today", "nine-days-ago"],
+        "never past 90 days"
+    );
+    assert_eq!(actions(0), ["today"], "nothing before the session's start");
 }

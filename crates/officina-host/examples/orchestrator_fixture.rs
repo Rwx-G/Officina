@@ -9,8 +9,11 @@
 //! catalogue, as the window's card store issues them (story 5.9). Story 5.14
 //! adds the `auto` class's review rows with the author's decisions, its
 //! switches and the decision lines, which `officina relay --json` then
-//! prints (the `relay-auto` scenario). Never SQL from Node, never a command
-//! line write path. Built only with `window-authority`, linked into neither
+//! prints (the `relay-auto` scenario). A script with a meeting (story 5.10)
+//! builds a git repository with commits since the session's start and a
+//! working-tree change, and prints the `MeetingView` the window builds for
+//! that card, its logs read from the fake claude. Never SQL from Node,
+//! never a command line write path. Built only with `window-authority`, linked into neither
 //! shipped binary.
 //!
 //! Usage: `orchestrator_fixture <officina home> <script.json>`, where the
@@ -37,7 +40,9 @@ use officina_core::relay::approvals::ApprovalBy;
 use officina_core::relay::auto::{AutoMode, EscalationCause, ReviewDecision};
 use officina_core::relay::journal::{ApprovalEvent, JournalEntry};
 use officina_core::relay::template::{ApprovedTemplate, ParamName, ProjectName, TemplateName};
-use officina_host::paths::events_dir_of;
+use officina_host::collector::{Collector, LoadedFloor};
+use officina_host::meeting;
+use officina_host::paths::{Paths, events_dir_of};
 use officina_host::registry::orders::LaunchRecord;
 use officina_host::registry::review::NewReview;
 use officina_host::registry::store::{Writer, open_writer};
@@ -45,6 +50,7 @@ use officina_host::registry::window::WindowRegistry;
 use officina_host::relay::home::{RelayHome, load_relay_floor};
 use officina_host::relay::journal;
 use officina_host::relay::view::{AutoRead, read_view_with};
+use officina_host::spawn::resolve_claude;
 use serde::Deserialize;
 
 const USAGE: &str = "usage: orchestrator_fixture <officina home> <script.json>";
@@ -86,6 +92,131 @@ struct Script {
     /// name instead of the view.
     #[serde(default)]
     cards: Vec<CardStep>,
+    /// A meeting to print instead of the view (story 5.10).
+    #[serde(default)]
+    meeting: Option<MeetingScript>,
+}
+
+/// A meeting to print (story 5.10, D-181's kind `meeting`): the board's
+/// card `key`, whose session `claude agents` lists in `repo`, which this
+/// tool makes a git repository with `commits` and `working_tree` changes.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MeetingScript {
+    key: String,
+    repo: PathBuf,
+    commits: Vec<SeededCommit>,
+    /// Files written after the commits, tracked or not.
+    #[serde(default)]
+    working_tree: Vec<SeededFile>,
+}
+
+/// One commit, dated `at_ms`.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SeededCommit {
+    at_ms: i64,
+    subject: String,
+    files: Vec<SeededFile>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SeededFile {
+    path: String,
+    text: String,
+}
+
+/// Runs `git <args>` in `dir` with a fixed identity, both dates `at_ms`.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the fixture builds its repository with git outside host::git"
+)]
+fn git_in(git: &Path, dir: &Path, args: &[&str], at_ms: i64) -> Result<(), String> {
+    let date = format!("{} +0000", at_ms / 1000);
+    let out = std::process::Command::new(git)
+        .args([
+            "-c",
+            "user.name=user01",
+            "-c",
+            "user.email=user@example.com",
+            "-c",
+            "core.autocrlf=false",
+            "-c",
+            "init.defaultBranch=main",
+            "-c",
+            "commit.gpgSign=false",
+        ])
+        .args(args)
+        .current_dir(dir)
+        .env("GIT_AUTHOR_DATE", &date)
+        .env("GIT_COMMITTER_DATE", &date)
+        .stdin(std::process::Stdio::null())
+        .output()
+        .map_err(|e| e.to_string())?;
+    if out.status.success() {
+        Ok(())
+    } else {
+        Err(format!(
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        ))
+    }
+}
+
+fn write_file(repo: &Path, file: &SeededFile) -> Result<(), String> {
+    let path = repo.join(&file.path);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    std::fs::write(path, &file.text).map_err(|e| e.to_string())
+}
+
+/// Builds the repository of `meeting`, then the meeting of its key as the
+/// window builds it: the collector's half on a collector that listed the
+/// sessions through the `claude` of `OFFICINA_CLAUDE_BIN`, then the reads
+/// and the view (`meeting::grant`, `meeting::gather`).
+fn print_meeting(
+    home: &Path,
+    board: Option<&Board>,
+    meeting: &MeetingScript,
+    now_ms: i64,
+) -> Result<String, String> {
+    let git = officina_host::relay::tree::resolve_git().ok_or("no git installed")?;
+    std::fs::create_dir_all(&meeting.repo).map_err(|e| e.to_string())?;
+    let first = meeting.commits.first().map_or(now_ms, |c| c.at_ms);
+    git_in(&git, &meeting.repo, &["init", "-q"], first)?;
+    for commit in &meeting.commits {
+        for file in &commit.files {
+            write_file(&meeting.repo, file)?;
+            git_in(&git, &meeting.repo, &["add", &file.path], commit.at_ms)?;
+        }
+        git_in(
+            &git,
+            &meeting.repo,
+            &["commit", "-q", "-m", &commit.subject],
+            commit.at_ms,
+        )?;
+    }
+    for file in &meeting.working_tree {
+        write_file(&meeting.repo, file)?;
+    }
+    let paths = Paths {
+        officina_home: home.to_path_buf(),
+        claude_config_dir: home.join("claude"),
+        claude_config_override: None,
+        floor_file: None,
+    };
+    let claude = resolve_claude().map(|c| c.path().to_path_buf());
+    let mut collector = Collector::from_parts(paths, LoadedFloor::default(), claude);
+    if !collector.refresh_agents(now_ms) {
+        return Err("claude agents did not answer".to_owned());
+    }
+    let mut registry = WindowRegistry::open(home, &[], now_ms);
+    let grant =
+        meeting::grant(&collector, &mut registry, board, &meeting.key).map_err(|e| e.message)?;
+    let view = meeting::gather(&grant, now_ms);
+    serde_json::to_string_pretty(&view).map_err(|e| e.to_string())
 }
 
 /// One review row, as the window's review would have written it.
@@ -422,6 +553,9 @@ fn run(home: &Path, script: &Script) -> Result<String, String> {
     if !script.cards.is_empty() {
         let cards = issue_cards(home, &relay, board.as_ref(), &script.cards, script.now_ms)?;
         return serde_json::to_string_pretty(&cards).map_err(|e| e.to_string());
+    }
+    if let Some(meeting) = &script.meeting {
+        return print_meeting(home, board.as_ref(), meeting, script.now_ms);
     }
     let auto = AutoRead::read_only(home, script.now_ms);
     let relay_view =

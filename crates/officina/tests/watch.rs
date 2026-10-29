@@ -11,7 +11,9 @@
 //! launched from the collector's store, their outcome recorded and
 //! journaled once, the board at its pace while `claude --bg` runs (story
 //! 5.7); the Orchestrator view emitted on change and its briefing counted
-//! from the author's last reading (story 5.8).
+//! from the author's last reading (story 5.8); a meeting's reads off the
+//! collector thread, a subject's meeting on its latest prompted session,
+//! and no git where only an event line names the folder (story 5.10).
 //!
 //! The tests of stories 1.5 and 2.7 give the fake claude no fixture (it
 //! then lists no session). Story 3.2's run a copy of the fake configured by
@@ -31,6 +33,7 @@ use std::time::{Duration, Instant};
 
 use officina_core::board::{Board, Column, Settled};
 use officina_core::ipc::IpcErrorCode;
+use officina_core::meeting::{Changes, Delivery, Logs};
 use officina_core::orders::briefing::Cursor;
 use officina_core::orders::card::{LaunchAnswer, LaunchRefusal};
 use officina_core::orders::view::ORCHESTRATOR_VIEW_SCHEMA;
@@ -3109,4 +3112,164 @@ fn a_live_pid_fallback_survives_a_window_restart() {
     );
     assert_eq!(window.spawns(1).len(), 1, "no second session");
     assert_eq!(window.rows().len(), 1);
+}
+
+// ------------------------------------------------------------ the meeting
+
+/// The background session of the meeting tests.
+const MEETING_SESSION: &str = "0f1e2d3c-4b5a-4978-8796-a5b4c3d2e1f0";
+
+/// The fixture listing [`MEETING_SESSION`] idle and done with a pid, live
+/// and idle by E1, in `cwd`.
+fn background_listing(cwd: &Path, now: i64) -> String {
+    serde_json::json!([{"id": "bg0001", "sessionId": MEETING_SESSION, "name": "bump", "cwd": cwd,
+        "kind": "background", "pid": 4200, "startedAt": now - 60_000, "status": "idle", "state": "done"}])
+    .to_string()
+}
+
+/// The `claude` calls the fake logged whose first argument is `first`.
+fn calls_of(env: &common::TestEnv, first: &str) -> usize {
+    common::fake_claude_calls(&env.fake_log())
+        .iter()
+        .filter(|call| common::logged_argv(call).first().map(String::as_str) == Some(first))
+        .count()
+}
+
+fn set_sidecar(sidecar: &Path, key: &str, value: serde_json::Value) {
+    let mut config: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(sidecar).unwrap()).unwrap();
+    config[key] = value;
+    std::fs::write(sidecar, config.to_string()).unwrap();
+}
+
+/// D-138, AD-3: a meeting's reads run on the command's thread, never the
+/// collector's: while `claude logs` hangs to its deadline, the collector
+/// still runs `claude agents` on a refresh, and the meeting then says the
+/// logs could not be read.
+#[test]
+fn a_meeting_reads_its_inputs_without_blocking_the_board() {
+    let env = common::TestEnv::new();
+    let now = common::now_ms();
+    let work = env.root.path().join("work");
+    std::fs::create_dir_all(&work).unwrap();
+    env.write_agents(&background_listing(&work, now));
+    let (handle, emitted, sidecar) = watch_all(&env, |_| {});
+    let board = until(&emitted.boards, |b| shows(b, MEETING_SESSION));
+    let key = board
+        .columns
+        .all()
+        .find(|c| c.session_id.as_deref() == Some(MEETING_SESSION))
+        .unwrap()
+        .key
+        .clone();
+    set_sidecar(&sidecar, "mode", "logs-hang".into());
+    set_sidecar(&sidecar, "hang_ms", 8_000.into());
+    std::thread::sleep(SETTLE);
+    let sender = handle.sender.clone();
+    let opened = std::thread::spawn(move || officina_host::meeting::open_meeting(&sender, &key));
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while calls_of(&env, "logs") == 0 {
+        assert!(Instant::now() < deadline, "the logs call never started");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let agents_before = calls_of(&env, "agents");
+    handle.sender.send(CollectorMsg::Refresh).unwrap();
+    while calls_of(&env, "agents") == agents_before {
+        assert!(
+            !opened.is_finished(),
+            "the refresh waited for the meeting's reads"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let view = opened.join().unwrap().unwrap();
+    assert!(
+        matches!(view.logs, Some(Logs::Unavailable { .. })),
+        "{:?}",
+        view.logs
+    );
+    assert_eq!(view.delivery, Delivery::ResumeLive);
+    stop(handle);
+}
+
+/// D-76, D-138: Receive on a subject to resume opens its latest session
+/// that saw a prompt, as `sid:<session id>`, from the registry when the
+/// board no longer shows it; no `claude agents` folder is known for it,
+/// so no git runs and an interactive one is copy only (D-168).
+#[test]
+fn a_subject_to_resume_opens_its_latest_prompted_session() {
+    let env = common::TestEnv::new();
+    let now = common::now_ms();
+    // Three days ago: past the board's two days, so the registry alone
+    // holds them.
+    for (session, at) in [
+        ("s-later", now - 3 * DAY_MS),
+        ("s-earlier", now - 3 * DAY_MS - 60_000),
+    ] {
+        hook_line(
+            &env,
+            serde_json::json!({"hook_event_name": "UserPromptSubmit", "session_id": session,
+                "cwd": "C:/work/api", "prompt": format!("prompt of {session}")}),
+            at,
+        );
+    }
+    let (handle, emitted, _) = watch_all(&env, |_| {});
+    let board = until(&emitted.boards, |_| true);
+    assert!(!shows(&board, "s-later"));
+    let created = ask(
+        &handle,
+        create(
+            "rollout",
+            SubjectOrigin::Sessions(vec!["s-earlier".into(), "s-later".into()]),
+        ),
+        AUTHOR_WAIT,
+    )
+    .recv()
+    .unwrap()
+    .unwrap()
+    .into_done()
+    .unwrap()
+    .unwrap();
+    let view = officina_host::meeting::open_meeting(&handle.sender, &format!("subject:{created}"))
+        .unwrap();
+    assert_eq!(view.key, "sid:s-later");
+    assert_eq!(view.column, Column::ToResume);
+    assert_eq!(
+        serde_json::to_value(&view.decision.last_prompt).unwrap(),
+        "prompt of s-later"
+    );
+    assert_eq!(view.changes, Changes::FolderUnknown);
+    assert_eq!(view.delivery, Delivery::CopyOnly);
+    let unknown = officina_host::meeting::open_meeting(&handle.sender, "subject:999");
+    assert_eq!(unknown.unwrap_err().code, IpcErrorCode::Refused);
+    stop(handle);
+}
+
+/// D-168: a folder from an event line never chooses where git runs: a
+/// session `claude agents` does not list, whose only `cwd` is a forged
+/// event line's naming a work tree, gets no changes read, and, ended
+/// without a folder `claude agents` reported, is copy only.
+#[test]
+fn a_folder_from_an_event_line_runs_no_git() {
+    let env = common::TestEnv::new();
+    let now = common::now_ms();
+    let repo = env.root.path().join("forged");
+    std::fs::create_dir_all(repo.join(".git")).unwrap();
+    // An hour ago, past the grace an unlisted session is judged after.
+    for (event, at) in [
+        ("UserPromptSubmit", now - 3_602_000),
+        ("Stop", now - 3_601_000),
+    ] {
+        hook_line(
+            &env,
+            serde_json::json!({"hook_event_name": event, "session_id": "s-forged", "cwd": repo,
+                "prompt": "look here"}),
+            at,
+        );
+    }
+    let (handle, emitted, _) = watch_all(&env, |_| {});
+    until(&emitted.boards, |b| shows(b, "s-forged"));
+    let view = officina_host::meeting::open_meeting(&handle.sender, "sid:s-forged").unwrap();
+    assert_eq!(view.changes, Changes::FolderUnknown);
+    assert_eq!(view.delivery, Delivery::CopyOnly);
+    stop(handle);
 }
