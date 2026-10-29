@@ -19,7 +19,7 @@ use officina_host::spawn::BaseEnv;
 use officina_host::watch::{CollectorMsg, WatchHandle, spawn};
 
 use super::relay::Relay;
-use super::{Emitted, fake_claude_in, now_ms, run_with, sink};
+use super::{Emitted, fake_claude_in, now_ms, read_tool_log, run_with, sink};
 
 /// The relay floor: `check`, free, and `apply`, `auto` after it, with
 /// `{cap}` approvals an hour and `{review}` standing for an
@@ -270,11 +270,7 @@ impl Auto {
     /// The review calls the fake answered: one JSON line each, its argv,
     /// environment and stdin.
     pub fn calls(&self) -> Vec<serde_json::Value> {
-        std::fs::read_to_string(&self.review_log)
-            .unwrap_or_default()
-            .lines()
-            .map(|line| serde_json::from_str(line).unwrap())
-            .collect()
+        read_tool_log(&self.review_log)
     }
 
     /// Seeds review rows before the window starts, as earlier windows wrote

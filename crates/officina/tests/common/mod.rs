@@ -254,12 +254,13 @@ pub fn read_events(env: &TestEnv) -> Vec<serde_json::Value> {
 }
 
 /// The launches `officina-fake-tool` logged in `log`, one JSON value each;
-/// empty when it never ran.
+/// empty when it never ran. Only lines ended by their newline are read: a
+/// line the writer has not finished is read next time (D-883).
 pub fn read_tool_log(log: &Path) -> Vec<serde_json::Value> {
     std::fs::read_to_string(log)
         .unwrap_or_default()
-        .lines()
-        .filter(|l| !l.trim().is_empty())
+        .split_inclusive('\n')
+        .filter(|l| l.ends_with('\n') && !l.trim().is_empty())
         .map(|l| serde_json::from_str(l).unwrap())
         .collect()
 }
