@@ -1,6 +1,6 @@
 # Story 5.12: The `auto` class in `officina run` and on the approval card
 
-**Status:** Approved
+**Status:** Review
 
 ## Story
 
@@ -21,14 +21,14 @@ so that the review of story 5.13 plugs into a path that already works, and every
 
 ## Tasks
 
-- [ ] `relay::classes`, `officina run`'s `auto` path with the check again at consumption, `run --list` class (AC 1)
-- [ ] Approval file `by` and `review_id`; journal `by` and the rejection reason (AC 2, 5)
-- [ ] `ApprovalView.class` and `state`, `waiting_count`, `BOARD_SCHEMA`, bindings (AC 3)
-- [ ] `officina-core::scene` reads pending approvals only; `scene.json` cases (AC 4)
-- [ ] `authority::decide_approval` with the reason, the `reviewing` refusal and the `.decided` marker; command signature, `ipc.ts`, mock (AC 5)
-- [ ] `ApprovalCard.svelte` class and reason slot, the file's approval line; stable-size case and scene (AC 6)
-- [ ] Doctor line (AC 7)
-- [ ] Update `CHANGELOG.md` and the README (AC 8)
+- [x] `relay::classes`, `officina run`'s `auto` path with the check again at consumption, `run --list` class (AC 1)
+- [x] Approval file `by` and `review_id`; journal `by` and the rejection reason (AC 2, 5)
+- [x] `ApprovalView.class` and `state`, `waiting_count`, `BOARD_SCHEMA`, bindings (AC 3)
+- [x] `officina-core::scene` reads pending approvals only; `scene.json` cases (AC 4)
+- [x] `authority::decide_approval` with the reason, the `reviewing` refusal and the `.decided` marker; command signature, `ipc.ts`, mock (AC 5)
+- [x] `ApprovalCard.svelte` class and reason slot, the file's approval line; stable-size case and scene (AC 6)
+- [x] Doctor line (AC 7)
+- [x] Update `CHANGELOG.md` and the README (AC 8)
 
 ## Dev Notes
 
@@ -49,12 +49,42 @@ so that the review of story 5.13 plugs into a path that already works, and every
 
 ### Debug Log
 
+- The rebase onto story 5.7 met one conflict, the journal's imports (`LaunchOutcome` beside `AuthorReason`).
+- The run that reads a check ageing past its half hour during the wait (`the_refused_approval_stays_unconsumed`) seeds a check ten seconds from staleness and approves after twelve, so a slow start of `officina run` cannot turn the case into `check_required`.
+
 ### Completion Notes
 
+Every AC is implemented and proven by the tests named, with two departures recorded as decisions: `is_available` and `class_not_available` are removed rather than kept true (D-720), and the reviewing state is a file mark (D-721). Decisions D-720 to D-725, none to confirm. No new dependency or feature.
+
+- AC 1: core `relay/run.rs::tests::{auto_plans_like_human, list_states_what_blocks_and_explains_human_actions}` (D-720 replaces the `is_available` doctest); CLI `run.rs::{auto_creates_a_request_and_waits_like_human, auto_with_a_check_is_refused_until_the_check_passed, an_auto_approval_is_refused_after_a_tree_change, the_refused_approval_stays_unconsumed, an_auto_rejection_blocks_for_15_minutes, run_list_shows_the_class}`; `approvals.rs::an_auto_approval_while_waiting_runs_once`. The consumption-time check is `relay::run::auto_check_at_consumption` (D-722).
+- AC 2: core `relay/approvals.rs::tests::{an_approval_without_by_reads_as_author, by_and_review_id_round_trip, the_decision_marker_is_a_file_of_the_request}`; `relay/journal.rs::tests::{approval_given_carries_by, older_approval_lines_still_parse}`. `by` comes as `relay::approvals::ApprovalBy` (D-723).
+- AC 3: core `board.rs::tests::approvals::{approvals_carry_their_class_and_state, reviewing_requests_are_not_counted_as_waiting}`; `typescript_bindings.rs::committed_bindings_match_the_rust_types` (`ApprovalView`, `ApprovalEvent`, `RefusalReason` and the new `ApprovalBy`, `ApprovalState`, `AuthorReason`); CLI `board.rs` compares `schema` with `BOARD_SCHEMA`, now 5.
+- AC 4: `tests/vectors/scene.json` cases "a reviewing approval leaves the session in its office", "an escalated approval queues it", "a reviewing approval never alerts", through `scene_vectors.rs::every_case_places_its_cards`; the scene reads `ApprovalView::waits_on_the_author`.
+- AC 5: host `authority.rs::{rejecting_auto_requires_a_reason, a_human_rejection_takes_no_reason, an_author_approval_says_by_author, a_second_decision_is_refused, two_concurrent_decisions_write_one, a_reviewing_request_cannot_be_decided}`; core `journal.rs::tests::approval_rejected_carries_the_reason`; the order inside `decide_approval` is D-724.
+- AC 6: Playwright `approvals.spec.ts > auto requests > {an auto request shows its class and its check, rejecting an auto request asks should not run or not now, the reason buttons ignore the keyboard, the approval card is the same in both themes but for its tokens (light), (dark)}`; `stable-size.spec.ts` case "auto rejection reasons" on the new `autoApproval` scene, fed by the new `approvals-auto` fixture (a real `officina run` request of an `auto` action beside a `human` one); `scene.spec.ts > the file of a session with an auto request names its class`; Vitest `components.test.ts > {the reason buttons ignore a click with detail 0, a human card's Reject decides at once and has no reason slot}`. No colour was added.
+- AC 7: host `relay/doctor.rs::tests::{auto_actions_are_listed_with_check_and_cap, the_paragraph_explains_an_auto_action_like_a_human_one}`.
+- AC 8: `CHANGELOG.md` `[Unreleased]` Added (the `auto` class runs) and Changed (board schema 5, `class_not_available` gone); README "The `auto` class".
+- Gate (2026-10-29), on `f7c941a` rebased onto `8e91f6e`: the local replay of `ci.yml`. Windows: fmt and clippy clean; Rust 1312 passed, 0 failed, 11 ignored; the launch half without the authority 7 passed; perf (hook own cost 12.4 ms of 150, gate own cost 0 of 15), lexer differential, approvals stress, registry crash, authority markers, registry dependencies and bundled roots green; mutants: each of the three caught by its guarded case, the control green; e2e fixtures rebuilt; `pnpm check`, `lint` clean, Vitest 281; Playwright 1017 passed, 6 skipped, over three repeats; `cargo deny` ok; `pnpm audit` 1 low, ignored as before. Linux (`rust:1-bookworm`): fmt and clippy clean, 1168 passed, 0 failed, 9 ignored, and the spawn step alone.
+
 ## File List
+
+- `CHANGELOG.md`, `README.md`
+- `crates/officina-core/src/{board,scene}.rs`, `crates/officina-core/src/registry/types.rs`
+- `crates/officina-core/src/relay/{approvals,classes,journal,mod,record,run,view}.rs`
+- `crates/officina-core/tests/scene_vectors.rs`, `tests/vectors/scene.json`
+- `crates/officina-host/src/relay/{approvals,authority,doctor}.rs`, `crates/officina-host/src/relay/run/{consume,mod,request}.rs`
+- `crates/officina-host/tests/{authority,relay_http}.rs`
+- `crates/officina/tests/{approvals,run}.rs`
+- `app/src-tauri/src/main.rs`
+- `app/src/components/{ApprovalCard,BoardColumn,SessionFile}.svelte`, `app/src/components/components.test.ts`
+- `app/src/{e2e-mock.ts,lib/board.svelte.ts,lib/ipc.ts,lib/relay-text.ts,lib/scene/testing.ts}`
+- `app/src/lib/generated/{ApprovalEvent,ApprovalView,RefusalReason}.ts`, `app/src/lib/generated/{ApprovalBy,ApprovalState,AuthorReason}.ts` (new)
+- `app/e2e/{approvals,fixtures,scene,stable-size}.spec.ts` and `fixtures.ts`, `app/scripts/e2e-fixtures.mjs`
+- `docs/stories/epic-5-decisions.md`, `docs/stories/sprint-status.yaml`, this file
 
 ## Change Log
 
 - 2026-10-28 created
 - 2026-10-28 reworked after review: the after-check rule applies again at consumption with a fresh tree (F6); one decision per request through a `.decided` marker, none while `reviewing` (F26)
 - 2026-10-28 reworked against the addendum and v0.4 as built: every `auto` request takes the after-check rule, the check being mandatory (D-570); a reviewing request is no wait in v0.4's scene (AC 4, D-571); the card and the file as built, the reason buttons in a reserved slot with a stable-size case, both themes (D-563, D-564)
+- 2026-10-29 implemented; decisions D-720 to D-725; status Review
