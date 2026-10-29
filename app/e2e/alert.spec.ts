@@ -321,7 +321,7 @@ test.describe("alert room", () => {
     await expect(scene(page).locator("[data-beacon]")).toHaveAttribute("data-beacon", beaconPair(stale)!.key);
     // Their tickets keep the alert colour.
     for (const card of alerted(board)) {
-      await expect(scene(page).locator(`[data-figure="${card.key}"] [data-mark="ticket"] circle`)).toHaveAttribute("fill", paint("color-alert"));
+      await expect(scene(page).locator(`[data-ticket-of="${card.key}"] [data-mark="ticket"] circle`)).toHaveAttribute("fill", paint("color-alert"));
     }
   });
 

@@ -11,12 +11,19 @@ import { board, card, fixtureBoards } from "./testing";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 
-function mount(): { root: SVGGElement; objects: SceneObjects } {
+/** A group in an svg of its own, as the scene mounts each layer. */
+function layer(): SVGGElement {
   const svg = document.createElementNS(SVG_NS, "svg");
   const root = document.createElementNS(SVG_NS, "g");
   svg.append(root);
   document.body.append(svg);
-  return { root, objects: new SceneObjects(root) };
+  return root;
+}
+
+function mount(): { root: SVGGElement; badges: SVGGElement; objects: SceneObjects } {
+  const root = layer();
+  const badges = layer();
+  return { root, badges, objects: new SceneObjects(root, badges) };
 }
 
 function colours(b: Board): Map<string, ProjectColor | null> {
@@ -65,13 +72,8 @@ describe("objects", () => {
     for (const { name, board: b } of fixtureBoards()) {
       const [first, second] = layouts(b, b);
       const single = mount();
-      const svgs = Array.from({ length: DEPTH_BANDS }, () => {
-        const svg = document.createElementNS(SVG_NS, "svg");
-        svg.append(document.createElementNS(SVG_NS, "g"));
-        document.body.append(svg);
-        return svg.firstElementChild as SVGGElement;
-      });
-      const banded = new SceneObjects(svgs);
+      const svgs = Array.from({ length: DEPTH_BANDS }, layer);
+      const banded = new SceneObjects(svgs, layer());
       for (const layout of [first!, second!]) {
         for (const objects of [single.objects, banded]) objects.update({ layout, colours: colours(b), snap: 1, figures: restingFrames(layout) });
       }
@@ -169,19 +171,37 @@ describe("objects", () => {
 
   it("a kept desk shows its session's number and a free desk is faded", () => {
     // `a` works at desk 1, then waits in the decision office: its desk is
-    // kept with its board number; desk 2 stays free.
+    // kept with its board number, in the badge layer; desk 2 stays free.
     const working = board([card("a", "office")]);
     const waiting = board([card("a", "decision")]);
     const [l1, l2] = layouts(working, waiting);
-    const { root, objects } = mount();
+    const { root, badges, objects } = mount();
     objects.update({ layout: l1!, colours: colours(working), snap: 1, figures: restingFrames(l1!) });
     const desk = (index: number, part: string) => root.querySelector(`[data-desk="0:${index}"][data-desk-part="${part}"]`)!;
     expect(desk(0, "desk").hasAttribute("opacity")).toBe(false);
     expect(desk(1, "desk").getAttribute("opacity")).toBe("0.42");
     expect(desk(0, "desk").querySelector("[data-lines]")!.hasAttribute("display")).toBe(false);
     objects.update({ layout: l2!, colours: colours(waiting), snap: 1, figures: restingFrames(l2!) });
-    expect(desk(0, "chair").querySelector("[data-away]")!.textContent).toBe("1");
+    expect(badges.querySelector('[data-away-ticket="0:0"]')!.textContent).toBe("1");
+    expect(desk(0, "chair").querySelector("[data-away]")!.textContent).toBe("");
     expect(desk(0, "desk").querySelector("[data-lines]")!.getAttribute("display")).toBe("none");
+  });
+
+  it("queue badges are drawn in the badge layer, above every object, at their figure", () => {
+    for (const { name, board: b } of fixtureBoards()) {
+      const [layout] = layouts(b);
+      const { root, badges, objects } = mount();
+      objects.update({ layout: layout!, colours: colours(b), snap: 1, figures: restingFrames(layout!) });
+      expect(root.querySelector('[data-mark="ticket"]'), name).toBeNull();
+      const ticketed = layout!.employees.filter((e) => e.at !== null && (e.marks.ticket !== null || e.marks.approval) && e.facing === "front" && e.pose !== "seated-working");
+      for (const e of ticketed) {
+        const badge = badges.querySelector(`[data-ticket-of="${e.key}"]`)!;
+        expect(badge.querySelector('[data-mark="ticket"]'), `${name} ${e.key}`).not.toBeNull();
+        expect(badge.getAttribute("transform"), `${name} ${e.key}`).toBe(figure(root, e.key)!.getAttribute("transform"));
+      }
+      const shown = [...badges.querySelectorAll("[data-ticket-of]")].filter((g) => g.childElementCount > 0);
+      expect(shown.length, name).toBe(ticketed.length);
+    }
   });
 
   describe("depth while moving (AD-171)", () => {

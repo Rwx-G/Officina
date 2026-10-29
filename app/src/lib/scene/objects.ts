@@ -10,6 +10,8 @@
 // changes, so a settled scene receives no write. The depth order is split
 // into consecutive bands (`geometry.ts` `DEPTH_BANDS`), one `<svg>` each,
 // so a walk dirties one band's paint, never the whole layer's (story 4.16).
+// Queue badges, a figure's and a kept desk's, are drawn in a layer of their
+// own above every band, so no object ever covers one (story 4.17, D-554).
 // Ported from the prototype v2's `renderActor`, `reorder`, `staticIndexFor` and
 // `updateSnap`.
 import type { ProjectColor } from "../generated/ProjectColor";
@@ -18,7 +20,7 @@ import { ALERT_PAINTS, buildStatics, paint, type OfficeUse, type Static } from "
 import { SUBAGENT_SCALE, alertLit, type SceneLayout } from "./layout";
 import type { FigureFrame } from "./mover";
 import { allSpots, type Spot } from "./places";
-import { badgeMarkup, createRig, lookOf, marksMarkup, setPose, ticketMarkup, underMarkup, write, type Rig } from "./rig";
+import { badgeMarkup, createRig, lookOf, marksMarkup, setPose, ticketMarkup, ticketOn, underMarkup, write, type Rig } from "./rig";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 
@@ -30,7 +32,7 @@ export const DEPTH_WINDOW = 0.05;
 /** A moving figure's depth, as ties among figures read it, changes only
  *  past this step, in tiles (AD-171). */
 export const DEPTH_QUANTUM = 0.06;
-/** Where a kept desk's number floats above its empty chair, in px. */
+/** Where a kept desk's badges float above its empty chair, in px. */
 const AWAY_LIFT = 25;
 /** A free desk is drawn faded. */
 const FREE_OPACITY = "0.42";
@@ -48,6 +50,8 @@ export interface ObjectsInput {
 
 interface Figure {
   rig: Rig;
+  /** Its queue badge's node, in the badge layer. */
+  badge: SVGGElement;
   colour: ProjectColor | null;
   /** Creation order, the depth sort's last tie-break. */
   token: number;
@@ -67,7 +71,10 @@ interface DeskParts {
   chair: Element;
   screens: Element[];
   lines: Element[];
+  /** Where a kept desk's own number floats, in the chair's static. */
   away: Element;
+  /** Where a kept desk's queue badge floats, in the badge layer. */
+  ticket: Element;
   /** The chair's screen point, where a kept desk's number floats. */
   x: number;
   y: number;
@@ -99,6 +106,9 @@ export class SceneObjects {
   /** One root per depth band, in paint order; each is its own paint
    *  layer, so a walk repaints only the band it walks in. */
   readonly #roots: SVGGElement[];
+  /** The badge layer's groups: the kept desks' badges, then the figures'. */
+  readonly #deskBadges: SVGGElement;
+  readonly #figureBadges: SVGGElement;
   #statics: StaticNode[] = [];
   #staticsKey: string | null = null;
   #desks = new Map<string, DeskParts>();
@@ -117,8 +127,11 @@ export class SceneObjects {
   #colours: ReadonlyMap<string, ProjectColor | null> = new Map();
   #snap = 1;
 
-  constructor(roots: SVGGElement | readonly SVGGElement[]) {
+  constructor(roots: SVGGElement | readonly SVGGElement[], badges: SVGGElement) {
     this.#roots = Array.isArray(roots) ? [...(roots as readonly SVGGElement[])] : [roots as SVGGElement];
+    this.#deskBadges = this.#doc.createElementNS(SVG_NS, "g");
+    this.#figureBadges = this.#doc.createElementNS(SVG_NS, "g");
+    badges.replaceChildren(this.#deskBadges, this.#figureBadges);
   }
 
   get #doc(): Document {
@@ -166,6 +179,8 @@ export class SceneObjects {
 
   destroy(): void {
     for (const root of this.#roots) root.replaceChildren();
+    this.#deskBadges.replaceChildren();
+    this.#figureBadges.replaceChildren();
     this.#figures.clear();
     this.#desks.clear();
     this.#statics = [];
@@ -187,6 +202,7 @@ export class SceneObjects {
     const bands = this.#roots.length;
     nodes.forEach((node, i) => this.#roots[Math.floor((i * bands) / nodes.length)]!.append(node));
     this.#desks.clear();
+    this.#deskBadges.replaceChildren();
     this.#deskColours = Array.from(uses, (use) => (use?.kind === "office" ? use.colour : null));
     for (const node of nodes) {
       const id = node.getAttribute("data-desk");
@@ -199,6 +215,9 @@ export class SceneObjects {
       } else {
         parts.chair = node;
         parts.away = node.querySelector("[data-away]")!;
+        parts.ticket = this.#doc.createElementNS(SVG_NS, "g");
+        parts.ticket.setAttribute("data-away-ticket", id);
+        this.#deskBadges.append(parts.ticket);
       }
       parts.slot = Number(id.split(":")[0]);
       this.#desks.set(id, parts);
@@ -248,14 +267,15 @@ export class SceneObjects {
         if (lit) lines.removeAttribute("display");
         else lines.setAttribute("display", "none");
       }
-      let mark = "";
+      let tag = "";
+      let ticket = "";
       if (away !== "" && desk?.number != null) {
-        const inner = away.startsWith("badge")
-          ? badgeMarkup(desk.number, this.#deskColours[parts.slot] ?? null)
-          : ticketMarkup(desk.number, away.endsWith("true"));
-        mark = `<g transform="translate(${parts.x} ${parts.y - AWAY_LIFT})">${inner}</g>`;
+        const at = (inner: string) => `<g transform="translate(${parts.x} ${parts.y - AWAY_LIFT})">${inner}</g>`;
+        if (away.startsWith("badge")) tag = at(badgeMarkup(desk.number, this.#deskColours[parts.slot] ?? null));
+        else ticket = at(ticketMarkup(desk.number, away.endsWith("true")));
       }
-      parts.away.innerHTML = mark;
+      parts.away.innerHTML = tag;
+      parts.ticket.innerHTML = ticket;
     }
   }
 
@@ -286,6 +306,7 @@ export class SceneObjects {
     for (const [key, figure] of this.#figures) {
       if (figures.has(key)) continue;
       figure.rig.node.remove();
+      figure.badge.remove();
       this.#figures.delete(key);
     }
     for (const f of figures.values()) {
@@ -294,6 +315,7 @@ export class SceneObjects {
       const colour = this.#colours.has(f.project) ? (this.#colours.get(f.project) ?? null) : (figure?.colour ?? null);
       if (figure && figure.colour !== colour) {
         figure.rig.node.remove();
+        figure.badge.remove();
         figure = undefined;
       }
       if (!figure) {
@@ -301,7 +323,10 @@ export class SceneObjects {
         rig.node.setAttribute("data-figure", f.key);
         if (f.helper) rig.node.setAttribute("data-helper", "");
         rig.node.setAttribute("aria-hidden", "true");
-        figure = { rig, colour, token: this.#created++, depth: 0, moving: false, si: -1, dq: 0, drawn: null };
+        const badge = this.#doc.createElementNS(SVG_NS, "g");
+        badge.setAttribute("data-ticket-of", f.key);
+        this.#figureBadges.append(badge);
+        figure = { rig, badge, colour, token: this.#created++, depth: 0, moving: false, si: -1, dq: 0, drawn: null };
         this.#figures.set(f.key, figure);
       }
       if (figure.drawn === f) continue;
@@ -315,11 +340,22 @@ export class SceneObjects {
       write(rig, "transform", rig.node, "transform", `translate(${x} ${y})`);
       write(rig, "opacity", rig.node, "opacity", f.opacity < 1 ? String(f.opacity) : null);
       setPose(rig, f.pose, f.facing, f.marks.hand, { flip: f.flip, stride: f.stride });
-      // An unknown employee keeps its alert (D-494), and its ticket's colour.
-      const marks = marksMarkup(f.marks, f.pose, f.facing, f.alerted, colour);
+      const marks = marksMarkup(f.marks, f.pose, f.facing, colour);
       if (rig.cache.get("marks") !== marks) {
         rig.cache.set("marks", marks);
         rig.marks.innerHTML = marks;
+      }
+      // The badge follows its figure only while it shows, so a walk, which
+      // shows none (D-531), writes nothing in the badge layer. An unknown
+      // employee keeps its alert (D-494), and its badge's colour.
+      const ticket = ticketOn(f.marks, f.pose, f.facing, f.alerted);
+      if (rig.cache.get("ticket") !== ticket) {
+        rig.cache.set("ticket", ticket);
+        figure.badge.innerHTML = ticket;
+      }
+      if (ticket !== "") {
+        write(rig, "ticket:transform", figure.badge, "transform", `translate(${x} ${y})`);
+        write(rig, "ticket:opacity", figure.badge, "opacity", f.opacity < 1 ? String(f.opacity) : null);
       }
       const floor = p(f.gx, f.gy);
       const under = underMarkup(f.marks.ring, Math.round(floor.x - at.x), Math.round(floor.y - at.y));

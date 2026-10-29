@@ -40,14 +40,14 @@ function renderWithLayout(b: Board): { container: HTMLElement; layout: SceneLayo
 const buttonsOf = (container: HTMLElement) => [...container.querySelectorAll<HTMLButtonElement>('[data-layer="targets"] button')];
 
 describe("Scene", () => {
-  it("layers 1 to 4 are hidden from assistive technology and ignore the pointer", () => {
+  it("layers 1 to 4 and the badges are hidden from assistive technology and ignore the pointer", () => {
     const { getByTestId } = renderScene(waitingBoard());
     const scene = getByTestId("scene");
     expect(scene.getAttribute("tabindex")).toBe("-1");
     expect(scene.hasAttribute("role")).toBe(false);
     expect(scene.getAttribute("data-moving")).toBe("0");
     const all = [...scene.querySelectorAll("[data-layer]")];
-    expect(all.map((l) => l.getAttribute("data-layer"))).toEqual(["floor", "halos", "objects", "overlay", "targets"]);
+    expect(all.map((l) => l.getAttribute("data-layer"))).toEqual(["floor", "halos", "objects", "badges", "overlay", "targets"]);
     const layers = all.slice(0, -1);
     for (const layer of layers) {
       expect(layer.getAttribute("aria-hidden"), layer.getAttribute("data-layer")!).toBe("true");
@@ -74,10 +74,11 @@ describe("Scene", () => {
     const plaques = [...scene.querySelectorAll("[data-plaque]")].map((p) => p.textContent ?? "");
     expect(plaques.some((text) => text.includes(markup))).toBe(true);
     expect(getByTestId("register").textContent).toContain(markup);
-    // Layer 3 holds no text but digits.
-    const objects = scene.querySelector('[data-layer="objects"]')!;
-    const walker = document.createTreeWalker(objects, NodeFilter.SHOW_TEXT);
-    for (let n = walker.nextNode(); n; n = walker.nextNode()) expect(n.textContent!.trim()).toMatch(/^\d*$/);
+    // Layer 3 and the badges hold no text but digits.
+    for (const name of ["objects", "badges"]) {
+      const walker = document.createTreeWalker(scene.querySelector(`[data-layer="${name}"]`)!, NodeFilter.SHOW_TEXT);
+      for (let n = walker.nextNode(); n; n = walker.nextNode()) expect(n.textContent!.trim()).toMatch(/^\d*$/);
+    }
     // Targets and their name tags carry the name as text.
     const target = buttonsOf(scene).find((b) => b.dataset.key === waiting.key)!;
     expect(target.getAttribute("aria-label")).toContain(markup);

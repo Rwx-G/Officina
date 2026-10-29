@@ -3,7 +3,7 @@ import type { ProjectColor } from "../generated/ProjectColor";
 import { PROJECT_COLORS } from "../colors";
 import type { Pose } from "./layout";
 import type { Facing } from "./places";
-import { HAIR_STYLES, LOOKS, badgeMarkup, createRig, lookOf, marksMarkup, setPose, ticketMarkup, type Rig } from "./rig";
+import { HAIR_STYLES, LOOKS, badgeMarkup, createRig, lookOf, marksMarkup, setPose, ticketMarkup, ticketOn, type Rig } from "./rig";
 
 const POSES: Pose[] = ["standing", "seated-facing", "seated-working"];
 const FACINGS: Facing[] = ["front", "back"];
@@ -105,8 +105,10 @@ describe("rig", () => {
     expect(textNodes(holder)).toEqual(["7", "3"]);
     // No chest mark on a back turned to the author.
     const marks = { ticket: 2, approval: false, deskBadge: null, hand: false, ring: false, question: false };
-    expect(marksMarkup(marks, "standing", "back", false, "green")).toBe("");
-    expect(marksMarkup(marks, "seated-working", "back", false, "green")).toBe("");
-    expect(marksMarkup(marks, "standing", "front", false, "green")).toContain(">2<");
+    expect(ticketOn(marks, "standing", "back", false)).toBe("");
+    expect(ticketOn(marks, "seated-working", "back", false)).toBe("");
+    expect(ticketOn(marks, "standing", "front", false)).toContain(">2<");
+    // The ticket is the badge layer's, never among the figure's own marks.
+    expect(marksMarkup(marks, "standing", "front", "green")).toBe("");
   });
 });

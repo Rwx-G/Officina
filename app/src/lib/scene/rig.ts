@@ -304,16 +304,28 @@ function unknownMarkup(y: number): string {
   );
 }
 
-/** A figure's marks: the ticket or the desk badge on the chest while the
+/** The height of a figure's chest above its floor point, or `null` when
+ *  its chest is turned away from the author. */
+function chestY(pose: Pose, facing: Facing): number | null {
+  if (pose === "seated-working" || (pose === "standing" && facing === "back")) return null;
+  return pose === "seated-facing" ? -26 : -31;
+}
+
+/** A figure's queue badge on its chest, origin at its floor point, or ""
+ *  (D-554: drawn in the badge layer, above every object). */
+export function ticketOn(marks: Marks, pose: Pose, facing: Facing, alert: boolean): string {
+  const y = chestY(pose, facing);
+  if (y === null || (marks.ticket === null && !marks.approval)) return "";
+  return `<g data-mark="ticket" transform="translate(0 ${y})">${ticketMarkup(marks.ticket, alert)}</g>`;
+}
+
+/** The marks drawn with the figure: its desk badge on the chest while the
  *  chest shows, and the question mark. */
-export function marksMarkup(marks: Marks, pose: Pose, facing: Facing, alert: boolean, colour: ProjectColor | null): string {
-  const seated = pose !== "standing";
-  const chestY = pose === "seated-facing" ? -26 : -31;
-  const chest = pose !== "seated-working" && !(pose === "standing" && facing === "back");
+export function marksMarkup(marks: Marks, pose: Pose, facing: Facing, colour: ProjectColor | null): string {
+  const y = chestY(pose, facing);
   let s = "";
-  if (chest && (marks.ticket !== null || marks.approval)) s += `<g data-mark="ticket" transform="translate(0 ${chestY})">${ticketMarkup(marks.ticket, alert)}</g>`;
-  if (chest && marks.deskBadge !== null) s += `<g data-mark="desk" transform="translate(0 ${chestY})">${badgeMarkup(marks.deskBadge, colour)}</g>`;
-  if (marks.question) s += `<g data-mark="question">${unknownMarkup(seated ? -66 : -72)}</g>`;
+  if (y !== null && marks.deskBadge !== null) s += `<g data-mark="desk" transform="translate(0 ${y})">${badgeMarkup(marks.deskBadge, colour)}</g>`;
+  if (marks.question) s += `<g data-mark="question">${unknownMarkup(pose !== "standing" ? -66 : -72)}</g>`;
   return s;
 }
 
