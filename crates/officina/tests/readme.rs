@@ -380,3 +380,20 @@ fn readme_names_no_sync_marker() {
         "positive control: the exclusion is stated"
     );
 }
+
+/// Story 5.19 AC 2 (D-149): the README describes the variables a session
+/// kind drops by their families and names the constant, never one of its
+/// entries, which the session-variables entry (research notes E84) owns.
+#[test]
+fn readme_names_no_session_variable() {
+    use officina_core::spawn::SESSION_ENV_REMOVED;
+    let text = readme();
+    assert!(!SESSION_ENV_REMOVED.is_empty());
+    for name in SESSION_ENV_REMOVED {
+        assert!(!text.contains(name), "the README transcribes {name}");
+    }
+    assert!(
+        text.contains("`SESSION_ENV_REMOVED`"),
+        "positive control: the constant is named"
+    );
+}

@@ -19,6 +19,225 @@ project uses [Semantic Versioning](https://semver.org/).
   `window/alive.json`, refreshed every 5 s and removed when it closes.
   Doctor does not register `PermissionRequest` yet.
 
+- The orchestrator (v0.5): work orders started from templates you wrote
+  and approved, a meeting where you receive a session and answer it in
+  writing, an `auto` class reviewed in blind shadow before it may approve,
+  and a restricted orchestrator session that reads what Officina records
+  and proposes recaps, work orders and answers, none of which acts before
+  your click. The entries below follow that order.
+- Templates in the floor file (v0.5, story 5.4): `[[template]]` declares a
+  prompt with placeholders, the catalogue projects it may run in, a closed
+  `values` list per parameter (never a `pattern`) and an optional model.
+  Each rule (name, description, projects, braces, placeholders, characters,
+  the first character after leading whitespace, the longest rendering,
+  values, model) is an `IssueKind`; a failing template is skipped and
+  reported with its line and table, never invalidating the floor.
+  Templates belong to the approved catalogue: the Relay view lists them,
+  the change banner shows them added, removed or changed. `[orchestrator]`
+  and `[auto_review]` tables each take an optional `model`, a failing
+  table reported; `[auto_review]` belongs to the approved catalogue (its
+  model defaults to haiku), `[orchestrator]` does not. `class = "auto"`
+  validates and must name its `check` (`auto_without_check` otherwise), so
+  an unattended apply always runs after its dry run; `auto_max_per_hour`
+  (1 to 60, default 6) applies to `auto` actions only; an HTTP action
+  cannot be `auto`. `officina doctor` names each issue's table (`template
+  bump`, `action apply`), counts valid templates, and lists templates,
+  credentials and the review model in a pending change.
+- Work orders (v0.5, stories 5.5 to 5.7 and 5.9): a template is read from
+  the approved snapshot only while the floor still hashes to it
+  (`TemplateUnavailable`), and `WorkOrder::validate` is the only way to an
+  order, refusing a project the template does not list, a missing,
+  repeated or undeclared parameter, a value that is not byte for byte one
+  of its list's, and a rendering over the prompt limit or starting with
+  `/`, `!` or `-` (`WorkOrderRefusal`); the order keeps the template's own
+  strings. Its vector, `claude --bg --name <template>-<seq> [--model
+  <alias>] -- <prompt>`, runs in the project's folder as declared, the
+  prompt one argument after `--`, as a session kind, in no job, its
+  deadline ending `claude` alone; `tests/vectors/orders.json` and a
+  `work_order` case of `tests/vectors/spawn.json` pin it.
+- Cards and the one click (v0.5, stories 5.7 and 5.9): in the Orchestrator
+  view, the composer offers the approved templates with their
+  descriptions, the template's projects and one list per parameter holding
+  exactly its values, with no field to type a value, and a subject picker
+  with the project's open subjects and a new name. Each choice issues or
+  edits a card through core: the rendered prompt, its SHA-256, the
+  argument vector exactly as it would run under a name reserved at issue,
+  each value and argument as a chip, the folder, the subject and the quota
+  gauges, never in the attention colour; an edit issues a new card under
+  the same name and supersedes the old. **Launch** acts on a pointer click
+  only: the collector checks the card in a fixed order (`LaunchRefusal`),
+  consumes it, records the row and hands the card's vector, byte for byte,
+  to the click's own thread, which runs `claude --bg` and sends the outcome
+  back (`LaunchOutcome`, an untrusted folder its own), recorded however
+  late and journaled once as `work_order_launched`. The card then shows the
+  outcome. Nothing retries: a double click launches once, and a failed
+  launch burns its card. Commands `issue_card`, `edit_card` and
+  `launch_work_order`.
+- Work order records (v0.5, story 5.6): a launch is recorded `launching`
+  under its unique name `<template>-<seq>` (a name the registry holds is
+  refused `name_taken`), then its outcome, with what `claude --bg` printed
+  (4 KiB) and its error (500 characters) kept as untrusted text; a row left
+  `launching` two minutes reads `unknown`. A `started` order binds, within
+  ten minutes, to the background session listed under its name in its
+  project folder, and that session is filed under the order's subject with
+  source `author`, ahead of the filing rules; a new subject is created at
+  `started`, never at the click, or the open subject of that name is used.
+  Rows are kept 90 days, their texts cleared with the excerpts.
+- The Orchestrator view and its briefing (v0.5, story 5.8): a fourth view
+  in the header's switch, with a neutral presence mark. The briefing,
+  built by Officina's own code from the board, the relay view and the
+  registry, lists the open subjects with their sessions' states, the Needs
+  you and Your turn sessions, the pending approvals, the rows to sort, the
+  failed and refused runs and the launched work orders, and what changed
+  since you last read it (`ChangeKind`). It is at most 32 KiB: the oldest
+  items go first and each section says how many. Leaving the view or
+  closing the window records the reading. The view also lists the approved
+  templates, those awaiting approval and the work order history with each
+  order's outcome, binding, "unbound" and "printed id differs" flags and
+  its session's state. Commands `get_orchestrator` and
+  `mark_briefing_read`, event `orchestrator://updated`.
+- The meeting (v0.5, story 5.10): Receive on a Needs you or Your turn card,
+  a background session idle in Done, the session file or a subject to
+  resume opens a side panel in the file's place, which resizes nothing:
+  what the session expects (waiting for, Claude Code's latest
+  notification, the end of its last answer, your last prompt), its relay
+  runs since it started and its pending approvals, the commits since it
+  started with one diff to the working tree and its untracked files, and
+  for a background session the end of `claude logs` with its escape
+  sequences stripped; then how an answer would reach it (`Delivery`). The
+  scene rings the received employee in the working colour. `git` runs
+  read-only, in the folder `claude agents` reported only, running nothing
+  a repository configures; no transcript is read.
+- Written answers from the meeting (v0.5, story 5.11): a composer, never
+  prefilled, sends with Send or Ctrl+Enter and copies the text on the same
+  gesture. A session whose answer goes as its next turn gets it through
+  `claude --resume` in its own console, in the folder `claude agents`
+  reported for it, confirmed when it turns busy within 30 s; otherwise the
+  text is copied, with `claude attach` opened while the session waits on a
+  question, and an interactive session gets Focus. The panel keeps the
+  text until it is confirmed or discarded; the journal keeps its SHA-256
+  (`meeting_answer`), never the text. `officina doctor` warns when
+  `claude` is too old to send a resumed prompt.
+- The `auto` class runs (v0.5, story 5.12): `officina run` requests and
+  waits for an `auto` action's approval exactly as for a `human` one; just
+  before an approval is used, the check is evaluated again on the files as
+  they are then and refuses `check_not_satisfied`, the approval left
+  unused, when it no longer holds. Approval files and `approval_given`
+  lines say who approved (`by`); rejecting an `auto` request asks "should
+  not run" or "not now", kept in the rejection file and its line. One
+  decision per request: a `.decided` marker created first refuses a second
+  decider `already_decided`. The approval card and the session file show
+  the class; `run --list` shows every action's class.
+- The review of `auto` requests, in blind shadow (v0.5, story 5.13): each
+  new `auto` request is prechecked and either goes to you at once with its
+  cause (`EscalationCause`: the setup, the request, the limits) or is
+  reviewed by a contained call on a `review` thread of its own, paced 5 s
+  apart from each call's start, the cap and budget checked again right
+  before each call. The call sees the catalogue's rebuild of the request,
+  the subject, your last prompt, the last ten runs and the check's status,
+  never the session's answers, and can only answer approve, reject or
+  escalate. With auto approval off the card says so at once, and the
+  review's answer stays hidden until you decide and writes no approval.
+  Each review is an `auto_review` row with the rule baseline and your
+  decision copied onto it, journaled `auto_review` and `auto_escalated`
+  (never the reason), kept 90 days, its reason cleared with the excerpts.
+  The triage call also turns the advisor tool off
+  (`CLAUDE_CODE_DISABLE_ADVISOR_TOOL=1`).
+- Letting reviews approve (v0.5, story 5.14): the Relay view's Auto
+  approval section counts the shadow reviews met by your decision over 30
+  days, the disagreements and how often review and rule differ, and states
+  the 3/n bound on wrong approvals. Turning auto approval on is offered
+  only while the gate holds (20 cases, no disagreement), on a pointer
+  click, and the writer refuses it when the gate broke since display. Live
+  mode: a request is `reviewing` (no buttons, not waiting) until its review
+  answers; an approve is recorded by the window's authority (`by =
+  "review"`, the review's id), the hourly cap checked once more, your
+  decision winning. Rule mode, offered while review and rule differ in
+  under 5 % of the cases: no call, a true baseline approves `by = "rule"`,
+  a false one escalates `rule_baseline_false`. "Should not have run" on an
+  auto-approved run of the last 7 days turns approval off and the mode
+  back to review, and counts as a disagreement for 30 days. Each change is
+  journaled `auto_approval_set`; an approval the authority refuses
+  escalates `approval_refused`. `officina relay --json` prints the section
+  and each decision's review without any reason.
+- Permission modes in doctor (v0.5, story 5.20): the hook records each
+  session's `permission_mode` on its event lines (cut to 32 characters;
+  the canary watches it on `UserPromptSubmit`), and doctor prints a
+  "permission mode" line counting the sessions of the last 24 h in each
+  mode, interactive or background, an undocumented value named unknown.
+  `officina doctor --permissions` prints the user settings' whole
+  `permissions` key with `defaultMode` set to `"auto"` and the whole
+  `autoMode` key (Claude Code's defaults and two placeholders when there is
+  none), every entry kept, each also written to `doctor/`; switching is
+  your decision and no settings file is written. Gate 8 passed without a
+  rule, so nothing is added for the relay. Plain doctor reads neither key
+  and removes the two files.
+- `officina mcp` (v0.5, stories 5.15 and 5.21): the orchestrator's MCP
+  server on stdio, newline-delimited JSON-RPC answered by hand, a line over
+  1 MiB discarded and refused. It serves only in
+  `<officina home>/orchestrator/workdir` (else one line, exit 1). Read
+  tools, read-only with the window open or closed: the briefing (cursor:
+  the previous orchestrator start), the subjects, one subject, the board,
+  the relay's recent activity, the approved templates and the proposals
+  of the last seven days. Proposal tools (`propose_recap`,
+  `propose_work_order`, `propose_answer`) write one file each under
+  `orchestrator/proposals/`, bounded and limited per hour and in pending
+  count (`PROPOSALS_PER_HOUR`, `PROPOSALS_PENDING_MAX`), and validate
+  nothing else. Every answer starts with a note and marks every session
+  text `{"untrusted": "..."}`; no excerpt with `no_excerpts`; answers at
+  most 64 KiB. No tool runs, launches, approves, sends text, reads a path
+  or touches a permission prompt; its `claude agents` child receives none
+  of the orchestrator's session variables.
+- The orchestrator session (v0.5, story 5.16): **Start** in the
+  Orchestrator view opens `claude` in a console of its own, in
+  `<officina home>/orchestrator/workdir`, with no built-in tool, Officina's
+  MCP server only (run from the `officina.exe` beside the window), no
+  settings source, inbound messages refused, `dontAsk` with Officina's
+  tools allowed and both messaging tools denied, its role appended and the
+  name `officina-orchestrator`; the contained allow list's variables only,
+  agent view and the advisor tool off. No first prompt: the role asks for
+  the briefing before the first answer. Refused, with the cause shown and
+  recorded, for a `claude` that is not `.exe`, a non-empty workdir, a
+  missing `officina.exe` or an unwritable registry. Each Start is an
+  `orchestrator_start` row (pid and creation time kept, read back at window
+  start, deleted after 90 days) and an `orchestrator_started` journal line;
+  never a resume. The agents entry named `officina-orchestrator` in its
+  workdir is `Board.orchestrator` and the view's presence, never a card; a
+  second Start while it runs brings its console to the front by title. Its
+  lines and its agents entry are never filed.
+- The orchestrator's proposals in the window (v0.5, story 5.17): the
+  window reads `orchestrator/proposals/` (a name that is no proposal's is
+  deleted and counted, a file read at most `PROPOSAL_FILE_MAX_BYTES` plus a
+  byte, the hourly and pending limits held again by deletion, a temporary
+  file never read and deleted after a day), validates each against the
+  approved catalogue and the registry (`orders::proposal::validate`),
+  stores it once by its id and deletes it. A proposal is `pending`,
+  `invalid` with its reason (`ProposalInvalidReason`), `accepted`,
+  `dismissed`, `expired` (a work order proposal a day after its receipt)
+  or `superseded` (a newer recap on the same target); recaps do not
+  expire. The Orchestrator view lists them under a "proposal" label, texts
+  as text, with Open as card for a valid work order proposal (the same
+  validation and the same click as your own cards; a proposed new
+  subject's name is a suggestion beside the picker, never the default) and
+  Dismiss; launching such a card accepts the proposal. The briefing lists
+  the pending ones and counts those received. Rows go after 90 days, their
+  texts with the excerpts. The meeting shows the latest pending recap for
+  the received session or its subject after its runs, under the same
+  label, never copied into the answer composer.
+- Answer proposals (v0.5, story 5.21): the window stores a proposed answer
+  `pending` only for a background session live and idle in its turn whose
+  answer goes as its next turn, its text passing the composer's own rules
+  and its rationale given; otherwise `invalid` with its reason. It shows
+  in that session's meeting beside your composer, under the "proposal"
+  label and as text, never copied into it; **Send the proposed answer**
+  acts on a pointer click only and sends the proposal's id, the window
+  sending the text it stored, copied to the clipboard on the same click and
+  confirmed as your own answers are; nothing else ever sends it. It
+  expires on the first board where its session moved on, a newer one for
+  the same session supersedes it, and a sent one is `accepted`. The
+  Orchestrator view lists them with their session and an Open meeting
+  button; `meeting_answer` lines carry `source` (`author` or `proposal`)
+  and the proposal's id, never the text.
 - The orchestrator in the scene's decision office (v0.5, story 5.18):
   while `claude agents` lists it, it sits at the decider's desk in its own
   tunic (`--orch-tunic`, both themes), at its desk while busy, facing the
@@ -35,248 +254,20 @@ project uses [Semantic Versioning](https://semver.org/).
   carries the pending count beside its presence mark, in its name and
   tooltip too; neither reaches the title, the taskbar badge or the
   attention colour.
-
-- Answer proposals (v0.5, story 5.21): `officina mcp` gains
-  `propose_answer {session_id, text, rationale}`, bounded like your own
-  answers and sharing the other proposal tools' limits. The window stores
-  a proposed answer `pending` only for a background session live and idle
-  in its turn whose answer goes as its next turn, its text passing the
-  composer's own rules and its rationale given; otherwise `invalid` with
-  its reason. It shows in that session's meeting beside your composer,
-  under the "proposal" label and as text, never copied into it; **Send the
-  proposed answer** acts on a pointer click only and sends the proposal's
-  id, the window sending the text it stored, copied to the clipboard on the
-  same click and confirmed as your own answers are; nothing else ever
-  sends it. It expires on the first board where its session moved on, a
-  newer one for the same session supersedes it, and a sent one is
-  `accepted`. The Orchestrator view lists them with their session and an
-  Open meeting button; `meeting_answer` lines carry `source` (`author` or
-  `proposal`) and the proposal's id, never the text.
-- The orchestrator's proposals in the window (v0.5, story 5.17): the
-  window reads `orchestrator/proposals/` (a name that is no proposal's is
-  deleted and counted, a file read at most 16 KiB plus a byte, the hourly
-  and pending limits held again by deletion, a temporary file never read
-  and deleted after a day), validates each against the approved catalogue
-  and the registry (`orders::proposal::validate`), stores it once by its id
-  and deletes it. A proposal is `pending`, `invalid` with its reason
-  (`ProposalInvalidReason`), `accepted`, `dismissed`, `expired` (a work
-  order proposal a day after its receipt) or `superseded` (a newer recap
-  on the same target); recaps do not expire. The Orchestrator view lists
-  them under a "proposal" label, texts as text, with Open as card for a
-  valid work order proposal (the same validation and the same click as
-  your own cards; a proposed new subject's name is a suggestion beside the
-  picker, never the default) and Dismiss; launching such a card records the
-  proposal and accepts it. The briefing lists the pending ones and counts
-  those received. Rows go after 90 days, their texts with the excerpts.
-  `officina doctor` reports the pending and invalid counts and old
-  temporary files. The meeting shows the latest pending recap for the
-  received session or its subject after its runs, under the same label,
-  its texts as text, never copied into the answer composer.
-- Written answers from the meeting (v0.5, story 5.11): a composer, never
-  prefilled, sends with Send or Ctrl+Enter and copies the text on the same
-  gesture. A live idle background session or an ended one gets the
-  answer as its next turn through `claude --resume` in its own console,
-  in the folder `claude agents` reported for it, confirmed when the
-  session turns busy within 30 s; a session waiting on a question gets
-  the copy and `claude attach`; one whose folder Claude Code never
-  reported, the copy alone; an interactive one, Focus. The panel keeps the
-  text until it is confirmed or discarded; the journal keeps its SHA-256
-  (`meeting_answer`), never the text. `officina doctor` warns when
-  `claude` is too old to send a resumed prompt.
-- The meeting (v0.5, story 5.10): Receive on a Needs you or Your turn card,
-  a background session idle in Done, the session file or a subject to
-  resume opens a side panel in the file's place, which resizes nothing:
-  what the session expects (waiting for, Claude Code's latest
-  notification, the end of its last answer, your last prompt), its relay
-  runs since it started and its pending approvals, the commits since it
-  started with one diff to the working tree and its untracked files, and
-  for a background session the end of `claude logs` with its escape
-  sequences stripped; then how an answer would reach it. The scene rings
-  the received employee in the working colour. `git` runs read-only, in
-  the folder `claude agents` reported only, running nothing a repository
-  configures; no transcript is read.
-- The orchestrator session (v0.5, story 5.16): **Start** in the
-  Orchestrator view opens `claude` in a console of its own, in
-  `<officina home>/orchestrator/workdir`, with no built-in tool, Officina's
-  MCP server only (run from the `officina.exe` beside the window), no
-  settings source, inbound messages refused, `dontAsk` with Officina's
-  tools allowed and both messaging tools denied, its role appended and the
-  name `officina-orchestrator`; the contained allow list's variables only,
-  agent view and the advisor tool off. No first prompt: the role asks for
-  the briefing before the first answer. Refused, with the cause shown and
-  recorded, for a `claude` that is not `.exe`, a non-empty workdir, a
-  missing `officina.exe` or an unwritable registry. Each Start is an
-  `orchestrator_start` row (pid and creation time kept, read back at window
-  start, deleted after 90 days) and an `orchestrator_started` journal line;
-  never a resume. The agents entry named `officina-orchestrator` in its
-  workdir is `Board.orchestrator` and the view's presence (the filled dot
-  on the view switch), never a card; a second Start while it runs brings
-  its console to the front by title. Its lines and its agents entry are
-  never filed. `officina doctor` checks the workdir, `officina.exe` and the
-  sessions under the orchestrator's folder.
-- `officina mcp` (v0.5, story 5.15): the orchestrator's MCP server on stdio,
-  newline-delimited JSON-RPC answered by hand, a line over 1 MiB discarded
-  and refused. It serves only when `CLAUDE_PROJECT_DIR` is
-  `<officina home>/orchestrator/workdir` (else one line, exit 1). Read
-  tools, read-only with the window open or closed: the briefing (cursor:
-  the previous orchestrator start), the subjects, one subject, the board,
-  the relay's recent activity, the approved templates and the proposals
-  of the last seven days. Proposal tools (`propose_recap`,
-  `propose_work_order`) write one file each under
-  `orchestrator/proposals/`, bounded and limited to 30 an hour and 200
-  pending, and validate nothing else. Every answer starts with a note and
-  marks every session text `{"untrusted": "..."}`; no excerpt with
-  `no_excerpts`; answers at most 64 KiB. No tool runs, launches, approves,
-  sends text, reads a path or touches a permission prompt; its `claude
-  agents` child receives none of the orchestrator's session variables.
-- Templates in the floor file (v0.5, story 5.4): `[[template]]` declares a
-  prompt with placeholders, the catalogue projects it may run in, a closed
-  `values` list per parameter (never a `pattern`) and an optional model.
-  Each rule (name, description, projects, braces, placeholders, characters,
-  the first character after leading whitespace, the longest rendering,
-  values, model) is an `IssueKind`; a failing template is skipped and
-  reported with its line and table, never invalidating the floor.
-  Templates belong to the approved catalogue: the Relay view lists them,
-  the change banner shows them added, removed or changed.
-- `[orchestrator]` and `[auto_review]` tables, each with an optional
-  `model`; a failing table is reported. `[auto_review]` belongs to the
-  approved catalogue (its model defaults to haiku), `[orchestrator]` does
-  not.
-- `class = "auto"` validates, and must name its `check` (`auto_without_check`
-  otherwise), so an unattended apply always runs after its dry run;
-  `auto_max_per_hour` (1 to 60, default 6) on `auto` actions only; an HTTP
-  action cannot be `auto`.
-- The `auto` class runs (v0.5, story 5.12): `officina run` requests and
-  waits for an `auto` action's approval exactly as for a `human` one, the
-  author deciding until the review ships; just before an `auto` approval is
-  used, its check is evaluated again on the files as they are then and
-  refuses `check_not_satisfied`, the approval left unused, when it no longer
-  holds. Approval files and `approval_given` lines say who approved
-  (`by`); rejecting an `auto` request asks "should not run" or "not now",
-  kept in the rejection file and its line. One decision per request: a
-  `.decided` marker created first refuses a second decider
-  `already_decided`. The approval card and the session file show the class;
-  `run --list` shows every action's class; doctor lists the `auto` actions
-  with their check and cap.
-- The review of `auto` requests, in blind shadow (v0.5, story 5.13): each
-  new `auto` request is prechecked and either goes to the author at once
-  with its cause (`EscalationCause`: the binary, the session, privacy,
-  quota, the hourly cap, the review's own budget, configuration) or is
-  reviewed by a contained call on a `review` thread of its own, paced 5 s
-  apart, the cap and budget checked again right before each call. The
-  call sees the catalogue's rebuild of the request, the subject, the
-  author's last prompt, the last ten runs and the check's status, never
-  the session's answers, and can only answer approve, reject or escalate.
-  Auto approval is off: the card says so at once, the review's answer
-  stays hidden until the author decides and writes no approval. Each
-  review is an `auto_review` row with the rule baseline and the author's
-  decision copied onto it, journaled `auto_review` and `auto_escalated`
-  (never the reason), kept 90 days, its reason cleared with the excerpts.
-  Doctor reports the review's model, today's requests and calls against
-  the budget, and an invalid `[auto_review]` table. The triage call also
-  turns the advisor tool off (`CLAUDE_CODE_DISABLE_ADVISOR_TOOL=1`).
-- Letting reviews approve (v0.5, story 5.14): the Relay view's Auto
-  approval section counts the shadow reviews met by the author's decision
-  over 30 days, the disagreements and how often review and rule differ,
-  and states the 3/n bound on wrong approvals. Turning auto approval on is
-  offered only while the gate holds (20 cases, no disagreement), on a
-  pointer click, and the writer refuses it when the gate broke since
-  display. Live mode: a request is `reviewing` (no buttons, not waiting)
-  until its review answers; an approve is recorded by the window's
-  authority (`by = "review"`, the review's id), the hourly cap checked once
-  more, an author decision winning. Rule mode, offered while review and
-  rule differ in under 5 % of the cases: no call, a true baseline approves
-  `by = "rule"`, a false one escalates `rule_baseline_false`. "Should not
-  have run" on an auto-approved run of the last 7 days turns approval off
-  and the mode back to review, and counts as a disagreement for 30 days.
-  Each change is journaled `auto_approval_set`; an approval the authority
-  refuses escalates `approval_refused`. `officina relay --json` prints the
-  section and each decision's review without any reason; doctor reports
-  approval, mode, the gate's counts and the rule difference.
-- Permission modes in doctor (v0.5, story 5.20): the hook records each
-  session's `permission_mode` on its event lines (cut to 32 characters;
-  the canary watches it on `UserPromptSubmit`), and doctor prints a
-  "permission mode" line counting the sessions of the last 24 h in each
-  mode, interactive or background, an undocumented value named unknown.
-  `officina doctor --permissions` prints the user settings' whole
-  `permissions` key with `defaultMode` set to `"auto"` and the whole
-  `autoMode` key (Claude Code's defaults and two placeholders when there is
-  none), every entry kept, each also written to `doctor/`; switching is the
-  author's decision and no settings file is written. Gate 8 passed without
-  a rule, so nothing is added for the relay. Plain doctor reads neither key
-  and removes the two files.
-- `officina doctor` names each issue's table (`template bump`, `action
-  apply`), counts valid templates, and lists templates, credentials and the
-  review model in a pending change.
-- The validated work order and its vector (v0.5, story 5.5; internal until
-  the window offers work orders): a template is read from the approved
-  snapshot only while the floor still hashes to it (`TemplateUnavailable`),
-  and `WorkOrder::validate` is the only way to an order, refusing a project
-  the template does not list, a missing, repeated or undeclared parameter,
-  a value that is not byte for byte one of its list's, and a rendering over
-  the prompt limit or starting with `/`, `!` or `-` (`WorkOrderRefusal`).
-  The order keeps the template's own strings. Its vector, `claude --bg
-  --name <template>-<seq> [--model <alias>] -- <prompt>`, runs in the
-  project's folder as declared, the prompt one argument after `--`, as a
-  session kind, in no job, its deadline ending `claude` alone. Pinned by
-  `tests/vectors/orders.json` and a `work_order` case of
-  `tests/vectors/spawn.json`.
-- Work order records (v0.5, story 5.6; internal until the window offers
-  work orders): a launch is recorded `launching` under its unique name
-  `<template>-<seq>` (a name the registry holds is refused `name_taken`),
-  then its outcome, with what `claude --bg` printed (4 KiB) and its error
-  (500 characters) kept as untrusted text; a row left `launching` two
-  minutes reads `unknown`, at start and on the collector's tick. A
-  `started` order binds, within ten minutes, to the background session
-  listed under its name in its project folder, and that session is filed
-  under the order's subject with source `author`, ahead of the filing
-  rules; a new subject is created at `started`, never at the click, or the
-  open subject of that name is used. Rows are kept 90 days, their texts
-  cleared with the excerpts.
-- Work orders launched from cards (v0.5, story 5.7; the window's controls
-  come with story 5.9): the window issues a card for a template, a project
-  and a value from each list, which shows the rendered prompt, its SHA-256
-  and the argument vector exactly as it would run under a name reserved at
-  issue; an edit issues a new card under the same name and supersedes the
-  old. One pointer click launches a card: the collector checks it in a
-  fixed order (`LaunchRefusal`), consumes it, records the row and hands
-  the card's vector, byte for byte, to the click's own thread, which runs
-  `claude --bg` there and sends the outcome back (`LaunchOutcome`, an
-  untrusted folder its own), recorded however late and journaled once as
-  `work_order_launched`. Nothing retries: a double click launches
-  once, and a failed launch burns its card. Commands `issue_card`,
-  `edit_card` and `launch_work_order`.
-- `officina doctor` warns, under "agent view", when
-  `CLAUDE_CODE_DISABLE_AGENT_VIEW` turns agent view off in its environment
-  or in the `env` object of the user settings: work orders and answers
-  will fail, and set in the settings file the board's own refresh too.
-- The Orchestrator view and its briefing (v0.5, story 5.8): a fourth view
-  in the header's switch, with a neutral presence mark (absent until the
-  orchestrator ships). The briefing, built by Officina's own code from the
-  board, the relay view and the registry, lists the open subjects with
-  their sessions' states, the Needs you and Your turn sessions, the pending
-  approvals, the rows to sort, the failed and refused runs and the launched
-  work orders, and what changed since you last read it (runs finished,
-  sessions that began to wait, subjects whose status changed, orders
-  launched). It is at most 32 KiB: the oldest items go first and each
-  section says how many. Leaving the view or closing the window records
-  the reading. The view also lists the approved templates, those awaiting
-  approval and the work order history with each order's outcome, binding,
-  "unbound" and "printed id differs" flags and its session's state.
-  Commands `get_orchestrator` and `mark_briefing_read`, event
-  `orchestrator://updated`.
-- The work order composer (v0.5, story 5.9): in the Orchestrator view, a
-  template picker with each template's description, the template's
-  projects and one list per parameter holding exactly its values, with no
-  field to type a value; the subject picker with the card's open subjects
-  and a new name. Each choice issues or edits a card through core and shows
-  it, or the refusal. The card shows the template, the project, each value
-  as a chip, the whole prompt as text, one chip per argument, the folder,
-  the subject and the quota gauges, never in the attention colour. Launch
-  acts on a pointer click only, reads Launching while it runs, and the card
-  then shows the outcome: started with its session once bound, a folder
-  never trusted with what to do, failed with its exit code and error as
-  text, or the refusal. Nothing retries.
+- `officina doctor`'s Orchestrator section (v0.5, story 5.19): the
+  orchestrator's checks, from the work orders' setup to the proposals,
+  print together, last, in one stable order (`ORCHESTRATOR_SECTION`), each
+  once; a template's issue and the templates awaiting approval join them.
+  A non-`.exe` `claude`, a non-empty workdir and a missing `officina.exe`
+  fail; the others warn or inform, `review_config_invalid` included, since
+  every `auto` request then comes to you.
+- The use metrics (v0.5, story 5.19): `orders::metrics::per_day` counts,
+  per UTC day of the relay journal, the work orders started, the answers
+  sent and confirmed (yours and the proposals' apart) and your decisions
+  beside the review's and the rule's; `cargo run -p officina-host
+  --example use_metrics` prints them from the journal as `officina relay
+  --json` reads it, with the Use and Delivery share figures of PRD
+  section 7.
 
 - Sub-agents in the scene (v0.4, story 4.12): each running sub-agent of a
   session stands beside its desk, a smaller figure without a cap, from its
@@ -651,7 +642,6 @@ project uses [Semantic Versioning](https://semver.org/).
 - The triage call also passes `--settings {"crossSessionInbound":"refuse"}`,
   so no other session can deliver text into it mid-call; its argument
   vector is pinned in `tests/vectors/spawn.json`.
-
 - The catalogue's canonical format goes up by one (v0.5, story 5.4):
   templates, the review model and `auto_max_per_hour` join what the author
   approves. The first start of v0.5 therefore asks for one catalogue
@@ -833,13 +823,20 @@ project uses [Semantic Versioning](https://semver.org/).
   lint (`crates/officina-host/clippy.toml`) refuses
   `std::process::Command::new` outside the three modules that start
   processes (`spawn`, `relay::run`, `git`).
-
 - Session and model text is a distinct type in core (v0.5, story 5.3):
   what the board, the Subjects view, the relay's recent entries and a
   focus show from a session or the triage model can be shown and measured
   but never converted to a string argument, so a later change cannot pass
   it to a process by accident. No behaviour change: the window and the
   `--json` outputs carry the same bytes.
+- The meeting's `git` finds a filter driver however the repository
+  configures it before diffing the working tree (v0.5, story 5.19's
+  security audit): a filter set in a file the repository's configuration
+  includes, or in its `config.worktree`, escaped the lookup, so a session
+  could have the window run a clean filter program of its choosing on
+  Receive. The lookup now follows includes and reads every scope, and a
+  filter the repository sets, there or in its own config, limits the diff
+  to the commits.
 - The gate fails closed where it guards. Doctor prints its `PreToolUse`
   entry with `"onFailure": "block"`, so Claude Code (2.1.295 and later)
   blocks the call when the hook cannot start, times out or crashes, where
