@@ -3460,8 +3460,14 @@ fn an_answer_is_confirmed_when_the_session_turns_busy() {
     stop(handle);
 }
 
-/// D-160, review F37: a turn of under two seconds is still seen, the
-/// collector refreshing at its minimum spawn interval while it watches.
+/// D-160, review F37, D-881: a turn that only one session list sees busy
+/// is still confirmed. The fake's session turns idle again right after
+/// the first listing that printed it busy, so the test rests on the order
+/// of the listings, never on how fast the machine starts a process. The
+/// collector lists while it watches, without which the next listing would
+/// be the 15 s safety poll's, past the 10 s window; the 500 ms spacing
+/// that puts a turn of under two seconds on a listing is the plan's,
+/// tested on its clock (`a_watched_answer_lists_sessions_every_min_spawn_interval`).
 #[cfg(windows)]
 #[test]
 fn a_two_second_turn_is_confirmed() {
@@ -3472,13 +3478,19 @@ fn a_two_second_turn_is_confirmed() {
     env.write_agents(&listed_background(&work, "idle", "done", true, now));
     let (handle, emitted) = watch_answering(
         &env,
-        serde_json::json!({"mode": "resume", "turn_ms": 1_500}),
+        serde_json::json!({"mode": "resume", "short_turn": true}),
         Duration::from_secs(10),
     );
     let key = meeting_key(&emitted);
     assert_eq!(
         send_answer(&handle.sender, &key, Delivery::ResumeLive, author(ANSWER)).unwrap(),
         AnswerResult::Confirmed
+    );
+    let listed: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(env.fixture()).unwrap()).unwrap();
+    assert_eq!(
+        listed[0]["status"], "idle",
+        "the turn ended with the one listing that saw it busy"
     );
     stop(handle);
 }

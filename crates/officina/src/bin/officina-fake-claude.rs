@@ -44,8 +44,10 @@
 //!   for any other call, for a meeting whose logs take their deadline.
 //!   `resume` (story 5.11, D-129) answers `--resume <session id>` by
 //!   marking that session `busy` in the fixture, as a delivered answer
-//!   makes it, and, with `turn_ms` set, `idle` again that long after; any
-//!   other call prints the fixture.
+//!   makes it; any other call prints the fixture. With `short_turn` set to
+//!   `true`, the session turns `idle` again right after the first listing
+//!   that printed it `busy`: the shortest turn a listing can see, counted
+//!   in listings rather than in time, so no machine is too slow for it.
 //! - `FAKE_CLAUDE_HANG_MS` (`hang_ms`): how long `hang` sleeps, 60 s by
 //!   default.
 //! - `FAKE_CLAUDE_VERSION` (`version`): answer to `--version`.
@@ -346,10 +348,17 @@ fn set_status(session: &str, status: &str, state: &str) {
     let _ = std::fs::write(&fixture, serde_json::Value::from(entries).to_string());
 }
 
+/// The file naming the session whose short turn is running, beside the
+/// fixture.
+fn short_turn_file(fixture: &str) -> String {
+    format!("{fixture}.turn")
+}
+
 /// A `--resume <session id>` call in mode `resume` (story 5.11, D-129):
 /// the session turns `busy` in the fixture, as a delivered answer makes
-/// it; with `turn_ms` set, it turns back `idle` that long after, a short
-/// turn the confirmation must still see.
+/// it; with `short_turn` set, its turn is recorded as short, after the
+/// fixture says `busy`, so a listing that read the fixture before never
+/// ends it.
 fn resume(args: &[String]) {
     let Some(session) = args
         .iter()
@@ -359,9 +368,35 @@ fn resume(args: &[String]) {
         return;
     };
     set_status(session, "busy", "working");
-    if let Some(ms) = setting("turn_ms").and_then(|v| v.parse().ok()) {
-        std::thread::sleep(Duration::from_millis(ms));
-        set_status(session, "idle", "done");
+    if setting("short_turn").is_some_and(|v| v == "true")
+        && let Some(fixture) = setting("fixture")
+    {
+        let _ = std::fs::write(short_turn_file(&fixture), session);
+    }
+}
+
+/// Any other call in mode `resume`: the fixture printed, then a short turn
+/// ended when this very listing printed its session `busy` (D-881).
+fn list_ending_a_short_turn() {
+    let Some(fixture) = setting("fixture") else {
+        print!("[]");
+        return;
+    };
+    let listed = std::fs::read_to_string(&fixture).unwrap_or_else(|_| "[]".into());
+    print!("{listed}");
+    let turn = short_turn_file(&fixture);
+    let Ok(session) = std::fs::read_to_string(&turn) else {
+        return;
+    };
+    let printed_busy =
+        serde_json::from_str::<Vec<serde_json::Value>>(&listed).is_ok_and(|entries| {
+            entries
+                .iter()
+                .any(|e| e["sessionId"] == session.as_str() && e["status"] == "busy")
+        });
+    if printed_busy {
+        set_status(&session, "idle", "done");
+        let _ = std::fs::remove_file(turn);
     }
 }
 
@@ -595,6 +630,7 @@ fn main() {
         }
         "logs" if args.first().map(String::as_str) == Some("logs") => print!("{}", logs_screen()),
         "resume" if args.iter().any(|a| a == "--resume") => resume(&args),
+        "resume" => list_ending_a_short_turn(),
         "logs-hang" if args.first().map(String::as_str) == Some("logs") => {
             let ms = setting("hang_ms")
                 .and_then(|v| v.parse().ok())

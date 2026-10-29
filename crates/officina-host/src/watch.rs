@@ -547,6 +547,13 @@ impl<C: Fn() -> Instant> RefreshPlan<C> {
         self.agents_wanted = true;
     }
 
+    /// An answer awaits its confirmation: the session list is wanted at
+    /// every tick, so it runs at the minimum spawn interval, not the safety
+    /// poll, and a short turn falls on a listing (D-160).
+    fn answer_watched(&mut self) {
+        self.agents_wanted = true;
+    }
+
     /// `CollectorMsg::Visibility`: picks the safety poll interval.
     fn visibility_changed(&mut self, visible: bool) {
         self.visible = visible;
@@ -1087,10 +1094,8 @@ fn run<E: Emit>(
         // D-136: a launch whose outcome never came back reads `unknown`
         // within a tick of its expiry, whatever else is due.
         registry.expire_launching(now_ms());
-        // An answer awaiting its confirmation refreshes the session list at
-        // the minimum spawn interval, not the safety poll (D-160).
         if !confirmations.is_empty() {
-            plan.refresh_requested();
+            plan.answer_watched();
         }
         let due = plan.due();
         // Before the session list and the board read anything (D-78).
@@ -1809,6 +1814,32 @@ mod tests {
         advance(&now, TICK);
         plan.quota_changed();
         assert!(!plan.due().ingest, "a quota change reads no event");
+    }
+
+    /// D-160, D-881: while an answer is watched, a session list is due
+    /// every `MIN_SPAWN_INTERVAL` of the plan's clock, so a turn of under
+    /// two seconds falls on several listings; a machine whose listing
+    /// takes longer spaces them by that time instead (`watch.rs`'s
+    /// `a_two_second_turn_is_confirmed` rests on their order alone).
+    #[test]
+    fn a_watched_answer_lists_sessions_every_min_spawn_interval() {
+        let (mut plan, now) = started();
+        advance(&now, Duration::from_secs(5));
+        let turn = Duration::from_secs(2);
+        let from = now.get();
+        let mut listed = Vec::new();
+        while now.get() - from < turn {
+            plan.answer_watched();
+            if plan.due().agents {
+                listed.push(now.get() - from);
+            }
+            advance(&now, TICK);
+        }
+        let every_interval: Vec<Duration> = (0..)
+            .map(|n| MIN_SPAWN_INTERVAL * n)
+            .take_while(|at| *at < turn)
+            .collect();
+        assert_eq!(listed, every_interval);
     }
 
     #[test]
