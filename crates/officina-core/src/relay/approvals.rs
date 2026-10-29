@@ -16,6 +16,7 @@ use super::catalogue::{
 use super::http::{self, HttpMethod, HttpPlan};
 use super::journal::TreeFingerprint;
 use crate::quota::normalise_path;
+use crate::untrusted::Untrusted;
 
 /// A request no decision answered is listed and reused this long, then
 /// expires (AD-33, FR-9).
@@ -470,7 +471,7 @@ pub struct ApprovalView {
     pub invalid_reason: Option<String>,
     pub session_id: Option<String>,
     /// The name of the card with this session id, when there is one.
-    pub session_name: Option<String>,
+    pub session_name: Option<Untrusted<String>>,
     pub requested_at_ms: i64,
     pub expires_at_ms: i64,
     pub dry_run: Option<DryRunView>,

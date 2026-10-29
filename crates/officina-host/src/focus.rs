@@ -214,7 +214,7 @@ mod tests {
             column: Column::Working,
             badge: None,
             kind: Some(kind),
-            name: "n".into(),
+            name: officina_core::untrusted::Untrusted::new("n".into()),
             project: ProjectView {
                 name: "p".into(),
                 color: None,

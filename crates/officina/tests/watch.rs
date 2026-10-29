@@ -35,6 +35,7 @@ use officina_core::registry::types::{
 use officina_core::registry::view::RegistryView;
 use officina_core::relay::journal::{CatalogueApproved, JournalEntry};
 use officina_core::relay::view::{RecentEvent, RelayView};
+use officina_core::untrusted::Untrusted;
 use officina_host::collector::{Collector, LoadedFloor, load_floor};
 use officina_host::paths::Paths;
 use officina_host::registry::ingest::IngestContext;
@@ -159,7 +160,10 @@ fn emits_first_board_then_only_on_change() {
         .recv_timeout(Duration::from_secs(5))
         .expect("board after hook event");
     assert_eq!(next.columns.to_resume.len(), 1);
-    assert_eq!(next.columns.to_resume[0].last_prompt.as_deref(), Some("x"));
+    assert_eq!(
+        next.columns.to_resume[0].last_prompt,
+        Some(Untrusted::new("x".to_owned()))
+    );
 
     stop(handle);
 }
@@ -1347,10 +1351,10 @@ fn author_verdicts_move_an_ended_session_on_the_board() {
             assert_eq!(
                 (
                     listed[0].session_id.as_str(),
-                    listed[0].name.as_deref(),
-                    listed[0].prompt.as_deref()
+                    listed[0].name.clone(),
+                    listed[0].prompt.clone()
                 ),
-                ("s-old", Some("api"), None)
+                ("s-old", Some(Untrusted::new("api".to_owned())), None)
             );
         }
         other => panic!("{other:?}"),

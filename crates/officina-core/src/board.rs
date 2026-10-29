@@ -15,6 +15,7 @@ use crate::quota::{QuotaFile, QuotaWindow};
 use crate::registry::types::{RegistryReport, Settlement, SubjectRef};
 use crate::relay::approvals::ApprovalView;
 use crate::scene::{SceneFacts, SceneState};
+use crate::untrusted::Untrusted;
 
 /// Version of the board JSON contract. 2: approval requests (AD-35). 3:
 /// the registry's state (v0.3, AD-54); later v0.3 stories extend the board
@@ -118,7 +119,7 @@ pub struct Card {
     pub column: Column,
     pub badge: Option<Badge>,
     pub kind: Option<SessionKindView>,
-    pub name: String,
+    pub name: Untrusted<String>,
     pub project: ProjectView,
     pub session_id: Option<String>,
     /// Background session id, the argument of `claude attach`.
@@ -126,12 +127,12 @@ pub struct Card {
     pub pid: Option<u32>,
     pub cwd: Option<String>,
     pub waiting_for: Option<String>,
-    pub last_prompt: Option<String>,
-    pub last_message: Option<String>,
+    pub last_prompt: Option<Untrusted<String>>,
+    pub last_message: Option<Untrusted<String>>,
     /// The end of the answer `last_message` starts, when the hook could not
     /// keep it whole (D-182): from the same `Stop` line, so head and tail
     /// always come from one answer.
-    pub last_message_tail: Option<String>,
+    pub last_message_tail: Option<Untrusted<String>>,
     #[cfg_attr(feature = "ts", ts(type = "number | null"))]
     pub last_event_at_ms: Option<i64>,
     #[cfg_attr(feature = "ts", ts(type = "number | null"))]
@@ -737,7 +738,7 @@ fn new_card(
         if input.no_excerpts {
             None
         } else {
-            text.clone()
+            text.clone().map(Untrusted::new)
         }
     };
     let subject = facts
@@ -750,7 +751,7 @@ fn new_card(
         column: placement.column,
         badge: placement.badge,
         kind: facts.kind,
-        name: facts.name.unwrap_or_else(|| project.name.clone()),
+        name: Untrusted::new(facts.name.unwrap_or_else(|| project.name.clone())),
         project,
         session_id: facts.session_id,
         background_id: facts.background_id,
@@ -1027,6 +1028,7 @@ pub fn build_board(input: &BoardInput, now_ms: i64) -> Board {
 mod tests {
     use super::*;
     use crate::agents::parse_agents;
+    use crate::untrusted::text;
 
     fn record(json: &str) -> AgentRecord {
         parse_agents(&format!("[{json}]")).unwrap().remove(0)
@@ -1559,8 +1561,8 @@ mod tests {
         for card in [listed, unlisted] {
             assert_eq!(card.project.name, "api", "{}", card.key);
             assert_eq!(card.project.color, Some(ProjectColor::Blue), "{}", card.key);
-            assert_eq!(card.name, "api", "{}", card.key);
-            assert_eq!(card.last_prompt.as_deref(), Some("deploy"), "{}", card.key);
+            assert_eq!(card.name, text("api"), "{}", card.key);
+            assert_eq!(card.last_prompt, Some(text("deploy")), "{}", card.key);
         }
 
         input.no_excerpts = true;
@@ -1590,8 +1592,8 @@ mod tests {
         let board = build_board(&input, 10_000_000);
         assert_eq!(board.columns.all().count(), 1);
         assert_eq!(
-            board.columns.your_turn[0].last_prompt.as_deref(),
-            Some("after clear")
+            board.columns.your_turn[0].last_prompt,
+            Some(text("after clear"))
         );
     }
 
@@ -1762,12 +1764,12 @@ values = [\"web01\"]
                 &DryRunInputs::default(),
                 WAITING,
             );
-            let names: Vec<Option<&str>> = board
+            let names: Vec<Option<Untrusted<String>>> = board
                 .approvals
                 .iter()
-                .map(|a| a.session_name.as_deref())
+                .map(|a| a.session_name.clone())
                 .collect();
-            assert_eq!(names, [Some("deploy-lab"), None, None]);
+            assert_eq!(names, [Some(text("deploy-lab")), None, None]);
         }
 
         #[test]
@@ -2013,8 +2015,8 @@ values = [\"web01\"]
     fn cards_carry_the_answer_tail_and_withhold_it_without_excerpts() {
         let lines = vec![stop(5, Some("head…"), Some("…tail"))];
         let card = listed_with(lines.clone(), false);
-        assert_eq!(card.last_message.as_deref(), Some("head…"));
-        assert_eq!(card.last_message_tail.as_deref(), Some("…tail"));
+        assert_eq!(card.last_message, Some(text("head…")));
+        assert_eq!(card.last_message_tail, Some(text("…tail")));
         let hidden = listed_with(lines, true);
         assert_eq!(
             (hidden.last_message, hidden.last_message_tail),
@@ -2033,7 +2035,7 @@ values = [\"web01\"]
             ],
             false,
         );
-        assert_eq!(card.last_message.as_deref(), Some("short"));
+        assert_eq!(card.last_message, Some(text("short")));
         assert_eq!(card.last_message_tail, None);
         let kept = listed_with(
             vec![
@@ -2042,7 +2044,67 @@ values = [\"web01\"]
             ],
             false,
         );
-        assert_eq!(kept.last_message_tail.as_deref(), Some("…old tail"));
+        assert_eq!(kept.last_message_tail, Some(text("…old tail")));
+    }
+
+    /// AD-74, D-130: a card's name and excerpts and an approval's session
+    /// name are untrusted (marked inside `untrusted::wrapped`), while Claude
+    /// Code's values and the project stay plain; outside it every one is the
+    /// plain string it was.
+    #[test]
+    fn card_texts_serialize_as_plain_strings() {
+        use serde_json::{Value, json};
+        let mut prompt = event(5, "s", "UserPromptSubmit");
+        prompt.prompt = Some("deploy".into());
+        let input = BoardInput {
+            agents: Some(vec![record(
+                r#"{"pid":7,"sessionId":"s","kind":"interactive","status":"idle","name":"deploy-lab","cwd":"C:/work/api","startedAt":1}"#,
+            )]),
+            events: vec![prompt, stop(9, Some("head…"), Some("…tail"))],
+            approvals: vec![ApprovalView {
+                id: "0123456789abcdef-1".into(),
+                project: "api".into(),
+                action: "restart".into(),
+                description: String::new(),
+                argv: Vec::new(),
+                http: None,
+                valid: false,
+                invalid_reason: Some("no catalogue is approved".into()),
+                session_id: Some("s".into()),
+                session_name: None,
+                requested_at_ms: 1,
+                expires_at_ms: 2,
+                dry_run: None,
+                binding: None,
+                bound_files: None,
+                files_unchanged: None,
+            }],
+            ..Default::default()
+        };
+        let board = build_board(&input, 10);
+        let texts = |board: &Value| {
+            let card = &board["columns"]["your_turn"][0];
+            vec![
+                card["name"].clone(),
+                card["last_prompt"].clone(),
+                card["last_message"].clone(),
+                card["last_message_tail"].clone(),
+                board["approvals"][0]["session_name"].clone(),
+            ]
+        };
+        let expected = ["deploy-lab", "deploy", "head…", "…tail", "deploy-lab"];
+        let plain = serde_json::to_value(&board).unwrap();
+        assert_eq!(texts(&plain), expected.map(|t| json!(t)));
+        let marked = crate::untrusted::wrapped(|| serde_json::to_value(&board)).unwrap();
+        assert_eq!(texts(&marked), expected.map(|t| json!({ "untrusted": t })));
+        for board in [&plain, &marked] {
+            let card = &board["columns"]["your_turn"][0];
+            assert_eq!(card["key"], "pid:7:1");
+            assert_eq!(card["session_id"], "s");
+            assert_eq!(card["cwd"], "C:/work/api");
+            assert_eq!(card["project"]["name"], "api");
+            assert_eq!(board["approvals"][0]["action"], "restart");
+        }
     }
 
     #[test]

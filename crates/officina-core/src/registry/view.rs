@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::board::{Badge, Board, Card, Column, SessionKindView};
 use crate::dates::DAY_MS;
+use crate::untrusted::Untrusted;
 
 use super::dry_run::{DryRunProgress, DryRunState, DryRunStop, Evaluation};
 use super::filing::excerpt_time;
@@ -289,7 +290,7 @@ pub struct LiveCard {
 pub struct SessionView {
     pub session_id: String,
     pub project: String,
-    pub name: Option<String>,
+    pub name: Option<Untrusted<String>>,
     pub kind: Option<SessionKindView>,
     #[cfg_attr(feature = "ts", ts(type = "number"))]
     pub first_seen_ms: i64,
@@ -311,8 +312,8 @@ pub struct SessionView {
 pub struct DiscardedSession {
     pub session_id: String,
     pub project: String,
-    pub name: Option<String>,
-    pub prompt: Option<String>,
+    pub name: Option<Untrusted<String>>,
+    pub prompt: Option<Untrusted<String>>,
     #[cfg_attr(feature = "ts", ts(type = "number"))]
     pub discarded_at_ms: i64,
 }
@@ -322,11 +323,11 @@ pub struct DiscardedSession {
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct ExcerptView {
     pub session_id: String,
-    pub prompt: Option<String>,
+    pub prompt: Option<Untrusted<String>>,
     #[cfg_attr(feature = "ts", ts(type = "number | null"))]
     pub prompt_at_ms: Option<i64>,
-    pub answer_head: Option<String>,
-    pub answer_tail: Option<String>,
+    pub answer_head: Option<Untrusted<String>>,
+    pub answer_tail: Option<Untrusted<String>>,
     #[cfg_attr(feature = "ts", ts(type = "number | null"))]
     pub answer_at_ms: Option<i64>,
 }
@@ -359,7 +360,7 @@ pub struct TriageRow {
     pub subject: Option<SubjectRef>,
     /// The anchor, for a subject row; the session, for an unfiled one.
     pub session_id: Option<String>,
-    pub session_name: Option<String>,
+    pub session_name: Option<Untrusted<String>>,
     pub proposal: Proposal,
     /// What confirming as shown applies: none for `unsure`, which waits
     /// for the author's choice (D-59).
@@ -378,7 +379,7 @@ pub struct TriageRow {
     pub model_pending: bool,
     /// The model's reason for its proposal: untrusted text, rendered as
     /// text under a "model" label, never read by a rule (AD-40).
-    pub model_reason: Option<String>,
+    pub model_reason: Option<Untrusted<String>>,
     /// The model's last call on the row's inputs gave no answer: the
     /// default stays, with why (AD-52).
     pub model_call: Option<ModelCall>,
@@ -442,7 +443,10 @@ fn session_view(record: &SessionRecord, cards: &BTreeMap<&str, &Card>) -> Sessio
     SessionView {
         session_id: record.session_id.clone(),
         project: record.project.clone(),
-        name: record.name.as_ref().map(|n| n.value.clone()),
+        name: record
+            .name
+            .as_ref()
+            .map(|n| Untrusted::new(n.value.clone())),
         kind: record.kind.as_ref().map(|k| k.value.into()),
         first_seen_ms: record.first_seen_ms,
         last_seen_ms: record.last_seen_ms,
@@ -515,10 +519,10 @@ fn subject_view(
 fn excerpt_view(e: &ExcerptRecord) -> ExcerptView {
     ExcerptView {
         session_id: e.session_id.clone(),
-        prompt: e.prompt.clone(),
+        prompt: e.prompt.clone().map(Untrusted::new),
         prompt_at_ms: e.prompt_at_ms,
-        answer_head: e.answer_head.clone(),
-        answer_tail: e.answer_tail.clone(),
+        answer_head: e.answer_head.clone().map(Untrusted::new),
+        answer_tail: e.answer_tail.clone().map(Untrusted::new),
         answer_at_ms: e.answer_at_ms,
     }
 }
@@ -585,7 +589,7 @@ fn triage_row(
     let (model_pending, model_reason, model_call) = match model {
         RowModel::None => (false, None, None),
         RowModel::Pending => (true, None, None),
-        RowModel::Answered { reason } => (false, Some(reason), None),
+        RowModel::Answered { reason } => (false, Some(Untrusted::new(reason)), None),
         RowModel::NoAnswer {
             outcome,
             refusal,
@@ -611,7 +615,8 @@ fn triage_row(
         kind: row.kind,
         project: row.project,
         subject: row.subject.and_then(reference),
-        session_name: session.and_then(|s| s.name.as_ref().map(|n| n.value.clone())),
+        session_name: session
+            .and_then(|s| s.name.as_ref().map(|n| Untrusted::new(n.value.clone()))),
         end: session.and_then(|s| end_view(s)),
         excerpts: row
             .session_id
@@ -878,6 +883,7 @@ mod tests {
     use crate::agents::parse_agents;
     use crate::board::{BoardInput, build_board};
     use crate::registry::types::{HookEnd, NON_INTERACTIVE_END_REASON, RegistryState, Sourced};
+    use crate::untrusted::text;
 
     const NOW: i64 = 1_793_102_400_000;
 
@@ -1159,8 +1165,8 @@ mod tests {
         );
         let latest = shown.subjects[0].excerpts.as_ref().unwrap();
         assert_eq!(
-            (latest.session_id.as_str(), latest.answer_head.as_deref()),
-            ("new", Some("Done."))
+            (latest.session_id.as_str(), latest.answer_head.clone()),
+            ("new", Some(text("Done.")))
         );
     }
 
@@ -1283,8 +1289,8 @@ mod tests {
         assert_eq!(filed.session_id.as_deref(), Some("filed"));
         assert_eq!(filed.verdict, Some(Verdict::ToResume));
         assert_eq!(
-            filed.excerpts.as_ref().and_then(|e| e.prompt.as_deref()),
-            Some("tighten the alert rules")
+            filed.excerpts.as_ref().and_then(|e| e.prompt.clone()),
+            Some(text("tighten the alert rules"))
         );
         assert_eq!(
             filed.end.as_ref().map(|e| (e.how, e.at_ms)),
@@ -1303,6 +1309,119 @@ mod tests {
         assert_eq!(alive.to_sort, 1, "a prompt after its end: alive again");
         assert_eq!(alive.triage[0].key, "session:loose");
         assert_eq!(unread_view(ready(), NOW).to_sort, 0);
+    }
+
+    /// AD-74, D-130: session names, excerpts and the model's reason are
+    /// untrusted (marked inside `untrusted::wrapped`), while subject names,
+    /// projects and ids stay plain; outside it every one is the plain string
+    /// it was.
+    #[test]
+    fn excerpts_and_model_reason_serialize_as_plain_strings() {
+        use serde_json::{Value, json};
+        let subjects = [subject(1, SubjectStatus::Active, NOW)];
+        let sessions = [SessionRecord {
+            name: sourced("deploy-lab".to_owned(), Source::Agents, NOW - 1_200),
+            ..ended("filed", "api", Some(1), NOW - 1_000)
+        }];
+        let excerpts = [ExcerptRecord {
+            session_id: "filed".into(),
+            prompt: Some("tighten the alert rules".into()),
+            prompt_at_ms: Some(NOW - 1_100),
+            answer_head: Some("head…".into()),
+            answer_tail: Some("…tail".into()),
+            answer_at_ms: Some(NOW - 1_050),
+        }];
+        let shown = build_view(
+            &ViewInput {
+                registry: ready(),
+                ingestion: IngestionView::default(),
+                subjects: &subjects,
+                sessions: &sessions,
+                excerpts: &excerpts,
+                confirmations: &[],
+                model: &ModelFacts::default(),
+                board: None,
+                restore_notice: None,
+                evidence: &EvidenceInput::default(),
+                no_excerpts: false,
+            },
+            NOW,
+        );
+        let answered = triage_row(
+            Row {
+                kind: RowKind::UnfiledSession,
+                key: "session:loose".into(),
+                project: "api".into(),
+                subject: None,
+                session_id: Some("loose".into()),
+                proposal: crate::registry::proposal::default_proposal(),
+                at_ms: NOW,
+                proposed_subject: None,
+                choices: Vec::new(),
+            },
+            RowModel::Answered {
+                reason: "Shipped with tests.".into(),
+            },
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+        );
+        let discarded = DiscardedSession {
+            session_id: "gone".into(),
+            project: "api".into(),
+            name: Some(text("old-name")),
+            prompt: Some(text("try again")),
+            discarded_at_ms: NOW,
+        };
+        let texts = |view: &Value, row: &Value, gone: &Value| {
+            let subject = &view["subjects"][0];
+            let triage = &view["triage"][0];
+            vec![
+                subject["sessions"][0]["name"].clone(),
+                subject["excerpts"]["prompt"].clone(),
+                subject["excerpts"]["answer_head"].clone(),
+                subject["excerpts"]["answer_tail"].clone(),
+                triage["session_name"].clone(),
+                triage["excerpts"]["prompt"].clone(),
+                row["model_reason"].clone(),
+                gone["name"].clone(),
+                gone["prompt"].clone(),
+            ]
+        };
+        let expected = [
+            "deploy-lab",
+            "tighten the alert rules",
+            "head…",
+            "…tail",
+            "deploy-lab",
+            "tighten the alert rules",
+            "Shipped with tests.",
+            "old-name",
+            "try again",
+        ];
+        let serialized = || {
+            (
+                serde_json::to_value(&shown).unwrap(),
+                serde_json::to_value(&answered).unwrap(),
+                serde_json::to_value(&discarded).unwrap(),
+            )
+        };
+        let plain = serialized();
+        assert_eq!(
+            texts(&plain.0, &plain.1, &plain.2),
+            expected.map(|t| json!(t))
+        );
+        let marked = crate::untrusted::wrapped(serialized);
+        assert_eq!(
+            texts(&marked.0, &marked.1, &marked.2),
+            expected.map(|t| json!({ "untrusted": t }))
+        );
+        for view in [&plain.0, &marked.0] {
+            assert_eq!(view["subjects"][0]["name"], "subject 1", "the author's");
+            assert_eq!(view["subjects"][0]["sessions"][0]["project"], "api");
+            assert_eq!(view["triage"][0]["subject"]["name"], "subject 1");
+            assert_eq!(view["triage"][0]["session_id"], "filed");
+        }
     }
 
     /// FR-13, D-55: subjects archived with the routine box are candidates,

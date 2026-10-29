@@ -485,11 +485,14 @@ pub fn window_titles_for(pid: u32) -> Vec<String> {
 /// Brings the window of an interactive session to the foreground.
 pub fn focus_session_window(pid: u32, names: &[String]) -> officina_core::focus::FocusOutcome {
     use officina_core::focus::{FocusOutcome, WindowChoice, choose_window};
+    use officina_core::untrusted::Untrusted;
     let windows = session_windows(pid);
     let titles: Vec<String> = windows.iter().map(|(_, t)| t.clone()).collect();
     match choose_window(&titles, names) {
         WindowChoice::None => FocusOutcome::NoWindow,
-        WindowChoice::Candidates(list) => FocusOutcome::Candidates(list),
+        WindowChoice::Candidates(list) => {
+            FocusOutcome::Candidates(list.into_iter().map(Untrusted::new).collect())
+        }
         WindowChoice::One(index) => {
             let hwnd = windows[index].0;
             // SAFETY: `hwnd` came from EnumWindows moments ago; a window

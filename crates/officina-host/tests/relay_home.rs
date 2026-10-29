@@ -11,8 +11,8 @@ use officina_core::relay::approvals::{
     FileKind, KEPT_OUTPUT_RETENTION_MS, RETENTION_MS, file_name, kept_output_name,
 };
 use officina_core::relay::catalogue::{ApprovedCatalogue, load};
-use officina_core::relay::journal::{GateError, GateFault};
-use officina_core::relay::view::RecentEvent;
+use officina_core::relay::journal::GateFault;
+use officina_core::relay::view::{GateErrorView, RecentEvent};
 use officina_host::files::now_ms;
 use officina_host::relay::approvals::prune;
 use officina_host::relay::home::{
@@ -362,7 +362,7 @@ fn a_known_projects_write_error_is_reported() {
     assert_eq!(keeper.keep(&home, now), Some(failing.as_str()));
 
     let view = read_view(&home, now).unwrap();
-    let errors: Vec<&GateError> = view
+    let errors: Vec<&GateErrorView> = view
         .recent
         .iter()
         .filter_map(|entry| match &entry.event {

@@ -350,7 +350,6 @@ closed_enum! {
 
 /// `officina run` refused before starting anything.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct Refused {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project: Option<String>,
@@ -400,7 +399,6 @@ closed_enum! {
 /// The gate denied a tool call: a shell command, or a file write under the
 /// Officina home (AD-26, D-171, D-173).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct GateDenied {
     pub project: String,
     #[serde(default)]
@@ -417,7 +415,6 @@ pub struct GateDenied {
 /// The gate met a fault: an input it could not read (D-15) or an internal
 /// error (AD-28). The decision it took stands beside it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct GateError {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project: Option<String>,

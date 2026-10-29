@@ -32,6 +32,7 @@ use officina_core::registry::view::{
     AutoArchiveSetting, DiscardedSession, EvidenceInput, IngestionView, RegistryView, SubjectView,
     ViewInput, archived_subjects, build_view,
 };
+use officina_core::untrusted::Untrusted;
 use rusqlite::types::ValueRef;
 use rusqlite::{Connection, OptionalExtension};
 
@@ -358,8 +359,8 @@ pub(crate) fn discarded(conn: &Connection) -> rusqlite::Result<Vec<DiscardedSess
             Ok(DiscardedSession {
                 session_id: row.get(0)?,
                 project: row.get(1)?,
-                name: row.get(2)?,
-                prompt: row.get(3)?,
+                name: row.get::<_, Option<String>>(2)?.map(Untrusted::new),
+                prompt: row.get::<_, Option<String>>(3)?.map(Untrusted::new),
                 discarded_at_ms: row.get(4)?,
             })
         },

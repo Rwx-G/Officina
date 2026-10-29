@@ -20,6 +20,7 @@ use officina_core::registry::types::{
     AuthorRefusal, ConfirmRefusal, ModelVerdict, ProposalSource, ReasonCode, SessionRecord, Source,
     SubjectRecord, SubjectStatus, Verdict,
 };
+use officina_core::untrusted::Untrusted;
 use officina_host::registry::ingest::IngestContext;
 use officina_host::registry::store::{Writer, open_reader};
 use officina_host::registry::write::AuthorError;
@@ -1542,7 +1543,10 @@ mod model {
             (row.proposal.source, row.proposal.verdict, row.model_pending),
             (ProposalSource::Model, ModelVerdict::Finished, false)
         );
-        assert_eq!(row.model_reason.as_deref(), Some("Shipped with tests."));
+        assert_eq!(
+            row.model_reason,
+            Some(Untrusted::new("Shipped with tests.".to_owned()))
+        );
         assert_eq!(after.model.pending, 1);
     }
 
@@ -1777,7 +1781,7 @@ mod model {
             .collect();
         assert_eq!(holders, ["model_answer"], "positive control");
         let row = view(&writer, &home, NOW + 5_000).triage.remove(0);
-        assert_eq!(row.model_reason.as_deref(), Some(MARKER));
+        assert_eq!(row.model_reason, Some(Untrusted::new(MARKER.to_owned())));
         confirm_shown(&mut writer, &row, Verdict::Finished, "export", NOW + 6_000);
         assert!(
             every_text(&home)

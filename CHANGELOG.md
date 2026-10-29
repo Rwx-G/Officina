@@ -478,6 +478,12 @@ project uses [Semantic Versioning](https://semver.org/).
 
 ### Security
 
+- Session and model text is a distinct type in core (v0.5, story 5.3):
+  what the board, the Subjects view, the relay's recent entries and a
+  focus show from a session or the triage model can be shown and measured
+  but never converted to a string argument, so a later change cannot pass
+  it to a process by accident. No behaviour change: the window and the
+  `--json` outputs carry the same bytes.
 - The gate fails closed where it guards. Doctor prints its `PreToolUse`
   entry with `"onFailure": "block"`, so Claude Code (2.1.295 and later)
   blocks the call when the hook cannot start, times out or crashes, where

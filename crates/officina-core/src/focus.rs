@@ -3,6 +3,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::untrusted::Untrusted;
+
 /// What a click on a card did.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
@@ -11,7 +13,7 @@ pub enum FocusOutcome {
     Focused,
     AttachOpened,
     /// Several or no window matched; the titles are listed instead of guessing.
-    Candidates(Vec<String>),
+    Candidates(Vec<Untrusted<String>>),
     NoWindow,
     /// Windows refused the foreground change; the window was flashed.
     Refused,
@@ -201,6 +203,22 @@ mod tests {
             WindowChoice::One(0)
         );
         assert_eq!(choose_window(&[], &s(&["api"])), WindowChoice::None);
+    }
+
+    /// AD-74: a window title is the terminal's, which Claude Code sets from
+    /// the session, so the titles listed are untrusted; plain strings
+    /// outside `untrusted::wrapped`.
+    #[test]
+    fn candidate_titles_are_untrusted() {
+        let outcome = FocusOutcome::Candidates(vec![crate::untrusted::text("api - Code")]);
+        assert_eq!(
+            serde_json::to_string(&outcome).unwrap(),
+            r#"{"outcome":"candidates","detail":["api - Code"]}"#
+        );
+        assert_eq!(
+            crate::untrusted::wrapped(|| serde_json::to_value(&outcome)).unwrap(),
+            serde_json::json!({"outcome": "candidates", "detail": [{"untrusted": "api - Code"}]})
+        );
     }
 
     #[test]
