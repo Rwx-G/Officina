@@ -32,7 +32,14 @@
 //!   home, floor and repository approved through the authority, then a
 //!   `claude --permission-mode auto` console for case a (no rule) and, on
 //!   request, case b (the narrow rule through `--settings`).
-//! - `all`: the three in that order.
+//! - `gate1-window`: gate 1's window half (story 5.16 AC 10, E24, D-691,
+//!   D-692): with a window built from the story, it plants the marker
+//!   `CLAUDE.md` in `<home>/orchestrator/` (D-164), says what to do in the
+//!   window and in the orchestrator's console at each step, asks what was
+//!   seen, compares `claude agents --json` with the orchestrator's name and
+//!   folder, and removes the marker at the end. It starts nothing itself:
+//!   the window's Start does.
+//! - `all`: gate1, gate4 and gate8 in that order.
 //!
 //! `--dry-run` prepares the scratch folders and writes the report with the
 //! exact command lines and environment names, starting nothing and asking
@@ -60,7 +67,7 @@ use officina_host::relay::authority::approve_catalogue;
 use officina_host::relay::home::{RelayHome, load_relay_floor};
 use officina_host::spawn::{BaseEnv, ResolvedClaude, SpawnError, resolve_claude};
 
-const USAGE: &str = "usage: gates_v05 gate1|gate4|gate8|all [--dry-run]";
+const USAGE: &str = "usage: gates_v05 gate1|gate1-window|gate4|gate8|all [--dry-run]";
 
 /// The variable that turns agent view off (S7): the orchestrator sets it,
 /// the session kinds remove it (AD-80).
@@ -152,6 +159,8 @@ const GATE8_RULE: &str = "Bash(officina run *)";
 const GATE8_REQUEST: &str = "Run `officina run check`, then `officina run apply --wait 5`, one Bash call each, and report each exit code and output.";
 
 struct Ctx {
+    /// The owner's Officina home, the window's (gate1-window).
+    officina_home: PathBuf,
     claude: PathBuf,
     resolved: ResolvedClaude,
     config_dir: Option<PathBuf>,
@@ -807,6 +816,143 @@ fn gate1(ctx: &Ctx) -> Report {
     report
 }
 
+/// True when `listing` (`claude agents --json --all`) holds the
+/// orchestrator: an entry named as core names it whose folder is the
+/// workdir under `home` (D-166).
+fn orchestrator_listed(listing: &str, home: &Path) -> bool {
+    officina_core::agents::parse_agents(listing.trim()).is_ok_and(|records| {
+        officina_core::orders::orchestrator::presence(&records, &home.to_string_lossy()).is_some()
+    })
+}
+
+/// Gate 1's window half (story 5.16 AC 10): the owner starts the
+/// orchestrator from the window built from the story and reports what its
+/// console shows.
+fn gate1_window(ctx: &Ctx) -> Report {
+    use officina_core::spawn::{ORCHESTRATOR_MCP_SERVER, ORCHESTRATOR_NAME};
+    let mut report = Report::new("gate1-window", ctx);
+    let folder = ctx
+        .officina_home
+        .join(officina_core::orders::ORCHESTRATOR_DIR);
+    let workdir = officina_host::paths::orchestrator_workdir(&ctx.officina_home);
+    let marker = folder.join("CLAUDE.md");
+    let tools: Vec<String> = officina_core::mcp::McpTool::ALL
+        .iter()
+        .map(|tool| format!("mcp__{ORCHESTRATOR_MCP_SERVER}__{}", tool.code()))
+        .collect();
+    report.line(&format!(
+        "- Officina home: `{}`",
+        ctx.officina_home.display()
+    ));
+    report.line(&format!("- Orchestrator workdir: `{}`", workdir.display()));
+    report.line(&format!(
+        "- Marker memory file (D-164): `{}`",
+        marker.display()
+    ));
+    report.block(
+        "The tools `/context` should list, from `McpTool::ALL`",
+        &tools.join("\n"),
+    );
+    report.block("claude agents --json --all before", &agents_listing(ctx));
+    if ctx.dry_run {
+        return report;
+    }
+    if marker.exists() {
+        report.line("- A `CLAUDE.md` already sits in the orchestrator's folder: the gate leaves it and stops.");
+        return report;
+    }
+    if let Err(e) =
+        std::fs::create_dir_all(&folder).and_then(|()| std::fs::write(&marker, MARKER_CLAUDE_MD))
+    {
+        report.line(&format!("- Cannot write the marker: {e}"));
+        return report;
+    }
+    say(&format!(
+        "Gate 1, window half. Build the window from this branch (pnpm tauri build, or the dev build with officina.exe beside officina-app.exe), close any orchestrator console, and keep {} empty.",
+        workdir.display()
+    ));
+    pause("Open the window, go to the Orchestrator view and click Start once.");
+    ask(
+        &mut report,
+        "Did Claude Code show its trust dialog for the workdir in the new console? (accept it there)",
+    );
+    ask(
+        &mut report,
+        "Did the Start's answer beside the button say it started and to type any first message?",
+    );
+    pause("In the orchestrator's console, run /mcp.");
+    ask(
+        &mut report,
+        &format!("Does /mcp list one server only, {ORCHESTRATOR_MCP_SERVER}, connected?"),
+    );
+    pause("Run /context.");
+    ask(
+        &mut report,
+        "Does /context list only the tools printed above (mcp__officina__*), each of them, and no other tool?",
+    );
+    ask(
+        &mut report,
+        &format!(
+            "Does /context list the marker memory file {} ?",
+            marker.display()
+        ),
+    );
+    ask(
+        &mut report,
+        "Does /context list a tool named advisor? (D-692: it must not)",
+    );
+    ask(
+        &mut report,
+        "Does the status bar read \"don't ask on\"? (D-690)",
+    );
+    pause("Run /config and look for the row \"Messages from your other sessions\".");
+    ask(&mut report, "Is that row absent?");
+    pause("Type any first message, such as: hello.");
+    ask(
+        &mut report,
+        "Did the session call the briefing tool (a tool call shown in the console, not text that looks like one) before it answered? (D-691)",
+    );
+    ask(
+        &mut report,
+        &format!("Did any answer start with the word {MARKER_WORD}? (D-164: it must not)"),
+    );
+    pause("Ask it: which sessions are live right now? Use the board tool.");
+    ask(
+        &mut report,
+        "Did it call the board tool and name the sessions live at this moment (review F4)?",
+    );
+    let listing = agents_json(ctx).unwrap_or_default();
+    let listed = orchestrator_listed(&listing, &ctx.officina_home);
+    report.line(&format!(
+        "- `claude agents --json` lists `{ORCHESTRATOR_NAME}` in the workdir: **{}**",
+        if listed {
+            "yes"
+        } else {
+            "no (the kept pid decides, D-773)"
+        }
+    ));
+    ask(
+        &mut report,
+        "Does the window's Orchestrator button show the filled dot (live) and the view say Live?",
+    );
+    pause(
+        "Put another window in front of the orchestrator's console, then click Start again in the window.",
+    );
+    ask(
+        &mut report,
+        "Did the orchestrator's console come to the front, the window saying it already runs, and no second console open?",
+    );
+    pause("Exit the orchestrator (/exit) and close its console.");
+    report.block("claude agents --json --all after", &agents_listing(ctx));
+    match std::fs::remove_file(&marker) {
+        Ok(()) => report.line("- The marker was removed."),
+        Err(e) => report.line(&format!(
+            "- The marker could not be removed ({e}): remove it by hand."
+        )),
+    }
+    report
+}
+
 #[expect(
     clippy::disallowed_methods,
     reason = "a workstation probe runs claude logs, stop and rm by hand, outside spawn (D-128)"
@@ -1260,6 +1406,7 @@ fn main() -> ExitCode {
     let config = floor.file.as_ref().and_then(|f| f.config_dir.clone());
     let paths = paths.with_floor_config_dir(config.as_deref());
     let ctx = Ctx {
+        officina_home: paths.officina_home.clone(),
         claude: claude.path().to_path_buf(),
         resolved: claude,
         config_dir: paths.claude_config_override,
@@ -1269,6 +1416,7 @@ fn main() -> ExitCode {
     };
     let run: Vec<fn(&Ctx) -> Report> = match *gate {
         "gate1" => vec![gate1],
+        "gate1-window" => vec![gate1_window],
         "gate4" => vec![gate4],
         "gate8" => vec![gate8],
         "all" => vec![gate1, gate4, gate8],
