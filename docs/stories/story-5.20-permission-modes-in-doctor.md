@@ -1,6 +1,6 @@
 # Story 5.20: Permission modes in doctor, and the auto-mode block the author may paste
 
-**Status:** Approved
+**Status:** Review
 
 ## Story
 
@@ -24,12 +24,12 @@ so that the switch is my decision, made on facts, pasted in one replacement, and
 
 ## Tasks
 
-- [ ] `events.rs` field, the hook's write, `contract.rs` (AC 1)
-- [ ] Doctor's permission line over the event lines and the registry (AC 2)
-- [ ] `--permissions`: read, merge, print, write the two paste files; the pointer line; usage (AC 3)
-- [ ] Gate 8's recorded branch (AC 4)
-- [ ] Zero-write and readme cases (AC 3, 5)
-- [ ] Update `CHANGELOG.md` and the README (AC 6)
+- [x] `events.rs` field, the hook's write, `contract.rs` (AC 1)
+- [x] Doctor's permission line over the event lines and the registry (AC 2)
+- [x] `--permissions`: read, merge, print, write the two paste files; the pointer line; usage (AC 3)
+- [x] Gate 8's recorded branch (AC 4)
+- [x] Zero-write and readme cases (AC 3, 5)
+- [x] Update `CHANGELOG.md` and the README (AC 6)
 
 ## Dev Notes
 
@@ -53,9 +53,26 @@ so that the switch is my decision, made on facts, pasted in one replacement, and
 
 ### Completion Notes
 
+Every AC is implemented and proven by the tests named. Gate 8's branch: **case a passed** (research notes E85), so nothing is added for the relay. Decisions D-745 to D-749; D-748 (object keys print sorted, since keeping their order needs serde_json's `preserve_order` feature) to confirm. No new dependency or feature.
+
+- AC 1: core `events.rs::tests::{permission_mode_round_trips_and_is_optional, permission_mode_is_cut_to_32_characters}`; `contract.rs::tests::the_hook_fields_name_permission_mode`; CLI `hook.rs::the_hook_records_the_permission_mode` (and `payload_missing_a_field_records_absent` covers the new field); `perf.rs`'s hook own-cost case within its bound (D-745).
+- AC 2: host `doctor.rs::tests::{the_permission_line_counts_sessions_per_mode_and_kind, an_unknown_mode_is_named, a_session_without_a_record_is_unknown, no_permission_mode_no_line}`; the modes are `permissions::PERMISSION_MODES` (D-746). The failed branch's warning does not ship.
+- AC 3: host `doctor.rs::tests::{the_permissions_block_keeps_every_entry_and_sets_auto, an_absent_auto_mode_gets_defaults_and_placeholders, an_existing_auto_mode_is_kept_whole, an_unparsable_key_gets_no_block, a_missing_settings_file_gets_both_keys, each_permissions_block_is_written_to_its_file, plain_doctor_reads_neither_key, plain_doctor_removes_the_permissions_paste_files, run_reports_every_check_in_order}`; core doctests of `permissions_block` and `auto_mode_block`; CLI `quota_doctor.rs::doctor_permissions_writes_no_settings_file`, `readme.rs::usage_and_readme_name_the_permissions_flag` (D-748, D-749).
+- AC 4: host `doctor.rs::tests::the_gate_8_addition_is_the_recorded_one`: the additions are the empty core lists `GATE_8_ALLOW_RULES` and `GATE_8_AUTO_MODE_ALLOW` (D-747).
+- AC 5: `tests/vectors/spawn.json` unchanged by this story; `quota_doctor.rs::no_command_writes_under_the_claude_config_dir` runs `doctor --permissions` too.
+- AC 6: `CHANGELOG.md` `[Unreleased]` Added; README "Permission modes".
+- Gate (2026-10-29), on `52934c2` plus this story: the local replay of `ci.yml`. Windows: fmt and clippy clean; the workspace's Rust tests all green with `--no-fail-fast` (a first run beside a Linux container build saw `watch.rs::the_board_keeps_its_pace_while_a_review_hangs` wait 5.6 s against 5 s, green on the quiet rerun); the launch half without the authority 7 passed; perf green on its rerun (the first run, under another build, read 30.6 ms of hook own cost against 30; the rerun's hook p95 14.1 ms, the gate 3.5 ms of 5); lexer differential, approvals stress, registry crash, the markers, cargo deny green; mutants: each of the three caught, the control green; e2e fixtures rebuilt; `pnpm check`, `lint` clean, Vitest 286; Playwright 1113 passed, 6 skipped, over three repeats. Linux (`rust:1-bookworm`): fmt, clippy, tests and the spawn step green.
+
 ## File List
+
+- `CHANGELOG.md`, `README.md`
+- `crates/officina-core/src/{board,contract,events,lib}.rs`, `crates/officina-core/src/permissions.rs` (new), `crates/officina-core/src/registry/fold.rs`
+- `crates/officina-host/src/doctor.rs`
+- `crates/officina/src/main.rs`, `crates/officina/tests/{hook,quota_doctor,readme}.rs`
+- `docs/stories/epic-5-decisions.md`, `docs/stories/sprint-status.yaml`, this file
 
 ## Change Log
 
 - 2026-10-28 created against the addendum (PRD section 9 items 7 and 8; AD-180; D-572 to D-574)
 - 2026-10-28 after the rework's adversarial pass: a plain run removes the permissions paste files (rework F6); the per-kind counts read PRD item 7 (D-574, rework F3)
+- 2026-10-29 implemented, gate 8's case a branch; decisions D-745 to D-749; status Review

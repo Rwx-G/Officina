@@ -151,7 +151,7 @@ stories:
   - {id: "5.18", file: story-5.18-orchestrator-in-the-decision-office.md, slice: C, status: approved}
   - {id: "5.19", file: story-5.19-docs-doctor-use-and-qa.md, slice: C, status: approved}
   # 5.20 and 5.21 merge before 5.19.
-  - {id: "5.20", file: story-5.20-permission-modes-in-doctor.md, slice: B, status: approved}
+  - {id: "5.20", file: story-5.20-permission-modes-in-doctor.md, slice: B, status: review}
   - {id: "5.21", file: story-5.21-answer-proposals.md, slice: C, status: approved}
   # Slice D, v0.5.x, after 5.19.
   - {id: "5.22", file: story-5.22-permission-router-core-and-hook.md, slice: D, status: approved}
