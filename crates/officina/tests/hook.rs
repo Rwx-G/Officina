@@ -1,8 +1,18 @@
-//! `officina hook` end to end (story 1.3, FR-3).
+//! `officina hook` end to end (story 1.3, FR-3), and its
+//! `PermissionRequest` path (story 5.22, AD-181).
 
 mod common;
 
+use std::io::Write;
+use std::time::{Duration, Instant};
+
 use common::{TestEnv, read_events};
+use officina_core::relay::prompts::{
+    DENY_MESSAGE, PromptAnswer, PromptBehavior, PromptFileKind, PromptOutput, WindowMarker,
+    parse_prompt_file_name,
+};
+use officina_host::relay::authority::decide_prompt;
+use officina_host::relay::prompts::{ENV_TEST_PROMPT_WAIT_MS, MarkerFile, read_requests};
 
 use officina_host::doctor::BUFFERED_EVENTS as EVENTS;
 
@@ -387,4 +397,232 @@ fn unknown_subcommand_exits_64_never_2() {
     assert_eq!(out.status.code(), Some(0));
     let out = env.run(&["version"], b"");
     assert!(String::from_utf8_lossy(&out.stdout).starts_with("officina 0."));
+}
+
+/// A `PermissionRequest` payload as the hooks reference documents it,
+/// redacted, with `session_id` when given.
+fn permission_request(session_id: Option<&str>) -> serde_json::Value {
+    let mut payload = serde_json::json!({
+        "transcript_path": "/path/to/transcript.jsonl",
+        "cwd": "C:/work/repo-a",
+        "permission_mode": "default",
+        "hook_event_name": "PermissionRequest",
+        "tool_name": "Bash",
+        "tool_input": {"command": "rm -rf build", "description": "Clean the build"},
+        "permission_suggestions": [{"type": "addRules", "rules": [{"toolName": "Bash", "ruleContent": "rm -rf build"}], "behavior": "allow", "destination": "localSettings"}],
+    });
+    if let Some(id) = session_id {
+        payload["session_id"] = id.into();
+    }
+    payload
+}
+
+const PROMPT_SESSION: &str = "00000000-0000-0000-0000-000000000001";
+
+/// The marker of a window that routes prompts, or not, held by the test
+/// as the collector would hold it (D-579).
+fn window(env: &TestEnv, routes_prompts: bool) -> MarkerFile {
+    MarkerFile::write(
+        &env.relay_home(),
+        &WindowMarker {
+            pid: std::process::id(),
+            started_at_ms: common::now_ms(),
+            routes_prompts,
+        },
+    )
+    .unwrap()
+}
+
+/// `officina hook` started on `payload`, its wait for a decision cut to
+/// `wait_ms` through the test seam.
+fn hook_waiting(env: &TestEnv, payload: &serde_json::Value, wait_ms: u32) -> std::process::Child {
+    let mut cmd = env.officina(&["hook"]);
+    cmd.env(ENV_TEST_PROMPT_WAIT_MS, wait_ms.to_string());
+    let mut child = cmd.spawn().unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    stdin.write_all(payload.to_string().as_bytes()).unwrap();
+    drop(stdin);
+    child
+}
+
+/// The id of the request the waiting hook wrote, within 10 s.
+fn request_written(env: &TestEnv) -> String {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        if let Some(request) = read_requests(&env.relay_home()).into_iter().next() {
+            return request.id;
+        }
+        assert!(Instant::now() < deadline, "the hook wrote no request");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+/// Every file under `relay/prompts/`, by name.
+fn prompt_files(env: &TestEnv) -> Vec<String> {
+    let Ok(entries) = std::fs::read_dir(env.relay_home().prompts_dir()) else {
+        return Vec::new();
+    };
+    let mut names: Vec<String> = entries
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    names
+}
+
+/// Story 5.22 AC 3 (AD-181, D-511, D-579): with no marker, a stale one or
+/// one that does not route, a `PermissionRequest` gets exit 0, no output
+/// and no file at all, the event buffer included: Claude Code's own prompt
+/// at once.
+#[test]
+fn permission_request_without_a_window_prints_nothing_and_writes_nothing() {
+    let env = TestEnv::new();
+    let payload = permission_request(Some(PROMPT_SESSION)).to_string();
+    let quiet = |env: &TestEnv| {
+        let before = common::fingerprint(&env.officina_home());
+        let started = Instant::now();
+        let out = env.run(&["hook"], payload.as_bytes());
+        assert_eq!(out.status.code(), Some(0));
+        assert!(out.stdout.is_empty() && out.stderr.is_empty());
+        assert!(started.elapsed() < Duration::from_secs(5), "no wait");
+        assert_eq!(common::fingerprint(&env.officina_home()), before);
+    };
+    quiet(&env);
+    let not_routing = window(&env, false);
+    quiet(&env);
+    drop(not_routing);
+    let stale = window(&env, true);
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(env.relay_home().window_marker_file())
+        .unwrap()
+        .set_modified(std::time::SystemTime::now() - Duration::from_secs(60))
+        .unwrap();
+    quiet(&env);
+    drop(stale);
+    assert!(read_events(&env).is_empty());
+}
+
+/// Story 5.22 AC 3: with a window routing prompts, a payload that does not
+/// parse, has no session id or an empty one gets no output and no file.
+#[test]
+fn a_malformed_permission_request_prints_nothing() {
+    let env = TestEnv::new();
+    let _window = window(&env, true);
+    let mut not_text = permission_request(None);
+    not_text["session_id"] = 7.into();
+    for stdin in [
+        b"{\"hook_event_name\":\"PermissionRequest\"".to_vec(),
+        permission_request(None).to_string().into_bytes(),
+        permission_request(Some("")).to_string().into_bytes(),
+        not_text.to_string().into_bytes(),
+    ] {
+        let out = env.run(&["hook"], &stdin);
+        assert_eq!(out.status.code(), Some(0));
+        assert!(out.stdout.is_empty() && out.stderr.is_empty());
+        assert!(prompt_files(&env).is_empty(), "{:?}", prompt_files(&env));
+    }
+    assert!(read_events(&env).is_empty());
+}
+
+/// Story 5.22 AC 3 (hooks reference: exit 2 is not honoured here, and
+/// `officina-rust.md` forbids it anyway): no window, a malformed payload, a
+/// deadline and a window gone during the wait all exit 0.
+#[test]
+fn the_hook_never_exits_2_on_permission_request() {
+    let env = TestEnv::new();
+    let payload = permission_request(Some(PROMPT_SESSION));
+    for stdin in [payload.to_string().into_bytes(), b"not json".to_vec()] {
+        assert_eq!(env.run(&["hook"], &stdin).status.code(), Some(0));
+    }
+    let routing = window(&env, true);
+    let deadline = hook_waiting(&env, &payload, 300)
+        .wait_with_output()
+        .unwrap();
+    assert_eq!(deadline.status.code(), Some(0));
+    assert!(deadline.stdout.is_empty());
+    let gone = hook_waiting(&env, &payload, 20_000);
+    request_written(&env);
+    drop(routing);
+    let out = gone.wait_with_output().unwrap();
+    assert_eq!(out.status.code(), Some(0));
+    assert!(out.stdout.is_empty());
+}
+
+/// Runs a waiting hook to the author's `answer`, written once its request
+/// appears, and returns what it printed.
+fn answered(env: &TestEnv, answer: PromptAnswer) -> std::process::Output {
+    let _window = window(env, true);
+    let hook = hook_waiting(env, &permission_request(Some(PROMPT_SESSION)), 20_000);
+    let id = request_written(env);
+    decide_prompt(&env.relay_home(), &id, answer, common::now_ms()).unwrap();
+    let out = hook.wait_with_output().unwrap();
+    assert_eq!(out.status.code(), Some(0));
+    assert!(out.stderr.is_empty());
+    out
+}
+
+/// Story 5.22 AC 4 (AD-181): an allow the window writes while the hook
+/// waits, before its wait ends, is printed as the documented output, one
+/// line, and nothing else.
+#[test]
+fn an_allow_written_before_the_wait_is_printed() {
+    let env = TestEnv::new();
+    let out = answered(&env, PromptAnswer::Allow);
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        format!("{}\n", PromptOutput::of(PromptBehavior::Allow).to_json())
+    );
+}
+
+/// Story 5.22 AC 4: a deny prints the constant message, never the request.
+#[test]
+fn a_deny_prints_the_constant_message() {
+    let env = TestEnv::new();
+    let out = answered(&env, PromptAnswer::Deny);
+    let printed: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(
+        printed["hookSpecificOutput"]["decision"]["message"],
+        DENY_MESSAGE
+    );
+    assert_eq!(
+        printed["hookSpecificOutput"]["decision"]["behavior"],
+        "deny"
+    );
+    assert!(!String::from_utf8_lossy(&out.stdout).contains("rm -rf"));
+}
+
+/// Story 5.22 AC 4: allow, deny, decline, the deadline and a window gone
+/// all leave no request file; a decline prints nothing.
+#[test]
+fn the_request_file_is_removed_on_every_exit() {
+    let env = TestEnv::new();
+    let no_request = |env: &TestEnv| {
+        assert!(
+            !prompt_files(env)
+                .iter()
+                .any(|name| parse_prompt_file_name(name)
+                    .is_some_and(|(_, kind)| kind == PromptFileKind::Request)),
+            "{:?}",
+            prompt_files(env)
+        );
+    };
+    for answer in PromptAnswer::ALL {
+        let out = answered(&env, *answer);
+        assert_eq!(out.stdout.is_empty(), answer.behavior().is_none());
+        no_request(&env);
+    }
+    let payload = permission_request(Some(PROMPT_SESSION));
+    let routing = window(&env, true);
+    let out = hook_waiting(&env, &payload, 300)
+        .wait_with_output()
+        .unwrap();
+    assert!(out.stdout.is_empty());
+    no_request(&env);
+    let gone = hook_waiting(&env, &payload, 20_000);
+    request_written(&env);
+    drop(routing);
+    assert!(gone.wait_with_output().unwrap().stdout.is_empty());
+    no_request(&env);
+    assert!(read_events(&env).is_empty(), "never the event buffer");
 }

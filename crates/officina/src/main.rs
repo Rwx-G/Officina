@@ -22,6 +22,7 @@ use officina_host::paths::Paths;
 use officina_host::registry::commands::{ViewRead, read_registry, subjects_view};
 use officina_host::relay::gate::{self, GATE_EVENT, GateEnv};
 use officina_host::relay::home::RelayHome;
+use officina_host::relay::prompts::{self, PROMPT_EVENT, PROMPT_POLL_MS};
 use officina_host::relay::run::{self as relay_run, RunArgs};
 use officina_host::relay::view::read_view;
 use officina_host::writers::{hook_keeps_excerpts, record_hook_payload, record_quota};
@@ -68,7 +69,9 @@ fn read_stdin() -> Vec<u8> {
 ///
 /// stdin is parsed once (AD-26): `PreToolUse` goes to the gate, which prints
 /// a deny or nothing and is never appended to the event buffer (volume, and
-/// `tool_input` can carry secrets); every other event is recorded as in v0.1.
+/// `tool_input` can carry secrets); `PermissionRequest` goes to the
+/// router's path, never to the buffer either (AD-181); every other event is
+/// recorded as in v0.1.
 /// The gate fails closed in a guarded project (D-452): its own panic prints
 /// a deny there, and its registration carries `onFailure: "block"`, so a
 /// hook that cannot start, times out or dies blocks the call too.
@@ -78,18 +81,24 @@ fn hook() -> ExitCode {
         let Ok(payload) = serde_json::from_slice::<serde_json::Value>(&stdin) else {
             return;
         };
-        if payload
+        let claude_pid = std::env::var("CLAUDE_PID")
+            .ok()
+            .and_then(|v| v.parse().ok());
+        match payload
             .get("hook_event_name")
             .and_then(serde_json::Value::as_str)
-            == Some(GATE_EVENT)
         {
-            gate_hook(&payload);
-            return;
+            Some(GATE_EVENT) => {
+                gate_hook(&payload);
+                return;
+            }
+            Some(PROMPT_EVENT) => {
+                prompt_hook(&payload, claude_pid);
+                return;
+            }
+            _ => {}
         }
         if let Some(paths) = Paths::from_env(None) {
-            let claude_pid = std::env::var("CLAUDE_PID")
-                .ok()
-                .and_then(|v| v.parse().ok());
             let _ = record_hook_payload(
                 &paths,
                 &payload,
@@ -100,6 +109,24 @@ fn hook() -> ExitCode {
         }
     });
     ExitCode::SUCCESS
+}
+
+/// The `PermissionRequest` half of the hook (AD-181, D-579, D-580): with no
+/// window routing prompts, nothing at once; else the request waits for the
+/// window's decision, and only a decision bound to it is printed. Every
+/// other end prints nothing, so Claude Code's own prompt takes over.
+fn prompt_hook(payload: &serde_json::Value, claude_pid: Option<u32>) {
+    let Some(home) = RelayHome::from_env() else {
+        return;
+    };
+    let poll = std::time::Duration::from_millis(PROMPT_POLL_MS);
+    if let Some(output) =
+        prompts::route(&home, payload, claude_pid, prompts::prompt_wait_ms(), poll)
+    {
+        let mut out = std::io::stdout().lock();
+        let _ = writeln!(out, "{}", output.to_json());
+        let _ = out.flush();
+    }
 }
 
 /// The gate's half of the hook: prints the deny JSON on stdout, or nothing.

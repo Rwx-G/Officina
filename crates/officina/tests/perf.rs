@@ -1,4 +1,5 @@
-//! Hook and gate latency, concurrent appends to the event buffer and the
+//! Hook and gate latency, the `PermissionRequest` path without a window
+//! (story 5.22), concurrent appends to the event buffer and the
 //! journal (stories 1.3 and 2.4, AD-10, AD-17, AD-28, AD-32, D-19). Ignored
 //! by default: run with `cargo test --release -p officina -- --ignored`.
 //!
@@ -109,6 +110,59 @@ fn hook_latency_p95() {
         "own cost {own_cost:?}"
     );
     assert!(hook < budget, "p95 {hook:?} over {budget:?}");
+}
+
+/// Story 5.22 AC 3 (D-511, D-579): with no window, a `PermissionRequest`
+/// costs the hook what any event does, the marker's one open included,
+/// so Claude Code's own prompt appears without delay. The same budgets as
+/// [`hook_latency_p95`], measured the same way.
+#[test]
+#[ignore = "timing test, run in release by CI"]
+fn permission_request_without_a_window_is_within_the_hook_budget() {
+    let _serial = serial();
+    let env = TestEnv::new();
+    let payload = serde_json::json!({
+        "hook_event_name": "PermissionRequest",
+        "session_id": "00000000-0000-0000-0000-000000000001",
+        "permission_mode": "default",
+        "tool_name": "Bash",
+        "tool_input": {"command": "x".repeat(64 * 1024)},
+    })
+    .to_string()
+    .into_bytes();
+    for _ in 0..5 {
+        env.run(&["hook"], &payload);
+    }
+    let hook = p95(timed(200, || {
+        let out = env.run(&["hook"], &payload);
+        assert!(out.status.success() && out.stdout.is_empty());
+    }));
+    let baseline = p95(timed(200, || {
+        let out = std::process::Command::new(common::FAKE_CLAUDE)
+            .arg("--version")
+            .output()
+            .unwrap();
+        assert!(out.status.success());
+    }));
+    let own_cost = hook.saturating_sub(baseline);
+    let budget = Duration::from_millis(
+        std::env::var("OFFICINA_HOOK_P95_BUDGET_MS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(30),
+    );
+    println!(
+        "permission request p95 {hook:?}, empty process p95 {baseline:?}, own cost {own_cost:?}, budget {budget:?}"
+    );
+    assert!(
+        own_cost < Duration::from_millis(30),
+        "own cost {own_cost:?}"
+    );
+    assert!(hook < budget, "p95 {hook:?} over {budget:?}");
+    assert!(
+        !env.relay_home().prompts_dir().exists(),
+        "no window, no request"
+    );
 }
 
 const GATE_ACTIONS: usize = 50;
