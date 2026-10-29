@@ -134,6 +134,8 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
+use crate::agents::{AgentRecord, SessionKind};
+use crate::quota::normalise_path;
 use crate::relay::template::{
     ApprovedTemplate, FORBIDDEN_PROMPT_STARTS, MAX_PROMPT_CHARS, ModelAlias, ParamName,
     ProjectName, render,
@@ -308,6 +310,141 @@ impl WorkOrder {
     pub fn catalogue_hash(&self) -> &str {
         &self.catalogue_hash
     }
+}
+
+/// The name a work order's session runs under (AD-79, D-135):
+/// `<template>-<seq>`, unique in the registry.
+///
+/// ```
+/// use officina_core::orders::work_order::order_name;
+/// assert_eq!(order_name("dependency-bump", 7), "dependency-bump-7");
+/// ```
+pub fn order_name(template: &str, seq: u32) -> String {
+    format!("{template}-{seq}")
+}
+
+/// The subject a work order files its session under (AD-78): one that
+/// exists, or a new one by name, created only once the launch started
+/// (AD-81 step 5).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "value", rename_all = "snake_case")]
+pub enum SubjectChoice {
+    Existing(i64),
+    New(String),
+}
+
+/// How long after its launch a `started` order may still bind to its
+/// session (AD-81 step 4); an order unbound past it reads `unbound`.
+pub const BIND_WINDOW_MS: i64 = 10 * 60_000;
+
+/// How long before the launch a session's `startedAt` may be and still
+/// bind: clocks of two processes read a few milliseconds apart (AD-81).
+pub const START_TOLERANCE_MS: i64 = 5_000;
+
+/// How long a row stays `launching` before it reads `unknown` (D-136): the
+/// spawn's own deadline is one minute, so an outcome older than this never
+/// comes back.
+pub const LAUNCHING_EXPIRY_MS: i64 = 2 * 60_000;
+
+/// The most of what `claude --bg` printed a row keeps, in bytes (AD-81).
+pub const PRINTED_MAX_BYTES: usize = 4 * 1024;
+
+/// The most of a failure's stderr a row keeps, in characters (AD-81).
+pub const ERROR_MAX_CHARS: usize = 500;
+
+/// `printed` cut to [`PRINTED_MAX_BYTES`] on a character boundary.
+///
+/// ```
+/// use officina_core::orders::work_order::{PRINTED_MAX_BYTES, cut_printed};
+/// assert_eq!(cut_printed("backgrounded"), "backgrounded");
+/// assert_eq!(cut_printed(&"é".repeat(PRINTED_MAX_BYTES)).len(), PRINTED_MAX_BYTES);
+/// ```
+pub fn cut_printed(printed: &str) -> &str {
+    let mut end = printed.len().min(PRINTED_MAX_BYTES);
+    while !printed.is_char_boundary(end) {
+        end -= 1;
+    }
+    &printed[..end]
+}
+
+/// `error` cut to its first [`ERROR_MAX_CHARS`] characters.
+pub fn cut_error(error: &str) -> &str {
+    match error.char_indices().nth(ERROR_MAX_CHARS) {
+        Some((end, _)) => &error[..end],
+        None => error,
+    }
+}
+
+/// A `started` order not yet bound, as binding reads it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnboundOrder {
+    pub id: String,
+    /// `<template>-<seq>`.
+    pub name: String,
+    /// The project folder stored at launch, so a floor edited since moves
+    /// nothing (D-133).
+    pub cwd: String,
+    pub launched_at_ms: i64,
+}
+
+/// An order bound to the background session it started (AD-81 step 4).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Binding {
+    pub order_id: String,
+    pub bg_id: String,
+    pub session_id: String,
+}
+
+/// True when `cwd` is `folder` or lies under it, both read as
+/// [`normalise_path`] does.
+fn lies_in(cwd: &str, folder: &str) -> bool {
+    let cwd = normalise_path(cwd);
+    let folder = normalise_path(folder);
+    !folder.is_empty()
+        && (cwd == folder
+            || cwd
+                .strip_prefix(&folder)
+                .is_some_and(|rest| rest.starts_with('/')))
+}
+
+/// What one agents refresh binds (AD-81 step 4): each order younger than
+/// [`BIND_WINDOW_MS`] binds to the first background entry of `records`
+/// whose `name` equals the order's, whose `cwd` lies in the order's stored
+/// folder and whose `startedAt` is at most [`START_TOLERANCE_MS`] before
+/// the launch. An entry binds one order at most. The id `--bg` printed
+/// plays no part: its format is undocumented, a unique name decides.
+pub fn bind(orders: &[UnboundOrder], records: &[AgentRecord], now_ms: i64) -> Vec<Binding> {
+    let mut taken: Vec<&str> = Vec::new();
+    let mut bound = Vec::new();
+    for order in orders
+        .iter()
+        .filter(|order| now_ms - order.launched_at_ms < BIND_WINDOW_MS)
+    {
+        let found = records.iter().find_map(|record| {
+            let bg_id = record.id.as_deref()?;
+            let session_id = record.session_id.as_deref()?;
+            let fits = record.kind == Some(SessionKind::Background)
+                && record.name.as_deref() == Some(order.name.as_str())
+                && record
+                    .cwd
+                    .as_deref()
+                    .is_some_and(|cwd| lies_in(cwd, &order.cwd))
+                && record
+                    .started_at_ms
+                    .is_some_and(|at| at >= order.launched_at_ms - START_TOLERANCE_MS)
+                && !taken.contains(&session_id);
+            fits.then_some((bg_id, session_id))
+        });
+        if let Some((bg_id, session_id)) = found {
+            taken.push(session_id);
+            bound.push(Binding {
+                order_id: order.id.clone(),
+                bg_id: bg_id.to_owned(),
+                session_id: session_id.to_owned(),
+            });
+        }
+    }
+    bound
 }
 
 /// A valid order of the sample template, for the tests of `spawn`.
@@ -551,5 +688,137 @@ mod tests {
 
     fn values_of(package: &str) -> [(ParamName, &str); 2] {
         [(param("package"), package), (param("level"), "minor")]
+    }
+
+    const LAUNCHED: i64 = 1_793_102_400_000;
+    const FOLDER: &str = "C:/Work/Backend";
+
+    fn unbound(name: &str) -> UnboundOrder {
+        UnboundOrder {
+            id: format!("card-{name}"),
+            name: name.to_owned(),
+            cwd: FOLDER.to_owned(),
+            launched_at_ms: LAUNCHED,
+        }
+    }
+
+    /// A background entry named `name` in `cwd`, started at `started`.
+    fn entry(name: &str, cwd: &str, started: i64) -> AgentRecord {
+        AgentRecord {
+            id: Some(format!("bg-{name}-{started}")),
+            session_id: Some(format!("s-{name}-{started}")),
+            name: Some(name.to_owned()),
+            cwd: Some(cwd.to_owned()),
+            kind: Some(SessionKind::Background),
+            started_at_ms: Some(started),
+            ..AgentRecord::default()
+        }
+    }
+
+    fn bound_to(bindings: &[Binding]) -> Vec<(&str, &str)> {
+        bindings
+            .iter()
+            .map(|b| (b.order_id.as_str(), b.session_id.as_str()))
+            .collect()
+    }
+
+    #[test]
+    fn binds_by_name_folder_and_start_time() {
+        let orders = [unbound("bump-1"), unbound("bump-2")];
+        let records = [
+            // An interactive session of the same name never binds.
+            AgentRecord {
+                kind: Some(SessionKind::Interactive),
+                ..entry("bump-1", FOLDER, LAUNCHED + 900)
+            },
+            entry("bump-9", FOLDER, LAUNCHED + 1_000),
+            // The folder compared as `normalise_path` reads it, a subfolder
+            // included.
+            entry("bump-1", r"c:\work\backend\crate\", LAUNCHED + 2_000),
+            entry("bump-1", FOLDER, LAUNCHED + 3_000),
+            entry("bump-2", FOLDER, LAUNCHED - START_TOLERANCE_MS),
+        ];
+        let bindings = bind(&orders, &records, LAUNCHED + 60_000);
+        assert_eq!(
+            bound_to(&bindings),
+            [
+                (
+                    "card-bump-1",
+                    format!("s-bump-1-{}", LAUNCHED + 2_000).as_str()
+                ),
+                (
+                    "card-bump-2",
+                    format!("s-bump-2-{}", LAUNCHED - START_TOLERANCE_MS).as_str()
+                ),
+            ]
+        );
+        assert_eq!(bindings[0].bg_id, format!("bg-bump-1-{}", LAUNCHED + 2_000));
+        // An entry without its ids binds nothing.
+        let anonymous = AgentRecord {
+            session_id: None,
+            ..entry("bump-1", FOLDER, LAUNCHED)
+        };
+        assert!(bind(&orders[..1], &[anonymous], LAUNCHED + 1).is_empty());
+        // One entry binds one order at most.
+        let twins = [unbound("bump-1"), unbound("bump-1")];
+        let once = bind(&twins, &[entry("bump-1", FOLDER, LAUNCHED)], LAUNCHED + 1);
+        assert_eq!(once.len(), 1);
+    }
+
+    #[test]
+    fn a_session_started_too_early_does_not_bind() {
+        let early = entry("bump-1", FOLDER, LAUNCHED - START_TOLERANCE_MS - 1);
+        assert!(bind(&[unbound("bump-1")], &[early], LAUNCHED + 1).is_empty());
+        let unknown_start = AgentRecord {
+            started_at_ms: None,
+            ..entry("bump-1", FOLDER, LAUNCHED)
+        };
+        assert!(bind(&[unbound("bump-1")], &[unknown_start], LAUNCHED + 1).is_empty());
+    }
+
+    #[test]
+    fn an_entry_outside_the_folder_does_not_bind() {
+        for cwd in [
+            "C:/Work/Backend2",
+            "C:/Work",
+            "D:/Work/Backend",
+            "C:/Other/Work/Backend",
+        ] {
+            let outside = entry("bump-1", cwd, LAUNCHED);
+            assert!(
+                bind(&[unbound("bump-1")], &[outside], LAUNCHED + 1).is_empty(),
+                "{cwd}"
+            );
+        }
+        let no_cwd = AgentRecord {
+            cwd: None,
+            ..entry("bump-1", FOLDER, LAUNCHED)
+        };
+        assert!(bind(&[unbound("bump-1")], &[no_cwd], LAUNCHED + 1).is_empty());
+    }
+
+    #[test]
+    fn an_order_older_than_10_minutes_does_not_bind() {
+        let session = entry("bump-1", FOLDER, LAUNCHED + 1_000);
+        let just_in = LAUNCHED + BIND_WINDOW_MS - 1;
+        assert_eq!(
+            bind(
+                &[unbound("bump-1")],
+                std::slice::from_ref(&session),
+                just_in
+            )
+            .len(),
+            1
+        );
+        assert!(bind(&[unbound("bump-1")], &[session], LAUNCHED + BIND_WINDOW_MS).is_empty());
+    }
+
+    #[test]
+    fn printed_and_error_are_cut_on_character_boundaries() {
+        let printed = format!("{}é", "a".repeat(PRINTED_MAX_BYTES - 1));
+        assert_eq!(cut_printed(&printed), "a".repeat(PRINTED_MAX_BYTES - 1));
+        let error = "é".repeat(ERROR_MAX_CHARS + 3);
+        assert_eq!(cut_error(&error).chars().count(), ERROR_MAX_CHARS);
+        assert_eq!(cut_error("short"), "short");
     }
 }

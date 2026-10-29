@@ -27,6 +27,7 @@ use officina_core::registry::types::{
 };
 #[cfg(feature = "window-authority")]
 use officina_core::registry::types::{HookEnd, HookStart};
+use officina_core::registry::types::{LaunchOutcome, WorkOrderRecord, WorkOrderSource};
 use officina_core::registry::verdict::{Row, VerdictInput, rows};
 use officina_core::registry::view::{
     AutoArchiveSetting, DiscardedSession, EvidenceInput, IngestionView, RegistryView, SubjectView,
@@ -252,6 +253,12 @@ impl Reader {
     /// `board` (AD-54, D-55).
     pub fn archived(&self, board: Option<&Board>) -> rusqlite::Result<Vec<SubjectView>> {
         archived(&self.conn, board)
+    }
+
+    /// The latest work orders, newest first, with their binding and the
+    /// bound session's record (AD-82, D-130).
+    pub fn work_orders(&self) -> rusqlite::Result<Vec<WorkOrderRecord>> {
+        work_orders(&self.conn)
     }
 }
 
@@ -611,7 +618,6 @@ pub(crate) fn session_records(conn: &Connection) -> rusqlite::Result<Vec<Session
     Ok(pivot(&sessions(conn)?, &facts(conn)?))
 }
 
-#[cfg(feature = "window-authority")]
 /// The session `session_id` with its facts, when the registry holds it.
 pub(crate) fn session_record(
     conn: &Connection,
@@ -863,6 +869,78 @@ pub(crate) fn known_projects(conn: &Connection) -> rusqlite::Result<Vec<String>>
     conn.prepare_cached("SELECT project FROM session UNION SELECT project FROM subject ORDER BY 1")?
         .query_map([], |row| row.get(0))?
         .collect()
+}
+
+/// How many work orders [`work_orders`] reads back (AD-82).
+pub const WORK_ORDERS_READ: u32 = 50;
+
+const WORK_ORDER_COLUMNS: &str = "id, seq, template, project, cwd, values_json, argv_json,
+    prompt_sha256, catalogue_hash, name, subject_id, new_subject_name, source, proposal_id,
+    launched_at_ms, outcome, exit_code, error, printed, bg_id, session_id, bound_at_ms";
+
+/// A JSON column written by the window, read back; text that does not
+/// parse is a type error, as for a code no variant parses.
+fn json_of<T: serde::de::DeserializeOwned>(
+    row: &rusqlite::Row<'_>,
+    index: usize,
+) -> rusqlite::Result<T> {
+    let text: String = row.get(index)?;
+    serde_json::from_str(&text).map_err(|error| {
+        rusqlite::Error::FromSqlConversionFailure(
+            index,
+            rusqlite::types::Type::Text,
+            Box::new(error),
+        )
+    })
+}
+
+fn work_order_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<WorkOrderRecord> {
+    Ok(WorkOrderRecord {
+        id: row.get(0)?,
+        seq: row.get(1)?,
+        template: row.get(2)?,
+        project: row.get(3)?,
+        cwd: row.get(4)?,
+        values: json_of(row, 5)?,
+        argv: json_of(row, 6)?,
+        prompt_sha256: row.get(7)?,
+        catalogue_hash: row.get(8)?,
+        name: row.get(9)?,
+        subject_id: row.get(10)?,
+        new_subject_name: row.get(11)?,
+        // Both columns' `CHECK` list every value this build knows.
+        source: code_of(row, 12, WorkOrderSource::from_code)?,
+        proposal_id: row.get(13)?,
+        launched_at_ms: row.get(14)?,
+        outcome: code_of(row, 15, LaunchOutcome::from_code)?,
+        exit_code: row.get(16)?,
+        error: row.get::<_, Option<String>>(17)?.map(Untrusted::new),
+        printed: row.get::<_, Option<String>>(18)?.map(Untrusted::new),
+        bg_id: row.get(19)?,
+        session_id: row.get(20)?,
+        bound_at_ms: row.get(21)?,
+        session: None,
+    })
+}
+
+/// The latest [`WORK_ORDERS_READ`] work orders, newest first, each with
+/// the record of the session it bound to, from one read transaction
+/// (AD-82); `printed` and `error` come back untrusted (D-130).
+pub(crate) fn work_orders(conn: &Connection) -> rusqlite::Result<Vec<WorkOrderRecord>> {
+    let snapshot = conn.unchecked_transaction()?;
+    let mut orders: Vec<WorkOrderRecord> = snapshot
+        .prepare_cached(&format!(
+            "SELECT {WORK_ORDER_COLUMNS} FROM work_order
+             ORDER BY launched_at_ms DESC, seq DESC, id LIMIT ?1"
+        ))?
+        .query_map([WORK_ORDERS_READ], work_order_row)?
+        .collect::<rusqlite::Result<_>>()?;
+    for order in &mut orders {
+        if let Some(session_id) = &order.session_id {
+            order.session = session_record(&snapshot, session_id)?;
+        }
+    }
+    Ok(orders)
 }
 
 /// A 0 or 1 column (its `CHECK` allows nothing else), read back.

@@ -596,6 +596,8 @@ Every kind then sets `NoDefaultCurrentDirectoryInExePath=1` and, when the floor 
 
 A work order is one of your templates in one of its projects, with a value chosen from each parameter's list. It exists only once validated against your approved catalogue: the template is read from your last approval, and only while the floor file still means what you approved; the project must be one of the template's; each parameter is given once, with a value that is exactly one of its list's (the order keeps your string, not the one it was given); and the rendered prompt keeps the template's rules. Its process is a session kind: `claude --bg --name <template>-<seq>`, the template's model when it names one, then `--` and the rendered prompt as one argument, started in the project's folder as the floor declares it. It runs in no job, so its deadline ends `claude` alone, never the background service it starts. The window will offer work orders with a later story; nothing launches one yet.
 
+The registry is ready to record them: each launch is a row named `<template>-<seq>`, a name the registry never gives twice, with its project folder, values, argument vector and how it ended. A launch whose outcome never came back (the window closed while it started) reads `unknown` two minutes later. Within ten minutes of a start, the order is tied to the background session `claude agents` lists under its name, in its project folder, started no earlier than the launch; that session is then filed under the subject you chose for the order, ahead of the filing rules, and a new subject you named is created only once the launch started (one of that name already open in the project is used instead). Rows are kept 90 days; what `claude` printed and its error text, which come from the session, are cleared with the excerpts.
+
 ### The `auto` class
 
 An action may now be `class = "auto"`. It must name its `check`, a `free` action with the same parameters, as an `after-check` action does: an unattended apply always runs after its dry run, and an `auto` action without one is skipped with the issue `auto_without_check`. `auto_max_per_hour` (1 to 60, 6 when not set) caps how many such runs can be approved in an hour; it applies to `auto` actions only. An HTTP action cannot be `auto`: it stays on the `human` path. Until the review of `auto` requests ships, `officina run` refuses an `auto` action with `class_not_available`, and `officina run --list` marks it as not available in this build.
@@ -603,6 +605,8 @@ An action may now be `class = "auto"`. It must name its `check`, a `free` action
 ### Upgrading from v0.4
 
 Templates, `[auto_review]` and `auto_max_per_hour` change the catalogue's canonical format, so the first start of v0.5 shows a catalogue change even if you edited nothing: the banner names the format change and lists the templates added. Until you approve it once, `officina run` refuses every action with "catalogue changed, approval pending" and the gate keeps guarding the projects of your last approval; one click on **Approve this catalogue** covers it, and nothing else is voided.
+
+The first start of v0.5 also moves the registry to its version 2, which adds the tables of work orders, the orchestrator's proposals and starts, and the reviews of `auto` requests. As for any migration, the database is copied first to `registry/backup/pre-v2-<date>.db`, and every row you had is kept.
 
 ## Command line
 

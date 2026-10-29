@@ -5,6 +5,7 @@
 
 pub mod approvals;
 pub mod argv;
+pub mod auto;
 pub mod catalogue;
 pub mod classes;
 pub mod credential;
@@ -107,6 +108,7 @@ mod tests {
 
     use serde::Serialize;
 
+    use super::auto::ReviewDecision;
     use super::catalogue::{
         ActionClass, ForwardedValues, IssueKind, IssueTable, NoticeKind, Runner,
     };
@@ -136,7 +138,8 @@ mod tests {
     /// of this crate without a line here.
     #[test]
     fn code_equals_the_serde_name_for_every_variant() {
-        let checked: [fn(); 25] = [
+        let checked: [fn(); 26] = [
+            || assert_codes(ReviewDecision::ALL, ReviewDecision::code),
             || assert_codes(ActionClass::ALL, ActionClass::code),
             || assert_codes(IssueTable::ALL, IssueTable::code),
             || assert_codes(ModelAlias::ALL, ModelAlias::code),
@@ -175,6 +178,7 @@ mod tests {
             include_str!("../orders/work_order.rs"),
             include_str!("approvals.rs"),
             include_str!("argv.rs"),
+            include_str!("auto.rs"),
             include_str!("catalogue.rs"),
             include_str!("classes.rs"),
             include_str!("credential.rs"),

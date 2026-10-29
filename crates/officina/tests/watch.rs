@@ -6,7 +6,8 @@
 //! kept current; the registry ingested before the first board, before each
 //! session list and before each board, and reported when it cannot be; the
 //! registry view emitted on change, and the author's requests answered on
-//! the collector thread (story 3.5).
+//! the collector thread (story 3.5); stale launching work orders expired
+//! and started ones bound on the collector's tick (story 5.6).
 //!
 //! The tests of stories 1.5 and 2.7 give the fake claude no fixture (it
 //! then lists no session). Story 3.2's run a copy of the fake configured by
@@ -15,6 +16,8 @@
 mod common;
 #[path = "../../../tests/support/fake_store.rs"]
 mod fake_store;
+#[path = "../../../tests/support/spawn_cases.rs"]
+mod spawn_cases;
 
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::Receiver;
@@ -23,22 +26,25 @@ use std::time::{Duration, Instant};
 
 use officina_core::board::{Board, Column, Settled};
 use officina_core::ipc::IpcErrorCode;
+use officina_core::orders::work_order::{LAUNCHING_EXPIRY_MS, SubjectChoice, WorkOrder};
 use officina_core::registry::confirm::{
     AuthorAction, ConfirmItem, FileUnder, ItemOutcome, SubjectOrigin,
 };
 use officina_core::registry::proposal::Proposal;
 use officina_core::registry::retention::EXCERPT_TTL_MS;
 use officina_core::registry::types::{
-    AuthorRefusal, Ending, ModelVerdict, ProposalSource, ReasonCode, RegistryState, SessionRecord,
-    SettingKey, Settlement, Source, Verdict,
+    AuthorRefusal, Ending, LaunchOutcome, ModelVerdict, ProposalSource, ReasonCode, RegistryState,
+    SessionRecord, SettingKey, Settlement, Source, Verdict, WorkOrderRecord, WorkOrderSource,
 };
 use officina_core::registry::view::RegistryView;
 use officina_core::relay::journal::{CatalogueApproved, JournalEntry};
 use officina_core::relay::view::{RecentEvent, RelayView};
+use officina_core::spawn::VectorKind;
 use officina_core::untrusted::Untrusted;
 use officina_host::collector::{Collector, LoadedFloor, load_floor};
 use officina_host::paths::Paths;
 use officina_host::registry::ingest::IngestContext;
+use officina_host::registry::orders::LaunchRecord;
 use officina_host::registry::store::{open_reader, open_writer};
 use officina_host::relay::credential::OwnedStore;
 use officina_host::relay::journal::append;
@@ -2025,5 +2031,183 @@ fn the_collector_sends_a_default_row_to_the_enabled_model() {
     let sent = std::fs::read_to_string(&triage_log).unwrap();
     assert_eq!(sent.lines().count(), 1, "one case, one call");
     assert!(sent.contains("work of s-pending"));
+    stop(handle);
+}
+
+/// The golden work order of `tests/vectors/spawn.json`, its floor's folder
+/// under `env`'s root, and that project folder created.
+fn golden_order(env: &common::TestEnv) -> WorkOrder {
+    let order = spawn_cases::load()
+        .cases
+        .into_iter()
+        .find(|case| case.kind() == VectorKind::WorkOrder)
+        .expect("a golden work order")
+        .work_order(Some(&env.root.path().to_string_lossy()));
+    std::fs::create_dir_all(order.project_folder()).unwrap();
+    order
+}
+
+/// Records the launch of `order` as `card` with `seq`, its subject a new
+/// one named "Rollout", at `at`, through a writer of its own.
+fn record_launch(env: &common::TestEnv, order: &WorkOrder, card: &str, seq: u32, at: i64) {
+    let mut writer = open_writer(&env.officina_home(), &[], at).writer().unwrap();
+    writer
+        .insert_work_order(
+            &LaunchRecord {
+                order,
+                card_id: card,
+                seq,
+                source: WorkOrderSource::Composer,
+                subject: &SubjectChoice::New("Rollout".into()),
+                proposal_id: None,
+            },
+            at,
+        )
+        .unwrap()
+        .unwrap();
+}
+
+/// The work order `card` as a command line reads it.
+fn work_order_row(env: &common::TestEnv, card: &str) -> Option<WorkOrderRecord> {
+    open_reader(&env.officina_home(), &[])
+        .ok()?
+        .work_orders()
+        .ok()?
+        .into_iter()
+        .find(|order| order.id == card)
+}
+
+/// Polls `card`'s row until `wanted` holds; panics after 10 s.
+fn work_order_once(
+    env: &common::TestEnv,
+    card: &str,
+    wanted: impl Fn(&WorkOrderRecord) -> bool,
+) -> WorkOrderRecord {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        if let Some(order) = work_order_row(env, card).filter(|o| wanted(o)) {
+            return order;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "{card} never reached the state wanted: {:?}",
+            work_order_row(env, card)
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// D-136, review F14: a `launching` row older than two minutes reads
+/// `unknown` before the first board at start, and one written while the
+/// window runs turns `unknown` on the collector's own tick, without a
+/// restart.
+#[test]
+fn a_stale_launching_row_becomes_unknown_on_the_tick() {
+    let env = common::TestEnv::new();
+    env.write_agents("[]");
+    let order = golden_order(&env);
+    let stale = |now: i64| now - LAUNCHING_EXPIRY_MS - 1_000;
+    record_launch(
+        &env,
+        &order,
+        "at-start",
+        1,
+        stale(officina_host::files::now_ms()),
+    );
+    let seen = Arc::new(Mutex::new(None));
+    let first = Arc::clone(&seen);
+    let home = env.officina_home();
+    let (handle, rx, _) = watch_listing(&env, move |_| {
+        let mut slot = first.lock().unwrap();
+        if slot.is_none() {
+            let outcome = open_reader(&home, &[])
+                .unwrap()
+                .work_orders()
+                .unwrap()
+                .into_iter()
+                .find(|o| o.id == "at-start")
+                .map(|o| o.outcome);
+            *slot = Some(outcome);
+        }
+    });
+    until(&rx, |_| true);
+    assert_eq!(
+        *seen.lock().unwrap(),
+        Some(Some(LaunchOutcome::Unknown)),
+        "expired before the first board"
+    );
+    record_launch(
+        &env,
+        &order,
+        "on-tick",
+        2,
+        stale(officina_host::files::now_ms()),
+    );
+    work_order_once(&env, "on-tick", |o| o.outcome == LaunchOutcome::Unknown);
+    stop(handle);
+}
+
+/// AD-81 steps 4 and 5, D-129: the fake in `bg` mode starts the order's
+/// background session and lists it in `claude agents`; the window's next
+/// refresh binds the order to it by its name, and the session is filed
+/// under the subject created at `started`, source `author`.
+#[test]
+fn a_started_order_binds_to_its_background_session() {
+    use officina_host::spawn::{BaseEnv, ResolvedClaude, SpawnOutcome, execute};
+
+    let env = common::TestEnv::new();
+    env.write_agents("[]");
+    let order = golden_order(&env);
+    let launched_at = officina_host::files::now_ms();
+    record_launch(&env, &order, "card", 1, launched_at);
+    let background = common::fake_claude_in(
+        &env.root.path().join("bin-bg"),
+        &serde_json::json!({"fixture": env.fixture(), "log": env.fake_log(), "mode": "bg"}),
+    );
+    let base = BaseEnv::new(vec![(
+        "SYSTEMROOT".to_owned(),
+        std::env::var("SYSTEMROOT").unwrap_or_default(),
+    )]);
+    let outcome = execute(
+        &ResolvedClaude::new(background),
+        &officina_core::spawn::work_order(&order, 1, None),
+        &base,
+    );
+    let Ok(SpawnOutcome::Captured(ran)) = outcome else {
+        panic!("{outcome:?}");
+    };
+    assert!(ran.status.success());
+    let printed = String::from_utf8_lossy(&ran.stdout).into_owned();
+    {
+        let mut writer = open_writer(&env.officina_home(), &[], launched_at)
+            .writer()
+            .unwrap();
+        writer
+            .record_launch_outcome(
+                "card",
+                LaunchOutcome::Started,
+                Some(0),
+                None,
+                Some(&printed),
+                officina_host::files::now_ms(),
+            )
+            .unwrap();
+    }
+    let (handle, _rx, _) = watch_listing(&env, |_| {});
+    let bound = work_order_once(&env, "card", |o| o.bound_at_ms.is_some());
+    let bg_id = bound.bg_id.clone().unwrap();
+    assert!(
+        printed.contains(&bg_id),
+        "the id --bg printed is the bound entry's: {printed}"
+    );
+    let session = bound.session.expect("the bound session's record");
+    assert_eq!(
+        Some(session.session_id.as_str()),
+        bound.session_id.as_deref()
+    );
+    let filing = session.subject.expect("filed");
+    assert!(bound.subject_id.is_some(), "created at started");
+    assert_eq!(filing.value, bound.subject_id);
+    assert_eq!(filing.src, Source::Author);
     stop(handle);
 }

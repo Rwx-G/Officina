@@ -1,12 +1,15 @@
-//! The registry's vocabulary (AD-38, AD-40, D-45): every enum a column of
-//! schema 1 stores, each declared with `closed_enum!` so its `ALL` cannot
+//! The registry's vocabulary (AD-38, AD-40, AD-82, D-45, D-133): every
+//! enum a column stores, each declared with `closed_enum!` so its `ALL` cannot
 //! miss a variant and its text form (`code()`, `snake_case`) is the one the
 //! `CHECK` constraints list; the records rows are read into; and
 //! [`Sourced`], a value with its provenance.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 use crate::agents::{LifecycleState, LiveStatus, SessionKind};
+use crate::untrusted::Untrusted;
 
 closed_enum! {
     #[serde(rename_all = "snake_case")]
@@ -135,6 +138,132 @@ closed_enum! {
         TriageModelPause,
         /// Whether auto-archive is on, and why it changed (D-69).
         AutoArchive,
+        /// Whether `auto` actions may be approved by their review (AD-88).
+        AutoApproval,
+        /// Whether `auto` requests are decided by the review or the rule
+        /// (D-162).
+        AutoMode,
+        /// When the author last read the orchestrator's briefing (AD-83).
+        BriefingReadAtMs,
+    }
+}
+
+closed_enum! {
+    #[serde(rename_all = "snake_case")]
+    /// Where a work order came from (AD-82).
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+    pub enum WorkOrderSource {
+        /// The author's composer.
+        Composer,
+        /// A proposal of the orchestrator the author accepted.
+        Proposal,
+    }
+}
+
+closed_enum! {
+    #[serde(rename_all = "snake_case")]
+    /// How a work order's launch ended (AD-81 step 3).
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+    pub enum LaunchOutcome {
+        /// Recorded, its spawn not answered yet.
+        Launching,
+        /// `claude --bg` exited 0.
+        Started,
+        /// `claude` refused the folder: the workspace is not trusted.
+        UntrustedWorkspace,
+        /// Any other non-zero exit, or the deadline.
+        Failed,
+        /// Its outcome never came back (D-136): the window stopped while it
+        /// was launching.
+        Unknown,
+    }
+}
+
+closed_enum! {
+    #[serde(rename_all = "snake_case")]
+    /// What an orchestrator proposal file proposes (AD-82, D-575).
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+    pub enum ProposalKind {
+        Recap,
+        WorkOrder,
+        /// Used from story 5.21, declared here so migration 2's `CHECK`
+        /// list holds it (D-575).
+        Answer,
+    }
+}
+
+closed_enum! {
+    #[serde(rename_all = "snake_case")]
+    /// Where an orchestrator proposal stands (AD-82).
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+    pub enum ProposalStatus {
+        Pending,
+        Invalid,
+        Accepted,
+        Dismissed,
+        Expired,
+        Superseded,
+    }
+}
+
+closed_enum! {
+    #[serde(rename_all = "snake_case")]
+    /// How a Start of the orchestrator ended (AD-82, D-144).
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+    pub enum OrchestratorStartOutcome {
+        Spawned,
+        Refused,
+        Failed,
+    }
+}
+
+closed_enum! {
+    #[serde(rename_all = "snake_case")]
+    /// How an `auto` request was reviewed (AD-82, AD-88).
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+    pub enum ReviewMode {
+        /// Blind: the author decides, the review is evidence.
+        Shadow,
+        /// The review's approval runs the action.
+        Live,
+        /// The rule baseline decides, without a call (D-162).
+        Rule,
+    }
+}
+
+closed_enum! {
+    #[serde(rename_all = "snake_case")]
+    /// How a review call ended (AD-82, AD-87).
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+    pub enum ReviewOutcome {
+        /// Escalated before any call.
+        NoCall,
+        Answered,
+        /// An answer that fails validation.
+        Invalid,
+        Failed,
+        Timeout,
+    }
+}
+
+closed_enum! {
+    #[serde(rename_all = "snake_case")]
+    /// The author's own decision on a reviewed request (AD-82).
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+    pub enum AuthorDecision {
+        Approved,
+        Rejected,
+    }
+}
+
+closed_enum! {
+    #[serde(rename_all = "snake_case")]
+    /// Why the author rejected a reviewed request (AD-82).
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+    pub enum AuthorReason {
+        /// It should not have run: turns `auto` off for the action.
+        ShouldNotRun,
+        NotNow,
     }
 }
 
@@ -670,6 +799,47 @@ pub struct RestoreNotice {
     pub restored_at_ms: i64,
 }
 
+/// One `work_order` row read back (AD-82, D-130), with the record of the
+/// session it bound to, when the registry holds it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkOrderRecord {
+    /// The id of the card it consumed (D-136).
+    pub id: String,
+    pub seq: u32,
+    pub template: String,
+    pub project: String,
+    /// The project folder at launch, which binding compares (D-133).
+    pub cwd: String,
+    /// Each parameter's value, by name.
+    pub values: BTreeMap<String, String>,
+    /// The argument vector after the binary, as it ran.
+    pub argv: Vec<String>,
+    pub prompt_sha256: String,
+    pub catalogue_hash: String,
+    /// `<template>-<seq>`, unique in the registry.
+    pub name: String,
+    /// The subject chosen, or created at `started` for a new one.
+    pub subject_id: Option<i64>,
+    /// The new subject's name the author chose, when it was one.
+    pub new_subject_name: Option<String>,
+    pub source: WorkOrderSource,
+    pub proposal_id: Option<String>,
+    pub launched_at_ms: i64,
+    pub outcome: LaunchOutcome,
+    pub exit_code: Option<i64>,
+    /// The first characters of `claude`'s stderr on a failure.
+    pub error: Option<Untrusted<String>>,
+    /// What `claude --bg` printed, display only.
+    pub printed: Option<Untrusted<String>>,
+    /// The binding (AD-81 step 4): the background id, the session id and
+    /// when.
+    pub bg_id: Option<String>,
+    pub session_id: Option<String>,
+    pub bound_at_ms: Option<i64>,
+    /// The bound session as the registry holds it.
+    pub session: Option<SessionRecord>,
+}
+
 #[cfg(test)]
 mod tests {
     use std::fmt::Debug;
@@ -682,7 +852,48 @@ mod tests {
     /// Runs `check` once per enum of this file, giving it the enum's `ALL`,
     /// `code` and `from_code`; returns how many enums it ran on.
     fn each_enum(check: &dyn Fn(&dyn EnumUnderTest)) -> usize {
-        let enums: [&dyn EnumUnderTest; 17] = [
+        let enums: [&dyn EnumUnderTest; 26] = [
+            &Closed(
+                WorkOrderSource::ALL,
+                WorkOrderSource::code,
+                WorkOrderSource::from_code,
+            ),
+            &Closed(
+                LaunchOutcome::ALL,
+                LaunchOutcome::code,
+                LaunchOutcome::from_code,
+            ),
+            &Closed(
+                ProposalKind::ALL,
+                ProposalKind::code,
+                ProposalKind::from_code,
+            ),
+            &Closed(
+                ProposalStatus::ALL,
+                ProposalStatus::code,
+                ProposalStatus::from_code,
+            ),
+            &Closed(
+                OrchestratorStartOutcome::ALL,
+                OrchestratorStartOutcome::code,
+                OrchestratorStartOutcome::from_code,
+            ),
+            &Closed(ReviewMode::ALL, ReviewMode::code, ReviewMode::from_code),
+            &Closed(
+                ReviewOutcome::ALL,
+                ReviewOutcome::code,
+                ReviewOutcome::from_code,
+            ),
+            &Closed(
+                AuthorDecision::ALL,
+                AuthorDecision::code,
+                AuthorDecision::from_code,
+            ),
+            &Closed(
+                AuthorReason::ALL,
+                AuthorReason::code,
+                AuthorReason::from_code,
+            ),
             &Closed(
                 TriageRefusal::ALL,
                 TriageRefusal::code,

@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 
 use officina_core::dates::{dated_file_day, utc_date};
 use officina_core::registry::retention::{
-    COPIES_KEPT, TRIAGE_CALL_TTL_MS, event_file_deletable, excerpt_cutoff, kept,
+    COPIES_KEPT, TRIAGE_CALL_TTL_MS, WORK_ORDER_TTL_MS, event_file_deletable, excerpt_cutoff, kept,
 };
 
 use super::ingest::{IngestContext, IngestReport};
@@ -35,6 +35,10 @@ pub struct PassReport {
     pub cleared_excerpts: usize,
     /// `triage_call` rows past their 90 days (AD-44).
     pub deleted_calls: usize,
+    /// `work_order` rows past their 90 days (D-134).
+    pub deleted_work_orders: usize,
+    /// `work_order` rows whose `printed` and `error` were cleared (D-134).
+    pub cleared_work_order_texts: usize,
     /// False when a reader kept the WAL from being truncated.
     pub checkpointed: bool,
 }
@@ -93,6 +97,8 @@ impl Writer {
         report.deleted_event_files = self.retire_event_files(ctx.events_dir, now_ms)?;
         report.cleared_excerpts = self.clear_excerpts(ctx.no_excerpts, now_ms)?;
         report.deleted_calls = self.retire_triage_calls(now_ms)?;
+        (report.deleted_work_orders, report.cleared_work_order_texts) =
+            self.retire_work_orders(now_ms)?;
         report.checkpointed = self.checkpoint()?;
         Ok(report)
     }
@@ -185,10 +191,6 @@ impl Writer {
         Ok(deleted)
     }
 
-    /// Clears the excerpts whose event is older than the TTL, counted from
-    /// the event (D-50), and every excerpt when `no_excerpts` is on (D-85),
-    /// in `session_excerpt` and in `confirmation_input`; returns how many
-    /// sessions lost one.
     /// Deletes the `triage_call` rows started [`TRIAGE_CALL_TTL_MS`] or
     /// more before `now_ms` (AD-44).
     fn retire_triage_calls(&self, now_ms: i64) -> Result<usize, RegistryError> {
@@ -198,6 +200,30 @@ impl Writer {
         )?)
     }
 
+    /// Deletes the `work_order` rows launched [`WORK_ORDER_TTL_MS`] or more
+    /// before `now_ms`, and clears the untrusted texts of those launched
+    /// [`EXCERPT_TTL_MS`](officina_core::registry::retention::EXCERPT_TTL_MS)
+    /// or more before it, so D-85's bound covers them (D-134). Returns the
+    /// rows deleted and the rows whose texts were cleared.
+    fn retire_work_orders(&mut self, now_ms: i64) -> Result<(usize, usize), RegistryError> {
+        let tx = self.conn.transaction()?;
+        let deleted = tx.execute(
+            "DELETE FROM work_order WHERE launched_at_ms <= ?1",
+            [now_ms - WORK_ORDER_TTL_MS],
+        )?;
+        let cleared = tx.execute(
+            "UPDATE work_order SET printed = NULL, error = NULL
+             WHERE launched_at_ms <= ?1 AND (printed IS NOT NULL OR error IS NOT NULL)",
+            [excerpt_cutoff(now_ms)],
+        )?;
+        tx.commit()?;
+        Ok((deleted, cleared))
+    }
+
+    /// Clears the excerpts whose event is older than the TTL, counted from
+    /// the event (D-50), and every excerpt when `no_excerpts` is on (D-85),
+    /// in `session_excerpt` and in `confirmation_input`; returns how many
+    /// sessions lost one.
     fn clear_excerpts(&mut self, no_excerpts: bool, now_ms: i64) -> Result<usize, RegistryError> {
         let tx = self.conn.transaction()?;
         let cleared = if no_excerpts {

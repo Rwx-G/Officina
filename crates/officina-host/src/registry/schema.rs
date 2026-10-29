@@ -2,9 +2,9 @@
 //!
 //! Entry `i` of [`MIGRATIONS`] moves a database from version `i` to `i + 1`.
 //! A shipped entry never changes: `tests/registry_schema.rs` pins the
-//! SHA-256 of each one. Until v0.3 ships, an Epic 3 story that must change
-//! schema 1 edits it and its pinned hash in one commit (P-14); from the
-//! release on, migrations are append-only.
+//! SHA-256 of each one. Migrations are append-only: v0.3 shipped schema 1,
+//! and schema 2 reaches the owner's registry with a Slice A build of v0.5
+//! (D-133), so neither is edited again.
 //!
 //! Every column holding a registry enum carries a `CHECK` list of the enum's
 //! text forms; the schema test reads those lists from `sqlite_master` and
@@ -158,8 +158,115 @@ BEGIN
 END;
 ";
 
+/// Schema version 2 (AD-82 as D-133 amends it), written whole by story 5.6
+/// so a registry a Slice A build migrates never needs a second v0.5
+/// migration: a hole found later is a migration 3.
+///
+/// No foreign key points at `session` or `subject`: retention deletes their
+/// rows on its own schedule under `foreign_keys = ON`. `auto_review.cause`
+/// and `proposal.invalid_reason` carry no `CHECK`, since their enums grow
+/// with stories 5.13 and 5.17; `proposal.kind` is nullable for a file that
+/// does not parse. `setting` is rebuilt (create, copy, drop, rename, in
+/// this migration's transaction) because its key `CHECK` widens.
+const V2: &str = "\
+CREATE TABLE work_order (
+    id TEXT PRIMARY KEY NOT NULL,
+    seq INTEGER NOT NULL,
+    template TEXT NOT NULL,
+    project TEXT NOT NULL,
+    cwd TEXT NOT NULL,
+    values_json TEXT NOT NULL,
+    argv_json TEXT NOT NULL,
+    prompt_sha256 TEXT NOT NULL,
+    catalogue_hash TEXT NOT NULL,
+    name TEXT NOT NULL,
+    subject_id INTEGER,
+    new_subject_name TEXT,
+    source TEXT NOT NULL CHECK (source IN ('composer', 'proposal')),
+    proposal_id TEXT,
+    launched_at_ms INTEGER NOT NULL,
+    outcome TEXT NOT NULL CHECK (outcome IN ('launching', 'started', 'untrusted_workspace', 'failed', 'unknown')),
+    exit_code INTEGER,
+    error TEXT,
+    printed TEXT,
+    bg_id TEXT,
+    session_id TEXT,
+    bound_at_ms INTEGER,
+    UNIQUE (name),
+    UNIQUE (template, seq)
+) STRICT;
+
+CREATE TABLE proposal (
+    id TEXT PRIMARY KEY NOT NULL,
+    kind TEXT CHECK (kind IN ('recap', 'work_order', 'answer')),
+    status TEXT NOT NULL CHECK (status IN ('pending', 'invalid', 'accepted', 'dismissed', 'expired', 'superseded')),
+    invalid_reason TEXT,
+    received_at_ms INTEGER NOT NULL,
+    expires_at_ms INTEGER,
+    orchestrator_session_id TEXT,
+    target_subject_id INTEGER,
+    target_session_id TEXT,
+    template TEXT,
+    project TEXT,
+    values_json TEXT,
+    subject_choice_json TEXT,
+    texts_json TEXT,
+    decided_at_ms INTEGER,
+    work_order_id TEXT
+) STRICT;
+
+CREATE TABLE orchestrator_start (
+    id INTEGER PRIMARY KEY,
+    started_at_ms INTEGER NOT NULL,
+    pid INTEGER,
+    pid_created_at_ms INTEGER,
+    outcome TEXT NOT NULL CHECK (outcome IN ('spawned', 'refused', 'failed')),
+    error TEXT
+) STRICT;
+
+CREATE TABLE auto_review (
+    id INTEGER PRIMARY KEY,
+    approval_id TEXT NOT NULL,
+    request_key TEXT NOT NULL,
+    project TEXT NOT NULL,
+    action TEXT NOT NULL,
+    requested_at_ms INTEGER NOT NULL,
+    mode TEXT NOT NULL CHECK (mode IN ('shadow', 'live', 'rule')),
+    outcome TEXT NOT NULL CHECK (outcome IN ('no_call', 'answered', 'invalid', 'failed', 'timeout')),
+    cause TEXT,
+    decision TEXT CHECK (decision IN ('approve', 'reject', 'escalate')),
+    reason TEXT,
+    rule_baseline INTEGER NOT NULL CHECK (rule_baseline IN (0, 1)),
+    call_started_at_ms INTEGER,
+    duration_ms INTEGER,
+    input_tokens INTEGER,
+    output_tokens INTEGER,
+    cost_microusd INTEGER,
+    author_decision TEXT CHECK (author_decision IN ('approved', 'rejected')),
+    author_reason TEXT CHECK (author_reason IN ('should_not_run', 'not_now')),
+    decided_at_ms INTEGER,
+    run_id TEXT,
+    marked_at_ms INTEGER
+) STRICT;
+
+CREATE TABLE setting_v2 (
+    key TEXT PRIMARY KEY CHECK (key IN ('restore_notice', 'triage_model', 'triage_model_pause', 'auto_archive', 'auto_approval', 'auto_mode', 'briefing_read_at_ms')),
+    value ANY,
+    src TEXT NOT NULL CHECK (src IN ('agents', 'hook', 'rules', 'model', 'author')),
+    at_ms INTEGER NOT NULL
+) STRICT;
+INSERT INTO setting_v2 (key, value, src, at_ms) SELECT key, value, src, at_ms FROM setting;
+DROP TABLE setting;
+ALTER TABLE setting_v2 RENAME TO setting;
+
+CREATE INDEX work_order_by_launch ON work_order (launched_at_ms);
+CREATE INDEX proposal_by_status ON proposal (status, received_at_ms);
+CREATE INDEX auto_review_by_action ON auto_review (project, action, requested_at_ms);
+CREATE INDEX auto_review_by_request ON auto_review (requested_at_ms);
+";
+
 /// Every migration, in order: entry `i` moves version `i` to `i + 1`.
-pub const MIGRATIONS: &[&str] = &[V1];
+pub const MIGRATIONS: &[&str] = &[V1, V2];
 
 /// The schema version this build reads and writes: the number of
 /// migrations.

@@ -42,6 +42,18 @@ project uses [Semantic Versioning](https://semver.org/).
   session kind, in no job, its deadline ending `claude` alone. Pinned by
   `tests/vectors/orders.json` and a `work_order` case of
   `tests/vectors/spawn.json`.
+- Work order records (v0.5, story 5.6; internal until the window offers
+  work orders): a launch is recorded `launching` under its unique name
+  `<template>-<seq>` (a name the registry holds is refused `name_taken`),
+  then its outcome, with what `claude --bg` printed (4 KiB) and its error
+  (500 characters) kept as untrusted text; a row left `launching` two
+  minutes reads `unknown`, at start and on the collector's tick. A
+  `started` order binds, within ten minutes, to the background session
+  listed under its name in its project folder, and that session is filed
+  under the order's subject with source `author`, ahead of the filing
+  rules; a new subject is created at `started`, never at the click, or the
+  open subject of that name is used. Rows are kept 90 days, their texts
+  cleared with the excerpts.
 
 - Sub-agents in the scene (v0.4, story 4.12): each running sub-agent of a
   session stands beside its desk, a smaller figure without a cap, from its
@@ -412,6 +424,11 @@ project uses [Semantic Versioning](https://semver.org/).
   projects of the last approval. `officina relay --json` is schema 2: each
   issue carries its `table`, the catalogue its `templates` and
   `auto_review`.
+- Registry schema version 2 (v0.5, story 5.6), copied to
+  `registry/backup/pre-v2-<date>.db` before migrating: the tables of work
+  orders, the orchestrator's proposals and starts, and the reviews of
+  `auto` requests, written whole in one migration, and `setting` rebuilt
+  for its three new keys. Every row of version 1 is kept.
 - Sober corners: controls round 4 px and surfaces 6 px, from one radius
   family in `app.css`; pills are kept for count badges (story 4.15).
 - One header in every view and mode: the same quota gauges (150 px wide,

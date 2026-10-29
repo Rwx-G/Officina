@@ -411,6 +411,13 @@ impl WindowRegistry {
         applied
     }
 
+    /// Turns the `launching` work orders whose outcome can no longer come
+    /// back into `unknown` (D-136), when the registry is writable: at start
+    /// before the first view, then on the collector's tick.
+    pub fn expire_launching(&mut self, now_ms: i64) {
+        self.on_writer(|writer| writer.expire_launching(now_ms));
+    }
+
     /// The registry's hourly pass, when the registry is writable: read-only
     /// or unavailable, nothing is ingested and nothing deleted.
     pub fn hourly_pass(&mut self, ctx: &IngestContext, now_ms: i64) -> Option<PassReport> {

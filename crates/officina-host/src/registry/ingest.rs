@@ -15,16 +15,17 @@ use officina_core::dates::dated_file_day;
 use officina_core::events::is_subagent_event;
 use officina_core::events::{EventLine, ParsedLine, parse_line};
 use officina_core::registry::confirm::wake;
-use officina_core::registry::filing::filing_at_creation;
+use officina_core::registry::filing::filing_for_new_session;
 use officina_core::registry::fold::{candidates_needed, line_facts, link_for_line};
 use officina_core::registry::ingestion::{
     ExcerptObservation, FileOpening, close_event_file, excerpt_observation, in_triage_workdir,
     line_too_long, open_event_file, recorded_at, starts_a_chunk,
 };
 use officina_core::registry::retention::excerpt_expired;
-use officina_core::registry::types::{EventFileRecord, SessionRecord, Source};
+use officina_core::registry::types::{EventFileRecord, SessionRecord};
 use rusqlite::{Connection, TransactionBehavior, params};
 
+use super::orders::bound_subject_of;
 use super::read;
 use super::store::Writer;
 use super::write::{RegistryError, apply_wake, prune_excerpts, write_fact};
@@ -174,10 +175,11 @@ fn parse_raw(raw: &RawLine) -> ParsedLine {
 /// Records the session of `session_id`, seen at `seen_ms` in `cwd`: the one
 /// function that creates a session record, whichever source sees it first
 /// (D-79), inside the caller's transaction. A new session's project comes
-/// from its `cwd` and the window's floor (D-53), and is never rewritten; it
-/// joins the single active subject of that project, source `rules`, in the
-/// same transaction (AD-43, AD-48, D-75). Returns true when the session is
-/// new.
+/// from its `cwd` and the window's floor (D-53), and is never rewritten.
+/// It is filed in the same transaction (AD-43, AD-48, D-75): under the
+/// subject of the work order bound to it, source `author`, first (AD-81
+/// step 5); else under the single active subject of its project, source
+/// `rules`. Returns true when the session is new.
 pub(crate) fn ensure_session(
     conn: &Connection,
     session_id: &str,
@@ -194,14 +196,17 @@ pub(crate) fn ensure_session(
         .execute(params![session_id, project, seen_ms])?
         == 1;
     if created {
-        if let Some(subject) =
-            filing_at_creation(&project, &read::active_subjects_of(conn, &project)?)
-        {
+        let filing = filing_for_new_session(
+            bound_subject_of(conn, session_id)?,
+            &project,
+            &read::active_subjects_of(conn, &project)?,
+        );
+        if let Some((subject, src)) = filing {
             conn.prepare_cached(
                 "UPDATE session SET subject_id = ?2, subject_src = ?3, subject_at_ms = ?4
                  WHERE session_id = ?1",
             )?
-            .execute(params![session_id, subject, Source::Rules.code(), seen_ms])?;
+            .execute(params![session_id, subject, src.code(), seen_ms])?;
         }
     } else {
         conn.prepare_cached(

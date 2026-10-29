@@ -744,6 +744,7 @@ fn run<E: Emit>(
         &onedrive_roots_from_env(),
         now_ms(),
     );
+    registry.expire_launching(now_ms());
     hourly_pass(collector, &mut registry);
     // No thread, no call: the board does not depend on it, and no dry run
     // is accepted that would wait on it forever.
@@ -779,6 +780,9 @@ fn run<E: Emit>(
                 plan.excerpts_turned_off();
             }
         }
+        // D-136: a launch whose outcome never came back reads `unknown`
+        // within a tick of its expiry, whatever else is due.
+        registry.expire_launching(now_ms());
         let due = plan.due();
         // Before the session list and the board read anything (D-78).
         if due.ingest {

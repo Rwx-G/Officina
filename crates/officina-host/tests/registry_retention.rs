@@ -4,6 +4,8 @@
 //! read-only. Every pass runs at an explicit `now_ms`.
 
 mod common;
+#[path = "../../../tests/support/spawn_cases.rs"]
+mod spawn_cases;
 
 use std::path::Path;
 
@@ -432,6 +434,118 @@ fn triage_call_rows_are_kept_90_days() {
         .hourly_pass(&home.ctx(), kept + TRIAGE_CALL_TTL_MS)
         .unwrap();
     assert!(writer.triage_calls_since(0).unwrap().is_empty());
+}
+
+/// Records a launch of the golden `dependency-bump` order as card `card`,
+/// with `seq`, at `at`, and its outcome with what it printed and erred.
+fn launched(
+    writer: &mut officina_host::registry::store::Writer,
+    home: &Home,
+    card: &str,
+    seq: u32,
+    at: i64,
+) {
+    use officina_core::orders::work_order::SubjectChoice;
+    use officina_core::registry::types::{LaunchOutcome, WorkOrderSource};
+    use officina_core::spawn::VectorKind;
+    use officina_host::registry::orders::LaunchRecord;
+
+    let order = spawn_cases::load()
+        .cases
+        .into_iter()
+        .find(|case| case.kind() == VectorKind::WorkOrder)
+        .unwrap()
+        .work_order(Some(&home.root.to_string_lossy()));
+    writer
+        .insert_work_order(
+            &LaunchRecord {
+                order: &order,
+                card_id: card,
+                seq,
+                source: WorkOrderSource::Composer,
+                subject: &SubjectChoice::Existing(1),
+                proposal_id: None,
+            },
+            at,
+        )
+        .unwrap()
+        .unwrap();
+    writer
+        .record_launch_outcome(
+            card,
+            LaunchOutcome::Failed,
+            Some(1),
+            Some(&format!("error of {card}")),
+            Some(&format!("printed by {card}")),
+            at,
+        )
+        .unwrap();
+}
+
+/// Story 5.6 AC 8 (D-134): a `work_order` row is deleted 90 days after its
+/// launch by the hourly pass.
+#[test]
+fn work_order_rows_are_deleted_at_90_days() {
+    use officina_core::registry::retention::WORK_ORDER_TTL_MS;
+
+    let home = Home::new();
+    let mut writer = home.writer(NOW);
+    let kept = NOW - WORK_ORDER_TTL_MS + 1;
+    let gone = NOW - WORK_ORDER_TTL_MS;
+    launched(&mut writer, &home, "kept", 1, kept);
+    launched(&mut writer, &home, "gone", 2, gone);
+    let report = writer.hourly_pass(&home.ctx(), NOW).unwrap();
+    assert_eq!(report.deleted_work_orders, 1);
+    let left: Vec<String> = writer
+        .work_orders()
+        .unwrap()
+        .into_iter()
+        .map(|o| o.id)
+        .collect();
+    assert_eq!(left, ["kept"]);
+    writer
+        .hourly_pass(&home.ctx(), kept + WORK_ORDER_TTL_MS)
+        .unwrap();
+    assert!(writer.work_orders().unwrap().is_empty());
+}
+
+/// Story 5.6 AC 8 (D-134): `printed` and `error` are cleared
+/// `EXCERPT_TTL_MS` after the launch, the row kept, so D-85's 30-day bound
+/// covers them; the cleared text leaves the database and its WAL.
+#[test]
+fn work_order_texts_are_cleared_with_the_excerpt_ttl() {
+    let home = Home::new();
+    let mut writer = home.writer(NOW);
+    let kept = NOW - EXCERPT_TTL_MS + 1;
+    let cleared = NOW - EXCERPT_TTL_MS;
+    launched(&mut writer, &home, "kept", 1, kept);
+    launched(&mut writer, &home, "cleared", 2, cleared);
+    let report = writer.hourly_pass(&home.ctx(), NOW).unwrap();
+    assert_eq!(report.cleared_work_order_texts, 1);
+    let orders = writer.work_orders().unwrap();
+    let texts = |id: &str| {
+        let order = orders.iter().find(|o| o.id == id).unwrap();
+        (order.printed.is_some(), order.error.is_some())
+    };
+    assert_eq!(texts("kept"), (true, true));
+    assert_eq!(texts("cleared"), (false, false), "the row stays");
+    let again = writer.hourly_pass(&home.ctx(), NOW).unwrap();
+    assert_eq!(again.cleared_work_order_texts, 0, "counted once");
+    drop(writer);
+    let db = home.paths().database();
+    assert!(file_contains(&db, "error of kept"), "positive control");
+    for leftover in [&db, &home.paths().wal()] {
+        assert!(
+            !file_contains(leftover, "error of cleared"),
+            "{}",
+            leftover.display()
+        );
+        assert!(
+            !file_contains(leftover, "printed by cleared"),
+            "{}",
+            leftover.display()
+        );
+    }
 }
 
 /// Quality audit M2: a read of the cards' subjects that fails is reported,

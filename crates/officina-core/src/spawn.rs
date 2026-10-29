@@ -648,7 +648,7 @@ pub fn triage_call(
 /// `seq` is the number the card store reserved for the card (D-135), so
 /// the name is unique and the vector the card shows is the one that runs.
 pub fn work_order(order: &WorkOrder, seq: u32, config_dir: Option<&str>) -> ClaudeVector {
-    let name = format!("{}-{seq}", order.template());
+    let name = crate::orders::work_order::order_name(order.template(), seq);
     let model = order
         .model()
         .map(|model| ["--model".to_owned(), model.code().to_owned()]);

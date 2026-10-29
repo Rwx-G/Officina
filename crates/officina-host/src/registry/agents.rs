@@ -14,6 +14,7 @@ use officina_core::registry::types::SessionRecord;
 use rusqlite::{Connection, TransactionBehavior};
 
 use super::ingest::ensure_session;
+use super::orders::{bind_orders, file_bound_session};
 use super::read;
 use super::store::Writer;
 use super::write::{RegistryError, apply_wake, prune_excerpts, write_fact};
@@ -50,8 +51,10 @@ impl Writer {
     /// Folds one successful `claude agents` refresh into the registry, at
     /// `now_ms`, in one transaction (AD-46): a session first seen here is
     /// created through the one creation function (D-79), changed facts are
-    /// written with source `agents`, and a session gone without an end gets
-    /// `interrupted`. `snapshot` is the previous refresh's, seeded from the
+    /// written with source `agents`, a session gone without an end gets
+    /// `interrupted`, and a `started` work order binds to the session it
+    /// started, which is filed under its subject (AD-81 steps 4 and 5).
+    /// `snapshot` is the previous refresh's, seeded from the
     /// registry when there is none yet (D-51); it moves on only once the
     /// transaction commits, so a failed write leaves it as it was.
     pub fn apply_agents(
@@ -75,6 +78,9 @@ impl Writer {
             .collect::<Vec<_>>();
         let known = known_records(&tx, ids)?;
         let (next, changes) = fold_agents(&previous, records, &known, now_ms);
+        // AD-81 steps 4 and 5: bound before any session is created, so the
+        // creation function files a new one under its order's subject.
+        let bindings = bind_orders(&tx, records, now_ms)?;
         for listed in &changes.newly_listed {
             ensure_session(
                 &tx,
@@ -123,6 +129,11 @@ impl Writer {
             if newly_listed && let Some(subject) = after.filed_subject() {
                 prune_excerpts(&tx, subject)?;
             }
+        }
+        // A session the registry held before its order bound (a hook line
+        // came first) and the rules filed elsewhere moves now.
+        for binding in &bindings {
+            file_bound_session(&tx, binding, now_ms)?;
         }
         tx.commit()?;
         *snapshot = Some(next);

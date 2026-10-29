@@ -284,23 +284,30 @@ fn absent_registry_is_created_by_the_writer_only() {
 fn older_version_is_copied_then_migrated() {
     let home = Home::new();
     fill(&home);
-    let next = [MIGRATIONS[0], "CREATE TABLE added (x INTEGER) STRICT;"];
+    let next: Vec<&str> = MIGRATIONS
+        .iter()
+        .copied()
+        .chain(["CREATE TABLE added (x INTEGER) STRICT;"])
+        .collect();
+    let target = SCHEMA_VERSION + 1;
     assert_eq!(
-        open_reader_expecting(&home.home, &[], 2).unwrap_err().state,
+        open_reader_expecting(&home.home, &[], target)
+            .unwrap_err()
+            .state,
         RegistryState::Older
     );
     match open_writer_with(&home.home, &[], &next, NOW) {
         WriterOpen::Writable {
             integrity:
                 Integrity::Migrated {
-                    from: 1,
+                    from: SCHEMA_VERSION,
                     copy: Some(copy),
                 },
             ..
         } => assert!(copy.is_file()),
         other => panic!("{other:?}"),
     }
-    let reader = open_reader_expecting(&home.home, &[], 2).unwrap();
+    let reader = open_reader_expecting(&home.home, &[], target).unwrap();
     assert_eq!(reader.settings().unwrap().len(), SettingKey::ALL.len());
 }
 

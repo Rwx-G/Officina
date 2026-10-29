@@ -2246,14 +2246,16 @@ mod tests {
     const NOW: i64 = 1_793_102_400_000;
     const DAY: i64 = DAY_MS;
 
-    /// A registry of schema 1 at `version` under `home`, written without the
-    /// window's writer, which this test build may not hold.
+    /// A registry of this build's schema at `version` under `home`,
+    /// written without the window's writer, which this test build may not
+    /// hold.
     fn registry_at(home: &Path, version: i64) -> rusqlite::Connection {
         let paths = RegistryPaths::new(home);
         fs::create_dir_all(paths.dir()).unwrap();
         let conn = rusqlite::Connection::open(paths.database()).unwrap();
-        conn.execute_batch(crate::registry::schema::MIGRATIONS[0])
-            .unwrap();
+        for migration in crate::registry::schema::MIGRATIONS {
+            conn.execute_batch(migration).unwrap();
+        }
         conn.pragma_update(None, "user_version", version).unwrap();
         conn
     }
