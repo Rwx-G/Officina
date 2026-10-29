@@ -234,22 +234,30 @@ export function entranceSignRect(columns: number): Rect {
  *  and the overflow of reception, the lounge and the alert room (D-104).
  *  The left end, not D-104's right end: at the right end an office's chip
  *  met the chip spot of the office to its right, and the alert room's met
- *  the queue in the corridor. */
+ *  the queue in the corridor. The decision office's sits at its plaque's
+ *  right end: at the left end it met reception's spot by the counter's
+ *  end (story 4.17, D-557). */
 export const PLAQUE_GROUP_TARGET = { w: 48, h: 48 } as const;
-/** The register in the decision office's corner of the canvas: a header
- *  and one row per shown session, then its overflow target (D-103). */
-export const REGISTER = { x: PAD.left, y: 6, w: 156, head: 24, rowH: 19, rows: 5 } as const;
-export const REGISTER_OVERFLOW_TARGET = { w: 116, h: 48 } as const;
+/** The register (D-103, D-524; story 4.17, D-555, D-556): overlay UI in
+ *  CSS px, never scaled with the floor, `top` and `right` px inside the
+ *  scene's top-right corner, `w` px wide; a heading of `head` px, then up
+ *  to `rows` rows of `rowH` px and one more for the rest: a row per board
+ *  key (`layout.ts` `MAX_NUMBER`, D-107; a test holds them equal). */
+export const REGISTER = { top: 8, right: 12, w: 212, head: 30, rowH: 23, rows: 9 } as const;
+/** The register's tallest box, in CSS px: its heading, its rows and the
+ *  "+n more" line, and its frame (`Register.svelte`). */
+export const REGISTER_MAX_H = REGISTER.head + (REGISTER.rows + 1) * REGISTER.rowH + 10;
 
 /** A figure's target at the floor point `at` (screen px). */
 export function figureTarget(at: Point): Rect {
   return { x: at.x - FIGURE_TARGET.w / 2, y: at.y - FIGURE_TARGET.rise, w: FIGURE_TARGET.w, h: FIGURE_TARGET.h };
 }
 
-/** A group target left and bottom aligned with a plaque's cap rectangle. */
-function plaqueGroupTarget(plaque: Rect): Rect {
+/** A group target bottom aligned with a plaque's cap rectangle, at its
+ *  left end or its right end. */
+function plaqueGroupTarget(plaque: Rect, end: "left" | "right" = "left"): Rect {
   return {
-    x: plaque.x,
+    x: end === "left" ? plaque.x : plaque.x + plaque.w - PLAQUE_GROUP_TARGET.w,
     y: plaque.y + plaque.h - PLAQUE_GROUP_TARGET.h,
     w: PLAQUE_GROUP_TARGET.w,
     h: PLAQUE_GROUP_TARGET.h,
@@ -261,18 +269,10 @@ export function chipTarget(columns: number, cell: Cell): Rect {
   return plaqueGroupTarget(plaqueRect(columns, cell, "office"));
 }
 
-/** The group of a shared zone beyond its spots (D-484): the register's
- *  overflow for the decision office, the plaque's "+n" for the others. */
+/** The group of a shared zone beyond its spots (D-484): the "+n" at its
+ *  plaque's end, the decision office's at the right end (D-557). */
 export function zoneGroupTarget(columns: number, zone: SharedZone): Rect {
-  if (zone === "decision") {
-    return {
-      x: REGISTER.x,
-      y: REGISTER.y + REGISTER.head + REGISTER.rows * REGISTER.rowH,
-      w: REGISTER_OVERFLOW_TARGET.w,
-      h: REGISTER_OVERFLOW_TARGET.h,
-    };
-  }
-  return plaqueGroupTarget(plaqueRect(columns, SHARED_CELLS[zone], zone));
+  return plaqueGroupTarget(plaqueRect(columns, SHARED_CELLS[zone], zone), zone === "decision" ? "right" : "left");
 }
 
 /** More offices: the rectangle inscribed in its cell, centred, half the

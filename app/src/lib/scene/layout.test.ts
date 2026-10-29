@@ -708,17 +708,19 @@ describe("layoutScene: targets", () => {
       expect(nearestTarget(officeLayout.targets, from, direction), `${from} ${direction}`).toBe(to);
     }
 
-    // A full queue: every queue spot taken, one more in the register.
+    // A full queue: every queue spot taken, one more in the group, whose
+    // "+n" is at the right end of the office's plaque, above the queue's
+    // first places (D-557).
     const queue = Array.from({ length: CAPACITY.decision + 1 }, (_, i) => card(`n${i}`, "decision", { started: i, project: `p${i}` }));
     const queueLayout = lay(board(queue));
     const q = (i: number) => `figure:n${i}`;
-    const register = "group:decision";
+    const group = "group:decision";
     const queueVectors: [string, Direction, string | null][] = [
-      [q(0), "up", null],
+      [q(0), "up", group],
       [q(0), "down", null],
       [q(0), "left", q(1)],
       [q(0), "right", null],
-      [q(1), "up", null],
+      [q(1), "up", group],
       [q(1), "down", null],
       [q(1), "left", q(2)],
       [q(1), "right", q(0)],
@@ -736,12 +738,12 @@ describe("layoutScene: targets", () => {
       [q(4), "right", q(3)],
       [q(5), "up", null],
       [q(5), "down", null],
-      [q(5), "left", register],
+      [q(5), "left", null],
       [q(5), "right", q(4)],
-      [register, "up", null],
-      [register, "down", null],
-      [register, "left", null],
-      [register, "right", q(5)],
+      [group, "up", null],
+      [group, "down", q(1)],
+      [group, "left", q(2)],
+      [group, "right", null],
     ];
     for (const [from, direction, to] of queueVectors) {
       expect(nearestTarget(queueLayout.targets, from, direction), `${from} ${direction}`).toBe(to);

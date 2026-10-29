@@ -114,7 +114,7 @@ describe("rig", () => {
     expect(marksMarkup(marks, "standing", "front", "green")).toBe("");
   });
 
-  it("a digit on a disc is a board number, a desk a letter on a square", () => {
+  it("a digit on a disc is a board number, a desk a letter on a square, an approval a diamond", () => {
     const parse = (markup: string) => {
       const holder = document.createElementNS("http://www.w3.org/2000/svg", "g");
       holder.innerHTML = markup;
@@ -133,6 +133,10 @@ describe("rig", () => {
       const numbered = parse(ticketMarkup(1, alert));
       expect(numbered.querySelector("circle")).not.toBeNull();
       expect(textNodes(numbered)).toEqual(["1"]);
+      const approval = parse(ticketMarkup(null, alert));
+      expect(approval.querySelector("circle, rect")).toBeNull();
+      expect(approval.querySelector("path")).not.toBeNull();
+      expect(textNodes(approval)).toEqual([]);
     }
   });
 });

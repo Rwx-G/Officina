@@ -276,12 +276,15 @@ export function setPose(rig: Rig, pose: Pose, facing: Facing, hand: boolean, mot
 
 // ------------------------------------------------------------ marks
 
-/** A board number on amber, or on the alert colour in the alert room; an
- *  approval-only wait's ticket has no digit (D-464). */
+/** A queue badge (story 4.17, D-554, D-556): a board number on an amber
+ *  disc, on the alert colour in the alert room; an approval-only wait's,
+ *  which has no number (D-464), is an amber diamond. Only a board number
+ *  is ever a digit on a disc, as only those are keys (D-107). */
 export function ticketMarkup(number: number | null, alert: boolean): string {
   const [bg, fg] = alert ? [paint("color-alert"), paint("color-on-alert")] : [paint("color-attention"), paint("color-attention-text")];
-  const circle = `<circle fill="${bg}" stroke="${paint("color-attention-text")}" cx="0" cy="0" r="7.6" stroke-width="1.3"/>`;
-  return number === null ? circle : circle + glyph(String(integer(number)), fg);
+  const edge = `stroke="${paint("color-attention-text")}" stroke-width="1.3"`;
+  if (number === null) return `<path fill="${bg}" ${edge} stroke-linejoin="round" d="M0 -8.6 L8.6 0 L0 8.6 L-8.6 0 Z"/>`;
+  return `<circle fill="${bg}" ${edge} cx="0" cy="0" r="7.6"/>` + glyph(String(integer(number)), fg);
 }
 
 /** The letter that names desk `desk` of an office, A for the first:

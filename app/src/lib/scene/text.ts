@@ -54,13 +54,19 @@ export function plaqueText(room: SharedZone | "more"): string {
   return ROOM_NAMES[room];
 }
 
-/** The scene's fixed signs: the door's, the high-priority pill's and the
- *  register's heading. */
+/** The scene's fixed signs: the door's, the high-priority pill's, and the
+ *  register's order and approval words. */
 export const SIGN_WORDS = {
   entrance: "Entrance and exit",
   highPriority: "high priority",
-  register: "Needs you, board order",
+  boardOrder: "board order",
+  approval: "approval",
 } as const;
+
+/** The register's heading: how many wait, in one place (D-556). */
+export function registerHead(waiting: number): string {
+  return `Needs you: ${waiting}`;
+}
 
 /** The register's last row when it shows fewer sessions than wait there. */
 export function registerMore(hidden: number): string {

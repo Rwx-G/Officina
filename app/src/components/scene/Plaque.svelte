@@ -15,13 +15,15 @@
     /** The room's group, "+n" at the plaque's left end, where its target
      *  sits (D-524); 0 without one. */
     more?: number;
+    /** The "+n" at the right end instead (the decision office, D-557). */
+    moreAtEnd?: boolean;
     /** A smaller pill, for the "high priority" sign. */
     small?: boolean;
   }
-  let { text, state, count, dot, more = 0, small = false }: Props = $props();
+  let { text, state, count, dot, more = 0, moreAtEnd = false, small = false }: Props = $props();
 </script>
 
-<div class="plaque {state}" class:small class:grouped={more > 0}>
+<div class="plaque {state}" class:small class:grouped={more > 0} class:end={moreAtEnd}>
   {#if more > 0}<span class="more" data-testid="plaque-more">+{more}</span>{/if}
   <span class="pill">
     {#if dot !== undefined}<span class="dot" style:background={projectColor(dot)}></span>{/if}
@@ -44,6 +46,9 @@
   /* With a group, the "+n" takes the left end and the name the rest. */
   .grouped {
     justify-content: flex-start;
+  }
+  .grouped.end {
+    flex-direction: row-reverse;
   }
   .pill {
     display: flex;

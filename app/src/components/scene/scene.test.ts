@@ -8,7 +8,9 @@ import type { Card } from "../../lib/generated/Card";
 import { beaconPair } from "../../lib/alert";
 import { HALO_BREATHING_MS, haloMemo } from "../../lib/halo";
 import { paint } from "../../lib/scene/furniture";
-import { layoutScene, type SceneLayout } from "../../lib/scene/layout";
+import { MAX_NUMBER, layoutScene, type SceneLayout } from "../../lib/scene/layout";
+import { REGISTER } from "../../lib/scene/geometry";
+import { SIGN_WORDS, registerHead, registerMore } from "../../lib/scene/text";
 import * as memory from "../../lib/scene/memory";
 import { emptyMemory } from "../../lib/scene/memory";
 import { board, card, fixtureBoards, project } from "../../lib/scene/testing";
@@ -40,7 +42,7 @@ function renderWithLayout(b: Board): { container: HTMLElement; layout: SceneLayo
 const buttonsOf = (container: HTMLElement) => [...container.querySelectorAll<HTMLButtonElement>('[data-layer="targets"] button')];
 
 describe("Scene", () => {
-  it("layers 1 to 4 and the badges are hidden from assistive technology and ignore the pointer", () => {
+  it("layers 1 to 4, the badges and the register are hidden from assistive technology and ignore the pointer", () => {
     const { getByTestId } = renderScene(waitingBoard());
     const scene = getByTestId("scene");
     expect(scene.getAttribute("tabindex")).toBe("-1");
@@ -48,7 +50,7 @@ describe("Scene", () => {
     expect(scene.getAttribute("data-moving")).toBe("0");
     const all = [...scene.querySelectorAll("[data-layer]")];
     expect(all.map((l) => l.getAttribute("data-layer"))).toEqual(["floor", "halos", "objects", "badges", "overlay", "targets"]);
-    const layers = all.slice(0, -1);
+    const layers = [...all.slice(0, -1), getByTestId("register")];
     for (const layer of layers) {
       expect(layer.getAttribute("aria-hidden"), layer.getAttribute("data-layer")!).toBe("true");
       expect((layer as HTMLElement).style.pointerEvents, layer.getAttribute("data-layer")!).toBe("none");
@@ -84,6 +86,34 @@ describe("Scene", () => {
     expect(target.getAttribute("aria-label")).toContain(markup);
     expect(target.querySelector("[data-tag]")!.textContent).toContain(markup);
     expect((globalThis as { __pwned?: number }).__pwned).toBeUndefined();
+  });
+
+  it("the register's heading counts everyone waiting; an approval-only wait has a diamond and the word", () => {
+    // More waiting than the register has rows, and one approval-only wait.
+    const numbered = Array.from({ length: REGISTER.rows + 1 }, (_, i) => card(`n${i}`, "decision", { started: i }));
+    const approvalOnly = card("approve-me", "decision", { column: "working", approval: true, started: 99 });
+    const b = board([...numbered, approvalOnly]);
+    const { getByTestId, container } = renderScene(b);
+    const register = getByTestId("register");
+    expect(getByTestId("register-count").textContent).toBe(registerHead(numbered.length + 1));
+    const rows = [...register.querySelectorAll("[data-register-row]")];
+    expect(rows).toHaveLength(REGISTER.rows);
+    expect(register.textContent).toContain(registerMore(numbered.length + 1 - REGISTER.rows));
+    expect(rows.map((r) => r.querySelector(".ticket")!.textContent)).toEqual(Array.from({ length: REGISTER.rows }, (_, i) => String(i + 1)));
+    expect(register.querySelector("[data-approval]")).toBeNull();
+    cleanup();
+
+    const few = board([card("first", "decision"), approvalOnly]);
+    renderScene(few);
+    const row = document.querySelector('[data-register-row="approve-me"]')!;
+    expect(row.querySelector("[data-approval]")).not.toBeNull();
+    expect(row.textContent).toContain(SIGN_WORDS.approval);
+    expect(document.querySelector('[data-register-row="first"] [data-approval]')).toBeNull();
+    expect(container.isConnected).toBe(false);
+  });
+
+  it("the register has a row per board key", () => {
+    expect(REGISTER.rows).toBe(MAX_NUMBER);
   });
 
   it("one halo per employee in the decision office or the alert room", () => {

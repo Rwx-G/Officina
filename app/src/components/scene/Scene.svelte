@@ -4,6 +4,8 @@
   // the store's clock (AD-64); the layout is derived from the board, and its
   // memory committed after each layout without re-running it (D-184). It
   // hosts the mover (AD-172), between the layout and layer 3.
+  // Over the scene's corner, outside the scaled layers: the register, at a
+  // fixed size (D-555).
   // Beside the scene element, outside it (D-111): the file panel, which this
   // component opens, closes and returns focus from (AD-63). The counts of
   // ended sessions are in the header (D-541).
@@ -24,6 +26,7 @@
   import SceneObjects from "./SceneObjects.svelte";
   import SceneOverlay from "./SceneOverlay.svelte";
   import SceneTargets from "./SceneTargets.svelte";
+  import Register, { type RegisterRow } from "./Register.svelte";
 
   interface Props {
     board: Board;
@@ -56,6 +59,12 @@
 
   let cards = $derived(new Map(liveCards(board).map((card) => [card.key, card])));
   let beacon = $derived(beaconPair(board));
+  /** Who waits, in board order: the register's rows. */
+  let waiting = $derived<RegisterRow[]>(
+    layout.employees
+      .filter((e) => e.zone === "decision" || e.zone === "alert")
+      .map((e) => ({ key: e.key, name: cards.get(e.key)?.name ?? e.key, number: e.marks.ticket, approval: e.marks.approval, alert: e.zone === "alert" })),
+  );
   let colours = $derived(new Map<string, ProjectColor | null>(liveCards(board).map((card) => [card.project.name, card.project.color])));
 
   /** The sessions area's client size, the scrollbar's room left out. */
@@ -194,9 +203,12 @@
       <SceneFloor {layout} />
       <SceneHalos {layout} {cards} {beacon} {transit} />
       <SceneObjects {layout} {colours} snap={scale * pixelRatio} {mover} {walking} />
-      <SceneOverlay {layout} {cards} />
+      <SceneOverlay {layout} />
       <SceneTargets {layout} onActivate={activate} bind:this={targetsLayer} />
     </div>
+    {#if waiting.length > 0}
+      <Register rows={waiting} />
+    {/if}
   </div>
 </div>
 {#if form}
