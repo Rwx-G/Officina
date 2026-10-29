@@ -44,7 +44,7 @@ async function openStored(page: Page, raw: string): Promise<void> {
 test.describe("modes", () => {
   test("the header names the Sessions view", async ({ page }) => {
     await openBoard(page, loadBoard("scene-c"), {}, loadRelay("relay-clean"));
-    await expect(page.getByTestId("view-switch").getByRole("button")).toHaveText(["Sessions", "Subjects", "Relay"]);
+    await expect(page.getByTestId("view-switch").getByRole("button")).toHaveText(["Sessions", "Subjects", "Relay", "Orchestrator"]);
     await expect(page.getByTestId("view-sessions")).toHaveAttribute("aria-pressed", "true");
   });
 
