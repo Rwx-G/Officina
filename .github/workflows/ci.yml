@@ -219,6 +219,36 @@ jobs:
           name: playwright-report
           path: app/playwright-report
 
+  mutants:
+    # AD-95's mutation row, D-148 (review F22): each mutant of the launch
+    # path, a core feature skipping one check, must compile, then turn the
+    # injection battery red through the case that guards it (the battery
+    # names it `guarded by <feature>`); the control run without them passes.
+    # The features are read from officina-core's manifest, so a new mutant
+    # joins the job by being declared.
+    if: github.event_name != 'schedule'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1
+      - name: Each mutant turns its guarding case red
+        shell: bash
+        run: |
+          features=$(sed -n 's/^\(mutant-[a-z-]*\) = \[\]$/\1/p' crates/officina-core/Cargo.toml)
+          test -n "$features"
+          for feature in $features; do
+            cargo test --locked -p officina --test injection --features "$feature" --no-run
+            if cargo test --locked -p officina --test injection --features "$feature" > "mutant.log" 2>&1; then
+              cat mutant.log; echo "$feature: the injection battery stayed green"; exit 1
+            fi
+            if ! grep -q -F "(guarded by $feature)" mutant.log; then
+              cat mutant.log; echo "$feature: no case guarded by it failed"; exit 1
+            fi
+            echo "$feature: caught"
+          done
+      - name: Control run without the mutants
+        run: cargo test --locked -p officina --test injection
+
   audit:
     runs-on: ubuntu-latest
     steps:

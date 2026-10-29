@@ -43,6 +43,11 @@ window-authority = []
 # dev-dependencies: the exe a session can call never reads either, which
 # the CI step that searches its feature graph checks.
 test-seams = []
+# The mutants of AD-95, forwarded to officina-core under the same names for
+# CI's `mutants` job, which turns them on from the `officina` crate (D-148).
+mutant-accept-any-value = ["officina-core/mutant-accept-any-value"]
+mutant-accept-superseded = ["officina-core/mutant-accept-superseded"]
+mutant-skip-prompt-hash = ["officina-core/mutant-skip-prompt-hash"]
 
 [[test]]
 name = "authority"

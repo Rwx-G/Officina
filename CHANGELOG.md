@@ -585,6 +585,18 @@ project uses [Semantic Versioning](https://semver.org/).
 
 ### Security
 
+- The injection battery (v0.5, story 5.7): `tests/vectors/injection.json`
+  replays hostile inputs at the card launch, each tagged with its attack
+  family (PRD section 7's Gesture row, declared once in the harness's
+  `FAMILIES`), through the window's own functions, the fake claude
+  counting `--bg` spawns: none before the click, exactly one after, its
+  argument vector equal to the card's and to the catalogue's rebuild. A
+  coverage test fails when a family, a section or a refusal has no case.
+- The mutation job (CI `mutants`): core features named `mutant-*` each
+  skip one check of the launch path; with each one on, the battery must
+  still compile and fail on the case that guards it, and a control run
+  passes. The window refuses to
+  compile with any of them (`MUTANTS_ENABLED`), release builds included.
 - Every `claude` Officina starts as a session (`claude agents`,
   `--version`, attach) drops the variables Claude Code gives a session's
   children (`SESSION_ENV_REMOVED`) and `CLAUDE_CODE_DISABLE_AGENT_VIEW`, so

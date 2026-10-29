@@ -37,5 +37,14 @@ officina-core.workspace = true
 officina-host = { workspace = true, features = ["window-authority", "test-seams"] }
 tempfile = "3.27.0"
 
+[features]
+# The mutants of AD-95 (D-148), for CI's `mutants` job only: officina-core
+# is a dev-dependency here, so each is forwarded through officina-host
+# under the same name. The injection battery (`tests/injection.rs`) must
+# fail with each one on.
+mutant-accept-any-value = ["officina-host/mutant-accept-any-value"]
+mutant-accept-superseded = ["officina-host/mutant-accept-superseded"]
+mutant-skip-prompt-hash = ["officina-host/mutant-skip-prompt-hash"]
+
 [lints]
 workspace = true
