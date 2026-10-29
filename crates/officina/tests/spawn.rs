@@ -36,6 +36,7 @@ impl Setup {
         };
         std::fs::create_dir_all(setup.triage_workdir()).unwrap();
         std::fs::create_dir_all(setup.officina_dir(OfficinaDir::ReviewWorkdir)).unwrap();
+        std::fs::create_dir_all(setup.officina_dir(OfficinaDir::OrchestratorWorkdir)).unwrap();
         setup
     }
 
@@ -81,7 +82,7 @@ impl Setup {
     fn fake_for(&self, kind: VectorKind) -> ResolvedClaude {
         let mode = match kind {
             VectorKind::Agents | VectorKind::Version => "ok",
-            VectorKind::Attach => "interactive",
+            VectorKind::Attach | VectorKind::Orchestrator => "interactive",
             VectorKind::TriageCall => "triage",
             VectorKind::ReviewCall => "review",
             VectorKind::WorkOrder => "bg",
@@ -175,7 +176,14 @@ fn expected_names(vector: &ClaudeVector, base: &[(String, String)]) -> Vec<Strin
         .map(|(name, _)| name)
         .filter(|name| match vector.env_rule() {
             EnvRule::Session => !removed_from_sessions(name),
-            EnvRule::Contained => passed_to_contained(name),
+            EnvRule::Contained => {
+                passed_to_contained(name)
+                    || vector
+                        .kind()
+                        .env_extra()
+                        .iter()
+                        .any(|extra| extra.eq_ignore_ascii_case(name))
+            }
         })
         .chain(vector.env_set().iter().map(|(name, _)| name))
         .cloned()
@@ -200,7 +208,8 @@ fn run_kind(setup: &Setup, kind: VectorKind, base: &[(String, String)]) -> serde
 }
 
 /// AD-80, D-128 review F13: no name of `SESSION_ENV_REMOVED` reaches any
-/// kind, whatever its case, and neither does agent view off.
+/// kind, whatever its case, and neither does the base's agent view switch:
+/// the orchestrator's is the one it sets itself (D-561).
 #[test]
 fn seeded_session_variables_never_reach_the_child() {
     let setup = Setup::new();
@@ -210,7 +219,8 @@ fn seeded_session_variables_never_reach_the_child() {
             continue;
         }
         let names = env_names(&run_kind(&setup, kind, &base));
-        for removed in SESSION_ENV_REMOVED.iter().chain(&[AGENT_VIEW_VAR]) {
+        let removed_view = (kind != VectorKind::Orchestrator).then_some(AGENT_VIEW_VAR);
+        for removed in SESSION_ENV_REMOVED.iter().copied().chain(removed_view) {
             assert!(
                 names.iter().all(|n| !n.eq_ignore_ascii_case(removed)),
                 "{kind:?}: {removed} reached the child"
@@ -253,7 +263,7 @@ fn contained_kinds_receive_the_allow_list_only() {
     let contained = VectorKind::ALL
         .iter()
         .copied()
-        .filter(|k| k.env_rule() == EnvRule::Contained);
+        .filter(|k| k.env_rule() == EnvRule::Contained && runs_here(*k, &setup));
     for kind in contained {
         let vector = setup.vector(kind);
         let names = env_names(&run_kind(&setup, kind, &base));
@@ -285,7 +295,7 @@ fn every_kind_reaches_the_fake_claude_as_its_golden_vector() {
         }
         let name = format!("case-{at}");
         let mode = match kind {
-            VectorKind::Attach => "interactive",
+            VectorKind::Attach | VectorKind::Orchestrator => "interactive",
             VectorKind::TriageCall => "triage",
             VectorKind::ReviewCall => "review",
             VectorKind::WorkOrder => "bg",
@@ -298,7 +308,7 @@ fn every_kind_reaches_the_fake_claude_as_its_golden_vector() {
         let call = calls
             .first()
             .unwrap_or_else(|| panic!("{}: no call", case.name));
-        let expected: Vec<String> = serde_json::from_value(case.expect["args"].clone()).unwrap();
+        let expected = case.expected_args(Some(&setup.home().to_string_lossy()));
         let argv = common::logged_argv(call);
         assert_eq!(argv.len(), expected.len(), "{}", case.name);
         for (got, want) in argv.iter().zip(&expected) {
@@ -482,7 +492,8 @@ fn the_deadline_ends_a_captured_kind_and_its_tree() {
     assert!(stopped, "the grandchild outlived the deadline");
 }
 
-/// The console kinds (`Attach` here), with the console they start in.
+/// The console kinds (`Attach` and `Orchestrator`), with the console they
+/// start in.
 #[cfg(windows)]
 fn console_kinds() -> impl Iterator<Item = VectorKind> {
     let setup = Setup::new();

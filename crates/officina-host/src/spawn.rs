@@ -213,7 +213,7 @@ pub const fn job_rule(kind: VectorKind) -> JobRule {
     match kind {
         VectorKind::Agents | VectorKind::Version => JobRule::TreeOnTimeout,
         VectorKind::TriageCall | VectorKind::ReviewCall => JobRule::KillOnClose,
-        VectorKind::Attach | VectorKind::WorkOrder => JobRule::NoJob,
+        VectorKind::Attach | VectorKind::WorkOrder | VectorKind::Orchestrator => JobRule::NoJob,
     }
 }
 
@@ -229,7 +229,8 @@ pub const fn keeps_held_output(kind: VectorKind) -> bool {
         | VectorKind::Version
         | VectorKind::TriageCall
         | VectorKind::ReviewCall
-        | VectorKind::Attach => false,
+        | VectorKind::Attach
+        | VectorKind::Orchestrator => false,
     }
 }
 
@@ -462,6 +463,17 @@ mod tests {
                 &officina_core::relay::auto::schema(),
                 None,
                 "C:/path/to/home",
+            ),
+            VectorKind::Orchestrator => officina_core::spawn::orchestrator(
+                &officina_core::spawn::McpServerInputs {
+                    officina_exe: "C:/path/to/app/officina.exe",
+                    officina_home: "C:/path/to/home",
+                    floor: None,
+                    no_excerpts: false,
+                    claude_bin: "C:/path/to/bin/claude.exe",
+                },
+                None,
+                None,
             ),
         }
     }

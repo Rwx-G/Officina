@@ -12,7 +12,7 @@ use officina_core::relay::catalogue::{self, ApprovedCatalogue};
 use officina_core::relay::template::{
     ApprovedTemplate, ModelAlias, ParamName, ProjectName, TemplateName,
 };
-use officina_core::spawn::{self, BackgroundId, ClaudeVector, VectorKind};
+use officina_core::spawn::{self, BackgroundId, ClaudeVector, McpServerInputs, VectorKind};
 use serde_json::Value;
 
 pub const VECTORS: &str = include_str!("../vectors/spawn.json");
@@ -30,6 +30,10 @@ const INPUT_KEYS: &[&str] = &[
     "project",
     "values",
     "seq",
+    "officina_exe",
+    "floor_file",
+    "no_excerpts",
+    "claude_bin",
 ];
 
 #[derive(Debug)]
@@ -139,6 +143,26 @@ impl Case {
             .unwrap_or_else(|e| panic!("case {}: {e:?}", self.name))
     }
 
+    /// The case's expected arguments with its Officina home replaced by
+    /// `home`, as [`Case::build`] replaces it: the orchestrator's MCP
+    /// config names the home inside its JSON argument (D-128), escaped as
+    /// JSON escapes it.
+    pub fn expected_args(&self, home: Option<&str>) -> Vec<String> {
+        let args: Vec<String> =
+            serde_json::from_value(self.expect["args"].clone()).expect("args are strings");
+        match (self.kind(), home) {
+            (VectorKind::Orchestrator, Some(home)) => {
+                let quoted = |text: &str| Value::from(text).to_string();
+                let from = quoted(self.required("officina_home"));
+                let to = quoted(home);
+                args.into_iter()
+                    .map(|arg| arg.replace(&from, &to))
+                    .collect()
+            }
+            _ => args,
+        }
+    }
+
     /// The vector the kind's builder makes from the case's inputs, with
     /// the Officina home replaced by `home` when one is given (for a work
     /// order, the floor's folder: [`Case::work_order`]).
@@ -177,6 +201,22 @@ impl Case {
                     config_dir,
                     officina_home,
                 )
+            }
+            VectorKind::Orchestrator => {
+                let model = self.text("model").map(|code| {
+                    ModelAlias::from_code(code)
+                        .unwrap_or_else(|| panic!("case {}: unknown model", self.name))
+                });
+                let server = McpServerInputs {
+                    officina_exe: self.required("officina_exe"),
+                    officina_home: home.unwrap_or_else(|| self.required("officina_home")),
+                    floor: self.text("floor_file"),
+                    no_excerpts: self.input["no_excerpts"]
+                        .as_bool()
+                        .unwrap_or_else(|| panic!("case {}: no no_excerpts", self.name)),
+                    claude_bin: self.required("claude_bin"),
+                };
+                spawn::orchestrator(&server, model, config_dir)
             }
         }
     }
