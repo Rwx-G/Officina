@@ -126,7 +126,7 @@ version: v0.5
 # Reworked 2026-10-28 against the addendum (prd-v0.5.md section 9, architecture-v0.5.md section 6, D-486 to D-491) and v0.2 to v0.4 as built on main (D-560 to D-582): 5.1, 5.2, 5.4, 5.12, 5.13, 5.15 and 5.18 reworked (5.18 rewritten for v0.4's decision office, its file renamed); the other stories aligned; 5.20, 5.21, 5.22 and 5.23 added.
 # 5.19 closes the PRD after real use (owner rule, epic-2-decisions.md P-7, epic-5-decisions.md P-25).
 stories:
-  # 5.1: the agent ran the session-variables entry (E84), E19, gates 2, 3 and 7 (E20, E21, E23) and gate 8 in print mode (E85), all passing; the owner's halves of gates 1 and 4 (E24, E22) run with crates/officina-host/examples/gates_v05.rs (story Completion Notes).
+  # 5.1: the agent ran the session-variables entry (E84), E19, gates 2, 3 and 7 (E20, E21, E23) and gate 8 in print mode (E85), all passing; gate 1's owner half passed (E24, D-690 to D-693); gate 4's owner half (E22) runs with crates/officina-host/examples/gates_v05.rs (story Completion Notes).
   - {id: "5.1", file: story-5.1-workstation-gates.md, slice: "0", status: in-progress}
   - {id: "5.2", file: story-5.2-spawn-module.md, slice: A, status: review}
   - {id: "5.3", file: story-5.3-untrusted-text.md, slice: A, status: review}

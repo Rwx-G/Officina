@@ -563,18 +563,112 @@ Story 5.1 AC 7, AD-96 row 1, D-126, D-164, D-561.
   (2026-10-28); E84 adds that a print-mode MCP server holds
   `CLAUDE_PROJECT_DIR` and the messaging socket and token, but not
   `CLAUDE_PID`.
-- **Owner half: pending.** From the repository root, in a console of the
-  owner's own: `cargo build -p officina-host --features window-authority
-  --example gates_v05`, then `target\debug\examples\gates_v05.exe gate1`.
-  It starts the same flag set in a new console, then says what to type
-  and asks what was seen at each step: the trust dialog, the first turn,
-  `/mcp`, `/context` (tools and memory files, the marker included or
-  not), `/status`, `/config`, the read, run and message requests, a second
-  session's `/list-agents` and token message, `Ctrl+O` and the
-  held-message dialog; it lists `claude agents --json`, reruns the token
-  test without `CLAUDE_CODE_DISABLE_AGENT_VIEW` when the sender found no
-  orchestrator, and reads the stub's log. Report:
-  `target/gates-v05/report-gate1.md`.
+- **Owner half (2026-10-29, 2.1.312).** Run by the owner with
+  `gates_v05 gate1` (report `target/gates-v05/report-gate1.md`): AD-89's
+  exact flag set with the stub server named `officina`, started in a new
+  console in an empty workdir under the temporary folder whose parent
+  holds the marker `CLAUDE.md`, environment exactly D-561's allow list
+  plus `CLAUDE_CODE_DISABLE_AGENT_VIEW=1` (no extra name). Against AD-96
+  row 1's pass column:
+  - Trust dialog: shown once for the workdir; the owner accepted it. The
+    session then started with the first prompt as its first turn.
+  - `/mcp`: only `officina`. **Pass.**
+  - `/context`: only `mcp__officina__*` tools, as the owner read it; the
+    tool names were not copied into the report. **Pass**, names not
+    recorded.
+  - Memory files: the marker `CLAUDE.md` in the workdir's parent was not
+    listed and no answer started with its word. Memory files from the
+    parent folder do not load with this flag set, so D-164's refusal
+    branch for `<home>/orchestrator/` is not needed.
+  - `/status` permission mode `dontAsk`: **deviation**, the owner read
+    `Manual`. Explained by the agent's follow-up below: the session runs
+    in `dontAsk`; `Manual` is the settings default, not the session's
+    mode.
+  - `/config`: no row "Messages from your other sessions". **Pass.**
+  - Read a file, run `hostname`, message another session: no prompt
+    appeared and nothing ran. **Pass.**
+  - Token test: a second interactive session's `/list-agents` showed
+    `officina-orchestrator`; asked to send it a unique token, it reported
+    the send refused (`session is not accepting cross session messages`).
+    The token did not appear in the orchestrator's transcript viewer and
+    no held-message dialog opened. **Pass**; the rerun without
+    `CLAUDE_CODE_DISABLE_AGENT_VIEW` was not needed.
+  - `claude agents --json`: the orchestrator listed as `interactive`,
+    `idle`, its `cwd` the workdir. **Listed**: AD-89's pid fallback is not
+    needed for presence.
+  - Start again from the window: not part of the companion; story 5.16
+    AC 10 (window half).
+  - Listings before and after held the owner's same rows; no session
+    left.
+- **The first turn ran no tool.** The owner answered that the briefing
+  tool ran, but the stub's log records `server/discover`, `initialize`,
+  `notifications/initialized` and `tools/list`, and no `tools/call`. The
+  agent reproduced it (below): the first prompt's API request carries an
+  empty tool list, and the model wrote a tool call and its result as
+  plain text. **Deviation**: the first briefing is not a tool result.
+- **The MCP server's environment.** On top of D-561's allow list and
+  `CLAUDE_CODE_DISABLE_AGENT_VIEW`, the stub server held Claude Code's own
+  session variables: `AI_AGENT`, `CLAUDECODE`, `CLAUDE_CODE_ENTRYPOINT`,
+  `CLAUDE_CODE_MESSAGING_SOCKET`, `CLAUDE_CODE_MESSAGING_TOKEN`,
+  `CLAUDE_CODE_SESSION_ID`, `CLAUDE_PROJECT_DIR`, plus
+  `COREPACK_ENABLE_AUTO_PIN` and `SHELL` (names only, values never read).
+  Claude Code adds them; Officina cannot remove them from the vector.
+  `officina mcp` inherits the orchestrator's messaging socket and token
+  and must never use them (R38).
+- **Agent follow-up (2026-10-29, 2.1.312, Haiku).** The same vector with
+  `--name probe-e24-<x>` and `--model haiku`, started by the agent in a
+  new console in the owner's trusted gate workdir, the parent session's
+  variables removed, `--settings` extended with `UserPromptSubmit`,
+  `PreToolUse` and `Stop` command hooks recording the payload's
+  `permission_mode`; the console's screen read from its buffer, and
+  `/status` and `/config` typed into that console's input buffer.
+  - Effective mode: every hook payload read `dontAsk` (`UserPromptSubmit`,
+    `Stop`, and `PreToolUse` for `mcp__officina__briefing`); the
+    transcript's `permission-mode` entries and each user entry read
+    `dontAsk`; the status bar read `⏵⏵ don't ask on (shift+tab to
+    cycle)`.
+  - `/status` opens the settings dialog on its Status tab, whose rows are
+    version, session name and ID, session kind, peer address, `cwd`,
+    login, model, MCP servers, `Setting sources: Command line arguments`
+    and auto mode server: no permission mode row. The dialog's Config tab,
+    filtered on "permission", shows one row: `Default permission mode
+    Manual`.
+  - With `"permissions": {"defaultMode": "acceptEdits"}` added to
+    `--settings` (prompt blocked by the hook, no model turn), that row read
+    `Accept edits` while the hooks and the status bar still read
+    `dontAsk`. The row shows the settings default, which with
+    `--setting-sources ""` and no `defaultMode` key is the built-in one,
+    `Manual` (the permission modes page: `default` is labelled Manual);
+    `--permission-mode` overrides it for the session, as the CLI reference
+    states. Not run: the vector without `--setting-sources ""`, which
+    would load the owner's user hooks.
+  - First turn: the request was sent 0.2 s after the prompt, before the
+    stub server process had started, with `tools: []`; the model then
+    wrote a tool call as text (one run) or nothing useful (another). A
+    second prompt typed 8 s later had `mcp__officina__briefing` in its
+    request, called it with no prompt, and the stub recorded `tools/call`.
+    The MCP page says a request that needs a still-connecting server
+    waits inside `ToolSearch` or `WaitForMcpServers`; `--tools ""` removes
+    both (inferred, not tested).
+  - From the second request on, the tool list sent to the API also held
+    `DeferredToolPlaceholder` (deferred, "never call this tool") and a
+    server-side `advisor` tool (deferred, model Opus), which `/context`
+    did not show to the owner. It runs nothing on the workstation; the
+    environment variables page documents
+    `CLAUDE_CODE_DISABLE_ADVISOR_TOOL=1` to remove it (not tested).
+  - The workdir stayed empty; every probe console was killed with its
+    process tree; `claude agents --json --all` listed the owner's same
+    rows before and after. Cost: four Haiku requests over two sessions,
+    the rest with the prompt blocked by the hook.
+- **Outcome.** Containment passes: one MCP server, only Officina's local
+  tools, no prompt and nothing run for read, run and message requests,
+  inbound messages refused, the session listed, no memory file loaded.
+  The `/status` item is a wrong check, not a failure: the session runs in
+  `dontAsk`, which the status bar shows; AD-96 row 1 and story 5.16 AC 10
+  read the status bar instead. The first turn fails: the first prompt
+  reaches the model before the `officina` server connects, so story 5.16
+  changes how the briefing is first asked for. `ORCHESTRATOR_ENV_EXTRA`
+  stays empty (D-561).
 
 ## E80. The taskbar overlay badge and the attention request (v0.4 gate 2)
 
