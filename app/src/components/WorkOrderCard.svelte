@@ -7,7 +7,10 @@
   // `tabindex` makes up for it (FR-13 as amended). The launch's outcome
   // stays on the card; the bound session, the exit code and the error come
   // from the history's row for the card. Nothing on the card is amber: it
-  // is the author's own order, not something waiting on him.
+  // is the author's own order, not something waiting on him. A card opened
+  // from a proposal says so under a "proposal" label, with the
+  // orchestrator's rationale and any new subject's name it suggests, all
+  // as text: the suggestion is never the card's subject (D-152).
   import type { LaunchAnswer } from "../lib/generated/LaunchAnswer";
   import type { WorkOrderCard } from "../lib/generated/WorkOrderCard";
   import type { WorkOrderView } from "../lib/generated/WorkOrderView";
@@ -62,6 +65,12 @@
     <span class="muted" data-testid="card-name">{card.name}</span>
   </div>
   <p class="muted" data-testid="card-description">{card.description}</p>
+  {#if card.proposal}
+    <div class="part" data-testid="card-proposal" data-proposal={card.proposal.id}>
+      <span><span class="chip" data-testid="card-proposal-label">proposal</span> <span class="label">Rationale</span></span>
+      <p class="text" data-testid="card-rationale">{card.proposal.rationale}</p>
+    </div>
+  {/if}
   {#if card.values.length > 0}
     <ul class="chips" aria-label="Values">
       {#each card.values as param (param.name)}
@@ -86,6 +95,12 @@
   </div>
   <p data-testid="card-cwd"><span class="label">In</span> <code>{card.cwd}</code></p>
   <p data-testid="card-subject"><span class="label">Filed under</span> {subject}</p>
+  {#if card.proposal?.suggested_subject}
+    <p class="muted" data-testid="card-suggested-subject">
+      The proposal suggests a new subject named <span class="text">{card.proposal.suggested_subject}</span>; type it in
+      the subject picker to use it.
+    </p>
+  {/if}
   <div class="gauges" aria-label="Quota when the card was issued">
     <Gauge
       label="5 h"
@@ -210,6 +225,11 @@
     background: var(--color-bg);
     font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
     font-size: 12.5px;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    unicode-bidi: isolate;
+  }
+  .text {
     white-space: pre-wrap;
     overflow-wrap: anywhere;
     unicode-bidi: isolate;

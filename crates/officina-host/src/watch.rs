@@ -28,7 +28,9 @@ use crate::files::{event_file_for, now_ms};
 use crate::meeting::MeetingGrant;
 use crate::orders::orchestrator::{OrchestratorKeeper, StartGrant, StartReport};
 use crate::orders::{CardStore, LaunchGrant, LaunchReport};
-use crate::paths::Paths;
+use crate::paths::{Paths, orchestrator_proposals_dir};
+use crate::registry::proposals::ProposalPass;
+
 use crate::registry::ingest::IngestContext;
 use crate::registry::review::AutoState;
 use crate::registry::store::onedrive_roots_from_env;
@@ -66,6 +68,9 @@ pub const RELAY_POLL: Duration = POLL_VISIBLE;
 /// rebuilt for a floor or relay change, and at most this often otherwise:
 /// never on every tick (D-41).
 pub const CREDENTIAL_POLL: Duration = Duration::from_secs(60);
+/// The proposal files are ingested at least this often, so a work order
+/// proposal turns `expired` without a file change (D-145).
+pub const PROPOSALS_POLL: Duration = POLL_VISIBLE;
 /// How long a window command waits for the collector's answer to an author
 /// request (AD-38): a running `claude agents` takes about 210 ms (E10) and
 /// is cut at [`crate::spawn::AGENTS_TIMEOUT`]; twice that is a choice, so
@@ -109,6 +114,11 @@ pub enum AuthorCommand {
     IssueCard(CardRequest),
     /// A new card in place of `card_id`, with one change (AD-78).
     EditCard { card_id: String, change: CardChange },
+    /// A card for the pending work order proposal `proposal_id`, through
+    /// the same validation as the author's (AD-91, D-152).
+    IssueCardFromProposal { proposal_id: String },
+    /// A pending or invalid proposal set aside by the author (FR-12).
+    DismissProposal { proposal_id: String },
     /// A click on Launch: AD-78's checks, then the card consumed and its
     /// row recorded `launching`, answered with the card's vector (AD-81
     /// step 1).
@@ -446,7 +456,16 @@ fn relay_fingerprint(dir: &Path) -> u64 {
     fingerprint_of(entries)
 }
 
+/// Fingerprint of `orchestrator/proposals/` (AD-91), as of `relay/`: name,
+/// size and modification time of every file in it.
+fn proposals_fingerprint(dir: &Path) -> u64 {
+    let mut entries = Vec::new();
+    dir_entries(dir, false, &|_| true, &mut entries);
+    fingerprint_of(entries)
+}
+
 /// What the refresh plan asks the collector thread to do now.
+
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 struct Due {
     /// Ingest the event files into the registry, before the session list
@@ -465,6 +484,9 @@ struct Due {
     relay: bool,
     /// Check the credentials' presence before rebuilding it (D-41).
     credentials: bool,
+    /// Ingest the orchestrator's proposal files (AD-91): one changed, or
+    /// their poll, which also expires the old ones.
+    proposals: bool,
 }
 
 /// The refresh plan of AD-4. Each trigger has its method, which records what
@@ -483,11 +505,13 @@ struct RefreshPlan<C> {
     relay_wanted: bool,
     credentials_wanted: bool,
     retention_wanted: bool,
+    proposals_wanted: bool,
     last_spawn: Option<Instant>,
     follow_up_at: Option<Instant>,
     last_retention: Instant,
     last_relay: Instant,
     last_credentials: Instant,
+    last_proposals: Instant,
 }
 
 impl<C: Fn() -> Instant> RefreshPlan<C> {
@@ -505,11 +529,13 @@ impl<C: Fn() -> Instant> RefreshPlan<C> {
             relay_wanted: true,
             credentials_wanted: true,
             retention_wanted: false,
+            proposals_wanted: true,
             last_spawn: None,
             follow_up_at: None,
             last_retention: now,
             last_relay: now,
             last_credentials: now,
+            last_proposals: now,
         }
     }
 
@@ -569,6 +595,12 @@ impl<C: Fn() -> Instant> RefreshPlan<C> {
         self.relay_wanted = true;
         self.recompute_wanted = true;
         self.credentials_wanted = true;
+    }
+
+    /// A file of `orchestrator/proposals/` appeared, changed or went away
+    /// (AD-91): ingested at the next tick, no spawn.
+    fn proposals_changed(&mut self) {
+        self.proposals_wanted = true;
     }
 
     /// The window's floor changed and was reloaded: its projects reach a new
@@ -635,6 +667,12 @@ impl<C: Fn() -> Instant> RefreshPlan<C> {
                 due.credentials = true;
             }
         }
+        if std::mem::take(&mut self.proposals_wanted)
+            || now.duration_since(self.last_proposals) >= PROPOSALS_POLL
+        {
+            self.last_proposals = now;
+            due.proposals = true;
+        }
         due
     }
 }
@@ -658,6 +696,8 @@ struct WatchedPaths {
     relay_tree: u64,
     relay_floor: Stamp,
     journal: (Stamp, u64),
+    proposals_dir: PathBuf,
+    proposals: u64,
 }
 
 impl WatchedPaths {
@@ -669,7 +709,10 @@ impl WatchedPaths {
         let floor_file = collector.watched_floor();
         let relay = collector.relay().clone();
         let relay_floor_file = relay.relay_floor(&relay.read_approved());
+        let proposals_dir = orchestrator_proposals_dir(&collector.paths().officina_home);
         WatchedPaths {
+            proposals: proposals_fingerprint(&proposals_dir),
+            proposals_dir,
             event_file: stamp(&event_file_for(&events_dir, now_ms())),
             sessions: sessions_fingerprint(&sessions_dir),
             quota: stamp(&quota_file),
@@ -692,6 +735,11 @@ impl WatchedPaths {
     /// when the window's floor changed: the caller reloads it and builds the
     /// watched paths again.
     fn poll(&mut self, plan: &mut RefreshPlan<impl Fn() -> Instant>) -> bool {
+        let proposals = proposals_fingerprint(&self.proposals_dir);
+        if proposals != self.proposals {
+            self.proposals = proposals;
+            plan.proposals_changed();
+        }
         let relay_tree = relay_fingerprint(&self.relay.relay_dir());
         if relay_tree != self.relay_tree {
             self.relay_tree = relay_tree;
@@ -882,6 +930,21 @@ fn apply_agents(collector: &mut Collector, registry: &mut WindowRegistry, now_ms
     report_registry(collector, registry);
 }
 
+/// One ingestion pass of the orchestrator's proposal files (AD-91, D-155),
+/// validated against the approved snapshot the window's record confirms,
+/// read only when a file waits; the pass also expires the old ones. True
+/// when it changed what the Orchestrator view shows.
+fn ingest_proposals(collector: &Collector, registry: &mut WindowRegistry) -> bool {
+    let dir = orchestrator_proposals_dir(&collector.paths().officina_home);
+    let waiting = std::fs::read_dir(&dir).is_ok_and(|mut entries| entries.next().is_some());
+    let catalogue = waiting
+        .then(|| crate::orders::approved_catalogue(collector.relay()))
+        .flatten();
+    registry
+        .ingest_proposals(&dir, catalogue.as_ref(), now_ms())
+        .is_some_and(|pass| pass != ProposalPass::default())
+}
+
 /// The hourly pass, also run at start before the first board (AD-44,
 /// D-44, D-85): the registry's part (ingest, copy when due, retention, the
 /// WAL truncated) only while the registry is writable, then v0.2's focus
@@ -989,6 +1052,9 @@ fn run<E: Emit>(
         }
         if due.retention {
             hourly_pass(collector, &mut registry);
+        }
+        if due.proposals && ingest_proposals(collector, &mut registry) {
+            publish_orchestrator(&mut registry, outputs, false, now_ms());
         }
         // A wait reaching the alert threshold is a state change the clock
         // causes: the board is rebuilt from what the collector holds,
@@ -1163,6 +1229,18 @@ fn answer_author<E: Emit>(
             now,
         )
         .map(AuthorAnswer::Card),
+        AuthorCommand::IssueCardFromProposal { proposal_id } => crate::orders::issue_from_proposal(
+            cards,
+            collector,
+            registry,
+            quota.as_ref(),
+            &proposal_id,
+            now,
+        )
+        .map(AuthorAnswer::Card),
+        AuthorCommand::DismissProposal { proposal_id } => registry
+            .dismiss_proposal(&proposal_id, now)
+            .map(|()| AuthorAnswer::Done { created: None }),
         AuthorCommand::LaunchCard {
             card_id,
             prompt_sha256,
@@ -1451,11 +1529,31 @@ mod tests {
                 contract: true,
                 relay: true,
                 credentials: true,
+                proposals: true,
                 ..agents_and_board()
             }
         );
         advance(&now, TICK);
         assert_eq!(plan.due(), Due::default());
+    }
+
+    #[test]
+    fn proposal_files_are_ingested_at_start_on_change_and_with_their_poll() {
+        let (mut plan, now) = plan_on_fake_clock();
+        assert!(plan.due().proposals, "at start");
+        advance(&now, TICK);
+        assert!(!plan.due().proposals);
+        plan.proposals_changed();
+        assert_eq!(
+            plan.due(),
+            Due {
+                proposals: true,
+                ..Due::default()
+            },
+            "no spawn, no board: the view is published when a row changed"
+        );
+        advance(&now, PROPOSALS_POLL);
+        assert!(plan.due().proposals, "expiry without a file change");
     }
 
     #[test]

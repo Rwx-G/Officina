@@ -75,6 +75,8 @@ export class OrchestratorStore {
   /** How the last Start was answered, or why it could not be sent. */
   started = $state<StartAnswer | null>(null);
   startError = $state<string | null>(null);
+  /** Why the last dismissal of a proposal failed, and which. */
+  proposalError = $state<{ id: string; message: string } | null>(null);
   /** Numbers the issue and edit requests: only the latest one's answer is
    *  shown, so a slow answer never replaces a newer card. */
   private request = 0;
@@ -150,6 +152,25 @@ export class OrchestratorStore {
     const card = this.editable;
     if (card) await this.edit(card, { kind: "subject", subject });
     else await this.compose(subject);
+  }
+
+  /** Opens the pending work order proposal `id` as the card on screen
+   *  (AD-91, D-152): core issues it from the stored values, through the
+   *  same validation as the composer's; the composer then shows its
+   *  choices, and a choice edits it. */
+  async openProposal(id: string): Promise<void> {
+    this.drop();
+    await this.ask(() => ipc.issueCardFromProposal(id), null);
+  }
+
+  /** Dismisses proposal `id` (FR-12); the next view shows it decided. */
+  async dismissProposal(id: string): Promise<void> {
+    this.proposalError = null;
+    try {
+      await ipc.dismissProposal(id);
+    } catch (error) {
+      this.proposalError = { id, message: ipc.errorMessage(error) };
+    }
   }
 
   /** Launches the card on screen: the caller sends it on a pointer click

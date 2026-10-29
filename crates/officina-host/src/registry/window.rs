@@ -11,6 +11,8 @@ use officina_core::agents::AgentRecord;
 use officina_core::board::{Board, ProjectRule, SessionSettlement};
 use officina_core::ipc::{IpcError, IpcErrorCode};
 use officina_core::orders::briefing::Cursor;
+use officina_core::orders::card::{ProposalOrder, ProposalRefusal};
+use officina_core::orders::proposal::{DeletedFiles, ProposalView};
 use officina_core::orders::view::{self, OrchestratorView, ViewInput};
 use officina_core::registry::confirm::{AuthorAction, ConfirmItem, ItemAnswer};
 use officina_core::registry::dry_run::DryRunState;
@@ -21,10 +23,12 @@ use officina_core::registry::types::{
     SubjectRecord, SubjectRef, WorkOrderRecord,
 };
 use officina_core::registry::view::{DiscardedSession, RegistryView, SubjectView, unread_view};
+use officina_core::relay::catalogue::CanonicalCatalogue;
 use officina_core::relay::view::RelayView;
 
 use super::ingest::{IngestContext, IngestReport};
 use super::orders::{LaunchRecord, NameTaken, OrchestratorStartRecord};
+use super::proposals::ProposalPass;
 use super::read::{self, Reader};
 use super::retention::PassReport;
 use super::review::{AutoState, ReviewRow};
@@ -39,6 +43,8 @@ use officina_core::relay::auto::AutoMode;
 pub struct OrdersState {
     pub subjects: Vec<SubjectRecord>,
     pub work_orders: Vec<WorkOrderRecord>,
+    /// The proposal rows, newest first (AD-91).
+    pub proposals: Vec<ProposalView>,
     /// `setting.briefing_read_at_ms`.
     pub read_at_ms: Option<i64>,
 }
@@ -76,6 +82,9 @@ pub struct WindowRegistry {
     /// Whether the model can be called, and the `claude` binary's stamp,
     /// as the collector last saw them (AD-51, D-66).
     model_env: ModelEnv,
+    /// The proposal files ingestion deleted unread since the window
+    /// started (D-155), which the Orchestrator view shows.
+    deleted_proposal_files: DeletedFiles,
 }
 
 impl WindowRegistry {
@@ -101,6 +110,7 @@ impl WindowRegistry {
             agents: None,
             triage: Triage::default(),
             model_env: ModelEnv::default(),
+            deleted_proposal_files: DeletedFiles::default(),
         }
     }
 
@@ -585,6 +595,7 @@ impl WindowRegistry {
             Ok(OrdersState {
                 subjects: read::subjects(conn)?,
                 work_orders: read::work_orders(conn)?,
+                proposals: read::proposals(conn)?,
                 read_at_ms: read::briefing_read_at(conn)?,
             })
         };
@@ -596,6 +607,7 @@ impl WindowRegistry {
                 Ok::<_, rusqlite::Error>(OrdersState {
                     subjects: reader.subjects()?,
                     work_orders: reader.work_orders()?,
+                    proposals: reader.proposals()?,
                     read_at_ms: reader.briefing_read_at()?,
                 })
             })()
@@ -615,8 +627,58 @@ impl WindowRegistry {
         now_ms: i64,
     ) -> OrchestratorView {
         let state = self.orders_state();
-        let input = ViewInput::of(board, relay, registry, &state.subjects, &state.work_orders);
+        let mut input = ViewInput::of(
+            board,
+            relay,
+            registry,
+            &state.subjects,
+            &state.work_orders,
+            &state.proposals,
+        );
+        input.deleted = self.deleted_proposal_files;
         view::build(&input, state.cursor(), now_ms)
+    }
+
+    /// One ingestion pass of the proposal files of `dir` at `now_ms`
+    /// (AD-91, D-155), when the registry is writable; the files it deleted
+    /// unread are counted for the view. `None` when the registry cannot
+    /// be written: the files wait.
+    pub fn ingest_proposals(
+        &mut self,
+        dir: &Path,
+        catalogue: Option<&CanonicalCatalogue>,
+        now_ms: i64,
+    ) -> Option<ProposalPass> {
+        let pass = self.on_writer(|writer| writer.ingest_proposals(dir, catalogue, now_ms))?;
+        let deleted = &mut self.deleted_proposal_files;
+        deleted.misnamed = deleted.misnamed.saturating_add(pass.misnamed);
+        deleted.over_limit = deleted.over_limit.saturating_add(pass.over_limit);
+        Some(pass)
+    }
+
+    /// The pending work order proposal `id` a card is issued from (AD-91),
+    /// or why none is; refused when the registry cannot be written.
+    pub fn proposal_order(
+        &mut self,
+        id: &str,
+        now_ms: i64,
+    ) -> Result<Result<ProposalOrder, ProposalRefusal>, IpcError> {
+        self.with_writer(|writer| Ok(Ok(writer.proposal_order(id, now_ms)?)))
+    }
+
+    /// Dismisses proposal `id` at `now_ms` (FR-12); refused, with why,
+    /// when it is neither pending nor invalid.
+    pub fn dismiss_proposal(&mut self, id: &str, now_ms: i64) -> Result<(), IpcError> {
+        self.with_writer(|writer| {
+            Ok(if writer.dismiss_proposal(id, now_ms)? {
+                Ok(())
+            } else {
+                Err(IpcError::new(
+                    IpcErrorCode::Refused,
+                    "the proposal is neither pending nor invalid: the next view shows where it stands",
+                ))
+            })
+        })
     }
 
     /// Sets the cause of review row `id` (D-734), when the registry is

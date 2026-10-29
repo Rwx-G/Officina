@@ -16,6 +16,8 @@ pub mod commands;
 pub mod ingest;
 #[cfg(feature = "window-authority")]
 pub mod orders;
+#[cfg(feature = "window-authority")]
+pub mod proposals;
 pub mod read;
 #[cfg(feature = "window-authority")]
 pub mod retention;

@@ -12,8 +12,10 @@
 //! prints (the `relay-auto` scenario). A script with a meeting (story 5.10)
 //! builds a git repository with commits since the session's start and a
 //! working-tree change, and prints the `MeetingView` the window builds for
-//! that card, its logs read from the fake claude. Never SQL from Node,
-//! never a command line write path. Built only with `window-authority`, linked into neither
+//! that card, its logs read from the fake claude. Story 5.17 adds proposal
+//! files, each ingested by the window's writer when received, and cards
+//! issued from a seeded proposal by name. Never SQL from Node, never a
+//! command line write path. Built only with `window-authority`, linked into neither
 //! shipped binary.
 //!
 //! Usage: `orchestrator_fixture <officina home> <script.json>`, where the
@@ -31,6 +33,7 @@ use officina_core::board::Board;
 use officina_core::orders::card::{
     self, CardChange, CardInputs, CardRequest, IssuedCard, WorkOrderCard, reserved_seq,
 };
+use officina_core::orders::proposal::{file_name, proposal_id};
 use officina_core::orders::work_order::{SubjectChoice, WorkOrder, order_name};
 use officina_core::registry::fold::AgentsSnapshot;
 use officina_core::registry::types::{
@@ -42,7 +45,7 @@ use officina_core::relay::journal::{ApprovalEvent, JournalEntry};
 use officina_core::relay::template::{ApprovedTemplate, ParamName, ProjectName, TemplateName};
 use officina_host::collector::{Collector, LoadedFloor};
 use officina_host::meeting;
-use officina_host::paths::{Paths, events_dir_of};
+use officina_host::paths::{Paths, events_dir_of, orchestrator_proposals_dir};
 use officina_host::registry::orders::LaunchRecord;
 use officina_host::registry::review::NewReview;
 use officina_host::registry::store::{Writer, open_writer};
@@ -95,6 +98,10 @@ struct Script {
     /// A meeting to print instead of the view (story 5.10).
     #[serde(default)]
     meeting: Option<MeetingScript>,
+    /// Proposal files written as the orchestrator or a hand would, each
+    /// ingested by the window's writer when it is received (story 5.17).
+    #[serde(default)]
+    proposals: Vec<SeededProposal>,
 }
 
 /// A meeting to print (story 5.10, D-181's kind `meeting`): the board's
@@ -221,6 +228,78 @@ fn print_meeting(
     serde_json::to_string_pretty(&view).map_err(|e| e.to_string())
 }
 
+/// One file of `orchestrator/proposals/`, named for its fixture: a file as
+/// `officina mcp` writes it (`file`), or bytes that hold no proposal
+/// (`raw`), written at `written_at_ms` and ingested at `received_at_ms`;
+/// dismissed by the author when `dismissed`.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SeededProposal {
+    name: String,
+    written_at_ms: i64,
+    received_at_ms: i64,
+    #[serde(default)]
+    file: Option<serde_json::Value>,
+    #[serde(default)]
+    raw: Option<String>,
+    #[serde(default)]
+    dismissed: bool,
+}
+
+/// The fixed id of the seeded proposal at `index`, so a card step names
+/// the same proposal on every run.
+fn seeded_id(proposal: &SeededProposal, index: usize) -> String {
+    proposal_id(proposal.written_at_ms, index as u64 + 1)
+}
+
+/// Writes and ingests the script's proposals through the window's writer,
+/// against the home's approved snapshot, then expires what is due at
+/// `now_ms`.
+fn seed_proposals(
+    writer: &mut Writer,
+    home: &Path,
+    relay: &RelayHome,
+    script: &Script,
+) -> Result<(), String> {
+    if script.proposals.is_empty() {
+        return Ok(());
+    }
+    let dir = orchestrator_proposals_dir(home);
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let catalogue = relay
+        .read_approved()
+        .approved()
+        .map(|approved| approved.canonical.clone());
+    for (index, proposal) in script.proposals.iter().enumerate() {
+        let id = seeded_id(proposal, index);
+        let bytes = match (&proposal.file, &proposal.raw) {
+            (Some(file), None) => serde_json::to_vec(file).map_err(|e| e.to_string())?,
+            (None, Some(raw)) => raw.as_bytes().to_vec(),
+            _ => {
+                return Err(format!(
+                    "{}: a file or raw bytes, one of them",
+                    proposal.name
+                ));
+            }
+        };
+        std::fs::write(dir.join(file_name(&id)), bytes).map_err(|e| e.to_string())?;
+        writer
+            .ingest_proposals(&dir, catalogue.as_ref(), proposal.received_at_ms)
+            .map_err(|e| e.to_string())?;
+        if proposal.dismissed
+            && !writer
+                .dismiss_proposal(&id, proposal.received_at_ms + 60_000)
+                .map_err(|e| e.to_string())?
+        {
+            return Err(format!("{}: not dismissed", proposal.name));
+        }
+    }
+    writer
+        .expire_proposals(script.now_ms)
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 /// One review row, as the window's review would have written it.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -331,8 +410,8 @@ fn seed_auto(writer: &mut Writer, relay: &RelayHome, script: &Script) -> Result<
     Ok(())
 }
 
-/// One card, named for its fixture: issued for a request, or issued by an
-/// edit of a card an earlier step named.
+/// One card, named for its fixture: issued for a request, by an edit of a
+/// card an earlier step named, or from the seeded proposal of that name.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct CardStep {
@@ -341,6 +420,8 @@ struct CardStep {
     request: Option<CardRequest>,
     #[serde(default)]
     edit: Option<CardEdit>,
+    #[serde(default)]
+    proposal: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -471,9 +552,10 @@ fn issue_cards(
     home: &Path,
     relay: &RelayHome,
     board: Option<&Board>,
-    steps: &[CardStep],
+    script: &Script,
     now_ms: i64,
 ) -> Result<BTreeMap<String, WorkOrderCard>, String> {
+    let steps = &script.cards;
     let state = relay.read_approved();
     let approved = state
         .approved()
@@ -485,6 +567,37 @@ fn issue_cards(
     let mut issued: BTreeMap<String, IssuedCard> = BTreeMap::new();
     for (index, step) in steps.iter().enumerate() {
         let id = format!("{:032x}", index + 1);
+        if let Some(name) = &step.proposal {
+            let (index, seeded) = script
+                .proposals
+                .iter()
+                .enumerate()
+                .find(|(_, p)| p.name == *name)
+                .ok_or_else(|| format!("{}: no proposal named {name}", step.name))?;
+            let order = registry
+                .proposal_order(&seeded_id(seeded, index), now_ms)
+                .map_err(|e| format!("{}: {}", step.name, e.message))?
+                .map_err(|refusal| format!("{}: {refusal:?}", step.name))?;
+            let (subjects, highest) = registry
+                .card_reads(&order.template)
+                .map_err(|e| format!("{}: {}", step.name, e.message))?;
+            let held = issued
+                .values()
+                .filter(|card| card.card().template == order.template)
+                .map(IssuedCard::seq);
+            let inputs = CardInputs {
+                approved: &approved,
+                current: &current,
+                subjects: &subjects,
+                quota: board.map(|b| &b.quota),
+                config_dir: None,
+                now_ms,
+            };
+            let card = card::issue_from_proposal(&id, reserved_seq(highest, held), &order, &inputs)
+                .map_err(|refusal| format!("{}: refused {refusal:?}", step.name))?;
+            issued.insert(step.name.clone(), card);
+            continue;
+        }
         let previous = match &step.edit {
             Some(edit) => Some(
                 issued
@@ -544,6 +657,10 @@ fn run(home: &Path, script: &Script) -> Result<String, String> {
             writer.mark_briefing_read(at).map_err(|e| e.to_string())?;
         }
         seed_auto(&mut writer, &relay, script)?;
+        // A script of cards names proposals an earlier run seeded.
+        if script.cards.is_empty() {
+            seed_proposals(&mut writer, home, &relay, script)?;
+        }
     }
     let board: Option<Board> = match &script.board_file {
         Some(path) => Some(
@@ -553,7 +670,7 @@ fn run(home: &Path, script: &Script) -> Result<String, String> {
         None => None,
     };
     if !script.cards.is_empty() {
-        let cards = issue_cards(home, &relay, board.as_ref(), &script.cards, script.now_ms)?;
+        let cards = issue_cards(home, &relay, board.as_ref(), script, script.now_ms)?;
         return serde_json::to_string_pretty(&cards).map_err(|e| e.to_string());
     }
     if let Some(meeting) = &script.meeting {

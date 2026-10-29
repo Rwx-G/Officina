@@ -1,9 +1,10 @@
 //! Replays the `validate` section of the work order vector set (AD-77,
 //! FR-3) through `ApprovedTemplate::new` and `WorkOrder::validate`, and
 //! its `card` section (AD-78, story 5.7) through `card::issue` and
-//! `card::check_launch`, and its `briefing` section (AD-83, story 5.8)
-//! through `briefing::build`, and refuses a set that leaves a refusal, a
-//! change kind or a run kind without a case.
+//! `card::check_launch`, its `briefing` section (AD-83, story 5.8)
+//! through `briefing::build`, and its `proposal` section (AD-91, story
+//! 5.17) through `proposal::record_of`, and refuses a set that leaves a
+//! refusal, a change kind, a run kind or an invalid reason without a case.
 //!
 //! Every case reads the set's floor, approves it, and validates; a case
 //! with `snapshot_template` or `over_limit` first edits the approved
@@ -11,7 +12,7 @@
 //! keep it: what `validate` checks beyond the closed lists is what such a
 //! snapshot can carry.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use officina_core::board::{Card, Column, Columns};
 use officina_core::orders::briefing::{
@@ -22,9 +23,14 @@ use officina_core::orders::card::{
     CardInputs, CardRequest, CardState, LaunchFacts, LaunchRefusal, WorkOrderCard, check_launch,
     issue,
 };
+use officina_core::orders::proposal::{
+    FileRead, PROPOSAL_TEXT_MAX_CHARS, ProposalInvalidReason, ProposalRecord, ProposalView,
+    RegistryRefs, record_of,
+};
 use officina_core::orders::work_order::{WorkOrder, WorkOrderRefusal};
 use officina_core::registry::types::{
-    LaunchOutcome, Source, Sourced, SubjectRecord, SubjectStatus, WorkOrderRecord, WorkOrderSource,
+    LaunchOutcome, ProposalKind, ProposalStatus, Source, Sourced, SubjectRecord, SubjectStatus,
+    WorkOrderRecord, WorkOrderSource,
 };
 use officina_core::registry::view::{
     EndHow, EndView, LiveCard, SessionView, SubjectView, TriageRow,
@@ -50,6 +56,47 @@ struct VectorSet {
     validate: Vec<Case>,
     card: Vec<CardCase>,
     briefing: Vec<BriefingCase>,
+    /// The registry the `proposal` cases are validated against.
+    proposal_subjects: Vec<SubjectRow>,
+    proposal_sessions: Vec<String>,
+    proposal: Vec<ProposalCase>,
+}
+
+/// One case of the `proposal` section (story 5.17, AD-91): a file as
+/// written (`file`, its stand-ins replaced), bytes that are no JSON
+/// (`raw`), or a file over its bound (`oversized`), and the row ingestion
+/// stores for it.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProposalCase {
+    name: String,
+    #[serde(default)]
+    file: Option<Value>,
+    #[serde(default)]
+    raw: Option<String>,
+    #[serde(default)]
+    oversized: bool,
+    expect: ProposalExpect,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProposalExpect {
+    status: ProposalStatus,
+    /// Checked when given; `null` for a file with no kind.
+    #[serde(default, deserialize_with = "present_kind")]
+    kind: Option<Option<ProposalKind>>,
+    #[serde(default)]
+    reason: Option<ProposalInvalidReason>,
+    /// The stored values, the template's strings, when given.
+    #[serde(default)]
+    values: Option<BTreeMap<String, String>>,
+}
+
+fn present_kind<'de, D: serde::Deserializer<'de>>(
+    d: D,
+) -> Result<Option<Option<ProposalKind>>, D::Error> {
+    Option::<ProposalKind>::deserialize(d).map(Some)
 }
 
 /// One case of the `card` section: an issue, compared with the expected
@@ -443,11 +490,25 @@ struct BriefingCase {
     subject_rows: Vec<SubjectStatusRow>,
     #[serde(default)]
     orders: Vec<OrderRow>,
+    /// The proposal rows, newest first, and the files not received yet.
+    #[serde(default)]
+    proposals: Vec<ProposalRow>,
     /// Needs you cards the harness adds, each a step newer than the last,
     /// with names of `name_chars` characters: the bound's input.
     #[serde(default)]
     crowd: Option<Crowd>,
     expect: BTreeMap<String, ExpectedSection>,
+}
+
+/// A proposal as the registry reads it back, or a file waiting
+/// (`received` null).
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProposalRow {
+    id: String,
+    kind: Option<ProposalKind>,
+    status: ProposalStatus,
+    received: Option<i64>,
 }
 
 #[derive(Deserialize)]
@@ -744,7 +805,9 @@ fn changed_id(item: &ChangedItem) -> String {
         }
         ChangedItem::StartedWaiting { key, .. } => key.clone(),
         ChangedItem::SubjectStatus { id, .. } => id.to_string(),
-        ChangedItem::OrderLaunched { id, .. } => id.clone(),
+        ChangedItem::OrderLaunched { id, .. } | ChangedItem::ProposalReceived { id, .. } => {
+            id.clone()
+        }
     };
     format!("{}:{what}", item.kind().code())
 }
@@ -775,6 +838,7 @@ fn sections_of(briefing: &Briefing) -> BTreeMap<String, ExpectedSection> {
             "work_orders",
             section(&briefing.work_orders, |o| o.id.clone()),
         ),
+        ("proposals", section(&briefing.proposals, |p| p.id.clone())),
         ("changed", section(&briefing.changed, changed_id)),
     ]
     .into_iter()
@@ -792,6 +856,7 @@ struct Payloads {
     triage: Vec<TriageRow>,
     subjects: Vec<SubjectRecord>,
     orders: Vec<WorkOrderRecord>,
+    proposals: Vec<ProposalView>,
 }
 
 impl Payloads {
@@ -804,6 +869,16 @@ impl Payloads {
             triage: case.triage.iter().map(triage_of).collect(),
             subjects: case.subject_rows.iter().map(subject_row_of).collect(),
             orders: case.orders.iter().map(order_of).collect(),
+            proposals: case
+                .proposals
+                .iter()
+                .map(|row| ProposalView {
+                    kind: row.kind,
+                    status: row.status,
+                    received_at_ms: row.received,
+                    ..ProposalView::unreadable_file(&row.id)
+                })
+                .collect(),
         }
     }
 
@@ -816,6 +891,7 @@ impl Payloads {
             triage: &self.triage,
             subjects: &self.subjects,
             work_orders: &self.orders,
+            proposals: &self.proposals,
         }
     }
 }
@@ -829,6 +905,13 @@ fn kept_times(briefing: &Briefing) -> Vec<Option<i64>> {
     out.extend(briefing.triage.items.iter().map(|t| t.at_ms));
     out.extend(briefing.runs.items.iter().map(|r| Some(r.at_ms)));
     out.extend(briefing.work_orders.items.iter().map(|o| Some(o.at_ms)));
+    out.extend(
+        briefing
+            .proposals
+            .items
+            .iter()
+            .map(|p| Some(p.written_at_ms)),
+    );
     out.extend(briefing.changed.items.iter().map(|c| Some(c.at_ms())));
     out
 }
@@ -894,6 +977,125 @@ fn briefing_cases_match() {
         assert_eq!(got, case.expect, "case: {}", case.name);
         check_the_crowd(case, &briefing);
     }
+}
+
+/// `value` with each stand-in of a bound replaced by a text one character
+/// over it, built from the constant (D-655).
+fn with_proposal_bounds(value: &Value) -> Value {
+    match value {
+        Value::String(text) if text == "<over PROPOSAL_TEXT_MAX_CHARS>" => {
+            Value::from("a".repeat(PROPOSAL_TEXT_MAX_CHARS + 1))
+        }
+        Value::Array(items) => Value::Array(items.iter().map(with_proposal_bounds).collect()),
+        Value::Object(map) => Value::Object(
+            map.iter()
+                .map(|(key, value)| (key.clone(), with_proposal_bounds(value)))
+                .collect(),
+        ),
+        other => other.clone(),
+    }
+}
+
+/// The row ingestion stores for `case`, against the set's approved floor
+/// and registry.
+fn proposal_record(set: &VectorSet, case: &ProposalCase) -> ProposalRecord {
+    let current = current(set);
+    let approved = ApprovedCatalogue::approving(&current, &set.floor_path, 0);
+    let subjects: Vec<SubjectRecord> = set
+        .proposal_subjects
+        .iter()
+        .map(|row| SubjectRecord {
+            id: row.id,
+            project: row.project.clone(),
+            name: row.name.clone(),
+            status: Sourced {
+                value: row.status,
+                src: Source::Author,
+                at_ms: CREATED_AT_MS,
+            },
+            created_at_ms: CREATED_AT_MS,
+            routine: false,
+            merged_into: None,
+        })
+        .collect();
+    let sessions: BTreeSet<String> = set.proposal_sessions.iter().cloned().collect();
+    let refs = RegistryRefs {
+        subjects: &subjects,
+        sessions: &sessions,
+    };
+    let bytes = match (&case.file, &case.raw) {
+        (Some(file), None) => serde_json::to_vec(&with_proposal_bounds(file)).unwrap(),
+        (None, Some(raw)) => raw.as_bytes().to_vec(),
+        _ => Vec::new(),
+    };
+    let read = if case.oversized {
+        FileRead::Oversized
+    } else {
+        FileRead::Bytes(&bytes)
+    };
+    record_of(
+        "1800000000000-0000000000000001",
+        read,
+        Some(&approved.canonical),
+        &refs,
+        1_800_000_000_000,
+    )
+}
+
+/// Story 5.17 AC 2 (AD-91, FR-12): every case's file is stored with its
+/// status, kind, reason and, for a valid order, the template's values.
+#[test]
+fn proposal_cases_match() {
+    let set = load_set();
+    assert!(!set.proposal.is_empty());
+    for case in &set.proposal {
+        let sources = usize::from(case.file.is_some())
+            + usize::from(case.raw.is_some())
+            + usize::from(case.oversized);
+        assert_eq!(
+            sources, 1,
+            "case {}: one of file, raw, oversized",
+            case.name
+        );
+        let row = proposal_record(&set, case);
+        let expect = &case.expect;
+        assert_eq!(row.status, expect.status, "case: {}", case.name);
+        assert_eq!(row.invalid_reason, expect.reason, "case: {}", case.name);
+        if let Some(kind) = expect.kind {
+            assert_eq!(row.kind, kind, "case: {}", case.name);
+        }
+        if let Some(values) = &expect.values {
+            assert_eq!(row.values.as_ref(), Some(values), "case: {}", case.name);
+        }
+        if row.kind.is_none() {
+            assert_eq!(
+                row.texts, None,
+                "case {}: no texts without a kind",
+                case.name
+            );
+        }
+    }
+}
+
+/// Story 5.17 AC 2: every variant of `ProposalInvalidReason` is some
+/// case's reason, and some case is valid.
+#[test]
+fn every_invalid_reason_has_a_case() {
+    let set = load_set();
+    for reason in ProposalInvalidReason::ALL {
+        assert!(
+            set.proposal
+                .iter()
+                .any(|case| case.expect.reason == Some(*reason)),
+            "{reason:?} has no case in tests/vectors/orders.json"
+        );
+    }
+    assert!(
+        set.proposal
+            .iter()
+            .any(|case| case.expect.status == ProposalStatus::Pending),
+        "no proposal case is valid"
+    );
 }
 
 #[test]

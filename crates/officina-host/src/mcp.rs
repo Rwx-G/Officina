@@ -38,7 +38,7 @@ use officina_core::relay::view::RelayView;
 use serde_json::Value;
 
 use crate::collector::Collector;
-use crate::files::{atomic_write, now_ms};
+use crate::files::{atomic_write_staged, now_ms};
 use crate::paths::officina_home_from_env;
 use crate::registry::commands::{read_registry, registry_view};
 use crate::registry::read::Reader;
@@ -104,11 +104,23 @@ fn nonce() -> u64 {
 }
 
 /// Writes `file` into `dir` as `<now_ms>-<16 hex>.json` with AD-10's
-/// [`atomic_write`] (a temporary name, `sync_all`, a rename), so a reader
+/// [`crate::files::atomic_write`] (a temporary name, `sync_all`, a rename), so a reader
 /// never sees half a file; returns its id. A file over
 /// [`PROPOSAL_FILE_MAX_BYTES`] is not written. The one writer of proposal
 /// files: the tools and the restart test's helper call it.
 pub fn write_proposal(dir: &Path, file: &ProposalFile, now_ms: i64) -> io::Result<String> {
+    write_proposal_staged(dir, file, now_ms, &mut |_| {})
+}
+
+/// [`write_proposal`] with `before_rename` called on the temporary file,
+/// written and synced, right before its rename: the restart test's stall
+/// point (story 5.17, D-89).
+pub fn write_proposal_staged(
+    dir: &Path,
+    file: &ProposalFile,
+    now_ms: i64,
+    before_rename: &mut dyn FnMut(&Path),
+) -> io::Result<String> {
     let bytes = file.to_bytes();
     if bytes.len() > PROPOSAL_FILE_MAX_BYTES {
         return Err(io::Error::new(
@@ -122,7 +134,7 @@ pub fn write_proposal(dir: &Path, file: &ProposalFile, now_ms: i64) -> io::Resul
         if path.exists() {
             continue;
         }
-        atomic_write(&path, &bytes)?;
+        atomic_write_staged(&path, &bytes, before_rename)?;
         return Ok(id);
     }
 }
@@ -281,6 +293,9 @@ impl Server {
                     registry_view(&self.collector, &reading.opened, &reading.board, now_ms);
                 let subjects = reading.subjects();
                 let work_orders = reading.work_orders();
+                // The rows and the files not ingested yet, newest first.
+                let mut proposals = self.known_proposals(&reading);
+                proposals.reverse();
                 let input = BriefingInput {
                     columns: Some(&reading.board.columns),
                     approvals: &reading.board.approvals,
@@ -289,6 +304,7 @@ impl Server {
                     triage: &view.triage,
                     subjects: &subjects,
                     work_orders: &work_orders,
+                    proposals: &proposals,
                 };
                 let cursor = reading.cursor();
                 mcp::dispatch(id, tool, ingestion, || {

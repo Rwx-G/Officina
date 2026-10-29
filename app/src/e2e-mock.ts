@@ -85,7 +85,10 @@ export function installE2eMock(): void {
           return setTriageModel((args as { on: boolean }).on);
         case "issue_card":
         case "edit_card":
+        case "issue_card_from_proposal":
           return card();
+        case "dismiss_proposal":
+          return dismissProposal((args as { proposalId: string }).proposalId);
         case "launch_work_order":
           return launch();
         case "get_orchestrator":
@@ -160,6 +163,21 @@ function author(cmd: string): Promise<number | null> {
  *  refusal of a catalogue with no template approved. */
 function card(): CardAnswer {
   return window.__officinaCardAnswer ?? { outcome: "refused", value: { kind: "template", detail: "not_approved" } };
+}
+
+/** Mirrors the collector's answer to `dismiss_proposal` (FR-12): a
+ *  pending or invalid proposal of the view is dismissed and the next view
+ *  shows it decided; anything else is refused. */
+async function dismissProposal(id: string): Promise<void> {
+  const current = window.__officinaOrchestrator;
+  const found = current?.proposals.find((p) => p.id === id);
+  if (!current || !found || (found.status !== "pending" && found.status !== "invalid")) {
+    return refused("the proposal is neither pending nor invalid: the next view shows where it stands");
+  }
+  await window.__officinaPushOrchestrator?.({
+    ...current,
+    proposals: current.proposals.map((p) => (p.id === id ? { ...p, status: "dismissed" } : p)),
+  });
 }
 
 /** Mirrors the collector's answer to `launch_work_order` (AD-81): the

@@ -600,6 +600,82 @@ fn orchestrator_start_rows_are_deleted_at_90_days() {
     assert_eq!(left, [NOW - ORCHESTRATOR_START_TTL_MS + 1]);
 }
 
+/// A recap whose texts carry `marker`, written and ingested at `at` by the
+/// window: its `received_at_ms` is `at`.
+fn proposal_received(
+    writer: &mut officina_host::registry::store::Writer,
+    home: &Home,
+    marker: &str,
+    at: i64,
+) -> String {
+    use officina_core::orders::proposal::{ProposalFile, ProposalTarget, RecapProposal};
+    let dir = home.home.join("orchestrator").join("proposals");
+    let file = ProposalFile::recap(
+        RecapProposal {
+            target: ProposalTarget::SubjectId(1),
+            done: format!("done by {marker}"),
+            blocking: "nothing".into(),
+            decision_expected: "none".into(),
+        },
+        None,
+        at,
+    );
+    let id = officina_host::mcp::write_proposal(&dir, &file, at).unwrap();
+    let pass = writer.ingest_proposals(&dir, None, at).unwrap();
+    assert_eq!(pass.ingested, 1);
+    id
+}
+
+/// Story 5.17 AC 9 (D-134): `proposal` rows go 90 days after the window
+/// received them, whatever their status: a recap pending forever leaves.
+#[test]
+fn proposal_rows_are_deleted_at_90_days() {
+    use officina_core::registry::retention::PROPOSAL_TTL_MS;
+    let home = Home::new();
+    let mut writer = home.writer(NOW);
+    proposal_received(&mut writer, &home, "gone", NOW - PROPOSAL_TTL_MS);
+    let kept = proposal_received(&mut writer, &home, "kept", NOW - PROPOSAL_TTL_MS + 1);
+    let report = writer.hourly_pass(&home.ctx(), NOW).unwrap();
+    assert_eq!(report.deleted_proposals, 1);
+    let reader = open_reader(&home.home, &[]).unwrap();
+    let left: Vec<String> = reader
+        .proposals()
+        .unwrap()
+        .into_iter()
+        .map(|p| p.id)
+        .collect();
+    assert_eq!(left, [kept]);
+}
+
+/// Story 5.17 AC 9 (D-134): a proposal's texts, the orchestrator's, are
+/// cleared `EXCERPT_TTL_MS` after its receipt, the row kept, and leave the
+/// database and its WAL.
+#[test]
+fn proposal_texts_are_cleared_with_the_excerpt_ttl() {
+    let home = Home::new();
+    let mut writer = home.writer(NOW);
+    let kept = proposal_received(&mut writer, &home, "kept", NOW - EXCERPT_TTL_MS + 1);
+    let cleared = proposal_received(&mut writer, &home, "cleared", NOW - EXCERPT_TTL_MS);
+    let report = writer.hourly_pass(&home.ctx(), NOW).unwrap();
+    assert_eq!(report.cleared_proposal_texts, 1);
+    let again = writer.hourly_pass(&home.ctx(), NOW).unwrap();
+    assert_eq!(again.cleared_proposal_texts, 0, "counted once");
+    drop(writer);
+    let rows = open_reader(&home.home, &[]).unwrap().proposals().unwrap();
+    let content = |id: &str| rows.iter().find(|p| p.id == id).unwrap().content.is_some();
+    assert!(content(&kept));
+    assert!(!content(&cleared), "the row stays, its texts gone");
+    let db = home.paths().database();
+    assert!(file_contains(&db, "done by kept"), "positive control");
+    for leftover in [&db, &home.paths().wal()] {
+        assert!(
+            !file_contains(leftover, "done by cleared"),
+            "{}",
+            leftover.display()
+        );
+    }
+}
+
 /// Story 5.13 AC 10 (D-134): a review's reason, model text, is cleared
 /// `EXCERPT_TTL_MS` after the request, the row kept, and leaves the
 /// database and its WAL.

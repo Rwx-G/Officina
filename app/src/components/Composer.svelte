@@ -105,6 +105,12 @@
           disabled={busy}
           onPick={pickSubject}
         />
+        {#if card.proposal?.suggested_subject}
+          <!-- D-152: the proposal's name is a suggestion to type, never preselected. -->
+          <span class="muted suggestion" data-testid="composer-suggested-subject">
+            Suggested by the proposal: <span class="text">{card.proposal.suggested_subject}</span>
+          </span>
+        {/if}
       </div>
     {/if}
   {/if}
@@ -187,6 +193,14 @@
   }
   .muted {
     color: var(--color-text-muted);
+  }
+  .suggestion {
+    font-size: 13.5px;
+    overflow-wrap: anywhere;
+  }
+  .text {
+    white-space: pre-wrap;
+    unicode-bidi: isolate;
   }
   .fault {
     color: var(--color-stopped-text);

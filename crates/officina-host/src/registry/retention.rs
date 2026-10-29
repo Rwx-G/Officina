@@ -9,8 +9,8 @@ use std::path::{Path, PathBuf};
 
 use officina_core::dates::{dated_file_day, utc_date};
 use officina_core::registry::retention::{
-    AUTO_REVIEW_TTL_MS, COPIES_KEPT, ORCHESTRATOR_START_TTL_MS, TRIAGE_CALL_TTL_MS,
-    WORK_ORDER_TTL_MS, event_file_deletable, excerpt_cutoff, kept,
+    AUTO_REVIEW_TTL_MS, COPIES_KEPT, ORCHESTRATOR_START_TTL_MS, PROPOSAL_TTL_MS,
+    TRIAGE_CALL_TTL_MS, WORK_ORDER_TTL_MS, event_file_deletable, excerpt_cutoff, kept,
 };
 
 use super::ingest::{IngestContext, IngestReport};
@@ -46,6 +46,10 @@ pub struct PassReport {
     pub cleared_review_reasons: usize,
     /// `orchestrator_start` rows past their 90 days (D-134).
     pub deleted_orchestrator_starts: usize,
+    /// `proposal` rows past their 90 days (D-134).
+    pub deleted_proposals: usize,
+    /// `proposal` rows whose texts were cleared (D-134).
+    pub cleared_proposal_texts: usize,
     /// False when a reader kept the WAL from being truncated.
     pub checkpointed: bool,
 }
@@ -112,6 +116,8 @@ impl Writer {
             "DELETE FROM orchestrator_start WHERE started_at_ms <= ?1",
             [now_ms - ORCHESTRATOR_START_TTL_MS],
         )?;
+        (report.deleted_proposals, report.cleared_proposal_texts) =
+            self.retire_proposals(now_ms)?;
         report.checkpointed = self.checkpoint()?;
         Ok(report)
     }
@@ -248,6 +254,27 @@ impl Writer {
         let cleared = tx.execute(
             "UPDATE auto_review SET reason = NULL
              WHERE requested_at_ms <= ?1 AND reason IS NOT NULL",
+            [excerpt_cutoff(now_ms)],
+        )?;
+        tx.commit()?;
+        Ok((deleted, cleared))
+    }
+
+    /// Deletes the `proposal` rows received [`PROPOSAL_TTL_MS`] or more
+    /// before `now_ms`, and clears the texts, the orchestrator's, of those
+    /// received
+    /// [`EXCERPT_TTL_MS`](officina_core::registry::retention::EXCERPT_TTL_MS)
+    /// or more before it (D-134). Returns the rows deleted and the rows
+    /// whose texts were cleared.
+    fn retire_proposals(&mut self, now_ms: i64) -> Result<(usize, usize), RegistryError> {
+        let tx = self.conn.transaction()?;
+        let deleted = tx.execute(
+            "DELETE FROM proposal WHERE received_at_ms <= ?1",
+            [now_ms - PROPOSAL_TTL_MS],
+        )?;
+        let cleared = tx.execute(
+            "UPDATE proposal SET texts_json = NULL
+             WHERE received_at_ms <= ?1 AND texts_json IS NOT NULL",
             [excerpt_cutoff(now_ms)],
         )?;
         tx.commit()?;

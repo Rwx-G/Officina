@@ -21,6 +21,7 @@ use officina_core::ipc::IpcError;
 use officina_core::meeting::{AnswerResult, MeetingView};
 use officina_core::orders::card::{CardAnswer, CardChange, CardRequest, LaunchAnswer};
 use officina_core::orders::orchestrator::StartAnswer;
+use officina_core::orders::proposal::ProposalInvalidReason;
 use officina_core::orders::view::OrchestratorView;
 use officina_core::registry::confirm::{ConfirmItem, ItemAnswer, SubjectOrigin};
 use officina_core::registry::types::Settlement;
@@ -69,6 +70,7 @@ fn export(dir: &Path) {
     StartAnswer::export_all(&cfg).unwrap();
     MeetingView::export_all(&cfg).unwrap();
     AnswerResult::export_all(&cfg).unwrap();
+    ProposalInvalidReason::export_all(&cfg).unwrap();
 }
 
 #[test]

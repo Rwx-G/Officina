@@ -9,13 +9,16 @@
 //! meets the same way. Every string a view carries from a file or a row is
 //! [`Untrusted`]: the orchestrator wrote it.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
-use crate::registry::confirm::NAME_MAX_CHARS;
-use crate::registry::types::{ProposalKind, ProposalStatus};
-use crate::relay::params::TEMPLATE_VALUE_MAX_CHARS;
+use crate::registry::confirm::{NAME_MAX_CHARS, checked_name};
+use crate::registry::types::{
+    AuthorRefusal, ProposalKind, ProposalStatus, SubjectRecord, SubjectStatus,
+};
+use crate::relay::catalogue::CanonicalCatalogue;
+use crate::relay::params::{TEMPLATE_VALUE_MAX_CHARS, is_forbidden_format};
 use crate::untrusted::Untrusted;
 
 /// The proposal file's format version (AD-91).
@@ -121,8 +124,18 @@ pub fn id_of_file(name: &str) -> Option<&str> {
         .filter(|id| written_at(id).is_some())
 }
 
+/// The files of `proposals/` ingestion deleted unread since the window
+/// started (D-155): misnamed ones, and those past the hourly or pending
+/// limits. Counted in memory and shown in the Orchestrator view.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct DeletedFiles {
+    pub misnamed: u32,
+    pub over_limit: u32,
+}
+
 /// What a recap is about: a session or a subject (AD-90).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum ProposalTarget {
     SessionId(String),
@@ -467,6 +480,469 @@ pub fn merged(rows: Vec<ProposalView>, files: Vec<ProposalView>) -> Vec<Proposal
     by_id.into_values().collect()
 }
 
+/// How long a work order proposal stays `pending` after the window
+/// received it (AD-91, D-145): past it, it is `expired`. Recaps do not
+/// expire.
+pub const WORK_ORDER_PROPOSAL_TTL_MS: i64 = 24 * PROPOSAL_HOUR_MS;
+
+/// How old a temporary file of `proposals/` gets before ingestion deletes
+/// it, unread (D-155): a writer killed between its write and its rename
+/// left it.
+pub const TMP_FILE_TTL_MS: i64 = 24 * PROPOSAL_HOUR_MS;
+
+/// How many invalid proposals the Orchestrator view lists, newest first
+/// (D-155).
+pub const PROPOSALS_SHOWN_INVALID: usize = 50;
+
+/// How many decided proposals (accepted, dismissed, expired, superseded)
+/// the Orchestrator view lists, newest first (AD-92).
+pub const PROPOSALS_SHOWN_DECIDED: usize = 50;
+
+/// The extension of a temporary file: `atomic_write`'s
+/// `<name>.<pid>.tmp`, which ingestion never reads (D-155).
+const TMP_EXTENSION: &str = ".tmp";
+
+/// True when the file named `name` is a temporary file, never read and
+/// deleted once older than [`TMP_FILE_TTL_MS`].
+///
+/// ```
+/// use officina_core::orders::proposal::is_temporary_file;
+/// assert!(is_temporary_file("1761700000000-00000000000000ab.json.42.tmp"));
+/// assert!(!is_temporary_file("1761700000000-00000000000000ab.json"));
+/// ```
+pub fn is_temporary_file(name: &str) -> bool {
+    name.ends_with(TMP_EXTENSION)
+}
+
+closed_enum! {
+    #[serde(rename_all = "snake_case")]
+    /// Why the window stored a proposal `invalid` (AD-91, D-133, D-155):
+    /// the file's reading, or the first check of [`validate`] that failed,
+    /// in its order. `proposal.invalid_reason` has no `CHECK`, so a reason
+    /// added here needs no migration.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+    #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+    pub enum ProposalInvalidReason {
+        /// Not JSON, an unknown field or kind (`answer` until story 5.21,
+        /// D-575), or another schema: stored with no kind (D-133).
+        Unparsable,
+        /// Over [`PROPOSAL_FILE_MAX_BYTES`]: stored with no kind and no
+        /// texts (D-155).
+        Oversized,
+        /// A recap field or a rationale over [`PROPOSAL_TEXT_MAX_CHARS`].
+        TextTooLong,
+        /// A text holds a control, bidirectional or invisible character.
+        ForbiddenCharacters,
+        /// The recap's session is not in the registry.
+        UnknownSession,
+        /// The subject named is not in the registry.
+        UnknownSubject,
+        /// The work order's subject is archived or merged.
+        SubjectClosed,
+        /// The work order's subject belongs to another project.
+        SubjectOtherProject,
+        /// The proposed new subject's name breaks one of D-57's rules.
+        SubjectNameInvalid,
+        /// The approved snapshot holds no template of that name.
+        UnknownTemplate,
+        /// The project is not one of the template's.
+        ProjectNotAllowed,
+        /// A parameter the template does not declare.
+        UnknownParameter,
+        /// A parameter the template declares has no value.
+        MissingParameter,
+        /// A value is not, byte for byte, an entry of its list.
+        ValueNotInList,
+    }
+}
+
+/// What a proposal's names are checked against in the registry (AD-91):
+/// every subject row, and the sessions it holds among those the files
+/// name.
+#[derive(Debug, Clone, Copy)]
+pub struct RegistryRefs<'a> {
+    pub subjects: &'a [SubjectRecord],
+    pub sessions: &'a BTreeSet<String>,
+}
+
+/// A proposal that passed [`validate`]: a work order's names and values
+/// are the approved template's own strings, never the file's.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Validated {
+    Recap,
+    WorkOrder {
+        template: String,
+        project: String,
+        values: BTreeMap<String, String>,
+    },
+}
+
+/// The checks of a text the orchestrator wrote: its bound, then no
+/// control character but a line end or a tab, and no bidirectional or
+/// invisible one.
+fn checked_text(text: &str) -> Result<(), ProposalInvalidReason> {
+    if text.chars().count() > PROPOSAL_TEXT_MAX_CHARS {
+        return Err(ProposalInvalidReason::TextTooLong);
+    }
+    let forbidden =
+        |c: char| (c.is_control() && !matches!(c, '\n' | '\r' | '\t')) || is_forbidden_format(c);
+    if text.chars().any(forbidden) {
+        return Err(ProposalInvalidReason::ForbiddenCharacters);
+    }
+    Ok(())
+}
+
+/// Validates `raw` against the approved snapshot `catalogue` and the
+/// registry (AD-91, FR-12): the window's check at ingestion, never the
+/// tool's, so a file written by hand meets the same rules (amendment 7).
+/// A recap's texts are within their bounds and its session or subject is
+/// the registry's. A work order's rationale is within its bound, its
+/// template is the snapshot's (none without a snapshot), its project one
+/// of the template's, each declared parameter given once with a value of
+/// its list, and its subject an open subject of the project or a new name
+/// D-57 accepts (a taken name files into the subject holding it, D-158).
+/// The first failure is the reason.
+pub fn validate(
+    raw: &ProposalFile,
+    catalogue: Option<&CanonicalCatalogue>,
+    refs: &RegistryRefs,
+) -> Result<Validated, ProposalInvalidReason> {
+    match raw {
+        ProposalFile::Recap(file) => {
+            for text in [&file.done, &file.blocking, &file.decision_expected] {
+                checked_text(text)?;
+            }
+            match &file.target {
+                ProposalTarget::SessionId(id) if !refs.sessions.contains(id) => {
+                    Err(ProposalInvalidReason::UnknownSession)
+                }
+                ProposalTarget::SubjectId(id) if !refs.subjects.iter().any(|s| s.id == *id) => {
+                    Err(ProposalInvalidReason::UnknownSubject)
+                }
+                _ => Ok(Validated::Recap),
+            }
+        }
+        ProposalFile::WorkOrder(file) => {
+            checked_text(&file.rationale)?;
+            let (name, template) = catalogue
+                .and_then(|c| c.templates.get_key_value(&file.template))
+                .ok_or(ProposalInvalidReason::UnknownTemplate)?;
+            let project = template
+                .projects
+                .iter()
+                .find(|p| **p == file.project)
+                .ok_or(ProposalInvalidReason::ProjectNotAllowed)?;
+            if file
+                .values
+                .keys()
+                .any(|param| !template.params.contains_key(param))
+            {
+                return Err(ProposalInvalidReason::UnknownParameter);
+            }
+            let mut values = BTreeMap::new();
+            for (param, list) in &template.params {
+                let given = file
+                    .values
+                    .get(param)
+                    .ok_or(ProposalInvalidReason::MissingParameter)?;
+                let entry = list
+                    .iter()
+                    .find(|entry| entry.as_bytes() == given.as_bytes())
+                    .ok_or(ProposalInvalidReason::ValueNotInList)?;
+                values.insert(param.clone(), entry.clone());
+            }
+            checked_subject(&file.subject, project, refs.subjects)?;
+            Ok(Validated::WorkOrder {
+                template: name.clone(),
+                project: project.clone(),
+                values,
+            })
+        }
+    }
+}
+
+/// The work order's subject: an open subject of `project`, or a new name
+/// D-57 accepts.
+fn checked_subject(
+    subject: &ProposedSubject,
+    project: &str,
+    subjects: &[SubjectRecord],
+) -> Result<(), ProposalInvalidReason> {
+    match subject {
+        ProposedSubject::Id(id) => {
+            let found = subjects
+                .iter()
+                .find(|s| s.id == *id)
+                .ok_or(ProposalInvalidReason::UnknownSubject)?;
+            if found.project != project {
+                Err(ProposalInvalidReason::SubjectOtherProject)
+            } else if found.status.value == SubjectStatus::Archived {
+                Err(ProposalInvalidReason::SubjectClosed)
+            } else {
+                Ok(())
+            }
+        }
+        ProposedSubject::New(name) => match checked_name(name, project, None, subjects) {
+            Ok(_) | Err(AuthorRefusal::NameTaken) => Ok(()),
+            Err(_) => Err(ProposalInvalidReason::SubjectNameInvalid),
+        },
+    }
+}
+
+/// When a proposal of `kind` received at `received_at_ms` expires: a work
+/// order's [`WORK_ORDER_PROPOSAL_TTL_MS`] later; a recap never (D-145).
+/// An answer's expiry is story 5.21's (D-575).
+pub fn expires_at_ms(kind: ProposalKind, received_at_ms: i64) -> Option<i64> {
+    match kind {
+        ProposalKind::WorkOrder => Some(received_at_ms + WORK_ORDER_PROPOSAL_TTL_MS),
+        ProposalKind::Recap | ProposalKind::Answer => None,
+    }
+}
+
+/// True when a pending proposal whose expiry is `expires_at_ms` is
+/// `expired` at `now_ms`.
+pub fn is_expired(expires_at_ms: Option<i64>, now_ms: i64) -> bool {
+    expires_at_ms.is_some_and(|at| now_ms >= at)
+}
+
+/// How a file of `proposals/` was read: its bytes, at most
+/// [`PROPOSAL_FILE_MAX_BYTES`], or more than that (D-155).
+#[derive(Debug, Clone, Copy)]
+pub enum FileRead<'a> {
+    Bytes(&'a [u8]),
+    Oversized,
+}
+
+/// The `proposal` row ingestion stores for one file (AD-82, D-762): the
+/// target in its two columns, the values' map, the subject as the file
+/// writes it and the kind's texts by field name.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProposalRecord {
+    pub id: String,
+    /// `None` for a file that did not parse or was oversized (D-133).
+    pub kind: Option<ProposalKind>,
+    pub status: ProposalStatus,
+    pub invalid_reason: Option<ProposalInvalidReason>,
+    pub received_at_ms: i64,
+    pub expires_at_ms: Option<i64>,
+    pub orchestrator_session_id: Option<String>,
+    pub target: Option<ProposalTarget>,
+    pub template: Option<String>,
+    pub project: Option<String>,
+    pub values: Option<BTreeMap<String, String>>,
+    pub subject: Option<ProposedSubject>,
+    pub texts: Option<BTreeMap<String, String>>,
+}
+
+impl ProposalRecord {
+    /// The record of a file that holds no proposal the window can read:
+    /// no kind, no texts.
+    fn unread(id: &str, reason: ProposalInvalidReason, now_ms: i64) -> ProposalRecord {
+        ProposalRecord {
+            id: id.to_owned(),
+            kind: None,
+            status: ProposalStatus::Invalid,
+            invalid_reason: Some(reason),
+            received_at_ms: now_ms,
+            expires_at_ms: None,
+            orchestrator_session_id: None,
+            target: None,
+            template: None,
+            project: None,
+            values: None,
+            subject: None,
+            texts: None,
+        }
+    }
+
+    /// A recap's target, when it is one: what supersession compares.
+    pub fn recap_target(&self) -> Option<&ProposalTarget> {
+        (self.kind == Some(ProposalKind::Recap) && self.status == ProposalStatus::Pending)
+            .then_some(self.target.as_ref())
+            .flatten()
+    }
+}
+
+/// The row of the file `id`, read as `read`, at `now_ms` (AD-91, D-155):
+/// `invalid` with `oversized` or `unparsable` and no kind when it holds no
+/// proposal; else its kind and fields, `pending` when [`validate`] passes
+/// (a work order's names and values then the template's strings, its
+/// expiry set) or `invalid` with the reason and the texts as written.
+pub fn record_of(
+    id: &str,
+    read: FileRead,
+    catalogue: Option<&CanonicalCatalogue>,
+    refs: &RegistryRefs,
+    now_ms: i64,
+) -> ProposalRecord {
+    let bytes = match read {
+        FileRead::Oversized => {
+            return ProposalRecord::unread(id, ProposalInvalidReason::Oversized, now_ms);
+        }
+        FileRead::Bytes(bytes) => bytes,
+    };
+    let Some(raw) = serde_json::from_slice::<ProposalFile>(bytes)
+        .ok()
+        .filter(|raw| raw.schema() == PROPOSAL_FILE_SCHEMA)
+    else {
+        return ProposalRecord::unread(id, ProposalInvalidReason::Unparsable, now_ms);
+    };
+    let outcome = validate(&raw, catalogue, refs);
+    let kind = raw.kind();
+    let (status, invalid_reason, expires) = match &outcome {
+        Ok(_) => (ProposalStatus::Pending, None, expires_at_ms(kind, now_ms)),
+        Err(reason) => (ProposalStatus::Invalid, Some(*reason), None),
+    };
+    let mut record = ProposalRecord {
+        id: id.to_owned(),
+        kind: Some(kind),
+        status,
+        invalid_reason,
+        received_at_ms: now_ms,
+        expires_at_ms: expires,
+        orchestrator_session_id: None,
+        target: None,
+        template: None,
+        project: None,
+        values: None,
+        subject: None,
+        texts: None,
+    };
+    match raw {
+        ProposalFile::Recap(file) => {
+            record.orchestrator_session_id = file.orchestrator_session_id;
+            record.target = Some(file.target);
+            record.texts = Some(BTreeMap::from([
+                ("done".to_owned(), file.done),
+                ("blocking".to_owned(), file.blocking),
+                ("decision_expected".to_owned(), file.decision_expected),
+            ]));
+        }
+        ProposalFile::WorkOrder(file) => {
+            record.orchestrator_session_id = file.orchestrator_session_id;
+            let (template, project, values) = match outcome {
+                Ok(Validated::WorkOrder {
+                    template,
+                    project,
+                    values,
+                }) => (template, project, values),
+                _ => (file.template, file.project, file.values),
+            };
+            record.template = Some(template);
+            record.project = Some(project);
+            record.values = Some(values);
+            record.subject = Some(file.subject);
+            record.texts = Some(BTreeMap::from([("rationale".to_owned(), file.rationale)]));
+        }
+    }
+    record
+}
+
+impl ProposalFile {
+    /// The file's format version.
+    pub fn schema(&self) -> u32 {
+        match self {
+            ProposalFile::Recap(file) => file.schema,
+            ProposalFile::WorkOrder(file) => file.schema,
+        }
+    }
+}
+
+/// The pending recaps a newer valid recap on the same target supersedes
+/// (D-145): of `pending`, every recap but the newest by id of its target.
+///
+/// ```
+/// use officina_core::orders::proposal::{ProposalTarget, superseded_recaps};
+/// let pending = vec![
+///     ("0000000000001-0000000000000001".to_owned(), ProposalTarget::SubjectId(4)),
+///     ("0000000000002-0000000000000001".to_owned(), ProposalTarget::SubjectId(4)),
+///     ("0000000000001-0000000000000002".to_owned(), ProposalTarget::SubjectId(5)),
+/// ];
+/// assert_eq!(superseded_recaps(&pending), ["0000000000001-0000000000000001"]);
+/// ```
+pub fn superseded_recaps(pending: &[(String, ProposalTarget)]) -> Vec<String> {
+    let mut newest: BTreeMap<&ProposalTarget, &str> = BTreeMap::new();
+    for (id, target) in pending {
+        let kept = newest.entry(target).or_insert(id);
+        if id.as_str() > *kept {
+            *kept = id;
+        }
+    }
+    let mut superseded: Vec<String> = pending
+        .iter()
+        .filter(|(id, target)| newest.get(target) != Some(&id.as_str()))
+        .map(|(id, _)| id.clone())
+        .collect();
+    superseded.sort();
+    superseded
+}
+
+/// A proposal the registry or this ingestion pass knows, for the limits
+/// held again at ingestion (AD-90, D-769).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KnownProposal {
+    pub id: String,
+    pub pending: bool,
+}
+
+/// The rate limit the file `id` breaks at ingestion (AD-90, D-155), counted
+/// as the tool counted when it wrote it: the known proposals written
+/// before it, within the hour before its own time, and those of them
+/// pending. A file written directly is held to the same limits.
+pub fn ingestion_refusal(id: &str, known: &[KnownProposal]) -> Option<RateRefusal> {
+    let at = written_at(id)?;
+    let earlier = || known.iter().filter(|k| k.id.as_str() < id);
+    let times: Vec<i64> = earlier().filter_map(|k| written_at(&k.id)).collect();
+    let pending = earlier().filter(|k| k.pending).count();
+    rate_refusal(at, &times, pending)
+}
+
+/// The proposals the Orchestrator view lists (AD-92, D-155), of `rows`
+/// newest first: every pending one, the [`PROPOSALS_SHOWN_INVALID`] latest
+/// invalid ones and the [`PROPOSALS_SHOWN_DECIDED`] latest decided ones.
+pub fn shown(rows: &[ProposalView]) -> Vec<ProposalView> {
+    let mut invalid = 0;
+    let mut decided = 0;
+    rows.iter()
+        .filter(|row| match row.status {
+            ProposalStatus::Pending => true,
+            ProposalStatus::Invalid => {
+                invalid += 1;
+                invalid <= PROPOSALS_SHOWN_INVALID
+            }
+            ProposalStatus::Accepted
+            | ProposalStatus::Dismissed
+            | ProposalStatus::Expired
+            | ProposalStatus::Superseded => {
+                decided += 1;
+                decided <= PROPOSALS_SHOWN_DECIDED
+            }
+        })
+        .cloned()
+        .collect()
+}
+
+/// The latest pending recap whose target is `session_id` or its subject
+/// `subject_id` (AD-84's recap section, FR-5): what the meeting panel
+/// shows under its label once story 5.10's meeting builds it. `rows` run
+/// newest first.
+pub fn latest_recap<'a>(
+    rows: &'a [ProposalView],
+    session_id: &str,
+    subject_id: Option<i64>,
+) -> Option<&'a ProposalView> {
+    let session = Untrusted::new(session_id.to_owned());
+    rows.iter()
+        .filter(|row| row.status == ProposalStatus::Pending)
+        .find(|row| match &row.content {
+            Some(ProposalContent::Recap { target, .. }) => match target {
+                TargetView::SessionId(id) => *id == session,
+                TargetView::SubjectId(id) => Some(*id) == subject_id,
+            },
+            _ => false,
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;
@@ -607,5 +1083,394 @@ mod tests {
             merged.iter().find(|p| p.id == id).unwrap().status,
             ProposalStatus::Invalid
         );
+    }
+
+    use crate::registry::types::{Source, Sourced};
+    use crate::relay::template::sample;
+
+    fn subject(id: i64, project: &str, status: SubjectStatus) -> SubjectRecord {
+        SubjectRecord {
+            id,
+            project: project.to_owned(),
+            name: format!("subject {id}"),
+            status: Sourced {
+                value: status,
+                src: Source::Author,
+                at_ms: NOW,
+            },
+            created_at_ms: NOW,
+            routine: false,
+            merged_into: None,
+        }
+    }
+
+    fn order(values: &[(&str, &str)], subject: ProposedSubject) -> ProposalFile {
+        ProposalFile::work_order(
+            WorkOrderProposal {
+                template: sample::TEMPLATE.into(),
+                project: "backend".into(),
+                values: values
+                    .iter()
+                    .map(|(n, v)| ((*n).to_owned(), (*v).to_owned()))
+                    .collect(),
+                subject,
+                rationale: "Tests fail on the old release.".into(),
+            },
+            Some("s-1".into()),
+            NOW,
+        )
+    }
+
+    const VALID: &[(&str, &str)] = &[("package", "serde_json"), ("level", "minor")];
+
+    /// Records `file` at `now` against the sample catalogue, subjects 1
+    /// and 4 (open, `backend`), 2 (archived) and 3 (`lab`), and session
+    /// `s-9`.
+    fn record_at(file: &ProposalFile, now: i64) -> ProposalRecord {
+        let approved = sample::approved();
+        let subjects = [
+            subject(1, "backend", SubjectStatus::Active),
+            subject(2, "backend", SubjectStatus::Archived),
+            subject(3, "lab", SubjectStatus::Active),
+            subject(4, "backend", SubjectStatus::ToResume),
+        ];
+        let sessions = BTreeSet::from(["s-9".to_owned()]);
+        let refs = RegistryRefs {
+            subjects: &subjects,
+            sessions: &sessions,
+        };
+        record_of(
+            &proposal_id(now, 1),
+            FileRead::Bytes(&file.to_bytes()),
+            Some(&approved.canonical),
+            &refs,
+            now,
+        )
+    }
+
+    /// AD-91, D-145: a valid work order proposal is pending until 24 h
+    /// after its receipt, then expired.
+    #[test]
+    fn a_work_order_proposal_expires_after_24_h() {
+        let row = record_at(&order(VALID, ProposedSubject::Id(1)), NOW);
+        assert_eq!(row.status, ProposalStatus::Pending);
+        assert_eq!(row.expires_at_ms, Some(NOW + WORK_ORDER_PROPOSAL_TTL_MS));
+        assert!(!is_expired(
+            row.expires_at_ms,
+            NOW + WORK_ORDER_PROPOSAL_TTL_MS - 1
+        ));
+        assert!(is_expired(
+            row.expires_at_ms,
+            NOW + WORK_ORDER_PROPOSAL_TTL_MS
+        ));
+    }
+
+    /// D-145: recaps never expire, however old.
+    #[test]
+    fn recaps_do_not_expire() {
+        let row = record_at(&ProposalFile::recap(recap(), None, NOW), NOW);
+        assert_eq!(row.kind, Some(ProposalKind::Recap));
+        assert_eq!(row.expires_at_ms, None);
+        assert!(!is_expired(row.expires_at_ms, i64::MAX));
+        assert_eq!(expires_at_ms(ProposalKind::Recap, NOW), None);
+    }
+
+    /// D-145: a newer valid recap on the same target supersedes the
+    /// pending one, whatever order the files came in; another target's
+    /// stays.
+    #[test]
+    fn a_newer_recap_supersedes_the_pending_one() {
+        let older = proposal_id(NOW, 1);
+        let newer = proposal_id(NOW + 1, 1);
+        let other = proposal_id(NOW - 5, 2);
+        let subject = ProposalTarget::SubjectId(4);
+        let session = ProposalTarget::SessionId("s-9".into());
+        for pending in [
+            vec![
+                (older.clone(), subject.clone()),
+                (newer.clone(), subject.clone()),
+            ],
+            vec![
+                (newer.clone(), subject.clone()),
+                (older.clone(), subject.clone()),
+            ],
+        ] {
+            let mut all = pending;
+            all.push((other.clone(), session.clone()));
+            assert_eq!(superseded_recaps(&all), std::slice::from_ref(&older));
+        }
+        // A recap only supersedes once valid: an invalid one names none.
+        let mut invalid = recap();
+        invalid.target = ProposalTarget::SessionId("s-unknown".into());
+        let row = record_at(&ProposalFile::recap(invalid, None, NOW), NOW);
+        assert_eq!(row.recap_target(), None);
+        let valid = record_at(&ProposalFile::recap(recap(), None, NOW), NOW);
+        assert_eq!(valid.recap_target(), Some(&ProposalTarget::SubjectId(4)));
+    }
+
+    /// AD-91: the stored names and values are the template's strings, the
+    /// texts as written; an invalid proposal keeps its texts and reason.
+    #[test]
+    fn a_valid_order_stores_the_templates_strings() {
+        let row = record_at(&order(VALID, ProposedSubject::New("deps".into())), NOW);
+        assert_eq!(row.status, ProposalStatus::Pending);
+        assert_eq!(row.template.as_deref(), Some(sample::TEMPLATE));
+        assert_eq!(row.values.as_ref().unwrap()["package"], "serde_json");
+        assert_eq!(row.subject, Some(ProposedSubject::New("deps".into())));
+        assert_eq!(row.orchestrator_session_id.as_deref(), Some("s-1"));
+        let refused = record_at(
+            &order(
+                &[("package", "serde_json --settings x"), ("level", "minor")],
+                ProposedSubject::Id(1),
+            ),
+            NOW,
+        );
+        assert_eq!(refused.status, ProposalStatus::Invalid);
+        assert_eq!(
+            refused.invalid_reason,
+            Some(ProposalInvalidReason::ValueNotInList)
+        );
+        assert_eq!(
+            refused.texts.as_ref().unwrap()["rationale"],
+            "Tests fail on the old release."
+        );
+        assert_eq!(refused.expires_at_ms, None);
+    }
+
+    /// AD-91: each check's refusal, in `validate`'s order.
+    #[test]
+    fn each_check_has_its_reason() {
+        let reason = |file: &ProposalFile| record_at(file, NOW).invalid_reason;
+        let with_recap = |edit: fn(&mut RecapProposal)| {
+            let mut proposal = recap();
+            edit(&mut proposal);
+            ProposalFile::recap(proposal, None, NOW)
+        };
+        assert_eq!(
+            reason(&with_recap(
+                |r| r.done = "a".repeat(PROPOSAL_TEXT_MAX_CHARS + 1)
+            )),
+            Some(ProposalInvalidReason::TextTooLong)
+        );
+        assert_eq!(
+            reason(&with_recap(|r| r.blocking = "a\u{202e}b".into())),
+            Some(ProposalInvalidReason::ForbiddenCharacters)
+        );
+        assert_eq!(
+            reason(&with_recap(|r| r.done = "line one\nline two\ttab".into())),
+            None
+        );
+        assert_eq!(
+            reason(&with_recap(|r| r.target = ProposalTarget::SubjectId(9))),
+            Some(ProposalInvalidReason::UnknownSubject)
+        );
+        assert_eq!(
+            reason(&with_recap(
+                |r| r.target = ProposalTarget::SessionId("s-9".into())
+            )),
+            None
+        );
+        for (file, expected) in [
+            (
+                order(VALID, ProposedSubject::Id(2)),
+                ProposalInvalidReason::SubjectClosed,
+            ),
+            (
+                order(VALID, ProposedSubject::Id(3)),
+                ProposalInvalidReason::SubjectOtherProject,
+            ),
+            (
+                order(VALID, ProposedSubject::Id(9)),
+                ProposalInvalidReason::UnknownSubject,
+            ),
+            (
+                order(VALID, ProposedSubject::New("  ".into())),
+                ProposalInvalidReason::SubjectNameInvalid,
+            ),
+            (
+                order(&[("package", "serde_json")], ProposedSubject::Id(1)),
+                ProposalInvalidReason::MissingParameter,
+            ),
+            (
+                order(
+                    &[("package", "serde_json"), ("level", "minor"), ("x", "y")],
+                    ProposedSubject::Id(1),
+                ),
+                ProposalInvalidReason::UnknownParameter,
+            ),
+        ] {
+            assert_eq!(reason(&file), Some(expected), "{expected:?}");
+        }
+        // A taken name files into the subject that holds it (D-158).
+        assert_eq!(
+            reason(&order(VALID, ProposedSubject::New("Subject 1".into()))),
+            None
+        );
+        let ProposalFile::WorkOrder(mut file) = order(VALID, ProposedSubject::Id(1)) else {
+            unreachable!()
+        };
+        file.project = "lab".into();
+        assert_eq!(
+            reason(&ProposalFile::WorkOrder(file.clone())),
+            Some(ProposalInvalidReason::ProjectNotAllowed)
+        );
+        file.template = "release-notes".into();
+        assert_eq!(
+            reason(&ProposalFile::WorkOrder(file)),
+            Some(ProposalInvalidReason::UnknownTemplate)
+        );
+        // No approved snapshot, no template.
+        let refs = RegistryRefs {
+            subjects: &[],
+            sessions: &BTreeSet::new(),
+        };
+        let row = record_of(
+            "0000000000001-0000000000000001",
+            FileRead::Bytes(&order(VALID, ProposedSubject::Id(1)).to_bytes()),
+            None,
+            &refs,
+            NOW,
+        );
+        assert_eq!(
+            row.invalid_reason,
+            Some(ProposalInvalidReason::UnknownTemplate)
+        );
+    }
+
+    /// D-133, D-155: a file that holds no proposal is invalid with no kind
+    /// and no texts: oversized, not JSON, another schema, an unknown field
+    /// or the `answer` kind (D-575).
+    #[test]
+    fn unread_files_have_no_kind() {
+        let refs = RegistryRefs {
+            subjects: &[],
+            sessions: &BTreeSet::new(),
+        };
+        let unread =
+            |read: FileRead| record_of("0000000000001-0000000000000001", read, None, &refs, NOW);
+        let oversized = unread(FileRead::Oversized);
+        assert_eq!(
+            (oversized.kind, oversized.invalid_reason, oversized.texts),
+            (None, Some(ProposalInvalidReason::Oversized), None)
+        );
+        let mut schema = serde_json::to_value(ProposalFile::recap(recap(), None, NOW)).unwrap();
+        schema["schema"] = json!(PROPOSAL_FILE_SCHEMA + 1);
+        let mut answer = serde_json::to_value(ProposalFile::recap(recap(), None, NOW)).unwrap();
+        answer["kind"] = json!("answer");
+        for bytes in [
+            b"not json".to_vec(),
+            serde_json::to_vec(&schema).unwrap(),
+            serde_json::to_vec(&answer).unwrap(),
+            br#"{"kind":"recap","launch":"now"}"#.to_vec(),
+        ] {
+            let row = unread(FileRead::Bytes(&bytes));
+            assert_eq!(
+                (row.kind, row.status, row.invalid_reason, row.texts),
+                (
+                    None,
+                    ProposalStatus::Invalid,
+                    Some(ProposalInvalidReason::Unparsable),
+                    None
+                ),
+                "{}",
+                String::from_utf8_lossy(&bytes)
+            );
+        }
+    }
+
+    /// AD-90, D-155: at ingestion the limits count the proposals known
+    /// before each file, as the tool counted them when it wrote it.
+    #[test]
+    fn ingestion_holds_the_limits_on_earlier_proposals() {
+        let known: Vec<KnownProposal> = (0..PROPOSALS_PER_HOUR as i64)
+            .map(|at| KnownProposal {
+                id: proposal_id(NOW + at, 1),
+                pending: false,
+            })
+            .collect();
+        let next = proposal_id(NOW + PROPOSALS_PER_HOUR as i64, 1);
+        assert_eq!(
+            ingestion_refusal(&next, &known),
+            Some(RateRefusal::HourlyLimit)
+        );
+        // The last one written within the limit was counted without itself.
+        assert_eq!(
+            ingestion_refusal(&known[PROPOSALS_PER_HOUR - 1].id, &known),
+            None
+        );
+        let hour_later = proposal_id(NOW + PROPOSAL_HOUR_MS + 1, 1);
+        assert_eq!(ingestion_refusal(&hour_later, &known), None);
+        let pending: Vec<KnownProposal> = (0..PROPOSALS_PENDING_MAX as i64)
+            .map(|at| KnownProposal {
+                id: proposal_id(NOW - 3 * PROPOSAL_HOUR_MS - at, 1),
+                pending: true,
+            })
+            .collect();
+        assert_eq!(
+            ingestion_refusal(&proposal_id(NOW, 2), &pending),
+            Some(RateRefusal::PendingLimit)
+        );
+    }
+
+    /// AD-92, D-155: every pending proposal, the 50 latest invalid and the
+    /// 50 latest decided, newest first.
+    #[test]
+    fn shown_keeps_pending_and_the_latest_invalid_and_decided() {
+        let mut rows = Vec::new();
+        for (offset, status) in [
+            (0, ProposalStatus::Pending),
+            (1_000, ProposalStatus::Invalid),
+            (2_000, ProposalStatus::Dismissed),
+        ] {
+            for at in 0..60 {
+                rows.push(view(&proposal_id(NOW - offset - at, 1), status));
+            }
+        }
+        rows.sort_by(|a, b| b.id.cmp(&a.id));
+        let listed = shown(&rows);
+        let count = |status| listed.iter().filter(|p| p.status == status).count();
+        assert_eq!(count(ProposalStatus::Pending), 60);
+        assert_eq!(count(ProposalStatus::Invalid), PROPOSALS_SHOWN_INVALID);
+        assert_eq!(count(ProposalStatus::Dismissed), PROPOSALS_SHOWN_DECIDED);
+        assert!(listed.windows(2).all(|w| w[0].id > w[1].id));
+    }
+
+    /// AD-84 (FR-5): the latest pending recap of a session or its subject.
+    #[test]
+    fn the_latest_pending_recap_of_a_session_or_its_subject() {
+        let of = |id: &str, target: ProposalTarget, status| {
+            let mut proposal = recap();
+            proposal.target = target;
+            ProposalView {
+                status,
+                ..ProposalFile::recap(proposal, None, NOW).pending_view(id)
+            }
+        };
+        let rows = vec![
+            of(
+                "0000000000004-0000000000000001",
+                ProposalTarget::SessionId("s-1".into()),
+                ProposalStatus::Superseded,
+            ),
+            of(
+                "0000000000003-0000000000000001",
+                ProposalTarget::SubjectId(4),
+                ProposalStatus::Pending,
+            ),
+            of(
+                "0000000000002-0000000000000001",
+                ProposalTarget::SessionId("s-1".into()),
+                ProposalStatus::Pending,
+            ),
+        ];
+        assert_eq!(
+            latest_recap(&rows, "s-1", Some(4)).map(|r| r.id.as_str()),
+            Some("0000000000003-0000000000000001")
+        );
+        assert_eq!(
+            latest_recap(&rows, "s-1", None).map(|r| r.id.as_str()),
+            Some("0000000000002-0000000000000001")
+        );
+        assert!(latest_recap(&rows, "s-2", Some(5)).is_none());
     }
 }

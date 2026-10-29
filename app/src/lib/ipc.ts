@@ -193,6 +193,18 @@ export function editCard(cardId: string, change: CardChange): Promise<CardAnswer
   return invoke<CardAnswer>("edit_card", { cardId, change });
 }
 
+/** Issues a card from the pending work order proposal `proposalId`
+ *  (AD-91, D-152): its stored values through the author's validation, or
+ *  why it opens none. */
+export function issueCardFromProposal(proposalId: string): Promise<CardAnswer> {
+  return invoke<CardAnswer>("issue_card_from_proposal", { proposalId });
+}
+
+/** Dismisses the pending or invalid proposal `proposalId` (FR-12). */
+export function dismissProposal(proposalId: string): Promise<void> {
+  return invoke("dismiss_proposal", { proposalId });
+}
+
 /** Launches card `cardId`, whose shown prompt hashes to `promptSha256`
  *  (AD-78): how it ended, or why it was refused. The caller sends it on a
  *  pointer click only (D-28). */

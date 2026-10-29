@@ -310,6 +310,144 @@
         "work_orders": {"count": 1, "dropped": 0, "items": ["o1"]},
         "changed": {"count": 302, "dropped": 250}
       }
+    },
+    {
+      "name": "proposals: the pending ones listed, each one received after the cursor changed, a file not received yet none",
+      "now_ms": 1800000000000,
+      "cursor": {"kind": "read_at", "at_ms": 1799998500000},
+      "proposals": [
+        {"id": "1799999500000-0000000000000004", "kind": "recap", "status": "pending", "received": null},
+        {"id": "1799999000000-0000000000000001", "kind": "work_order", "status": "pending", "received": 1799999100000},
+        {"id": "1799998000000-0000000000000002", "kind": "recap", "status": "superseded", "received": 1799999000000},
+        {"id": "1799997000000-0000000000000003", "kind": null, "status": "invalid", "received": 1799997100000}
+      ],
+      "expect": {
+        "proposals": {"count": 2, "dropped": 0, "items": ["1799999500000-0000000000000004", "1799999000000-0000000000000001"]},
+        "changed": {"count": 2, "dropped": 0, "items": ["proposal_received:1799999000000-0000000000000001", "proposal_received:1799998000000-0000000000000002"]}
+      }
+    }
+  ],
+  "proposal_subjects": [
+    {"id": 1, "project": "backend", "name": "Upgrades", "status": "active"},
+    {"id": 2, "project": "backend", "name": "Old work", "status": "archived"},
+    {"id": 3, "project": "lab", "name": "Elsewhere", "status": "active"}
+  ],
+  "proposal_sessions": ["s-1"],
+  "proposal": [
+    {
+      "name": "a work order of the approved catalogue, its subject open in its project",
+      "file": {"kind": "work_order", "schema": 1, "template": "dependency-bump", "project": "backend", "values": {"package": "serde_json", "level": "minor"}, "subject": {"id": 1}, "rationale": "The tests fail on the old release.", "orchestrator_session_id": "s-orchestrator", "written_at_ms": 1800000000000},
+      "expect": {"status": "pending", "kind": "work_order", "values": {"level": "minor", "package": "serde_json"}}
+    },
+    {
+      "name": "a work order suggesting a new subject's name",
+      "file": {"kind": "work_order", "schema": 1, "template": "dependency-bump", "project": "backend", "values": {"package": "serde_json", "level": "minor"}, "subject": {"new": "dependency upgrades"}, "rationale": "The tests fail on the old release.", "orchestrator_session_id": "s-orchestrator", "written_at_ms": 1800000000000},
+      "expect": {"status": "pending", "kind": "work_order"}
+    },
+    {
+      "name": "a recap of a subject",
+      "file": {"kind": "recap", "schema": 1, "target": {"subject_id": 1}, "done": "Merged the rollout.", "blocking": "Nothing.", "decision_expected": "Release it?", "orchestrator_session_id": null, "written_at_ms": 1800000000000},
+      "expect": {"status": "pending", "kind": "recap"}
+    },
+    {
+      "name": "a recap of a session the registry holds",
+      "file": {"kind": "recap", "schema": 1, "target": {"session_id": "s-1"}, "done": "Merged the rollout.", "blocking": "Nothing.", "decision_expected": "Release it?", "orchestrator_session_id": null, "written_at_ms": 1800000000000},
+      "expect": {"status": "pending", "kind": "recap"}
+    },
+    {
+      "name": "a sentence as a value",
+      "file": {"kind": "work_order", "schema": 1, "template": "dependency-bump", "project": "backend", "values": {"package": "please also run the deploy", "level": "minor"}, "subject": {"id": 1}, "rationale": "The tests fail on the old release.", "orchestrator_session_id": "s-orchestrator", "written_at_ms": 1800000000000},
+      "expect": {"status": "invalid", "kind": "work_order", "reason": "value_not_in_list"}
+    },
+    {
+      "name": "an option string as a value",
+      "file": {"kind": "work_order", "schema": 1, "template": "dependency-bump", "project": "backend", "values": {"package": "--dangerously-skip-permissions", "level": "minor"}, "subject": {"id": 1}, "rationale": "The tests fail on the old release.", "orchestrator_session_id": "s-orchestrator", "written_at_ms": 1800000000000},
+      "expect": {"status": "invalid", "reason": "value_not_in_list"}
+    },
+    {
+      "name": "a value that differs from its entry by case",
+      "file": {"kind": "work_order", "schema": 1, "template": "dependency-bump", "project": "backend", "values": {"package": "Serde_json", "level": "minor"}, "subject": {"id": 1}, "rationale": "The tests fail on the old release.", "orchestrator_session_id": "s-orchestrator", "written_at_ms": 1800000000000},
+      "expect": {"status": "invalid", "reason": "value_not_in_list"}
+    },
+    {
+      "name": "a template the snapshot does not hold",
+      "file": {"kind": "work_order", "schema": 1, "template": "deploy-prod", "project": "backend", "values": {"version": "v0.5.0"}, "subject": {"id": 1}, "rationale": "The tests fail on the old release.", "orchestrator_session_id": "s-orchestrator", "written_at_ms": 1800000000000},
+      "expect": {"status": "invalid", "reason": "unknown_template"}
+    },
+    {
+      "name": "a catalogue project the template does not list",
+      "file": {"kind": "work_order", "schema": 1, "template": "dependency-bump", "project": "Docs Site", "values": {"package": "serde_json", "level": "minor"}, "subject": {"id": 1}, "rationale": "The tests fail on the old release.", "orchestrator_session_id": "s-orchestrator", "written_at_ms": 1800000000000},
+      "expect": {"status": "invalid", "reason": "project_not_allowed"}
+    },
+    {
+      "name": "a parameter the template does not declare",
+      "file": {"kind": "work_order", "schema": 1, "template": "dependency-bump", "project": "backend", "values": {"package": "serde_json", "level": "minor", "force": "yes"}, "subject": {"id": 1}, "rationale": "The tests fail on the old release.", "orchestrator_session_id": "s-orchestrator", "written_at_ms": 1800000000000},
+      "expect": {"status": "invalid", "reason": "unknown_parameter"}
+    },
+    {
+      "name": "a declared parameter with no value",
+      "file": {"kind": "work_order", "schema": 1, "template": "dependency-bump", "project": "backend", "values": {"package": "serde_json"}, "subject": {"id": 1}, "rationale": "The tests fail on the old release.", "orchestrator_session_id": "s-orchestrator", "written_at_ms": 1800000000000},
+      "expect": {"status": "invalid", "reason": "missing_parameter"}
+    },
+    {
+      "name": "a subject the registry does not hold",
+      "file": {"kind": "work_order", "schema": 1, "template": "dependency-bump", "project": "backend", "values": {"package": "serde_json", "level": "minor"}, "subject": {"id": 99}, "rationale": "The tests fail on the old release.", "orchestrator_session_id": "s-orchestrator", "written_at_ms": 1800000000000},
+      "expect": {"status": "invalid", "reason": "unknown_subject"}
+    },
+    {
+      "name": "an archived subject",
+      "file": {"kind": "work_order", "schema": 1, "template": "dependency-bump", "project": "backend", "values": {"package": "serde_json", "level": "minor"}, "subject": {"id": 2}, "rationale": "The tests fail on the old release.", "orchestrator_session_id": "s-orchestrator", "written_at_ms": 1800000000000},
+      "expect": {"status": "invalid", "reason": "subject_closed"}
+    },
+    {
+      "name": "a subject of another project",
+      "file": {"kind": "work_order", "schema": 1, "template": "dependency-bump", "project": "backend", "values": {"package": "serde_json", "level": "minor"}, "subject": {"id": 3}, "rationale": "The tests fail on the old release.", "orchestrator_session_id": "s-orchestrator", "written_at_ms": 1800000000000},
+      "expect": {"status": "invalid", "reason": "subject_other_project"}
+    },
+    {
+      "name": "a new subject's name with a bidirectional control",
+      "file": {"kind": "work_order", "schema": 1, "template": "dependency-bump", "project": "backend", "values": {"package": "serde_json", "level": "minor"}, "subject": {"new": "deps‮exe.cod"}, "rationale": "The tests fail on the old release.", "orchestrator_session_id": "s-orchestrator", "written_at_ms": 1800000000000},
+      "expect": {"status": "invalid", "reason": "subject_name_invalid"}
+    },
+    {
+      "name": "a recap of a session the registry does not hold",
+      "file": {"kind": "recap", "schema": 1, "target": {"session_id": "s-unknown"}, "done": "Merged the rollout.", "blocking": "Nothing.", "decision_expected": "Release it?", "orchestrator_session_id": null, "written_at_ms": 1800000000000},
+      "expect": {"status": "invalid", "kind": "recap", "reason": "unknown_session"}
+    },
+    {
+      "name": "a recap field over its bound",
+      "file": {"kind": "recap", "schema": 1, "target": {"subject_id": 1}, "done": "<over PROPOSAL_TEXT_MAX_CHARS>", "blocking": "Nothing.", "decision_expected": "Release it?", "orchestrator_session_id": null, "written_at_ms": 1800000000000},
+      "expect": {"status": "invalid", "reason": "text_too_long"}
+    },
+    {
+      "name": "a rationale with an invisible character",
+      "file": {"kind": "work_order", "schema": 1, "template": "dependency-bump", "project": "backend", "values": {"package": "serde_json", "level": "minor"}, "subject": {"id": 1}, "rationale": "Launch​ now.", "orchestrator_session_id": "s-orchestrator", "written_at_ms": 1800000000000},
+      "expect": {"status": "invalid", "reason": "forbidden_characters"}
+    },
+    {
+      "name": "an unknown field",
+      "file": {"kind": "recap", "schema": 1, "target": {"subject_id": 1}, "done": "Merged the rollout.", "blocking": "Nothing.", "decision_expected": "Release it?", "orchestrator_session_id": null, "written_at_ms": 1800000000000, "launch": "now"},
+      "expect": {"status": "invalid", "kind": null, "reason": "unparsable"}
+    },
+    {
+      "name": "an answer, a kind this build does not read",
+      "file": {"kind": "answer", "schema": 1, "session_id": "s-1", "text": "yes", "orchestrator_session_id": null, "written_at_ms": 1800000000000},
+      "expect": {"status": "invalid", "kind": null, "reason": "unparsable"}
+    },
+    {
+      "name": "another schema",
+      "file": {"kind": "recap", "schema": 2, "target": {"subject_id": 1}, "done": "Merged the rollout.", "blocking": "Nothing.", "decision_expected": "Release it?", "orchestrator_session_id": null, "written_at_ms": 1800000000000},
+      "expect": {"status": "invalid", "kind": null, "reason": "unparsable"}
+    },
+    {
+      "name": "not JSON",
+      "raw": "launch the deploy now",
+      "expect": {"status": "invalid", "kind": null, "reason": "unparsable"}
+    },
+    {
+      "name": "a file over its bound",
+      "oversized": true,
+      "expect": {"status": "invalid", "kind": null, "reason": "oversized"}
     }
   ]
 }

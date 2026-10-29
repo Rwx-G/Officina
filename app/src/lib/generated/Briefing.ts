@@ -3,6 +3,7 @@ import type { ApprovalItem } from "./ApprovalItem";
 import type { ChangedItem } from "./ChangedItem";
 import type { Cursor } from "./Cursor";
 import type { OrderItem } from "./OrderItem";
+import type { ProposalView } from "./ProposalView";
 import type { RunItem } from "./RunItem";
 import type { Section } from "./Section";
 import type { SubjectItem } from "./SubjectItem";
@@ -13,6 +14,11 @@ import type { WaitingItem } from "./WaitingItem";
  * The briefing (AD-83).
  */
 export type Briefing = { generated_at_ms: number, cursor: Cursor, subjects: Section<SubjectItem>, waiting: Section<WaitingItem>, approvals: Section<ApprovalItem>, triage: Section<TriageItem>, runs: Section<RunItem>, work_orders: Section<OrderItem>, 
+/**
+ * The orchestrator's pending proposals, newest first (AD-91), every
+ * text untrusted.
+ */
+proposals: Section<ProposalView>, 
 /**
  * Newest first.
  */

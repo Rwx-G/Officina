@@ -15,8 +15,10 @@ use std::collections::BTreeSet;
 use serde::{Deserialize, Serialize};
 
 use crate::board::{Card, Column, Columns};
+use crate::orders::proposal::ProposalView;
 use crate::registry::types::{
-    LaunchOutcome, RowKind, SubjectRecord, SubjectRef, SubjectStatus, WorkOrderRecord,
+    LaunchOutcome, ProposalKind, ProposalStatus, RowKind, SubjectRecord, SubjectRef, SubjectStatus,
+    WorkOrderRecord,
 };
 use crate::registry::view::{SessionView, SubjectView, TriageRow};
 use crate::relay::approvals::ApprovalView;
@@ -242,6 +244,7 @@ closed_enum! {
         StartedWaiting,
         SubjectStatus,
         OrderLaunched,
+        ProposalReceived,
     }
 }
 
@@ -280,6 +283,14 @@ pub enum ChangedItem {
         outcome: LaunchOutcome,
         at_ms: i64,
     },
+    /// The window received a proposal of the orchestrator (AD-91); `kind`
+    /// is null for a file that did not parse.
+    ProposalReceived {
+        id: String,
+        proposal: Option<ProposalKind>,
+        status: ProposalStatus,
+        at_ms: i64,
+    },
 }
 
 impl ChangedItem {
@@ -290,6 +301,7 @@ impl ChangedItem {
             ChangedItem::StartedWaiting { .. } => ChangeKind::StartedWaiting,
             ChangedItem::SubjectStatus { .. } => ChangeKind::SubjectStatus,
             ChangedItem::OrderLaunched { .. } => ChangeKind::OrderLaunched,
+            ChangedItem::ProposalReceived { .. } => ChangeKind::ProposalReceived,
         }
     }
 
@@ -299,7 +311,8 @@ impl ChangedItem {
             ChangedItem::RunFinished { at_ms, .. }
             | ChangedItem::StartedWaiting { at_ms, .. }
             | ChangedItem::SubjectStatus { at_ms, .. }
-            | ChangedItem::OrderLaunched { at_ms, .. } => *at_ms,
+            | ChangedItem::OrderLaunched { at_ms, .. }
+            | ChangedItem::ProposalReceived { at_ms, .. } => *at_ms,
         }
     }
 }
@@ -316,15 +329,18 @@ pub struct Briefing {
     pub triage: Section<TriageItem>,
     pub runs: Section<RunItem>,
     pub work_orders: Section<OrderItem>,
+    /// The orchestrator's pending proposals, newest first (AD-91), every
+    /// text untrusted.
+    pub proposals: Section<ProposalView>,
     /// Newest first.
     pub changed: Section<ChangedItem>,
 }
 
 /// What the briefing is built from (AD-83): the board's cards and pending
 /// requests, the relay view's recent entries, the registry view's open
-/// subjects and triage rows, and the orders state: every subject row and
-/// the latest work orders. A payload the window does not hold yet is
-/// empty.
+/// subjects and triage rows, and the orders state: every subject row, the
+/// latest work orders and the proposal rows, newest first. A payload the
+/// window does not hold yet is empty.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct BriefingInput<'a> {
     pub columns: Option<&'a Columns>,
@@ -334,6 +350,7 @@ pub struct BriefingInput<'a> {
     pub triage: &'a [TriageRow],
     pub subjects: &'a [SubjectRecord],
     pub work_orders: &'a [WorkOrderRecord],
+    pub proposals: &'a [ProposalView],
 }
 
 impl BriefingInput<'_> {
@@ -559,10 +576,20 @@ fn changed(input: &BriefingInput, cursor: Cursor) -> Vec<ChangedItem> {
             outcome: order.outcome,
             at_ms: order.launched_at_ms,
         });
+    // A file read since the cursor; one waiting as a file has no receipt.
+    let proposals = input.proposals.iter().filter_map(|proposal| {
+        Some(ChangedItem::ProposalReceived {
+            id: proposal.id.clone(),
+            proposal: proposal.kind,
+            status: proposal.status,
+            at_ms: proposal.received_at_ms?,
+        })
+    });
     let mut items: Vec<ChangedItem> = runs
         .chain(waiting)
         .chain(subjects)
         .chain(orders)
+        .chain(proposals)
         .filter(|item| cursor.follows(item.at_ms()))
         .collect();
     items.sort_by_key(|item| std::cmp::Reverse(item.at_ms()));
@@ -593,6 +620,14 @@ fn assemble(input: &BriefingInput, cursor: Cursor, now_ms: i64) -> Briefing {
                 .work_orders
                 .iter()
                 .map(|order| order_item(input, order))
+                .collect(),
+        ),
+        proposals: Section::of(
+            input
+                .proposals
+                .iter()
+                .filter(|p| p.status == ProposalStatus::Pending)
+                .cloned()
                 .collect(),
         ),
         changed: Section::of(changed(input, cursor)),
@@ -637,6 +672,12 @@ impl Dated for RunItem {
 impl Dated for OrderItem {
     fn dated(&self) -> Option<i64> {
         Some(self.at_ms)
+    }
+}
+
+impl Dated for ProposalView {
+    fn dated(&self) -> Option<i64> {
+        Some(self.written_at_ms)
     }
 }
 
@@ -691,6 +732,9 @@ fn drop_from<T>(section: &mut Section<T>, number: usize, gone: &BTreeSet<(usize,
     section.dropped += u32::try_from(removed).unwrap_or(u32::MAX);
 }
 
+/// How many lists [`Briefing::candidates`] numbers.
+const SECTION_LISTS: usize = 8;
+
 impl Briefing {
     /// Every list item, numbered by section in the payload's order.
     fn candidates(&self) -> Vec<Candidate> {
@@ -701,7 +745,8 @@ impl Briefing {
         candidates_of(&self.triage, 3, &mut out);
         candidates_of(&self.runs, 4, &mut out);
         candidates_of(&self.work_orders, 5, &mut out);
-        candidates_of(&self.changed, 6, &mut out);
+        candidates_of(&self.proposals, 6, &mut out);
+        candidates_of(&self.changed, 7, &mut out);
         out
     }
 
@@ -712,7 +757,8 @@ impl Briefing {
         drop_from(&mut self.triage, 3, gone);
         drop_from(&mut self.runs, 4, gone);
         drop_from(&mut self.work_orders, 5, gone);
-        drop_from(&mut self.changed, 6, gone);
+        drop_from(&mut self.proposals, 6, gone);
+        drop_from(&mut self.changed, 7, gone);
     }
 }
 
@@ -745,11 +791,11 @@ fn hold_the_bound(briefing: &mut Briefing) {
             return;
         }
         candidates.sort_by(drop_order);
-        let mut left: Vec<usize> = vec![0; 7];
+        let mut left: Vec<usize> = vec![0; SECTION_LISTS];
         for candidate in &candidates {
             left[candidate.section] += 1;
         }
-        let mut dropped: Vec<u32> = vec![0; 7];
+        let mut dropped: Vec<u32> = vec![0; SECTION_LISTS];
         let mut gone = BTreeSet::new();
         for candidate in &candidates {
             if total <= BRIEFING_MAX_BYTES {
@@ -933,6 +979,7 @@ mod tests {
         triage: Vec<TriageRow>,
         subjects: Vec<SubjectRecord>,
         orders: Vec<WorkOrderRecord>,
+        proposals: Vec<ProposalView>,
     }
 
     impl Fixture {
@@ -945,6 +992,7 @@ mod tests {
                 triage: &self.triage,
                 subjects: &self.subjects,
                 work_orders: &self.orders,
+                proposals: &self.proposals,
             }
         }
     }
@@ -1032,7 +1080,98 @@ mod tests {
                 subject_row(3, SubjectStatus::ToResume, NOW - 200 * MIN),
             ],
             orders: vec![order("o1", NOW - 15 * MIN, Some("s-c"))],
+            proposals: vec![
+                proposal(
+                    "0000000000003-0000000000000001",
+                    ProposalStatus::Pending,
+                    NOW - 60 * MIN,
+                ),
+                proposal(
+                    "0000000000002-0000000000000001",
+                    ProposalStatus::Dismissed,
+                    NOW - 70 * MIN,
+                ),
+            ],
         }
+    }
+
+    /// A recap of subject 1 received at `received_at_ms`, with `status`.
+    fn proposal(id: &str, status: ProposalStatus, received_at_ms: i64) -> ProposalView {
+        use crate::orders::proposal::{ProposalFile, ProposalTarget, RecapProposal};
+        let file = ProposalFile::recap(
+            RecapProposal {
+                target: ProposalTarget::SubjectId(1),
+                done: "<b>merged</b>".into(),
+                blocking: "nothing".into(),
+                decision_expected: "release?".into(),
+            },
+            None,
+            received_at_ms,
+        );
+        ProposalView {
+            status,
+            received_at_ms: Some(received_at_ms),
+            ..file.pending_view(id)
+        }
+    }
+
+    /// AD-83, AD-91: the pending proposals are the briefing's section,
+    /// texts untrusted; every proposal the window received since the
+    /// cursor is a change, a file not received yet none.
+    #[test]
+    fn pending_proposals_are_listed_and_received_ones_are_changed() {
+        let mut fixture = day();
+        let waiting = ProposalView {
+            received_at_ms: None,
+            ..proposal(
+                "0000000000004-0000000000000001",
+                ProposalStatus::Pending,
+                NOW,
+            )
+        };
+        fixture.proposals.push(waiting);
+        let briefing = build(
+            &fixture.input(),
+            Cursor::ReadAt {
+                at_ms: NOW - 65 * MIN,
+            },
+            NOW,
+        );
+        let listed: Vec<&str> = briefing
+            .proposals
+            .items
+            .iter()
+            .map(|p| p.id.as_str())
+            .collect();
+        assert_eq!(
+            listed,
+            [
+                "0000000000003-0000000000000001",
+                "0000000000004-0000000000000001"
+            ],
+            "pending only"
+        );
+        let received: Vec<&ChangedItem> = briefing
+            .changed
+            .items
+            .iter()
+            .filter(|c| c.kind() == ChangeKind::ProposalReceived)
+            .collect();
+        assert_eq!(
+            received,
+            [&ChangedItem::ProposalReceived {
+                id: "0000000000003-0000000000000001".into(),
+                proposal: Some(ProposalKind::Recap),
+                status: ProposalStatus::Pending,
+                at_ms: NOW - 60 * MIN,
+            }],
+            "after the cursor, received"
+        );
+        let marked = wrapped(|| serde_json::to_value(&briefing)).unwrap();
+        assert_eq!(
+            marked["proposals"]["items"][0]["content"]["recap"]["done"],
+            serde_json::json!({ "untrusted": "<b>merged</b>" })
+        );
     }
 
     #[test]
@@ -1142,8 +1281,8 @@ mod tests {
             "every kind with a time"
         );
         // Every timed item: two finished runs, two waiting cards, two
-        // subjects whose status moved, one order.
-        assert_eq!(briefing.changed.count, 7);
+        // subjects whose status moved, one order, two proposals received.
+        assert_eq!(briefing.changed.count, 9);
         let times: Vec<i64> = briefing
             .changed
             .items
@@ -1216,6 +1355,7 @@ mod tests {
             briefing.triage.dropped,
             briefing.runs.dropped,
             briefing.work_orders.dropped,
+            briefing.proposals.dropped,
             briefing.changed.dropped,
         ]
         .iter()

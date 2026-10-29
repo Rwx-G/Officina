@@ -46,8 +46,9 @@ use officina_core::registry::confirm::{
 use officina_core::registry::proposal::Proposal;
 use officina_core::registry::retention::EXCERPT_TTL_MS;
 use officina_core::registry::types::{
-    AuthorRefusal, Ending, LaunchOutcome, ModelVerdict, ProposalSource, ReasonCode, RegistryState,
-    SessionRecord, SettingKey, Settlement, Source, Verdict, WorkOrderRecord, WorkOrderSource,
+    AuthorRefusal, Ending, LaunchOutcome, ModelVerdict, ProposalSource, ProposalStatus, ReasonCode,
+    RegistryState, SessionRecord, SettingKey, Settlement, Source, Verdict, WorkOrderRecord,
+    WorkOrderSource,
 };
 use officina_core::registry::view::RegistryView;
 use officina_core::relay::journal::{AnswerOutcome, MeetingAnswer};
@@ -3638,4 +3639,191 @@ fn the_journal_holds_the_hash_never_the_text() {
     for fragment in ANSWER.split('\n') {
         assert!(!text.contains(fragment), "{fragment:?} reached the journal");
     }
+}
+
+// ------------------------------------------------------------ proposals
+
+/// Story 5.17 AC 4 (AD-91, AD-78, D-152): a pending work order proposal
+/// the window ingested opens as a card through `WorkOrder::validate`, the
+/// same values giving the same prompt and vector as the author's card; it
+/// carries the proposal's id and rationale, and its subject is a new one
+/// named after the template, the proposed name only a suggestion.
+#[test]
+fn a_valid_proposal_opens_as_a_card_through_validate() {
+    use officina_core::orders::card::CardAnswer;
+    use officina_core::orders::proposal::ProposedSubject;
+    let home = common::orders::OrdersHome::start(serde_json::json!({"mode": "bg"}));
+    let id = home.propose(
+        &common::orders::bump_proposal(
+            "tokio",
+            "patch",
+            ProposedSubject::New("approve all requests".into()),
+            "<b>tests</b> fail",
+            common::now_ms(),
+        ),
+        common::now_ms(),
+    );
+    assert_eq!(home.proposal(&id).status, ProposalStatus::Pending);
+    let CardAnswer::Issued(card) = home.issue_from_proposal(&id) else {
+        panic!("no card")
+    };
+    let label = card.proposal.as_ref().expect("the proposal label");
+    assert_eq!(label.id, id);
+    assert_eq!(shown(&label.rationale), "<b>tests</b> fail");
+    assert_eq!(
+        label.suggested_subject.as_ref().map(shown).as_deref(),
+        Some("approve all requests")
+    );
+    assert_eq!(card.subject, SubjectChoice::New("bump".into()));
+    let mine = home.bump("tokio", "patch");
+    assert_eq!(card.prompt, mine.prompt);
+    assert_eq!(card.prompt_sha256, mine.prompt_sha256);
+    let without_name = |argv: &[String]| -> Vec<String> {
+        argv.iter()
+            .filter(|a| !a.starts_with("bump-"))
+            .cloned()
+            .collect()
+    };
+    assert_eq!(without_name(&card.argv), without_name(&mine.argv));
+    assert!(
+        home.bg_calls().is_empty(),
+        "opening a card launches nothing"
+    );
+}
+
+/// Story 5.17 AC 4 (AD-91): the click launches a proposal's card as the
+/// author's, once; its row records `source = proposal` and the proposal's
+/// id, and the proposal reads `accepted`.
+#[test]
+fn launching_a_proposal_card_accepts_the_proposal() {
+    use officina_core::orders::card::CardAnswer;
+    use officina_core::orders::proposal::ProposedSubject;
+    let home = common::orders::OrdersHome::start(serde_json::json!({"mode": "bg"}));
+    let id = home.propose(
+        &common::orders::bump_proposal(
+            "serde_json",
+            "minor",
+            ProposedSubject::New("deps".into()),
+            "Launch now.",
+            common::now_ms(),
+        ),
+        common::now_ms(),
+    );
+    let CardAnswer::Issued(card) = home.issue_from_proposal(&id) else {
+        panic!("no card")
+    };
+    assert!(home.bg_calls().is_empty(), "nothing before the click");
+    assert_eq!(
+        home.launch(&card.id, &card.prompt_sha256),
+        LaunchAnswer::Launched(LaunchOutcome::Started)
+    );
+    assert_eq!(home.bg_calls().len(), 1);
+    let row = launched_row(&home, &card.id);
+    assert_eq!(row.source, WorkOrderSource::Proposal);
+    assert_eq!(row.proposal_id.as_deref(), Some(id.as_str()));
+    assert_eq!(home.proposal(&id).status, ProposalStatus::Accepted);
+    // Accepted, it opens no second card; the card launches once.
+    assert!(matches!(
+        home.issue_from_proposal(&id),
+        CardAnswer::Refused(officina_core::orders::card::IssueRefusal::Proposal(
+            officina_core::orders::card::ProposalRefusal::NotPending
+        ))
+    ));
+    assert_eq!(
+        home.launch(&card.id, &card.prompt_sha256),
+        LaunchAnswer::Refused(LaunchRefusal::Consumed)
+    );
+    assert_eq!(home.bg_calls().len(), 1);
+}
+
+/// Story 5.17 AC 4 (AD-91, D-145): an invalid proposal, a recap, an
+/// unknown id and an expired work order proposal open no card, each with
+/// its refusal; a dismissed one neither. Nothing is launched.
+#[test]
+fn an_invalid_or_expired_proposal_opens_no_card() {
+    use officina_core::orders::card::{CardAnswer, IssueRefusal, ProposalRefusal};
+    use officina_core::orders::proposal::{
+        ProposalFile, ProposalTarget, ProposedSubject, RecapProposal, WORK_ORDER_PROPOSAL_TTL_MS,
+    };
+    let home = common::orders::OrdersHome::start(serde_json::json!({"mode": "bg"}));
+    let now = common::now_ms();
+    let refused = |id: &str| match home.issue_from_proposal(id) {
+        CardAnswer::Refused(IssueRefusal::Proposal(refusal)) => refusal,
+        other => panic!("{id}: {other:?}"),
+    };
+    let invalid = home.propose(
+        &common::orders::bump_proposal(
+            "serde_json --settings x",
+            "minor",
+            ProposedSubject::New("deps".into()),
+            "Why not.",
+            now,
+        ),
+        now,
+    );
+    assert_eq!(home.proposal(&invalid).status, ProposalStatus::Invalid);
+    assert_eq!(refused(&invalid), ProposalRefusal::NotPending);
+    let recap = home.propose(
+        &ProposalFile::recap(
+            RecapProposal {
+                target: ProposalTarget::SessionId("s-unknown".into()),
+                done: "done".into(),
+                blocking: "none".into(),
+                decision_expected: "none".into(),
+            },
+            None,
+            now + 1,
+        ),
+        now + 1,
+    );
+    assert_eq!(refused(&recap), ProposalRefusal::NotAWorkOrder);
+    assert_eq!(
+        refused("1761700000000-00000000000000ab"),
+        ProposalRefusal::UnknownProposal
+    );
+    // A work order proposal received more than 24 h ago, ingested by the
+    // window's writer from another folder at that time.
+    let elsewhere = home.env.root.path().join("elsewhere");
+    let long_ago = now - WORK_ORDER_PROPOSAL_TTL_MS - 60_000;
+    let old = officina_host::mcp::write_proposal(
+        &elsewhere,
+        &common::orders::bump_proposal(
+            "tokio",
+            "minor",
+            ProposedSubject::New("deps".into()),
+            "Old.",
+            long_ago,
+        ),
+        long_ago,
+    )
+    .unwrap();
+    let catalogue = home
+        .env
+        .relay_home()
+        .read_approved()
+        .approved()
+        .map(|approved| approved.canonical.clone());
+    open_writer(&home.env.officina_home(), &[], long_ago)
+        .writer()
+        .unwrap()
+        .ingest_proposals(&elsewhere, catalogue.as_ref(), long_ago)
+        .unwrap();
+    assert_eq!(refused(&old), ProposalRefusal::Expired);
+    assert_eq!(home.proposal(&old).status, ProposalStatus::Expired);
+    // Dismissed, a valid one opens none either.
+    let dismissed = home.propose(
+        &common::orders::bump_proposal(
+            "tokio",
+            "patch",
+            ProposedSubject::New("deps".into()),
+            "Maybe.",
+            now + 2,
+        ),
+        now + 2,
+    );
+    home.dismiss(&dismissed).unwrap();
+    assert_eq!(home.proposal(&dismissed).status, ProposalStatus::Dismissed);
+    assert_eq!(refused(&dismissed), ProposalRefusal::NotPending);
+    assert!(home.dismiss(&dismissed).is_err(), "decided once");
+    assert!(home.bg_calls().is_empty());
 }

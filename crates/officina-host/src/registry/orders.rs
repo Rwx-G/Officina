@@ -12,8 +12,8 @@ use officina_core::orders::work_order::{
 };
 use officina_core::registry::filing::{NewSubjectFiling, refiles_on_binding, subject_for_new};
 use officina_core::registry::types::{
-    LaunchOutcome, OrchestratorStartOutcome, SettingKey, Source, SubjectStatus, WorkOrderRecord,
-    WorkOrderSource,
+    LaunchOutcome, OrchestratorStartOutcome, ProposalStatus, SettingKey, Source, SubjectStatus,
+    WorkOrderRecord, WorkOrderSource,
 };
 use officina_core::spawn;
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
@@ -206,6 +206,8 @@ impl Writer {
     /// vector that runs as JSON, the prompt's SHA-256, the catalogue hash
     /// and `name` = `<template>-<seq>`. A name or `(template, seq)` the
     /// registry already holds is refused [`NameTaken`], nothing written.
+    /// A launch from a proposal sets it `accepted`, with the order's id, in
+    /// the same transaction (AD-91): a card from it launched.
     pub fn insert_work_order(
         &mut self,
         launch: &LaunchRecord,
@@ -217,7 +219,10 @@ impl Writer {
             SubjectChoice::Existing(id) => (Some(*id), None),
             SubjectChoice::New(name) => (None, Some(name.as_str())),
         };
-        let inserted = self.conn.execute(
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let inserted = tx.execute(
             "INSERT INTO work_order (id, seq, template, project, cwd, values_json, argv_json,
                  prompt_sha256, catalogue_hash, name, subject_id, new_subject_name, source,
                  proposal_id, launched_at_ms, outcome)
@@ -242,10 +247,24 @@ impl Writer {
             ],
         );
         match inserted {
-            Ok(_) => Ok(Ok(())),
-            Err(error) if is_unique_violation(&error) => Ok(Err(NameTaken)),
-            Err(error) => Err(error.into()),
+            Ok(_) => {}
+            Err(error) if is_unique_violation(&error) => return Ok(Err(NameTaken)),
+            Err(error) => return Err(error.into()),
         }
+        if let Some(proposal) = launch.proposal_id {
+            tx.execute(
+                "UPDATE proposal SET status = ?2, decided_at_ms = ?3, work_order_id = ?4
+                 WHERE id = ?1 AND status != ?2",
+                params![
+                    proposal,
+                    ProposalStatus::Accepted.code(),
+                    now_ms,
+                    launch.card_id
+                ],
+            )?;
+        }
+        tx.commit()?;
+        Ok(Ok(()))
     }
 
     /// Records how the launch of order `id` ended (AD-81 step 3), even

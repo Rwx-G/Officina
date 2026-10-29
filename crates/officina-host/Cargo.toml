@@ -90,6 +90,10 @@ name = "registry_triage"
 required-features = ["window-authority"]
 
 [[test]]
+name = "proposal_ingest"
+required-features = ["window-authority"]
+
+[[test]]
 name = "registry_orders"
 required-features = ["window-authority"]
 

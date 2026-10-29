@@ -31,6 +31,8 @@ const COMMANDS: &[&str] = &[
     "list_discarded",
     "issue_card",
     "edit_card",
+    "issue_card_from_proposal",
+    "dismiss_proposal",
     "launch_work_order",
     "get_orchestrator",
     "mark_briefing_read",

@@ -12,6 +12,9 @@ use std::time::Duration;
 use officina_core::orders::card::{
     CardAnswer, CardChange, CardRequest, LaunchAnswer, WorkOrderCard,
 };
+use officina_core::orders::proposal::{
+    ProposalFile, ProposalView, ProposedSubject, WorkOrderProposal,
+};
 use officina_host::collector::{Collector, LoadedFloor};
 use officina_host::paths::Paths;
 use officina_host::spawn::BaseEnv;
@@ -154,6 +157,151 @@ impl OrdersHome {
             .expect("the collector answers")
     }
 
+    /// `<home>/orchestrator/proposals`, where the proposal tools write.
+    pub fn proposals_dir(&self) -> PathBuf {
+        officina_host::paths::orchestrator_proposals_dir(&self.env.officina_home())
+    }
+
+    /// Writes `bytes` as the file `name` of the proposals' folder, as a
+    /// hand would, and waits for the window's collector to take it: the
+    /// file is gone.
+    pub fn propose_file(&self, name: &str, bytes: &[u8]) {
+        let dir = self.proposals_dir();
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(name);
+        std::fs::write(&path, bytes).unwrap();
+        self.wait_gone(&path);
+    }
+
+    /// Files under the subjects the proposal checks name, through the
+    /// window's own path: an event line per session, then the author's
+    /// actions. Returns an open subject of `backend`, an archived one of
+    /// `backend` and an open one of `lab`.
+    pub fn seed_subjects(&self) -> [i64; 3] {
+        use officina_core::registry::confirm::{AuthorAction, SubjectOrigin};
+        let now = super::now_ms();
+        let events = self.env.events_dir();
+        std::fs::create_dir_all(&events).unwrap();
+        let lines: String = [
+            ("s-open", "backend"),
+            ("s-old", "backend"),
+            ("s-lab", "lab"),
+        ]
+        .iter()
+        .map(|(session, folder)| {
+            format!(
+                "{}\n",
+                serde_json::json!({"v": 1, "ts": now - 60_000, "event": "SessionStart",
+                        "session_id": session, "cwd": format!("C:/work/{folder}")})
+            )
+        })
+        .collect();
+        std::fs::write(
+            events.join(officina_core::dates::event_file_name(now)),
+            lines,
+        )
+        .unwrap();
+        let act = |action: AuthorAction| {
+            ask(
+                &self.handle().sender,
+                AuthorCommand::Act(action),
+                AUTHOR_WAIT,
+            )
+            .and_then(|answer| answer.into_done())
+        };
+        let create = |name: &str, session: &str| -> i64 {
+            let deadline = std::time::Instant::now() + Duration::from_secs(10);
+            loop {
+                let made = act(AuthorAction::Create {
+                    name: name.to_owned(),
+                    origin: SubjectOrigin::Sessions(vec![session.to_owned()]),
+                });
+                match made {
+                    Ok(Some(id)) => return id,
+                    _ if std::time::Instant::now() < deadline => {
+                        std::thread::sleep(Duration::from_millis(100));
+                    }
+                    other => panic!("subject {name}: {other:?}"),
+                }
+            }
+        };
+        let open = create("upgrades", "s-open");
+        let old = create("old work", "s-old");
+        let lab = create("lab notes", "s-lab");
+        act(AuthorAction::Archive {
+            subject: old,
+            routine: false,
+        })
+        .unwrap();
+        [open, old, lab]
+    }
+
+    /// Writes `file` through `officina mcp`'s writer at `at` and waits for
+    /// the window to ingest it; its id.
+    pub fn propose(&self, file: &ProposalFile, at: i64) -> String {
+        let id = officina_host::mcp::write_proposal(&self.proposals_dir(), file, at).unwrap();
+        self.wait_gone(
+            &self
+                .proposals_dir()
+                .join(officina_core::orders::proposal::file_name(&id)),
+        );
+        id
+    }
+
+    fn wait_gone(&self, path: &std::path::Path) {
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while path.exists() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the window did not ingest {}",
+                path.display()
+            );
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+
+    /// The proposal rows, newest first, read as a command line reads them.
+    pub fn proposals(&self) -> Vec<ProposalView> {
+        officina_host::registry::store::open_reader(&self.env.officina_home(), &[])
+            .unwrap()
+            .proposals()
+            .unwrap()
+    }
+
+    /// The row of proposal `id`.
+    pub fn proposal(&self, id: &str) -> ProposalView {
+        self.proposals()
+            .into_iter()
+            .find(|p| p.id == id)
+            .unwrap_or_else(|| panic!("no row for proposal {id}"))
+    }
+
+    /// What `issue_card_from_proposal` answers.
+    pub fn issue_from_proposal(&self, proposal_id: &str) -> CardAnswer {
+        ask(
+            &self.handle().sender,
+            AuthorCommand::IssueCardFromProposal {
+                proposal_id: proposal_id.to_owned(),
+            },
+            AUTHOR_WAIT,
+        )
+        .expect("the collector answers")
+        .into_card()
+        .unwrap()
+    }
+
+    /// What `dismiss_proposal` answers.
+    pub fn dismiss(&self, proposal_id: &str) -> Result<(), officina_core::ipc::IpcError> {
+        ask(
+            &self.handle().sender,
+            AuthorCommand::DismissProposal {
+                proposal_id: proposal_id.to_owned(),
+            },
+            AUTHOR_WAIT,
+        )
+        .and_then(|answer| answer.into_done().map(|_| ()))
+    }
+
     /// The fake's logged calls holding `--bg`: the launches.
     pub fn bg_calls(&self) -> Vec<serde_json::Value> {
         fake_claude_calls(&self.env.fake_log())
@@ -179,6 +327,32 @@ impl Drop for OrdersHome {
     fn drop(&mut self) {
         self.stop();
     }
+}
+
+/// A work order proposal of `bump` in `backend` with these values, its
+/// subject `subject` and its rationale `rationale`, written at `at`.
+pub fn bump_proposal(
+    package: &str,
+    level: &str,
+    subject: ProposedSubject,
+    rationale: &str,
+    at: i64,
+) -> ProposalFile {
+    ProposalFile::work_order(
+        WorkOrderProposal {
+            template: "bump".to_owned(),
+            project: "backend".to_owned(),
+            values: [
+                ("package".to_owned(), package.to_owned()),
+                ("level".to_owned(), level.to_owned()),
+            ]
+            .into(),
+            subject,
+            rationale: rationale.to_owned(),
+        },
+        Some("s-orchestrator".to_owned()),
+        at,
+    )
 }
 
 /// A request for `bump` in `backend` with these values, its default

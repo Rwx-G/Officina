@@ -29,7 +29,7 @@ use officina_core::orders::work_order::{SubjectChoice, cut_error};
 use officina_core::registry::types::{
     LaunchOutcome, SubjectRecord, SubjectStatus, WorkOrderSource,
 };
-use officina_core::relay::catalogue::{ApprovedCatalogue, RelayFloor};
+use officina_core::relay::catalogue::{ApprovedCatalogue, CanonicalCatalogue, RelayFloor};
 use officina_core::relay::journal::{JournalEntry, WorkOrderLaunched};
 use officina_core::relay::template::TemplateUnavailable;
 use officina_core::spawn::ClaudeVector;
@@ -183,6 +183,60 @@ pub(crate) fn issue(
     })
 }
 
+/// The approved snapshot the window's record confirms (D-175), which
+/// proposals are validated against at ingestion (AD-91); none when no
+/// catalogue is approved or the record does not vouch for it.
+pub(crate) fn approved_catalogue(relay: &RelayHome) -> Option<CanonicalCatalogue> {
+    catalogue(relay)
+        .ok()
+        .map(|(approved, _)| approved.canonical)
+}
+
+/// Issues a card from the pending work order proposal `proposal_id`
+/// (AD-91, D-152) on the collector thread: its stored values through
+/// core's issue, as the author's request would go, with the `seq` the
+/// registry and the store reserve. A proposal that opens no card is
+/// answered with why.
+pub(crate) fn issue_from_proposal(
+    store: &mut CardStore,
+    collector: &Collector,
+    registry: &mut WindowRegistry,
+    quota: Option<&QuotaView>,
+    proposal_id: &str,
+    now_ms: i64,
+) -> Result<CardAnswer, IpcError> {
+    let proposal = match registry.proposal_order(proposal_id, now_ms)? {
+        Ok(proposal) => proposal,
+        Err(refusal) => return Ok(CardAnswer::Refused(IssueRefusal::Proposal(refusal))),
+    };
+    let (approved, current) = match catalogue(collector.relay()) {
+        Ok(found) => found,
+        Err(unavailable) => return Ok(CardAnswer::Refused(IssueRefusal::Template(unavailable))),
+    };
+    let (subjects, highest) = registry.card_reads(&proposal.template)?;
+    let seq = store.reserve_seq(&proposal.template, highest);
+    let id = store.new_id(now_ms);
+    let config = config_dir(collector);
+    let inputs = CardInputs {
+        approved: &approved,
+        current: &current,
+        subjects: &subjects,
+        quota,
+        config_dir: config.as_deref(),
+        now_ms,
+    };
+    Ok(
+        match card::issue_from_proposal(&id, seq, &proposal, &inputs) {
+            Ok(issued) => {
+                let shown = issued.card().clone();
+                store.insert(issued);
+                CardAnswer::Issued(Box::new(shown))
+            }
+            Err(refusal) => CardAnswer::Refused(refusal),
+        },
+    )
+}
+
 /// Edits card `card_id` (AD-78): a new card under the same `seq`, the old
 /// one superseded once the new one exists.
 pub(crate) fn edit(
@@ -296,13 +350,19 @@ pub(crate) fn grant(
     let Some(claude) = claude.cloned() else {
         return Ok(LaunchGrant::Refused(LaunchRefusal::ClaudeNotExecutable));
     };
+    // A card opened from a proposal records it, and accepts it (AD-91).
+    let proposal_id = shown.proposal.as_ref().map(|p| p.id.as_str());
     let record = LaunchRecord {
         order: issued.order(),
         card_id,
         seq: issued.seq(),
-        source: WorkOrderSource::Composer,
+        source: if proposal_id.is_some() {
+            WorkOrderSource::Proposal
+        } else {
+            WorkOrderSource::Composer
+        },
         subject: &shown.subject,
-        proposal_id: None,
+        proposal_id,
     };
     if registry.insert_work_order(&record, now_ms)?.is_err() {
         return Ok(LaunchGrant::Refused(LaunchRefusal::NameTaken));

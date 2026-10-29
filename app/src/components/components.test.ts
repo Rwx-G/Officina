@@ -48,8 +48,12 @@ import launchRefusalSource from "../lib/generated/LaunchRefusal.ts?raw";
 import Composer from "./Composer.svelte";
 import WorkOrderCard from "./WorkOrderCard.svelte";
 import { OrchestratorStore } from "../lib/orchestrator.svelte";
-import { LAUNCH_REFUSAL_TEXT } from "../lib/orchestrator-text";
+import { LAUNCH_REFUSAL_TEXT, PROPOSAL_INVALID_TEXT, invalidReasonText } from "../lib/orchestrator-text";
 import type { LaunchRefusal } from "../lib/generated/LaunchRefusal";
+import invalidReasonSource from "../lib/generated/ProposalInvalidReason.ts?raw";
+import ProposalList from "./ProposalList.svelte";
+import type { ProposalInvalidReason } from "../lib/generated/ProposalInvalidReason";
+import type { ProposalView } from "../lib/generated/ProposalView";
 import type { OrchestratorView } from "../lib/generated/OrchestratorView";
 import type { WorkOrderCard as WorkOrderCardPayload } from "../lib/generated/WorkOrderCard";
 
@@ -1008,6 +1012,7 @@ describe("Briefing", () => {
         },
       ]),
       work_orders: section([]),
+      proposals: section([]),
       changed: section([{ kind: "started_waiting", key: "k1", name: hostile, column: "needs_you", at_ms: NOW }], 3),
     };
   }
@@ -1246,5 +1251,63 @@ describe("AnswerComposer", () => {
     await fireEvent.click(getByTestId("answer-send"));
     await vi.waitFor(() => expect(getByTestId("answer-result").textContent).toContain(ANSWER_REFUSAL_TEXT.leading_slash));
     expect((getByTestId("answer-text") as HTMLTextAreaElement).value).toBe("/clear");
+  });
+});
+
+describe("ProposalList", () => {
+  const hostile = `<img src=x onerror="window.__officinaXss = 1">`;
+
+  function props(proposals: ProposalView[]) {
+    return {
+      proposals,
+      deleted: { misnamed: 2, over_limit: 1 },
+      subjectNames: new Map<number, string>(),
+      nowMs: NOW,
+      busy: false,
+      error: null,
+      onOpen: vi.fn(),
+      onDismiss: vi.fn(),
+    };
+  }
+
+  it("ProposalList renders markup in proposal texts as text", () => {
+    const view = fixtureOf<OrchestratorView>("orchestrator", "orchestrator-day");
+    expect(view.proposals.some((p) => JSON.stringify(p.content).includes("<img"))).toBe(true);
+    const { container, getAllByTestId, getByTestId } = render(ProposalList, props(view.proposals));
+    expect(container.querySelector("img")).toBeNull();
+    const texts = getAllByTestId("proposal-text").map((t) => t.textContent);
+    expect(texts.some((t) => t?.includes(hostile))).toBe(true);
+    expect(getAllByTestId("proposal-label").every((label) => label.textContent === "proposal")).toBe(true);
+    expect(getByTestId("proposals-deleted").textContent).toContain("2 misnamed files");
+    expect((window as { __officinaXss?: number }).__officinaXss).toBeUndefined();
+  });
+
+  it("every invalid reason has a wording", () => {
+    // The generated union, read as text: its values come from Rust's
+    // `ProposalInvalidReason::ALL`, so a new reason is iterated here.
+    const reasons = Array.from(invalidReasonSource.matchAll(/"([a-z_]+)"/g), (m) => m[1]! as ProposalInvalidReason);
+    expect(reasons.length).toBeGreaterThan(0);
+    expect(Object.keys(PROPOSAL_INVALID_TEXT).sort()).toEqual([...reasons].sort());
+    const texts = reasons.map((r) => PROPOSAL_INVALID_TEXT[r]);
+    expect(new Set(texts).size).toBe(texts.length);
+    const base = fixtureOf<OrchestratorView>("orchestrator", "orchestrator-day").proposals.find((p) => p.kind === null)!;
+    for (const reason of reasons) {
+      cleanup();
+      const { getByTestId } = render(ProposalList, props([{ ...base, invalid_reason: reason }]));
+      expect(getByTestId("proposal-reason").textContent).toContain(PROPOSAL_INVALID_TEXT[reason]);
+    }
+    // A code this window does not know is shown as the code it is.
+    expect(invalidReasonText("from_a_newer_window")).toBe("from_a_newer_window");
+  });
+
+  it("Open as card and Dismiss call back with the proposal's id", async () => {
+    const view = fixtureOf<OrchestratorView>("orchestrator", "orchestrator-day");
+    const pending = view.proposals.filter((p) => p.status === "pending" && p.kind === "work_order");
+    const shown = props(pending);
+    const { getAllByTestId } = render(ProposalList, shown);
+    await fireEvent.click(getAllByTestId("proposal-open")[0]!);
+    await fireEvent.click(getAllByTestId("proposal-dismiss")[1]!);
+    expect(shown.onOpen).toHaveBeenCalledWith(pending[0]!.id);
+    expect(shown.onDismiss).toHaveBeenCalledWith(pending[1]!.id);
   });
 });

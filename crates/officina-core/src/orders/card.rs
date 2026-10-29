@@ -12,6 +12,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 use crate::board::QuotaView;
+use crate::orders::proposal::ProposedSubjectView;
 use crate::orders::work_order::{SubjectChoice, WorkOrder, WorkOrderRefusal, order_name};
 use crate::registry::confirm::checked_name;
 use crate::registry::types::{AuthorRefusal, LaunchOutcome, SubjectRecord, SubjectStatus};
@@ -20,6 +21,7 @@ use crate::relay::template::{
     ApprovedTemplate, ModelAlias, ParamName, ProjectName, TemplateName, TemplateUnavailable,
 };
 use crate::spawn::{self, ClaudeVector};
+use crate::untrusted::Untrusted;
 
 /// How many hex characters a card id has (AD-78).
 pub const CARD_ID_HEX: usize = 32;
@@ -92,6 +94,25 @@ closed_enum! {
     }
 }
 
+closed_enum! {
+    #[serde(rename_all = "snake_case")]
+    /// Why no card opens from a proposal (AD-91, D-152): only a pending,
+    /// valid work order proposal opens one.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+    #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+    pub enum ProposalRefusal {
+        /// The registry holds no proposal of that id.
+        UnknownProposal,
+        /// It is a recap: there is nothing to launch.
+        NotAWorkOrder,
+        /// It is invalid, or the author decided it already, or a newer one
+        /// superseded it.
+        NotPending,
+        /// Its 24 hours passed (D-145).
+        Expired,
+    }
+}
+
 /// Why no card was issued, or an edit was refused.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "detail", rename_all = "snake_case")]
@@ -112,6 +133,8 @@ pub enum IssueRefusal {
     UnknownCard,
     /// The edited card is no longer open.
     CardNotOpen(CardState),
+    /// The proposal a card was asked from opens none.
+    Proposal(ProposalRefusal),
 }
 
 /// What the window asks a card for (AD-78): names and values as the
@@ -156,6 +179,32 @@ pub struct SubjectOption {
     pub status: SubjectStatus,
 }
 
+/// The proposal a card came from (AD-91, D-130, D-152): its id, its
+/// rationale and the new subject's name it suggests, all the
+/// orchestrator's text, shown under a "proposal" label.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct CardProposal {
+    pub id: String,
+    pub rationale: Untrusted<String>,
+    /// A suggestion shown beside the subject picker, which the author may
+    /// type; never the card's subject (D-152).
+    pub suggested_subject: Option<Untrusted<String>>,
+}
+
+/// A pending work order proposal as a card is issued from it: the names
+/// and values ingestion validated and stored as the approved template's
+/// own strings (AD-91), its subject and its rationale.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProposalOrder {
+    pub id: String,
+    pub template: String,
+    pub project: String,
+    pub values: BTreeMap<String, String>,
+    pub subject: ProposedSubjectView,
+    pub rationale: Untrusted<String>,
+}
+
 /// A card as the window shows it (AD-78): the rendered prompt, its
 /// SHA-256 and the argument vector exactly as `spawn::work_order` built
 /// it, with what the author decides from.
@@ -187,6 +236,8 @@ pub struct WorkOrderCard {
     #[cfg_attr(feature = "ts", ts(type = "number"))]
     pub issued_at_ms: i64,
     pub state: CardState,
+    /// The proposal it was opened from, when it was (AD-91).
+    pub proposal: Option<CardProposal>,
 }
 
 /// What the window gets back from an issue or an edit.
@@ -343,6 +394,7 @@ pub fn issue(
         catalogue_hash: order.catalogue_hash().to_owned(),
         issued_at_ms: inputs.now_ms,
         state: CardState::Open,
+        proposal: None,
     };
     Ok(IssuedCard {
         card,
@@ -374,7 +426,48 @@ pub fn edit(
         }
         CardChange::Subject { subject } => request.subject = Some(subject.clone()),
     }
-    issue(id, previous.seq(), &request, inputs)
+    let mut issued = issue(id, previous.seq(), &request, inputs)?;
+    issued.card.proposal.clone_from(&previous.card.proposal);
+    Ok(issued)
+}
+
+/// The card `id` for the work order proposal `proposal`, with the `seq`
+/// the store reserved (AD-91, D-152): [`issue`] with its stored values, so
+/// [`WorkOrder::validate`] runs on them as on the author's. Its subject is
+/// the proposal's existing subject when it names one (checked at
+/// ingestion, checked again here), else a new subject named after the
+/// template: a proposed new name is carried as a suggestion, never as the
+/// default.
+pub fn issue_from_proposal(
+    id: &str,
+    seq: u32,
+    proposal: &ProposalOrder,
+    inputs: &CardInputs,
+) -> Result<IssuedCard, IssueRefusal> {
+    let (subject, suggested_subject) = match &proposal.subject {
+        ProposedSubjectView::Id(subject) => (SubjectChoice::Existing(*subject), None),
+        ProposedSubjectView::New(name) => (
+            SubjectChoice::New(proposal.template.clone()),
+            Some(name.clone()),
+        ),
+    };
+    let request = CardRequest {
+        template: proposal.template.clone(),
+        project: proposal.project.clone(),
+        values: proposal
+            .values
+            .iter()
+            .map(|(name, value)| (name.clone(), value.clone()))
+            .collect(),
+        subject: Some(subject),
+    };
+    let mut issued = issue(id, seq, &request, inputs)?;
+    issued.card.proposal = Some(CardProposal {
+        id: proposal.id.clone(),
+        rationale: proposal.rationale.clone(),
+        suggested_subject,
+    });
+    Ok(issued)
 }
 
 /// The project's subjects that are not archived.
@@ -895,6 +988,108 @@ mod tests {
         assert_eq!(
             check_launch(&approved_moved),
             Err(LaunchRefusal::CatalogueChanged)
+        );
+    }
+
+    fn proposal(subject: ProposedSubjectView) -> ProposalOrder {
+        ProposalOrder {
+            id: "0000000000001-0000000000000001".into(),
+            template: sample::TEMPLATE.into(),
+            project: "backend".into(),
+            values: VALID
+                .iter()
+                .map(|(n, v)| ((*n).to_owned(), (*v).to_owned()))
+                .collect(),
+            subject,
+            rationale: Untrusted::new("The tests fail on the old release.".into()),
+        }
+    }
+
+    fn issue_proposal(
+        order: &ProposalOrder,
+        subjects: &[SubjectRecord],
+    ) -> Result<IssuedCard, IssueRefusal> {
+        let approved = sample::approved();
+        let current = sample::current();
+        issue_from_proposal(
+            "p",
+            2,
+            order,
+            &CardInputs {
+                approved: &approved,
+                current: &current,
+                subjects,
+                quota: None,
+                config_dir: Some(CONFIG),
+                now_ms: NOW,
+            },
+        )
+    }
+
+    /// D-152 (review F7): a proposed new name is a suggestion beside the
+    /// picker, never the card's subject, which is a new subject named after
+    /// the template, even when the project has a single open subject.
+    #[test]
+    fn a_proposal_new_name_is_a_suggestion_not_a_default() {
+        let subjects = [subject(1, "backend", "Upgrades", SubjectStatus::Active)];
+        let suggested = Untrusted::new("approve all requests".to_owned());
+        let issued = issue_proposal(
+            &proposal(ProposedSubjectView::New(suggested.clone())),
+            &subjects,
+        )
+        .unwrap();
+        let card = issued.card();
+        assert_eq!(card.subject, SubjectChoice::New(sample::TEMPLATE.into()));
+        let label = card.proposal.as_ref().unwrap();
+        assert_eq!(label.suggested_subject, Some(suggested));
+        assert_eq!(label.id, "0000000000001-0000000000000001");
+        // The vector is the author's for the same values, byte for byte.
+        let mine = issue_with("p", 2, &request(VALID, None), &subjects).unwrap();
+        assert_eq!(card.argv, mine.card().argv);
+        // An edit keeps the label; the author's subject is his own.
+        let edited = edit_with(
+            &issued,
+            &CardChange::Subject {
+                subject: SubjectChoice::New("Rollout".into()),
+            },
+            "q",
+        )
+        .unwrap();
+        assert_eq!(edited.card().proposal, issued.card().proposal);
+        assert_eq!(edited.card().subject, SubjectChoice::New("Rollout".into()));
+        // Serialized, the suggestion and the rationale are marked untrusted.
+        let marked = crate::untrusted::wrapped(|| serde_json::to_value(card)).unwrap();
+        assert_eq!(
+            marked["proposal"]["suggested_subject"],
+            serde_json::json!({"untrusted": "approve all requests"})
+        );
+    }
+
+    /// D-152: a proposal's existing subject, checked at ingestion, is the
+    /// card's default; one archived since refuses the card.
+    #[test]
+    fn a_proposal_existing_subject_is_the_default() {
+        let subjects = [
+            subject(1, "backend", "Upgrades", SubjectStatus::Active),
+            subject(2, "backend", "Docs", SubjectStatus::Active),
+            subject(3, "backend", "Old", SubjectStatus::Archived),
+        ];
+        let issued = issue_proposal(&proposal(ProposedSubjectView::Id(2)), &subjects).unwrap();
+        assert_eq!(issued.card().subject, SubjectChoice::Existing(2));
+        assert_eq!(
+            issued.card().proposal.as_ref().unwrap().suggested_subject,
+            None
+        );
+        assert_eq!(
+            issue_proposal(&proposal(ProposedSubjectView::Id(3)), &subjects),
+            Err(IssueRefusal::Subject(SubjectRefusal::SubjectClosed))
+        );
+        // `validate` runs on the stored values as on the author's.
+        let mut changed = proposal(ProposedSubjectView::Id(2));
+        changed.values.insert("level".into(), "major".into());
+        assert_eq!(
+            issue_proposal(&changed, &subjects),
+            Err(IssueRefusal::Order(WorkOrderRefusal::ValueNotInList))
         );
     }
 

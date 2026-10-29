@@ -9,6 +9,10 @@ import type { IssueRefusal } from "./generated/IssueRefusal";
 import type { LaunchOutcome } from "./generated/LaunchOutcome";
 import type { LaunchRefusal } from "./generated/LaunchRefusal";
 import type { LiveStatus } from "./generated/LiveStatus";
+import type { ProposalInvalidReason } from "./generated/ProposalInvalidReason";
+import type { ProposalKind } from "./generated/ProposalKind";
+import type { ProposalRefusal } from "./generated/ProposalRefusal";
+import type { ProposalStatus } from "./generated/ProposalStatus";
 import type { StartAnswer } from "./generated/StartAnswer";
 import type { StartRefusal } from "./generated/StartRefusal";
 import type { RunKind } from "./generated/RunKind";
@@ -139,8 +143,64 @@ export function changeText(item: ChangedItem): string {
       return `is now ${SUBJECT_STATUS_TEXT[item.status]}`;
     case "order_launched":
       return `launched, ${OUTCOME_TEXT[item.outcome]}`;
+    case "proposal_received":
+      return `received, ${PROPOSAL_STATUS_TEXT[item.status]}`;
   }
 }
+
+/** A proposal's kind; a file that did not parse has none (D-133). */
+export const PROPOSAL_KIND_TEXT: Record<ProposalKind, string> = {
+  recap: "Recap",
+  work_order: "Work order",
+  answer: "Answer",
+};
+
+/** The kind of a proposal, or of a file that did not parse. */
+export function proposalKindText(kind: ProposalKind | null): string {
+  return kind === null ? "Unreadable file" : PROPOSAL_KIND_TEXT[kind];
+}
+
+/** Where a proposal stands (AD-91, D-145). */
+export const PROPOSAL_STATUS_TEXT: Record<ProposalStatus, string> = {
+  pending: "pending",
+  invalid: "invalid",
+  accepted: "accepted: a card from it launched",
+  dismissed: "dismissed",
+  expired: "expired unopened",
+  superseded: "superseded by a newer recap",
+};
+
+/** Why the window stored a proposal invalid (AD-91, D-155). */
+export const PROPOSAL_INVALID_TEXT: Record<ProposalInvalidReason, string> = {
+  unparsable: "the file is not a proposal this version reads",
+  oversized: "the file is larger than a proposal may be, so it was not read",
+  text_too_long: "a text is over its length",
+  forbidden_characters: "a text holds a control, bidirectional or invisible character",
+  unknown_session: "the session it names is not in the registry",
+  unknown_subject: "the subject it names is not in the registry",
+  subject_closed: "the subject it names is archived or merged",
+  subject_other_project: "the subject it names belongs to another project",
+  subject_name_invalid: "the new subject's name it suggests is not one a subject can have",
+  unknown_template: "the approved catalogue holds no such template",
+  project_not_allowed: "the template does not run in that project",
+  unknown_parameter: "it gives a parameter the template does not have",
+  missing_parameter: "a parameter of the template has no value",
+  value_not_in_list: "a value is not in its parameter's list",
+};
+
+/** The invalid reason the row carries, worded; a code this window does
+ *  not know is shown as the code it is. */
+export function invalidReasonText(reason: string): string {
+  return reason in PROPOSAL_INVALID_TEXT ? PROPOSAL_INVALID_TEXT[reason as ProposalInvalidReason] : reason;
+}
+
+/** Why no card opens from a proposal (AD-91). */
+const PROPOSAL_REFUSAL_TEXT: Record<ProposalRefusal, string> = {
+  unknown_proposal: "the registry no longer holds this proposal",
+  not_a_work_order: "a recap has nothing to launch",
+  not_pending: "the proposal is no longer pending",
+  expired: "the proposal expired unopened",
+};
 
 /** Why core refused a launch (AD-78): nothing started, nothing retries. */
 export const LAUNCH_REFUSAL_TEXT: Record<LaunchRefusal, string> = {
@@ -199,6 +259,8 @@ export function issueRefusalText(refusal: IssueRefusal): string {
       return LAUNCH_REFUSAL_TEXT.unknown_card;
     case "card_not_open":
       return `This card is ${CARD_STATE_TEXT[refusal.detail]}: compose the order again.`;
+    case "proposal":
+      return `No card: ${PROPOSAL_REFUSAL_TEXT[refusal.detail]}.`;
   }
 }
 

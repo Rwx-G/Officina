@@ -13,6 +13,7 @@
     SUBJECT_STATUS_TEXT,
     WAITING_COLUMN_TEXT,
     changeText,
+    proposalKindText,
     sinceText,
   } from "../lib/orchestrator-text";
   import { clock } from "../lib/time";
@@ -37,6 +38,8 @@
         return item.name;
       case "order_launched":
         return item.name;
+      case "proposal_received":
+        return `${proposalKindText(item.proposal)} proposal`;
     }
   }
 
@@ -182,6 +185,23 @@
       {/each}
     </ul>
     {@render dropped("work_orders", briefing.work_orders)}
+  {/if}
+
+  <h3 data-testid="briefing-section-proposals">
+    Proposals pending <span class="count">{counted(briefing.proposals)}</span>
+  </h3>
+  {#if briefing.proposals.count === 0}
+    <p class="muted">None.</p>
+  {:else}
+    <ul>
+      {#each briefing.proposals.items as item (item.id)}
+        <li data-testid="briefing-proposal">
+          <span class="time">{clock(item.received_at_ms ?? item.written_at_ms, nowMs)}</span>
+          <strong>{proposalKindText(item.kind)}</strong>, listed under Proposals
+        </li>
+      {/each}
+    </ul>
+    {@render dropped("proposals", briefing.proposals)}
   {/if}
 </section>
 

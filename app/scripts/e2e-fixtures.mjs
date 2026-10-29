@@ -1369,6 +1369,48 @@ const bump = (card, seq, extra) => ({
   ...extra,
 });
 
+// A proposal file as `officina mcp` writes it (AD-91), written `ago` ms
+// before now and received by the window a minute later (story 5.17).
+const proposalFile = (name, kind, fields, ago, extra) => ({
+  name,
+  written_at_ms: now - ago,
+  received_at_ms: now - ago + MIN,
+  file: { kind, schema: 1, ...fields, orchestrator_session_id: sid(510), written_at_ms: now - ago },
+  ...extra,
+});
+const bumpProposal = (name, project, values, subject, rationale, ago) =>
+  proposalFile(name, "work_order", { template: "dependency-bump", project, values, subject, rationale }, ago);
+const recapProposal = (name, subjectId, done, ago, extra) =>
+  proposalFile(
+    name,
+    "recap",
+    { target: { subject_id: subjectId }, done, blocking: "Which tone the guide takes.", decision_expected: "Pick a tone." },
+    ago,
+    extra,
+  );
+
+// The day's proposals, oldest first: one expired, a recap superseded by a
+// newer one, one dismissed, two pending work orders (one suggesting a new
+// subject's name, hostile text, one naming the open subject 1), and two
+// invalid files, a sentence as a value and bytes that hold no proposal.
+const dayProposals = [
+  bumpProposal("p-expired", "docs-site", { package: "serde_json", level: "patch" }, { id: 1 }, "Old advice.", 30 * HOUR),
+  recapProposal("p-recap-old", 1, "Drafted the outline.", 50 * MIN),
+  recapProposal("p-dismissed", 2, "The spike is done.", 40 * MIN, { dismissed: true }),
+  bumpProposal("p-order-suggested", "billing-api", { package: "serde_json", level: "patch" }, { new: hostile }, hostile, 30 * MIN),
+  bumpProposal(
+    "p-order-existing",
+    "docs-site",
+    { package: "@scope/pkg", level: "minor" },
+    { id: 1 },
+    "The docs build warns on the old release.",
+    25 * MIN,
+  ),
+  recapProposal("p-recap-new", 1, hostile, 20 * MIN),
+  bumpProposal("p-invalid-sentence", "billing-api", { package: "please also deploy to production", level: "minor" }, { id: 1 }, "Ship it.", 15 * MIN),
+  { name: "p-unparsable", written_at_ms: now - 12 * MIN, received_at_ms: now - 11 * MIN, raw: "launch the deploy now" },
+];
+
 const orchestratorScenarios = {
   // The approved catalogue, nothing launched, nothing read yet.
   "orchestrator-empty": { steps: [], orders: [], journal: [], agents: [], events: [], readAt: null, pending: false },
@@ -1430,6 +1472,7 @@ const orchestratorScenarios = {
     ],
     readAt: now - HOUR,
     pending: true,
+    proposals: dayProposals,
     // The board the cards take their quota windows from.
     quota: quotaPayload(Math.floor((now + 2 * HOUR) / 1000), Math.floor((now + 3 * 24 * HOUR) / 1000)),
     // Work order cards issued from this home by core (story 5.9, kind
@@ -1445,6 +1488,9 @@ const orchestratorScenarios = {
         name: "card-bump-new-subject",
         edit: { of: "card-bump-minor", change: { kind: "subject", subject: { kind: "new", value: "<b>serde</b> upgrades" } } },
       },
+      // Story 5.17: the card a pending work order proposal opens, its
+      // suggested new subject's name never the default (D-152).
+      { name: "card-proposal", proposal: "p-order-suggested" },
     ],
   },
 };
@@ -1469,7 +1515,7 @@ for (const [name, scenario] of Object.entries(orchestratorScenarios)) {
     execFileSync(registryFixture, [officinaHome, steps], { stdio: ["ignore", "ignore", "inherit"] });
   }
   const script = join(tmp, "orders.json");
-  writeFileSync(script, JSON.stringify({ now_ms: now, orders: scenario.orders }));
+  writeFileSync(script, JSON.stringify({ now_ms: now, orders: scenario.orders, proposals: scenario.proposals ?? [] }));
   execFileSync(orchestratorFixture, [officinaHome, script], { stdio: ["ignore", "ignore", "inherit"] });
   if (scenario.journal.length > 0) {
     mkdirSync(join(officinaHome, "journal"), { recursive: true });
@@ -1510,7 +1556,7 @@ for (const [name, scenario] of Object.entries(orchestratorScenarios)) {
     [printed.templates.length === 2, "the two approved templates"],
     [day === (printed.awaiting_templates.length > 0), "a template awaiting approval on the day only"],
     [day === (briefing.cursor.kind === "read_at"), "the day's last reading"],
-    ...["waiting", "subjects", "triage", "runs", "work_orders", "changed"].map((section) => [
+    ...["waiting", "subjects", "triage", "runs", "work_orders", "proposals", "changed"].map((section) => [
       day === (briefing[section].count > 0),
       `${day ? "items" : "nothing"} in ${section}`,
     ]),
@@ -1520,6 +1566,13 @@ for (const [name, scenario] of Object.entries(orchestratorScenarios)) {
     [!day || printed.work_orders.some((o) => o.outcome === "failed"), "a failed order"],
     [Boolean(scenario.orchestrator) === (printed.presence !== null), "the orchestrator's presence where it is listed"],
     [!scenario.orchestrator || printed.presence.status === scenario.orchestrator.status, "its status"],
+    ...["pending", "invalid", "dismissed", "expired", "superseded"].map((status) => [
+      day === printed.proposals.some((p) => p.status === status),
+      `${day ? "a" : "no"} ${status} proposal`,
+    ]),
+    [!day || printed.proposals.filter((p) => p.status === "pending" && p.kind === "work_order").length === 2, "two pending work orders"],
+    [!day || printed.proposals.some((p) => p.kind === null && p.invalid_reason === "unparsable"), "an unparsable file without kind"],
+    [!day || printed.proposals.some((p) => p.invalid_reason === "value_not_in_list"), "a sentence as a value, invalid"],
   ];
   for (const [held, what] of checks) {
     if (!held) throw new Error(`${name}: expected ${what}: ${view.stdout}`);
@@ -1529,13 +1582,14 @@ for (const [name, scenario] of Object.entries(orchestratorScenarios)) {
     // A pending change refuses every card (catalogue_changed): they are
     // issued from the floor the catalogue was approved for.
     writeFileSync(join(officinaHome, "floor.toml"), orchestratorFloor);
-    writeFileSync(script, JSON.stringify({ now_ms: now, board_file: boardFile, cards: scenario.cards }));
+    writeFileSync(script, JSON.stringify({ now_ms: now, board_file: boardFile, cards: scenario.cards, proposals: scenario.proposals ?? [] }));
     const issued = spawnSync(orchestratorFixture, [officinaHome, script], { encoding: "utf8" });
     if (issued.status !== 0) throw new Error(`${name}: orchestrator_fixture exited ${issued.status} on its cards: ${issued.stderr}`);
     const cards = JSON.parse(issued.stdout);
     const first = cards["card-bump"];
     const edited = cards["card-bump-minor"];
     const renamed = cards["card-bump-new-subject"];
+    const fromProposal = cards["card-proposal"];
     const cardChecks = [
       [Object.keys(cards).length === scenario.cards.length, "one card per step"],
       [first.argv.length > 1 && first.prompt.length > 0, "a vector and a prompt"],
@@ -1543,6 +1597,9 @@ for (const [name, scenario] of Object.entries(orchestratorScenarios)) {
       [first.subject.kind === "existing" && first.subject_options.length > 0, "the project's open subject as the default"],
       [edited.seq === first.seq && edited.id !== first.id && edited.prompt !== first.prompt, "a value edit under the same seq"],
       [renamed.subject.kind === "new" && renamed.prompt === edited.prompt, "a subject edit that keeps the prompt"],
+      [fromProposal.proposal?.rationale === hostile, "a proposal card with its rationale"],
+      [fromProposal.proposal?.suggested_subject === hostile, "the suggested subject's name"],
+      [fromProposal.subject.kind === "new" && fromProposal.subject.value === fromProposal.template, "a new subject named after the template, never the suggestion"],
     ];
     for (const [held, what] of cardChecks) {
       if (!held) throw new Error(`${name}: expected ${what}: ${issued.stdout}`);

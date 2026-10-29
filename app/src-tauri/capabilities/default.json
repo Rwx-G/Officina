@@ -35,6 +35,8 @@
     "allow-list-discarded",
     "allow-issue-card",
     "allow-edit-card",
+    "allow-issue-card-from-proposal",
+    "allow-dismiss-proposal",
     "allow-launch-work-order",
     "allow-get-orchestrator",
     "allow-mark-briefing-read",

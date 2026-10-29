@@ -51,6 +51,17 @@ fn ends_without_newline(path: &Path) -> bool {
 /// flushed, then renamed over the target. A third-party handle (antivirus,
 /// indexer) can make the rename fail transiently, hence three retries.
 pub fn atomic_write(path: &Path, content: &[u8]) -> io::Result<()> {
+    atomic_write_staged(path, content, &mut |_| {})
+}
+
+/// [`atomic_write`] with `before_rename` called on the temporary file once
+/// it is written and synced, right before the rename: where a writer
+/// killed mid-write stops, for the tests that kill one (story 5.17).
+pub fn atomic_write_staged(
+    path: &Path,
+    content: &[u8],
+    before_rename: &mut dyn FnMut(&Path),
+) -> io::Result<()> {
     let dir = path
         .parent()
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "path has no parent"))?;
@@ -68,6 +79,7 @@ pub fn atomic_write(path: &Path, content: &[u8]) -> io::Result<()> {
         file.write_all(content)?;
         file.sync_all()?;
     }
+    before_rename(&tmp);
     let mut last_error = None;
     for attempt in 0..4 {
         if attempt > 0 {

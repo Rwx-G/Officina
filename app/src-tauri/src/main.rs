@@ -428,6 +428,28 @@ async fn edit_card(
         .into_card()
 }
 
+/// Issues a work order card from the pending proposal `proposal_id`
+/// (AD-91, D-152): its stored values through the same validation as the
+/// author's, under a "proposal" label; or why it opens none.
+#[tauri::command]
+async fn issue_card_from_proposal(
+    state: State<'_, AppState>,
+    proposal_id: String,
+) -> Result<CardAnswer, IpcError> {
+    ask(state, AuthorCommand::IssueCardFromProposal { proposal_id })
+        .await?
+        .into_card()
+}
+
+/// Dismisses the pending or invalid proposal `proposal_id` (FR-12).
+#[tauri::command]
+async fn dismiss_proposal(state: State<'_, AppState>, proposal_id: String) -> Result<(), IpcError> {
+    ask(state, AuthorCommand::DismissProposal { proposal_id })
+        .await?
+        .into_done()
+        .map(|_| ())
+}
+
 /// Launches card `card_id`, the prompt shown hashing to `prompt_sha256`
 /// (AD-78, AD-81): the checks and the record on the collector thread, the
 /// spawn on this command's blocking thread, never the collector's (AD-3).
@@ -716,6 +738,8 @@ fn main() {
             list_discarded,
             issue_card,
             edit_card,
+            issue_card_from_proposal,
+            dismiss_proposal,
             launch_work_order,
             get_orchestrator,
             mark_briefing_read,

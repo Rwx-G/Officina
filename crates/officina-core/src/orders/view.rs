@@ -28,6 +28,8 @@ pub use crate::orders::orchestrator::OrchestratorPresence;
 
 pub use crate::orders::proposal::ProposalView;
 
+use crate::orders::proposal::{self, DeletedFiles};
+
 /// An approved template, as the composer offers it (AD-93): every value
 /// comes from its closed list.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -108,20 +110,25 @@ pub struct OrchestratorView {
     pub templates: Vec<TemplateOption>,
     /// The templates a pending catalogue change adds, changes or removes.
     pub awaiting_templates: Vec<AwaitingTemplate>,
-    /// Empty until story 5.17.
+    /// The orchestrator's proposals (AD-91, D-155): every pending one and
+    /// the latest invalid and decided ones, newest first.
     pub proposals: Vec<ProposalView>,
+    /// The files of `proposals/` deleted unread since the window started.
+    pub deleted_proposal_files: DeletedFiles,
     /// The latest work orders, newest first.
     pub work_orders: Vec<WorkOrderView>,
 }
 
 /// What the view is built from: the briefing's input, the relay view's
-/// approved snapshot and pending change, and the board's orchestrator.
+/// approved snapshot and pending change, the board's orchestrator, and the
+/// proposal files ingestion deleted.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ViewInput<'a> {
     pub briefing: BriefingInput<'a>,
     pub presence: Option<OrchestratorPresence>,
     pub catalogue: Option<&'a CanonicalCatalogue>,
     pub pending: Option<&'a PendingChange>,
+    pub deleted: DeletedFiles,
 }
 
 impl<'a> ViewInput<'a> {
@@ -133,6 +140,7 @@ impl<'a> ViewInput<'a> {
         registry: Option<&'a RegistryView>,
         subjects: &'a [SubjectRecord],
         work_orders: &'a [WorkOrderRecord],
+        proposals: &'a [ProposalView],
     ) -> ViewInput<'a> {
         ViewInput {
             briefing: BriefingInput {
@@ -143,10 +151,12 @@ impl<'a> ViewInput<'a> {
                 triage: registry.map_or(&[], |r| &r.triage),
                 subjects,
                 work_orders,
+                proposals,
             },
             presence: board.and_then(|b| b.orchestrator),
             catalogue: relay.and_then(|r| r.catalogue.as_ref()),
             pending: relay.and_then(|r| r.pending.as_ref()),
+            deleted: DeletedFiles::default(),
         }
     }
 }
@@ -246,7 +256,8 @@ pub fn build(input: &ViewInput, cursor: Cursor, now_ms: i64) -> OrchestratorView
         briefing: briefing::build(&input.briefing, cursor, now_ms),
         templates: template_options(input.catalogue),
         awaiting_templates: awaiting(input.pending),
-        proposals: Vec::new(),
+        proposals: proposal::shown(input.briefing.proposals),
+        deleted_proposal_files: input.deleted,
         work_orders: input
             .briefing
             .work_orders
@@ -418,7 +429,7 @@ values = ["minor"]
             routine: false,
             merged_into: None,
         }];
-        let input = ViewInput::of(None, None, None, &subjects, &orders);
+        let input = ViewInput::of(None, None, None, &subjects, &orders, &[]);
         let view = build(&input, Cursor::None, NOW);
         let flags: Vec<(&str, bool, bool)> = view
             .work_orders
@@ -454,6 +465,49 @@ values = ["minor"]
         assert!(view.proposals.is_empty());
     }
 
+    /// Story 5.17 AC 5 (AD-92, D-155): the view lists every pending
+    /// proposal, the latest 50 invalid and the latest 50 decided, newest
+    /// first, and carries the deleted files' counts.
+    #[test]
+    fn proposals_are_pending_invalid_and_last_50_decided() {
+        use crate::orders::proposal::{
+            PROPOSALS_SHOWN_DECIDED, PROPOSALS_SHOWN_INVALID, proposal_id,
+        };
+        use crate::registry::types::ProposalStatus;
+        let mut rows: Vec<ProposalView> = Vec::new();
+        let statuses = [
+            ProposalStatus::Pending,
+            ProposalStatus::Invalid,
+            ProposalStatus::Accepted,
+            ProposalStatus::Expired,
+        ];
+        for (at, status) in (0..240).zip(statuses.iter().cycle()) {
+            rows.push(ProposalView {
+                status: *status,
+                received_at_ms: Some(NOW - at),
+                ..ProposalView::unreadable_file(&proposal_id(NOW - at, 1))
+            });
+        }
+        let mut input = ViewInput::of(None, None, None, &[], &[], &rows);
+        input.deleted.misnamed = 3;
+        let view = build(&input, Cursor::None, NOW);
+        let count = |wanted: &[ProposalStatus]| {
+            view.proposals
+                .iter()
+                .filter(|p| wanted.contains(&p.status))
+                .count()
+        };
+        assert_eq!(count(&[ProposalStatus::Pending]), 60);
+        assert_eq!(count(&[ProposalStatus::Invalid]), PROPOSALS_SHOWN_INVALID);
+        assert_eq!(
+            count(&[ProposalStatus::Accepted, ProposalStatus::Expired]),
+            PROPOSALS_SHOWN_DECIDED
+        );
+        assert!(view.proposals.windows(2).all(|w| w[0].id > w[1].id));
+        assert_eq!(view.deleted_proposal_files.misnamed, 3);
+        assert_eq!(view.briefing.proposals.count, 60);
+    }
+
     /// Story 5.16 AC 5 (AD-92): the view's presence is the board's.
     #[test]
     fn the_view_carries_the_boards_presence() {
@@ -473,7 +527,7 @@ values = ["minor"]
         let board = build_board(&input, NOW);
         assert!(board.orchestrator.is_some());
         let view = build(
-            &ViewInput::of(Some(&board), None, None, &[], &[]),
+            &ViewInput::of(Some(&board), None, None, &[], &[], &[]),
             Cursor::None,
             NOW,
         );

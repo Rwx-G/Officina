@@ -43,6 +43,11 @@ pub const AUTO_REVIEW_TTL_MS: i64 = 90 * DAY_MS;
 /// D-134); it holds no untrusted text.
 pub const ORCHESTRATOR_START_TTL_MS: i64 = 90 * DAY_MS;
 
+/// How long a `proposal` row is kept after the window received it (AD-82,
+/// D-134): a recap pending forever leaves then. Its texts, the
+/// orchestrator's, go [`EXCERPT_TTL_MS`] after it, like an excerpt.
+pub const PROPOSAL_TTL_MS: i64 = 90 * DAY_MS;
+
 /// True when an excerpt recorded for an event at `event_ms` has expired at
 /// `now_ms` (D-50: counted from the event, never from ingestion).
 pub fn excerpt_expired(event_ms: i64, now_ms: i64) -> bool {

@@ -1,13 +1,15 @@
 <script lang="ts">
   // The Orchestrator view (AD-93): the briefing Officina's own code builds,
-  // the composer over the approved templates with the card core issued for
-  // its choices, and the work order history. No model is involved. Leaving
-  // the view records the briefing's reading (App.svelte).
+  // the orchestrator's proposals, the composer over the approved templates
+  // with the card core issued for its choices or for a proposal, and the
+  // work order history. No model is involved. Leaving the view records the
+  // briefing's reading (App.svelte).
   import { fadeMotion } from "../lib/motion";
   import type { OrchestratorStore } from "../lib/orchestrator.svelte";
   import Briefing from "./Briefing.svelte";
   import Composer from "./Composer.svelte";
   import OrchestratorStart from "./OrchestratorStart.svelte";
+  import ProposalList from "./ProposalList.svelte";
   import WorkOrderCard from "./WorkOrderCard.svelte";
   import WorkOrderHistory from "./WorkOrderHistory.svelte";
 
@@ -21,6 +23,7 @@
   let card = $derived(store.card);
   /** The history's row for the card, once its launch recorded one. */
   let order = $derived(card ? (view?.work_orders.find((o) => o.id === card.id) ?? null) : null);
+  let subjectNames = $derived(new Map((view?.briefing.subjects.items ?? []).map((s) => [s.id, s.name])));
 </script>
 
 <main class="orchestrator-view" data-testid="orchestrator-view" in:fadeMotion|global>
@@ -29,6 +32,16 @@
   {:else}
     <OrchestratorStart {store} {nowMs} />
     <Briefing briefing={view.briefing} {nowMs} />
+    <ProposalList
+      proposals={view.proposals}
+      deleted={view.deleted_proposal_files}
+      {subjectNames}
+      {nowMs}
+      busy={store.composing || store.launching}
+      error={store.proposalError}
+      onOpen={(id) => void store.openProposal(id)}
+      onDismiss={(id) => void store.dismissProposal(id)}
+    />
     <Composer {store} />
     {#if card}
       <WorkOrderCard

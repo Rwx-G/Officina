@@ -9,6 +9,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import { fixtureOf } from "./fixture-index";
 import { calls, loadBoard, loadRelay, openBoard, openScene, transitionsDone } from "./fixtures";
+import { PROPOSAL_STATUS_TEXT, invalidReasonText } from "../src/lib/orchestrator-text";
 import type { CardAnswer } from "../src/lib/generated/CardAnswer";
 import type { LaunchAnswer } from "../src/lib/generated/LaunchAnswer";
 import type { OrchestratorView } from "../src/lib/generated/OrchestratorView";
@@ -509,3 +510,116 @@ test("a failed launch shows its exit code and error as text", async ({ page }) =
   await expect(page.locator('[data-testid="work-order-card"] img')).toHaveCount(0);
   expect(await page.evaluate(() => (window as { __officinaXss?: number }).__officinaXss)).toBeUndefined();
 });
+
+// Story 5.17 (AD-91, AD-93, FR-12, D-152, D-564): the orchestrator's
+// proposals, ingested by the day's home's own writer, each under a
+// "proposal" label with its status and, when invalid, its reason as worded
+// by `PROPOSAL_INVALID_TEXT`; every text the orchestrator's, shown as text;
+// a valid work order proposal opens as the card core issued from it.
+
+/** The day's proposal pending as a work order that suggests a new subject. */
+function suggesting(view: OrchestratorView): string {
+  return view.proposals.find(
+    (p) => p.status === "pending" && p.content !== null && "work_order" in p.content && "new" in p.content.work_order.subject,
+  )!.id;
+}
+
+for (const theme of ["light", "dark"] as const) {
+  test(`proposals are listed with their status and reason (${theme})`, async ({ page }) => {
+    await page.emulateMedia({ colorScheme: theme });
+    const view = orchestrator("orchestrator-day");
+    await openOrchestrator(page, view);
+    const list = page.getByTestId("proposals");
+    const open = view.proposals.filter((p) => p.status === "pending" || p.status === "invalid");
+    const decided = view.proposals.length - open.length;
+    await expect(list.locator('ul.list:not([data-testid="proposals-decided"]) > [data-testid="proposal"]')).toHaveCount(open.length);
+    await expect(page.getByTestId("proposals-decided").getByTestId("proposal")).toHaveCount(decided);
+    for (const proposal of view.proposals) {
+      const item = list.locator(`[data-testid="proposal"][data-id="${proposal.id}"]`);
+      await expect(item).toHaveAttribute("data-status", proposal.status);
+      await expect(item.getByTestId("proposal-label")).toHaveText("proposal");
+      await expect(item.getByTestId("proposal-status")).toHaveText(PROPOSAL_STATUS_TEXT[proposal.status]);
+      if (proposal.invalid_reason !== null) {
+        await expect(item.getByTestId("proposal-reason")).toContainText(invalidReasonText(proposal.invalid_reason));
+      }
+      // Open as card for a valid work order only; Dismiss while undecided.
+      await expect(item.getByTestId("proposal-open")).toHaveCount(
+        proposal.status === "pending" && proposal.kind === "work_order" ? 1 : 0,
+      );
+      await expect(item.getByTestId("proposal-dismiss")).toHaveCount(
+        proposal.status === "pending" || proposal.status === "invalid" ? 1 : 0,
+      );
+    }
+    await expect(list.locator("img")).toHaveCount(0);
+    expect(await page.evaluate(() => (window as { __officinaXss?: number }).__officinaXss)).toBeUndefined();
+    // Neutral: no colour of the list is the attention colour (D-564, D-565).
+    const seen = await list.evaluate((shown) => {
+      const probe = document.createElement("span");
+      probe.style.color = "var(--color-attention)";
+      document.body.append(probe);
+      const attention = getComputedStyle(probe).color;
+      probe.remove();
+      const colours = new Set<string>();
+      for (const element of [shown, ...Array.from(shown.querySelectorAll("*"))]) {
+        const style = getComputedStyle(element);
+        for (const colour of [style.color, style.backgroundColor, style.borderTopColor]) colours.add(colour);
+      }
+      return { attention, colours: [...colours] };
+    });
+    expect(seen.colours).not.toContain(seen.attention);
+  });
+}
+
+test("a valid proposal opens as a card with its rationale under the label", async ({ page }) => {
+  const view = orchestrator("orchestrator-day");
+  const issued = fixtureOf<WorkOrderCard>("card", "card-proposal");
+  await openOrchestrator(page, view);
+  await answerCards(page, { outcome: "issued", value: issued });
+  const id = suggesting(view);
+  await page.locator(`[data-testid="proposal"][data-id="${id}"]`).getByTestId("proposal-open").click();
+  expect(await callsOf(page, "issue_card_from_proposal")).toEqual([{ proposalId: id }]);
+  const shown = page.getByTestId("work-order-card");
+  await expect(shown).toHaveAttribute("data-card", issued.id);
+  await expect(shown.getByTestId("card-proposal")).toHaveAttribute("data-proposal", issued.proposal!.id);
+  await expect(shown.getByTestId("card-proposal-label")).toHaveText("proposal");
+  await expect(shown.getByTestId("card-rationale")).toHaveText(issued.proposal!.rationale);
+  await expect(shown.locator("img")).toHaveCount(0);
+  // The card launches as the author's: on a click, its id and hash.
+  await page.getByTestId("launch").click();
+  expect(await callsOf(page, "launch_work_order")).toEqual([{ cardId: issued.id, promptSha256: issued.prompt_sha256 }]);
+});
+
+test("dismiss sends dismiss_proposal", async ({ page }) => {
+  const view = orchestrator("orchestrator-day");
+  await openOrchestrator(page, view);
+  const id = suggesting(view);
+  const item = page.locator(`[data-testid="proposal"][data-id="${id}"]`);
+  await item.getByTestId("proposal-dismiss").click();
+  expect(await callsOf(page, "dismiss_proposal")).toEqual([{ proposalId: id }]);
+  // The next view shows it decided: it leaves the open list.
+  await expect(item).toHaveAttribute("data-status", "dismissed");
+  await expect(page.getByTestId("proposals-decided").locator(`[data-id="${id}"]`)).toHaveCount(1);
+  await expect(item.getByTestId("proposal-dismiss")).toHaveCount(0);
+});
+
+test("a suggested subject name is shown, never preselected", async ({ page }) => {
+  const view = orchestrator("orchestrator-day");
+  const issued = fixtureOf<WorkOrderCard>("card", "card-proposal");
+  const suggested = issued.proposal!.suggested_subject!;
+  await openOrchestrator(page, view);
+  await answerCards(page, { outcome: "issued", value: issued });
+  await page.locator(`[data-testid="proposal"][data-id="${suggesting(view)}"]`).getByTestId("proposal-open").click();
+  await expect(page.getByTestId("composer-suggested-subject")).toContainText(suggested);
+  await expect(page.getByTestId("card-suggested-subject")).toContainText(suggested);
+  // The card files under a new subject named after the template.
+  expect(issued.subject).toEqual({ kind: "new", value: issued.template });
+  await expect(page.getByTestId("card-subject")).toContainText(issued.template);
+  await expect(page.getByTestId("card-subject")).not.toContainText(suggested);
+  // Nothing in the picker carries it: no subject chosen, the name field empty.
+  await expect(page.getByTestId("picker-new-name")).toHaveValue("");
+  for (const option of await page.getByTestId("pick-subject").all()) {
+    await expect(option).not.toContainText(suggested);
+  }
+  await expect(page.locator('[data-testid="composer"] img')).toHaveCount(0);
+});
+
