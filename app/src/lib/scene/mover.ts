@@ -14,10 +14,9 @@
 // on to its place. Once per work order, and never when a walk would not
 // be drawn.
 import { HH, HW } from "./geometry";
-import { ORCHESTRATOR_KEY, type Employee, type Helper, type Marks, type Pose, type SceneLayout, type Staff } from "./layout";
+import { ORCHESTRATOR_KEY, type Employee, type Helper, type Marks, type Pose, type Role, type SceneLayout, type Staff } from "./layout";
 import { allSpots, briefingSpot, navGraph, restPoint, staffSpots, type Facing, type NavGraph, type Spot } from "./places";
 import { route, smooth, type RoutePoint, type RouteStart } from "./paths";
-import type { Role } from "./rig";
 
 /** One frame of the walk cycle: the legs' and the arms' angles in degrees,
  *  in opposition, and the bob in px. */

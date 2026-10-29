@@ -126,12 +126,15 @@ const CASES: ToggleCase[] = [
     name: "orchestrator view switch mark",
     selector: '[data-testid="view-orchestrator"]',
     scene: "board",
-    act: (page) =>
-      page.evaluate(
-        ([presence, view]) =>
-          Promise.all([window.__officinaPushBoard?.({ ...window.__officinaBoard!, orchestrator: presence }), window.__officinaPushOrchestrator?.(view)]),
+    act: async (page) => {
+      await page.evaluate(
+        async ([presence, view]) => {
+          await window.__officinaPushBoard?.({ ...window.__officinaBoard!, orchestrator: presence });
+          await window.__officinaPushOrchestrator?.(view);
+        },
         [sceneBoardOrchestrator(), withPending(sceneView(), PENDING_LIMIT)] as const,
-      ),
+      );
+    },
   },
   // The absent orchestrator's file in the scene (story 5.18 AC 6): held in
   // flight, Start reads Starting.

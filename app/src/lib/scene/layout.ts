@@ -145,6 +145,10 @@ export interface Staff {
   status: LiveStatus | null;
 }
 
+/** Whose figure a rig draws: a session's or a sub-agent's, or the
+ *  orchestrator's (AD-179, D-567). */
+export type Role = "employee" | "orchestrator";
+
 /** The figure key of the orchestrator: card keys start `pid:` or `sid:`. */
 export const ORCHESTRATOR_KEY = "officina:orchestrator";
 

@@ -9,7 +9,7 @@
 // never text.
 import type { ProjectColor } from "../generated/ProjectColor";
 import { CAPACITY, type Facing } from "./places";
-import type { Marks, Pose } from "./layout";
+import type { Marks, Pose, Role } from "./layout";
 import type { Stride } from "./mover";
 import { SHADE_1, SHADE_2, fnv1a, paint, projectPaint } from "./furniture";
 
@@ -49,10 +49,6 @@ export function lookOf(key: string): Look {
   const [skin, hair] = LOOKS[h % LOOKS.length]!;
   return { skin, hair, style: HAIR_STYLES[(h >>> 8) % HAIR_STYLES.length]! };
 }
-
-/** Whose figure a rig draws: a session's or a sub-agent's, or the
- *  orchestrator's (AD-179, D-567). */
-export type Role = "employee" | "orchestrator";
 
 export interface RigOptions {
   look: Look;
