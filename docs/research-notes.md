@@ -511,6 +511,64 @@ passes: `HALO_BREATHING_MS` stays 120 000 ms. A run on the unlocked
 240 Hz screen would put the passes in the AC's own condition; it cannot
 reverse run 4.
 
+## E83. Sub-agent signals (v0.4 gate 1)
+
+Story 4.1 AC 1, AD-176, AD-178 row 1 as amended by D-518, D-507. Claude
+Code 2.1.312 on Windows 11, the owner's real sessions with the hooks
+block that registers `SubagentStart` and `SubagentStop` pasted, read from
+Officina's own event buffer with `cargo run -p officina-host --example
+slice0_probe -- subagents` (read-only; it prints counts and times, never
+an id, a type, a prompt or a path).
+
+Two readings on 2026-10-29:
+
+| Figure | Lead's run | Second run, later the same day |
+|---|---|---|
+| `SubagentStart` lines | 8 | 20 |
+| `SubagentStop` lines | 9 | 18 |
+| Lines without `agent_id` | 0 | 0 |
+| Starts naming a session that sent `UserPromptSubmit` | 8 of 8 | 20 of 20 |
+| Started agent ids; with a later stop | 2; 2 | 7; 4 |
+| Agent ids stopped without any start | 1 | 1 |
+| Agent ids started more than once; most starts, most stops for one id | 1; 7, 7 | 2; 8, 8 |
+| Starts of an id already running (no stop between) | not printed | 0 |
+| Stop to the same id's next start | not printed | 13 gaps: shortest 119 ms, median 121 s, longest 648 s |
+| Most sub-agents running at once under one session | not printed | 3 |
+| Ids still running at the reading | not printed | 3, started 12, 115 and 142 s before |
+
+The second run's pairing figures come from `print_pairing`, added to the
+probe for this entry. Its three ids without a stop were sub-agents still
+running in the lead's own session when it was read: an id with no stop
+after its last start is, by the probe's reading, still running or a lost
+stop, and these three had started minutes before.
+
+What the cases show:
+
+- **Observed.** Every start carries the lead's `session_id`: the session
+  that sent the prompts, not an id of the sub-agent's own. Sub-agents run
+  side by side under one lead (three at once). A background sub-agent
+  outlives the lead's turn and, resumed by messages, produces a new
+  `SubagentStart` and `SubagentStop` pair under the same `agent_id` each
+  time it resumes (up to eight pairs for one id), never a second start
+  while it runs. The time between a stop and the same id's next start
+  ranges from about a tenth of a second to minutes. One id was stopped
+  without any start, the documented shape of a prompt suggestion or a
+  `/btw` side question.
+- **Not observed by name.** No `/btw` was run on purpose, so the start-less
+  stop is not tied to one; no agent team was used, so the teammate's
+  per-message shape (D-507) was not seen; no `claude --bg` session and no
+  nested sub-agent were identified as such. The docs' description of the
+  teammate (a start per message handled) stays documented, not verified.
+- No field of the contract was absent on these lines.
+
+**Pass.** Every start names the lead's session and pairs by `agent_id`
+with a later stop once the sub-agent ends; the stop without a start is
+there. Story 4.12 ships (D-476), folding the shapes above: a repeated pair
+is the same sub-agent reappearing, a start while it runs is the same
+sub-agent, a stop without a start is ignored, and a stop followed by a
+start a fraction of a second later must not make its figure flicker
+(epic-4-decisions.md D-547, D-548).
+
 ## E7. Configuration directory
 
 - **Documented.** `CLAUDE_CONFIG_DIR` redirects settings, session history and

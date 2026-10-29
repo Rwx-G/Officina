@@ -86,7 +86,7 @@ version: v0.4
 # Implemented after v0.2 and v0.3; each seam has one owning story (epic-4-decisions.md D-98, story numbers read through D-460's and D-498's maps).
 # 4.14 closes the PRD with the workstation checks (owner rule, epic-2-decisions.md P-7, epic-4-decisions.md P-21).
 stories:
-  # 4.1: tooling done (D-518); gate 2 passed (E80), gate 4 recorded (E81); gates 1 and 5's entries are the owner's (Completion Notes).
+  # 4.1: tooling done (D-518); gate 1 passed (E83), gate 2 passed (E80), gate 4 recorded (E81); gate 5's entry is the owner's (Completion Notes).
   - {id: "4.1", file: story-4.1-workstation-checks.md, slice: "0", status: in-progress}
   - {id: "4.2", file: story-4.2-floor-keys-payloads-and-scene-fixtures.md, slice: A, status: review}
   # 4.3: gate 4 recorded (E81); its question shape is a vector case.
@@ -100,7 +100,7 @@ stories:
   - {id: "4.9", file: story-4.9-alert-room-and-beacon.md, slice: A, status: review}
   - {id: "4.10", file: story-4.10-walking.md, slice: A, status: review}  # AD-71 walking run failed (E82): DEFAULT_WALKING is false since story 4.14
   - {id: "4.11", file: story-4.11-focus-mode-and-keys.md, slice: A, status: review}
-  - {id: "4.12", file: story-4.12-subagents.md, slice: B, status: approved}
+  - {id: "4.12", file: story-4.12-subagents.md, slice: B, status: in-progress}  # gate 1 passed (E83)
   # 4.13: code done; AC 5's dark baselines wait for the CI snapshot run and the owner's comparison with the prototype's dark render (D-508).
   - {id: "4.13", file: story-4.13-dark-theme.md, slice: B, status: in-progress}
   - {id: "4.14", file: story-4.14-docs-workstation-checks-and-qa.md, slice: B, status: in-progress}  # AC 7 passed; AC 5 measured (E82), walking fallback shipped; AC 2 review and AC 6, 8-10 are the owner's

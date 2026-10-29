@@ -1,6 +1,6 @@
 # Story 4.1: Slice 0: sub-agent signals, the taskbar on Windows, what a real wait emits, and the floor and window to draw for
 
-**Status:** In progress (tooling done; gates 1, 2, 4 and 5 are the owner's; see Completion Notes)
+**Status:** In progress (tooling done; gates 1 and 2 passed, gate 4 recorded; gate 5's counts and window figures are the owner's; see Completion Notes)
 
 ## Story
 
@@ -22,7 +22,7 @@ so that the scene draws sub-agents only from signals that exist, the badge is le
 
 - [x] Gate 4: a question and a permission prompt in a `default`-mode folder, read with `slice0_probe wait`; the buffer count with `slice0_probe notifications`; the entry (AC 4, 7): research notes E81
 - [x] Gate 1 tooling (D-518): doctor registers `SubagentStart` and `SubagentStop`; the hook records `agent_id` and `agent_type`; board and registry skip the lines; `slice0_probe subagents` (AC 1)
-- [ ] Gate 1: the owner pastes the hooks block again; sub-agent sessions, with the cases of AD-178 row 1 he chooses; the entry (AC 1, 7) (owner)
+- [x] Gate 1: the owner pastes the hooks block again; sub-agent sessions, with the cases of AD-178 row 1 he chooses; the entry (AC 1, 7): research notes E83, pass
 - [x] `app/src-tauri/src/taskbar.rs` with `overlay_badge` and its unit tests; `examples/taskbar_probe.rs` (AC 2)
 - [x] Gate 2: the probe run at 100 % with a light taskbar, twice (E80, D-523); a dark taskbar run open as information
 - [x] Gate 5 tooling: `slice0_probe projects` (AC 5)
@@ -60,12 +60,12 @@ so that the scene draws sub-agents only from signals that exist, the badge is le
 ### Completion Notes
 
 - **Gate 3** is withdrawn (D-500): no prototype measurement runs; walking's default is AD-71's walking run in story 4.14, against 1 % of the machine (D-515).
-- **Gate 1** (open, owner): run `officina doctor`, paste the hooks block it prints into the user settings (it now holds `SubagentStart` and `SubagentStop`), then use sessions that spawn sub-agents, with whichever of AD-178 row 1's cases the owner wants checked (two in parallel, one in the background, a `claude --bg` session, a nested one, a `/btw` side question, an agent-team teammate). Then `cargo run -p officina-host --example slice0_probe -- subagents` prints the figures for the entry; the entry adds the Claude Code version and ends with pass or fail (story 4.12's entry condition).
+- **Gate 1** (passed, research notes E83, 2026-10-29): the owner pasted the hooks block with `SubagentStart` and `SubagentStop` and used his real sessions; `slice0_probe subagents`, run by the lead then again for the entry, read on Claude Code 2.1.312 every start naming the lead's session (20 of 20), no line without `agent_id`, every ended sub-agent with a later stop, one stop without a start, and a background sub-agent resumed by messages giving a new start and stop pair under one `agent_id` each time (up to eight), never a start while it runs, the next start from 119 ms to minutes after a stop. Observed: sub-agents in parallel (three at once), in the background past the lead's turn, resumed. Not observed by name: a `/btw` question, an agent-team teammate, a `claude --bg` session, a nested sub-agent. Story 4.12 ships. The probe gained the pairing figures (`print_pairing`) for the entry. Recorded the day story 4.12 started, before its first code commit (AC 6).
 - **Gate 2** (passed, research notes E80): run 1 found the flash right and the badge as first drawn illegible (blurred above 16 px, thin at 16 px), so D-523 redrew it at the small icon's size with larger digits and a `!` on the alert badge; run 2 on that design read both badges at a glance at 16 px, the alert colour clearly distinct, the flash until focus and nothing when focused. Pass at 100 % with a light taskbar; a dark taskbar run stays open as information, not blocking. The probe's window says what the taskbar shows at each step and takes the owner's answers by click; at the end it prints them with the display scale, the Windows build and the Tauri version, and appends them to `taskbar-probe-report.md` beside its executable, which is the entry's content (the legible size, whether the flash runs until focus, that nothing happens when focused). The app crate's build script links the Common Controls v6 manifest into examples, without which the probe stopped at start with `STATUS_ENTRYPOINT_NOT_FOUND`.
 - **Gate 4** (recorded, research notes E81, 2026-10-28): in a scratch folder in `default` permission mode, Claude Code 2.1.312, an `AskUserQuestion` question emitted a `permission_prompt` notification 8 s after the prompt, and the `Write` permission dialog the same type; no repeated or `idle_prompt` notification during a 70 s wait; the owner's real sessions, in `bypassPermissions`, emitted none over the buffer's day. A question has a known wait start; story 4.3's vectors carry it. Recorded after story 4.3 was built (D-499's order not met).
 - **Gate 5**: the owner's answers are recorded (D-519: four to six projects live, eight the design target, growth by columns kept; D-520: 1920 x 1080 at 100 %, maximised, no scrolling with eight projects). Open: `slice0_probe projects` after a few working days (first reading on 2026-10-28: 4 distinct projects, 3 at once, one day of data, not yet the gate's number), and the window's `innerWidth`, `innerHeight`, `devicePixelRatio` and the sessions area's size from the dev build's devtools.
 - **AC 7** holds for the tooling: the probe reads the buffer and opens the registry with `SQLITE_OPEN_READ_ONLY`; the taskbar probe has no collector, no single-instance lock and no floor.
-- AC to test: AC 1 tooling: `events.rs::tests::{subagent_fields_are_kept_and_capped, subagent_texts_and_paths_are_never_kept}`, `board.rs::tests::subagent_lines_leave_the_session_state_unchanged`, `doctor.rs::tests::{subagent_events_are_buffered, every_buffered_event_has_hook_fields}`, `registry_ingest.rs::subagent_lines_touch_no_session_record`, `hook.rs::a_subagent_start_and_stop_are_appended`; AC 2: `taskbar.rs::tests::{overlay_badge_draws_each_count, overlay_badge_uses_the_alert_colour, nine_plus_above_nine}`; AC 3: this note; AC 1, 2, 4, 5 entries: open (owner).
+- AC to test: AC 1 tooling: `events.rs::tests::{subagent_fields_are_kept_and_capped, subagent_texts_and_paths_are_never_kept}`, `board.rs::tests::subagent_lines_leave_the_session_state_unchanged`, `doctor.rs::tests::{subagent_events_are_buffered, every_buffered_event_has_hook_fields}`, `registry_ingest.rs::subagent_lines_touch_no_session_record`, `hook.rs::a_subagent_start_and_stop_are_appended`; AC 2: `taskbar.rs::tests::{overlay_badge_draws_each_count, overlay_badge_uses_the_alert_colour, nine_plus_above_nine}`; AC 3: this note; AC 1: E83 (pass); AC 2: E80 (pass); AC 4: E81; AC 5's entry: open (owner).
 
 ## File List
 
@@ -84,3 +84,4 @@ so that the scene draws sub-agents only from signals that exist, the badge is le
 - 2026-10-28 gate 2 run 1 recorded (research notes E80) and its outcome decided (D-523): the badge redrawn, the probe follows; run 2 open
 - 2026-10-28 gate 2 passed on run 2 (E80); a dark taskbar run stays open as information
 - 2026-10-28 gate 4 recorded (research notes E81)
+- 2026-10-29 gate 1 passed (research notes E83); the probe prints how starts and stops of one agent id interleave
