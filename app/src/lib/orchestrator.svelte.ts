@@ -10,6 +10,7 @@ import type { IssueRefusal } from "./generated/IssueRefusal";
 import type { LaunchAnswer } from "./generated/LaunchAnswer";
 import type { LaunchRefusal } from "./generated/LaunchRefusal";
 import type { OrchestratorView } from "./generated/OrchestratorView";
+import type { StartAnswer } from "./generated/StartAnswer";
 import type { SubjectChoice } from "./generated/SubjectChoice";
 import type { TemplateOption } from "./generated/TemplateOption";
 import type { WorkOrderCard } from "./generated/WorkOrderCard";
@@ -69,6 +70,11 @@ export class OrchestratorStore {
   /** How the card's launch was answered, once it was: the card is then
    *  done, and a new choice issues a new card. */
   launch = $state<LaunchAnswer | null>(null);
+  /** A Start is on its way (AD-89). */
+  starting = $state(false);
+  /** How the last Start was answered, or why it could not be sent. */
+  started = $state<StartAnswer | null>(null);
+  startError = $state<string | null>(null);
   /** Numbers the issue and edit requests: only the latest one's answer is
    *  shown, so a slow answer never replaces a newer card. */
   private request = 0;
@@ -88,6 +94,22 @@ export class OrchestratorStore {
       await ipc.markBriefingRead();
     } catch (error) {
       this.readError = ipc.errorMessage(error);
+    }
+  }
+
+  /** Starts the orchestrator, or brings the live one forward (AD-89);
+   *  one Start at a time. */
+  async startOrchestrator(): Promise<void> {
+    if (this.starting) return;
+    this.starting = true;
+    this.startError = null;
+    try {
+      this.started = await ipc.startOrchestrator();
+    } catch (error) {
+      this.started = null;
+      this.startError = ipc.errorMessage(error);
+    } finally {
+      this.starting = false;
     }
   }
 

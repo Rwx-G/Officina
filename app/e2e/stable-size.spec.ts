@@ -135,6 +135,16 @@ const CASES: ToggleCase[] = [
     },
   },
   {
+    name: "orchestrator Start",
+    selector: '[data-testid="orchestrator-start"]',
+    scene: "orchestrator",
+    // Held in flight, its label reads Starting (D-564).
+    act: async (page, control) => {
+      await page.evaluate(() => (window.__officinaStartHeld = true));
+      await control.click();
+    },
+  },
+  {
     name: "auto rejection reasons",
     selector: '[data-testid="reject-reasons"]',
     scene: "autoApproval",

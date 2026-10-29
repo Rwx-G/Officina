@@ -1372,6 +1372,18 @@ const bump = (card, seq, extra) => ({
 const orchestratorScenarios = {
   // The approved catalogue, nothing launched, nothing read yet.
   "orchestrator-empty": { steps: [], orders: [], journal: [], agents: [], events: [], readAt: null, pending: false },
+  // The same, with the orchestrator listed by `claude agents` in its own
+  // folder (story 5.16, E24): the board's presence, never a card.
+  "orchestrator-live": {
+    steps: [],
+    orders: [],
+    journal: [],
+    agents: [],
+    orchestrator: { pid: 4510, startedAt: now - 20 * MIN, sessionId: sid(510), status: "idle" },
+    events: [],
+    readAt: null,
+    pending: false,
+  },
   "orchestrator-day": {
     events: [
       { ts: now - 3 * HOUR, event: "UserPromptSubmit", session_id: sid(504), cwd: work("docs-site"), prompt: hostile },
@@ -1467,7 +1479,13 @@ for (const [name, scenario] of Object.entries(orchestratorScenarios)) {
   }
   if (scenario.pending) writeFileSync(join(officinaHome, "floor.toml"), orchestratorPendingFloor);
   const fixture = join(tmp, "agents.json");
-  writeFileSync(fixture, JSON.stringify(scenario.agents));
+  const orchestratorEntry = scenario.orchestrator && {
+    ...scenario.orchestrator,
+    cwd: join(officinaHome, "orchestrator", "workdir"),
+    kind: "interactive",
+    name: "officina-orchestrator",
+  };
+  writeFileSync(fixture, JSON.stringify([...scenario.agents, ...(orchestratorEntry ? [orchestratorEntry] : [])]));
   const env = {
     SYSTEMROOT: process.env.SYSTEMROOT ?? "",
     USERPROFILE: home,
@@ -1500,6 +1518,8 @@ for (const [name, scenario] of Object.entries(orchestratorScenarios)) {
     [!day || printed.work_orders.some((o) => o.printed_id_differs), "an order whose printed id differs"],
     [!day || printed.work_orders.some((o) => o.session !== null), "an order bound to its session"],
     [!day || printed.work_orders.some((o) => o.outcome === "failed"), "a failed order"],
+    [Boolean(scenario.orchestrator) === (printed.presence !== null), "the orchestrator's presence where it is listed"],
+    [!scenario.orchestrator || printed.presence.status === scenario.orchestrator.status, "its status"],
   ];
   for (const [held, what] of checks) {
     if (!held) throw new Error(`${name}: expected ${what}: ${view.stdout}`);

@@ -8,6 +8,9 @@ import type { Cursor } from "./generated/Cursor";
 import type { IssueRefusal } from "./generated/IssueRefusal";
 import type { LaunchOutcome } from "./generated/LaunchOutcome";
 import type { LaunchRefusal } from "./generated/LaunchRefusal";
+import type { LiveStatus } from "./generated/LiveStatus";
+import type { StartAnswer } from "./generated/StartAnswer";
+import type { StartRefusal } from "./generated/StartRefusal";
 import type { RunKind } from "./generated/RunKind";
 import type { SessionPhase } from "./generated/SessionPhase";
 import type { SubjectRefusal } from "./generated/SubjectRefusal";
@@ -64,6 +67,49 @@ export const TEMPLATE_CHANGE_TEXT: Record<TemplateChange, string> = {
   changed: "changed",
   removed: "removed",
 };
+
+/** The orchestrator's live status, as its agents entry gives it. */
+export const LIVE_STATUS_TEXT: Record<LiveStatus, string> = {
+  busy: "working",
+  waiting: "waiting",
+  idle: "idle",
+};
+
+/** Why a Start was refused (AD-89), and what to do about it. */
+export const START_REFUSAL_TEXT: Record<StartRefusal, string> = {
+  claude_not_found: "Refused: claude was not found. Install it or set OFFICINA_CLAUDE_BIN.",
+  claude_not_exe:
+    "Refused: claude is not a native claude.exe, and Officina runs no other. Install the native claude.exe.",
+  workdir_not_empty:
+    "Refused: the orchestrator's folder is not empty. Officina never deletes it; empty it yourself (officina doctor names it).",
+  officina_exe_missing:
+    "Refused: officina.exe is missing beside the window's executable; the orchestrator's tools run it. Reinstall Officina.",
+  registry_unavailable: "Refused: the registry cannot record the start now (see the board's diagnostics).",
+  unsupported: "Refused: the orchestrator opens in a console of its own, on Windows only.",
+};
+
+/** What the author is told after a Start, beside the button. */
+export function startAnswerText(answer: StartAnswer): string {
+  switch (answer.outcome) {
+    case "started":
+      return "Started in a console of its own. Accept its folder there if Claude Code asks, then type any first message: it reads the briefing before it answers.";
+    case "already_running":
+      switch (answer.detail.outcome) {
+        case "focused":
+          return "Already running: its console is in front.";
+        case "candidates":
+          return `Already running: several windows carry its name (${answer.detail.detail.join(", ")}); bring the right one forward yourself.`;
+        case "refused":
+          return "Already running: Windows did not bring its console forward, so it flashes in the taskbar.";
+        default:
+          return "Already running: no window carries its name; find its console in the taskbar.";
+      }
+    case "refused":
+      return START_REFUSAL_TEXT[answer.detail];
+    case "failed":
+      return `Could not start: ${answer.detail}`;
+  }
+}
 
 export const SOURCE_TEXT: Record<WorkOrderSource, string> = {
   composer: "composer",

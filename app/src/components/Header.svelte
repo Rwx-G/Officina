@@ -77,8 +77,8 @@
   ];
 
   // D-565: the Orchestrator button carries the orchestrator's presence as
-  // a neutral shape, never the attention colour. `presence` is null until
-  // story 5.16 reports a live orchestrator, so the ring reads absent. The
+  // a neutral shape, never the attention colour: a filled dot while an
+  // agents entry shows it live, a hollow ring while absent (D-678). The
   // pending proposals' count joins it with story 5.18 (D-675).
   let orchestratorLive = $derived((orchestrator?.view?.presence ?? null) !== null);
   let orchestratorName = $derived(`Orchestrator: ${orchestratorLive ? "live" : "absent"}`);

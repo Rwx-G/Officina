@@ -7,6 +7,7 @@
   import type { OrchestratorStore } from "../lib/orchestrator.svelte";
   import Briefing from "./Briefing.svelte";
   import Composer from "./Composer.svelte";
+  import OrchestratorStart from "./OrchestratorStart.svelte";
   import WorkOrderCard from "./WorkOrderCard.svelte";
   import WorkOrderHistory from "./WorkOrderHistory.svelte";
 
@@ -26,6 +27,7 @@
   {#if !view}
     <p class="loading" data-testid="orchestrator-loading">Building the briefing...</p>
   {:else}
+    <OrchestratorStart {store} {nowMs} />
     <Briefing briefing={view.briefing} {nowMs} />
     <Composer {store} />
     {#if card}

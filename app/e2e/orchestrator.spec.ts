@@ -12,10 +12,11 @@ import { calls, loadBoard, loadRelay, openBoard, openScene, transitionsDone } fr
 import type { CardAnswer } from "../src/lib/generated/CardAnswer";
 import type { LaunchAnswer } from "../src/lib/generated/LaunchAnswer";
 import type { OrchestratorView } from "../src/lib/generated/OrchestratorView";
+import type { StartAnswer } from "../src/lib/generated/StartAnswer";
 import type { WorkOrderCard } from "../src/lib/generated/WorkOrderCard";
 import type { WorkOrderView } from "../src/lib/generated/WorkOrderView";
 
-function orchestrator(name: "orchestrator-empty" | "orchestrator-day"): OrchestratorView {
+function orchestrator(name: "orchestrator-empty" | "orchestrator-day" | "orchestrator-live"): OrchestratorView {
   return fixtureOf<OrchestratorView>("orchestrator", name);
 }
 
@@ -165,6 +166,57 @@ for (const theme of ["light", "dark"] as const) {
     expect(seen.mark).toBe(pressed);
   });
 }
+
+async function answerStart(page: Page, answer: StartAnswer): Promise<void> {
+  await page.evaluate((a) => (window.__officinaStartAnswer = a), answer);
+}
+
+// Story 5.16 AC 7 (AD-89, AD-92, D-691): Start sends `start_orchestrator`,
+// from a click or the keyboard, since a Start approves nothing; once
+// started, the author is told to type any first message.
+test("Start sends start_orchestrator", async ({ page }) => {
+  await openOrchestrator(page, orchestrator("orchestrator-empty"));
+  await expect(page.getByTestId("orchestrator-presence-text")).toHaveText("Absent.");
+  const start = page.getByTestId("orchestrator-start");
+  await expect(start).toHaveAccessibleName("Start");
+  await start.click();
+  await expect(page.getByTestId("orchestrator-start-answer")).toContainText("type any first message");
+  expect(await callsOf(page, "start_orchestrator")).toHaveLength(1);
+  await start.focus();
+  await page.keyboard.press("Enter");
+  await expect.poll(async () => (await callsOf(page, "start_orchestrator")).length).toBe(2);
+});
+
+// Story 5.16 AC 7 (AD-89): a refusal shows its cause beside the button,
+// and a spawn that failed shows what it failed with, as text.
+test("a refused start shows its cause", async ({ page }) => {
+  await openOrchestrator(page, orchestrator("orchestrator-empty"));
+  await answerStart(page, { outcome: "refused", detail: "workdir_not_empty" });
+  await page.getByTestId("orchestrator-start").click();
+  const answer = page.getByTestId("orchestrator-start-answer");
+  await expect(answer).toContainText("the orchestrator's folder is not empty");
+  await answerStart(page, { outcome: "failed", detail: "<b>access denied</b>" });
+  await page.getByTestId("orchestrator-start").click();
+  await expect(answer).toHaveText("Could not start: <b>access denied</b>");
+  await expect(answer.locator("b")).toHaveCount(0);
+});
+
+// Story 5.16 AC 5 and 7 (AD-89, D-565, D-678): the board's live
+// orchestrator, from the real CLI's board, shows its status in the view
+// and the filled mark on the view switch; Start then reads "Bring to
+// front" and says it already runs.
+test("a live orchestrator shows its status", async ({ page }) => {
+  await openOrchestrator(page, orchestrator("orchestrator-live"));
+  await expect(page.getByTestId("orchestrator-presence-text")).toContainText("Live: idle, started");
+  await expect(page.getByTestId("orchestrator-presence")).toHaveAttribute("data-presence", "live");
+  await expect(page.getByTestId("view-orchestrator")).toHaveAccessibleName("Orchestrator: live");
+  const start = page.getByTestId("orchestrator-start");
+  await expect(start).toHaveAccessibleName("Bring to front");
+  await answerStart(page, { outcome: "already_running", detail: { outcome: "no_window" } });
+  await start.click();
+  await expect(page.getByTestId("orchestrator-start-answer")).toContainText("Already running");
+  expect(await callsOf(page, "start_orchestrator")).toHaveLength(1);
+});
 
 test("the briefing shows each section and since when", async ({ page }) => {
   const day = orchestrator("orchestrator-day");
