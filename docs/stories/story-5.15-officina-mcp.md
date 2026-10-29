@@ -1,6 +1,6 @@
 # Story 5.15: `officina mcp`: the server, read tools and proposal files
 
-**Status:** Approved
+**Status:** Review
 
 ## Story
 
@@ -23,13 +23,13 @@ so that the orchestrator can brief itself and suggest work, while nothing it cal
 
 ## Tasks
 
-- [ ] `crates/officina-core/src/mcp.rs`: types, `McpTool`, schemas, bounds, dispatch, `MCP_PROTOCOL_VERSIONS` (AC 1, 4-6)
-- [ ] `tests/vectors/mcp.json`, `crates/officina-core/tests/mcp_vectors.rs` (AC 1)
-- [ ] `crates/officina-host/src/mcp.rs`: loop, start check, read model, proposal file writer, rate limits (AC 2-5)
-- [ ] `officina/main.rs`: `mcp` subcommand and usage (AC 2)
-- [ ] `crates/officina/tests/mcp.rs` (AC 2-7)
-- [ ] `mcp_tool` and `mcp_output` sections (AC 8)
-- [ ] Zero-write, `CHANGELOG.md`, README (AC 9, 10)
+- [x] `crates/officina-core/src/mcp.rs`: types, `McpTool`, schemas, bounds, dispatch, `MCP_PROTOCOL_VERSIONS` (AC 1, 4-6)
+- [x] `tests/vectors/mcp.json`, `crates/officina-core/tests/mcp_vectors.rs` (AC 1)
+- [x] `crates/officina-host/src/mcp.rs`: loop, start check, read model, proposal file writer, rate limits (AC 2-5)
+- [x] `officina/main.rs`: `mcp` subcommand and usage (AC 2)
+- [x] `crates/officina/tests/mcp.rs` (AC 2-7)
+- [x] `mcp_tool` and `mcp_output` sections (AC 8)
+- [x] Zero-write, `CHANGELOG.md`, README (AC 9, 10)
 
 ## Dev Notes
 
@@ -55,12 +55,40 @@ so that the orchestrator can brief itself and suggest work, while nothing it cal
 
 ### Debug Log
 
+- The first bound check of `mcp::dispatch` dropped one item per pass, re-serializing the whole output each time: `outputs_are_bounded` (5,000 items, every tool) ran for minutes. It now drops as many of the largest list's last items as its mean item size says the excess needs, one pass or two.
+- ts-rs writes one file per type name: the proposal's subject view, first named `SubjectView`, made `ProposalContent.ts` import the registry's `SubjectView`; renamed `ProposedSubjectView` (D-761). A doc comment on `RefusedView.params` changed `Refused.ts`; it became a plain comment, so the binding's bytes stay (D-766).
+- A full workspace run under the load of a parallel Linux build failed on `run.rs::the_refused_approval_stays_unconsumed` (no request within 20 s) and the Linux run on `injection.rs::card_launch_cases` (first board timeout); both passed alone and in the sequential gate. The full workspace run failed once on `board.rs::hanging_claude_times_out_instead_of_blocking` (6.10 s against 6 s), under the load of a parallel build; run alone it passed. This story does not touch `board --json`'s path.
+
 ### Completion Notes
 
+Every AC is implemented and proven by the tests named. Decisions D-760 to D-772 (epic-5-decisions.md, "Implementation (2026-10-29)"); D-770 is to confirm. No new dependency and no new feature. The frontend changes only by its generated bindings (`ProposalView.ts` and the types it names; `pnpm check` green).
+
+- AC 1: `tests/vectors/mcp.json` through `crates/officina-core/tests/mcp_vectors.rs::{framing_cases_match, every_tool_and_error_has_a_case}` (iterates `McpTool::ALL`, `McpError::ALL` and `ArgsRefusal::ALL`; stand-ins built from the bounds, the newest version and the tool list taken from their constants); host `crates/officina-host/src/mcp.rs::tests::an_oversized_line_is_discarded_to_its_newline`; core `crates/officina-core/src/mcp.rs::tests::{schemas_are_pinned, no_schema_takes_a_path}`. Errors and refusals as built: D-764; versions: D-765.
+- AC 2: CLI `crates/officina/tests/mcp.rs::{a_wrong_project_dir_exits_1_with_one_line, a_usage_error_exits_64, stderr_never_holds_an_environment_value}` (a marker under each messaging name of `SESSION_ENV_REMOVED`, searched in stdout, stderr and the proposal files, serving and refusing); `crates/officina/tests/readme.rs::readme_mentions_every_subcommand`. Start check: D-772.
+- AC 3: `mcp.rs::{reads_with_the_window_closed_and_reports_pending_bytes, the_registry_file_is_unchanged_after_every_tool}`; D-693's test `mcp.rs::the_agents_child_receives_no_session_variable` (every name of `SESSION_ENV_REMOVED` seeded, none in the fake's logged names). Read model: D-768.
+- AC 4: `mcp.rs::{each_read_tool_answers_from_the_fixture, session_text_is_wrapped_untrusted, no_excerpts_serves_no_excerpt, no_excerpts_from_the_environment_serves_no_excerpt, the_board_tool_works_with_agent_view_off_in_the_parent, the_briefing_cursor_is_the_previous_start}` (the excerpt tests carry a positive control with excerpts on); core `mcp.rs::tests::outputs_are_bounded`; host `mcp.rs::tests::registry_rows_read_back_untrusted_and_count_toward_the_limits`. `ProposalView`'s fields: D-761; the rows' columns: D-762; output shape and bound: D-763; what `no_excerpts` withholds: D-770 (to confirm); the cursor's writer and reader: D-767.
+- AC 5: `mcp.rs::{each_proposal_tool_writes_one_file_and_returns_its_id, oversized_inputs_are_refused, the_31st_proposal_in_an_hour_is_refused_with_its_reason, the_201st_pending_is_refused, a_sentence_as_a_value_is_written_for_ingestion_to_judge}`; host `mcp.rs::tests::{proposal_file_names_are_unique_and_atomic, a_file_over_its_bound_is_not_written, files_read_back_as_pending_views}`; core `orders/proposal.rs::tests`. File and writer: D-760; counting: D-769.
+- AC 6: core `mcp.rs::tests::no_schema_takes_a_path`; CLI `mcp.rs::{no_tool_spawns_anything_but_claude_agents, no_tool_reads_or_writes_a_permission_prompt}`. `officina_host::mcp` is outside `window-authority` and calls no authority code, so the CI step "officina holds no authority" holds unchanged (the release builds it compares run in CI).
+- AC 7: `mcp.rs::{the_e11_handshake_completes, tools_list_names_every_tool}`; every test above drives the real binary with E11's handshake.
+- AC 8: `crates/officina/tests/injection.rs::{mcp_tool_cases, mcp_output_cases, every_section_family_and_refusal_has_a_case}` (sections `mcp_tool`, 15 cases, and `mcp_output`, 10 cases, one per source of `common::mcp::SOURCES`; family `markup` added). The invalid reason of a registry row is proven by the host test above until story 5.17's writer lets the battery seed one (D-771).
+- AC 9: `crates/officina/tests/quota_doctor.rs::no_command_writes_under_the_claude_config_dir` runs a scripted `officina mcp` session calling every tool.
+- AC 10: `CHANGELOG.md` `[Unreleased]`, Added: `officina mcp`. README "The orchestrator (v0.5, in progress)": the section "The orchestrator's tools (`officina mcp`)" (the two families of `McpTool`, the bounds and limits, the note, what no tool does, the folder check) and the opening sentence; "Command line": the `officina mcp [--floor <path>]` row.
+- Gate (2026-10-29), the Rust parts of `ci.yml` on `7a7e81b`, then `c2695bd`: fmt and clippy (`--workspace --all-targets --features officina-core/ts`) green; Rust 1423 passed, 1 failed, 11 ignored, the failure `serves_in`'s doctest (a Windows path not written as a raw string), fixed in `c2695bd` and green run again; the launch half without the authority green; the `mutants` step caught each mutant, the control run green; Linux (`rust:1-bookworm`, volumes `officina-v05mcp-linux-*`): 1269 passed, 0 failed, 9 ignored, and the spawn step alone. Vitest, Playwright, `cargo deny` and `pnpm audit` are the lead's at integration; `pnpm check` green with the regenerated bindings.
+
 ## File List
+
+- `CHANGELOG.md`, `README.md`
+- `app/src/lib/generated/ProposalView.ts`; `ProposalContent.ts`, `ProposalKind.ts`, `ProposalStatus.ts`, `ProposedSubjectView.ts`, `TargetView.ts` (new, generated)
+- `crates/officina-core/src/lib.rs`, `crates/officina-core/src/mcp.rs` (new), `crates/officina-core/src/orders/mod.rs`, `crates/officina-core/src/orders/proposal.rs` (new), `crates/officina-core/src/orders/view.rs`, `crates/officina-core/src/registry/types.rs`, `crates/officina-core/src/relay/view.rs`
+- `crates/officina-core/tests/mcp_vectors.rs` (new), `tests/vectors/mcp.json` (new), `tests/vectors/injection.json`
+- `crates/officina-host/src/lib.rs`, `crates/officina-host/src/mcp.rs` (new), `crates/officina-host/src/registry/commands.rs`, `crates/officina-host/src/registry/orders.rs`, `crates/officina-host/src/registry/read.rs`
+- `crates/officina/src/main.rs`
+- `crates/officina/tests/mcp.rs` (new), `crates/officina/tests/common/mcp.rs` (new), `crates/officina/tests/common/mod.rs`, `crates/officina/tests/injection.rs`, `crates/officina/tests/quota_doctor.rs`
+- `docs/stories/epic-5-decisions.md`, `docs/stories/sprint-status.yaml`, this file
 
 ## Change Log
 
 - 2026-10-28 created
 - 2026-10-28 reworked after review: home, excerpt switch and `claude` path from the MCP config (F1); the board works with agent view off in the parent (F4); wrapping through `untrusted::wrapped`, a marker in every source (F8); bounded line read, `McpError` (F39); D-145 recorded as a departure (F45)
 - 2026-10-28 reworked against the addendum and v0.4 as built: no tool touches a Claude Code permission prompt, proven against Slice D's folder (PRD section 9 item 6's second half, D-577); `propose_answer` left to story 5.21 (D-575); proposals carried as `ProposalView`, a name v0.3 does not export (D-576); the server's environment comes from the contained allow list and its MCP config (D-561); seams cited by file (D-563)
+- 2026-10-29 implemented: `officina mcp`, its read and proposal tools, the proposal file and `ProposalView`, the vector set and the battery's two sections; decisions D-760 to D-772
