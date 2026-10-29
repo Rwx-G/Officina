@@ -1,6 +1,7 @@
 //! Win32 calls for the focus action (AD-15), for the relay's process tree
-//! (AD-30, AD-31), for the credentials of HTTP actions (AD-36) and for the
-//! registry's location check (AD-39). The only
+//! (AD-30, AD-31), for the credentials of HTTP actions (AD-36), for the
+//! registry's location check (AD-39) and for the orchestrator's liveness and
+//! console (AD-89). The only
 //! module of the workspace allowed `unsafe`; every
 //! block carries its safety argument. Decisions (which window, which
 //! arguments) are made by pure functions in `officina_core`.
@@ -34,8 +35,8 @@ unsafe extern "system" {
 }
 use windows_sys::Win32::System::SystemInformation::GetSystemDirectoryW;
 use windows_sys::Win32::System::Threading::{
-    CREATE_UNICODE_ENVIRONMENT, GetCurrentProcess, GetProcessTimes, OpenProcess,
-    PROCESS_INFORMATION, PROCESS_QUERY_LIMITED_INFORMATION, STARTUPINFOW,
+    CREATE_UNICODE_ENVIRONMENT, GetCurrentProcess, GetExitCodeProcess, GetProcessTimes,
+    OpenProcess, PROCESS_INFORMATION, PROCESS_QUERY_LIMITED_INFORMATION, STARTUPINFOW,
 };
 
 /// A job object: every process assigned to it, and every process those
@@ -364,6 +365,17 @@ fn parent_map() -> HashMap<u32, u32> {
 
 /// Creation time of a process in 100 ns ticks, `None` when it cannot be read.
 fn creation_time(pid: u32) -> Option<u64> {
+    process_state(pid).map(|(created, _)| created)
+}
+
+/// What `GetExitCodeProcess` answers for a process that has not exited
+/// (`STILL_ACTIVE`, 259); windows-sys declares it under a feature the
+/// addendum does not list.
+const STILL_ACTIVE: u32 = 259;
+
+/// The creation time of process `pid` in 100 ns ticks, and whether it has
+/// not exited yet; `None` when it cannot be opened.
+fn process_state(pid: u32) -> Option<(u64, bool)> {
     // SAFETY: plain call; the handle is checked and closed below.
     let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
     if handle.is_null() {
@@ -376,10 +388,30 @@ fn creation_time(pid: u32) -> Option<u64> {
     let (mut created, mut exited, mut kernel, mut user) = (zero, zero, zero, zero);
     // SAFETY: `handle` is a valid process handle with query rights and the
     // four out pointers are writable FILETIMEs for the duration of the call.
-    let ok = unsafe { GetProcessTimes(handle, &mut created, &mut exited, &mut kernel, &mut user) };
+    let timed =
+        unsafe { GetProcessTimes(handle, &mut created, &mut exited, &mut kernel, &mut user) };
+    let mut code = 0u32;
+    // SAFETY: `handle` is a valid process handle with query rights and
+    // `code` is a writable u32 for the call.
+    let coded = unsafe { GetExitCodeProcess(handle, &mut code) };
     // SAFETY: the handle came from OpenProcess and is closed once.
     unsafe { CloseHandle(handle) };
-    (ok != 0).then(|| (u64::from(created.dwHighDateTime) << 32) | u64::from(created.dwLowDateTime))
+    (timed != 0).then(|| {
+        (
+            (u64::from(created.dwHighDateTime) << 32) | u64::from(created.dwLowDateTime),
+            coded != 0 && code == STILL_ACTIVE,
+        )
+    })
+}
+
+/// True when process `pid` still runs and was created at
+/// `created_at_ms` (Unix milliseconds, as `orchestrator_start` stores it,
+/// D-144): Windows reuses process ids, and a pid given to another process
+/// since has a later creation time (AD-89).
+pub fn process_alive(pid: u32, created_at_ms: i64) -> bool {
+    process_state(pid).is_some_and(|(created, running)| {
+        running && officina_core::dates::filetime_ms(created) == created_at_ms
+    })
 }
 
 /// `pid` and its ancestors, nearest first, at most 16 hops, cycle-safe.
@@ -483,6 +515,30 @@ pub fn window_titles_for(pid: u32) -> Vec<String> {
     session_windows(pid).into_iter().map(|(_, t)| t).collect()
 }
 
+/// Restores `hwnd` if it is minimised and brings it to the foreground;
+/// when Windows refuses the change, flashes it.
+fn bring_to_front(hwnd: HWND) -> officina_core::focus::FocusOutcome {
+    // SAFETY: `hwnd` came from EnumWindows moments ago; a window closed
+    // since makes these calls fail harmlessly.
+    unsafe {
+        if IsIconic(hwnd) != 0 {
+            ShowWindow(hwnd, SW_RESTORE);
+        }
+        if SetForegroundWindow(hwnd) != 0 || GetForegroundWindow() == hwnd {
+            return officina_core::focus::FocusOutcome::Focused;
+        }
+        let flash = FLASHWINFO {
+            cbSize: u32::try_from(std::mem::size_of::<FLASHWINFO>()).unwrap_or(0),
+            hwnd,
+            dwFlags: FLASHW_ALL | FLASHW_TIMERNOFG,
+            uCount: 3,
+            dwTimeout: 0,
+        };
+        FlashWindowEx(&flash);
+    }
+    officina_core::focus::FocusOutcome::Refused
+}
+
 /// Brings the window of an interactive session to the foreground.
 pub fn focus_session_window(pid: u32, names: &[String]) -> officina_core::focus::FocusOutcome {
     use officina_core::focus::{FocusOutcome, WindowChoice, choose_window};
@@ -494,28 +550,40 @@ pub fn focus_session_window(pid: u32, names: &[String]) -> officina_core::focus:
         WindowChoice::Candidates(list) => {
             FocusOutcome::Candidates(list.into_iter().map(Untrusted::new).collect())
         }
-        WindowChoice::One(index) => {
-            let hwnd = windows[index].0;
-            // SAFETY: `hwnd` came from EnumWindows moments ago; a window
-            // closed since makes these calls fail harmlessly.
-            unsafe {
-                if IsIconic(hwnd) != 0 {
-                    ShowWindow(hwnd, SW_RESTORE);
-                }
-                if SetForegroundWindow(hwnd) != 0 || GetForegroundWindow() == hwnd {
-                    return FocusOutcome::Focused;
-                }
-                let flash = FLASHWINFO {
-                    cbSize: u32::try_from(std::mem::size_of::<FLASHWINFO>()).unwrap_or(0),
-                    hwnd,
-                    dwFlags: FLASHW_ALL | FLASHW_TIMERNOFG,
-                    uCount: 3,
-                    dwTimeout: 0,
-                };
-                FlashWindowEx(&flash);
-            }
-            FocusOutcome::Refused
-        }
+        WindowChoice::One(index) => bring_to_front(windows[index].0),
+    }
+}
+
+/// The indexes of the titles that hold `name` as a whole word (AD-89):
+/// `-`, `_` and `.` belong to a name, so a longer name holding it is no
+/// match.
+fn titled(titles: &[&str], name: &str) -> Vec<usize> {
+    titles
+        .iter()
+        .enumerate()
+        .filter(|(_, title)| officina_core::focus::title_contains_word(title, name))
+        .map(|(index, _)| index)
+        .collect()
+}
+
+/// Brings to the front the one top-level window whose title holds `name`
+/// as a whole word, whoever owns it: `--name` titles the orchestrator's
+/// console, or its Windows Terminal tab (AD-89). Several are candidates,
+/// none is [`NoWindow`](officina_core::focus::FocusOutcome::NoWindow).
+pub fn focus_window_by_title(name: &str) -> officina_core::focus::FocusOutcome {
+    use officina_core::focus::FocusOutcome;
+    use officina_core::untrusted::Untrusted;
+    let windows = top_windows();
+    let titles: Vec<&str> = windows.iter().map(|w| w.title.as_str()).collect();
+    match titled(&titles, name).as_slice() {
+        [] => FocusOutcome::NoWindow,
+        [one] => bring_to_front(windows[*one].hwnd),
+        several => FocusOutcome::Candidates(
+            several
+                .iter()
+                .map(|index| Untrusted::new(windows[*index].title.clone()))
+                .collect(),
+        ),
     }
 }
 
@@ -720,5 +788,54 @@ mod tests {
     #[test]
     fn window_enumeration_does_not_crash_and_titles_are_non_empty() {
         assert!(top_windows().iter().all(|w| !w.title.is_empty()));
+    }
+
+    /// Story 5.16 AC 4 (AD-89): the orchestrator's console is found by its
+    /// name as a whole word; a longer name holding it is another session.
+    #[test]
+    fn title_match_is_a_whole_word() {
+        use officina_core::spawn::ORCHESTRATOR_NAME;
+        let titles = [
+            "officina-orchestrator",
+            "Claude Code - officina-orchestrator",
+            "OFFICINA-ORCHESTRATOR: idle",
+            "my-officina-orchestrator",
+            "officina-orchestrator-2",
+            "officina orchestrator",
+            "officina-orchestrator.log - Notepad",
+        ];
+        assert_eq!(titled(&titles, ORCHESTRATOR_NAME), [0, 1, 2]);
+        assert!(titled(&[], ORCHESTRATOR_NAME).is_empty());
+        // No window holds a name nobody uses: nothing is brought forward.
+        assert_eq!(
+            focus_window_by_title("officina-test-no-window-7f3a91"),
+            officina_core::focus::FocusOutcome::NoWindow
+        );
+    }
+
+    /// Story 5.16 AC 4 (AD-89, D-144): a pid is alive only with the
+    /// creation time it was kept with, and only until it exits.
+    #[test]
+    fn process_alive_refuses_a_reused_pid() {
+        let own = std::process::id();
+        let created = officina_core::dates::filetime_ms(creation_time(own).unwrap());
+        assert!(process_alive(own, created));
+        assert!(!process_alive(own, created + 1), "another creation time");
+        assert!(!process_alive(own, created - 1), "another creation time");
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "the test starts a short-lived process to watch it exit"
+        )]
+        let mut child = std::process::Command::new(system_directory().unwrap().join("ping.exe"))
+            .args(["-n", "2", "127.0.0.1"])
+            .stdout(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        let pid = child.id();
+        let born = officina_core::dates::filetime_ms(creation_time(pid).unwrap());
+        assert!(process_alive(pid, born), "it runs");
+        child.wait().unwrap();
+        assert!(!process_alive(pid, born), "it exited");
+        assert!(!process_alive(0, 0));
     }
 }

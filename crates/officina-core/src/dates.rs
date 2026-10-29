@@ -7,6 +7,23 @@ pub const HOUR_MS: i64 = 3_600_000;
 /// One day, in milliseconds: the one copy every module uses.
 pub const DAY_MS: i64 = 24 * HOUR_MS;
 
+/// Milliseconds from 1601-01-01, where Windows counts a process's creation
+/// time, to 1970-01-01.
+const FILETIME_EPOCH_MS: i64 = 11_644_473_600_000;
+
+/// A Windows creation time, in 100 ns ticks since 1601, as Unix
+/// milliseconds: how `orchestrator_start.pid_created_at_ms` stores it
+/// (D-144), so a reused pid's later creation never compares equal.
+///
+/// ```
+/// use officina_core::dates::filetime_ms;
+/// assert_eq!(filetime_ms(116_444_736_000_000_000), 0);
+/// assert_eq!(filetime_ms(116_444_736_000_019_999), 1);
+/// ```
+pub fn filetime_ms(ticks: u64) -> i64 {
+    i64::try_from(ticks / 10_000).unwrap_or(i64::MAX) - FILETIME_EPOCH_MS
+}
+
 /// `(year, month, day)` of the UTC day containing `unix_ms`.
 ///
 /// Howard Hinnant's `civil_from_days`, valid for the whole `i64` day range
