@@ -1,14 +1,16 @@
-//! One spawn module is a lint, and the lint has exactly three exceptions
-//! (AD-73, D-128 as amended by D-562, review F18): clippy refuses
-//! `std::process::Command::new` anywhere in this crate (`clippy.toml`);
-//! this test holds `src/` outside its test modules to one `expect` of it
-//! in each of `spawn`, `relay::run` and `git`, which no lint can count. It
+//! One spawn module is a lint, and the lint has exactly its listed
+//! exceptions (AD-73, D-128 as amended by D-562, review F18): clippy
+//! refuses `std::process::Command::new` and the console launcher anywhere
+//! in this crate (`clippy.toml`, D-963); this test holds `src/` outside its
+//! test modules to the `expect`s of [`SITES`], which no lint can count. It
 //! reads the source text on purpose.
 
 use std::path::{Path, PathBuf};
 
-/// The modules where a process starts, as files under `src/`.
-const SITES: &[&str] = &["spawn.rs", "relay/run/spawn.rs", "git.rs"];
+/// The modules where a process starts, as files under `src/`, with how
+/// many `expect`s each holds: `spawn` starts claude both through `Command`
+/// and through the console launcher (D-963).
+const SITES: &[(&str, usize)] = &[("spawn.rs", 2), ("relay/run/spawn.rs", 1), ("git.rs", 1)];
 
 const EXPECT: &str = "#[expect(";
 const LINT: &str = "clippy::disallowed_methods";
@@ -83,7 +85,7 @@ fn expects(text: &str) -> usize {
 }
 
 #[test]
-fn command_new_is_expected_in_three_modules_only() {
+fn process_starts_are_expected_in_the_spawn_sites_only() {
     let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let mut files = Vec::new();
     sources(&src, &mut files);
@@ -106,8 +108,10 @@ fn command_new_is_expected_in_three_modules_only() {
         }
     }
     holding.sort();
-    let mut expected: Vec<(String, usize)> =
-        SITES.iter().map(|site| ((*site).to_owned(), 1)).collect();
+    let mut expected: Vec<(String, usize)> = SITES
+        .iter()
+        .map(|(site, count)| ((*site).to_owned(), *count))
+        .collect();
     expected.sort();
     assert_eq!(holding, expected);
 }

@@ -382,15 +382,20 @@ fn start_in_console(
         Some(_) => claude.path().to_path_buf(),
         None => claude.path().with_extension("exe"),
     };
-    crate::platform::windows::start_in_new_console(
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "a console kind starts here, in the spawn module, as every claude process does (AD-73, D-963)"
+    )]
+    let started = crate::platform::windows::start_in_new_console(
         &program,
         vector.args(),
         cwd,
         env,
         creation_flags(vector.console()),
-    )
-    .map(|(pid, created)| SpawnOutcome::Started { pid, created })
-    .map_err(|e| SpawnError::Spawn(e.to_string()))
+    );
+    started
+        .map(|(pid, created)| SpawnOutcome::Started { pid, created })
+        .map_err(|e| SpawnError::Spawn(e.to_string()))
 }
 
 #[cfg(not(windows))]
