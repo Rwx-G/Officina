@@ -235,6 +235,7 @@ closed_enum! {
     #[serde(rename_all = "snake_case")]
     /// Why no [`ApprovedTemplate`] can be had (AD-77).
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+    #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
     pub enum TemplateUnavailable {
         /// The floor's catalogue is not the approved one: edited since the
         /// approval, or a project the template names is not on it.

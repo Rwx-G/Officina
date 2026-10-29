@@ -146,6 +146,7 @@ closed_enum! {
     #[serde(rename_all = "snake_case")]
     /// Why [`WorkOrder::validate`] refused, in the order it checks (AD-77).
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+    #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
     pub enum WorkOrderRefusal {
         /// The project is not one of the template's.
         ProjectNotAllowed,
@@ -246,11 +247,8 @@ impl WorkOrder {
         }
         let mut chosen = BTreeMap::new();
         for (name, value, list) in given {
-            let entry = list
-                .iter()
-                .find(|entry| entry.as_bytes() == value.as_bytes())
-                .ok_or(WorkOrderRefusal::ValueNotInList)?;
-            chosen.insert(name.to_owned(), entry.clone());
+            let entry = list_entry(list, value).ok_or(WorkOrderRefusal::ValueNotInList)?;
+            chosen.insert(name.to_owned(), entry);
         }
         let prompt =
             render(template.prompt(), &chosen).ok_or(WorkOrderRefusal::UnrenderablePrompt)?;
@@ -312,6 +310,22 @@ impl WorkOrder {
     }
 }
 
+/// The entry of `list` equal to `value` byte for byte: the template's own
+/// string, never the caller's.
+#[cfg(not(feature = "mutant-accept-any-value"))]
+fn list_entry(list: &[String], value: &str) -> Option<String> {
+    list.iter()
+        .find(|entry| entry.as_bytes() == value.as_bytes())
+        .cloned()
+}
+
+/// The mutant `mutant-accept-any-value` (AD-95, D-148): list membership
+/// skipped, the caller's value kept.
+#[cfg(feature = "mutant-accept-any-value")]
+fn list_entry(_list: &[String], value: &str) -> Option<String> {
+    Some(value.to_owned())
+}
+
 /// The name a work order's session runs under (AD-79, D-135):
 /// `<template>-<seq>`, unique in the registry.
 ///
@@ -328,6 +342,7 @@ pub fn order_name(template: &str, seq: u32) -> String {
 /// (AD-81 step 5).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "value", rename_all = "snake_case")]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub enum SubjectChoice {
     Existing(i64),
     New(String),

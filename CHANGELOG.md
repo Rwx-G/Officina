@@ -54,6 +54,19 @@ project uses [Semantic Versioning](https://semver.org/).
   rules; a new subject is created at `started`, never at the click, or the
   open subject of that name is used. Rows are kept 90 days, their texts
   cleared with the excerpts.
+- Work orders launched from cards (v0.5, story 5.7; the window's controls
+  come with story 5.9): the window issues a card for a template, a project
+  and a value from each list, which shows the rendered prompt, its SHA-256
+  and the argument vector exactly as it would run under a name reserved at
+  issue; an edit issues a new card under the same name and supersedes the
+  old. One pointer click launches a card: the collector checks it in a
+  fixed order (`LaunchRefusal`), consumes it, records the row and hands
+  the card's vector, byte for byte, to the click's own thread, which runs
+  `claude --bg` there and sends the outcome back (`LaunchOutcome`, an
+  untrusted folder its own), recorded however late and journaled once as
+  `work_order_launched`. Nothing retries: a double click launches
+  once, and a failed launch burns its card. Commands `issue_card`,
+  `edit_card` and `launch_work_order`.
 - `officina doctor` warns, under "agent view", when
   `CLAUDE_CODE_DISABLE_AGENT_VIEW` turns agent view off in its environment
   or in the `env` object of the user settings: work orders and answers

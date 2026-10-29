@@ -598,3 +598,68 @@ fn a_non_exe_claude_is_refused_for_every_kind() {
     std::thread::sleep(Duration::from_millis(300));
     assert!(!setup.log("refused").exists(), "the fake was started");
 }
+
+/// D-128 review F10, story 5.7 AC 4: `claude --bg` that exits 0 while a
+/// process it started (the supervisor) still holds the output pipes is a
+/// started launch, with what was read; the process it left runs on. The
+/// fake's `bg-hold` mode leaves a heartbeat copy holding them.
+#[test]
+fn held_pipes_after_exit_0_are_started() {
+    let setup = Setup::new();
+    let heartbeat = setup.root.path().join("heartbeat");
+    let fake = setup.fake(
+        "hold",
+        serde_json::json!({"mode": "bg-hold", "heartbeat": heartbeat}),
+    );
+    let started = Instant::now();
+    let ran = execute(
+        &fake,
+        &setup.vector(VectorKind::WorkOrder),
+        &BaseEnv::new(seeded_base()),
+    );
+    let held = matches!(&ran, Ok(SpawnOutcome::Captured(c)) if c.status.success() && c.output_held);
+    assert!(held, "{ran:?}");
+    assert!(started.elapsed() < Duration::from_secs(15));
+    let result = officina_host::orders::launch_result(ran);
+    assert_eq!(
+        result.outcome,
+        officina_core::registry::types::LaunchOutcome::Started
+    );
+    let printed = result.printed.unwrap_or_default();
+    assert!(printed.starts_with("backgrounded"), "{printed:?}");
+    let running = !common::heartbeat_stopped(&heartbeat);
+    common::stop_heartbeat(&heartbeat);
+    assert!(running, "what claude left running was ended");
+}
+
+/// D-128 review F10, story 5.7 AC 4: past a work order's deadline the
+/// launch is `failed` with `timeout`, and only `claude` is ended: the
+/// process it started survives. The vector is tightened to 2 s; the fake
+/// in `bg-hold` hangs after starting its holder.
+#[test]
+fn a_work_order_timeout_kills_only_claude() {
+    let setup = Setup::new();
+    let heartbeat = setup.root.path().join("heartbeat");
+    let fake = setup.fake(
+        "hold-hang",
+        serde_json::json!({"mode": "bg-hold", "heartbeat": heartbeat, "hang_ms": 30_000}),
+    );
+    let order = setup
+        .vector(VectorKind::WorkOrder)
+        .tightened(2_000, usize::MAX);
+    let started = Instant::now();
+    let ran = execute(&fake, &order, &BaseEnv::new(seeded_base()));
+    assert!(started.elapsed() < Duration::from_secs(10), "{ran:?}");
+    let result = officina_host::orders::launch_result(ran);
+    assert_eq!(
+        (result.outcome, result.error.as_deref()),
+        (
+            officina_core::registry::types::LaunchOutcome::Failed,
+            Some("timeout")
+        )
+    );
+    assert!(common::heartbeat_len(&heartbeat) > 0, "the holder ran");
+    let running = !common::heartbeat_stopped(&heartbeat);
+    common::stop_heartbeat(&heartbeat);
+    assert!(running, "the deadline ended what claude started");
+}

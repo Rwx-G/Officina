@@ -4,11 +4,15 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { Board } from "./generated/Board";
+import type { CardAnswer } from "./generated/CardAnswer";
+import type { CardChange } from "./generated/CardChange";
+import type { CardRequest } from "./generated/CardRequest";
 import type { ConfirmItem } from "./generated/ConfirmItem";
 import type { DiscardedSession } from "./generated/DiscardedSession";
 import type { FocusOutcome } from "./generated/FocusOutcome";
 import type { IpcError } from "./generated/IpcError";
 import type { ItemAnswer } from "./generated/ItemAnswer";
+import type { LaunchAnswer } from "./generated/LaunchAnswer";
 import type { RegistryView } from "./generated/RegistryView";
 import type { RelayView } from "./generated/RelayView";
 import type { Settlement } from "./generated/Settlement";
@@ -146,6 +150,25 @@ export function setTriageModel(on: boolean): Promise<void> {
 /** Turns auto-archive on, refused unless its gate holds, or off (FR-12). */
 export function setAutoArchive(on: boolean): Promise<void> {
   return invoke("set_auto_archive", { on });
+}
+
+/** Issues a work order card (AD-78): the card, its argument vector exactly
+ *  as it would run, or the refusal. */
+export function issueCard(request: CardRequest): Promise<CardAnswer> {
+  return invoke<CardAnswer>("issue_card", { request });
+}
+
+/** A new card in place of `cardId` with one change (AD-78); the old card
+ *  is superseded. */
+export function editCard(cardId: string, change: CardChange): Promise<CardAnswer> {
+  return invoke<CardAnswer>("edit_card", { cardId, change });
+}
+
+/** Launches card `cardId`, whose shown prompt hashes to `promptSha256`
+ *  (AD-78): how it ended, or why it was refused. The caller sends it on a
+ *  pointer click only (D-28). */
+export function launchWorkOrder(cardId: string, promptSha256: string): Promise<LaunchAnswer> {
+  return invoke<LaunchAnswer>("launch_work_order", { cardId, promptSha256 });
 }
 
 export function getBoard(): Promise<Board | null> {

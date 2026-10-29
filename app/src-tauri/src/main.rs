@@ -5,15 +5,20 @@
 
 mod taskbar;
 
+// A build that links a mutant of AD-95 does not compile (D-148): the
+// mutants exist for CI's `mutants` job, never for a window, release or not.
+const _: () = assert!(!officina_core::MUTANTS_ENABLED);
+
 use std::collections::BTreeSet;
 use std::path::PathBuf;
-use std::sync::mpsc::{RecvTimeoutError, Sender};
+use std::sync::mpsc::Sender;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use officina_core::board::Board;
 use officina_core::focus::FocusOutcome;
-use officina_core::ipc::{IpcError, IpcErrorCode};
+use officina_core::ipc::IpcError;
+use officina_core::orders::card::{CardAnswer, CardChange, CardRequest, LaunchAnswer};
 use officina_core::registry::confirm::{AuthorAction, ConfirmItem, ItemAnswer, SubjectOrigin};
 use officina_core::registry::types::Settlement;
 use officina_core::registry::view::{DiscardedSession, RegistryView, SubjectView};
@@ -23,13 +28,12 @@ use officina_host::files::now_ms;
 use officina_host::focus::{
     FocusContext, attach_command, focus_card, log_outcome, log_wrong_window,
 };
+use officina_host::orders;
 use officina_host::paths::Paths;
 use officina_host::relay::authority::{self, AuthorityError};
 use officina_host::relay::home::RelayHome;
 use officina_host::spawn::BaseEnv;
-use officina_host::watch::{
-    AUTHOR_WAIT, AuthorAnswer, AuthorCommand, AuthorRequest, CollectorMsg, Emit, spawn,
-};
+use officina_host::watch::{AUTHOR_WAIT, AuthorAnswer, AuthorCommand, CollectorMsg, Emit, spawn};
 use tauri::{AppHandle, Emitter, Manager, State, WindowEvent};
 
 /// Event carrying each new board to the window.
@@ -122,24 +126,8 @@ fn ask_collector(
     command: AuthorCommand,
     wait: Duration,
 ) -> Result<AuthorAnswer, IpcError> {
-    let not_run = || {
-        IpcError::new(
-            IpcErrorCode::Timeout,
-            format!(
-                "the registry did not answer within {} ms; the next view shows whether the change was made",
-                wait.as_millis()
-            ),
-        )
-    };
     let sender = sender.ok_or_else(|| IpcError::internal("the collector is not running"))?;
-    let (request, answer) = AuthorRequest::new(command, wait);
-    sender
-        .send(CollectorMsg::Author(request))
-        .map_err(|_| IpcError::internal("the collector has stopped"))?;
-    match answer.recv_timeout(wait) {
-        Ok(reply) => reply,
-        Err(RecvTimeoutError::Timeout | RecvTimeoutError::Disconnected) => Err(not_run()),
-    }
+    officina_host::watch::ask(&sender, command, wait)
 }
 
 /// Runs an author request off the main thread (AD-3), waiting at most
@@ -341,6 +329,50 @@ async fn evaluate_triage_model(state: State<'_, AppState>) -> Result<u32, IpcErr
     ask(state, AuthorCommand::Evaluate).await?.into_evaluating()
 }
 
+/// Issues a work order card for `request` (AD-78): the card, with the
+/// argument vector exactly as it would run, or the refusal.
+#[tauri::command]
+async fn issue_card(
+    state: State<'_, AppState>,
+    request: CardRequest,
+) -> Result<CardAnswer, IpcError> {
+    ask(state, AuthorCommand::IssueCard(request))
+        .await?
+        .into_card()
+}
+
+/// A new card in place of `card_id` with one value, from its list, or the
+/// subject changed (AD-78); the old card is superseded.
+#[tauri::command]
+async fn edit_card(
+    state: State<'_, AppState>,
+    card_id: String,
+    change: CardChange,
+) -> Result<CardAnswer, IpcError> {
+    ask(state, AuthorCommand::EditCard { card_id, change })
+        .await?
+        .into_card()
+}
+
+/// Launches card `card_id`, the prompt shown hashing to `prompt_sha256`
+/// (AD-78, AD-81): the checks and the record on the collector thread, the
+/// spawn on this command's blocking thread, never the collector's (AD-3).
+#[tauri::command]
+async fn launch_work_order(
+    state: State<'_, AppState>,
+    card_id: String,
+    prompt_sha256: String,
+) -> Result<LaunchAnswer, IpcError> {
+    let sender = state
+        .collector()
+        .ok_or_else(|| IpcError::internal("the collector is not running"))?;
+    tauri::async_runtime::spawn_blocking(move || {
+        orders::launch_card(&sender, &card_id, &prompt_sha256)
+    })
+    .await
+    .map_err(|e| IpcError::internal(e.to_string()))?
+}
+
 #[tauri::command]
 fn refresh(state: State<'_, AppState>) {
     if let Ok(sender) = state.sender.lock() {
@@ -527,7 +559,10 @@ fn main() {
             set_triage_model,
             set_auto_archive,
             settle_session,
-            list_discarded
+            list_discarded,
+            issue_card,
+            edit_card,
+            launch_work_order
         ])
         .run(tauri::generate_context!())
         .expect("failed to run the Officina window");

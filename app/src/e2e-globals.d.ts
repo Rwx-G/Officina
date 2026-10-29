@@ -2,9 +2,11 @@
 // the app and the e2e tests, which type-check under different tsconfigs.
 import type { Board } from "./lib/generated/Board";
 import type { AuthorRefusal } from "./lib/generated/AuthorRefusal";
+import type { CardAnswer } from "./lib/generated/CardAnswer";
 import type { DiscardedSession } from "./lib/generated/DiscardedSession";
 import type { FocusOutcome } from "./lib/generated/FocusOutcome";
 import type { ItemOutcome } from "./lib/generated/ItemOutcome";
+import type { LaunchAnswer } from "./lib/generated/LaunchAnswer";
 import type { RegistryView } from "./lib/generated/RegistryView";
 import type { RelayView } from "./lib/generated/RelayView";
 import type { SubjectView } from "./lib/generated/SubjectView";
@@ -35,6 +37,10 @@ declare global {
     __officinaConfirmOutcome?: Record<string, ItemOutcome>;
     /** The refusal `evaluate_triage_model` answers, when set (story 3.9). */
     __officinaEvaluateRefused?: string;
+    /** What `issue_card` and `edit_card` answer (story 5.7). */
+    __officinaCardAnswer?: CardAnswer;
+    /** What `launch_work_order` answers (story 5.7). */
+    __officinaLaunchAnswer?: LaunchAnswer;
   }
 }
 

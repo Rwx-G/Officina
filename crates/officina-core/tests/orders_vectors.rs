@@ -1,6 +1,8 @@
 //! Replays the `validate` section of the work order vector set (AD-77,
 //! FR-3) through `ApprovedTemplate::new` and `WorkOrder::validate`, and
-//! refuses a set that leaves a refusal without a case.
+//! its `card` section (AD-78, story 5.7) through `card::issue` and
+//! `card::check_launch`, and refuses a set that leaves a refusal without a
+//! case.
 //!
 //! Every case reads the set's floor, approves it, and validates; a case
 //! with `snapshot_template` or `over_limit` first edits the approved
@@ -8,7 +10,12 @@
 //! keep it: what `validate` checks beyond the closed lists is what such a
 //! snapshot can carry.
 
+use officina_core::orders::card::{
+    CardInputs, CardRequest, CardState, LaunchFacts, LaunchRefusal, WorkOrderCard, check_launch,
+    issue,
+};
 use officina_core::orders::work_order::{WorkOrder, WorkOrderRefusal};
+use officina_core::registry::types::{Source, Sourced, SubjectRecord, SubjectStatus};
 use officina_core::relay::catalogue::{ApprovedCatalogue, CanonicalTemplate, RelayFloor, load};
 use officina_core::relay::template::{
     ApprovedTemplate, MAX_PROMPT_CHARS, ParamName, ProjectName, TemplateName, render,
@@ -25,6 +32,65 @@ struct VectorSet {
     floor_path: String,
     floor: String,
     validate: Vec<Case>,
+    card: Vec<CardCase>,
+}
+
+/// One case of the `card` section: an issue, compared with the expected
+/// card's fields or refusal, or a launch's checks on the first issue
+/// case's card with the facts `launch` changes.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CardCase {
+    name: String,
+    #[serde(default)]
+    issue: Option<CardRequest>,
+    #[serde(default)]
+    seq: u32,
+    #[serde(default)]
+    subjects: Vec<SubjectRow>,
+    #[serde(default)]
+    launch: Option<LaunchCase>,
+    expect: Value,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SubjectRow {
+    id: i64,
+    project: String,
+    name: String,
+    status: SubjectStatus,
+}
+
+/// What differs from a launch every check passes: the card's state or an
+/// unknown id, the clicked hash, either catalogue hash (`null`: none), and
+/// the host's findings.
+#[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+struct LaunchCase {
+    #[serde(default)]
+    card: Option<String>,
+    #[serde(default)]
+    clicked: Option<String>,
+    #[serde(default, deserialize_with = "present")]
+    approved: Option<Option<String>>,
+    #[serde(default, deserialize_with = "present")]
+    current: Option<Option<String>>,
+    #[serde(default)]
+    template_approved: Option<bool>,
+    #[serde(default)]
+    claude_native: Option<bool>,
+    #[serde(default)]
+    folder_exists: Option<bool>,
+    #[serde(default)]
+    subject_open: Option<bool>,
+    #[serde(default)]
+    name_taken: Option<bool>,
+}
+
+/// A key given, `null` included, as `Some`; absent as `None`.
+fn present<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<Option<String>>, D::Error> {
+    Option::<String>::deserialize(d).map(Some)
 }
 
 #[derive(Deserialize)]
@@ -181,4 +247,155 @@ fn every_expected_order_is_consistent() {
             );
         }
     }
+}
+
+fn subject_records(rows: &[SubjectRow]) -> Vec<SubjectRecord> {
+    rows.iter()
+        .map(|row| SubjectRecord {
+            id: row.id,
+            project: row.project.clone(),
+            name: row.name.clone(),
+            status: Sourced {
+                value: row.status,
+                src: Source::Author,
+                at_ms: 0,
+            },
+            created_at_ms: 0,
+            routine: false,
+            merged_into: None,
+        })
+        .collect()
+}
+
+const CARD_ID: &str = "0123456789abcdef0123456789abcdef";
+
+/// `request` issued with `seq` and `subjects` on the set's floor, approved.
+fn issued(
+    set: &VectorSet,
+    seq: u32,
+    request: &CardRequest,
+    subjects: &[SubjectRecord],
+) -> Result<officina_core::orders::card::IssuedCard, officina_core::orders::card::IssueRefusal> {
+    let current = current(set);
+    let approved = ApprovedCatalogue::approving(&current, &set.floor_path, 0);
+    issue(
+        CARD_ID,
+        seq,
+        request,
+        &CardInputs {
+            approved: &approved,
+            current: &current,
+            subjects,
+            quota: None,
+            config_dir: None,
+            now_ms: 0,
+        },
+    )
+}
+
+/// The card or the refusal `case` gives, as JSON: the card's fields the
+/// expectation names only, so a case states what it is about.
+fn replay_issue(set: &VectorSet, case: &CardCase, request: &CardRequest) -> Value {
+    match issued(set, case.seq, request, &subject_records(&case.subjects)) {
+        Err(refusal) => serde_json::json!({"refused": refusal}),
+        Ok(issued) => {
+            assert_eq!(
+                issued.card().argv,
+                officina_core::spawn::work_order(issued.order(), case.seq, None).args(),
+                "{}: the card's argv is the vector spawn builds",
+                case.name
+            );
+            let card = serde_json::to_value(issued.card()).unwrap();
+            let wanted = case.expect["card"].as_object().cloned().unwrap_or_default();
+            let fields: serde_json::Map<String, Value> = wanted
+                .keys()
+                .map(|key| (key.clone(), card[key].clone()))
+                .collect();
+            serde_json::json!({ "card": fields })
+        }
+    }
+}
+
+/// The first issue case's card, which every launch case checks.
+fn launch_card(set: &VectorSet) -> WorkOrderCard {
+    let case = set
+        .card
+        .iter()
+        .find(|case| case.issue.is_some() && case.expect.get("card").is_some())
+        .expect("an issue case that issues");
+    issued(set, case.seq, case.issue.as_ref().unwrap(), &[])
+        .unwrap()
+        .card()
+        .clone()
+}
+
+/// What `launch` gives on `card`: `"launched"` or the refusal.
+fn replay_launch(card: &WorkOrderCard, launch: &LaunchCase) -> Value {
+    let other = "f".repeat(64);
+    let hash = |given: &Option<Option<String>>| -> Option<String> {
+        match given {
+            None => Some(card.catalogue_hash.clone()),
+            Some(None) => None,
+            Some(Some(_)) => Some(other.clone()),
+        }
+    };
+    let mut stated = card.clone();
+    if let Some(state) = launch.card.as_deref().filter(|c| *c != "unknown") {
+        stated.state = CardState::from_code(state).unwrap_or_else(|| panic!("card state {state}"));
+    }
+    let (approved, current) = (hash(&launch.approved), hash(&launch.current));
+    let clicked = match &launch.clicked {
+        None => card.prompt_sha256.clone(),
+        Some(_) => other.clone(),
+    };
+    let facts = LaunchFacts {
+        card: (launch.card.as_deref() != Some("unknown")).then_some(&stated),
+        clicked_sha256: &clicked,
+        approved_hash: approved.as_deref(),
+        current_hash: current.as_deref(),
+        template_approved: launch.template_approved.unwrap_or(true),
+        claude_native: launch.claude_native.unwrap_or(true),
+        folder_exists: launch.folder_exists.unwrap_or(true),
+        subject_open: launch.subject_open.unwrap_or(true),
+        name_taken: launch.name_taken.unwrap_or(false),
+    };
+    match check_launch(&facts) {
+        Ok(()) => Value::from("launched"),
+        Err(refusal) => serde_json::json!({ "refused": refusal }),
+    }
+}
+
+#[test]
+fn card_cases_match() {
+    let set = load_set();
+    assert!(!set.card.is_empty());
+    let card = launch_card(&set);
+    for case in &set.card {
+        let got = match (&case.issue, &case.launch) {
+            (Some(request), None) => replay_issue(&set, case, request),
+            (None, Some(launch)) => replay_launch(&card, launch),
+            _ => panic!("{}: an issue or a launch", case.name),
+        };
+        assert_eq!(got, case.expect, "case: {}", case.name);
+    }
+}
+
+#[test]
+fn every_launch_refusal_has_a_case() {
+    let set = load_set();
+    for refusal in LaunchRefusal::ALL {
+        let wanted = serde_json::json!({ "refused": refusal });
+        assert!(
+            set.card
+                .iter()
+                .any(|case| case.launch.is_some() && case.expect == wanted),
+            "{refusal:?} has no launch case in tests/vectors/orders.json"
+        );
+    }
+    assert!(
+        set.card
+            .iter()
+            .any(|case| case.launch.is_some() && case.expect == "launched"),
+        "no launch passes"
+    );
 }

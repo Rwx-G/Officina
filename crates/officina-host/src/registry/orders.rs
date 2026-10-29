@@ -187,6 +187,18 @@ impl Writer {
         Ok(highest.and_then(|seq| u32::try_from(seq).ok()))
     }
 
+    /// True when the registry holds `<template>-<seq>` as a name, or
+    /// `seq` for `template`: a launch of that card is refused `name_taken`
+    /// (D-135), the last of AD-78's checks.
+    pub fn work_order_name_taken(&self, template: &str, seq: u32) -> Result<bool, RegistryError> {
+        Ok(self.conn.query_row(
+            "SELECT EXISTS (SELECT 1 FROM work_order
+                 WHERE name = ?1 OR (template = ?2 AND seq = ?3))",
+            params![order_name(template, seq), template, seq],
+            |row| row.get(0),
+        )?)
+    }
+
     /// Records a launch at `now_ms` with outcome `launching` (AD-81 step
     /// 1): the order's project folder as `cwd`, its values and the argument
     /// vector that runs as JSON, the prompt's SHA-256, the catalogue hash

@@ -217,6 +217,20 @@ pub const fn job_rule(kind: VectorKind) -> JobRule {
     }
 }
 
+/// True when `kind`'s run that exited 0 keeps what it read although a
+/// process it started still holds the output pipes (D-128 review F10):
+/// `claude --bg` may start the supervisor of every background session,
+/// which inherits them; any other captured kind answered in full or not
+/// at all.
+pub const fn keeps_held_output(kind: VectorKind) -> bool {
+    match kind {
+        VectorKind::WorkOrder => true,
+        VectorKind::Agents | VectorKind::Version | VectorKind::TriageCall | VectorKind::Attach => {
+            false
+        }
+    }
+}
+
 /// The creation flags of a process with `console`.
 pub const fn creation_flags(console: Console) -> u32 {
     match console {
@@ -326,6 +340,7 @@ fn run_captured(
         stderr_cap: capture.stderr_cap,
         grace,
         job,
+        keep_held_output: keeps_held_output(vector.kind()),
     };
     let mut command = claude_command(claude);
     command.args(vector.args()).env_clear().envs(env);

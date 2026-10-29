@@ -8,11 +8,13 @@ mod stub_server;
 use std::time::{Duration, Instant};
 
 use common::{TestEnv, fingerprint, now_ms, printed_hooks_block};
+use officina_core::orders::card::{CardAnswer, CardRequest, LaunchAnswer};
+use officina_core::registry::types::LaunchOutcome;
 use officina_core::relay::gate::{gated_tools, gated_tools_matcher};
 use officina_core::relay::run::{EXIT_NOT_STARTED, EXIT_REFUSED};
 use officina_host::collector::{Collector, LoadedFloor};
 use officina_host::paths::Paths;
-use officina_host::watch::{CollectorMsg, spawn};
+use officina_host::watch::{AUTHOR_WAIT, AuthorCommand, CollectorMsg, ask, spawn};
 
 const STATUSLINE: &str = r#"{"session_id":"s1","model":{"display_name":"Opus"},
   "rate_limits":{"five_hour":{"used_percentage":62.0,"resets_at":1800000000},
@@ -213,7 +215,8 @@ fn doctor_with_a_guarded_project_requires_every_gated_tool() {
 /// into `~/.claude.json`, whatever command runs, with the window's
 /// collector running beside them, ingesting into its registry and sending a
 /// row to the enabled model through the fake (story 3.11, story 3.12
-/// AC 6), and a dry run's call made through the fake (story 3.9 AC 12).
+/// AC 6), a dry run's call made through the fake (story 3.9 AC 12), and a
+/// work order launched from a card through the fake (story 5.7 AC 8).
 #[test]
 fn no_command_writes_under_the_claude_config_dir() {
     let env = TestEnv::new();
@@ -307,7 +310,7 @@ fn no_command_writes_under_the_claude_config_dir() {
     let stub = stub_server::Stub::start(vec![stub_server::Reply::ok("up")]);
     let health = stub.url("/health");
     env.write_floor(&format!(
-        "schema = 2\n[[project]]\nname = \"lab\"\npath = \"{lab_path}\"\nactions = [\"probe\", \"restart\", \"health\"]\n[[action]]\nname = \"probe\"\nclass = \"free\"\nprogram = \"{{tool}}\"\n[[action]]\nname = \"restart\"\nclass = \"human\"\nprogram = \"{{tool}}\"\n[[action]]\nname = \"health\"\nkind = \"http\"\nclass = \"free\"\nmethod = \"GET\"\nurl = \"{health}\"\n"
+        "schema = 2\n[[project]]\nname = \"lab\"\npath = \"{lab_path}\"\nactions = [\"probe\", \"restart\", \"health\"]\n[[template]]\nname = \"probe-notes\"\ndescription = \"Write the probe notes\"\nprojects = [\"lab\"]\nprompt = \"Write the notes for {{host}}.\"\n[template.params.host]\nvalues = [\"web01\"]\n[[action]]\nname = \"probe\"\nclass = \"free\"\nprogram = \"{{tool}}\"\n[[action]]\nname = \"restart\"\nclass = \"human\"\nprogram = \"{{tool}}\"\n[[action]]\nname = \"health\"\nkind = \"http\"\nclass = \"free\"\nmethod = \"GET\"\nurl = \"{health}\"\n"
     ));
     env.approve();
     let payload = serde_json::json!({
@@ -348,6 +351,31 @@ fn no_command_writes_under_the_claude_config_dir() {
             String::from_utf8_lossy(&out.stderr)
         );
     }
+
+    // A work order launched from a card, as the window's commands do, with
+    // the collector's fake answering `--bg` (story 5.7 AC 8, D-80).
+    let request = CardRequest {
+        template: "probe-notes".to_owned(),
+        project: "lab".to_owned(),
+        values: vec![("host".to_owned(), "web01".to_owned())],
+        subject: None,
+    };
+    let card = match ask(
+        &watch.sender,
+        AuthorCommand::IssueCard(request),
+        AUTHOR_WAIT,
+    )
+    .unwrap()
+    .into_card()
+    .unwrap()
+    {
+        CardAnswer::Issued(card) => card,
+        refused => panic!("{refused:?}"),
+    };
+    assert_eq!(
+        officina_host::orders::launch_card(&watch.sender, &card.id, &card.prompt_sha256),
+        Ok(LaunchAnswer::Launched(LaunchOutcome::Started))
+    );
 
     // A triage call through the fake, pointed at the same config dir as a
     // floor's `config_dir` would point it (story 3.9 AC 12, D-80).

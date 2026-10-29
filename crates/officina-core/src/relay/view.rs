@@ -445,6 +445,9 @@ fn recent(lines: &[JournalLine], now_ms: i64) -> Vec<RecentEntry> {
                 }
                 JournalEntry::RelayStopped => RecentEvent::RelayStopped,
                 JournalEntry::RelayResumed => RecentEvent::RelayResumed,
+                // A launch is no relay entry: the Orchestrator view's
+                // history shows work orders, from the registry (AD-92).
+                JournalEntry::WorkOrderLaunched(_) => return None,
             };
             Some(RecentEntry {
                 ts: line.ts,
@@ -901,6 +904,9 @@ mod tests {
                 }
                 JournalKind::RelayStopped => JournalEntry::RelayStopped,
                 JournalKind::RelayResumed => JournalEntry::RelayResumed,
+                // Left out of the relay view, which `recent` checks by its
+                // match: work orders show in the Orchestrator view.
+                JournalKind::WorkOrderLaunched => continue,
             };
             let lines = [JournalLine::new(NOW, entry)];
             let view = build(&inputs(SnapshotState::Missing, FloorRead::Missing, &lines));

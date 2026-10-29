@@ -4,9 +4,11 @@
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 import { emit } from "@tauri-apps/api/event";
 import type { Board } from "./lib/generated/Board";
+import type { CardAnswer } from "./lib/generated/CardAnswer";
 import type { ConfirmItem } from "./lib/generated/ConfirmItem";
 import type { IpcError } from "./lib/generated/IpcError";
 import type { ItemAnswer } from "./lib/generated/ItemAnswer";
+import type { LaunchAnswer } from "./lib/generated/LaunchAnswer";
 import type { RegistryView } from "./lib/generated/RegistryView";
 import type { RelayView } from "./lib/generated/RelayView";
 
@@ -70,6 +72,11 @@ export function installE2eMock(): void {
           return setAutoArchive((args as { on: boolean }).on);
         case "set_triage_model":
           return setTriageModel((args as { on: boolean }).on);
+        case "issue_card":
+        case "edit_card":
+          return card();
+        case "launch_work_order":
+          return launch();
         default:
           if (AUTHOR_COMMANDS.includes(cmd)) return author(cmd);
           return null;
@@ -100,6 +107,20 @@ function author(cmd: string): Promise<number | null> {
     return Promise.reject(error);
   }
   return Promise.resolve(cmd === "create_subject" ? 1 : null);
+}
+
+/** Mirrors the collector's answer to `issue_card` and `edit_card` (AD-78):
+ *  the card or refusal the test sets in `__officinaCardAnswer`, else the
+ *  refusal of a catalogue with no template approved. */
+function card(): CardAnswer {
+  return window.__officinaCardAnswer ?? { outcome: "refused", value: { kind: "template", detail: "not_approved" } };
+}
+
+/** Mirrors the collector's answer to `launch_work_order` (AD-81): the
+ *  outcome or refusal the test sets in `__officinaLaunchAnswer`, else
+ *  `started`. */
+function launch(): LaunchAnswer {
+  return window.__officinaLaunchAnswer ?? { outcome: "launched", value: "started" };
 }
 
 /** Mirrors the collector's answer to `confirm_triage` (AD-49): each item is

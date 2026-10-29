@@ -156,5 +156,71 @@
       "snapshot_template": {"description": "Draft the release notes", "projects": ["Docs Site"], "prompt": "!git push {version}", "params": {"version": ["v0.4.0", "v0.5.0"]}, "model": null},
       "expect": {"refused": "prompt_start"}
     }
+  ],
+  "card": [
+    {
+      "name": "a card holds the vector the reserved seq names, and a new subject named after the template",
+      "issue": {"template": "dependency-bump", "project": "backend", "values": [["package", "serde_json"], ["level", "minor"]], "subject": null},
+      "seq": 3,
+      "subjects": [],
+      "expect": {"card": {"name": "dependency-bump-3", "seq": 3, "argv": ["--bg", "--name", "dependency-bump-3", "--model", "sonnet", "--", "Bump serde_json to its latest minor release, run the tests, fix what breaks, commit."], "cwd": "C:/path/to/floor/work/Backend", "subject": {"kind": "new", "value": "dependency-bump"}, "state": "open"}}
+    },
+    {
+      "name": "the project's single open subject is the default",
+      "issue": {"template": "release-notes", "project": "Docs Site", "values": [["version", "v0.5.0"]], "subject": null},
+      "seq": 1,
+      "subjects": [{"id": 4, "project": "Docs Site", "name": "Release", "status": "to_resume"}, {"id": 5, "project": "Docs Site", "name": "Old", "status": "archived"}, {"id": 6, "project": "lab", "name": "Lab", "status": "active"}],
+      "expect": {"card": {"name": "release-notes-1", "seq": 1, "argv": ["--bg", "--name", "release-notes-1", "--", "Draft the release notes for v0.5.0.\nKeep \"Unreleased\" as it is."], "cwd": "D:/path/to/Docs-Site", "subject": {"kind": "existing", "value": 4}, "state": "open"}}
+    },
+    {
+      "name": "two open subjects leave the default to a new one",
+      "issue": {"template": "release-notes", "project": "Docs Site", "values": [["version", "v0.4.0"]], "subject": null},
+      "seq": 2,
+      "subjects": [{"id": 4, "project": "Docs Site", "name": "Release", "status": "active"}, {"id": 7, "project": "Docs Site", "name": "Fixes", "status": "to_resume"}],
+      "expect": {"card": {"name": "release-notes-2", "seq": 2, "argv": ["--bg", "--name", "release-notes-2", "--", "Draft the release notes for v0.4.0.\nKeep \"Unreleased\" as it is."], "cwd": "D:/path/to/Docs-Site", "subject": {"kind": "new", "value": "release-notes"}, "state": "open"}}
+    },
+    {
+      "name": "a template the snapshot does not hold",
+      "issue": {"template": "deploy-prod", "project": "backend", "values": [], "subject": null},
+      "seq": 1,
+      "subjects": [],
+      "expect": {"refused": {"kind": "template", "detail": "not_approved"}}
+    },
+    {
+      "name": "a value outside its list",
+      "issue": {"template": "dependency-bump", "project": "backend", "values": [["package", "serde_json --settings x"], ["level", "minor"]], "subject": null},
+      "seq": 1,
+      "subjects": [],
+      "expect": {"refused": {"kind": "order", "detail": "value_not_in_list"}}
+    },
+    {
+      "name": "an archived subject",
+      "issue": {"template": "dependency-bump", "project": "backend", "values": [["package", "serde_json"], ["level", "minor"]], "subject": {"kind": "existing", "value": 5}},
+      "seq": 1,
+      "subjects": [{"id": 5, "project": "backend", "name": "Old", "status": "archived"}],
+      "expect": {"refused": {"kind": "subject", "detail": "subject_closed"}}
+    },
+    {
+      "name": "a new subject name holding a bidirectional character",
+      "issue": {"template": "dependency-bump", "project": "backend", "values": [["package", "serde_json"], ["level", "minor"]], "subject": {"kind": "new", "value": "Roll\u202eout"}},
+      "seq": 1,
+      "subjects": [],
+      "expect": {"refused": {"kind": "subject_name", "detail": "name_has_forbidden_characters"}}
+    },
+    {"name": "a launch every check passes", "launch": {}, "expect": "launched"},
+    {"name": "an unknown card", "launch": {"card": "unknown"}, "expect": {"refused": "unknown_card"}},
+    {"name": "a superseded card", "launch": {"card": "superseded"}, "expect": {"refused": "superseded"}},
+    {"name": "a consumed card, a double click", "launch": {"card": "consumed"}, "expect": {"refused": "consumed"}},
+    {"name": "a superseded card is refused as such before its hash", "launch": {"card": "superseded", "clicked": "other"}, "expect": {"refused": "superseded"}},
+    {"name": "another prompt's hash", "launch": {"clicked": "other"}, "expect": {"refused": "prompt_hash_mismatch"}},
+    {"name": "another catalogue approved since", "launch": {"approved": "other"}, "expect": {"refused": "catalogue_changed"}},
+    {"name": "no catalogue the window's record confirms", "launch": {"approved": null}, "expect": {"refused": "catalogue_changed"}},
+    {"name": "the floor edited since", "launch": {"current": "other"}, "expect": {"refused": "catalogue_changed"}},
+    {"name": "the template gone from the snapshot", "launch": {"template_approved": false}, "expect": {"refused": "template_not_approved"}},
+    {"name": "a claude that is not an executable", "launch": {"claude_native": false}, "expect": {"refused": "claude_not_executable"}},
+    {"name": "the project folder gone", "launch": {"folder_exists": false}, "expect": {"refused": "project_folder_missing"}},
+    {"name": "the subject archived since", "launch": {"subject_open": false}, "expect": {"refused": "subject_closed"}},
+    {"name": "the registry holds the name", "launch": {"name_taken": true}, "expect": {"refused": "name_taken"}},
+    {"name": "the hash is checked before the catalogue", "launch": {"clicked": "other", "current": "other"}, "expect": {"refused": "prompt_hash_mismatch"}}
   ]
 }

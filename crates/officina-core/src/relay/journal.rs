@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use super::catalogue::ActionClass;
 use super::gate::DenyKind;
 use super::http::HttpMethod;
+use crate::registry::types::LaunchOutcome;
 
 /// Version of the journal line format. Readers skip lines of another
 /// version without counting them corrupt.
@@ -83,6 +84,7 @@ pub enum JournalEntry {
     ApprovalRejected(ApprovalEvent),
     RelayStopped,
     RelayResumed,
+    WorkOrderLaunched(WorkOrderLaunched),
 }
 
 closed_enum! {
@@ -102,6 +104,7 @@ closed_enum! {
         ApprovalRejected,
         RelayStopped,
         RelayResumed,
+        WorkOrderLaunched,
     }
 }
 
@@ -120,6 +123,7 @@ impl JournalEntry {
             JournalEntry::ApprovalRejected(_) => JournalKind::ApprovalRejected,
             JournalEntry::RelayStopped => JournalKind::RelayStopped,
             JournalEntry::RelayResumed => JournalKind::RelayResumed,
+            JournalEntry::WorkOrderLaunched(_) => JournalKind::WorkOrderLaunched,
         }
     }
 }
@@ -457,6 +461,28 @@ pub struct ApprovalEvent {
     pub dry_run: Option<bool>,
 }
 
+/// A work order's launch ended (AD-32 as amended, AD-81 step 3): what
+/// ran and how. The registry's row keeps `claude`'s output and error text
+/// for its bounded time (D-134); the journal, kept 90 days, keeps neither.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkOrderLaunched {
+    /// The card's id, the registry row's (D-136).
+    pub order_id: String,
+    /// `<template>-<seq>`.
+    pub name: String,
+    pub template: String,
+    pub project: String,
+    pub values: BTreeMap<String, String>,
+    /// The arguments after the binary, exactly as they ran.
+    pub argv: Vec<String>,
+    pub prompt_sha256: String,
+    pub catalogue_hash: String,
+    pub outcome: LaunchOutcome,
+    /// `claude`'s exit code, when it exited.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exit_code: Option<i64>,
+}
+
 /// How a reader classifies one raw line.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[allow(clippy::large_enum_variant)] // returned by value and consumed at once, never stored
@@ -576,7 +602,59 @@ mod tests {
             JournalKind::ApprovalRejected => JournalEntry::ApprovalRejected(approval()),
             JournalKind::RelayStopped => JournalEntry::RelayStopped,
             JournalKind::RelayResumed => JournalEntry::RelayResumed,
+            JournalKind::WorkOrderLaunched => JournalEntry::WorkOrderLaunched(launched()),
         }
+    }
+
+    fn launched() -> WorkOrderLaunched {
+        WorkOrderLaunched {
+            order_id: "0123456789abcdef0123456789abcdef".into(),
+            name: "dependency-bump-3".into(),
+            template: "dependency-bump".into(),
+            project: "backend".into(),
+            values: BTreeMap::from([("package".into(), "serde_json".into())]),
+            argv: vec![
+                "--bg".into(),
+                "--name".into(),
+                "dependency-bump-3".into(),
+                "--".into(),
+                "Bump serde_json.".into(),
+            ],
+            prompt_sha256: crate::relay::sha256_hex(b"Bump serde_json."),
+            catalogue_hash: "00".into(),
+            outcome: LaunchOutcome::Started,
+            exit_code: Some(0),
+        }
+    }
+
+    /// AD-32 as amended, story 5.7 AC 4: a launch's line carries the
+    /// template, project, values, argument vector, prompt digest,
+    /// catalogue hash and outcome, and reads back as written; an exit code
+    /// it does not have is left out.
+    #[test]
+    fn work_order_launched_round_trips() {
+        let line = JournalLine::new(11, JournalEntry::WorkOrderLaunched(launched())).to_line();
+        let value: serde_json::Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(value["kind"], "work_order_launched");
+        assert_eq!(value["outcome"], "started");
+        assert_eq!(value["argv"][0], "--bg");
+        assert_eq!(value["values"]["package"], "serde_json");
+        assert_eq!(
+            parse_line(line.trim_end()),
+            ParsedLine::Line(JournalLine::new(
+                11,
+                JournalEntry::WorkOrderLaunched(launched())
+            ))
+        );
+        let timed_out = WorkOrderLaunched {
+            outcome: LaunchOutcome::Failed,
+            exit_code: None,
+            ..launched()
+        };
+        let line = JournalLine::new(12, JournalEntry::WorkOrderLaunched(timed_out)).to_line();
+        let value: serde_json::Value = serde_json::from_str(&line).unwrap();
+        assert!(value.get("exit_code").is_none(), "{line}");
+        assert!(matches!(parse_line(line.trim_end()), ParsedLine::Line(_)));
     }
 
     fn approval() -> ApprovalEvent {

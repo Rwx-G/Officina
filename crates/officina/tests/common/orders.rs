@@ -1,0 +1,196 @@
+//! The work order harness of the CLI tests (story 5.7): a home whose
+//! floor holds a template in a project whose folder exists, approved
+//! through the window's authority, and the window's collector thread on
+//! it, its `claude` a copy of the fake configured by its sidecar (D-86).
+//! Cards are issued, edited and launched through the functions the
+//! window's commands call, so the tests drive the window's path without
+//! Tauri.
+
+use std::path::PathBuf;
+use std::time::Duration;
+
+use officina_core::orders::card::{
+    CardAnswer, CardChange, CardRequest, LaunchAnswer, WorkOrderCard,
+};
+use officina_host::collector::{Collector, LoadedFloor};
+use officina_host::paths::Paths;
+use officina_host::spawn::BaseEnv;
+use officina_host::watch::{AUTHOR_WAIT, AuthorCommand, CollectorMsg, WatchHandle, ask, spawn};
+
+use super::{Emitted, TestEnv, fake_claude_calls, fake_claude_in, sink};
+
+/// A floor with one project, `{project}` standing for its folder, and two
+/// templates, one with a model and one without.
+pub const FLOOR: &str = r#"schema = 2
+[[project]]
+name = "backend"
+path = "{project}"
+[[template]]
+name = "bump"
+description = "Bump one dependency"
+projects = ["backend"]
+prompt = "Bump {package} to its latest {level} release."
+model = "sonnet"
+[template.params.package]
+values = ["serde_json", "tokio"]
+[template.params.level]
+values = ["patch", "minor"]
+[[template]]
+name = "notes"
+description = "Draft the release notes"
+projects = ["backend"]
+prompt = "Draft the release notes for {version}."
+[template.params.version]
+values = ["v0.4.0", "v0.5.0"]
+"#;
+
+/// A home with [`FLOOR`] approved and the window's collector running on it.
+pub struct OrdersHome {
+    pub env: TestEnv,
+    handle: Option<WatchHandle>,
+    pub emitted: Emitted,
+    /// The fake's copy the collector runs, its sidecar beside it.
+    pub claude: PathBuf,
+}
+
+impl OrdersHome {
+    /// [`FLOOR`] approved, the collector's `claude` the fake with `sidecar`
+    /// (its fixture and log are the environment's).
+    pub fn start(sidecar: serde_json::Value) -> OrdersHome {
+        OrdersHome::start_with(TestEnv::new(), sidecar, "claude")
+    }
+
+    /// The same on `env`, the fake's copy named `name` (`claude.cmd` for a
+    /// shim the spawn module refuses).
+    pub fn start_with(env: TestEnv, mut sidecar: serde_json::Value, name: &str) -> OrdersHome {
+        let project = env.root.path().join("work").join("Backend");
+        std::fs::create_dir_all(&project).unwrap();
+        env.write_floor(&FLOOR.replace("{project}", &project.to_string_lossy().replace('\\', "/")));
+        env.approve();
+        env.write_agents("[]");
+        sidecar["fixture"] = env.fixture().to_string_lossy().into();
+        sidecar["log"] = env.fake_log().to_string_lossy().into();
+        let bin = env.root.path().join("bin");
+        let fake = fake_claude_in(&bin, &sidecar);
+        let claude = if name == "claude" {
+            fake
+        } else {
+            let renamed = bin.join(name);
+            std::fs::copy(&fake, &renamed).unwrap();
+            renamed
+        };
+        let paths = Paths {
+            officina_home: env.officina_home(),
+            claude_config_dir: env.claude_config(),
+            claude_config_override: None,
+            floor_file: None,
+        };
+        let collector = Collector::from_parts(paths, LoadedFloor::default(), Some(claude.clone()))
+            .with_base_env(BaseEnv::new(vec![(
+                "SYSTEMROOT".to_owned(),
+                std::env::var("SYSTEMROOT").unwrap_or_default(),
+            )]));
+        let (board_sink, emitted) = sink(|_| {});
+        let handle = spawn(collector, board_sink).unwrap();
+        emitted
+            .boards
+            .recv_timeout(Duration::from_secs(10))
+            .expect("first board");
+        OrdersHome {
+            env,
+            handle: Some(handle),
+            emitted,
+            claude,
+        }
+    }
+
+    pub fn handle(&self) -> &WatchHandle {
+        self.handle.as_ref().unwrap()
+    }
+
+    /// The project's folder.
+    pub fn project(&self) -> PathBuf {
+        self.env.root.path().join("work").join("Backend")
+    }
+
+    /// The card `request` gets, as `issue_card` answers.
+    pub fn issue(&self, request: &CardRequest) -> CardAnswer {
+        ask(
+            &self.handle().sender,
+            AuthorCommand::IssueCard(request.clone()),
+            AUTHOR_WAIT,
+        )
+        .expect("the collector answers")
+        .into_card()
+        .unwrap()
+    }
+
+    /// A card of `bump` with these values, its default subject.
+    pub fn bump(&self, package: &str, level: &str) -> WorkOrderCard {
+        match self.issue(&bump_request(package, level)) {
+            CardAnswer::Issued(card) => *card,
+            refused => panic!("{refused:?}"),
+        }
+    }
+
+    /// What `edit_card` answers.
+    pub fn edit(&self, card_id: &str, change: CardChange) -> CardAnswer {
+        ask(
+            &self.handle().sender,
+            AuthorCommand::EditCard {
+                card_id: card_id.to_owned(),
+                change,
+            },
+            AUTHOR_WAIT,
+        )
+        .expect("the collector answers")
+        .into_card()
+        .unwrap()
+    }
+
+    /// What `launch_work_order` answers, through the function it calls.
+    pub fn launch(&self, card_id: &str, prompt_sha256: &str) -> LaunchAnswer {
+        officina_host::orders::launch_card(&self.handle().sender, card_id, prompt_sha256)
+            .expect("the collector answers")
+    }
+
+    /// The fake's logged calls holding `--bg`: the launches.
+    pub fn bg_calls(&self) -> Vec<serde_json::Value> {
+        fake_claude_calls(&self.env.fake_log())
+            .into_iter()
+            .filter(|call| {
+                call["argv"]
+                    .as_array()
+                    .is_some_and(|argv| argv.iter().any(|a| a == "--bg"))
+            })
+            .collect()
+    }
+
+    /// Stops the collector thread.
+    pub fn stop(&mut self) {
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.sender.send(CollectorMsg::Shutdown);
+            let _ = handle.thread.join();
+        }
+    }
+}
+
+impl Drop for OrdersHome {
+    fn drop(&mut self) {
+        self.stop();
+    }
+}
+
+/// A request for `bump` in `backend` with these values, its default
+/// subject.
+pub fn bump_request(package: &str, level: &str) -> CardRequest {
+    CardRequest {
+        template: "bump".to_owned(),
+        project: "backend".to_owned(),
+        values: vec![
+            ("package".to_owned(), package.to_owned()),
+            ("level".to_owned(), level.to_owned()),
+        ],
+        subject: None,
+    }
+}

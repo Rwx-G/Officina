@@ -14,15 +14,17 @@ use officina_core::registry::confirm::{AuthorAction, ConfirmItem, ItemAnswer};
 use officina_core::registry::dry_run::DryRunState;
 use officina_core::registry::fold::{AgentsChanges, AgentsSnapshot};
 use officina_core::registry::model::{EnableRefusal, ModelEnv};
-use officina_core::registry::types::{RegistryReport, RegistryState, SubjectRef};
+use officina_core::registry::types::{RegistryReport, RegistryState, SubjectRecord, SubjectRef};
 use officina_core::registry::view::{DiscardedSession, RegistryView, SubjectView, unread_view};
 
 use super::ingest::{IngestContext, IngestReport};
+use super::orders::{LaunchRecord, NameTaken};
 use super::read::{self, Reader};
 use super::retention::PassReport;
 use super::store::{Writer, WriterOpen, open_writer};
 use super::triage::{CallResult, DryRunRefusal, NextCall, Triage};
 use super::write::{AuthorError, RegistryError};
+use crate::orders::LaunchResult;
 
 #[derive(Debug)]
 enum Slot {
@@ -409,6 +411,67 @@ impl WindowRegistry {
             self.on_writer(|writer| writer.apply_agents(&mut snapshot, records, projects, now_ms));
         self.agents = snapshot;
         applied
+    }
+
+    /// The card store's reads before an issue (D-135): the subjects, and
+    /// the highest `seq` the registry holds for `template`. Only a
+    /// writable registry answers, since a card is only worth issuing when
+    /// its launch can be recorded.
+    pub fn card_reads(
+        &mut self,
+        template: &str,
+    ) -> Result<(Vec<SubjectRecord>, Option<u32>), IpcError> {
+        self.with_writer(|writer| {
+            Ok(Ok((
+                writer.subjects()?,
+                writer.highest_work_order_seq(template)?,
+            )))
+        })
+    }
+
+    /// The launch's reads (AD-78): the subjects and whether the registry
+    /// holds the card's name.
+    pub fn launch_reads(
+        &mut self,
+        template: &str,
+        seq: u32,
+    ) -> Result<(Vec<SubjectRecord>, bool), IpcError> {
+        self.with_writer(|writer| {
+            Ok(Ok((
+                writer.subjects()?,
+                writer.work_order_name_taken(template, seq)?,
+            )))
+        })
+    }
+
+    /// Records a launch with outcome `launching` (AD-81 step 1); a name the
+    /// registry holds answers [`NameTaken`] and writes nothing.
+    pub fn insert_work_order(
+        &mut self,
+        launch: &LaunchRecord,
+        now_ms: i64,
+    ) -> Result<Result<(), NameTaken>, IpcError> {
+        self.with_writer(|writer| Ok(Ok(writer.insert_work_order(launch, now_ms)?)))
+    }
+
+    /// Records how a launch ended (AD-81 step 3), even after its row read
+    /// `unknown` (D-135); false when no row has the id.
+    pub fn record_launch_outcome(
+        &mut self,
+        id: &str,
+        result: &LaunchResult,
+        now_ms: i64,
+    ) -> Result<bool, IpcError> {
+        self.with_writer(|writer| {
+            Ok(Ok(writer.record_launch_outcome(
+                id,
+                result.outcome,
+                result.exit_code,
+                result.error.as_deref(),
+                result.printed.as_deref(),
+                now_ms,
+            )?))
+        })
     }
 
     /// Turns the `launching` work orders whose outcome can no longer come

@@ -21,6 +21,14 @@
 //!   background entry with that id, the `--name` value, its working
 //!   directory as `cwd` and the current time as `startedAt`, so a later
 //!   `agents --json` lists it; any other call prints the fixture.
+//!   `bg-hold` (story 5.7, D-128 review F10) does the same, then leaves a
+//!   copy of itself holding the output pipes, as the supervisor `claude
+//!   --bg` may start does: the heartbeat copy when `heartbeat` is set,
+//!   else one that hangs `ORPHAN_HOLD_MS`; with `hang_ms` set it then
+//!   sleeps that long before exiting 0, for a deadline.
+//!   `bg-untrusted` (story 5.7) answers a `--bg` call as `claude` does in
+//!   a folder whose trust dialog was never accepted (E19): the message on
+//!   stderr, exit 1.
 //! - `FAKE_CLAUDE_HANG_MS` (`hang_ms`): how long `hang` sleeps, 60 s by
 //!   default.
 //! - `FAKE_CLAUDE_VERSION` (`version`): answer to `--version`.
@@ -201,6 +209,26 @@ fn background(args: &[String]) {
     }
 }
 
+/// Leaves a copy of this program holding the output pipes it inherits:
+/// the heartbeat copy when a heartbeat file is set, else one that hangs.
+fn hold_the_pipes() {
+    if setting("heartbeat").is_some() {
+        start_heartbeat();
+        return;
+    }
+    if let Ok(me) = std::env::current_exe() {
+        let _ = std::process::Command::new(me)
+            .env("FAKE_CLAUDE_MODE", "hang")
+            .env("FAKE_CLAUDE_HANG_MS", ORPHAN_HOLD_MS)
+            .env("FAKE_CLAUDE_LOG", "")
+            .stdin(std::process::Stdio::null())
+            .spawn();
+    }
+}
+
+/// What `claude --bg` prints in a folder never trusted (E19).
+const NOT_TRUSTED: &str = "Workspace not trusted. Run `claude` in this folder once and accept the trust prompt, then retry.";
+
 /// The verdict `stdin` names after [`VERDICT_TOKEN`], else `unsure`.
 fn named_verdict(stdin: &str) -> String {
     stdin
@@ -346,6 +374,17 @@ fn main() {
     match mode.as_str() {
         "interactive" => {}
         "bg" if args.iter().any(|a| a == "--bg") => background(&args),
+        "bg-hold" if args.iter().any(|a| a == "--bg") => {
+            background(&args);
+            hold_the_pipes();
+            if let Some(ms) = setting("hang_ms").and_then(|v| v.parse().ok()) {
+                std::thread::sleep(Duration::from_millis(ms));
+            }
+        }
+        "bg-untrusted" if args.iter().any(|a| a == "--bg") => {
+            eprintln!("{NOT_TRUSTED}");
+            std::process::exit(1);
+        }
         "hang" => {
             let ms = setting("hang_ms")
                 .and_then(|v| v.parse().ok())

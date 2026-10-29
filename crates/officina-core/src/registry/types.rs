@@ -164,6 +164,7 @@ closed_enum! {
     #[serde(rename_all = "snake_case")]
     /// How a work order's launch ended (AD-81 step 3).
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+    #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
     pub enum LaunchOutcome {
         /// Recorded, its spawn not answered yet.
         Launching,

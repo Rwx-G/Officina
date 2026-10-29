@@ -6,6 +6,8 @@ pub mod doctor;
 pub mod files;
 pub mod focus;
 pub mod git;
+#[cfg(feature = "window-authority")]
+pub mod orders;
 pub mod paths;
 pub mod platform;
 pub mod process;

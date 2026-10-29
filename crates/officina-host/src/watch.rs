@@ -12,7 +12,8 @@ use std::time::{Duration, Instant, SystemTime};
 
 use officina_core::board::Board;
 use officina_core::dates::event_file_name;
-use officina_core::ipc::IpcError;
+use officina_core::ipc::{IpcError, IpcErrorCode};
+use officina_core::orders::card::{CardAnswer, CardChange, CardRequest};
 use officina_core::registry::confirm::{AuthorAction, ConfirmItem, ItemAnswer};
 use officina_core::registry::model::{ModelEnv, unavailable};
 use officina_core::registry::retention::PASS_INTERVAL_MS;
@@ -21,6 +22,7 @@ use officina_core::relay::view::RelayView;
 
 use crate::collector::Collector;
 use crate::files::{event_file_for, now_ms};
+use crate::orders::{CardStore, LaunchGrant, LaunchReport};
 use crate::paths::Paths;
 use crate::registry::ingest::IngestContext;
 use crate::registry::store::onedrive_roots_from_env;
@@ -85,6 +87,21 @@ pub enum AuthorCommand {
     /// The triage model turned on, under its gate and while it can be
     /// called, or off (FR-10 as amended).
     SetTriageModel(bool),
+    /// A work order card for these values (AD-78).
+    IssueCard(CardRequest),
+    /// A new card in place of `card_id`, with one change (AD-78).
+    EditCard { card_id: String, change: CardChange },
+    /// A click on Launch: AD-78's checks, then the card consumed and its
+    /// row recorded `launching`, answered with the card's vector (AD-81
+    /// step 1).
+    LaunchCard {
+        card_id: String,
+        prompt_sha256: String,
+    },
+    /// How a granted launch ended (AD-81 step 3). It carries no deadline:
+    /// the collector records it however late it comes, and never drops it
+    /// (D-135, review F14).
+    LaunchOutcome(Box<LaunchReport>),
 }
 
 impl AuthorAnswer {
@@ -133,10 +150,26 @@ impl AuthorAnswer {
             other => Err(other.unexpected()),
         }
     }
+
+    /// The card or its refusal, for `IssueCard`'s and `EditCard`'s answer.
+    pub fn into_card(self) -> Result<CardAnswer, IpcError> {
+        match self {
+            AuthorAnswer::Card(answer) => Ok(answer),
+            other => Err(other.unexpected()),
+        }
+    }
+
+    /// The launch's ticket or its refusal, for `LaunchCard`'s answer.
+    pub fn into_launch(self) -> Result<LaunchGrant, IpcError> {
+        match self {
+            AuthorAnswer::Launch(grant) => Ok(grant),
+            other => Err(other.unexpected()),
+        }
+    }
 }
 
 /// What the collector answers to an author request.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum AuthorAnswer {
     /// The action was written; `created` is the subject it created, if any.
     Done {
@@ -151,6 +184,8 @@ pub enum AuthorAnswer {
     Evaluating {
         cases: u32,
     },
+    Card(CardAnswer),
+    Launch(LaunchGrant),
 }
 
 /// The collector's answer, or why there is none to give.
@@ -179,10 +214,34 @@ impl AuthorRequest {
         (request, answer)
     }
 
-    /// True when the collector must drop the request unrun (D-92).
+    /// True when the collector must drop the request unrun (D-92). A
+    /// launch's outcome never expires: the launch happened, and its row and
+    /// line are recorded however late (D-135, review F14).
     fn expired(&self, now: Instant) -> bool {
-        now + AUTHOR_HEADROOM >= self.deadline
+        !matches!(self.command, AuthorCommand::LaunchOutcome(_))
+            && now + AUTHOR_HEADROOM >= self.deadline
     }
+}
+
+/// Sends `command` to the collector thread and waits at most `wait` for
+/// its answer (AD-38, D-92). Past `wait`, or when the collector dropped the
+/// request unrun near its deadline, the answer is a timeout: the action
+/// did not run and will not, unless it is a launch's outcome, which the
+/// collector records whenever it reaches it.
+pub fn ask(sender: &Sender<CollectorMsg>, command: AuthorCommand, wait: Duration) -> AuthorReply {
+    let (request, answer) = AuthorRequest::new(command, wait);
+    sender
+        .send(CollectorMsg::Author(request))
+        .map_err(|_| IpcError::internal("the collector has stopped"))?;
+    answer.recv_timeout(wait).unwrap_or_else(|_| {
+        Err(IpcError::new(
+            IpcErrorCode::Timeout,
+            format!(
+                "the registry did not answer within {} ms; the next view shows whether the change was made",
+                wait.as_millis()
+            ),
+        ))
+    })
 }
 
 /// Messages to the collector thread.
@@ -755,6 +814,7 @@ fn run<E: Emit>(
     let mut watched = WatchedPaths::new(collector);
     let mut plan = RefreshPlan::new(Instant::now);
     let mut presence: BTreeMap<String, bool> = BTreeMap::new();
+    let mut cards = CardStore::default();
 
     loop {
         registry.set_model_env(model_env(collector));
@@ -764,7 +824,7 @@ fn run<E: Emit>(
             Ok(CollectorMsg::Visibility(visible)) => plan.visibility_changed(visible),
             Ok(CollectorMsg::RelayChanged) => plan.relay_files_changed(),
             Ok(CollectorMsg::Author(request)) => {
-                answer_author(collector, &mut registry, request, outputs);
+                answer_author(collector, &mut registry, &mut cards, request, outputs);
             }
             Err(RecvTimeoutError::Timeout) => {}
         }
@@ -865,6 +925,7 @@ fn rebuild_and_publish<E: Emit>(
 fn answer_author<E: Emit>(
     collector: &mut Collector,
     registry: &mut WindowRegistry,
+    cards: &mut CardStore,
     request: AuthorRequest,
     outputs: &mut Outputs<E>,
 ) {
@@ -876,8 +937,12 @@ fn answer_author<E: Emit>(
     let now = now_ms();
     let writes = !matches!(
         request.command,
-        AuthorCommand::ListArchived | AuthorCommand::ListDiscarded
+        AuthorCommand::ListArchived
+            | AuthorCommand::ListDiscarded
+            | AuthorCommand::IssueCard(_)
+            | AuthorCommand::EditCard { .. }
     );
+    let quota = outputs.board.current().map(|board| board.quota);
     let reply = match request.command {
         AuthorCommand::ListArchived => {
             let board = outputs.board.current();
@@ -899,6 +964,34 @@ fn answer_author<E: Emit>(
         AuthorCommand::Evaluate => registry
             .evaluate(now)
             .map(|cases| AuthorAnswer::Evaluating { cases }),
+        AuthorCommand::IssueCard(card_request) => crate::orders::issue(
+            cards,
+            collector,
+            registry,
+            quota.as_ref(),
+            &card_request,
+            now,
+        )
+        .map(AuthorAnswer::Card),
+        AuthorCommand::EditCard { card_id, change } => crate::orders::edit(
+            cards,
+            collector,
+            registry,
+            quota.as_ref(),
+            &card_id,
+            &change,
+            now,
+        )
+        .map(AuthorAnswer::Card),
+        AuthorCommand::LaunchCard {
+            card_id,
+            prompt_sha256,
+        } => crate::orders::grant(cards, collector, registry, &card_id, &prompt_sha256, now)
+            .map(AuthorAnswer::Launch),
+        AuthorCommand::LaunchOutcome(report) => {
+            crate::orders::record(collector, registry, &report, now)
+                .map(|()| AuthorAnswer::Done { created: None })
+        }
     };
     // Every command reports the registry's state, a failure included
     // (quality audit M3); those that write publish the views at once.

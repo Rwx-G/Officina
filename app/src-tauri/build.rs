@@ -26,6 +26,9 @@ const COMMANDS: &[&str] = &[
     "set_auto_archive",
     "settle_session",
     "list_discarded",
+    "issue_card",
+    "edit_card",
+    "launch_work_order",
 ];
 
 fn main() {

@@ -105,6 +105,17 @@ pub mod untrusted;
 #[doc(hidden)]
 pub mod wire;
 
+/// True when this build holds one of the mutants of AD-95 (D-148): core
+/// features that each skip one check of the launch path, turned on only by
+/// CI's `mutants` job to prove the injection battery catches them. The
+/// window asserts it false at compile time, so no build of the app can
+/// link one.
+pub const MUTANTS_ENABLED: bool = cfg!(any(
+    feature = "mutant-accept-any-value",
+    feature = "mutant-accept-superseded",
+    feature = "mutant-skip-prompt-hash",
+));
+
 pub(crate) fn hex(digest: &[u8]) -> String {
     use std::fmt::Write;
     digest

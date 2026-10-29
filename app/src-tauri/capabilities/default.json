@@ -29,6 +29,9 @@
     "allow-set-triage-model",
     "allow-set-auto-archive",
     "allow-settle-session",
-    "allow-list-discarded"
+    "allow-list-discarded",
+    "allow-issue-card",
+    "allow-edit-card",
+    "allow-launch-work-order"
   ]
 }

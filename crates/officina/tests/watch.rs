@@ -7,7 +7,10 @@
 //! session list and before each board, and reported when it cannot be; the
 //! registry view emitted on change, and the author's requests answered on
 //! the collector thread (story 3.5); stale launching work orders expired
-//! and started ones bound on the collector's tick (story 5.6).
+//! and started ones bound on the collector's tick (story 5.6); cards
+//! launched from the collector's store, their outcome recorded and
+//! journaled once, the board at its pace while `claude --bg` runs (story
+//! 5.7).
 //!
 //! The tests of stories 1.5 and 2.7 give the fake claude no fixture (it
 //! then lists no session). Story 3.2's run a copy of the fake configured by
@@ -19,6 +22,7 @@ mod fake_store;
 #[path = "../../../tests/support/spawn_cases.rs"]
 mod spawn_cases;
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::Receiver;
 use std::sync::{Arc, Mutex};
@@ -26,6 +30,7 @@ use std::time::{Duration, Instant};
 
 use officina_core::board::{Board, Column, Settled};
 use officina_core::ipc::IpcErrorCode;
+use officina_core::orders::card::{LaunchAnswer, LaunchRefusal};
 use officina_core::orders::work_order::{LAUNCHING_EXPIRY_MS, SubjectChoice, WorkOrder};
 use officina_core::registry::confirm::{
     AuthorAction, ConfirmItem, FileUnder, ItemOutcome, SubjectOrigin,
@@ -37,11 +42,12 @@ use officina_core::registry::types::{
     SessionRecord, SettingKey, Settlement, Source, Verdict, WorkOrderRecord, WorkOrderSource,
 };
 use officina_core::registry::view::RegistryView;
-use officina_core::relay::journal::{CatalogueApproved, JournalEntry};
+use officina_core::relay::journal::{CatalogueApproved, JournalEntry, WorkOrderLaunched};
 use officina_core::relay::view::{RecentEvent, RelayView};
 use officina_core::spawn::VectorKind;
 use officina_core::untrusted::Untrusted;
 use officina_host::collector::{Collector, LoadedFloor, load_floor};
+use officina_host::orders::{LaunchGrant, LaunchReport, LaunchResult};
 use officina_host::paths::Paths;
 use officina_host::registry::ingest::IngestContext;
 use officina_host::registry::orders::LaunchRecord;
@@ -2210,4 +2216,269 @@ fn a_started_order_binds_to_its_background_session() {
     assert_eq!(filing.value, bound.subject_id);
     assert_eq!(filing.src, Source::Author);
     stop(handle);
+}
+
+/// An untrusted text as the window receives it, through serialization.
+fn shown(text: &Untrusted<String>) -> String {
+    serde_json::to_value(text)
+        .unwrap()
+        .as_str()
+        .unwrap()
+        .to_owned()
+}
+
+/// The work order rows of `home`, read as a command line reads them.
+fn launched_row(home: &common::orders::OrdersHome, card: &str) -> WorkOrderRecord {
+    work_order_row(&home.env, card).unwrap_or_else(|| panic!("no row for {card}"))
+}
+
+/// The `work_order_launched` lines of `home`'s journal.
+fn launch_lines(home: &common::orders::OrdersHome) -> Vec<WorkOrderLaunched> {
+    home.env
+        .journal()
+        .into_iter()
+        .filter_map(|line| match line.entry {
+            JournalEntry::WorkOrderLaunched(launched) => Some(launched),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Story 5.7 AC 4 (AD-81 steps 1 to 3): a click launches the card's
+/// vector once; its row reads `started` with what `claude --bg` printed,
+/// and one `work_order_launched` line records what ran.
+#[test]
+fn a_launch_records_started_and_one_journal_line() {
+    let home = common::orders::OrdersHome::start(serde_json::json!({"mode": "bg"}));
+    let card = home.bump("serde_json", "minor");
+    assert_eq!(
+        home.launch(&card.id, &card.prompt_sha256),
+        LaunchAnswer::Launched(LaunchOutcome::Started)
+    );
+    let row = launched_row(&home, &card.id);
+    assert_eq!(row.outcome, LaunchOutcome::Started);
+    assert_eq!(row.name, card.name);
+    assert_eq!(row.exit_code, Some(0));
+    let printed = shown(&row.printed.expect("what --bg printed"));
+    assert!(printed.starts_with("backgrounded"), "{printed}");
+    let lines = launch_lines(&home);
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    let line = &lines[0];
+    assert_eq!(line.outcome, LaunchOutcome::Started);
+    assert_eq!(line.exit_code, Some(0));
+    assert_eq!(line.order_id, card.id);
+    assert_eq!(line.argv, card.argv);
+    assert_eq!(line.template, "bump");
+    assert_eq!(line.project, "backend");
+    assert_eq!(line.prompt_sha256, card.prompt_sha256);
+    assert_eq!(line.catalogue_hash, card.catalogue_hash);
+    assert_eq!(
+        line.values,
+        BTreeMap::from([
+            ("level".to_owned(), "minor".to_owned()),
+            ("package".to_owned(), "serde_json".to_owned())
+        ])
+    );
+}
+
+/// Story 5.7 AC 4, review F2: what runs is the card's argument vector, byte
+/// for byte, element by element, in the project's folder.
+#[test]
+fn the_launched_vector_equals_the_card_vector() {
+    let home = common::orders::OrdersHome::start(serde_json::json!({"mode": "bg"}));
+    let card = home.bump("tokio", "patch");
+    home.launch(&card.id, &card.prompt_sha256);
+    let calls = home.bg_calls();
+    assert_eq!(calls.len(), 1, "{calls:?}");
+    let argv = common::logged_argv(&calls[0]);
+    assert_eq!(argv.len(), card.argv.len());
+    for (ran, shown) in argv.iter().zip(&card.argv) {
+        assert_eq!(ran.as_bytes(), shown.as_bytes());
+    }
+    assert_eq!(
+        std::fs::canonicalize(calls[0]["cwd"].as_str().unwrap()).unwrap(),
+        std::fs::canonicalize(home.project()).unwrap()
+    );
+    let stored = launched_row(&home, &card.id).argv;
+    assert_eq!(stored, card.argv, "the row stores what ran");
+}
+
+/// AD-81 step 3, S4: `claude` refusing an untrusted folder is its own
+/// outcome, with what it said.
+#[test]
+fn workspace_not_trusted_is_its_own_outcome() {
+    let home = common::orders::OrdersHome::start(serde_json::json!({"mode": "bg-untrusted"}));
+    let card = home.bump("serde_json", "patch");
+    assert_eq!(
+        home.launch(&card.id, &card.prompt_sha256),
+        LaunchAnswer::Launched(LaunchOutcome::UntrustedWorkspace)
+    );
+    let row = launched_row(&home, &card.id);
+    assert_eq!(row.outcome, LaunchOutcome::UntrustedWorkspace);
+    assert_eq!(row.exit_code, Some(1));
+    let error = shown(&row.error.expect("its stderr"));
+    assert!(
+        error.contains(officina_core::orders::card::WORKSPACE_NOT_TRUSTED),
+        "{error}"
+    );
+    assert_eq!(
+        launch_lines(&home)[0].outcome,
+        LaunchOutcome::UntrustedWorkspace
+    );
+}
+
+/// FR-4, D-135: a failed spawn burns its card; nothing retries it, and
+/// the same click again is refused before anything starts.
+#[test]
+fn a_failed_spawn_burns_the_card_and_is_not_retried() {
+    let home = common::orders::OrdersHome::start(serde_json::json!({"mode": "exit1"}));
+    let card = home.bump("serde_json", "minor");
+    assert_eq!(
+        home.launch(&card.id, &card.prompt_sha256),
+        LaunchAnswer::Launched(LaunchOutcome::Failed)
+    );
+    let row = launched_row(&home, &card.id);
+    assert_eq!(row.outcome, LaunchOutcome::Failed);
+    assert_eq!(row.exit_code, Some(1));
+    assert_eq!(row.error, Some(Untrusted::new("fake failure".to_owned())));
+    assert_eq!(
+        home.launch(&card.id, &card.prompt_sha256),
+        LaunchAnswer::Refused(LaunchRefusal::Consumed)
+    );
+    std::thread::sleep(SETTLE);
+    assert_eq!(home.bg_calls().len(), 1, "one spawn, never retried");
+    assert_eq!(launch_lines(&home).len(), 1);
+}
+
+/// FR-4: two clicks on one card at once launch it once; the other is
+/// refused as consumed.
+#[test]
+fn a_double_click_launches_once() {
+    let home = common::orders::OrdersHome::start(serde_json::json!({"mode": "bg"}));
+    let card = home.bump("serde_json", "minor");
+    let sender = home.handle().sender.clone();
+    let clicks: Vec<_> = (0..2)
+        .map(|_| {
+            let (sender, id, sha) = (sender.clone(), card.id.clone(), card.prompt_sha256.clone());
+            std::thread::spawn(move || {
+                officina_host::orders::launch_card(&sender, &id, &sha).unwrap()
+            })
+        })
+        .collect();
+    let answers: Vec<LaunchAnswer> = clicks.into_iter().map(|c| c.join().unwrap()).collect();
+    assert!(
+        answers.contains(&LaunchAnswer::Launched(LaunchOutcome::Started)),
+        "{answers:?}"
+    );
+    assert!(
+        answers.contains(&LaunchAnswer::Refused(LaunchRefusal::Consumed)),
+        "{answers:?}"
+    );
+    assert_eq!(home.bg_calls().len(), 1);
+    assert_eq!(launch_lines(&home).len(), 1);
+}
+
+/// D-135, review F14: a launch's outcome carries no deadline; one sent
+/// past its own is still recorded, its row and its line.
+#[test]
+fn a_late_launch_outcome_is_still_recorded() {
+    let home = common::orders::OrdersHome::start(serde_json::json!({"mode": "bg"}));
+    let card = home.bump("tokio", "minor");
+    let granted = officina_host::watch::ask(
+        &home.handle().sender,
+        AuthorCommand::LaunchCard {
+            card_id: card.id.clone(),
+            prompt_sha256: card.prompt_sha256.clone(),
+        },
+        AUTHOR_WAIT,
+    )
+    .unwrap()
+    .into_launch()
+    .unwrap();
+    let LaunchGrant::Granted(ticket) = granted else {
+        panic!("{granted:?}");
+    };
+    assert_eq!(ticket.vector.args(), card.argv);
+    assert_eq!(
+        launched_row(&home, &card.id).outcome,
+        LaunchOutcome::Launching
+    );
+    let report = LaunchReport {
+        order_id: ticket.order_id.clone(),
+        line: ticket.line.clone(),
+        result: LaunchResult {
+            outcome: LaunchOutcome::Started,
+            exit_code: Some(0),
+            error: None,
+            printed: Some("backgrounded".to_owned()),
+        },
+    };
+    // Its deadline is already past when it is sent.
+    let (request, answer) = AuthorRequest::new(
+        AuthorCommand::LaunchOutcome(Box::new(report)),
+        Duration::ZERO,
+    );
+    home.handle()
+        .sender
+        .send(CollectorMsg::Author(request))
+        .unwrap();
+    assert_eq!(
+        answer.recv_timeout(AUTHOR_WAIT).unwrap(),
+        Ok(AuthorAnswer::Done { created: None })
+    );
+    assert_eq!(
+        launched_row(&home, &card.id).outcome,
+        LaunchOutcome::Started
+    );
+    assert_eq!(launch_lines(&home).len(), 1);
+    assert!(home.bg_calls().is_empty(), "the test ran nothing");
+}
+
+/// AD-3 as amended, AD-81 step 2: the launch runs on the command's thread;
+/// while `claude --bg` hangs there, hook events still reach the board at
+/// its usual pace.
+#[test]
+fn the_board_keeps_its_pace_while_a_launch_spawns() {
+    const HANG: Duration = Duration::from_secs(12);
+    let home = common::orders::OrdersHome::start(
+        serde_json::json!({"mode": "bg-hold", "hang_ms": HANG.as_millis() as u64}),
+    );
+    let card = home.bump("serde_json", "minor");
+    let sender = home.handle().sender.clone();
+    let (id, sha) = (card.id.clone(), card.prompt_sha256.clone());
+    let launched =
+        std::thread::spawn(move || officina_host::orders::launch_card(&sender, &id, &sha).unwrap());
+    {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while home.bg_calls().is_empty() {
+            assert!(Instant::now() < deadline, "the launch never started");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        for i in 0..3 {
+            let session = format!("s-during-launch-{i}");
+            let at = officina_host::files::now_ms();
+            hook_line(
+                &home.env,
+                serde_json::json!({"hook_event_name": "UserPromptSubmit", "session_id": session, "cwd": "C:/work/api", "prompt": "x"}),
+                at - 2_000,
+            );
+            let written = Instant::now();
+            hook_line(
+                &home.env,
+                serde_json::json!({"hook_event_name": "SessionEnd", "session_id": session, "cwd": "C:/work/api", "reason": "prompt_input_exit"}),
+                at - 1_000,
+            );
+            until(&home.emitted.boards, |b| shows(b, &session));
+            assert!(
+                written.elapsed() < HANG / 3,
+                "a board waited on the launch: {:?}",
+                written.elapsed()
+            );
+        }
+        assert!(!launched.is_finished(), "claude still runs");
+    }
+    assert_eq!(
+        launched.join().unwrap(),
+        LaunchAnswer::Launched(LaunchOutcome::Started)
+    );
 }

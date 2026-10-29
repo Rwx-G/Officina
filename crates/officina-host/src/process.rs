@@ -5,6 +5,7 @@
 use std::io::{Read, Write};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::mpsc::{self, Receiver};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 /// How often a running child is polled against its deadline.
@@ -86,6 +87,11 @@ pub struct RunLimits {
     pub grace: Duration,
     /// The child's tree: in a job, and which.
     pub job: JobRule,
+    /// What a child that exited 0 while a process it started still holds
+    /// its output pipes gives: `true` keeps what was read by the end of
+    /// the grace (`claude --bg` and the supervisor it may start, D-128),
+    /// `false` fails with [`RunError::OutputHeld`].
+    pub keep_held_output: bool,
 }
 
 /// A child that ran to its exit.
@@ -96,8 +102,12 @@ pub struct Contained {
     /// True when the child wrote more than [`RunLimits::stdout_cap`].
     pub stdout_over: bool,
     /// At most [`RunLimits::stderr_cap`]; empty when the pipe stayed open
-    /// past the grace.
+    /// past the grace, unless [`RunLimits::keep_held_output`] keeps what
+    /// was read.
     pub stderr: Vec<u8>,
+    /// True when a process the child started still held the output past
+    /// the grace, and what was read by then is kept.
+    pub output_held: bool,
 }
 
 impl Contained {
@@ -144,32 +154,52 @@ pub enum RunError {
     OutputHeld,
 }
 
+/// One output pipe drained on a thread of its own: what it kept once the
+/// pipe closed, and what it kept so far.
+struct Drain {
+    done: Receiver<()>,
+    kept: Arc<Mutex<(Vec<u8>, bool)>>,
+}
+
+impl Drain {
+    /// What was kept, and whether more came than the cap.
+    fn kept(&self) -> (Vec<u8>, bool) {
+        self.kept
+            .lock()
+            .map(|kept| kept.clone())
+            .unwrap_or_default()
+    }
+}
+
 /// Reads `pipe` to its end on a thread of its own, keeping the first
 /// `keep` bytes and discarding the rest, so a child writing more never
-/// blocks on a full pipe (D-97); sends what it kept and whether more came.
-/// A pipe that never closes keeps its thread blocked; the caller stops
-/// waiting and abandons it.
-fn drain(pipe: Option<impl Read + Send + 'static>, keep: usize) -> Receiver<(Vec<u8>, bool)> {
-    let (sender, receiver) = mpsc::channel();
+/// blocks on a full pipe (D-97); signals when the pipe closed. A pipe that
+/// never closes keeps its thread blocked; the caller stops waiting, reads
+/// what was kept so far or nothing, and abandons it.
+fn drain(pipe: Option<impl Read + Send + 'static>, keep: usize) -> Drain {
+    let (sender, done) = mpsc::channel();
+    let kept = Arc::new(Mutex::new((Vec::new(), false)));
+    let shared = Arc::clone(&kept);
     std::thread::spawn(move || {
-        let mut kept = Vec::new();
-        let mut over = false;
         if let Some(mut pipe) = pipe {
             let mut chunk = [0u8; 8192];
             loop {
                 match pipe.read(&mut chunk) {
                     Ok(0) | Err(_) => break,
                     Ok(n) => {
-                        let room = keep.saturating_sub(kept.len());
-                        kept.extend_from_slice(&chunk[..n.min(room)]);
-                        over |= n > room;
+                        let Ok(mut kept) = shared.lock() else {
+                            break;
+                        };
+                        let room = keep.saturating_sub(kept.0.len());
+                        kept.0.extend_from_slice(&chunk[..n.min(room)]);
+                        kept.1 |= n > room;
                     }
                 }
             }
         }
-        let _ = sender.send((kept, over));
+        let _ = sender.send(());
     });
-    receiver
+    Drain { done, kept }
 }
 
 /// The processes of one child. On Windows the child goes into a job right
@@ -273,20 +303,28 @@ pub fn run_contained(
     }
     let drained_by = Instant::now() + limits.grace;
     let remaining = || drained_by.saturating_duration_since(Instant::now());
-    let stdout = stdout.recv_timeout(remaining());
-    let (stderr, _) = stderr.recv_timeout(remaining()).unwrap_or_default();
+    let stdout_closed = stdout.done.recv_timeout(remaining()).is_ok();
+    let stderr_closed = stderr.done.recv_timeout(remaining()).is_ok();
+    let held = !stdout_closed || !stderr_closed;
+    let kept_stderr = if stderr_closed || limits.keep_held_output {
+        stderr.kept().0
+    } else {
+        Vec::new()
+    };
     // A failed exit is reported as such even when its output stays held:
     // the caller reads the status first.
-    let (stdout, stdout_over) = match stdout {
-        Ok(read) => read,
-        Err(_) if !status.success() => (Vec::new(), false),
-        Err(_) => return Err(RunError::OutputHeld),
+    let (stdout, stdout_over) = match (stdout_closed, status.success()) {
+        (true, _) => stdout.kept(),
+        (false, _) if limits.keep_held_output => stdout.kept(),
+        (false, false) => (Vec::new(), false),
+        (false, true) => return Err(RunError::OutputHeld),
     };
     Ok(Contained {
         status,
         stdout,
         stdout_over,
-        stderr,
+        stderr: kept_stderr,
+        output_held: held && limits.keep_held_output,
     })
 }
 
