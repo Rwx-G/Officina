@@ -11,8 +11,9 @@ use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use common::{TestEnv, read_events};
-use officina_core::relay::journal::{JournalEntry, JournalKind};
+use officina_core::relay::journal::{JournalEntry, JournalKind, spilled_day_file};
 use officina_host::relay::gate::{GateEnv, answer};
+use officina_host::relay::journal::{JournalLock, LOCK_TIMEOUT};
 
 fn big_payload() -> Vec<u8> {
     serde_json::json!({
@@ -252,6 +253,9 @@ fn gate_in_process_p95() {
 /// AD-37: 16 processes append 200 journal lines each, every line over
 /// 4096 bytes (past any size a single write is known to keep whole), and
 /// not one is corrupt: the lock, not the write size, keeps them apart.
+/// Meanwhile the test holds the lock past [`LOCK_TIMEOUT`], as a loaded
+/// machine does, and not one line is lost: the writers that waited spill
+/// (D-760).
 #[test]
 #[ignore = "stress test, run in release by CI"]
 fn journal_appends_never_interleave() {
@@ -277,9 +281,20 @@ fn journal_appends_never_interleave() {
                 }
             });
         }
+        std::thread::sleep(Duration::from_millis(200));
+        let held = JournalLock::acquire_within(&env.relay_home(), Duration::from_secs(60)).unwrap();
+        std::thread::sleep(LOCK_TIMEOUT + Duration::from_millis(500));
+        drop(held);
     });
     let denied: Vec<JournalEntry> = env.journal_after_approvals();
     assert_eq!(denied.len(), PROCESSES * LINES);
+    let spills = std::fs::read_dir(env.relay_home().journal_dir())
+        .unwrap()
+        .flatten()
+        .filter(|e| spilled_day_file(&e.file_name().to_string_lossy()).is_some())
+        .count();
+    println!("{spills} writes spilled");
+    assert!(spills > 0, "the held lock made writers spill");
     assert!(denied.iter().all(|e| e.kind() == JournalKind::GateDenied));
     let shortest_line = std::fs::read_dir(env.relay_home().journal_dir())
         .unwrap()
