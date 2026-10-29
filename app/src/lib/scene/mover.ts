@@ -8,7 +8,7 @@
 // the prototype v2's "movement" (`setGoal`, `advance`, `stepGlide`,
 // `arrive`) and its frame loop.
 import { HH, HW } from "./geometry";
-import type { Employee, Marks, Pose, SceneLayout } from "./layout";
+import type { Employee, Helper, Marks, Pose, SceneLayout } from "./layout";
 import { allSpots, navGraph, restPoint, type Facing, type NavGraph, type Spot } from "./places";
 import { route, smooth, type RoutePoint, type RouteStart } from "./paths";
 
@@ -45,6 +45,10 @@ export const WALK = {
 export const GLIDE_MS = 320;
 /** A fade in on arrival through the entrance, or out on leaving, in ms. */
 export const FADE_MS = 320;
+/** A sub-agent whose key left the layout stays this long, in ms, before it
+ *  fades out: a resumed sub-agent's stop and next start can reach the window
+ *  on two boards, and it must not blink between them (D-548). */
+export const HELPER_HOLD_MS = 1000;
 /** The longest frame the walk advances by, in s: a slower frame slows the
  *  walk rather than letting it jump. */
 export const FRAME_CAP_S = 0.1;
@@ -105,6 +109,32 @@ export interface FigureFrame {
   opacity: number;
   marks: Marks;
   alerted: boolean;
+  /** A sub-agent beside its lead's desk (AD-176): smaller, without a cap,
+   *  never walking. */
+  helper: boolean;
+}
+
+const NO_MARKS: Marks = { ticket: null, approval: false, deskBadge: null, hand: false, ring: false, question: false };
+
+/** A sub-agent standing at its place, at `opacity`. */
+function helperFrame(h: Helper, opacity: number): FigureFrame {
+  return {
+    key: h.key,
+    project: h.project,
+    gx: h.gx,
+    gy: h.gy,
+    drawGx: h.gx,
+    drawGy: h.gy,
+    moving: false,
+    pose: "standing",
+    facing: "front",
+    flip: false,
+    stride: null,
+    opacity,
+    marks: NO_MARKS,
+    alerted: false,
+    helper: true,
+  };
 }
 
 /** A figure on its way shows no mark but the question mark (the prototype
@@ -137,8 +167,10 @@ export function restingFrames(layout: SceneLayout): Map<string, FigureFrame> {
       opacity: 1,
       marks: e.marks,
       alerted: e.alert !== null,
+      helper: false,
     });
   }
+  for (const h of layout.helpers) out.set(h.key, helperFrame(h, 1));
   return out;
 }
 
@@ -176,6 +208,15 @@ interface Walker {
   leaving: boolean;
 }
 
+/** A sub-agent's figure: it never walks, it fades in where it stands and
+ *  fades out there after `HELPER_HOLD_MS`. */
+interface Standing {
+  helper: Helper;
+  /** A fade out starts at `t0`, which is in the future during the hold. */
+  fade: { t0: number; from: number; to: 0 | 1 } | null;
+  leaving: boolean;
+}
+
 const SLIDE_MS = WALK.slide * 1000;
 const clamp01 = (n: number): number => Math.min(1, Math.max(0, n));
 const easeInOut = (t: number): number => (t < 0.5 ? 2 * t * t : 1 - (-2 * t + 2) ** 2 / 2);
@@ -192,6 +233,7 @@ function strideOf(phase: number): Stride {
 export class Mover {
   readonly #env: MotionEnv;
   readonly #walkers = new Map<string, Walker>();
+  readonly #helpers = new Map<string, Standing>();
   /** The live keys of the last layout: a key outside it is new. */
   #seen = new Set<string>();
   #started = false;
@@ -242,6 +284,7 @@ export class Mover {
     this.#offHidden();
     this.#listeners.clear();
     this.#walkers.clear();
+    this.#helpers.clear();
   }
 
   /** The keys on their way to a place. */
@@ -287,9 +330,38 @@ export class Mover {
       }
       if (w.goal !== spot.id) this.#setGoal(w, spot.id, instant, now);
     }
+    this.#updateHelpers(layout.helpers, instant, now);
     this.#seen = live;
     this.#started = true;
     this.#afterChange(now);
+  }
+
+  /** A new sub-agent fades in at its place; one gone from the layout holds,
+   *  then fades out; one back during its hold or fade is the same figure,
+   *  its fade turned back (D-548). */
+  #updateHelpers(helpers: readonly Helper[], instant: boolean, now: number): void {
+    const next = new Map(helpers.map((h) => [h.key, h]));
+    for (const [key, h] of this.#helpers) {
+      if (next.has(key) || h.leaving) continue;
+      if (instant) {
+        this.#helpers.delete(key);
+        continue;
+      }
+      h.leaving = true;
+      h.fade = { t0: now + HELPER_HOLD_MS, from: this.#fadeOf(h.fade, now), to: 0 };
+    }
+    for (const helper of next.values()) {
+      const h = this.#helpers.get(helper.key);
+      if (!h) {
+        this.#helpers.set(helper.key, { helper, fade: instant ? null : { t0: now, from: 0, to: 1 }, leaving: false });
+        continue;
+      }
+      h.helper = helper;
+      if (!h.leaving) continue;
+      h.leaving = false;
+      const opacity = this.#fadeOf(h.fade, now);
+      h.fade = opacity < 1 ? { t0: now, from: opacity, to: 1 } : null;
+    }
   }
 
   /** Every figure as drawn now, leaving ones included. */
@@ -297,6 +369,7 @@ export class Mover {
     const now = this.#env.now();
     const out = new Map<string, FigureFrame>();
     for (const w of this.#walkers.values()) out.set(w.key, this.#frame(w, now));
+    for (const h of this.#helpers.values()) out.set(h.helper.key, helperFrame(h.helper, this.#fadeOf(h.fade, now)));
     return out;
   }
 
@@ -530,9 +603,13 @@ export class Mover {
   }
 
   #opacity(w: Walker, now: number): number {
-    if (!w.fade) return 1;
-    const t = clamp01((now - w.fade.t0) / FADE_MS);
-    return Math.round((w.fade.from + (w.fade.to - w.fade.from) * t) * 100) / 100;
+    return this.#fadeOf(w.fade, now);
+  }
+
+  #fadeOf(fade: { t0: number; from: number; to: number } | null, now: number): number {
+    if (!fade) return 1;
+    const t = clamp01((now - fade.t0) / FADE_MS);
+    return Math.round((fade.from + (fade.to - fade.from) * t) * 100) / 100;
   }
 
   #frame(w: Walker, now: number): FigureFrame {
@@ -571,6 +648,7 @@ export class Mover {
       opacity: this.#opacity(w, now),
       marks,
       alerted: e.alert !== null,
+      helper: false,
     };
   }
 
@@ -587,6 +665,10 @@ export class Mover {
       if (w.route || w.glide || w.at !== w.goal) this.#place(w, w.goal);
       this.#arrive(w, now, true);
     }
+    for (const [key, h] of this.#helpers) {
+      if (h.leaving) this.#helpers.delete(key);
+      else h.fade = null;
+    }
     if (this.#handle !== null) this.#env.cancel(this.#handle);
     this.#handle = null;
   }
@@ -597,7 +679,7 @@ export class Mover {
 
   /** Starts or stops the loop, and tells the host and the halos. */
   #afterChange(now: number): void {
-    const active = [...this.#walkers.values()].some((w) => this.#busy(w, now));
+    const active = [...this.#walkers.values()].some((w) => this.#busy(w, now)) || [...this.#helpers.values()].some((h) => h.fade !== null);
     if (active && this.#handle === null) {
       this.#last = now;
       this.#handle = this.#env.request(this.#tick);
@@ -642,6 +724,11 @@ export class Mover {
         if (!w.fade || now - w.fade.t0 < FADE_MS) continue;
         if (w.fade.to === 0) this.#walkers.delete(w.key);
         else w.fade = null;
+      }
+      for (const [key, h] of [...this.#helpers]) {
+        if (!h.fade || now - h.fade.t0 < FADE_MS) continue;
+        if (h.fade.to === 0) this.#helpers.delete(key);
+        else h.fade = null;
       }
     }
     this.#notify();

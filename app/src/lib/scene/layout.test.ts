@@ -17,7 +17,7 @@ import {
   projector,
   type SharedZone,
 } from "./geometry";
-import { MAX_NUMBER, alertLit, layoutScene, liveCards, nearestTarget, zoneOf, type Direction, type Pose, type SceneLayout } from "./layout";
+import { HELPER_OFFSETS, MAX_NUMBER, alertLit, helperKey, layoutScene, liveCards, nearestTarget, zoneOf, type Direction, type Pose, type SceneLayout } from "./layout";
 import { emptyMemory, type SceneMemory } from "./memory";
 import { CAPACITY, allSpots, officeSpots, restPoint, sharedSpots } from "./places";
 import { approval, board, card, fixtureBoards, project } from "./testing";
@@ -87,7 +87,7 @@ describe("layoutScene: purity", () => {
   it("every live card of every fixture board is in exactly one target", () => {
     for (const { name, board: b } of fixtureBoards()) {
       const l = lay(b);
-      const listed = l.targets.flatMap((t) => t.keys);
+      const listed = l.targets.filter((t) => t.kind !== "helper").flatMap((t) => t.keys);
       expect([...listed].sort(), name).toEqual(liveCards(b).map((c) => c.key).sort());
       for (let i = 0; i < l.targets.length; i++) {
         for (let j = i + 1; j < l.targets.length; j++) {
@@ -531,6 +531,64 @@ describe("layoutScene: desks", () => {
     expect(deskOf(third!, "x")).toMatchObject({ index: 0, state: "kept", number: 1 });
     expect(employee(third!, "x").marks.deskBadge).toBe(1);
     expect(employee(fourth!, "x")).toMatchObject({ spot: officeSpots(0).desks[0]!.id, pose: "seated-working" });
+  });
+});
+
+describe("layoutScene: sub-agents", () => {
+  const agents = (n: number) => Array.from({ length: n }, (_, i) => ({ agent_id: `a${i}`, agent_type: i % 2 ? "Plan" : "Explore" }));
+  const chairOf = (l: SceneLayout, key: string) => {
+    const desk = deskOf(l, key)!;
+    return officeSpots(desk.slot).desks[desk.index]!;
+  };
+
+  it("sub-agents stand beside their lead's desk, three at most", () => {
+    const lead = card("lead", "office", { subagents: agents(HELPER_OFFSETS.length + 2) });
+    const l = lay(board([lead, card("other", "office", { started: 1 })]));
+    const chair = chairOf(l, "lead");
+    expect(l.helpers.map((h) => h.key)).toEqual(agents(HELPER_OFFSETS.length).map((a) => helperKey("lead", a.agent_id)));
+    l.helpers.forEach((h, i) => {
+      const [dgx, dgy] = HELPER_OFFSETS[i]!;
+      expect([h.gx, h.gy]).toEqual([chair.gx + dgx, chair.gy + dgy]);
+      expect(h.at).toEqual(projector(l.columns)(h.gx, h.gy));
+      expect([h.lead, h.project]).toEqual(["lead", "alpha"]);
+    });
+    expect(lay(board([card("solo", "office")])).helpers).toEqual([]);
+  });
+
+  it("sub-agents stay at the desk while the lead waits or rests", () => {
+    const subagents = agents(2);
+    const [working, waiting, resting, unknown] = run(
+      board([card("lead", "office", { subagents })]),
+      board([card("lead", "decision", { subagents })]),
+      board([card("lead", "lounge", { subagents })]),
+      board([card("lead", "unknown", { subagents })]),
+    );
+    for (const l of [waiting!, resting!, unknown!]) expect(l.helpers).toEqual(working!.helpers);
+    expect(employee(waiting!, "lead").spot).not.toBe(employee(working!, "lead").spot);
+  });
+
+  it("a lead without a desk draws no sub-agent", () => {
+    const subagents = agents(1);
+    expect(lay(board([card("r", "reception", { subagents })])).helpers).toEqual([]);
+    // A fifth session at work in an office of four desks stands at the chip spot.
+    const full = Array.from({ length: CAPACITY.desks }, (_, i) => card(`d${i}`, "office", { started: i }));
+    const l = lay(board([...full, card("chip", "office", { started: 9, subagents })]));
+    expect(deskOf(l, "chip")).toBeNull();
+    expect(l.helpers).toEqual([]);
+  });
+
+  it("a sub-agent's target sits at its place and names its lead, where it overlaps no target", () => {
+    let seen = 0;
+    for (const { name, board: b } of fixtureBoards()) {
+      const l = lay(b);
+      for (const t of l.targets.filter((x) => x.kind === "helper")) {
+        const h = l.helpers.find((x) => `helper:${x.key}` === t.id)!;
+        expect(t.keys, name).toEqual([h.lead]);
+        expect(t.rect, name).toEqual(figureTarget(h.at));
+        seen++;
+      }
+    }
+    expect(seen).toBeGreaterThan(0);
   });
 });
 

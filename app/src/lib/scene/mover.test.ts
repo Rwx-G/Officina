@@ -5,7 +5,7 @@ import type { Board } from "../generated/Board";
 import { HH, HW } from "./geometry";
 import { layoutScene, type SceneLayout } from "./layout";
 import { emptyMemory, type SceneMemory } from "./memory";
-import { FADE_MS, FRAME_CAP_S, FRAME_GAP_S, GLIDE_MS, Mover, WALK, restingFrames, type FigureFrame, type MotionEnv } from "./mover";
+import { FADE_MS, FRAME_CAP_S, FRAME_GAP_S, GLIDE_MS, HELPER_HOLD_MS, Mover, WALK, restingFrames, type FigureFrame, type MotionEnv } from "./mover";
 import { CORNER_RADIUS, route } from "./paths";
 import { allSpots, navGraph, restPoint } from "./places";
 import { board, card, fixtureBoards } from "./testing";
@@ -392,6 +392,88 @@ describe("mover", () => {
     mover.update(b!, false);
     expect(mover.moving).toBe(false);
     expect(mover.figures()).toEqual(withFlips(restingFrames(b!), mover));
+  });
+});
+
+describe("mover: sub-agents (story 4.12, D-548)", () => {
+  const agent = { agent_id: "a1", agent_type: "Explore" };
+  const lead = (subagents: (typeof agent)[]) => board([card("lead", "office", { subagents })]);
+  const helperOf = (mover: Mover) => [...mover.figures().values()].find((f) => f.helper) ?? null;
+  /** Runs `ms` of 16 ms frames: a longer frame is a stall (D-502). */
+  const run = (frames: Frames, ms: number) => {
+    for (let left = ms; left > 0; left -= 16) frames.step(Math.min(16, left));
+  };
+
+  it("a sub-agent is placed at once on the first layout and never walks", () => {
+    const { mover } = setup();
+    const [l] = layouts(lead([agent]));
+    mover.update(l!, true);
+    expect(mover.moving).toBe(false);
+    expect(mover.figures()).toEqual(restingFrames(l!));
+    expect(helperOf(mover)).toMatchObject({ helper: true, moving: false, stride: null, pose: "standing", opacity: 1 });
+  });
+
+  it("a new sub-agent fades in where it stands, then nothing runs", () => {
+    const { frames, mover, host } = setup();
+    const [none, one] = layouts(lead([]), lead([agent]));
+    mover.update(none!, true);
+    mover.update(one!, true);
+    expect(helperOf(mover)!.opacity).toBe(0);
+    expect(host.getAttribute("data-moving")).toBe("1");
+    const at = helperOf(mover)!;
+    while (frames.pending > 0) frames.step();
+    expect(helperOf(mover)).toEqual({ ...at, opacity: 1 });
+    expect(host.getAttribute("data-moving")).toBe("0");
+  });
+
+  it("a stopped sub-agent holds, then fades out", () => {
+    const { frames, mover } = setup();
+    const [one, none] = layouts(lead([agent]), lead([]));
+    mover.update(one!, true);
+    mover.update(none!, true);
+    run(frames, HELPER_HOLD_MS - 16);
+    expect(helperOf(mover)!.opacity).toBe(1);
+    run(frames, 16 + FADE_MS / 2);
+    expect(helperOf(mover)!.opacity).toBeCloseTo(0.5, 1);
+    run(frames, FADE_MS);
+    expect(helperOf(mover)).toBeNull();
+    expect(frames.pending).toBe(0);
+  });
+
+  it("a sub-agent that resumes during its hold or its fade is the same figure, its fade turned back", () => {
+    const { frames, mover } = setup();
+    const [one, none, again, gone, back] = layouts(lead([agent]), lead([]), lead([agent]), lead([]), lead([agent]));
+    mover.update(one!, true);
+    mover.update(none!, true);
+    run(frames, HELPER_HOLD_MS / 2);
+    mover.update(again!, true);
+    expect(helperOf(mover)!.opacity).toBe(1);
+    expect(mover.moving).toBe(false);
+    mover.update(gone!, true);
+    run(frames, HELPER_HOLD_MS + FADE_MS / 2);
+    const faded = helperOf(mover)!.opacity;
+    expect(faded).toBeGreaterThan(0);
+    expect(faded).toBeLessThan(1);
+    mover.update(back!, true);
+    expect(helperOf(mover)!.opacity).toBe(faded);
+    while (frames.pending > 0) frames.step();
+    expect(helperOf(mover)!.opacity).toBe(1);
+  });
+
+  it("a hidden page or reduced motion places sub-agents and drops the stopped ones at once", () => {
+    const { frames, mover } = setup();
+    const [one, none] = layouts(lead([agent]), lead([]));
+    mover.update(one!, true);
+    mover.update(none!, true);
+    frames.hide();
+    expect(helperOf(mover)).toBeNull();
+    const reduced = setup();
+    reduced.mover.update(none!, true);
+    reduced.frames.reduced = true;
+    reduced.mover.update(one!, true);
+    expect(helperOf(reduced.mover)!.opacity).toBe(1);
+    reduced.mover.update(none!, true);
+    expect(helperOf(reduced.mover)).toBeNull();
   });
 });
 

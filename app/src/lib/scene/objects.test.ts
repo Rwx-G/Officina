@@ -44,7 +44,7 @@ describe("objects", () => {
       objects.update({ layout: layout!, colours: colours(b), snap: 1, figures: restingFrames(layout!) });
       const spots = new Map(allSpots(layout!.columns).map((s) => [s.id, s]));
       const placed = layout!.employees.filter((e) => e.spot !== null);
-      expect(objects.figureOrder().sort(), name).toEqual(placed.map((e) => e.key).sort());
+      expect(objects.figureOrder().sort(), name).toEqual([...placed.map((e) => e.key), ...layout!.helpers.map((h) => h.key)].sort());
       for (const e of placed) {
         const spot = spots.get(e.spot!)!;
         const depth = spot.gx + spot.gy;

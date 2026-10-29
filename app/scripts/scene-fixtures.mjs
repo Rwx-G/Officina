@@ -102,6 +102,21 @@ export function sceneScenarios(now) {
     sceneSession(n, project, "your_turn", "lounge", name, [prompt(stoppedMin + 5), stopAt(stoppedMin)]);
   /** Your turn, just started from the command line, no prompt yet. */
   const arriving = (n, project, name) => sceneSession(n, project, "your_turn", "reception", name, [startAt(4, "startup")]);
+  /** The hook payloads of a sub-agent's start and stop (AD-176), shaped as
+   *  the hooks reference's examples with placeholder paths; `officina hook`
+   *  turns them into event lines, so the fixture holds what the real hook
+   *  keeps of them. */
+  const subagentStart = (agentId, agentType) => ({ hook_event_name: "SubagentStart", agent_id: agentId, agent_type: agentType, transcript_path: "/path/to/session.jsonl" });
+  const subagentStop = (agentId, agentType) => ({
+    hook_event_name: "SubagentStop",
+    agent_id: agentId,
+    agent_type: agentType,
+    stop_hook_active: false,
+    agent_transcript_path: "/path/to/subagents/agent.jsonl",
+    transcript_path: "/path/to/session.jsonl",
+    last_assistant_message: "Found the three call sites.",
+  });
+
   /** Your turn, compacted after its round, no prompt since. */
   const compacted = (n, project, name) =>
     sceneSession(n, project, "your_turn", "lounge", name, [prompt(30), stopAt(25), startAt(20, "compact")]);
@@ -203,6 +218,35 @@ export function sceneScenarios(now) {
         resting(5, P.docs, "docs-site"),
       ],
     },
+    // Sub-agents (story 4.12): a lead at work running four, one of them
+    // resumed, another stopped, and a stop without a start; a waiting lead
+    // with one beside its desk; a lead at reception, without a desk, with
+    // one; a lead whose only sub-agent has stopped; one in the lounge. The
+    // intents name each card's running sub-agents by type, in first-start
+    // order.
+    "scene-subagents": {
+      floor: { projects: fourProjects },
+      sessions: [
+        workingOn(1, P.billing, "invoice-export", 6, {
+          hook: [
+            subagentStart("agent-a1", "Explore"),
+            subagentStart("agent-a2", "Plan"),
+            subagentStop("agent-a2", "Plan"),
+            subagentStart("agent-a3", "general-purpose"),
+            subagentStart("agent-a2", "Plan"),
+            subagentStart("agent-a4", "Explore"),
+            subagentStart("agent-a5", "code-reviewer"),
+            subagentStop("agent-a5", "code-reviewer"),
+            subagentStop("agent-s1", ""),
+          ],
+          subagents: ["Explore", "Plan", "general-purpose", "Explore"],
+        }),
+        waitingOn(2, P.web, "web-portal", 4, { hook: [subagentStart("agent-b1", "Explore")], subagents: ["Explore"] }),
+        { ...arriving(3, P.docs, "docs-site"), hook: [subagentStart("agent-c1", "Explore")], subagents: ["Explore"] },
+        workingOn(4, P.infra, "rotate-certs", 6, { hook: [subagentStart("agent-d1", "Explore"), subagentStop("agent-d1", "Explore")], subagents: [] }),
+        resting(5, P.docs, "link-fixes"),
+      ],
+    },
     // Eight projects, the owner's design target (D-519): every office used.
     "scene-eight": {
       floor: { projects: tenProjects.slice(0, 8) },
@@ -301,6 +345,18 @@ export function writeSceneHome({ dir, name, scenario, officina, fakeClaude, appr
     byDay.set(day, (byDay.get(day) ?? "") + JSON.stringify(event) + "\n");
   }
   for (const [day, content] of byDay) writeFileSync(join(officinaHome, "events", `${day}.jsonl`), content);
+  // Sub-agent lines go through the real hook (D-101), after the session's
+  // own lines, in the order written.
+  for (const s of sessions) {
+    for (const payload of s.hook ?? []) {
+      const hook = spawnSync(officina, ["hook"], {
+        env: base,
+        input: JSON.stringify({ session_id: sid(s.n), cwd: s.agent.cwd, ...payload }),
+        encoding: "utf8",
+      });
+      if (hook.status !== 0) throw new Error(`${name}: officina hook exited ${hook.status} for ${s.agent.name}: ${hook.stderr}`);
+    }
+  }
   const fixture = join(dir, "agents.json");
   writeFileSync(fixture, JSON.stringify(sessions.map((s) => s.agent)));
   const env = { ...base, OFFICINA_CLAUDE_BIN: fakeClaude, FAKE_CLAUDE_FIXTURE: fixture, FAKE_CLAUDE_MODE: "ok" };
@@ -323,6 +379,9 @@ export function checkSceneIntents(name, board, sessions, scenario) {
     for (const [key, expected] of Object.entries(s.intent)) {
       if (placed[key] !== expected) problems.push(`${s.agent.name}: ${key} ${placed[key]}, meant ${expected}`);
     }
+    const running = card.subagents.map((a) => a.agent_type).join(",");
+    const meantRunning = (s.subagents ?? []).join(",");
+    if (running !== meantRunning) problems.push(`${s.agent.name}: sub-agents ${running}, meant ${meantRunning}`);
   }
   if (live.length !== sessions.length) problems.push(`${live.length} live cards for ${sessions.length} sessions`);
   const floorNames = board.floor_projects.map((p) => p.name).join(",");

@@ -31,7 +31,8 @@ export type Scenario =
   | "scene-alert"
   | "scene-alert-early"
   | "scene-eight"
-  | "scene-overflow";
+  | "scene-overflow"
+  | "scene-subagents";
 
 /** Registry views printed by `officina subjects --json` after the
  *  `registry_fixture` example wrote the registry (stories 3.5, 3.7, 3.9 and

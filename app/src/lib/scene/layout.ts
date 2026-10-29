@@ -16,6 +16,7 @@ import {
   chipTarget,
   columnsFor,
   figureTarget,
+  intersects,
   moreOfficesTarget,
   officeCells,
   projector,
@@ -28,7 +29,7 @@ import {
 } from "./geometry";
 import type { LastPlace, SceneMemory } from "./memory";
 import { CAPACITY, officeSpots, restPoint, sharedSpots, type Facing, type Spot } from "./places";
-import { figureWords, groupWords, plaqueText, summaryText, type FigureFacts } from "./text";
+import { figureWords, groupWords, helperWords, plaqueText, summaryText, type FigureFacts } from "./text";
 
 export interface SceneInput {
   board: Board;
@@ -64,6 +65,35 @@ export interface Employee {
   marks: Marks;
   alert: AlertCause | null;
 }
+
+/** A running sub-agent drawn beside its lead's desk (AD-176, D-476). */
+export interface Helper {
+  /** The lead's key and the sub-agent's id: a resumed sub-agent keeps it
+   *  (D-547). */
+  key: string;
+  lead: string;
+  project: string;
+  /** Its floor point on the grid, in tiles. */
+  gx: number;
+  gy: number;
+  /** Its floor point on screen. */
+  at: Point;
+}
+
+/** Where a lead's first sub-agents stand, relative to its desk's chair, in
+ *  tiles (the prototype v2's `spawnHelper`): no more are drawn. */
+export const HELPER_OFFSETS: readonly (readonly [dgx: number, dgy: number])[] = [
+  [-0.62, 0.42],
+  [0.62, 0.42],
+  [0, 0.78],
+];
+
+/** A sub-agent's figure is a session's scaled by this, without a cap
+ *  (D-477). */
+export const SUBAGENT_SCALE = 0.68;
+
+/** A sub-agent figure's key: unique on the board, stable while it runs. */
+export const helperKey = (lead: string, agentId: string): string => `${lead}/agent:${agentId}`;
 
 export type DeskState = "free" | "occupied" | "kept";
 
@@ -109,7 +139,9 @@ export interface Group {
   keys: string[];
 }
 
-export type TargetKind = "figure" | "group";
+/** A figure's target opens its session's file, a sub-agent's (`helper`)
+ *  its lead's, a group's lists its members. */
+export type TargetKind = "figure" | "helper" | "group";
 
 export interface Target {
   id: string;
@@ -127,6 +159,8 @@ export interface SceneLayout {
   canvas: { w: number; h: number };
   rooms: Room[];
   employees: Employee[];
+  /** The sub-agents drawn, by lead in board order, then by start. */
+  helpers: Helper[];
   desks: Desk[];
   groups: Group[];
   targets: Target[];
@@ -397,6 +431,22 @@ export function layoutScene(input: SceneInput, memory: SceneMemory): SceneLayout
     });
   });
 
+  // Sub-agents beside their lead's desk, wherever the lead stands (AD-176):
+  // a lead without a desk shows them in its file only.
+  const helpers: Helper[] = [];
+  for (const e of employees) {
+    const slot = slotOf.get(e.project);
+    const d = deskOf.get(e.key);
+    if (slot === undefined || d === undefined) continue;
+    const chair = spotsOf[slot]!.desks[d]!;
+    cardOf.get(e.key)!.subagents.slice(0, HELPER_OFFSETS.length).forEach((agent, i) => {
+      const [dgx, dgy] = HELPER_OFFSETS[i]!;
+      const gx = chair.gx + dgx;
+      const gy = chair.gy + dgy;
+      helpers.push({ key: helperKey(e.key, agent.agent_id), lead: e.key, project: e.project, gx, gy, at: p(gx, gy) });
+    });
+  }
+
   // Each group's members in board order (D-484).
   const groupKeys = new Map<string, string[]>();
   for (const e of employees) {
@@ -502,6 +552,17 @@ export function layoutScene(input: SceneInput, memory: SceneMemory): SceneLayout
   sharedGroup("lounge");
   if (overflow) group(MORE, MORE, moreOfficesTarget(columns, cells[MAX_OFFICES - 1]!), plaqueText(MORE));
 
+  // A sub-agent's target opens its lead's file, where it does not overlap
+  // another target (story 4.6's property): at the prototype's offsets its
+  // lead's own target covers it.
+  for (const h of helpers) {
+    const rect = figureTarget(h.at);
+    if (targets.some((t) => intersects(t.rect, rect))) continue;
+    const lead = cardOf.get(h.lead)!;
+    const words = helperWords(lead, lead.subagents.find((a) => helperKey(h.lead, a.agent_id) === h.key)!);
+    targets.push({ id: `helper:${h.key}`, group: officeId(slotOf.get(h.project)!), kind: "helper", rect, label: words.label, tag: words.tag, keys: [h.lead] });
+  }
+
   const groups: Group[] = targets
     .filter((t) => t.kind === "group")
     .map((t) => ({ id: t.id.slice("group:".length), room: t.group, keys: t.keys }));
@@ -516,6 +577,7 @@ export function layoutScene(input: SceneInput, memory: SceneMemory): SceneLayout
     canvas: canvas(columns),
     rooms,
     employees,
+    helpers,
     desks: deskList,
     groups,
     targets,

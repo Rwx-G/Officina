@@ -13,8 +13,9 @@ import { fixturesOf } from "./fixture-index";
 import { beaconPair } from "../src/lib/alert";
 import { HALO_BREATHING_MS, HALO_CYCLE_MS } from "../src/lib/halo";
 import { MIN_SCALE, TARGET_CSS_MIN } from "../src/lib/scene/geometry";
-import { layoutScene, liveCards, nearestTarget, type Direction, type SceneLayout, type Target } from "../src/lib/scene/layout";
+import { SUBAGENT_SCALE, layoutScene, liveCards, nearestTarget, type Direction, type SceneLayout, type Target } from "../src/lib/scene/layout";
 import { STORAGE_KEY, emptyMemory, type SceneMemory } from "../src/lib/scene/memory";
+import { FADE_MS, HELPER_HOLD_MS } from "../src/lib/scene/mover";
 import { ZONE_WORDS } from "../src/lib/scene/text";
 import { causeText } from "../src/lib/alert";
 import { outcomeText } from "../src/lib/outcome";
@@ -46,11 +47,12 @@ interface FigureState {
   shown: string[];
 }
 
-/** Every figure's transform and shown pose group, by card key. */
+/** Every session's figure's transform and shown pose group, by card key;
+ *  sub-agents' figures are `helpers`'. */
 function figures(page: Page): Promise<Record<string, FigureState>> {
   return scene(page).evaluate((root) => {
     const out: Record<string, FigureState> = {};
-    for (const node of Array.from(root.querySelectorAll("[data-figure]"))) {
+    for (const node of Array.from(root.querySelectorAll("[data-figure]:not([data-helper])"))) {
       const shown = Array.from(node.querySelectorAll('[data-part="stand"], [data-part="seated-facing"], [data-part="seated-working"]'))
         .filter((group) => group.getAttribute("display") !== "none")
         .map((group) => group.getAttribute("data-part")!);
@@ -145,6 +147,17 @@ async function expectTargetsAtLeastMinimum(page: Page): Promise<void> {
   }
 }
 
+/** Every sub-agent's figure drawn: its key, transform and opacity. */
+function helpers(page: Page): Promise<{ key: string; transform: string; opacity: string | null }[]> {
+  return scene(page).evaluate((root) =>
+    Array.from(root.querySelectorAll("[data-helper]")).map((node) => ({
+      key: node.getAttribute("data-figure")!,
+      transform: node.getAttribute("transform") ?? "",
+      opacity: node.getAttribute("opacity"),
+    })),
+  );
+}
+
 test.describe("the scene draws every live session of each fixture", () => {
   for (const { name, data: board } of fixturesOf<Board>("board")) {
     test(name, async ({ page }) => {
@@ -152,6 +165,7 @@ test.describe("the scene draws every live session of each fixture", () => {
       const [layout] = layouts(board);
       const drawn = Object.keys(await figures(page)).sort();
       expect(drawn).toEqual(layout!.employees.filter((e) => e.spot !== null).map((e) => e.key).sort());
+      expect((await helpers(page)).map((h) => h.key).sort()).toEqual(layout!.helpers.map((h) => h.key).sort());
       const listed = layout!.groups.flatMap((g) => g.keys);
       const all = [...drawn, ...listed].sort();
       expect(all).toEqual(liveCards(board).map((c) => c.key).sort());
@@ -189,6 +203,63 @@ test.describe("scene", () => {
       if (!later || e.key === mover.key || !e.at || JSON.stringify(e.at) !== JSON.stringify(later.at)) continue;
       expect(now[e.key]!.transform, e.key).toBe(was[e.key]!.transform);
     }
+  });
+
+  // Story 4.12 (AD-176, D-476, D-548): a sub-agent fades in beside its
+  // lead's desk, small and without a cap, and fades out after its hold
+  // once its stop reaches the board; it is the same figure if it resumes
+  // during the hold.
+  test("a sub-agent appears beside its lead and leaves when it stops", async ({ page }) => {
+    const board = loadBoard("scene-subagents");
+    await openScene(page, board);
+    await page.clock.pauseAt(board.generated_at_ms + 60_000);
+    const lead = board.columns.working.find((c) => c.subagents.length === 0)!;
+    const withOne = structuredClone(board);
+    withOne.columns.working.find((c) => c.key === lead.key)!.subagents = [{ agent_id: "agent-new", agent_type: "Explore" }];
+    const [, laid] = layouts(board, withOne);
+    const helper = laid!.helpers.find((h) => h.lead === lead.key)!;
+    expect(helper).toBeDefined();
+    await push(page, withOne);
+    const node = scene(page).locator(`[data-figure="${helper.key}"]`);
+    await expect(node).toHaveAttribute("data-helper", "");
+    await expect(node).toHaveAttribute("opacity", /^0(\.\d+)?$/);
+    await expect(node.locator('[data-part="rig"]')).toHaveAttribute("transform", `scale(${SUBAGENT_SCALE})`);
+    await page.clock.runFor(FADE_MS + 32);
+    await expect(scene(page)).toHaveAttribute("data-moving", "0");
+    await expect(node).not.toHaveAttribute("opacity", /.*/);
+    const scale = Number(await scene(page).getAttribute("data-scale"));
+    const [x, y] = parse((await node.getAttribute("transform"))!);
+    const [ex, ey] = placed(helper.at, scale);
+    expect(Math.abs(x - ex)).toBeLessThan(1e-6);
+    expect(Math.abs(y - ey)).toBeLessThan(1e-6);
+    // Its file lists it by type.
+    await scene(page).locator(`[data-target="figure:${lead.key}"]`).click();
+    await expect(page.getByTestId("file-subagents")).toHaveText("Explore");
+    await page.keyboard.press("Escape");
+
+    // Stopped: it holds, then fades; back during the hold, it is the same node.
+    const marked = await node.evaluate((el) => ((window as unknown as { __helper: Element }).__helper = el) !== null);
+    expect(marked).toBe(true);
+    await push(page, board);
+    await page.clock.runFor(HELPER_HOLD_MS / 2);
+    await expect(node).not.toHaveAttribute("opacity", /.*/);
+    await push(page, withOne);
+    await page.clock.runFor(HELPER_HOLD_MS + FADE_MS);
+    expect(await node.evaluate((el) => el === (window as unknown as { __helper: Element }).__helper && el.isConnected)).toBe(true);
+    await expect(node).not.toHaveAttribute("opacity", /.*/);
+    await push(page, board);
+    await page.clock.runFor(HELPER_HOLD_MS + 32);
+    await expect(node).toHaveAttribute("opacity", /^0?\.\d+$|^1$/);
+    await page.clock.runFor(FADE_MS + 32);
+    await expect(node).toHaveCount(0);
+    await expect(scene(page)).toHaveAttribute("data-moving", "0");
+  });
+
+  test("nothing moves once the sub-agents are placed", async ({ page }) => {
+    const board = loadBoard("scene-subagents");
+    await openScene(page, board);
+    expect((await helpers(page)).length).toBeGreaterThan(0);
+    await expectNothingChanges(page, board);
   });
 
   test("no CSS animation runs inside a figure", async ({ page }) => {

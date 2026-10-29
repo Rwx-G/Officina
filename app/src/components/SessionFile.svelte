@@ -20,7 +20,7 @@
   import { projectColor } from "../lib/colors";
   import { outcomeText, visibleOutcome } from "../lib/outcome";
   import { liveCards, zoneOf, MAX_NUMBER } from "../lib/scene/layout";
-  import { COLUMN_WORDS, BADGE_WORDS, SIGN_WORDS, ZONE_WORDS } from "../lib/scene/text";
+  import { COLUMN_WORDS, BADGE_WORDS, SIGN_WORDS, ZONE_WORDS, agentTypeWords } from "../lib/scene/text";
   import { clock, duration } from "../lib/time";
   import StableLabel from "./StableLabel.svelte";
 
@@ -129,6 +129,16 @@
       {#if card.subject}
         <dt>Subject</dt>
         <dd data-testid="file-subject">{card.subject.name}</dd>
+      {/if}
+      {#if card.subagents.length > 0}
+        <dt>Sub-agents</dt>
+        <dd>
+          <ul class="subagents" data-testid="file-subagents">
+            {#each card.subagents as agent (agent.agent_id)}
+              <li>{agentTypeWords(agent)}</li>
+            {/each}
+          </ul>
+        </dd>
       {/if}
     </dl>
 
@@ -249,6 +259,11 @@
   dd {
     margin: 0;
     overflow-wrap: anywhere;
+  }
+  .subagents {
+    margin: 0;
+    padding: 0;
+    list-style: none;
   }
   .dot {
     display: inline-block;

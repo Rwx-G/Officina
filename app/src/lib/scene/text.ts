@@ -7,6 +7,7 @@ import type { Badge } from "../generated/Badge";
 import type { Board } from "../generated/Board";
 import type { Card } from "../generated/Card";
 import type { Column } from "../generated/Column";
+import type { SubagentView } from "../generated/SubagentView";
 import type { Zone } from "../generated/Zone";
 import type { SharedZone } from "./geometry";
 import type { Employee } from "./layout";
@@ -80,8 +81,25 @@ function zoneWords({ card, employee }: FigureFacts): string {
   return ZONE_WORDS[employee.zone];
 }
 
-/** A figure's `aria-label` (session, project, zone, state, reason, number)
- *  and its name tag. */
+/** A sub-agent's type as words; Claude Code may leave it empty. */
+export function agentTypeWords(agent: SubagentView): string {
+  return agent.agent_type || "sub-agent";
+}
+
+/** How many sub-agents a lead runs, as words; `null` for none. */
+export function subagentCount(card: Card): string | null {
+  const n = card.subagents.length;
+  return n === 0 ? null : `running ${plural(n, "sub-agent", "sub-agents")}`;
+}
+
+/** A sub-agent's `aria-label` and name tag: its type and its lead. */
+export function helperWords(lead: Card, agent: SubagentView): { label: string; tag: string } {
+  const type = agentTypeWords(agent);
+  return { label: `${type}, sub-agent of ${lead.name}`, tag: type };
+}
+
+/** A figure's `aria-label` (session, project, zone, state, reason, number,
+ *  sub-agents) and its name tag. */
 export function figureWords(facts: FigureFacts): { label: string; tag: string } {
   const { card, employee } = facts;
   const parts = [card.name, `project ${card.project.name}`, zoneWords(facts), COLUMN_WORDS[card.column]];
@@ -91,6 +109,8 @@ export function figureWords(facts: FigureFacts): { label: string; tag: string } 
   if (employee.alert && employee.zone !== "unknown") parts.push(ALERT_WORDS[employee.alert]);
   const number = employee.marks.ticket;
   if (number !== null) parts.push(`number ${number}`);
+  const helpers = subagentCount(card);
+  if (helpers !== null) parts.push(helpers);
   return { label: parts.join(", "), tag: number !== null ? `${number}. ${card.name}` : card.name };
 }
 

@@ -34,6 +34,14 @@ describe("text", () => {
     expect(one.summary).toMatch(/^1 needs you\. Oldest: solo, project alpha, permission prompt\./);
   });
 
+  it("a lead's name counts its sub-agents", () => {
+    const one = card("lead", "office", { subagents: [{ agent_id: "a1", agent_type: "Explore" }] });
+    expect(label(lay(board([one])), "lead")).toMatch(/, running 1 sub-agent$/);
+    const two = card("lead", "office", { subagents: [{ agent_id: "a1", agent_type: "Explore" }, { agent_id: "a2", agent_type: null }] });
+    expect(label(lay(board([two])), "lead")).toMatch(/, running 2 sub-agents$/);
+    expect(label(lay(board([card("lead", "office")])), "lead")).not.toContain("sub-agent");
+  });
+
   it("nobody waiting reads as such", () => {
     expect(lay(board([card("w", "office")])).summary).toBe("Nobody needs you. 1 working in 1 office.");
     expect(lay(board([])).summary).toBe("Nobody needs you. No live session.");

@@ -8,6 +8,12 @@ project uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Sub-agents in the scene (v0.4, story 4.12): each running sub-agent of a
+  session stands beside its desk, a smaller figure without a cap, from its
+  `SubagentStart` to its `SubagentStop`, three at most, wherever its lead
+  stands; it fades in and out, and a resumed sub-agent is the same figure
+  coming back. The session's file lists every running sub-agent by type
+  and its name counts them; `board --json` cards carry `subagents`.
 - Moving an ended card (v0.4, story 4.15): a To resume or Done card can be
   dragged onto Done, back onto To resume, or onto a Discard target shown
   while it is dragged, for a session that was never real work; its menu
@@ -458,12 +464,12 @@ project uses [Semantic Versioning](https://semver.org/).
   of the HTTP actions an approved catalogue declares, run with `officina
   run`, and nothing else; it said Officina opened no connection at all.
 - `officina doctor` (v0.4) prints `SubagentStart` and `SubagentStop` in the
-  hooks block and reports them missing until the block is pasted again. The
-  hook records them with the sub-agent's `agent_id` and `agent_type` (cut
-  to 64 characters, optional fields of event line version 1), never its
-  answer or transcript paths; the board and the registry ignore these lines
-  until the scene shows sub-agents, so v0.4's Slice 0 can check on real
-  sessions which session each one names.
+  hooks block and reports them missing until the block is pasted again: to
+  paste again for the scene to show sub-agents. The hook records them with
+  the sub-agent's `agent_id` and `agent_type` (cut to 64 characters,
+  optional fields of event line version 1), never its answer or transcript
+  paths; they fold into the lead's card only, never its own state or
+  activity time, and the registry ignores them.
 - The taskbar overlay (v0.4) carries the waiting count on its amber disc,
   "9+" above nine, drawn in code at the small icon's size for the display
   scale (16 px at 100 %, where Windows draws it); `cargo run -p

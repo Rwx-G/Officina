@@ -105,7 +105,7 @@ The hooks go in your **user** settings (`~/.claude/settings.json`), so every pro
 }
 ```
 
-The two sub-agent events are recorded so that v0.4 can check, on real sessions, that Claude Code names the session that spawned each sub-agent before the scene draws any (their lines keep the sub-agent's id and type, never its answer or transcripts). If you pasted the block before they appeared, paste it again: doctor reports them missing until you do.
+The two sub-agent events draw each running sub-agent beside the session that spawned it (see [Sub-agents](#sub-agents)); their lines keep the sub-agent's id and type, never its answer or transcripts. If you pasted the block before they appeared, paste it again: doctor reports them missing until you do, and the scene shows no sub-agent meanwhile.
 
 Hooks from user settings run alongside each project's own hooks. The hook appends one line to a local file and exits: no network, no server, no port. It always exits 0, so a broken Officina can never block a session, except through the relay's gate below. Measured p95: about 20 ms, process start included.
 
@@ -539,7 +539,7 @@ When Claude Code's session list cannot be read, Officina keeps the last known al
 
 ### Sub-agents
 
-The scene does not draw sub-agents yet. Officina records each sub-agent's start and stop, with its id and type only, so that real use can check that Claude Code names the session that spawned it (see [Wiring the hooks](#wiring-the-hooks)); the scene draws them only once that check has passed.
+A session's running sub-agents stand beside its desk as smaller figures without a cap, the collar in the project's colour, from the moment Claude Code reports one started (`SubagentStart`) until it reports it stopped (`SubagentStop`); they need the two sub-agent events in the hooks block (see [Wiring the hooks](#wiring-the-hooks)). They stay at the desk while their lead waits, rests or is unknown, since they keep working in the office; at most three are drawn, and a session without a desk (at reception, at its office's plaque, in More offices) shows none in the scene. A sub-agent fades in, stands still, and fades out a second after its stop; a background sub-agent that Claude Code resumes is the same figure coming back, never a second one. The session's file lists every running sub-agent by its type, its name counts them, and a sub-agent's figure, where it has room for a button of its own, opens its lead's file. Officina shows only the sub-agents Claude Code reported: a stop without a start (a prompt suggestion, a `/btw` question) shows nothing, a session that ends takes its sub-agents with it, and missing data never ends one. Verified on Claude Code 2.1.312 (`docs/research-notes.md`, E83).
 
 ### Light and dark
 

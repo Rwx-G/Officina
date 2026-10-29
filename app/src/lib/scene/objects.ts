@@ -13,7 +13,7 @@
 import type { ProjectColor } from "../generated/ProjectColor";
 import { projector } from "./geometry";
 import { ALERT_PAINTS, buildStatics, paint, type OfficeUse, type Static } from "./furniture";
-import { alertLit, type SceneLayout } from "./layout";
+import { SUBAGENT_SCALE, alertLit, type SceneLayout } from "./layout";
 import type { FigureFrame } from "./mover";
 import { allSpots, type Spot } from "./places";
 import { badgeMarkup, createRig, lookOf, marksMarkup, setPose, ticketMarkup, underMarkup, write, type Rig } from "./rig";
@@ -279,8 +279,9 @@ export class SceneObjects {
         figure = undefined;
       }
       if (!figure) {
-        const rig = createRig(this.#root.ownerDocument, { look: lookOf(f.key), colour, cap: true, scale: 1 });
+        const rig = createRig(this.#root.ownerDocument, { look: lookOf(f.key), colour, cap: !f.helper, scale: f.helper ? SUBAGENT_SCALE : 1 });
         rig.node.setAttribute("data-figure", f.key);
+        if (f.helper) rig.node.setAttribute("data-helper", "");
         rig.node.setAttribute("aria-hidden", "true");
         figure = { rig, colour, token: this.#created++, depth: 0, moving: false, si: -1, dq: 0 };
         this.#figures.set(f.key, figure);

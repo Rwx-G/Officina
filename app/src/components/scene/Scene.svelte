@@ -137,12 +137,12 @@
   });
 
   function activate(target: Target): void {
-    open = target.kind === "figure" ? { kind: "file", key: target.keys[0]!, from: null } : { kind: "list", target: target.id, focusKey: null };
+    open = target.kind === "group" ? { kind: "list", target: target.id, focusKey: null } : { kind: "file", key: target.keys[0]!, from: null };
   }
 
   /** The target that now represents `key`: its figure, else its group. */
   function representing(key: string): string | null {
-    const holding = layout.targets.filter((t) => t.keys.includes(key));
+    const holding = layout.targets.filter((t) => t.kind !== "helper" && t.keys.includes(key));
     return (holding.find((t) => t.kind === "figure") ?? holding[0])?.id ?? null;
   }
 
