@@ -58,27 +58,24 @@ Findings of the implementation, all decided:
 
 ## Evidence
 
-Figures from the full local gate after stories 4.12 and 4.16, on
-the commit before it was rebased onto v0.5's story 5.3 (the Rust half
-unchanged since `a5bc797`, where it last ran), Rust 1.99.1, Windows 11
-host; `core-linux` in a `rust:1-bookworm` container. Rebased (`0effd0d`,
-story 5.3's `Untrusted` sub-agent type included): clippy clean, Rust 1,114
-passed, 0 failed, 11 ignored; Vitest 271 passed; Playwright once 285
-passed, 2 skipped. The gate after story 4.15, on `1e7183f`, read 1,084
-Rust tests, 257 Vitest and 840 Playwright runs.
+Figures from the full local gate after story 4.17, on its code
+(`995ca78` and the renamed `scene.spec.ts` cases), Rust 1.99.1, Windows 11
+host; `core-linux` in a `rust:1-bookworm` container. The gate after stories
+4.12 and 4.16 (`0effd0d`) read 1,114 Rust tests, 271 Vitest and 855
+Playwright runs; after story 4.15 (`1e7183f`), 1,084, 257 and 840.
 
 | Gate | Result |
 |---|---|
 | `cargo fmt --check`; clippy `-D warnings`, workspace with `officina-core/ts` | clean |
-| Rust unit, integration, CLI end to end, doc tests, vector sets, TypeScript bindings drift | 1,087 passed, 0 failed, 11 ignored (the release-only perf, stress, crash and lexer tests below) |
-| Perf, release (hook own cost, gate own cost, gate in process, appends) | 5 passed; hook own cost 0 ns against an empty process at 29.4 ms p95 (bound 150 ms with CI's budget); gate own cost 0 ns (bound 15 ms); gate in process p95 3.6 ms (a workstation check, not asserted); on the run after story 4.12 the gate's own cost read 3.3 ms |
+| Rust unit, integration, CLI end to end, doc tests, vector sets, TypeScript bindings drift | 1,114 passed, 0 failed, 11 ignored (the release-only perf, stress, crash and lexer tests below) |
+| Perf, release (hook own cost, gate own cost, gate in process, appends) | 5 passed; hook own cost 12.5 ms against an empty process at 4.4 ms p95 (bound 150 ms with CI's budget); gate own cost 2.9 ms (bound 15 ms); gate in process p95 3.3 ms (a workstation check, not asserted) |
 | Lexer against Git Bash; approvals stress; crash (release) | pass |
 | `officina.exe` built alone: no authority or registry writer marker; both in `officina-app.exe` | pass |
 | Registry dependencies, no bundled roots | pass |
-| Frontend: svelte-check, ESLint, Vitest | 0 errors, clean, 271 passed in 25 files |
-| e2e fixtures from the real CLI, Playwright `--repeat-each=3` | 855 passed, 6 skipped (the light and dark baseline cases, `test.fixme` until D-508), three times each |
+| Frontend: svelte-check, ESLint, Vitest | 0 errors, clean, 276 passed in 25 files |
+| e2e fixtures from the real CLI, Playwright `--repeat-each=3` | 960 passed, 6 skipped (the light and dark baseline cases, `test.fixme` until D-508), three times each |
 | `cargo deny` (0.19.4), `pnpm audit` (11.5.3) | `cargo deny` ok (advisories, bans, licenses, sources); `pnpm audit` 1 low, ignored with its dated reason |
-| `core-linux` in `rust:1-bookworm` | fmt and clippy clean, 955 passed, 0 failed, 9 ignored |
+| `core-linux` in `rust:1-bookworm` | fmt and clippy clean, 982 passed, 0 failed, 9 ignored |
 | Zero write under the Claude config dir | `quota_doctor.rs::no_command_writes_under_the_claude_config_dir` |
 
 Stability: after story 4.12, `themes.spec.ts > the header logo follows
@@ -113,6 +110,7 @@ binary without the gate, process-start noise: the next run read 4.7 ms.
 | 4.14 Docs, checks, QA | in progress | AC 2 review, AC 6, 8 to 10 (owner), this report's closure; AC 5 measured (E82), AC 7 passed |
 | 4.15 First-use feedback | review | the owner's next use of the real window |
 | 4.16 Walking's cost | review | AC 6 measured (E86): the walking run at 1.00 % of the machine, not under 1 %; walking stays off by default |
+| 4.17 Scene readability | review | the owner's two-second test (story 4.14 AC 9) on the screenshots it rendered again |
 
 ## Slice 0 order (story 4.14 AC 11)
 
@@ -196,6 +194,28 @@ Not verified on the real window, which this run did not open: the drag in
 WebView2, the minimum size as Windows applies it, and the transitions'
 feel; each is covered in Playwright's Chromium.
 
+## Story 4.17 (the scene's readability)
+
+Preparing the owner's two-second test (story 4.14 AC 9), the screenshots
+of five fixtures at 1920 x 1032 showed four defects; story 4.17 fixes
+each, with the decisions D-554 to D-559:
+
+1. A queue number hidden behind the alert room's beacon: every queue
+   badge is drawn in a layer above the floor's objects (D-554).
+2. The count of what needs you in no one place: the register's heading
+   reads "Needs you: N", it shows a row per number key, and an
+   approval-only wait has a diamond and the word "approval" (D-556).
+3. The register's text at about 11 px at eight projects: it is overlay UI
+   at a fixed size over the scene's top-right corner (D-555); the
+   decision office's extra waits move to a "+n" on its plaque (D-557).
+4. Desk numbers read as queue numbers: a desk is a letter on a square
+   tag, so a digit on a disc is always a key (D-558).
+
+The minor findings, a plaque on a waiting head and the "high priority"
+pill on its plaque, are fixed too (D-559). `readability.spec.ts` holds
+each fix with a hit test on what is painted. The owner's AC 9 run itself
+stays open.
+
 ## Decisions taken under delegation, for the owner to confirm
 
 - D-529: the "relay stopped" chip in the danger colour.
@@ -211,3 +231,6 @@ feel; each is covered in Playwright's Chromium.
   gauges at 150 px), D-542 (a card done by its archived subject goes back
   by reopening the subject, without Undo) and D-546 (1140 x 820, which
   rules out half of a Full HD screen).
+- D-554 to D-559 (story 4.17): above all D-555 (the register in the
+  top-right corner, which the session file covers on a Full HD screen
+  while it is open) and D-558 (desks named by letters instead of numbers).

@@ -108,6 +108,8 @@ stories:
   - {id: "4.15", file: story-4.15-first-use-feedback.md, slice: B, status: review}
   # 4.16: walking's cost after E82 (D-550 to D-553); AC 6 measured (E86): the walking run at 1.00 % of the machine, not under 1 %, so walking stays off by default.
   - {id: "4.16", file: story-4.16-walking-cost.md, slice: B, status: review}
+  # 4.17: the scene's readability defects found preparing story 4.14 AC 9 (D-554 to D-559).
+  - {id: "4.17", file: story-4.17-scene-readability.md, slice: B, status: review}
 ---
 epic: 5
 version: v0.5
