@@ -33,6 +33,9 @@ import { figureWords, groupWords, helperWords, plaqueText, summaryText, type Fig
 
 export interface SceneInput {
   board: Board;
+  /** The card key of the open meeting (D-566): its figure is marked
+   *  received wherever it stands; absent or `null`, nobody is. */
+  received?: string | null;
 }
 
 /** Which of a figure's pose groups shows (AD-171). */
@@ -49,6 +52,9 @@ export interface Marks {
   hand: boolean;
   ring: boolean;
   question: boolean;
+  /** The open meeting's figure (D-566): a ring under it in the working
+   *  colour, wherever it stands; never on a figure inside a group. */
+  received: boolean;
 }
 
 export interface Employee {
@@ -211,6 +217,7 @@ export const MAX_NUMBER = 9;
 
 export function layoutScene(input: SceneInput, memory: SceneMemory): SceneLayout {
   const { board } = input;
+  const received = input.received ?? null;
   const live = liveCards(board);
   const cardOf = new Map(live.map((c) => [c.key, c]));
 
@@ -391,6 +398,7 @@ export function layoutScene(input: SceneInput, memory: SceneMemory): SceneLayout
       hand: zone === "lounge",
       ring: zone === "lounge",
       question: zone === "unknown",
+      received: card.key === received && at.spot !== null,
     };
     const rest = at.spot ? restPoint(at.spot) : null;
     return {
@@ -535,7 +543,12 @@ export function layoutScene(input: SceneInput, memory: SceneMemory): SceneLayout
   const group = (id: string, room: string, rect: Rect, roomName: string) => {
     const keys = groupKeys.get(id) ?? [];
     if (keys.length === 0 && id !== MORE) return;
-    const words = groupWords(roomName, keys.map((k) => facts(employeeOf.get(k)!)), id === MORE ? moreProjects.length : null);
+    const words = groupWords(
+      roomName,
+      keys.map((k) => facts(employeeOf.get(k)!)),
+      id === MORE ? moreProjects.length : null,
+      received !== null && keys.includes(received),
+    );
     targets.push({ id: `group:${id}`, group: room, kind: "group", rect, label: words.label, tag: words.tag, keys });
   };
   const sharedGroup = (zone: SharedZone) => {

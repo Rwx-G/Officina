@@ -348,6 +348,12 @@ export function marksMarkup(marks: Marks, pose: Pose, facing: Facing, colour: Pr
 
 /** The Your turn ring on the floor under the figure, at `(dx, dy)` from
  *  its origin (a seated figure's floor point is its seat's). */
-export function underMarkup(ring: boolean, dx: number, dy: number): string {
-  return ring ? `<ellipse fill="none" stroke="${paint("color-attention")}" cx="${dx}" cy="${dy}" rx="25" ry="12.5" stroke-width="2.6"/>` : "";
+export function underMarkup(ring: boolean, received: boolean, dx: number, dy: number): string {
+  const amber = ring ? `<ellipse fill="none" stroke="${paint("color-attention")}" cx="${dx}" cy="${dy}" rx="25" ry="12.5" stroke-width="2.6"/>` : "";
+  // The open meeting's figure (D-566): a neutral ring in the working
+  // colour, outside the lounge's amber one when both are drawn.
+  const meeting = received
+    ? `<ellipse data-mark="received" fill="none" stroke="${paint("color-working")}" cx="${dx}" cy="${dy}" rx="${ring ? 30 : 25}" ry="${ring ? 15 : 12.5}" stroke-width="2.6"/>`
+    : "";
+  return amber + meeting;
 }

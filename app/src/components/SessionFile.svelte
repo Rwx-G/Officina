@@ -23,6 +23,7 @@
   import { COLUMN_WORDS, BADGE_WORDS, SIGN_WORDS, ZONE_WORDS, agentTypeWords } from "../lib/scene/text";
   import { clock, duration } from "../lib/time";
   import StableLabel from "./StableLabel.svelte";
+  import { meeting } from "../lib/meeting.svelte";
 
   interface Props {
     form: FileForm;
@@ -164,6 +165,7 @@
       >
         Bring to front
       </button>
+      <button type="button" class="action" data-testid="file-receive" onclick={() => void meeting.receive(card!.key)}>Receive</button>
       {#if card.attach_available}
         <button type="button" class="action" data-testid="copy-attach" onclick={() => store.copyAttach(card!)}>
           <StableLabel labels={{ copied: "Copied", ready: "Copy attach command" }} current={store.copied === card.key ? "copied" : "ready"} />

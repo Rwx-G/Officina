@@ -7,6 +7,9 @@ import Gauge from "./Gauge.svelte";
 import { tick } from "svelte";
 import SessionCard from "./SessionCard.svelte";
 import SessionFile from "./SessionFile.svelte";
+import MeetingPanel from "./MeetingPanel.svelte";
+import { meeting } from "../lib/meeting.svelte";
+import type { MeetingView } from "../lib/generated/MeetingView";
 import EndedCounts from "./EndedCounts.svelte";
 import Briefing from "./Briefing.svelte";
 import type { Briefing as BriefingPayload } from "../lib/generated/Briefing";
@@ -1150,5 +1153,46 @@ describe("WorkOrderCard", () => {
       expect(getByTestId("card-launch-refused").textContent).toBe(LAUNCH_REFUSAL_TEXT[refusal]);
       expect((getByTestId("launch") as HTMLButtonElement).disabled).toBe(true);
     }
+  });
+});
+
+describe("MeetingPanel", () => {
+  afterEach(() => meeting.close(false));
+
+  it("MeetingPanel renders markup in commit subjects, paths and logs as text", () => {
+    const hostile = `<img src=x onerror="window.__officinaXss = 1"><b>x</b>`;
+    const base = fixtureOf<MeetingView>("meeting", "meeting-background");
+    if (base.changes.state !== "read" || base.logs?.state !== "shown") throw new Error("the fixture's meeting reads its changes and logs");
+    const view: MeetingView = {
+      ...base,
+      name: hostile,
+      decision: { waiting_for: hostile, notification: hostile, answer_end: hostile, last_prompt: hostile },
+      runs: base.runs.map((run) => ({ ...run, action: hostile })),
+      changes: {
+        ...base.changes,
+        commits: base.changes.commits.map((c) => ({ ...c, subject: hostile, files: [hostile] })),
+        diff: { ...base.changes.diff, text: `${hostile}\n+${hostile}\n`, files: [{ path: hostile, line: 0, hunks: [1] }] },
+        untracked: [{ path: hostile, bytes: 3 }],
+      },
+      logs: { ...base.logs, text: `${hostile}\n`, first_error_line: 1 },
+    };
+    meeting.key = view.key;
+    meeting.view = view;
+    const { container, getByTestId, getAllByTestId } = render(MeetingPanel, { board: null, store: store(), onJournal: () => {} });
+    expect(container.querySelector("img, b")).toBeNull();
+    for (const id of [
+      "meeting-notification",
+      "meeting-answer-end",
+      "meeting-last-prompt",
+      "meeting-waiting-for",
+      "diff-text",
+      "meeting-untracked",
+      "meeting-logs-text",
+    ]) {
+      expect(getByTestId(id).textContent, id).toContain(hostile);
+    }
+    for (const commit of getAllByTestId("meeting-commit")) expect(commit.textContent).toContain(hostile);
+    expect(getByTestId("diff-file").textContent).toBe(hostile);
+    expect((window as { __officinaXss?: number }).__officinaXss).toBeUndefined();
   });
 });

@@ -9,7 +9,7 @@
 import { existsSync } from "node:fs";
 import { expect, test, type Page } from "@playwright/test";
 import { SCREENSHOT_MAX_DIFF_RATIO, calls, loadBoard, loadRelay, openScene, openWalkingScene, sceneSettled, transitionsDone } from "./fixtures";
-import { fixturesOf } from "./fixture-index";
+import { fixtureOf, fixturesOf } from "./fixture-index";
 import { beaconPair } from "../src/lib/alert";
 import { HALO_BREATHING_MS, HALO_CYCLE_MS } from "../src/lib/halo";
 import { MIN_SCALE, TARGET_CSS_MIN } from "../src/lib/scene/geometry";
@@ -23,6 +23,7 @@ import { hours } from "../src/lib/time";
 import type { Board } from "../src/lib/generated/Board";
 import type { Card } from "../src/lib/generated/Card";
 import type { FocusOutcome } from "../src/lib/generated/FocusOutcome";
+import type { MeetingView } from "../src/lib/generated/MeetingView";
 
 const scene = (page: Page) => page.getByTestId("scene");
 
@@ -1179,4 +1180,35 @@ test.describe("the text alternative names the waiting count and the oldest waiti
       await expect(summary).toContainText(`Oldest: ${waiting[0]!.name}`);
     });
   }
+});
+
+// D-566, AD-70 (story 5.10): opening a meeting marks the received figure
+// with one change of the scene, which then stays still; closing it is one
+// more change, and the ring is gone.
+test("opening a meeting marks the figure once", async ({ page }) => {
+  const board = loadBoard("scene-c");
+  const placed = layoutScene({ board }, emptyMemory(board.floor)).employees.find((e) => e.spot !== null)!;
+  await openScene(page, board);
+  const meetingView = { ...fixtureOf<MeetingView>("meeting", "meeting-background"), key: placed.key };
+  await page.evaluate((m) => (window.__officinaMeetings = { [m.key]: m }), meetingView);
+  const ring = scene(page).locator(`[data-figure=${JSON.stringify(placed.key)}] [data-mark="received"]`);
+  await expect(ring).toHaveCount(0);
+  await scene(page).locator(`[data-layer="targets"] [data-key=${JSON.stringify(placed.key)}]`).click();
+  await page.clock.runFor(1_000);
+  await scene(page).evaluate((root) => {
+    const records: MutationRecord[] = [];
+    new MutationObserver((list) => records.push(...list)).observe(root, { subtree: true, childList: true, attributes: true, characterData: true });
+    (window as unknown as { __receivedRecords: MutationRecord[] }).__receivedRecords = records;
+  });
+  const records = () => page.evaluate(() => (window as unknown as { __receivedRecords: MutationRecord[] }).__receivedRecords.length);
+  await page.getByTestId("file-receive").click();
+  await expect(page.getByTestId("meeting-panel").getByTestId("meeting-decision")).toBeVisible();
+  await expect(ring).toHaveCount(1);
+  const marked = await records();
+  expect(marked).toBeGreaterThan(0);
+  // Then nothing moves while nothing changes.
+  await page.clock.runFor(150_000);
+  expect(await records()).toBe(marked);
+  await page.getByTestId("meeting-close").click();
+  await expect(ring).toHaveCount(0);
 });

@@ -3,7 +3,7 @@ import type { Board } from "../generated/Board";
 import type { ProjectColor } from "../generated/ProjectColor";
 import { layoutScene, liveCards, type SceneLayout } from "./layout";
 import { emptyMemory, type SceneMemory } from "./memory";
-import { restingFrames, type FigureFrame } from "./mover";
+import { restingFrames, walkingMarks, type FigureFrame } from "./mover";
 import { DEPTH_BANDS } from "./geometry";
 import { DEPTH_QUANTUM, DEPTH_WINDOW, SceneObjects } from "./objects";
 import { deskLetter } from "./rig";
@@ -200,6 +200,26 @@ describe("objects", () => {
     expect(away.querySelector("rect")).not.toBeNull();
     expect(away.querySelector("circle")).toBeNull();
     expect(badges.textContent).toBe("");
+  });
+
+  // D-566, D-531: the received ring is drawn under the figure at rest, in
+  // the working colour, and hidden while it walks like every mark but the
+  // question mark.
+  it("the received ring is hidden while walking", () => {
+    const b = board([card("a", "decision"), card("b", "office", { started: 1 })]);
+    const layout = layoutScene({ board: b, received: "a" }, emptyMemory(b.floor));
+    const { root, objects } = mount();
+    const resting = restingFrames(layout);
+    objects.update({ layout, colours: colours(b), snap: 1, figures: resting });
+    const ring = () => figure(root, "a")!.querySelector('[data-mark="received"]');
+    expect(ring()).not.toBeNull();
+    expect(ring()!.getAttribute("stroke")).toContain("color-working");
+    expect(figure(root, "b")!.querySelector('[data-mark="received"]')).toBeNull();
+    const walking: FigureFrame = { ...resting.get("a")!, moving: true, marks: walkingMarks(resting.get("a")!.marks) };
+    objects.frame(new Map([...resting, ["a", walking]]));
+    expect(ring()).toBeNull();
+    objects.frame(resting);
+    expect(ring()).not.toBeNull();
   });
 
   it("queue badges are drawn in the badge layer, above every object, at their figure", () => {

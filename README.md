@@ -551,7 +551,7 @@ The whole window, board and scene alike, follows Windows' light or dark theme. T
 
 ## The orchestrator (v0.5, in progress)
 
-v0.5 lets you delegate routine subjects: a work order starts a background session from a template you wrote and approved, and an `auto` action can be approved without you once its dry run passed. What is built so far is the floor file's part, the one module every `claude` process starts from, the work order records, the Orchestrator view with its briefing, its composer and its work order cards, the `auto` class with its review, in shadow until its evidence lets you turn approval on, the orchestrator's tools (`officina mcp`) and the orchestrator session, started from the window; its proposals in the window follow.
+v0.5 lets you delegate routine subjects: a work order starts a background session from a template you wrote and approved, and an `auto` action can be approved without you once its dry run passed. What is built so far is the floor file's part, the one module every `claude` process starts from, the work order records, the Orchestrator view with its briefing, its composer and its work order cards, the `auto` class with its review, in shadow until its evidence lets you turn approval on, the orchestrator's tools (`officina mcp`), the orchestrator session, started from the window, and the meeting, where you receive a session that waits on you; written answers and the orchestrator's proposals in the window follow.
 
 ### Templates
 
@@ -622,6 +622,20 @@ The view opens on the briefing, which Officina's own code builds, with no model 
 "Since" is your last reading: Officina records one when you leave the Orchestrator view and when you close the window, and before the first one everything with a time counts as new. Session names and texts are shown as text, never as markup. The briefing holds at most `BRIEFING_MAX_BYTES` (32 KiB): when it would hold more, the oldest items of all sections go first, each section says how many it left out, and its count stays whole.
 
 Below it come the composer over the approved templates, with those a pending catalogue change adds, changes or removes (while a change is pending, every card is refused until you approve it), the card it issued, and the history of your latest work orders: template, project, values, outcome, the background session it bound to and that session's state. An order still unbound ten minutes after it started is marked **unbound**, and one whose printed output does not hold the id it bound to is marked too: both are computed when the view is built, never stored.
+
+### Receiving a session (the meeting)
+
+**Receive** on a Needs you or Your turn card, on a background session resting in Done (idle, its process still alive), in a session's file in the scene, or on a subject to resume in the Subjects view, opens the meeting: one panel in the session file's place at the sessions area's right edge, in Board and Scene modes, which never resizes the board or the scene; **Close** or Escape closes it and gives the focus back to where you were. In the scene, the received employee wears a neutral ring in the working colour wherever it stands; inside a group, the group's name says "received". A subject's meeting is its latest session that saw a prompt. The panel reads everything again when the board shows that session's state changed.
+
+It shows, as text:
+
+- what the session expects of you: what `claude agents` says it waits for, Claude Code's latest notification to it, the end of its last answer and your last prompt;
+- its relay runs since it started (back to its start, at most the journal's 90 days): succeeded, failed with the exit code, refused with the reason, and its pending approvals; a failed run jumps to its entry in the Relay view;
+- the changes in its folder: the commits since it started with their files, one diff from before the first of them to the working tree (cut at 256 KiB, with a jump to each file and each hunk), and the untracked files by name and size;
+- for a background session, the end of `claude logs`, its escape sequences stripped, with a jump to the first line holding one of the error markers (`LOG_ERROR_MARKERS`);
+- how an answer would reach it (`Delivery`): delivered as its next turn, copied with `claude attach` opened while it waits on a question, copied alone when Claude Code never reported its folder, or answered in its own terminal for an interactive session (Focus).
+
+No transcript is read. `git` runs read-only, only in the folder `claude agents` reported for that session, never one a hook line names (any session can write those), and only on Receive, within 10 seconds: no index refresh, no fsmonitor, no external diff, no textconv, no signature check, and when the repository configures a filter driver, the diff covers the commits only and says why, since diffing the working tree would run it. Untracked files are never read. `claude logs` runs from the `claude` binary's folder with no console.
 
 ### The orchestrator's tools (`officina mcp`)
 

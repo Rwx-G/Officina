@@ -7,6 +7,7 @@
   import { ago, duration } from "../lib/time";
   import { drag, draggable } from "../lib/drag.svelte";
   import { targetsFor } from "../lib/settle";
+  import { meeting, offersReceive } from "../lib/meeting.svelte";
   import CardMenu from "./CardMenu.svelte";
   import StableLabel from "./StableLabel.svelte";
 
@@ -86,6 +87,10 @@
   {/if}
 
   <CardMenu {card} busy={store.settling[card.key] === true} onChoose={(target) => void store.settle(card, target, true)} />
+
+  {#if offersReceive(card)}
+    <button class="link receive" data-testid="receive" onclick={() => void meeting.receive(card.key)}>Receive</button>
+  {/if}
 
   {#if card.attach_available}
     <button class="link copy" data-testid="copy-attach" onclick={() => store.copyAttach(card)}>
@@ -286,7 +291,8 @@
     cursor: pointer;
     text-decoration: underline;
   }
-  .copy {
+  .copy,
+  .receive {
     margin: 0 14px 8px;
   }
 </style>

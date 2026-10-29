@@ -122,12 +122,20 @@ export function figureWords(facts: FigureFacts): { label: string; tag: string } 
 
 /** A group target's words: its room, its count and its members' names.
  *  More offices also counts its projects. */
-export function groupWords(room: string, members: FigureFacts[], projects: number | null): { label: string; tag: string } {
+export function groupWords(
+  room: string,
+  members: FigureFacts[],
+  projects: number | null,
+  received = false,
+): { label: string; tag: string } {
   const sessions = plural(members.length, "session", "sessions");
   const names = members.map((m) => m.card.name).join(", ");
   const head = projects === null ? `${room}: ${members.length} more ${members.length === 1 ? "session" : "sessions"}` : `${room}: ${plural(projects, "project", "projects")}, ${sessions}`;
+  // A received session inside the group has no figure to mark (D-566):
+  // the group's name says it.
+  const label = names ? `${head}: ${names}` : head;
   return {
-    label: names ? `${head}: ${names}` : head,
+    label: received ? `${label}, received` : label,
     tag: projects === null ? `+${members.length}` : plural(projects, "project", "projects"),
   };
 }

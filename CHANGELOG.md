@@ -8,6 +8,18 @@ project uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- The meeting (v0.5, story 5.10): Receive on a Needs you or Your turn card,
+  a background session idle in Done, the session file or a subject to
+  resume opens a side panel in the file's place, which resizes nothing:
+  what the session expects (waiting for, Claude Code's latest
+  notification, the end of its last answer, your last prompt), its relay
+  runs since it started and its pending approvals, the commits since it
+  started with one diff to the working tree and its untracked files, and
+  for a background session the end of `claude logs` with its escape
+  sequences stripped; then how an answer would reach it. The scene rings
+  the received employee in the working colour. `git` runs read-only, in
+  the folder `claude agents` reported only, running nothing a repository
+  configures; no transcript is read.
 - The orchestrator session (v0.5, story 5.16): **Start** in the
   Orchestrator view opens `claude` in a console of its own, in
   `<officina home>/orchestrator/workdir`, with no built-in tool, Officina's

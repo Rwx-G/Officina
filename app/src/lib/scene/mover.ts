@@ -125,7 +125,7 @@ export interface FigureFrame {
   helper: boolean;
 }
 
-const NO_MARKS: Marks = { ticket: null, approval: false, deskBadge: null, hand: false, ring: false, question: false };
+const NO_MARKS: Marks = { ticket: null, approval: false, deskBadge: null, hand: false, ring: false, question: false, received: false };
 
 /** A sub-agent standing at its place, at `opacity`. */
 function helperFrame(h: Helper, opacity: number): FigureFrame {
@@ -150,8 +150,8 @@ function helperFrame(h: Helper, opacity: number): FigureFrame {
 
 /** A figure on its way shows no mark but the question mark (the prototype
  *  v2's `poseOf`): its ticket and ring belong to the place it walks to. */
-function walkingMarks(marks: Marks): Marks {
-  return { ticket: null, approval: false, deskBadge: null, hand: false, ring: false, question: marks.question };
+export function walkingMarks(marks: Marks): Marks {
+  return { ticket: null, approval: false, deskBadge: null, hand: false, ring: false, question: marks.question, received: false };
 }
 
 /** Every placed employee at rest at its place: the mover's output once

@@ -1657,6 +1657,126 @@ model = "haiku"
   console.log(`fixture ${name}: exit ${run.status}`);
 }
 
+// Meetings (story 5.10, D-72's pattern, D-181's kind `meeting`): a session
+// `claude agents` lists in a folder `orchestrator_fixture` makes a git
+// repository with two commits since the session's start and a working-tree
+// change; event lines and journal lines written here as the hook and
+// `officina run` write them; the board from the real `officina board
+// --json`; then the `MeetingView` the window builds for that card, printed
+// by the window's own functions, its logs from the fake claude's `logs`
+// mode. Redacted placeholders only.
+const meetingScenarios = {
+  "meeting-background": {
+    session: sid(601),
+    agent: (cwd) => ({ pid: 4601, id: "bg0601", cwd, kind: "background", startedAt: now - HOUR, sessionId: sid(601), name: "dependency-bump-3", status: "idle", state: "done" }),
+    key: "bg:bg0601",
+    events: [
+      { ts: now - HOUR + 1_000, event: "UserPromptSubmit", prompt: "Bump serde_json to its latest patch release, run the tests, fix what breaks, commit." },
+      { ts: now - 5 * MIN, event: "Stop", last_message: "Bumped serde_json and committed. One test still fails: <b>which</b> fixture should win?" },
+      { ts: now - 4 * MIN, event: "Notification", notification_type: "idle_prompt", message: "Claude is waiting for your input" },
+    ],
+    journal: (session) => [
+      { ts: now - 40 * MIN, kind: "run_started", run_id: "run-check-1", project: "billing-api", session_id: session, action: "check", class: "free", params: {}, argv: ["C:/tools/check.exe"], catalogue_hash: "0".repeat(64), timeout_s: 60 },
+      { ts: now - 40 * MIN + 2_000, kind: "run_finished", run_id: "run-check-1", outcome: "exited", exit_code: 0, duration_ms: 2_000 },
+      { ts: now - 30 * MIN, kind: "run_started", run_id: "run-apply-1", project: "billing-api", session_id: session, action: "apply", class: "human", params: {}, argv: ["C:/tools/apply.exe"], catalogue_hash: "0".repeat(64), timeout_s: 60 },
+      { ts: now - 30 * MIN + 4_000, kind: "run_finished", run_id: "run-apply-1", outcome: "exited", exit_code: 2, duration_ms: 4_000 },
+      { ts: now - 20 * MIN, kind: "refused", project: "billing-api", session_id: session, action: "deploy", reason: "action_not_allowed", detail: "not in the catalogue" },
+    ],
+    commits: [
+      { at_ms: now - 30 * MIN, subject: "Bump serde_json to 1.0.140", files: [{ path: "Cargo.toml", text: '[dependencies]\nserde_json = "1.0.140"\n' }] },
+      { at_ms: now - 15 * MIN, subject: "Fix the <b>invoice</b> fixture", files: [{ path: "tests/fixtures/invoice.json", text: '{"total": 42}\n' }] },
+    ],
+    base: [{ path: "Cargo.toml", text: '[dependencies]\nserde_json = "1.0.139"\n' }, { path: "src/lib.rs", text: "pub fn total() -> u32 {\n    41\n}\n" }],
+    working_tree: [
+      { path: "src/lib.rs", text: "pub fn total() -> u32 {\n    42\n}\n" },
+      { path: "notes.tmp", text: "scratch notes\n" },
+    ],
+    checks: (view) => [
+      [view.delivery === "resume_live", "a live idle background session resumes live"],
+      [view.changes.state === "read" && view.changes.commits.length === 2, "two commits since the start"],
+      [view.changes.diff?.files.length >= 2, "a diff of two files or more"],
+      [view.changes.untracked?.length === 1, "one untracked file"],
+      [view.logs?.state === "shown" && view.logs.first_error_line !== null, "logs with an error line"],
+      [view.runs.some((r) => r.result === "failed") && view.runs.some((r) => r.result === "refused"), "a failed run and a refusal"],
+      [view.decision.notification !== null, "the notification message"],
+    ],
+  },
+  "meeting-interactive": {
+    session: sid(602),
+    agent: (cwd) => ({ pid: 4602, cwd, kind: "interactive", startedAt: now - HOUR, sessionId: sid(602), name: "docs-site", status: "waiting", waitingFor: "permission prompt" }),
+    key: `pid:4602:${now - HOUR}`,
+    events: [
+      { ts: now - HOUR + 1_000, event: "UserPromptSubmit", prompt: "Rewrite the install page." },
+      { ts: now - 2 * MIN, event: "Notification", notification_type: "permission_prompt", message: "Claude needs your permission to use Bash" },
+    ],
+    journal: () => [],
+    commits: [
+      { at_ms: now - 25 * MIN, subject: "Rewrite the install page", files: [{ path: "docs/install.md", text: "# Install\n\nRun the installer.\n" }] },
+      { at_ms: now - 10 * MIN, subject: "Link the install page", files: [{ path: "docs/index.md", text: "- [Install](install.md)\n" }] },
+    ],
+    base: [{ path: "docs/index.md", text: "# Docs\n" }],
+    working_tree: [{ path: "docs/install.md", text: "# Install\n\nRun the installer, then sign in.\n" }],
+    checks: (view) => [
+      [view.delivery === "focus_only", "a live interactive session is Focus only"],
+      [view.logs === null, "no logs section"],
+      [view.changes.state === "read" && view.changes.commits.length === 2, "two commits since the start"],
+    ],
+  },
+};
+
+for (const [name, scenario] of Object.entries(meetingScenarios)) {
+  const tmp = mkdtempSync(join(tmpdir(), `officina-fixture-${name}-`));
+  const home = join(tmp, "home");
+  const officinaHome = join(tmp, "officina");
+  const repo = join(tmp, "repo");
+  mkdirSync(join(home, ".claude", "sessions"), { recursive: true });
+  mkdirSync(join(officinaHome, "events"), { recursive: true });
+  const cwd = repo.replaceAll("\\", "/");
+  const lines = scenario.events.map((e) => ({ v: 1, session_id: scenario.session, cwd, ...e }));
+  const byDay = new Map();
+  for (const line of lines) byDay.set(utcDay(line.ts), (byDay.get(utcDay(line.ts)) ?? "") + JSON.stringify(line) + "\n");
+  for (const [day, content] of byDay) writeFileSync(join(officinaHome, "events", `${day}.jsonl`), content);
+  const journal = scenario.journal(scenario.session);
+  if (journal.length > 0) {
+    mkdirSync(join(officinaHome, "journal"), { recursive: true });
+    for (const line of journal) appendFileSync(join(officinaHome, "journal", `${utcDay(line.ts)}.jsonl`), JSON.stringify({ v: 1, ...line }) + "\n");
+  }
+  const fixture = join(tmp, "agents.json");
+  writeFileSync(fixture, JSON.stringify([scenario.agent(cwd)]));
+  const env = {
+    SYSTEMROOT: process.env.SYSTEMROOT ?? "",
+    PATH: process.env.PATH ?? "",
+    USERPROFILE: home,
+    HOME: home,
+    OFFICINA_HOME: officinaHome,
+    OFFICINA_CLAUDE_BIN: fakeClaude,
+    FAKE_CLAUDE_FIXTURE: fixture,
+    FAKE_CLAUDE_MODE: "logs",
+  };
+  const board = officinaJson(["board", "--json"], env);
+  if (board.status !== 0) throw new Error(`${name}: officina board exited ${board.status}: ${board.stderr}`);
+  const boardFile = join(tmp, "board.json");
+  writeFileSync(boardFile, board.stdout);
+  const commits = [{ at_ms: now - 2 * HOUR, subject: "Before the session", files: scenario.base }, ...scenario.commits];
+  const script = join(tmp, "meeting.json");
+  writeFileSync(
+    script,
+    JSON.stringify({ now_ms: now, board_file: boardFile, meeting: { key: scenario.key, repo, commits, working_tree: scenario.working_tree } }),
+  );
+  const view = spawnSync(orchestratorFixture, [officinaHome, script], { encoding: "utf8", env: { ...process.env, ...env } });
+  if (view.status !== 0) throw new Error(`${name}: orchestrator_fixture exited ${view.status}: ${view.stderr}`);
+  const printed = JSON.parse(view.stdout);
+  for (const [held, what] of scenario.checks(printed)) {
+    if (!held) throw new Error(`${name}: expected ${what}: ${view.stdout}`);
+  }
+  if (view.stdout.includes(tmp.replaceAll("\\", "/")) || view.stdout.includes(tmp)) {
+    throw new Error(`${name}: the meeting names its temporary folder`);
+  }
+  writeFixture(name, "meeting", view.stdout);
+  rmSync(tmp, { recursive: true, force: true });
+  console.log(`fixture ${name}: exit ${view.status}`);
+}
+
 // D-181: every fixture file and its kind, for the loader the specs and the
 // Vitest cases share (`e2e/fixture-index.ts`).
 writeFileSync(join(outDir, "index.json"), JSON.stringify({ files: fixtureKinds }, null, 2) + "\n");

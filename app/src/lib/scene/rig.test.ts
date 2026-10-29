@@ -106,7 +106,7 @@ describe("rig", () => {
     holder.innerHTML = ticketMarkup(7, false) + deskTagMarkup(3, null) + ticketMarkup(null, false);
     expect(textNodes(holder)).toEqual(["7", deskLetter(3)]);
     // No chest mark on a back turned to the author.
-    const marks = { ticket: 2, approval: false, deskBadge: null, hand: false, ring: false, question: false };
+    const marks = { ticket: 2, approval: false, deskBadge: null, hand: false, ring: false, question: false, received: false };
     expect(ticketOn(marks, "standing", "back", false)).toBe("");
     expect(ticketOn(marks, "seated-working", "back", false)).toBe("");
     expect(ticketOn(marks, "standing", "front", false)).toContain(">2<");

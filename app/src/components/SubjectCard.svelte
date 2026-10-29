@@ -8,6 +8,7 @@
   import { isLive, subjectTarget, type RegistryStore } from "../lib/registry.svelte";
   import { SUBJECT_STATUS_TEXT } from "../lib/registry-text";
   import SessionRow from "./SessionRow.svelte";
+  import { meeting, subjectKey } from "../lib/meeting.svelte";
 
   interface Props {
     subject: SubjectView;
@@ -72,6 +73,9 @@
   {/if}
 
   <div class="actions">
+    {#if subject.status === "to_resume"}
+      <button class="tool" data-testid="subject-receive" onclick={() => void meeting.receive(subjectKey(subject.id))}>Receive</button>
+    {/if}
     <button class="tool" data-testid="subject-rename" aria-pressed={mode === "rename"} onclick={() => open("rename")}
       >Rename</button
     >

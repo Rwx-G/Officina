@@ -35,6 +35,8 @@
           data-testid="recent-entry"
           data-kind={entry.event.kind}
           data-state={entry.event.kind === "run" ? entry.event.state : undefined}
+          data-run-id={entry.event.kind === "run" ? entry.event.started.run_id : undefined}
+          tabindex="-1"
           class={row.tone}
         >
           <td>{clock(entry.ts, nowMs)}</td>

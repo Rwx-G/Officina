@@ -20,6 +20,7 @@
   import * as memory from "../../lib/scene/memory";
   import { Mover } from "../../lib/scene/mover";
   import { DEFAULT_WALKING } from "../../lib/view.svelte";
+  import { meeting } from "../../lib/meeting.svelte";
   import SessionFile, { type FileForm } from "../SessionFile.svelte";
   import SceneFloor from "./SceneFloor.svelte";
   import SceneHalos from "./SceneHalos.svelte";
@@ -54,7 +55,9 @@
 
   // `load` reads storage once, before the first layout, and returns the
   // committed memory after that.
-  let layout = $derived(layoutScene({ board }, memory.load(board)));
+  // The open meeting's figure is marked received wherever it stands
+  // (D-566): opening and closing a meeting each change the scene once.
+  let layout = $derived(layoutScene({ board, received: meeting.view?.key ?? meeting.key }, memory.load(board)));
   $effect(() => memory.commit(layout.memory));
 
   let cards = $derived(new Map(liveCards(board).map((card) => [card.key, card])));
@@ -150,7 +153,13 @@
     }
   });
 
+  // One panel at a time (D-111): a meeting takes the file's slot.
+  $effect(() => {
+    if (meeting.key !== null) open = null;
+  });
+
   function activate(target: Target): void {
+    meeting.close(false);
     open = target.kind === "group" ? { kind: "list", target: target.id, focusKey: null } : { kind: "file", key: target.keys[0]!, from: null };
   }
 

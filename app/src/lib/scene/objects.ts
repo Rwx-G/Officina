@@ -358,7 +358,7 @@ export class SceneObjects {
         write(rig, "ticket:opacity", figure.badge, "opacity", f.opacity < 1 ? String(f.opacity) : null);
       }
       const floor = p(f.gx, f.gy);
-      const under = underMarkup(f.marks.ring, Math.round(floor.x - at.x), Math.round(floor.y - at.y));
+      const under = underMarkup(f.marks.ring, f.marks.received, Math.round(floor.x - at.x), Math.round(floor.y - at.y));
       if (rig.cache.get("under") !== under) {
         rig.cache.set("under", under);
         rig.under.innerHTML = under;

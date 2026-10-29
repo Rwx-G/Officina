@@ -157,6 +157,11 @@ const PAIRS: [Side, Side, number][] = [
   ["--figure-tunic", "--scene-rug-2", 3],
   ["--figure-legs", "--scene-rug-2", 3],
   ["--figure-tunic", "--scene-sofa-t", 3],
+  // The received ring (D-566) on each floor a figure stands on.
+  ["--color-working", "--scene-room", 3],
+  ["--color-working", "--scene-alert-floor", 3],
+  ["--color-working", "--scene-rug", 3],
+  ["--color-working", "--scene-rug-2", 3],
 ];
 
 /** Hair against the rim the head is outlined with, on each floor a figure

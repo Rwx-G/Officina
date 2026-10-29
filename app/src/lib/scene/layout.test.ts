@@ -629,6 +629,45 @@ describe("layoutScene: poses and marks", () => {
   });
 });
 
+describe("layoutScene: the received marker", () => {
+  // D-566: the open meeting's figure is marked wherever it is placed.
+  it("the received figure is marked wherever it stands", () => {
+    const zones: Zone[] = ["office", "decision", "alert", "lounge", "reception", "unknown"];
+    const cards = zones.map((zone, i) => card(`c-${zone}`, zone, { started: i, project: zone === "unknown" ? "beta" : "alpha" }));
+    const b = board(cards);
+    for (const c of cards) {
+      const l = layoutScene({ board: b, received: c.key }, emptyMemory(b.floor));
+      const marked = l.employees.filter((e) => e.marks.received).map((e) => e.key);
+      expect(marked, c.key).toEqual([c.key]);
+      expect(employee(l, c.key).spot, c.key).not.toBeNull();
+    }
+  });
+
+  it("a received key in a group marks the group's name only", () => {
+    const zone: SharedZone = "decision";
+    const cards = Array.from({ length: CAPACITY[zone] + 1 }, (_, i) => card(`q${i}`, zone, { started: i, project: `p${i}` }));
+    const b = board(cards);
+    const inGroup = cards.at(-1)!.key;
+    const l = layoutScene({ board: b, received: inGroup }, emptyMemory(b.floor));
+    expect(employee(l, inGroup)).toMatchObject({ spot: null, group: zone });
+    expect(l.employees.some((e) => e.marks.received)).toBe(false);
+    const group = l.targets.find((t) => t.id === `group:${zone}`)!;
+    expect(group.label.endsWith(", received")).toBe(true);
+    const plain = layoutScene({ board: b, received: null }, emptyMemory(b.floor));
+    expect(plain.targets.find((t) => t.id === `group:${zone}`)!.label).toBe(group.label.slice(0, -", received".length));
+  });
+
+  it("no received key, no marker", () => {
+    for (const { name, board: b } of fixtureBoards()) {
+      const l = lay(b);
+      expect(l.employees.some((e) => e.marks.received), name).toBe(false);
+      expect(l.targets.some((t) => t.label.endsWith(", received")), name).toBe(false);
+      // An unknown key marks nobody and changes nothing else.
+      expect(layoutScene({ board: b, received: "no-such-card" }, emptyMemory(b.floor)), name).toEqual(l);
+    }
+  });
+});
+
 describe("layoutScene: targets", () => {
   it("targets follow the tab order", () => {
     const cards = [

@@ -14,7 +14,7 @@ export const FIXTURE_DIR = import.meta.url.startsWith("file:")
   ? join(dirname(fileURLToPath(import.meta.url)), ".fixtures")
   : join(process.cwd(), "e2e", ".fixtures");
 
-export type FixtureKind = "board" | "relay" | "registry" | "orchestrator" | "card";
+export type FixtureKind = "board" | "relay" | "registry" | "orchestrator" | "card" | "meeting";
 
 export interface FixtureIndex {
   files: Record<string, FixtureKind>;

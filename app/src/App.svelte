@@ -20,6 +20,9 @@
   import RelayView from "./components/RelayView.svelte";
   import SubjectsView from "./components/SubjectsView.svelte";
   import Scene from "./components/scene/Scene.svelte";
+  import MeetingPanel from "./components/MeetingPanel.svelte";
+  import { meeting } from "./lib/meeting.svelte";
+  import type { MeetingRun } from "./lib/generated/MeetingRun";
 
   const store = new BoardStore();
   const relay = new RelayStore();
@@ -27,6 +30,24 @@
   const orchestrator = new OrchestratorStore();
   const windowView = new ViewStore();
   const DONE_VISIBLE = 5;
+
+  // A meeting is held in the Sessions view (AD-93): Receive from the
+  // Subjects view shows it there.
+  meeting.onOpen = () => (windowView.view = "sessions");
+  // The open meeting asks again when the board shows its card changed.
+  $effect(() => {
+    if (store.board) meeting.boardChanged(store.board);
+  });
+
+  /** A failed run's journal entry in the Relay view (AD-93): focused when
+   *  the Relay view's recent entries still list it. */
+  async function showJournal(run: MeetingRun): Promise<void> {
+    windowView.view = "relay";
+    await tick();
+    const row = run.run_id ? document.querySelector<HTMLElement>(`[data-run-id="${CSS.escape(run.run_id)}"]`) : null;
+    row?.scrollIntoView({ block: "center" });
+    row?.focus();
+  }
 
   /** To resume or Done from the header (D-541): Board mode on that column,
    *  its heading focused and brought into view. */
@@ -221,6 +242,9 @@
         />
       </main>
     {/if}
+  {/if}
+  {#if meeting.key !== null && view === "sessions"}
+    <MeetingPanel {board} {store} onJournal={(run) => void showJournal(run)} />
   {/if}
   <DiscardTarget />
   <SettleNote {store} onUndone={undone} />
