@@ -13,7 +13,8 @@
 //! message names it, `guarded by <feature>`.
 //!
 //! Sections: `card_launch` (story 5.7), `review_excerpt` (story 5.13),
-//! `auto_approved_run` (story 5.14); later stories add theirs.
+//! `auto_approved_run` (story 5.14), `mcp_tool` and `mcp_output` (story 5.15);
+//! later stories add theirs.
 
 mod common;
 
@@ -48,7 +49,13 @@ const CORE_LIB: &str = include_str!("../../officina-core/src/lib.rs");
 
 /// The entry points the battery covers, one section each (D-147), in the
 /// order the vector set's keys read back.
-const SECTIONS: &[&str] = &["auto_approved_run", "card_launch", "review_excerpt"];
+const SECTIONS: &[&str] = &[
+    "auto_approved_run",
+    "card_launch",
+    "mcp_output",
+    "mcp_tool",
+    "review_excerpt",
+];
 
 /// The attack families of PRD section 7's Gesture and Auto fail-closed
 /// rows the sections hold, declared here once (D-147), and what a case of
@@ -68,6 +75,7 @@ const FAMILIES: &[&str] = &[
     "stale_card",
     "edited_snapshot",
     "launch_conditions",
+    "markup",
     "control",
 ];
 
@@ -746,15 +754,21 @@ fn run_auto_approved_run(case: &Value) -> Result<(), String> {
 #[cfg(windows)]
 #[test]
 fn auto_approved_run_cases() {
+    run_section("auto_approved_run", run_auto_approved_run);
+}
+
+/// Runs `work` on each case of `section`, a few at once, and names every
+/// failure.
+fn run_section(section: &str, work: fn(&Value) -> Result<(), String>) {
     let set = load();
-    let cases = cases(&set, "auto_approved_run");
+    let cases = cases(&set, section);
     assert!(!cases.is_empty());
     let mut failures = Vec::new();
     for chunk in cases.chunks(PARALLEL_CASES) {
         let results: Vec<(String, Result<(), String>)> = std::thread::scope(|scope| {
             let runs: Vec<_> = chunk
                 .iter()
-                .map(|case| scope.spawn(move || run_auto_approved_run(case)))
+                .map(|case| scope.spawn(move || work(case)))
                 .collect();
             chunk
                 .iter()
@@ -775,6 +789,148 @@ fn auto_approved_run_cases() {
         );
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// `value` with each `mcp_tool` stand-in replaced, from its bound.
+fn with_mcp_bounds(value: &Value) -> Value {
+    use officina_core::mcp::MAX_INPUT_BYTES;
+    use officina_core::orders::proposal::{PROPOSAL_TEXT_MAX_CHARS, PROPOSAL_VALUE_MAX_CHARS};
+    match value {
+        Value::String(text) => match text.as_str() {
+            "<over PROPOSAL_VALUE_MAX_CHARS>" => {
+                Value::from("a".repeat(PROPOSAL_VALUE_MAX_CHARS + 1))
+            }
+            "<over PROPOSAL_TEXT_MAX_CHARS>" => {
+                Value::from("a".repeat(PROPOSAL_TEXT_MAX_CHARS + 1))
+            }
+            "<over MAX_INPUT_BYTES>" => Value::from("a".repeat(MAX_INPUT_BYTES)),
+            _ => value.clone(),
+        },
+        Value::Array(items) => Value::Array(items.iter().map(with_mcp_bounds).collect()),
+        Value::Object(map) => Value::Object(
+            map.iter()
+                .map(|(key, value)| (key.clone(), with_mcp_bounds(value)))
+                .collect(),
+        ),
+        other => other.clone(),
+    }
+}
+
+/// What the fake claude ran in `home`: only `claude agents`, never a
+/// `--bg` (AD-90, P-5).
+fn only_agents_ran(home: &common::mcp::McpHome) -> Result<(), String> {
+    for call in common::fake_claude_calls(&home.env.fake_log()) {
+        let argv = common::logged_argv(&call);
+        if argv.iter().any(|a| a == "--bg") || argv.first().map(String::as_str) != Some("agents") {
+            return Err(format!("the server ran claude {argv:?}"));
+        }
+    }
+    Ok(())
+}
+
+/// One `mcp_tool` case (story 5.15 AC 8, D-147): the hostile input given
+/// to a proposal tool is refused by its bounds, or written as a file
+/// holding it as given and nothing else; nothing but `claude agents`
+/// runs, no `--bg`.
+fn run_mcp_tool(case: &Value) -> Result<(), String> {
+    use common::mcp::{McpHome, call, output, response};
+    use officina_core::mcp::McpTool;
+    let home = McpHome::new();
+    let tool = McpTool::from_code(case["tool"].as_str().unwrap()).ok_or("unknown tool")?;
+    let arguments = with_mcp_bounds(&case["arguments"]);
+    let (_, responses) = home.session(&[
+        call(2, tool, arguments.clone()),
+        call(3, McpTool::Board, serde_json::json!({})),
+    ]);
+    let answer = response(&responses, 2);
+    let out = output(answer);
+    let files: Vec<PathBuf> = std::fs::read_dir(home.proposals_dir())
+        .map(|entries| entries.flatten().map(|e| e.path()).collect())
+        .unwrap_or_default();
+    match &case["expect"] {
+        Value::String(written) if written == "written" => {
+            if answer["result"]["isError"] != false {
+                return Err(format!("refused: {out}"));
+            }
+            let [file] = files.as_slice() else {
+                return Err(format!("{} files written", files.len()));
+            };
+            let held: Value = serde_json::from_slice(&std::fs::read(file).unwrap())
+                .map_err(|e| format!("the file does not parse: {e}"))?;
+            for (key, given) in arguments.as_object().unwrap() {
+                if held[key.as_str()] != *given {
+                    return Err(format!(
+                        "{key}: wrote {}, given {given}",
+                        held[key.as_str()]
+                    ));
+                }
+            }
+        }
+        expect => {
+            if answer["result"]["isError"] != true || out["refused"] != expect["refused"] {
+                return Err(format!("expected {expect}, got {out}"));
+            }
+            if !files.is_empty() {
+                return Err(format!("{} files written", files.len()));
+            }
+        }
+    }
+    only_agents_ran(&home)
+}
+
+/// Story 5.15 AC 8 (AD-95, D-147): every case of `mcp_tool`.
+#[test]
+fn mcp_tool_cases() {
+    run_section("mcp_tool", run_mcp_tool);
+}
+
+/// One `mcp_output` case (story 5.15 AC 8, D-147, D-153, review F8): the
+/// case's marker seeded into one source of session text, every tool
+/// called; the marker reaches some output, and every occurrence of it in
+/// every output sits inside a wrapper.
+fn run_mcp_output(case: &Value) -> Result<(), String> {
+    use common::mcp::{McpHome, Sources, every_tool, marker_places, output};
+    let marker = case["marker"].as_str().unwrap();
+    let source = case["source"].as_str().unwrap();
+    let home = McpHome::new();
+    let sources = Sources::neutral().with(source, marker);
+    let subject = home.seed(&sources);
+    let (_, responses) = home.session(&every_tool(&sources, subject));
+    let mut wrapped = 0;
+    for answer in responses.iter().filter(|r| r["id"].as_u64() >= Some(100)) {
+        if answer["result"]["isError"] != false {
+            return Err(format!("a tool refused: {answer}"));
+        }
+        let out = output(answer);
+        let (inside, plain) = marker_places(&out, marker);
+        if !plain.is_empty() {
+            return Err(format!(
+                "{} shows the marker unwrapped at {plain:?}",
+                out["tool"]
+            ));
+        }
+        wrapped += inside;
+    }
+    if wrapped == 0 {
+        return Err(format!("the marker of {source} reached no output"));
+    }
+    only_agents_ran(&home)
+}
+
+/// Story 5.15 AC 8 (AD-95, D-147): every case of `mcp_output`, and every
+/// source of `common::mcp::SOURCES` seeded by one.
+#[test]
+fn mcp_output_cases() {
+    let set = load();
+    for source in common::mcp::SOURCES {
+        assert!(
+            cases(&set, "mcp_output")
+                .iter()
+                .any(|case| case["source"] == *source),
+            "source {source} has no mcp_output case"
+        );
+    }
+    run_section("mcp_output", run_mcp_output);
 }
 
 /// D-147: every section has a case, every family a case and every case a
