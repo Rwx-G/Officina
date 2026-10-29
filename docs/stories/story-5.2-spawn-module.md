@@ -1,6 +1,6 @@
 # Story 5.2: One spawn module: vector kinds, environment, golden vectors and the lint
 
-**Status:** Approved
+**Status:** Review
 
 ## Story
 
@@ -31,17 +31,17 @@ so that "no path launches a session except the window's" is a property of the co
 
 ## Tasks
 
-- [ ] `crates/officina-core/src/spawn.rs`: `VectorKind`, `is_launch`, `ClaudeVector`, rules, `EnvRule`, the environment `match`, builders, `BackgroundId`, `SESSION_ENV_REMOVED` (from the session-variables entry), the allow list moved from `registry::triage_call` (AC 1, 2)
-- [ ] `tests/vectors/spawn.json` and `crates/officina-core/tests/spawn_vectors.rs` (AC 3)
-- [ ] `crates/officina-host/src/spawn.rs`: resolution, `ResolvedClaude`, `execute` over `process::run_contained`, job rule, case-insensitive matching, the launch half under `window-authority`; remove `claude.rs`; move `open_attach_console`; switch every caller (AC 2, 4, 6, 7)
-- [ ] The no-feature test and the CI step on both jobs (AC 7)
-- [ ] `crates/officina-host/clippy.toml`, the three `expect` sites, the test modules' own, the WSL probe moved into `relay::run`, `tests/spawn_lint.rs` (AC 8)
-- [ ] `crates/officina-host/src/git.rs`; the tree fingerprint calls it; `tests/git.rs` with its control (AC 9)
-- [ ] Triage vector: `--settings`, the contained rule, golden case and environment test moved (AC 10)
-- [ ] Fake claude JSON log, S7 mirror, `interactive` mode; `tests/fake_claude.rs` (AC 5, 11)
-- [ ] `crates/officina/tests/spawn.rs` (AC 2-7)
-- [ ] Doctor line (AC 12)
-- [ ] Update `CHANGELOG.md` and the README (AC 13)
+- [x] `crates/officina-core/src/spawn.rs`: `VectorKind`, `is_launch`, `ClaudeVector`, rules, `EnvRule`, the environment `match`, builders, `BackgroundId`, `SESSION_ENV_REMOVED` (from the session-variables entry), the allow list moved from `registry::triage_call` (AC 1, 2)
+- [x] `tests/vectors/spawn.json` and `crates/officina-core/tests/spawn_vectors.rs` (AC 3)
+- [x] `crates/officina-host/src/spawn.rs`: resolution, `ResolvedClaude`, `execute` over `process::run_contained`, job rule, case-insensitive matching, the launch half under `window-authority`; remove `claude.rs`; move `open_attach_console`; switch every caller (AC 2, 4, 6, 7)
+- [x] The no-feature test and the CI step on both jobs (AC 7)
+- [x] `crates/officina-host/clippy.toml`, the three `expect` sites, the test modules' own, the WSL probe moved into `relay::run`, `tests/spawn_lint.rs` (AC 8)
+- [x] `crates/officina-host/src/git.rs`; the tree fingerprint calls it; `tests/git.rs` with its control (AC 9)
+- [x] Triage vector: `--settings`, the contained rule, golden case and environment test moved (AC 10)
+- [x] Fake claude JSON log, S7 mirror, `interactive` mode; `tests/fake_claude.rs` (AC 5, 11)
+- [x] `crates/officina/tests/spawn.rs` (AC 2-7)
+- [x] Doctor line (AC 12)
+- [x] Update `CHANGELOG.md` and the README (AC 13)
 
 ## Dev Notes
 
@@ -68,12 +68,51 @@ so that "no path launches a session except the window's" is a property of the co
 
 ### Debug Log
 
+- The first console path ran through `std::process::Command`, which hands the child the caller's standard handles whenever the caller has any: a test's pipes or a debug window's console. A console kind now starts through `CreateProcessW` with no inherited handle and no `STARTF_USESTDHANDLES` (D-648); `a_console_kind_gets_a_console` holds it, with a control on pipes.
+- `CreateProcessW` sits behind `windows-sys`'s `Win32_Security` feature, for a pointer passed null: declared locally, as `CreateJobObjectW` already is, rather than enabling a feature.
+- The quoting test first expected `C:\dir\` quoted; an argument without a space or quote goes unquoted, and its trailing backslash is literal. The round trip through the fake (`a_console_start_keeps_each_argument_whole`) is the proof.
+- A shared support file (`tests/support/git.rs`) is compiled by the host's test crates, which lint `Command::new`, and the CLI's, which do not: it keeps an `allow` with its reason (D-651).
+- `cargo test --test git` is refused by the worktree's command guard (it reads `git` as the command); the `tests/git.rs` cases ran by name filter, and the gate runs them with the whole suite.
+
 ### Completion Notes
 
+Every AC is implemented and proven by the tests named; decisions D-644 to D-652 (epic-5-decisions.md, "Implementation (2026-10-29)"). No new dependency or feature.
+
+- AC 1: core `spawn.rs::tests::{background_id_follows_the_attach_rule, attach_takes_only_a_parsed_background_id, is_launch_names_every_kind}`; the `compile_fail` doctest on `ClaudeVector`. Builders take the config dir on every kind and the home on `triage_call` (D-646).
+- AC 2: core `spawn.rs::tests::{session_kinds_remove_the_session_variables, contained_kinds_take_only_the_allow_list, every_kind_sets_the_exe_path_rule_and_the_config_dir, agent_view_is_removed_on_every_session_kind, the_allow_list_is_triage_calls_unchanged}`; CLI `spawn.rs::{seeded_session_variables_never_reach_the_child, session_kinds_keep_the_authors_officina_settings, contained_kinds_receive_the_allow_list_only}`. `SESSION_ENV_REMOVED` from E84 (D-644); the allow list renamed `CONTAINED_ENV_*` and pinned by digest (D-645).
+- AC 3: `tests/vectors/spawn.json`; core `spawn_vectors.rs::{every_case_matches_its_builder, every_kind_has_a_case}`; CLI `spawn.rs::every_kind_reaches_the_fake_claude_as_its_golden_vector`. The cases are read by `tests/support/spawn_cases.rs`, shared by both crates.
+- AC 4: host `spawn.rs::tests::{creation_flags_follow_the_console_rule, the_job_rule_names_every_kind}`; CLI `spawn.rs::{a_captured_kind_is_capped_and_both_streams_drain, the_deadline_ends_a_captured_kind_and_its_tree, a_console_kind_is_not_waited}`; `watch.rs`, `board.rs`, `triage.rs`, `process.rs` and focus tests green (`board.rs` reads the fake's JSON log and the new import path, D-649). `claude.rs` is gone; collector, doctor, focus, the triage runner and both examples call `spawn`.
+- AC 5: CLI `spawn.rs::a_console_kind_gets_a_console` (with its control) and `a_console_start_keeps_each_argument_whole` (D-648).
+- AC 6: CLI `spawn.rs::a_non_exe_claude_is_refused_for_every_kind`; host `focus.rs::tests::attach_through_a_shim_fails_with_the_copy_hint`; the shim test of `claude.rs` moved as `spawn.rs::tests::a_shim_is_refused_before_anything_starts`, its `cmd.exe` control kept. "Native" is `.exe` or no extension (D-647).
+- AC 7: host `spawn.rs::tests::execute_refuses_every_launch_kind_without_the_feature` (run alone: `cargo test -p officina-host --lib spawn`, the new CI step "The launch half without the authority" on `core-linux` and `windows`); `LaunchError` carries `AUTHORITY_MARKER`; the step "officina holds no authority" green. The triage runner was already under the feature.
+- AC 8: `crates/officina-host/clippy.toml`; host `tests/spawn_lint.rs::{command_new_is_expected_in_three_modules_only, test_modules_are_skipped_and_nothing_else}`; clippy `--all-targets` clean. The WSL probe's command is `relay::run`'s, re-exported by `relay::doctor` (D-651).
+- AC 9: host `git.rs::tests::every_call_carries_the_flags_and_the_lock_variable`; `tests/git.rs::{a_fingerprint_leaves_a_stale_index_unchanged, without_the_lock_variable_the_index_changes}`; `relay_tree.rs` and `relay/tree.rs`'s tests green.
+- AC 10: the `TriageCall` cases of `spawn.json`; CLI `triage.rs::argv_matches_the_golden_vector` reads them; the triage behaviour tests green.
+- AC 11: CLI `fake_claude.rs::{the_log_is_one_json_object_per_call, a_prompt_with_a_newline_stays_one_argument, agent_view_off_refuses_bg_agents_and_logs}`; `interactive` uses `IsTerminal` (D-649).
+- AC 12: host `doctor.rs::tests::a_non_exe_claude_fails_with_every_refused_use` (D-652).
+- AC 13: `CHANGELOG.md` (Changed, Security), README (focus, install, "How Officina starts `claude`"); `readme.rs` green.
+- Gate (2026-10-29): the full local replay of `ci.yml` green. Windows: Rust 1200 passed, 0 failed, 11 ignored; the launch half without the authority, perf, lexer differential, approvals stress, registry crash, the authority markers, registry dependencies and bundled roots green; Vitest 279; Playwright 978 (x3); `cargo deny` ok; `pnpm audit` 1 low, ignored as before. Linux (`rust:1-bookworm`): 1062 passed, 0 failed, 9 ignored, and the spawn step alone.
+
 ## File List
+
+- `.github/workflows/ci.yml`
+- `CHANGELOG.md`, `README.md`
+- `app/src-tauri/src/main.rs`
+- `crates/officina-core/src/{agents,lib,spawn}.rs`, `crates/officina-core/src/registry/triage_call.rs`
+- `crates/officina-core/tests/spawn_vectors.rs`
+- `crates/officina-host/clippy.toml`
+- `crates/officina-host/src/{collector,doctor,focus,git,lib,process,spawn,watch}.rs` (`claude.rs` removed)
+- `crates/officina-host/src/platform/windows.rs`, `src/registry/triage.rs`, `src/relay/{doctor,environment,gate,tree}.rs`, `src/relay/run/{mod,spawn}.rs`
+- `crates/officina-host/examples/{gates_v05,triage_probe}.rs`
+- `crates/officina-host/tests/{git,spawn_lint,registry_crash,registry_store,relay_tree}.rs`
+- `crates/officina/src/bin/officina-fake-claude.rs`
+- `crates/officina/tests/{spawn,fake_claude,board,triage,watch,quota_doctor}.rs`, `crates/officina/tests/common/mod.rs`
+- `tests/support/{git,spawn_cases}.rs`, `tests/vectors/spawn.json`
+- `docs/stories/epic-5-decisions.md`, `docs/stories/sprint-status.yaml`, this file
 
 ## Change Log
 
 - 2026-10-28 created
 - 2026-10-28 reworked after review: `OFFICINA_*` kept by session kinds, dropped by contained ones, agent view removed on every kind but the orchestrator, case-insensitive removals (F1, F4, F13); `is_launch` and a no-feature test run alone (F5); job rule per kind (F10); console handles proven (F11); JSON fake log and S7 mirror (F12, F4); WSL probe moved into `relay::run` (F18); index test with precondition and control (F22); executables only (F28); `BackgroundId` wraps `is_valid_attach_id` (F47)
 - 2026-10-28 reworked against v0.3 and v0.4 as built: contained kinds take the triage call's allow list, which moves into `spawn`, instead of a removal list (D-561); no kind runs a shim, captured kinds run through `process::run_contained` (D-562); the lint's sites and test modules as they stand on `main` (D-562); seams cited by file (D-563); `SESSION_ENV_REMOVED` comes from the session-variables entry (D-560)
+- 2026-10-29 implemented; decisions D-644 to D-652; status Review

@@ -128,7 +128,7 @@ version: v0.5
 stories:
   # 5.1: the agent ran the session-variables entry (E84), E19, gates 2, 3 and 7 (E20, E21, E23) and gate 8 in print mode (E85), all passing; the owner's halves of gates 1 and 4 (E24, E22) run with crates/officina-host/examples/gates_v05.rs (story Completion Notes).
   - {id: "5.1", file: story-5.1-workstation-gates.md, slice: "0", status: in-progress}
-  - {id: "5.2", file: story-5.2-spawn-module.md, slice: A, status: approved}
+  - {id: "5.2", file: story-5.2-spawn-module.md, slice: A, status: review}
   - {id: "5.3", file: story-5.3-untrusted-text.md, slice: A, status: review}
   - {id: "5.4", file: story-5.4-templates-and-catalogue-format.md, slice: A, status: review}
   - {id: "5.5", file: story-5.5-work-order-validation-and-vector.md, slice: A, status: approved}
