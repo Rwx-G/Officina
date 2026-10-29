@@ -147,6 +147,12 @@ export const TARGET_CSS_MIN = 44;
 export const FIGURE_TARGET = { w: 48, h: 48, rise: 56 } as const;
 /** The scale at which a figure's target is `TARGET_CSS_MIN` CSS px. */
 export const MIN_SCALE = TARGET_CSS_MIN / FIGURE_TARGET.w;
+/** How many depth bands layer 3 is split into, each its own `<svg>` and so
+ *  its own paint layer (story 4.16, D-550): a walk repaints the band it walks in
+ *  and reuses the others' recorded paint. Eight took a walk frame's paint
+ *  from about 1.4 to 0.4 ms on the eight-project floor; 24 gained little
+ *  more. */
+export const DEPTH_BANDS = 8;
 /** The largest scale the scene is drawn at, so a figure stays a figure. */
 export const MAX_SCALE = 1.5;
 /** The smallest target side in logical px (D-104). The epsilon absorbs the

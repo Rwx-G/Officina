@@ -5,7 +5,7 @@ import type { Board } from "../generated/Board";
 import { HH, HW } from "./geometry";
 import { layoutScene, type SceneLayout } from "./layout";
 import { emptyMemory, type SceneMemory } from "./memory";
-import { FADE_MS, FRAME_CAP_S, FRAME_GAP_S, GLIDE_MS, HELPER_HOLD_MS, Mover, WALK, restingFrames, type FigureFrame, type MotionEnv } from "./mover";
+import { FADE_MS, FRAME_CAP_S, FRAME_GAP_S, GLIDE_MS, HELPER_HOLD_MS, MIN_FRAME_MS, Mover, WALK, restingFrames, type FigureFrame, type MotionEnv } from "./mover";
 import { CORNER_RADIUS, route } from "./paths";
 import { allSpots, navGraph, restPoint } from "./places";
 import { board, card, fixtureBoards } from "./testing";
@@ -16,10 +16,10 @@ class Frames implements MotionEnv {
   isHidden = false;
   reduced = false;
   #id = 0;
-  #queue = new Map<number, () => void>();
+  #queue = new Map<number, (at: number) => void>();
   #hiddenListeners = new Set<() => void>();
   now = () => this.t;
-  request = (frame: () => void) => {
+  request = (frame: (at: number) => void) => {
     this.#queue.set(++this.#id, frame);
     return this.#id;
   };
@@ -38,7 +38,7 @@ class Frames implements MotionEnv {
     this.t += ms;
     const frames = [...this.#queue.values()];
     this.#queue.clear();
-    for (const frame of frames) frame();
+    for (const frame of frames) frame(this.t);
   }
   hide(): void {
     this.isHidden = true;
@@ -136,8 +136,17 @@ describe("mover", () => {
     let previous = { gx: spotOf(a!, "w").gx, gy: spotOf(a!, "w").gy };
     let fastest = 0;
     const path = walk(frames, mover, "w", () => steps[i++ % steps.length]!);
+    // A vsync sooner than MIN_FRAME_MS after the last drawn frame draws
+    // nothing; the next one advances by the whole time since.
+    let since = 0;
     for (const [n, f] of path.entries()) {
-      const dt = Math.min(steps[n % steps.length]! / 1000, FRAME_CAP_S);
+      since += steps[n % steps.length]!;
+      if (since < MIN_FRAME_MS) {
+        expect([f.gx, f.gy]).toEqual([previous.gx, previous.gy]);
+        continue;
+      }
+      const dt = Math.min(since / 1000, FRAME_CAP_S);
+      since = 0;
       const speed = Math.hypot(f.gx - previous.gx, f.gy - previous.gy) / dt;
       expect(speed).toBeLessThanOrEqual(WALK.vmax + 1e-9);
       fastest = Math.max(fastest, speed);
@@ -145,6 +154,40 @@ describe("mover", () => {
     }
     // It reaches full speed on the way.
     expect(fastest).toBeGreaterThan(WALK.vmax * 0.9);
+  });
+
+  it("a fast display draws one frame per MIN_FRAME_MS, a 60 Hz one every vsync", () => {
+    for (const [vsync, drawnEvery] of [
+      [1000 / 240, 4],
+      [1000 / 144, 2],
+      [1000 / 75, 1],
+      [1000 / 60, 1],
+    ] as const) {
+      const { frames, mover } = setup();
+      const [a, b] = layouts(working, waiting);
+      mover.update(a!, true);
+      mover.update(b!, true);
+      let notified = 0;
+      mover.subscribe(() => notified++);
+      const vsyncs = 48;
+      for (let i = 0; i < vsyncs; i++) frames.step(vsync);
+      expect(notified, `${Math.round(1000 / vsync)} Hz`).toBe(vsyncs / drawnEvery);
+    }
+  });
+
+  it("an object at rest is handed out again unchanged, a walking one anew", () => {
+    const { frames, mover } = setup();
+    const [a, b] = layouts(working, waiting);
+    mover.update(a!, true);
+    const resting = mover.figures();
+    expect(mover.figures().get("w")).toBe(resting.get("w"));
+    mover.update(b!, true);
+    frames.step();
+    const first = mover.figures();
+    frames.step();
+    const second = mover.figures();
+    expect(second.get("w")).not.toBe(first.get("w"));
+    expect(second.get("other")).toBe(first.get("other"));
   });
 
   it("facing changes only past the velocity thresholds", () => {

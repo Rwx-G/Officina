@@ -463,6 +463,14 @@ project uses [Semantic Versioning](https://semver.org/).
 - The README's Privacy section says what reaches the network: the requests
   of the HTTP actions an approved catalogue declares, run with `officina
   run`, and nothing else; it said Officina opened no connection at all.
+- Walking costs a fraction of what it did (v0.4, story 4.16): the scene's
+  furniture and figures are drawn in eight depth bands, so a walk repaints
+  the band it walks in rather than the whole floor, a figure at rest is not
+  redrawn, and the walk draws at most one frame per 13 ms, so a 240 Hz
+  screen draws 60 frames a second during a walk and a 60 Hz one every
+  frame. Profiled in Chromium, a walk's main-thread time per second fell by
+  about four fifths. Walking stays off by default until the release's CPU
+  measurement is run again.
 - `officina doctor` (v0.4) prints `SubagentStart` and `SubagentStop` in the
   hooks block and reports them missing until the block is pasted again: to
   paste again for the scene to show sub-agents. The hook records them with

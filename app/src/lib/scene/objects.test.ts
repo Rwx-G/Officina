@@ -4,6 +4,7 @@ import type { ProjectColor } from "../generated/ProjectColor";
 import { layoutScene, liveCards, type SceneLayout } from "./layout";
 import { emptyMemory, type SceneMemory } from "./memory";
 import { restingFrames, type FigureFrame } from "./mover";
+import { DEPTH_BANDS } from "./geometry";
 import { DEPTH_QUANTUM, DEPTH_WINDOW, SceneObjects } from "./objects";
 import { allSpots } from "./places";
 import { board, card, fixtureBoards } from "./testing";
@@ -56,6 +57,27 @@ describe("objects", () => {
         if (before) expect(Number(before.getAttribute("data-depth")), `${name} ${e.key} after`).toBeLessThanOrEqual(depth + 0.01);
         if (after) expect(Number(after.getAttribute("data-depth")), `${name} ${e.key} before`).toBeGreaterThan(depth);
       }
+    }
+  });
+
+  it("split into depth bands, the layer paints in the order of one root", () => {
+    const order = (roots: Element[]) => roots.flatMap((r) => [...r.children].map((n) => n.getAttribute("data-figure") ?? n.getAttribute("data-depth")));
+    for (const { name, board: b } of fixtureBoards()) {
+      const [first, second] = layouts(b, b);
+      const single = mount();
+      const svgs = Array.from({ length: DEPTH_BANDS }, () => {
+        const svg = document.createElementNS(SVG_NS, "svg");
+        svg.append(document.createElementNS(SVG_NS, "g"));
+        document.body.append(svg);
+        return svg.firstElementChild as SVGGElement;
+      });
+      const banded = new SceneObjects(svgs);
+      for (const layout of [first!, second!]) {
+        for (const objects of [single.objects, banded]) objects.update({ layout, colours: colours(b), snap: 1, figures: restingFrames(layout) });
+      }
+      expect(svgs.every((g) => g.children.length > 0), name).toBe(true);
+      expect(order(svgs), name).toEqual(order([single.root]));
+      expect(banded.figureOrder(), name).toEqual(single.objects.figureOrder());
     }
   });
 

@@ -55,6 +55,15 @@ export const FRAME_CAP_S = 0.1;
 /** A frame later than this, in s, means the window was hidden or stalled:
  *  every walker is placed at once and every fade ends (D-502). */
 export const FRAME_GAP_S = 0.25;
+/** The mover draws at most one frame per this many ms of frame start time
+ *  (story 4.16, D-551): on a display faster than about 77 Hz it lets
+ *  refreshes pass, so a 240 Hz screen draws 60 frames a second and a 144 Hz
+ *  one 72, while a 60 or 75 Hz one draws every refresh. The frames' start
+ *  times are refresh-aligned, so a 75 Hz screen's 13.3 ms never reads as
+ *  less. The step per drawn frame stays under AD-70's 3 px: at `WALK.vmax`
+ *  the fastest screen direction moves about 97 px/s, 1.6 px at 60 frames a
+ *  second and 1.9 at the 50 a 100 Hz screen gets. */
+export const MIN_FRAME_MS = 13;
 /** The walk advances in steps no longer than this, in s. */
 const SUBSTEP_S = 0.05;
 
@@ -62,7 +71,9 @@ const SUBSTEP_S = 0.05;
 export interface MotionEnv {
   /** A monotonic clock, in ms. */
   now(): number;
-  request(frame: () => void): number;
+  /** Calls `frame` at the next frame with its start time on `now()`'s
+   *  clock, which a browser aligns on the display's refresh. */
+  request(frame: (at: number) => void): number;
   cancel(handle: number): void;
   hidden(): boolean;
   /** Calls `listener` when the page becomes hidden; returns the unsubscribe. */
@@ -75,7 +86,7 @@ export interface MotionEnv {
 export function browserEnv(): MotionEnv {
   return {
     now: () => performance.now(),
-    request: (frame) => requestAnimationFrame(() => frame()),
+    request: (frame) => requestAnimationFrame((at) => frame(at)),
     cancel: (handle) => cancelAnimationFrame(handle),
     hidden: () => document.visibilityState === "hidden",
     onHidden: (listener) => {
@@ -206,6 +217,9 @@ interface Walker {
   fade: { t0: number; from: number; to: 0 | 1 } | null;
   /** Gone from the layout's places: it walks out, or fades where it is. */
   leaving: boolean;
+  /** Its frame once at rest, handed out again, the same object, until a
+   *  layout or a settle changes it: `objects.ts` skips a frame it drew. */
+  still: FigureFrame | null;
 }
 
 /** A sub-agent's figure: it never walks, it fades in where it stands and
@@ -215,6 +229,9 @@ interface Standing {
   /** A fade out starts at `t0`, which is in the future during the hold. */
   fade: { t0: number; from: number; to: 0 | 1 } | null;
   leaving: boolean;
+  /** Its frame once its fade has ended, handed out again as a walker's
+   *  `still`. */
+  still: FigureFrame | null;
 }
 
 const SLIDE_MS = WALK.slide * 1000;
@@ -243,6 +260,9 @@ export class Mover {
   #spots = new Map<string, Spot>();
   #handle: number | null = null;
   #last = 0;
+  /** The start time of the last frame drawn: a loop that starts again
+   *  after a rest finds it long past, so its first frame draws. */
+  #lastFrameAt = Number.NEGATIVE_INFINITY;
   #host: Element | null = null;
   #moving = false;
   #transit = "";
@@ -304,6 +324,7 @@ export class Mover {
       this.#columns = layout.columns;
     }
     const now = this.#env.now();
+    for (const w of this.#walkers.values()) w.still = null;
     // Turning walking off sends every walker to its place at once (AD-66).
     if (this.#walking && !walking) this.#settleAll();
     this.#walking = walking;
@@ -341,6 +362,7 @@ export class Mover {
    *  its fade turned back (D-548). */
   #updateHelpers(helpers: readonly Helper[], instant: boolean, now: number): void {
     const next = new Map(helpers.map((h) => [h.key, h]));
+    for (const h of this.#helpers.values()) h.still = null;
     for (const [key, h] of this.#helpers) {
       if (next.has(key) || h.leaving) continue;
       if (instant) {
@@ -353,7 +375,7 @@ export class Mover {
     for (const helper of next.values()) {
       const h = this.#helpers.get(helper.key);
       if (!h) {
-        this.#helpers.set(helper.key, { helper, fade: instant ? null : { t0: now, from: 0, to: 1 }, leaving: false });
+        this.#helpers.set(helper.key, { helper, fade: instant ? null : { t0: now, from: 0, to: 1 }, leaving: false, still: null });
         continue;
       }
       h.helper = helper;
@@ -368,8 +390,24 @@ export class Mover {
   figures(): Map<string, FigureFrame> {
     const now = this.#env.now();
     const out = new Map<string, FigureFrame>();
-    for (const w of this.#walkers.values()) out.set(w.key, this.#frame(w, now));
-    for (const h of this.#helpers.values()) out.set(h.helper.key, helperFrame(h.helper, this.#fadeOf(h.fade, now)));
+    for (const w of this.#walkers.values()) {
+      if (w.still) {
+        out.set(w.key, w.still);
+        continue;
+      }
+      const frame = this.#frame(w, now);
+      if (!this.#busy(w, now)) w.still = frame;
+      out.set(w.key, frame);
+    }
+    for (const h of this.#helpers.values()) {
+      if (h.still) {
+        out.set(h.helper.key, h.still);
+        continue;
+      }
+      const frame = helperFrame(h.helper, this.#fadeOf(h.fade, now));
+      if (!h.fade) h.still = frame;
+      out.set(h.helper.key, frame);
+    }
     return out;
   }
 
@@ -398,6 +436,7 @@ export class Mover {
       sitAt: null,
       fade: null,
       leaving: false,
+      still: null,
     };
     this.#walkers.set(e.key, w);
     return w;
@@ -662,12 +701,14 @@ export class Mover {
         continue;
       }
       w.fade = null;
+      w.still = null;
       if (w.route || w.glide || w.at !== w.goal) this.#place(w, w.goal);
       this.#arrive(w, now, true);
     }
     for (const [key, h] of this.#helpers) {
       if (h.leaving) this.#helpers.delete(key);
-      else h.fade = null;
+      h.fade = null;
+      h.still = null;
     }
     if (this.#handle !== null) this.#env.cancel(this.#handle);
     this.#handle = null;
@@ -705,9 +746,14 @@ export class Mover {
     for (const listener of this.#listeners) listener(figures);
   }
 
-  readonly #tick = (): void => {
-    this.#handle = null;
+  readonly #tick = (at: number): void => {
     const now = this.#env.now();
+    if (at - this.#lastFrameAt < MIN_FRAME_MS) {
+      this.#handle = this.#env.request(this.#tick);
+      return;
+    }
+    this.#lastFrameAt = at;
+    this.#handle = null;
     const dt = (now - this.#last) / 1000;
     this.#last = now;
     if (dt > FRAME_GAP_S) {
@@ -729,6 +775,7 @@ export class Mover {
         if (!h.fade || now - h.fade.t0 < FADE_MS) continue;
         if (h.fade.to === 0) this.#helpers.delete(key);
         else h.fade = null;
+        h.still = null;
       }
     }
     this.#notify();

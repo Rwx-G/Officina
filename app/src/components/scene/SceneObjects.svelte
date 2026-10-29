@@ -6,6 +6,7 @@
   import type { ProjectColor } from "../../lib/generated/ProjectColor";
   import type { SceneLayout } from "../../lib/scene/layout";
   import type { Mover } from "../../lib/scene/mover";
+  import { DEPTH_BANDS } from "../../lib/scene/geometry";
   import { SceneObjects } from "../../lib/scene/objects";
 
   interface Props {
@@ -25,8 +26,8 @@
     walking: boolean;
   }
 
-  function objects(node: SVGGElement, input: Input) {
-    const layer = new SceneObjects(node);
+  function objects(node: HTMLElement, input: Input) {
+    const layer = new SceneObjects([...node.querySelectorAll<SVGGElement>("svg > g")]);
     const apply = (next: Input) => {
       next.mover.update(next.layout, next.walking);
       layer.update({ layout: next.layout, colours: next.colours, snap: next.snap, figures: next.mover.figures() });
@@ -43,14 +44,18 @@
   }
 </script>
 
-<svg
-  class="layer"
-  aria-hidden="true"
-  style:pointer-events="none"
-  width={layout.canvas.w}
-  height={layout.canvas.h}
-  viewBox="0 0 {layout.canvas.w} {layout.canvas.h}"
-  data-layer="objects"
->
-  <g use:objects={{ layout, colours, snap, mover, walking }}></g>
-</svg>
+<!-- One svg per depth band: each is its own paint layer, so a walk repaints
+     only the band the walker is in (story 4.16). -->
+<div class="layer" aria-hidden="true" style:pointer-events="none" data-layer="objects" use:objects={{ layout, colours, snap, mover, walking }}>
+  {#each { length: DEPTH_BANDS } as _, band (band)}
+    <svg class="band" width={layout.canvas.w} height={layout.canvas.h} viewBox="0 0 {layout.canvas.w} {layout.canvas.h}"><g></g></svg>
+  {/each}
+</div>
+
+<style>
+  .band {
+    position: absolute;
+    top: 0;
+    left: 0;
+  }
+</style>

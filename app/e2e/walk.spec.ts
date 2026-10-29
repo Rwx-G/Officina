@@ -7,7 +7,7 @@
 // places come from `layoutScene`, imported, never retyped.
 import { expect, test, type Page } from "@playwright/test";
 import { loadBoard, openWalkingScene, sceneSettled } from "./fixtures";
-import { projector } from "../src/lib/scene/geometry";
+import { DEPTH_BANDS, projector } from "../src/lib/scene/geometry";
 import { layoutScene, type SceneLayout } from "../src/lib/scene/layout";
 import { STORAGE_KEY, emptyMemory, parse, prune, type SceneMemory } from "../src/lib/scene/memory";
 import { GLIDE_MS } from "../src/lib/scene/mover";
@@ -192,6 +192,59 @@ test.describe("walking", () => {
     const [, after] = layouts(board, next);
     const at = after!.employees.find((e) => e.key === key)!.at!;
     expect([previous.x, previous.y]).toEqual([snapped(at.x, scale), snapped(at.y, scale)]);
+  });
+
+  // Story 4.16 (D-550): layer 3 is split into depth bands, each its own
+  // <svg>, so a walk dirties the band it walks in and Chromium keeps the
+  // others' recorded paint. Every write of a walk frame is inside the
+  // walker's node, or moves figure nodes among their neighbours (the depth
+  // sort); a frame touches one band, two when the walker crosses from one
+  // to the next.
+  test("a walk writes only the walker, in one depth band at a time", async ({ page }) => {
+    const { board, next, key } = waitingCase();
+    await openPaused(page, board);
+    const bands = await scene(page).evaluate((root) =>
+      Array.from(root.querySelectorAll('[data-layer="objects"] > svg'), (svg) => svg.querySelectorAll("[data-static]").length),
+    );
+    expect(bands).toHaveLength(DEPTH_BANDS);
+    const statics = bands.reduce((a, b) => a + b, 0);
+    for (const n of bands) expect(n).toBeLessThanOrEqual(Math.ceil(statics / DEPTH_BANDS));
+    await push(page, next);
+    await scene(page).evaluate((root, k) => {
+      const out: { band: number; inWalker: boolean; figuresMoved: boolean; layer: string | null }[] = [];
+      const svgs = Array.from(root.querySelectorAll('[data-layer="objects"] > svg'));
+      const walker = root.querySelector(`[data-figure="${k}"]`)!;
+      new MutationObserver((list) => {
+        for (const r of list) {
+          const target = r.target as Element;
+          out.push({
+            band: svgs.findIndex((svg) => svg.contains(target)),
+            inWalker: walker.contains(target),
+            figuresMoved: r.type === "childList" && [...Array.from(r.addedNodes), ...Array.from(r.removedNodes)].every((n) => n instanceof Element && n.hasAttribute("data-figure")),
+            layer: target.closest("[data-layer]")?.getAttribute("data-layer") ?? null,
+          });
+        }
+      }).observe(root, { subtree: true, childList: true, attributes: true });
+      (window as unknown as { __bandRecords: typeof out }).__bandRecords = out;
+    }, key);
+    const take = () =>
+      page.evaluate(() => {
+        const w = window as unknown as { __bandRecords: { band: number; inWalker: boolean; figuresMoved: boolean; layer: string | null }[] };
+        return w.__bandRecords.splice(0);
+      });
+    let frames = 0;
+    let oneBand = 0;
+    for (let i = 0; i < MAX_FRAMES && (await scene(page).getAttribute("data-moving")) !== "0"; i++) {
+      await page.clock.runFor(FRAME_MS);
+      const records = (await take()).filter((r) => r.layer === "objects");
+      for (const r of records) expect(r.inWalker || r.figuresMoved, `frame ${i}: a write outside the walker`).toBe(true);
+      const touched = new Set(records.map((r) => r.band));
+      expect(touched.size, `frame ${i}`).toBeLessThanOrEqual(2);
+      frames++;
+      if (touched.size <= 1) oneBand++;
+    }
+    expect(frames).toBeGreaterThan(CHECKED_FRAMES);
+    expect(oneBand / frames).toBeGreaterThan(0.9);
   });
 
   test("no CSS animation runs inside a walking figure", async ({ page }) => {

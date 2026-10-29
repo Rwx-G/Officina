@@ -7,8 +7,10 @@
 // snapped to whole device pixels; a moving figure changes place among the
 // statics with hysteresis, so walking along a desk never flickers in front
 // of and behind it. Every attribute is written only when its cached value
-// changes, so a settled scene receives no write. Ported from the
-// prototype v2's `renderActor`, `reorder`, `staticIndexFor` and
+// changes, so a settled scene receives no write. The depth order is split
+// into consecutive bands (`geometry.ts` `DEPTH_BANDS`), one `<svg>` each,
+// so a walk dirties one band's paint, never the whole layer's (story 4.16).
+// Ported from the prototype v2's `renderActor`, `reorder`, `staticIndexFor` and
 // `updateSnap`.
 import type { ProjectColor } from "../generated/ProjectColor";
 import { projector } from "./geometry";
@@ -55,6 +57,9 @@ interface Figure {
    *  `-1` before its first sort. */
   si: number;
   dq: number;
+  /** The frame object last drawn: the mover hands the same one again
+   *  while the figure rests, and it is not drawn twice. */
+  drawn: FigureFrame | null;
 }
 
 interface DeskParts {
@@ -91,7 +96,9 @@ function staticsKey(columns: number, uses: readonly (OfficeUse | undefined)[]): 
 }
 
 export class SceneObjects {
-  readonly #root: SVGGElement;
+  /** One root per depth band, in paint order; each is its own paint
+   *  layer, so a walk repaints only the band it walks in. */
+  readonly #roots: SVGGElement[];
   #statics: StaticNode[] = [];
   #staticsKey: string | null = null;
   #desks = new Map<string, DeskParts>();
@@ -110,13 +117,21 @@ export class SceneObjects {
   #colours: ReadonlyMap<string, ProjectColor | null> = new Map();
   #snap = 1;
 
-  constructor(root: SVGGElement) {
-    this.#root = root;
+  constructor(roots: SVGGElement | readonly SVGGElement[]) {
+    this.#roots = Array.isArray(roots) ? [...(roots as readonly SVGGElement[])] : [roots as SVGGElement];
+  }
+
+  get #doc(): Document {
+    return this.#roots[0]!.ownerDocument;
+  }
+
+  #all(selector: string): Element[] {
+    return this.#roots.flatMap((root) => [...root.querySelectorAll(selector)]);
   }
 
   /** The figure keys, in the layer's order: for tests and the e2e. */
   figureOrder(): string[] {
-    return [...this.#root.querySelectorAll("[data-figure]")].map((el) => el.getAttribute("data-figure")!);
+    return this.#all("[data-figure]").map((el) => el.getAttribute("data-figure")!);
   }
 
   /** One frame of the mover: the figures only, on the last layout. */
@@ -129,6 +144,8 @@ export class SceneObjects {
     this.#columns = layout.columns;
     this.#colours = colours;
     this.#snap = snap;
+    // A new layout, scale or colour can change how an unchanged frame draws.
+    for (const figure of this.#figures.values()) figure.drawn = null;
     const uses = officeUses(layout);
     const key = staticsKey(layout.columns, uses);
     if (key !== this.#staticsKey) {
@@ -148,7 +165,7 @@ export class SceneObjects {
   }
 
   destroy(): void {
-    this.#root.replaceChildren();
+    for (const root of this.#roots) root.replaceChildren();
     this.#figures.clear();
     this.#desks.clear();
     this.#statics = [];
@@ -157,7 +174,7 @@ export class SceneObjects {
 
   #rebuildStatics(statics: Static[], uses: readonly (OfficeUse | undefined)[]): void {
     for (const { node } of this.#statics) node.remove();
-    const holder = this.#root.ownerDocument.createElementNS(SVG_NS, "g");
+    const holder = this.#doc.createElementNS(SVG_NS, "g");
     holder.innerHTML = statics
       .map((s) => {
         const desk = s.desk ? ` data-desk="${s.desk.slot}:${s.desk.index}" data-desk-part="${s.desk.part}"` : "";
@@ -167,7 +184,8 @@ export class SceneObjects {
       .join("");
     const nodes = [...holder.children];
     this.#statics = nodes.map((node, i) => ({ node, depth: statics[i]!.depth }));
-    this.#root.append(...nodes);
+    const bands = this.#roots.length;
+    nodes.forEach((node, i) => this.#roots[Math.floor((i * bands) / nodes.length)]!.append(node));
     this.#desks.clear();
     this.#deskColours = Array.from(uses, (use) => (use?.kind === "office" ? use.colour : null));
     for (const node of nodes) {
@@ -185,16 +203,16 @@ export class SceneObjects {
       parts.slot = Number(id.split(":")[0]);
       this.#desks.set(id, parts);
     }
-    this.#decisionTops = [...this.#root.querySelectorAll('[data-partition="decision"] [data-top]')];
+    this.#decisionTops = this.#all('[data-partition="decision"] [data-top]');
     this.#queueOn = null;
-    const parts = (part: keyof typeof ALERT_PAINTS, selector: string) => [...this.#root.querySelectorAll(selector)].map((node) => ({ part, node }));
+    const parts = (part: keyof typeof ALERT_PAINTS, selector: string) => this.#all(selector).map((node) => ({ part, node }));
     this.#alertParts = [
       ...parts("lamp", "[data-beacon-lamp]"),
       ...parts("panel", "[data-status-panel]"),
       ...parts("mark", "[data-status-mark]"),
       ...parts("partition", '[data-partition="alert"] [data-top]'),
     ];
-    this.#beams = [...this.#root.querySelectorAll("[data-beacon-beam]")];
+    this.#beams = this.#all("[data-beacon-beam]");
     this.#alertOn = null;
   }
 
@@ -279,13 +297,15 @@ export class SceneObjects {
         figure = undefined;
       }
       if (!figure) {
-        const rig = createRig(this.#root.ownerDocument, { look: lookOf(f.key), colour, cap: !f.helper, scale: f.helper ? SUBAGENT_SCALE : 1 });
+        const rig = createRig(this.#doc, { look: lookOf(f.key), colour, cap: !f.helper, scale: f.helper ? SUBAGENT_SCALE : 1 });
         rig.node.setAttribute("data-figure", f.key);
         if (f.helper) rig.node.setAttribute("data-helper", "");
         rig.node.setAttribute("aria-hidden", "true");
-        figure = { rig, colour, token: this.#created++, depth: 0, moving: false, si: -1, dq: 0 };
+        figure = { rig, colour, token: this.#created++, depth: 0, moving: false, si: -1, dq: 0, drawn: null };
         this.#figures.set(f.key, figure);
       }
+      if (figure.drawn === f) continue;
+      figure.drawn = f;
       figure.depth = f.gx + f.gy + DEPTH_EPSILON;
       figure.moving = f.moving;
       const { rig } = figure;
@@ -348,7 +368,8 @@ export class SceneObjects {
       const next = list[i + 1];
       const ref = next && next.si === figure.si ? next.rig.node : (this.#statics[figure.si]?.node ?? null);
       const node = figure.rig.node;
-      if (node.parentNode !== this.#root || node.nextSibling !== ref) this.#root.insertBefore(node, ref);
+      const parent = ref?.parentNode ?? this.#roots[this.#roots.length - 1]!;
+      if (node.parentNode !== parent || node.nextSibling !== ref) parent.insertBefore(node, ref);
     }
   }
 }
