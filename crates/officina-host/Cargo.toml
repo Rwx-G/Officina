@@ -108,6 +108,14 @@ required-features = ["window-authority"]
 name = "triage_probe"
 required-features = ["window-authority"]
 
+# The owner's halves of the v0.5 workstation gates (story 5.1: gates 1, 4
+# and 8), run by hand from his own console; never by a test, never part of
+# a shipped binary. Gate 8 approves a scratch catalogue through the
+# authority, hence the feature.
+[[example]]
+name = "gates_v05"
+required-features = ["window-authority"]
+
 [target."cfg(windows)".dependencies]
 windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_System_Diagnostics_ToolHelp", "Win32_System_Threading", "Win32_System_JobObjects", "Win32_System_SystemInformation", "Win32_Security_Credentials", "Win32_System_Registry", "Win32_System_Environment", "Win32_Storage_FileSystem"] }
 
