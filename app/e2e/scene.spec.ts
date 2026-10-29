@@ -8,7 +8,7 @@
 // from `layoutScene`, imported, never retyped.
 import { existsSync } from "node:fs";
 import { expect, test, type Page } from "@playwright/test";
-import { SCREENSHOT_MAX_DIFF_RATIO, calls, loadBoard, loadRelay, openScene, sceneSettled, transitionsDone } from "./fixtures";
+import { SCREENSHOT_MAX_DIFF_RATIO, calls, loadBoard, loadRelay, openScene, openWalkingScene, sceneSettled, transitionsDone } from "./fixtures";
 import { fixturesOf } from "./fixture-index";
 import { beaconPair } from "../src/lib/alert";
 import { HALO_BREATHING_MS, HALO_CYCLE_MS } from "../src/lib/halo";
@@ -584,7 +584,7 @@ test.describe("acting from the scene", () => {
   // place, and the walking figure takes no click.
   test("a walking figure's target is at its destination from the first frame", async ({ page }) => {
     const board = loadBoard("scene-c");
-    await openScene(page, board);
+    await openWalkingScene(page, board);
     await page.clock.pauseAt(board.generated_at_ms + 60_000);
     const walker = liveCards(board).find((c) => c.scene?.zone === "lounge")!;
     const next = startsWorking(board, walker.key);

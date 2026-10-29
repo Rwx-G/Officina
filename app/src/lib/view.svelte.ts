@@ -28,9 +28,10 @@ export type Mode = Base | "focus";
 /** Board until the owner has chosen Scene for ten working days (D-481). */
 export const DEFAULT_BASE: Base = "board";
 
-/** Figures walk to their places (D-469); story 4.14's AD-71 walking run
- *  turns this off if walking costs more than FR-9 allows (D-480, D-515). */
-export const DEFAULT_WALKING = true;
+/** Figures glide to their places until the author turns walking on: story
+ *  4.14's AD-71 walking run measured walking over FR-9's 1 % of the
+ *  machine (research notes E82; D-480, D-515). */
+export const DEFAULT_WALKING = false;
 
 /** Focus is off at start until the author turns it on (D-113). */
 export const DEFAULT_FOCUS = false;

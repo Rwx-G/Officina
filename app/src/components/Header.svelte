@@ -2,7 +2,7 @@
   import type { BoardStore } from "../lib/board.svelte";
   import type { RegistryStore } from "../lib/registry.svelte";
   import type { RelayStore } from "../lib/relay.svelte";
-  import type { Base, Mode, WindowView } from "../lib/view.svelte";
+  import { DEFAULT_WALKING, type Base, type Mode, type WindowView } from "../lib/view.svelte";
   import { RELAY_TOGGLE_TEXT } from "../lib/relay-text";
   import EndedCounts, { type EndedColumn } from "./EndedCounts.svelte";
   import { fadeMotion } from "../lib/motion";
@@ -50,7 +50,7 @@
     theme = "auto",
     resolvedTheme = "light",
     onTheme,
-    walking = true,
+    walking = DEFAULT_WALKING,
     onWalking,
     onEnded,
   }: Props = $props();

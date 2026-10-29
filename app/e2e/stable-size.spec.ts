@@ -69,7 +69,7 @@ const CASES: ToggleCase[] = [
   { name: "theme switch", selector: '[data-testid="theme-switch"]', scene: "board" },
   { name: "theme switch on one line", selector: '[data-testid="theme-switch"]', scene: "sceneMode" },
   // The Walking toggle (D-469, D-517): a fixed control in every mode.
-  { name: "walking toggle", selector: '[data-testid="walking-toggle"]', scene: "sceneMode", pressed: true },
+  { name: "walking toggle", selector: '[data-testid="walking-toggle"]', scene: "sceneMode" },
   // To resume and Done in the header (D-541): a count that changes moves
   // nothing beside it.
   {

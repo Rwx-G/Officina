@@ -2,7 +2,7 @@
 // the view switch's names, the mode switch, `m`, the stored mode and its
 // defaults, and the banners above the sessions area.
 import { expect, test, type Page } from "@playwright/test";
-import { calls, loadBoard, loadRelay, openBoard, openScene, sceneSettled, transitionsDone } from "./fixtures";
+import { calls, loadBoard, loadRelay, openBoard, openScene, openWalkingScene, sceneSettled, transitionsDone } from "./fixtures";
 import { DEFAULT_WALKING, VIEW_STORAGE_KEY, defaultViewState, readViewState, serialiseViewState } from "../src/lib/view.svelte";
 import { FOCUS_REPEAT_GUARD_MS } from "../src/lib/board.svelte";
 import type { Board } from "../src/lib/generated/Board";
@@ -178,14 +178,20 @@ test.describe("modes", () => {
     await sceneSettled(page);
   });
 
-  // Walking (story 4.10; AD-66 as amended, D-469, D-517).
-  test("walking is on by default", async ({ page }) => {
-    expect(DEFAULT_WALKING).toBe(true);
+  // Walking (story 4.10; AD-66 as amended, D-469, D-517): off by default
+  // since the AD-71 walking run measured it over FR-9 (E82; D-480, D-515);
+  // the toggle turns it on and the choice is kept.
+  test("walking is off by default", async ({ page }) => {
+    expect(DEFAULT_WALKING).toBe(false);
     await openScene(page, loadBoard("scene-c"));
     const toggle = page.getByRole("button", { name: "Walking" });
     await expect(toggle).toBeVisible();
-    await expect(toggle).toHaveAttribute("aria-pressed", "true");
+    await expect(toggle).toHaveAttribute("aria-pressed", "false");
     await expect(toggle).toHaveText("Walking");
+    await toggle.click();
+    await expect(toggle).toHaveAttribute("aria-pressed", "true");
+    await page.reload();
+    await expect(page.getByRole("button", { name: "Walking" })).toHaveAttribute("aria-pressed", "true");
   });
 
   // One header in every view and mode (story 4.15, D-540): the Walking
@@ -209,10 +215,10 @@ test.describe("modes", () => {
     }
     // Pressed from Board mode, it is the scene's setting there too.
     await toggle.click();
-    await expect(toggle).toHaveAttribute("aria-pressed", "false");
+    await expect(toggle).toHaveAttribute("aria-pressed", String(!DEFAULT_WALKING));
     await page.getByTestId("mode-scene").click();
     await sceneSettled(page);
-    await expect(toggle).toHaveAttribute("aria-pressed", "false");
+    await expect(toggle).toHaveAttribute("aria-pressed", String(!DEFAULT_WALKING));
     // On the owner's screen the header keeps one line (D-526): the toggle
     // and the last button on the brand's line.
     await page.setViewportSize({ width: 1920, height: 1001 });
@@ -388,7 +394,7 @@ test.describe("modes", () => {
 
   test("leaving Scene mid-walk leaves no frame loop running", async ({ page }) => {
     const board = loadBoard("scene-b");
-    await openScene(page, board);
+    await openWalkingScene(page, board);
     // Count the frame callbacks the page asked for and has neither run nor
     // cancelled, over the installed clock's own.
     await page.evaluate(() => {

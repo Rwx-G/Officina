@@ -162,6 +162,16 @@ export async function openScene(
   await transitionsDone(page);
 }
 
+/** Opens the window in Scene mode with walking on, both stored choices:
+ *  for the cases about walking, which is off by default (D-480, E82). */
+export async function openWalkingScene(page: Page, board: Board): Promise<void> {
+  await load(page, board, {}, null, null, {
+    [VIEW_STORAGE_KEY]: serialiseViewState({ ...defaultViewState(), base: "scene", walking: true }),
+  });
+  await sceneSettled(page);
+  await transitionsDone(page);
+}
+
 /** Waits for the window's transitions to end (story 4.15, D-545): the
  *  Web Animations a view, a card or a panel runs once when it comes or
  *  goes. CSS animations (the halos) are not transitions and are left

@@ -31,14 +31,16 @@ project uses [Semantic Versioning](https://semver.org/).
   mode the header keeps to one line, so eight projects fit a maximised
   Full HD window. The scene's light materials, figure and people colours
   join the tokens.
-- Walking in the scene (v0.4, in progress): an employee whose place
-  changes walks there along the corridors, with a walk cycle, and sits
-  down at a seat; its halo appears when it arrives. A new session fades in
-  at the entrance and walks in; an ended one walks out and fades. Opening
+- Walking in the scene (v0.4, in progress), off by default: a "Walking"
+  toggle in the header, kept for the next start, turns it on. An employee
+  whose place changes then walks there along the corridors, with a walk
+  cycle, and sits down at a seat; its halo appears when it arrives. A new
+  session fades in at the entrance and walks in; an ended one walks out
+  and fades. With walking off, employees glide to their places. Opening
   the scene, a window brought back from behind another, and the system's
   reduced motion place everyone at once; nothing runs once everyone has
-  arrived. A "Walking" toggle in the header, in Scene mode, kept for the
-  next start, turns it off: employees then glide to their places.
+  arrived. Walking is off by default because the release's CPU measurement
+  put it over the scene's budget of 1 % of the machine.
 - Focus mode (v0.4, in progress): a third mode of the Sessions view, and
   `f`, hide the board and the scene and list only what waits for you: the
   approvals waiting (opened in Board mode), the Needs you sessions,

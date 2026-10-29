@@ -6,7 +6,7 @@
 // `requestAnimationFrame`. Boards are `officina board --json` output;
 // places come from `layoutScene`, imported, never retyped.
 import { expect, test, type Page } from "@playwright/test";
-import { loadBoard, openScene, sceneSettled } from "./fixtures";
+import { loadBoard, openWalkingScene, sceneSettled } from "./fixtures";
 import { projector } from "../src/lib/scene/geometry";
 import { layoutScene, type SceneLayout } from "../src/lib/scene/layout";
 import { STORAGE_KEY, emptyMemory, parse, prune, type SceneMemory } from "../src/lib/scene/memory";
@@ -141,7 +141,7 @@ async function stepUntilSettled(page: Page, key: string, every = 1): Promise<(Sa
 /** Opens `board` in Scene mode and pauses the clock, so each frame is
  *  stepped by the test. */
 async function openPaused(page: Page, board: Board): Promise<number> {
-  await openScene(page, board);
+  await openWalkingScene(page, board);
   await page.clock.pauseAt(board.generated_at_ms + 60_000);
   return Number(await scene(page).getAttribute("data-scale"));
 }
@@ -268,7 +268,7 @@ test.describe("walking", () => {
 
   test("a reload places everyone at once", async ({ page }) => {
     const { board, next } = waitingCase();
-    await openScene(page, board);
+    await openWalkingScene(page, board);
     await push(page, next);
     await page.addInitScript((b) => {
       window.__officinaBoard = b;

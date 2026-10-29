@@ -25,8 +25,8 @@ function waitingBoard(): Board {
   return found.board;
 }
 
-function renderScene(b: Board) {
-  return render(Scene, { board: b, store: new BoardStore(), onBoard: () => {} });
+function renderScene(b: Board, walking?: boolean) {
+  return render(Scene, { board: b, store: new BoardStore(), onBoard: () => {}, walking });
 }
 
 /** Renders `b` and returns the layout the scene drew it from: the one the
@@ -215,7 +215,7 @@ describe("Scene with walking", () => {
     try {
       // From the lounge, which has a place whatever offices the run holds.
       const other = card("walk-other", "office", { project: "walk-p" });
-      const { getByTestId, container, rerender } = renderScene(board([card("walker", "lounge", { project: "walk-p" }), other]));
+      const { getByTestId, container, rerender } = renderScene(board([card("walker", "lounge", { project: "walk-p" }), other]), true);
       const scene = getByTestId("scene");
       const halo = () => container.querySelector<HTMLElement>('[data-halo="walker"]');
       await tick();

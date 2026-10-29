@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { test } from "@playwright/test";
 import gifenc from "gifenc";
 import pngjs from "pngjs";
-import { loadBoard, openBoard, openScene } from "./fixtures";
+import { loadBoard, openBoard, openScene, openWalkingScene } from "./fixtures";
 import type { Board } from "../src/lib/generated/Board";
 import type { Card } from "../src/lib/generated/Card";
 
@@ -87,7 +87,7 @@ for (const theme of ["light", "dark"] as const) {
 
 test("animated scene: a first prompt, a wait, its file, and back to work", async ({ page }) => {
   const board = loadBoard("scene-c");
-  await openScene(page, board);
+  await openWalkingScene(page, board);
   await page.clock.pauseAt(board.generated_at_ms + 60_000);
   const frames: { png: Buffer; delay: number }[] = [];
   const shot = async (delay: number) => frames.push({ png: await page.screenshot(), delay });

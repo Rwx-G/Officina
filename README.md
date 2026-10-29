@@ -517,9 +517,9 @@ Nothing moves while nothing changes: an employee moves only when the board chang
 
 ### Walking
 
-When the board changes an employee's place, it gets up and walks there along the corridors, through its room's door, at a walking pace, and sits down when its place is a seat; its halo waits until it has arrived. A new session comes in through the entrance, fading in, and walks to its place; an ended one walks out through the entrance and fades. Once everyone has arrived nothing moves, and the scene does no work until the next change. Opening the window, or switching to Scene, shows everyone already at their place; so does a window brought back from behind another one.
+Walking is off by default: when the board changes an employee's place, it glides straight there in about a third of a second, and a new or ended session fades in or out where it stands. The header's **Walking** toggle, kept for the next start, turns walking on: an employee then gets up and walks along the corridors, through its room's door, at a walking pace, and sits down when its place is a seat; its halo waits until it has arrived. A new session comes in through the entrance, fading in, and walks to its place; an ended one walks out through the entrance and fades. Once everyone has arrived nothing moves, and the scene does no work until the next change. Opening the window, or switching to Scene, shows everyone already at their place; so does a window brought back from behind another one. With the system's reduced-motion setting on, every employee is placed at once and nothing fades.
 
-The header's **Walking** toggle, kept for the next start, turns walking off: an employee then glides straight to its new place in about a third of a second, and a new or ended session fades in or out where it stands. With the system's reduced-motion setting on, every employee is placed at once and nothing fades. Walking is on by default; the workstation's CPU measurement of the release decides whether it stays so.
+Walking is off by default because of its cost: measured on the release with one change every 10 s, the scene with walking on took about 2 % of the machine's CPU, over the scene's budget of 1 %, and under 1 % with walking off (`docs/research-notes.md`, E82).
 
 ### Acting from the scene
 
