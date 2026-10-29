@@ -5,6 +5,7 @@
   import type { RelayStore } from "../lib/relay.svelte";
   import { DEFAULT_WALKING, type Base, type Mode, type WindowView } from "../lib/view.svelte";
   import { RELAY_TOGGLE_TEXT } from "../lib/relay-text";
+  import { switchText } from "../lib/orchestrator-text";
   import EndedCounts, { type EndedColumn } from "./EndedCounts.svelte";
   import { fadeMotion } from "../lib/motion";
   import Gauge from "./Gauge.svelte";
@@ -78,10 +79,12 @@
 
   // D-565: the Orchestrator button carries the orchestrator's presence as
   // a neutral shape, never the attention colour: a filled dot while an
-  // agents entry shows it live, a hollow ring while absent (D-678). The
-  // pending proposals' count joins it with story 5.18 (D-675).
-  let orchestratorLive = $derived((orchestrator?.view?.presence ?? null) !== null);
-  let orchestratorName = $derived(`Orchestrator: ${orchestratorLive ? "live" : "absent"}`);
+  // agents entry shows it live (on the board or in the view, whichever
+  // came last), a hollow ring while absent (D-678); and while proposals
+  // are pending, their count in the button's corner (D-833).
+  let orchestratorLive = $derived((store.board?.orchestrator ?? orchestrator?.view?.presence ?? null) !== null);
+  let pending = $derived(orchestrator?.view?.proposals.filter((p) => p.status === "pending").length ?? 0);
+  let orchestratorName = $derived(switchText(orchestratorLive, pending));
 
   // The Relay position only where the relay is in use (story 2.9).
   let views = $derived(VIEWS.filter((option) => option.id !== "relay" || relay?.inUse));
@@ -123,7 +126,9 @@
               data-presence={orchestratorLive ? "live" : "absent"}
               aria-hidden="true"
             ></span>
-
+            {#if pending > 0}
+              <span class="pending" data-testid="orchestrator-pending" aria-hidden="true">{pending}</span>
+            {/if}
           </button>
         {:else}
           <button
@@ -305,6 +310,26 @@
   }
   .view[aria-pressed="true"] .presence.live {
     background: currentColor;
+  }
+  /* The pending count above the mark, in the button's top padding: it
+     takes no width of the line, whose Full HD fit has a few pixels left
+     (D-679, D-833), so it moves nothing whatever its digits. Neutral like
+     the mark. */
+  .view[data-testid="view-orchestrator"] {
+    position: relative;
+  }
+  .pending {
+    position: absolute;
+    top: 3px;
+    right: 3px;
+    color: var(--color-text-muted);
+    font-size: 10.5px;
+    font-weight: 700;
+    line-height: 1;
+    font-variant-numeric: tabular-nums;
+  }
+  .view[aria-pressed="true"] .pending {
+    color: currentColor;
   }
   /* A count badge: the one pill of the header (D-539). */
   .pill {

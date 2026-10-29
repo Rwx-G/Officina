@@ -8,7 +8,18 @@
 // answers issue, edit and launch as the test sets them.
 import { expect, test, type Page } from "@playwright/test";
 import { fixtureOf } from "./fixture-index";
-import { calls, loadBoard, loadRelay, openBoard, openScene, transitionsDone } from "./fixtures";
+import {
+  PENDING_LIMIT,
+  calls,
+  loadBoard,
+  loadRelay,
+  openBoard,
+  openScene,
+  sceneBoardOrchestrator,
+  sceneView,
+  transitionsDone,
+  withPending,
+} from "./fixtures";
 import { PROPOSAL_STATUS_TEXT, invalidReasonText } from "../src/lib/orchestrator-text";
 import type { CardAnswer } from "../src/lib/generated/CardAnswer";
 import type { LaunchAnswer } from "../src/lib/generated/LaunchAnswer";
@@ -89,7 +100,7 @@ test("the header switches to the Orchestrator view", async ({ page }) => {
   await expect(page.getByTestId("view-switch").locator("> button")).toHaveCount(4);
   await expect(button).toHaveAttribute("aria-pressed", "false");
   // D-565: the presence mark is a shape and a name, never colour alone.
-  await expect(button).toHaveAccessibleName("Orchestrator: absent");
+  await expect(button).toHaveAccessibleName(/^Orchestrator: absent/);
   await expect(page.getByTestId("orchestrator-presence")).toHaveAttribute("data-presence", "absent");
   await button.click();
   await expect(page.getByTestId("orchestrator-view")).toBeVisible();
@@ -622,4 +633,125 @@ test("a suggested subject name is shown, never preselected", async ({ page }) =>
   }
   await expect(page.locator('[data-testid="composer"] img')).toHaveCount(0);
 });
+
+// Story 5.18 AC 9 (D-565, D-833): the view switch's Orchestrator button
+// carries presence as a shape and, while proposals are pending, their
+// count; both in its accessible name and tooltip.
+const pendingOf = (view: OrchestratorView) => view.proposals.filter((p) => p.status === "pending").length;
+
+test("the view switch shows presence and the proposal count", async ({ page }) => {
+  const day = orchestrator("orchestrator-day");
+  const pending = pendingOf(day);
+  expect(pending).toBeGreaterThan(1);
+  await answering(page, day);
+  await openBoard(page, loadBoard("busy"), {}, loadRelay("relay-clean"));
+  const button = page.getByTestId("view-orchestrator");
+  await expect(button).toHaveAccessibleName(`Orchestrator: absent, ${pending} proposals pending`);
+  await expect(button).toHaveAttribute("title", `Orchestrator: absent, ${pending} proposals pending`);
+  await expect(page.getByTestId("orchestrator-pending")).toHaveText(String(pending));
+  // Live, from the board: the filled mark; none pending: no count.
+  const board = { ...loadBoard("busy"), orchestrator: sceneBoardOrchestrator() };
+  await page.evaluate((b) => window.__officinaPushBoard!(b), board);
+  await expect(page.getByTestId("orchestrator-presence")).toHaveAttribute("data-presence", "live");
+  await expect(button).toHaveAccessibleName(`Orchestrator: live, ${pending} proposals pending`);
+  await page.evaluate((v) => window.__officinaPushOrchestrator!(v), { ...day, proposals: [] });
+  await expect(page.getByTestId("orchestrator-pending")).toHaveCount(0);
+  await expect(button).toHaveAccessibleName("Orchestrator: live");
+  await page.evaluate((v) => window.__officinaPushOrchestrator!(v), withPending(day, 1));
+  await expect(button).toHaveAccessibleName("Orchestrator: live, 1 proposal pending");
+  // The same element in Scene mode.
+  await page.getByTestId("mode-scene").click();
+  await expect(button).toHaveAccessibleName("Orchestrator: live, 1 proposal pending");
+  await expect(page.getByTestId("orchestrator-pending")).toHaveText("1");
+});
+
+test("the view switch's mark is not colour alone", async ({ page }) => {
+  await answering(page, orchestrator("orchestrator-day"));
+  await openBoard(page, loadBoard("busy"), {}, loadRelay("relay-clean"));
+  const mark = page.getByTestId("orchestrator-presence");
+  const shape = () =>
+    mark.evaluate((m) => {
+      const s = getComputedStyle(m);
+      return { border: s.borderTopColor, borderWidth: s.borderTopWidth, fill: s.backgroundColor };
+    });
+  const absent = await shape();
+  const absentName = await page.getByTestId("view-orchestrator").getAttribute("aria-label");
+  await page.evaluate((b) => window.__officinaPushBoard!(b), { ...loadBoard("busy"), orchestrator: sceneBoardOrchestrator() });
+  await expect(mark).toHaveAttribute("data-presence", "live");
+  const live = await shape();
+  // The same colour, a hollow ring then a filled dot, and different words.
+  expect(live.border).toBe(absent.border);
+  expect(absent.fill).toBe("rgba(0, 0, 0, 0)");
+  expect(live.fill).toBe(live.border);
+  expect(Number.parseFloat(absent.borderWidth)).toBeGreaterThan(0);
+  expect(await page.getByTestId("view-orchestrator").getAttribute("aria-label")).not.toBe(absentName);
+});
+
+// Review F40: proposals and the orchestrator reach neither the title nor,
+// through `waiting_count`, the taskbar overlay (core and app tests hold
+// the Rust side: `board.rs` and `taskbar.rs`).
+test("proposals leave the title unchanged", async ({ page }) => {
+  await answering(page, orchestrator("orchestrator-empty"));
+  await openBoard(page, loadBoard("busy"), {}, loadRelay("relay-clean"));
+  const title = await page.title();
+  const waiting = await page.getByTestId("waiting-pill").textContent();
+  await page.evaluate((v) => window.__officinaPushOrchestrator!(v), withPending(orchestrator("orchestrator-day"), PENDING_LIMIT));
+  await page.evaluate((b) => window.__officinaPushBoard!(b), { ...loadBoard("busy"), orchestrator: { ...sceneBoardOrchestrator(), status: "waiting" as const } });
+  await expect(page.getByTestId("orchestrator-pending")).toHaveText(String(PENDING_LIMIT));
+  expect(await page.title()).toBe(title);
+  await expect(page.getByTestId("waiting-pill")).toHaveText(waiting!);
+});
+
+// D-163, D-564, review F22: computed colours in the real browser against
+// `--color-attention` resolved on the document root, in both themes.
+for (const theme of ["light", "dark"] as const) {
+  test(`the view switch, the proposal list and the decision office never take the attention colour (${theme})`, async ({ page }) => {
+    await page.emulateMedia({ colorScheme: theme });
+    // Nobody waits: the decision office's own queue would be amber, and
+    // rightly (AD-167); what is checked is the orchestrator's.
+    const board = structuredClone(loadBoard("scene-orchestrator"));
+    for (const card of board.columns.needs_you.splice(0)) {
+      board.columns.working.push({ ...card, column: "working", waiting_for: null, scene: { ...card.scene!, zone: "office", alert: null, approval: false } });
+    }
+    board.waiting_count = 0;
+    await answering(page, sceneView());
+    await openScene(page, board);
+    await expect(page.getByTestId("theme-switch")).toHaveAttribute("data-theme-resolved", theme);
+    const colours = (selector: string) =>
+      page.evaluate((sel) => {
+        const probe = document.createElement("span");
+        probe.style.color = "var(--color-attention)";
+        document.body.append(probe);
+        const attention = getComputedStyle(probe).color;
+        probe.remove();
+        const seen = new Set<string>();
+        for (const root of Array.from(document.querySelectorAll(sel))) {
+          for (const element of [root, ...Array.from(root.querySelectorAll("*"))]) {
+            const s = getComputedStyle(element);
+            for (const value of [s.color, s.backgroundColor, s.borderTopColor, s.fill, s.stroke, s.outlineColor]) seen.add(value);
+          }
+        }
+        return { attention, seen: [...seen], count: document.querySelectorAll(sel).length };
+      }, selector);
+    const surfaces = [
+      '[data-testid="view-switch"]',
+      '[data-plaque="decision"]',
+      "[data-display-screen]",
+      "[data-whiteboard]",
+      "[data-orchestrator]",
+      '[data-partition="decision"]',
+    ];
+    for (const selector of surfaces) {
+      const { attention, seen, count } = await colours(selector);
+      expect(count, selector).toBeGreaterThan(0);
+      expect(seen, selector).not.toContain(attention);
+    }
+    await page.getByTestId("view-orchestrator").click();
+    await expect(page.getByTestId("proposals")).toBeVisible();
+    for (const selector of ['[data-testid="proposals"]', '[data-testid="view-switch"]']) {
+      const { attention, seen } = await colours(selector);
+      expect(seen, selector).not.toContain(attention);
+    }
+  });
+}
 

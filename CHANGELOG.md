@@ -8,6 +8,23 @@ project uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- The orchestrator in the scene's decision office (v0.5, story 5.18):
+  while `claude agents` lists it, it sits at the decider's desk in its own
+  tunic (`--orch-tunic`, both themes), at its desk while busy, facing the
+  room otherwise, never ringed, numbered, counted or grouped; the plaque
+  reads "Orchestrator" while it is live and "Decisions: you" otherwise. Its
+  screens show the pending proposals and the Needs you count, the
+  whiteboard the latest pending proposals' labels, as text, redrawn only
+  when they change. Its button opens the Orchestrator view; the empty
+  chair's opens the orchestrator's file with Start, reachable from the
+  keyboard. A work order bound while it is live is briefed once at the
+  reception counter: the employee and the orchestrator meet there for
+  `BRIEFING_DWELL_MS`, then go to their places, never with walking off,
+  reduced motion or a hidden window. The view switch's Orchestrator button
+  carries the pending count beside its presence mark, in its name and
+  tooltip too; neither reaches the title, the taskbar badge or the
+  attention colour.
+
 - The orchestrator's proposals in the window (v0.5, story 5.17): the
   window reads `orchestrator/proposals/` (a name that is no proposal's is
   deleted and counted, a file read at most 16 KiB plus a byte, the hourly

@@ -492,6 +492,7 @@ test.describe("scene", () => {
       // controls, beside the theme control (story 4.13).
       await openScene(page, board, loadRelay("relay-clean"));
       if (alert) await expect(page.getByTestId("alert-band")).toBeVisible();
+      await expect(page.getByTestId("orchestrator-pending")).toHaveText(String(PENDING_LIMIT));
       await expect(scene(page).locator("[data-orchestrator]")).toHaveCount(1);
       // The header on one line (D-526), every fixed control included.
       const tops = await page.locator("header.bar > *").evaluateAll((items) => items.map((e) => Math.round(e.getBoundingClientRect().top)));
