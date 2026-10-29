@@ -100,10 +100,13 @@ The hooks go in your **user** settings (`~/.claude/settings.json`), so every pro
     "Stop":             [{ "hooks": [{ "type": "command", "command": "\"C:/path/to/officina.exe\" hook", "timeout": 5 }] }],
     "Notification":     [{ "hooks": [{ "type": "command", "command": "\"C:/path/to/officina.exe\" hook", "timeout": 5 }] }],
     "SubagentStart":    [{ "hooks": [{ "type": "command", "command": "\"C:/path/to/officina.exe\" hook", "timeout": 5 }] }],
-    "SubagentStop":     [{ "hooks": [{ "type": "command", "command": "\"C:/path/to/officina.exe\" hook", "timeout": 5 }] }]
+    "SubagentStop":     [{ "hooks": [{ "type": "command", "command": "\"C:/path/to/officina.exe\" hook", "timeout": 5 }] }],
+    "PermissionDenied": [{ "hooks": [{ "type": "command", "command": "\"C:/path/to/officina.exe\" hook", "timeout": 5 }] }]
   }
 }
 ```
+
+`PermissionDenied` fires only when Claude Code's auto mode refuses a tool call; it records the refusal (see [Auto-mode denials](#auto-mode-denials)) and costs nothing while your sessions do not run in auto mode. If you pasted the block before it appeared, paste it again: doctor reports it missing until you do.
 
 The two sub-agent events draw each running sub-agent beside the session that spawned it (see [Sub-agents](#sub-agents)); their lines keep the sub-agent's id and type, never its answer or transcripts. If you pasted the block before they appeared, paste it again: doctor reports them missing until you do, and the scene shows no sub-agent meanwhile.
 
@@ -742,6 +745,10 @@ Claude Code's auto mode, where a classifier judges each command instead of you o
 
 Nothing is added for the relay: gate 8 (research notes E85) found `officina run`, its check and an approval request all pass auto mode's classifier without a rule. Once you switch, gate 4 runs again so the research notes record how a work order behaves under your new default; work orders themselves pass no mode, and Officina's own sessions keep theirs.
 
+### Auto-mode denials
+
+When auto mode's classifier refuses a tool call, Claude Code runs the `PermissionDenied` hook, and `officina hook` appends one line to the relay's journal, `auto_mode_denied`: the session, the tool and the classifier's reason (such as `[Irreversible Local Destruction]`), cut to 200 characters (with excerpts off, only its rule name in square brackets), never the call's input. It prints nothing, so Officina never asks Claude Code to let the model retry a refused call: the refusal stands as auto mode decided it. The Relay view lists each denial in its recent activity with its reason as text, and a session's file in the scene counts its denials of the last 24 hours, in neutral text: a denial is something auto mode decided, not something waiting on you, so it never reaches the title, the taskbar, the alert or the attention colour. `officina relay --json` prints the same counts. The hooks block gains `PermissionDenied` once you paste it again.
+
 ### What v0.5 stores, and for how long
 
 Everything stays under the Officina home, with the bounds of [Privacy](#privacy) and [Privacy in the registry](#privacy-in-the-registry):
@@ -751,6 +758,7 @@ Everything stays under the Officina home, with the bounds of [Privacy](#privacy)
 - **Proposals**: a registry row per proposal file, kept 90 days, its texts (recaps, rationales, a proposed answer) cleared with the excerpts; an invalid proposal keeps the values it named.
 - **Reviews**: a registry row per `auto` request, kept 90 days, the review's reason cleared with the excerpts; the journal's review lines never hold a reason.
 - **Orchestrator starts**: a registry row and a journal line per Start, without any session's text, kept 90 days.
+- **Auto-mode denials**: a journal line per denial with the session, the tool and the classifier's reason, never the call's input, kept with the journal's 90 days; with excerpts off, only the reason's rule name in square brackets is kept, since a reason of another form may quote the call.
 
 With `no_excerpts` (the floor or `OFFICINA_NO_EXCERPTS`), no excerpt is kept, so none reaches a review (an `auto` request then goes to you) or `officina mcp`. What leaves the machine: the review call, while auto requests arrive and the window runs, sends the request as your catalogue rebuilds it, the subject's name, your last prompt to that session and the action's recent outcomes to the review's model under your account; the orchestrator is a Claude Code session of yours, and what its tools read goes to its model as any session's context does.
 

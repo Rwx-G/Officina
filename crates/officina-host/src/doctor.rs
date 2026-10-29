@@ -84,9 +84,21 @@ pub fn gate_registration() -> Registration {
     }
 }
 
-/// The registrations doctor requires: every buffered event, plus the gate's
-/// when the relay guards a project (D-18), so workstations without one pay
-/// nothing on each shell tool call.
+/// Auto mode's refusals, journaled (AD-181, story 5.23): every tool, in
+/// the buffered events' form, failing open, since it only records what
+/// auto mode already decided. It fires only in auto mode, so it costs
+/// nothing before.
+pub fn denial_registration() -> Registration {
+    Registration {
+        event: crate::relay::journal::DENIED_EVENT,
+        tools: Vec::new(),
+        fails_closed: false,
+    }
+}
+
+/// The registrations doctor requires: every buffered event and auto mode's
+/// denials, plus the gate's when the relay guards a project (D-18), so
+/// workstations without one pay nothing on each shell tool call.
 pub fn registrations(gate: bool) -> Vec<Registration> {
     BUFFERED_EVENTS
         .into_iter()
@@ -95,6 +107,7 @@ pub fn registrations(gate: bool) -> Vec<Registration> {
             tools: Vec::new(),
             fails_closed: false,
         })
+        .chain(std::iter::once(denial_registration()))
         .chain(gate.then(gate_registration))
         .collect()
 }
@@ -2957,6 +2970,54 @@ mod tests {
         }
     }
 
+    /// Story 5.23 AC 2 (D-530, D-534): `PermissionDenied` is required with
+    /// or without the gate, once, in the buffered events' entry form
+    /// (`timeout` 5, no matcher, no `onFailure`); merging twice, into a
+    /// foreign `hooks` key or not, never doubles it.
+    #[test]
+    fn permission_denied_is_registered_once() {
+        use crate::relay::journal::DENIED_EVENT;
+        let exe = PathBuf::from(r"C:\Program Files\Officina\officina.exe");
+        for gate in [false, true] {
+            let required = registrations(gate);
+            let denied: Vec<&Registration> = required
+                .iter()
+                .filter(|r| r.event == DENIED_EVENT)
+                .collect();
+            assert_eq!(denied, [&denial_registration()]);
+            for current in [None, Some(foreign_hooks())] {
+                let once = merged_hooks(current.as_ref(), &exe, &required).unwrap();
+                let twice = merged_hooks(Some(&once), &exe, &required).unwrap();
+                assert_eq!(once, twice);
+                assert_eq!(officina_entry_count(&once, DENIED_EVENT), 1);
+                let group = &once[DENIED_EVENT][0];
+                assert!(group.get("matcher").is_none(), "{group}");
+                let entry = &group["hooks"][0];
+                assert_eq!(entry["timeout"], 5);
+                assert!(entry.get(ON_FAILURE.0).is_none(), "{entry}");
+            }
+        }
+    }
+
+    /// Story 5.23 AC 2: settings holding every other registration report
+    /// `PermissionDenied` missing, and nothing else.
+    #[test]
+    fn a_missing_permission_denied_is_reported() {
+        use crate::relay::journal::DENIED_EVENT;
+        let exe = PathBuf::from(r"C:\Program Files\Officina\officina.exe");
+        for gate in [false, true] {
+            let required = registrations(gate);
+            let others: Vec<Registration> = required
+                .iter()
+                .filter(|r| r.event != DENIED_EVENT)
+                .cloned()
+                .collect();
+            let settings =
+                serde_json::json!({ "hooks": merged_hooks(None, &exe, &others).unwrap() });
+            assert_eq!(missing_hook_events(&settings, &required), [DENIED_EVENT]);
+        }
+    }
+
     /// AD-56, D-44: the canary checks the payload of every event the hook
     /// buffers, and names no event it does not.
     #[test]
@@ -2997,14 +3058,15 @@ mod tests {
             "SessionStart": [{"hooks": [{"type": "command", "command": "officina.exe doctor"}]}]
         }});
         let required = registrations(false);
-        let expected: Vec<&str> = BUFFERED_EVENTS
-            .into_iter()
+        let expected: Vec<&str> = required
+            .iter()
+            .map(|r| r.event)
             .filter(|event| *event != "Stop")
             .collect();
         assert_eq!(missing_hook_events(&settings, &required), expected);
         assert_eq!(
             missing_hook_events(&serde_json::Value::Null, &required).len(),
-            BUFFERED_EVENTS.len()
+            required.len()
         );
     }
 

@@ -165,6 +165,41 @@ fn readme_states_the_gate_fails_closed() {
     );
 }
 
+/// Story 5.23 AC 6 (AD-181): the README's hooks block shows every
+/// registration doctor requires without the gate, `PermissionDenied`
+/// included, each event once, and its denials section says Officina never
+/// asks for a retry and that the block is to be pasted again.
+#[test]
+fn readme_shows_every_registration_and_never_a_retry() {
+    use officina_host::doctor::registrations;
+    use officina_host::relay::journal::DENIED_EVENT;
+    let (_, block_lines) = spans_and_block_lines(&readme());
+    for registration in registrations(false) {
+        let key = format!("\"{}\":", registration.event);
+        let shown = block_lines
+            .iter()
+            .filter(|line| line.trim_start().starts_with(&key))
+            .count();
+        assert_eq!(
+            shown, 1,
+            "{} in the README's hooks block",
+            registration.event
+        );
+    }
+    let readme = readme();
+    let section = readme
+        .split("### Auto-mode denials")
+        .nth(1)
+        .and_then(|rest| rest.split("\n### ").next())
+        .expect("an Auto-mode denials section");
+    assert!(section.contains(DENIED_EVENT), "{section}");
+    assert!(
+        section.contains("never asks Claude Code to let the model retry"),
+        "{section}"
+    );
+    assert!(section.contains("paste it again"), "{section}");
+}
+
 /// Story 2.13 AC 4 (D-172): the README no longer says that no shell reads a
 /// value; its paragraph on the values a program reads names the notice
 /// kinds' constant and, for every kind, the program that reads the value,
