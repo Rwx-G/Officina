@@ -18,13 +18,13 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::Command;
 use std::time::{Duration, Instant};
 
 use officina_core::floor::{Autonomy, floor_dir_of, join_project_path};
 use officina_core::quota::normalise_path;
 use officina_core::relay::approvals::DEFAULT_WAIT_S;
-use officina_core::relay::argv::{WSL_ENV_PROGRAM, WSL_EXE, WSL_REMOVED_ENV, WSL_TIMEOUT_PROGRAM};
+use officina_core::relay::argv::{WSL_ENV_PROGRAM, WSL_EXE, WSL_TIMEOUT_PROGRAM};
 use officina_core::relay::catalogue::{
     ActionClass, ActionIssue, CanonicalAction, CanonicalCatalogue, CatalogueDiff, IssueTable,
     RelayFloor, Runner, SectionDiff, diff, notices, relay_in_use,
@@ -43,7 +43,7 @@ use super::home::{ApprovedState, RelayHome, load_relay_floor};
 use super::tree::TreeError;
 use super::{journal, tree};
 use crate::doctor::{Check, Level, check};
-use crate::process::{Waited, hide_console, wait_until};
+use crate::process::{Waited, wait_until};
 
 /// The program the WSL probe runs inside the distro, by absolute path like
 /// the tools it probes (D-6): `test -x <path>` exits 0 when the path is an
@@ -87,26 +87,8 @@ pub enum ToolProbe {
     Failed(String),
 }
 
-/// The command probing `path` in `distro` (the default one when `None`):
-/// `wsl.exe [-d <distro>] --exec /usr/bin/test -x <path>`, never through a
-/// shell, stdio null, no console window, the environment `officina run`
-/// gives `wsl.exe` (D-6).
-pub fn wsl_probe_command(wsl: &Path, distro: Option<&str>, path: &str) -> Command {
-    let mut command = Command::new(wsl);
-    if let Some(distro) = distro {
-        command.args(["-d", distro]);
-    }
-    command
-        .args(["--exec", WSL_TEST_PROGRAM, "-x", path])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-    for key in WSL_REMOVED_ENV {
-        command.env_remove(key);
-    }
-    hide_console(&mut command);
-    command
-}
+/// The WSL probe's command, `relay::run`'s since story 5.2 (D-128).
+pub use super::run::wsl_probe_command;
 
 /// Runs `command` to its end or `timeout`, whichever comes first; a process
 /// still running at the deadline is killed.
@@ -1074,12 +1056,19 @@ fn paragraph_checks(
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the tests start shells and wsl.exe to check the probe runner"
+)]
 mod tests {
     use super::*;
     #[cfg(windows)]
     use crate::relay::home::system_dir;
+    use officina_core::relay::argv::WSL_REMOVED_ENV;
     use officina_core::relay::catalogue::{NoticeKind, load};
     use std::path::PathBuf;
+    #[cfg(windows)]
+    use std::process::Stdio;
 
     const FLOOR_PATH: &str = "C:/path/to/officina.toml";
 

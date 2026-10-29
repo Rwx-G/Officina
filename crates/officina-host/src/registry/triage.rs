@@ -1,6 +1,7 @@
 //! The triage call on the host (AD-51, AD-52, D-64 to D-68, D-81, D-86,
 //! D-87, D-97): the refusals checked before anything starts, the contained
-//! `claude -p` child core describes, the `triage` worker thread that runs
+//! `claude -p` child, core's `TriageCall` vector run by `spawn::execute`
+//! (D-128), the `triage` worker thread that runs
 //! one call at a time, the dry run and the proposal queue the collector
 //! drives from the registry, and the pause. Compiled only with the
 //! `window-authority` feature: only the window spends model calls.
@@ -8,8 +9,6 @@
 use std::collections::VecDeque;
 use std::hash::{BuildHasher, Hasher};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
-use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::time::Duration;
 
@@ -22,8 +21,8 @@ use officina_core::registry::model::{
 };
 use officina_core::registry::triage_call::{
     Budget, CALL_SPACING_MS, CALL_TIMEOUT_MS, CallAnswer, CallRecord, CallUsage, ModelOutputError,
-    STDOUT_CAP_BYTES, TriageCase, WORKDIR_NAME, argv, budget, prompt, read_output,
-    refusal_for_binary, triage_env,
+    STDOUT_CAP_BYTES, TRIAGE_MODEL, TriageCase, WORKDIR_NAME, budget, prompt, read_output,
+    refusal_for_binary, schema,
 };
 use officina_core::registry::types::{SettingKey, Source};
 use officina_core::registry::types::{TriageOutcome, TriagePurpose, TriageRefusal};
@@ -32,13 +31,7 @@ use rusqlite::TransactionBehavior;
 use super::read::{self, VerdictSnapshot};
 use super::store::Writer;
 use super::write::{RegistryError, setting_json, write_setting};
-use crate::process::{RunError, RunLimits, hide_console, run_contained};
-
-/// How long the output pipes may stay open once the child exited and its
-/// job was ended. Longer than `claude agents`' grace: the call runs on the
-/// `triage` thread, which nothing waits on, and its tree is already ended,
-/// so the pipes close as soon as the reader threads are scheduled.
-const OUTPUT_GRACE: Duration = Duration::from_secs(2);
+use crate::spawn::{BaseEnv, ResolvedClaude, SpawnError, SpawnOutcome, execute};
 
 /// How many nonces are drawn before a case is given up (D-87's "host draws
 /// again"): one 16-digit nonce in an excerpt is chance; several in a row
@@ -77,7 +70,7 @@ pub struct TriageJob {
     /// `no_excerpts` from the environment or the window's floor.
     pub no_excerpts: bool,
     /// The environment the call's own is built from (D-86): the window's.
-    pub base_env: Arc<Vec<(String, String)>>,
+    pub base_env: BaseEnv,
     pub limits: CallLimits,
 }
 
@@ -194,40 +187,25 @@ fn failed(detail: impl Into<String>) -> Ran {
     }
 }
 
-/// The command of one call (AD-51): the program, core's argument vector,
-/// the work folder as working directory, an environment cleared then set
-/// to core's [`triage_env`] of `job.base_env`, the three pipes, no console
-/// window.
-pub fn command_for(job: &TriageJob, claude: &Path) -> Command {
+/// Runs core's `TriageCall` vector through `spawn::execute` (its own
+/// kill-on-close job, D-64), the prompt on its stdin, within the job's
+/// limits, and reads its answer.
+fn spawn_and_wait(job: &TriageJob, claude: &Path, prompt: String) -> Ran {
     let config_dir = job
         .config_dir
         .as_deref()
         .map(|dir| dir.to_string_lossy().into_owned());
-    let mut command = Command::new(claude);
-    command
-        .args(argv())
-        .current_dir(workdir(&job.officina_home))
-        .env_clear()
-        .envs(triage_env(&job.base_env, config_dir.as_deref()))
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    hide_console(&mut command);
-    command
-}
-
-/// Runs the child through [`run_contained`] (its own kill-on-close job,
-/// D-64), the prompt on its stdin, and reads its answer.
-fn spawn_and_wait(job: &TriageJob, claude: &Path, prompt: String) -> Ran {
-    let limits = RunLimits {
-        timeout: job.limits.timeout,
-        stdout_cap: job.limits.stdout_cap,
-        grace: OUTPUT_GRACE,
-        owns_tree: true,
-    };
-    let ran = match run_contained(command_for(job, claude), Some(prompt.into_bytes()), &limits) {
-        Ok(ran) => ran,
-        Err(RunError::Timeout(_)) => {
+    let home = job.officina_home.to_string_lossy();
+    let deadline_ms = u64::try_from(job.limits.timeout.as_millis()).unwrap_or(u64::MAX);
+    let vector =
+        officina_core::spawn::triage_call(TRIAGE_MODEL, &schema(), config_dir.as_deref(), &home)
+            .tightened(deadline_ms, job.limits.stdout_cap)
+            .with_stdin(prompt.into_bytes());
+    let claude = ResolvedClaude::new(claude.to_path_buf());
+    let ran = match execute(&claude, &vector, &job.base_env) {
+        Ok(SpawnOutcome::Captured(ran)) => ran,
+        Ok(SpawnOutcome::Started { .. }) => return failed("claude was not captured"),
+        Err(error) if matches!(error.cause(), SpawnError::Timeout(_)) => {
             return Ran {
                 outcome: TriageOutcome::Timeout,
                 answer: None,
@@ -238,7 +216,7 @@ fn spawn_and_wait(job: &TriageJob, claude: &Path, prompt: String) -> Ran {
                 )),
             };
         }
-        Err(error) => return failed(format!("claude {error}")),
+        Err(error) => return failed(error.to_string()),
     };
     let (answer, usage) = if ran.stdout_over {
         (Err(ModelOutputError::TooLarge), CallUsage::default())
@@ -832,7 +810,7 @@ mod tests {
             officina_home: PathBuf::from("home"),
             config_dir: None,
             no_excerpts: false,
-            base_env: Arc::new(Vec::new()),
+            base_env: BaseEnv::default(),
             limits: CallLimits::default(),
         };
         assert!(!worker.gone());

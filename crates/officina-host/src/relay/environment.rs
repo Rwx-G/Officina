@@ -92,6 +92,10 @@ pub fn value_of<'e>(env: &'e [(String, String)], name: &str) -> Option<&'e str> 
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test inspects the environment start_from gives a command"
+)]
 mod tests {
     use super::*;
 

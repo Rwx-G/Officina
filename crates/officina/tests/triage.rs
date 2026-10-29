@@ -5,25 +5,28 @@
 //! and answers by its mode. No real model is ever called.
 
 mod common;
+#[path = "../../../tests/support/spawn_cases.rs"]
+mod spawn_cases;
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::time::Duration;
 
 use officina_core::registry::confirm::{ConfirmItem, FileUnder, ItemOutcome};
 use officina_core::registry::proposal::default_proposal;
-use officina_core::registry::triage_call::{
-    CALL_SPACING_MS, CONFIG_DIR_VAR, NO_CURRENT_DIR_VAR, TRIAGE_ENV_AUTH, TRIAGE_ENV_NETWORK,
-    TRIAGE_ENV_SYSTEM, TriageCase, argv, passed_to_triage,
-};
+use officina_core::registry::triage_call::{CALL_SPACING_MS, TriageCase};
 use officina_core::registry::types::{
     ModelVerdict, ProposalSource, TriageOutcome, TriagePurpose, TriageRefusal, Verdict,
+};
+use officina_core::spawn::{
+    CONFIG_DIR_VAR, CONTAINED_ENV_AUTH, CONTAINED_ENV_NETWORK, CONTAINED_ENV_SYSTEM,
+    NO_CURRENT_DIR_VAR, VectorKind, passed_to_contained,
 };
 use officina_host::registry::ingest::IngestContext;
 use officina_host::registry::store::{Writer, open_reader, open_writer};
 use officina_host::registry::triage::{
     CallLimits, CallResult, Triage, TriageJob, run_call, workdir,
 };
+use officina_host::spawn::BaseEnv;
 
 /// What a triage call reached the fake with, from its log.
 #[derive(Debug)]
@@ -98,7 +101,7 @@ impl Setup {
             officina_home: self.home(),
             config_dir: None,
             no_excerpts: false,
-            base_env: Arc::new(base),
+            base_env: BaseEnv::new(base),
             limits: CallLimits::default(),
         }
     }
@@ -142,8 +145,9 @@ fn fake_triage_mode_answers_the_named_verdict() {
     assert_eq!(setup.logged().len(), ModelVerdict::ALL.len());
 }
 
-/// AD-51, AD-58 gate: the child gets core's argument vector, each element
-/// one argument, the empty values of `--tools` and `--setting-sources`
+/// AD-51 as amended, AD-58 gate, story 5.2 AC 10: the child gets the
+/// `TriageCall` case of `tests/vectors/spawn.json`, each element one
+/// argument, the empty values of `--tools` and `--setting-sources`
 /// included, and runs in the empty work folder.
 #[test]
 fn argv_matches_the_golden_vector() {
@@ -151,7 +155,13 @@ fn argv_matches_the_golden_vector() {
     setup.run(&setup.job(case_naming("finished"), plain_base()));
     let logged = setup.logged();
     assert_eq!(logged.len(), 1);
-    assert_eq!(logged[0].argv, argv());
+    let golden = spawn_cases::load()
+        .cases
+        .into_iter()
+        .find(|case| case.kind() == VectorKind::TriageCall)
+        .expect("a TriageCall case");
+    let expected: Vec<String> = serde_json::from_value(golden.expect["args"].clone()).unwrap();
+    assert_eq!(logged[0].argv, expected);
     assert_eq!(
         logged[0].argv.iter().filter(|a| a.is_empty()).count(),
         2,
@@ -197,10 +207,10 @@ fn excerpts_reach_the_child_on_stdin_only() {
 fn only_the_allowed_variables_reach_the_child() {
     let setup = Setup::new("triage");
     let mut base = plain_base();
-    let allowed: Vec<&str> = TRIAGE_ENV_SYSTEM
+    let allowed: Vec<&str> = CONTAINED_ENV_SYSTEM
         .iter()
-        .chain(TRIAGE_ENV_NETWORK)
-        .chain(TRIAGE_ENV_AUTH)
+        .chain(CONTAINED_ENV_NETWORK)
+        .chain(CONTAINED_ENV_AUTH)
         .copied()
         .filter(|name| !name.eq_ignore_ascii_case("SystemRoot"))
         .collect();
@@ -239,7 +249,7 @@ fn only_the_allowed_variables_reach_the_child() {
     for (name, value) in env {
         assert_ne!(value, "dropped", "{name} reached the child");
         assert!(
-            passed_to_triage(name)
+            passed_to_contained(name)
                 || name.eq_ignore_ascii_case(NO_CURRENT_DIR_VAR)
                 || name.eq_ignore_ascii_case(CONFIG_DIR_VAR),
             "{name} reached the child"

@@ -272,6 +272,10 @@ pub fn run_contained(
 }
 
 #[cfg(all(test, windows))]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the tests wait on cmd.exe children"
+)]
 mod tests {
     use super::*;
 

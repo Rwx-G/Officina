@@ -5,9 +5,11 @@ use std::path::{Path, PathBuf};
 use officina_core::board::{Card, SessionKindView};
 use officina_core::focus::{FocusOutcome, candidate_names, is_valid_attach_id};
 use officina_core::quota::fnv1a;
+use officina_core::spawn::BackgroundId;
 
 use crate::files::append_line;
 use crate::paths::{Paths, user_home};
+use crate::spawn::{BaseEnv, ResolvedClaude, SpawnError, SpawnOutcome, execute};
 
 /// What the focus action needs beyond the card.
 #[derive(Debug, Clone)]
@@ -15,14 +17,17 @@ pub struct FocusContext {
     pub claude: Option<PathBuf>,
     pub config_override: Option<PathBuf>,
     pub state_dir: PathBuf,
+    /// The environment the attach console's own is built from (D-86).
+    pub base_env: BaseEnv,
 }
 
 impl FocusContext {
-    pub fn new(paths: &Paths, claude: Option<PathBuf>) -> FocusContext {
+    pub fn new(paths: &Paths, claude: Option<PathBuf>, base_env: BaseEnv) -> FocusContext {
         FocusContext {
             claude,
             config_override: paths.claude_config_override.clone(),
             state_dir: paths.state_dir(),
+            base_env,
         }
     }
 }
@@ -51,31 +56,33 @@ fn focus_window(_pid: u32, _names: &[String]) -> FocusOutcome {
     FocusOutcome::Unsupported
 }
 
+/// What a failed attach adds: the board's other way in (AD-79's "gives
+/// up").
+pub const COPY_ATTACH_HINT: &str = "copy the attach command and run it in your own terminal";
+
+/// Opens `claude attach <id>` in a console of its own through the spawn
+/// module's `Attach` vector; a `claude` Officina refuses to run (a shim)
+/// fails with the copy-attach-command path.
 fn open_attach(card: &Card, ctx: &FocusContext) -> FocusOutcome {
-    let Some(id) = card
-        .background_id
-        .as_deref()
-        .filter(|id| is_valid_attach_id(id))
-    else {
+    let Some(id) = card.background_id.as_deref().and_then(BackgroundId::parse) else {
         return FocusOutcome::Failed("invalid or missing background session id".into());
     };
     let Some(claude) = &ctx.claude else {
         return FocusOutcome::Failed("claude not found".into());
     };
-    spawn_attach(claude, id, ctx.config_override.as_deref())
-}
-
-#[cfg(windows)]
-fn spawn_attach(claude: &Path, id: &str, config: Option<&Path>) -> FocusOutcome {
-    match crate::platform::windows::open_attach_console(claude, id, config) {
-        Ok(()) => FocusOutcome::AttachOpened,
+    let config = ctx
+        .config_override
+        .as_deref()
+        .map(|dir| dir.to_string_lossy().into_owned());
+    let vector = officina_core::spawn::attach(&id, config.as_deref());
+    match execute(&ResolvedClaude::new(claude.clone()), &vector, &ctx.base_env) {
+        Ok(SpawnOutcome::Started { .. } | SpawnOutcome::Captured(_)) => FocusOutcome::AttachOpened,
+        Err(SpawnError::Unsupported) => FocusOutcome::Unsupported,
+        Err(e @ SpawnError::NotNative(_)) => {
+            FocusOutcome::Failed(format!("{e}; or {COPY_ATTACH_HINT}"))
+        }
         Err(e) => FocusOutcome::Failed(e.to_string()),
     }
-}
-
-#[cfg(not(windows))]
-fn spawn_attach(_claude: &Path, _id: &str, _config: Option<&Path>) -> FocusOutcome {
-    FocusOutcome::Unsupported
 }
 
 /// Characters an interactive bash still interprets inside double quotes:
@@ -243,6 +250,7 @@ mod tests {
             claude: None,
             config_override: None,
             state_dir: dir.to_path_buf(),
+            base_env: BaseEnv::default(),
         }
     }
 
@@ -266,6 +274,36 @@ mod tests {
             "claude attach abc"
         );
         assert_eq!(attach_command(&bad_id, &context), None);
+    }
+
+    /// AD-79, D-562: a `claude` that is not a native executable is never
+    /// run for attach; the failure names the copy-attach-command path,
+    /// which the card still offers.
+    #[test]
+    fn attach_through_a_shim_fails_with_the_copy_hint() {
+        let dir = tempfile::tempdir().unwrap();
+        let ran = dir.path().join("ran.txt");
+        let cwd = dir.path().to_string_lossy().into_owned();
+        let bg = card(SessionKindView::Background, Some("abc"), Some(&cwd));
+        for name in ["claude.cmd", "claude.bat", "claude.com"] {
+            let shim = dir.path().join(name);
+            std::fs::write(&shim, format!("@echo ran> \"{}\"\r\n", ran.display())).unwrap();
+            let context = FocusContext {
+                claude: Some(shim),
+                ..ctx(dir.path())
+            };
+            let FocusOutcome::Failed(why) = focus_card(&bg, &context) else {
+                panic!("{name}: attach through a shim must fail");
+            };
+            assert!(why.contains(COPY_ATTACH_HINT), "{name}: {why}");
+            assert!(why.contains(name), "{name}: {why}");
+            assert_eq!(
+                attach_command(&bg, &context).as_deref(),
+                Some("claude attach abc"),
+                "the copy path stays offered"
+            );
+        }
+        assert!(!ran.exists(), "a shim ran");
     }
 
     #[test]

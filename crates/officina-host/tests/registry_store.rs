@@ -2,6 +2,11 @@
 //! D-93, D-94, D-97): location, connection settings, readers beside and
 //! after the writer, the version rule, integrity at open, copies.
 
+#![expect(
+    clippy::disallowed_methods,
+    reason = "a test starts the crash helper example and kills it"
+)]
+
 mod common;
 
 use std::io::{BufRead, BufReader};

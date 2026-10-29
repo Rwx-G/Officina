@@ -13,17 +13,25 @@
 //!   running would), or `tree` (starts a copy of itself that appends a byte
 //!   to `FAKE_CLAUDE_HEARTBEAT` every 100 ms, for 30 s at most or until a
 //!   file named like it plus `.stop` exists, then hangs for 60 s); and the
-//!   triage modes below.
+//!   triage modes below; `interactive` (story 5.2, D-129) records in its
+//!   log line whether its stdin and stdout are a console, then exits 0, for
+//!   the kinds that start in a console of their own.
 //! - `FAKE_CLAUDE_HANG_MS` (`hang_ms`): how long `hang` sleeps, 60 s by
 //!   default.
 //! - `FAKE_CLAUDE_VERSION` (`version`): answer to `--version`.
-//! - `FAKE_CLAUDE_LOG` (`log`): each call appends its argv and
-//!   `CLAUDE_CONFIG_DIR`, so tests can assert what reached the child; empty
-//!   logs nothing.
+//! - `FAKE_CLAUDE_LOG` (`log`): each call appends one line of JSON (D-129),
+//!   `{"argv": [...], "cwd": "...", "env_names": [...], "config_dir": ...}`,
+//!   the names sorted and never a value but `CLAUDE_CONFIG_DIR`'s, which
+//!   Officina sets itself, so tests compare argument vectors element by
+//!   element and assert what reached the child by name; empty logs nothing.
 //! - `FAKE_CLAUDE_HEARTBEAT` (`heartbeat`): the file `tree`'s copy beats in.
 //! - `FAKE_CLAUDE_TRIAGE_LOG` (`triage_log`): each triage call appends one
 //!   JSON line with its argv, its environment, its config dir, its working
 //!   directory and its stdin, so tests can assert what reached it and how.
+//!
+//! As `claude` does (S7, E19), with `CLAUDE_CODE_DISABLE_AGENT_VIEW=1` a
+//! call holding `--bg`, or whose first argument is `agents` or `logs`,
+//! exits 1 with Claude Code's message, after its log line.
 //!
 //! A call whose first argument is `-p` is a triage call (AD-51). In a mode
 //! starting with `triage` it reads its stdin, logs, and then: `triage`
@@ -38,7 +46,7 @@
 //! those modes answers as `ok`, so a collector sharing the copy keeps its
 //! session list.
 
-use std::io::{Read, Write};
+use std::io::{IsTerminal, Read, Write};
 use std::time::Duration;
 
 /// How long the process `orphan` leaves behind holds the output: well past
@@ -50,6 +58,52 @@ const SIDECAR: &str = "fake-claude.json";
 
 /// The token a test puts in an excerpt to choose the fake model's verdict.
 const VERDICT_TOKEN: &str = "FAKE-VERDICT:";
+
+/// Set to `1`, `claude` refuses `--bg`, `agents` and `logs` (S7).
+const AGENT_VIEW_OFF: &str = "CLAUDE_CODE_DISABLE_AGENT_VIEW";
+
+/// What `claude` refuses with agent view off, and the name its message
+/// gives it (E19).
+fn refused_without_agent_view(args: &[String]) -> Option<&'static str> {
+    if args.iter().any(|a| a == "--bg") {
+        return Some("'--bg'");
+    }
+    match args.first().map(String::as_str) {
+        Some("agents") => Some("'claude agents --json'"),
+        Some("logs") => Some("'claude logs'"),
+        _ => None,
+    }
+}
+
+/// Appends this call's line to the log (D-129): its argv, its working
+/// directory, its variables' names sorted, its config dir, and in
+/// `interactive` mode whether stdin and stdout are a console.
+fn log_call(log: &str, args: &[String], interactive: bool) {
+    let Ok(mut f) = std::fs::OpenOptions::new()
+        .append(true)
+        .create(true)
+        .open(log)
+    else {
+        return;
+    };
+    let mut names: Vec<String> = std::env::vars_os()
+        .map(|(name, _)| name.to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    let mut entry = serde_json::json!({
+        "argv": args,
+        "cwd": std::env::current_dir().ok(),
+        "env_names": names,
+        "config_dir": std::env::var("CLAUDE_CONFIG_DIR").ok(),
+    });
+    if interactive {
+        entry["console"] = serde_json::json!({
+            "stdin": std::io::stdin().is_terminal(),
+            "stdout": std::io::stdout().is_terminal(),
+        });
+    }
+    let _ = writeln!(f, "{entry}");
+}
 
 /// The setting `name`: `FAKE_CLAUDE_<NAME>` when set, even empty, else the
 /// sidecar's `name` key.
@@ -223,14 +277,14 @@ fn main() {
         return;
     }
     let args: Vec<String> = std::env::args().skip(1).collect();
-    if let Some(log) = setting("log").filter(|log| !log.is_empty())
-        && let Ok(mut f) = std::fs::OpenOptions::new()
-            .append(true)
-            .create(true)
-            .open(log)
+    if let Some(log) = setting("log").filter(|log| !log.is_empty()) {
+        log_call(&log, &args, mode == "interactive");
+    }
+    if std::env::var(AGENT_VIEW_OFF).is_ok_and(|v| v == "1")
+        && let Some(refused) = refused_without_agent_view(&args)
     {
-        let config = std::env::var("CLAUDE_CONFIG_DIR").unwrap_or_default();
-        let _ = writeln!(f, "{}\tCLAUDE_CONFIG_DIR={config}", args.join(" "));
+        eprintln!("{refused} is disabled by {AGENT_VIEW_OFF}.");
+        std::process::exit(1);
     }
     if args.first().map(String::as_str) == Some("--version") {
         let version = setting("version").unwrap_or_else(|| "9.9.9".into());
@@ -246,6 +300,7 @@ fn main() {
         return;
     }
     match mode.as_str() {
+        "interactive" => {}
         "hang" => {
             let ms = setting("hang_ms")
                 .and_then(|v| v.parse().ok())

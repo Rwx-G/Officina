@@ -18,7 +18,6 @@ use officina_core::registry::types::RegistryState;
 use officina_core::registry::view::RESTORE_NOTICE_MS;
 use officina_core::relay::gate::gated_tools;
 
-use crate::claude;
 use crate::collector::{Collector, ContractStore};
 use crate::files::{now_ms, read_recent_events};
 use crate::paths::{ENV_FLOOR, Paths, env_path, events_dir_of};
@@ -29,6 +28,7 @@ use crate::registry::store::{
 use crate::relay::doctor::{self as relay_doctor, RelayDoctor};
 use crate::relay::gate::GATE_EVENT;
 use crate::relay::home::RelayHome;
+use crate::spawn::{self, BaseEnv, ResolvedClaude, SpawnError};
 use crate::writers::hook_keeps_excerpts;
 
 /// Hook events the hook records in the event buffer (framing principle 5).
@@ -647,33 +647,58 @@ fn registry_section(mut checks: Vec<Check>) -> Vec<Check> {
     checks
 }
 
+/// What a `claude` that is not a native executable costs (AD-94 part A,
+/// FR-15, D-562): every use Officina has for it is refused, and the attach
+/// command can still be copied. Replaces v0.3's shim line (D-436).
+pub fn refused_claude_line(claude: &Path) -> String {
+    format!(
+        "claude resolves to {}, which is not a native claude.exe, and Officina runs no other: launches, answers, reviews, the orchestrator, attach, the board's refresh and the triage call are refused; a background session's attach command can still be copied; install the native claude.exe or set OFFICINA_CLAUDE_BIN to it",
+        claude.display()
+    )
+}
+
 /// `claude --version`, then `claude agents --json` against the contract;
 /// the version, when it was read, for the hook fields of the registry
-/// section.
+/// section. A `claude` Officina refuses to run fails with one line.
 fn check_claude(collector: &Collector) -> (Vec<Check>, Option<String>) {
-    let Some(bin) = collector.claude() else {
+    let Some(bin) = collector.resolved_claude() else {
         return (
             vec![check(
                 Level::Fail,
                 "claude",
-                claude::ClaudeError::NotFound.to_string(),
+                SpawnError::NotFound.to_string(),
             )],
             None,
         );
     };
+    if !bin.is_native() {
+        return (
+            vec![check(
+                Level::Fail,
+                "claude",
+                refused_claude_line(bin.path()),
+            )],
+            None,
+        );
+    }
     let config_dir = collector.paths().claude_config_override.as_deref();
-    match claude::version(bin, config_dir) {
+    let base = collector.base_env();
+    match spawn::version(bin, config_dir, base) {
         Ok(v) => (
             vec![
-                check(Level::Ok, "claude", format!("{v} at {}", bin.display())),
-                check_agents_output(bin, config_dir),
+                check(
+                    Level::Ok,
+                    "claude",
+                    format!("{v} at {}", bin.path().display()),
+                ),
+                check_agents_output(bin, config_dir, base),
             ],
             Some(v),
         ),
         Err(e) => (
             vec![
                 check(Level::Fail, "claude", e.to_string()),
-                check_agents_output(bin, config_dir),
+                check_agents_output(bin, config_dir, base),
             ],
             None,
         ),
@@ -715,9 +740,9 @@ fn check_hook_fields(contract_file: &Path, version: &str) -> Check {
     check(level, TITLE, detail)
 }
 
-fn check_agents_output(bin: &Path, config_dir: Option<&Path>) -> Check {
+fn check_agents_output(bin: &ResolvedClaude, config_dir: Option<&Path>, base: &BaseEnv) -> Check {
     const TITLE: &str = "claude agents --json";
-    let out = match claude::agents_json(bin, config_dir) {
+    let out = match spawn::agents_json(bin, config_dir, base) {
         Ok(out) => out,
         Err(e) => return check(Level::Fail, TITLE, e.to_string()),
     };
@@ -1257,8 +1282,9 @@ fn counted(counts: &CallCounts) -> String {
 
 /// The triage model (AD-53): whether it proposes or is paused, the calls
 /// and their cost today and over the count window, the latest dry run, and
-/// the refusal every call meets while `claude` resolves to a `.cmd` or
-/// `.bat` shim (AD-51). Read-only; the registry is never created.
+/// the refusal every call meets while `claude` resolves to anything but a
+/// native executable (AD-51, D-562). Read-only; the registry is never
+/// created.
 pub fn check_triage(
     claude: Option<&Path>,
     officina_home: &Path,
@@ -1271,7 +1297,7 @@ pub fn check_triage(
             Level::Warn,
             "triage call",
             format!(
-                "claude resolves to {}, a shim only cmd.exe runs: every triage call is refused before it starts; install the native claude.exe or set OFFICINA_CLAUDE_BIN to it",
+                "claude resolves to {}, which is not a native claude.exe: every triage call is refused before it starts; install the native claude.exe or set OFFICINA_CLAUDE_BIN to it",
                 shim.display()
             ),
         ));
@@ -1728,6 +1754,47 @@ mod tests {
         );
         apply_paste(&file, &block.unwrap());
         assert_eq!(SettingsFile::read(&file).get("statusLine"), Some(&value));
+    }
+
+    /// Story 5.2 AC 12 (AD-94 part A, D-562): a `claude` that is not a
+    /// native executable fails doctor with one line naming every refused
+    /// use and the attach command's copy; nothing is started for it.
+    #[test]
+    fn a_non_exe_claude_fails_with_every_refused_use() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths {
+            officina_home: dir.path().join("officina"),
+            claude_config_dir: dir.path().join("config"),
+            claude_config_override: None,
+            floor_file: None,
+        };
+        let ran = dir.path().join("ran.txt");
+        for name in ["claude.cmd", "claude.bat", "claude.com"] {
+            let shim = dir.path().join(name);
+            std::fs::write(&shim, format!("@echo ran> \"{}\"\r\n", ran.display())).unwrap();
+            let collector =
+                Collector::from_parts(paths.clone(), LoadedFloor::default(), Some(shim.clone()));
+            let (checks, version) = check_claude(&collector);
+            assert_eq!(version, None);
+            let [line] = checks.as_slice() else {
+                panic!("{name}: one line, {checks:?}");
+            };
+            assert_eq!((line.title.as_str(), line.level), ("claude", Level::Fail));
+            assert_eq!(line.detail, refused_claude_line(&shim));
+            for refused in [
+                "launches",
+                "answers",
+                "reviews",
+                "the orchestrator",
+                "attach",
+                "the board's refresh",
+                "the triage call",
+                "attach command can still be copied",
+            ] {
+                assert!(line.detail.contains(refused), "{name}: {refused}");
+            }
+        }
+        assert!(!ran.exists(), "a shim ran");
     }
 
     #[test]
@@ -2198,13 +2265,13 @@ mod tests {
             .unwrap_or_else(|| panic!("no {title} line in {checks:?}"))
     }
 
-    /// Story 3.9 AC 11 (AD-51, AD-53): a `claude` that resolves to a
-    /// `.cmd` or `.bat` shim is reported as refusing every triage call; a
-    /// native one is not.
+    /// Story 3.9 AC 11 (AD-51, AD-53): a `claude` that is not a native
+    /// executable is reported as refusing every triage call; a native one
+    /// is not.
     #[test]
     fn cmd_shim_is_reported_as_refusing_triage() {
         let dir = tempfile::tempdir().unwrap();
-        for shim in ["claude.cmd", "claude.Bat"] {
+        for shim in ["claude.cmd", "claude.Bat", "claude.com"] {
             let checks = check_triage(Some(&dir.path().join(shim)), dir.path(), &[], NOW);
             let line = registry_line(&checks, "triage call");
             assert_eq!(line.level, Level::Warn, "{shim}");

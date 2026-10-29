@@ -34,7 +34,8 @@ unsafe extern "system" {
 }
 use windows_sys::Win32::System::SystemInformation::GetSystemDirectoryW;
 use windows_sys::Win32::System::Threading::{
-    GetCurrentProcess, GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+    CREATE_UNICODE_ENVIRONMENT, GetCurrentProcess, GetProcessTimes, OpenProcess,
+    PROCESS_INFORMATION, PROCESS_QUERY_LIMITED_INFORMATION, STARTUPINFOW,
 };
 
 /// A job object: every process assigned to it, and every process those
@@ -518,30 +519,159 @@ pub fn focus_session_window(pid: u32, names: &[String]) -> officina_core::focus:
     }
 }
 
-/// Spawns `claude attach <id>` in a new console (FR-10). The child is not
-/// tracked: Officina owns no session process.
-pub fn open_attach_console(
-    claude: &std::path::Path,
-    id: &str,
-    config_dir: Option<&std::path::Path>,
-) -> std::io::Result<()> {
-    use std::os::windows::process::CommandExt;
-    const CREATE_NEW_CONSOLE: u32 = 0x0000_0010;
-    let mut cmd = std::process::Command::new(claude);
-    cmd.arg("attach").arg(id).creation_flags(CREATE_NEW_CONSOLE);
-    // `attach` needs no working directory. Running it from the session's
-    // folder would let `cmd.exe` (behind a `claude.cmd` shim) pick up a
-    // planted `node.cmd` there; the binary's own folder is not the session's
-    // to write, and the variable stops `cmd.exe` searching the current
-    // directory at all.
-    if let Some(dir) = claude.parent().filter(|d| !d.as_os_str().is_empty()) {
-        cmd.current_dir(dir);
+// windows-sys declares CreateProcessW only with its `Win32_Security`
+// feature, for the type of the two security attributes pointers. Officina
+// always passes null there, so the one function is declared here, as
+// CreateJobObjectW is above.
+#[link(name = "kernel32")]
+unsafe extern "system" {
+    fn CreateProcessW(
+        application: *const u16,
+        command_line: *mut u16,
+        process_attributes: *const std::ffi::c_void,
+        thread_attributes: *const std::ffi::c_void,
+        inherit_handles: i32,
+        creation_flags: u32,
+        environment: *const std::ffi::c_void,
+        current_directory: *const u16,
+        startup_info: *const STARTUPINFOW,
+        process_information: *mut PROCESS_INFORMATION,
+    ) -> i32;
+}
+
+/// `text` as a NUL-terminated UTF-16 string.
+fn wide(text: &std::ffi::OsStr) -> Vec<u16> {
+    use std::os::windows::ffi::OsStrExt;
+    text.encode_wide().chain(std::iter::once(0)).collect()
+}
+
+/// Appends `arg` to `line` quoted as the Microsoft C runtime parses a
+/// command line back into arguments, so each element stays exactly one
+/// argument (E13): backslashes are doubled only before a quote.
+fn push_quoted(line: &mut String, arg: &str) {
+    if !arg.is_empty() && !arg.contains([' ', '\t', '\n', '\x0b', '"']) {
+        line.push_str(arg);
+        return;
     }
-    cmd.env("NoDefaultCurrentDirectoryInExePath", "1");
-    if let Some(dir) = config_dir {
-        cmd.env(crate::paths::ENV_CLAUDE_CONFIG_DIR, dir);
+    line.push('"');
+    let mut backslashes = 0usize;
+    for c in arg.chars() {
+        match c {
+            '\\' => backslashes += 1,
+            '"' => {
+                line.extend(std::iter::repeat_n('\\', backslashes * 2 + 1));
+                line.push('"');
+                backslashes = 0;
+            }
+            other => {
+                line.extend(std::iter::repeat_n('\\', backslashes));
+                line.push(other);
+                backslashes = 0;
+            }
+        }
     }
-    cmd.spawn().map(|_| ())
+    line.extend(std::iter::repeat_n('\\', backslashes * 2));
+    line.push('"');
+}
+
+/// The command line of `program` with `args`: the program quoted whole (a
+/// path holds no quote), then each argument by [`push_quoted`].
+fn command_line(program: &std::path::Path, args: &[String]) -> String {
+    let mut line = format!("\"{}\"", program.display());
+    for arg in args {
+        line.push(' ');
+        push_quoted(&mut line, arg);
+    }
+    line
+}
+
+/// A Unicode environment block holding exactly `env`, sorted by name
+/// ignoring case as Windows expects.
+fn environment_block(env: &[(String, String)]) -> Vec<u16> {
+    let mut sorted: Vec<&(String, String)> = env.iter().collect();
+    sorted.sort_by_key(|(name, _)| name.to_uppercase());
+    let mut block: Vec<u16> = Vec::new();
+    for (name, value) in sorted {
+        block.extend(format!("{name}={value}").encode_utf16());
+        block.push(0);
+    }
+    block.push(0);
+    block
+}
+
+/// Starts `program` with `args` in a console of its own (`flags` holds
+/// `CREATE_NEW_CONSOLE`), in `cwd`, with exactly `env`, and leaves it to
+/// the author: Officina owns no session process (FR-10). It inherits no
+/// handle and is given no standard handles, so it reads and writes the
+/// new console whatever the window's own standard handles are (review
+/// F11); `std::process::Command` always passes the caller's. Returns its
+/// pid and creation time.
+pub fn start_in_new_console(
+    program: &std::path::Path,
+    args: &[String],
+    cwd: Option<&std::path::Path>,
+    env: &[(String, String)],
+    flags: u32,
+) -> io::Result<(u32, Option<u64>)> {
+    let application = wide(program.as_os_str());
+    let mut line: Vec<u16> = command_line(program, args)
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+    let block = environment_block(env);
+    let directory = cwd.map(|dir| wide(dir.as_os_str()));
+    let startup = STARTUPINFOW {
+        cb: u32::try_from(std::mem::size_of::<STARTUPINFOW>()).unwrap_or(0),
+        ..STARTUPINFOW::default()
+    };
+    let mut info = PROCESS_INFORMATION::default();
+    // SAFETY: every pointer is to a NUL-terminated buffer, or the doubly
+    // NUL-terminated environment block, that lives for the call; the
+    // command line is writable, as CreateProcessW requires; both security
+    // attribute pointers are null (defaults); `startup` is sized by its
+    // `cb`, and `info` is a writable out structure.
+    let ok = unsafe {
+        CreateProcessW(
+            application.as_ptr(),
+            line.as_mut_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
+            0,
+            flags | CREATE_UNICODE_ENVIRONMENT,
+            block.as_ptr().cast(),
+            directory.as_ref().map_or(std::ptr::null(), |d| d.as_ptr()),
+            &startup,
+            &mut info,
+        )
+    };
+    if ok == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let zero = FILETIME {
+        dwLowDateTime: 0,
+        dwHighDateTime: 0,
+    };
+    let (mut created, mut exited, mut kernel, mut user) = (zero, zero, zero, zero);
+    // SAFETY: `info.hProcess` is the new process's handle, with every
+    // right; the four out pointers are writable FILETIMEs for the call.
+    let timed = unsafe {
+        GetProcessTimes(
+            info.hProcess,
+            &mut created,
+            &mut exited,
+            &mut kernel,
+            &mut user,
+        )
+    };
+    // SAFETY: both handles came from CreateProcessW and are closed once;
+    // closing them does not end the process.
+    unsafe {
+        CloseHandle(info.hThread);
+        CloseHandle(info.hProcess);
+    }
+    let created = (timed != 0)
+        .then(|| (u64::from(created.dwHighDateTime) << 32) | u64::from(created.dwLowDateTime));
+    Ok((info.dwProcessId, created))
 }
 
 #[cfg(test)]
@@ -558,6 +688,33 @@ mod tests {
             times.windows(2).all(|w| w[1] <= w[0]),
             "every ancestor is older than its child"
         );
+    }
+
+    /// E13: each argument comes back whole from the C runtime's parse;
+    /// `crates/officina/tests/spawn.rs` replays a console kind through a
+    /// real child.
+    #[test]
+    fn quoting_keeps_each_argument_whole() {
+        // A trailing backslash is doubled only where a closing quote
+        // follows it; elsewhere backslashes are literal.
+        let args: Vec<String> = [
+            "plain",
+            "",
+            "two words",
+            "say \"hi\"",
+            "C:\\dir\\",
+            "C:\\my dir\\",
+            "a\tb\nc",
+        ]
+        .map(str::to_owned)
+        .to_vec();
+        let line = command_line(std::path::Path::new("C:\\Program Files\\claude.exe"), &args);
+        assert_eq!(
+            line,
+            "\"C:\\Program Files\\claude.exe\" plain \"\" \"two words\" \"say \\\"hi\\\"\" C:\\dir\\ \"C:\\my dir\\\\\" \"a\tb\nc\""
+        );
+        let block = environment_block(&[("b".into(), "2".into()), ("A".into(), "1".into())]);
+        assert_eq!(String::from_utf16_lossy(&block), "A=1\0b=2\0\0");
     }
 
     #[test]

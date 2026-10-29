@@ -98,6 +98,7 @@ pub mod quota;
 pub mod registry;
 pub mod relay;
 pub mod scene;
+pub mod spawn;
 pub mod untrusted;
 // Public only so `closed_enum!` expands in other crates (`$crate::wire`).
 #[doc(hidden)]

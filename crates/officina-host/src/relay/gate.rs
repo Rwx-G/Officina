@@ -586,6 +586,10 @@ mod tests {
 
     /// `cmd.exe` from the system directory, running `line`; its stdout.
     #[cfg(windows)]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the test compares the gate with cmd.exe's own parse"
+    )]
     fn cmd(line: &str) -> String {
         use std::os::windows::process::CommandExt;
         let system = crate::relay::home::system_dir().unwrap();

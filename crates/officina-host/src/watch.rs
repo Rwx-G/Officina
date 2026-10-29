@@ -56,7 +56,7 @@ pub const RELAY_POLL: Duration = POLL_VISIBLE;
 pub const CREDENTIAL_POLL: Duration = Duration::from_secs(60);
 /// How long a window command waits for the collector's answer to an author
 /// request (AD-38): a running `claude agents` takes about 210 ms (E10) and
-/// is cut at [`crate::claude::AGENTS_TIMEOUT`]; twice that is a choice, so
+/// is cut at [`crate::spawn::AGENTS_TIMEOUT`]; twice that is a choice, so
 /// a request queued behind a call that runs to its deadline is still
 /// answered.
 pub const AUTHOR_WAIT: Duration = Duration::from_secs(10);
@@ -930,7 +930,7 @@ fn triage_job(collector: &Collector, next: NextCall) -> TriageJob {
         officina_home: collector.paths().officina_home.clone(),
         config_dir: collector.paths().claude_config_override.clone(),
         no_excerpts: collector.no_excerpts(),
-        base_env: std::sync::Arc::clone(collector.triage_base_env()),
+        base_env: collector.base_env().clone(),
         limits: CallLimits::default(),
     }
 }

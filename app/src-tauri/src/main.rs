@@ -26,6 +26,7 @@ use officina_host::focus::{
 use officina_host::paths::Paths;
 use officina_host::relay::authority::{self, AuthorityError};
 use officina_host::relay::home::RelayHome;
+use officina_host::spawn::BaseEnv;
 use officina_host::watch::{
     AUTHOR_WAIT, AuthorAnswer, AuthorCommand, AuthorRequest, CollectorMsg, Emit, spawn,
 };
@@ -50,13 +51,19 @@ struct AppState {
     /// dir that focus and attach pass to `claude`.
     paths: Arc<RwLock<Paths>>,
     claude: Option<PathBuf>,
+    /// The environment the attach console's own is built from (D-86).
+    base_env: BaseEnv,
 }
 
 impl AppState {
     /// What focus and attach need, from the paths in use now.
     fn focus_context(&self) -> Option<FocusContext> {
         let paths = self.paths.read().ok()?;
-        Some(FocusContext::new(&paths, self.claude.clone()))
+        Some(FocusContext::new(
+            &paths,
+            self.claude.clone(),
+            self.base_env.clone(),
+        ))
     }
 
     /// A sender for a command that runs off the main thread.
@@ -456,16 +463,12 @@ fn main() {
             }
         }))
         .setup(|app| {
-            // A triage call's environment is built from the window's own
-            // (AD-51, D-86), as core's allow lists keep it.
-            let collector = Collector::new(floor_arg().as_deref())?.with_triage_base_env(
-                std::env::vars_os()
-                    .filter_map(|(name, value)| {
-                        Some((name.into_string().ok()?, value.into_string().ok()?))
-                    })
-                    .collect(),
-            );
+            // Every `claude` the window starts has its environment built
+            // from the window's own, read once here (D-86), by its kind's
+            // rule (D-561).
+            let collector = Collector::new(floor_arg().as_deref())?;
             let claude = collector.claude().map(std::path::Path::to_path_buf);
+            let base_env = collector.base_env().clone();
             let relay_home = collector.relay().clone();
             // From now on, a decision the window did not make shows (D-173).
             if let Err(e) = authority::ensure_record(&relay_home) {
@@ -484,6 +487,7 @@ fn main() {
                 sender: std::sync::Mutex::new(watch.sender),
                 paths: watch.paths,
                 claude,
+                base_env,
             });
             Ok(())
         })

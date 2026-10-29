@@ -1732,7 +1732,7 @@ fn board_keeps_its_pace_while_a_triage_call_hangs() {
     )];
     let collector = Collector::from_parts(paths_of(&env, None), LoadedFloor::default(), Some(fake))
         .with_credential_store(OwnedStore(Box::new(FakeStore::empty())))
-        .with_triage_base_env(base);
+        .with_base_env(officina_host::spawn::BaseEnv::new(base));
     let (sink, emitted) = common::sink(|_| {});
     let handle = spawn(collector, sink).unwrap();
     until(&emitted.boards, |b| shows(b, "s-live"));
@@ -2000,7 +2000,7 @@ fn the_collector_sends_a_default_row_to_the_enabled_model() {
     )];
     let collector = Collector::from_parts(paths_of(&env, None), LoadedFloor::default(), Some(fake))
         .with_credential_store(OwnedStore(Box::new(FakeStore::empty())))
-        .with_triage_base_env(base);
+        .with_base_env(officina_host::spawn::BaseEnv::new(base));
     let (sink, emitted) = common::sink(|_| {});
     let handle = spawn(collector, sink).unwrap();
     until(&emitted.boards, |b| shows(b, "s-live"));

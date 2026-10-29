@@ -1,11 +1,16 @@
 //! Starting a process action (AD-30, AD-31): its command, the job it runs
 //! in, its deadline, and the one ending every way out of it goes through.
+//! Also the command of doctor's WSL probe (story 2.10), which runs a
+//! catalogue program's path the way an action would: `relay::run` is where
+//! a catalogue program starts (AD-73, D-128).
 
+use std::ffi::OsStr;
 use std::io::Write;
+use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
-use officina_core::relay::argv::Launch;
+use officina_core::relay::argv::{Launch, WSL_REMOVED_ENV};
 use officina_core::relay::journal::RunOutcome;
 use officina_core::relay::run::{EXIT_NOT_STARTED, EXIT_TIMEOUT, RunPlan};
 
@@ -13,15 +18,45 @@ use super::OUTPUT_GRACE;
 use super::journaling::{end_run, process_finished};
 use super::output::{Output, no_streams};
 use crate::process::{Waited, hide_console, wait_until};
+use crate::relay::doctor::WSL_TEST_PROGRAM;
 use crate::relay::environment::{launch_env, start_from};
 use crate::relay::home::RelayHome;
+
+#[expect(
+    clippy::disallowed_methods,
+    reason = "relay::run is where a catalogue program starts (AD-73)"
+)]
+fn program_command(program: &OsStr) -> Command {
+    Command::new(program)
+}
+
+/// The command probing `path` in `distro` (the default one when `None`):
+/// `wsl.exe [-d <distro>] --exec /usr/bin/test -x <path>`, never through a
+/// shell, stdio null, no console window, the environment `officina run`
+/// gives `wsl.exe` (D-6).
+pub fn wsl_probe_command(wsl: &Path, distro: Option<&str>, path: &str) -> Command {
+    let mut command = program_command(wsl.as_os_str());
+    if let Some(distro) = distro {
+        command.args(["-d", distro]);
+    }
+    command
+        .args(["--exec", WSL_TEST_PROGRAM, "-x", path])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    for key in WSL_REMOVED_ENV {
+        command.env_remove(key);
+    }
+    hide_console(&mut command);
+    command
+}
 
 /// The command for a launch (AD-30): the program itself, its arguments as a
 /// vector, the project folder as working directory, an environment cleared
 /// then built from `base` ([`launch_env`], D-175), the declared `env` added
 /// and `env_remove` removed, stdin null, no console window.
 pub fn command_for(launch: &Launch, base: &[(String, String)]) -> Command {
-    let mut command = Command::new(&launch.program);
+    let mut command = program_command(OsStr::new(&launch.program));
     command
         .args(&launch.args)
         .current_dir(&launch.cwd)

@@ -10,6 +10,11 @@
 //! window-authority --example registry_crash_helper`). The random kill
 //! points come from a seed printed first; `OFFICINA_CRASH_SEED` replays one.
 
+#![expect(
+    clippy::disallowed_methods,
+    reason = "the tests start the crash helper example and kill it"
+)]
+
 mod common;
 
 use std::io::{BufRead, BufReader};

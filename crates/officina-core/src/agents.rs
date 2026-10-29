@@ -6,28 +6,6 @@
 
 use serde::{Deserialize, Serialize};
 
-/// True when the `claude` binary at `binary` is a `.cmd` or `.bat` shim,
-/// which only `cmd.exe` runs: Officina runs no such shim for any call
-/// (`claude agents`, `claude --version`, the triage call), since `cmd.exe`
-/// re-parses what it is given and runs whatever the script says. Windows
-/// drops trailing dots and spaces from a file name, so `claude.cmd.` is a
-/// shim too. Matched on the name, ignoring case.
-///
-/// ```
-/// use officina_core::agents::is_cmd_shim;
-/// assert!(is_cmd_shim("C:/npm/claude.CMD"));
-/// assert!(is_cmd_shim("C:/npm/claude.bat. "));
-/// assert!(!is_cmd_shim("C:/bin/claude.exe"));
-/// assert!(!is_cmd_shim("C:/bin/claude"));
-/// ```
-pub fn is_cmd_shim(binary: &str) -> bool {
-    let name = binary.rsplit(['/', '\\']).next().unwrap_or(binary);
-    let name = name.trim_end_matches(['.', ' ']);
-    name.rsplit_once('.').is_some_and(|(_, extension)| {
-        extension.eq_ignore_ascii_case("cmd") || extension.eq_ignore_ascii_case("bat")
-    })
-}
-
 /// Whether a session runs in a terminal the author drives, or under the
 /// background supervisor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

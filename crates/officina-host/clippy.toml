@@ -1,0 +1,8 @@
+# One spawn module is a lint, not a promise (AD-73, D-128 as amended by
+# D-562): a process starts in `spawn` (claude), `relay::run` (catalogue
+# programs) or `git` (read-only git), each with an `expect` stating why;
+# tests and examples carry their own. `tests/spawn_lint.rs` holds `src/` to
+# exactly those three sites.
+disallowed-methods = [
+  { path = "std::process::Command::new", reason = "a process starts in spawn, relay::run or git (AD-73)" },
+]

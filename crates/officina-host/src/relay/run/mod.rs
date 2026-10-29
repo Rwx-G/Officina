@@ -26,6 +26,8 @@ mod request;
 mod send;
 mod spawn;
 
+pub use spawn::wsl_probe_command;
+
 #[cfg(test)]
 mod fixture;
 

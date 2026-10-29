@@ -7,7 +7,7 @@ use std::process::Stdio;
 use std::time::{Duration, Instant};
 
 use common::{TestEnv, now_ms};
-use officina_host::claude::{AGENTS_TIMEOUT, OUTPUT_GRACE};
+use officina_host::spawn::{AGENTS_TIMEOUT, OUTPUT_GRACE};
 
 fn agents_fixture(now: i64) -> String {
     serde_json::json!([
@@ -160,7 +160,7 @@ fn a_process_claude_leaves_running_cannot_hold_the_board() {
         serde_json::from_slice(&std::fs::read(&board_file).unwrap()).unwrap();
     assert_eq!(
         board["stale"]["error"],
-        officina_host::claude::ClaudeError::OutputHeld.to_string()
+        officina_host::spawn::SpawnError::OutputHeld.to_string()
     );
 }
 
@@ -195,12 +195,15 @@ fn floor_config_dir_reaches_the_claude_child() {
     assert_eq!(out.status.code(), Some(0));
     let board: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(board["floor"], "work");
-    let log = std::fs::read_to_string(env.fake_log()).unwrap();
-    assert!(log.contains("agents --json --all"));
-    assert!(log.contains(&format!(
-        "CLAUDE_CONFIG_DIR={}",
+    let calls = common::fake_claude_calls(&env.fake_log());
+    let agents = calls
+        .iter()
+        .find(|call| common::logged_argv(call) == ["agents", "--json", "--all"])
+        .expect("claude agents ran");
+    assert_eq!(
+        agents["config_dir"],
         other.to_string_lossy().replace('\\', "/")
-    )));
+    );
 }
 
 #[test]
@@ -267,10 +270,12 @@ fn schema_2_floor_maps_projects_like_schema_1() {
     for (name, content) in [("v1.toml", &v1), ("v2.toml", &v2)] {
         std::fs::write(env.fake_log(), "").unwrap();
         let board = board_with_floor(&env, name, content);
-        let log = std::fs::read_to_string(env.fake_log()).unwrap();
+        let calls = common::fake_claude_calls(&env.fake_log());
         assert!(
-            log.contains(&format!("CLAUDE_CONFIG_DIR={config}")),
-            "{name}: {log}"
+            calls
+                .iter()
+                .any(|call| call["config_dir"] == config.as_str()),
+            "{name}: {calls:?}"
         );
         assert!(board["diagnostics"]["floor_error"].is_null(), "{name}");
         boards.push(board);

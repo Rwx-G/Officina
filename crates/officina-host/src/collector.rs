@@ -20,7 +20,6 @@ use officina_core::registry::types::{RegistryReport, SubjectRef};
 use officina_core::scene::{SceneState, states_by_key};
 use serde::{Deserialize, Serialize};
 
-use crate::claude;
 use crate::doctor::BUFFERED_EVENTS;
 use crate::files::{atomic_write, read_recent_events};
 use crate::paths::{ENV_FLOOR, Paths, env_path, excerpts_disabled_by_env};
@@ -29,6 +28,7 @@ use crate::relay::credential::{CredentialStore, OwnedStore};
 use crate::relay::home::RelayHome;
 use crate::relay::known_projects::KnownProjectsKeeper;
 use crate::relay::tree::{self, TreeResult};
+use crate::spawn::{self, BaseEnv, ResolvedClaude, SpawnError};
 
 /// How long the window trusts a project's tree fingerprint before it runs
 /// `git` again for an approval card's dry run (D-170): boards are rebuilt on
@@ -215,7 +215,7 @@ pub struct Collector {
     /// `config_dir` applies to these.
     base_paths: Paths,
     floor: LoadedFloor,
-    claude: Option<PathBuf>,
+    claude: Option<ResolvedClaude>,
     relay: RelayHome,
     credentials: OwnedStore,
     agents: Option<Vec<AgentRecord>>,
@@ -234,9 +234,9 @@ pub struct Collector {
     /// What the ingested event lines said about the hook payloads, kept
     /// until the running version and its record are known (AD-56).
     hook_sightings: HookSightings,
-    /// The environment a triage call's own is built from (AD-51, D-86):
-    /// the window's, given at start; empty unless one is given.
-    triage_base_env: std::sync::Arc<Vec<(String, String)>>,
+    /// The environment every `claude` vector's own is built from (D-86):
+    /// this process's at start, or the one a test gives.
+    base_env: BaseEnv,
     /// The scene state of each card of the board built last, emitted or
     /// not: the next board's previous states, so an unknown card keeps its
     /// alert (D-494).
@@ -253,7 +253,7 @@ impl Collector {
         Ok(Collector::assemble(
             paths,
             floor,
-            claude::resolve_claude(),
+            spawn::resolve_claude(),
             relay,
         ))
     }
@@ -265,13 +265,13 @@ impl Collector {
     /// environment.
     pub fn from_parts(paths: Paths, floor: LoadedFloor, claude: Option<PathBuf>) -> Collector {
         let relay = RelayHome::new(paths.officina_home.clone(), None);
-        Collector::assemble(paths, floor, claude, relay)
+        Collector::assemble(paths, floor, claude.map(ResolvedClaude::new), relay)
     }
 
     fn assemble(
         paths: Paths,
         floor: LoadedFloor,
-        claude: Option<PathBuf>,
+        claude: Option<ResolvedClaude>,
         relay: RelayHome,
     ) -> Collector {
         let config_dir = floor.file.as_ref().and_then(|f| f.config_dir.clone());
@@ -293,21 +293,21 @@ impl Collector {
             subjects: BTreeMap::new(),
             settlements: BTreeMap::new(),
             hook_sightings: HookSightings::default(),
-            triage_base_env: std::sync::Arc::new(Vec::new()),
+            base_env: BaseEnv::from_process(),
             last_scene: RefCell::new(BTreeMap::new()),
         }
     }
 
-    /// The collector building each triage call's environment from `base`
-    /// (D-86): the window passes its own, a test one of its making.
-    pub fn with_triage_base_env(mut self, base: Vec<(String, String)>) -> Collector {
-        self.triage_base_env = std::sync::Arc::new(base);
+    /// The collector building each `claude` vector's environment from
+    /// `base` (D-86): this process's by default, a test one of its making.
+    pub fn with_base_env(mut self, base: BaseEnv) -> Collector {
+        self.base_env = base;
         self
     }
 
-    /// The environment a triage call's own is built from.
-    pub fn triage_base_env(&self) -> &std::sync::Arc<Vec<(String, String)>> {
-        &self.triage_base_env
+    /// The environment every `claude` vector's own is built from.
+    pub fn base_env(&self) -> &BaseEnv {
+        &self.base_env
     }
 
     /// Records the registry's state, which the next board reports
@@ -355,7 +355,12 @@ impl Collector {
 
     /// The `claude` binary, when one was found.
     pub fn claude(&self) -> Option<&Path> {
-        self.claude.as_deref()
+        self.claude.as_ref().map(ResolvedClaude::path)
+    }
+
+    /// The `claude` binary as resolved, with what decides whether it runs.
+    pub fn resolved_claude(&self) -> Option<&ResolvedClaude> {
+        self.claude.as_ref()
     }
 
     /// Where the relay's files are, and which floor it reads (AD-24, D-8).
@@ -414,15 +419,19 @@ impl Collector {
     /// failed call never empties the board.
     pub fn refresh_agents(&mut self, now_ms: i64) -> bool {
         let result = match &self.claude {
-            None => Err(claude::ClaudeError::NotFound.to_string()),
-            Some(bin) => claude::agents_json(bin, self.paths.claude_config_override.as_deref())
-                .map_err(|e| e.to_string())
-                .and_then(|out| {
-                    let raw: Vec<serde_json::Value> = serde_json::from_str(out.trim())
-                        .map_err(|e| format!("claude agents output is not a JSON array: {e}"))?;
-                    let records = parse_agents(out.trim()).map_err(|e| e.to_string())?;
-                    Ok((raw, records))
-                }),
+            None => Err(SpawnError::NotFound.to_string()),
+            Some(bin) => spawn::agents_json(
+                bin,
+                self.paths.claude_config_override.as_deref(),
+                &self.base_env,
+            )
+            .map_err(|e| e.to_string())
+            .and_then(|out| {
+                let raw: Vec<serde_json::Value> = serde_json::from_str(out.trim())
+                    .map_err(|e| format!("claude agents output is not a JSON array: {e}"))?;
+                let records = parse_agents(out.trim()).map_err(|e| e.to_string())?;
+                Ok((raw, records))
+            }),
         };
         match result {
             Ok((raw, records)) => {
@@ -446,8 +455,12 @@ impl Collector {
         let Some(bin) = &self.claude else {
             return;
         };
-        self.contract.claude_version =
-            claude::version(bin, self.paths.claude_config_override.as_deref()).ok();
+        self.contract.claude_version = spawn::version(
+            bin,
+            self.paths.claude_config_override.as_deref(),
+            &self.base_env,
+        )
+        .ok();
         self.check_contract(now_ms);
     }
 

@@ -30,6 +30,13 @@ pub fn git_or_skip(test: &str) -> Option<PathBuf> {
 }
 
 /// Runs the `git` program `git` with `args` in `dir`; its output.
+// `allow`, not `expect`: the host's test crates lint `Command::new`
+// (`crates/officina-host/clippy.toml`), the CLI's do not, and this file is
+// included by both, where an `expect` would go unfulfilled.
+#[allow(
+    clippy::disallowed_methods,
+    reason = "tests build their repositories with git outside host::git"
+)]
 pub fn run_git(git: &Path, dir: &Path, args: &[&str]) -> Output {
     Command::new(git)
         .args([

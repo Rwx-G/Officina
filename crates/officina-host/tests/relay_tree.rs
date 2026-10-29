@@ -2,6 +2,11 @@
 //! temporary repositories built with `git init`. Each test skips with a
 //! printed reason on a machine without `git`.
 
+#![expect(
+    clippy::disallowed_methods,
+    reason = "a test reruns itself in a child process with git variables set"
+)]
+
 mod common;
 
 use std::path::{Path, PathBuf};

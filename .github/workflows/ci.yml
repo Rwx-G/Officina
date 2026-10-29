@@ -42,6 +42,11 @@ jobs:
         run: cargo clippy --locked -p officina-core -p officina-host -p officina --all-targets --features officina-core/ts -- -D warnings
       - name: Test
         run: cargo test --locked -p officina-core -p officina-host -p officina --features officina-core/ts
+      - name: The launch half without the authority
+        # Story 5.2 AC 7 (AD-73, D-128 review F5): the host's spawn tests
+        # built alone, so no other package turns window-authority on; the
+        # test that every launch kind is refused compiles only then.
+        run: cargo test --locked -p officina-host --lib spawn
 
   windows:
     if: github.event_name != 'schedule'
@@ -68,6 +73,11 @@ jobs:
         run: cargo clippy --locked --workspace --all-targets --features officina-core/ts -- -D warnings
       - name: Test (includes the TypeScript bindings drift check)
         run: cargo test --locked --workspace --features officina-core/ts
+      - name: The launch half without the authority
+        # Story 5.2 AC 7 (AD-73, D-128 review F5): the host's spawn tests
+        # built alone, so no other package turns window-authority on; the
+        # test that every launch kind is refused compiles only then.
+        run: cargo test --locked -p officina-host --lib spawn
       - name: Hook and gate latency, concurrent appends
         # Every #[ignore]d test of perf.rs. Hosted runners start any process
         # several times slower than a workstation; the test still gates

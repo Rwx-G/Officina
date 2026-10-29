@@ -279,11 +279,12 @@ fn no_command_writes_under_the_claude_config_dir() {
         &env.root.path().join("bin"),
         &serde_json::json!({"fixture": env.fixture(), "mode": "triage"}),
     );
-    let collector = Collector::from_parts(paths, LoadedFloor::default(), Some(fake))
-        .with_triage_base_env(vec![(
+    let collector = Collector::from_parts(paths, LoadedFloor::default(), Some(fake)).with_base_env(
+        officina_host::spawn::BaseEnv::new(vec![(
             "SYSTEMROOT".to_owned(),
             std::env::var("SYSTEMROOT").unwrap_or_default(),
-        )]);
+        )]),
+    );
     let (sink, emitted) = common::sink(|_| {});
     let watch = spawn(collector, sink).unwrap();
     emitted
@@ -366,7 +367,7 @@ fn no_command_writes_under_the_claude_config_dir() {
             officina_home: env.officina_home(),
             config_dir: Some(config.clone()),
             no_excerpts: false,
-            base_env: std::sync::Arc::new(vec![(
+            base_env: officina_host::spawn::BaseEnv::new(vec![(
                 "SYSTEMROOT".to_owned(),
                 std::env::var("SYSTEMROOT").unwrap_or_default(),
             )]),

@@ -52,13 +52,13 @@ use std::process::{Command, ExitCode, Stdio};
 use std::time::{Duration, Instant};
 
 use officina_core::dates::utc_date;
-use officina_core::registry::triage_call::triage_env;
-use officina_host::claude::{agents_json, resolve_claude};
+use officina_core::spawn::{CONFIG_DIR_VAR, NO_CURRENT_DIR_VAR, passed_to_contained};
 use officina_host::collector::load_floor;
 use officina_host::files::now_ms;
 use officina_host::paths::Paths;
 use officina_host::relay::authority::approve_catalogue;
 use officina_host::relay::home::{RelayHome, load_relay_floor};
+use officina_host::spawn::{BaseEnv, ResolvedClaude, SpawnError, resolve_claude};
 
 const USAGE: &str = "usage: gates_v05 gate1|gate4|gate8|all [--dry-run]";
 
@@ -149,6 +149,7 @@ const GATE8_REQUEST: &str = "Run `officina run check`, then `officina run apply 
 
 struct Ctx {
     claude: PathBuf,
+    resolved: ResolvedClaude,
     config_dir: Option<PathBuf>,
     base_env: Vec<(String, String)>,
     dry_run: bool,
@@ -216,8 +217,22 @@ fn repository_root() -> PathBuf {
 }
 
 fn claude_version(ctx: &Ctx) -> String {
-    officina_host::claude::version(&ctx.claude, ctx.config_dir.as_deref())
-        .unwrap_or_else(|e| format!("unknown ({e})"))
+    officina_host::spawn::version(
+        &ctx.resolved,
+        ctx.config_dir.as_deref(),
+        &BaseEnv::new(ctx.base_env.clone()),
+    )
+    .unwrap_or_else(|e| format!("unknown ({e})"))
+}
+
+/// `claude agents --json --all` through the spawn module, as the board
+/// runs it.
+fn agents_json(ctx: &Ctx) -> Result<String, SpawnError> {
+    officina_host::spawn::agents_json(
+        &ctx.resolved,
+        ctx.config_dir.as_deref(),
+        &BaseEnv::new(ctx.base_env.clone()),
+    )
 }
 
 fn scratch_dir(gate: &str) -> PathBuf {
@@ -293,7 +308,7 @@ fn ask_text(report: &mut Report, question: &str) -> String {
 /// One line per entry of `claude agents --json --all`: what tells sessions
 /// apart, never a prompt or a message.
 fn agents_listing(ctx: &Ctx) -> String {
-    let json = match agents_json(&ctx.claude, ctx.config_dir.as_deref()) {
+    let json = match agents_json(ctx) {
         Ok(json) => json,
         Err(e) => return format!("claude agents failed: {e}"),
     };
@@ -362,7 +377,7 @@ fn creation_flags(command: &mut Command, flags: u32) {
 #[cfg(not(windows))]
 fn creation_flags(_command: &mut Command, _flags: u32) {}
 
-#[allow(
+#[expect(
     clippy::disallowed_methods,
     reason = "a workstation probe starts claude by hand, outside spawn (D-128)"
 )]
@@ -393,14 +408,22 @@ fn start_in_console(
 
 /// D-561's contained environment: the allow list's names found in this
 /// console's environment, the floor's config dir and
-/// `NoDefaultCurrentDirectoryInExePath=1`, as `triage_env` builds them,
-/// then agent view off and any `extra` name the owner recorded.
+/// `NoDefaultCurrentDirectoryInExePath=1`, as the contained rule builds
+/// them, then agent view off and any `extra` name the owner recorded.
 fn contained_env(ctx: &Ctx, agent_view_off: bool, extra: &[String]) -> Vec<(String, String)> {
-    let config = ctx
-        .config_dir
-        .as_ref()
-        .map(|d| d.to_string_lossy().into_owned());
-    let mut env = triage_env(&ctx.base_env, config.as_deref());
+    let mut env: Vec<(String, String)> = ctx
+        .base_env
+        .iter()
+        .filter(|(name, _)| passed_to_contained(name))
+        .cloned()
+        .collect();
+    env.push((NO_CURRENT_DIR_VAR.to_owned(), "1".to_owned()));
+    if let Some(dir) = &ctx.config_dir {
+        env.push((
+            CONFIG_DIR_VAR.to_owned(),
+            dir.to_string_lossy().into_owned(),
+        ));
+    }
     if agent_view_off {
         env.push((AGENT_VIEW_OFF.to_owned(), "1".to_owned()));
     }
@@ -701,7 +724,7 @@ fn gate1(ctx: &Ctx) -> Report {
     report
 }
 
-#[allow(
+#[expect(
     clippy::disallowed_methods,
     reason = "a workstation probe runs claude logs, stop and rm by hand, outside spawn (D-128)"
 )]
@@ -784,7 +807,7 @@ fn gate4_project(ctx: &Ctx, report: &mut Report, label: &str, project: &Path, se
     let mut bg_id = None;
     let poll_start = Instant::now();
     while poll_start.elapsed() < Duration::from_secs(60) {
-        if let Ok(json) = agents_json(&ctx.claude, ctx.config_dir.as_deref()) {
+        if let Ok(json) = agents_json(ctx) {
             bg_id = bg_id.or_else(|| bg_id_of(&json, &name));
             let rows: Vec<serde_json::Value> = serde_json::from_str(&json).unwrap_or_default();
             for row in rows.iter().filter(|r| {
@@ -916,7 +939,7 @@ fn find_on_path(program: &str) -> Option<PathBuf> {
     })
 }
 
-#[allow(
+#[expect(
     clippy::disallowed_methods,
     reason = "a workstation probe creates its scratch repository by hand, outside host::git"
 )]
@@ -1149,7 +1172,8 @@ fn main() -> ExitCode {
     let config = floor.file.as_ref().and_then(|f| f.config_dir.clone());
     let paths = paths.with_floor_config_dir(config.as_deref());
     let ctx = Ctx {
-        claude,
+        claude: claude.path().to_path_buf(),
+        resolved: claude,
         config_dir: paths.claude_config_override,
         base_env,
         dry_run,

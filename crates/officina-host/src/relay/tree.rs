@@ -27,12 +27,11 @@
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 
 use officina_core::relay::StreamHash;
 use officina_core::relay::journal::TreeFingerprint;
 
-use super::environment::{launch_env, start_from, value_of};
+use super::environment::{launch_env, value_of};
 
 /// Where Git for Windows records its install folder, under `HKLM`, then
 /// `HKCU` (D-173).
@@ -46,16 +45,8 @@ pub const GIT_UNDER_INSTALL: &str = r"cmd\git.exe";
 /// only an administrator writes.
 pub const GIT_OFF_WINDOWS: &str = "/usr/bin/git";
 
-/// Options before every `git` subcommand: no pager, no index refresh
-/// written back, no fsmonitor hook, no untracked cache.
-pub const GIT_GLOBAL_ARGS: &[&str] = &[
-    "--no-pager",
-    "--no-optional-locks",
-    "-c",
-    "core.fsmonitor=false",
-    "-c",
-    "core.untrackedCache=false",
-];
+/// Options before every `git` subcommand, now `host::git`'s (D-128).
+pub use crate::git::GIT_GLOBAL_ARGS;
 /// The listing of the tracked files a fingerprint binds, those of active
 /// submodules included, NUL-separated, run at the top of the work tree.
 /// `git` recurses into submodules for tracked files only.
@@ -150,26 +141,16 @@ pub fn git_env() -> Vec<(String, String)> {
     env
 }
 
-/// Runs `git <args>` in `dir` with `env` ([`git_env`]); its exit code and
-/// stdout, or the reason it could not start.
+/// Runs `git <args>` in `dir` with `env` ([`git_env`]) through
+/// `host::git`, which adds the read-only flags and `GIT_OPTIONAL_LOCKS=0`;
+/// its exit code and stdout, or the reason it could not start.
 fn git(
     program: &Path,
     dir: &Path,
     args: &[&str],
     env: &[(String, String)],
 ) -> Result<(Option<i32>, Vec<u8>), String> {
-    let mut command = Command::new(program);
-    command
-        .args(GIT_GLOBAL_ARGS)
-        .args(args)
-        .current_dir(dir)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null());
-    start_from(&mut command, env);
-    crate::process::hide_console(&mut command);
-    let output = command.output().map_err(|e| e.to_string())?;
-    Ok((output.status.code(), output.stdout))
+    crate::git::output(program, dir, args, env)
 }
 
 /// Hashes one length-prefixed field, so no two inputs read alike.
@@ -434,8 +415,13 @@ fn content_hash(path: &Path, limit: u64) -> Result<Content, TreeError> {
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the tests build repositories and child test runs outside host::git"
+)]
 mod tests {
     use super::*;
+    use std::process::{Command, Stdio};
 
     /// `git` from this process's `PATH`, for building test repositories;
     /// `None` after printing why `test` skips (D-23).

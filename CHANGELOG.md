@@ -380,6 +380,17 @@ project uses [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- Attach refuses a `claude` that is not the native `claude.exe` (v0.5, story
+  5.2): through a `.cmd` or `.bat` shim, or any other file type, a click on
+  a background card fails with a message pointing at the card's copy of
+  the attach command. Every `claude` Officina starts now comes from one
+  spawn module (`claude agents`, `--version`, attach and the triage call),
+  each refusing such a binary before anything starts, and
+  `officina doctor` fails with one line naming every use that is refused.
+- The triage call also passes `--settings {"crossSessionInbound":"refuse"}`,
+  so no other session can deliver text into it mid-call; its argument
+  vector is pinned in `tests/vectors/spawn.json`.
+
 - The catalogue's canonical format goes up by one (v0.5, story 5.4):
   templates, the review model and `auto_max_per_hour` join what the author
   approves. The first start of v0.5 therefore asks for one catalogue
@@ -526,6 +537,19 @@ project uses [Semantic Versioning](https://semver.org/).
   request, asks what the owner sees and writes the taskbar check's report.
 
 ### Security
+
+- Every `claude` Officina starts as a session (`claude agents`,
+  `--version`, attach) drops the variables Claude Code gives a session's
+  children (`SESSION_ENV_REMOVED`) and `CLAUDE_CODE_DISABLE_AGENT_VIEW`, so
+  a window started from inside a session never hands its children that
+  session's identity or inbox; the author's `OFFICINA_*` settings are
+  kept. Officina's own contained calls (the triage call) receive only the
+  contained allow list of the environment. Story 5.2.
+- Officina's `git` calls set `GIT_OPTIONAL_LOCKS=0` beside
+  `--no-optional-locks`, so a read never writes the index back, and a
+  lint (`crates/officina-host/clippy.toml`) refuses
+  `std::process::Command::new` outside the three modules that start
+  processes (`spawn`, `relay::run`, `git`).
 
 - Session and model text is a distinct type in core (v0.5, story 5.3):
   what the board, the Subjects view, the relay's recent entries and a

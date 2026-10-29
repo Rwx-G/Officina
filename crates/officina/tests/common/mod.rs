@@ -261,6 +261,23 @@ pub fn read_tool_log(log: &Path) -> Vec<serde_json::Value> {
         .collect()
 }
 
+/// The calls the fake claude logged in `log`, one JSON object each (D-129):
+/// `argv`, `cwd`, `env_names`, `config_dir`, and `console` in its
+/// `interactive` mode.
+pub fn fake_claude_calls(log: &Path) -> Vec<serde_json::Value> {
+    read_tool_log(log)
+}
+
+/// The `argv` of one logged fake claude call.
+pub fn logged_argv(call: &serde_json::Value) -> Vec<String> {
+    call["argv"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|a| a.as_str().unwrap().to_owned())
+        .collect()
+}
+
 /// Bytes the fake tool's heartbeat grandchild wrote so far.
 pub fn heartbeat_len(file: &Path) -> u64 {
     std::fs::metadata(file).map(|m| m.len()).unwrap_or(0)

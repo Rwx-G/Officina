@@ -73,7 +73,7 @@ An ended card can be dragged onto **Done** (you mark it done), back onto **To re
 ### Bringing a session to the front
 
 - **Interactive session** in an editor or terminal: Officina walks up from the session's process to the window that hosts it. VS Code runs every window from one process, so Officina picks the window whose title contains the session's folder name, then each parent folder. When several windows match, it lists them instead of guessing. It brings the window forward; choosing the terminal tab inside the editor stays with you.
-- **Background session**: Officina opens `claude attach <id>` in a new console. The card can also copy that command for you.
+- **Background session**: Officina opens `claude attach <id>` in a new console, from the `claude` binary's folder. The card can also copy that command for you. When `claude` resolves to anything but the native `claude.exe` (a `.cmd` or `.bat` shim, say), Officina does not run it, and the attach fails with a message pointing at that copy: paste it into your own terminal.
 
 If the wrong window comes up, click **Wrong window?**: Officina counts how often its first click is right.
 
@@ -85,7 +85,7 @@ Officina v0.1 targets Windows 10 and 11 (x64). Linux builds arrive with v1.
 2. Put `officina.exe` somewhere on your `PATH`.
 3. Run `officina doctor` and follow what it prints.
 
-Officina finds `claude` through `OFFICINA_CLAUDE_BIN`, then the absolute folders of `PATH` (`claude.exe`, then `claude.cmd`), then `~/.local/bin`, where the native installer puts it. It runs the native `claude.exe` only: a `.cmd` or `.bat` shim (an npm install) is refused for every call, since `cmd.exe` would run whatever the script says, so the board then lists no live session and doctor says why. Install the native `claude.exe`, or set `OFFICINA_CLAUDE_BIN` to it.
+Officina finds `claude` through `OFFICINA_CLAUDE_BIN`, then the absolute folders of `PATH` (`claude.exe`, then `claude.cmd`), then `~/.local/bin`, where the native installer puts it. It runs the native `claude.exe` only: a `.cmd` or `.bat` shim (an npm install), or any file that is not an `.exe`, is refused for every call, since `cmd.exe` would run whatever the script says, so the board then lists no live session, attach falls back to copying its command, and doctor fails with one line naming every refused use. Install the native `claude.exe`, or set `OFFICINA_CLAUDE_BIN` to it.
 
 ### Wiring the hooks
 
@@ -547,7 +547,7 @@ The whole window, board and scene alike, follows Windows' light or dark theme. T
 
 ## The orchestrator (v0.5, in progress)
 
-v0.5 lets you delegate routine subjects: a work order starts a background session from a template you wrote and approved, and an `auto` action can be approved without you once its dry run passed. What is built so far is the floor file's part; the work orders, the review of `auto` requests and the orchestrator itself follow.
+v0.5 lets you delegate routine subjects: a work order starts a background session from a template you wrote and approved, and an `auto` action can be approved without you once its dry run passed. What is built so far is the floor file's part and the one module every `claude` process starts from; the work orders, the review of `auto` requests and the orchestrator itself follow.
 
 ### Templates
 
@@ -580,6 +580,15 @@ model = "haiku"                        # optional: the review's model, haiku whe
 - A template that breaks a rule is skipped and reported with its line (`officina doctor`, the Relay view), like an invalid action; it never invalidates the floor. Each rule is a variant of `IssueKind`, and each issue names the table it comes from.
 
 Templates belong to the catalogue you approve: the Relay view lists them with their projects, prompt, values and model, and the change banner shows a template added, removed or changed field by field. `[orchestrator]` is not part of the approval: the orchestrator approves and launches nothing.
+
+### How Officina starts `claude`
+
+Every `claude` process Officina starts comes from one module, from a vector per kind (`VectorKind`) whose arguments, folder, console and environment are fixed, each kind pinned by a case of `tests/vectors/spawn.json`. Two environment rules apply, by kind (`EnvRule`):
+
+- A session kind, one that reads or opens your sessions, runs as a session you start would: it gets Officina's environment minus the variables Claude Code gives a session's children (`SESSION_ENV_REMOVED`: the session's identity, its process, its entrypoint and nesting markers, its messaging socket and token) and minus `CLAUDE_CODE_DISABLE_AGENT_VIEW`, so a window started from inside a Claude Code session never hands its children that session's inbox, while your own `OFFICINA_*` settings still reach their hooks.
+- A contained kind, one of Officina's own model calls such as the triage call, gets only the names of the contained allow list (`CONTAINED_ENV_SYSTEM`, `CONTAINED_ENV_NETWORK`, `CONTAINED_ENV_AUTH`), nothing else of Officina's environment.
+
+Every kind then sets `NoDefaultCurrentDirectoryInExePath=1` and, when the floor names one, `CLAUDE_CONFIG_DIR`, never one inherited. Names compare ignoring case, as Windows compares them.
 
 ### The `auto` class
 

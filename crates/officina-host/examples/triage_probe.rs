@@ -1,6 +1,7 @@
 //! The triage call's workstation gate (story 3.9 AC 13; AD-51, AD-58,
 //! D-80, D-91): one real `claude -p` call with the argument vector exactly
-//! as Rust quotes it, since E16 verified the flags through a shell. Run by
+//! as Rust quotes it, since E16 verified the flags through a shell, run by
+//! `spawn::execute` from core's `TriageCall` vector (D-128). Run by
 //! the owner, by hand; never by a test. It spends one Haiku call (about
 //! USD 0.001, E16).
 //!
@@ -17,17 +18,15 @@
 //! one under the system temp folder. Prints what it found and the verdict;
 //! exit 0 on a pass, 1 on a failure.
 
-use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use officina_core::registry::triage_call::{TriageCase, prompt, read_output};
+use officina_core::registry::triage_call::{TRIAGE_MODEL, TriageCase, prompt, read_output, schema};
 use officina_core::registry::types::TriagePurpose;
-use officina_host::claude::{resolve_claude, version};
 use officina_host::paths::{ENV_CLAUDE_CONFIG_DIR, env_path, user_home};
-use officina_host::registry::triage::{CallLimits, TriageJob, command_for, refusal, workdir};
+use officina_host::registry::triage::{CallLimits, TriageJob, refusal, workdir};
+use officina_host::spawn::{BaseEnv, SpawnOutcome, execute, resolve_claude, version};
 
 /// E16's measured input tokens for one short case, cached system prompt
 /// included.
@@ -74,23 +73,18 @@ fn main() -> ExitCode {
             end: Some("prompt_input_exit".into()),
             cut_mid_turn: false,
         },
-        claude: Some(claude.clone()),
+        claude: Some(claude.path().to_path_buf()),
         officina_home: home.clone(),
         config_dir: env_path(ENV_CLAUDE_CONFIG_DIR),
         no_excerpts: false,
-        base_env: Arc::new(
-            std::env::vars_os()
-                .filter_map(|(name, value)| {
-                    Some((name.into_string().ok()?, value.into_string().ok()?))
-                })
-                .collect(),
-        ),
+        base_env: BaseEnv::from_process(),
         limits: CallLimits::default(),
     };
-    println!("claude: {}", claude.display());
+    println!("claude: {}", claude.path().display());
     println!(
         "version: {}",
-        version(&claude, job.config_dir.as_deref()).unwrap_or_else(|e| e.to_string())
+        version(&claude, job.config_dir.as_deref(), &job.base_env)
+            .unwrap_or_else(|e| e.to_string())
     );
     if let Err(e) = std::fs::create_dir_all(workdir(&home)) {
         eprintln!("triage_probe: the work folder could not be created: {e}");
@@ -107,31 +101,35 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    let config = job
+        .config_dir
+        .as_deref()
+        .map(|dir| dir.to_string_lossy().into_owned());
+    let vector = officina_core::spawn::triage_call(
+        TRIAGE_MODEL,
+        &schema(),
+        config.as_deref(),
+        &home.to_string_lossy(),
+    )
+    .with_stdin(text.into_bytes());
     let started = Instant::now();
-    let mut child = match command_for(&job, &claude).spawn() {
-        Ok(child) => child,
+    let ran = match execute(&claude, &vector, &job.base_env) {
+        Ok(SpawnOutcome::Captured(ran)) => ran,
+        Ok(SpawnOutcome::Started { .. }) => {
+            eprintln!("triage_probe: the call was not captured");
+            return ExitCode::FAILURE;
+        }
         Err(e) => {
-            eprintln!("triage_probe: claude could not start: {e}");
+            eprintln!("triage_probe: {e}");
             return ExitCode::FAILURE;
         }
     };
-    if let Some(mut stdin) = child.stdin.take() {
-        let _ = stdin.write_all(text.as_bytes());
-    }
-    let mut stdout = Vec::new();
-    if let Some(mut out) = child.stdout.take() {
-        let _ = out.read_to_end(&mut stdout);
-    }
-    let mut stderr = Vec::new();
-    if let Some(mut err) = child.stderr.take() {
-        let _ = err.read_to_end(&mut stderr);
-    }
-    let status = child.wait();
+    let (stdout, stderr) = (ran.stdout, ran.stderr);
     println!(
         "duration: {:?}",
         started.elapsed().min(Duration::from_secs(600))
     );
-    println!("exit: {status:?}");
+    println!("exit: {:?}", ran.status);
     if !stderr.is_empty() {
         println!("stderr: {}", String::from_utf8_lossy(&stderr).trim());
     }
