@@ -587,7 +587,7 @@ test.describe("acting from the scene", () => {
     expect(await records()).toBe(0);
   });
 
-  test("Tab walks reception, the queue, the register, the alert room, the offices, the lounge and More offices in that order", async ({ page }) => {
+  test("Tab walks reception, the queue and its group, the alert room, the offices, the lounge and More offices in that order", async ({ page }) => {
     const board = everyZone();
     await openScene(page, board);
     const [layout] = layouts(board);
@@ -601,7 +601,8 @@ test.describe("acting from the scene", () => {
     const rooms = layout!.targets.map((t) => t.group).filter((room, i, all) => room !== all[i - 1]);
     const offices = layout!.rooms.filter((r) => r.kind === "office" && layout!.targets.some((t) => t.group === r.id)).map((r) => r.id);
     expect(rooms).toEqual(["reception", "decision", "alert", ...offices, "lounge", "more"]);
-    // The register's group comes right after the queue's figures (D-103).
+    // The decision office's group comes right after the queue's figures
+    // (D-103), at its plaque's end (D-557).
     const decision = layout!.targets.filter((t) => t.group === "decision");
     expect(decision.map((t) => t.kind)).toEqual([...decision.slice(0, -1).map(() => "figure"), "group"]);
   });
@@ -868,16 +869,16 @@ test.describe("acting from the scene", () => {
     await expect(sessionFile(page)).toHaveCount(0);
   });
 
-  test("the register lists the waiting beyond the queue, each opening its file", async ({ page }) => {
+  test("the decision office's group lists the waiting beyond the queue, each opening its file", async ({ page }) => {
     const board = loadBoard("scene-overflow");
     await openScene(page, board);
     const [layout] = layouts(board);
-    const register = groupTarget(layout!, (kind) => kind === "decision");
+    const queueGroup = groupTarget(layout!, (kind) => kind === "decision");
     const queued = layout!.targets.filter((t) => t.group === "decision" && t.kind === "figure").flatMap((t) => t.keys);
-    expect([...queued, ...register.keys]).toEqual(board.columns.needs_you.map((c) => c.key));
-    await targetById(page, register.id).click();
-    await expectList(page, register.keys);
-    for (const key of register.keys) {
+    expect([...queued, ...queueGroup.keys]).toEqual(board.columns.needs_you.map((c) => c.key));
+    await targetById(page, queueGroup.id).click();
+    await expectList(page, queueGroup.keys);
+    for (const key of queueGroup.keys) {
       await rowOf(page, key).click();
       await expect(page.getByRole("dialog", { name: cardOf(board, key).name })).toBeVisible();
       await expect(page.getByTestId("bring-to-front")).toBeFocused();
@@ -929,37 +930,37 @@ test.describe("acting from the scene", () => {
     const board = loadBoard("scene-overflow");
     await openScene(page, board);
     const [layout] = layouts(board);
-    const register = groupTarget(layout!, (kind) => kind === "decision");
-    const key = register.keys[1]!;
-    await targetById(page, register.id).click();
+    const queueGroup = groupTarget(layout!, (kind) => kind === "decision");
+    const key = queueGroup.keys[1]!;
+    await targetById(page, queueGroup.id).click();
     await rowOf(page, key).click();
     await expect(sessionFile(page)).toHaveAttribute("data-form", "file");
     await expect(page.getByTestId("file-close")).toHaveText("Back to the list");
     await page.keyboard.press("Escape");
-    await expectList(page, register.keys);
+    await expectList(page, queueGroup.keys);
     await expect(rowOf(page, key)).toBeFocused();
     await page.keyboard.press("Escape");
     await expect(sessionFile(page)).toHaveCount(0);
-    await expect(targetById(page, register.id)).toBeFocused();
+    await expect(targetById(page, queueGroup.id)).toBeFocused();
   });
 
   test("a list whose group empties closes, focus on the scene", async ({ page }) => {
     const board = loadBoard("scene-overflow");
     await openScene(page, board);
-    const register = groupTarget(layouts(board)[0]!, (kind) => kind === "decision");
-    await targetById(page, register.id).click();
-    await expect(rowOf(page, register.keys[0]!)).toBeFocused();
+    const queueGroup = groupTarget(layouts(board)[0]!, (kind) => kind === "decision");
+    await targetById(page, queueGroup.id).click();
+    await expect(rowOf(page, queueGroup.keys[0]!)).toBeFocused();
     // A board arrives while the list is open: one row fewer, the list stays.
     const fewer = structuredClone(board);
-    fewer.columns.needs_you = fewer.columns.needs_you.filter((c) => c.key !== register.keys.at(-1));
+    fewer.columns.needs_you = fewer.columns.needs_you.filter((c) => c.key !== queueGroup.keys.at(-1));
     await push(page, fewer);
-    await expectList(page, register.keys.slice(0, -1));
+    await expectList(page, queueGroup.keys.slice(0, -1));
     // The queue now holds everyone: no group, no list.
     const emptied = structuredClone(board);
-    emptied.columns.needs_you = emptied.columns.needs_you.filter((c) => !register.keys.includes(c.key));
+    emptied.columns.needs_you = emptied.columns.needs_you.filter((c) => !queueGroup.keys.includes(c.key));
     await push(page, emptied);
     await expect(sessionFile(page)).toHaveCount(0);
-    await expect(targetById(page, register.id)).toHaveCount(0);
+    await expect(targetById(page, queueGroup.id)).toHaveCount(0);
     await expect(scene(page)).toBeFocused();
   });
 
@@ -1138,10 +1139,10 @@ test.describe("acting from the scene", () => {
     await expect(page.getByRole("dialog", { name: queued.name })).toBeVisible();
     await expect(page.getByTestId("file-project")).toContainText(renamed);
     await page.keyboard.press("Escape");
-    const register = groupTarget(layout!, (kind) => kind === "decision");
-    expect(register.keys).toContain(listed.key);
-    expect(await targetById(page, register.id).getAttribute("aria-label")).toContain(listed.name);
-    await targetById(page, register.id).click();
+    const queueGroup = groupTarget(layout!, (kind) => kind === "decision");
+    expect(queueGroup.keys).toContain(listed.key);
+    expect(await targetById(page, queueGroup.id).getAttribute("aria-label")).toContain(listed.name);
+    await targetById(page, queueGroup.id).click();
     await expect(rowOf(page, listed.key)).toContainText(listed.name);
     await rowOf(page, listed.key).click();
     await expect(page.getByRole("dialog", { name: listed.name })).toBeVisible();
