@@ -283,6 +283,11 @@ impl Reader {
         ingestion_view(&self.conn, events_dir)
     }
 
+    /// Every `orchestrator_start` row, newest first (AD-82, D-144).
+    pub fn orchestrator_starts(&self) -> rusqlite::Result<Vec<OrchestratorStartRow>> {
+        orchestrator_starts(&self.conn)
+    }
+
     /// `officina mcp`'s briefing cursor (AD-83, D-144): the start of the
     /// newest orchestrator spawned before the newest one, the current
     /// session's; refused and failed starts are never one.
@@ -1059,6 +1064,41 @@ fn work_order_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<WorkOrderRecord> 
 /// The latest [`WORK_ORDERS_READ`] work orders, newest first, each with
 /// the record of the session it bound to, from one read transaction
 /// (AD-82); `printed` and `error` come back untrusted (D-130).
+/// One `orchestrator_start` row (AD-82, D-144): when, how it ended, the
+/// pid it kept with its creation time, and why it was refused or failed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OrchestratorStartRow {
+    pub id: i64,
+    pub started_at_ms: i64,
+    pub outcome: OrchestratorStartOutcome,
+    pub pid: Option<u32>,
+    pub pid_created_at_ms: Option<i64>,
+    pub error: Option<String>,
+}
+
+/// Every `orchestrator_start` row, newest first; retention keeps them 90
+/// days (D-134), a few a day at most.
+pub(crate) fn orchestrator_starts(
+    conn: &Connection,
+) -> rusqlite::Result<Vec<OrchestratorStartRow>> {
+    conn.prepare_cached(
+        "SELECT id, started_at_ms, outcome, pid, pid_created_at_ms, error FROM orchestrator_start
+         ORDER BY started_at_ms DESC, id DESC",
+    )?
+    .query_map([], |row| {
+        Ok(OrchestratorStartRow {
+            id: row.get(0)?,
+            started_at_ms: row.get(1)?,
+            // The column's `CHECK` lists every value this build knows.
+            outcome: code_of(row, 2, OrchestratorStartOutcome::from_code)?,
+            pid: row.get(3)?,
+            pid_created_at_ms: row.get(4)?,
+            error: row.get(5)?,
+        })
+    })?
+    .collect()
+}
+
 pub(crate) fn work_orders(conn: &Connection) -> rusqlite::Result<Vec<WorkOrderRecord>> {
     let snapshot = conn.unchecked_transaction()?;
     let mut orders: Vec<WorkOrderRecord> = snapshot

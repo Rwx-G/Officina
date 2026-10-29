@@ -555,6 +555,51 @@ fn auto_review_rows_are_deleted_at_90_days() {
     assert_eq!(left, ["kept"]);
 }
 
+/// Story 5.16 AC 8 (D-134): `orchestrator_start` rows go 90 days after
+/// their start, whatever their outcome.
+#[test]
+fn orchestrator_start_rows_are_deleted_at_90_days() {
+    use officina_core::registry::retention::ORCHESTRATOR_START_TTL_MS;
+    use officina_core::registry::types::OrchestratorStartOutcome;
+    use officina_host::registry::orders::OrchestratorStartRecord;
+    let home = Home::new();
+    let mut writer = home.writer(NOW);
+    for (at, outcome) in [
+        (
+            NOW - ORCHESTRATOR_START_TTL_MS,
+            OrchestratorStartOutcome::Spawned,
+        ),
+        (
+            NOW - ORCHESTRATOR_START_TTL_MS,
+            OrchestratorStartOutcome::Refused,
+        ),
+        (
+            NOW - ORCHESTRATOR_START_TTL_MS + 1,
+            OrchestratorStartOutcome::Spawned,
+        ),
+    ] {
+        let spawned = outcome == OrchestratorStartOutcome::Spawned;
+        writer
+            .record_orchestrator_start(&OrchestratorStartRecord {
+                started_at_ms: at,
+                outcome,
+                pid: spawned.then_some(7),
+                pid_created_at_ms: spawned.then_some(at - 5),
+                error: (!spawned).then_some("workdir_not_empty"),
+            })
+            .unwrap();
+    }
+    let report = writer.hourly_pass(&home.ctx(), NOW).unwrap();
+    assert_eq!(report.deleted_orchestrator_starts, 2);
+    let left: Vec<i64> = writer
+        .orchestrator_starts()
+        .unwrap()
+        .into_iter()
+        .map(|row| row.started_at_ms)
+        .collect();
+    assert_eq!(left, [NOW - ORCHESTRATOR_START_TTL_MS + 1]);
+}
+
 /// Story 5.13 AC 10 (D-134): a review's reason, model text, is cleared
 /// `EXCERPT_TTL_MS` after the request, the row kept, and leaves the
 /// database and its WAL.

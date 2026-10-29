@@ -323,6 +323,11 @@ impl Writer {
         Ok(read::briefing_read_at(&self.conn)?)
     }
 
+    /// Every `orchestrator_start` row, newest first (D-144).
+    pub fn orchestrator_starts(&self) -> Result<Vec<read::OrchestratorStartRow>, RegistryError> {
+        Ok(read::orchestrator_starts(&self.conn)?)
+    }
+
     /// Records one Start of the orchestrator (AD-82, AD-89, D-144): when,
     /// how it ended, the kept pid and its creation time, and the cause of a
     /// refused or failed start. A spawned row's start is the next session's

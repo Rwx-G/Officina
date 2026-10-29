@@ -9,8 +9,8 @@ use std::path::{Path, PathBuf};
 
 use officina_core::dates::{dated_file_day, utc_date};
 use officina_core::registry::retention::{
-    AUTO_REVIEW_TTL_MS, COPIES_KEPT, TRIAGE_CALL_TTL_MS, WORK_ORDER_TTL_MS, event_file_deletable,
-    excerpt_cutoff, kept,
+    AUTO_REVIEW_TTL_MS, COPIES_KEPT, ORCHESTRATOR_START_TTL_MS, TRIAGE_CALL_TTL_MS,
+    WORK_ORDER_TTL_MS, event_file_deletable, excerpt_cutoff, kept,
 };
 
 use super::ingest::{IngestContext, IngestReport};
@@ -44,6 +44,8 @@ pub struct PassReport {
     pub deleted_auto_reviews: usize,
     /// `auto_review` rows whose reason was cleared (D-134).
     pub cleared_review_reasons: usize,
+    /// `orchestrator_start` rows past their 90 days (D-134).
+    pub deleted_orchestrator_starts: usize,
     /// False when a reader kept the WAL from being truncated.
     pub checkpointed: bool,
 }
@@ -106,6 +108,10 @@ impl Writer {
             self.retire_work_orders(now_ms)?;
         (report.deleted_auto_reviews, report.cleared_review_reasons) =
             self.retire_auto_reviews(now_ms)?;
+        report.deleted_orchestrator_starts = self.conn.execute(
+            "DELETE FROM orchestrator_start WHERE started_at_ms <= ?1",
+            [now_ms - ORCHESTRATOR_START_TTL_MS],
+        )?;
         report.checkpointed = self.checkpoint()?;
         Ok(report)
     }

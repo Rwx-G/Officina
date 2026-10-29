@@ -17,13 +17,14 @@ use officina_core::registry::dry_run::DryRunState;
 use officina_core::registry::fold::{AgentsChanges, AgentsSnapshot};
 use officina_core::registry::model::{EnableRefusal, ModelEnv};
 use officina_core::registry::types::{
-    RegistryReport, RegistryState, SubjectRecord, SubjectRef, WorkOrderRecord,
+    OrchestratorStartOutcome, RegistryReport, RegistryState, SubjectRecord, SubjectRef,
+    WorkOrderRecord,
 };
 use officina_core::registry::view::{DiscardedSession, RegistryView, SubjectView, unread_view};
 use officina_core::relay::view::RelayView;
 
 use super::ingest::{IngestContext, IngestReport};
-use super::orders::{LaunchRecord, NameTaken};
+use super::orders::{LaunchRecord, NameTaken, OrchestratorStartRecord};
 use super::read::{self, Reader};
 use super::retention::PassReport;
 use super::review::{AutoState, ReviewRow};
@@ -527,6 +528,25 @@ impl WindowRegistry {
     /// leaving the Orchestrator view and when the window closes.
     pub fn mark_briefing_read(&mut self, now_ms: i64) -> Result<(), IpcError> {
         self.with_writer(|writer| Ok(Ok(writer.mark_briefing_read(now_ms)?)))
+    }
+
+    /// Records one Start of the orchestrator (AD-89, D-144); refused when
+    /// the registry cannot be written.
+    pub fn record_orchestrator_start(
+        &mut self,
+        start: &OrchestratorStartRecord,
+    ) -> Result<i64, IpcError> {
+        self.with_writer(|writer| Ok(Ok(writer.record_orchestrator_start(start)?)))
+    }
+
+    /// The pid and creation time the newest spawned start kept (D-144),
+    /// read back at window start; `None` without one, or when the registry
+    /// cannot be read.
+    pub fn kept_orchestrator(&mut self) -> Option<(u32, i64)> {
+        self.on_writer(|writer| Ok(writer.orchestrator_starts()?))?
+            .into_iter()
+            .find(|row| row.outcome == OrchestratorStartOutcome::Spawned)
+            .and_then(|row| row.pid.zip(row.pid_created_at_ms))
     }
 
     /// What the briefing reads of the registry (AD-83): every subject row,
