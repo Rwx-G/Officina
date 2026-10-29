@@ -329,6 +329,253 @@ Windows 11.
   guarded project. The owner's 2.1.312 honours the field. Not verified on
   the workstation: a crash or timeout of the real hook under Claude Code.
 
+## E19. `--bg`, trust and agent view (v0.5, addendum items 1 to 3)
+
+Story 5.1 AC 2, D-125. **Verified** by the developer agent on 2026-10-29,
+Claude Code 2.1.312, Windows 11, no model turn. An empty scratch folder
+under the user's temporary folder, outside every trusted folder; every
+name of the session-variables entry (E84) and every `OFFICINA_*` name
+removed from the child, spawned from Python's `subprocess` with list
+arguments and no console.
+
+- `claude --help` exits 0 and still shows `--permission-mode <mode>` with
+  `dontAsk` among its choices, `--disallowedTools`, `logs <id|name>` and
+  the `--bg` sentence "With --resume <session-id>, continues that session
+  in the background under the same ID, or starts a copy and says so when
+  the session is already running".
+- `CLAUDE_CODE_DISABLE_AGENT_VIEW=1 claude --bg --name probe -- x`: exit 1
+  in 0.14 s, stderr `'--bg' is disabled by CLAUDE_CODE_DISABLE_AGENT_VIEW.`,
+  nothing started.
+- `claude --bg --name probe -- x`: exit 1 in 0.51 s, stderr
+  ``Workspace not trusted. Run `claude` in <folder> once and accept the
+  trust prompt, then retry.``
+- `CLAUDE_CODE_DISABLE_AGENT_VIEW=1 claude agents --json --all`: exit 1,
+  empty stdout, stderr `'claude agents --json' is disabled by
+  CLAUDE_CODE_DISABLE_AGENT_VIEW.` It lists nothing, so the orchestrator's
+  MCP server, which inherits the variable (AD-80), cannot list sessions
+  through `claude agents`.
+- `claude agents --json --all` without the variable listed the same rows
+  before and after, and the folder stayed empty.
+- **Trust is not inherited by nesting.** A plain folder under the
+  repository's git worktree (in its ignored `target/`) passed the trust
+  check without having been trusted itself; a folder inside a git
+  repository created under that same worktree failed it, and so did the
+  temporary folder. Claude Code's project list holds the main checkout,
+  not the worktree, so trust follows the folder's git root, a worktree
+  resolving to its main repository (inferred from these three cases, not
+  documented). Claude Code recorded no trust entry for any scratch folder.
+- **`--bg` does not validate options.** In that trusted folder,
+  `claude --bg --zzz-unknown -- x` exited 0 (`Starting background
+  service…`) and started a session that ended `failed`; `claude logs` on
+  it exited 1 (`Couldn't read logs ... connect ENOENT` on the supervisor's
+  control pipe, the supervisor having exited). Removed with `claude stop`
+  and `claude rm`. An unknown option after `--bg` is a launch, not a usage
+  error: the `WorkOrder` vector must be exact, as AD-79's golden vectors
+  hold it.
+- Outcome: items 1 to 3 hold on 2.1.312 as the addendum states. Cost:
+  none.
+
+## E20. The bare `--` (v0.5 gate 2)
+
+Story 5.1 AC 3, AD-96 row 2, D-125, D-127. **Verified** by the developer
+agent on 2026-10-29, 2.1.312. A scratch folder under the worktree's
+ignored `target/` (trusted through the main checkout, E19), not a git
+repository, whose `.claude/settings.local.json` the agent wrote (the
+owner allows it for a scratch folder) with one `UserPromptSubmit` hook: a
+Python script writing the payload's `prompt` as JSON (every byte kept),
+its `session_id` and the names of its environment to one file per
+prompt, and blocking the prompt while a flag file exists, so these runs
+cost no model turn. Spawned from Python's `subprocess` with list
+arguments (MSVC quoting, as Rust's `Command`), the session-variables
+entry's names removed, `OFFICINA_*` kept (none set),
+`NoDefaultCurrentDirectoryInExePath=1`. The four cases of addendum
+section 1 item 5: (1) a leading dash, double quotes, an escaped quote, a
+newline and a tab; (2) `100%`, `^`, `&`, `|`, `<`, `>`, `!`, `$HOME` and
+`*.txt`; (3) accented letters, `C:\path\to\dir\` and a trailing
+backslash; (4) inner `--`, `--bg` and `--model opus`.
+
+| Form | Cases 1 to 4 |
+|---|---|
+| `claude --bg --name probe-<n> --model haiku -- <case>`, stdin null, stdout and stderr piped, no console | byte for byte, each |
+| `claude --resume <session id> -- <case>`, new console, working directory the session's folder | byte for byte, each, in the same session |
+| the same, working directory the `claude` binary's folder | not delivered: trust dialog, each |
+| `claude -p --model haiku -- <case>` (item 5, re-run) | byte for byte, each |
+
+- **`--bg`'s stdio.** Exit 0 in 0.58 to 1.36 s; both pipes reached end of
+  file at the exit, within 20 ms, in all four cases: no process holds
+  them. stdout: `backgrounded · <id> · <name>` then four lines naming
+  `claude agents`, `claude attach <id>`, `claude logs <id>` and
+  `claude stop <id>`; stderr empty, except `Starting background service…`
+  on the call that started the supervisor. The supervisor's parent is
+  `WmiPrvSE.exe`: `claude --bg` starts it through WMI, so it inherits no
+  handle of the caller and sits in no job of the caller. It exits by
+  itself once no background session remains.
+- Right after a blocked first prompt the listing read `status: idle`,
+  `state: working`; after a blocked resumed prompt, `state: blocked` with
+  no `waitingFor`.
+- **Resume from the binary's folder.** From a new console whose working
+  directory is the `claude` binary's folder, as AD-79's `Answer` vector
+  does for a live background session, `claude --resume` first shows
+  Claude Code's trust dialog for that folder ("Accessing workspace:
+  <binary folder>", "No, exit" selected, "Yes, I trust this folder"). With
+  nobody answering, nothing was delivered in 45 s and the session's state
+  did not change (the console's text read from its screen buffer, then
+  the console killed). That folder is not trusted on this workstation, and
+  the agent trusts no folder.
+- **Resume from the session's folder.** The console printed `Sending your
+  prompt to the background session (<id>)…`, then `Sent your prompt to
+  the background session (<id>); opening it…`, and attached; the hook
+  received the case with the same `session_id`, and the listing kept one
+  row per session (no copy).
+- **Item 4, re-run.** `claude -p --resume <unknown id> "--zzz probe"`
+  exits 1 with `error: unknown option '--zzz probe'`; with `--` before the
+  prompt, exit 1 with `No conversation found with session ID: <id>`.
+- **Outcome** (D-127): `--` holds for both vectors. The `WorkOrder`
+  vector keeps `--`; the `Answer` vector keeps `--` and needs no
+  `AnswerRefusal::LeadingDash`. New fact for AD-79 and story 5.11: the
+  `Answer` vector's working directory for a live background session
+  cannot be the binary's folder while that folder is untrusted, since the
+  resume then stops at the trust dialog; from the session's folder the
+  delivery works. D-127 names no branch for this: the choice (the
+  session's folder, or the owner trusting the binary's folder once) is
+  the lead's and the owner's.
+- Every probe session was stopped and removed; `claude agents --json
+  --all` listed the owner's same rows before and after. Cost: no model
+  turn.
+
+## E21. Resume delivery (v0.5 gate 3)
+
+Story 5.1 AC 4, AD-96 row 3, D-127. **Verified** by the developer agent
+on 2026-10-29, 2.1.312, Haiku, in E20's scratch folder with the hook
+recording without blocking. The resumes ran in a new console the agent
+started (Python, `CREATE_NEW_CONSOLE`) whose working directory was the
+session's folder (E20: the binary's folder stops at the trust dialog);
+nothing was typed, and the console's text was read from its screen
+buffer.
+
+- `claude --bg --name probe-g3 --model haiku -- "Reply with the word
+  ready."`: exit 0; `idle` and `done` 5 s later.
+- `claude --resume <sessionId> -- "Reply with the word delivered."`: the
+  hook received the prompt in that session; the listing read `busy` /
+  `working` at 2.1 s and `idle` / `done` at 4.3 s, one row throughout, no
+  copy. The resume process stayed attached (alive after 30 s) until the
+  agent killed it, which left the session `idle` / `done`. The console
+  line, as E20 read it: `Sent your prompt to the background session
+  (<id>); opening it…`.
+- A second session asked to use `AskUserQuestion` read `waiting` /
+  `blocked` / `waitingFor: input needed` 9 s after its start.
+  `claude --resume <sessionId> -- "Reply with the word delivered."`, kept
+  on screen with `cmd /k`, printed ``That session is running in the
+  background (<id>). Your prompt was not sent to it: it is waiting on
+  your answer to a question. Run `claude attach <id>` to open it, or
+  `claude stop <id>` first to resume it here. Add --fork-session to branch
+  off a copy instead.`` and exited 1 within 2 s; the hook received
+  nothing; the state stayed `waiting` / `blocked` / `input needed`; no
+  copy.
+- **Outcome: pass, both halves**, from the session's folder.
+  `meeting::delivery` may return `ResumeLive` (D-127); a session waiting
+  on a question gets the documented refusal and needs `attach`. Its
+  `waitingFor` reads `input needed`, not `permission prompt`.
+- Probe sessions stopped and removed; listings before and after equal.
+  Cost: three short Haiku turns in background sessions, which report no
+  cost; well under USD 0.01 by E16's figures.
+
+## E22. Work order permissions (v0.5 gate 4)
+
+Story 5.1 AC 5, AD-96 row 4, D-126, D-127, D-573.
+
+- **Verified (agent half, 2026-10-29, 2.1.312): a `--bg` session takes
+  the supervisor's environment, not the invoker's.** With the supervisor
+  already running, started by a `claude --bg` whose environment carried a
+  marker name `O5_INVOKER_MARK`, a new `claude --bg` whose environment
+  carried only `O5_INVOKER_MARK2` started a session whose
+  `UserPromptSubmit` hook saw `O5_INVOKER_MARK` and not `O5_INVOKER_MARK2`
+  (E20's hook, prompt blocked, no model turn). A session's environment is
+  the one the supervisor started with, from whichever `claude --bg`
+  started it; since the supervisor exits once no background session
+  remains (E20), the next `--bg` starts it with its own. Not tested:
+  whether the session-variables entry's names reach later sessions when
+  the invoker that starts the supervisor holds them.
+- Besides E84's names, a background session's hook also sees
+  `CLAUDE_JOB_DIR`, `CLAUDE_CODE_ALT_SCREEN_FULL_REPAINT`, `COLUMNS`,
+  `LINES`, `BROWSER` and `INVOCATION_ID`; it does not see `TERM_PROGRAM`
+  or `VSCODE_GIT_IPC_HANDLE`, which the supervisor's invoker held (the two
+  names checked).
+- The agent's probe sessions ran in the owner's default mode: the
+  attached console's footer read `bypass permissions on`, and
+  `claude logs` prints the same footer (E23).
+- **Outcome so far** (D-127): the branch "a `--bg` session takes the
+  supervisor's environment" holds. D-128's environment rule cannot reach
+  a work order while a supervisor runs; story 5.7 records it and the
+  README states it.
+- **Owner half: pending.** From the repository root, in a console of the
+  owner's own: `cargo build -p officina-host --features window-authority
+  --example gates_v05`, then `target\debug\examples\gates_v05.exe gate4`.
+  It asks for one free and one guarded project, starts the exact
+  `WorkOrder` vector in each (the floor's `CLAUDE_CONFIG_DIR`,
+  `NoDefaultCurrentDirectoryInExePath=1`, agent view on, `OFFICINA_*`
+  kept), records `claude agents --json` over 60 s, the probe file and the
+  names its Bash lists, and the mode footer from `claude logs`, then asks
+  before removing the file and the session. Report:
+  `target/gates-v05/report-gate4.md`. It runs again once the owner
+  switches his default mode (D-573).
+
+## E23. `claude logs` (v0.5 gate 7)
+
+Story 5.1 AC 6, AD-96 row 7, D-126. **Verified** by the developer agent
+on 2026-10-29, 2.1.312, on gate 3's first session after its two turns:
+working directory the binary's folder (as the `Logs` kind), stdin null,
+stdout redirected to a file, no console.
+
+| Environment | Exit | Elapsed | Bytes | ESC bytes |
+|---|---|---|---|---|
+| agent view on | 0 | 0.89 s | 128,131 | 4,606 |
+| `CLAUDE_CODE_DISABLE_AGENT_VIEW=1` | 1 | 0.99 s | 0 | 0 |
+
+- With the variable, stderr `'logs' is disabled by
+  CLAUDE_CODE_DISABLE_AGENT_VIEW.`
+- The output is the session's rendered screen with its footer
+  (`bypass permissions on (shift+tab to cycle)`), so it also tells a
+  session's permission mode.
+- `claude logs` needs no trusted folder. It fails once the supervisor has
+  exited (E19).
+- **Outcome: pass** (exit 0 in under 2 s): story 5.10 keeps the `Logs`
+  kind; readability after AD-84's stripping is judged there.
+
+## E24. The orchestrator's flag set (v0.5 gate 1)
+
+Story 5.1 AC 7, AD-96 row 1, D-126, D-164, D-561.
+
+- **Verified (agent half, 2026-10-29, 2.1.312).** AD-89's exact flag set,
+  with a stub stdio server named `officina` (Python, in a scratch folder),
+  started by the agent in a new console in an empty, untrusted workdir
+  under the temporary folder whose parent holds a marker `CLAUDE.md`, with
+  exactly D-561's environment: the allow list's names found in the
+  environment (as `registry::triage_call::triage_env` builds them, the
+  names taken from the companion's dry run), `NoDefaultCurrentDirectoryInExePath=1`
+  and `CLAUDE_CODE_DISABLE_AGENT_VIEW=1` (no `CLAUDE_CONFIG_DIR`: the
+  owner's floor sets none). It starts with no missing name reported, and
+  Claude Code shows its trust dialog for the workdir first; the stub
+  server had not started while the dialog waited. The agent answered
+  nothing and killed the console. So far `ORCHESTRATOR_ENV_EXTRA` stays
+  empty (D-561).
+- **Print mode, items 6 to 8:** as the addendum's section 1 records them
+  (2026-10-28); E84 adds that a print-mode MCP server holds
+  `CLAUDE_PROJECT_DIR` and the messaging socket and token, but not
+  `CLAUDE_PID`.
+- **Owner half: pending.** From the repository root, in a console of the
+  owner's own: `cargo build -p officina-host --features window-authority
+  --example gates_v05`, then `target\debug\examples\gates_v05.exe gate1`.
+  It starts the same flag set in a new console, then says what to type
+  and asks what was seen at each step: the trust dialog, the first turn,
+  `/mcp`, `/context` (tools and memory files, the marker included or
+  not), `/status`, `/config`, the read, run and message requests, a second
+  session's `/list-agents` and token message, `Ctrl+O` and the
+  held-message dialog; it lists `claude agents --json`, reruns the token
+  test without `CLAUDE_CODE_DISABLE_AGENT_VIEW` when the sender found no
+  orchestrator, and reads the stub's log. Report:
+  `target/gates-v05/report-gate1.md`.
+
 ## E80. The taskbar overlay badge and the attention request (v0.4 gate 2)
 
 Story 4.1 AC 2, AD-178 gate 2, numbered after the ranges Epics 5 to 7
@@ -617,6 +864,143 @@ is the same sub-agent reappearing, a start while it runs is the same
 sub-agent, a stop without a start is ignored, and a stop followed by a
 start a fraction of a second later must not make its figure flicker
 (epic-4-decisions.md D-547, D-548).
+
+## E84. The session variables (AD-80)
+
+Story 5.1 AC 1, D-125, D-560 (numbered when written; story 5.2's
+`SESSION_ENV_REMOVED` cites this entry). **Verified** by the developer
+agent on 2026-10-29, Claude Code 2.1.312, Windows 11. Names only, never a
+value.
+
+Procedure:
+
+1. The names the agent's own Bash child holds (an interactive session
+   started from VS Code's terminal, its Bash tool running Git Bash) that
+   neither the user nor the machine environment block holds, both blocks
+   read from the registry keys behind
+   `[Environment]::GetEnvironmentVariables('User')` and `('Machine')`
+   (PowerShell is refused inside the agent's worktree).
+2. From an empty scratch folder, a print-mode `claude -p --model haiku
+   --strict-mcp-config --mcp-config <stub> --setting-sources ""
+   --permission-mode dontAsk --allowedTools "Bash(python -I *)"` started
+   with only the logon environment (the two blocks and the names Windows
+   sets at logon), whose stub stdio server logged its environment's names
+   and whose one Bash call listed its own. Any name beyond that launch
+   environment was added by Claude Code or, in the Bash child, by Git
+   Bash. The server held every launch name as well.
+
+Claude Code's names, the union (A: the agent's Bash child; B: the
+print-mode Bash child; M: the print-mode MCP server):
+
+| Name | A | B | M |
+|---|---|---|---|
+| `AI_AGENT` | yes | yes | yes |
+| `CLAUDECODE` | yes | yes | yes |
+| `CLAUDE_CODE_BRIDGE_SESSION_ID` | yes | - | - |
+| `CLAUDE_CODE_CHILD_SESSION` | yes | yes | - |
+| `CLAUDE_CODE_DISABLE_TERMINAL_TITLE` | yes | - | - |
+| `CLAUDE_CODE_ENTRYPOINT` | yes | yes | yes |
+| `CLAUDE_CODE_EXECPATH` | yes | yes | - |
+| `CLAUDE_CODE_MESSAGING_SOCKET` | yes | yes | yes |
+| `CLAUDE_CODE_MESSAGING_TOKEN` | yes | yes | yes |
+| `CLAUDE_CODE_SESSION_ATTENDED` | yes | yes | - |
+| `CLAUDE_CODE_SESSION_ID` | yes | yes | yes |
+| `CLAUDE_CODE_SSE_PORT` | yes | - | - |
+| `CLAUDE_EFFORT` | yes | yes | - |
+| `CLAUDE_PID` | yes | yes | - |
+| `CLAUDE_PROJECT_DIR` | - | - | yes |
+| `COREPACK_ENABLE_AUTO_PIN` | yes | yes | yes |
+| `GIT_EDITOR` | yes | yes | - |
+| `NoDefaultCurrentDirectoryInExePath` | yes | yes | yes |
+| `SHELL` | yes | yes | yes |
+
+- The `CLAUDE*` names and `AI_AGENT` are the session's identity, project
+  and process, entrypoint and nesting markers, and messaging socket and
+  token. The last four rows are defaults Claude Code gives every child
+  rather than identity; `NoDefaultCurrentDirectoryInExePath` is set by
+  every Officina vector anyway (AD-80). Names only the agent's session
+  holds (`..._BRIDGE_SESSION_ID`, `..._DISABLE_TERMINAL_TITLE`,
+  `..._SSE_PORT`) depend on how that session was started, most likely
+  from the IDE (not checked).
+- A print-mode MCP server holds no `CLAUDE_PID`, where E11's server did.
+- A background session's hook holds more Claude Code names (E22).
+- What Git Bash and the shell add to a Bash child: `_`, `ACLOCAL_PATH`,
+  `CONFIG_SITE`, `DISPLAY`, `EXEPATH`, `HOME`, `HOSTNAME`, `INFOPATH`,
+  `LANG`, `MANPATH`, `MINGW_CHOST`, `MINGW_PACKAGE_PREFIX`,
+  `MINGW_PREFIX`, `MSYSTEM`, `MSYSTEM_CARCH`, `MSYSTEM_CHOST`,
+  `MSYSTEM_PREFIX`, `ORIGINAL_PATH`, `ORIGINAL_TEMP`, `ORIGINAL_TMP`,
+  `PKG_CONFIG_PATH`, `PKG_CONFIG_SYSTEM_INCLUDE_PATH`,
+  `PKG_CONFIG_SYSTEM_LIBRARY_PATH`, `PLINK_PROTOCOL`, `PWD`, `SHLVL`,
+  `SSH_ASKPASS`, `TERM`, `TMPDIR`. A process started with
+  `ORIGINAL_PATH` set gets a Bash tool whose profile rebuilds `PATH` from
+  it (E85).
+- What the terminal host (VS Code) adds: `COLORTERM`, `TERM_PROGRAM`,
+  `TERM_PROGRAM_VERSION`, `GIT_ASKPASS`, `VSCODE_GIT_ASKPASS_EXTRA_ARGS`,
+  `VSCODE_GIT_ASKPASS_MAIN`, `VSCODE_GIT_ASKPASS_NODE`,
+  `VSCODE_GIT_IPC_HANDLE`, `VSCODE_PYTHON_AUTOACTIVATE_GUARD`,
+  `CHROME_CRASHPAD_PIPE_NAME`, `FPS_BROWSER_APP_PROFILE_STRING`,
+  `FPS_BROWSER_USER_PROFILE_STRING` and five `EFC_<n>_<n>` names.
+- What Windows sets at logon, in neither block: the profile, application
+  data and program folders, the public folder, the computer, user domain
+  and logon server names, and the session name.
+- Cost: one print-mode Haiku call, USD 0.0019.
+
+## E85. Auto mode and `officina run` (v0.5 gate 8)
+
+Story 5.1 AC 8, AD-180, D-572, D-573. **Verified** by the developer agent
+on 2026-10-29, 2.1.312, in print mode. A scratch Officina home under the
+temporary folder, with a floor holding one guarded project (a scratch
+git repository under the worktree's ignored `target/`) and two actions:
+`check` (class `free`, `git --version`) and `apply` (class `human`,
+`check = "check"`, the same program), approved with
+`examples/approve_fixture.rs`. `officina.exe` was a debug build of the
+branch, first on the child's `PATH`, and `OFFICINA_HOME` named the
+scratch home for the child only. The child started from the logon
+environment: from a Git Bash environment, the Bash tool's profile rebuilt
+`PATH` from `ORIGINAL_PATH` and the first run found no `officina`
+(exit 127; the classifier had let both calls start). Command:
+`claude -p --permission-mode auto --model haiku --output-format
+stream-json --verbose --no-session-persistence [--settings <case>] --
+<request>`. The init message read `model: claude-haiku-5-5`,
+`permissionMode: auto`: auto mode accepts Haiku. Each tool result carries
+`tool_result_meta.permission_decision` (`decision`, `source`,
+`reason_type`), from which the verdicts below are read.
+
+| Case | Request | Calls | Decision (`reason_type`) | Result |
+|---|---|---|---|---|
+| a, no rule (two runs) | explicit: `officina run check`, then `officina run apply --wait 5` | `check` | accept (`classifier`) | ran, exit 0 |
+| | | `apply --wait 5` | accept (`classifier`) | ran: exit 126 `approval_pending`, a request file under `relay/approvals/` |
+| b, `--settings {"permissions":{"allow":["Bash(officina run *)"]}}` | the same | both | accept (`subcommandResults`) | the same: the rule decided, the classifier was not asked |
+| a, the session's own choice | "This repository's routine actions go through Officina's relay; `officina run --list` lists them. Run the repository's dry run, then apply the change (give the apply `--wait 5`) ..." | `--list`, `check`, `apply --wait 5` twice | accept (`classifier`), each | the same; the retry reused the one request |
+| control | explicit: `git push --force origin main` | that | accept (`classifier`) | ran, failed on the missing branch |
+
+- The control shows that a command the user asks for in so many words
+  passes the classifier; the run where the session chose the calls
+  itself, as a session following doctor's paragraph does, is the faithful
+  case, and it passed as well.
+- `claude auto-mode config` (exit 0): the owner's user settings hold no
+  `autoMode` key, so it equals `claude auto-mode defaults` (17 `allow`,
+  72 `soft_deny`, 1 `hard_deny`, 21 `environment` entries), none naming
+  Officina. Given `--settings` with an `autoMode.allow` sentence, it lists
+  that sentence: a flag source reaches the classifier's configuration.
+- The relay's gate hook did not run: the owner's user settings register
+  `officina hook` on seven events, not on `PreToolUse`. The verdicts above
+  do not depend on it.
+- `/permissions` has no print-mode form; case b's `reason_type` shows the
+  narrow rule kept and deciding in auto mode.
+- **Outcome: pass in case a** (D-573): doctor's block adds nothing for
+  `officina run`; case c was not needed. Switching modes stays the
+  owner's decision (D-490), and gate 4 runs again once he switches.
+- **Owner half (interactive confirmation): pending, optional.** From the
+  repository root, in a console of the owner's own: `cargo build -p
+  officina`, `cargo build -p officina-host --features window-authority
+  --example gates_v05`, then `target\debug\examples\gates_v05.exe gate8`.
+  It prepares a fresh scratch home, opens `claude --permission-mode auto`
+  consoles for cases a and b, and records the footer, both calls, the
+  request file and `/permissions`. Report:
+  `target/gates-v05/report-gate8.md`.
+- Cost: six print-mode Haiku runs, USD 0.020 in all (each run's
+  `total_cost_usd`).
 
 ## E7. Configuration directory
 

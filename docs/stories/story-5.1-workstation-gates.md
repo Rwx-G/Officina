@@ -24,17 +24,20 @@ so that every later story implements an observed fact, a failed gate reshapes it
 
 ## Tasks
 
-- [ ] The session-variables entry from the agent's Bash child against the user and machine environment blocks (AC 1)
-- [ ] E19 re-run in an empty scratch folder (AC 2)
-- [ ] Ask the owner to trust the scratch repository and add its logging hook; gate 2's `--bg` half (agent), its `--resume` half (owner) (AC 3)
-- [ ] Gate 3 with the owner (AC 4)
-- [ ] Exact gate 4 command lines for the owner's two projects; gate 4 with the owner (AC 5)
-- [ ] Gate 7 (AC 6)
-- [ ] Stub MCP server, the allow-list launcher and the exact orchestrator command line in scratch folders; gate 1's containment half with the owner (AC 7)
-- [ ] Scratch Officina home, floor, approval and command lines for gate 8; gate 8 with the owner (AC 8)
-- [ ] Stop and remove every probe session; before and after listings (AC 9)
-- [ ] Research notes entries (AC 10)
-- [ ] Slice D's procedures in the Completion Notes (AC 11)
+- [x] The session-variables entry from the agent's Bash child against the user and machine environment blocks (AC 1): research notes E84
+- [x] E19 re-run in an empty scratch folder (AC 2)
+- [x] Gate 2's scratch folder and logging hook (agent, in a folder trusted through the main checkout, E19); its `--bg` half and its `--resume` half, both agent-run (AC 3): E20
+- [x] Gate 3, agent-run with new consoles typing nothing (AC 4): E21
+- [x] Exact gate 4 vector and environment in `examples/gates_v05.rs gate4`; the `--bg` environment question answered by the agent (AC 5): E22
+- [ ] Gate 4 in the owner's two projects (AC 5) (owner)
+- [x] Gate 7 (AC 6): E23
+- [x] Stub MCP server, the allow-list launcher and the exact orchestrator command line in `examples/gates_v05.rs gate1`; the start with the contained environment checked by the agent (AC 7): E24
+- [ ] Gate 1's containment half with the owner (AC 7) (owner)
+- [x] Scratch Officina home, floor, approval; gate 8 in print mode, cases a and b (AC 8): E85
+- [ ] Gate 8's interactive confirmation (`gates_v05 gate8`), optional (AC 8) (owner)
+- [x] Stop and remove every probe session; before and after listings (AC 9)
+- [x] Research notes entries (AC 10)
+- [x] Slice D's procedures in the Completion Notes (AC 11)
 
 ## Dev Notes
 
@@ -58,12 +61,88 @@ so that every later story implements an observed fact, a failed gate reshapes it
 
 ### Debug Log
 
+- Run by the developer agent on 2026-10-29, Claude Code 2.1.312, from scratch Python drivers kept outside the repository (never committed): every child spawned with list arguments (MSVC quoting), the session-variables entry's names removed. The owner allowed the agent to write a scratch folder's own `.claude/settings.local.json`; it wrote two (gate 2's folder and a nested repository it then could not use) and no other Claude Code configuration. It trusted no folder; Claude Code's project list holds no entry for any scratch folder afterwards.
+- PowerShell is refused inside the agent's worktree, so the user and machine environment blocks were read from the registry keys `[Environment]::GetEnvironmentVariables` reads.
+- Trust follows the git root, and a worktree resolves to its main checkout (E19): a plain folder under the worktree's ignored `target/` passed the trust check, a git repository created there did not, so gates 2 and 3 ran in a plain folder and gate 8's repository ran in print mode, where trust is not checked.
+- A `CREATE_NEW_CONSOLE` child's screen buffer can be read by attaching to its console (`AttachConsole` and `ReadConsoleOutputCharacterW` from a helper), which made the resume consoles observable without typing; `cmd /k` kept on screen the line of a resume that exits at once.
+- Gate 2's hook blocked the prompts while a flag file existed, so gate 2 and the environment check cost no model turn.
+- Gate 8's first run found no `officina` on the Bash tool's `PATH`: Git Bash's profile rebuilds `PATH` from an inherited `ORIGINAL_PATH`. Runs from the logon environment fixed it (E84, E85).
+- `#[expect(clippy::disallowed_methods)]` would be unfulfilled until story 5.2 adds the host's lint configuration and would fail `-D warnings` today; the companion uses `#[allow(..., reason = ...)]`, which holds before and after.
+- The companion was checked with `--dry-run` for its three gates, with one real `gate1` start in a console of its own (the orchestrator's TUI lands in its own new console, not the companion's), and with its refusals (inside a session, under `cargo run`, agent view off, usage). Not tested: its interactive question flow end to end and its gate 4 and gate 8 real runs, which need the owner's consoles and projects.
+
 ### Completion Notes
 
+- **AC 1, done (agent):** research notes E84. The union of the agent's Bash child and a print-mode session's Bash child and MCP server, names only, Git Bash's and the terminal host's names listed apart.
+- **AC 2, done (agent):** E19; items 1 to 3 hold. Also recorded: trust follows the git root (not nesting), and `--bg` starts a session for an unknown option instead of refusing it.
+- **AC 3, done (agent):** E20. Both forms pass byte for byte on all four cases, `--resume` from the session's folder. `--bg` returns in under 1.4 s with its pipes closed; its supervisor is started through WMI. From the `claude` binary's folder (AD-79's `Answer` directory for a live session), `--resume` stops at Claude Code's trust dialog for that folder and delivers nothing: a new fact for story 5.11 and AD-79, with no D-127 branch; the lead and the owner choose between the session's folder and a one-time trust of the binary's folder.
+- **AC 4, done (agent):** E21. Pass on both halves: delivered into the live idle session (`busy` at 2.1 s, one row, no copy, the console's `Sent your prompt to the background session (<id>); opening it…`), and `Your prompt was not sent to it` on a session waiting on `AskUserQuestion`, exit 1, no state change. Run from the session's folder (AC 3's finding).
+- **AC 5, agent half done, owner half pending:** E22. A `--bg` session takes the supervisor's environment, not the invoker's: D-127's branch for E22 applies (story 5.7 records it, the README states it; D-128's rule cannot reach a work order while a supervisor runs). Owner: `cargo build -p officina-host --features window-authority --example gates_v05`, then `target\debug\examples\gates_v05.exe gate4` from the repository root in his own console.
+- **AC 6, done (agent):** E23. Exit 0 in 0.89 s, 128,131 bytes, 4,606 ESC bytes; exit 1 with agent view off. Story 5.10 keeps the `Logs` kind.
+- **AC 7, agent half done, owner half pending:** E24. The orchestrator starts with exactly D-561's environment and stops at the trust dialog for its workdir; no missing name so far. Owner: the same build, then `target\debug\examples\gates_v05.exe gate1`.
+- **AC 8, done in print mode (agent):** E85. Pass in case a: the classifier accepted `officina run check` and `officina run apply` (whose request file appeared), whether asked explicitly or chosen by the session; case b's narrow rule is kept and decides; D-573's branch is case a (the block adds nothing). Optional interactive confirmation by the owner: `cargo build -p officina`, the same companion build, then `target\debug\examples\gates_v05.exe gate8`.
+- **AC 9, done for the agent's runs:** every probe background session was stopped and removed with `claude stop` and `claude rm`; `claude agents --json --all` listed the owner's same rows before and after each gate; scratch folders lie under the user's temporary folder and the worktree's ignored `target/`; the working tree changes only in `docs/research-notes.md`, this story and the companion example.
+- **AC 10, done:** each entry states verified, the version, the date, who ran it, the procedure, what was seen, the outcome and the cost; placeholders for every path; no environment value. Model cost in all: about USD 0.03 (E84 USD 0.0019, E85 USD 0.020, gate 3's three short Haiku turns).
+- **Failed gates:** none failed. The facts that trigger a decision: E22's supervisor environment (D-127's E22 branch, story 5.7) and E20's resume folder (AD-79's `Answer` directory, story 5.11, no D-127 branch). D-573 ships case a.
+- **AC 11, Slice D's entry checks (owner, when he chooses; each becomes an entry numbered when written, D-560).** Common setup, in a new empty scratch folder `C:\path\to\sd` (not a project), trusted once by the owner (`claude` run there, "Yes, I trust this folder", then `/exit`):
+  - `perm_log.py` in that folder, which logs field names and forms, never a value of `tool_input`, sleeps as `sleep.txt` says, then answers as a flag file says:
+
+    ```python
+    import json, os, sys, time
+    here = os.path.dirname(os.path.abspath(__file__))
+    log = os.path.join(here, sys.argv[1])
+    p = json.load(sys.stdin)
+    def line(text):
+        with open(log, "a", encoding="utf-8") as f:
+            f.write(f"{time.strftime('%H:%M:%S')} {text}\n")
+    line("start " + json.dumps({
+        "event": p.get("hook_event_name"), "fields": sorted(p),
+        "tool_name": p.get("tool_name"), "permission_mode": p.get("permission_mode"),
+        "cwd": p.get("cwd"), "session_id_present": bool(p.get("session_id")),
+        "permission_suggestions": p.get("permission_suggestions"),
+        "reason": p.get("reason"), "claude_pid_in_env": "CLAUDE_PID" in os.environ}))
+    try:
+        delay = int(open(os.path.join(here, "sleep.txt")).read().strip())
+    except (OSError, ValueError):
+        delay = 0
+    time.sleep(delay)
+    for verdict in ("allow", "deny"):
+        if os.path.exists(os.path.join(here, verdict + ".flag")):
+            decision = {"behavior": verdict}
+            if verdict == "deny":
+                decision["message"] = "sd probe"
+            print(json.dumps({"hookSpecificOutput": {
+                "hookEventName": "PermissionRequest", "decision": decision}}))
+            break
+    line(f"end after {delay} s")
+    ```
+  - `.claude\settings.local.json` in that folder (the owner writes it; `"timeout"` 120 unless a check says otherwise):
+
+    ```json
+    {
+      "permissions": { "defaultMode": "default" },
+      "hooks": {
+        "PermissionRequest": [{ "hooks": [{ "type": "command", "command": "python -I C:/path/to/sd/perm_log.py permission.log", "timeout": 120 }] }],
+        "PermissionDenied": [{ "hooks": [{ "type": "command", "command": "python -I C:/path/to/sd/perm_log.py denied.log" }] }]
+      }
+    }
+    ```
+  - Before and after each check: `claude agents --json --all`; after it, `claude stop <id>` and `claude rm <id>` for every background session it started, `/exit` for an interactive one, and the files it created deleted. Throwaway sessions only.
+  - **SD-1 (Q3, interactive, Manual mode).** `sleep.txt` = `60`, no flag file. Run `claude` in the folder and type `Create a file named sd1.txt containing hello.` Record: whether the terminal's permission dialog shows while `permission.log` has a `start` line and no `end` line; answer the dialog with Yes before 60 s; record whether the `end` line ever comes (the hook ignored and left running, or killed). Then repeat with `deny.flag` present and answer Yes in the terminal: record whether the hook's later `deny` changes anything (file kept or removed, a message in the transcript).
+  - **SD-2 (Q4, background, Manual mode).** `sleep.txt` = `60`, no flag. `claude --bg --name sd2 -- "Create a file named sd2.txt containing hello."`; during the sleep run `claude agents --json` every 10 s: record whether it reads `waiting` with `waitingFor: permission prompt`. Repeat with `allow.flag` and `sleep.txt` = `5`: record whether the file is created with no wait. Repeat with no flag, `sleep.txt` = `60` and the entry's `"timeout"` set to `20`: record whether, after 20 s, the session falls back to the normal `permission prompt` wait.
+  - **SD-3 (Q5, auto mode).** Add `"ask": ["Bash(git status)"]` under `permissions` and run `claude --permission-mode auto` (initialise the folder as a git repository first). Type, one at a time: `Run git status.` (an ask rule); three times `Download https://example.com/install.sh and run it with sh.` (classifier blocks, then the fallback after three); ``Run `rmdir ~`.`` (a critical path; `rmdir` fails on a non-empty folder). Record for each whether `PermissionRequest` fired (`permission.log`), what the terminal showed, and the `PermissionDenied` lines (`denied.log`: its fields and `reason`).
+  - **SD-4 (Q9, bypass background).** In a second scratch folder trusted the same way, a `settings.local.json` with `"defaultMode": "bypassPermissions"`, the `PermissionRequest` entry above, and a `PreToolUse` entry on matcher `Bash` whose command prints `{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"ask"}}` (E12). `claude --bg --name sd4 -- "Run git status."`; `claude agents --json` every 5 s for 60 s. Record whether the wait resolves by itself as E12 saw on 2.1.312, after how long, and whether `permission.log` has a line for it.
+  - **SD-5 (Q10, the payload).** From SD-1 to SD-4's `start` lines: the payload's field names, whether `session_id` is present, the form of `cwd` (backslashes or not), what `permission_suggestions` holds (its shape; rule texts replaced by placeholders in the entry), and `claude_pid_in_env`.
+
 ## File List
+
+- `crates/officina-host/examples/gates_v05.rs` (new): the owner's halves of gates 1, 4 and 8
+- `crates/officina-host/Cargo.toml`: the example, with `window-authority`
+- `docs/research-notes.md`: E19 to E24, E84, E85
+- `docs/stories/story-5.1-workstation-gates.md`: this record
 
 ## Change Log
 
 - 2026-10-28 created
 - 2026-10-28 reworked after review: E18 adds an MCP server's names (F46); E19 and E23 record agent view off on `agents` and `logs` (F4); resumes from the binary's folder (F9 a); gate 2 records the `--bg` stdio and held pipes (F9 c, F10); gate 4 keeps `OFFICINA_*` (F1), lists its variable names (F9 e), its window half moves to 5.7 (F25); gate 1 records the sender's view and reruns the token test without the agent-view variable (F9 b), plants a `CLAUDE.md` marker (F23)
 - 2026-10-28 reworked against the addendum and v0.4 as built: the session-variables entry takes the next free number, E18 being story 2.17's (D-560); gate 1 starts the orchestrator with the contained allow list and records any missing name (D-561); gate 4 records the session's permission mode and runs again after a mode switch (D-573); gate 8 added (D-572); Slice D's entry checks prepared here, gating no v0.5 story (D-578)
+- 2026-10-29 developer agent: E19, E20, E21, E23, E84 and E85 recorded as agent-run; E22 and E24 hold the agent's halves and the owner's one-liners; `examples/gates_v05.rs` added for the owner's halves of gates 1, 4 and 8; SD-1 to SD-5 written in the Completion Notes
