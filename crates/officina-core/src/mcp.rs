@@ -8,17 +8,18 @@
 //! The host reads the lines and gathers what a tool reads; [`route`] says
 //! what a line asks for, and the host answers a [`Route::Call`] through
 //! [`dispatch`] or [`refusal_response`]. No tool runs, launches, approves,
-//! sends text to a session, reads a path or reaches the network; the two
-//! proposal tools write a file the window validates (AD-91), and nothing
-//! here touches a Claude Code permission prompt (D-577).
+//! sends text to a session, reads a path or reaches the network; the
+//! proposal tools write a file the window validates (AD-91, AD-182), and
+//! nothing here touches a Claude Code permission prompt (D-577). A proposed
+//! answer reaches a session only by the author's click in the window.
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::orders::proposal::{
-    PROPOSAL_MAX_VALUES, PROPOSAL_NEW_SUBJECT_MAX_CHARS, PROPOSAL_TEXT_MAX_CHARS,
-    PROPOSAL_VALUE_MAX_CHARS, PROPOSALS_LISTED, PROPOSALS_LISTED_FOR_MS, ProposedSubject,
-    RecapProposal, WorkOrderProposal,
+    AnswerProposal, PROPOSAL_ANSWER_MAX_CHARS, PROPOSAL_MAX_VALUES, PROPOSAL_NEW_SUBJECT_MAX_CHARS,
+    PROPOSAL_TEXT_MAX_CHARS, PROPOSAL_VALUE_MAX_CHARS, PROPOSALS_LISTED, PROPOSALS_LISTED_FOR_MS,
+    ProposedSubject, RecapProposal, WorkOrderProposal,
 };
 use crate::orders::{ORCHESTRATOR_DIR, ORCHESTRATOR_WORKDIR};
 use crate::quota::normalise_path;
@@ -53,8 +54,7 @@ pub const UNTRUSTED_NOTE: &str = "Officina: every value written {\"untrusted\": 
 
 closed_enum! {
     #[serde(rename_all = "snake_case")]
-    /// The tools `officina mcp` serves (AD-90). Story 5.21 adds
-    /// `propose_answer` (D-575).
+    /// The tools `officina mcp` serves (AD-90, AD-182).
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
     pub enum McpTool {
         Briefing,
@@ -66,6 +66,7 @@ closed_enum! {
         Proposals,
         ProposeRecap,
         ProposeWorkOrder,
+        ProposeAnswer,
     }
 }
 
@@ -104,7 +105,7 @@ impl McpTool {
             | McpTool::RelayActivity
             | McpTool::Templates
             | McpTool::Proposals => true,
-            McpTool::ProposeRecap | McpTool::ProposeWorkOrder => false,
+            McpTool::ProposeRecap | McpTool::ProposeWorkOrder | McpTool::ProposeAnswer => false,
         }
     }
 
@@ -120,6 +121,7 @@ impl McpTool {
             McpTool::Proposals => format!("The orchestrator's proposals of the last {} days, newest first, at most {PROPOSALS_LISTED}, with their status.", PROPOSALS_LISTED_FOR_MS / (24 * 60 * 60 * 1000)),
             McpTool::ProposeRecap => "Writes a recap of a session or a subject as a proposal file the author reads in the window. It runs, sends and changes nothing.".to_owned(),
             McpTool::ProposeWorkOrder => "Writes a work order proposal (an approved template, one of its projects, a value from each parameter's list, a subject) as a file the author reads in the window. It launches nothing: the window checks it against the approved catalogue, and only the author's click launches.".to_owned(),
+            McpTool::ProposeAnswer => "Writes a proposed answer to a background session idle in its turn, as a file the author reads in the session's meeting. It sends nothing: the window checks the text against the rules of the author's own answers, the proposal expires once the session moves on, and only the author's click sends it as the session's next prompt.".to_owned(),
         }
     }
 
@@ -169,6 +171,14 @@ impl McpTool {
                     "rationale": text_schema(PROPOSAL_TEXT_MAX_CHARS),
                 }),
                 &["template", "project", "values", "subject", "rationale"],
+            ),
+            McpTool::ProposeAnswer => object_schema(
+                json!({
+                    "session_id": {"type": "string"},
+                    "text": text_schema(PROPOSAL_ANSWER_MAX_CHARS),
+                    "rationale": text_schema(PROPOSAL_TEXT_MAX_CHARS),
+                }),
+                &["session_id", "text", "rationale"],
             ),
         }
     }
@@ -247,6 +257,8 @@ closed_enum! {
         NotTheSchema,
         /// A text over [`PROPOSAL_TEXT_MAX_CHARS`].
         TextTooLong,
+        /// A proposed answer over [`PROPOSAL_ANSWER_MAX_CHARS`].
+        AnswerTooLong,
         /// A value over [`PROPOSAL_VALUE_MAX_CHARS`].
         ValueTooLong,
         /// More than [`PROPOSAL_MAX_VALUES`] values.
@@ -270,6 +282,9 @@ impl ArgsRefusal {
             }
             ArgsRefusal::TextTooLong => {
                 format!("a text is over {PROPOSAL_TEXT_MAX_CHARS} characters")
+            }
+            ArgsRefusal::AnswerTooLong => {
+                format!("the answer is over {PROPOSAL_ANSWER_MAX_CHARS} characters")
             }
             ArgsRefusal::ValueTooLong => {
                 format!("a value is over {PROPOSAL_VALUE_MAX_CHARS} characters")
@@ -323,6 +338,7 @@ pub enum ToolArgs {
     Proposals { status: Option<ProposalStatus> },
     ProposeRecap(RecapProposal),
     ProposeWorkOrder(WorkOrderProposal),
+    ProposeAnswer(AnswerProposal),
 }
 
 impl ToolArgs {
@@ -338,6 +354,7 @@ impl ToolArgs {
             ToolArgs::Proposals { .. } => McpTool::Proposals,
             ToolArgs::ProposeRecap(_) => McpTool::ProposeRecap,
             ToolArgs::ProposeWorkOrder(_) => McpTool::ProposeWorkOrder,
+            ToolArgs::ProposeAnswer(_) => McpTool::ProposeAnswer,
         }
     }
 }
@@ -604,6 +621,20 @@ fn tool_args(tool: McpTool, arguments: Value) -> Result<ToolArgs, ArgsRefusal> {
             )?;
             ToolArgs::ProposeWorkOrder(order)
         }
+        McpTool::ProposeAnswer => {
+            let answer: AnswerProposal = parsed(arguments)?;
+            within(
+                &answer.text,
+                PROPOSAL_ANSWER_MAX_CHARS,
+                ArgsRefusal::AnswerTooLong,
+            )?;
+            within(
+                &answer.rationale,
+                PROPOSAL_TEXT_MAX_CHARS,
+                ArgsRefusal::TextTooLong,
+            )?;
+            ToolArgs::ProposeAnswer(answer)
+        }
     })
 }
 
@@ -794,7 +825,7 @@ mod tests {
     /// The pinned SHA-256 of `tools_list()`: a schema or description change
     /// is a decision, made here on purpose (AD-90's golden test).
     const TOOLS_LIST_SHA256: &str =
-        "00bd8cd2c98089563b12ac0141173810e05fbac513bf481ea134bf6dd180f0d9";
+        "8cbcab6f665e2fe40f7854209b389e17f5fae676a6085e5554b0730b3a6141eb";
 
     #[test]
     fn schemas_are_pinned() {

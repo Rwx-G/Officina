@@ -13,9 +13,9 @@ use common::mcp::{
 use common::{fake_claude_calls, fingerprint, logged_argv, now_ms};
 use officina_core::mcp::{ArgsRefusal, McpError, McpTool};
 use officina_core::orders::proposal::{
-    PROPOSAL_HOUR_MS, PROPOSAL_MAX_VALUES, PROPOSAL_TEXT_MAX_CHARS, PROPOSAL_VALUE_MAX_CHARS,
-    PROPOSALS_PENDING_MAX, PROPOSALS_PER_HOUR, ProposalFile, ProposalTarget, RateRefusal,
-    RecapProposal, id_of_file, written_at,
+    PROPOSAL_ANSWER_MAX_CHARS, PROPOSAL_HOUR_MS, PROPOSAL_MAX_VALUES, PROPOSAL_TEXT_MAX_CHARS,
+    PROPOSAL_VALUE_MAX_CHARS, PROPOSALS_PENDING_MAX, PROPOSALS_PER_HOUR, ProposalFile,
+    ProposalTarget, RateRefusal, RecapProposal, id_of_file, written_at,
 };
 use officina_core::registry::types::OrchestratorStartOutcome;
 use officina_core::spawn::{AGENT_VIEW_VAR, SESSION_ENV_REMOVED};
@@ -292,10 +292,11 @@ fn each_read_tool_answers_from_the_fixture() {
             }
             McpTool::Proposals => {
                 let listed = result.as_array().unwrap();
-                assert_eq!(listed.len(), 2, "the two proposals written first");
+                let written = McpTool::ALL.iter().filter(|t| !t.reads_only()).count();
+                assert_eq!(listed.len(), written, "the proposals written first");
                 assert!(listed.iter().all(|p| p["status"] == "pending"));
             }
-            McpTool::ProposeRecap | McpTool::ProposeWorkOrder => {
+            McpTool::ProposeRecap | McpTool::ProposeWorkOrder | McpTool::ProposeAnswer => {
                 assert!(written_at(result["id"].as_str().unwrap()).is_some());
             }
         }
@@ -614,6 +615,104 @@ fn the_201st_pending_is_refused() {
     assert_eq!(out["refused"], RateRefusal::PendingLimit.code());
     assert_eq!(out["reason"], RateRefusal::PendingLimit.reason());
     assert_eq!(files(&home).len(), PROPOSALS_PENDING_MAX);
+}
+
+/// Story 5.21 AC 1 (AD-182, D-575): `propose_answer` writes one file of
+/// kind `answer` named by the id it returns, holding the session, the text
+/// and the rationale as given, a text the composer would refuse included:
+/// the tool holds bounds only, the window judges at ingestion. A text over
+/// the composer's bound is refused and writes nothing.
+#[test]
+fn propose_answer_writes_one_file_and_returns_its_id() {
+    let home = McpHome::new();
+    let mut args = arguments(McpTool::ProposeAnswer, &Sources::neutral(), 4);
+    args["text"] = json!("  /clear, then send now");
+    let mut long = args.clone();
+    long["text"] = json!("a".repeat(PROPOSAL_ANSWER_MAX_CHARS + 1));
+    let (_, responses) = home.session(&[
+        call(2, McpTool::ProposeAnswer, args.clone()),
+        call(3, McpTool::ProposeAnswer, long),
+    ]);
+    let names = files(&home);
+    let [name] = names.as_slice() else {
+        panic!("{names:?}")
+    };
+    let returned = output(response(&responses, 2))["result"]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(id_of_file(name), Some(returned.as_str()));
+    let file: ProposalFile =
+        serde_json::from_slice(&std::fs::read(home.proposals_dir().join(name)).unwrap()).unwrap();
+    let mut value = serde_json::to_value(&file).unwrap();
+    assert_eq!(value["kind"], "answer");
+    assert_eq!(value["orchestrator_session_id"], SESSION_LABEL);
+    assert_eq!(value["written_at_ms"].as_i64(), written_at(&returned));
+    for (key, expected) in args.as_object().unwrap() {
+        assert_eq!(value[key.as_str()].take(), *expected, "{key}");
+    }
+    let refused = output(response(&responses, 3));
+    assert_eq!(refused["refused"], ArgsRefusal::AnswerTooLong.code());
+    assert_eq!(refused["reason"], ArgsRefusal::AnswerTooLong.reason());
+}
+
+/// Story 5.21 AC 1 (AD-90, AD-182): answers count toward the hourly and
+/// pending limits the other proposal tools hold, and those count toward
+/// an answer: the hour's last place taken by answers refuses a recap, and
+/// as many recaps pending as the limit refuse an answer.
+#[test]
+fn propose_answer_shares_the_rate_limits() {
+    let home = McpHome::new();
+    let sources = Sources::neutral();
+    let mut calls: Vec<Value> = (0..PROPOSALS_PER_HOUR as u64)
+        .map(|at| {
+            call(
+                10 + at,
+                McpTool::ProposeAnswer,
+                arguments(McpTool::ProposeAnswer, &sources, 4),
+            )
+        })
+        .collect();
+    let next = 10 + PROPOSALS_PER_HOUR as u64;
+    calls.push(call(
+        next,
+        McpTool::ProposeRecap,
+        arguments(McpTool::ProposeRecap, &sources, 4),
+    ));
+    let (_, responses) = home.session(&calls);
+    for at in 0..PROPOSALS_PER_HOUR as u64 {
+        assert_eq!(response(&responses, 10 + at)["result"]["isError"], false);
+    }
+    assert_eq!(
+        output(response(&responses, next))["refused"],
+        RateRefusal::HourlyLimit.code()
+    );
+    assert_eq!(files(&home).len(), PROPOSALS_PER_HOUR);
+
+    let pending = McpHome::new();
+    let earlier = now_ms() - 2 * PROPOSAL_HOUR_MS;
+    let recap = ProposalFile::recap(
+        RecapProposal {
+            target: ProposalTarget::SubjectId(4),
+            done: "d".into(),
+            blocking: "b".into(),
+            decision_expected: "e".into(),
+        },
+        None,
+        earlier,
+    );
+    for _ in 0..PROPOSALS_PENDING_MAX {
+        write_proposal(&pending.proposals_dir(), &recap, earlier).unwrap();
+    }
+    let (_, responses) = pending.session(&[call(
+        2,
+        McpTool::ProposeAnswer,
+        arguments(McpTool::ProposeAnswer, &sources, 4),
+    )]);
+    let out = output(response(&responses, 2));
+    assert_eq!(out["refused"], RateRefusal::PendingLimit.code());
+    assert_eq!(out["reason"], RateRefusal::PendingLimit.reason());
+    assert_eq!(files(&pending).len(), PROPOSALS_PENDING_MAX);
 }
 
 /// AD-90, amendment 7: the tool validates nothing but bounds: a sentence

@@ -355,6 +355,10 @@ impl Server {
                 let file = ProposalFile::work_order(order, self.session.clone(), now_ms);
                 self.propose(id, tool, &reading, &file, now_ms)
             }
+            ToolArgs::ProposeAnswer(answer) => {
+                let file = ProposalFile::answer(answer, self.session.clone(), now_ms);
+                self.propose(id, tool, &reading, &file, now_ms)
+            }
         }
     }
 

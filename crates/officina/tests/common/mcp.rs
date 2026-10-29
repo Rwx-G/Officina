@@ -371,6 +371,8 @@ pub fn arguments(tool: McpTool, sources: &Sources, subject: i64) -> Value {
         McpTool::ProposeWorkOrder => json!({"template": "probe-notes", "project": "lab",
             "values": {"host": sources.proposal_value},
             "subject": {"new": sources.proposal_text}, "rationale": sources.proposal_text}),
+        McpTool::ProposeAnswer => json!({"session_id": "00000000-0000-0000-0000-000000000001",
+            "text": sources.proposal_text, "rationale": sources.proposal_text}),
     }
 }
 

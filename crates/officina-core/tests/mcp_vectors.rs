@@ -12,8 +12,8 @@ use officina_core::mcp::{
     tools_list,
 };
 use officina_core::orders::proposal::{
-    PROPOSAL_MAX_VALUES, PROPOSAL_NEW_SUBJECT_MAX_CHARS, PROPOSAL_TEXT_MAX_CHARS,
-    PROPOSAL_VALUE_MAX_CHARS,
+    PROPOSAL_ANSWER_MAX_CHARS, PROPOSAL_MAX_VALUES, PROPOSAL_NEW_SUBJECT_MAX_CHARS,
+    PROPOSAL_TEXT_MAX_CHARS, PROPOSAL_VALUE_MAX_CHARS,
 };
 use officina_core::relay::view::RECENT_ENTRIES;
 use serde_json::{Map, Value, json};
@@ -40,6 +40,8 @@ fn filled(value: &Value) -> Value {
             "<over RECENT_ENTRIES>" => json!(RECENT_ENTRIES + 1),
             "<at PROPOSAL_TEXT_MAX_CHARS>" => Value::from("é".repeat(PROPOSAL_TEXT_MAX_CHARS)),
             "<over PROPOSAL_TEXT_MAX_CHARS>" => over(PROPOSAL_TEXT_MAX_CHARS),
+            "<at PROPOSAL_ANSWER_MAX_CHARS>" => Value::from("a".repeat(PROPOSAL_ANSWER_MAX_CHARS)),
+            "<over PROPOSAL_ANSWER_MAX_CHARS>" => over(PROPOSAL_ANSWER_MAX_CHARS),
             "<over PROPOSAL_VALUE_MAX_CHARS>" => over(PROPOSAL_VALUE_MAX_CHARS),
             "<over PROPOSAL_NEW_SUBJECT_MAX_CHARS>" => over(PROPOSAL_NEW_SUBJECT_MAX_CHARS),
             "<over MAX_INPUT_BYTES>" => Value::from("a".repeat(MAX_INPUT_BYTES)),
