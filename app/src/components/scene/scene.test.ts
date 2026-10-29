@@ -38,7 +38,7 @@ function renderScene(b: Board, walking?: boolean) {
 /** Renders `b` and returns the layout the scene drew it from: the one the
  *  run's memory gives, as `Scene.svelte` lays it out. */
 function renderWithLayout(b: Board): { container: HTMLElement; layout: SceneLayout; unmount: () => void } {
-  const layout = layoutScene({ board: b }, memory.load(b));
+  const layout = layoutScene({ board: b, orchestrator: b.orchestrator }, memory.load(b));
   const { container, unmount } = renderScene(b);
   return { container, layout, unmount };
 }
