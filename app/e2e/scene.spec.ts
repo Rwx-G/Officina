@@ -808,6 +808,18 @@ test.describe("acting from the scene", () => {
     await expect(scene(page)).toHaveCount(0);
   });
 
+  // Story 5.12 AC 6: the request a session waits on says its class.
+  test("the file of a session with an auto request names its class", async ({ page }) => {
+    const board = loadBoard("approvals-auto");
+    const request = board.approvals.find((a) => a.class === "auto")!;
+    const waiting = liveCards(board).find((c) => c.session_id === request.session_id)!;
+    expect(waiting.scene?.approval).toBe(true);
+    await openScene(page, board);
+    await figureOf(page, waiting.key).click();
+    await expect(page.getByTestId("file-approval")).toContainText(request.action);
+    await expect(page.getByTestId("file-approval-class")).toHaveText("(class auto)");
+  });
+
   test("the file of an alerted session states its cause", async ({ page }) => {
     const board = loadBoard("scene-alert");
     await openScene(page, board);

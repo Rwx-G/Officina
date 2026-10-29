@@ -21,8 +21,10 @@ use crate::untrusted::Untrusted;
 /// the registry's state (v0.3, AD-54); later v0.3 stories extend the board
 /// under this number, since no release ships in between (P-13). 4: the
 /// scene's inputs (v0.4, AD-68), extended under this number by the later
-/// v0.4 stories (P-22 as amended by D-461).
-pub const BOARD_SCHEMA: u32 = 4;
+/// v0.4 stories (P-22 as amended by D-461). 5: an approval's class and
+/// state (v0.5, AD-92), extended under this number by the later v0.5
+/// stories (P-26).
+pub const BOARD_SCHEMA: u32 = 5;
 
 /// Sessions that ended, failed or finished are listed for this long.
 pub const DONE_WINDOW_MS: i64 = 24 * 60 * 60 * 1000;
@@ -977,7 +979,8 @@ pub fn build_board(input: &BoardInput, now_ms: i64) -> Board {
             ..approval.clone()
         })
         .collect();
-    let waiting = columns.needs_you.len() + approvals.iter().filter(|a| a.valid).count();
+    let waiting =
+        columns.needs_you.len() + approvals.iter().filter(|a| a.waits_on_the_author()).count();
     let alert_after_ms = i64::from(
         input
             .alert_after_minutes
@@ -1738,6 +1741,63 @@ values = [\"web01\"]
             );
         }
 
+        /// AD-92: each approval carries its class and state; every request
+        /// is pending until a live review is deciding it.
+        #[test]
+        fn approvals_carry_their_class_and_state() {
+            use crate::relay::approvals::ApprovalState;
+            use crate::relay::catalogue::ActionClass;
+            let approved = approved();
+            let board = board_of(
+                &files(vec![request(
+                    &approved,
+                    "restart",
+                    "web01",
+                    NOW - MIN,
+                    None,
+                )]),
+                &DryRunInputs::default(),
+                "[]",
+            );
+            let approval = &board.approvals[0];
+            assert_eq!(
+                (approval.class, approval.state),
+                (ActionClass::Human, ApprovalState::Pending)
+            );
+            let value = serde_json::to_value(&board).unwrap();
+            assert_eq!(value["approvals"][0]["class"], "human");
+            assert_eq!(value["approvals"][0]["state"], "pending");
+        }
+
+        /// AD-92, D-571: a request a live review is deciding waits on the
+        /// review, not on the author: it is not counted.
+        #[test]
+        fn reviewing_requests_are_not_counted_as_waiting() {
+            use crate::relay::approvals::ApprovalState;
+            let approved = approved();
+            let ctx_dirs = BTreeMap::from([("lab".to_owned(), "C:/path/to/Lab".to_owned())]);
+            let ctx = ApprovalContext {
+                approved: Some(&approved),
+                project_dirs: &ctx_dirs,
+                system_dir: "C:/Windows/System32",
+            };
+            let all = files(vec![
+                request(&approved, "restart", "web01", NOW - MIN, None),
+                request(&approved, "restart", "db01", NOW - MIN, None),
+            ]);
+            let mut approvals = pending(&all, &ctx, &DryRunInputs::default(), NOW);
+            approvals[0].state = ApprovalState::Reviewing;
+            let board = build_board(
+                &BoardInput {
+                    approvals,
+                    ..Default::default()
+                },
+                NOW,
+            );
+            assert_eq!(board.approvals.len(), 2, "both listed");
+            assert_eq!(board.waiting_count, 1, "only the pending one waits");
+        }
+
         #[test]
         fn invalid_requests_do_not_count() {
             let approved = approved();
@@ -1785,10 +1845,7 @@ values = [\"web01\"]
             ]);
             all.rejected.insert(
                 decided_id,
-                Decision {
-                    decided_at_ms: NOW,
-                    request_key: decided.request_key,
-                },
+                Decision::by_author(NOW, &decided.request_key, None),
             );
             let board = board_of(&all, &DryRunInputs::default(), "[]");
             let ids: Vec<&str> = board.approvals.iter().map(|a| a.id.as_str()).collect();
@@ -2065,6 +2122,8 @@ values = [\"web01\"]
                 id: "0123456789abcdef-1".into(),
                 project: "api".into(),
                 action: "restart".into(),
+                class: crate::relay::catalogue::ActionClass::Human,
+                state: crate::relay::approvals::ApprovalState::Pending,
                 description: String::new(),
                 argv: Vec::new(),
                 http: None,

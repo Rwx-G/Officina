@@ -20,7 +20,7 @@ use officina_core::focus::FocusOutcome;
 use officina_core::ipc::IpcError;
 use officina_core::orders::card::{CardAnswer, CardChange, CardRequest, LaunchAnswer};
 use officina_core::registry::confirm::{AuthorAction, ConfirmItem, ItemAnswer, SubjectOrigin};
-use officina_core::registry::types::Settlement;
+use officina_core::registry::types::{AuthorReason, Settlement};
 use officina_core::registry::view::{DiscardedSession, RegistryView, SubjectView};
 use officina_core::relay::view::RelayView;
 use officina_host::collector::Collector;
@@ -445,17 +445,20 @@ async fn approve_catalogue(state: State<'_, AppState>, hash: String) -> Result<S
     .await
 }
 
-/// Approves or rejects a `human` action's request (FR-9, AD-35); the
-/// authority refuses one that is unknown, decided, expired or does not
-/// rebuild from the approved catalogue (D-27).
+/// Approves or rejects a `human` or `auto` action's request (FR-9, AD-35,
+/// AD-86); rejecting an `auto` one takes its reason. The authority refuses
+/// a request that is unknown, decided, expired, being reviewed or does not
+/// rebuild from the approved catalogue (D-27, D-157), and a reason that
+/// does not fit its class.
 #[tauri::command]
 async fn decide_approval(
     state: State<'_, AppState>,
     id: String,
     approve: bool,
+    reason: Option<AuthorReason>,
 ) -> Result<(), IpcError> {
     with_authority(state, move |home| {
-        authority::decide_approval(home, &id, approve)
+        authority::decide_approval(home, &id, approve, reason)
     })
     .await
 }
@@ -737,6 +740,8 @@ mod tests {
             id: id.to_owned(),
             project: "lab".to_owned(),
             action: "restart".to_owned(),
+            class: officina_core::relay::catalogue::ActionClass::Human,
+            state: officina_core::relay::approvals::ApprovalState::Pending,
             description: String::new(),
             argv: Vec::new(),
             http: None,

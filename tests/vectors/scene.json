@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "_doc": "Hand-written cases of the scene state (AD-167, D-462 to D-465, D-494 to D-496), replayed through build_board by crates/officina-core/tests/scene_vectors.rs. Times are Unix ms; agents use the shapes of research notes E1, redacted. A case's floor gives projects and their priority, approvals are valid pending relay requests by session id, previous is the scene state of each card key on the board built before. An expected card's subagents, absent for none, are the running sub-agents its session's SubagentStart and SubagentStop lines leave (AD-176, D-507, D-547).",
+  "_doc": "Hand-written cases of the scene state (AD-167, D-462 to D-465, D-494 to D-496), replayed through build_board by crates/officina-core/tests/scene_vectors.rs. Times are Unix ms; agents use the shapes of research notes E1, redacted. A case's floor gives projects and their priority, approvals are relay requests by session id (valid and pending unless a case says otherwise; a reviewing one waits on its review, D-571), previous is the scene state of each card key on the board built before. An expected card's subagents, absent for none, are the running sub-agents its session's SubagentStart and SubagentStop lines leave (AD-176, D-507, D-547).",
   "cases": [
     {
       "name": "a working session sits in its office",
@@ -234,6 +234,38 @@
       "name": "an invalid request holds nobody",
       "now_ms": 1793102400000,
       "approvals": [{"session_id": "00000000-0000-0000-0000-000000000001", "requested_at_ms": 1793102340000, "valid": false}],
+      "agents": [{"pid": 4100, "cwd": "C:/work/api", "kind": "interactive", "startedAt": 1793095200000, "sessionId": "00000000-0000-0000-0000-000000000001", "status": "busy"}],
+      "events": [],
+      "expect": [{"key": "pid:4100:1793095200000", "zone": "office", "waiting_since_ms": null, "alert": null, "approval": false}],
+      "expect_alert_count": 0,
+      "expect_next_escalation_at_ms": null
+    },
+    {
+      "name": "a reviewing approval leaves the session in its office",
+      "now_ms": 1793102400000,
+      "approvals": [{"session_id": "00000000-0000-0000-0000-000000000001", "requested_at_ms": 1793102340000, "state": "reviewing"}],
+      "agents": [{"pid": 4100, "cwd": "C:/work/api", "kind": "interactive", "startedAt": 1793095200000, "sessionId": "00000000-0000-0000-0000-000000000001", "status": "busy"}],
+      "events": [],
+      "expect": [{"key": "pid:4100:1793095200000", "zone": "office", "waiting_since_ms": null, "alert": null, "approval": false}],
+      "expect_alert_count": 0,
+      "expect_next_escalation_at_ms": null
+    },
+    {
+      "name": "an escalated approval queues it",
+      "now_ms": 1793102400000,
+      "approvals": [{"session_id": "00000000-0000-0000-0000-000000000001", "requested_at_ms": 1793102340000, "state": "pending"}],
+      "previous": {"pid:4100:1793095200000": {"zone": "office", "waiting_since_ms": null, "alert": null, "approval": false}},
+      "agents": [{"pid": 4100, "cwd": "C:/work/api", "kind": "interactive", "startedAt": 1793095200000, "sessionId": "00000000-0000-0000-0000-000000000001", "status": "busy"}],
+      "events": [],
+      "expect": [{"key": "pid:4100:1793095200000", "zone": "decision", "waiting_since_ms": 1793102340000, "alert": null, "approval": true}],
+      "expect_alert_count": 0,
+      "expect_next_escalation_at_ms": null
+    },
+    {
+      "name": "a reviewing approval never alerts",
+      "now_ms": 1793102400000,
+      "floor": [{"name": "api", "path": "c:/work/api", "priority": "high"}],
+      "approvals": [{"session_id": "00000000-0000-0000-0000-000000000001", "requested_at_ms": 1793100000000, "state": "reviewing"}],
       "agents": [{"pid": 4100, "cwd": "C:/work/api", "kind": "interactive", "startedAt": 1793095200000, "sessionId": "00000000-0000-0000-0000-000000000001", "status": "busy"}],
       "events": [],
       "expect": [{"key": "pid:4100:1793095200000", "zone": "office", "waiting_since_ms": null, "alert": null, "approval": false}],

@@ -27,7 +27,7 @@ const FLOOR: &str = r#"schema = 2
 [[project]]
 name = "lab"
 path = "{project}"
-actions = ["restart", "missing", "verify", "apply-sensitive"]
+actions = ["restart", "missing", "verify", "apply-sensitive", "apply-auto"]
 
 [[action]]
 name = "restart"
@@ -59,6 +59,16 @@ class = "human"
 check = "verify"
 program = "{tool}"
 args = ["{group}"]
+
+[action.params.group]
+pattern = "lab-[a-z0-9-]{1,30}"
+
+[[action]]
+name = "apply-auto"
+class = "auto"
+check = "verify"
+program = "{tool}"
+args = ["--auto", "{group}"]
 
 [action.params.group]
 pattern = "lab-[a-z0-9-]{1,30}"
@@ -135,7 +145,7 @@ impl Relay {
     }
 
     fn decide(&self, id: &str, approve: bool) {
-        decide_approval(&self.env.relay_home(), id, approve).unwrap();
+        decide_approval(&self.env.relay_home(), id, approve, None).unwrap();
     }
 
     /// Moves a decision `ago` into the past, as time would.
@@ -314,7 +324,7 @@ fn forged_request_argv_is_not_shown_or_approvable() {
     assert!(!out.stdout.windows(10).any(|w| w == b"whoami.exe"));
     assert_eq!(board["waiting_count"], 1, "the real request only");
 
-    let refused = decide_approval(&relay.env.relay_home(), &id, true);
+    let refused = decide_approval(&relay.env.relay_home(), &id, true, None);
     assert!(
         matches!(refused, Err(AuthorityError::Decide(_))),
         "{refused:?}"
@@ -409,7 +419,7 @@ fn forged_http_request_is_not_approvable() {
     );
     assert!(!stdout.windows(8).any(|w| w == b"attacker"));
     assert!(matches!(
-        decide_approval(&relay.env.relay_home(), &id, true),
+        decide_approval(&relay.env.relay_home(), &id, true, None),
         Err(AuthorityError::Decide(_))
     ));
 }
@@ -487,6 +497,27 @@ fn approve_while_waiting_runs_once_under_2_s() {
         "the next call asks again"
     );
     assert_eq!(relay.launches().len(), 1);
+}
+
+/// Story 5.12 AC 1 (AD-86): an `auto` request approved while its call waits
+/// runs once, as a `human` one; the next call asks again.
+#[test]
+fn an_auto_approval_while_waiting_runs_once() {
+    let relay = Relay::new();
+    dry_run(&relay, "lab-web");
+    let child = relay.spawn(&["apply-auto", "group=lab-web", "--wait", "30"]);
+    let id = relay.next_request(&[]);
+    relay.decide(&id, true);
+    let out = child.wait_with_output().unwrap();
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    assert_eq!(relay.launches().len(), 2, "the check, then the apply");
+    assert_eq!(relay.ids(FileKind::Consumed), [id]);
+    assert_refused_after(
+        &relay,
+        &relay.run(&["apply-auto", "group=lab-web", "--wait", "1"]),
+        RefusalReason::ApprovalPending,
+        2,
+    );
 }
 
 // ---- AC 7: a failure after consumption burns the approval ----

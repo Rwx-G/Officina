@@ -10,8 +10,11 @@ use std::io;
 use std::path::Path;
 
 use officina_core::ipc::{IpcError, IpcErrorCode};
+use officina_core::registry::types::AuthorReason;
 use officina_core::relay::StopFlag;
-use officina_core::relay::approvals::{DecideRefusal, Decision, FileKind, decidable, file_name};
+use officina_core::relay::approvals::{
+    ApprovalBy, DecideRefusal, Decision, FileKind, decidable, file_name, reason_fits,
+};
 use officina_core::relay::catalogue::{ApprovedCatalogue, KnownProjects};
 use officina_core::relay::journal::{ApprovalEvent, CatalogueApproved, JournalEntry};
 use officina_core::relay::record::{
@@ -231,27 +234,54 @@ pub fn approve_catalogue(
     Ok(approved)
 }
 
-/// Approves or rejects request `id` (FR-9, AD-33, AD-35): writes
-/// `<id>.approved.json` or `<id>.rejected.json` (`decided_at_ms`,
-/// `request_key`) atomically and journals `approval_given` or
-/// `approval_rejected`. Refused, writing nothing, for a request that is
-/// unknown, already decided, expired, or that does not rebuild from the
-/// approved catalogue, a request of another catalogue included (D-27).
+/// Approves or rejects request `id` as the author (FR-9, AD-33, AD-35,
+/// AD-86): writes `<id>.approved.json` or `<id>.rejected.json`
+/// (`decided_at_ms`, `request_key`, `by = "author"`, and for an `auto`
+/// rejection its `reason`) atomically and journals `approval_given` or
+/// `approval_rejected` with the same. Refused, writing nothing, for a
+/// request that is unknown, already decided, expired, being reviewed, or
+/// that does not rebuild from the approved catalogue, a request of another
+/// catalogue included (D-27, D-157); and for a reason that does not fit
+/// ([`reason_fits`]).
 ///
 /// The journal lock is held across the check, the decision and its line, so
-/// two clicks decide once.
-pub fn decide_approval(home: &RelayHome, id: &str, approve: bool) -> Result<(), AuthorityError> {
+/// two clicks decide once; the decision marker (D-157) is claimed first, so
+/// a review approving at the same time decides once with it.
+pub fn decide_approval(
+    home: &RelayHome,
+    id: &str,
+    approve: bool,
+    reason: Option<AuthorReason>,
+) -> Result<(), AuthorityError> {
     let journal = JournalLock::acquire(home).map_err(|e| AuthorityError::Journal(e.to_string()))?;
     let files = approvals::read_files(home);
     let sources = ContextSources::read(home);
     let now = now_ms();
-    let request = decidable(&files, &sources.context(), id, now).map_err(AuthorityError::Decide)?;
+    let (request, class) =
+        decidable(&files, &sources.context(), id, now).map_err(AuthorityError::Decide)?;
+    reason_fits(class, approve, reason).map_err(|why| {
+        AuthorityError::Decide(DecideRefusal::Reason {
+            id: id.to_owned(),
+            why: why.to_owned(),
+        })
+    })?;
+    let claimed = approvals::claim_decision(home, id).map_err(|e| AuthorityError::Write {
+        path: home.approvals_dir().display().to_string(),
+        error: e.to_string(),
+    })?;
+    if !claimed {
+        return Err(AuthorityError::Decide(DecideRefusal::Decided(
+            id.to_owned(),
+        )));
+    }
     let event = ApprovalEvent {
         approval_id: id.to_owned(),
         request_key: request.request_key.clone(),
         project: Some(request.project.clone()),
         action: Some(request.action.clone()),
         dry_run: None,
+        by: Some(ApprovalBy::Author),
+        reason,
     };
     let (kind, verdict, line) = if approve {
         (
@@ -280,10 +310,7 @@ pub fn decide_approval(home: &RelayHome, id: &str, approve: bool) -> Result<(), 
     })?;
     write_json(
         &home.approvals_dir().join(file_name(id, kind)),
-        &Decision {
-            decided_at_ms: now,
-            request_key: request.request_key.clone(),
-        },
+        &Decision::by_author(now, &request.request_key, reason),
     )?;
     journal
         .append(&[line], now)

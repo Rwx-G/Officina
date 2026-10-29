@@ -7,10 +7,11 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
+use super::approvals::ApprovalBy;
 use super::catalogue::ActionClass;
 use super::gate::DenyKind;
 use super::http::HttpMethod;
-use crate::registry::types::LaunchOutcome;
+use crate::registry::types::{AuthorReason, LaunchOutcome};
 
 /// Version of the journal line format. Readers skip lines of another
 /// version without counting them corrupt.
@@ -312,9 +313,6 @@ closed_enum! {
         UnknownParameter,
         /// A value breaks a rule of AD-30 or the parameter's own.
         InvalidValue,
-        /// The action's class is one this build does not run yet
-        /// (`classes::is_available`): `auto` until story 5.12 (D-132).
-        ClassNotAvailable,
         /// The project is a git work tree, and no `git` is installed where
         /// Git for Windows records it: its files cannot be bound (D-173).
         GitUnavailable,
@@ -459,6 +457,13 @@ pub struct ApprovalEvent {
     /// dry run (D-170, D-172).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dry_run: Option<bool>,
+    /// On `approval_given` and `approval_rejected`: who decided (AD-86);
+    /// absent on lines written before v0.5, which were the author's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub by: Option<ApprovalBy>,
+    /// On `approval_rejected` of an `auto` request: why (FR-9, AD-86).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<AuthorReason>,
 }
 
 /// A work order's launch ended (AD-32 as amended, AD-81 step 3): what
@@ -664,6 +669,51 @@ mod tests {
             project: Some("lab".into()),
             action: Some("apply".into()),
             dry_run: Some(true),
+            by: None,
+            reason: None,
+        }
+    }
+
+    /// AD-86: `approval_given` says who approved.
+    #[test]
+    fn approval_given_carries_by() {
+        for by in ApprovalBy::ALL {
+            let given = ApprovalEvent {
+                dry_run: None,
+                by: Some(*by),
+                ..approval()
+            };
+            let line = JournalLine::new(3, JournalEntry::ApprovalGiven(given.clone())).to_line();
+            let value: serde_json::Value = serde_json::from_str(&line).unwrap();
+            assert_eq!(value["by"], by.code());
+            assert_eq!(
+                parse_line(line.trim_end()),
+                ParsedLine::Line(JournalLine::new(3, JournalEntry::ApprovalGiven(given)))
+            );
+        }
+    }
+
+    /// FR-9, AD-86: an `auto` rejection's line carries its reason.
+    #[test]
+    fn approval_rejected_carries_the_reason() {
+        for reason in AuthorReason::ALL {
+            let rejected = ApprovalEvent {
+                dry_run: None,
+                by: Some(ApprovalBy::Author),
+                reason: Some(*reason),
+                ..approval()
+            };
+            let line =
+                JournalLine::new(3, JournalEntry::ApprovalRejected(rejected.clone())).to_line();
+            let value: serde_json::Value = serde_json::from_str(&line).unwrap();
+            assert_eq!(value["reason"], reason.code());
+            assert_eq!(
+                parse_line(line.trim_end()),
+                ParsedLine::Line(JournalLine::new(
+                    3,
+                    JournalEntry::ApprovalRejected(rejected)
+                ))
+            );
         }
     }
 
@@ -712,6 +762,7 @@ mod tests {
                 (event.project, event.action, event.dry_run),
                 (None, None, None)
             );
+            assert_eq!((event.by, event.reason), (None, None));
         }
         assert_eq!(JOURNAL_LINE_VERSION, 1);
     }

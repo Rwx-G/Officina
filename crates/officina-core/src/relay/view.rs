@@ -895,6 +895,8 @@ mod tests {
                         project: Some("lab".to_owned()),
                         action: Some("probe".to_owned()),
                         dry_run: None,
+                        by: None,
+                        reason: None,
                     };
                     match kind {
                         JournalKind::ApprovalRequested => JournalEntry::ApprovalRequested(event),

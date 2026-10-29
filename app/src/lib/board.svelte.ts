@@ -1,5 +1,6 @@
 // Window state: the current board, a clock for relative times, and the
 // outcome of recent clicks, kept `OUTCOME_VISIBLE_MS` per card (AD-20).
+import type { AuthorReason } from "./generated/AuthorReason";
 import type { Board } from "./generated/Board";
 import type { Card } from "./generated/Card";
 import type { FocusOutcome } from "./generated/FocusOutcome";
@@ -155,15 +156,16 @@ export class BoardStore {
     });
   }
 
-  /** Approves or rejects request `id`, once at a time; a refusal is kept to
-   *  show on its card. The card leaves Needs you with the next board. */
-  async decideApproval(id: string, approve: boolean): Promise<void> {
+  /** Approves or rejects request `id`, with an `auto` rejection's reason,
+   *  once at a time; a refusal is kept to show on its card. The card leaves
+   *  Needs you with the next board. */
+  async decideApproval(id: string, approve: boolean, reason?: AuthorReason): Promise<void> {
     if (this.deciding[id]) return;
     this.deciding = { ...this.deciding, [id]: true };
     const { [id]: _previous, ...others } = this.approvalErrors;
     this.approvalErrors = others;
     try {
-      await ipc.decideApproval(id, approve);
+      await ipc.decideApproval(id, approve, reason);
     } catch (error) {
       this.approvalErrors = { ...this.approvalErrors, [id]: ipc.errorMessage(error) };
     } finally {

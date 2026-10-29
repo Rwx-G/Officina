@@ -37,11 +37,23 @@ pub fn read_files(home: &RelayHome) -> ApprovalFiles {
         let Some((id, kind)) = parse_file_name(&name) else {
             continue;
         };
+        let id = id.to_owned();
+        match kind {
+            FileKind::Decided => {
+                files.markers.insert(id);
+                continue;
+            }
+            FileKind::Reviewing => {
+                files.reviewing.insert(id);
+                continue;
+            }
+            _ => {}
+        }
         let Ok(bytes) = fs::read(entry.path()) else {
             continue;
         };
-        let id = id.to_owned();
         match kind {
+            FileKind::Decided | FileKind::Reviewing => {}
             FileKind::Request => {
                 if let Ok(request) = serde_json::from_slice(&bytes) {
                     files.requests.insert(id, request);
@@ -102,6 +114,48 @@ pub fn consume(home: &RelayHome, id: &str) -> io::Result<()> {
     // Used whatever happens next: the consumed name is the record.
     let _ = fs::remove_file(&approved);
     Ok(())
+}
+
+/// Claims the decision of request `id` (D-157): creates `<id>.decided` with
+/// `create_new`, so of the author and a review deciding at once exactly one
+/// gets `Ok(true)`; the other gets `Ok(false)` and writes nothing.
+pub fn claim_decision(home: &RelayHome, id: &str) -> io::Result<bool> {
+    let dir = home.approvals_dir();
+    fs::create_dir_all(&dir)?;
+    match OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(dir.join(file_name(id, FileKind::Decided)))
+    {
+        Ok(_) => Ok(true),
+        Err(e) if e.kind() == io::ErrorKind::AlreadyExists => Ok(false),
+        Err(e) => Err(e),
+    }
+}
+
+/// Marks request `id` as decided by a live review, or clears the mark
+/// (D-157): while it stands the author cannot decide it, and the board
+/// shows it reviewing. A missing mark to clear is no error.
+pub fn set_reviewing(home: &RelayHome, id: &str, reviewing: bool) -> io::Result<()> {
+    let path = home
+        .approvals_dir()
+        .join(file_name(id, FileKind::Reviewing));
+    if reviewing {
+        fs::create_dir_all(home.approvals_dir())?;
+        return fs::write(path, b"");
+    }
+    match fs::remove_file(path) {
+        Err(e) if e.kind() != io::ErrorKind::NotFound => Err(e),
+        _ => Ok(()),
+    }
+}
+
+/// Clears every review mark: what the window does as it starts, since a
+/// mark only holds while the window that wrote it reviews (D-157).
+pub fn clear_reviewing(home: &RelayHome) {
+    for id in read_files(home).reviewing {
+        let _ = set_reviewing(home, &id, false);
+    }
 }
 
 /// The window's decision on request `id`, as a stat finds it: approved (and

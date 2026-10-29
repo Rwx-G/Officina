@@ -608,7 +608,11 @@ The registry is ready to record them: each launch is a row named `<template>-<se
 
 ### The `auto` class
 
-An action may now be `class = "auto"`. It must name its `check`, a `free` action with the same parameters, as an `after-check` action does: an unattended apply always runs after its dry run, and an `auto` action without one is skipped with the issue `auto_without_check`. `auto_max_per_hour` (1 to 60, 6 when not set) caps how many such runs can be approved in an hour; it applies to `auto` actions only. An HTTP action cannot be `auto`: it stays on the `human` path. Until the review of `auto` requests ships, `officina run` refuses an `auto` action with `class_not_available`, and `officina run --list` marks it as not available in this build.
+An action may now be `class = "auto"`. It must name its `check`, a `free` action with the same parameters, as an `after-check` action does: an unattended apply always runs after its dry run, and an `auto` action without one is skipped with the issue `auto_without_check`. `auto_max_per_hour` (1 to 60, 6 when not set) caps how many such runs can be approved in an hour; it applies to `auto` actions only. An HTTP action cannot be `auto`: it stays on the `human` path. `officina doctor` lists the `auto` actions with their check and cap.
+
+`officina run` treats an `auto` action exactly as a `human` one for now: after its check passed, the call writes a request and waits for an approval, which runs it once. `officina run --list` shows every action's class. The approval file says who gave it (`by`: you, a review, or the rule), and whoever gave it, the call checks again just before using it that the dry run still holds on the files as they are then and is still under half an hour old; otherwise it refuses `check_not_satisfied` and leaves the approval unused.
+
+On its card in Needs you, an `auto` request shows its class and its check. **Reject** asks why, with two buttons that appear in place, so nothing on the board moves: **should not run** (the request was wrong) or **not now** (it was fine, the timing was not). Both act on a pointer click only. The reason is kept with the rejection; once reviews run, only "should not run" against a review that approved counts against the review when Officina decides whether it may approve on its own. One request gets one decision: whoever decides first, you or a review, the other is refused.
 
 ### Upgrading from v0.4
 

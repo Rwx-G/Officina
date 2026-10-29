@@ -23,13 +23,14 @@ use std::time::{Duration, Instant};
 
 use officina_core::floor::{Autonomy, floor_dir_of, join_project_path};
 use officina_core::quota::normalise_path;
-use officina_core::relay::approvals::DEFAULT_WAIT_S;
+use officina_core::relay::approvals::{DEFAULT_WAIT_S, waits_for_approval};
 use officina_core::relay::argv::{WSL_ENV_PROGRAM, WSL_EXE, WSL_TIMEOUT_PROGRAM};
 use officina_core::relay::catalogue::{
-    ActionClass, ActionIssue, CanonicalAction, CanonicalCatalogue, CatalogueDiff, IssueTable,
-    RelayFloor, Runner, SectionDiff, diff, notices, relay_in_use,
+    ActionClass, ActionIssue, CanonicalAction, CanonicalCatalogue, CatalogueDiff,
+    DEFAULT_AUTO_MAX_PER_HOUR, IssueTable, RelayFloor, Runner, SectionDiff, diff, notices,
+    relay_in_use,
 };
-use officina_core::relay::classes::{CHECK_VALID_MS, WAIT_RANGE_S, is_available};
+use officina_core::relay::classes::{CHECK_VALID_MS, WAIT_RANGE_S};
 use officina_core::relay::credential::{cmdkey_line, target};
 use officina_core::relay::gate::{LIST_COMMAND, SHELL_TOOLS, ToolRule};
 use officina_core::relay::http::MAX_HTTP_TIMEOUT_S;
@@ -233,6 +234,7 @@ fn checks_with(
         let snapshot = approved.approved().map(|a| &a.canonical);
         checks.extend(credential_checks(&relay.canonical, snapshot, store));
         checks.extend(timeout_checks(&relay.canonical.actions));
+        checks.extend(auto_action_checks(&relay.canonical.actions));
         checks.extend(check_listing_checks(&relay.canonical));
         checks.extend(tree_checks(&relay.canonical, &dirs));
     }
@@ -742,7 +744,7 @@ fn timeout_checks(actions: &BTreeMap<String, CanonicalAction>) -> Vec<Check> {
                 Some(_) => action.timeout_s.min(MAX_HTTP_TIMEOUT_S),
                 None => action.timeout_s,
             });
-            let waits = action.class == ActionClass::Human;
+            let waits = waits_for_approval(action.class);
             let detail = if timeout >= cap_s {
                 format!(
                     "timeout_s {timeout} reaches the Bash tool's {cap_s} s cap: Claude Code can kill the call first, and the run then reads abandoned in the journal"
@@ -758,6 +760,28 @@ fn timeout_checks(actions: &BTreeMap<String, CanonicalAction>) -> Vec<Check> {
             Some(check(Level::Warn, &format!("relay timeout {name}"), detail))
         })
         .collect()
+}
+
+/// AD-94 part B: the `auto` actions, each with its check and its hourly cap
+/// (AD-75, D-570); none when the catalogue has none.
+fn auto_action_checks(actions: &BTreeMap<String, CanonicalAction>) -> Vec<Check> {
+    let listed: Vec<String> = actions
+        .iter()
+        .filter(|(_, action)| action.class == ActionClass::Auto)
+        .map(|(name, action)| {
+            format!(
+                "{name} (check {}, at most {} approvals an hour)",
+                action.check.as_deref().unwrap_or("none"),
+                action
+                    .auto_max_per_hour
+                    .unwrap_or(DEFAULT_AUTO_MAX_PER_HOUR)
+            )
+        })
+        .collect();
+    if listed.is_empty() {
+        return Vec::new();
+    }
+    vec![check(Level::Ok, "relay auto actions", listed.join("; "))]
 }
 
 /// An action naming a check (an `after-check` action, or a `human` action's
@@ -798,7 +822,7 @@ fn tree_checks(catalogue: &CanonicalCatalogue, dirs: &BTreeMap<String, String>) 
         .filter(|(_, project)| {
             project.actions.iter().any(|a| {
                 catalogue.actions.get(a).is_some_and(|action| {
-                    action.check.is_some() || action.class == ActionClass::Human
+                    action.check.is_some() || waits_for_approval(action.class)
                 })
             })
         })
@@ -942,24 +966,18 @@ fn paragraph_action(name: &str, action: &CanonicalAction) -> String {
         notes.push(format!("{description}."));
     }
     let minutes = CHECK_VALID_MS / 60_000;
-    if !is_available(action.class) {
-        notes.push(format!(
-            "Class `{}` is not available in this build of Officina: `officina run` refuses it.",
-            action.class.code()
-        ));
-    }
     match (action.class, &action.check) {
         (ActionClass::AfterCheck, Some(check)) => notes.push(format!(
             "Runs only after `officina run {check}` succeeded with the same values on the same code in the last {minutes} minutes."
         )),
-        (ActionClass::Human, check) => {
+        (ActionClass::Human | ActionClass::Auto, check) => {
             if let Some(check) = check {
                 notes.push(format!(
                     "Run its dry run `officina run {check}` with the same values first: the approval request is made only after it succeeded on the same code in the last {minutes} minutes."
                 ));
             }
             notes.push(format!(
-                "Runs once the author approves it in the Officina window; the call waits for that up to `--wait <s>` ({DEFAULT_WAIT_S} by default, at most {}), and a call that timed out is repeated as is to keep waiting.",
+                "Runs once it is approved in the Officina window; the call waits for that up to `--wait <s>` ({DEFAULT_WAIT_S} by default, at most {}), and a call that timed out is repeated as is to keep waiting.",
                 WAIT_RANGE_S.end()
             ));
         }
@@ -1224,15 +1242,51 @@ mod tests {
         );
     }
 
-    /// The `CLAUDE.md` paragraph says an `auto` action does not run in this
-    /// build (D-132).
+    /// Story 5.12 AC 1: the `CLAUDE.md` paragraph tells a session an `auto`
+    /// action waits for its approval after its dry run, as a `human` one.
     #[test]
-    fn the_paragraph_marks_an_auto_action_unavailable() {
+    fn the_paragraph_explains_an_auto_action_like_a_human_one() {
         let relay = load(&template_floor(TEMPLATE), FLOOR_PATH).unwrap();
         let line = paragraph_action("apply", &relay.canonical.actions["apply"]);
-        assert!(line.contains("not available in this build"), "{line}");
-        let check = paragraph_action("check", &relay.canonical.actions["check"]);
-        assert!(!check.contains("not available"), "{check}");
+        assert!(
+            line.contains("Run its dry run `officina run check`"),
+            "{line}"
+        );
+        assert!(
+            line.contains("Runs once it is approved in the Officina window"),
+            "{line}"
+        );
+        assert!(!line.contains("not available"), "{line}");
+    }
+
+    /// Story 5.12 AC 7 (AD-94 part B): doctor lists the `auto` actions with
+    /// their check and hourly cap, and says nothing without one.
+    #[test]
+    fn auto_actions_are_listed_with_check_and_cap() {
+        let floor = template_floor(TEMPLATE).replace(
+            "class = \"auto\"\ncheck = \"check\"\n",
+            "class = \"auto\"\ncheck = \"check\"\nauto_max_per_hour = 3\n",
+        );
+        let relay = load(&floor, FLOOR_PATH).unwrap();
+        let checks = auto_action_checks(&relay.canonical.actions);
+        assert_eq!(checks.len(), 1);
+        assert_eq!(checks[0].level, Level::Ok);
+        assert_eq!(checks[0].title, "relay auto actions");
+        assert_eq!(
+            checks[0].detail,
+            "apply (check check, at most 3 approvals an hour)"
+        );
+        let default = load(&template_floor(TEMPLATE), FLOOR_PATH).unwrap();
+        assert!(
+            auto_action_checks(&default.canonical.actions)[0]
+                .detail
+                .ends_with(&format!(
+                    "at most {DEFAULT_AUTO_MAX_PER_HOUR} approvals an hour)"
+                ))
+        );
+        let human = template_floor(TEMPLATE).replace("class = \"auto\"", "class = \"human\"");
+        let none = load(&human, FLOOR_PATH).unwrap();
+        assert!(auto_action_checks(&none.canonical.actions).is_empty());
     }
 
     #[test]

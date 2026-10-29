@@ -107,7 +107,7 @@ impl Relay {
         loop {
             let files = read_files(&self.home);
             if let Some(id) = files.requests.keys().find(|id| !files.decided(id)) {
-                decide_approval(&self.home, id, true).unwrap();
+                decide_approval(&self.home, id, true, None).unwrap();
                 return id.clone();
             }
             assert!(Instant::now() < deadline, "no request appeared");

@@ -3,14 +3,16 @@
 
 use std::path::Path;
 
+use officina_core::relay::catalogue::ActionClass;
 use officina_core::relay::record::{RecordState, Verdict};
-use officina_core::relay::run::{Refusal, RunPlan, plan};
+use officina_core::relay::run::{Refusal, RunPlan, auto_check_at_consumption, plan};
 
 use super::request::Bound;
 use super::{Context, read_secret, tree_refusal, with_inputs};
+use crate::files::now_ms;
 use crate::relay::approvals;
 use crate::relay::credential::Secret;
-use crate::relay::tree;
+use crate::relay::{journal, tree};
 
 /// How using an approval went.
 pub(super) enum Consumed {
@@ -27,7 +29,9 @@ pub(super) enum Consumed {
 /// included, an approval the record holds as approved for this request key
 /// (D-173, D-175), the approval made under the same catalogue, the files
 /// still the ones the request was bound to, its dry run's when it names a
-/// check (D-170, D-173), and an HTTP action's credential read (D-29); then
+/// check (D-170, D-173), for an `auto` action its check satisfied again on
+/// those files at this moment, whoever approved (D-151), and an HTTP
+/// action's credential read (D-29); then
 /// the claim by exclusive create. Anything refused leaves the approval
 /// unconsumed.
 pub(super) fn consume(
@@ -63,16 +67,26 @@ pub(super) fn consume(
     if fresh.catalogue_hash != planned.catalogue_hash {
         return Consumed::Refused(Refusal::catalogue_changed_since_request(&fresh.project));
     }
+    let mut current = None;
     if fresh.binds_tree {
         match tree::fingerprint(Path::new(&fresh.project_dir)) {
             Err(e) => return Consumed::Refused(tree_refusal(&fresh.project, &e)),
-            Ok(current) if current.as_ref() != bound.tree => {
+            Ok(found) if found.as_ref() != bound.tree => {
                 return Consumed::Refused(match &fresh.check {
                     Some(check) => Refusal::check_not_satisfied(&fresh.project, check),
                     None => Refusal::tree_changed(&fresh.project),
                 });
             }
-            Ok(_) => {}
+            Ok(found) => current = found,
+        }
+    }
+    if fresh.class == ActionClass::Auto {
+        let now = now_ms();
+        let (lines, _) = journal::read_recent(ctx.home, now);
+        if let Err(refusal) =
+            auto_check_at_consumption(&fresh, ctx.params, &lines, current.as_ref(), now)
+        {
+            return Consumed::Refused(refusal);
         }
     }
     let secret = match read_secret(&fresh, ctx.store) {

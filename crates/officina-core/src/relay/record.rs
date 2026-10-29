@@ -362,10 +362,7 @@ mod tests {
     const MIN: i64 = 60_000;
 
     fn decision(at: i64) -> Decision {
-        Decision {
-            decided_at_ms: at,
-            request_key: "ab".to_owned(),
-        }
+        Decision::by_author(at, "ab", None)
     }
 
     fn run(ts: i64, run_id: &str, approval_id: Option<&str>) -> JournalLine {

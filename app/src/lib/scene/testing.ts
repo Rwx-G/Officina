@@ -75,6 +75,8 @@ export function approval(of: Card, requestedAt: number, valid = true): ApprovalV
     id: `approval-${of.key}-${requestedAt}`,
     project: of.project.name,
     action: "deploy",
+    class: "human",
+    state: "pending",
     description: "",
     argv: [],
     http: null,

@@ -17,6 +17,7 @@ use common::relay::{
     Relay, assert_refused, assert_refused_after, slashed, stderr_lines, stderr_text,
 };
 use common::{git, git_dir_or_skip, heartbeat_len, heartbeat_stopped, stop_heartbeat};
+use officina_core::registry::types::AuthorReason;
 use officina_core::relay::argv::{
     ArgvRefusal, Launch, WSL_KILL_AFTER_S, WSL_TIMEOUT_MARGIN_S, WSL_TIMEOUT_PROGRAM,
 };
@@ -294,8 +295,13 @@ fn scenario(reason: RefusalReason) -> Option<Scenario> {
             checked(&git, "lab-web");
             let during: During = Box::new(|relay: &Relay, id: &str| {
                 std::fs::write(relay.project().join("playbook.yml"), "- hosts: all\n").unwrap();
-                officina_host::relay::authority::decide_approval(&relay.env.relay_home(), id, true)
-                    .unwrap();
+                officina_host::relay::authority::decide_approval(
+                    &relay.env.relay_home(),
+                    id,
+                    true,
+                    None,
+                )
+                .unwrap();
             });
             return Some(Scenario {
                 during: Some(during),
@@ -309,8 +315,13 @@ fn scenario(reason: RefusalReason) -> Option<Scenario> {
             let git = GitRelay::new("every_refusal_code (tree_changed)")?;
             let during: During = Box::new(|relay: &Relay, id: &str| {
                 std::fs::write(relay.project().join("playbook.yml"), "- hosts: all\n").unwrap();
-                officina_host::relay::authority::decide_approval(&relay.env.relay_home(), id, true)
-                    .unwrap();
+                officina_host::relay::authority::decide_approval(
+                    &relay.env.relay_home(),
+                    id,
+                    true,
+                    None,
+                )
+                .unwrap();
             });
             return Some(Scenario {
                 during: Some(during),
@@ -388,7 +399,6 @@ fn scenario(reason: RefusalReason) -> Option<Scenario> {
         RefusalReason::MissingParameter => (project, vec!["probe"]),
         RefusalReason::UnknownParameter => (project, vec!["probe", "host=web01", "x=1"]),
         RefusalReason::InvalidValue => (project, vec!["probe", "host=web02"]),
-        RefusalReason::ClassNotAvailable => (project, vec!["apply-auto", "group=lab-web"]),
         RefusalReason::CheckRequired => (project, vec!["apply", "group=lab-web"]),
         RefusalReason::ApprovalRejected => {
             during = Some(Box::new(|relay: &Relay, id: &str| {
@@ -396,6 +406,7 @@ fn scenario(reason: RefusalReason) -> Option<Scenario> {
                     &relay.env.relay_home(),
                     id,
                     false,
+                    None,
                 )
                 .unwrap();
             }));
@@ -1285,35 +1296,170 @@ fn list_explains_human_actions_and_their_dry_run() {
     );
 }
 
-/// Story 5.4 AC 5 (D-132): an approved `auto` action validates, and this
-/// build refuses it with `class_not_available` before anything starts;
-/// `run --list` marks it.
+/// Story 5.12 AC 1 (AD-86): `run --list` gives every action's class.
 #[test]
-fn auto_is_refused_as_not_available() {
+fn run_list_shows_the_class() {
     let relay = Relay::new();
-    let out = relay.run(&["apply-auto", "group=lab-web"]);
-    assert_refused(&relay, &out, RefusalReason::ClassNotAvailable);
-    assert!(
-        stderr_text(&out).contains("class `auto`"),
-        "{}",
-        stderr_text(&out)
-    );
-    let refused = relay.refused();
-    assert_eq!(refused[0].action, "apply-auto");
     let text = list(&relay, &relay.project());
-    let line = text
-        .lines()
-        .find(|line| line.contains("officina run apply-auto"))
-        .unwrap_or_else(|| panic!("{text}"));
-    assert!(
-        line.ends_with("(class auto, not available in this build)"),
-        "{line}"
+    for (call, class) in [
+        ("officina run probe host=<...>", "free"),
+        ("officina run apply group=<...>", "after-check"),
+        ("officina run approve-me group=<...>", "human"),
+        ("officina run apply-auto group=<...>", "auto"),
+    ] {
+        assert!(
+            text.contains(&format!("{call}  (class {class})\n")),
+            "{call}: {text}"
+        );
+    }
+    assert!(!text.contains("not available"), "{text}");
+}
+
+/// The author's decision on request `id`, as the window takes it.
+fn author_decides(relay: &Relay, id: &str, approve: bool, reason: Option<AuthorReason>) {
+    officina_host::relay::authority::decide_approval(&relay.env.relay_home(), id, approve, reason)
+        .unwrap();
+}
+
+/// Story 5.12 AC 1 (AD-86): an `auto` action, its check run, writes a
+/// request and waits like a `human` one; the author's approval runs it once,
+/// journaled with its approval and its class.
+#[test]
+fn auto_creates_a_request_and_waits_like_human() {
+    let Some(git) = GitRelay::new("auto_creates_a_request_and_waits_like_human") else {
+        return;
+    };
+    let before = checked(&git, "lab-web");
+    let relay = &git.relay;
+    let out = run_waiting(
+        relay,
+        relay.command(
+            &relay.project(),
+            &["apply-auto", "group=lab-web", "--wait", "30"],
+        ),
+        Box::new(|relay: &Relay, id: &str| author_decides(relay, id, true, None)),
     );
+    assert_eq!(out.status.code(), Some(0), "{:?}", stderr_lines(&out));
+    assert_eq!(relay.launches().len(), before + 1);
+    let id = request_ids(relay).pop().unwrap();
+    let started = relay.started().pop().unwrap();
+    assert_eq!(started.action, "apply-auto");
     assert_eq!(
-        text.matches("not available in this build").count(),
-        1,
-        "{text}"
+        started.class,
+        officina_core::relay::catalogue::ActionClass::Auto
     );
+    assert_eq!(started.approval_id.as_deref(), Some(id.as_str()));
+    let again = relay.run(&["apply-auto", "group=lab-web", "--wait", "1"]);
+    assert_refused_after(relay, &again, RefusalReason::ApprovalPending, before + 1);
+}
+
+/// Story 5.12 AC 1 (D-570): every `auto` action names its check, so no
+/// request is made before the check passed.
+#[test]
+fn auto_with_a_check_is_refused_until_the_check_passed() {
+    let Some(git) = GitRelay::new("auto_with_a_check_is_refused_until_the_check_passed") else {
+        return;
+    };
+    let out = git.run(&["apply-auto", "group=lab-web"]);
+    assert_refused(&git.relay, &out, RefusalReason::CheckRequired);
+    assert!(request_ids(&git.relay).is_empty(), "no request");
+    let before = checked(&git, "lab-web");
+    let out = git.run(&["apply-auto", "group=lab-web", "--wait", "1"]);
+    assert_refused_after(&git.relay, &out, RefusalReason::ApprovalPending, before);
+    assert_eq!(request_ids(&git.relay).len(), 1);
+}
+
+/// Story 5.12 AC 1 (D-151): an approval of an `auto` action is checked
+/// again at consumption on the files as they are then: an edit made during
+/// the wait refuses `check_not_satisfied`, nothing runs, the refusal is
+/// journaled.
+#[test]
+fn an_auto_approval_is_refused_after_a_tree_change() {
+    let Some(git) = GitRelay::new("an_auto_approval_is_refused_after_a_tree_change") else {
+        return;
+    };
+    let before = checked(&git, "lab-web");
+    let relay = &git.relay;
+    let out = run_waiting(
+        relay,
+        relay.command(
+            &relay.project(),
+            &["apply-auto", "group=lab-web", "--wait", "30"],
+        ),
+        Box::new(|relay: &Relay, id: &str| {
+            std::fs::write(relay.project().join("playbook.yml"), "- hosts: all\n").unwrap();
+            author_decides(relay, id, true, None);
+        }),
+    );
+    assert_refused_after(relay, &out, RefusalReason::CheckNotSatisfied, before);
+}
+
+/// Story 5.12 AC 1 (D-151): the check is evaluated again, not only the
+/// files: a check that aged past its half hour during the wait refuses the
+/// approval, which stays unconsumed for a call after a fresh check.
+#[test]
+fn the_refused_approval_stays_unconsumed() {
+    use officina_core::relay::approvals::{FileKind, file_name};
+    let Some(git) = GitRelay::new("the_refused_approval_stays_unconsumed") else {
+        return;
+    };
+    // A check that turns stale ten seconds from now, during the wait.
+    seed_check(&git, "ageing", CHECK_VALID_MS - 10_000);
+    let relay = &git.relay;
+    let out = run_waiting(
+        relay,
+        relay.command(
+            &relay.project(),
+            &["apply-auto", "group=lab-web", "--wait", "30"],
+        ),
+        Box::new(|relay: &Relay, id: &str| {
+            std::thread::sleep(Duration::from_secs(12));
+            author_decides(relay, id, true, None);
+        }),
+    );
+    assert_refused(relay, &out, RefusalReason::CheckNotSatisfied);
+    assert!(relay.launches().is_empty());
+    let id = request_ids(relay).pop().unwrap();
+    let dir = relay.env.relay_home().approvals_dir();
+    assert!(dir.join(file_name(&id, FileKind::Approved)).is_file());
+    assert!(!dir.join(file_name(&id, FileKind::Consumed)).exists());
+}
+
+/// Story 5.12 AC 1 and AC 5 (AD-33, FR-9): an `auto` rejection carries its
+/// reason and blocks the same request for 15 minutes, as a `human` one.
+#[test]
+fn an_auto_rejection_blocks_for_15_minutes() {
+    use officina_core::relay::approvals::{Decision, FileKind, file_name};
+    let Some(git) = GitRelay::new("an_auto_rejection_blocks_for_15_minutes") else {
+        return;
+    };
+    let before = checked(&git, "lab-web");
+    let relay = &git.relay;
+    let args = ["apply-auto", "group=lab-web", "--wait", "30"];
+    let out = run_waiting(
+        relay,
+        relay.command(&relay.project(), &args),
+        Box::new(|relay: &Relay, id: &str| {
+            author_decides(relay, id, false, Some(AuthorReason::NotNow));
+        }),
+    );
+    assert_refused_after(relay, &out, RefusalReason::ApprovalRejected, before);
+    let id = request_ids(relay).pop().unwrap();
+    let rejected: Decision = serde_json::from_slice(
+        &std::fs::read(
+            relay
+                .env
+                .relay_home()
+                .approvals_dir()
+                .join(file_name(&id, FileKind::Rejected)),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(rejected.reason, Some(AuthorReason::NotNow));
+    let again = relay.run(&args);
+    assert_refused_after(relay, &again, RefusalReason::ApprovalRejected, before);
+    assert_eq!(request_ids(relay), [id], "no new request while blocked");
 }
 
 /// Story 5.4 AC 7 (AD-76, D-131): an approval in the previous format
@@ -1691,10 +1837,7 @@ fn forge_approval(relay: &Relay, id: &str) {
     let request: ApprovalRequest =
         serde_json::from_slice(&std::fs::read(dir.join(file_name(id, FileKind::Request))).unwrap())
             .unwrap();
-    let decision = Decision {
-        decided_at_ms: common::now_ms(),
-        request_key: request.request_key,
-    };
+    let decision = Decision::by_author(common::now_ms(), &request.request_key, None);
     std::fs::write(
         dir.join(file_name(id, FileKind::Approved)),
         serde_json::to_vec(&decision).unwrap(),
@@ -1861,8 +2004,13 @@ fn a_rejected_request_rewritten_as_approved_does_not_run() {
         &relay,
         relay.command(&relay.project(), &args),
         Box::new(|relay: &Relay, id: &str| {
-            officina_host::relay::authority::decide_approval(&relay.env.relay_home(), id, false)
-                .unwrap();
+            officina_host::relay::authority::decide_approval(
+                &relay.env.relay_home(),
+                id,
+                false,
+                None,
+            )
+            .unwrap();
         }),
     );
     assert_refused(&relay, &out, RefusalReason::ApprovalRejected);

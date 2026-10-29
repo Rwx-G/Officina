@@ -3,6 +3,7 @@
 // real backend are interchangeable.
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import type { AuthorReason } from "./generated/AuthorReason";
 import type { Board } from "./generated/Board";
 import type { CardAnswer } from "./generated/CardAnswer";
 import type { CardChange } from "./generated/CardChange";
@@ -52,10 +53,12 @@ export function approveCatalogue(hash: string): Promise<string> {
   return invoke<string>("approve_catalogue", { hash });
 }
 
-/** Approves or rejects a `human` action's request (AD-35); the backend
- *  refuses one that is unknown, decided, expired or invalid (D-27). */
-export function decideApproval(id: string, approve: boolean): Promise<void> {
-  return invoke("decide_approval", { id, approve });
+/** Approves or rejects a `human` or `auto` action's request (AD-35, AD-86);
+ *  rejecting an `auto` one takes its reason. The backend refuses one that is
+ *  unknown, decided, expired, being reviewed or invalid (D-27, D-157), and a
+ *  reason that does not fit its class. */
+export function decideApproval(id: string, approve: boolean, reason?: AuthorReason): Promise<void> {
+  return invoke("decide_approval", reason ? { id, approve, reason } : { id, approve });
 }
 
 /** Acknowledges an anomaly by its key (D-173): the Relay view keeps it,

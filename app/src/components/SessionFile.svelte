@@ -145,7 +145,7 @@
     {#each approvals as approval (approval.id)}
       <div class="approval" data-testid="file-approval">
         <p>
-          Relay request <strong>{approval.action}</strong>, since {clock(approval.requested_at_ms, store.nowMs)}{#if approval.description}: {approval.description}{/if}
+          Relay request <strong>{approval.action}</strong> <span data-testid="file-approval-class">(class {approval.class})</span>, since {clock(approval.requested_at_ms, store.nowMs)}{#if approval.description}: {approval.description}{/if}
         </p>
         <p class="muted">It is approved on its card in Board mode.</p>
       </div>

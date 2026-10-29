@@ -8,7 +8,8 @@ use officina_core::agents::parse_agents;
 use officina_core::board::{BoardInput, ProjectRule, Staleness, SubagentView, build_board};
 use officina_core::events::EventLine;
 use officina_core::floor::Priority;
-use officina_core::relay::approvals::ApprovalView;
+use officina_core::relay::approvals::{ApprovalState, ApprovalView};
+use officina_core::relay::catalogue::ActionClass;
 use officina_core::scene::{AlertCause, SceneState, Zone};
 use serde::Deserialize;
 
@@ -33,6 +34,12 @@ struct Request {
     requested_at_ms: i64,
     #[serde(default = "valid")]
     valid: bool,
+    #[serde(default = "pending")]
+    state: ApprovalState,
+}
+
+fn pending() -> ApprovalState {
+    ApprovalState::Pending
 }
 
 fn valid() -> bool {
@@ -82,6 +89,8 @@ fn approval(request: &Request) -> ApprovalView {
         id: format!("0123456789abcdef-{}", request.requested_at_ms),
         project: "api".to_owned(),
         action: "restart".to_owned(),
+        class: ActionClass::Auto,
+        state: request.state,
         description: String::new(),
         argv: Vec::new(),
         http: None,

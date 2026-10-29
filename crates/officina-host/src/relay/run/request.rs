@@ -150,6 +150,8 @@ fn create(
         project: Some(plan.project.clone()),
         action: Some(plan.action.clone()),
         dry_run: Some(plan.check.is_some()),
+        by: None,
+        reason: None,
     });
     if lock.append(&[line], now).is_err() {
         let _ = writeln!(

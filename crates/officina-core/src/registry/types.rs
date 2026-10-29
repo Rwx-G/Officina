@@ -259,8 +259,10 @@ closed_enum! {
 
 closed_enum! {
     #[serde(rename_all = "snake_case")]
-    /// Why the author rejected a reviewed request (AD-82).
+    /// Why the author rejected an `auto` request (AD-82, AD-86): on the
+    /// rejection file, the journal line and the review row.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+    #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
     pub enum AuthorReason {
         /// It should not have run: turns `auto` off for the action.
         ShouldNotRun,

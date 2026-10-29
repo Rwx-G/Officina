@@ -1,12 +1,15 @@
 <script lang="ts">
-  // One `human` action's request in Needs you (AD-35): the command rebuilt
-  // from the approved catalogue, one chip per argument, and Approve and
-  // Reject that act on a pointer click only (D-28). Every text is rendered
-  // as text: arguments, descriptions and outputs come from files a session
-  // can write.
+  // One `human` or `auto` action's request in Needs you (AD-35, AD-86): the
+  // command rebuilt from the approved catalogue, one chip per argument, its
+  // class, and Approve and Reject that act on a pointer click only (D-28).
+  // Rejecting an `auto` request asks why, "should not run" or "not now", in
+  // a slot the card always reserves, so the question moves nothing (FR-9,
+  // D-564). Every text is rendered as text: arguments, descriptions and
+  // outputs come from files a session can write.
   import type { ApprovalView } from "../lib/generated/ApprovalView";
+  import type { AuthorReason } from "../lib/generated/AuthorReason";
   import { isPointerClick } from "../lib/pointer";
-  import { bindingText } from "../lib/relay-text";
+  import { REJECT_REASONS, bindingText } from "../lib/relay-text";
   import { ago, duration } from "../lib/time";
 
   interface Props {
@@ -16,17 +19,30 @@
     /** Why the last decision on this card failed, if it did. */
     error?: string;
     nowMs: number;
-    /** Decides this card, `true` to approve: called on a pointer click only. */
-    onDecide: (approve: boolean) => void;
+    /** Decides this card, `true` to approve, with an `auto` rejection's
+     *  reason: called on a pointer click only. */
+    onDecide: (approve: boolean, reason?: AuthorReason) => void;
   }
   let { approval, busy, error, nowMs, onDecide }: Props = $props();
 
   let dryRun = $derived(approval.dry_run);
   let binding = $derived(bindingText(approval));
+  let isAuto = $derived(approval.class === "auto");
+  /** Reject was clicked on an `auto` card: its reasons are shown. */
+  let asking = $state(false);
 
   function decide(event: MouseEvent, approve: boolean): void {
     if (!isPointerClick(event)) return;
+    if (!approve && isAuto) {
+      asking = true;
+      return;
+    }
     onDecide(approve);
+  }
+
+  function reject(event: MouseEvent, reason: AuthorReason): void {
+    if (!isPointerClick(event) || !asking) return;
+    onDecide(false, reason);
   }
 
   /** Enter and Space never decide (D-28): the browser's click they would
@@ -42,6 +58,9 @@
     <span class="tag">{approval.valid ? "approval" : "invalid request"}</span>
   </div>
   <div class="action" data-testid="approval-action">{approval.action}</div>
+  <p class="class" data-testid="approval-class">
+    class {approval.class}{#if approval.valid && dryRun}, after its check {dryRun.check}{/if}
+  </p>
   {#if approval.description}
     <p class="description" data-testid="approval-description">{approval.description}</p>
   {/if}
@@ -112,6 +131,24 @@
         Reject
       </button>
     </div>
+    {#if isAuto}
+      <div class="reasons" data-stable-slot data-testid="reject-reasons" class:shown={asking}>
+        <div class="reasons-inner" inert={!asking} aria-hidden={!asking}>
+          <span class="ask">Reject because it</span>
+          {#each REJECT_REASONS as [reason, label] (reason)}
+            <button
+              class="reason-button"
+              data-testid="reason-{reason}"
+              disabled={busy}
+              onclick={(event) => reject(event, reason)}
+              onkeydown={noKeyDecides}
+            >
+              {label}
+            </button>
+          {/each}
+        </div>
+      </div>
+    {/if}
   {/if}
   {#if error}
     <p class="error" role="alert" data-testid="approval-error">{error}</p>
@@ -164,6 +201,41 @@
     font-size: 16px;
     font-weight: 700;
     overflow-wrap: anywhere;
+  }
+  .class {
+    margin: 0;
+    font-size: 12.5px;
+    color: var(--color-text-muted);
+  }
+  /* Reserved whatever its state, so the question moves nothing (D-564). */
+  .reasons {
+    min-height: var(--target-min);
+  }
+  .reasons-inner {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    visibility: hidden;
+  }
+  .reasons.shown .reasons-inner {
+    visibility: visible;
+  }
+  .ask {
+    font-size: 12.5px;
+    color: var(--color-text-muted);
+  }
+  .reason-button {
+    flex: 1;
+    min-height: var(--target-min);
+    border-radius: var(--radius-control);
+    border: 1px solid var(--color-border);
+    background: transparent;
+    font-weight: 700;
+    cursor: pointer;
+  }
+  .reason-button:disabled {
+    cursor: progress;
+    opacity: 0.6;
   }
   .description,
   .reason,

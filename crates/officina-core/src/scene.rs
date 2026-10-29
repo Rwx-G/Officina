@@ -71,7 +71,8 @@ pub struct SceneFacts<'a> {
     pub stale: bool,
     pub now_ms: i64,
     pub alert_after_ms: i64,
-    /// The valid pending relay requests (AD-35).
+    /// The pending relay requests (AD-35); only the valid ones waiting on
+    /// the author, not on a review, make a wait (D-571).
     pub approvals: &'a [ApprovalView],
     /// The scene state of each card key on the last board built.
     pub previous: &'a BTreeMap<String, SceneState>,
@@ -119,7 +120,7 @@ fn state_of(card: &Card, events: Option<&SessionEvents>, facts: &SceneFacts) -> 
         facts
             .approvals
             .iter()
-            .filter(|a| a.valid && a.session_id.as_deref() == Some(sid))
+            .filter(|a| a.waits_on_the_author() && a.session_id.as_deref() == Some(sid))
             .map(|a| a.requested_at_ms)
             .min()
     });

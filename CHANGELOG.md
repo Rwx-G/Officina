@@ -24,8 +24,19 @@ project uses [Semantic Versioning](https://semver.org/).
 - `class = "auto"` validates, and must name its `check` (`auto_without_check`
   otherwise), so an unattended apply always runs after its dry run;
   `auto_max_per_hour` (1 to 60, default 6) on `auto` actions only; an HTTP
-  action cannot be `auto`. Until the review ships, `officina run` refuses an
-  `auto` action with `class_not_available` and `run --list` marks it.
+  action cannot be `auto`.
+- The `auto` class runs (v0.5, story 5.12): `officina run` requests and
+  waits for an `auto` action's approval exactly as for a `human` one, the
+  author deciding until the review ships; just before an `auto` approval is
+  used, its check is evaluated again on the files as they are then and
+  refuses `check_not_satisfied`, the approval left unused, when it no longer
+  holds. Approval files and `approval_given` lines say who approved
+  (`by`); rejecting an `auto` request asks "should not run" or "not now",
+  kept in the rejection file and its line. One decision per request: a
+  `.decided` marker created first refuses a second decider
+  `already_decided`. The approval card and the session file show the class;
+  `run --list` shows every action's class; doctor lists the `auto` actions
+  with their check and cap.
 - `officina doctor` names each issue's table (`template bump`, `action
   apply`), counts valid templates, and lists templates, credentials and the
   review model in a pending change.
@@ -422,6 +433,10 @@ project uses [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- The board JSON contract is schema 5 (v0.5, story 5.12): each approval
+  carries its `class` (`human`, `auto`) and its `state` (`pending`,
+  `reviewing`); only a pending request counts as waiting and makes a session
+  wait in the scene. The refusal code `class_not_available` is gone.
 - Attach refuses a `claude` that is not the native `claude.exe` (v0.5, story
   5.2): through a `.cmd` or `.bat` shim, or any other file type, a click on
   a background card fails with a message pointing at the card's copy of

@@ -5,6 +5,7 @@
 import type { ActionIssue } from "./generated/ActionIssue";
 import type { AnomalyKind } from "./generated/AnomalyKind";
 import type { ApprovalView } from "./generated/ApprovalView";
+import type { AuthorReason } from "./generated/AuthorReason";
 import type { DenyKind } from "./generated/DenyKind";
 import type { GateFault } from "./generated/GateFault";
 import type { IssueTable } from "./generated/IssueTable";
@@ -32,7 +33,6 @@ export const REFUSAL_TEXT: Record<RefusalReason, string> = {
   missing_parameter: "missing parameter",
   unknown_parameter: "unknown parameter",
   invalid_value: "invalid value",
-  class_not_available: "class not available in this build",
   git_unavailable: "no git to bind the files",
   tree_too_large: "work tree too large to bind",
   tree_unreadable: "work tree could not be read",
@@ -46,6 +46,15 @@ export const REFUSAL_TEXT: Record<RefusalReason, string> = {
   credential_missing: "credential not in the Credential Manager",
   credential_unreadable: "credential cannot be read",
 };
+
+/** The buttons an `auto` rejection asks with (FR-9, AD-86): only "should
+ *  not run" against a review's approve is a disagreement for the gate. */
+const REJECT_REASON_TEXT: Record<AuthorReason, string> = {
+  should_not_run: "should not run",
+  not_now: "not now",
+};
+
+export const REJECT_REASONS = Object.entries(REJECT_REASON_TEXT) as [AuthorReason, string][];
 
 /** What an issue's table is called before the entry's name (D-132); a key
  *  or a single table is named by itself. */

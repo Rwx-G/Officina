@@ -52,7 +52,7 @@
         busy={store.deciding[approval.id] === true}
         error={store.approvalErrors[approval.id]}
         nowMs={store.nowMs}
-        onDecide={(approve) => void store.decideApproval(approval.id, approve)}
+        onDecide={(approve, reason) => void store.decideApproval(approval.id, approve, reason)}
       />
       </div>
     {/each}

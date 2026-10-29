@@ -1,6 +1,8 @@
-//! `human` actions (FR-8, FR-9, AD-33, AD-35, D-27, D-170): the request key
-//! and id, the files of `relay/approvals/`, what `officina run` does next for
-//! a request, the cards the window shows and what the window may decide.
+//! `human` and `auto` actions (FR-7, FR-8, FR-9, AD-33, AD-35, AD-86, D-27,
+//! D-170): the request key and id, the files of `relay/approvals/`, what
+//! `officina run` does next for a request, the cards the window shows and
+//! what the window may decide. An `auto` request takes a `human` one's path
+//! (AD-86); who approved it is in its approval file.
 //! Every command shown or approved is rebuilt from the approved catalogue,
 //! never read from a request file, which any process running as the author
 //! can write (D-27). Pure: the host reads and writes the files.
@@ -16,6 +18,7 @@ use super::catalogue::{
 use super::http::{self, HttpMethod, HttpPlan};
 use super::journal::TreeFingerprint;
 use crate::quota::normalise_path;
+use crate::registry::types::AuthorReason;
 use crate::untrusted::Untrusted;
 
 /// A request no decision answered is listed and reused this long, then
@@ -58,6 +61,14 @@ closed_enum! {
         /// An approval `officina run` used: claimed with `create_new`,
         /// the `Approved` name removed after.
         Consumed,
+        /// Empty, created with `create_new` by whoever decides first, the
+        /// author or a review, before its decision file (D-157): a second
+        /// decider is refused `already_decided` before it writes anything.
+        Decided,
+        /// Empty, written by the window while a live review decides the
+        /// request (D-157): the author cannot decide it then. The window
+        /// removes it when the review answers, and every one at its start.
+        Reviewing,
     }
 }
 
@@ -69,6 +80,8 @@ impl FileKind {
             FileKind::Approved => ".approved.json",
             FileKind::Rejected => ".rejected.json",
             FileKind::Consumed => ".consumed.json",
+            FileKind::Decided => ".decided",
+            FileKind::Reviewing => ".reviewing",
         }
     }
 }
@@ -181,12 +194,53 @@ impl ApprovalRequest {
     }
 }
 
+closed_enum! {
+    #[serde(rename_all = "snake_case")]
+    /// Who gave an approval (AD-86, AD-25 as amended): the author in the
+    /// window, an `auto` action's review, or the rule baseline (D-141).
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+    #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+    pub enum ApprovalBy {
+        Author,
+        Review,
+        Rule,
+    }
+}
+
 /// Content of `<id>.approved.json`, `.rejected.json` and `.consumed.json`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Decision {
     pub decided_at_ms: i64,
     pub request_key: String,
+    /// Who decided; absent in files written before v0.5, which only the
+    /// author wrote ([`Decision::by`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub by: Option<ApprovalBy>,
+    /// The review row that approved, for an approval `by` a review.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review_id: Option<String>,
+    /// Why the author rejected an `auto` request (FR-9, AD-86).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<AuthorReason>,
+}
+
+impl Decision {
+    /// The author's decision, as the window writes it.
+    pub fn by_author(decided_at_ms: i64, request_key: &str, reason: Option<AuthorReason>) -> Self {
+        Decision {
+            decided_at_ms,
+            request_key: request_key.to_owned(),
+            by: Some(ApprovalBy::Author),
+            review_id: None,
+            reason,
+        }
+    }
+
+    /// Who decided: the author when the file does not say (AD-86).
+    pub fn by(&self) -> ApprovalBy {
+        self.by.unwrap_or(ApprovalBy::Author)
+    }
 }
 
 /// The readable files of `relay/approvals/`, by request id.
@@ -196,6 +250,10 @@ pub struct ApprovalFiles {
     pub approved: BTreeMap<String, Decision>,
     pub rejected: BTreeMap<String, Decision>,
     pub consumed: BTreeMap<String, Decision>,
+    /// The requests whose decision marker exists (D-157).
+    pub markers: std::collections::BTreeSet<String>,
+    /// The requests a live review is deciding (D-157).
+    pub reviewing: std::collections::BTreeSet<String>,
 }
 
 impl ApprovalFiles {
@@ -298,6 +356,8 @@ impl From<&HttpPlan> for HttpRequestView {
 /// A request rebuilt from the approved catalogue (D-27).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Rebuilt {
+    /// `human` or `auto`: the classes that wait for an approval.
+    pub class: ActionClass,
     /// The program, then its arguments: exactly what `officina run` starts;
     /// empty for an HTTP action.
     pub argv: Vec<String>,
@@ -312,7 +372,8 @@ pub struct Rebuilt {
 /// and the request's project, action and parameters, or says why the
 /// request is invalid (D-27): no catalogue approved, another catalogue, a key
 /// or id that does not match the request, an action the project no longer
-/// lists or that is not `human`, parameters that no longer fit, a dry run
+/// lists or that is neither `human` nor `auto`, parameters that no longer
+/// fit, a dry run
 /// missing or unexpected, or a stored command that differs.
 pub fn rebuild(
     ctx: &ApprovalContext<'_>,
@@ -346,8 +407,10 @@ pub fn rebuild(
         .canonical
         .actions
         .get(&request.action)
-        .filter(|a| a.class == ActionClass::Human)
-        .ok_or_else(|| "the approved catalogue has no human action of this name".to_owned())?;
+        .filter(|a| waits_for_approval(a.class))
+        .ok_or_else(|| {
+            "the approved catalogue has no human or auto action of this name".to_owned()
+        })?;
     match (&action.check, &request.check_run_id) {
         (Some(_), None) => return Err("it names no dry run, which the action requires".to_owned()),
         (None, Some(_)) => return Err("it names a dry run the action has no check for".to_owned()),
@@ -381,6 +444,7 @@ pub fn rebuild(
         return Err("its stored command differs from the approved catalogue's".to_owned());
     }
     Ok(Rebuilt {
+        class: action.class,
         argv: rebuilt,
         http,
         description: action.description.clone(),
@@ -388,43 +452,93 @@ pub fn rebuild(
     })
 }
 
-/// Why the window refuses to decide a request (AD-35, D-27).
+/// True for the classes whose runs wait for an approval: `human`, and
+/// `auto`, which takes its path (AD-86).
+pub fn waits_for_approval(class: ActionClass) -> bool {
+    matches!(class, ActionClass::Human | ActionClass::Auto)
+}
+
+/// Why the window refuses to decide a request (AD-35, D-27, D-157).
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum DecideRefusal {
     #[error("no request {0} in the relay's approvals")]
     Unknown(String),
+    /// A decision file exists, or another decider created the marker first
+    /// (`already_decided`, D-157).
     #[error("request {0} is already decided")]
     Decided(String),
+    /// A live review is deciding it (D-157): the author decides once it
+    /// escalates.
+    #[error(
+        "request {0} is being reviewed; it comes to Needs you if the review does not approve it"
+    )]
+    Reviewing(String),
+    /// Rejecting an `auto` request needs `should_not_run` or `not_now`, and
+    /// a `human` rejection or an approval takes none (FR-9, AD-86).
+    #[error("request {id}: {why}")]
+    Reason { id: String, why: String },
     #[error("request {0} expired")]
     Expired(String),
     #[error("request {id} is invalid: {why}")]
     Invalid { id: String, why: String },
 }
 
-/// The request the window may decide now, or why not: it exists, nothing
-/// decided it, it is still pending, and it rebuilds from the approved
-/// catalogue, which also rules out a request of another catalogue (AD-35).
+/// The request the window may decide now, with its class, or why not: it
+/// exists, nothing decided it (no decision file, no marker, D-157), it is
+/// still pending, and it rebuilds from the approved catalogue, which also
+/// rules out a request of another catalogue (AD-35).
 pub fn decidable<'f>(
     files: &'f ApprovalFiles,
     ctx: &ApprovalContext<'_>,
     id: &str,
     now_ms: i64,
-) -> Result<&'f ApprovalRequest, DecideRefusal> {
+) -> Result<(&'f ApprovalRequest, ActionClass), DecideRefusal> {
     let request = files
         .requests
         .get(id)
         .ok_or_else(|| DecideRefusal::Unknown(id.to_owned()))?;
-    if files.decided(id) {
+    if files.decided(id) || files.markers.contains(id) {
         return Err(DecideRefusal::Decided(id.to_owned()));
     }
     if !is_live(request.created_at_ms, now_ms) {
         return Err(DecideRefusal::Expired(id.to_owned()));
     }
-    rebuild(ctx, id, request).map_err(|why| DecideRefusal::Invalid {
+    if files.reviewing.contains(id) {
+        return Err(DecideRefusal::Reviewing(id.to_owned()));
+    }
+    let rebuilt = rebuild(ctx, id, request).map_err(|why| DecideRefusal::Invalid {
         id: id.to_owned(),
         why,
     })?;
-    Ok(request)
+    Ok((request, rebuilt.class))
+}
+
+/// Whether the author's decision carries the reason its class asks for
+/// (FR-9, AD-86): rejecting an `auto` request needs one, a `human`
+/// rejection and any approval take none.
+///
+/// ```
+/// use officina_core::registry::types::AuthorReason;
+/// use officina_core::relay::approvals::reason_fits;
+/// use officina_core::relay::catalogue::ActionClass;
+/// assert!(reason_fits(ActionClass::Auto, false, Some(AuthorReason::NotNow)).is_ok());
+/// assert!(reason_fits(ActionClass::Auto, false, None).is_err());
+/// assert!(reason_fits(ActionClass::Human, false, None).is_ok());
+/// assert!(reason_fits(ActionClass::Human, true, Some(AuthorReason::NotNow)).is_err());
+/// ```
+pub fn reason_fits(
+    class: ActionClass,
+    approve: bool,
+    reason: Option<AuthorReason>,
+) -> Result<(), &'static str> {
+    match (approve, class, reason) {
+        (true, _, Some(_)) => Err("an approval takes no reason"),
+        (false, ActionClass::Auto, None) => {
+            Err("rejecting an auto request needs a reason: it should not run, or not now")
+        }
+        (false, ActionClass::Auto, Some(_)) | (_, _, None) => Ok(()),
+        (false, _, Some(_)) => Err("only an auto request's rejection takes a reason"),
+    }
 }
 
 /// The dry run a card shows (D-170): the check, its run, and its kept
@@ -453,6 +567,20 @@ pub enum TreeBinding {
     NotGitTree,
 }
 
+closed_enum! {
+    #[serde(rename_all = "snake_case")]
+    /// Where a pending request stands (AD-92, D-157, D-571).
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+    #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+    pub enum ApprovalState {
+        /// It waits on the author.
+        Pending,
+        /// A live review is deciding it: it waits on the review, not on the
+        /// author, who cannot decide it until it escalates.
+        Reviewing,
+    }
+}
+
 /// One pending request as Needs you shows it (AD-35, D-27).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
@@ -460,6 +588,12 @@ pub struct ApprovalView {
     pub id: String,
     pub project: String,
     pub action: String,
+    /// `human` or `auto`; for an invalid request, the class its action has
+    /// in the approved catalogue when it waits for an approval, else
+    /// `human`.
+    pub class: ActionClass,
+    /// [`ApprovalState::Pending`] unless a live review is deciding it.
+    pub state: ApprovalState,
     /// From the approved catalogue; empty for an invalid request.
     pub description: String,
     /// Rebuilt from the approved catalogue (D-27); empty for an invalid
@@ -483,6 +617,15 @@ pub struct ApprovalView {
     /// it differs (approving would then be refused at the run), absent when
     /// unknown or not bound.
     pub files_unchanged: Option<bool>,
+}
+
+impl ApprovalView {
+    /// True for a valid request in [`ApprovalState::Pending`]: one the author
+    /// can decide now. Only these count as waiting, on the board and in the
+    /// scene (AD-92, D-571).
+    pub fn waits_on_the_author(&self) -> bool {
+        self.valid && self.state == ApprovalState::Pending
+    }
 }
 
 /// What the host found for the dry runs of the pending requests (D-170).
@@ -563,10 +706,25 @@ pub fn pending(
                         (Some(_), Some(_)) => TreeBinding::DryRun,
                         (Some(_), None) => TreeBinding::Request,
                     });
+            let class = match &rebuilt {
+                Ok(rebuilt) => rebuilt.class,
+                Err(_) => ctx
+                    .approved
+                    .and_then(|a| a.canonical.actions.get(&request.action))
+                    .map(|a| a.class)
+                    .filter(|class| waits_for_approval(*class))
+                    .unwrap_or(ActionClass::Human),
+            };
             ApprovalView {
                 id: id.clone(),
                 project: request.project.clone(),
                 action: request.action.clone(),
+                class,
+                state: if files.reviewing.contains(id) {
+                    ApprovalState::Reviewing
+                } else {
+                    ApprovalState::Pending
+                },
                 description,
                 argv,
                 http,
@@ -1162,20 +1320,88 @@ pattern = \"lab-[a-z]+\"
             Err(DecideRefusal::Unknown("0123456789abcdef-1".to_owned()))
         );
         assert_eq!(
-            decidable(&files, &ctx, &live.0, NOW).map(|r| r.created_at_ms),
-            Ok(NOW - MIN)
+            decidable(&files, &ctx, &live.0, NOW).map(|(r, class)| (r.created_at_ms, class)),
+            Ok((NOW - MIN, ActionClass::Human))
+        );
+        let mut marked = files.clone();
+        marked.markers.insert(live.0.clone());
+        assert_eq!(
+            decidable(&marked, &ctx, &live.0, NOW),
+            Err(DecideRefusal::Decided(live.0.clone())),
+            "a marker another decider created refuses the second (D-157)"
+        );
+        let mut reviewing = files.clone();
+        reviewing.reviewing.insert(live.0.clone());
+        assert_eq!(
+            decidable(&reviewing, &ctx, &live.0, NOW),
+            Err(DecideRefusal::Reviewing(live.0.clone())),
+            "a live review is deciding it (D-157)"
+        );
+        assert_eq!(
+            pending(&reviewing, &ctx, &DryRunInputs::default(), NOW)
+                .iter()
+                .find(|view| view.id == live.0)
+                .map(|view| view.state),
+            Some(ApprovalState::Reviewing)
         );
         files.consumed.insert(
             live.0.clone(),
-            Decision {
-                decided_at_ms: NOW,
-                request_key: live.1.request_key.clone(),
-            },
+            Decision::by_author(NOW, &live.1.request_key, None),
         );
         assert!(pending(&files, &ctx, &DryRunInputs::default(), NOW).is_empty());
         assert_eq!(
             decidable(&files, &ctx, &live.0, NOW),
             Err(DecideRefusal::Decided(live.0.clone()))
+        );
+    }
+
+    /// AD-86: an approval file without `by`, as v0.4 wrote it, reads as the
+    /// author's.
+    #[test]
+    fn an_approval_without_by_reads_as_author() {
+        let old: Decision =
+            serde_json::from_str(r#"{"decided_at_ms": 1, "request_key": "ab"}"#).unwrap();
+        assert_eq!(old.by, None);
+        assert_eq!(old.by(), ApprovalBy::Author);
+        assert_eq!(old.review_id, None);
+        assert_eq!(old.reason, None);
+    }
+
+    /// AD-86: `by`, `review_id` and the reason survive a write and a read,
+    /// and an unknown field is still refused.
+    #[test]
+    fn by_and_review_id_round_trip() {
+        let by_review = Decision {
+            decided_at_ms: NOW,
+            request_key: "ab".to_owned(),
+            by: Some(ApprovalBy::Review),
+            review_id: Some("7".to_owned()),
+            reason: None,
+        };
+        let text = serde_json::to_string(&by_review).unwrap();
+        assert!(text.contains(r#""by":"review""#), "{text}");
+        assert_eq!(serde_json::from_str::<Decision>(&text).unwrap(), by_review);
+        let rejected = Decision::by_author(NOW, "ab", Some(AuthorReason::ShouldNotRun));
+        let text = serde_json::to_string(&rejected).unwrap();
+        assert!(
+            text.contains(r#""by":"author""#) && text.contains(r#""reason":"should_not_run""#),
+            "{text}"
+        );
+        assert_eq!(serde_json::from_str::<Decision>(&text).unwrap(), rejected);
+        assert!(
+            serde_json::from_str::<Decision>(
+                r#"{"decided_at_ms": 1, "request_key": "ab", "extra": 1}"#
+            )
+            .is_err()
+        );
+    }
+
+    /// The marker's file name parses like the others (D-157).
+    #[test]
+    fn the_decision_marker_is_a_file_of_the_request() {
+        assert_eq!(
+            parse_file_name("0123456789abcdef-17.decided"),
+            Some(("0123456789abcdef-17", FileKind::Decided))
         );
     }
 
@@ -1191,10 +1417,7 @@ pattern = \"lab-[a-z]+\"
             NOW - 5 * MIN,
         );
         let key = request.request_key.clone();
-        let decision = |at: i64| Decision {
-            decided_at_ms: at,
-            request_key: key.clone(),
-        };
+        let decision = |at: i64| Decision::by_author(at, &key, None);
         let mut files = ApprovalFiles::default();
         assert_eq!(next_step(&files, &key, NOW), NextStep::Create);
         files.requests.insert(id.clone(), request.clone());

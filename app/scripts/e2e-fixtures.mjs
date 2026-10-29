@@ -495,6 +495,98 @@ values = ["web01", "db01"]
   console.log(`fixture ${name}: exit ${run.status}`);
 }
 
+// An `auto` request beside a `human` one (story 5.12, AD-86): a catalogue
+// approved through `approve_fixture`, the `auto` action's check run, then the
+// `auto` request made by the real `officina run --wait 1` from the busy
+// board's working session, and a `human` request from a terminal. The board
+// is `officina board --json` on the busy sessions.
+{
+  const name = "approvals-auto";
+  const tmp = mkdtempSync(join(tmpdir(), `officina-fixture-${name}-`));
+  const home = join(tmp, "home");
+  const officinaHome = join(tmp, "officina");
+  const project = join(tmp, "work", "infra-scripts");
+  mkdirSync(join(home, ".claude", "sessions"), { recursive: true });
+  mkdirSync(join(officinaHome, "events"), { recursive: true });
+  mkdirSync(project, { recursive: true });
+  const fakeTool = join(targetDir, "debug", `officina-fake-tool${exe}`).replaceAll("\\", "/");
+  writeFileSync(
+    join(officinaHome, "floor.toml"),
+    `schema = 2
+
+[[project]]
+name = "infra-scripts"
+path = "${project.replaceAll("\\", "/")}"
+actions = ["check", "apply", "restart"]
+
+[[action]]
+name = "check"
+description = "Dry run of a playbook on one lab group"
+class = "free"
+program = "${fakeTool}"
+env = { FAKE_TOOL_MODE = "echo" }
+args = ["TASK [deploy {group}]", "changed=1", "unreachable=0"]
+
+[action.params.group]
+pattern = "lab-[a-z0-9-]{1,30}"
+
+[[action]]
+name = "apply"
+description = "Apply the playbook checked by its dry run, unattended once allowed"
+class = "auto"
+check = "check"
+program = "${fakeTool}"
+args = ["apply", "{group}"]
+
+[action.params.group]
+pattern = "lab-[a-z0-9-]{1,30}"
+
+[[action]]
+name = "restart"
+description = "Restart one service"
+class = "human"
+program = "C:/path/to/service-tool.exe"
+args = ["restart", "{service}"]
+
+[action.params.service]
+values = ["web01", "db01"]
+`,
+  );
+  approveFixture(officinaHome, "approve");
+  const base = { SYSTEMROOT: process.env.SYSTEMROOT ?? "", USERPROFILE: home, HOME: home, OFFICINA_HOME: officinaHome };
+  const relayRun = (args, extra = {}) => {
+    const run = spawnSync(officina, ["run", ...args], { env: { ...base, ...extra }, cwd: project, encoding: "utf8" });
+    if (run.status !== 0 && run.status !== 126) console.error(run.stderr);
+    return run.status;
+  };
+  if (relayRun(["check", "group=lab-web"]) !== 0) throw new Error(`${name}: the dry run failed`);
+  if (relayRun(["apply", "group=lab-web", "--wait", "1"], { CLAUDE_CODE_SESSION_ID: sid(5) }) !== 126) {
+    throw new Error(`${name}: the auto request did not wait`);
+  }
+  if (relayRun(["restart", "service=db01", "--wait", "1"]) !== 126) {
+    throw new Error(`${name}: the restart request did not wait`);
+  }
+  const fixture = join(tmp, "agents.json");
+  writeFileSync(fixture, JSON.stringify(busyAgents));
+  const byDay = new Map();
+  for (const event of busyEvents) {
+    const day = utcDay(event.ts);
+    byDay.set(day, (byDay.get(day) ?? "") + JSON.stringify(event) + "\n");
+  }
+  for (const [day, content] of byDay) writeFileSync(join(officinaHome, "events", `${day}.jsonl`), content);
+  const env = { ...base, OFFICINA_CLAUDE_BIN: fakeClaude, FAKE_CLAUDE_FIXTURE: fixture, FAKE_CLAUDE_MODE: "ok" };
+  const run = spawnSync(officina, ["board", "--json"], { env, encoding: "utf8" });
+  if (run.status !== 0) throw new Error(`${name}: officina board exited ${run.status}: ${run.stderr}`);
+  const board = JSON.parse(run.stdout);
+  const classes = board.approvals.map((a) => `${a.class}:${a.state}:${a.valid}`).sort();
+  if (classes.join(",") !== "auto:pending:true,human:pending:true") {
+    throw new Error(`${name}: expected one valid auto and one valid human request: ${JSON.stringify(board.approvals)}`);
+  }
+  writeFixture(name, "board", run.stdout);
+  rmSync(tmp, { recursive: true, force: true });
+  console.log(`fixture ${name}: exit ${run.status}`);
+}
+
 // Relay activity (story 2.9, D-25): a catalogue approved through
 // `approve_fixture`; real runs and refusals through `officina run` with the
 // fake tool; a gate deny and a gate error through `officina hook`; then, as

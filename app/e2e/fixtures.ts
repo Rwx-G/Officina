@@ -17,6 +17,7 @@ export type Scenario =
   | "stale"
   | "quota-reset"
   | "approvals"
+  | "approvals-auto"
   | "registry-unavailable"
   | "subjects-board"
   | "triage-board"

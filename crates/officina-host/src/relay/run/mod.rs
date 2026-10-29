@@ -36,7 +36,7 @@ use std::io::Write;
 use std::path::Path;
 use std::time::Duration;
 
-use officina_core::relay::catalogue::ActionClass;
+use officina_core::relay::approvals::waits_for_approval;
 use officina_core::relay::journal::{JournalEntry, Refused};
 use officina_core::relay::run::{
     FloorState, Refusal, RunInputs, RunPlan, SnapshotState, check_step, list_text, plan,
@@ -189,9 +189,10 @@ pub fn run_with(
             Err(refusal) => return ctx.refuse(err, &refusal),
         }
     }
-    // `auto` never passes validation (v0.5); were it to, it would still wait
-    // for the author.
-    if matches!(plan.class, ActionClass::Human | ActionClass::Auto) {
+    // `auto` takes `human`'s path (AD-86): its approval is the author's or,
+    // once he lets it, its review's; consumption checks its check again
+    // (D-151).
+    if waits_for_approval(plan.class) {
         let bound = Bound {
             check_run_id: check_run_id.as_deref(),
             tree: tree.as_ref(),

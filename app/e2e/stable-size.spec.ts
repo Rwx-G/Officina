@@ -14,12 +14,16 @@ const TOLERANCE_PX = 0.5;
 /** What makes an element a toggle this spec must cover. */
 const TOGGLE = '[aria-pressed], [role="radio"], [data-stable-slot], :has(> [data-stable-label])';
 
-type SceneName = "board" | "sceneMode" | "relay" | "subjects" | "triage";
+type SceneName = "board" | "autoApproval" | "sceneMode" | "relay" | "subjects" | "triage";
 
 const SCENES: Record<SceneName, (page: Page) => Promise<void>> = {
   board: async (page) => {
     await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
     await openBoard(page, loadBoard("busy"), {}, loadRelay("relay-clean"));
+  },
+  // An `auto` request in Needs you (story 5.12): its rejection reasons.
+  autoApproval: async (page) => {
+    await openBoard(page, loadBoard("approvals-auto"), {}, loadRelay("relay-clean"));
   },
   // The Sessions view's Scene mode: the header on one line (D-525).
   sceneMode: async (page) => {
@@ -90,6 +94,14 @@ const CASES: ToggleCase[] = [
       }),
   },
   { name: "copy attach command", selector: '[data-testid="copy-attach"]', scene: "board" },
+  {
+    name: "auto rejection reasons",
+    selector: '[data-testid="reject-reasons"]',
+    scene: "autoApproval",
+    // Reject on its card asks the reason in the slot (story 5.12 AC 6).
+    act: (_page, control) =>
+      control.locator("xpath=ancestor::*[@data-testid='approval-card']").getByTestId("reject").click(),
+  },
   { name: "Relay view stop toggle", selector: '[data-testid="relay-view-stop"]', scene: "relay" },
   { name: "triage verdict", selector: '[data-testid^="triage-verdict-"]', scene: "subjects" },
   {

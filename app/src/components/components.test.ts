@@ -267,6 +267,8 @@ function approval(overrides: Partial<ApprovalView> = {}): ApprovalView {
     id: "0123456789abcdef-1",
     project: "infra",
     action: "restart",
+    class: "human",
+    state: "pending",
     description: "Restart one service",
     argv: ["C:/path/to/tool.exe", "restart", "web01"],
     http: null,
@@ -415,6 +417,33 @@ describe("ApprovalCard", () => {
       ...decision(),
     });
     expect(invalid.queryByTestId("binding")).toBeNull();
+  });
+
+  // Story 5.12 AC 6 (D-28): Reject on an `auto` card asks why; neither it
+  // nor a reason button acts on a key's synthesised click (detail 0).
+  it("the reason buttons ignore a click with detail 0", async () => {
+    const { getByTestId } = render(ApprovalCard, { approval: approval({ class: "auto" }), ...decision() });
+    const reasons = getByTestId("reject-reasons");
+    expect(reasons.classList.contains("shown")).toBe(false);
+    await fireEvent.click(getByTestId("reject"), { detail: 0 });
+    expect(reasons.classList.contains("shown")).toBe(false);
+    await fireEvent.click(getByTestId("reject"), { detail: 1 });
+    expect(reasons.classList.contains("shown")).toBe(true);
+    expect(onDecide).not.toHaveBeenCalled();
+    for (const reason of ["should_not_run", "not_now"]) {
+      await fireEvent.click(getByTestId(`reason-${reason}`), { detail: 0 });
+    }
+    expect(onDecide).not.toHaveBeenCalled();
+    await fireEvent.click(getByTestId("reason-not_now"), { detail: 1 });
+    expect(onDecide).toHaveBeenCalledWith(false, "not_now");
+  });
+
+  it("a human card's Reject decides at once and has no reason slot", async () => {
+    const { getByTestId, queryByTestId } = render(ApprovalCard, { approval: approval(), ...decision() });
+    expect(queryByTestId("reject-reasons")).toBeNull();
+    expect(getByTestId("approval-class").textContent?.trim()).toBe("class human");
+    await fireEvent.click(getByTestId("reject"), { detail: 1 });
+    expect(onDecide).toHaveBeenCalledWith(false);
   });
 });
 
@@ -784,6 +813,8 @@ describe("SessionFile", () => {
       id: "r1",
       project: c.project.name,
       action: "restart",
+      class: "human",
+      state: "pending",
       description: "Restart the service",
       argv: [],
       http: null,

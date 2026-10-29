@@ -385,11 +385,9 @@ fn unconfirmed(record: &RecordState, hash: &str) -> bool {
 /// 4. that project lists the action;
 /// 5. every declared parameter is given, none other, each value accepted
 ///    (AD-30, D-5);
-/// 6. the action's class is one this build runs
-///    ([`classes::is_available`], D-132); an action naming a check then
-///    needs [`check_step`], which reads the
-///    journal and the tree; a `human` action then needs the author's
-///    approval (`relay::approvals`).
+/// 6. an action naming a check then needs [`check_step`], which reads the
+///    journal and the tree; a `human` or `auto` action then needs an
+///    approval (`relay::approvals`, AD-86).
 ///
 /// The launch is built from the current floor's validated action, which
 /// the equal hash proves is the approved one, with the project folder as
@@ -509,18 +507,8 @@ pub fn plan(
             project: Some((*project).to_owned()),
         }
     })?;
-    if !classes::is_available(validated.class) {
-        return refuse(
-            RefusalReason::ClassNotAvailable,
-            format!(
-                "the action {action} is of class `{}`, which this build of Officina does not run yet",
-                validated.class.code()
-            ),
-            Some(project),
-        );
-    }
     let names_a_check = validated.check.is_some();
-    let waits_for_the_author = matches!(validated.class, ActionClass::Human | ActionClass::Auto);
+    let waits_for_the_author = approvals::waits_for_approval(validated.class);
     let is_a_check = relay
         .catalogue
         .actions
@@ -570,7 +558,7 @@ pub fn check_step(
         return Ok(Some(found.run_id.clone()));
     }
     let minutes = CHECK_VALID_MS / 60_000;
-    let detail = if plan.class == ActionClass::Human {
+    let detail = if approvals::waits_for_approval(plan.class) {
         format!(
             "run `{check}` first: an approval of {} is requested only after its dry run {check} succeeded with the same parameters on the same code in the last {minutes} minutes",
             plan.action
@@ -584,19 +572,46 @@ pub fn check_step(
     refuse(RefusalReason::CheckRequired, detail, Some(&plan.project))
 }
 
+/// The after-check rule again, right before an approval of an `auto` action
+/// is consumed, whoever gave it (D-151): its check must still be satisfied,
+/// within [`CHECK_VALID_MS`], on `tree` as computed at that moment, or the
+/// call is refused [`RefusalReason::CheckNotSatisfied`] and the approval
+/// stays unconsumed. A queue of reviews can hold an approval past the
+/// check's half hour, and the wait is long enough for an edit. Other classes
+/// pass: a `human` approval is the author's judgement of the dry run he saw,
+/// bound to its files (D-170).
+pub fn auto_check_at_consumption(
+    plan: &RunPlan,
+    params: &BTreeMap<String, String>,
+    lines: &[JournalLine],
+    tree: Option<&TreeFingerprint>,
+    now_ms: i64,
+) -> Result<(), Refusal> {
+    let (ActionClass::Auto, Some(check)) = (plan.class, &plan.check) else {
+        return Ok(());
+    };
+    if classes::check_satisfied(
+        lines,
+        &plan.project,
+        check,
+        params,
+        &plan.catalogue_hash,
+        tree,
+        now_ms,
+    ) {
+        Ok(())
+    } else {
+        Err(Refusal::check_not_satisfied(&plan.project, check))
+    }
+}
+
 fn action_lines(text: &mut String, name: &str, action: &CanonicalAction) {
     text.push_str("  officina run ");
     text.push_str(name);
     for param in action.params.keys() {
         text.push_str(&format!(" {param}=<...>"));
     }
-    if !classes::is_available(action.class) {
-        text.push_str(&format!(
-            "  (class {}, not available in this build)",
-            action.class.code()
-        ));
-    }
-    text.push('\n');
+    text.push_str(&format!("  (class {})\n", action.class.code()));
     if !action.description.is_empty() {
         text.push_str(&format!("      {}\n", action.description));
     }
@@ -605,14 +620,19 @@ fn action_lines(text: &mut String, name: &str, action: &CanonicalAction) {
         (ActionClass::AfterCheck, Some(check)) => text.push_str(&format!(
             "      runs only after `officina run {check}` succeeded with the same parameters on the same code in the last {minutes} minutes\n"
         )),
-        (ActionClass::Human, check) => {
+        (ActionClass::Human | ActionClass::Auto, check) => {
             if let Some(check) = check {
                 text.push_str(&format!(
                     "      asks for approval only after its dry run `officina run {check}` succeeded with the same parameters on the same code in the last {minutes} minutes\n"
                 ));
             }
+            let giver = if action.class == ActionClass::Auto {
+                "given by the author in the Officina window or, once the author turns auto approval on, by its review"
+            } else {
+                "the author gives in the Officina window"
+            };
             text.push_str(&format!(
-                "      runs once per approval the author gives in the Officina window; the call waits for it up to --wait <s> (default {}, at most {})\n",
+                "      runs once per approval {giver}; the call waits for it up to --wait <s> (default {}, at most {})\n",
                 approvals::DEFAULT_WAIT_S,
                 classes::WAIT_RANGE_S.end()
             ));
@@ -634,8 +654,8 @@ fn action_lines(text: &mut String, name: &str, action: &CanonicalAction) {
 }
 
 /// The text of `officina run --list` (D-21): the approved actions of the
-/// project the working directory lies in, with their parameters and what
-/// each accepts, unavailable classes marked (D-17, D-132); a stopped relay, a
+/// project the working directory lies in, each with its class, its
+/// parameters and what each accepts (AD-86); a stopped relay, a
 /// pending catalogue change or an unreadable file stated first. It always
 /// exits 0, whatever it says.
 pub fn list_text(inputs: &RunInputs<'_>) -> String {
@@ -706,6 +726,70 @@ mod tests {
 
     fn approved_of(relay: &RelayFloor) -> ApprovedCatalogue {
         ApprovedCatalogue::approving(relay, FLOOR_PATH, 1)
+    }
+
+    const NOW: i64 = 1_793_102_400_000;
+
+    fn fingerprint(text: &str) -> TreeFingerprint {
+        TreeFingerprint {
+            sha256: crate::relay::sha256_hex(text.as_bytes()),
+            files: 0,
+            git: None,
+        }
+    }
+
+    /// A successful run of `check` on `tree`, started at `started_ms`.
+    fn check_lines(
+        check: &RunPlan,
+        params: &BTreeMap<String, String>,
+        tree: &TreeFingerprint,
+        started_ms: i64,
+    ) -> Vec<JournalLine> {
+        use crate::relay::journal::{
+            JournalEntry, RunFinished, RunOutcome, RunStarted, StreamSummary,
+        };
+        let stream = StreamSummary {
+            bytes: 0,
+            sha256: crate::relay::sha256_hex(b""),
+        };
+        vec![
+            JournalLine::new(
+                started_ms,
+                JournalEntry::RunStarted(RunStarted {
+                    run_id: "c1".to_owned(),
+                    project: check.project.clone(),
+                    session_id: None,
+                    action: check.action.clone(),
+                    class: check.class,
+                    params: params.clone(),
+                    argv: check.argv(),
+                    method: None,
+                    url: None,
+                    credential: None,
+                    catalogue_hash: check.catalogue_hash.clone(),
+                    approval_id: None,
+                    tree: Some(tree.clone()),
+                    timeout_s: Some(check.timeout_s),
+                }),
+            ),
+            JournalLine::new(
+                started_ms + 1000,
+                JournalEntry::RunFinished(RunFinished {
+                    body_broke_off: false,
+                    run_id: "c1".to_owned(),
+                    outcome: RunOutcome::Exited,
+                    exit_code: Some(0),
+                    duration_ms: 1000,
+                    stdout: Some(stream.clone()),
+                    stderr: Some(stream),
+                    dropped_bytes: 0,
+                    status: None,
+                    body_bytes: None,
+                    body_sha256: None,
+                    detail: None,
+                }),
+            ),
+        ]
     }
 
     /// The window's record confirming `snapshot`'s catalogue, as the window
@@ -955,17 +1039,17 @@ mod tests {
             "C:/path/to/Lab",
         ));
         assert!(text.starts_with("Project lab (guarded)"), "{text}");
-        assert!(text.contains("officina run probe host=<...>\n"), "{text}");
+        assert!(
+            text.contains("officina run probe host=<...>  (class free)\n"),
+            "{text}"
+        );
         assert!(text.contains("host: one of db01, web01"), "{text}");
         assert!(
             text.contains("group: the whole value matches lab-[a-z]+"),
             "{text}"
         );
         assert!(
-            text.contains(
-                "officina run apply group=<...>
-"
-            ),
+            text.contains("officina run apply group=<...>  (class human)\n"),
             "{text}"
         );
         assert!(
@@ -1066,7 +1150,7 @@ program = \"C:/path/to/tool.exe\"
         assert_eq!((probe.check.as_deref(), probe.binds_tree), (None, false));
         let listed = list_text(&ready);
         assert!(
-            listed.contains("  officina run apply group=<...>\n      runs only after `officina run verify` succeeded with the same parameters"),
+            listed.contains("  officina run apply group=<...>  (class after-check)\n      runs only after `officina run verify` succeeded with the same parameters"),
             "{listed}"
         );
 
@@ -1139,11 +1223,11 @@ program = \"C:/path/to/tool.exe\"
         );
     }
 
-    /// Story 5.4 AC 5 (D-132): an approved `auto` action validates, but
-    /// this build refuses to run it, after its parameters are checked, and
-    /// `run --list` marks it.
+    /// Story 5.12 AC 1 (AD-86, D-636): an approved `auto` action plans like
+    /// a `human` one, its values checked first, binding its tree and naming
+    /// its check; `run --list` gives its class.
     #[test]
-    fn auto_is_not_available_yet() {
+    fn auto_plans_like_human() {
         let floor_text = FLOOR.replace(
             "actions = [\"probe\", \"apply\"]",
             "actions = [\"probe\", \"apply\", \"auto-apply\"]",
@@ -1165,24 +1249,51 @@ program = \"C:/path/to/tool.exe\"
             floor,
             "C:/path/to/Lab",
         );
-        let refusal = plan(&ready, "auto-apply", &params(&[("host", "web01")])).unwrap_err();
-        assert_eq!(refusal.reason, RefusalReason::ClassNotAvailable);
-        assert!(refusal.detail.contains("`auto`"), "{}", refusal.detail);
+        let auto = plan(&ready, "auto-apply", &params(&[("host", "web01")])).unwrap();
+        assert_eq!(auto.class, ActionClass::Auto);
+        assert_eq!(auto.check.as_deref(), Some("probe"));
+        assert!(auto.binds_tree, "an auto action binds its tree");
         let bad_value = plan(&ready, "auto-apply", &params(&[("host", "db01")])).unwrap_err();
+        assert_eq!(bad_value.reason, RefusalReason::InvalidValue);
+        let refusal = check_step(&auto, &params(&[("host", "web01")]), &[], None, 0).unwrap_err();
+        assert_eq!(refusal.reason, RefusalReason::CheckRequired);
+        assert!(
+            refusal
+                .detail
+                .contains("an approval of auto-apply is requested only after"),
+            "{}",
+            refusal.detail
+        );
+        let lines = |age_ms: i64, tree: &TreeFingerprint| {
+            let probe = plan(&ready, "probe", &params(&[("host", "web01")])).unwrap();
+            check_lines(&probe, &params(&[("host", "web01")]), tree, NOW - age_ms)
+        };
+        let host = params(&[("host", "web01")]);
+        let a = fingerprint("a");
         assert_eq!(
-            bad_value.reason,
-            RefusalReason::InvalidValue,
-            "values first"
+            auto_check_at_consumption(&auto, &host, &lines(60_000, &a), Some(&a), NOW),
+            Ok(())
+        );
+        for (age, tree) in [(60_000, fingerprint("b")), (CHECK_VALID_MS + 1, a.clone())] {
+            let refused =
+                auto_check_at_consumption(&auto, &host, &lines(age, &a), Some(&tree), NOW)
+                    .unwrap_err();
+            assert_eq!(refused.reason, RefusalReason::CheckNotSatisfied);
+        }
+        let human = plan(&ready, "apply", &params(&[("group", "lab-web")])).unwrap();
+        assert_eq!(
+            auto_check_at_consumption(&human, &host, &[], None, NOW),
+            Ok(()),
+            "a human approval is bound to its files only (D-170)"
         );
         let listed = list_text(&ready);
-        let line = listed
-            .lines()
-            .find(|line| line.contains("officina run auto-apply"))
-            .unwrap();
         assert!(
-            line.ends_with("(class auto, not available in this build)"),
-            "{line}"
+            listed.contains("  officina run auto-apply host=<...>  (class auto)\n"),
+            "{listed}"
         );
-        assert!(!listed.contains("(class human"), "{listed}");
+        assert!(
+            listed.contains("or, once the author turns auto approval on, by its review"),
+            "{listed}"
+        );
     }
 }

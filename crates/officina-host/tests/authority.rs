@@ -10,10 +10,11 @@ use std::path::Path;
 use common::TestHome;
 use officina_core::ipc::IpcErrorCode;
 use officina_core::quota::normalise_path;
+use officina_core::registry::types::AuthorReason;
 use officina_core::relay::StopFlag;
 use officina_core::relay::approvals::{
-    ApprovalRequest, DecideRefusal, Decision, FileKind, KeyInputs, PENDING_MS, file_name,
-    request_id, request_key,
+    ApprovalBy, ApprovalRequest, DecideRefusal, Decision, FileKind, KeyInputs, PENDING_MS,
+    file_name, request_id, request_key,
 };
 use officina_core::relay::journal::{ApprovalEvent, CatalogueApproved, JournalEntry};
 use officina_host::files::now_ms;
@@ -401,7 +402,7 @@ fn decide_approves_a_pending_request() {
     let home = TestHome::new();
     let relay = human_relay(&home);
     let (id, request) = write_request(&relay, "web01", 60_000);
-    decide_approval(&relay, &id, true).unwrap();
+    decide_approval(&relay, &id, true, None).unwrap();
     let approved = decision_file(&relay, &id, FileKind::Approved).expect("approved.json");
     assert_eq!(approved.request_key, request.request_key);
     assert!((now_ms() - approved.decided_at_ms).abs() < 60_000);
@@ -413,11 +414,13 @@ fn decide_approves_a_pending_request() {
             project: Some(request.project.clone()),
             action: Some(request.action.clone()),
             dry_run: None,
+            by: Some(ApprovalBy::Author),
+            reason: None,
         })]
     );
 
     let (other, other_request) = write_request(&relay, "db01", 30_000);
-    decide_approval(&relay, &other, false).unwrap();
+    decide_approval(&relay, &other, false, None).unwrap();
     assert!(decision_file(&relay, &other, FileKind::Rejected).is_some());
     assert!(decision_file(&relay, &other, FileKind::Approved).is_none());
     assert_eq!(
@@ -428,15 +431,230 @@ fn decide_approves_a_pending_request() {
             project: Some(other_request.project),
             action: Some(other_request.action),
             dry_run: None,
+            by: Some(ApprovalBy::Author),
+            reason: None,
         })
     );
+}
+
+// ---- story 5.12: `auto` requests, reasons, one decision (AD-86, D-157) ----
+
+const AUTO_FLOOR: &str = "schema = 2\n\n[[project]]\nname = \"lab\"\npath = \"Lab\"\nactions = [\"restart\", \"check\", \"apply\"]\n\n[[action]]\nname = \"restart\"\nclass = \"human\"\nprogram = \"C:/path/to/tool.exe\"\nargs = [\"{service}\"]\n\n[action.params.service]\nvalues = [\"web01\", \"db01\"]\n\n[[action]]\nname = \"check\"\nclass = \"free\"\nprogram = \"C:/path/to/tool.exe\"\nargs = [\"--check\", \"{service}\"]\n\n[action.params.service]\nvalues = [\"web01\", \"db01\"]\n\n[[action]]\nname = \"apply\"\nclass = \"auto\"\ncheck = \"check\"\nprogram = \"C:/path/to/tool.exe\"\nargs = [\"--apply\", \"{service}\"]\n\n[action.params.service]\nvalues = [\"web01\", \"db01\"]\n";
+
+/// An approved relay with a `human` action and an `auto` one.
+fn auto_relay(home: &TestHome) -> RelayHome {
+    let relay = home.relay(None);
+    home.write(&relay.default_floor(), AUTO_FLOOR);
+    approve_catalogue(&relay, &displayed(&relay.default_floor())).unwrap();
+    relay
+}
+
+/// Writes the request `officina run apply service=<service>` would write
+/// after its check, and returns its id.
+fn write_auto_request(relay: &RelayHome, service: &str) -> String {
+    let hash = relay.read_approved().approved().unwrap().hash.clone();
+    let params = BTreeMap::from([("service".to_owned(), service.to_owned())]);
+    let key = request_key(&KeyInputs {
+        project: "lab",
+        action: "apply",
+        params: &params,
+        catalogue_hash: &hash,
+        check_run_id: Some("19a2b3c4d5e-1f"),
+        tree: None,
+    });
+    let created_at_ms = now_ms() - 1_000;
+    let id = request_id(&key, created_at_ms);
+    let request = ApprovalRequest {
+        request_key: key,
+        created_at_ms,
+        project: "lab".to_owned(),
+        action: "apply".to_owned(),
+        params,
+        argv: vec![
+            "C:/path/to/tool.exe".to_owned(),
+            "--apply".to_owned(),
+            service.to_owned(),
+        ],
+        http: None,
+        catalogue_hash: hash,
+        session_id: None,
+        check_run_id: Some("19a2b3c4d5e-1f".to_owned()),
+        tree: None,
+    };
+    approvals::create_request(relay, &id, &request).unwrap();
+    id
+}
+
+fn refusal_of(result: Result<(), AuthorityError>) -> DecideRefusal {
+    match result {
+        Err(AuthorityError::Decide(refusal)) => refusal,
+        other => panic!("{other:?}"),
+    }
+}
+
+/// Story 5.12 AC 5 (FR-9, AD-86): rejecting an `auto` request needs a
+/// reason, which reaches the rejection file and its journal line; nothing is
+/// written without one.
+#[test]
+fn rejecting_auto_requires_a_reason() {
+    let home = TestHome::new();
+    let relay = auto_relay(&home);
+    let id = write_auto_request(&relay, "web01");
+    assert!(matches!(
+        refusal_of(decide_approval(&relay, &id, false, None)),
+        DecideRefusal::Reason { .. }
+    ));
+    assert!(decision_file(&relay, &id, FileKind::Rejected).is_none());
+    assert!(
+        !relay
+            .approvals_dir()
+            .join(file_name(&id, FileKind::Decided))
+            .exists(),
+        "a refused decision claims nothing"
+    );
+    decide_approval(&relay, &id, false, Some(AuthorReason::ShouldNotRun)).unwrap();
+    let rejected = decision_file(&relay, &id, FileKind::Rejected).unwrap();
+    assert_eq!(rejected.reason, Some(AuthorReason::ShouldNotRun));
+    assert_eq!(rejected.by, Some(ApprovalBy::Author));
+    match decision_lines(&relay).as_slice() {
+        [JournalEntry::ApprovalRejected(event)] => {
+            assert_eq!(event.reason, Some(AuthorReason::ShouldNotRun));
+            assert_eq!(event.by, Some(ApprovalBy::Author));
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
+/// Story 5.12 AC 5: a `human` rejection and any approval take no reason.
+#[test]
+fn a_human_rejection_takes_no_reason() {
+    let home = TestHome::new();
+    let relay = auto_relay(&home);
+    let (human, _) = write_request(&relay, "web01", 1_000);
+    assert!(matches!(
+        refusal_of(decide_approval(
+            &relay,
+            &human,
+            false,
+            Some(AuthorReason::NotNow)
+        )),
+        DecideRefusal::Reason { .. }
+    ));
+    let auto = write_auto_request(&relay, "web01");
+    assert!(matches!(
+        refusal_of(decide_approval(
+            &relay,
+            &auto,
+            true,
+            Some(AuthorReason::NotNow)
+        )),
+        DecideRefusal::Reason { .. }
+    ));
+    decide_approval(&relay, &human, false, None).unwrap();
+    assert_eq!(
+        decision_file(&relay, &human, FileKind::Rejected)
+            .unwrap()
+            .reason,
+        None
+    );
+}
+
+/// Story 5.12 AC 2 and AC 5 (AD-86): the author's approval says so, in its
+/// file and its journal line.
+#[test]
+fn an_author_approval_says_by_author() {
+    let home = TestHome::new();
+    let relay = auto_relay(&home);
+    let id = write_auto_request(&relay, "db01");
+    decide_approval(&relay, &id, true, None).unwrap();
+    let approved = decision_file(&relay, &id, FileKind::Approved).unwrap();
+    assert_eq!(
+        (approved.by, approved.reason),
+        (Some(ApprovalBy::Author), None)
+    );
+    match decision_lines(&relay).as_slice() {
+        [JournalEntry::ApprovalGiven(event)] => assert_eq!(event.by, Some(ApprovalBy::Author)),
+        other => panic!("{other:?}"),
+    }
+}
+
+/// Story 5.12 AC 5 (D-157): a decision marker created first, as a review
+/// approving does, refuses the author `already_decided` before anything is
+/// written; so does a second click after a decision.
+#[test]
+fn a_second_decision_is_refused() {
+    let home = TestHome::new();
+    let relay = auto_relay(&home);
+    let id = write_auto_request(&relay, "web01");
+    assert!(
+        approvals::claim_decision(&relay, &id).unwrap(),
+        "the review first"
+    );
+    assert!(matches!(
+        refusal_of(decide_approval(&relay, &id, true, None)),
+        DecideRefusal::Decided(_)
+    ));
+    assert!(decision_file(&relay, &id, FileKind::Approved).is_none());
+    assert!(decision_lines(&relay).is_empty());
+
+    let other = write_auto_request(&relay, "db01");
+    decide_approval(&relay, &other, true, None).unwrap();
+    assert!(matches!(
+        refusal_of(decide_approval(
+            &relay,
+            &other,
+            false,
+            Some(AuthorReason::NotNow)
+        )),
+        DecideRefusal::Decided(_)
+    ));
+    assert!(decision_file(&relay, &other, FileKind::Rejected).is_none());
+}
+
+/// Story 5.12 AC 5 (D-157): two decisions at once on one request write one
+/// decision file and one journal line.
+#[test]
+fn two_concurrent_decisions_write_one() {
+    let home = TestHome::new();
+    let relay = auto_relay(&home);
+    let id = write_auto_request(&relay, "web01");
+    let results: Vec<bool> = std::thread::scope(|scope| {
+        let approve = scope.spawn(|| decide_approval(&relay, &id, true, None).is_ok());
+        let reject =
+            scope.spawn(|| decide_approval(&relay, &id, false, Some(AuthorReason::NotNow)).is_ok());
+        vec![approve.join().unwrap(), reject.join().unwrap()]
+    });
+    assert_eq!(results.iter().filter(|ok| **ok).count(), 1, "{results:?}");
+    let written = [FileKind::Approved, FileKind::Rejected]
+        .into_iter()
+        .filter(|kind| decision_file(&relay, &id, *kind).is_some())
+        .count();
+    assert_eq!(written, 1);
+    assert_eq!(decision_lines(&relay).len(), 1);
+}
+
+/// Story 5.12 AC 5 (D-157): while a live review decides a request, the
+/// author cannot; once the review lets go, he can.
+#[test]
+fn a_reviewing_request_cannot_be_decided() {
+    let home = TestHome::new();
+    let relay = auto_relay(&home);
+    let id = write_auto_request(&relay, "web01");
+    approvals::set_reviewing(&relay, &id, true).unwrap();
+    assert!(matches!(
+        refusal_of(decide_approval(&relay, &id, true, None)),
+        DecideRefusal::Reviewing(_)
+    ));
+    assert!(decision_file(&relay, &id, FileKind::Approved).is_none());
+    approvals::set_reviewing(&relay, &id, false).unwrap();
+    decide_approval(&relay, &id, true, None).unwrap();
 }
 
 #[test]
 fn decide_refuses_unknown_decided_expired_and_stale_hash() {
     let home = TestHome::new();
     let relay = human_relay(&home);
-    let refused = |id: &str| match decide_approval(&relay, id, true) {
+    let refused = |id: &str| match decide_approval(&relay, id, true, None) {
         Err(AuthorityError::Decide(refusal)) => refusal,
         other => panic!("{id}: {other:?}"),
     };
@@ -447,7 +665,7 @@ fn decide_refuses_unknown_decided_expired_and_stale_hash() {
     ));
 
     let (decided, _) = write_request(&relay, "web01", 60_000);
-    decide_approval(&relay, &decided, false).unwrap();
+    decide_approval(&relay, &decided, false, None).unwrap();
     assert!(matches!(refused(&decided), DecideRefusal::Decided(_)));
 
     let (expired, _) = write_request(&relay, "db01", PENDING_MS + 60_000);
@@ -459,7 +677,7 @@ fn decide_refuses_unknown_decided_expired_and_stale_hash() {
         &HUMAN_FLOOR.replace("\"web01\", \"db01\"", "\"web01\", \"db01\", \"cache01\""),
     );
     approve_catalogue(&relay, &displayed(&relay.default_floor())).unwrap();
-    let error = decide_approval(&relay, &stale, true).unwrap_err();
+    let error = decide_approval(&relay, &stale, true, None).unwrap_err();
     assert!(error.to_string().starts_with(AUTHORITY_MARKER));
     assert!(
         matches!(&error, AuthorityError::Decide(DecideRefusal::Invalid { why, .. }) if why.contains("another catalogue")),
@@ -489,13 +707,13 @@ fn decide_refuses_a_forged_request() {
     forged.created_at_ms += 1;
     let id = request_id(&forged.request_key, forged.created_at_ms);
     approvals::create_request(&relay, &id, &forged).unwrap();
-    let error = decide_approval(&relay, &id, true).unwrap_err();
+    let error = decide_approval(&relay, &id, true, None).unwrap_err();
     assert!(
         matches!(&error, AuthorityError::Decide(DecideRefusal::Invalid { why, .. }) if why.contains("key")),
         "{error}"
     );
     assert!(decision_file(&relay, &id, FileKind::Approved).is_none());
-    decide_approval(&relay, &real, true).unwrap();
+    decide_approval(&relay, &real, true, None).unwrap();
 }
 
 /// The anomalies the relay view and doctor read now (D-173).
@@ -519,7 +737,7 @@ fn a_foreign_approval_file_is_an_anomaly() {
     let home = TestHome::new();
     let relay = human_relay(&home);
     let (given, _) = write_request(&relay, "web01", 60_000);
-    decide_approval(&relay, &given, true).unwrap();
+    decide_approval(&relay, &given, true, None).unwrap();
     assert!(
         anomalies_now(&relay).is_empty(),
         "the window's own approval"
@@ -530,11 +748,7 @@ fn a_foreign_approval_file_is_an_anomaly() {
         relay
             .approvals_dir()
             .join(file_name(&forged_id, FileKind::Approved)),
-        serde_json::to_vec(&Decision {
-            decided_at_ms: now_ms(),
-            request_key: forged.request_key,
-        })
-        .unwrap(),
+        serde_json::to_vec(&Decision::by_author(now_ms(), &forged.request_key, None)).unwrap(),
     )
     .unwrap();
     let found = anomalies_now(&relay);
@@ -578,7 +792,7 @@ fn a_run_without_a_window_decision_is_an_anomaly() {
         })
     };
     let (given, _) = write_request(&relay, "web01", 60_000);
-    decide_approval(&relay, &given, true).unwrap();
+    decide_approval(&relay, &given, true, None).unwrap();
     officina_host::relay::journal::append(&relay, &[start(&given)], now_ms()).unwrap();
     assert!(
         anomalies_now(&relay).is_empty(),
@@ -624,7 +838,7 @@ fn an_authority_error_reaches_the_window_with_its_code() {
     let ipc = stale.ipc();
     assert_eq!(ipc.code, IpcErrorCode::CatalogueChanged);
     assert_eq!(ipc.message, stale.to_string());
-    let unknown = decide_approval(&relay, "0123456789abcdef-1", true).unwrap_err();
+    let unknown = decide_approval(&relay, "0123456789abcdef-1", true, None).unwrap_err();
     assert_eq!(unknown.ipc().code, IpcErrorCode::Refused);
 }
 

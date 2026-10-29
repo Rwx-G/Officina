@@ -96,3 +96,84 @@ test.describe("approval requests", () => {
     await expect(dryRun.getByTestId("dry-run-output")).toHaveText(approval.dry_run!.output!);
   });
 });
+
+// Story 5.12 AC 6 (AD-35 as amended, AD-86, D-28, D-564): an `auto` request
+// beside a `human` one, both made by the real `officina run`.
+test.describe("auto requests", () => {
+  const autoBoard = loadBoard("approvals-auto");
+  const auto = autoBoard.approvals.find((a) => a.class === "auto")!;
+  const autoCard = (page: Page) => page.locator(`[data-id="${auto.id}"]`);
+
+  test("an auto request shows its class and its check", async ({ page }) => {
+    await openBoard(page, autoBoard);
+    expect(auto.dry_run?.check).toBeTruthy();
+    await expect(autoCard(page).getByTestId("approval-class")).toHaveText(
+      `class auto, after its check ${auto.dry_run!.check}`,
+    );
+    const human = page.locator(`[data-id="${autoBoard.approvals.find((a) => a.class === "human")!.id}"]`);
+    await expect(human.getByTestId("approval-class")).toHaveText("class human");
+    await expect(human.getByTestId("reject-reasons")).toHaveCount(0);
+  });
+
+  test("rejecting an auto request asks should not run or not now", async ({ page }) => {
+    await openBoard(page, autoBoard);
+    const card = autoCard(page);
+    const reasons = card.getByTestId("reject-reasons");
+    await expect(card.getByTestId("reason-should_not_run")).toBeHidden();
+    const approveBefore = await card.getByTestId("approve").boundingBox();
+    const cardBefore = await card.boundingBox();
+    await card.getByTestId("reject").click();
+    expect(await decisions(page)).toEqual([]);
+    await expect(reasons).toHaveClass(/shown/);
+    await expect(card.getByTestId("reason-should_not_run")).toBeVisible();
+    await expect(card.getByTestId("reason-not_now")).toBeVisible();
+    expect(await card.getByTestId("approve").boundingBox()).toEqual(approveBefore);
+    expect(await card.boundingBox()).toEqual(cardBefore);
+    await card.getByTestId("reason-should_not_run").click();
+    expect(await decisions(page)).toEqual([{ id: auto.id, approve: false, reason: "should_not_run" }]);
+    await expect(card).toBeHidden();
+  });
+
+  test("the reason buttons ignore the keyboard", async ({ page }) => {
+    await openBoard(page, autoBoard);
+    const card = autoCard(page);
+    await card.getByTestId("reject").focus();
+    await page.keyboard.press("Enter");
+    await page.keyboard.press("Space");
+    await expect(card.getByTestId("reject-reasons")).not.toHaveClass(/shown/);
+    await card.getByTestId("reject").click();
+    for (const reason of ["should_not_run", "not_now"]) {
+      const button = card.getByTestId(`reason-${reason}`);
+      await button.focus();
+      await expect(button).toBeFocused();
+      await page.keyboard.press("Enter");
+      await page.keyboard.press("Space");
+    }
+    expect(await decisions(page)).toEqual([]);
+    await expect(card).toBeVisible();
+  });
+
+  for (const theme of ["light", "dark"] as const) {
+    test(`the approval card is the same in both themes but for its tokens (${theme})`, async ({ page }) => {
+      await page.emulateMedia({ colorScheme: theme });
+      await openBoard(page, autoBoard);
+      const card = autoCard(page);
+      await card.getByTestId("reject").click();
+      const resolved = (token: string) =>
+        page.evaluate((name) => {
+          const probe = document.createElement("div");
+          probe.style.color = `var(${name})`;
+          document.body.append(probe);
+          const value = getComputedStyle(probe).color;
+          probe.remove();
+          return value;
+        }, token);
+      const style = (testId: string, property: "color" | "borderTopColor") =>
+        card.getByTestId(testId).evaluate((e, p) => getComputedStyle(e)[p], property);
+      expect(await card.evaluate((e) => getComputedStyle(e).borderTopColor)).toBe(await resolved("--color-attention"));
+      expect(await style("approval-class", "color")).toBe(await resolved("--color-text-muted"));
+      expect(await style("reason-not_now", "borderTopColor")).toBe(await resolved("--color-border"));
+      expect(await style("reason-not_now", "color")).toBe(await resolved("--color-text"));
+    });
+  }
+});

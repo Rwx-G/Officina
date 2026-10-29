@@ -51,8 +51,8 @@ export function installE2eMock(): void {
         case "approve_catalogue":
           return approve((args as { hash: string }).hash);
         case "decide_approval": {
-          const { id } = args as { id: string; approve: boolean };
-          return decide(id);
+          const { id, approve, reason } = args as { id: string; approve: boolean; reason?: string };
+          return decide(id, approve, reason);
         }
         case "set_relay_stopped":
           return setStopped((args as { stopped: boolean }).stopped);
@@ -244,19 +244,20 @@ async function acknowledge(key: string): Promise<void> {
 }
 
 /** Mirrors `authority::decide_approval`: a request the board lists as valid
- *  is decided and leaves Needs you with the next board; anything else is
- *  refused, as the backend refuses an unknown or invalid request. */
-async function decide(id: string): Promise<void> {
+ *  and pending is decided and leaves Needs you with the next board;
+ *  anything else is refused, as the backend refuses an unknown, invalid or
+ *  reviewing request, and a reason that does not fit its class. */
+async function decide(id: string, approve: boolean, reason?: string): Promise<void> {
   const board = window.__officinaBoard;
   const approval = board?.approvals.find((a) => a.id === id);
-  if (!board || !approval?.valid) {
-    const error: IpcError = {
-      code: "refused",
-      message: `officina-window-authority: request ${id} is invalid or unknown`,
-      refusal: null,
-    };
+  const refuse = (why: string): Promise<void> => {
+    const error: IpcError = { code: "refused", message: `officina-window-authority: request ${id} ${why}`, refusal: null };
     return Promise.reject(error);
-  }
+  };
+  if (!board || !approval?.valid) return refuse("is invalid or unknown");
+  if (approval.state !== "pending") return refuse("is being reviewed");
+  const needsReason = !approve && approval.class === "auto";
+  if (needsReason !== (reason !== undefined)) return refuse("has a reason that does not fit its class");
   await window.__officinaPushBoard?.({
     ...board,
     approvals: board.approvals.filter((a) => a.id !== id),
