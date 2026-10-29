@@ -176,17 +176,21 @@ export function fitScale(area: { w: number; h: number }, size: { w: number; h: n
 /** A plaque: a pill whose bottom sits `lift` px above its anchor, capped
  *  at `cap` px wide with CSS ellipsis (AD-61). */
 export const PLAQUE = { lift: 4, h: 25, cap: 140 } as const;
-/** Where each room's plaque hangs along its left partition, in tiles. */
+/** Where each room's plaque hangs along its left partition, in tiles. The
+ *  decision office's hangs at its back: further forward it covered the
+ *  queue's third head, or reception's figure by the counter's end (story
+ *  4.17). */
 export const PLAQUE_ALONG: Record<RoomKind, number> = {
   reception: 3.3,
-  decision: 2.7,
+  decision: 0.6,
   lounge: 3.1,
   alert: 1.6,
   office: 0.8,
 };
 /** The "high priority" pill, stacked above its office's plaque: beside it,
- *  as in the prototype, it met the desk targets of the office below. */
-export const PRIORITY_PILL = { gap: 3, cap: 110, h: 25 } as const;
+ *  as in the prototype, it met the desk targets of the office below. The
+ *  gap keeps it from reading as part of the plaque (story 4.17). */
+export const PRIORITY_PILL = { gap: 9, cap: 110, h: 25 } as const;
 /** The alert room's beacon (AD-175): its post at room-local (`lx`, `ly`)
  *  in tiles, its lamp `z` units up, and its glow, an ellipse of `rx` by
  *  `ry` logical px centred on the lamp. The post is layer 3's, the glow

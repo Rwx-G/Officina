@@ -107,6 +107,26 @@ for (const { name, data: board } of WAITING) {
     }
   });
 
+  test(`no plaque covers a waiting figure's head: ${name}`, async ({ page }) => {
+    await page.setViewportSize(VIEWPORTS[0]!);
+    await openScene(page, board);
+    await hitTestPaint(page);
+    const covered = await page.getByTestId("scene").evaluate((root) => {
+      const out: string[] = [];
+      for (const badge of Array.from(root.querySelectorAll("[data-ticket-of]"))) {
+        if (badge.childElementCount === 0) continue;
+        const key = badge.getAttribute("data-ticket-of")!;
+        const body = Array.from(root.querySelectorAll("[data-figure]")).find((f) => f.getAttribute("data-figure") === key)!;
+        const r = body.querySelector('[data-part="rig"]')!.getBoundingClientRect();
+        // Two px inside the cap's top, at the head's centre.
+        const hit = document.elementFromPoint(r.left + r.width / 2, r.top + 2);
+        if (hit?.closest('[data-layer="overlay"]')) out.push(key);
+      }
+      return out;
+    });
+    expect(covered).toEqual([]);
+  });
+
   test(`the register counts everyone waiting at a fixed size and covers nothing: ${name}`, async ({ page }) => {
     const layout = layoutScene({ board }, emptyMemory(board.floor));
     const waiting = layout.employees.filter((e) => e.zone === "decision" || e.zone === "alert");
