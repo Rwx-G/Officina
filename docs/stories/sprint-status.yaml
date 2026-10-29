@@ -154,7 +154,8 @@ stories:
   - {id: "5.17", file: story-5.17-proposals-and-restart.md, slice: C, status: review}
   # 5.18: ACs 2 to 9 and 11 done; AC 1 and AC 10's baselines are the owner's (workflow_dispatch run, comparison, commit), and the entry waits on 5.16 AC 10 (D-841); D-830, D-832 and D-833 to confirm.
   - {id: "5.18", file: story-5.18-orchestrator-in-the-decision-office.md, slice: C, status: in-progress}
-  - {id: "5.19", file: story-5.19-docs-doctor-use-and-qa.md, slice: C, status: approved}
+  # 5.19: ACs 1 to 3, 8 and the report of 9 done (docs/qa/epic-5-report.md, gate open); AC 4's reader built, ACs 4 to 7 wait on the owner's real use and gate halves; D-687 and D-797 to confirm.
+  - {id: "5.19", file: story-5.19-docs-doctor-use-and-qa.md, slice: C, status: in-progress}
   # 5.20 and 5.21 merge before 5.19.
   - {id: "5.20", file: story-5.20-permission-modes-in-doctor.md, slice: B, status: review}
   # 5.21: done; D-860 and D-865 to confirm (Your turn read as live idle in Done; the panel's fixed proposal slot).
