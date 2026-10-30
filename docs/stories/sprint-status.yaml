@@ -165,6 +165,9 @@ stories:
   - {id: "5.22", file: story-5.22-permission-router-core-and-hook.md, slice: D, status: review}
   # 5.23: done ahead of 5.19 (D-900); D-910 to confirm (the file says "in the last 24 h", not "today").
   - {id: "5.23", file: story-5.23-auto-mode-denials.md, slice: D, status: review}
+  # Follow-up after v0.5 (gate 4's owner half, the owner's decision D-980).
+  # 5.24: done; D-980's interpretation, D-982, D-983, D-986 and D-987 to confirm; the owner's check of the control in the installed window is open.
+  - {id: "5.24", file: story-5.24-work-order-permission-mode.md, slice: D, status: in-progress}
 ---
 epic: 6
 version: v0.6

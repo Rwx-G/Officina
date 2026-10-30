@@ -508,9 +508,12 @@ Story 5.1 AC 5, AD-96 row 4, D-126, D-127, D-573.
   supervisor's environment" holds. D-128's environment rule cannot reach
   a work order while a supervisor runs; story 5.7 records it and the
   README states it.
-- **Owner half: pending.** From the repository root, in a console of the
-  owner's own: `cargo build -p officina-host --features window-authority
-  --example gates_v05`, then `target\debug\examples\gates_v05.exe gate4`.
+- **Owner half: run 2026-10-30, recorded in E88**: the free project
+  passed, the project whose own settings set `acceptEdits` stopped at a
+  permission prompt. The procedure it followed: from the repository root,
+  in a console of the owner's own: `cargo build -p officina-host --features
+  window-authority --example gates_v05`, then
+  `target\debug\examples\gates_v05.exe gate4`.
   It asks for one free and one guarded project, starts the exact
   `WorkOrder` vector in each (the floor's `CLAUDE_CONFIG_DIR`,
   `NoDefaultCurrentDirectoryInExePath=1`, agent view on, `OFFICINA_*`
@@ -1198,6 +1201,44 @@ stream-json --verbose --no-session-persistence [--settings <case>] --
   `target/gates-v05/report-gate8.md`.
 - Cost: six print-mode Haiku runs, USD 0.020 in all (each run's
   `total_cost_usd`).
+
+## E88. Work orders in a project's own permission mode (v0.5 gate 4, owner half)
+
+Story 5.24, D-980 to D-987; the owner half of E22. **Verified** by the
+owner on 2026-10-30 with `gates_v05 gate4`, Claude Code 2.1.314, the
+exact `WorkOrder` vector of AD-79 (no `--permission-mode`), each project a
+trusted git repository of his. Workstation paths, probe names and session
+ids are left out.
+
+| Project | Its own settings | `claude --bg` | `claude agents --json` over 60 s | Probe file | Footer in `claude logs` |
+|---|---|---|---|---|---|
+| a free project | none (the owner's user default) | exit 0 in 1.4 s, stderr "Starting background service…" | `busy`, `working`, then `idle`, `done` at about 20 s | written | `bypass permissions on` |
+| a guarded project | `acceptEdits` | exit 0 in 0.8 s, stderr empty | `busy`, `working`, then from 15 s `waiting`, `blocked`, `waitingFor: "permission prompt"` to the end | not written | `accept edits on` |
+
+- **The project's own mode wins.** With no `--permission-mode`, a
+  background session takes its project settings' `defaultMode`, else the
+  author's: the second project's work order stopped at its first Bash
+  call. AD-96 row 4 passed in the first project and failed in the
+  second. Both probe sessions were stopped and removed by the owner.
+- **The invoker's environment reached the session that started the
+  service.** In the first run, whose `claude --bg` started the background
+  service (its stderr says so), the probe's Bash listed
+  `GATES_V05_INVOKER_MARK`, a name set on that invocation only: E22's
+  branch seen from the other side, since a supervisor started by an
+  invocation keeps that invocation's environment. In the second run the
+  service was already running and the probe wrote no file, so which
+  environment that session got is not known from this run. Besides the
+  invoker's names, the Bash listed the session names of E84 and E22
+  (`CLAUDECODE`, `CLAUDE_CODE_SESSION_ID`, `CLAUDE_JOB_DIR` and the like).
+- **Inferred, not verified**: the background service is per configuration
+  directory, so a supervisor started with the floor's `CLAUDE_CONFIG_DIR`
+  serves only sessions of that directory. Not tested here.
+- **Outcome** (D-127 as D-980 amends it): work orders keep the project's
+  own mode by default, a blocked one waits in Needs you, and the author
+  may switch a project's work orders to Officina's default, auto mode
+  (D-982 to D-986). The environment that a service a work order started
+  hands to the author's own later background sessions is accepted and
+  stated in the README (D-987).
 
 ## E7. Configuration directory
 
