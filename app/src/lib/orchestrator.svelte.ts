@@ -14,6 +14,7 @@ import type { StartAnswer } from "./generated/StartAnswer";
 import type { SubjectChoice } from "./generated/SubjectChoice";
 import type { TemplateOption } from "./generated/TemplateOption";
 import type { WorkOrderCard } from "./generated/WorkOrderCard";
+import type { WorkOrderPermission } from "./generated/WorkOrderPermission";
 import * as ipc from "./ipc";
 
 /** What the composer holds: a template, a project and each parameter's
@@ -194,6 +195,16 @@ export class OrchestratorStore {
     } finally {
       this.launching = false;
     }
+  }
+
+  /** Switches the card's project to `permission` for its work orders
+   *  (story 5.24, D-985): the backend records the choice and answers the
+   *  card issued again with it. The caller sends `officina` on a pointer
+   *  click only (D-986). */
+  async setPermission(permission: WorkOrderPermission): Promise<void> {
+    const card = this.editable;
+    if (!card || card.permission === permission) return;
+    await this.ask(() => ipc.setWorkOrderPermission(card.id, permission), card);
   }
 
   /** Clears the card and its launch: the choices no longer match them. */

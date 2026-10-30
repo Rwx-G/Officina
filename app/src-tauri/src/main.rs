@@ -21,6 +21,7 @@ use officina_core::ipc::{IpcError, IpcErrorCode};
 use officina_core::meeting::{AnswerResult, Delivery, MeetingView};
 use officina_core::orders::card::{CardAnswer, CardChange, CardRequest, LaunchAnswer};
 use officina_core::orders::orchestrator::StartAnswer;
+use officina_core::orders::permission::WorkOrderPermission;
 use officina_core::orders::view::OrchestratorView;
 use officina_core::registry::confirm::{AuthorAction, ConfirmItem, ItemAnswer, SubjectOrigin};
 use officina_core::registry::types::{AuthorReason, Settlement};
@@ -429,6 +430,26 @@ async fn edit_card(
         .into_card()
 }
 
+/// Switches the work orders of card `card_id`'s project to `permission`
+/// (story 5.24, D-983, D-985) and answers the card issued again with it.
+/// The page sends Officina's default on a pointer click only (D-986).
+#[tauri::command]
+async fn set_work_order_permission(
+    state: State<'_, AppState>,
+    card_id: String,
+    permission: WorkOrderPermission,
+) -> Result<CardAnswer, IpcError> {
+    ask(
+        state,
+        AuthorCommand::SetWorkOrderPermission {
+            card_id,
+            permission,
+        },
+    )
+    .await?
+    .into_card()
+}
+
 /// Issues a work order card from the pending proposal `proposal_id`
 /// (AD-91, D-152): its stored values through the same validation as the
 /// author's, under a "proposal" label; or why it opens none.
@@ -751,6 +772,7 @@ fn main() {
             list_discarded,
             issue_card,
             edit_card,
+            set_work_order_permission,
             issue_card_from_proposal,
             dismiss_proposal,
             launch_work_order,

@@ -23,6 +23,7 @@ import type { SubjectStatus } from "./generated/SubjectStatus";
 import type { TargetView } from "./generated/TargetView";
 import type { TemplateChange } from "./generated/TemplateChange";
 import type { TemplateUnavailable } from "./generated/TemplateUnavailable";
+import type { WorkOrderPermission } from "./generated/WorkOrderPermission";
 import type { WorkOrderRefusal } from "./generated/WorkOrderRefusal";
 import type { WorkOrderSource } from "./generated/WorkOrderSource";
 import { AUTHOR_REFUSAL_TEXT } from "./registry-text";
@@ -214,11 +215,33 @@ export const LAUNCH_REFUSAL_TEXT: Record<LaunchRefusal, string> = {
   consumed: "This card was already launched: a card launches once.",
   prompt_hash_mismatch: "The prompt shown is not the one that would run: compose the order again.",
   catalogue_changed: "The catalogue changed since this card was issued: review it in the Relay view, then compose again.",
+  permission_changed: "This project's work order permission changed since this card was issued: compose the order again.",
   template_not_approved: "The approved catalogue no longer holds this template.",
   claude_not_executable: "No native claude executable was found: see officina doctor.",
   project_folder_missing: "The project's folder is not a folder any more.",
   subject_closed: "The subject this card files under was archived or merged since: choose another.",
   name_taken: "The registry already holds this session's name: compose the order again.",
+};
+
+/** Where a work order's permission mode comes from (story 5.24, D-980). */
+export const PERMISSION_TEXT: Record<WorkOrderPermission, string> = {
+  project: "the project's own mode",
+  officina: "Officina's default, auto mode",
+};
+
+/** The tooltip under the permission line: what the mode is now and what
+ *  the switch would change (D-982, D-986). */
+export const PERMISSION_TIP_TEXT: Record<WorkOrderPermission, string> = {
+  project:
+    "This project's work orders start in the permission mode its own settings set, else your default, as a session you start there would; one that stops at a permission prompt waits in Needs you. Officina's default runs them in Claude Code's auto mode, whose classifier decides each tool call; never bypass.",
+  officina:
+    "This project's work orders start in Claude Code's auto mode, Officina's default, whatever the project's settings say: its classifier decides each tool call. Going back gives them the project's own mode again.",
+};
+
+/** The switch's label, by the permission it moves the project to. */
+export const PERMISSION_SWITCH_TEXT: Record<WorkOrderPermission, string> = {
+  officina: "Use Officina's default for this project",
+  project: "Back to the project's mode",
 };
 
 const TEMPLATE_UNAVAILABLE_TEXT: Record<TemplateUnavailable, string> = {

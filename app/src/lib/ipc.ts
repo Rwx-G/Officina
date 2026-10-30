@@ -25,6 +25,7 @@ import type { StartAnswer } from "./generated/StartAnswer";
 import type { Settlement } from "./generated/Settlement";
 import type { SubjectOrigin } from "./generated/SubjectOrigin";
 import type { SubjectView } from "./generated/SubjectView";
+import type { WorkOrderPermission } from "./generated/WorkOrderPermission";
 
 export const BOARD_EVENT = "board://updated";
 
@@ -191,6 +192,13 @@ export function issueCard(request: CardRequest): Promise<CardAnswer> {
  *  is superseded. */
 export function editCard(cardId: string, change: CardChange): Promise<CardAnswer> {
   return invoke<CardAnswer>("edit_card", { cardId, change });
+}
+
+/** Switches the work orders of card `cardId`'s project to `permission`
+ *  (story 5.24, D-985): the card issued again with it, or why not. The
+ *  caller sends `officina` on a pointer click only (D-986). */
+export function setWorkOrderPermission(cardId: string, permission: WorkOrderPermission): Promise<CardAnswer> {
+  return invoke<CardAnswer>("set_work_order_permission", { cardId, permission });
 }
 
 /** Issues a card from the pending work order proposal `proposalId`

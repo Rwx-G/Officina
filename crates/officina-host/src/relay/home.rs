@@ -6,6 +6,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use officina_core::floor::FloorError;
+use officina_core::orders::permission::WorkOrderPermissions;
 use officina_core::relay::approvals::OUTPUTS_DIR;
 use officina_core::relay::catalogue::{
     self, ApprovedCatalogue, KnownProjects, RelayFloor, parse_known_projects,
@@ -62,6 +63,31 @@ impl KnownProjectsState {
         match self {
             KnownProjectsState::Valid(known) => Some(known),
             KnownProjectsState::Missing | KnownProjectsState::Unreadable(_) => None,
+        }
+    }
+}
+
+/// What `relay/work-order-permissions.json` holds (story 5.24, D-983).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WorkOrderPermissionsState {
+    /// Never written: every project's work orders take its own mode.
+    Missing,
+    /// It exists and cannot be read, or is corrupt or of another schema:
+    /// every project's work orders take its own mode, and doctor says why.
+    Unreadable(String),
+    Valid(WorkOrderPermissions),
+}
+
+impl WorkOrderPermissionsState {
+    /// The record work orders follow: an unreadable one counts as none, so
+    /// a broken file never gives a work order a mode the author did not
+    /// choose for it (D-983).
+    pub fn effective(&self) -> WorkOrderPermissions {
+        match self {
+            WorkOrderPermissionsState::Valid(record) => record.clone(),
+            WorkOrderPermissionsState::Missing | WorkOrderPermissionsState::Unreadable(_) => {
+                WorkOrderPermissions::default()
+            }
         }
     }
 }
@@ -157,6 +183,26 @@ impl RelayHome {
     /// (D-173).
     pub fn decisions_file(&self) -> PathBuf {
         self.relay_dir().join(DECISION_RECORD_FILE)
+    }
+
+    /// `relay/work-order-permissions.json`: the projects whose work orders
+    /// take Officina's default mode (D-983), written by the window's
+    /// authority only.
+    pub fn work_order_permissions_file(&self) -> PathBuf {
+        self.relay_dir().join("work-order-permissions.json")
+    }
+
+    /// Reads `relay/work-order-permissions.json` into one of its three
+    /// states.
+    pub fn read_work_order_permissions(&self) -> WorkOrderPermissionsState {
+        match fs::read_to_string(self.work_order_permissions_file()) {
+            Ok(text) => match WorkOrderPermissions::parse(&text) {
+                Ok(record) => WorkOrderPermissionsState::Valid(record),
+                Err(why) => WorkOrderPermissionsState::Unreadable(why),
+            },
+            Err(e) if e.kind() == io::ErrorKind::NotFound => WorkOrderPermissionsState::Missing,
+            Err(e) => WorkOrderPermissionsState::Unreadable(e.to_string()),
+        }
     }
 
     /// Reads `relay/decisions.json` into one of its three states.

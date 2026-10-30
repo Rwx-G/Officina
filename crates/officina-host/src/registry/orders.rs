@@ -35,6 +35,9 @@ pub struct LaunchRecord<'a> {
     pub subject: &'a SubjectChoice,
     /// The proposal the card came from, for a `proposal` source.
     pub proposal_id: Option<&'a str>,
+    /// Where the card's permission mode came from (D-980), so the row's
+    /// argument vector is the one that ran.
+    pub permission: officina_core::orders::permission::WorkOrderPermission,
 }
 
 /// The registry already holds the order's name, or its template's `seq`:
@@ -214,7 +217,9 @@ impl Writer {
         now_ms: i64,
     ) -> Result<Result<(), NameTaken>, RegistryError> {
         let order = launch.order;
-        let argv = spawn::work_order(order, launch.seq, None).args().to_vec();
+        let argv = spawn::work_order(order, launch.seq, None, launch.permission)
+            .args()
+            .to_vec();
         let (subject_id, new_subject_name) = match launch.subject {
             SubjectChoice::Existing(id) => (Some(*id), None),
             SubjectChoice::New(name) => (None, Some(name.as_str())),

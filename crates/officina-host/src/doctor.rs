@@ -911,6 +911,16 @@ pub fn run_with(collector: &Collector, exe: &Path, permissions: bool) -> Vec<Che
         orchestrator.push(permissions_pointer());
     }
     checks.extend(write_paste_files(&doctor_dir, &files));
+    let floor_folders =
+        crate::relay::home::load_relay_floor(&relay.relay_floor(&relay.read_approved()))
+            .ok()
+            .map(|floor| {
+                officina_core::relay::catalogue::project_dirs(&floor.floor, &floor.floor_path)
+            });
+    orchestrator.push(check_work_order_permissions(
+        &relay.read_work_order_permissions(),
+        floor_folders.as_ref(),
+    ));
     checks.push(check_officina_home(&paths.officina_home));
     orchestrator.extend(check_orchestrator(
         &paths.officina_home,
@@ -977,6 +987,7 @@ pub const ORCHESTRATOR_SECTION: &[&str] = &[
     "permission mode switch",
     "permissions block",
     "autoMode block",
+    "work order permissions",
     "orchestrator workdir",
     "officina.exe",
     "orchestrator folder",
@@ -1718,6 +1729,72 @@ fn check_quota(
         paste,
     };
     (line, files)
+}
+
+/// Which permission mode each project's work orders start in (story 5.24,
+/// D-983): the projects the window's record switched to Officina's
+/// default, each with its folder, and those whose choice no longer
+/// applies because the relay floor, `folders` (its project folders when it
+/// reads), names the project elsewhere or not at all; a record that cannot
+/// be read warns, every project then taking its own mode. Read-only.
+pub fn check_work_order_permissions(
+    state: &crate::relay::home::WorkOrderPermissionsState,
+    folders: Option<&BTreeMap<String, String>>,
+) -> Check {
+    use crate::relay::home::WorkOrderPermissionsState;
+    use officina_core::orders::permission::OFFICINA_WORK_ORDER_MODE;
+    const TITLE: &str = "work order permissions";
+    let record = match state {
+        WorkOrderPermissionsState::Unreadable(why) => {
+            return check(
+                Level::Warn,
+                TITLE,
+                format!(
+                    "the window's record cannot be read ({why}): every project's work orders take the project's own permission mode until you choose again on a work order card"
+                ),
+            );
+        }
+        WorkOrderPermissionsState::Missing => return check(Level::Ok, TITLE, own_mode_only()),
+        WorkOrderPermissionsState::Valid(record) if record.officina_default.is_empty() => {
+            return check(Level::Ok, TITLE, own_mode_only());
+        }
+        WorkOrderPermissionsState::Valid(record) => record,
+    };
+    let (applied, stale): (Vec<_>, Vec<_>) =
+        record
+            .officina_default
+            .iter()
+            .partition(|(project, chosen)| {
+                folders.is_none_or(|folders| folders.get(*project) == Some(&chosen.folder))
+            });
+    let named = |entries: &[(&String, &officina_core::orders::permission::OfficinaDefault)]| {
+        entries
+            .iter()
+            .map(|(project, chosen)| format!("{project} ({})", chosen.folder))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let mut detail = if applied.is_empty() {
+        own_mode_only()
+    } else {
+        format!(
+            "the work orders of {} start in Officina's default, {OFFICINA_WORK_ORDER_MODE} mode, whatever their project's settings say; every other project's take its own mode. \"Back to the project's mode\" on a work order card undoes it",
+            named(&applied)
+        )
+    };
+    if !stale.is_empty() {
+        detail.push_str(&format!(
+            "; no longer applied, since the relay floor names the project elsewhere or not at all: {}",
+            named(&stale)
+        ));
+    }
+    check(Level::Ok, TITLE, detail)
+}
+
+/// The work order permissions line when no project takes Officina's
+/// default.
+fn own_mode_only() -> String {
+    "every project's work orders take the project's own permission mode, as a session you start there would; a work order card's permission line switches a project to Officina's default, auto mode".to_owned()
 }
 
 /// The Officina home exists and takes a write.
@@ -2718,6 +2795,7 @@ mod tests {
                 ("floor", Level::Ok, false),
                 // The Orchestrator section, last (story 5.19 AC 1).
                 ("permissions block", Level::Ok, false),
+                ("work order permissions", Level::Ok, false),
                 ("orchestrator workdir", Level::Ok, false),
                 ("officina.exe", Level::Fail, false),
                 ("orchestrator proposals", Level::Ok, false),
@@ -4283,6 +4361,67 @@ mod tests {
         .unwrap();
         let line = check_quota(&collector, &user, &new, now_ms(), Path::new("doctor")).0;
         assert_eq!((line.level, line.paste), (Level::Ok, None));
+    }
+
+    /// Story 5.24 (D-983): doctor names each project switched to Officina's
+    /// default with its folder, says when none is, sets aside a choice the
+    /// relay floor no longer matches, and warns on a record it cannot read.
+    #[test]
+    fn the_work_order_permissions_line_names_each_switched_project() {
+        use crate::relay::home::WorkOrderPermissionsState;
+        use officina_core::orders::permission::{WorkOrderPermission, WorkOrderPermissions};
+        const BACKEND: &str = "C:/path/to/work/Backend";
+        let folders = BTreeMap::from([
+            ("backend".to_owned(), BACKEND.to_owned()),
+            ("lab".to_owned(), "C:/path/to/work/Lab".to_owned()),
+        ]);
+        for state in [
+            WorkOrderPermissionsState::Missing,
+            WorkOrderPermissionsState::Valid(WorkOrderPermissions::default()),
+        ] {
+            let line = check_work_order_permissions(&state, Some(&folders));
+            assert_eq!(line.level, Level::Ok);
+            assert!(
+                line.detail
+                    .starts_with("every project's work orders take the project's own"),
+                "{}",
+                line.detail
+            );
+        }
+        let record = WorkOrderPermissions::default()
+            .with("backend", BACKEND, WorkOrderPermission::Officina, 1)
+            .with(
+                "lab",
+                "C:/path/to/old/Lab",
+                WorkOrderPermission::Officina,
+                1,
+            )
+            .with("gone", "C:/path/to/Gone", WorkOrderPermission::Officina, 1);
+        let line =
+            check_work_order_permissions(&WorkOrderPermissionsState::Valid(record), Some(&folders));
+        assert_eq!(line.level, Level::Ok);
+        let (applied, stale) = line.detail.split_once("no longer applied").unwrap();
+        assert!(
+            applied.contains(&format!("backend ({BACKEND})")),
+            "{}",
+            line.detail
+        );
+        assert!(applied.contains("auto mode"), "{}", line.detail);
+        assert!(!applied.contains("lab ("), "{}", line.detail);
+        assert!(
+            stale.contains("lab (C:/path/to/old/Lab)") && stale.contains("gone (C:/path/to/Gone)"),
+            "{stale}"
+        );
+        let broken = check_work_order_permissions(
+            &WorkOrderPermissionsState::Unreadable("expected value".into()),
+            Some(&folders),
+        );
+        assert_eq!(broken.level, Level::Warn);
+        assert!(
+            broken.detail.contains("expected value"),
+            "{}",
+            broken.detail
+        );
     }
 
     /// Every file under `dir` with its bytes, sorted.

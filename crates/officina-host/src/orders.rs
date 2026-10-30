@@ -25,6 +25,7 @@ use officina_core::orders::card::{
     LaunchAnswer, LaunchFacts, LaunchRefusal, WORKSPACE_NOT_TRUSTED, card_values, check_launch,
     reserved_seq,
 };
+use officina_core::orders::permission::WorkOrderPermission;
 use officina_core::orders::work_order::{SubjectChoice, cut_error};
 use officina_core::registry::types::{
     LaunchOutcome, SubjectRecord, SubjectStatus, WorkOrderSource,
@@ -165,12 +166,14 @@ pub(crate) fn issue(
     let seq = store.reserve_seq(&request.template, highest);
     let id = store.new_id(now_ms);
     let config = config_dir(collector);
+    let permissions = collector.relay().read_work_order_permissions().effective();
     let inputs = CardInputs {
         approved: &approved,
         current: &current,
         subjects: &subjects,
         quota,
         config_dir: config.as_deref(),
+        permissions: &permissions,
         now_ms,
     };
     Ok(match card::issue(&id, seq, request, &inputs) {
@@ -217,12 +220,14 @@ pub(crate) fn issue_from_proposal(
     let seq = store.reserve_seq(&proposal.template, highest);
     let id = store.new_id(now_ms);
     let config = config_dir(collector);
+    let permissions = collector.relay().read_work_order_permissions().effective();
     let inputs = CardInputs {
         approved: &approved,
         current: &current,
         subjects: &subjects,
         quota,
         config_dir: config.as_deref(),
+        permissions: &permissions,
         now_ms,
     };
     Ok(
@@ -263,15 +268,83 @@ pub(crate) fn edit(
     let (subjects, _) = registry.card_reads(&previous.card().template)?;
     let id = store.new_id(now_ms);
     let config = config_dir(collector);
+    let permissions = collector.relay().read_work_order_permissions().effective();
     let inputs = CardInputs {
         approved: &approved,
         current: &current,
         subjects: &subjects,
         quota,
         config_dir: config.as_deref(),
+        permissions: &permissions,
         now_ms,
     };
     Ok(match card::edit(&previous, change, &id, &inputs) {
+        Ok(issued) => {
+            let shown = issued.card().clone();
+            store.mark(card_id, CardState::Superseded);
+            store.insert(issued);
+            CardAnswer::Issued(Box::new(shown))
+        }
+        Err(refusal) => CardAnswer::Refused(refusal),
+    })
+}
+
+/// Switches the work orders of card `card_id`'s project to `permission`
+/// (story 5.24, D-983, D-985): the window's authority writes the choice
+/// for the project and its folder as the card names them, and journals
+/// it; then the card is issued again under its `seq`, so the card the
+/// author sees carries the mode that will run, and the old one is
+/// superseded. A card unknown or not open, a catalogue that issues no
+/// card, or one approved since the card was issued, writes nothing.
+/// Compiled with the window's authority only.
+pub(crate) fn set_permission(
+    store: &mut CardStore,
+    collector: &Collector,
+    registry: &mut WindowRegistry,
+    quota: Option<&QuotaView>,
+    card_id: &str,
+    permission: WorkOrderPermission,
+    now_ms: i64,
+) -> Result<CardAnswer, IpcError> {
+    let Some(previous) = store.get(card_id).cloned() else {
+        return Ok(CardAnswer::Refused(IssueRefusal::UnknownCard));
+    };
+    if previous.state() != CardState::Open {
+        return Ok(CardAnswer::Refused(IssueRefusal::CardNotOpen(
+            previous.state(),
+        )));
+    }
+    let (approved, current) = match catalogue(collector.relay()) {
+        Ok(found) => found,
+        Err(unavailable) => return Ok(CardAnswer::Refused(IssueRefusal::Template(unavailable))),
+    };
+    // The folder recorded is the one the approved catalogue resolves now.
+    if previous.card().catalogue_hash != approved.hash {
+        return Ok(CardAnswer::Refused(IssueRefusal::Template(
+            TemplateUnavailable::CatalogueChanged,
+        )));
+    }
+    let permissions = crate::relay::authority::set_work_order_permission(
+        collector.relay(),
+        &previous.card().project,
+        previous.order().project_folder(),
+        permission,
+        now_ms,
+    )
+    .map_err(|e| e.ipc())?;
+    let (subjects, _) = registry.card_reads(&previous.card().template)?;
+    let id = store.new_id(now_ms);
+    let config = config_dir(collector);
+    let inputs = CardInputs {
+        approved: &approved,
+        current: &current,
+        subjects: &subjects,
+        quota,
+        config_dir: config.as_deref(),
+        permissions: &permissions,
+        now_ms,
+    };
+    Ok(match card::reissue(&previous, &id, &inputs) {
         Ok(issued) => {
             let shown = issued.card().clone();
             store.mark(card_id, CardState::Superseded);
@@ -323,6 +396,10 @@ pub(crate) fn grant(
     let approved = state.approved().filter(|a| confirmed(relay, &a.hash));
     let current = load_relay_floor(&relay.relay_floor(&state)).ok();
     let claude = collector.resolved_claude().filter(|c| c.is_native());
+    let permission = relay
+        .read_work_order_permissions()
+        .effective()
+        .of(&shown.project, issued.order().project_folder());
     // The registry's facts are the last two checks: they are read only
     // once every earlier check passed, so a registry that cannot be read
     // never hides an earlier refusal.
@@ -331,6 +408,7 @@ pub(crate) fn grant(
         clicked_sha256,
         approved_hash: approved.map(|a| a.hash.as_str()),
         current_hash: current.as_ref().map(|c| c.hash.as_str()),
+        permission,
         template_approved: approved
             .is_some_and(|a| a.canonical.templates.contains_key(&shown.template)),
         claude_native: claude.is_some(),
@@ -363,6 +441,7 @@ pub(crate) fn grant(
         },
         subject: &shown.subject,
         proposal_id,
+        permission: shown.permission,
     };
     if registry.insert_work_order(&record, now_ms)?.is_err() {
         return Ok(LaunchGrant::Refused(LaunchRefusal::NameTaken));
@@ -571,6 +650,7 @@ prompt = \"Draft the notes.\"
                 subjects: &[],
                 quota: None,
                 config_dir: None,
+                permissions: &officina_core::orders::permission::WorkOrderPermissions::default(),
                 now_ms: 0,
             },
         )

@@ -465,6 +465,7 @@ fn launched(
                 source: WorkOrderSource::Composer,
                 subject: &SubjectChoice::Existing(1),
                 proposal_id: None,
+                permission: officina_core::orders::permission::WorkOrderPermission::Project,
             },
             at,
         )

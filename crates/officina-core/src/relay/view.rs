@@ -803,6 +803,7 @@ fn recent(lines: &[JournalLine], now_ms: i64, rows: &[AutoRow]) -> Vec<RecentEnt
                 | JournalEntry::AutoEscalated(_)
                 | JournalEntry::AutoReview(_)
                 | JournalEntry::AutoApprovalSet(_)
+                | JournalEntry::WorkOrderPermissionSet(_)
                 | JournalEntry::OrchestratorStarted(_)
                 | JournalEntry::MeetingAnswer(_) => return None,
             };
@@ -1369,6 +1370,7 @@ mod tests {
                 | JournalKind::AutoEscalated
                 | JournalKind::AutoReview
                 | JournalKind::AutoApprovalSet
+                | JournalKind::WorkOrderPermissionSet
                 | JournalKind::OrchestratorStarted
                 | JournalKind::MeetingAnswer => continue,
             };

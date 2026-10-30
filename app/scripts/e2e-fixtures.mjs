@@ -1536,6 +1536,9 @@ const orchestratorScenarios = {
         name: "card-bump-new-subject",
         edit: { of: "card-bump-minor", change: { kind: "subject", subject: { kind: "new", value: "<b>serde</b> upgrades" } } },
       },
+      // Story 5.24: the same card once its project's work orders take
+      // Officina's default (D-985).
+      { name: "card-bump-officina", permission: { of: "card-bump-new-subject", to: "officina" } },
       // Story 5.17: the card a pending work order proposal opens, its
       // suggested new subject's name never the default (D-152).
       { name: "card-proposal", proposal: "p-order-suggested" },
@@ -1670,6 +1673,7 @@ for (const [name, scenario] of Object.entries(orchestratorScenarios)) {
     const edited = cards["card-bump-minor"];
     const renamed = cards["card-bump-new-subject"];
     const fromProposal = cards["card-proposal"];
+    const switched = cards["card-bump-officina"];
     const cardChecks = [
       [Object.keys(cards).length === scenario.cards.length, "one card per step"],
       [first.argv.length > 1 && first.prompt.length > 0, "a vector and a prompt"],
@@ -1677,6 +1681,12 @@ for (const [name, scenario] of Object.entries(orchestratorScenarios)) {
       [first.subject.kind === "existing" && first.subject_options.length > 0, "the project's open subject as the default"],
       [edited.seq === first.seq && edited.id !== first.id && edited.prompt !== first.prompt, "a value edit under the same seq"],
       [renamed.subject.kind === "new" && renamed.prompt === edited.prompt, "a subject edit that keeps the prompt"],
+      [first.permission === "project" && !first.argv.includes("--permission-mode"), "the project's own mode by default"],
+      [
+        switched.permission === "officina" && switched.seq === renamed.seq && switched.prompt === renamed.prompt &&
+          switched.argv.join(" ").includes("--permission-mode auto --"),
+        "Officina's default issued again under the same seq",
+      ],
       [fromProposal.proposal?.rationale === hostile, "a proposal card with its rationale"],
       [fromProposal.proposal?.suggested_subject === hostile, "the suggested subject's name"],
       [fromProposal.subject.kind === "new" && fromProposal.subject.value === fromProposal.template, "a new subject named after the template, never the suggestion"],

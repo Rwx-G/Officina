@@ -145,6 +145,7 @@ pub enum JournalEntry {
     PromptRouted(PromptRouted),
     PromptDecided(PromptDecided),
     AutoModeDenied(AutoModeDenied),
+    WorkOrderPermissionSet(WorkOrderPermissionSet),
 }
 
 closed_enum! {
@@ -173,6 +174,7 @@ closed_enum! {
         PromptRouted,
         PromptDecided,
         AutoModeDenied,
+        WorkOrderPermissionSet,
     }
 }
 
@@ -200,6 +202,7 @@ impl JournalEntry {
             JournalEntry::PromptRouted(_) => JournalKind::PromptRouted,
             JournalEntry::PromptDecided(_) => JournalKind::PromptDecided,
             JournalEntry::AutoModeDenied(_) => JournalKind::AutoModeDenied,
+            JournalEntry::WorkOrderPermissionSet(_) => JournalKind::WorkOrderPermissionSet,
         }
     }
 }
@@ -563,6 +566,19 @@ pub struct WorkOrderLaunched {
     pub exit_code: Option<i64>,
 }
 
+/// The author switched a project's work orders to Officina's default
+/// permission mode, or back to the project's own (story 5.24, D-983): the
+/// project, the folder the choice holds for, where the mode now comes from
+/// and the `--permission-mode` value its work orders carry, if any.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkOrderPermissionSet {
+    pub project: String,
+    pub folder: String,
+    pub permission: crate::orders::permission::WorkOrderPermission,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<String>,
+}
+
 /// A Start of the orchestrator (AD-89, D-144): how it ended, the pid it
 /// keeps when it spawned, the arguments it ran with, and why when it was
 /// refused or failed. The registry's `orchestrator_start` row holds the
@@ -916,6 +932,14 @@ mod tests {
                 tool_name: Some("Bash".into()),
                 reason: "[Irreversible Local Destruction]".into(),
             }),
+            JournalKind::WorkOrderPermissionSet => {
+                JournalEntry::WorkOrderPermissionSet(WorkOrderPermissionSet {
+                    project: "backend".into(),
+                    folder: "C:/path/to/work/Backend".into(),
+                    permission: crate::orders::permission::WorkOrderPermission::Officina,
+                    mode: Some("auto".into()),
+                })
+            }
             JournalKind::PromptDecided => JournalEntry::PromptDecided(PromptDecided {
                 session_id: "0f1e2d3c-4b5a-4978-8796-a5b4c3d2e1f0".into(),
                 tool_name: None,
@@ -1147,6 +1171,30 @@ mod tests {
             (read.source, read.proposal_id),
             (AnswerSource::Author, None)
         );
+    }
+
+    /// Story 5.24 (D-983): `work_order_permission_set` reads back for
+    /// either permission, its mode left out when it has none.
+    #[test]
+    fn work_order_permission_set_round_trips() {
+        use crate::orders::permission::WorkOrderPermission;
+        for permission in WorkOrderPermission::ALL.iter().copied() {
+            let entry = JournalEntry::WorkOrderPermissionSet(WorkOrderPermissionSet {
+                project: "backend".into(),
+                folder: "C:/path/to/work/Backend".into(),
+                permission,
+                mode: permission.mode().map(str::to_owned),
+            });
+            let line = JournalLine::new(4, entry.clone()).to_line();
+            let value: serde_json::Value = serde_json::from_str(&line).unwrap();
+            assert_eq!(value["kind"], "work_order_permission_set");
+            assert_eq!(value["permission"], permission.code());
+            assert_eq!(value.get("mode").is_some(), permission.mode().is_some());
+            assert_eq!(
+                parse_line(line.trim_end()),
+                ParsedLine::Line(JournalLine::new(4, entry))
+            );
+        }
     }
 
     /// Story 5.14 AC 2 (AD-88): `auto_approval_set` reads back with its

@@ -35,6 +35,7 @@
     "allow-list-discarded",
     "allow-issue-card",
     "allow-edit-card",
+    "allow-set-work-order-permission",
     "allow-issue-card-from-proposal",
     "allow-dismiss-proposal",
     "allow-launch-work-order",

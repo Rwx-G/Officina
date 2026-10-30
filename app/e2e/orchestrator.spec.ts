@@ -6,6 +6,8 @@
 // Story 5.9: the composer and the work order card, on cards core issued
 // from the day's home through the same example (kind `card`); the mock
 // answers issue, edit and launch as the test sets them.
+// Story 5.24: the card's permission line and its tooltip, on the card core
+// issued again once the project takes Officina's default.
 import { expect, test, type Page } from "@playwright/test";
 import { fixtureOf } from "./fixture-index";
 import {
@@ -33,7 +35,7 @@ function orchestrator(name: "orchestrator-empty" | "orchestrator-day" | "orchest
   return fixtureOf<OrchestratorView>("orchestrator", name);
 }
 
-function card(name: "card-bump" | "card-bump-minor" | "card-bump-new-subject"): WorkOrderCard {
+function card(name: "card-bump" | "card-bump-minor" | "card-bump-new-subject" | "card-bump-officina"): WorkOrderCard {
   return fixtureOf<WorkOrderCard>("card", name);
 }
 
@@ -479,6 +481,108 @@ test("a keyboard press never launches", async ({ page }) => {
   await expect(launch).toBeEnabled();
   await expect(page.getByTestId("card-outcome")).toHaveCount(0);
   expect(await callsOf(page, "launch_work_order")).toEqual([]);
+});
+
+// Story 5.24 (D-980, D-986): the permission line says where the mode
+// comes from; its tooltip shows on hover and on keyboard focus, laid over
+// the card so nothing moves; Officina's default is chosen on a pointer
+// click only, going back takes the keyboard too.
+const OPACITY = (locator: import("@playwright/test").Locator) => locator.evaluate((e) => getComputedStyle(e).opacity);
+/** The label a stable-label control shows, not the ones it keeps hidden
+ *  for its size. */
+const SHOWN = (locator: import("@playwright/test").Locator) => locator.locator("[data-stable-label] > :not([aria-hidden])");
+
+for (const theme of ["light", "dark"] as const) {
+  test(`the permission tooltip shows on hover and moves nothing (${theme})`, async ({ page }) => {
+    await page.emulateMedia({ colorScheme: theme });
+    const issued = card("card-bump");
+    await composeCard(page, issued);
+    await expect(page.getByTestId("theme-switch")).toHaveAttribute("data-theme-resolved", theme);
+    const line = page.getByTestId("card-permission");
+    await expect(line).toHaveAttribute("data-permission", "project");
+    await expect(SHOWN(page.getByTestId("card-permission-text"))).toHaveText("the project's own mode");
+    const tip = page.getByTestId("card-permission-tip");
+    expect(await OPACITY(tip)).toBe("0");
+    // In the page's own coordinates: hovering may scroll the line into view.
+    const boxes = () =>
+      Promise.all(
+        ["work-order-card", "card-subject", "launch"].map((id) =>
+          page.getByTestId(id).evaluate((e) => {
+            const r = e.getBoundingClientRect();
+            return { x: r.x + window.scrollX, y: r.y + window.scrollY, width: r.width, height: r.height };
+          }),
+        ),
+      );
+    const before = await boxes();
+    await page.getByTestId("card-permission-text").hover();
+    await expect.poll(() => OPACITY(tip)).toBe("1");
+    const button = page.getByTestId("card-permission-switch");
+    await expect(button).toHaveAccessibleName("Use Officina's default for this project");
+    await expect(SHOWN(page.getByTestId("card-permission-tip-text"))).toContainText("auto mode");
+    expect(await boxes()).toEqual(before);
+    const colours = await tip.evaluate((element) => {
+      const probe = document.createElement("span");
+      probe.style.color = "var(--color-attention)";
+      document.body.append(probe);
+      const attention = getComputedStyle(probe).color;
+      probe.remove();
+      const seen = [element, ...Array.from(element.querySelectorAll("*"))].flatMap((e) => {
+        const style = getComputedStyle(e);
+        return [style.color, style.backgroundColor, style.borderTopColor];
+      });
+      return { attention, seen, surface: getComputedStyle(element).backgroundColor, body: getComputedStyle(document.body).backgroundColor };
+    });
+    expect(colours.seen).not.toContain(colours.attention);
+    expect(colours.surface).not.toBe("rgba(0, 0, 0, 0)");
+    expect(await callsOf(page, "set_work_order_permission")).toEqual([]);
+  });
+}
+
+test("the permission switch is reached with Tab, which shows its tooltip, and no key widens", async ({ page }) => {
+  await composeCard(page, card("card-bump"));
+  const button = page.getByTestId("card-permission-switch");
+  await page.getByTestId("card-cwd").click();
+  let reached = false;
+  for (let i = 0; i < 40 && !reached; i += 1) {
+    await page.keyboard.press("Tab");
+    reached = await button.evaluate((e) => e === document.activeElement);
+  }
+  expect(reached, "Tab reaches the switch").toBe(true);
+  await expect.poll(() => OPACITY(page.getByTestId("card-permission-tip"))).toBe("1");
+  await page.keyboard.press("Enter");
+  await page.keyboard.press("Space");
+  await expect(page.getByTestId("card-permission")).toHaveAttribute("data-permission", "project");
+  expect(await callsOf(page, "set_work_order_permission")).toEqual([]);
+});
+
+test("a click switches the project to Officina's default; going back takes the keyboard", async ({ page }) => {
+  const issued = card("card-bump");
+  await composeCard(page, issued);
+  await page.getByTestId("card-permission-text").hover();
+  await page.getByTestId("card-permission-switch").click();
+  const line = page.getByTestId("card-permission");
+  await expect(line).toHaveAttribute("data-permission", "officina");
+  await expect(SHOWN(page.getByTestId("card-permission-text"))).toHaveText("Officina's default, auto mode");
+  const args = await page.getByTestId("card-arg").allTextContents();
+  const separator = args.indexOf("--");
+  expect(args.slice(separator - 2, separator)).toEqual(["--permission-mode", "auto"]);
+  expect(await callsOf(page, "set_work_order_permission")).toEqual([{ cardId: issued.id, permission: "officina" }]);
+  const back = page.getByTestId("card-permission-switch");
+  await expect(back).toHaveAccessibleName("Back to the project's mode");
+  await back.focus();
+  await page.keyboard.press("Enter");
+  await expect(line).toHaveAttribute("data-permission", "project");
+  expect((await callsOf(page, "set_work_order_permission")).at(-1)).toMatchObject({ permission: "project" });
+  expect(await page.getByTestId("card-arg").allTextContents()).not.toContain("--permission-mode");
+});
+
+test("the card core issued for Officina's default carries auto mode before the prompt", async ({ page }) => {
+  const switched = card("card-bump-officina");
+  await composeCard(page, switched);
+  await expect(page.getByTestId("card-permission")).toHaveAttribute("data-permission", "officina");
+  const args = await page.getByTestId("card-arg").allTextContents();
+  expect(args).toEqual(switched.argv);
+  expect(args.join(" ")).toContain("--permission-mode auto --");
 });
 
 test("a started launch shows its session once bound", async ({ page }) => {

@@ -18,6 +18,7 @@ pub mod briefing;
 pub mod card;
 pub mod metrics;
 pub mod orchestrator;
+pub mod permission;
 pub mod proposal;
 pub mod view;
 pub mod work_order;

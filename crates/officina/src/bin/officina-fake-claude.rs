@@ -20,7 +20,14 @@
 //!   prints `backgrounded · <id> · <name>`, then appends to the fixture a
 //!   background entry with that id, the `--name` value, its working
 //!   directory as `cwd` and the current time as `startedAt`, so a later
-//!   `agents --json` lists it; any other call prints the fixture.
+//!   `agents --json` lists it; any other call prints the fixture. The
+//!   session's permission mode is the call's `--permission-mode`, else
+//!   the `permissions.defaultMode` of `.claude/settings.json` in its
+//!   working directory, else none (the author's default, which never
+//!   asks); in `default`, `acceptEdits` or `plan` it is listed `waiting`,
+//!   `blocked` on a `permission prompt`, as gate 4 found a work order whose
+//!   project set `acceptEdits` (story 5.24, research notes E88), else
+//!   `busy`, `working`.
 //!   `bg-hold` (story 5.7, D-128 review F10) does the same, then leaves a
 //!   copy of itself holding the output pipes, as the supervisor `claude
 //!   --bg` may start does: the heartbeat copy when `heartbeat` is set,
@@ -234,7 +241,7 @@ fn background(args: &[String]) {
         .and_then(|at| args.get(at + 1))
         .cloned()
         .unwrap_or_default();
-    let entry = serde_json::json!({
+    let mut entry = serde_json::json!({
         "id": id,
         "sessionId": format!("{id}-0000-4000-8000-{started_at:012x}"),
         "name": name,
@@ -245,6 +252,14 @@ fn background(args: &[String]) {
         "status": "busy",
         "state": "working",
     });
+    if matches!(
+        permission_mode(args).as_deref(),
+        Some("default" | "acceptEdits" | "plan")
+    ) {
+        entry["status"] = "waiting".into();
+        entry["state"] = "blocked".into();
+        entry["waitingFor"] = "permission prompt".into();
+    }
     if let Some(fixture) = setting("fixture") {
         let mut entries: Vec<serde_json::Value> = std::fs::read(&fixture)
             .ok()
@@ -257,6 +272,24 @@ fn background(args: &[String]) {
     for command in ["agents", "attach", "logs", "stop"] {
         println!("  claude {command} {id}");
     }
+}
+
+/// The mode a `--bg` session runs in: the call's `--permission-mode`, else
+/// the project settings' `permissions.defaultMode` in the working
+/// directory, as Claude Code reads them; none when neither sets one.
+fn permission_mode(args: &[String]) -> Option<String> {
+    let flagged = args
+        .iter()
+        .position(|a| a == "--permission-mode")
+        .and_then(|at| args.get(at + 1))
+        .cloned();
+    flagged.or_else(|| {
+        let settings = std::fs::read(".claude/settings.json").ok()?;
+        let settings: serde_json::Value = serde_json::from_slice(&settings).ok()?;
+        settings["permissions"]["defaultMode"]
+            .as_str()
+            .map(str::to_owned)
+    })
 }
 
 /// Leaves a copy of this program holding the output pipes it inherits:

@@ -60,6 +60,7 @@ fn launch(
                 source: WorkOrderSource::Composer,
                 subject,
                 proposal_id: None,
+                permission: officina_core::orders::permission::WorkOrderPermission::Project,
             },
             at,
         )
@@ -140,7 +141,16 @@ fn a_launch_is_recorded_launching_then_its_outcome() {
     assert_eq!(recorded.project, bump.project());
     assert_eq!(recorded.cwd, bump.project_folder());
     assert_eq!(&recorded.values, bump.values());
-    assert_eq!(recorded.argv, spawn::work_order(&bump, 7, None).args());
+    assert_eq!(
+        recorded.argv,
+        spawn::work_order(
+            &bump,
+            7,
+            None,
+            officina_core::orders::permission::WorkOrderPermission::Project
+        )
+        .args()
+    );
     assert_eq!(recorded.prompt_sha256, bump.prompt_sha256());
     assert_eq!(recorded.catalogue_hash, bump.catalogue_hash());
     assert_eq!(recorded.source, WorkOrderSource::Composer);

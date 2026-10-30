@@ -38,7 +38,7 @@ use officina_core::board::{Board, Column, Settled};
 use officina_core::ipc::IpcErrorCode;
 use officina_core::meeting::{AnswerRefused, AnswerResult, Changes, Delivery, Logs};
 use officina_core::orders::briefing::Cursor;
-use officina_core::orders::card::{LaunchAnswer, LaunchRefusal};
+use officina_core::orders::card::{CardAnswer, LaunchAnswer, LaunchRefusal, WorkOrderCard};
 use officina_core::orders::view::ORCHESTRATOR_VIEW_SCHEMA;
 use officina_core::orders::work_order::{LAUNCHING_EXPIRY_MS, SubjectChoice, WorkOrder};
 use officina_core::registry::confirm::{
@@ -54,7 +54,7 @@ use officina_core::registry::types::{
 use officina_core::registry::view::RegistryView;
 use officina_core::relay::journal::{AnswerOutcome, MeetingAnswer};
 use officina_core::relay::journal::{
-    CatalogueApproved, JournalEntry, PromptRouted, WorkOrderLaunched,
+    CatalogueApproved, JournalEntry, PromptRouted, WorkOrderLaunched, WorkOrderPermissionSet,
 };
 use officina_core::relay::prompts::{
     MARKER_REFRESH_MS, MARKER_STALE_MS, PROMPT_FILE_TTL_MS, PROMPT_WAIT_MS, PromptRequest,
@@ -2136,6 +2136,7 @@ fn record_launch(env: &common::TestEnv, order: &WorkOrder, card: &str, seq: u32,
                 source: WorkOrderSource::Composer,
                 subject: &SubjectChoice::New("Rollout".into()),
                 proposal_id: None,
+                permission: officina_core::orders::permission::WorkOrderPermission::Project,
             },
             at,
         )
@@ -2246,7 +2247,12 @@ fn a_started_order_binds_to_its_background_session() {
     )]);
     let outcome = execute(
         &ResolvedClaude::new(background),
-        &officina_core::spawn::work_order(&order, 1, None),
+        &officina_core::spawn::work_order(
+            &order,
+            1,
+            None,
+            officina_core::orders::permission::WorkOrderPermission::Project,
+        ),
         &base,
     );
     let Ok(SpawnOutcome::Captured(ran)) = outcome else {
@@ -2349,6 +2355,202 @@ fn a_launch_records_started_and_one_journal_line() {
             ("package".to_owned(), "serde_json".to_owned())
         ])
     );
+}
+
+/// The `work_order_permission_set` lines of `home`'s journal.
+fn permission_lines(home: &common::orders::OrdersHome) -> Vec<WorkOrderPermissionSet> {
+    home.env
+        .journal()
+        .into_iter()
+        .filter_map(|line| match line.entry {
+            JournalEntry::WorkOrderPermissionSet(set) => Some(set),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The card issued in an answer.
+fn issued_card(answer: CardAnswer) -> WorkOrderCard {
+    match answer {
+        CardAnswer::Issued(card) => *card,
+        refused => panic!("{refused:?}"),
+    }
+}
+
+/// The fake's listed entry named `name`.
+fn listed_entry(home: &common::orders::OrdersHome, name: &str) -> serde_json::Value {
+    let listed: Vec<serde_json::Value> =
+        serde_json::from_slice(&std::fs::read(home.env.fixture()).unwrap()).unwrap();
+    listed
+        .into_iter()
+        .find(|entry| entry["name"] == name)
+        .unwrap_or_else(|| panic!("no entry named {name}"))
+}
+
+/// Story 5.24 (D-980, D-982 to D-985), gate 4's guarded project: a project
+/// whose own settings set `acceptEdits` gets work orders in that mode, no
+/// `--permission-mode` on their vector, and one stopped at a permission
+/// prompt waits in Needs you like any session. Switching the project to
+/// Officina's default records the choice in Officina's own state, journals
+/// it, issues the card again with `--permission-mode auto`, refuses a card
+/// issued before the switch, and its launch runs in auto mode; going back
+/// removes the choice and journals it too. Nothing is written under the
+/// project's `.claude`.
+#[test]
+fn a_work_order_takes_the_projects_mode_until_officinas_default_is_chosen() {
+    use officina_core::orders::permission::WorkOrderPermission;
+
+    let home = common::orders::OrdersHome::start(serde_json::json!({"mode": "bg"}));
+    let settings = home.project().join(".claude").join("settings.json");
+    std::fs::create_dir_all(settings.parent().unwrap()).unwrap();
+    let project_settings = r#"{"permissions":{"defaultMode":"acceptEdits"}}"#;
+    std::fs::write(&settings, project_settings).unwrap();
+
+    let own = home.bump("serde_json", "minor");
+    assert_eq!(own.permission, WorkOrderPermission::Project);
+    assert!(
+        !own.argv.iter().any(|a| a.contains("permission")),
+        "{:?}",
+        own.argv
+    );
+    assert_eq!(
+        home.launch(&own.id, &own.prompt_sha256),
+        LaunchAnswer::Launched(LaunchOutcome::Started)
+    );
+    assert_eq!(
+        listed_entry(&home, &own.name)["waitingFor"],
+        "permission prompt"
+    );
+    let deadline = Instant::now() + Duration::from_secs(60);
+    loop {
+        let board = home
+            .emitted
+            .boards
+            .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+            .expect("a board listing the blocked work order in Needs you");
+        if board
+            .columns
+            .needs_you
+            .iter()
+            .any(|card| serde_json::to_value(&card.name).unwrap() == own.name.as_str())
+        {
+            break;
+        }
+    }
+
+    let before = home.bump("tokio", "patch");
+    let card = home.bump("serde_json", "patch");
+    let switched = issued_card(home.set_permission(&card.id, WorkOrderPermission::Officina));
+    assert_eq!(switched.permission, WorkOrderPermission::Officina);
+    assert_eq!((switched.seq, &switched.prompt), (card.seq, &card.prompt));
+    assert_ne!(switched.id, card.id);
+    let separator = switched.argv.iter().position(|a| a == "--").unwrap();
+    assert_eq!(
+        &switched.argv[separator - 2..separator],
+        ["--permission-mode", "auto"]
+    );
+    assert_eq!(
+        permission_lines(&home),
+        [WorkOrderPermissionSet {
+            project: "backend".into(),
+            folder: switched.cwd.clone(),
+            permission: WorkOrderPermission::Officina,
+            mode: Some("auto".into()),
+        }]
+    );
+    let record = home
+        .env
+        .relay_home()
+        .read_work_order_permissions()
+        .effective();
+    assert_eq!(
+        record.of("backend", &switched.cwd),
+        WorkOrderPermission::Officina
+    );
+    // The card issued before the switch shows a mode that would not run.
+    assert_eq!(
+        home.launch(&before.id, &before.prompt_sha256),
+        LaunchAnswer::Refused(LaunchRefusal::PermissionChanged)
+    );
+    assert_eq!(
+        home.launch(&card.id, &card.prompt_sha256),
+        LaunchAnswer::Refused(LaunchRefusal::Superseded)
+    );
+    // The same choice again writes and journals nothing.
+    let again = issued_card(home.set_permission(&switched.id, WorkOrderPermission::Officina));
+    assert_eq!(permission_lines(&home).len(), 1);
+    assert_eq!(
+        home.launch(&again.id, &again.prompt_sha256),
+        LaunchAnswer::Launched(LaunchOutcome::Started)
+    );
+    let ran = common::logged_argv(home.bg_calls().last().unwrap());
+    assert_eq!(ran, again.argv);
+    let entry = listed_entry(&home, &again.name);
+    assert_eq!(
+        (entry["status"].as_str(), entry["state"].as_str()),
+        (Some("busy"), Some("working"))
+    );
+    assert_eq!(
+        launched_row(&home, &again.id).argv,
+        again.argv,
+        "the row stores what ran"
+    );
+
+    let next = home.bump("tokio", "minor");
+    assert_eq!(
+        next.permission,
+        WorkOrderPermission::Officina,
+        "the choice holds for the project"
+    );
+    let back = issued_card(home.set_permission(&next.id, WorkOrderPermission::Project));
+    assert_eq!(back.permission, WorkOrderPermission::Project);
+    assert!(!back.argv.iter().any(|a| a.contains("permission")));
+    assert_eq!(
+        permission_lines(&home)[1].permission,
+        WorkOrderPermission::Project
+    );
+    assert_eq!(permission_lines(&home)[1].mode, None);
+    assert_eq!(
+        home.env
+            .relay_home()
+            .read_work_order_permissions()
+            .effective(),
+        officina_core::orders::permission::WorkOrderPermissions::default()
+    );
+    assert_eq!(
+        std::fs::read_to_string(&settings).unwrap(),
+        project_settings
+    );
+    assert_eq!(
+        std::fs::read_dir(settings.parent().unwrap())
+            .unwrap()
+            .count(),
+        1,
+        "Officina writes nothing in the project's .claude"
+    );
+}
+
+/// Story 5.24 (D-983): an unreadable record counts as none, so every
+/// project's work orders take its own mode, and choosing again starts a
+/// new record from that.
+#[test]
+fn an_unreadable_permission_record_gives_every_project_its_own_mode() {
+    use officina_core::orders::permission::WorkOrderPermission;
+
+    let home = common::orders::OrdersHome::start(serde_json::json!({"mode": "bg"}));
+    let file = home.env.relay_home().work_order_permissions_file();
+    std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+    std::fs::write(&file, "{ not json").unwrap();
+    let card = home.bump("serde_json", "minor");
+    assert_eq!(card.permission, WorkOrderPermission::Project);
+    let switched = issued_card(home.set_permission(&card.id, WorkOrderPermission::Officina));
+    assert_eq!(switched.permission, WorkOrderPermission::Officina);
+    let record = home
+        .env
+        .relay_home()
+        .read_work_order_permissions()
+        .effective();
+    assert_eq!(record.officina_default.len(), 1);
 }
 
 /// Story 5.7 AC 4, review F2: what runs is the card's argument vector, byte

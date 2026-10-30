@@ -12,6 +12,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 use crate::board::QuotaView;
+use crate::orders::permission::{WorkOrderPermission, WorkOrderPermissions};
 use crate::orders::proposal::ProposedSubjectView;
 use crate::orders::work_order::{SubjectChoice, WorkOrder, WorkOrderRefusal, order_name};
 use crate::registry::confirm::checked_name;
@@ -80,6 +81,10 @@ closed_enum! {
         /// The approved catalogue, or the floor's, no longer hashes to the
         /// one the card was issued under.
         CatalogueChanged,
+        /// The project's work order permission changed since the card was
+        /// issued (D-985): the window showed another mode than the one
+        /// that would run.
+        PermissionChanged,
         /// The approved snapshot no longer holds the card's template.
         TemplateNotApproved,
         /// No `claude` was found, or it is not a native executable (D-128,
@@ -238,6 +243,9 @@ pub struct WorkOrderCard {
     pub state: CardState,
     /// The proposal it was opened from, when it was (AD-91).
     pub proposal: Option<CardProposal>,
+    /// Where its permission mode comes from (D-980): `argv` carries
+    /// `--permission-mode` only for [`WorkOrderPermission::Officina`].
+    pub permission: WorkOrderPermission,
 }
 
 /// What the window gets back from an issue or an edit.
@@ -317,7 +325,8 @@ impl IssuedCard {
 
 /// What issuing reads besides the request: the approved catalogue and the
 /// current floor, the registry's subjects, the board's quota windows, the
-/// floor's config dir and the time.
+/// floor's config dir, the window's record of the projects whose work
+/// orders take Officina's default (D-980) and the time.
 #[derive(Debug, Clone, Copy)]
 pub struct CardInputs<'a> {
     pub approved: &'a ApprovedCatalogue,
@@ -325,6 +334,7 @@ pub struct CardInputs<'a> {
     pub subjects: &'a [SubjectRecord],
     pub quota: Option<&'a QuotaView>,
     pub config_dir: Option<&'a str>,
+    pub permissions: &'a WorkOrderPermissions,
     pub now_ms: i64,
 }
 
@@ -360,7 +370,10 @@ pub fn issue(
         .clone()
         .unwrap_or_else(|| default_subject(&order, inputs.subjects));
     let subject = checked_subject(&wanted, &order, inputs.subjects)?;
-    let vector = spawn::work_order(&order, seq, inputs.config_dir);
+    let permission = inputs
+        .permissions
+        .of(order.project(), order.project_folder());
+    let vector = spawn::work_order(&order, seq, inputs.config_dir, permission);
     let card = WorkOrderCard {
         id: id.to_owned(),
         template: order.template().to_owned(),
@@ -395,6 +408,7 @@ pub fn issue(
         issued_at_ms: inputs.now_ms,
         state: CardState::Open,
         proposal: None,
+        permission,
     };
     Ok(IssuedCard {
         card,
@@ -426,7 +440,33 @@ pub fn edit(
         }
         CardChange::Subject { subject } => request.subject = Some(subject.clone()),
     }
-    let mut issued = issue(id, previous.seq(), &request, inputs)?;
+    issued_again(previous, &request, id, inputs)
+}
+
+/// The card `id` that replaces `previous` as it stands, under the same
+/// `seq`, after its project's work order permission changed (D-985): the
+/// same request issued again, so its vector carries the permission
+/// `inputs` now hold. A card that is not open is refused.
+pub fn reissue(
+    previous: &IssuedCard,
+    id: &str,
+    inputs: &CardInputs,
+) -> Result<IssuedCard, IssueRefusal> {
+    if previous.state() != CardState::Open {
+        return Err(IssueRefusal::CardNotOpen(previous.state()));
+    }
+    issued_again(previous, &previous.request(), id, inputs)
+}
+
+/// [`issue`] of `request` under `previous`'s `seq`, keeping the proposal
+/// it came from.
+fn issued_again(
+    previous: &IssuedCard,
+    request: &CardRequest,
+    id: &str,
+    inputs: &CardInputs,
+) -> Result<IssuedCard, IssueRefusal> {
+    let mut issued = issue(id, previous.seq(), request, inputs)?;
     issued.card.proposal.clone_from(&previous.card.proposal);
     Ok(issued)
 }
@@ -535,6 +575,8 @@ pub struct LaunchFacts<'a> {
     pub approved_hash: Option<&'a str>,
     /// The current floor's hash, when it reads.
     pub current_hash: Option<&'a str>,
+    /// The permission the card's project takes now (D-985).
+    pub permission: WorkOrderPermission,
     /// The approved snapshot still holds the card's template.
     pub template_approved: bool,
     /// `claude` resolves to a native executable.
@@ -558,6 +600,9 @@ pub fn check_launch(facts: &LaunchFacts) -> Result<(), LaunchRefusal> {
     let hash = Some(card.catalogue_hash.as_str());
     if facts.approved_hash != hash || facts.current_hash != hash {
         return Err(LaunchRefusal::CatalogueChanged);
+    }
+    if facts.permission != card.permission {
+        return Err(LaunchRefusal::PermissionChanged);
     }
     if !facts.template_approved {
         return Err(LaunchRefusal::TemplateNotApproved);
@@ -689,6 +734,7 @@ mod tests {
                 subjects,
                 quota: None,
                 config_dir: Some(CONFIG),
+                permissions: &WorkOrderPermissions::default(),
                 now_ms: NOW,
             },
         )
@@ -711,6 +757,7 @@ mod tests {
                 subjects: &[],
                 quota: None,
                 config_dir: Some(CONFIG),
+                permissions: &WorkOrderPermissions::default(),
                 now_ms: NOW + 1,
             },
         )
@@ -729,7 +776,7 @@ mod tests {
             ],
         )
         .unwrap();
-        let rebuilt = spawn::work_order(&order, 7, Some(CONFIG));
+        let rebuilt = spawn::work_order(&order, 7, Some(CONFIG), WorkOrderPermission::Project);
         assert_eq!(card.argv, rebuilt.args());
         assert_eq!(issued.vector(), &rebuilt);
         assert_eq!(card.prompt, order.prompt());
@@ -762,7 +809,13 @@ mod tests {
         assert!(second.card().prompt.contains("patch"));
         assert_eq!(
             second.vector().args(),
-            spawn::work_order(second.order(), 4, Some(CONFIG)).args()
+            spawn::work_order(
+                second.order(),
+                4,
+                Some(CONFIG),
+                WorkOrderPermission::Project
+            )
+            .args()
         );
     }
 
@@ -927,6 +980,7 @@ mod tests {
             clicked_sha256: &card.prompt_sha256,
             approved_hash: Some(&card.catalogue_hash),
             current_hash: Some(&card.catalogue_hash),
+            permission: card.permission,
             template_approved: true,
             claude_native: true,
             folder_exists: true,
@@ -959,6 +1013,9 @@ mod tests {
                 LaunchRefusal::Consumed => facts.card = Some(cards[1]),
                 LaunchRefusal::PromptHashMismatch => facts.clicked_sha256 = "0",
                 LaunchRefusal::CatalogueChanged => facts.current_hash = Some("0"),
+                LaunchRefusal::PermissionChanged => {
+                    facts.permission = WorkOrderPermission::Officina
+                }
                 LaunchRefusal::TemplateNotApproved => facts.template_approved = false,
                 LaunchRefusal::ClaudeNotExecutable => facts.claude_native = false,
                 LaunchRefusal::ProjectFolderMissing => facts.folder_exists = false,
@@ -1021,6 +1078,7 @@ mod tests {
                 subjects,
                 quota: None,
                 config_dir: Some(CONFIG),
+                permissions: &WorkOrderPermissions::default(),
                 now_ms: NOW,
             },
         )
@@ -1116,5 +1174,85 @@ mod tests {
             serde_json::json!({"outcome": "launched", "value": "started"})
         );
         assert_eq!(card_values(issued.card()), issued.order().values().clone());
+    }
+    /// D-980, D-985: a project switched to Officina's default issues its
+    /// cards with `--permission-mode auto` and the permission named; the
+    /// card issued before refuses to launch until it is issued again,
+    /// which keeps its `seq`, its values and its proposal; a project the
+    /// record names for another folder keeps its own mode.
+    #[test]
+    fn a_switched_project_issues_its_cards_with_officinas_default() {
+        let approved = sample::approved();
+        let current = sample::current();
+        let before = issue_with("a", 5, &request(VALID, None), &[]).unwrap();
+        assert_eq!(before.card().permission, WorkOrderPermission::Project);
+        assert!(!before.card().argv.iter().any(|a| a == "--permission-mode"));
+        let folder = before.order().project_folder().to_owned();
+        let switched = WorkOrderPermissions::default().with(
+            "backend",
+            &folder,
+            WorkOrderPermission::Officina,
+            NOW,
+        );
+        let inputs = CardInputs {
+            approved: &approved,
+            current: &current,
+            subjects: &[],
+            quota: None,
+            config_dir: Some(CONFIG),
+            permissions: &switched,
+            now_ms: NOW + 1,
+        };
+        let mut facts = passing(before.card());
+        facts.permission = switched.of("backend", &folder);
+        assert_eq!(check_launch(&facts), Err(LaunchRefusal::PermissionChanged));
+        let after = reissue(&before, "b", &inputs).unwrap();
+        assert_eq!(
+            (after.seq(), after.card().permission),
+            (5, WorkOrderPermission::Officina)
+        );
+        assert_eq!(after.card().prompt, before.card().prompt);
+        assert_eq!(
+            after.vector(),
+            &spawn::work_order(
+                after.order(),
+                5,
+                Some(CONFIG),
+                WorkOrderPermission::Officina
+            )
+        );
+        assert_eq!(after.card().argv, after.vector().args());
+        assert_eq!(
+            check_launch(&facts_for(after.card(), WorkOrderPermission::Officina)),
+            Ok(())
+        );
+        let elsewhere = WorkOrderPermissions::default().with(
+            "backend",
+            "C:/somewhere/else",
+            WorkOrderPermission::Officina,
+            NOW,
+        );
+        let inputs = CardInputs {
+            permissions: &elsewhere,
+            ..inputs
+        };
+        assert_eq!(
+            reissue(&before, "c", &inputs).unwrap().card().permission,
+            WorkOrderPermission::Project
+        );
+        let mut consumed = before;
+        consumed.mark(CardState::Consumed);
+        assert_eq!(
+            reissue(&consumed, "d", &inputs),
+            Err(IssueRefusal::CardNotOpen(CardState::Consumed))
+        );
+    }
+
+    /// [`passing`] facts for `card` with `permission` as the project's now.
+    fn facts_for(card: &WorkOrderCard, permission: WorkOrderPermission) -> LaunchFacts<'_> {
+        LaunchFacts {
+            permission,
+            ..passing(card)
+        }
     }
 }

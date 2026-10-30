@@ -216,6 +216,7 @@
     {"name": "another catalogue approved since", "launch": {"approved": "other"}, "expect": {"refused": "catalogue_changed"}},
     {"name": "no catalogue the window's record confirms", "launch": {"approved": null}, "expect": {"refused": "catalogue_changed"}},
     {"name": "the floor edited since", "launch": {"current": "other"}, "expect": {"refused": "catalogue_changed"}},
+    {"name": "the project's work order permission switched since the card was issued", "launch": {"permission_changed": true}, "expect": {"refused": "permission_changed"}},
     {"name": "the template gone from the snapshot", "launch": {"template_approved": false}, "expect": {"refused": "template_not_approved"}},
     {"name": "a claude that is not an executable", "launch": {"claude_native": false}, "expect": {"refused": "claude_not_executable"}},
     {"name": "the project folder gone", "launch": {"folder_exists": false}, "expect": {"refused": "project_folder_missing"}},

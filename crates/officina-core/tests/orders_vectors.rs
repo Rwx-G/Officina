@@ -23,6 +23,7 @@ use officina_core::orders::card::{
     CardInputs, CardRequest, CardState, LaunchFacts, LaunchRefusal, WorkOrderCard, check_launch,
     issue,
 };
+use officina_core::orders::permission::{WorkOrderPermission, WorkOrderPermissions};
 use officina_core::orders::proposal::{
     FileRead, PROPOSAL_ANSWER_MAX_CHARS, PROPOSAL_TEXT_MAX_CHARS, ProposalInvalidReason,
     ProposalRecord, ProposalView, RegistryRefs, record_of,
@@ -153,6 +154,8 @@ struct LaunchCase {
     subject_open: Option<bool>,
     #[serde(default)]
     name_taken: Option<bool>,
+    #[serde(default)]
+    permission_changed: Option<bool>,
 }
 
 /// A key given, `null` included, as `Some`; absent as `None`.
@@ -355,6 +358,7 @@ fn issued(
             subjects,
             quota: None,
             config_dir: None,
+            permissions: &WorkOrderPermissions::default(),
             now_ms: 0,
         },
     )
@@ -368,7 +372,13 @@ fn replay_issue(set: &VectorSet, case: &CardCase, request: &CardRequest) -> Valu
         Ok(issued) => {
             assert_eq!(
                 issued.card().argv,
-                officina_core::spawn::work_order(issued.order(), case.seq, None).args(),
+                officina_core::spawn::work_order(
+                    issued.order(),
+                    case.seq,
+                    None,
+                    WorkOrderPermission::Project
+                )
+                .args(),
                 "{}: the card's argv is the vector spawn builds",
                 case.name
             );
@@ -420,6 +430,11 @@ fn replay_launch(card: &WorkOrderCard, launch: &LaunchCase) -> Value {
         clicked_sha256: &clicked,
         approved_hash: approved.as_deref(),
         current_hash: current.as_deref(),
+        permission: if launch.permission_changed.unwrap_or(false) {
+            WorkOrderPermission::Officina
+        } else {
+            card.permission
+        },
         template_approved: launch.template_approved.unwrap_or(true),
         claude_native: launch.claude_native.unwrap_or(true),
         folder_exists: launch.folder_exists.unwrap_or(true),

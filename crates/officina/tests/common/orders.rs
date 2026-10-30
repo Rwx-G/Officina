@@ -151,6 +151,25 @@ impl OrdersHome {
         .unwrap()
     }
 
+    /// What `set_work_order_permission` answers for card `card_id`.
+    pub fn set_permission(
+        &self,
+        card_id: &str,
+        permission: officina_core::orders::permission::WorkOrderPermission,
+    ) -> CardAnswer {
+        ask(
+            &self.handle().sender,
+            AuthorCommand::SetWorkOrderPermission {
+                card_id: card_id.to_owned(),
+                permission,
+            },
+            AUTHOR_WAIT,
+        )
+        .expect("the collector answers")
+        .into_card()
+        .unwrap()
+    }
+
     /// What `launch_work_order` answers, through the function it calls.
     pub fn launch(&self, card_id: &str, prompt_sha256: &str) -> LaunchAnswer {
         officina_host::orders::launch_card(&self.handle().sender, card_id, prompt_sha256)

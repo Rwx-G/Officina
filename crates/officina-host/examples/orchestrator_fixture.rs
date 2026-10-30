@@ -35,6 +35,7 @@ use officina_core::board::Board;
 use officina_core::orders::card::{
     self, CardChange, CardInputs, CardRequest, IssuedCard, WorkOrderCard, reserved_seq,
 };
+use officina_core::orders::permission::{WorkOrderPermission, WorkOrderPermissions};
 use officina_core::orders::proposal::{file_name, proposal_id};
 use officina_core::orders::work_order::{SubjectChoice, WorkOrder, order_name};
 use officina_core::registry::fold::AgentsSnapshot;
@@ -439,7 +440,9 @@ fn seed_auto(writer: &mut Writer, relay: &RelayHome, script: &Script) -> Result<
 }
 
 /// One card, named for its fixture: issued for a request, by an edit of a
-/// card an earlier step named, or from the seeded proposal of that name.
+/// card an earlier step named, issued again once its project's work orders
+/// switch permission (story 5.24), or from the seeded proposal of that
+/// name.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct CardStep {
@@ -449,7 +452,16 @@ struct CardStep {
     #[serde(default)]
     edit: Option<CardEdit>,
     #[serde(default)]
+    permission: Option<CardPermission>,
+    #[serde(default)]
     proposal: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CardPermission {
+    of: String,
+    to: WorkOrderPermission,
 }
 
 #[derive(Deserialize)]
@@ -534,6 +546,7 @@ fn record(
                 source: WorkOrderSource::Composer,
                 subject: &order.subject,
                 proposal_id: None,
+                permission: officina_core::orders::permission::WorkOrderPermission::Project,
             },
             order.launched_at_ms,
         )
@@ -619,9 +632,37 @@ fn issue_cards(
                 subjects: &subjects,
                 quota: board.map(|b| &b.quota),
                 config_dir: None,
+                permissions: &WorkOrderPermissions::default(),
                 now_ms,
             };
             let card = card::issue_from_proposal(&id, reserved_seq(highest, held), &order, &inputs)
+                .map_err(|refusal| format!("{}: refused {refusal:?}", step.name))?;
+            issued.insert(step.name.clone(), card);
+            continue;
+        }
+        if let Some(switch) = &step.permission {
+            let previous = issued
+                .get(&switch.of)
+                .ok_or_else(|| format!("{}: no card named {}", step.name, switch.of))?;
+            let (subjects, _) = registry
+                .card_reads(&previous.card().template)
+                .map_err(|e| format!("{}: {}", step.name, e.message))?;
+            let permissions = WorkOrderPermissions::default().with(
+                &previous.card().project,
+                previous.order().project_folder(),
+                switch.to,
+                now_ms,
+            );
+            let inputs = CardInputs {
+                approved: &approved,
+                current: &current,
+                subjects: &subjects,
+                quota: board.map(|b| &b.quota),
+                config_dir: None,
+                permissions: &permissions,
+                now_ms,
+            };
+            let card = card::reissue(previous, &id, &inputs)
                 .map_err(|refusal| format!("{}: refused {refusal:?}", step.name))?;
             issued.insert(step.name.clone(), card);
             continue;
@@ -648,6 +689,7 @@ fn issue_cards(
             subjects: &subjects,
             quota: board.map(|b| &b.quota),
             config_dir: None,
+            permissions: &WorkOrderPermissions::default(),
             now_ms,
         };
         let answer = match (&step.request, previous, &step.edit) {

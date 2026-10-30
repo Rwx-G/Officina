@@ -6,6 +6,7 @@ import type { ParamChoice } from "./ParamChoice";
 import type { QuotaView } from "./QuotaView";
 import type { SubjectChoice } from "./SubjectChoice";
 import type { SubjectOption } from "./SubjectOption";
+import type { WorkOrderPermission } from "./WorkOrderPermission";
 
 /**
  * A card as the window shows it (AD-78): the rendered prompt, its
@@ -40,4 +41,9 @@ quota: QuotaView | null, catalogue_hash: string, issued_at_ms: number, state: Ca
 /**
  * The proposal it was opened from, when it was (AD-91).
  */
-proposal: CardProposal | null, };
+proposal: CardProposal | null, 
+/**
+ * Where its permission mode comes from (D-980): `argv` carries
+ * `--permission-mode` only for [`WorkOrderPermission::Officina`].
+ */
+permission: WorkOrderPermission, };

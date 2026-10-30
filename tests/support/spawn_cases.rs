@@ -6,6 +6,7 @@
 
 #![allow(dead_code)] // each test crate uses a different subset
 
+use officina_core::orders::permission::WorkOrderPermission;
 use officina_core::orders::work_order::WorkOrder;
 use officina_core::registry::triage_call::schema;
 use officina_core::relay::catalogue::{self, ApprovedCatalogue};
@@ -37,6 +38,7 @@ const INPUT_KEYS: &[&str] = &[
     "answer",
     "session_id",
     "folder",
+    "permission",
 ];
 
 #[derive(Debug)]
@@ -191,7 +193,12 @@ impl Case {
                     .as_u64()
                     .and_then(|seq| u32::try_from(seq).ok())
                     .unwrap_or_else(|| panic!("case {}: no seq", self.name));
-                spawn::work_order(&self.work_order(home), seq, config_dir)
+                let permission = match self.text("permission") {
+                    None => WorkOrderPermission::Project,
+                    Some(code) => WorkOrderPermission::from_code(code)
+                        .unwrap_or_else(|| panic!("case {}: unknown permission", self.name)),
+                };
+                spawn::work_order(&self.work_order(home), seq, config_dir, permission)
             }
             VectorKind::ReviewCall => {
                 let model = ModelAlias::from_code(self.required("model"))

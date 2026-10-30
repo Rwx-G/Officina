@@ -64,7 +64,9 @@
         launching={store.launching}
         launch={store.launch}
         {nowMs}
+        busy={store.composing}
         onLaunch={() => void store.launchCard()}
+        onPermission={(permission) => void store.setPermission(permission)}
       />
     {/if}
     <WorkOrderHistory orders={view.work_orders} {nowMs} />

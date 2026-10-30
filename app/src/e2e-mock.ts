@@ -16,6 +16,7 @@ import type { OrchestratorView } from "./lib/generated/OrchestratorView";
 import type { RegistryView } from "./lib/generated/RegistryView";
 import type { RelayView } from "./lib/generated/RelayView";
 import type { StartAnswer } from "./lib/generated/StartAnswer";
+import type { WorkOrderPermission } from "./lib/generated/WorkOrderPermission";
 
 /** The author's commands on subjects (story 3.5): each is recorded, then
  *  refused when the test says so, else accepted with nothing changed; a test
@@ -87,6 +88,8 @@ export function installE2eMock(): void {
         case "edit_card":
         case "issue_card_from_proposal":
           return card();
+        case "set_work_order_permission":
+          return switched((args as { permission: WorkOrderPermission }).permission);
         case "dismiss_proposal":
           return dismissProposal((args as { proposalId: string }).proposalId);
         case "launch_work_order":
@@ -181,6 +184,23 @@ function author(cmd: string): Promise<number | null> {
  *  refusal of a catalogue with no template approved. */
 function card(): CardAnswer {
   return window.__officinaCardAnswer ?? { outcome: "refused", value: { kind: "template", detail: "not_approved" } };
+}
+
+/** Mirrors the collector's answer to `set_work_order_permission` (story
+ *  5.24, D-985): the card the test set, issued again under a new id with
+ *  `permission`, `--permission-mode auto` before the separator for
+ *  Officina's default; the card it answers is the next issue's too. */
+function switched(permission: WorkOrderPermission): CardAnswer {
+  const current = card();
+  if (current.outcome !== "issued") return current;
+  const argv = current.value.argv.filter((arg, i, all) => arg !== "--permission-mode" && all[i - 1] !== "--permission-mode");
+  if (permission === "officina") argv.splice(argv.indexOf("--"), 0, "--permission-mode", "auto");
+  const answer: CardAnswer = {
+    outcome: "issued",
+    value: { ...current.value, id: `${current.value.id.slice(0, 31)}${permission === "officina" ? "1" : "0"}`, permission, argv },
+  };
+  window.__officinaCardAnswer = answer;
+  return answer;
 }
 
 /** Mirrors the collector's answer to `dismiss_proposal` (FR-12): a

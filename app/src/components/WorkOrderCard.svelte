@@ -11,10 +11,26 @@
   // from a proposal says so under a "proposal" label, with the
   // orchestrator's rationale and any new subject's name it suggests, all
   // as text: the suggestion is never the card's subject (D-152).
+  // Its permission line (story 5.24, D-980, D-986) says where the session's
+  // permission mode comes from: the project's own by default. Hovering the
+  // line, or reaching its control with Tab, shows a tooltip whose button
+  // switches the project's work orders to Officina's default (auto mode)
+  // on a pointer click only, as an approval is given; going back to the
+  // project's own mode gives nothing new, so the keyboard reaches it too.
+  // The tooltip is laid over the card, never in its flow, so showing it
+  // moves nothing.
   import type { LaunchAnswer } from "../lib/generated/LaunchAnswer";
   import type { WorkOrderCard } from "../lib/generated/WorkOrderCard";
+  import type { WorkOrderPermission } from "../lib/generated/WorkOrderPermission";
   import type { WorkOrderView } from "../lib/generated/WorkOrderView";
-  import { LAUNCH_REFUSAL_TEXT, PHASE_TEXT, launchOutcomeText } from "../lib/orchestrator-text";
+  import {
+    LAUNCH_REFUSAL_TEXT,
+    PERMISSION_SWITCH_TEXT,
+    PERMISSION_TEXT,
+    PERMISSION_TIP_TEXT,
+    PHASE_TEXT,
+    launchOutcomeText,
+  } from "../lib/orchestrator-text";
   import { isPointerClick } from "../lib/pointer";
   import Gauge from "./Gauge.svelte";
   import StableLabel from "./StableLabel.svelte";
@@ -26,10 +42,15 @@
     launching: boolean;
     launch: LaunchAnswer | null;
     nowMs: number;
+    /** An issue, an edit or a permission switch is on its way. */
+    busy: boolean;
     /** Launches the card: called on a pointer click only. */
     onLaunch: () => void;
+    /** Switches the project's work orders to `permission`: called for
+     *  Officina's default on a pointer click only (D-986). */
+    onPermission: (permission: WorkOrderPermission) => void;
   }
-  let { card, order, launching, launch, nowMs, onLaunch }: Props = $props();
+  let { card, order, launching, launch, nowMs, busy, onLaunch, onPermission }: Props = $props();
 
   const LAUNCH_LABELS = { idle: "Launch", launching: "Launching" } as const;
 
@@ -55,6 +76,23 @@
    *  is stopped before it is made. */
   function noKeyLaunches(event: KeyboardEvent): void {
     if (event.key === "Enter" || event.key === " ") event.preventDefault();
+  }
+
+  let switchable = $derived(!done && !launching && !busy);
+  /** The permission the switch moves the project to. */
+  let other = $derived<WorkOrderPermission>(card.permission === "project" ? "officina" : "project");
+
+  /** Officina's default widens what a background session may do without
+   *  asking: a pointer click only, as an approval (D-986). Going back to
+   *  the project's own mode takes the keyboard too. */
+  function switched(event: MouseEvent): void {
+    if (!switchable) return;
+    if (other === "officina" && !isPointerClick(event)) return;
+    onPermission(other);
+  }
+
+  function noKeyWidens(event: KeyboardEvent): void {
+    if (other === "officina") noKeyLaunches(event);
   }
 </script>
 
@@ -95,6 +133,28 @@
   </div>
   <p data-testid="card-cwd"><span class="label">In</span> <code>{card.cwd}</code></p>
   <p data-testid="card-subject"><span class="label">Filed under</span> {subject}</p>
+  <div class="permission" data-testid="card-permission" data-permission={card.permission}>
+    <span class="label">Permissions</span>
+    <span class="mode" id="permission-{card.id}" data-testid="card-permission-text"
+      ><StableLabel labels={PERMISSION_TEXT} current={card.permission} /></span
+    >
+    <div class="tip" role="group" aria-label="Work order permissions" data-testid="card-permission-tip">
+      <p id="permission-tip-{card.id}" data-testid="card-permission-tip-text"
+        ><StableLabel labels={PERMISSION_TIP_TEXT} current={card.permission} /></p
+      >
+      <button
+        type="button"
+        data-testid="card-permission-switch"
+        data-to={other}
+        aria-describedby="permission-{card.id} permission-tip-{card.id}"
+        disabled={!switchable}
+        onclick={switched}
+        onkeydown={noKeyWidens}
+      >
+        <StableLabel labels={PERMISSION_SWITCH_TEXT} current={other} />
+      </button>
+    </div>
+  </div>
   {#if card.proposal?.suggested_subject}
     <p class="muted" data-testid="card-suggested-subject">
       The proposal suggests a new subject named <span class="text">{card.proposal.suggested_subject}</span>; type it in
@@ -237,6 +297,60 @@
   code {
     font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
     font-size: 12.5px;
+  }
+  .permission {
+    position: relative;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 4px 8px;
+    font-size: 13.5px;
+  }
+  .mode {
+    text-decoration: underline dotted;
+    text-underline-offset: 3px;
+    cursor: help;
+  }
+  /* Laid over the card below the line, never in its flow: showing it moves
+     nothing. Transparent and out of the pointer's way until the line is
+     hovered or its button focused, so Tab still reaches the button. */
+  .tip {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    z-index: 2;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 6px;
+    max-width: min(440px, 100%);
+    padding: 8px 10px;
+    background: var(--color-surface);
+    color: var(--color-text);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-surface);
+    box-shadow: 0 2px 8px var(--color-shadow);
+    opacity: 0;
+    pointer-events: none;
+  }
+  .permission:hover .tip,
+  .permission:focus-within .tip {
+    opacity: 1;
+    pointer-events: auto;
+  }
+  .tip button {
+    min-height: var(--target-min);
+    padding: 0 14px;
+    border-radius: var(--radius-control);
+    border: 1px solid var(--color-text);
+    background: var(--color-surface);
+    color: var(--color-text);
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .tip button:disabled {
+    cursor: default;
+    opacity: 0.6;
   }
   .gauges {
     display: flex;

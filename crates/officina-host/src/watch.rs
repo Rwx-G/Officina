@@ -116,6 +116,13 @@ pub enum AuthorCommand {
     IssueCard(CardRequest),
     /// A new card in place of `card_id`, with one change (AD-78).
     EditCard { card_id: String, change: CardChange },
+    /// The work orders of card `card_id`'s project switched to
+    /// `permission`, then the card issued again with it (story 5.24,
+    /// D-985).
+    SetWorkOrderPermission {
+        card_id: String,
+        permission: officina_core::orders::permission::WorkOrderPermission,
+    },
     /// A card for the pending work order proposal `proposal_id`, through
     /// the same validation as the author's (AD-91, D-152).
     IssueCardFromProposal { proposal_id: String },
@@ -208,7 +215,8 @@ impl AuthorAnswer {
         }
     }
 
-    /// The card or its refusal, for `IssueCard`'s and `EditCard`'s answer.
+    /// The card or its refusal, for `IssueCard`'s, `EditCard`'s and
+    /// `SetWorkOrderPermission`'s answer.
     pub fn into_card(self) -> Result<CardAnswer, IpcError> {
         match self {
             AuthorAnswer::Card(answer) => Ok(answer),
@@ -1299,6 +1307,19 @@ fn answer_author<E: Emit>(
             quota.as_ref(),
             &card_id,
             &change,
+            now,
+        )
+        .map(AuthorAnswer::Card),
+        AuthorCommand::SetWorkOrderPermission {
+            card_id,
+            permission,
+        } => crate::orders::set_permission(
+            cards,
+            collector,
+            registry,
+            quota.as_ref(),
+            &card_id,
+            permission,
             now,
         )
         .map(AuthorAnswer::Card),

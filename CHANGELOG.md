@@ -8,6 +8,23 @@ project uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- A project's own permission mode for work orders, or Officina's default
+  (story 5.24): a work order runs in the permission mode its project's
+  settings set, else your default, as gate 4 found it does, and one that
+  stops at a permission prompt waits in Needs you like any session. The
+  card's Permissions line says which mode applies; its tooltip, shown on
+  hover or when Tab reaches its button, offers "Use Officina's default for
+  this project", which runs that project's work orders in Claude Code's
+  auto mode (`--permission-mode auto`), never `bypassPermissions`, on a
+  pointer click only; "Back to the project's mode" undoes it. The choice
+  is Officina's own state (`relay/work-order-permissions.json`, written by
+  the window only), never Claude Code's settings nor the floor, held per
+  project and folder, journaled as `work_order_permission_set`, and named
+  by `officina doctor`; a card issued before a switch is refused
+  `permission_changed` at Launch. The README also states that background
+  sessions you start while a service a work order started runs get
+  Officina's environment.
+
 - Auto-mode denials (v0.5.x, story 5.23): when Claude Code's auto mode
   refuses a tool call, its `PermissionDenied` hook makes `officina hook`
   journal `auto_mode_denied` with the session, the tool and the

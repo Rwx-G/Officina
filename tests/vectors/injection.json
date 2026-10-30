@@ -254,6 +254,16 @@
       "bg_spawns": 0
     },
     {
+      "name": "the project's work order permission switched after the card was issued",
+      "family": "launch_conditions",
+      "steps": [
+        {"issue": {"template": "bump", "project": "backend", "values": [["package", "serde_json"], ["level", "minor"]], "subject": null}, "expect": {"outcome": "issued"}},
+        {"tamper": {"kind": "permission_switched", "card": 0}},
+        {"launch": {"card": 0, "hash": "card"}, "expect": {"outcome": "refused", "value": "permission_changed"}}
+      ],
+      "bg_spawns": 0
+    },
+    {
       "name": "the template removed from the approved snapshot by hand",
       "family": "launch_conditions",
       "steps": [

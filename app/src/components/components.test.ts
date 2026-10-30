@@ -48,7 +48,14 @@ import launchRefusalSource from "../lib/generated/LaunchRefusal.ts?raw";
 import Composer from "./Composer.svelte";
 import WorkOrderCard from "./WorkOrderCard.svelte";
 import { OrchestratorStore } from "../lib/orchestrator.svelte";
-import { LAUNCH_REFUSAL_TEXT, PROPOSAL_INVALID_TEXT, invalidReasonText } from "../lib/orchestrator-text";
+import {
+  LAUNCH_REFUSAL_TEXT,
+  PERMISSION_SWITCH_TEXT,
+  PERMISSION_TEXT,
+  PERMISSION_TIP_TEXT,
+  PROPOSAL_INVALID_TEXT,
+  invalidReasonText,
+} from "../lib/orchestrator-text";
 import type { LaunchRefusal } from "../lib/generated/LaunchRefusal";
 import invalidReasonSource from "../lib/generated/ProposalInvalidReason.ts?raw";
 import ProposalList from "./ProposalList.svelte";
@@ -1084,13 +1091,68 @@ describe("Composer", () => {
 
 describe("WorkOrderCard", () => {
   const onLaunch = vi.fn();
-  beforeEach(() => onLaunch.mockReset());
+  const onPermission = vi.fn();
+  beforeEach(() => {
+    onLaunch.mockReset();
+    onPermission.mockReset();
+  });
 
   const bump = (): WorkOrderCardPayload => fixtureOf<WorkOrderCardPayload>("card", "card-bump");
 
   function props(card: WorkOrderCardPayload = bump()) {
-    return { card, order: null, launching: false, launch: null, nowMs: NOW, onLaunch };
+    return { card, order: null, launching: false, launch: null, nowMs: NOW, busy: false, onLaunch, onPermission };
   }
+
+  it("the permission line names the project's own mode and offers Officina's default", () => {
+    const card = bump();
+    expect(card.permission).toBe("project");
+    expect(card.argv).not.toContain("--permission-mode");
+    const { getByTestId } = render(WorkOrderCard, props(card));
+    expect(getByTestId("card-permission").dataset.permission).toBe("project");
+    expect(getByTestId("card-permission-text").textContent).toContain(PERMISSION_TEXT.project);
+    const button = getByTestId("card-permission-switch");
+    expect(button.dataset.to).toBe("officina");
+    expect(button.textContent).toContain(PERMISSION_SWITCH_TEXT.officina);
+    expect(button.hasAttribute("tabindex")).toBe(false);
+    expect(getByTestId("card-permission-tip-text").textContent).toContain(PERMISSION_TIP_TEXT.project);
+  });
+
+  it("Officina's default is chosen on a pointer click only", async () => {
+    const { getByTestId } = render(WorkOrderCard, props());
+    const button = getByTestId("card-permission-switch");
+    for (const key of ["Enter", " "]) {
+      const keydown = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true });
+      button.dispatchEvent(keydown);
+      expect(keydown.defaultPrevented).toBe(true);
+    }
+    await fireEvent.click(button, { detail: 0 });
+    expect(onPermission).not.toHaveBeenCalled();
+    await fireEvent.click(button, { detail: 1 });
+    expect(onPermission).toHaveBeenCalledWith("officina");
+  });
+
+  it("going back to the project's mode takes the keyboard too", async () => {
+    const card: WorkOrderCardPayload = { ...bump(), permission: "officina" };
+    const { getByTestId } = render(WorkOrderCard, props(card));
+    const button = getByTestId("card-permission-switch");
+    expect(button.dataset.to).toBe("project");
+    const keydown = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
+    button.dispatchEvent(keydown);
+    expect(keydown.defaultPrevented).toBe(false);
+    await fireEvent.click(button, { detail: 0 });
+    expect(onPermission).toHaveBeenCalledWith("project");
+  });
+
+  it("no permission switch on a launched card or while one is on its way", async () => {
+    for (const extra of [{ busy: true }, { launching: true }, { launch: { outcome: "launched", value: "started" } as const }]) {
+      cleanup();
+      const { getByTestId } = render(WorkOrderCard, { ...props(), ...extra });
+      const button = getByTestId("card-permission-switch") as HTMLButtonElement;
+      expect(button.disabled).toBe(true);
+      await fireEvent.click(button, { detail: 1 });
+    }
+    expect(onPermission).not.toHaveBeenCalled();
+  });
 
   it("WorkOrderCard shows one chip per argument", () => {
     const card = bump();

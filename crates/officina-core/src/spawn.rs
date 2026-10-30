@@ -21,6 +21,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::focus::is_valid_attach_id;
+use crate::orders::permission::WorkOrderPermission;
 use crate::orders::work_order::WorkOrder;
 use crate::orders::{ORCHESTRATOR_DIR, ORCHESTRATOR_WORKDIR};
 use crate::registry::ingestion::TRIAGE_DIR;
@@ -973,19 +974,31 @@ pub fn orchestrator(
 /// for byte after `--` with `--bg`, so the separator stays (D-127). It runs
 /// in the project's folder, without a console or stdin, its output
 /// captured within [`WORK_ORDER_OUTPUT_CAP`] and [`WORK_ORDER_DEADLINE_MS`],
-/// as a session the author starts would (D-128). No `--settings` and no
-/// permission mode: the session takes the author's own.
+/// as a session the author starts would (D-128). No `--settings`. With
+/// [`WorkOrderPermission::Project`] no permission mode either: the session
+/// takes the project's own, else the author's (D-980); with
+/// [`WorkOrderPermission::Officina`], `--permission-mode` and
+/// Officina's default before the separator (D-982).
 ///
 /// `seq` is the number the card store reserved for the card (D-135), so
 /// the name is unique and the vector the card shows is the one that runs.
-pub fn work_order(order: &WorkOrder, seq: u32, config_dir: Option<&str>) -> ClaudeVector {
+pub fn work_order(
+    order: &WorkOrder,
+    seq: u32,
+    config_dir: Option<&str>,
+    permission: WorkOrderPermission,
+) -> ClaudeVector {
     let name = crate::orders::work_order::order_name(order.template(), seq);
     let model = order
         .model()
         .map(|model| ["--model".to_owned(), model.code().to_owned()]);
+    let mode = permission
+        .mode()
+        .map(|mode| ["--permission-mode".to_owned(), mode.to_owned()]);
     let args = ["--bg".to_owned(), "--name".to_owned(), name]
         .into_iter()
         .chain(model.into_iter().flatten())
+        .chain(mode.into_iter().flatten())
         .chain(["--".to_owned(), order.prompt().to_owned()])
         .collect();
     ClaudeVector {
@@ -1024,7 +1037,9 @@ mod tests {
             VectorKind::TriageCall => {
                 triage_call(TRIAGE_MODEL, &schema(), config_dir, "C:/path/to/home")
             }
-            VectorKind::WorkOrder => work_order(&sample_order(), 7, config_dir),
+            VectorKind::WorkOrder => {
+                work_order(&sample_order(), 7, config_dir, WorkOrderPermission::Project)
+            }
             VectorKind::ReviewCall => review_call(
                 ModelAlias::Haiku,
                 &crate::relay::auto::schema(),
@@ -1575,7 +1590,7 @@ values = ["serde_json"]
     fn the_prompt_is_one_argument_after_the_separator() {
         let order = order_of(AWKWARD_FLOOR);
         assert!(order.prompt().contains("\n--bg -- --model opus\n-x \""));
-        let vector = work_order(&order, 12, None);
+        let vector = work_order(&order, 12, None, WorkOrderPermission::Project);
         assert_eq!(
             vector.args(),
             ["--bg", "--name", "bump-12", "--", order.prompt()],
@@ -1585,7 +1600,12 @@ values = ["serde_json"]
             "[template.params.package]",
             "model = \"opus\"\n[template.params.package]",
         ));
-        let vector = work_order(&with_model, 3, Some("C:/path/to/claude-work"));
+        let vector = work_order(
+            &with_model,
+            3,
+            Some("C:/path/to/claude-work"),
+            WorkOrderPermission::Project,
+        );
         assert_eq!(
             vector.args(),
             [
@@ -1630,7 +1650,7 @@ values = ["serde_json"]
     #[test]
     fn a_work_order_vector_carries_no_settings_and_no_permission_mode() {
         for order in [sample_order(), order_of(AWKWARD_FLOOR)] {
-            let vector = work_order(&order, 1, Some(CONFIG));
+            let vector = work_order(&order, 1, Some(CONFIG), WorkOrderPermission::Project);
             let separator = vector.args().iter().position(|a| a == "--").unwrap();
             let options = &vector.args()[..separator];
             for option in options {
@@ -1652,6 +1672,36 @@ values = ["serde_json"]
             assert_eq!(vector.env_rule(), EnvRule::Session);
             assert_eq!(vector.env_set(), env_set(Some(CONFIG)));
             assert!(VectorKind::WorkOrder.is_launch());
+        }
+    }
+    /// D-982: Officina's default adds exactly `--permission-mode auto`
+    /// before the separator, after the model; the prompt stays the last
+    /// argument; nothing else of the vector moves, and no mode that lets
+    /// every call through is ever written.
+    #[test]
+    fn officinas_default_adds_the_auto_mode_and_nothing_else() {
+        for order in [sample_order(), order_of(AWKWARD_FLOOR)] {
+            let own = work_order(&order, 1, Some(CONFIG), WorkOrderPermission::Project);
+            let auto = work_order(&order, 1, Some(CONFIG), WorkOrderPermission::Officina);
+            let separator = auto.args().iter().position(|a| a == "--").unwrap();
+            assert_eq!(
+                &auto.args()[separator - 2..separator],
+                ["--permission-mode", "auto"]
+            );
+            let mut without: Vec<String> = auto.args().to_vec();
+            without.drain(separator - 2..separator);
+            assert_eq!(without, own.args());
+            assert_eq!(auto.args().last().map(String::as_str), Some(order.prompt()));
+            for refused in ["bypassPermissions", "dontAsk", "dangerously", "--settings"] {
+                assert!(
+                    !auto.args()[..separator].iter().any(|a| a.contains(refused)),
+                    "{refused}"
+                );
+            }
+            assert_eq!(
+                (auto.cwd(), auto.env_set(), auto.env_rule()),
+                (own.cwd(), own.env_set(), own.env_rule())
+            );
         }
     }
 }

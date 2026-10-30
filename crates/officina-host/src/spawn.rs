@@ -489,7 +489,12 @@ mod tests {
             VectorKind::TriageCall => {
                 officina_core::spawn::triage_call(TRIAGE_MODEL, &schema(), None, "C:/path/to/home")
             }
-            VectorKind::WorkOrder => officina_core::spawn::work_order(&order(), 1, None),
+            VectorKind::WorkOrder => officina_core::spawn::work_order(
+                &order(),
+                1,
+                None,
+                officina_core::orders::permission::WorkOrderPermission::Project,
+            ),
             VectorKind::ReviewCall => officina_core::spawn::review_call(
                 officina_core::relay::template::ModelAlias::Haiku,
                 &officina_core::relay::auto::schema(),

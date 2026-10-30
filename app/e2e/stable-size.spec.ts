@@ -192,6 +192,26 @@ const CASES: ToggleCase[] = [
       await control.click();
     },
   },
+  // Story 5.24 (D-986): the permission switch and the line naming the
+  // mode, flipped by a click on the switch inside its tooltip.
+  {
+    name: "work order permission switch",
+    selector: '[data-testid="card-permission-switch"]',
+    scene: "orchestrator",
+    act: async (page, control) => {
+      await page.getByTestId("card-permission-text").hover();
+      await control.click();
+    },
+  },
+  {
+    name: "work order permission line and its tooltip's text",
+    selector: '[data-testid="card-permission-text"], [data-testid="card-permission-tip-text"]',
+    scene: "orchestrator",
+    act: async (page, control) => {
+      await control.hover();
+      await page.getByTestId("card-permission-switch").click();
+    },
+  },
   {
     name: "orchestrator Start",
     selector: '[data-testid="orchestrator-start"]',

@@ -160,7 +160,7 @@ fn rebuilt(home: &OrdersHome, card: &WorkOrderCard) -> Vec<String> {
         &values,
     )
     .unwrap();
-    officina_core::spawn::work_order(&order, card.seq, None)
+    officina_core::spawn::work_order(&order, card.seq, None, card.permission)
         .args()
         .to_vec()
 }
@@ -242,6 +242,20 @@ fn tamper(home: &OrdersHome, step: &Value, cards: &[WorkOrderCard]) -> Result<()
             assert_ne!(text, edited);
             std::fs::write(&floor, edited).unwrap();
         }
+        Some("permission_switched") => {
+            // The window's record written by hand for the card's project:
+            // the card shows a mode that would not run (D-985).
+            let card = card_at(cards, &step["card"])?;
+            let record = officina_core::orders::permission::WorkOrderPermissions::default().with(
+                &card.project,
+                &card.cwd,
+                officina_core::orders::permission::WorkOrderPermission::Officina,
+                0,
+            );
+            let file = home.env.relay_home().work_order_permissions_file();
+            std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+            std::fs::write(&file, serde_json::to_vec(&record).unwrap()).unwrap();
+        }
         Some("folder_missing") => {
             let mut moved = home.project().into_os_string();
             moved.push("-moved");
@@ -279,6 +293,7 @@ fn tamper(home: &OrdersHome, step: &Value, cards: &[WorkOrderCard]) -> Result<()
                         source: WorkOrderSource::Composer,
                         subject: &SubjectChoice::New("Elsewhere".into()),
                         proposal_id: None,
+                        permission: officina_core::orders::permission::WorkOrderPermission::Project,
                     },
                     now,
                 )

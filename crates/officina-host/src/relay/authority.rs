@@ -1,6 +1,7 @@
 //! What only the author may decide, from the window (AD-21): approving the
 //! catalogue, approving or rejecting a `human` action's request, stopping
-//! and resuming the relay, and acknowledging an anomaly. Each decision is
+//! and resuming the relay, acknowledging an anomaly, and which permission
+//! mode a project's work orders start in (D-983). Each decision is
 //! also kept in the window's record (`relay/decisions.json`, D-173), so one
 //! the window did not make shows. Compiled only with the
 //! `window-authority` feature, so the `officina` binary a session can call
@@ -10,6 +11,7 @@ use std::io;
 use std::path::Path;
 
 use officina_core::ipc::{IpcError, IpcErrorCode};
+use officina_core::orders::permission::{WorkOrderPermission, WorkOrderPermissions};
 use officina_core::registry::types::AuthorReason;
 use officina_core::relay::StopFlag;
 use officina_core::relay::approvals::{
@@ -21,7 +23,7 @@ use officina_core::relay::catalogue::{
     ApprovedCatalogue, DEFAULT_AUTO_MAX_PER_HOUR, KnownProjects,
 };
 use officina_core::relay::journal::{
-    ApprovalEvent, CatalogueApproved, JournalEntry, PromptDecided,
+    ApprovalEvent, CatalogueApproved, JournalEntry, PromptDecided, WorkOrderPermissionSet,
 };
 use officina_core::relay::prompts::{
     PromptAnswer, PromptDecision, PromptFileKind, is_prompt_id, prompt_file_name,
@@ -452,6 +454,42 @@ pub fn set_relay_stopped(home: &RelayHome, stopped: bool) -> Result<bool, Author
         .append(&[line], now)
         .map_err(|e| AuthorityError::Journal(e.to_string()))?;
     Ok(true)
+}
+
+/// Sets where the work orders of `project`, in `folder`, take their
+/// permission mode (story 5.24, D-983): writes
+/// `relay/work-order-permissions.json` atomically and journals
+/// `work_order_permission_set`, under the journal lock held across both,
+/// so a choice and its line go together. A choice the record already holds
+/// writes and journals nothing. A record that cannot be read counts as
+/// none: work orders already take each project's own mode, and the new
+/// record starts from that. Returns the record in effect. The
+/// caller passes a project and folder of a card the approved catalogue
+/// issued, so no other name reaches the file.
+pub fn set_work_order_permission(
+    home: &RelayHome,
+    project: &str,
+    folder: &str,
+    permission: WorkOrderPermission,
+    now_ms: i64,
+) -> Result<WorkOrderPermissions, AuthorityError> {
+    let journal = JournalLock::acquire(home).map_err(|e| AuthorityError::Journal(e.to_string()))?;
+    let current = home.read_work_order_permissions().effective();
+    if current.of(project, folder) == permission {
+        return Ok(current);
+    }
+    let record = current.with(project, folder, permission, now_ms);
+    write_json(&home.work_order_permissions_file(), &record)?;
+    let line = JournalEntry::WorkOrderPermissionSet(WorkOrderPermissionSet {
+        project: project.to_owned(),
+        folder: folder.to_owned(),
+        permission,
+        mode: permission.mode().map(str::to_owned),
+    });
+    journal
+        .append(&[line], now_ms)
+        .map_err(|e| AuthorityError::Journal(e.to_string()))?;
+    Ok(record)
 }
 
 /// Writes `bytes` to `path` only when nothing is there yet, and whole: a

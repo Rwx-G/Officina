@@ -9,6 +9,13 @@
       "expect": [{"key": "pid:4100:1761550000000", "column": "needs_you", "badge": null, "waiting_for": "permission prompt"}]
     },
     {
+      "name": "a work order blocked on a permission prompt in its project's own mode (story 5.24, E88)",
+      "now_ms": 1761555600000,
+      "agents": [{"pid": 4210, "id": "bg02", "cwd": "C:/work/repo-b", "kind": "background", "startedAt": 1761555580000, "sessionId": "00000000-0000-0000-0000-000000000003", "name": "dependency-bump-1", "status": "waiting", "state": "blocked", "waitingFor": "permission prompt"}],
+      "events": [],
+      "expect": [{"key": "bg:bg02", "column": "needs_you", "badge": null, "waiting_for": "permission prompt"}]
+    },
+    {
       "name": "background blocked on a question",
       "now_ms": 1761555600000,
       "agents": [{"pid": 4200, "id": "bg01", "cwd": "C:/work/repo-b", "kind": "background", "startedAt": 1761550000000, "sessionId": "00000000-0000-0000-0000-000000000002", "name": "nightly", "status": "waiting", "state": "blocked", "waitingFor": "input needed"}],
