@@ -1050,6 +1050,19 @@ project uses [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Doctor kept Officina's hook and statusline entries that named another
+  `officina.exe` (a copy placed elsewhere earlier, an older install) as
+  registered, so sessions kept running that copy and a block pasted after
+  an install mixed both paths. It now fails the hooks line, and warns on
+  the quota line even while the quota is fresh, naming the other path;
+  the hooks block points every Officina entry at the running
+  `officina.exe`, keeping each entry's other fields and every foreign hook,
+  never two Officina entries for one event, and the statusline value
+  points its `quota write` stage at it, its `--tee` and the rest of the
+  pipeline kept. A bare `officina` found through `PATH` is left alone. The
+  README states where the installer puts the executables,
+  `%LOCALAPPDATA%\Officina\`, and to run that `officina.exe`'s doctor
+  (D-981).
 - A `claude --version` the window could not read, as one cut by its
   5-second deadline on a loaded machine, left the version unknown until
   `claude` changed or the window restarted, so a meeting's answer to a

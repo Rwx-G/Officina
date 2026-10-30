@@ -187,14 +187,17 @@ fn registration_group(exe: &Path, registration: &Registration) -> serde_json::Va
 }
 
 /// The `hooks` value of a settings file once `registrations` are in it
-/// (D-530): `current` with every entry it holds kept as it is, plus one
-/// matcher group from [`registration_group`] for each registration
-/// [`missing_hook_events`] reports. For a registration with tools or one
-/// that fails closed, Officina's own entries of that event are taken out
-/// first, a group they leave empty going with them, so a partial matcher or
-/// an entry without [`ON_FAILURE`] is replaced, never doubled. Fails when
-/// `current`, or the list of an event to change, does not have the shape
-/// Claude Code reads.
+/// (D-530): `current` with every foreign entry it holds kept as it is, plus
+/// one matcher group from [`registration_group`] for each registration
+/// [`missing_hook_events`] reports. Officina's own entries that run another
+/// `officina` binary than `exe` (a stale copy, [`stale_hook_programs`]) are
+/// pointed at `exe` first, their other fields kept, and an entry that then
+/// repeats an earlier one of its event and matcher goes (D-981). For
+/// a registration with tools or one that fails closed, Officina's own
+/// entries of that event are taken out first, a group they leave empty
+/// going with them, so a partial matcher or an entry without
+/// [`ON_FAILURE`] is replaced, never doubled. Fails when `current`, or the
+/// list of an event to change, does not have the shape Claude Code reads.
 pub fn merged_hooks(
     current: Option<&serde_json::Value>,
     exe: &Path,
@@ -205,6 +208,11 @@ pub fn merged_hooks(
         Some(serde_json::Value::Object(map)) => map.clone(),
         Some(_) => return Err("its \"hooks\" key is not an object".to_owned()),
     };
+    for groups in hooks.values_mut() {
+        if let serde_json::Value::Array(groups) = groups {
+            retarget_officina_entries(groups, exe);
+        }
+    }
     for registration in registrations {
         let settings = serde_json::json!({ "hooks": serde_json::Value::Object(hooks.clone()) });
         if missing_hook_events(&settings, std::slice::from_ref(registration)).is_empty() {
@@ -246,11 +254,129 @@ fn drop_officina_entries(group: &mut serde_json::Value) -> bool {
     entries.len() < before && entries.is_empty()
 }
 
+/// Points every entry of `groups` (one event's matcher groups) that runs
+/// `officina hook` from another binary than `exe` at `exe`, its other
+/// fields kept; then drops an Officina entry that repeats one of an earlier
+/// group with the same matcher, or an earlier one of its own group, so a
+/// file holding both a stale and a current entry runs the hook once. A
+/// group this leaves empty goes; a group that was empty stays.
+fn retarget_officina_entries(groups: &mut Vec<serde_json::Value>, exe: &Path) {
+    let command = format!("{} hook", quoted_exe(exe));
+    let mut seen: Vec<(Option<serde_json::Value>, serde_json::Value)> = Vec::new();
+    groups.retain_mut(|group| {
+        let matcher = group.get("matcher").cloned();
+        let Some(entries) = group
+            .get_mut("hooks")
+            .and_then(serde_json::Value::as_array_mut)
+        else {
+            return true;
+        };
+        let before = entries.len();
+        entries.retain_mut(|entry| {
+            let Some(program) = entry
+                .get("command")
+                .and_then(serde_json::Value::as_str)
+                .and_then(officina_hook_program)
+            else {
+                return true;
+            };
+            if is_stale_program(&program, exe) {
+                entry["command"] = command.clone().into();
+            }
+            let key = (matcher.clone(), entry.clone());
+            if seen.contains(&key) {
+                return false;
+            }
+            seen.push(key);
+            true
+        });
+        !(entries.len() < before && entries.is_empty())
+    });
+}
+
+/// The `officina` binaries the Officina hook entries of `hooks` (a settings
+/// file's `hooks` value) run that are not `exe`, as each entry spells them,
+/// sorted and once each: a copy left at another place keeps running in
+/// every session while the entries name it (D-981).
+pub fn stale_hook_programs(hooks: Option<&serde_json::Value>, exe: &Path) -> Vec<String> {
+    let programs: std::collections::BTreeSet<String> = hooks
+        .and_then(serde_json::Value::as_object)
+        .into_iter()
+        .flat_map(|events| events.values())
+        .filter_map(serde_json::Value::as_array)
+        .flatten()
+        .flat_map(officina_entries)
+        .filter_map(|entry| entry.get("command")?.as_str())
+        .filter_map(officina_hook_program)
+        .filter(|program| is_stale_program(program, exe))
+        .collect();
+    programs.into_iter().collect()
+}
+
+/// True when `program`, the first word of an Officina command once
+/// unquoted, names another binary than `exe`: a path that differs once
+/// both use forward slashes, in any case on Windows. A bare name (no
+/// separator) is found through `PATH` at run time, which doctor does not
+/// resolve, so it is never stale.
+fn is_stale_program(program: &str, exe: &Path) -> bool {
+    if !program.contains(['/', '\\']) {
+        return false;
+    }
+    let found = program.replace('\\', "/");
+    let wanted = exe.to_string_lossy().replace('\\', "/");
+    if cfg!(windows) {
+        !found.eq_ignore_ascii_case(&wanted)
+    } else {
+        found != wanted
+    }
+}
+
+/// `command` with each pipeline stage that runs Officina's `quota write`
+/// from another binary than `exe` pointed at `exe`: the stage's own
+/// options and spacing kept, every other stage as it is.
+fn retargeted_quota_write(command: &str, exe: &Path) -> String {
+    command
+        .split('|')
+        .map(|stage| match quota_write_program(stage) {
+            Some(program) if is_stale_program(&program, exe) => {
+                let words = command_words(stage).unwrap_or_default();
+                let lead = &stage[..stage.len() - stage.trim_start().len()];
+                let trail = &stage[stage.trim_end().len()..];
+                let rest: Vec<String> = words
+                    .iter()
+                    .skip(1)
+                    .map(|word| {
+                        if word.is_empty() || word.contains(char::is_whitespace) {
+                            format!("\"{word}\"")
+                        } else {
+                            word.clone()
+                        }
+                    })
+                    .collect();
+                format!("{lead}{} {}{trail}", quoted_exe(exe), rest.join(" "))
+            }
+            _ => stage.to_owned(),
+        })
+        .collect::<Vec<_>>()
+        .join("|")
+}
+
+/// The `officina` binaries a statusline `command` runs `quota write` from
+/// that are not `exe`, as it spells them.
+pub fn stale_quota_write_programs(command: &str, exe: &Path) -> Vec<String> {
+    command
+        .split('|')
+        .filter_map(quota_write_program)
+        .filter(|program| is_stale_program(program, exe))
+        .collect()
+}
+
 /// The `statusLine` value that writes the quota (AD-16, D-530), from
 /// `current`, a settings file's `statusLine`: its other fields kept, its
 /// command teed into Officina's `quota write` (`--tee` keeps its output),
-/// or kept as it is when it already runs `quota write`, which a tee into it
-/// would run twice; without a command, the plain `quota write`.
+/// or kept when it already runs `quota write`, which a tee into it would
+/// run twice, a stage running it from another binary than `exe` pointed at
+/// `exe`; without a command, the plain `quota write`.
 pub fn statusline_value(exe: &Path, current: Option<&serde_json::Value>) -> serde_json::Value {
     let mut value = match current {
         Some(serde_json::Value::Object(map)) => map.clone(),
@@ -261,7 +387,9 @@ pub fn statusline_value(exe: &Path, current: Option<&serde_json::Value>) -> serd
         .and_then(serde_json::Value::as_str)
         .filter(|existing| !existing.trim().is_empty())
     {
-        Some(existing) if runs_officina_quota_write(existing) => existing.to_owned(),
+        Some(existing) if runs_officina_quota_write(existing) => {
+            retargeted_quota_write(existing, exe)
+        }
         Some(existing) => format!("{} quota write --tee | {existing}", quoted_exe(exe)),
         None => format!("{} quota write", quoted_exe(exe)),
     };
@@ -536,34 +664,42 @@ fn matcher_names(matcher: &str, tool: &str) -> bool {
 /// spelling the binary accepts. Later words are ignored, as the binary
 /// ignores them.
 fn runs_officina_hook(command: &str) -> bool {
-    let Some(words) = command_words(command) else {
-        return false;
-    };
+    officina_hook_program(command).is_some()
+}
+
+/// The program, unquoted, of `command` when it starts the Officina hook
+/// ([`runs_officina_hook`]).
+fn officina_hook_program(command: &str) -> Option<String> {
+    let words = command_words(command)?;
     let [program, subcommand, ..] = words.as_slice() else {
-        return false;
+        return None;
     };
+    (subcommand == "hook" && is_officina_binary(program)).then(|| program.clone())
+}
+
+/// True when the path `program` names a file called `officina` or
+/// `officina.exe`, in any case.
+fn is_officina_binary(program: &str) -> bool {
     let file_name = program.rsplit(['/', '\\']).next().unwrap_or_default();
-    subcommand == "hook"
-        && (file_name.eq_ignore_ascii_case("officina")
-            || file_name.eq_ignore_ascii_case("officina.exe"))
+    file_name.eq_ignore_ascii_case("officina") || file_name.eq_ignore_ascii_case("officina.exe")
 }
 
 /// True when a stage of the pipeline `command` runs `officina quota write`
 /// (the `officina` binary, then `quota`, then `write`), whatever its options.
 pub fn runs_officina_quota_write(command: &str) -> bool {
-    command.split('|').any(|stage| {
-        let Some(words) = command_words(stage) else {
-            return false;
-        };
-        let [program, quota, write, ..] = words.as_slice() else {
-            return false;
-        };
-        let file_name = program.rsplit(['/', '\\']).next().unwrap_or_default();
-        (file_name.eq_ignore_ascii_case("officina")
-            || file_name.eq_ignore_ascii_case("officina.exe"))
-            && quota == "quota"
-            && write == "write"
-    })
+    command
+        .split('|')
+        .any(|stage| quota_write_program(stage).is_some())
+}
+
+/// The program, unquoted, of the pipeline stage `stage` when it runs
+/// `officina quota write`.
+fn quota_write_program(stage: &str) -> Option<String> {
+    let words = command_words(stage)?;
+    let [program, quota, write, ..] = words.as_slice() else {
+        return None;
+    };
+    (is_officina_binary(program) && quota == "quota" && write == "write").then(|| program.clone())
 }
 
 /// Splits a command line into words as a POSIX shell does for plain words:
@@ -1205,9 +1341,10 @@ pub fn check_proposals(
     }
 }
 
-/// Every required registration in the user settings, else the file's whole
-/// `hooks` key with them merged in, to paste over it (D-530), and the file
-/// under `doctor_dir` that holds it (D-534).
+/// Every required registration in the user settings, each Officina entry
+/// running `exe`; else the file's whole `hooks` key with them merged in and
+/// a stale binary's entries pointed at `exe`, to paste over it (D-530,
+/// D-981), and the file under `doctor_dir` that holds it (D-534).
 fn check_hooks(
     user_settings: &Path,
     exe: &Path,
@@ -1217,7 +1354,8 @@ fn check_hooks(
     let settings = SettingsFile::read(user_settings);
     let current = settings.get("hooks");
     let missing = missing_hook_events(&serde_json::json!({ "hooks": current }), required);
-    if missing.is_empty() {
+    let stale = stale_hook_programs(current, exe);
+    if missing.is_empty() && stale.is_empty() {
         let ok = check(
             Level::Ok,
             "hooks",
@@ -1235,10 +1373,12 @@ fn check_hooks(
             None,
         ),
     };
-    let kept = if current.is_some() && paste.is_some() {
-        " (every hook already there is kept in it)"
-    } else {
-        ""
+    let kept = match (current.is_some() && paste.is_some(), stale.is_empty()) {
+        (false, _) => "",
+        (true, true) => " (every hook already there is kept in it)",
+        (true, false) => {
+            " (every other hook already there is kept in it, and Officina's own run this officina.exe)"
+        }
     };
     let file = paste.as_ref().map(|block| PasteFile {
         path: paste_file_path(doctor_dir, "user", "hooks"),
@@ -1251,14 +1391,26 @@ fn check_hooks(
         ),
         None => ".".to_owned(),
     };
+    let mut reasons = Vec::new();
+    if !missing.is_empty() {
+        reasons.push(format!(
+            "not registered for {} in {}",
+            missing.join(", "),
+            user_settings.display()
+        ));
+    }
+    if !stale.is_empty() {
+        reasons.push(format!(
+            "Officina's hooks in {} run {}, not this officina.exe ({}): every session runs that copy until they are replaced",
+            user_settings.display(),
+            stale.join(", "),
+            exe.display()
+        ));
+    }
     let line = Check {
         level: Level::Fail,
         title: "hooks".into(),
-        detail: format!(
-            "not registered for {} in {}. {instruction}{kept}{never_edits}",
-            missing.join(", "),
-            user_settings.display()
-        ),
+        detail: format!("{}. {instruction}{kept}{never_edits}", reasons.join("; ")),
         paste,
     };
     (line, file)
@@ -1380,8 +1532,9 @@ impl StatuslineOverride {
 
 /// The overrides among `folders`: each folder's `.claude/settings.local.json`
 /// statusline, else its `.claude/settings.json` one, when it does not run
-/// Officina's `quota write`. Read-only.
-pub fn statusline_overrides(folders: &[PathBuf]) -> Vec<StatuslineOverride> {
+/// Officina's `quota write`, or runs it from another binary than `exe`
+/// (D-981). Read-only.
+pub fn statusline_overrides(folders: &[PathBuf], exe: &Path) -> Vec<StatuslineOverride> {
     folders
         .iter()
         .filter_map(|folder| {
@@ -1397,7 +1550,10 @@ pub fn statusline_overrides(folders: &[PathBuf]) -> Vec<StatuslineOverride> {
                     Some((file, status_line))
                 })
                 .filter(|(_, status_line)| {
-                    !statusline_command(status_line).is_some_and(runs_officina_quota_write)
+                    !statusline_command(status_line).is_some_and(|command| {
+                        runs_officina_quota_write(command)
+                            && stale_quota_write_programs(command, exe).is_empty()
+                    })
                 })
                 .map(|(file, status_line)| StatuslineOverride {
                     folder: folder.clone(),
@@ -1421,10 +1577,12 @@ fn recent_session_folders(events_dir: &Path, now: i64) -> Vec<PathBuf> {
     folders.into_iter().collect()
 }
 
-/// A fresh quota file for this floor's account; else why it is stale and,
-/// for each settings file to change, its whole `statusLine` value wired to
-/// paste over it (D-530). A user statusline that already runs Officina's
-/// `quota write` is in place: the cause is then a project's own statusline,
+/// A fresh quota file for this floor's account, written by a user
+/// statusline that runs this `exe`; else why it is stale, or which other
+/// binary the statusline runs (D-981), and, for each settings file to
+/// change, its whole `statusLine` value wired to paste over it (D-530). A
+/// user statusline that already runs this Officina's `quota write` is in
+/// place: the cause is then a project's own statusline,
 /// which wins in sessions opened in its folder, so the folders of the
 /// sessions the hook saw are checked for one, and each gets its value for
 /// its `settings.local.json`. Each block is also in a file under
@@ -1436,36 +1594,12 @@ fn check_quota(
     now: i64,
     doctor_dir: &Path,
 ) -> (Check, Vec<PasteFile>) {
-    let found = collector.read_quota();
-    if let Some(q) = found
-        .as_ref()
-        .filter(|q| now - q.written_at * 1000 <= STALE_AFTER_MS)
-    {
-        let ok = check(
-            Level::Ok,
-            "quota",
-            format!(
-                "account {} updated {} min ago",
-                q.account_key,
-                (now / 1000 - q.written_at) / 60
-            ),
-        );
-        return (ok, Vec::new());
-    }
-    let state = format!(
-        "{} for account {}",
-        if found.is_some() { "stale" } else { "no data" },
-        collector.paths().account_key()
-    );
     let user = SettingsFile::read(user_settings);
-    let user_wired = user
-        .get("statusLine")
-        .and_then(statusline_command)
-        .is_some_and(runs_officina_quota_write);
-    let overrides = statusline_overrides(&recent_session_folders(
-        &collector.paths().events_dir(),
-        now,
-    ));
+    let user_command = user.get("statusLine").and_then(statusline_command);
+    let user_stale = user_command
+        .map(|command| stale_quota_write_programs(command, exe))
+        .unwrap_or_default();
+    let user_wired = user_command.is_some_and(runs_officina_quota_write) && user_stale.is_empty();
     let user_section = || {
         saved_section(
             key_paste(
@@ -1477,6 +1611,48 @@ fn check_quota(
             paste_file_path(doctor_dir, "user", "statusLine"),
         )
     };
+    let user_need = if user_stale.is_empty() {
+        "Wire officina quota write into the user statusline".to_owned()
+    } else {
+        format!(
+            "The user statusline runs {} quota write, not this officina.exe ({}): point it at this one",
+            user_stale.join(", "),
+            exe.display()
+        )
+    };
+    let found = collector.read_quota();
+    if let Some(q) = found
+        .as_ref()
+        .filter(|q| now - q.written_at * 1000 <= STALE_AFTER_MS)
+    {
+        let fresh = format!(
+            "account {} updated {} min ago",
+            q.account_key,
+            (now / 1000 - q.written_at) / 60
+        );
+        if user_stale.is_empty() {
+            return (check(Level::Ok, "quota", fresh), Vec::new());
+        }
+        let (text, file) = user_section();
+        let line = Check {
+            level: Level::Warn,
+            title: "quota".into(),
+            detail: format!(
+                "{fresh}, by another officina.exe. {user_need} (Officina never edits the file):"
+            ),
+            paste: Some(text),
+        };
+        return (line, file.into_iter().collect());
+    }
+    let state = format!(
+        "{} for account {}",
+        if found.is_some() { "stale" } else { "no data" },
+        collector.paths().account_key()
+    );
+    let overrides = statusline_overrides(
+        &recent_session_folders(&collector.paths().events_dir(), now),
+        exe,
+    );
     let (folder_texts, folder_files): (Vec<String>, Vec<Option<PasteFile>>) = overrides
         .iter()
         .map(|o| {
@@ -1502,8 +1678,7 @@ fn check_quota(
     let (detail, paste) = match (user_wired, overrides.is_empty()) {
         (true, true) => (
             format!(
-                "{state}. The user statusline already runs officina quota write and no folder of a recent session sets its own: the file is written while a session shows its statusline, so open one, and check that the statusline's officina is this one ({})",
-                quoted_exe(exe)
+                "{state}. The user statusline already runs this officina.exe's quota write and no folder of a recent session sets its own: the file is written while a session shows its statusline, so open one"
             ),
             None,
         ),
@@ -1511,7 +1686,7 @@ fn check_quota(
             files.extend(folder_files.into_iter().flatten());
             (
                 format!(
-                    "{state}. The user statusline already runs officina quota write, but these project settings set their own statusline, which wins in sessions opened there: {folders}. Wire it in each folder's .claude/settings.local.json, never a committed file (Officina never edits them):"
+                    "{state}. The user statusline already runs this officina.exe's quota write, but these project settings set their own statusline, which wins in sessions opened there, or run another officina.exe: {folders}. Wire it in each folder's .claude/settings.local.json, never a committed file (Officina never edits them):"
                 ),
                 Some(per_folder),
             )
@@ -1520,9 +1695,7 @@ fn check_quota(
             let (text, file) = user_section();
             files.extend(file);
             (
-                format!(
-                    "{state}. Wire officina quota write into the user statusline (Officina never edits the file):"
-                ),
+                format!("{state}. {user_need} (Officina never edits the file):"),
                 Some(text),
             )
         }
@@ -1532,7 +1705,7 @@ fn check_quota(
             files.extend(folder_files.into_iter().flatten());
             (
                 format!(
-                    "{state}. Wire officina quota write into the user statusline and, in the folders whose project settings set their own ({folders}), into their .claude/settings.local.json, never a committed file (Officina never edits them):"
+                    "{state}. {user_need} and, in the folders whose project settings set their own statusline or run another officina.exe ({folders}), wire it into their .claude/settings.local.json, never a committed file (Officina never edits them):"
                 ),
                 Some(format!("{text}\n{per_folder}")),
             )
@@ -3793,7 +3966,8 @@ mod tests {
         let line = check_quota(&collector, &user, &exe, now_ms(), Path::new("doctor")).0;
         assert_eq!(line.level, Level::Warn);
         assert!(
-            line.detail.contains("already runs officina quota write"),
+            line.detail
+                .contains("already runs this officina.exe's quota write"),
             "{}",
             line.detail
         );
@@ -3849,16 +4023,21 @@ mod tests {
         );
     }
 
-    /// An existing statusline that already runs Officina's `quota write` is
-    /// kept as it is, never teed into it again.
+    /// An existing statusline that already runs this Officina's `quota
+    /// write`, or a bare `officina` found through `PATH`, is kept as it is,
+    /// never teed into it again.
     #[test]
     fn statusline_value_never_tees_into_officina_itself() {
         let exe = PathBuf::from("C:/Program Files/Officina/officina.exe");
         for existing in [
             "\"C:/Program Files/Officina/officina.exe\" quota write",
             "\"C:/Program Files/Officina/officina.exe\" quota write --tee | python s.py",
-            "/opt/officina quota write",
+            "\"c:\\program files\\officina\\OFFICINA.EXE\" quota write",
+            "officina quota write --tee | python s.py",
         ] {
+            if existing.starts_with("\"c:") && !cfg!(windows) {
+                continue;
+            }
             let current = serde_json::json!({"type": "command", "command": existing});
             assert_eq!(statusline_value(&exe, Some(&current)), current);
         }
@@ -3882,6 +4061,228 @@ mod tests {
         ] {
             assert!(!runs_officina_quota_write(other), "{other}");
         }
+    }
+
+    /// The installed binary's path (D-981, the owner's case): the hooks
+    /// named a copy placed elsewhere by hand.
+    const OLD_EXE: &str = "C:/Users/user01/AppData/Local/Programs/Officina/officina.exe";
+    const NEW_EXE: &str = "C:/Users/user01/AppData/Local/Officina/officina.exe";
+
+    /// Every Officina entry of `hooks`, by its command.
+    fn officina_commands(hooks: &serde_json::Value) -> Vec<String> {
+        hooks
+            .as_object()
+            .unwrap()
+            .values()
+            .flat_map(|groups| groups.as_array().unwrap().iter())
+            .flat_map(officina_entries)
+            .map(|entry| entry["command"].as_str().unwrap().to_owned())
+            .collect()
+    }
+
+    /// D-981, the owner's case: every registration was merged earlier with
+    /// a copy's path, then `PermissionDenied` with the installed one. Doctor
+    /// fails naming the copy; its block points every Officina entry at the
+    /// running binary, once per registration, keeps each foreign entry in
+    /// its place, and doctor on the pasted file prints nothing.
+    #[test]
+    fn stale_officina_hooks_are_pointed_at_this_exe() {
+        let (old, new) = (PathBuf::from(OLD_EXE), PathBuf::from(NEW_EXE));
+        let required = registrations(true);
+        let without_denial: Vec<Registration> = required
+            .iter()
+            .filter(|r| r.event != denial_registration().event)
+            .cloned()
+            .collect();
+        let earlier = merged_hooks(Some(&foreign_hooks()), &old, &without_denial).unwrap();
+        // What the doctor before this fix printed: the copy's entries kept
+        // as registered, the missing one added with the installed path.
+        let mut mixed = earlier.clone();
+        mixed[denial_registration().event] =
+            serde_json::json!([registration_group(&new, &denial_registration())]);
+        assert_eq!(
+            stale_hook_programs(Some(&mixed), &new),
+            vec![OLD_EXE.to_owned()]
+        );
+
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("settings.json");
+        fs::write(
+            &file,
+            serde_json::json!({"model": "opus", "hooks": mixed}).to_string(),
+        )
+        .unwrap();
+        let line = check_hooks(&file, &new, &required, Path::new("doctor")).0;
+        assert_eq!(line.level, Level::Fail);
+        assert!(line.detail.contains(OLD_EXE), "{}", line.detail);
+        assert!(!line.detail.contains("not registered"), "{}", line.detail);
+        let block = line.paste.clone().unwrap();
+        assert!(!block.contains(OLD_EXE), "{block}");
+        apply_paste(&file, &block);
+
+        let pasted = SettingsFile::read(&file).get("hooks").unwrap().clone();
+        let commands = officina_commands(&pasted);
+        assert_eq!(commands.len(), required.len(), "{pasted:#}");
+        assert!(
+            commands
+                .iter()
+                .all(|c| *c == format!("{} hook", quoted_exe(&new))),
+            "{commands:?}"
+        );
+        for registration in &required {
+            assert_eq!(officina_entry_count(&pasted, registration.event), 1);
+        }
+        for (event, groups) in foreign_hooks().as_object().unwrap() {
+            let groups = groups.as_array().unwrap();
+            assert_eq!(
+                &pasted[event].as_array().unwrap()[..groups.len()],
+                groups.as_slice(),
+                "{event}"
+            );
+        }
+        assert_eq!(
+            merged_hooks(Some(&pasted), &new, &required).unwrap(),
+            pasted
+        );
+        let line = check_hooks(&file, &new, &required, Path::new("doctor")).0;
+        assert_eq!((line.level, line.paste), (Level::Ok, None));
+    }
+
+    /// D-981: an entry at a stale path keeps its other fields; one that then
+    /// repeats an entry of its event and matcher goes, with a group it
+    /// empties, and a foreign entry sharing its group stays.
+    #[test]
+    fn a_retargeted_entry_keeps_its_fields_and_is_never_doubled() {
+        let new = PathBuf::from(NEW_EXE);
+        let current = format!("{} hook", quoted_exe(&new));
+        let stale = format!("\"{OLD_EXE}\" hook");
+        let notify = serde_json::json!({"type": "command", "command": "python notify.py"});
+        let hooks = serde_json::json!({
+            "Stop": [
+                {"hooks": [notify.clone(), {"type": "command", "command": stale, "timeout": 5}]},
+                {"hooks": [{"type": "command", "command": current, "timeout": 5}]}
+            ],
+            "SessionEnd": [{"hooks": [{"type": "command", "command": stale, "timeout": 9, "async": true}]}]
+        });
+        let merged = merged_hooks(Some(&hooks), &new, &[]).unwrap();
+        assert_eq!(
+            merged,
+            serde_json::json!({
+                "Stop": [{"hooks": [notify, {"type": "command", "command": current, "timeout": 5}]}],
+                "SessionEnd": [{"hooks": [{"type": "command", "command": current, "timeout": 9, "async": true}]}]
+            })
+        );
+        assert!(stale_hook_programs(Some(&merged), &new).is_empty());
+    }
+
+    /// D-981: a bare `officina` is found through `PATH`, which doctor does
+    /// not resolve: never stale. A path differing in case and separators
+    /// only is the same file on Windows.
+    #[test]
+    fn a_bare_officina_is_never_stale() {
+        let new = PathBuf::from(NEW_EXE);
+        let hooks = serde_json::json!({"Stop": [{"hooks": [
+            {"type": "command", "command": "officina hook"},
+            {"type": "command", "command": "officina.exe hook"}
+        ]}]});
+        assert!(stale_hook_programs(Some(&hooks), &new).is_empty());
+        let backslashes = NEW_EXE.replace('/', "\\").to_uppercase();
+        let hooks = serde_json::json!({"Stop": [{"hooks": [
+            {"type": "command", "command": format!("\"{backslashes}\" hook")}
+        ]}]});
+        assert_eq!(
+            stale_hook_programs(Some(&hooks), &new).is_empty(),
+            cfg!(windows)
+        );
+    }
+
+    /// D-981: a statusline running `quota write` from a copy is pointed at
+    /// the running binary, its tee, its other stages and its other fields
+    /// kept; the result is stable.
+    #[test]
+    fn a_stale_statusline_keeps_its_tee_and_is_pointed_at_this_exe() {
+        let new = PathBuf::from(NEW_EXE);
+        let current = serde_json::json!({
+            "type": "command",
+            "command": format!("\"{OLD_EXE}\" quota write --tee | python s.py"),
+            "padding": 2
+        });
+        let value = statusline_value(&new, Some(&current));
+        assert_eq!(
+            value,
+            serde_json::json!({
+                "type": "command",
+                "command": format!("{} quota write --tee | python s.py", quoted_exe(&new)),
+                "padding": 2
+            })
+        );
+        assert_eq!(statusline_value(&new, Some(&value)), value);
+        assert_eq!(
+            stale_quota_write_programs(current["command"].as_str().unwrap(), &new),
+            vec![OLD_EXE.to_owned()]
+        );
+        let last = serde_json::json!({"command": format!("python s.py | {OLD_EXE} quota write")});
+        assert_eq!(
+            statusline_value(&new, Some(&last))["command"],
+            format!("python s.py | {} quota write", quoted_exe(&new))
+        );
+    }
+
+    /// D-981: a fresh quota written by a copy's statusline warns, names the
+    /// copy and prints the user statusline pointed at the running binary; a
+    /// stale one does the same in its own sentence.
+    #[test]
+    fn a_statusline_running_another_officina_warns() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths {
+            officina_home: dir.path().join("officina"),
+            claude_config_dir: dir.path().join("config"),
+            claude_config_override: None,
+            floor_file: None,
+        };
+        fs::create_dir_all(&paths.claude_config_dir).unwrap();
+        let new = PathBuf::from(NEW_EXE);
+        let user = paths.claude_config_dir.join("settings.json");
+        fs::write(
+            &user,
+            serde_json::json!({"statusLine": {"type": "command", "command": format!("\"{OLD_EXE}\" quota write")}})
+                .to_string(),
+        )
+        .unwrap();
+        let collector = Collector::from_parts(paths.clone(), LoadedFloor::default(), None);
+        let stale = check_quota(&collector, &user, &new, now_ms(), Path::new("doctor")).0;
+        fs::create_dir_all(paths.quota_file().parent().unwrap()).unwrap();
+        fs::write(
+            paths.quota_file(),
+            serde_json::json!({"schema": officina_core::quota::QUOTA_SCHEMA,
+                "account_key": paths.account_key(), "written_at": now_ms() / 1000})
+            .to_string(),
+        )
+        .unwrap();
+        assert!(collector.read_quota().is_some());
+        let fresh = check_quota(&collector, &user, &new, now_ms(), Path::new("doctor")).0;
+        let wired = serde_json::to_string(&format!("{} quota write", quoted_exe(&new))).unwrap();
+        for line in [&stale, &fresh] {
+            assert_eq!(line.level, Level::Warn, "{line:?}");
+            assert!(line.detail.contains(OLD_EXE), "{}", line.detail);
+            let paste = line.paste.as_deref().unwrap();
+            assert!(paste.contains(&wired), "{paste}");
+            assert!(!paste.contains(OLD_EXE), "{paste}");
+        }
+        assert!(
+            fresh.detail.contains("updated 0 min ago"),
+            "{}",
+            fresh.detail
+        );
+
+        fs::write(
+            &user,
+            serde_json::json!({"statusLine": {"type": "command", "command": format!("{} quota write", quoted_exe(&new))}})
+                .to_string(),
+        )
+        .unwrap();
+        let line = check_quota(&collector, &user, &new, now_ms(), Path::new("doctor")).0;
+        assert_eq!((line.level, line.paste), (Level::Ok, None));
     }
 
     /// Every file under `dir` with its bytes, sorted.
