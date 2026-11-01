@@ -250,6 +250,9 @@ export interface Target {
   rect: Rect;
   label: string;
   tag: string;
+  /** What the name tag adds after the name, set apart: a figure's project,
+   *  a sub-agent's lead (D-1044); `null` for none. */
+  context: string | null;
   keys: string[];
 }
 
@@ -672,7 +675,7 @@ export function layoutScene(input: SceneInput, memory: SceneMemory): SceneLayout
     const e = bySpot.get(spot.id);
     if (!e || !e.at) return;
     const words = figureWords(facts(e));
-    targets.push({ id: `figure:${e.key}`, group, kind: "figure", rect: figureTarget(e.at), label: words.label, tag: words.tag, keys: [e.key] });
+    targets.push({ id: `figure:${e.key}`, group, kind: "figure", rect: figureTarget(e.at), label: words.label, tag: words.tag, context: words.context, keys: [e.key] });
   };
   const group = (id: string, room: string, rect: Rect, roomName: string) => {
     const keys = groupKeys.get(id) ?? [];
@@ -683,7 +686,7 @@ export function layoutScene(input: SceneInput, memory: SceneMemory): SceneLayout
       id === MORE ? moreProjects.length : null,
       received !== null && keys.includes(received),
     );
-    targets.push({ id: `group:${id}`, group: room, kind: "group", rect, label: words.label, tag: words.tag, keys });
+    targets.push({ id: `group:${id}`, group: room, kind: "group", rect, label: words.label, tag: words.tag, context: null, keys });
   };
   const sharedGroup = (zone: SharedZone) => {
     for (const s of sharedSpots(zone)) figure(s, zone);
@@ -694,7 +697,7 @@ export function layoutScene(input: SceneInput, memory: SceneMemory): SceneLayout
   {
     const words = orchestratorWords(presence, proposals);
     const kind: TargetKind = presence ? "orchestrator" : "chair";
-    targets.push({ id: kind, group: "decision", kind, rect: figureTarget(chairAt), label: words.label, tag: words.tag, keys: [] });
+    targets.push({ id: kind, group: "decision", kind, rect: figureTarget(chairAt), label: words.label, tag: words.tag, context: null, keys: [] });
   }
   sharedGroup("alert");
   regular.forEach((project, slot) => {
@@ -714,7 +717,7 @@ export function layoutScene(input: SceneInput, memory: SceneMemory): SceneLayout
     if (targets.some((t) => intersects(t.rect, rect))) continue;
     const lead = cardOf.get(h.lead)!;
     const words = helperWords(lead, lead.subagents.find((a) => helperKey(h.lead, a.agent_id) === h.key)!);
-    targets.push({ id: `helper:${h.key}`, group: officeId(slotOf.get(h.project)!), kind: "helper", rect, label: words.label, tag: words.tag, keys: [h.lead] });
+    targets.push({ id: `helper:${h.key}`, group: officeId(slotOf.get(h.project)!), kind: "helper", rect, label: words.label, tag: words.tag, context: words.context, keys: [h.lead] });
   }
 
   const groups: Group[] = targets

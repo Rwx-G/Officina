@@ -1169,6 +1169,58 @@ test.describe("acting from the scene", () => {
     await expect(page.locator("#title-done")).toBeFocused();
   });
 
+  // Story 4.20 item 5 (D-1044): the owner read a plaque's "Officina 1" and
+  // a figure's "Officina-04" as two names of one agent. A session carries
+  // one name, its own, on every surface; its project is context set apart,
+  // and a plaque's count reads as a head count.
+  test("a session carries one name on every surface, its project only as context", async ({ page }) => {
+    const board = loadBoard("scene-c");
+    const lounge = liveCards(board).find((c) => c.scene?.zone === "lounge" && c.name !== c.project.name)!;
+    const queued = board.columns.needs_you.filter((c) => c.scene?.zone === "decision");
+    expect(lounge).toBeDefined();
+    expect(queued.length).toBeGreaterThan(0);
+    await openScene(page, board);
+
+    // The name tag: the session's own name, then its project set apart.
+    const figure = figureOf(page, lounge.key);
+    await figure.hover();
+    const tag = figure.locator("[data-tag]");
+    await expect(tag.locator(".tag-name")).toHaveText(lounge.name);
+    await expect(tag.locator("[data-tag-context]")).toHaveText(lounge.project.name);
+    const parts = await tag.evaluate((t) => Array.from(t.children).map((c) => c.className.split(" ")[0]));
+    expect(parts).toEqual(["tag-name", "tag-context"]);
+
+    // The queue: the tag, the register and the number agree on one name.
+    for (const card of queued) {
+      const row = scene(page).locator(`[data-register-row=${JSON.stringify(card.key)}]`);
+      if ((await row.count()) === 0) continue;
+      const number = await row.locator(".ticket").textContent();
+      await expect(row.locator(".name")).toHaveText(card.name);
+      await expect(figureOf(page, card.key).locator(".tag-name")).toHaveText(number ? `${number}. ${card.name}` : card.name);
+    }
+
+    // A plaque counts heads behind a glyph, apart from the room's name.
+    const plaques = scene(page).locator("[data-plaque-count]");
+    expect(await plaques.count()).toBeGreaterThan(0);
+    for (const count of await plaques.all()) {
+      await expect(count.locator("svg")).toHaveCount(1);
+      await expect(count).toHaveText(/^\d+$/);
+    }
+
+    // The file's title is the same name.
+    await figure.click();
+    await expect(sessionFile(page).getByRole("heading", { level: 2 })).toHaveText(lounge.name);
+    await expect(sessionFile(page).getByTestId("file-project")).toContainText(lounge.project.name);
+    await sessionFile(page).getByRole("button", { name: "Close" }).click();
+
+    // Focus: the name first, then the project.
+    await page.keyboard.press("f");
+    const focusRow = page.locator(`[data-testid="focus-row"][data-key=${JSON.stringify(lounge.key)}]`);
+    await expect(focusRow.getByTestId("focus-name")).toHaveText(lounge.name);
+    const order = await focusRow.locator("button.main").evaluate((b) => Array.from(b.children).map((c) => c.className.split(" ")[0]));
+    expect(order.indexOf("name")).toBeLessThan(order.indexOf("project"));
+  });
+
   test("session text renders as text in the scene and the file", async ({ page }) => {
     const markup = '<img src="x" onerror="window.__pwned = 1"><b>bold</b>';
     const board = structuredClone(loadBoard("scene-overflow"));

@@ -10,6 +10,7 @@ import type { Column } from "../generated/Column";
 import type { OrchestratorPresence } from "../generated/OrchestratorPresence";
 import type { SubagentView } from "../generated/SubagentView";
 import type { Zone } from "../generated/Zone";
+import { projectContext } from "../naming";
 import { LIVE_STATUS_TEXT, pendingText } from "../orchestrator-text";
 import type { SharedZone } from "./geometry";
 import type { Employee } from "./layout";
@@ -127,15 +128,17 @@ export function subagentCount(card: Card): string | null {
   return n === 0 ? null : `running ${plural(n, "sub-agent", "sub-agents")}`;
 }
 
-/** A sub-agent's `aria-label` and name tag: its type and its lead. */
-export function helperWords(lead: Card, agent: SubagentView): { label: string; tag: string } {
+/** A sub-agent's `aria-label` and name tag: its type, its lead as the
+ *  tag's context. */
+export function helperWords(lead: Card, agent: SubagentView): { label: string; tag: string; context: string } {
   const type = agentTypeWords(agent);
-  return { label: `${type}, sub-agent of ${lead.name}`, tag: type };
+  return { label: `${type}, sub-agent of ${lead.name}`, tag: type, context: lead.name };
 }
 
 /** A figure's `aria-label` (session, project, zone, state, reason, number,
- *  sub-agents) and its name tag. */
-export function figureWords(facts: FigureFacts): { label: string; tag: string } {
+ *  sub-agents), its name tag, the session's own name (D-1044), and the
+ *  tag's context, its project unless the name already says it. */
+export function figureWords(facts: FigureFacts): { label: string; tag: string; context: string | null } {
   const { card, employee } = facts;
   const parts = [card.name, `project ${card.project.name}`, zoneWords(facts), COLUMN_WORDS[card.column]];
   if (card.badge) parts.push(BADGE_WORDS[card.badge]);
@@ -146,7 +149,7 @@ export function figureWords(facts: FigureFacts): { label: string; tag: string } 
   if (number !== null) parts.push(`number ${number}`);
   const helpers = subagentCount(card);
   if (helpers !== null) parts.push(helpers);
-  return { label: parts.join(", "), tag: number !== null ? `${number}. ${card.name}` : card.name };
+  return { label: parts.join(", "), tag: number !== null ? `${number}. ${card.name}` : card.name, context: projectContext(card) };
 }
 
 /** A group target's words: its room, its count and its members' names.

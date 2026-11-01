@@ -119,6 +119,20 @@ describe("text", () => {
     expect(label(alerted, "hot")).toContain(ALERT_WORDS.priority);
   });
 
+  // D-1044: the session's own name is the tag; its project is the tag's
+  // context, left out when the name already says it.
+  it("a figure's tag is the session's own name, its project the context unless the name says it", () => {
+    const named = card("officina-04", "office", { project: "Officina" });
+    const unnamed = card("Officina", "office", { project: "officina" });
+    const l = lay(board([named, unnamed]));
+    const target = (key: string) => l.targets.find((t) => t.kind === "figure" && t.keys[0] === key)!;
+    expect(target("officina-04").tag).toBe("officina-04");
+    expect(target("officina-04").context).toBe("Officina");
+    expect(target("Officina").tag).toBe("Officina");
+    expect(target("Officina").context).toBeNull();
+    for (const t of l.targets.filter((x) => x.kind === "group" || x.kind === "chair" || x.kind === "orchestrator")) expect(t.context).toBeNull();
+  });
+
   it("an unknown employee reads as unknown", () => {
     const l = lay(board([card("u", "unknown")]));
     expect(label(l, "u")).toBe(`u, project alpha, ${ZONE_WORDS.unknown}, ${COLUMN_WORDS.working}, ${BADGE_WORDS.unknown}`);

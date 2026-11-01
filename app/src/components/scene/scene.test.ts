@@ -232,7 +232,10 @@ describe("Scene", () => {
     for (const button of buttonsOf(container)) {
       const tag = button.querySelector<HTMLElement>("[data-tag]");
       expect(tag, `${name} ${button.dataset.target}`).not.toBeNull();
-      expect(tag!.textContent).toBe(layout.targets.find((t) => t.id === button.dataset.target)!.tag);
+      const target = layout.targets.find((t) => t.id === button.dataset.target)!;
+      expect(tag!.querySelector(".tag-name")!.textContent).toBe(target.tag);
+      // The context after the name, set apart, never a second name (D-1044).
+      expect(tag!.querySelector("[data-tag-context]")?.textContent ?? null).toBe(target.context);
       expect(tag!.style.pointerEvents).toBe("none");
       expect(tag!.getAttribute("aria-hidden")).toBe("true");
     }

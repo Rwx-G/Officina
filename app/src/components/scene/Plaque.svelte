@@ -28,7 +28,13 @@
   <span class="pill">
     {#if dot !== undefined}<span class="dot" style:background={projectColor(dot)}></span>{/if}
     <span class="name">{text}</span>
-    {#if count !== null}<span class="count">{count}</span>{/if}
+    <!-- A head count, behind a person glyph, so a project's name and its
+         count never read as one session's name, "officina 1" (D-1044). -->
+    {#if count !== null}<span class="count" data-plaque-count
+        ><svg viewBox="0 0 10 12" width="8" height="10" aria-hidden="true"
+          ><circle cx="5" cy="3" r="2.6" /><path d="M0.4 12a4.6 4.6 0 0 1 9.2 0z" /></svg
+        >{count}</span
+      >{/if}
   </span>
 </div>
 
@@ -69,7 +75,16 @@
     text-overflow: ellipsis;
   }
   .count {
+    display: inline-flex;
+    flex: none;
+    align-items: center;
+    gap: 3px;
+    padding-left: 6px;
+    border-left: 1px solid currentColor;
     opacity: 0.72;
+  }
+  .count svg {
+    fill: currentColor;
   }
   .dot {
     flex: none;

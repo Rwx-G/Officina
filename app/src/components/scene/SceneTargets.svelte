@@ -54,7 +54,10 @@
       onclick={() => onActivate(target)}
       onkeydown={(event) => onKey(event, target)}
     >
-      <span class="tag" aria-hidden="true" data-tag style:pointer-events="none">{target.tag}</span>
+      <span class="tag" aria-hidden="true" data-tag style:pointer-events="none"
+        ><span class="tag-name">{target.tag}</span
+        >{#if target.context}<span class="tag-context" data-tag-context>{target.context}</span>{/if}</span
+      >
     </button>
   {/each}
 </div>
@@ -80,12 +83,17 @@
     outline-offset: 2px;
     box-shadow: 0 0 0 2px var(--color-surface);
   }
+  /* The session's own name, then its context set apart and muted, so the
+     two never read as two names (D-1044). */
   .tag {
     position: absolute;
     left: 50%;
     bottom: calc(100% + 6px);
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
     transform: translateX(-50%);
-    max-width: 180px;
+    max-width: 260px;
     padding: 3px 10px;
     border-radius: var(--radius-control);
     background: var(--color-text);
@@ -97,6 +105,22 @@
     overflow: hidden;
     text-overflow: ellipsis;
     visibility: hidden;
+  }
+  .tag-name {
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .tag-context {
+    flex: 0 2 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    padding-left: 6px;
+    border-left: 1px solid currentColor;
+    font-weight: 600;
+    opacity: 0.75;
   }
   .target:hover .tag,
   .target:focus-visible .tag {

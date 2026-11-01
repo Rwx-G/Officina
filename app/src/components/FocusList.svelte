@@ -42,8 +42,9 @@
       title={card.kind === "background" ? "Open claude attach" : "Bring the session window to front"}
     >
       {#if index !== null && index < 9}<kbd aria-hidden="true">{index + 1}</kbd>{/if}
+      <!-- The session's own name, then its project as context (D-1044). -->
+      <span class="name" data-testid="focus-name">{card.name}</span>
       <span class="project"><span class="dot"></span>{card.project.name}</span>
-      <span class="name">{card.name}</span>
       {#if card.waiting_for}<span class="waiting" data-testid="focus-waiting-for">{card.waiting_for}</span>{/if}
       {#if card.scene?.alert}
         <span class="alert" data-testid="focus-alert">
