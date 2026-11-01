@@ -163,6 +163,13 @@ required-features = ["window-authority"]
 name = "workshop_gate_probe"
 test = true
 
+# The workshop on a real engine without the window (story 6.8 AC 6 and 7):
+# CI's `workshop` job and the workstation's gate 9 and 1 second halves.
+# Builds through Build images' own code, hence the feature.
+[[example]]
+name = "battery_ci"
+required-features = ["window-authority"]
+
 [target."cfg(windows)".dependencies]
 windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_System_Diagnostics_ToolHelp", "Win32_System_Threading", "Win32_System_JobObjects", "Win32_System_SystemInformation", "Win32_Security_Credentials", "Win32_System_Registry", "Win32_System_Environment", "Win32_Storage_FileSystem"] }
 
