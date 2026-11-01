@@ -1,0 +1,467 @@
+{
+  "_doc": "The gateway's rules as cases (story 6.5, AD-103, D-234). Replayed by crates/officina-core/tests/gateway_vectors.rs; the addresses' range cases are derived there from addr.rs's tables. Formatter-exempt.",
+  "allow": [
+    "api.anthropic.com",
+    "index.crates.io",
+    "*.example.com"
+  ],
+  "requests": [
+    {
+      "name": "a CONNECT with a Host header",
+      "text": "CONNECT api.anthropic.com:443 HTTP/1.1\r\nHost: api.anthropic.com:443\r\n\r\n",
+      "expect": {
+        "host": "api.anthropic.com",
+        "port": 443,
+        "rest_hex": ""
+      }
+    },
+    {
+      "name": "HTTP/1.0",
+      "text": "CONNECT example.com:443 HTTP/1.0\r\n\r\n",
+      "expect": {
+        "host": "example.com",
+        "port": 443,
+        "rest_hex": ""
+      }
+    },
+    {
+      "name": "a pipelined ClientHello starts the TLS buffer",
+      "hex": "434f4e4e454354206170692e616e7468726f7069632e636f6d3a34343320485454502f312e310d0a486f73743a206170692e616e7468726f7069632e636f6d3a3434330d0a0d0a160301006f0100006b0303000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f2000000000000000000000000000000000000000000000000000000000000000000008130113021303c02b0100001a0000001600140000116170692e616e7468726f7069632e636f6d",
+      "expect": {
+        "host": "api.anthropic.com",
+        "port": 443,
+        "rest_hex": "160301006f0100006b0303000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f2000000000000000000000000000000000000000000000000000000000000000000008130113021303c02b0100001a0000001600140000116170692e616e7468726f7069632e636f6d"
+      }
+    },
+    {
+      "name": "no terminator yet",
+      "text": "CONNECT example.com:443 HTTP/1.1\r\n",
+      "expect": "more"
+    },
+    {
+      "name": "GET is another method",
+      "text": "GET http://example.com/ HTTP/1.1\r\n\r\n",
+      "expect": {
+        "refused": "method"
+      }
+    },
+    {
+      "name": "a lowercase method is malformed",
+      "text": "connect example.com:443 HTTP/1.1\r\n\r\n",
+      "expect": {
+        "refused": "malformed"
+      }
+    },
+    {
+      "name": "no port",
+      "text": "CONNECT example.com HTTP/1.1\r\n\r\n",
+      "expect": {
+        "refused": "malformed"
+      }
+    },
+    {
+      "name": "a port that is not a number",
+      "text": "CONNECT example.com:https HTTP/1.1\r\n\r\n",
+      "expect": {
+        "refused": "malformed"
+      }
+    },
+    {
+      "name": "HTTP/2.0",
+      "text": "CONNECT example.com:443 HTTP/2.0\r\n\r\n",
+      "expect": {
+        "refused": "malformed"
+      }
+    },
+    {
+      "name": "a header without a colon",
+      "text": "CONNECT example.com:443 HTTP/1.1\r\nHost\r\n\r\n",
+      "expect": {
+        "refused": "malformed"
+      }
+    },
+    {
+      "name": "8 KiB without a terminator",
+      "repeat": {
+        "byte": "a",
+        "count": 8192
+      },
+      "expect": {
+        "refused": "oversized"
+      }
+    }
+  ],
+  "hosts": [
+    {
+      "name": "an exact entry",
+      "host": "api.anthropic.com",
+      "port": 443,
+      "expect": {
+        "host": "api.anthropic.com",
+        "entry": "api.anthropic.com"
+      }
+    },
+    {
+      "name": "uppercase and a trailing dot",
+      "host": "API.Anthropic.COM.",
+      "port": 443,
+      "expect": {
+        "host": "api.anthropic.com",
+        "entry": "api.anthropic.com"
+      }
+    },
+    {
+      "name": "one label before a wildcard suffix",
+      "host": "a.example.com",
+      "port": 443,
+      "expect": {
+        "host": "a.example.com",
+        "entry": "*.example.com"
+      }
+    },
+    {
+      "name": "two labels before a wildcard suffix",
+      "host": "a.b.example.com",
+      "port": 443,
+      "expect": {
+        "host": "a.b.example.com",
+        "entry": "*.example.com"
+      }
+    },
+    {
+      "name": "the wildcard suffix itself",
+      "host": "example.com",
+      "port": 443,
+      "expect": {
+        "refused": "not_allowed"
+      }
+    },
+    {
+      "name": "a suffix glued to another label",
+      "host": "evilexample.com",
+      "port": 443,
+      "expect": {
+        "refused": "not_allowed"
+      }
+    },
+    {
+      "name": "an allowed name as a prefix",
+      "host": "api.anthropic.com.evil.org",
+      "port": 443,
+      "expect": {
+        "refused": "not_allowed"
+      }
+    },
+    {
+      "name": "port 80",
+      "host": "api.anthropic.com",
+      "port": 80,
+      "expect": {
+        "refused": "port"
+      }
+    },
+    {
+      "name": "dotted IPv4",
+      "host": "160.79.104.10",
+      "port": 443,
+      "expect": {
+        "refused": "ip_literal"
+      }
+    },
+    {
+      "name": "one integer",
+      "host": "2689558538",
+      "port": 443,
+      "expect": {
+        "refused": "ip_literal"
+      }
+    },
+    {
+      "name": "hexadecimal",
+      "host": "0xa04f680a",
+      "port": 443,
+      "expect": {
+        "refused": "ip_literal"
+      }
+    },
+    {
+      "name": "mixed hex labels",
+      "host": "0xa0.0x4f.104.10",
+      "port": 443,
+      "expect": {
+        "refused": "ip_literal"
+      }
+    },
+    {
+      "name": "bracketed IPv6",
+      "host": "[2607:6bc0::10]",
+      "port": 443,
+      "expect": {
+        "refused": "ip_literal"
+      }
+    },
+    {
+      "name": "an underscore",
+      "host": "a_b.example.com",
+      "port": 443,
+      "expect": {
+        "refused": "malformed"
+      }
+    },
+    {
+      "name": "an empty label",
+      "host": "a..example.com",
+      "port": 443,
+      "expect": {
+        "refused": "malformed"
+      }
+    },
+    {
+      "name": "a label starting with a hyphen",
+      "host": "-a.example.com",
+      "port": 443,
+      "expect": {
+        "refused": "malformed"
+      }
+    },
+    {
+      "name": "a label of 64 characters",
+      "host": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.example.com",
+      "port": 443,
+      "expect": {
+        "refused": "malformed"
+      }
+    },
+    {
+      "name": "a name over 253 characters",
+      "host": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.example.com",
+      "port": 443,
+      "expect": {
+        "refused": "malformed"
+      }
+    }
+  ],
+  "addresses": {
+    "embedded": [
+      {
+        "addr": "::ffff:127.0.0.1",
+        "public": false
+      },
+      {
+        "addr": "::ffff:160.79.104.10",
+        "public": true
+      },
+      {
+        "addr": "64:ff9b::a9fe:a9fe",
+        "public": false
+      },
+      {
+        "addr": "64:ff9b::a04f:680a",
+        "public": true
+      },
+      {
+        "addr": "2002:a00:1::1",
+        "public": false
+      },
+      {
+        "addr": "2002:a04f:680a::1",
+        "public": true
+      },
+      {
+        "addr": "2001:0:4136:e378:8000:63bf:3fff:fdd2",
+        "public": false
+      }
+    ],
+    "choose": [
+      {
+        "addrs": [
+          "160.79.104.10"
+        ],
+        "expect": {
+          "ipv4": "160.79.104.10"
+        }
+      },
+      {
+        "addrs": [
+          "2607:6bc0::10",
+          "160.79.104.10",
+          "160.79.104.11"
+        ],
+        "expect": {
+          "ipv4": "160.79.104.10"
+        }
+      },
+      {
+        "addrs": [
+          "160.79.104.10",
+          "10.0.0.1"
+        ],
+        "expect": {
+          "refused": "private_address"
+        }
+      },
+      {
+        "addrs": [
+          "2607:6bc0::10"
+        ],
+        "expect": {
+          "refused": "no_ipv4"
+        }
+      },
+      {
+        "addrs": [
+          "160.79.104.10",
+          "fe80::1"
+        ],
+        "expect": {
+          "refused": "private_address"
+        }
+      }
+    ]
+  },
+  "client_hello": [
+    {
+      "name": "a browser-shaped hello",
+      "hex": "16030100fb010000f70303000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f2000000000000000000000000000000000000000000000000000000000000000000008130113021303c02b010000a60a0a00000000001600140000116170692e616e7468726f7069632e636f6d00170000ff01000100000a000a00081a1a001d00170018000b00020100002300000010000e000e02683208687474702f312e31000500050100000000000d000a00080403080404010503003300260026001d00200000000000000000000000000000000000000000000000000000000000000000002d00020101002b000504030403031a1a000100",
+      "expect": {
+        "server_name": "api.anthropic.com",
+        "ech": false
+      }
+    },
+    {
+      "name": "a hello fragmented over three records",
+      "hex": "16030100070100006503030016030100170102030405060708090a0b0c0d0e0f1011121314151617160301004b18191a1b1c1d1e1f2000000000000000000000000000000000000000000000000000000000000000000008130113021303c02b0100001400000010000e00000b6578616d706c652e636f6d",
+      "expect": {
+        "server_name": "example.com",
+        "ech": false
+      }
+    },
+    {
+      "name": "no server name",
+      "hex": "160301005d010000590303000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f2000000000000000000000000000000000000000000000000000000000000000000008130113021303c02b01000008000a00040002001d",
+      "expect": {
+        "refused": "sni_missing"
+      }
+    },
+    {
+      "name": "two names",
+      "hex": "160301007b010000770303000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f2000000000000000000000000000000000000000000000000000000000000000000008130113021303c02b0100002600000022002000000d612e6578616d706c652e636f6d00000d622e6578616d706c652e636f6d",
+      "expect": {
+        "refused": "not_tls"
+      }
+    },
+    {
+      "name": "an encrypted_client_hello extension",
+      "hex": "1603010078010000740303000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f2000000000000000000000000000000000000000000000000000000000000000000008130113021303c02b010000230000001600140000116170692e616e7468726f7069632e636f6dfe0d00050000010001",
+      "expect": {
+        "server_name": "api.anthropic.com",
+        "ech": true
+      }
+    },
+    {
+      "name": "an extension length that overruns",
+      "hex": "16030100610100005d0303000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f2000000000000000000000000000000000000000000000000000000000000000000008130113021303c02b0100000c0000000800c8000003616263",
+      "expect": {
+        "refused": "not_tls"
+      }
+    },
+    {
+      "name": "application data, not a handshake",
+      "hex": "170303000568656c6c6f",
+      "expect": {
+        "refused": "not_tls"
+      }
+    },
+    {
+      "name": "a server hello",
+      "hex": "16030100080200000403030000",
+      "expect": {
+        "refused": "not_tls"
+      }
+    },
+    {
+      "name": "a hello cut in its record",
+      "hex": "16030100fb010000f70303000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f2000000000000000000000000000000000000000000000000000000000000000000008130113021303c02b010000a60a0a00000000001600140000116170692e616e7468726f7069632e636f6d00170000ff010001",
+      "expect": "more"
+    }
+  ],
+  "lines": [
+    {
+      "line": {
+        "line": "started",
+        "digest": "ab",
+        "upstreams": [
+          {
+            "upstream": "proxy.example.org:3128",
+            "state": "reachable"
+          }
+        ]
+      },
+      "text": "{\"line\":\"started\",\"digest\":\"ab\",\"upstreams\":[{\"upstream\":\"proxy.example.org:3128\",\"state\":\"reachable\"}]}"
+    },
+    {
+      "line": {
+        "line": "allowed",
+        "host": "api.anthropic.com",
+        "port": 443,
+        "ech": true
+      },
+      "text": "{\"line\":\"allowed\",\"host\":\"api.anthropic.com\",\"port\":443,\"ech\":true}"
+    },
+    {
+      "line": {
+        "line": "refused",
+        "host": "example.org",
+        "port": 443,
+        "cause": "not_allowed"
+      },
+      "text": "{\"line\":\"refused\",\"host\":\"example.org\",\"port\":443,\"cause\":\"not_allowed\"}"
+    },
+    {
+      "line": {
+        "line": "refused",
+        "host": "api.anthropic.com",
+        "port": 443,
+        "cause": "upstream_refused",
+        "status": 407
+      },
+      "text": "{\"line\":\"refused\",\"host\":\"api.anthropic.com\",\"port\":443,\"cause\":\"upstream_refused\",\"status\":407}"
+    },
+    {
+      "line": {
+        "line": "limit"
+      },
+      "text": "{\"line\":\"limit\"}"
+    }
+  ],
+  "program": [
+    {
+      "cause": "resolve_failed",
+      "proven_by": "crates/officina-container/tests/gateway.rs::every_refusal_reachable_offline_is_refused_with_its_cause"
+    },
+    {
+      "cause": "sni_mismatch",
+      "proven_by": "crates/officina-container/tests/gateway.rs::a_mismatched_server_name_is_refused"
+    },
+    {
+      "cause": "connect_failed",
+      "proven_by": "crates/officina-container/tests/gateway.rs::every_refusal_reachable_offline_is_refused_with_its_cause"
+    },
+    {
+      "cause": "upstream_refused",
+      "proven_by": "crates/officina-container/tests/gateway.rs::a_407_upstream_is_refused_with_its_status"
+    },
+    {
+      "cause": "busy",
+      "proven_by": "crates/officina-container/tests/gateway.rs::one_more_than_max_tunnels_is_busy"
+    },
+    {
+      "cause": "deadline",
+      "proven_by": "crates/officina-container/tests/gateway.rs::after_the_deadline_everything_is_refused"
+    },
+    {
+      "cause": "limit",
+      "proven_by": "crates/officina-container/tests/gateway.rs::the_limit_exits_3"
+    }
+  ]
+}

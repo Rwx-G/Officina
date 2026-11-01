@@ -857,6 +857,25 @@ max_usd = 3.0                        # optional, two decimals at most
 - `ca_file` is a PEM file of certificates only, for a network that
   inspects TLS; it is baked into the workshop's images.
 
+### The gateway
+
+A worker reaches the outside through one program only, the run's gateway:
+a proxy that accepts `CONNECT` to port 443 of an allowed host, checks that
+the TLS handshake names that same host, and relays the encrypted bytes. It
+refuses everything else, each refusal a cause of the constant
+`GatewayRefusal`, and ends after too many refusals in a few minutes or at
+the run's deadline. Without a route through your proxy it connects only to
+public addresses, never to your network or the engine's host. It holds no
+credential, writes no file and reads no environment: its command line is
+its whole configuration, built by the same code that checks its rules.
+
+What it gives up, by design: plain HTTP, SSH and anything over UDP do not
+pass; it filters by host, never by URL, so what goes to an allowed host is
+that host's business (an allowed host that accepts anonymous uploads is a
+way out); a service fronted inside TLS by an allowed name is reached; and
+under Encrypted ClientHello only the outer name is checked, which must
+still be an allowed host.
+
 ### Checking the engine
 
 For a floor that declares `[workshop]`, `officina doctor` adds a workshop

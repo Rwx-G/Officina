@@ -6,6 +6,7 @@ pub mod battery;
 pub mod doctor;
 pub mod engine;
 pub mod floor;
+pub mod gateway;
 pub mod image;
 pub mod names;
 pub mod review;

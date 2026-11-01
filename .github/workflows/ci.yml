@@ -39,9 +39,13 @@ jobs:
       - name: Format
         run: cargo fmt --all -- --check
       - name: Clippy
-        run: cargo clippy --locked -p officina-core -p officina-host -p officina --all-targets --features officina-core/ts -- -D warnings
+        run: cargo clippy --locked -p officina-core -p officina-host -p officina -p officina-container --all-targets --features officina-core/ts -- -D warnings
       - name: Test
-        run: cargo test --locked -p officina-core -p officina-host -p officina --features officina-core/ts
+        run: cargo test --locked -p officina-core -p officina-host -p officina -p officina-container --features officina-core/ts
+      - name: The workshop's Linux programs, static
+        # Story 6.5 AC 1 (AD-100, the gate 9 entry): officina-gateway and
+        # officina-entry for the musl target with rust-lld, no C toolchain.
+        run: cargo build --locked --release -p officina-container --target x86_64-unknown-linux-musl
       - name: The launch half without the authority
         # Story 5.2 AC 7 (AD-73, D-128 review F5): the host's spawn tests
         # built alone, so no other package turns window-authority on; the
@@ -86,6 +90,10 @@ jobs:
         # Story 6.3 AC 5 (AD-97, D-204): the engine driver built alone, so
         # every launch kind is refused before any docker process starts.
         run: cargo test --locked -p officina-host --lib workshop::engine
+      - name: The workshop's Linux programs, static
+        # Story 6.5 AC 1 (AD-100): the cross build from Windows, so the
+        # release's path cannot rot between releases.
+        run: cargo build --locked --release -p officina-container --target x86_64-unknown-linux-musl
       - name: Hook and gate latency, concurrent appends
         # Every #[ignore]d test of perf.rs. Hosted runners start any process
         # several times slower than a workstation; the test still gates

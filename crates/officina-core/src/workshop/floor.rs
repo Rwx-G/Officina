@@ -673,6 +673,8 @@ fn check_hosts(raw: &[String], problems: &mut Vec<Problem>) -> Vec<String> {
             )
         } else if wildcard && name.split('.').count() < 2 {
             Some("takes a leading `*.` only on a name of three labels or more")
+        } else if super::gateway::CLAUDE_CODE_HOSTS.contains(&host.as_str()) {
+            Some("is one of Claude Code's own hosts, which every worker may reach already")
         } else {
             None
         };
@@ -1228,6 +1230,19 @@ mod tests {
         )
         .unwrap();
         assert_eq!(ok.mounts, [".claude", "_bmad", "docs/notes"]);
+    }
+
+    #[test]
+    fn a_fixed_host_in_hosts_is_an_issue() {
+        for fixed in super::super::gateway::CLAUDE_CODE_HOSTS {
+            let text = format!("hosts = [{fixed:?}, \"index.crates.io\"]");
+            let found = project_workshop("api", &table(&text), &CatalogueFiles::not_read());
+            assert_eq!(
+                kinds(&found.unwrap_err()),
+                [IssueKind::WorkshopHosts],
+                "{fixed}"
+            );
+        }
     }
 
     #[test]

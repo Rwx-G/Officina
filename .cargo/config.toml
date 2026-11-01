@@ -1,0 +1,6 @@
+# The workshop's Linux programs link with the toolchain's own rust-lld, so
+# the musl build needs no C toolchain (AD-100). With the linker named
+# rust-lld, rustc picks the ld.lld flavour for the Linux target itself: no
+# flavour flag is needed (the gate 9 entry).
+[target.x86_64-unknown-linux-musl]
+linker = "rust-lld"

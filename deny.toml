@@ -1,6 +1,10 @@
 # cargo deny policy (AD-18). Run: cargo deny check
 [graph]
-targets = [{ triple = "x86_64-pc-windows-msvc" }, { triple = "x86_64-unknown-linux-gnu" }]
+targets = [
+  { triple = "x86_64-pc-windows-msvc" },
+  { triple = "x86_64-unknown-linux-gnu" },
+  { triple = "x86_64-unknown-linux-musl" },
+]
 
 [advisories]
 version = 2

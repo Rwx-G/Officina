@@ -1,0 +1,19 @@
+[package]
+name = "officina-container"
+description = "Officina's Linux programs for the isolated workshop: the egress gateway and the entry point."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+publish = false
+
+# Two programs built for x86_64-unknown-linux-musl (AD-100). Std only beyond
+# core and serde_json, so the musl build needs no C toolchain.
+[dependencies]
+officina-core.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

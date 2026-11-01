@@ -8,6 +8,15 @@ project uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- The workshop's gateway (v0.6, story 6.5): `officina-gateway`, a small
+  std-only Linux program in the new `officina-container` crate, built for
+  `x86_64-unknown-linux-musl` with the toolchain's own linker. It relays
+  `CONNECT` to port 443 of the allowed hosts once the TLS handshake names
+  the same host, connects only to public addresses or through the route
+  the window gives it, and refuses everything else with a cause; every
+  rule is decided in core and replayed by a vector set, and the program is
+  tested on loopback with no Docker and no internet.
+
 - The registry's workshop tables (v0.6, story 6.4): a migration, preceded
   by a copy of the registry as `registry/backup/pre-v<version>-<date>.db`,
   gives each work order its runner (every existing one runs on your
