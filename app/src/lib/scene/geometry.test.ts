@@ -221,7 +221,7 @@ describe("waiting places", () => {
     }
     // The variation is real, not a no-op: most of each waiting zone's spots
     // vary. A spot hemmed in by its neighbours and its room's plaque (the
-    // alert room's back row) keeps its place.
+    // alert room's first two places) keeps its place.
     for (const zone of WAITING_ZONES) {
       const spots = allSpots(MAX_COLUMNS).filter((s) => s.slot === null && s.room === zone);
       const varying = spots.filter((s) => waitingOffsets(s.id).length > 1);
