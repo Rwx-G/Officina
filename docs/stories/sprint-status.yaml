@@ -212,7 +212,8 @@ stories:
   - {id: "6.18", file: story-6.18-workshop-view-board-and-cli.md, slice: A, status: approved}
   - {id: "6.19", file: story-6.19-card-and-review-panel-frontend.md, slice: A, status: approved}
   - {id: "6.20", file: story-6.20-workshop-section-header-and-slice-a-close.md, slice: A, status: approved}
-  - {id: "6.25", file: story-6.25-system-proxy-and-corporate-ca.md, slice: A, status: approved}
+  # 6.25: ACs 2-4, 6 done with the interim registry reader (D-1124, to confirm); AC 1 waits for the owner's approval of windows-sys Win32_Networking_WinHttp; AC 5 is the owner's, on the work network.
+  - {id: "6.25", file: story-6.25-system-proxy-and-corporate-ca.md, slice: A, status: in-progress}
   - {id: "6.26", file: story-6.26-login-path-and-credential-state.md, slice: A, status: approved}
   - {id: "6.21", file: story-6.21-memory-as-proposal.md, slice: B, status: approved}
   - {id: "6.22", file: story-6.22-browser-base-image.md, slice: B, status: approved}

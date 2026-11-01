@@ -1,6 +1,6 @@
 # Story 6.25: The system proxy and the corporate CA
 
-**Status:** Approved
+**Status:** In Progress
 
 ## Story
 
@@ -19,10 +19,10 @@ so that the same floor works at home and at work without an edit, nothing in a c
 
 ## Tasks
 
-- [ ] `platform::windows` WinHTTP reader, the `windows-sys` feature after the owner's approval (AC 1)
-- [ ] `crates/officina-core/src/workshop/proxy.rs`: `routes`, `ProxyRefusal`, `ProxySource`; the `proxy` section of `workshop.json` (AC 2)
-- [ ] `crates/officina-host/src/workshop/proxy.rs`: `resolve`, on thread `workshop`, with its timeout (AC 3)
-- [ ] Doctor (AC 4); the work network's second half with the owner (AC 5); README, `CHANGELOG.md` (AC 6)
+- [ ] `platform::windows` WinHTTP reader, the `windows-sys` feature after the owner's approval (AC 1): waits for the approval; the interim registry reader is built (D-1124)
+- [x] `crates/officina-core/src/workshop/proxy.rs`: `routes`, `ProxyRefusal`, `ProxySource`; the `proxy` section of `workshop.json` (AC 2)
+- [x] `crates/officina-host/src/workshop/proxy.rs`: `resolve`, on thread `workshop`, with its timeout (AC 3)
+- [x] Doctor (AC 4); [ ] the work network's second half with the owner (AC 5); [x] README, `CHANGELOG.md` (AC 6)
 
 ## Dev Notes
 
@@ -45,8 +45,20 @@ so that the same floor works at home and at work without an edit, nothing in a c
 
 ### Completion Notes
 
+- AC 1: open. The `windows-sys` feature `Win32_Networking_WinHttp` is not approved, so no WinHTTP reader is written. Built instead: the `SystemProxyReader` trait the WinHTTP reader will implement, and `RegistryReader`, which reads the same configuration from the current user's registry with the approved `Win32_System_Registry` (`platform/windows.rs::registry_binary`, one `unsafe` block with its `// SAFETY:`) and cannot evaluate a PAC file (D-1124). Host `workshop/proxy.rs::tests::{the_reader_is_injected, handles_are_closed_on_error, the_connection_flags_are_byte_8, the_registry_reader_cannot_evaluate_a_pac}`. Owner item: approve the feature, then the reader and `platform/windows.rs::tests::reads_the_current_users_proxy_config` land.
+- AC 2: core `workshop/proxy.rs::tests::{none_is_direct, an_explicit_proxy_routes_every_entry, a_bypassed_host_is_direct, the_first_proxy_element_wins, socks_is_unsupported, a_wildcard_entry_uses_its_suffix, auto_detect_without_a_pac_is_direct_and_a_failed_pac_is_unresolved, proxy_cases_match, every_refusal_and_source_has_a_case}` over the `proxy` section of `workshop.json` (in core's unit tests, D-1121's pattern).
+- AC 3: host `workshop/proxy.rs::tests::{resolve_applies_core_routes_to_the_reader_answer, a_slow_pac_times_out_as_unresolved, the_setting_none_never_calls_the_reader}`. The consumers (6.8, 6.11, 6.26) call `resolve` with the reader.
+- AC 4: host `workshop/doctor.rs::tests::{the_proxy_source_and_routes_are_named, a_socks_answer_fails_with_its_entry, a_proxied_api_host_without_a_ca_file_notes_the_export, an_unevaluated_auto_detect_is_named}` (the section's module, as for story 6.3).
+- AC 5: open, the owner's, on the work network once stories 6.8 and 6.10 have merged.
+- AC 6: README "Proxies and a corporate root"; `CHANGELOG.md` Added.
+
 ## File List
+
+- `crates/officina-core/src/workshop/proxy.rs` (new), `workshop/{mod,doctor}.rs`; `tests/vectors/workshop.json` (the `proxy` section)
+- `crates/officina-host/src/workshop/proxy.rs` (new), `workshop/{mod,doctor}.rs`, `platform/windows.rs`, `doctor.rs`
+- `README.md`, `CHANGELOG.md`, `docs/stories/epic-6-decisions.md` (D-1124), `docs/stories/sprint-status.yaml`
 
 ## Change Log
 
 - 2026-10-29 created from the owner's answer to gate 0 (D-611, D-612, D-613, D-621)
+- 2026-11-01 ACs 2, 3, 4 and 6 implemented with the interim registry reader (D-1124); AC 1 waits for the feature's approval, AC 5 for the owner on the work network
