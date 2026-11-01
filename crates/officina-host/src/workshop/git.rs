@@ -82,7 +82,7 @@ pub fn ensure_empty_hooks(home: &Path) -> Result<PathBuf, String> {
 }
 
 /// The installed `git.exe` Git for Windows records in HKLM, if any.
-fn hklm_git() -> Option<PathBuf> {
+pub(crate) fn hklm_git() -> Option<PathBuf> {
     #[cfg(windows)]
     {
         use crate::platform::windows::{Hive, registry_string};

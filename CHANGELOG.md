@@ -13,7 +13,13 @@ project uses [Semantic Versioning](https://semver.org/).
   an allow list (the system names, `DOCKER_*` and nothing a session or
   Officina set), its stdout capped and its deadline enforced in a
   kill-on-close job; the calls that create, start, copy, build or remove
-  compile only into the window. Nothing calls them yet.
+  compile only into the window. The window reads the engine's identity
+  at start on its own `workshop` thread, never on the one that builds the
+  board. `officina doctor` gains a workshop section for a floor that
+  declares `[workshop]`: `docker.exe` and the workshop's `git` with where
+  each was found, the variables and Docker CLI settings that steer them,
+  a `DOCKER_HOST` on plain TCP, the engine and its key, and orphan
+  networks and volumes. Nothing launches yet.
 
 - The workshop's floor keys (v0.6, story 6.2): `[workshop]` (the credential
   kind, `oauth-token` by default, `login` or `api-key`; workers, CPUs and

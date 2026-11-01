@@ -911,12 +911,16 @@ pub fn run_with(collector: &Collector, exe: &Path, permissions: bool) -> Vec<Che
         orchestrator.push(permissions_pointer());
     }
     checks.extend(write_paste_files(&doctor_dir, &files));
-    let floor_folders =
-        crate::relay::home::load_relay_floor(&relay.relay_floor(&relay.read_approved()))
-            .ok()
-            .map(|floor| {
-                officina_core::relay::catalogue::project_dirs(&floor.floor, &floor.floor_path)
-            });
+    let relay_floor =
+        crate::relay::home::load_relay_floor(&relay.relay_floor(&relay.read_approved())).ok();
+    let floor_folders = relay_floor.as_ref().map(|floor| {
+        officina_core::relay::catalogue::project_dirs(&floor.floor, &floor.floor_path)
+    });
+    // The workshop section runs only for a floor that declares the
+    // workshop (D-1113): a floor without one never needs an engine.
+    let workshop = relay_floor
+        .as_ref()
+        .is_some_and(|floor| floor.floor.workshop.is_some());
     orchestrator.push(check_work_order_permissions(
         &relay.read_work_order_permissions(),
         floor_folders.as_ref(),
@@ -949,6 +953,11 @@ pub fn run_with(collector: &Collector, exe: &Path, permissions: bool) -> Vec<Che
     ));
     checks.extend(registry_section(registry));
     checks.push(check_floor(collector));
+    if workshop {
+        checks.extend(crate::workshop::doctor::checks(
+            &crate::workshop::doctor::gather(collector.base_env().vars(), &paths.officina_home),
+        ));
+    }
     let system_dir = crate::relay::home::system_dir();
     let reader = registry_store::open_reader(&paths.officina_home, &onedrive_roots).ok();
     let reviews = reader

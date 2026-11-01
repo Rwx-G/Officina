@@ -2,6 +2,7 @@
 //! obeys, decided in core before the engine sees it. Pure, like the rest of
 //! the crate, and compiled for the musl target too.
 
+pub mod doctor;
 pub mod engine;
 pub mod floor;
 pub mod image;

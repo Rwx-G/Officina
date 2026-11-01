@@ -843,6 +843,18 @@ max_usd = 3.0                        # optional, two decimals at most
 - `ca_file` is a PEM file of certificates only, for a network that
   inspects TLS; it is baked into the workshop's images.
 
+### Checking the engine
+
+For a floor that declares `[workshop]`, `officina doctor` adds a workshop
+section, read with `docker` calls that only list and inspect (doctor
+starts no container): where `docker.exe` and the workshop's `git` were
+found (an override, the install location in HKLM, or `PATH`; a shim
+fails), the variables and Docker CLI settings that change what `docker`
+does, named and never valued, a `DOCKER_HOST` on plain TCP, whether the
+engine runs Linux containers and its identity, and networks and volumes
+Officina labelled that no container uses any more. The findings are the
+variants of `WorkshopCheck`, each with its level.
+
 ### Approving workshop changes
 
 The catalogue keeps one hash for everything you approve and a second one
