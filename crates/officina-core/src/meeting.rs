@@ -33,8 +33,9 @@ pub const MEETING_VIEW_SCHEMA: u32 = 3;
 /// whole line within it, and says so.
 pub const DIFF_CAP_BYTES: usize = 256 * 1024;
 
-/// The most of `claude logs` a meeting keeps once its escape sequences are
-/// stripped: the end of the output, where the session's latest turn is.
+/// The most of `claude logs` a meeting keeps once played on a screen
+/// ([`crate::screen::render`]): the end of the text, where the session's
+/// latest turn is.
 pub const LOGS_KEPT_BYTES: usize = 64 * 1024;
 
 /// How far back the meeting reads the journal for a session's runs: the
@@ -551,12 +552,14 @@ pub enum Logs {
     },
 }
 
-/// The end of `claude logs`, its escape sequences stripped.
+/// The end of `claude logs` as its final screen shows it (D-1020): the
+/// output played on [`crate::screen`], no escape sequence or control
+/// character left.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct LogsText {
     pub text: Untrusted<String>,
-    /// How many escape sequences were removed.
+    /// How many escape sequences the screen read; none reaches the text.
     pub escapes_stripped: u32,
     /// Bytes dropped from the start to keep [`LOGS_KEPT_BYTES`].
     #[cfg_attr(feature = "ts", ts(type = "number"))]
@@ -995,85 +998,10 @@ fn diff_path(header: &str) -> String {
         .map_or_else(|| header.to_owned(), |(_, path)| path.to_owned())
 }
 
-/// `bytes` with every escape sequence removed (AD-84): CSI (`ESC [` to its
-/// final byte), OSC (`ESC ]` to BEL or `ESC \`), the other string controls
-/// (`ESC P`, `ESC X`, `ESC ^`, `ESC _` to `ESC \`), two-byte sequences, and
-/// the C1 introducers written as single bytes; the count of sequences
-/// removed. Carriage returns before a newline go; other control characters
-/// but newline and tab become nothing.
-///
-/// ```
-/// use officina_core::meeting::strip_escapes;
-/// let (text, count) = strip_escapes(b"\x1b[1;31mred\x1b[0m \x1b]0;title\x07done\r\n");
-/// assert_eq!((text.as_str(), count), ("red done\n", 3));
-/// ```
-pub fn strip_escapes(bytes: &[u8]) -> (String, u32) {
-    let text = String::from_utf8_lossy(bytes);
-    let mut out = String::with_capacity(text.len());
-    let mut count = 0u32;
-    let mut chars = text.chars().peekable();
-    while let Some(c) = chars.next() {
-        match c {
-            '\u{1b}' => {
-                count += 1;
-                match chars.next() {
-                    Some('[') => skip_csi(&mut chars),
-                    Some(']') => skip_string(&mut chars, true),
-                    Some('P' | 'X' | '^' | '_') => skip_string(&mut chars, false),
-                    // A character set designation takes one more byte.
-                    Some('(' | ')' | '*' | '+' | '-' | '.' | '/' | '#' | '%') => {
-                        chars.next();
-                    }
-                    _ => {}
-                }
-            }
-            '\u{9b}' => {
-                count += 1;
-                skip_csi(&mut chars);
-            }
-            '\u{9d}' => {
-                count += 1;
-                skip_string(&mut chars, true);
-            }
-            '\r' if chars.peek() == Some(&'\n') => {}
-            '\n' | '\t' => out.push(c),
-            c if c.is_control() => {}
-            c => out.push(c),
-        }
-    }
-    (out, count)
-}
-
-/// Skips a CSI sequence's parameter and intermediate bytes and its final
-/// byte (`@` to `~`).
-fn skip_csi(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) {
-    for c in chars.by_ref() {
-        if ('\u{40}'..='\u{7e}').contains(&c) {
-            return;
-        }
-    }
-}
-
-/// Skips a string sequence to its terminator: `ESC \`, or BEL when `bel`
-/// ends it too (OSC).
-fn skip_string(chars: &mut std::iter::Peekable<std::str::Chars<'_>>, bel: bool) {
-    while let Some(c) = chars.next() {
-        match c {
-            '\u{7}' if bel => return,
-            '\u{9c}' => return,
-            '\u{1b}' if chars.peek() == Some(&'\\') => {
-                chars.next();
-                return;
-            }
-            _ => {}
-        }
-    }
-}
-
 /// `text` with each line's trailing spaces dropped and every run of blank
-/// lines made one: `claude logs` prints the session's screen, padded to
-/// its width and height (E23), so the kept end holds more of what was
-/// said.
+/// lines made one: the session's final screen keeps the blank rows between
+/// what was said and its footer (E23, E100), so the kept end holds more of
+/// what was said.
 ///
 /// ```
 /// use officina_core::meeting::squeeze_blank_lines;
@@ -1127,14 +1055,14 @@ pub fn logs_of(read: Option<&LogsRead>) -> Logs {
             reason: reason.clone(),
         },
         Some(LogsRead::Output(bytes)) => {
-            let (stripped, escapes_stripped) = strip_escapes(bytes);
-            let stripped = squeeze_blank_lines(&stripped);
-            let (kept, dropped_bytes) = keep_end(&stripped);
+            let rendered = crate::screen::render(bytes);
+            let squeezed = squeeze_blank_lines(&rendered.text);
+            let (kept, dropped_bytes) = keep_end(&squeezed);
             let text = Untrusted::new(kept.to_owned());
             let first_error_line = text.first_line_matching(LOG_ERROR_MARKERS);
             Logs::Shown(LogsText {
                 text,
-                escapes_stripped,
+                escapes_stripped: rendered.sequences,
                 dropped_bytes,
                 first_error_line,
             })
@@ -1591,39 +1519,24 @@ mod tests {
         assert_eq!(json["state"], "outside_git");
     }
 
-    /// One sample of each sequence family the stripper knows, built from
-    /// its introducer.
-    pub(crate) fn escape_families() -> Vec<String> {
-        vec![
-            "\u{1b}[38;5;208m".to_owned(),
-            "\u{1b}[?25l".to_owned(),
-            "\u{1b}]0;window title\u{7}".to_owned(),
-            "\u{1b}]8;;https://example.com\u{1b}\\".to_owned(),
-            "\u{1b}P1$r0m\u{1b}\\".to_owned(),
-            "\u{1b}(B".to_owned(),
-            "\u{1b}7".to_owned(),
-            "\u{9b}2J".to_owned(),
-        ]
-    }
-
     #[test]
-    fn escape_sequences_are_stripped() {
-        let families = escape_families();
-        let raw: String = families
-            .iter()
-            .enumerate()
-            .map(|(at, seq)| format!("{seq}line {at}\r\n"))
-            .collect();
-        let (text, count) = strip_escapes(raw.as_bytes());
-        assert_eq!(count as usize, families.len());
-        assert!(!text.contains('\u{1b}') && !text.contains('\r'), "{text:?}");
-        let expected: String = (0..families.len())
-            .map(|at| format!("line {at}\n"))
-            .collect();
-        assert_eq!(text, expected);
-        // An unterminated sequence at the end drops what follows it only.
-        let (text, count) = strip_escapes(b"kept\x1b]0;never closed");
-        assert_eq!((text.as_str(), count), ("kept", 1));
+    fn the_logs_show_the_final_screen_once() {
+        let frame =
+            |body: &str| format!("\u{1b}[H\u{1b}[1mbanner\u{1b}[0m\u{1b}[K\r\n{body}\u{1b}[K\r\n");
+        let raw = format!(
+            "\u{1b}[2J{}{}",
+            frame("Determining… (3s)"),
+            frame("the answer")
+        );
+        let escapes = raw.matches('\u{1b}').count();
+        let Logs::Shown(logs) = logs_of(Some(&LogsRead::Output(raw.into_bytes()))) else {
+            panic!()
+        };
+        assert_eq!(
+            serde_json::to_value(&logs.text).unwrap(),
+            "banner\nthe answer\n"
+        );
+        assert_eq!(logs.escapes_stripped as usize, escapes);
     }
 
     #[test]
@@ -1649,7 +1562,7 @@ mod tests {
         let Logs::Shown(squeezed) = logs_of(Some(&LogsRead::Output(padded.into_bytes()))) else {
             panic!()
         };
-        assert_eq!(serde_json::to_value(&squeezed.text).unwrap(), "\nsaid\n\n");
+        assert_eq!(serde_json::to_value(&squeezed.text).unwrap(), "said\n");
         // Short output is kept whole.
         let Logs::Shown(short) = logs_of(Some(&LogsRead::Output(b"a\nb\n".to_vec()))) else {
             panic!()

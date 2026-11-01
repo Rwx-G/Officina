@@ -691,11 +691,11 @@ fn a_work_order_timeout_kills_only_claude() {
     assert!(running, "the deadline ended what claude started");
 }
 
-/// AD-84, D-129: the fake's rendered screen, read through the `Logs` kind,
-/// strips to text without an escape byte, and its error line, built from
+/// AD-84, D-129, D-1020: the fake's rendered screen, read through the
+/// `Logs` kind, renders to text without an escape byte, and its error line, built from
 /// the first of `LOG_ERROR_MARKERS`, is the one the meeting jumps to.
 #[test]
-fn the_logs_screen_strips_to_text_with_its_error_line() {
+fn the_logs_screen_renders_to_text_with_its_error_line() {
     use officina_core::meeting::{LOG_ERROR_MARKERS, Logs, LogsRead, logs_of};
     use officina_core::spawn::BackgroundId;
 

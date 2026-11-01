@@ -1184,6 +1184,14 @@ project uses [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- The meeting's recent output repeated a background session's whole
+  screen once per repaint, about thirty times, the answer buried among
+  banners, spinners and status bars (gate 7's readability check). Claude
+  Code repaints its screen from the top for every frame, and removing the
+  escape sequences appended each frame to the last; `claude logs` is now
+  played on a minimal terminal screen (cursor moves, erases, scrolling,
+  the alternate screen) and the meeting shows the final screen once.
+
 - A floor whose catalogue holds only templates (free projects, no action)
   was never offered for approval: the window showed no catalogue banner,
   its templates could never be approved, and no work order could run from

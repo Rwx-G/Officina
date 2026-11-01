@@ -1,8 +1,8 @@
 //! The meeting's logs on a real background session (story 5.10 AC 4,
-//! D-126, E23): runs the exact `Logs` vector against the `claude` Officina
-//! resolves, strips it as the meeting does, and prints the counts, then
-//! the text the panel would show, for the owner to judge readable. Run by
-//! hand, never by a test, never part of a shipped binary:
+//! D-126, E23, E94): runs the exact `Logs` vector against the `claude`
+//! Officina resolves, plays it on the meeting's screen (D-1020), and prints
+//! the counts, then the text the panel would show, for the owner to judge
+//! readable. Run by hand, never by a test, never part of a shipped binary:
 //!
 //! `cargo run -p officina-host --example logs_probe -- <background id>`
 //!
@@ -50,7 +50,7 @@ fn main() -> ExitCode {
             let text = serde_json::to_value(&shown.text).unwrap_or_default();
             let text = text.as_str().unwrap_or_default();
             println!(
-                "stripped: {} sequences removed, {} bytes kept, {} dropped from the start, first error line {}",
+                "rendered: {} sequences read, final screen {} bytes kept, {} dropped from the start, first error line {}",
                 shown.escapes_stripped,
                 text.len(),
                 shown.dropped_bytes,

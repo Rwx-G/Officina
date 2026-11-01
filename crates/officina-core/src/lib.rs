@@ -102,6 +102,7 @@ pub mod quota;
 pub mod registry;
 pub mod relay;
 pub mod scene;
+pub mod screen;
 pub mod spawn;
 pub mod untrusted;
 pub mod workshop;
