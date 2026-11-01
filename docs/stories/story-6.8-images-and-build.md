@@ -1,6 +1,6 @@
 # Story 6.8: Workshop images, Build images and the Linux programs
 
-**Status:** Approved
+**Status:** In Progress
 
 ## Story
 
@@ -22,7 +22,7 @@ so that a worker never runs on an image I did not approve, a project image can n
 
 ## Tasks
 
-- [ ] `docker/workshop.Dockerfile`, `docker/gateway.Dockerfile`; `crates/officina-core/src/workshop/image.rs` (embedding, labels, check) (AC 1, 2)
+- [x] `docker/workshop.Dockerfile`, `docker/gateway.Dockerfile`; `crates/officina-core/src/workshop/image.rs` (embedding, labels, check) (AC 1, 2): hadolint in the CI `workshop` job is still to add
 - [ ] `images` section of `workshop.json` (AC 2)
 - [ ] `crates/officina-host/src/workshop/build.rs`: programs, contexts, builds with `--builder`, records, journal (AC 3, 4)
 - [ ] `build_images` command and its plumbing; fake engine `build` and program `cp` modes; `crates/officina/tests/workshop_build.rs` (AC 4, 5)
@@ -54,6 +54,8 @@ so that a worker never runs on an image I did not approve, a project image can n
 ### Debug Log
 
 ### Completion Notes
+
+- Started 2026-11-01: the Dockerfiles (the gate 1 entry's probe base with `officina-entry` and the entry point; the gateway `FROM scratch`), core's embedding, label set and `image::check` with `image.rs::tests::{embedded_dockerfiles_hash_to_their_labels, the_ca_step_precedes_every_https_download, the_claude_version_is_not_compared, a_label_without_a_matching_measurement_mismatches}`. Only `officina.*` labels but `officina.claude.version` are compared; the OCI labels describe the build. Not done yet: the `images` section of `workshop.json`, the host build module, `build_images` and its plumbing, the fake engine's `build` and `cp` modes, the measurement, release and CI `workshop` job, doctor, gates 9 and 1 second halves, README.
 
 ## File List
 
