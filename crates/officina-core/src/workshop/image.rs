@@ -569,6 +569,24 @@ mod tests {
         assert_eq!(stages(GATEWAY_DOCKERFILE).unwrap()[0].image, "scratch");
     }
 
+    /// A context file keeps the mode the host wrote it with, and COPY keeps
+    /// that mode: on Linux the program lands without its executable bit and
+    /// the entry point cannot start (the CI engine's gateway, D-1071).
+    #[test]
+    fn each_entry_point_is_copied_with_its_own_mode() {
+        for dockerfile in [WORKSHOP_DOCKERFILE, GATEWAY_DOCKERFILE] {
+            let entry = dockerfile
+                .lines()
+                .find_map(|l| l.strip_prefix("ENTRYPOINT [\"")?.split('"').next())
+                .expect("an entry point");
+            let copy = dockerfile
+                .lines()
+                .find(|l| l.starts_with("COPY ") && l.split_whitespace().last() == Some(entry))
+                .expect("the entry point's COPY");
+            assert!(copy.contains(" --chmod=0755 "), "{copy}");
+        }
+    }
+
     #[test]
     fn the_ca_step_precedes_every_https_download() {
         let lines: Vec<&str> = WORKSHOP_DOCKERFILE.lines().collect();
