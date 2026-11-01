@@ -62,6 +62,7 @@ export type RelayScenario =
   | "relay-pending"
   | "relay-pending-again"
   | "relay-pending-approved"
+  | "relay-pending-workshop"
   | "relay-stopped"
   | "relay-activity"
   | "relay-anomalies"

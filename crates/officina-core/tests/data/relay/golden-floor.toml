@@ -10,6 +10,14 @@ color = "green"
 autonomy = "guarded"
 actions = ["check", "apply", "apply-sensitive", "apply-auto", "status", "health", "ping"]
 
+[project.workshop]
+mounts = [".claude", "_bmad"]
+hosts = ["index.crates.io", "*.pkg.example.com"]
+dockerfile = "tools/workshop.Dockerfile"
+review = "all"
+sensitive_paths = ["deploy/**", "infra/*.tf"]
+memory_name = "C--path-to-work-Supervision"
+
 [[project]]
 name = "notes"
 path = "C:/path/to/Notes"
@@ -151,6 +159,28 @@ in docs/notes.md."""
 
 [template.params.span]
 values = ["week", "month"]
+
+[[template]]
+name = "isolated-bump"
+description = "Bump one dependency in the workshop"
+projects = ["supervision"]
+prompt = "Bump {package}, run the tests, fix what breaks, commit."
+
+[template.params.package]
+values = ["serde_json"]
+
+[template.workshop]
+base = ["main", "release/2.1"]
+max_minutes = 45
+max_usd = 1.25
+
+[workshop]
+auth = "login"
+max_workers = 3
+cpus = 4
+memory_mib = 6144
+upstream_proxy = "proxy.example.com:8080"
+ca_file = "C:/path/to/corporate-ca.pem"
 
 [orchestrator]
 model = "opus"

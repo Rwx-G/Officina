@@ -988,7 +988,7 @@ fn an_authority_error_reaches_the_window_with_its_code() {
 /// the previous canonical format parses with its stored hash; the gate keeps
 /// applying that snapshot's guarded projects while the current floor, read
 /// in the new format, differs; the pending diff shows the format change and
-/// the templates added; one approval by the author then holds the new
+/// the templates added, if any; one approval by the author then holds the new
 /// format.
 #[test]
 fn an_approval_in_the_previous_format_keeps_guarding_and_waits_for_one_approval() {
@@ -1014,7 +1014,7 @@ fn an_approval_in_the_previous_format_keeps_guarding_and_waits_for_one_approval(
     let on_disk: serde_json::Value =
         serde_json::from_slice(&std::fs::read(relay.approved_file()).unwrap()).unwrap();
     assert!(
-        on_disk["canonical"].get("templates").is_none(),
+        on_disk["canonical"].get("workshop").is_none() && on_disk.get("relay_hash").is_none(),
         "the file is in the previous format"
     );
 
@@ -1046,17 +1046,26 @@ fn an_approval_in_the_previous_format_keeps_guarding_and_waits_for_one_approval(
         .expect("the snapshot's guarded project stays guarded");
     assert_eq!(deny.project, "supervision");
 
-    // The pending diff shows the format change and the templates added.
+    // The pending diff shows the format change and the templates added:
+    // here none, since this home holds neither the golden floor's CA file
+    // nor its Dockerfile, so its workshop is off and its workshop template
+    // dropped, with their issues.
     let pending = diff(&approved.canonical, &current.canonical);
     let format = pending.format.expect("the format changed");
     assert_eq!(format.before, CANONICAL_FORMAT - 1);
     assert_eq!(format.after, CANONICAL_FORMAT);
-    let templates: Vec<&String> = current.canonical.templates.keys().collect();
-    assert!(!templates.is_empty());
+    let templates: Vec<&String> = current
+        .canonical
+        .templates
+        .keys()
+        .filter(|name| !approved.canonical.templates.contains_key(*name))
+        .collect();
     assert_eq!(
         pending.templates.added.iter().collect::<Vec<_>>(),
         templates
     );
+    assert!(current.canonical.workshop.is_none());
+    assert!(!current.catalogue.issues.is_empty());
 
     // One approval of what the window shows; the gate then follows it.
     let renewed = approve_catalogue(&relay, &current.hash).unwrap();

@@ -379,3 +379,36 @@ fn a_known_projects_write_error_is_reported() {
     assert_eq!(keeper.keep(&home, now), None, "the write succeeds again");
     assert!(home.read_known_projects().valid().is_some());
 }
+
+/// Story 6.2 AC 3 (AD-101, D-244): the hook's gate reads phase 1 only. A
+/// floor whose workshop Dockerfile path names a folder, which no read can
+/// open as a file, and whose CA file is missing gets the same answer as
+/// the same floor without them: the gate never reads a catalogue file.
+#[test]
+fn the_hook_never_reads_catalogue_files() {
+    use officina_host::relay::gate::{ToolCall, evaluate};
+
+    let home = TestHome::new();
+    let relay = home.relay(None);
+    let project = relay.officina_home().join("Api");
+    std::fs::create_dir_all(project.join("tools").join("Dockerfile")).unwrap();
+    let plain = "schema = 2\n[[project]]\nname = \"api\"\npath = \"Api\"\nautonomy = \"guarded\"\n";
+    let with_workshop = format!(
+        "{plain}[project.workshop]\ndockerfile = \"tools/Dockerfile\"\n\n[workshop]\nca_file = \"C:/path/to/missing-ca.pem\"\n"
+    );
+    let call = ToolCall {
+        tool: "Bash".to_owned(),
+        command: Some("ssh web01 uptime".to_owned()),
+        target: None,
+        cwd: Some(project.to_string_lossy().into_owned()),
+        session_id: None,
+    };
+    let mut answers = Vec::new();
+    for floor in [plain.to_owned(), with_workshop] {
+        home.write(&relay.default_floor(), &floor);
+        let evaluation = evaluate(&relay, &call, None);
+        answers.push(evaluation.deny.map(|deny| (deny.project, deny.reason)));
+    }
+    assert!(answers[0].is_some(), "the guarded project denies ssh");
+    assert_eq!(answers[0], answers[1]);
+}

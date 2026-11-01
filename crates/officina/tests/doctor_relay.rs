@@ -151,12 +151,13 @@ impl Doctor {
     }
 
     fn snapshot(&self) -> CanonicalCatalogue {
-        self.env
+        (*self
+            .env
             .relay_home()
             .read_approved()
             .approved()
             .unwrap()
-            .canonical
+            .canonical)
             .clone()
     }
 }

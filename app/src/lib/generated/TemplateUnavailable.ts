@@ -3,4 +3,4 @@
 /**
  * Why no [`ApprovedTemplate`] can be had (AD-77).
  */
-export type TemplateUnavailable = "catalogue_changed" | "not_approved";
+export type TemplateUnavailable = "catalogue_changed" | "not_approved" | "workshop_only";

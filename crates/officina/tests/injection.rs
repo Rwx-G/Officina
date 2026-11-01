@@ -928,7 +928,7 @@ fn ingested_as(home: &common::mcp::McpHome, expected: &Value) -> Result<(), Stri
     let pass = open_writer(&home.env.officina_home(), &[], now)
         .writer()
         .ok_or("the registry cannot be written")?
-        .ingest_proposals(&home.proposals_dir(), catalogue.as_ref(), now)
+        .ingest_proposals(&home.proposals_dir(), catalogue.as_deref(), now)
         .map_err(|e| e.to_string())?;
     if pass.ingested != 1 {
         return Err(format!("{} rows ingested", pass.ingested));
@@ -1004,7 +1004,7 @@ fn run_mcp_output(case: &Value) -> Result<(), String> {
                 .writer()
                 .ok_or("the registry cannot be written")?;
         let pass = writer
-            .ingest_proposals(&home.proposals_dir(), catalogue.as_ref(), now)
+            .ingest_proposals(&home.proposals_dir(), catalogue.as_deref(), now)
             .map_err(|e| e.to_string())?;
         drop(writer);
         if pass.ingested == 0 {

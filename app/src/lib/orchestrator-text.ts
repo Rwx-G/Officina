@@ -248,6 +248,7 @@ export const PERMISSION_SWITCH_TEXT: Record<WorkOrderPermission, string> = {
 const TEMPLATE_UNAVAILABLE_TEXT: Record<TemplateUnavailable, string> = {
   catalogue_changed: "the catalogue changed since its approval: review it in the Relay view",
   not_approved: "the template is not in the approved catalogue",
+  workshop_only: "the template runs in the isolated workshop only, never as a work order on this machine",
 };
 
 const WORK_ORDER_REFUSAL_TEXT: Record<WorkOrderRefusal, string> = {

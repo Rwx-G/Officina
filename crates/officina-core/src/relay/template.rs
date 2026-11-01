@@ -229,6 +229,9 @@ pub struct Template {
     /// Each parameter's closed list: sorted, deduplicated, never empty.
     pub params: BTreeMap<String, Vec<String>>,
     pub model: Option<ModelAlias>,
+    /// `[template.workshop]`: present, the template runs only in the
+    /// workshop (FR-2, AD-101).
+    pub workshop: Option<crate::workshop::floor::TemplateWorkshop>,
 }
 
 closed_enum! {
@@ -242,6 +245,9 @@ closed_enum! {
         CatalogueChanged,
         /// The approved snapshot holds no template of that name.
         NotApproved,
+        /// The template declares `[template.workshop]`: it runs only in the
+        /// isolated workshop, never as a host work order (FR-2).
+        WorkshopOnly,
     }
 }
 
@@ -296,6 +302,9 @@ impl ApprovedTemplate {
             .templates
             .get(name.as_str())
             .ok_or(TemplateUnavailable::NotApproved)?;
+        if template.workshop.is_some() {
+            return Err(TemplateUnavailable::WorkshopOnly);
+        }
         let folders = project_dirs(&current.floor, &current.floor_path);
         let projects = template
             .projects
@@ -517,6 +526,20 @@ mod tests {
                     sample::current(),
                     TemplateName::parse("missing").unwrap(),
                 ),
+                TemplateUnavailable::WorkshopOnly => {
+                    let mut approved = sample::approved();
+                    let template = approved
+                        .canonical
+                        .templates
+                        .get_mut(sample::name().as_str())
+                        .unwrap();
+                    template.workshop = Some(crate::workshop::floor::CanonicalTemplateWorkshop {
+                        base: vec!["main".to_owned()],
+                        max_minutes: 60,
+                        max_usd_cents: None,
+                    });
+                    (approved, sample::current(), sample::name())
+                }
             };
             assert_eq!(
                 ApprovedTemplate::new(&approved, &current, &name),

@@ -76,6 +76,7 @@ function view(overrides: Partial<RelayView> = {}): RelayView {
         credentials: { added: [], removed: [], changed: [] },
         templates: { added: ["bump"], removed: [], changed: [] },
         auto_review: null,
+        workshop: [{ field: "upstream_proxy", before: "system", after: HOSTILE }],
       },
       current: catalogue(HOSTILE),
     },

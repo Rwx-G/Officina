@@ -365,6 +365,14 @@ pub fn is_stopped(flag: bool, record: &RecordState) -> bool {
     flag || record.valid().is_some_and(DecisionRecord::holds_stopped)
 }
 
+/// True when the floor's relay sections differ from the approved ones
+/// (D-244): `officina run` compares the relay-section hash only, so a
+/// workshop key or file never stops a relay action. An approval written
+/// before that hash existed reads as pending.
+fn relay_section_changed(relay: &RelayFloor, approved: &ApprovedCatalogue) -> bool {
+    approved.relay_hash.as_deref() != Some(relay.relay_hash.as_str())
+}
+
 /// True when the window's record names another catalogue than `hash` as
 /// the one it approved (D-175).
 fn unconfirmed(record: &RecordState, hash: &str) -> bool {
@@ -441,7 +449,7 @@ pub fn plan(
         }
         FloorState::Valid { relay, path } => (relay, path),
     };
-    if relay.hash != approved.hash {
+    if relay_section_changed(relay, approved) {
         return refuse(
             RefusalReason::CatalogueChanged,
             "catalogue changed, approval pending in Officina".to_owned(),
@@ -685,7 +693,7 @@ pub fn list_text(inputs: &RunInputs<'_>) -> String {
         FloorState::Unreadable(why) => text.push_str(&format!(
             "The relay floor cannot be read ({why}): `officina run` refuses every action until it can.\n"
         )),
-        FloorState::Valid { relay, .. } if relay.hash != approved.hash => text.push_str(
+        FloorState::Valid { relay, .. } if relay_section_changed(relay, approved) => text.push_str(
             "A catalogue change awaits approval in the Officina window: `officina run` refuses every action until it is approved.\n",
         ),
         FloorState::Valid { .. } => {}

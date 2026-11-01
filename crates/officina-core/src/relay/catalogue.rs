@@ -24,6 +24,10 @@ use crate::floor::{
     parse_floor, resolve_project_path,
 };
 use crate::quota::normalise_path;
+use crate::workshop::floor::{
+    CanonicalProjectWorkshop, CanonicalTemplateWorkshop, CanonicalWorkshop, CatalogueFiles,
+    Problem, ProjectWorkshop, WorkshopTable, project_workshop, template_workshop, workshop_table,
+};
 
 /// Programs the gate denies in a guarded project when the floor declares no
 /// `guarded_programs`: PRD amendment 6's list, the WSL routes of D-11
@@ -93,8 +97,9 @@ pub const MAX_DISTRO_CHARS: usize = 64;
 /// Version of the canonical form. Bumping it invalidates every approval on
 /// purpose (AD-24); 2 added credentials and HTTP actions (D-39), 3 an
 /// action's `forwarded_values` (D-173), 4 templates, `auto_review` and
-/// `auto_max_per_hour` (AD-76, D-131).
-pub const CANONICAL_FORMAT: u32 = 4;
+/// `auto_max_per_hour` (AD-76, D-131), 5 the workshop's tables and the
+/// relay-section hash (AD-101, D-244, P-53).
+pub const CANONICAL_FORMAT: u32 = 5;
 
 /// `auto_max_per_hour` when an `auto` action does not set it (AD-75).
 pub const DEFAULT_AUTO_MAX_PER_HOUR: u32 = 6;
@@ -272,6 +277,55 @@ closed_enum! {
         TemplatePattern,
         /// A `model` is not a [`ModelAlias`].
         Model,
+        /// `[workshop] auth` is not a `CredentialKind` (FR-5, D-603).
+        WorkshopAuth,
+        /// `[workshop] max_workers` out of range (FR-2).
+        WorkshopMaxWorkers,
+        /// `[workshop] cpus` or `memory_mib` not a positive whole number.
+        WorkshopLimits,
+        /// `[workshop] upstream_proxy` is not `"system"`, `"none"` or a
+        /// `host:port` without scheme or credentials (D-611).
+        UpstreamProxy,
+        /// `[workshop] ca_file` is not an absolute path to a PEM file of
+        /// certificates only, within its size (FR-2).
+        CaFile,
+        /// A workshop project's name breaks the action name rule or ends in
+        /// `-` (D-248): it names `/work/<project>` and an image.
+        WorkshopProjectName,
+        /// A `mounts` entry breaks FR-2's syntactic rules (D-231).
+        WorkshopMounts,
+        /// A `hosts` entry is not a lowercase DNS name with a lettered last
+        /// label, or takes `*.` on a name of fewer than three labels.
+        WorkshopHosts,
+        /// `dockerfile` is not a relative path inside the project.
+        DockerfilePath,
+        /// The Dockerfile is over its size or cannot be read.
+        DockerfileFile,
+        /// The Dockerfile's folder breaks the build context's bounds: too
+        /// many files or bytes, a subfolder, a link, a read failure.
+        DockerfileContext,
+        /// The Dockerfile's final stage does not descend from an Officina
+        /// base (AD-99).
+        DockerfileBase,
+        /// `review` is not `groups` or `all` (FR-11).
+        WorkshopReview,
+        /// `sensitive_paths` holds too many or malformed patterns (FR-11).
+        SensitivePaths,
+        /// `memory_name` is not one folder name (FR-13, D-236).
+        MemoryName,
+        /// `base` lists no branch, too many, a duplicate, or a name git
+        /// refuses (FR-2).
+        WorkshopBase,
+        /// `max_minutes` out of range (FR-2).
+        WorkshopMaxMinutes,
+        /// `max_usd` is not a positive amount with at most two decimals.
+        WorkshopMaxUsd,
+        /// A workshop template while the workshop is off (no valid
+        /// `[workshop]` table): the template is dropped (FR-2).
+        WorkshopOff,
+        /// A workshop template names a project without a valid
+        /// `[project.workshop]`: the template leaves that project (FR-2).
+        WorkshopTemplateProject,
     }
 }
 
@@ -288,6 +342,7 @@ closed_enum! {
         Template,
         Orchestrator,
         AutoReview,
+        Workshop,
     }
 }
 
@@ -462,6 +517,8 @@ pub struct CatalogueProject {
     pub autonomy: Autonomy,
     /// Sorted, deduplicated, valid actions only.
     pub actions: Vec<String>,
+    /// Its valid `[project.workshop]`, if it declares one (AD-101).
+    pub workshop: Option<ProjectWorkshop>,
 }
 
 /// The result of phase 2: what may run, and what was dropped and why.
@@ -483,6 +540,9 @@ pub struct Catalogue {
     /// when the table fails, and every `auto` request then escalates
     /// (AD-75, AD-87's `review_config_invalid`).
     pub auto_review_model: Option<ModelAlias>,
+    /// The valid `[workshop]` table; `None` when it is absent or fails,
+    /// and the workshop is then off (AD-101).
+    pub workshop: Option<WorkshopTable>,
     /// In file order; issues without a line last.
     pub issues: Vec<ActionIssue>,
 }
@@ -572,6 +632,10 @@ struct RawTemplate {
     params: BTreeMap<String, RawParam>,
     #[serde(default)]
     model: Option<String>,
+    /// `[template.workshop]`, validated by
+    /// `workshop::floor::template_workshop` (AD-101).
+    #[serde(default)]
+    workshop: Option<toml::Value>,
 }
 
 /// `[orchestrator]` and `[auto_review]`: an optional model each (AD-75).
@@ -1410,14 +1474,23 @@ struct Positions {
 /// then the rules across actions (unique names, `check` targets), then the
 /// projects' action lists, then each template against the projects, then
 /// the `[orchestrator]` and `[auto_review]` tables. `content` is the text
-/// `floor` was parsed from, for lines.
+/// `floor` was parsed from, for lines. Reads no workshop file: see
+/// [`validate_with_files`].
 pub fn validate(floor: &FloorFile, content: &str) -> Catalogue {
+    validate_with_files(floor, content, &CatalogueFiles::not_read())
+}
+
+/// [`validate`] with the workshop files the host read (AD-101): the
+/// window, doctor and `officina relay --json` pass what
+/// `workshop::files::read` returns; `officina run` and the gate read none.
+pub fn validate_with_files(floor: &FloorFile, content: &str, files: &CatalogueFiles) -> Catalogue {
     let positions: Positions = toml::from_str(content).unwrap_or_default();
     let mut issues = validate_guarded_programs(floor, &positions, content);
     let credentials = validate_credentials(floor, content, &mut issues);
     let actions = validate_actions(floor, content, &credentials, &mut issues);
-    let projects = validate_projects(floor, &positions, content, &actions, &mut issues);
-    let templates = validate_templates(floor, content, &projects, &mut issues);
+    let workshop = validate_workshop(floor, content, files, &mut issues);
+    let projects = validate_projects(floor, &positions, content, &actions, files, &mut issues);
+    let templates = validate_templates(floor, content, &projects, workshop.is_some(), &mut issues);
     let orchestrator_model = model_table(
         floor.orchestrator.as_ref(),
         IssueTable::Orchestrator,
@@ -1441,7 +1514,49 @@ pub fn validate(floor: &FloorFile, content: &str) -> Catalogue {
         templates,
         orchestrator_model,
         auto_review_model,
+        workshop,
         issues,
+    }
+}
+
+/// Problems of a workshop table as issues of `table` and `name`, at `line`.
+fn workshop_issues(
+    problems: Vec<Problem>,
+    table: IssueTable,
+    name: &str,
+    line: Option<u32>,
+) -> impl Iterator<Item = ActionIssue> {
+    let name = name.to_owned();
+    problems.into_iter().map(move |p| ActionIssue {
+        table,
+        name: name.clone(),
+        line,
+        kind: p.kind,
+        message: p.message,
+    })
+}
+
+/// `[workshop]` (AD-101): `None`, the workshop off, when it is absent or
+/// fails.
+fn validate_workshop(
+    floor: &FloorFile,
+    content: &str,
+    files: &CatalogueFiles,
+    issues: &mut Vec<ActionIssue>,
+) -> Option<WorkshopTable> {
+    let table = floor.workshop.as_ref()?;
+    let line = Some(line_at(content, table.span().start));
+    match workshop_table(table.get_ref(), files) {
+        Ok(workshop) => Some(workshop),
+        Err(problems) => {
+            issues.extend(workshop_issues(
+                problems,
+                IssueTable::Workshop,
+                IssueTable::Workshop.code(),
+                line,
+            ));
+            None
+        }
     }
 }
 
@@ -1492,6 +1607,7 @@ fn validate_templates(
     floor: &FloorFile,
     content: &str,
     projects: &[CatalogueProject],
+    workshop_on: bool,
     issues: &mut Vec<ActionIssue>,
 ) -> BTreeMap<String, Template> {
     let duplicates = duplicated(
@@ -1501,6 +1617,11 @@ fn validate_templates(
             .filter_map(|raw| raw.get_ref().get("name").and_then(toml::Value::as_str)),
     );
     let known: BTreeSet<&str> = projects.iter().map(|p| p.name.as_str()).collect();
+    let in_workshop: BTreeSet<&str> = projects
+        .iter()
+        .filter(|p| p.workshop.is_some())
+        .map(|p| p.name.as_str())
+        .collect();
     let mut templates = BTreeMap::new();
     for raw in &floor.templates {
         let line = Some(line_at(content, raw.span().start));
@@ -1523,7 +1644,14 @@ fn validate_templates(
             )));
             continue;
         }
-        let (kept, unknown): (Vec<String>, Vec<String>) = template
+        if template.workshop.is_some() && !workshop_on {
+            issues.push(at_line(report.issue(
+                IssueKind::WorkshopOff,
+                "the template runs in the workshop, which is off without a valid [workshop] table: it is dropped".to_owned(),
+            )));
+            continue;
+        }
+        let (mut kept, unknown): (Vec<String>, Vec<String>) = template
             .projects
             .iter()
             .cloned()
@@ -1533,6 +1661,20 @@ fn validate_templates(
                 IssueKind::UnknownTemplateProject,
                 format!("project {project} is not in the catalogue: the template leaves it"),
             )));
+        }
+        if template.workshop.is_some() {
+            let (in_it, outside): (Vec<String>, Vec<String>) = kept
+                .into_iter()
+                .partition(|p| in_workshop.contains(p.as_str()));
+            for project in &outside {
+                issues.push(at_line(report.issue(
+                    IssueKind::WorkshopTemplateProject,
+                    format!(
+                        "project {project} has no valid [project.workshop]: the workshop template leaves it"
+                    ),
+                )));
+            }
+            kept = in_it;
         }
         if kept.is_empty() {
             issues.push(at_line(report.issue(
@@ -1575,6 +1717,17 @@ fn template_from_value(value: &toml::Value) -> Result<Template, Vec<ActionIssue>
             report.issues.push(issue);
             None
         });
+    let workshop = raw
+        .workshop
+        .as_ref()
+        .map(template_workshop)
+        .transpose()
+        .unwrap_or_else(|problems| {
+            for found in problems {
+                report.add(found.kind, found.message);
+            }
+            None
+        });
     if !report.issues.is_empty() {
         return Err(report.issues);
     }
@@ -1588,6 +1741,7 @@ fn template_from_value(value: &toml::Value) -> Result<Template, Vec<ActionIssue>
         prompt: raw.prompt,
         params,
         model,
+        workshop,
     })
 }
 
@@ -1876,6 +2030,7 @@ fn validate_projects(
     positions: &Positions,
     content: &str,
     actions: &BTreeMap<String, Action>,
+    files: &CatalogueFiles,
     issues: &mut Vec<ActionIssue>,
 ) -> Vec<CatalogueProject> {
     let duplicates = duplicated(floor.projects.iter().map(|project| project.name.as_str()));
@@ -1912,11 +2067,27 @@ fn validate_projects(
                 });
             }
         }
+        // A failing workshop table leaves the project's relay actions alone:
+        // only its workshop goes (AD-101).
+        let workshop = project.workshop.as_ref().and_then(|table| {
+            let at = Some(line_at(content, table.span().start));
+            project_workshop(&project.name, table.get_ref(), files)
+                .map_err(|problems| {
+                    issues.extend(workshop_issues(
+                        problems,
+                        IssueTable::Project,
+                        &project.name,
+                        at,
+                    ));
+                })
+                .ok()
+        });
         projects.push(CatalogueProject {
             name: project.name.clone(),
             path: project.path.clone(),
             autonomy: floor.autonomy_of(project),
             actions: names.into_iter().collect(),
+            workshop,
         });
     }
     projects.sort_by(|a, b| a.name.cmp(&b.name));
@@ -2040,6 +2211,12 @@ pub struct CanonicalTemplate {
     /// Each parameter's closed list.
     pub params: BTreeMap<String, Vec<String>>,
     pub model: Option<ModelAlias>,
+    /// `[template.workshop]`: present, the template runs only in the
+    /// workshop; absent from host templates and from snapshots before
+    /// format 5 (AD-101).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
+    pub workshop: Option<CanonicalTemplateWorkshop>,
 }
 
 impl From<&Template> for CanonicalTemplate {
@@ -2050,6 +2227,10 @@ impl From<&Template> for CanonicalTemplate {
             prompt: template.prompt.clone(),
             params: template.params.clone(),
             model: template.model,
+            workshop: template
+                .workshop
+                .as_ref()
+                .map(CanonicalTemplateWorkshop::from),
         }
     }
 }
@@ -2131,6 +2312,11 @@ pub struct CanonicalProject {
     pub autonomy: Autonomy,
     /// Sorted.
     pub actions: Vec<String>,
+    /// `[project.workshop]`; absent without one and from snapshots before
+    /// format 5 (AD-101).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
+    pub workshop: Option<CanonicalProjectWorkshop>,
 }
 
 /// What the author approves (AD-24): the catalogue's meaning, not its text.
@@ -2160,6 +2346,11 @@ pub struct CanonicalCatalogue {
     /// Absent from snapshots before format 4, which read as the default.
     #[serde(default)]
     pub auto_review: CanonicalAutoReview,
+    /// `[workshop]`; absent while the workshop is off and from snapshots
+    /// before format 5 (AD-101).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
+    pub workshop: Option<CanonicalWorkshop>,
 }
 
 /// The canonical form of a validated catalogue read from `floor_path`.
@@ -2177,6 +2368,7 @@ pub fn canonical(catalogue: &Catalogue, floor_path: &str) -> CanonicalCatalogue 
                     path: resolve_project_path(floor_dir, &p.path),
                     autonomy: p.autonomy,
                     actions: p.actions.clone(),
+                    workshop: p.workshop.as_ref().map(CanonicalProjectWorkshop::from),
                 };
                 (p.name.clone(), project)
             })
@@ -2206,6 +2398,7 @@ pub fn canonical(catalogue: &Catalogue, floor_path: &str) -> CanonicalCatalogue 
         auto_review: CanonicalAutoReview {
             model: catalogue.auto_review_model,
         },
+        workshop: catalogue.workshop.as_ref().map(CanonicalWorkshop::from),
     }
 }
 
@@ -2239,6 +2432,27 @@ pub fn hash(canonical: &CanonicalCatalogue) -> String {
     super::sha256_hex(&bytes)
 }
 
+/// The sections `officina run` uses (D-244): the canonical form without
+/// `[workshop]`, without any project's `[project.workshop]` and without the
+/// workshop templates, so no workshop file and no workshop key can stop a
+/// relay action.
+pub fn relay_section(canonical: &CanonicalCatalogue) -> CanonicalCatalogue {
+    let mut section = canonical.clone();
+    section.workshop = None;
+    for project in section.projects.values_mut() {
+        project.workshop = None;
+    }
+    section
+        .templates
+        .retain(|_, template| template.workshop.is_none());
+    section
+}
+
+/// The relay-section hash (D-244): [`hash`] of [`relay_section`].
+pub fn relay_hash(canonical: &CanonicalCatalogue) -> String {
+    hash(&relay_section(canonical))
+}
+
 /// A floor read for the relay: both phases, the canonical form and its hash.
 #[derive(Debug, Clone)]
 pub struct RelayFloor {
@@ -2246,23 +2460,38 @@ pub struct RelayFloor {
     pub catalogue: Catalogue,
     pub canonical: CanonicalCatalogue,
     pub hash: String,
+    /// The relay-section hash, the one `officina run` compares (D-244).
+    pub relay_hash: String,
     /// The floor's path as read, which [`project_dirs`] resolves the
     /// projects' folders against (D-6).
     pub floor_path: String,
 }
 
-/// Runs phase 1 and phase 2 on a floor's content and computes its canonical
-/// form and hash. Only phase 1 can fail.
+/// Runs phase 1 and phase 2 on a floor's content, reading no workshop
+/// file, and computes its canonical form and hashes. Only phase 1 can
+/// fail. Its relay-section hash is the floor's; its global hash is only
+/// when the floor declares no workshop file (see [`load_with_files`]).
 pub fn load(content: &str, floor_path: &str) -> Result<RelayFloor, FloorError> {
+    load_with_files(content, floor_path, &CatalogueFiles::not_read())
+}
+
+/// [`load`] with the workshop files the host read (AD-101).
+pub fn load_with_files(
+    content: &str,
+    floor_path: &str,
+    files: &CatalogueFiles,
+) -> Result<RelayFloor, FloorError> {
     let floor = parse_floor(content)?;
-    let catalogue = validate(&floor, content);
+    let catalogue = validate_with_files(&floor, content, files);
     let canonical = canonical(&catalogue, floor_path);
     let hash = hash(&canonical);
+    let relay_hash = relay_hash(&canonical);
     Ok(RelayFloor {
         floor,
         catalogue,
         canonical,
         hash,
+        relay_hash,
         floor_path: floor_path.to_owned(),
     })
 }
@@ -2371,6 +2600,10 @@ pub struct CatalogueDiff {
     pub templates: SectionDiff,
     /// The review's model, `field` being `model` (AD-76).
     pub auto_review: Option<FieldChange>,
+    /// `[workshop]` field by field, `null` on the side where the workshop
+    /// is off (AD-101); a project's or a template's own workshop table is
+    /// its `workshop` field in its section.
+    pub workshop: Vec<FieldChange>,
 }
 
 impl CatalogueDiff {
@@ -2385,6 +2618,7 @@ impl CatalogueDiff {
             && self.credentials.is_empty()
             && self.templates.is_empty()
             && self.auto_review.is_none()
+            && self.workshop.is_empty()
     }
 }
 
@@ -2466,7 +2700,30 @@ pub fn diff(approved: &CanonicalCatalogue, current: &CanonicalCatalogue) -> Cata
             &approved.auto_review.model,
             &current.auto_review.model,
         ),
+        workshop: table_changes(&approved.workshop, &current.workshop),
     }
+}
+
+/// Field by field over two optional tables serialized, a missing table
+/// reading as every field `null`.
+fn table_changes<T: Serialize>(before: &Option<T>, after: &Option<T>) -> Vec<FieldChange> {
+    let object = |table: &Option<T>| match table.as_ref().map(serde_json::to_value) {
+        Some(Ok(serde_json::Value::Object(map))) => map,
+        _ => serde_json::Map::new(),
+    };
+    let (old, new) = (object(before), object(after));
+    let keys: BTreeSet<&String> = old.keys().chain(new.keys()).collect();
+    keys.into_iter()
+        .filter_map(|key| {
+            let before = old.get(key).cloned().unwrap_or_default();
+            let after = new.get(key).cloned().unwrap_or_default();
+            (before != after).then(|| FieldChange {
+                field: key.clone(),
+                before,
+                after,
+            })
+        })
+        .collect()
 }
 
 /// Content of `relay/approved.json`, written by the window only (AD-24,
@@ -2481,7 +2738,14 @@ pub struct ApprovedCatalogue {
     /// it existed; see [`ApprovedCatalogue::floor_file`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub floor_file: Option<String>,
-    pub canonical: CanonicalCatalogue,
+    /// The relay-section hash (D-244), which `officina run` compares.
+    /// Absent from records before format 5, which `officina run` then
+    /// reads as pending.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relay_hash: Option<String>,
+    /// Boxed: the record sits in `ApprovedState`'s variant beside short
+    /// ones.
+    pub canonical: Box<CanonicalCatalogue>,
 }
 
 impl ApprovedCatalogue {
@@ -2497,7 +2761,8 @@ impl ApprovedCatalogue {
             approved_at_ms,
             hash: relay.hash.clone(),
             floor_file: Some(floor_file.to_owned()),
-            canonical: relay.canonical.clone(),
+            relay_hash: Some(relay.relay_hash.clone()),
+            canonical: Box::new(relay.canonical.clone()),
         }
     }
 
@@ -2933,7 +3198,109 @@ mod tests {
     }
 
     fn validated(content: &str) -> Catalogue {
-        validate(&parse_floor(content).unwrap(), content)
+        validate_with_files(&parse_floor(content).unwrap(), content, &files_for(content))
+    }
+
+    /// A valid PEM certificate file, for `ca_file`.
+    const PEM: &str = "-----BEGIN CERTIFICATE-----\nTUlJQmV4YW1wbGU=\n-----END CERTIFICATE-----\n";
+    /// A valid project Dockerfile.
+    const DOCKERFILE: &str = "FROM officina-workshop:local\nRUN true\n";
+
+    /// The files the host would read for `content`, by convention on the
+    /// requested paths: a CA path holding `missing` is unreadable; a
+    /// Dockerfile under `toolarge/` is over its size, under `nested/` has a
+    /// subfolder beside it, under `debian/` descends from Debian; every other
+    /// file is valid.
+    fn files_for(content: &str) -> CatalogueFiles {
+        use crate::workshop::floor::{
+            ContextFile, ContextProblem, DockerfileFiles, FileContent, file_requests,
+        };
+        let floor = parse_floor(content).unwrap();
+        let requests = file_requests(&floor, "C:/Work/officina.toml");
+        let ca_file = requests.ca_file.map(|path| {
+            if path.contains("missing") {
+                FileContent::Unreadable("not found".to_owned())
+            } else {
+                FileContent::Bytes(PEM.as_bytes().to_vec())
+            }
+        });
+        let dockerfiles = requests
+            .dockerfiles
+            .into_iter()
+            .map(|request| {
+                let bytes = if request.path.contains("/debian/") {
+                    b"FROM debian:trixie-slim\n".to_vec()
+                } else {
+                    DOCKERFILE.as_bytes().to_vec()
+                };
+                let context = vec![ContextFile {
+                    name: "Dockerfile".to_owned(),
+                    bytes: bytes.clone(),
+                }];
+                let files = if request.path.contains("/toolarge/") {
+                    DockerfileFiles {
+                        dockerfile: FileContent::TooLarge,
+                        context: Ok(context),
+                    }
+                } else if request.path.contains("/nested/") {
+                    DockerfileFiles {
+                        dockerfile: FileContent::Bytes(bytes),
+                        context: Err(ContextProblem::Subfolder("sub".to_owned())),
+                    }
+                } else {
+                    DockerfileFiles {
+                        dockerfile: FileContent::Bytes(bytes),
+                        context: Ok(context),
+                    }
+                };
+                (request.project, files)
+            })
+            .collect();
+        CatalogueFiles {
+            read: true,
+            ca_file,
+            dockerfiles,
+        }
+    }
+
+    /// A valid workshop template for the project of [`PROJECT`].
+    fn workshop_template() -> String {
+        format!(
+            "{VALID_TEMPLATE}[template.workshop]\nbase = [\"main\", \"develop\"]\nmax_minutes = 30\nmax_usd = 2.5\n"
+        )
+    }
+
+    /// A schema 2 floor whose project of [`PROJECT`] declares
+    /// `[project.workshop]` holding `project` (when `Some`), a `[workshop]`
+    /// table holding `workshop` (when `Some`), [`VALID_PROBE`] and the
+    /// given templates.
+    fn workshop_floor(workshop: Option<&str>, project: Option<&str>, templates: &[&str]) -> String {
+        let mut text = format!("schema = 2\n{PROJECT}");
+        if let Some(project) = project {
+            text.push_str(&format!("[project.workshop]\n{project}\n"));
+        }
+        if let Some(workshop) = workshop {
+            text.push_str(&format!("[workshop]\n{workshop}\n"));
+        }
+        text.push_str(&format!("\n[[action]]\n{VALID_PROBE}"));
+        for template in templates {
+            text.push_str("\n[[template]]\n");
+            text.push_str(template);
+        }
+        text
+    }
+
+    /// A workshop floor with every key set and valid.
+    fn full_workshop_floor() -> String {
+        workshop_floor(
+            Some(
+                "auth = \"oauth-token\"\nmax_workers = 3\ncpus = 4\nmemory_mib = 8192\nupstream_proxy = \"proxy.example.com:8080\"\nca_file = \"C:/path/to/ca.pem\"",
+            ),
+            Some(
+                "mounts = [\"_bmad\", \".claude\"]\nhosts = [\"static.crates.io\", \"index.crates.io\"]\ndockerfile = \"tools/Dockerfile\"\nreview = \"all\"\nsensitive_paths = [\"deploy/**\"]\nmemory_name = \"C--Work-Lab\"",
+            ),
+            &[&workshop_template()],
+        )
     }
 
     /// Validates `content`, asserts an issue of `kind` and returns the
@@ -3122,6 +3489,60 @@ mod tests {
                 "values = [\"web01\", \"db01\"]",
                 "pattern = \"(\"",
             )]),
+            IssueKind::WorkshopAuth => workshop_floor(Some("auth = \"password\""), None, &[]),
+            IssueKind::WorkshopMaxWorkers => workshop_floor(Some("max_workers = 9"), None, &[]),
+            IssueKind::WorkshopLimits => workshop_floor(Some("cpus = 0"), None, &[]),
+            IssueKind::UpstreamProxy => workshop_floor(
+                Some("upstream_proxy = \"http://proxy.example.com:8080\""),
+                None,
+                &[],
+            ),
+            IssueKind::CaFile => {
+                workshop_floor(Some("ca_file = \"C:/path/to/missing.pem\""), None, &[])
+            }
+            IssueKind::WorkshopProjectName => {
+                workshop_floor(Some(""), Some(""), &[]).replace("name = \"lab\"", "name = \"lab-\"")
+            }
+            IssueKind::WorkshopMounts => workshop_floor(Some(""), Some("mounts = [\"..\"]"), &[]),
+            IssueKind::WorkshopHosts => {
+                workshop_floor(Some(""), Some("hosts = [\"192.0.2.10\"]"), &[])
+            }
+            IssueKind::DockerfilePath => {
+                workshop_floor(Some(""), Some("dockerfile = \"../Dockerfile\""), &[])
+            }
+            IssueKind::DockerfileFile => {
+                workshop_floor(Some(""), Some("dockerfile = \"toolarge/Dockerfile\""), &[])
+            }
+            IssueKind::DockerfileContext => {
+                workshop_floor(Some(""), Some("dockerfile = \"nested/Dockerfile\""), &[])
+            }
+            IssueKind::DockerfileBase => {
+                workshop_floor(Some(""), Some("dockerfile = \"debian/Dockerfile\""), &[])
+            }
+            IssueKind::WorkshopReview => workshop_floor(Some(""), Some("review = \"some\""), &[]),
+            IssueKind::SensitivePaths => {
+                workshop_floor(Some(""), Some("sensitive_paths = [\"/abs\"]"), &[])
+            }
+            IssueKind::MemoryName => workshop_floor(Some(""), Some("memory_name = \"..\""), &[]),
+            IssueKind::WorkshopBase => workshop_floor(
+                Some(""),
+                Some(""),
+                &[&workshop_template().replace("\"develop\"", "\"a..b\"")],
+            ),
+            IssueKind::WorkshopMaxMinutes => workshop_floor(
+                Some(""),
+                Some(""),
+                &[&workshop_template().replace("max_minutes = 30", "max_minutes = 1")],
+            ),
+            IssueKind::WorkshopMaxUsd => workshop_floor(
+                Some(""),
+                Some(""),
+                &[&workshop_template().replace("max_usd = 2.5", "max_usd = 0.001")],
+            ),
+            IssueKind::WorkshopOff => workshop_floor(None, Some(""), &[&workshop_template()]),
+            IssueKind::WorkshopTemplateProject => {
+                workshop_floor(Some(""), None, &[&workshop_template()])
+            }
             IssueKind::Check => floor_with(&[&replaced("\"free\"", "\"after-check\"")]),
             IssueKind::Timeout => floor_with(&[&probe_top("timeout_s = 0\n")]),
             IssueKind::MaxOutput => floor_with(&[&probe_top("max_output_kib = 2048\n")]),
@@ -4217,7 +4638,8 @@ mod tests {
 
     #[test]
     fn diff_covers_every_canonical_field() {
-        let canonical = canonical_of(&with_templates(&[VALID_TEMPLATE]));
+        let canonical = canonical_of(&full_workshop_floor());
+        assert!(canonical.workshop.is_some());
         assert!(!canonical.templates.is_empty());
         let canonical_keys: BTreeSet<String> = serde_json::to_value(&canonical)
             .unwrap()
@@ -4929,7 +5351,8 @@ mod tests {
 
     /// The previous format's approval, as `main` wrote it for the golden
     /// floor before this format (D-131): it parses, and against the same
-    /// floor today its diff shows the format change and the templates added.
+    /// floor today its diff shows the format change and the workshop's
+    /// tables and templates added.
     #[test]
     fn diff_reports_the_format_change() {
         let previous: ApprovedCatalogue = serde_json::from_str(include_str!(
@@ -4937,15 +5360,12 @@ mod tests {
         ))
         .expect("an approval in the previous format parses");
         assert_eq!(previous.canonical.format, CANONICAL_FORMAT - 1);
-        assert!(previous.canonical.templates.is_empty());
+        assert!(previous.canonical.workshop.is_none());
+        assert!(previous.relay_hash.is_none());
         assert_eq!(
-            previous.canonical.auto_review,
-            CanonicalAutoReview::default()
-        );
-        assert_ne!(
             hash(&previous.canonical),
             previous.hash,
-            "its stored hash is its own"
+            "its stored hash is the one its own canonical form gives"
         );
         let current = load(
             include_str!("../../tests/data/relay/golden-floor.toml"),
@@ -4961,9 +5381,16 @@ mod tests {
                 serde_json::json!(CANONICAL_FORMAT)
             )
         );
-        let added: Vec<&String> = current.canonical.templates.keys().collect();
+        let added: Vec<&String> = current
+            .canonical
+            .templates
+            .iter()
+            .filter(|(_, template)| template.workshop.is_some())
+            .map(|(name, _)| name)
+            .collect();
         assert!(!added.is_empty());
         assert_eq!(d.templates.added.iter().collect::<Vec<_>>(), added);
+        assert!(!d.workshop.is_empty());
         assert!(d.floor_path.is_none() && d.projects.removed.is_empty());
     }
 
@@ -5017,5 +5444,234 @@ mod tests {
             parse_known_projects(&text.replace("\"schema\":1", "\"schema\":2")),
             None
         );
+    }
+
+    fn workshop_load(content: &str, files: &CatalogueFiles) -> RelayFloor {
+        load_with_files(content, "C:/Work/officina.toml", files).unwrap()
+    }
+
+    #[test]
+    fn the_full_workshop_floor_is_valid() {
+        let content = full_workshop_floor();
+        let catalogue = validated(&content);
+        assert!(catalogue.issues.is_empty(), "{:#?}", catalogue.issues);
+        let canonical = canonical_of(&content);
+        let workshop = canonical.workshop.expect("the workshop is on");
+        assert_eq!(workshop.ca_sha256, Some(crate::sha256_hex(PEM.as_bytes())));
+        let project = canonical.projects["lab"]
+            .workshop
+            .clone()
+            .expect("lab's workshop");
+        assert_eq!(project.mounts, [".claude", "_bmad"]);
+        assert_eq!(project.hosts, ["index.crates.io", "static.crates.io"]);
+        assert!(project.dockerfile_sha256.is_some() && project.context_sha256.is_some());
+        let template = canonical.templates["bump"]
+            .workshop
+            .clone()
+            .expect("a workshop template");
+        assert_eq!(template.base, ["main", "develop"]);
+        assert_eq!(template.max_usd_cents, Some(250));
+    }
+
+    #[test]
+    fn an_invalid_workshop_table_drops_every_workshop_template_only() {
+        let host_template = template_with("name = \"bump\"", "name = \"audit\"");
+        let content = workshop_floor(
+            Some("max_workers = 9"),
+            Some(""),
+            &[&workshop_template(), &host_template],
+        );
+        let catalogue = with_issue(&content, IssueKind::WorkshopMaxWorkers);
+        assert!(catalogue.workshop.is_none(), "the workshop is off");
+        assert!(issue_of(&catalogue, IssueKind::WorkshopOff).name == "bump");
+        assert!(!catalogue.templates.contains_key("bump"));
+        assert!(
+            catalogue.templates.contains_key("audit"),
+            "host templates stay"
+        );
+        assert!(
+            catalogue.actions.contains_key("probe"),
+            "relay actions stay"
+        );
+        assert!(
+            catalogue.projects[0].workshop.is_some(),
+            "a project's own table stays valid"
+        );
+    }
+
+    #[test]
+    fn a_template_with_a_workshop_table_runs_only_in_the_workshop() {
+        let content = workshop_floor(Some(""), Some(""), &[&workshop_template()]);
+        let relay = workshop_load(&content, &files_for(&content));
+        let approved = ApprovedCatalogue::approving(&relay, "C:/Work/officina.toml", 1);
+        let name = crate::relay::template::TemplateName::parse("bump").unwrap();
+        assert_eq!(
+            crate::relay::template::ApprovedTemplate::new(&approved, &relay, &name),
+            Err(crate::relay::template::TemplateUnavailable::WorkshopOnly)
+        );
+        let host = with_templates(&[VALID_TEMPLATE]);
+        let host_relay = workshop_load(&host, &files_for(&host));
+        let approved = ApprovedCatalogue::approving(&host_relay, "C:/Work/officina.toml", 1);
+        assert!(
+            crate::relay::template::ApprovedTemplate::new(&approved, &host_relay, &name).is_ok()
+        );
+    }
+
+    #[test]
+    fn a_workshop_project_name_rule_leaves_its_relay_actions() {
+        let content = failing_fixture(IssueKind::WorkshopProjectName);
+        let catalogue = with_issue(&content, IssueKind::WorkshopProjectName);
+        assert_eq!(catalogue.projects[0].name, "lab-");
+        assert!(catalogue.projects[0].workshop.is_none());
+    }
+
+    /// The files of [`full_workshop_floor`] with `edit` applied.
+    fn edited_files(edit: impl FnOnce(&mut CatalogueFiles)) -> CatalogueFiles {
+        let mut files = files_for(&full_workshop_floor());
+        edit(&mut files);
+        files
+    }
+
+    fn both_hashes(content: &str, files: &CatalogueFiles) -> (String, String) {
+        let relay = workshop_load(content, files);
+        (relay.hash, relay.relay_hash)
+    }
+
+    #[test]
+    fn a_changed_dockerfile_byte_changes_the_global_hash_only() {
+        use crate::workshop::floor::FileContent;
+        let content = full_workshop_floor();
+        let (global, relay) = both_hashes(&content, &files_for(&content));
+        let files = edited_files(|files| {
+            let entry = files.dockerfiles.get_mut("lab").unwrap();
+            entry.dockerfile = FileContent::Bytes(format!("{DOCKERFILE}RUN echo 1\n").into_bytes());
+        });
+        let (global_after, relay_after) = both_hashes(&content, &files);
+        assert_ne!(global_after, global);
+        assert_eq!(relay_after, relay);
+    }
+
+    #[test]
+    fn a_changed_context_file_changes_the_global_hash_only() {
+        use crate::workshop::floor::ContextFile;
+        let content = full_workshop_floor();
+        let (global, relay) = both_hashes(&content, &files_for(&content));
+        let files = edited_files(|files| {
+            let entry = files.dockerfiles.get_mut("lab").unwrap();
+            entry.context.as_mut().unwrap().push(ContextFile {
+                name: "requirements.txt".to_owned(),
+                bytes: b"x".to_vec(),
+            });
+        });
+        let (global_after, relay_after) = both_hashes(&content, &files);
+        assert_ne!(global_after, global);
+        assert_eq!(relay_after, relay);
+    }
+
+    #[test]
+    fn a_changed_ca_file_changes_the_global_hash_only() {
+        use crate::workshop::floor::FileContent;
+        let content = full_workshop_floor();
+        let (global, relay) = both_hashes(&content, &files_for(&content));
+        let other = PEM.replace("TUlJQmV4YW1wbGU=", "QW5vdGhlcg==");
+        let files =
+            edited_files(|files| files.ca_file = Some(FileContent::Bytes(other.into_bytes())));
+        let (global_after, relay_after) = both_hashes(&content, &files);
+        assert_ne!(global_after, global);
+        assert_eq!(relay_after, relay);
+        let unreadable =
+            edited_files(|files| files.ca_file = Some(FileContent::Unreadable("gone".into())));
+        let (global_gone, relay_gone) = both_hashes(&content, &unreadable);
+        assert_ne!(
+            global_gone, global,
+            "an unreadable CA turns the workshop off"
+        );
+        assert_eq!(relay_gone, relay, "and leaves every relay action runnable");
+        let not_read = workshop_load(&content, &CatalogueFiles::not_read());
+        assert_eq!(
+            not_read.relay_hash, relay,
+            "officina run reads no file and agrees"
+        );
+    }
+
+    #[test]
+    fn a_changed_action_changes_both_hashes() {
+        let content = full_workshop_floor();
+        let (global, relay) = both_hashes(&content, &files_for(&content));
+        let edited = content.replace("\"web01\", \"db01\"", "\"web01\", \"db02\"");
+        assert_ne!(edited, content);
+        let (global_after, relay_after) = both_hashes(&edited, &files_for(&edited));
+        assert_ne!(global_after, global);
+        assert_ne!(relay_after, relay);
+    }
+
+    #[test]
+    fn a_changed_workshop_key_changes_the_global_hash_only() {
+        let content = full_workshop_floor();
+        let (global, relay) = both_hashes(&content, &files_for(&content));
+        for (from, to) in [
+            ("max_workers = 3", "max_workers = 2"),
+            ("\"static.crates.io\"", "\"static.example.com\""),
+            ("max_minutes = 30", "max_minutes = 31"),
+        ] {
+            let edited = content.replace(from, to);
+            assert_ne!(edited, content, "{from}");
+            let (global_after, relay_after) = both_hashes(&edited, &files_for(&edited));
+            assert_ne!(global_after, global, "{from}");
+            assert_eq!(relay_after, relay, "{from}");
+        }
+    }
+
+    #[test]
+    fn host_order_does_not_change_the_hash() {
+        let content = full_workshop_floor();
+        let reordered = content.replace(
+            "hosts = [\"static.crates.io\", \"index.crates.io\"]",
+            "hosts = [\"index.crates.io\", \"static.crates.io\", \"index.crates.io\"]",
+        );
+        assert_ne!(reordered, content);
+        assert_eq!(
+            both_hashes(&reordered, &files_for(&reordered)),
+            both_hashes(&content, &files_for(&content))
+        );
+    }
+
+    #[test]
+    fn base_order_does_change_the_hash() {
+        let content = full_workshop_floor();
+        let reordered = content.replace("[\"main\", \"develop\"]", "[\"develop\", \"main\"]");
+        assert_ne!(reordered, content);
+        let (global, relay) = both_hashes(&content, &files_for(&content));
+        let (global_after, relay_after) = both_hashes(&reordered, &files_for(&reordered));
+        assert_ne!(global_after, global, "the first base is the default");
+        assert_eq!(relay_after, relay);
+    }
+
+    #[test]
+    fn diff_lists_workshop_changes() {
+        let content = full_workshop_floor();
+        let before = canonical_of(&content);
+        let after = canonical_of(
+            &content
+                .replace("max_workers = 3", "max_workers = 4")
+                .replace("\"static.crates.io\", ", "")
+                .replace("max_minutes = 30", "max_minutes = 45"),
+        );
+        let d = diff(&before, &after);
+        assert_eq!(d.workshop.len(), 1);
+        assert_eq!(d.workshop[0].field, "max_workers");
+        assert_eq!(
+            (d.workshop[0].before.clone(), d.workshop[0].after.clone()),
+            (3.into(), 4.into())
+        );
+        assert_eq!(d.projects.changed[0].name, "lab");
+        assert_eq!(d.projects.changed[0].fields[0].field, "workshop");
+        assert_eq!(d.templates.changed[0].fields[0].field, "workshop");
+        let off = canonical_of(&workshop_floor(None, None, &[]));
+        let d = diff(&off, &before);
+        let fields: Vec<&str> = d.workshop.iter().map(|c| c.field.as_str()).collect();
+        assert!(fields.contains(&"auth") && fields.contains(&"upstream_proxy"));
+        assert!(d.workshop.iter().all(|c| c.before.is_null()));
+        assert!(!d.is_empty());
     }
 }

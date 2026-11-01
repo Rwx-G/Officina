@@ -192,7 +192,7 @@ pub(crate) fn issue(
 pub(crate) fn approved_catalogue(relay: &RelayHome) -> Option<CanonicalCatalogue> {
     catalogue(relay)
         .ok()
-        .map(|(approved, _)| approved.canonical)
+        .map(|(approved, _)| *approved.canonical)
 }
 
 /// Issues a card from the pending work order proposal `proposal_id`

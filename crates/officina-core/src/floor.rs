@@ -19,15 +19,17 @@ pub const FLOOR_SCHEMA_V1: u32 = 1;
 /// Keys only a schema 2 floor may carry. A dotted key names a key of every
 /// `[[project]]` table. Asserted against [`FloorFile`] by a test, so a new
 /// relay key cannot be forgotten here (D-7).
-pub const RELAY_KEYS: [&str; 8] = [
+pub const RELAY_KEYS: [&str; 10] = [
     "guarded_programs",
     "action",
     "credential",
     "template",
     "orchestrator",
     "auto_review",
+    "workshop",
     "project.autonomy",
     "project.actions",
+    "project.workshop",
 ];
 
 /// Keys valid in every schema that only change what the window shows:
@@ -111,6 +113,10 @@ pub struct ProjectEntry {
     /// [`FloorFile::priority_of`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub priority: Option<toml::Spanned<toml::Value>>,
+    /// The raw `[project.workshop]` table (AD-101), validated by phase 2,
+    /// so a broken one never refuses the floor the board uses.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workshop: Option<toml::Spanned<toml::Value>>,
 }
 
 /// The `[alert]` table (AD-168).
@@ -170,6 +176,10 @@ pub struct FloorFile {
     /// The raw `[auto_review]` table (AD-75), validated by phase 2.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auto_review: Option<toml::Spanned<toml::Value>>,
+    /// The raw `[workshop]` table (AD-101), validated by phase 2: a
+    /// malformed one turns the workshop off, never the floor.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workshop: Option<toml::Spanned<toml::Value>>,
     /// The escalation threshold of the alert (AD-168).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub alert: Option<AlertTable>,
@@ -533,11 +543,14 @@ program = "C:/path/to/tool.exe"
         match key.split_once('.') {
             Some(("project", "autonomy")) => format!("schema = 1\n{project}autonomy = \"free\"\n"),
             Some(("project", "actions")) => format!("schema = 1\n{project}actions = [\"x\"]\n"),
+            Some(("project", "workshop")) => {
+                format!("schema = 1\n{project}[project.workshop]\nhosts = [\"x\"]\n")
+            }
             Some((table, field)) => panic!("no sample for the relay key {table}.{field}"),
             None if ["action", "credential", "template"].contains(&key) => {
                 format!("schema = 1\n{project}[[{key}]]\nname = \"x\"\n")
             }
-            None if ["orchestrator", "auto_review"].contains(&key) => {
+            None if ["orchestrator", "auto_review", "workshop"].contains(&key) => {
                 format!("schema = 1\n{project}[{key}]\nmodel = \"x\"\n")
             }
             None => format!("schema = 1\n{key} = [\"x\"]\n{project}"),
@@ -613,12 +626,14 @@ program = "C:/path/to/tool.exe"
                 autonomy: Some(Autonomy::Guarded),
                 actions: Some(vec!["x".to_owned()]),
                 priority: Some(toml::Spanned::new(0..0, toml::Value::from("high"))),
+                workshop: Some(toml::Spanned::new(0..0, action.clone())),
             }],
             actions: vec![toml::Spanned::new(0..0, action.clone())],
             credentials: vec![toml::Spanned::new(0..0, action.clone())],
             templates: vec![toml::Spanned::new(0..0, action.clone())],
             orchestrator: Some(toml::Spanned::new(0..0, action.clone())),
-            auto_review: Some(toml::Spanned::new(0..0, action)),
+            auto_review: Some(toml::Spanned::new(0..0, action.clone())),
+            workshop: Some(toml::Spanned::new(0..0, action)),
             alert: Some(AlertTable {
                 after_minutes: Some(toml::Spanned::new(0..0, toml::Value::from(10))),
             }),

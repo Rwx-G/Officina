@@ -4091,7 +4091,7 @@ fn an_invalid_or_expired_proposal_opens_no_card() {
     open_writer(&home.env.officina_home(), &[], long_ago)
         .writer()
         .unwrap()
-        .ingest_proposals(&elsewhere, catalogue.as_ref(), long_ago)
+        .ingest_proposals(&elsewhere, catalogue.as_deref(), long_ago)
         .unwrap();
     assert_eq!(refused(&old), ProposalRefusal::Expired);
     assert_eq!(home.proposal(&old).status, ProposalStatus::Expired);

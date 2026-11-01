@@ -5,7 +5,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use officina_core::floor::FloorError;
+use officina_core::floor::{FloorError, parse_floor};
 use officina_core::orders::permission::WorkOrderPermissions;
 use officina_core::relay::approvals::OUTPUTS_DIR;
 use officina_core::relay::catalogue::{
@@ -14,6 +14,7 @@ use officina_core::relay::catalogue::{
 use officina_core::relay::prompts::{PROMPTS_DIR, WINDOW_DIR, WINDOW_MARKER_FILE};
 use officina_core::relay::record::{DECISION_RECORD_FILE, RecordState, parse_record};
 use officina_core::relay::{JOURNAL_DIR, RELAY_DIR};
+use officina_core::workshop::floor::CatalogueFiles;
 
 use crate::paths::{ENV_FLOOR, env_path, officina_home_from_env};
 
@@ -308,15 +309,34 @@ pub fn system_dir() -> Option<PathBuf> {
     }
 }
 
-/// Reads a floor for the relay: both phases, the canonical form and its
-/// hash. The path is recorded as given, normalised by the canonical form.
+/// Reads a floor for the relay: both phases with the workshop's catalogue
+/// files (AD-101), the canonical form and its hashes. The path is recorded
+/// as given, normalised by the canonical form. The window, doctor and
+/// `officina relay --json` read it so.
 pub fn load_relay_floor(path: &Path) -> Result<RelayFloor, RelayFloorError> {
+    load(path, true)
+}
+
+/// [`load_relay_floor`] reading no workshop file, for `officina run`, which
+/// compares the relay-section hash only (D-244): a Dockerfile edited after
+/// approval, a moved workshop project or an unreadable CA file never stops
+/// a relay action, and no call reads them.
+pub fn load_relay_floor_for_run(path: &Path) -> Result<RelayFloor, RelayFloorError> {
+    load(path, false)
+}
+
+fn load(path: &Path, with_files: bool) -> Result<RelayFloor, RelayFloorError> {
     let shown = path.display().to_string();
     let content = fs::read_to_string(path).map_err(|e| RelayFloorError::Unreadable {
         path: shown.clone(),
         error: e.to_string(),
     })?;
-    catalogue::load(&content, &path.to_string_lossy())
+    let floor_path = path.to_string_lossy();
+    let files = match parse_floor(&content) {
+        Ok(floor) if with_files => crate::workshop::files::read(&floor, &floor_path),
+        _ => CatalogueFiles::not_read(),
+    };
+    catalogue::load_with_files(&content, &floor_path, &files)
         .map_err(|error| RelayFloorError::Invalid { path: shown, error })
 }
 

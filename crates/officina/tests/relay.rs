@@ -107,7 +107,7 @@ fn catalogue_is_the_approved_snapshot() {
     let approved = env.relay_home().read_approved().approved().unwrap().clone();
     env.write_floor(&FLOOR.replace("\"web01\", \"db01\"", "\"web01\""));
     let shown = view(&env);
-    assert_eq!(shown.catalogue, Some(approved.canonical));
+    assert_eq!(shown.catalogue, Some(*approved.canonical));
     assert_eq!(shown.approved_hash, Some(approved.hash));
 }
 

@@ -19,4 +19,5 @@ pub mod relay;
 pub mod spawn;
 #[cfg(feature = "window-authority")]
 pub mod watch;
+pub mod workshop;
 pub mod writers;

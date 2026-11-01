@@ -2094,3 +2094,90 @@ fn a_path_shim_cannot_hide_an_edit_after_the_check() {
         git.relay.launches()
     );
 }
+
+// ---- story 6.2: `officina run` compares the relay-section hash (D-244) ----
+
+/// A CA file of one certificate block, for `[workshop] ca_file`.
+const WORKSHOP_CA: &str =
+    "-----BEGIN CERTIFICATE-----\nTUlJQmV4YW1wbGU=\n-----END CERTIFICATE-----\n";
+
+/// [`FLOOR`] with a `[workshop]` table naming a real CA file and the
+/// guarded project's `[project.workshop]` naming a real Dockerfile,
+/// approved with both read, as the window reads them. Returns the relay,
+/// the Dockerfile and the CA file.
+fn workshop_relay() -> (Relay, PathBuf, PathBuf) {
+    let relay = Relay::unapproved(FLOOR);
+    let dockerfile = relay.project().join("tools").join("Dockerfile");
+    std::fs::create_dir_all(dockerfile.parent().unwrap()).unwrap();
+    std::fs::write(&dockerfile, "FROM officina-workshop:local\n").unwrap();
+    let ca = relay.env.root.path().join("corporate-ca.pem");
+    std::fs::write(&ca, WORKSHOP_CA).unwrap();
+    let supervision = "\"apply-sensitive\", \"apply-auto\"]\n";
+    assert!(FLOOR.contains(supervision));
+    let floor = format!(
+        "{}\n[workshop]\nca_file = \"{}\"\n",
+        FLOOR.replacen(
+            supervision,
+            &format!("{supervision}\n[project.workshop]\ndockerfile = \"tools/Dockerfile\"\n"),
+            1,
+        ),
+        slashed(&ca)
+    );
+    relay.write(&floor);
+    let approved = relay.env.approve();
+    assert_eq!(global_hash(&relay), approved, "the window read the files");
+    (relay, dockerfile, ca)
+}
+
+/// The floor's global hash as the window computes it, files read.
+fn global_hash(relay: &Relay) -> String {
+    officina_host::relay::home::load_relay_floor(&relay.env.floor_file())
+        .unwrap()
+        .hash
+}
+
+#[test]
+fn an_edited_project_dockerfile_does_not_block_relay_actions() {
+    let (relay, dockerfile, _) = workshop_relay();
+    let approved = global_hash(&relay);
+    std::fs::write(
+        &dockerfile,
+        "FROM officina-workshop:local\nRUN echo edited\n",
+    )
+    .unwrap();
+    assert_ne!(
+        global_hash(&relay),
+        approved,
+        "a workshop launch is refused on the global hash"
+    );
+    assert_eq!(relay.run(&["probe", "host=web01"]).status.code(), Some(0));
+}
+
+#[test]
+fn an_unreadable_ca_file_does_not_block_relay_actions() {
+    let (relay, _, ca) = workshop_relay();
+    let approved = global_hash(&relay);
+    std::fs::rename(&ca, ca.with_extension("moved")).unwrap();
+    assert_ne!(
+        global_hash(&relay),
+        approved,
+        "an unreadable CA file turns the workshop off"
+    );
+    assert_eq!(relay.run(&["probe", "host=web01"]).status.code(), Some(0));
+}
+
+#[test]
+fn an_edited_action_still_refuses_until_approved() {
+    let (relay, _, _) = workshop_relay();
+    let floor = std::fs::read_to_string(relay.env.floor_file()).unwrap();
+    let edited = floor.replacen("\"web01\", \"db01\"", "\"web01\", \"db02\"", 1);
+    assert_ne!(edited, floor);
+    std::fs::write(relay.env.floor_file(), &edited).unwrap();
+    assert_refused(
+        &relay,
+        &relay.run(&["probe", "host=web01"]),
+        RefusalReason::CatalogueChanged,
+    );
+    relay.env.approve();
+    assert_eq!(relay.run(&["probe", "host=web01"]).status.code(), Some(0));
+}

@@ -3,4 +3,4 @@
 /**
  * The floor table an issue comes from (D-132).
  */
-export type IssueTable = "action" | "credential" | "project" | "guarded_programs" | "template" | "orchestrator" | "auto_review";
+export type IssueTable = "action" | "credential" | "project" | "guarded_programs" | "template" | "orchestrator" | "auto_review" | "workshop";

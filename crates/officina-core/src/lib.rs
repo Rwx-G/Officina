@@ -104,6 +104,7 @@ pub mod relay;
 pub mod scene;
 pub mod spawn;
 pub mod untrusted;
+pub mod workshop;
 // Public only so `closed_enum!` expands in other crates (`$crate::wire`).
 #[doc(hidden)]
 pub mod wire;

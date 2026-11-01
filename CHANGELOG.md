@@ -8,6 +8,19 @@ project uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- The workshop's floor keys (v0.6, story 6.2): `[workshop]` (the credential
+  kind, `oauth-token` by default, `login` or `api-key`; workers, CPUs and
+  memory; `upstream_proxy`, `"system"` by default; an optional corporate
+  `ca_file`), `[project.workshop]` (read-only mounts, allowed hosts, an
+  optional Dockerfile, the review mode, sensitive paths, a memory folder
+  name) and `[template.workshop]` (the base branches offered, minutes and an
+  optional budget). Phase 2 checks each key; the window, doctor and
+  `officina relay --json` also read the CA file and each project's
+  Dockerfile and its folder within their bounds. A failing `[workshop]`
+  turns the workshop off and drops the workshop templates, never a relay
+  action; a workshop template runs only in the workshop, never as a work
+  order on your machine. Nothing launches in the workshop yet.
+
 - A work order whose session worked in another folder than its project's,
   such as a git worktree Claude made under `.claude/worktrees/`, names
   that folder on its card and in the history, so you know where its
@@ -666,6 +679,15 @@ project uses [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- The catalogue's canonical format goes up by one (v0.6, story 6.2): the
+  workshop's tables and their files' digests join what the author
+  approves, and `approved.json` gains a second hash over the sections
+  `officina run` uses. The first start after the upgrade asks for one
+  catalogue approval even with an unchanged floor. From then on a workshop
+  change (a key, a Dockerfile or its folder, the CA file) holds back
+  workshop launches until it is approved, and never stops a relay action:
+  `officina run` compares the second hash and reads no workshop file.
+
 - The session file in Scene mode stands under the header as a panel of its
   own: a gap under the header, its right edge on the header's last control,
   four bordered rounded edges and a whole shadow, instead of running into
@@ -787,10 +809,10 @@ project uses [Semantic Versioning](https://semver.org/).
   relay's keys in it are an error naming `schema = 2`.
 - Approval journal lines name their project and action, and a request says
   whether its action has a dry run; lines written before still read.
-- The canonical catalogue is format 4: it covers credentials, HTTP actions,
-  `forwarded_values`, templates, the review model and `auto_max_per_hour`,
-  so a catalogue approved before shows as changed once and is approved
-  again.
+- The canonical catalogue is format 5: it covers credentials, HTTP actions,
+  `forwarded_values`, templates, the review model, `auto_max_per_hour` and
+  the workshop's tables with the digests of their files, so a catalogue
+  approved before shows as changed once and is approved again.
 - The board contract (`officina board --json`) is schema 2: it carries the
   pending approval requests, and `waiting_count` counts the approvable ones
   beside the sessions that wait.

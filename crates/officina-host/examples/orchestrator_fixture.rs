@@ -313,7 +313,7 @@ fn seed_proposals(
         let id = seeded_id(proposal, index);
         write_seeded(&dir, proposal, index)?;
         writer
-            .ingest_proposals(&dir, catalogue.as_ref(), proposal.received_at_ms)
+            .ingest_proposals(&dir, catalogue.as_deref(), proposal.received_at_ms)
             .map_err(|e| e.to_string())?;
         if proposal.dismissed
             && !writer

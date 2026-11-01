@@ -16,6 +16,14 @@ color = "terracotta"
 path = "Supervision"
 name = "supervision"
 
+[project.workshop]
+memory_name = "C--path-to-work-Supervision"
+review = "all"
+hosts = ["*.pkg.example.com", "index.crates.io", "index.crates.io"]
+sensitive_paths = ["infra/*.tf", "deploy/**", "deploy/**"]
+dockerfile = "tools/workshop.Dockerfile"
+mounts = ["_bmad", ".claude"]
+
 [[project]]
 name = "notes"
 autonomy = "free"
@@ -165,3 +173,25 @@ values = ["@scope/pkg", "serde_json", "@scope/pkg"]
 
 [auto_review]
 model = "sonnet"
+
+[workshop]
+ca_file = "C:/path/to/corporate-ca.pem"
+upstream_proxy = "proxy.example.com:8080"
+memory_mib = 6144
+cpus = 4
+max_workers = 3
+auth = "login"
+
+[[template]]
+name = "isolated-bump"
+prompt = "Bump {package}, run the tests, fix what breaks, commit."
+projects = ["supervision", "supervision"]
+description = "Bump one dependency in the workshop"
+
+[template.workshop]
+max_usd = 1.25
+max_minutes = 45
+base = ["main", "release/2.1"]
+
+[template.params.package]
+values = ["serde_json", "serde_json"]

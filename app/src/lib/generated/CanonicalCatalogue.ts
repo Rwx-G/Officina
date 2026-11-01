@@ -4,6 +4,7 @@ import type { CanonicalAutoReview } from "./CanonicalAutoReview";
 import type { CanonicalCredential } from "./CanonicalCredential";
 import type { CanonicalProject } from "./CanonicalProject";
 import type { CanonicalTemplate } from "./CanonicalTemplate";
+import type { CanonicalWorkshop } from "./CanonicalWorkshop";
 
 /**
  * What the author approves (AD-24): the catalogue's meaning, not its text.
@@ -31,4 +32,9 @@ templates: { [key in string]: CanonicalTemplate },
 /**
  * Absent from snapshots before format 4, which read as the default.
  */
-auto_review: CanonicalAutoReview, };
+auto_review: CanonicalAutoReview, 
+/**
+ * `[workshop]`; absent while the workshop is off and from snapshots
+ * before format 5 (AD-101).
+ */
+workshop?: CanonicalWorkshop, };

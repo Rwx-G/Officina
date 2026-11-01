@@ -308,6 +308,7 @@ for (const theme of ["light", "dark"] as const) {
       const pending = relay.pending!;
       expect(pending.diff.format).not.toBeNull();
       expect(pending.diff.templates.added.length).toBeGreaterThan(0);
+      expect(pending.diff.workshop.length).toBeGreaterThan(0);
       await openRelayView(page, relay);
       const banner = page.getByTestId("catalogue-banner");
       await expect(banner.locator('[data-testid="catalogue-field"][data-field="format"]')).toHaveText(
@@ -321,6 +322,9 @@ for (const theme of ["light", "dark"] as const) {
         await expect(added.getByTestId("template-added-projects")).toHaveText(template.projects.join(", "));
         await expect(added.getByTestId("template-added-prompt")).toHaveText(template.prompt);
       }
+      await expect(banner.getByTestId("catalogue-workshop").locator("[data-field]")).toHaveCount(
+        pending.diff.workshop.length,
+      );
       // The previous approval still stands until the author approves.
       expect(relay.catalogue!.format).toBe(pending.diff.format!.before);
       await expect(page.getByTestId("catalogue-table")).toBeVisible();

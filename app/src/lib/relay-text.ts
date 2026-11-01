@@ -99,6 +99,7 @@ const ISSUE_TABLE_TEXT: Record<IssueTable, string | null> = {
   guarded_programs: null,
   orchestrator: null,
   auto_review: null,
+  workshop: null,
 };
 
 /** What a floor issue is about, as the floor names it: `template bump`,

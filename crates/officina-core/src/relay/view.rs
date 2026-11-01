@@ -685,6 +685,7 @@ fn nothing_approved() -> CanonicalCatalogue {
         credentials: BTreeMap::new(),
         templates: BTreeMap::new(),
         auto_review: CanonicalAutoReview::default(),
+        workshop: None,
     }
 }
 
@@ -696,7 +697,7 @@ fn nothing_approved() -> CanonicalCatalogue {
 fn pending(snapshot: SnapshotState<'_>, current: &RelayFloor) -> Option<PendingChange> {
     let base = match snapshot {
         SnapshotState::Valid(approved) if approved.hash == current.hash => return None,
-        SnapshotState::Valid(approved) => approved.canonical.clone(),
+        SnapshotState::Valid(approved) => (*approved.canonical).clone(),
         SnapshotState::Missing if !relay_in_use(&current.floor) => return None,
         SnapshotState::Missing | SnapshotState::Unreadable(_) => nothing_approved(),
     };
@@ -884,7 +885,7 @@ pub fn build(inputs: &ViewInputs<'_>) -> RelayView {
         approved_hash: approved.map(|a| a.hash.clone()),
         approved_at_ms: approved.map(|a| a.approved_at_ms),
         snapshot_error,
-        catalogue: approved.map(|a| a.canonical.clone()),
+        catalogue: approved.map(|a| (*a.canonical).clone()),
         pending,
         issues,
         recent: recent(
@@ -1099,7 +1100,7 @@ mod tests {
             &[],
         ));
         assert_eq!(view.schema, RELAY_VIEW_SCHEMA);
-        assert_eq!(view.catalogue.as_ref(), Some(&approved.canonical));
+        assert_eq!(view.catalogue.as_ref(), Some(&*approved.canonical));
         assert_eq!(view.approved_hash.as_deref(), Some(current.hash.as_str()));
         assert_eq!(view.approved_at_ms, Some(approved.approved_at_ms));
         assert_eq!(view.pending, None);
@@ -1126,7 +1127,7 @@ mod tests {
         assert_eq!(pending.diff.actions.changed[0].fields[0].field, "params");
         assert_eq!(
             view.catalogue.unwrap(),
-            approved.canonical,
+            *approved.canonical,
             "D-24: the snapshot"
         );
     }

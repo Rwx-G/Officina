@@ -242,7 +242,7 @@ fn checks_with(
             inputs.system_dir,
             probe,
         ));
-        let snapshot = approved.approved().map(|a| &a.canonical);
+        let snapshot = approved.approved().map(|a| &*a.canonical);
         checks.extend(credential_checks(&relay.canonical, snapshot, store));
         checks.extend(timeout_checks(&relay.canonical.actions));
         checks.extend(auto_action_checks(&relay.canonical.actions));
@@ -257,7 +257,7 @@ fn checks_with(
     }
     checks.push(journal_check(home, inputs.now_ms));
     checks.extend(anomaly_check(home, &approved, inputs.now_ms));
-    let snapshot = approved.approved().map(|a| &a.canonical);
+    let snapshot = approved.approved().map(|a| &*a.canonical);
     checks.extend(paragraph_checks(current.map(|r| &r.canonical), snapshot));
     checks
 }
@@ -376,9 +376,10 @@ fn catalogue_checks(relay: &RelayFloor) -> Vec<Check> {
 /// `template dependency-bump`; a key or a single table by its name alone.
 fn issue_subject(issue: &ActionIssue) -> String {
     match issue.table {
-        IssueTable::GuardedPrograms | IssueTable::Orchestrator | IssueTable::AutoReview => {
-            issue.name.clone()
-        }
+        IssueTable::GuardedPrograms
+        | IssueTable::Orchestrator
+        | IssueTable::AutoReview
+        | IssueTable::Workshop => issue.name.clone(),
         IssueTable::Action
         | IssueTable::Credential
         | IssueTable::Project
@@ -518,7 +519,7 @@ fn approval_check(
 /// approves them in the window. None when neither holds a template.
 fn template_check(approved: &ApprovedState, current: Option<&RelayFloor>) -> Option<Check> {
     const TITLE: &str = "templates";
-    let snapshot = approved.approved().map(|a| &a.canonical);
+    let snapshot = approved.approved().map(|a| &*a.canonical);
     let approved_count = snapshot.map_or(0, |c| c.templates.len());
     let in_floor = current.map_or(0, |relay| relay.canonical.templates.len());
     if approved_count == 0 && in_floor == 0 {

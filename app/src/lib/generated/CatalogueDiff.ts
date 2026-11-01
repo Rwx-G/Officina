@@ -18,4 +18,10 @@ templates: SectionDiff,
 /**
  * The review's model, `field` being `model` (AD-76).
  */
-auto_review: FieldChange | null, };
+auto_review: FieldChange | null, 
+/**
+ * `[workshop]` field by field, `null` on the side where the workshop
+ * is off (AD-101); a project's or a template's own workshop table is
+ * its `workshop` field in its section.
+ */
+workshop: Array<FieldChange>, };

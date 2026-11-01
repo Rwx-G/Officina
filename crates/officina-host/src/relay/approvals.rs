@@ -21,7 +21,7 @@ use officina_core::relay::approvals::{
 use officina_core::relay::catalogue::project_dirs;
 use officina_core::relay::journal::TreeFingerprint;
 
-use super::home::{ApprovedState, RelayHome, load_relay_floor, system_dir};
+use super::home::{ApprovedState, RelayHome, load_relay_floor_for_run, system_dir};
 use super::tree::TreeResult;
 use crate::files::atomic_write;
 
@@ -246,7 +246,7 @@ impl ContextSources {
     pub fn read(home: &RelayHome) -> ContextSources {
         let approved = home.read_approved();
         let floor_path = home.relay_floor(&approved);
-        let project_dirs = load_relay_floor(&floor_path)
+        let project_dirs = load_relay_floor_for_run(&floor_path)
             .map(|relay| project_dirs(&relay.floor, &floor_path.to_string_lossy()))
             .unwrap_or_default();
         ContextSources {

@@ -1,9 +1,9 @@
 {
   "approved_at_ms": 1793102400000,
-  "hash": "2309c2c749a5c6395b1640eb47741dbaedbf642de50205e23f25db27877f1829",
+  "hash": "57fbcb0f0a65b38417844d061976344a3820343a731d4e185cb22072b1f2d88c",
   "floor_file": "C:/path/to/work/officina.toml",
   "canonical": {
-    "format": 3,
+    "format": 4,
     "floor_path": "c:/path/to/work/officina.toml",
     "guarded_programs": [
       "ansible*",
@@ -22,6 +22,7 @@
         "autonomy": "guarded",
         "actions": [
           "apply",
+          "apply-auto",
           "apply-sensitive",
           "check",
           "health",
@@ -62,6 +63,38 @@
         "check": "check",
         "timeout_s": 540,
         "max_output_kib": 256
+      },
+      "apply-auto": {
+        "description": "Apply the alerting playbook unattended after its dry run",
+        "class": "auto",
+        "runner": "wsl",
+        "distro": "Ubuntu",
+        "program": "/home/user01/venv/bin/ansible-playbook",
+        "env": {
+          "ANSIBLE_CONFIG": "/home/user01/ansible.cfg"
+        },
+        "args": [
+          "--diff",
+          "-i",
+          "inventory/lab",
+          "--limit",
+          "{group}",
+          "playbooks/{playbook}"
+        ],
+        "params": {
+          "group": {
+            "pattern": "lab-[a-z0-9-]{1,30}"
+          },
+          "playbook": {
+            "values": [
+              "alerting.yml"
+            ]
+          }
+        },
+        "check": "check",
+        "timeout_s": 540,
+        "max_output_kib": 64,
+        "auto_max_per_hour": 4
       },
       "apply-sensitive": {
         "description": "Apply a sensitive playbook, once per approval",
@@ -211,6 +244,44 @@
         "header": "Authorization",
         "scheme": "Bearer"
       }
+    },
+    "templates": {
+      "dependency-bump": {
+        "description": "Bump one dependency and fix what breaks",
+        "projects": [
+          "supervision"
+        ],
+        "prompt": "Bump {package} to its latest {level} release, run the tests, fix what breaks, commit.",
+        "params": {
+          "level": [
+            "minor",
+            "patch"
+          ],
+          "package": [
+            "@scope/pkg",
+            "serde_json"
+          ]
+        },
+        "model": "sonnet"
+      },
+      "release-notes": {
+        "description": "Draft the release notes",
+        "projects": [
+          "notes",
+          "supervision"
+        ],
+        "prompt": "Draft the release notes of the last {span}\nin docs/notes.md.",
+        "params": {
+          "span": [
+            "month",
+            "week"
+          ]
+        },
+        "model": null
+      }
+    },
+    "auto_review": {
+      "model": "sonnet"
     }
   }
 }

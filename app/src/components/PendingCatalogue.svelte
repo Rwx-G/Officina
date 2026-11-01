@@ -184,6 +184,14 @@
       </ul>
     {/if}
 
+    {#if diff.workshop.length > 0}
+      <h3>Workshop</h3>
+      <p class="lead">
+        Workshop changes hold back workshop launches until you approve them; relay actions keep running.
+      </p>
+      <div data-testid="catalogue-workshop">{@render fieldChanges(diff.workshop)}</div>
+    {/if}
+
     {#if diff.projects.added.length + diff.projects.removed.length + diff.projects.changed.length > 0}
       <h3>Projects</h3>
       <ul class="changes">

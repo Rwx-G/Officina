@@ -77,6 +77,28 @@ test.describe("catalogue approval", () => {
     await expect(page.getByTestId("catalogue-chip")).toBeHidden();
   });
 
+  test("the approval banner shows a workshop change", async ({ page }) => {
+    const pending = loadRelay("relay-pending-workshop");
+    const diff = pending.pending!.diff;
+    expect(diff.workshop.map((change) => change.field)).toEqual(["max_workers"]);
+    const project = diff.projects.changed.find((entry) => entry.name === "infra-scripts")!;
+    expect(project.fields.map((field) => field.field)).toEqual(["workshop"]);
+    expect(diff.actions.added.length + diff.actions.changed.length + diff.actions.removed.length).toBe(0);
+    await open(page, pending);
+
+    const banner = page.getByTestId("catalogue-banner");
+    await expect(banner).toBeVisible();
+    const workshop = banner.getByTestId("catalogue-workshop");
+    await expect(workshop.locator('[data-field="max_workers"]')).toHaveText("max_workers: 2 to 3");
+    await expect(banner.getByText("relay actions keep running")).toBeVisible();
+    const changed = banner.locator('[data-testid="project-changed"][data-name="infra-scripts"]');
+    await expect(changed.locator('[data-field="workshop"]')).toContainText("workshop.hosts");
+    await expect(changed.locator('[data-field="workshop"]')).toContainText("pypi.example.com");
+
+    await banner.getByTestId("approve-catalogue").click();
+    expect(await approvals(page)).toEqual([{ hash: pending.pending!.hash }]);
+  });
+
   test("the header chip marks a pending change", async ({ page }) => {
     await open(page, loadRelay("relay-pending"));
     const chip = page.getByTestId("catalogue-chip");

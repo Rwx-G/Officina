@@ -47,7 +47,7 @@ pub use officina_core::relay::run::{EXIT_NOT_STARTED, EXIT_REFUSED, EXIT_TIMEOUT
 pub use spawn::command_for;
 
 use super::credential::{CredentialStore, Secret, SystemCredentialStore};
-use super::home::{ApprovedState, RelayHome, load_relay_floor, system_dir};
+use super::home::{ApprovedState, RelayHome, load_relay_floor_for_run, system_dir};
 use super::journal;
 use super::tree::{self, TreeError};
 use crate::files::now_ms;
@@ -74,7 +74,7 @@ fn with_inputs<R>(home: &RelayHome, cwd: &str, f: impl FnOnce(&RunInputs<'_>) ->
     let approved = home.read_approved();
     let floor_path = home.relay_floor(&approved);
     let floor_text = floor_path.to_string_lossy();
-    let loaded = load_relay_floor(&floor_path);
+    let loaded = load_relay_floor_for_run(&floor_path);
     let floor_error = loaded.as_ref().err().map(ToString::to_string);
     let snapshot = match &approved {
         ApprovedState::Missing => SnapshotState::Missing,

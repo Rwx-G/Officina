@@ -128,6 +128,7 @@ mod tests {
     use crate::ipc::IpcErrorCode;
     use crate::orders::work_order::WorkOrderRefusal;
     use crate::scene::{AlertCause, Zone};
+    use crate::workshop::floor::{CredentialKind, ReviewScope};
 
     fn assert_codes<T: Serialize + Copy + Debug>(all: &[T], code: fn(T) -> &'static str) {
         for &variant in all {
@@ -142,7 +143,7 @@ mod tests {
     /// of this crate without a line here.
     #[test]
     fn code_equals_the_serde_name_for_every_variant() {
-        let checked: [fn(); 33] = [
+        let checked: [fn(); 35] = [
             || assert_codes(EscalationCause::ALL, EscalationCause::code),
             || assert_codes(AutoMode::ALL, AutoMode::code),
             || assert_codes(AutoOffReason::ALL, AutoOffReason::code),
@@ -176,6 +177,8 @@ mod tests {
             || assert_codes(UrlIssue::ALL, UrlIssue::code),
             || assert_codes(Tone::ALL, Tone::code),
             || assert_codes(IpcErrorCode::ALL, IpcErrorCode::code),
+            || assert_codes(CredentialKind::ALL, CredentialKind::code),
+            || assert_codes(ReviewScope::ALL, ReviewScope::code),
         ];
         for check in checked {
             check();
@@ -203,6 +206,7 @@ mod tests {
             include_str!("template.rs"),
             include_str!("url.rs"),
             include_str!("view.rs"),
+            include_str!("../workshop/floor.rs"),
         ];
         let with_code: usize = sources
             .iter()

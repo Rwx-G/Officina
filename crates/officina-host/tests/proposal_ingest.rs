@@ -41,7 +41,7 @@ values = ["serde_json", "tokio"]
 /// The approved snapshot of [`FLOOR`].
 fn catalogue() -> CanonicalCatalogue {
     let current = load(FLOOR, "C:/path/to/floor/officina.toml").unwrap();
-    ApprovedCatalogue::approving(&current, "C:/path/to/floor/officina.toml", 0).canonical
+    *ApprovedCatalogue::approving(&current, "C:/path/to/floor/officina.toml", 0).canonical
 }
 
 fn proposals_dir(home: &Home) -> PathBuf {

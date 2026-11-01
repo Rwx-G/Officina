@@ -781,6 +781,77 @@ Templates, `[auto_review]` and `auto_max_per_hour` change the catalogue's canoni
 
 The first start of v0.5 also moves the registry to its version 2, which adds the tables of work orders, the orchestrator's proposals and starts, and the reviews of `auto` requests. As for any migration, the database is copied first to `registry/backup/pre-v2-<date>.db`, and every row you had is kept.
 
+## The workshop (v0.6, in progress)
+
+The workshop runs a work order's Claude Code session unattended in a
+container on your Docker engine, behind an egress gateway, and hands back a
+package you review before anything reaches your repository. It is being
+built story by story; until it can launch, the keys below are validated and
+approved, and nothing runs.
+
+### Declaring the workshop
+
+Three tables of the floor file, all part of the catalogue you approve:
+
+```toml
+[workshop]
+auth = "oauth-token"                 # "oauth-token" (default), "login" or "api-key"
+max_workers = 2                      # 1 to 4
+cpus = 2                             # per worker
+memory_mib = 4096                    # per worker
+upstream_proxy = "system"            # "system" (default), "none" or "host:port"
+ca_file = "C:/path/to/corporate-ca.pem"   # optional
+
+[[project]]
+name = "backend"
+path = "Backend"
+
+[project.workshop]
+mounts = [".claude", "_bmad"]        # git-ignored folders, mounted read-only
+hosts = ["index.crates.io", "static.crates.io"]
+dockerfile = "tools/workshop.Dockerfile"  # optional
+review = "groups"                    # "groups" (default) or "all"
+sensitive_paths = ["deploy/**"]
+
+[[template]]
+name = "dependency-bump"
+# the v0.5 keys
+
+[template.workshop]
+base = ["main"]                      # the branches offered; the first is the default
+max_minutes = 60                     # 5 to 240
+max_usd = 3.0                        # optional, two decimals at most
+```
+
+- Without a valid `[workshop]` table the workshop is off and every template
+  with a `[template.workshop]` table is dropped, with an issue in the Relay
+  view and `officina doctor`. A template with that table runs only in the
+  workshop, never as a work order on your machine; one without it runs as in
+  v0.5.
+- `hosts` is what a worker may reach besides Claude Code's own hosts:
+  lowercase names, a leading `*.` only on a name of three labels or more.
+  An allowed host that accepts anonymous uploads is a way out the
+  allow-list cannot close: list only hosts you would let a stranger write
+  to.
+- `mounts` are relative to the project, never `.git`; whether each exists
+  and is git-ignored is checked when a run launches, not here.
+- `dockerfile`'s final stage descends from `officina-workshop:local`; its
+  own folder is the build context, at most 32 files and 1 MiB, no
+  subfolder.
+- `upstream_proxy = "system"` follows Windows' proxy settings, PAC files
+  included, at each launch, so the same floor works at home and at work.
+- `ca_file` is a PEM file of certificates only, for a network that
+  inspects TLS; it is baked into the workshop's images.
+
+### Approving workshop changes
+
+The catalogue keeps one hash for everything you approve and a second one
+for what `officina run` uses. A workshop change (a key, the Dockerfile or
+its folder, the CA file) changes the first only: it holds back workshop
+launches until you approve it, and never stops a relay action. The approval
+banner shows workshop changes in their own section. Upgrading to v0.6 asks
+for one approval, as every catalogue format change does.
+
 ## Command line
 
 | Command | Purpose |

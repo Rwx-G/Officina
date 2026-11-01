@@ -288,6 +288,21 @@ args = ["web01", "systemctl", "status", "{unit}"]
 values = ["nginx.service"]
 `;
 
+// Story 6.2 (AD-101): the relay floor with workshop tables, approved, then
+// one allowed host changed: the pending change shows the project's
+// workshop field, and relay actions keep their approval (D-244).
+const workshopFloor = relayFloor.replace(
+  `actions = ["check", "apply", "apply-unattended"]\n`,
+  `actions = ["check", "apply", "apply-unattended"]\n\n[project.workshop]\nmounts = [".claude"]\nhosts = ["index.crates.io", "static.crates.io"]\n`,
+) + `
+[workshop]
+max_workers = 2
+upstream_proxy = "system"
+`;
+const workshopPendingFloor = workshopFloor
+  .replace(`hosts = ["index.crates.io", "static.crates.io"]`, `hosts = ["index.crates.io", "pypi.example.com"]`)
+  .replace(`max_workers = 2`, `max_workers = 3`);
+
 // The floor edited again after the window displayed the pending change.
 const againFloor = pendingFloor.replace(
   `check = "check"\n`,
@@ -296,8 +311,14 @@ const againFloor = pendingFloor.replace(
 
 // Story 5.4 (AD-76, D-131): the golden floor of the catalogue hash test,
 // approved by the previous version in the previous canonical format, read
-// today: the pending change shows the format change and the templates added.
-const goldenFloor = readFileSync(join(root, "crates", "officina-core", "tests", "data", "relay", "golden-floor.toml"), "utf8");
+// today: the pending change shows the format change and what the new format
+// adds.
+// Its workshop names a CA file and a Dockerfile this home does not hold:
+// both keys are left out, so the workshop and its template are on and show
+// as added (story 6.2).
+const goldenFloor = readFileSync(join(root, "crates", "officina-core", "tests", "data", "relay", "golden-floor.toml"), "utf8")
+  .replace(/^ca_file = .*\n/m, "")
+  .replace(/^dockerfile = .*\n/m, "");
 
 // Gate 4's window run (D-1000): free projects and one template, no action
 // and no guarded project. The catalogue is still offered for approval.
@@ -324,6 +345,7 @@ const relayScenarios = {
   "relay-pending-again": [["floor", relayFloor], ["approve"], ["floor", againFloor]],
   "relay-pending-approved": [["floor", relayFloor], ["approve"], ["floor", pendingFloor], ["approve"]],
   "relay-stopped": [["floor", relayFloor], ["approve"], ["stop"]],
+  "relay-pending-workshop": [["floor", workshopFloor], ["approve"], ["floor", workshopPendingFloor]],
 };
 
 function approveFixture(officinaHome, verb) {
