@@ -49,6 +49,12 @@ pub struct TrackedScript {
     pub first_line: Option<String>,
     /// The blob id at the base commit, which the key covers.
     pub blob: Option<String>,
+    /// Whether git records the file executable (mode `100755`): the clone
+    /// checks it out with that mode, and a hook whose script is not
+    /// executable exits 126, which fails open as a missing one does
+    /// (D-1133).
+    #[serde(default)]
+    pub executable: bool,
 }
 
 /// One command the inventory resolves.
@@ -177,7 +183,7 @@ pub fn project_path(command: &str) -> Option<String> {
 
 /// True when `path`, relative to the project, lies in one of `mounts`
 /// (segment by segment, ASCII case ignored as NTFS compares).
-fn under_mount(path: &str, mounts: &[String]) -> bool {
+pub fn under_mount(path: &str, mounts: &[String]) -> bool {
     let segments: Vec<String> = path.split('/').map(str::to_ascii_lowercase).collect();
     mounts.iter().any(|mount| {
         let mount: Vec<String> = mount
@@ -230,6 +236,7 @@ pub fn extract(
                 present: false,
                 first_line: None,
                 blob: None,
+                executable: false,
             });
         }
     }
@@ -247,7 +254,10 @@ pub fn inventory_key(commands: &[InventoryCommand], image_id: &str) -> String {
             "matcher": command.matcher,
             "server": command.server,
             "command": command.command,
-            "tracked": command.tracked.as_ref().map(|t| (&t.path, t.present, &t.blob)),
+            "tracked": command
+                .tracked
+                .as_ref()
+                .map(|t| (&t.path, t.present, &t.blob, t.executable)),
         });
         text.push_str(&line.to_string());
         text.push('\n');
@@ -263,11 +273,33 @@ closed_enum! {
     pub enum Resolution {
         /// Found, with its path.
         Found,
-        /// Not found; the detail says what (`crlf_shebang`, `interpreter`,
-        /// `not_on_path`, `not_a_file`, `tracked_absent`).
+        /// Not found; the detail is a [`MissingDetail`].
         Missing,
         /// Computed at run time: not resolvable without running it.
         Dynamic,
+    }
+}
+
+closed_enum! {
+    #[serde(rename_all = "snake_case")]
+    /// Why a command's program is `missing` (AD-118, review F12).
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+    pub enum MissingDetail {
+        /// The script's first line ends in a carriage return:
+        /// `#!/usr/bin/env bash\r` exits 127 at run time.
+        CrlfShebang,
+        /// The interpreter a script's first line names is not there.
+        Interpreter,
+        /// A bare program name not found on the image's `PATH`.
+        NotOnPath,
+        /// A program written as a path that is not an executable file.
+        NotAFile,
+        /// A tracked script the repository does not record executable.
+        NotExecutable,
+        /// A tracked script the base commit does not hold.
+        TrackedAbsent,
+        /// The command starts no program.
+        NoProgram,
     }
 }
 
@@ -308,6 +340,116 @@ pub fn consequences(commands: &[InventoryCommand], results: &[Resolved]) -> Cons
         }
     }
     out
+}
+
+/// What `workshop_inventory.inventory_json` holds (AD-118, D-212): the
+/// commands checked and their results, so a launch judges the stored
+/// inventory without running it again while its key holds.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StoredInventory {
+    pub commands: Vec<InventoryCommand>,
+    pub results: Vec<Resolved>,
+}
+
+impl StoredInventory {
+    /// The judgement of the stored results (AD-118).
+    pub fn consequences(&self) -> Consequences {
+        consequences(&self.commands, &self.results)
+    }
+}
+
+/// The most bytes of a found program's path the inventory reports.
+pub const MAX_RESULT_PATH_BYTES: usize = 4096;
+
+/// Why `officina-entry inventory`'s output is refused: a result per
+/// command, in order, or nothing is recorded.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum ResultsError {
+    #[error("line {0} is not a result")]
+    NotAResult(usize),
+    #[error("result {0} is out of order")]
+    OutOfOrder(usize),
+    #[error("{got} results for {expected} commands")]
+    Count { expected: usize, got: usize },
+}
+
+/// Parses the inventory's stdout (AD-118): exactly one result per command,
+/// indexes in order, a found path at most [`MAX_RESULT_PATH_BYTES`] and a
+/// `missing` detail one of [`MissingDetail`]'s; anything else refuses the
+/// whole output, so a cut or garbled answer is never read as `found`.
+pub fn parse_results(stdout: &str, expected: usize) -> Result<Vec<Resolved>, ResultsError> {
+    let mut results = Vec::new();
+    for (line_index, line) in stdout.lines().filter(|l| !l.trim().is_empty()).enumerate() {
+        let result: Resolved =
+            serde_json::from_str(line).map_err(|_| ResultsError::NotAResult(line_index))?;
+        let well_formed = match result.resolution {
+            Resolution::Missing => result
+                .detail
+                .as_deref()
+                .and_then(MissingDetail::from_code)
+                .is_some(),
+            Resolution::Found => result
+                .path
+                .as_ref()
+                .is_some_and(|p| p.len() <= MAX_RESULT_PATH_BYTES),
+            Resolution::Dynamic => true,
+        };
+        if !well_formed {
+            return Err(ResultsError::NotAResult(line_index));
+        }
+        if result.index != results.len() {
+            return Err(ResultsError::OutOfOrder(line_index));
+        }
+        results.push(result);
+        if results.len() > expected {
+            break;
+        }
+    }
+    if results.len() != expected {
+        return Err(ResultsError::Count {
+            expected,
+            got: results.len(),
+        });
+    }
+    Ok(results)
+}
+
+/// The names a settings file exposes to the worker (AD-123, story 6.9 AC 5):
+/// each variable of its `env` block, and `apiKeyHelper` when set. Names
+/// only, never a value: the worker can read the file.
+pub fn exposed_names(bytes: &[u8]) -> Vec<String> {
+    let Ok(value) = serde_json::from_slice::<serde_json::Value>(bytes) else {
+        return Vec::new();
+    };
+    let mut names: Vec<String> = value
+        .get("env")
+        .and_then(serde_json::Value::as_object)
+        .map(|env| env.keys().cloned().collect())
+        .unwrap_or_default();
+    if value.get("apiKeyHelper").is_some() {
+        names.push("apiKeyHelper".to_owned());
+    }
+    names
+}
+
+/// True when a script's bytes hold a CRLF line ending (review F12): a hook
+/// written on Windows runs on Linux in the workshop.
+pub fn has_crlf(bytes: &[u8]) -> bool {
+    bytes.windows(2).any(|w| w == b"\r\n")
+}
+
+/// The project-relative paths of the hook scripts that lie in a mount,
+/// which the host reads to warn on CRLF line endings (AD-123).
+pub fn mounted_scripts(commands: &[InventoryCommand], mounts: &[String]) -> Vec<String> {
+    let mut paths: Vec<String> = commands
+        .iter()
+        .filter(|c| c.event.is_some())
+        .filter_map(|c| project_path(&c.command))
+        .filter(|path| under_mount(path, mounts))
+        .collect();
+    paths.sort();
+    paths.dedup();
+    paths
 }
 
 /// A tracked script's first line as the host passes it: cut at the first
@@ -561,6 +703,82 @@ mod tests {
             "#!/usr/bin/env bash\r"
         );
         assert_eq!(first_line(&[b'x'; 400]).len(), MAX_FIRST_LINE_BYTES);
+    }
+
+    fn result(index: usize, resolution: Resolution, detail: Option<&str>) -> Resolved {
+        Resolved {
+            index,
+            resolution,
+            path: (resolution == Resolution::Found).then(|| "/usr/bin/python3".to_owned()),
+            detail: detail.map(str::to_owned),
+        }
+    }
+
+    fn lines(results: &[Resolved]) -> String {
+        results
+            .iter()
+            .map(|r| serde_json::to_string(r).unwrap() + "\n")
+            .collect()
+    }
+
+    #[test]
+    fn results_are_one_per_command_in_order() {
+        let detail = MissingDetail::NotOnPath.code();
+        let good = [
+            result(0, Resolution::Found, None),
+            result(1, Resolution::Missing, Some(detail)),
+            result(2, Resolution::Dynamic, None),
+        ];
+        assert_eq!(parse_results(&lines(&good), 3).unwrap(), good.to_vec());
+        assert!(matches!(
+            parse_results(&lines(&good[..2]), 3),
+            Err(ResultsError::Count { .. })
+        ));
+        let swapped = [good[1].clone(), good[0].clone()];
+        assert!(matches!(
+            parse_results(&lines(&swapped), 2),
+            Err(ResultsError::OutOfOrder(_))
+        ));
+        let unknown = [result(0, Resolution::Missing, Some("invented"))];
+        assert!(parse_results(&lines(&unknown), 1).is_err());
+        assert!(parse_results("not json\n", 1).is_err());
+        assert!(parse_results(&lines(&good), 2).is_err(), "one too many");
+    }
+
+    #[test]
+    fn exposed_names_are_names_only() {
+        let names = exposed_names(
+            br#"{"env":{"API_TOKEN":"value-never-shown","DEBUG":"1"},"apiKeyHelper":"/bin/key"}"#,
+        );
+        assert_eq!(names, ["API_TOKEN", "DEBUG", "apiKeyHelper"]);
+        assert!(names.iter().all(|n| !n.contains("value")));
+        assert!(exposed_names(br#"{"hooks":{}}"#).is_empty());
+        assert!(has_crlf(b"#!/bin/sh\r\nexit 0\r\n"));
+        assert!(!has_crlf(b"#!/bin/sh\nexit 0\n"));
+    }
+
+    #[test]
+    fn mounted_scripts_are_those_under_a_mount() {
+        let commands = extract(
+            &[settings(SettingsSource::MountedSettings, GUARD)],
+            None,
+            &[".claude".into()],
+        )
+        .unwrap();
+        let tracked = r#"{"hooks":{"PreToolUse":[{"hooks":[{"type":"command","command":"$CLAUDE_PROJECT_DIR/.claude/hooks/a.sh"}]}]}}"#;
+        let mut all = commands;
+        all.extend(
+            extract(
+                &[settings(SettingsSource::MountedLocal, tracked)],
+                None,
+                &[".claude".into()],
+            )
+            .unwrap(),
+        );
+        assert_eq!(
+            mounted_scripts(&all, &[".claude".into()]),
+            [".claude/hooks/a.sh"]
+        );
     }
 
     #[test]

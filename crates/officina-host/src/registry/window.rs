@@ -576,6 +576,15 @@ impl WindowRegistry {
         self.with_writer(|writer| Ok(Ok(writer.record_image(image, build_tail)?)))
     }
 
+    /// Records a project's inventory on an image (AD-118), replacing the
+    /// earlier one.
+    pub fn record_workshop_inventory(
+        &mut self,
+        inventory: &crate::registry::workshop::InventoryRecord,
+    ) -> Result<(), IpcError> {
+        self.with_writer(|writer| Ok(Ok(writer.record_inventory(inventory)?)))
+    }
+
     /// Records one Start of the orchestrator (AD-89, D-144); refused when
     /// the registry cannot be written.
     pub fn record_orchestrator_start(

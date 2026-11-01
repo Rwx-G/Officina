@@ -17,6 +17,14 @@ project uses [Semantic Versioning](https://semver.org/).
 - Focus has an empty state (story 4.20): with nothing waiting, a centred
   drawing in the theme's colours, "Nothing waits for you", what Focus will
   show and that `f` goes back to the board or the scene.
+- The workshop's hook-program inventory (v0.6, story 6.9): after each
+  Build images, and at launch when a hook, a tracked script, `.mcp.json`
+  or the image changed, each project's hooks (mounted or tracked
+  `.claude` settings) and stdio MCP servers are resolved in its image with
+  no network; a missing `PreToolUse` program will refuse the launch,
+  other misses and computed commands warn. Doctor reports each project's
+  inventory, the names a mounted settings file's `env` block or
+  `apiKeyHelper` exposes, and mounted hook scripts with CRLF line endings.
 
 - The workshop's images and Build images (v0.6, story 6.8): the gateway,
   the base and each project's image built on the engine from Dockerfiles

@@ -314,6 +314,16 @@ impl Reader {
     ) -> rusqlite::Result<Option<crate::registry::workshop::ImageRecord>> {
         crate::registry::workshop::image(&self.conn, name)
     }
+
+    /// The inventory of `project` on `image` (AD-118): doctor and a
+    /// launch read it.
+    pub fn workshop_inventory(
+        &self,
+        image: &str,
+        project: &str,
+    ) -> rusqlite::Result<Option<crate::registry::workshop::InventoryRecord>> {
+        crate::registry::workshop::inventory(&self.conn, image, project)
+    }
 }
 
 /// A proposal row's columns, the order [`proposal_row`] reads.

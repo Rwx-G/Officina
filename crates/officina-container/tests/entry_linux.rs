@@ -587,14 +587,28 @@ impl InventoryRoot {
     /// The results for `commands`, the project folder `/work/api` with
     /// `.claude` mounted.
     fn resolve(&self, commands: &[&str]) -> Vec<serde_json::Value> {
+        self.resolve_values(
+            commands
+                .iter()
+                .map(|c| {
+                    serde_json::json!({
+                        "event": "PreToolUse", "matcher": "Bash", "server": null,
+                        "command": c, "tracked": null,
+                    })
+                })
+                .collect(),
+        )
+    }
+
+    fn resolve_values(&self, commands: Vec<serde_json::Value>) -> Vec<serde_json::Value> {
+        // Each run starts on a fresh project tmpfs, as a container does:
+        // the links of an earlier run go first.
+        let _ = fs::remove_dir_all(self.root.join("work/api"));
         let input = serde_json::json!({
             "schema": 1,
             "project_dir": "/work/api",
             "mounts": [".claude"],
-            "commands": commands.iter().map(|c| serde_json::json!({
-                "event": "PreToolUse", "matcher": "Bash", "server": null,
-                "command": c, "tracked": null,
-            })).collect::<Vec<_>>(),
+            "commands": commands,
         });
         let mut child = Command::new(ENTRY)
             .args(["inventory", "--root"])
@@ -695,4 +709,49 @@ fn a_mounted_script_resolves_through_its_link() {
             .file_type()
             .is_symlink()
     );
+}
+
+#[test]
+fn a_builtin_is_not_a_missing_program() {
+    let root = InventoryRoot::new();
+    root.program("bin/python", "#!/bin/sh\nexit 0\n");
+    let results = root.resolve(&[
+        "cd \"$CLAUDE_PROJECT_DIR\" && python .claude/hooks/guard.py",
+        "cd \"$CLAUDE_PROJECT_DIR\" && officina-no-such-program",
+    ]);
+    assert_eq!(results[0]["resolution"], "found", "{results:?}");
+    assert!(results[0]["path"].as_str().unwrap().ends_with("bin/python"));
+    assert_eq!(
+        results[1]["resolution"], "missing",
+        "a later program counts"
+    );
+    assert_eq!(results[1]["detail"], "not_on_path");
+}
+
+#[test]
+fn a_tracked_script_is_judged_from_what_the_host_read() {
+    let root = InventoryRoot::new();
+    let tracked = |present: bool, executable: bool, first_line: &str| {
+        serde_json::json!({
+            "event": "PreToolUse", "matcher": null, "server": null,
+            "command": "$CLAUDE_PROJECT_DIR/tools/guard.sh",
+            "tracked": {
+                "path": "tools/guard.sh", "present": present, "executable": executable,
+                "first_line": first_line, "blob": null,
+            },
+        })
+    };
+    let results = root.resolve_values(vec![
+        tracked(true, true, "#!/bin/sh"),
+        tracked(false, true, "#!/bin/sh"),
+        tracked(true, false, "#!/bin/sh"),
+        tracked(true, true, "#!/bin/sh\r"),
+        tracked(true, true, "#!/usr/bin/env officina-no-such-interpreter"),
+    ]);
+    assert_eq!(results[0]["resolution"], "found", "{results:?}");
+    assert_eq!(results[0]["path"], "/work/api/tools/guard.sh");
+    assert_eq!(results[1]["detail"], "tracked_absent");
+    assert_eq!(results[2]["detail"], "not_executable");
+    assert_eq!(results[3]["detail"], "crlf_shebang");
+    assert_eq!(results[4]["detail"], "interpreter");
 }

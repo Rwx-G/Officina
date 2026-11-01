@@ -1190,13 +1190,14 @@
             "server": null,
             "tracked": {
               "blob": null,
+              "executable": false,
               "first_line": null,
               "path": "scripts/notify.sh",
               "present": false
             }
           }
         ],
-        "key": "880bdb2fc6b15c5673a68382297220132b151f73e445f337f3959a0b23e6777c"
+        "key": "b7aa1e73356b4d195ba012368df986a7f4ba6c11aad2ef0dfc7228dd49aff769"
       },
       "image_id": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
       "mcp": null,
@@ -1228,6 +1229,7 @@
             "server": null,
             "tracked": {
               "blob": null,
+              "executable": false,
               "first_line": null,
               "path": "scripts/notify.sh",
               "present": false
@@ -1241,7 +1243,7 @@
             "tracked": null
           }
         ],
-        "key": "f23e82629dcbc8c753b78e0bbc85629e7cfd727f8d2afc2420324ed014e758b4"
+        "key": "8437d213d4665cb0295053a0245ad9ad9246dbecab5a62545b8995d23f111422"
       },
       "image_id": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
       "mcp": null,

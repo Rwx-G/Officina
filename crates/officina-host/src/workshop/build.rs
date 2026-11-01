@@ -139,10 +139,13 @@ mod window {
 
     use super::{LinuxPrograms, REVISION, VERSION};
     use crate::registry::window::WindowRegistry;
-    use crate::registry::workshop::ImageRecord;
+    use crate::registry::workshop::{ImageRecord, InventoryRecord};
     use crate::relay::home::RelayHome;
     use crate::workshop::engine::{
         EngineState, ResolvedDocker, build, execute, read_engine_state, stream_out,
+    };
+    use crate::workshop::inventory::{
+        InventoryEngine, InventoryProject, WorkshopGit, take as take_inventory,
     };
     use crate::workshop::proxy::{SystemProxyReader, resolve};
 
@@ -175,8 +178,22 @@ mod window {
         pub upstream_proxy: UpstreamProxy,
         pub ca_sha256: Option<String>,
         pub projects: Vec<ProjectPlan>,
+        /// Every workshop project, for the inventory after its image.
+        pub inventories: Vec<PlannedInventory>,
         pub claude_version: String,
         pub base_env: Vec<(String, String)>,
+    }
+
+    /// One project whose inventory follows the build of its image (AD-118).
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct PlannedInventory {
+        pub project: InventoryProject,
+        /// Built from its own Dockerfile, else run on the base image.
+        pub has_dockerfile: bool,
+        /// The branch whose tip the build's inventory reads tracked files
+        /// at (D-1137): the first base of the first workshop template that
+        /// names the project; `None` when no template names it.
+        pub base_branch: Option<String>,
     }
 
     /// The workshop's stop flag refuses a build (AD-116).
@@ -243,6 +260,37 @@ mod window {
                 })
             })
             .collect();
+        let inventories = current
+            .canonical
+            .projects
+            .iter()
+            .filter_map(|(name, project)| {
+                let w = project.workshop.as_ref()?;
+                let base_branch = current
+                    .canonical
+                    .templates
+                    .values()
+                    .filter(|t| t.projects.contains(name))
+                    .find_map(|t| t.workshop.as_ref()?.base.first().cloned());
+                // The canonical path is normalised for comparison (case
+                // folded); IO takes the floor's own path, as the
+                // Dockerfile reads do.
+                let raw = current.floor.projects.iter().find(|p| &p.name == name)?;
+                let path = officina_core::floor::join_project_path(
+                    officina_core::floor::floor_dir_of(&current.floor_path),
+                    &raw.path,
+                );
+                Some(PlannedInventory {
+                    project: InventoryProject {
+                        name: name.clone(),
+                        path: PathBuf::from(path),
+                        mounts: w.mounts.clone(),
+                    },
+                    has_dockerfile: w.dockerfile.is_some(),
+                    base_branch,
+                })
+            })
+            .collect();
         let claude_version = claude_version
             .and_then(officina_core::contract::claude_version)
             .map(|[a, b, c]| format!("{a}.{b}.{c}"))
@@ -255,6 +303,7 @@ mod window {
             upstream_proxy,
             ca_sha256,
             projects,
+            inventories,
             claude_version,
             base_env: base_env.to_vec(),
         })
@@ -288,6 +337,10 @@ mod window {
         pub claude_version: String,
         pub ca_sha256: Option<String>,
         pub jobs: Vec<ImageJob>,
+        pub inventories: Vec<PlannedInventory>,
+        /// The workshop's `git`, when it resolves: without it no
+        /// inventory follows the builds and the launch runs it.
+        pub git: Option<WorkshopGit>,
     }
 
     fn dir_name(tag: &str) -> String {
@@ -475,6 +528,8 @@ mod window {
             claude_version: plan.claude_version.clone(),
             ca_sha256: plan.ca_sha256.clone(),
             jobs,
+            inventories: plan.inventories.clone(),
+            git: crate::workshop::inventory::workshop_git(home, &plan.base_env),
         })
     }
 
@@ -486,6 +541,8 @@ mod window {
         pub tail: Option<String>,
         pub detail: Option<NotFromBase>,
         pub duration_ms: i64,
+        /// The inventories taken on the image once built (AD-118).
+        pub inventories: Vec<InventoryRecord>,
     }
 
     /// The labels `job` is built with (AD-99).
@@ -784,7 +841,52 @@ mod window {
             tail: ran.tail,
             detail: ran.detail,
             duration_ms: now_ms - started_ms,
+            inventories: Vec::new(),
         }
+    }
+
+    /// The inventories that follow `job`'s image (AD-118): the base serves
+    /// every project without a Dockerfile, a project image its own
+    /// project. A project with no base branch, an unresolved branch or a
+    /// failed run is skipped: nothing is recorded and its launch runs the
+    /// inventory.
+    fn inventories_after(
+        prepared: &Prepared,
+        job: &ImageJob,
+        image_id: &str,
+        now_ms: &dyn Fn() -> i64,
+    ) -> Vec<InventoryRecord> {
+        let Some(git) = &prepared.git else {
+            return Vec::new();
+        };
+        let engine = InventoryEngine {
+            docker: prepared.docker.clone(),
+            base_env: prepared.base_env.clone(),
+            home: prepared.home.clone(),
+            floor_key: prepared.floor_key.clone(),
+        };
+        prepared
+            .inventories
+            .iter()
+            .filter(|planned| match (&job.kind, &job.project) {
+                (ImageKind::Workshop, _) => !planned.has_dockerfile,
+                (ImageKind::Project, Some(project)) => planned.project.name == project.name,
+                _ => false,
+            })
+            .filter_map(|planned| {
+                let branch = planned.base_branch.as_deref()?;
+                let commit = git.branch_commit(&planned.project.path, branch)?;
+                take_inventory(
+                    &engine,
+                    git,
+                    (&job.tag, image_id),
+                    &planned.project,
+                    &commit,
+                    now_ms(),
+                )
+                .ok()
+            })
+            .collect()
     }
 
     /// Runs every build of `prepared` in AD-99's order (gateway, base,
@@ -826,7 +928,16 @@ mod window {
                     .map(|f| f.id.clone())
                     .zip(ran.programs.clone());
             }
-            sink(report(job, ran, started, now_ms()));
+            let built_id = ran
+                .facts
+                .as_ref()
+                .filter(|_| ran.outcome == BuildOutcome::Built)
+                .map(|f| f.id.clone());
+            let mut done = report(job, ran, started, now_ms());
+            if let Some(id) = built_id {
+                done.inventories = inventories_after(prepared, job, &id, now_ms);
+            }
+            sink(done);
         }
     }
 
@@ -839,6 +950,9 @@ mod window {
         now_ms: i64,
     ) -> Result<(), officina_core::ipc::IpcError> {
         registry.record_workshop_image(&report.record, report.tail.as_deref())?;
+        for inventory in &report.inventories {
+            registry.record_workshop_inventory(inventory)?;
+        }
         let line = JournalEntry::WorkshopImageBuilt(WorkshopImageBuilt {
             image: report.record.name.clone(),
             image_id: report.record.image_id.clone(),

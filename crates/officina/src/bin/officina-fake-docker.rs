@@ -17,8 +17,9 @@
 //! `network ls`, `volume ls`; story 6.8's `buildx ls` (sidecar `builders`,
 //! else one current `docker`-driver builder), `build` (see [`build`]),
 //! `create` of a recorded image, `cp <container>:<path> -` streaming the
-//! program its image holds, `rm` and `image rm`; any other call is logged
-//! and exits 0. Later stories add theirs.
+//! program its image holds, `rm` and `image rm`; story 6.9's attached
+//! `start` (see [`start_attached`]); any other call is logged and exits 0.
+//! Later stories add theirs.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -206,6 +207,7 @@ fn main() {
         ["build", rest @ ..] => build(rest, &sidecar, &mut state),
         ["create", rest @ ..] => create(rest, &mut state),
         ["cp", source, "-"] => copy_out(source, &state),
+        ["start", "--attach", .., name] => start_attached(name, &sidecar, &mut state),
         ["rm", rest @ ..] => {
             let names: Vec<&str> = rest
                 .iter()
@@ -390,6 +392,59 @@ fn create(args: &[&str], state: &mut serde_json::Value) -> i32 {
     });
     push(state, "containers", container);
     save(state);
+    0
+}
+
+/// `start --attach [--interactive] <container>` (story 6.9): the container
+/// ends `exited`. An `inventory` container reads its list on stdin, keeps
+/// it in `fake-docker-inventory.json` and prints one result per command:
+/// sidecar `inventory.<command text>` when set, else `found` at
+/// `/usr/bin/<first word>`; sidecar `inventory_output` replaces the whole
+/// output.
+fn start_attached(name: &str, sidecar: &serde_json::Value, state: &mut serde_json::Value) -> i32 {
+    let Some(container) = state["containers"]
+        .as_array_mut()
+        .and_then(|all| all.iter_mut().find(|c| c["name"] == name))
+    else {
+        eprintln!("Error: No such container: {name}");
+        return 1;
+    };
+    container["state"] = "exited".into();
+    container["exit_code"] = 0.into();
+    let role = container["labels"]["officina.role"]
+        .as_str()
+        .unwrap_or_default()
+        .to_owned();
+    save(state);
+    if role != "inventory" {
+        return 0;
+    }
+    let mut text = String::new();
+    let _ = std::io::Read::read_to_string(&mut std::io::stdin(), &mut text);
+    let _ = std::fs::write(beside("fake-docker-inventory.json"), &text);
+    if let Some(output) = sidecar["inventory_output"].as_str() {
+        print!("{output}");
+        return 0;
+    }
+    let input: serde_json::Value = serde_json::from_str(&text).unwrap_or_default();
+    for (index, command) in input["commands"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .enumerate()
+    {
+        let written = command["command"].as_str().unwrap_or_default();
+        let mut result = sidecar["inventory"][written].clone();
+        if !result.is_object() {
+            let program = written.split_whitespace().next().unwrap_or_default();
+            result = serde_json::json!({
+                "resolution": "found",
+                "path": format!("/usr/bin/{program}"),
+            });
+        }
+        result["index"] = index.into();
+        println!("{result}");
+    }
     0
 }
 

@@ -100,6 +100,23 @@ closed_enum! {
         /// `api.anthropic.com` goes through a proxy and no `ca_file` is set
         /// (D-612): if it inspects TLS, its root must be exported.
         ProxyCaNote,
+        /// A project's hook and MCP programs all resolved in its image
+        /// (AD-118).
+        HookProgramsFound,
+        /// A `PreToolUse` guard's program is missing from the image: a
+        /// launch of the project is refused `hook_program_missing`.
+        HookProgramMissing,
+        /// A program of another event or of an MCP server is missing, or a
+        /// command is `dynamic`: warned on the card.
+        HookProgramWarning,
+        /// No inventory is recorded for the project's image: the next
+        /// launch runs it.
+        InventoryAbsent,
+        /// A mounted settings file holds an `env` block or `apiKeyHelper`,
+        /// which the worker can read (names only).
+        SettingsExposed,
+        /// A mounted hook script has CRLF line endings (review F12).
+        HookScriptCrlf,
     }
 }
 
@@ -115,7 +132,8 @@ impl WorkshopCheck {
             | WorkshopCheck::LinuxProgramsMissing
             | WorkshopCheck::ImageMismatch
             | WorkshopCheck::CaUnreadable
-            | WorkshopCheck::CaLabelMismatch => CheckLevel::Fail,
+            | WorkshopCheck::CaLabelMismatch
+            | WorkshopCheck::HookProgramMissing => CheckLevel::Fail,
             WorkshopCheck::DockerCliProxies
             | WorkshopCheck::DockerCliPluginDirs
             | WorkshopCheck::DockerCliConfigUnreadable
@@ -128,7 +146,11 @@ impl WorkshopCheck {
             | WorkshopCheck::ProxyNotEvaluated
             | WorkshopCheck::ImageAbsent
             | WorkshopCheck::ClaudeVersionDiffers
-            | WorkshopCheck::WorkersOverMemory => CheckLevel::Warn,
+            | WorkshopCheck::WorkersOverMemory
+            | WorkshopCheck::HookProgramWarning
+            | WorkshopCheck::InventoryAbsent
+            | WorkshopCheck::SettingsExposed
+            | WorkshopCheck::HookScriptCrlf => CheckLevel::Warn,
             WorkshopCheck::ProxyRefused => CheckLevel::Fail,
             WorkshopCheck::ProxyRoutes | WorkshopCheck::ProxyCaNote => CheckLevel::Inform,
             WorkshopCheck::DockerResolved
@@ -138,7 +160,8 @@ impl WorkshopCheck {
             | WorkshopCheck::EngineReady
             | WorkshopCheck::LinuxPrograms
             | WorkshopCheck::ImageMatches
-            | WorkshopCheck::CaLabel => CheckLevel::Inform,
+            | WorkshopCheck::CaLabel
+            | WorkshopCheck::HookProgramsFound => CheckLevel::Inform,
         }
     }
 
@@ -178,6 +201,13 @@ impl WorkshopCheck {
             | WorkshopCheck::ProxyRefused
             | WorkshopCheck::ProxyNotEvaluated
             | WorkshopCheck::ProxyCaNote => "workshop proxy",
+            WorkshopCheck::HookProgramsFound
+            | WorkshopCheck::HookProgramMissing
+            | WorkshopCheck::HookProgramWarning
+            | WorkshopCheck::InventoryAbsent => "workshop hook programs",
+            WorkshopCheck::SettingsExposed | WorkshopCheck::HookScriptCrlf => {
+                "workshop project settings"
+            }
         }
     }
 
@@ -188,6 +218,89 @@ impl WorkshopCheck {
             .position(|check| *check == self)
             .unwrap_or(WorkshopCheck::ALL.len())
     }
+}
+
+/// What doctor read about one project's hooks (AD-123, story 6.9 AC 5).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HookFacts {
+    pub project: String,
+    /// The inventory recorded for the project's image, if any.
+    pub stored: Option<super::inventory::StoredInventory>,
+    /// Each mounted settings file with the names it exposes.
+    pub exposed: Vec<(String, Vec<String>)>,
+    /// The mounted hook scripts with CRLF line endings.
+    pub crlf: Vec<String>,
+}
+
+fn describe(command: &super::inventory::InventoryCommand) -> String {
+    let what = match (&command.event, &command.server) {
+        (Some(event), _) => format!("{event} hook"),
+        (None, Some(server)) => format!("MCP server {server}"),
+        (None, None) => "command".to_owned(),
+    };
+    format!("{what} `{}`", command.command)
+}
+
+/// The findings of one project's hooks (AD-118, AD-123): the recorded
+/// inventory judged as a launch judges it, a guard's missing program a
+/// failure, other misses and `dynamic` commands warnings; then the
+/// exposed settings names and the CRLF scripts.
+pub fn hook_findings(facts: &HookFacts) -> Vec<Finding> {
+    use super::inventory::Resolution;
+    let project = &facts.project;
+    let mut found = Vec::new();
+    match &facts.stored {
+        None => found.push(Finding::new(
+            WorkshopCheck::InventoryAbsent,
+            format!("{project}: no inventory recorded for its image; Build images or the next launch runs it"),
+        )),
+        Some(stored) => {
+            let judged = stored.consequences();
+            let line = |index: usize| {
+                let command = stored.commands.get(index).map(describe).unwrap_or_default();
+                let result = stored.results.iter().find(|r| r.index == index);
+                let how = match result.map(|r| (r.resolution, r.detail.as_deref())) {
+                    Some((Resolution::Dynamic, _)) => "dynamic".to_owned(),
+                    Some((_, Some(detail))) => format!("missing ({detail})"),
+                    _ => "missing".to_owned(),
+                };
+                format!("{project}: {command}: {how}")
+            };
+            for index in &judged.refused {
+                found.push(Finding::new(WorkshopCheck::HookProgramMissing, line(*index)));
+            }
+            for index in &judged.warnings {
+                found.push(Finding::new(WorkshopCheck::HookProgramWarning, line(*index)));
+            }
+            if judged.refused.is_empty() && judged.warnings.is_empty() {
+                found.push(Finding::new(
+                    WorkshopCheck::HookProgramsFound,
+                    format!(
+                        "{project}: {} command(s) resolved in its image",
+                        stored.commands.len()
+                    ),
+                ));
+            }
+        }
+    }
+    for (file, names) in &facts.exposed {
+        if !names.is_empty() {
+            found.push(Finding::new(
+                WorkshopCheck::SettingsExposed,
+                format!(
+                    "{project}: {file} sets {} which the worker can read",
+                    names.join(", ")
+                ),
+            ));
+        }
+    }
+    for script in &facts.crlf {
+        found.push(Finding::new(
+            WorkshopCheck::HookScriptCrlf,
+            format!("{project}: {script} has CRLF line endings; it runs on Linux in the workshop"),
+        ));
+    }
+    found
 }
 
 /// One finding and what it says.

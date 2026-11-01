@@ -5,9 +5,9 @@
 use std::path::{Path, PathBuf};
 
 use officina_core::workshop::doctor::{
-    CaRead, CheckLevel, Finding, ImageInput, WorkshopCheck, ca_findings, claude_version_finding,
-    docker_cli_config, image_finding, in_order, memory_finding, orphans, overrides_set,
-    plain_tcp_docker_host,
+    CaRead, CheckLevel, Finding, HookFacts, ImageInput, WorkshopCheck, ca_findings,
+    claude_version_finding, docker_cli_config, hook_findings, image_finding, in_order,
+    memory_finding, orphans, overrides_set, plain_tcp_docker_host,
 };
 use officina_core::workshop::engine::{
     EngineCall, EngineUnavailable, InfoFacts, ObjectRow, PsRow, engine_key, parse_object_rows,
@@ -61,6 +61,9 @@ pub struct WorkshopFacts {
     /// The Linux programs and the images, when the floor's workshop is
     /// valid (AD-123, story 6.8).
     pub images: Option<ImageReport>,
+    /// Each workshop project's hooks against its recorded inventory
+    /// (AD-123, story 6.9).
+    pub hooks: Vec<HookFacts>,
 }
 
 /// What doctor needs to compare the images (AD-99, AD-123).
@@ -70,6 +73,9 @@ pub struct ImageContext {
     pub exe_dir: PathBuf,
     pub canonical: officina_core::relay::catalogue::CanonicalCatalogue,
     pub floor_key: String,
+    /// Each project's folder as the floor names it, for IO: the
+    /// canonical path is case folded for comparison.
+    pub project_dirs: std::collections::BTreeMap<String, PathBuf>,
     /// The host's Claude Code version, `x.y.z`.
     pub claude_version: Option<String>,
 }
@@ -87,6 +93,89 @@ pub struct ImageReport {
     pub base_ca_label: Option<String>,
     /// `max_workers` and `memory_mib`.
     pub workers: (u32, u32),
+}
+
+/// What doctor reads of each workshop project's hooks (AD-123, story 6.9
+/// AC 5): the inventory recorded for the image the project runs on, the
+/// names each mounted settings file exposes, and the mounted hook scripts
+/// with CRLF line endings. Doctor runs no container and no `git`: tracked
+/// files are the inventory's to read at a launch's base commit.
+pub fn hook_facts(context: &ImageContext, home: &Path) -> Vec<HookFacts> {
+    use officina_core::workshop::image::WORKSHOP_BASE;
+    use officina_core::workshop::inventory::StoredInventory;
+    use officina_core::workshop::names::project_image;
+    let reader = crate::registry::store::open_reader(home, &[]).ok();
+    let mut all = Vec::new();
+    for (name, project) in &context.canonical.projects {
+        let Some(workshop) = project.workshop.as_ref() else {
+            continue;
+        };
+        let image = if workshop.dockerfile.is_some() {
+            project_image(&context.floor_key, name)
+        } else {
+            WORKSHOP_BASE.to_owned()
+        };
+        let stored = reader
+            .as_ref()
+            .and_then(|r| r.workshop_inventory(&image, name).ok().flatten())
+            .and_then(|record| {
+                serde_json::from_str::<StoredInventory>(&record.inventory_json).ok()
+            });
+        let Some(dir) = context.project_dirs.get(name) else {
+            continue;
+        };
+        all.push(project_hooks(name, dir, &workshop.mounts, stored));
+    }
+    all
+}
+
+/// One project's [`HookFacts`] from its folder: the mounted settings files
+/// read, bounded, for the names they expose and the scripts their hooks
+/// name under a mount, each checked for CRLF line endings.
+pub fn project_hooks(
+    name: &str,
+    dir: &Path,
+    mounts: &[String],
+    stored: Option<officina_core::workshop::inventory::StoredInventory>,
+) -> HookFacts {
+    use crate::workshop::inventory::SETTINGS_FILES;
+    use officina_core::workshop::inventory::{
+        MAX_INPUT_BYTES, SettingsFile, exposed_names, extract, has_crlf, mounted_scripts,
+        under_mount,
+    };
+    let read = |path: &Path| {
+        use std::io::Read;
+        let file = std::fs::File::open(path).ok()?;
+        let mut bytes = Vec::new();
+        let limit = u64::try_from(MAX_INPUT_BYTES).ok()?;
+        file.take(limit).read_to_end(&mut bytes).ok()?;
+        Some(bytes)
+    };
+    let mut exposed = Vec::new();
+    let mut mounted = Vec::new();
+    for (path, source, _) in SETTINGS_FILES {
+        if !under_mount(path, mounts) {
+            continue;
+        }
+        if let Some(bytes) = read(&dir.join(path)) {
+            exposed.push(((*path).to_owned(), exposed_names(&bytes)));
+            mounted.push(SettingsFile {
+                source: *source,
+                bytes,
+            });
+        }
+    }
+    let commands = extract(&mounted, None, mounts).unwrap_or_default();
+    let crlf = mounted_scripts(&commands, mounts)
+        .into_iter()
+        .filter(|script| read(&dir.join(script)).is_some_and(|bytes| has_crlf(&bytes)))
+        .collect();
+    HookFacts {
+        project: name.to_owned(),
+        stored,
+        exposed,
+        crlf,
+    }
 }
 
 fn digest_of(path: &Path) -> Result<String, String> {
@@ -444,6 +533,9 @@ pub fn gather(
         ),
         proxy: proxy.map(|input| proxy_facts(input, Arc::new(WinHttpReader))),
         images: None,
+        hooks: images
+            .map(|context| hook_facts(context, home))
+            .unwrap_or_default(),
     };
     if let Ok((path, source)) = &facts.docker {
         let docker = ResolvedDocker::at(path.clone(), *source);
@@ -554,6 +646,9 @@ pub fn findings(facts: &WorkshopFacts) -> Vec<Finding> {
     if let Some(report) = &facts.images {
         found.extend(image_findings(report, facts.info.as_ref()));
     }
+    for hooks in &facts.hooks {
+        found.extend(hook_findings(hooks));
+    }
     if let Some(dir) = &facts.synced_home {
         found.push(Finding::new(
             WorkshopCheck::HomeSynced,
@@ -604,6 +699,7 @@ mod tests {
             synced_home: None,
             proxy: None,
             images: None,
+            hooks: Vec::new(),
         }
     }
 
@@ -642,6 +738,109 @@ mod tests {
             base_ca_label: labels.get(LABEL_CA).cloned(),
             workers: (2, 4096),
         }
+    }
+
+    /// A project folder with `.claude` mounted, `settings` as its
+    /// `settings.json` and `files` beside it.
+    fn hook_project(settings: &str, files: &[(&str, &[u8])]) -> (tempfile::TempDir, HookFacts) {
+        let dir = tempfile::tempdir().unwrap();
+        let claude = dir.path().join(".claude");
+        std::fs::create_dir_all(claude.join("hooks")).unwrap();
+        std::fs::write(claude.join("settings.json"), settings).unwrap();
+        for (path, bytes) in files {
+            std::fs::write(dir.path().join(path), bytes).unwrap();
+        }
+        let facts = project_hooks("api", dir.path(), &[".claude".to_owned()], None);
+        (dir, facts)
+    }
+
+    fn hook_lines(hooks: HookFacts) -> Vec<Check> {
+        let mut facts = facts();
+        facts.hooks = vec![hooks];
+        checks(&facts)
+    }
+
+    fn line_of(lines: &[Check], check_kind: WorkshopCheck) -> Option<&Check> {
+        lines
+            .iter()
+            .find(|line| line.title == check_kind.title() && line.level == level_of(check_kind))
+    }
+
+    fn level_of(check_kind: WorkshopCheck) -> Level {
+        match check_kind.level() {
+            CheckLevel::Fail => Level::Fail,
+            CheckLevel::Warn => Level::Warn,
+            CheckLevel::Inform => Level::Ok,
+        }
+    }
+
+    #[test]
+    fn a_missing_pretooluse_program_fails() {
+        use officina_core::workshop::inventory::{
+            MissingDetail, Resolution, Resolved, SettingsFile, SettingsSource, StoredInventory,
+            extract,
+        };
+        let settings = r#"{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"python guard.py"}]}],"Stop":[{"hooks":[{"type":"command","command":"notify-send done"}]}]}}"#;
+        let commands = extract(
+            &[SettingsFile {
+                source: SettingsSource::MountedSettings,
+                bytes: settings.as_bytes().to_vec(),
+            }],
+            None,
+            &[],
+        )
+        .unwrap();
+        let missing = |index| Resolved {
+            index,
+            resolution: Resolution::Missing,
+            path: None,
+            detail: Some(MissingDetail::NotOnPath.code().to_owned()),
+        };
+        let (_dir, mut hooks) = hook_project("{}", &[]);
+        hooks.stored = Some(StoredInventory {
+            commands,
+            results: vec![missing(0), missing(1)],
+        });
+        let lines = hook_lines(hooks);
+        let fail = line_of(&lines, WorkshopCheck::HookProgramMissing).expect("the guard fails");
+        assert!(fail.detail.contains("PreToolUse") && fail.detail.contains("not_on_path"));
+        let warn = line_of(&lines, WorkshopCheck::HookProgramWarning).expect("the Stop hook warns");
+        assert!(warn.detail.contains("Stop"));
+        let (_dir, absent) = hook_project("{}", &[]);
+        assert!(line_of(&hook_lines(absent), WorkshopCheck::InventoryAbsent).is_some());
+    }
+
+    #[test]
+    fn an_env_block_in_a_mounted_settings_file_warns_by_name() {
+        let (_dir, hooks) = hook_project(
+            r#"{"env":{"DEPLOY_TOKEN":"value-never-printed"},"apiKeyHelper":"/bin/key"}"#,
+            &[],
+        );
+        let lines = hook_lines(hooks);
+        let warn = line_of(&lines, WorkshopCheck::SettingsExposed).expect("a warning");
+        assert!(warn.detail.contains("DEPLOY_TOKEN") && warn.detail.contains("apiKeyHelper"));
+        assert!(
+            lines
+                .iter()
+                .all(|l| !l.detail.contains("value-never-printed")),
+            "names only"
+        );
+    }
+
+    #[test]
+    fn a_crlf_hook_script_warns() {
+        let settings = r#"{"hooks":{"PreToolUse":[{"hooks":[{"type":"command","command":"$CLAUDE_PROJECT_DIR/.claude/hooks/a.sh"},{"type":"command","command":"$CLAUDE_PROJECT_DIR/.claude/hooks/b.sh"}]}]}}"#;
+        let (_dir, hooks) = hook_project(
+            settings,
+            &[
+                (".claude/hooks/a.sh", b"#!/bin/sh\r\nexit 0\r\n"),
+                (".claude/hooks/b.sh", b"#!/bin/sh\nexit 0\n"),
+            ],
+        );
+        assert_eq!(hooks.crlf, [".claude/hooks/a.sh"]);
+        let lines = hook_lines(hooks);
+        let warn = line_of(&lines, WorkshopCheck::HookScriptCrlf).expect("a warning");
+        assert!(warn.detail.contains("a.sh"));
     }
 
     fn image_lines(report: ImageReport, info: Option<InfoFacts>) -> Vec<Finding> {

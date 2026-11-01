@@ -974,6 +974,33 @@ Code's download host reach the base's build, which trusts the root before
 its first download. The images are per engine: one CA file per engine, or
 two floors rebuild each other's images.
 
+### Hook programs
+
+Under `bypassPermissions` a `PreToolUse` hook is a guard, and a guard whose
+program cannot start does not block: Claude Code runs the tool call
+anyway. So before a worker runs, Officina takes an inventory of each
+project's hooks and stdio MCP servers in the image the project runs on,
+with no network: the hooks of a mounted `.claude`'s `settings.json` and
+`settings.local.json`, those of the same files tracked in git at the base
+commit, and the servers of the base commit's `.mcp.json`. A small program
+in the image finds each command's programs as the image's shell would
+(builtins aside, the project folder's variable expanded and nothing
+else) and a
+script's interpreter from its first line; a script tracked in git is read
+at the base commit, with its mode. Each command is `found`, `missing`
+(with why: not on `PATH`, not a file, not executable, its interpreter
+absent, its first line ending in a carriage return, or absent at the base
+commit) or `dynamic` (its program computed at run time). A `missing`
+`PreToolUse` program refuses the launch (`hook_program_missing`); a
+`dynamic` command, or a missing program of another event or of an MCP
+server, is a warning on the card. The inventory follows each Build images
+and runs again at launch when a hook, a tracked script, `.mcp.json` or the
+image changed. Hooks written on Windows run on Linux in the workshop: a
+script with CRLF line endings fails there. Doctor reports each project's
+recorded inventory, a mounted settings file's `env` block or
+`apiKeyHelper` by name only (the worker can read them), and mounted hook
+scripts with CRLF line endings.
+
 ### Checking the engine
 
 For a floor that declares `[workshop]`, `officina doctor` adds a workshop

@@ -963,6 +963,20 @@ pub fn run_with(collector: &Collector, exe: &Path, permissions: bool) -> Vec<Che
                 exe_dir: exe.parent().unwrap_or(Path::new("")).to_path_buf(),
                 canonical: floor.canonical.clone(),
                 floor_key: officina_core::workshop::names::floor_key(&floor.floor_path),
+                project_dirs: floor
+                    .floor
+                    .projects
+                    .iter()
+                    .map(|project| {
+                        (
+                            project.name.clone(),
+                            PathBuf::from(officina_core::floor::join_project_path(
+                                officina_core::floor::floor_dir_of(&floor.floor_path),
+                                &project.path,
+                            )),
+                        )
+                    })
+                    .collect(),
                 claude_version: version
                     .as_deref()
                     .and_then(claude_version)
