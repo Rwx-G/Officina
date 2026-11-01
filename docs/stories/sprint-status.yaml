@@ -112,6 +112,8 @@ stories:
   - {id: "4.17", file: story-4.17-scene-readability.md, slice: B, status: review}
   # 4.19: the owner's two remarks on the session file in the installed v0.4 (D-702 to D-709); 4.18 was never created (D-701).
   - {id: "4.19", file: story-4.19-session-panel-polish.md, slice: B, status: review}
+  # 4.20: the owner's second feedback on the installed build (D-1040 to D-1046).
+  - {id: "4.20", file: story-4.20-owner-ui-feedback-2.md, slice: B, status: review}
 ---
 epic: 5
 version: v0.5

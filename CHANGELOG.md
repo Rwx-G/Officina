@@ -8,6 +8,16 @@ project uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- The session file's exchange reads as markdown (story 4.20): paragraphs
+  and line breaks, emphasis, inline and fenced code, headings as bold
+  lines, lists, quotes and tables, a wide table scrolling inside its
+  bubble. Officina reads that subset itself and writes every piece as
+  plain text: HTML shows as written, a link shows its text and address and
+  is never clickable, an image shows its description and is never loaded.
+- Focus has an empty state (story 4.20): with nothing waiting, a centred
+  drawing in the theme's colours, "Nothing waits for you", what Focus will
+  show and that `f` goes back to the board or the scene.
+
 - The workshop's images and Build images (v0.6, story 6.8): the gateway,
   the base and each project's image built on the engine from Dockerfiles
   Officina ships or you approved, in that order, on the engine's
@@ -750,6 +760,24 @@ project uses [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- To sort, To resume and Done are one fixed-size indicator in the header
+  instead of three controls (story 4.20): three counts behind their icons,
+  and a small panel naming each count with its action, opened on hover,
+  keyboard focus or a click, closed by Escape.
+- The quota gauges follow the data (story 4.20): a gauge shows only for a
+  window the quota file carries, the weekly gauge first and always there
+  (it says "no data" without a file), so the 5-hour gauge goes when Claude
+  Code stops reporting that window; older files with both windows show
+  both. `officina doctor`'s quota line names the windows the file carries.
+- A session has one name on every surface (story 4.20): its own name on
+  its figure, file, board card, the register and Focus, its project only
+  as context after it in the name tag and Focus. A room's plaque counts its
+  people behind a person sign, so a project's name and count no longer read
+  as a session's name.
+- The decision office and the alert room no longer draw their waiting
+  places on the floor, and each waiting figure stands a little off its
+  place, the same for the same session on every board (story 4.20).
+
 - The catalogue's canonical format goes up by one (v0.6, story 6.2): the
   workshop's tables and their files' digests join what the author
   approves, and `approved.json` gains a second hash over the sections
@@ -1183,6 +1211,10 @@ project uses [Semantic Versioning](https://semver.org/).
   processes it starts keep their own state.
 
 ### Fixed
+
+- The board's Undo note and discard target broke onto two lines; they now
+  keep one line and one width at every window width, a long session name
+  cut with an ellipsis and whole in the tooltip (story 4.20).
 
 - The meeting's recent output repeated a background session's whole
   screen once per repaint, about thirty times, the answer buried among

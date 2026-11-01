@@ -100,7 +100,7 @@ Fields: `v`, `ts` (ms, taken by the hook on receipt), `event`, `session_id`, `cw
 {"schema":1,"account_key":"default","session_id":"<UUID>","written_at":1761555600,"five_hour":{"used_percentage":62.0,"resets_at":1761570000},"seven_day":{"used_percentage":41.0,"resets_at":1761900000}}
 ```
 
-Seconds, like the statusline payload. Account key: `default` when no config dir override applies, else `cfg-` plus the FNV-1a 64 hex of the normalized absolute path (lowercase, forward slashes, no trailing slash). FNV is ten lines in core and needs no crate; it is an identifier, not a security boundary. The public contract is the command `officina quota write`, not the hash, so no other program computes it.
+Seconds, like the statusline payload. A window the statusline leaves out is absent from the file, never `null`: Claude Code sends each window only while the account has it, the header shows a gauge only for a window the file carries, and doctor names the windows present (D-1042). Account key: `default` when no config dir override applies, else `cfg-` plus the FNV-1a 64 hex of the normalized absolute path (lowercase, forward slashes, no trailing slash). FNV is ten lines in core and needs no crate; it is an identifier, not a security boundary. The public contract is the command `officina quota write`, not the hash, so no other program computes it.
 
 **Floor file** - `officina.toml`:
 
