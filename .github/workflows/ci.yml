@@ -26,6 +26,14 @@ on:
 permissions:
   contents: read
 
+# D-1072: a newer push or pull request update cancels the run still going
+# for the same ref; the `changes` job diffs from the last green push run,
+# so the commits of a cancelled run are tested by the next one. Scheduled
+# and manual runs are never cancelled, and tags run in release.yml.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'push' || github.event_name == 'pull_request' }}
+
 env:
   CARGO_TERM_COLOR: always
 
@@ -33,8 +41,8 @@ jobs:
   changes:
     # D-1073: what the change touches, so a docs-only change skips the build
     # jobs. A push is diffed from the last push run of this workflow on main
-    # that went green, not from the commit before it: a red run leaves its
-    # commits in the next diff. A pull
+    # that went green, not from the commit before it: a run cancelled by a
+    # newer push, or a red one, leaves its commits in the next diff. A pull
     # request is diffed from its base. A schedule, a manual run, a history
     # without that commit or an answer-less API runs everything.
     runs-on: ubuntu-latest

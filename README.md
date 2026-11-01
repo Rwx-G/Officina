@@ -1052,6 +1052,15 @@ pnpm e2e:fixtures && pnpm e2e                            # Playwright on boards 
 
 The gate's in-process p95 bound is a workstation check: `perf` asserts it only with `OFFICINA_PERF_WORKSTATION=1`, which CI's hosted runners do not set. The CI workflow in `.github/workflows/ci.yml` is the authoritative list of gates.
 
+### Continuous integration
+
+GitHub Actions minutes are counted, and a Windows minute counts twice, so the workflow runs only what a change needs:
+
+- A first job reads which files the change touches, from the last green push run on `main` (so the commits of a cancelled or red run are tested by the next one), or from a pull request's base.
+- A change that touches only `docs/` (outside `docs/assets/`) or Markdown files skips the build jobs; a cheap Linux job still runs the tests that read those files (the README and changelog against the code, core's unit tests).
+- Any other change runs every job. The `workshop` job runs only when the images, the gateway, the entry point or their rules change, and weekly.
+- A newer push to the same branch, or a new commit on the same pull request, cancels the run still going. Scheduled and manual runs are never cancelled; release tags build in their own workflow.
+
 If the repository lives in a synchronised folder (OneDrive, Synology Drive, Dropbox), exclude `target/` and `app/node_modules/` from the sync, or set `CARGO_TARGET_DIR` outside it: the sync client locks build files and slows every build.
 
 ## License
