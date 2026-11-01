@@ -3,6 +3,7 @@
 //! and coreutils' `timeout`.
 
 pub mod auth_status;
+pub mod inventory;
 pub mod pack;
 pub mod run;
 pub mod scan;

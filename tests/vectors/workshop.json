@@ -1172,6 +1172,137 @@
       }
     }
   ],
+  "inventory": [
+    {
+      "expect": {
+        "commands": [
+          {
+            "command": "python \"$CLAUDE_PROJECT_DIR/.claude/hooks/guard.py\"",
+            "event": "PreToolUse",
+            "matcher": "Bash",
+            "server": null,
+            "tracked": null
+          },
+          {
+            "command": "$CLAUDE_PROJECT_DIR/scripts/notify.sh",
+            "event": "Stop",
+            "matcher": null,
+            "server": null,
+            "tracked": {
+              "blob": null,
+              "first_line": null,
+              "path": "scripts/notify.sh",
+              "present": false
+            }
+          }
+        ],
+        "key": "880bdb2fc6b15c5673a68382297220132b151f73e445f337f3959a0b23e6777c"
+      },
+      "image_id": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+      "mcp": null,
+      "mounts": [
+        ".claude"
+      ],
+      "name": "a mounted .claude with a guard and a tracked Stop script",
+      "settings": [
+        {
+          "source": "mounted_settings",
+          "text": "{\"hooks\": {\"PreToolUse\": [{\"matcher\": \"Bash\", \"hooks\": [{\"type\": \"command\", \"command\": \"python \\\"$CLAUDE_PROJECT_DIR/.claude/hooks/guard.py\\\"\"}]}], \"Stop\": [{\"hooks\": [{\"type\": \"command\", \"command\": \"$CLAUDE_PROJECT_DIR/scripts/notify.sh\"}]}]}}"
+        }
+      ]
+    },
+    {
+      "expect": {
+        "commands": [
+          {
+            "command": "python \"$CLAUDE_PROJECT_DIR/.claude/hooks/guard.py\"",
+            "event": "PreToolUse",
+            "matcher": "Bash",
+            "server": null,
+            "tracked": null
+          },
+          {
+            "command": "$CLAUDE_PROJECT_DIR/scripts/notify.sh",
+            "event": "Stop",
+            "matcher": null,
+            "server": null,
+            "tracked": {
+              "blob": null,
+              "first_line": null,
+              "path": "scripts/notify.sh",
+              "present": false
+            }
+          },
+          {
+            "command": "npx prettier --write .",
+            "event": "PostToolUse",
+            "matcher": "Edit|Write",
+            "server": null,
+            "tracked": null
+          }
+        ],
+        "key": "f23e82629dcbc8c753b78e0bbc85629e7cfd727f8d2afc2420324ed014e758b4"
+      },
+      "image_id": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+      "mcp": null,
+      "mounts": [],
+      "name": "tracked settings, no mount: the hooks come from the base commit",
+      "settings": [
+        {
+          "source": "tracked_settings",
+          "text": "{\"hooks\": {\"PreToolUse\": [{\"matcher\": \"Bash\", \"hooks\": [{\"type\": \"command\", \"command\": \"python \\\"$CLAUDE_PROJECT_DIR/.claude/hooks/guard.py\\\"\"}]}], \"Stop\": [{\"hooks\": [{\"type\": \"command\", \"command\": \"$CLAUDE_PROJECT_DIR/scripts/notify.sh\"}]}]}}"
+        },
+        {
+          "source": "tracked_local",
+          "text": "{\"hooks\": {\"PostToolUse\": [{\"matcher\": \"Edit|Write\", \"hooks\": [{\"type\": \"command\", \"command\": \"npx prettier --write .\"}, {\"type\": \"prompt\", \"prompt\": \"not a command\"}]}]}}"
+        }
+      ]
+    },
+    {
+      "expect": {
+        "commands": [
+          {
+            "command": "uvx mcp-db --readonly",
+            "event": null,
+            "matcher": null,
+            "server": "db",
+            "tracked": null
+          },
+          {
+            "command": "node server.js",
+            "event": null,
+            "matcher": null,
+            "server": "local",
+            "tracked": null
+          }
+        ],
+        "key": "90b3e054b28964298b178be101acb3817296361737c4c3ca09722634f4d7e7da"
+      },
+      "image_id": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+      "mcp": "{\"mcpServers\": {\"db\": {\"command\": \"uvx\", \"args\": [\"mcp-db\", \"--readonly\"]}, \"web\": {\"type\": \"http\", \"url\": \"https://mcp.example.com/\"}, \"local\": {\"type\": \"stdio\", \"command\": \"node\", \"args\": [\"server.js\"]}}}",
+      "mounts": [],
+      "name": "stdio servers only, in .mcp.json",
+      "settings": []
+    },
+    {
+      "expect": {
+        "commands": [],
+        "key": "5d4cc820b37f3d1fd0c6e04ed50a56ead8d497ecfd3c25c749855ed9d852837d"
+      },
+      "image_id": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+      "mcp": null,
+      "mounts": [
+        ".claude"
+      ],
+      "name": "a settings file that does not parse lists nothing",
+      "settings": [
+        {
+          "source": "mounted_local",
+          "text": "{not json"
+        }
+      ]
+    }
+  ],
   "proxy": {
     "allow": [
       "api.anthropic.com",

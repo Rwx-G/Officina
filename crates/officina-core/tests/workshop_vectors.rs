@@ -1,7 +1,8 @@
-//! The workshop's image check (story 6.8 AC 2, AD-99, D-207, D-233): the
-//! `images` section of `tests/vectors/workshop.json` replayed against
-//! `image::check`. The other sections are replayed by the unit tests of the
-//! modules whose builders are crate-private (D-1121).
+//! The workshop's image check (story 6.8 AC 2, AD-99, D-207, D-233) and
+//! the inventory's extraction (story 6.9 AC 1, AD-118, D-211): the
+//! `images` and `inventory` sections of `tests/vectors/workshop.json`
+//! replayed against core. The other sections are replayed by the unit
+//! tests of the modules whose builders are crate-private (D-1121).
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -98,4 +99,136 @@ fn every_mismatch_has_a_case() {
         cases().iter().any(|case| case["expect"]["ok"].is_string()),
         "a passing case"
     );
+}
+
+fn inventory_input(
+    case: &Value,
+) -> (
+    Vec<officina_core::workshop::inventory::SettingsFile>,
+    Option<String>,
+    Vec<String>,
+) {
+    use officina_core::workshop::inventory::{SettingsFile, SettingsSource};
+    let settings = case["settings"]
+        .as_array()
+        .expect("settings")
+        .iter()
+        .map(|file| SettingsFile {
+            source: SettingsSource::from_code(file["source"].as_str().unwrap()).unwrap(),
+            bytes: file["text"].as_str().unwrap().as_bytes().to_vec(),
+        })
+        .collect();
+    let mounts = case["mounts"]
+        .as_array()
+        .expect("mounts")
+        .iter()
+        .filter_map(text)
+        .collect();
+    (settings, text(&case["mcp"]), mounts)
+}
+
+fn extracted(case: &Value) -> Value {
+    use officina_core::workshop::inventory::{extract, inventory_key};
+    let (settings, mcp, mounts) = inventory_input(case);
+    let commands = extract(&settings, mcp.as_deref().map(str::as_bytes), &mounts).unwrap();
+    let key = inventory_key(&commands, case["image_id"].as_str().unwrap());
+    serde_json::json!({ "commands": commands, "key": key })
+}
+
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test's write mode for a reviewed change of the golden file"
+)]
+fn write_inventory(cases: Vec<Value>) {
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../tests/vectors/workshop.json"
+    );
+    let mut all: Value = serde_json::from_str(VECTORS).unwrap();
+    all["inventory"] = Value::Array(cases);
+    std::fs::write(path, serde_json::to_string_pretty(&all).unwrap() + "\n").unwrap();
+}
+
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test's write mode for a reviewed change of the golden file"
+)]
+fn writing() -> bool {
+    std::env::var("OFFICINA_WRITE_VECTORS").is_ok_and(|v| v == "1")
+}
+
+fn inventory_cases() -> Vec<Value> {
+    let all: Value = serde_json::from_str(VECTORS).expect("workshop.json parses");
+    all["inventory"]
+        .as_array()
+        .expect("an inventory section")
+        .clone()
+}
+
+/// Story 6.9 AC 1: each case's commands and key equal what `extract` and
+/// `inventory_key` give; `OFFICINA_WRITE_VECTORS=1` writes them for a
+/// reviewed change.
+#[test]
+fn inventory_extraction_cases_match() {
+    let mut cases = inventory_cases();
+    assert!(!cases.is_empty());
+    if writing() {
+        for case in &mut cases {
+            case["expect"] = extracted(case);
+        }
+        write_inventory(cases);
+        return;
+    }
+    for case in &cases {
+        assert_eq!(extracted(case), case["expect"], "{}", case["name"]);
+    }
+}
+
+#[test]
+fn the_key_changes_with_a_tracked_script() {
+    use officina_core::workshop::inventory::{extract, inventory_key};
+    let case = &inventory_cases()[0];
+    let (settings, mcp, mounts) = inventory_input(case);
+    let mut commands = extract(&settings, mcp.as_deref().map(str::as_bytes), &mounts).unwrap();
+    let image = case["image_id"].as_str().unwrap();
+    let before = inventory_key(&commands, image);
+    let tracked = commands
+        .iter_mut()
+        .find_map(|c| c.tracked.as_mut())
+        .expect("a tracked script in the first case");
+    tracked.present = true;
+    tracked.blob = Some("a".repeat(40));
+    let present = inventory_key(&commands, image);
+    assert_ne!(before, present);
+    commands
+        .iter_mut()
+        .find_map(|c| c.tracked.as_mut())
+        .unwrap()
+        .blob = Some("b".repeat(40));
+    assert_ne!(present, inventory_key(&commands, image), "another blob");
+    assert_ne!(
+        inventory_key(&commands, image),
+        inventory_key(&commands, "sha256:other"),
+        "another image"
+    );
+}
+
+#[test]
+fn tracked_settings_hooks_are_listed() {
+    let case = inventory_cases()
+        .into_iter()
+        .find(|c| {
+            c["settings"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|f| f["source"] == "tracked_settings")
+        })
+        .expect("a case with tracked settings");
+    let commands = extracted(&case)["commands"].as_array().unwrap().clone();
+    assert!(
+        commands.iter().any(|c| c["event"] == "PreToolUse"),
+        "the tracked settings' guard is listed: {commands:?}"
+    );
+    assert!(commands.iter().any(|c| c["event"] == "PostToolUse"));
 }

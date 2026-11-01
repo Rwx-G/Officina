@@ -8,6 +8,7 @@ pub mod engine;
 pub mod floor;
 pub mod gateway;
 pub mod image;
+pub mod inventory;
 pub mod launch;
 pub mod names;
 pub mod proxy;

@@ -37,6 +37,7 @@ fn main() {
         },
         Some("auth-status") => entry::auth_status::auth_status(&layout),
         Some("scan") => entry::scan::scan(&layout),
+        Some("inventory") => entry::inventory::inventory(&layout),
         other => {
             eprintln!(
                 "officina-entry: unknown subcommand {:?}",

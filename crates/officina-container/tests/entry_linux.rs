@@ -1,6 +1,7 @@
 //! `officina-entry` on Linux with real git in a temporary root and a fake
 //! `claude` script (story 6.7 AC 1, 2, 5; AD-108, AD-110, D-606, D-608,
-//! D-609). `/work` lives under the temporary root (`--root`).
+//! D-609) and the inventory (story 6.9 AC 2, AD-118, D-211). `/work`
+//! lives under the temporary root (`--root`).
 #![cfg(target_os = "linux")]
 
 use std::fs;
@@ -557,4 +558,141 @@ fn an_oversized_record_is_refused() {
     drop(child.stdin.take());
     let out = child.wait_with_output().unwrap();
     assert!(String::from_utf8_lossy(&out.stdout).contains("too_large"));
+}
+
+/// A root for `officina-entry inventory` (story 6.9 AC 2): `bin/` holding
+/// the programs on the child's `PATH`, `/work/.officina/mounts/0` the
+/// mounted `.claude`.
+struct InventoryRoot {
+    _dir: tempfile::TempDir,
+    root: PathBuf,
+}
+
+impl InventoryRoot {
+    fn new() -> InventoryRoot {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        fs::create_dir_all(root.join("bin")).unwrap();
+        fs::create_dir_all(root.join("work/.officina/mounts/0/hooks")).unwrap();
+        InventoryRoot { _dir: dir, root }
+    }
+
+    fn program(&self, path: &str, text: &str) {
+        let file = self.root.join(path);
+        fs::create_dir_all(file.parent().unwrap()).unwrap();
+        fs::write(&file, text).unwrap();
+        fs::set_permissions(&file, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    /// The results for `commands`, the project folder `/work/api` with
+    /// `.claude` mounted.
+    fn resolve(&self, commands: &[&str]) -> Vec<serde_json::Value> {
+        let input = serde_json::json!({
+            "schema": 1,
+            "project_dir": "/work/api",
+            "mounts": [".claude"],
+            "commands": commands.iter().map(|c| serde_json::json!({
+                "event": "PreToolUse", "matcher": "Bash", "server": null,
+                "command": c, "tracked": null,
+            })).collect::<Vec<_>>(),
+        });
+        let mut child = Command::new(ENTRY)
+            .args(["inventory", "--root"])
+            .arg(&self.root)
+            .env(
+                "PATH",
+                format!("{}:/usr/bin:/bin", self.root.join("bin").display()),
+            )
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(input.to_string().as_bytes())
+            .unwrap();
+        let out = child.wait_with_output().unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect()
+    }
+}
+
+#[test]
+fn a_python_hook_is_found_when_python_exists() {
+    let root = InventoryRoot::new();
+    root.program("bin/python", "#!/bin/sh\nexit 0\n");
+    let results = root.resolve(&["python \"$CLAUDE_PROJECT_DIR/.claude/hooks/guard.py\""]);
+    assert_eq!(results[0]["resolution"], "found", "{results:?}");
+    assert!(results[0]["path"].as_str().unwrap().ends_with("bin/python"));
+}
+
+#[test]
+fn a_missing_program_is_missing() {
+    let root = InventoryRoot::new();
+    let results = root.resolve(&["officina-no-such-program --check"]);
+    assert_eq!(results[0]["resolution"], "missing");
+    assert_eq!(results[0]["detail"], "not_on_path");
+}
+
+#[test]
+fn an_env_shebang_resolves_its_interpreter() {
+    let root = InventoryRoot::new();
+    root.program(
+        "work/.officina/mounts/0/hooks/guard.sh",
+        "#!/usr/bin/env officina-interp\nexit 0\n",
+    );
+    let command = "$CLAUDE_PROJECT_DIR/.claude/hooks/guard.sh";
+    let absent = root.resolve(&[command]);
+    assert_eq!(absent[0]["resolution"], "missing");
+    assert_eq!(absent[0]["detail"], "interpreter");
+    root.program("bin/officina-interp", "#!/bin/sh\nexit 0\n");
+    assert_eq!(root.resolve(&[command])[0]["resolution"], "found");
+}
+
+#[test]
+fn a_crlf_shebang_is_missing() {
+    let root = InventoryRoot::new();
+    root.program(
+        "work/.officina/mounts/0/hooks/guard.sh",
+        "#!/bin/sh\r\nexit 0\r\n",
+    );
+    let results = root.resolve(&["$CLAUDE_PROJECT_DIR/.claude/hooks/guard.sh"]);
+    assert_eq!(results[0]["resolution"], "missing");
+    assert_eq!(results[0]["detail"], "crlf_shebang");
+}
+
+#[test]
+fn a_variable_other_than_the_project_dir_is_dynamic() {
+    let root = InventoryRoot::new();
+    let results = root.resolve(&["$HOME/guard.sh", "\"$GUARD\" --strict"]);
+    assert_eq!(results[0]["resolution"], "dynamic");
+    assert_eq!(results[1]["resolution"], "dynamic");
+}
+
+#[test]
+fn a_mounted_script_resolves_through_its_link() {
+    let root = InventoryRoot::new();
+    root.program(
+        "work/.officina/mounts/0/hooks/run.sh",
+        "#!/bin/sh\nexit 0\n",
+    );
+    let results = root.resolve(&["\"${CLAUDE_PROJECT_DIR}/.claude/hooks/run.sh\" --fast"]);
+    assert_eq!(results[0]["resolution"], "found", "{results:?}");
+    let link = root.root.join("work/api/.claude");
+    assert!(
+        fs::symlink_metadata(&link)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
 }
