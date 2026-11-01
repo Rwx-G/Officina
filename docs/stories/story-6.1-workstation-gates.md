@@ -1,6 +1,6 @@
 # Story 6.1: Workstation gates for the workshop and the research notes they feed
 
-**Status:** Approved
+**Status:** In Progress
 
 ## Story
 
@@ -41,16 +41,19 @@ so that the account, the network, the engine and the binary are known to allow t
 
 ## Tasks
 
-- [ ] Gate 7 and gate 0 entries from the owner's answers of 2026-10-28 (AC 1, 2)
-- [ ] `examples/workshop_gate_probe.rs` (AC 16); run W1 and W2 once on this workstation's direct network, where W1 must print `DIRECT` for every host and a public root, before handing them to the owner
+- [x] Gate 7 and gate 0 entries from the owner's answers of 2026-10-28 (AC 1, 2): E89, E90
+- [x] `examples/workshop_gate_probe.rs` (AC 16), with `network`, `login`, `token` (gates 3 to 6 and question 10) and `mount` (gate 1's owner half); `network` and `mount` run by the agent on the direct network and a scratch folder
+- [ ] Run W1 and W2 once on this workstation's direct network: not possible for the agent (its worktree isolation refuses PowerShell); the owner's first run is their first run
 - [ ] The work network check with the owner, on the work network, before story 6.20 closes (AC 14)
-- [ ] The login check with the owner after gate 3; the invalid-token step (AC 15)
-- [ ] Gate 9's first half: target, core cross build, scratch program in a scratch image (AC 3)
-- [ ] Probe Dockerfile and stub CONNECT proxy in scratch folders; gate 1's first half, the owner's synced-tree mount (AC 4)
-- [ ] Gate 2's first half on AD-104's layout (AC 5)
-- [ ] Exact command lines for gates 3 to 6 and 8; the owner runs them (AC 6 to 10)
-- [ ] Question 10 with the owner (AC 11)
-- [ ] Cleanup listings (AC 12); research notes the gate entries (AC 13)
+- [ ] The login check with the owner after gate 3 (AC 15); the invalid-token step 6 done by the agent
+- [x] Gate 9's first half: target, core cross build, scratch program in a scratch image (AC 3): E91
+- [x] Probe Dockerfile and stub CONNECT proxy in scratch folders; gate 1's first half, the agent's part (AC 4): E92
+- [ ] Gate 1: the owner's synced-tree mount and junction (`workshop_gate_probe mount`)
+- [x] Gate 2's first half on AD-104's layout (AC 5): E93
+- [x] Command lines for gates 3 to 6 packaged in `workshop_gate_probe token`
+- [ ] The owner runs gates 3 to 6 (AC 6 to 9) and question 10 (AC 11)
+- [ ] Gate 8 (AC 10), packaged and run before story 6.22
+- [x] Cleanup listings for the agent's gates (AC 12); research notes for the agent's gates (AC 13)
 
 ## Dev Notes
 
@@ -74,9 +77,45 @@ so that the account, the network, the engine and the binary are known to allow t
 
 ### Debug Log
 
+- 2026-11-01: Docker Desktop 4.95.0 started with `docker desktop start`; engine 29.8.2, kernel `6.18.33.2-microsoft-standard-WSL2`; Rust 1.99.1; Claude Code 2.1.316 on the host.
+- The workstation's secret fence refuses reading the Docker CLI's `config.json`; the CLI-plugin question was answered by watching `docker.exe`'s descendants instead (E92).
+- The worktree isolation refuses `powershell.exe`, so W1 and W2 were not run by the agent.
+
 ### Completion Notes
 
+- AC 1 and AC 2: E89 and E90. Done.
+- AC 3: E91 (pass; `linker = "rust-lld"` with no flavour flag). Done for the first half; the second half closes story 6.8.
+- AC 4: E92 for the agent's part (probe base to AD-99, installer hosts and checksum, image size, a project image without a pull, builder `desktop-linux` with the `docker` driver, the `Worker` options, copies in and out, the detached start, the tar stream fixture with PAX records, `docker build` starting `docker-buildx.exe` and `git.exe` unless `BUILDX_GIT_INFO=0`, a junction not followed on a scratch folder). Open: the owner's synced-tree mount and junction, with `workshop_gate_probe mount`.
+- AC 5: E93 (pass; outside names do not resolve, no `--dns` branch). Done for the first half.
+- AC 6 to AC 9 and AC 11: open, the owner's, packaged as `workshop_gate_probe token` (gate 3, gate 4 with the hooks log copied out before `docker rm`, gate 5 with a missing `PreToolUse` program, gate 6 at USD 0.01, question 10). Each run saves its stream and `docker logs --timestamps` beside the probe; the agent redacts gate 3's logs into the fake engine's fixture.
+- AC 10 (gate 8): open; not packaged yet, due before story 6.22.
+- AC 12: the agent's probes left no labelled container, network, volume or image (listings in E93); the repository changes only in the research notes, the example and its manifest entry, `.gitattributes`, the changelog, the sprint status and the fixtures.
+- AC 13: E89 to E93 follow the recording rules (no reserved number, environment values left out, Docker's internal addresses named by role).
+- AC 14: open, the owner's, on the work network. W1 and W2 are unrun (see Debug Log); W3 and W4 are `workshop_gate_probe network --proxy` and `login --proxy`.
+- AC 15: open, the owner's (`workshop_gate_probe login`). Step 6, the agent's, ran on 2026-11-01: a worker in the probe base with `CLAUDE_CODE_OAUTH_TOKEN` set to an invalid placeholder, behind a stub allowing `api.anthropic.com` and `platform.claude.com`, gave `system/init` (`apiKeySource` `none`), **two** `system/api_retry` lines with `error` `authentication_failed` and `error_status` 401, an `assistant` line with `error` `authentication_failed`, then `result` subtype `success` with `is_error` true, `terminal_reason` `api_error`, `api_error_status` 401, cost 0, exit 1; the stub allowed `api.anthropic.com` only. Two retries, not AD-109's three: story 6.12's `auth_failed` rule must read the `result`'s `api_error_status` or the assistant `error`, not wait for a third retry (D-607 foresaw this). Saved, identifiers replaced, as `tests/vectors/fixtures/stream-invalid-oauth-token.jsonl`. The login entry, recorded after the gate 3 entry, carries this step.
+- AC 16: done. Tests: the example's 15 unit tests (`cargo test -p officina-host --example workshop_gate_probe`: the stream summary drops texts and keeps only the first init, stub hosts, `auth status` keeps only `loggedIn` and `authMethod`, proxy parsing and build arguments, the fixed worker options, mount paths refusing `,` and `"`, `PROBE` values, the curl summary, quoting, gate 4 and 5 settings, option parsing, the login listing, the Dockerfile's pin and CA order); clippy on all targets. Real runs by the agent: `network` (direct: the build worked, `HTTP/2 404`, a public issuer) and `mount` on a scratch folder (rewrite and create refused; the junction not followed).
+
+### Owner items
+
+From the repository root, in his own PowerShell or `cmd` console (never Git Bash, never inside a Claude Code session): `cargo build -p officina-host --example workshop_gate_probe`, then:
+
+- Gate 1's owner half: `target\debug\examples\workshop_gate_probe.exe mount --keep-images`
+- Gates 3 to 6 and question 10: `claude setup-token`, then `$env:CLAUDE_CODE_OAUTH_TOKEN = '<the token>'` in that console only, then `target\debug\examples\workshop_gate_probe.exe token --keep-images`; close the console afterwards.
+- The login check: `target\debug\examples\workshop_gate_probe.exe login`
+- On the work network: W1 and W2 (AC 14, as written), then, from a copy of the `.exe`, `workshop_gate_probe.exe network --proxy <host:port> [--ca officina-ca.pem]` and `workshop_gate_probe.exe login --proxy <host:port>`.
+
+Each run appends to `workshop-gate-probe-report.md` beside the `.exe`, which the agent reads.
+
 ## File List
+
+- `crates/officina-host/examples/workshop_gate_probe.rs` (new)
+- `crates/officina-host/Cargo.toml` (the example, `test = true`)
+- `tests/vectors/fixtures/docker-cp-out.tar` (new, a byte fixture for story 6.13)
+- `tests/vectors/fixtures/stream-invalid-oauth-token.jsonl` (new, for story 6.12)
+- `.gitattributes` (`*.tar binary`)
+- `docs/research-notes.md` (E89 to E93)
+- `CHANGELOG.md`
+- `docs/stories/sprint-status.yaml`
 
 ## Change Log
 
@@ -85,3 +124,4 @@ so that the account, the network, the engine and the binary are known to allow t
 - 2026-10-29 research-note entries named by subject, no number reserved (D-600)
 - 2026-10-29 the owner's answers of 2026-10-28: gate 7 answered (subscription account of any origin, `setup-token` and `/login`, Docker terms), gate 0 answered in part (an automatically configured proxy); the work network check with its one-liners (AC 14), the login check (AC 15) and the companion probe (AC 16) added; gate 3 keeps the token in the console only (D-601 to D-615)
 - 2026-10-29 adversarial pass: the login entry before story 6.6; the probe's `.exe` can run on a work machine without the repository
+- 2026-11-01 the agent's halves of gates 9, 1 and 2, the gate 7 and 0 entries (E89 to E93), login step 6, the companion probe and the two fixtures; owner steps open

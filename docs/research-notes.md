@@ -1281,6 +1281,201 @@ Workstation paths and ids are left out.
   core-issued card started the session, the row bound within seconds, and
   `printed` names it. Story 5.7 AC 11 closes (D-1003).
 
+## E89. Terms and account (v0.6 gate 7)
+
+Story 6.1 AC 1; `epic-6-decisions.md` D-601, D-602, D-603, D-615.
+**Stated by the owner** on 2026-10-28, recorded on 2026-11-01. Not
+verified on the workstation: it is a statement of terms and intent.
+
+- **The account.** Workers use a Claude subscription account (Pro or Max
+  style, not the API), whatever its origin: the owner's personal account,
+  his professional account, or one the company provides. Every origin must
+  work, so no code reads, stores or branches on the plan or the origin.
+  No API key path is required; `api-key` stays an optional kind, never the
+  default.
+- **The credential.** `claude setup-token` is acceptable and the
+  recommended path for unattended workers; `/login`, the owner's method
+  today (about a month per login), must be supported too (D-603).
+- **Docker Desktop's terms.** The company has 65 employees (the owner's
+  answer) and its annual revenue is assumed under USD 10 million, for the
+  owner to correct; Docker's Desktop license page makes Docker Desktop free
+  under 250 employees and USD 10 million. No licence blocker.
+- **Outcome against AD-126 row 7.** Pass on the owner's statement. Whether
+  a subscription credential works in a worker is the gate 3 entry's and the
+  login entry's to show; P-52's stop applies only if both fail and no API
+  key is available (D-601).
+
+## E90. The work network (v0.6 gate 0)
+
+Story 6.1 AC 2; D-611, D-613, D-615. Recorded on 2026-11-01.
+
+- **Stated by the owner** (2026-10-28): the work network has an HTTPS
+  proxy configured automatically, a PAC file likely. Officina supports it
+  as a standing assumption: `upstream_proxy = "system"` by default,
+  resolved from Windows' settings, and a corporate root from `ca_file`.
+- **Verified, this workstation's network** (addendum section 1 item 4,
+  2026-10-28, repeated on 2026-11-01 with the companion probe's `network`
+  subcommand): direct, no proxy variable, Windows `ProxyEnable` 0, no
+  `ProxyServer` or `AutoConfigURL`; as uid 1000, `curl -v
+  https://api.anthropic.com` from the probe base answered `HTTP/2 404` with
+  the public chain (issuer Google Trust Services).
+- **The work network's own procedure** is the work network entry (story
+  6.1 AC 14: W1 to W4), due before story 6.20 closes Slice A. W1 and W2
+  were not run by the agent: its worktree isolation refuses PowerShell, so
+  the owner's first run of W1 is also the one-liner's first run.
+- **Outcome against AD-126 row 0.** Recorded; with E89 it opens Slice A
+  (D-613). No code changes either way (D-203).
+
+## E91. The musl build (v0.6 gate 9, first half)
+
+Story 6.1 AC 3; AD-100, D-202. **Verified** by the agent on 2026-11-01:
+Windows 11 Pro 10.0.26200, Rust 1.99.1 (the pinned toolchain), Docker
+Desktop 4.95.0 (242831), engine 29.8.2, kernel
+`6.18.33.2-microsoft-standard-WSL2`.
+
+- `rustup target add x86_64-unknown-linux-musl` installed the target
+  locally (the repository's `rust-toolchain.toml` changes in story 6.5).
+- `cargo build --release -p officina-core --target x86_64-unknown-linux-musl`
+  with `CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER=rust-lld`: built.
+- A scratch std-only program outside the repository (resolve a name, open
+  a CONNECT tunnel) built the same way into a 468 KiB static ELF. **No
+  linker flavour flag was needed**: with the linker named `rust-lld`, rustc
+  picks the `ld.lld` flavour for the Linux target itself, so
+  `.cargo/config.toml` needs only `linker = "rust-lld"`.
+- Copied into a `FROM scratch` probe image, run as uid 65534 with
+  `--read-only --cap-drop ALL --security-opt no-new-privileges:true` on a
+  probe `--internal` network beside a stub CONNECT proxy attached to that
+  network and to a probe bridge: it resolved the stub's name through the
+  engine's mounted resolver file, an outside name did not resolve
+  ("Try again"), the CONNECT to the allowed host answered `200 Connection
+  established` and the stub logged `ALLOWED`; an off-list host answered
+  `403` and the stub logged `REFUSED`.
+- **Outcome against AD-126 row 9 (first half).** Pass; AD-100's fallback is
+  not needed. The second half (the real `officina-gateway:local`) closes
+  story 6.8.
+
+## E92. Images, options, mounts, copies (v0.6 gate 1, first half)
+
+Story 6.1 AC 4; AD-99, AD-102, D-202, D-203. **Verified** by the agent on
+2026-11-01, same versions as E91, Claude Code 2.1.316 on the host. The
+owner's half (a git-ignored folder of one of his projects in the synced
+tree, and the junction question there) is open; it runs with
+`workshop_gate_probe mount`.
+
+- **The probe base**, drafted to AD-99 in a scratch folder:
+  `debian:trixie-slim` by index digest, the packages sorted with
+  `--no-install-recommends`, an empty `ca/` folder copied and
+  `update-ca-certificates` run before any HTTPS download, uv 0.13.6 checked
+  with `sha256sum -c` against the release's published checksum, the
+  documented installer (`install.sh <version>`) in a build stage, user
+  `worker` uid 1000, setuid and setgid bits removed. Built with
+  `HTTPS_PROXY` and `https_proxy` build arguments naming a logging stub
+  that allowed every host: 853 MB.
+- **The installer's hosts**: `claude.ai` (the script), then
+  `downloads.claude.ai` only (the `latest` pointer, `manifest.json`, the
+  bootstrap binary, then the pinned version's download by `claude
+  install <version>`). The build stage's `claude` also opened one
+  connection to `api.anthropic.com` after installing (builds use the
+  engine's default network, so this changes nothing; a real build stage can
+  set `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`). uv's download went to
+  `github.com` and `release-assets.githubusercontent.com`. The Debian
+  packages came over Debian's HTTP mirror, outside `HTTPS_PROXY`.
+- **The installer's checksum.** `install.sh` checks the bootstrap binary's
+  SHA-256 against `manifest.json` from the same host over TLS and stops on
+  a mismatch; the installed `/opt/officina/bin/claude` hashed equal to the
+  `linux-x64` checksum of the 2.1.316 release manifest. A version can be
+  pinned (`install.sh 2.1.316` installed 2.1.316). AD-99's release-manifest
+  path is not needed (D-203).
+- **The image.** As uid 1000: `/work/.officina/{in,out,home,config,mounts}`
+  owned by `worker`; no setuid or setgid file; `claude` root-owned 0755;
+  `claude --help` lists `--permission-prompts`; image `ENV` names `PATH`,
+  `SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`, `NODE_EXTRA_CA_CERTS`,
+  `UV_NATIVE_TLS` (plus `HOME` and `HOSTNAME` from the engine).
+- **A project image** `FROM` the probe base with the default builder: no
+  pull (the builder resolved the local image), and the inherited
+  `officina.base` label was present on the result.
+- **The builder.** `docker buildx ls`: the current builder is
+  `desktop-linux`, driver `docker`, so builds see local images; story 6.8
+  passes `--builder` naming the engine's `docker`-driver builder (D-203).
+- **AD-102's `Worker` options by hand** (`--user 1000:1000 --read-only
+  --cap-drop ALL --security-opt no-new-privileges:true --init --stop-timeout
+  3 --pids-limit 1024 --memory 2g --memory-swap 2g --cpus 2 --log-driver
+  local --log-opt max-size=32m --log-opt max-file=3`, a named volume at
+  `/work`, a tmpfs `/tmp`) were accepted and read back by `inspect`. `docker
+  cp` of a folder into the created container's volume arrived owned by
+  uid 0, mode 0755, readable by uid 1000; writes to `/`, `/usr`,
+  `/opt/officina/bin` and `/etc` failed with "Read-only file system", `/tmp`
+  took them; `docker start` returned at once and the container kept running
+  after the CLI exited; `docker cp` out of the stopped container returned
+  every file, the accented name intact.
+- **The tar stream** (D-218, review F16): `docker cp <container>:/work/.officina/out -`
+  from a probe container whose `out` held a file with a 125-byte name, an
+  accented name and `tip` is saved as `tests/vectors/fixtures/docker-cp-out.tar`.
+  It is ustar with **PAX `x` records** before the long and the non-ASCII
+  names (the ustar name field then holds a cut or ASCII-stripped name and
+  the PAX `path` the real one); the directory entry comes first; uid 1000,
+  modes 0755 and 0644. Story 6.13's `workshop::tar` must honour `path` from
+  `x` records.
+- **CLI plugins** (review F40), by watching every descendant of
+  `docker.exe`: `docker create` and `docker run` started no child.
+  **`docker build` started `docker-buildx.exe` and `git.exe`** (buildx reads
+  the build context's git state for provenance); with `BUILDX_GIT_INFO=0`
+  in the environment `git.exe` no longer started. Story 6.8's build
+  environment sets it, since a project's own context is a git work tree.
+  The Docker CLI's `config.json` was not read: the workstation's secret
+  fence refuses it, so the `proxies`, hooks and plugin-directory entries
+  stay doctor's to name (D-228).
+- **Junctions** (D-236), on a scratch folder of the agent's, not in the
+  synced tree: a junction inside a read-only mounted folder, pointing at a
+  folder outside it, appeared in the container as an entry that does not
+  resolve ("No such file or directory"): not followed. The owner's run in
+  the synced tree decides D-236's branch.
+- **Outcome against AD-126 row 1 (first half).** Pass for the agent's part:
+  no copy fallback, no `--build-context`, no release-manifest path. The
+  synced-tree mount is the owner's (open). The second half (the real images
+  and the real `Worker` vector) closes story 6.8.
+
+## E93. No route out (v0.6 gate 2, first half)
+
+Story 6.1 AC 5; AD-104, D-202, D-203. **Verified** by the agent on
+2026-11-01, same versions as E91. Layout: a probe `--internal` network, a
+probe bridge, a stub CONNECT proxy attached to both allowing
+`api.anthropic.com` alone, a probe worker (uid 1000, AD-102's fixed
+options) on the internal network only, `HTTPS_PROXY` naming the stub. 28
+attempts, a Python script in the probe:
+
+| Attempt | Outcome |
+|---|---|
+| TCP to three public IPv4 addresses on 443 | "Network is unreachable" |
+| an IPv6 socket to a public address | "Network is unreachable" |
+| UDP DNS to a public resolver | "Network is unreachable" |
+| resolving `example.org`, `api.anthropic.com`, `host.docker.internal`, `gateway.docker.internal`, `http.docker.internal` | "Temporary failure in name resolution" |
+| an ICMP datagram socket | "Network is unreachable" |
+| Docker Desktop's host address (what `host.docker.internal` resolves to on a plain bridge) on 22, 80, 2375, 2376 | "Network is unreachable" |
+| the internal network's own gateway address on 22, 80, 2375, 2376 | "Connection refused" |
+| the stub's ports 22, 80, 3129, 8080 | "Connection refused" |
+| a second probe run's container on its own internal network | "Network is unreachable" |
+| engine socket paths, `/mnt/wsl`, `/mnt/host` | absent |
+
+- **The allowed host through `HTTPS_PROXY`**: from the probe base, `curl
+  https://api.anthropic.com/` through the stub answered 404 with the
+  certificate verified; `example.org` through it got the stub's 403.
+- **One nuance for the battery** (AD-117's host family): the internal
+  network's gateway address answers at layer 3 ("Connection refused", not
+  "unreachable"): the engine VM holds that address on the bridge even for an
+  internal network, and nothing listened on the four ports. The battery's
+  attempts on "the battery networks' gateways" are therefore judged on the
+  connection, not on reachability.
+- **Outcome against AD-126 row 2 (first half).** Pass: every attempt failed
+  and the allowed host was reached through the proxy. Outside names do not
+  resolve, so the `--dns 0.0.0.0` branch is not taken (D-203). The second
+  half (the real battery on Docker Desktop) closes story 6.10; the CONNECT
+  through the work network's proxy closes story 6.25.
+- **Cleanup** (gates 9, 1 and 2): every probe container, network, volume
+  and image carried `officina-probe=1`; after removal, the four label
+  listings were empty. The pinned Debian base pulled by digest stays in the
+  engine's store as a build cache layer, as D-201 allows.
+
 ## E7. Configuration directory
 
 - **Documented.** `CLAUDE_CONFIG_DIR` redirects settings, session history and

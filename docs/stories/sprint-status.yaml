@@ -185,7 +185,8 @@ version: v0.6
 # 6.2 bumps the catalogue format once, with the relay-section hash (P-53, D-244); 6.4 writes the workshop migration whole, the next one relative to main (P-53, D-212).
 # 6.24 closes the PRD after real use and records the use entry (owner rule, epic-2-decisions.md P-7, epic-6-decisions.md P-52).
 stories:
-  - {id: "6.1", file: story-6.1-workstation-gates.md, slice: "0", status: approved}
+  # 6.1: gates 7 and 0 (E89, E90) and the agent's halves of gates 9, 1 and 2 (E91 to E93) recorded, login step 6 measured; the owner's steps (gate 1 mount, gates 3 to 6, the login check, question 10, the work network W1 to W4) packaged in workshop_gate_probe; gate 8 before 6.22.
+  - {id: "6.1", file: story-6.1-workstation-gates.md, slice: "0", status: in-progress}
   - {id: "6.2", file: story-6.2-floor-keys-and-catalogue-format.md, slice: A, status: approved}
   - {id: "6.3", file: story-6.3-engine-driver-and-host-git.md, slice: A, status: approved}
   - {id: "6.4", file: story-6.4-migration-3-and-workshop-records.md, slice: A, status: approved}

@@ -15,6 +15,17 @@ project uses [Semantic Versioning](https://semver.org/).
   tree. Merging and removing the worktree stays yours until v0.7's merged
   detection.
 
+- The isolated workshop's workstation gates (v0.6, story 6.1): the gate 7, 0, 9, 1
+  and 2 entries of the research notes (E89 to E93), a saved `docker cp`
+  tar stream and an invalid-token stream as fixtures, and
+  `workshop_gate_probe`, the owner's companion for the steps only he can run
+  (the work network's W3, the login check, gates 1, 3 to 6 and question 10):
+  each step prints its `docker` command, labels every object
+  `officina-probe=1`, asks what he saw where only he can see it, appends to
+  `workshop-gate-probe-report.md` beside it, and removes its objects at the
+  end. It never prints a token and passes one to the worker's `docker` by
+  name only.
+
 - A project's own permission mode for work orders, or Officina's default
   (story 5.24): a work order runs in the permission mode its project's
   settings set, else your default, as gate 4 found it does, and one that
