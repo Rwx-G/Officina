@@ -27,6 +27,7 @@ use officina_core::registry::confirm::{ConfirmItem, ItemAnswer, SubjectOrigin};
 use officina_core::registry::types::Settlement;
 use officina_core::registry::view::{DiscardedSession, RegistryView};
 use officina_core::relay::view::RelayView;
+use officina_core::workshop::image::BuildAnswer;
 use ts_rs::{Config, TS};
 
 fn committed_dir() -> PathBuf {
@@ -71,6 +72,7 @@ fn export(dir: &Path) {
     MeetingView::export_all(&cfg).unwrap();
     AnswerResult::export_all(&cfg).unwrap();
     ProposalInvalidReason::export_all(&cfg).unwrap();
+    BuildAnswer::export_all(&cfg).unwrap();
 }
 
 #[test]

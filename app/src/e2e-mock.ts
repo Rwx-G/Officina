@@ -5,6 +5,7 @@ import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 import { emit } from "@tauri-apps/api/event";
 import type { AutoMode } from "./lib/generated/AutoMode";
 import type { Board } from "./lib/generated/Board";
+import type { BuildAnswer } from "./lib/generated/BuildAnswer";
 import type { CardAnswer } from "./lib/generated/CardAnswer";
 import type { ConfirmItem } from "./lib/generated/ConfirmItem";
 import type { IpcError } from "./lib/generated/IpcError";
@@ -102,6 +103,8 @@ export function installE2eMock(): void {
           return startOrchestrator();
         case "open_meeting":
           return meetingOf((args as { key: string }).key);
+        case "build_images":
+          return buildImages();
         case "send_answer":
           return answer((args as { proposalId?: string }).proposalId ?? null);
         default:
@@ -230,6 +233,12 @@ function launch(): Promise<LaunchAnswer> {
   return new Promise((resolve) => {
     window.__officinaReleaseLaunch = () => resolve(answer());
   });
+}
+
+/** Mirrors the answer to `build_images` (AD-99): the answer the test
+ *  sets in `__officinaBuildAnswer`, else `queued`. */
+function buildImages(): Promise<BuildAnswer> {
+  return Promise.resolve(window.__officinaBuildAnswer ?? { outcome: "queued" });
 }
 
 /** Mirrors the answer to `start_orchestrator` (AD-89): the answer the

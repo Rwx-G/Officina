@@ -28,6 +28,7 @@ use officina_core::registry::types::{AuthorReason, Settlement};
 use officina_core::registry::view::{DiscardedSession, RegistryView, SubjectView};
 use officina_core::relay::auto::AutoMode;
 use officina_core::relay::view::RelayView;
+use officina_core::workshop::image::BuildAnswer;
 use officina_host::collector::Collector;
 use officina_host::files::now_ms;
 use officina_host::focus::{
@@ -40,6 +41,7 @@ use officina_host::relay::authority::{self, AuthorityError};
 use officina_host::relay::home::RelayHome;
 use officina_host::spawn::BaseEnv;
 use officina_host::watch::{AUTHOR_WAIT, AuthorAnswer, AuthorCommand, CollectorMsg, Emit, spawn};
+use officina_host::workshop::build::BuildContext;
 use officina_host::workshop::threads::WorkshopThreads;
 use tauri::{AppHandle, Emitter, Manager, RunEvent, State, WindowEvent};
 
@@ -79,11 +81,9 @@ struct AppState {
     exe_dir: Option<PathBuf>,
     /// Threads `workshop` and `workshop-build` (AD-98): the collector never
     /// runs `docker`, so every engine job runs on them.
-    #[expect(
-        dead_code,
-        reason = "held so both threads live as long as the window; the workshop's commands submit to them from story 6.8 on"
-    )]
     workshop: WorkshopThreads,
+    /// Set while Build images runs on thread `workshop-build` (AD-99).
+    build_busy: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl AppState {
@@ -518,6 +518,31 @@ async fn start_orchestrator(state: State<'_, AppState>) -> Result<StartAnswer, I
     .map_err(|e| IpcError::internal(e.to_string()))?
 }
 
+/// Build images (AD-99, AD-100): a pointer click in the window (D-28,
+/// story 6.20's button). The collector grants it; thread `workshop-build`
+/// checks the engine and the files, then builds; the answer says whether
+/// the builds were queued or why not.
+#[tauri::command]
+async fn build_images(state: State<'_, AppState>) -> Result<BuildAnswer, IpcError> {
+    let sender = state
+        .collector()
+        .ok_or_else(|| IpcError::internal("the collector is not running"))?;
+    let thread = state.workshop.build.clone();
+    let context = BuildContext {
+        exe_dir: state.exe_dir.clone(),
+        linux_override: std::env::var_os(officina_host::workshop::ENV_LINUX_BIN_DIR),
+        docker: officina_host::workshop::engine::resolve(),
+        reader: Arc::new(officina_host::workshop::proxy::RegistryReader),
+        busy: Arc::clone(&state.build_busy),
+        now_ms,
+    };
+    tauri::async_runtime::spawn_blocking(move || {
+        officina_host::workshop::build::build_images(&sender, &thread, context, Box::new(|| {}))
+    })
+    .await
+    .map_err(|e| IpcError::internal(e.to_string()))?
+}
+
 /// The meeting of `key` (AD-84, D-138): a card key, `sid:<session id>`
 /// or `subject:<id>`. The collector answers what it holds; the event
 /// lines, the journal, `git` and `claude logs` are read on this command's
@@ -733,6 +758,7 @@ fn main() {
                 base_env,
                 exe_dir,
                 workshop,
+                build_busy: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             });
             Ok(())
         })
@@ -797,7 +823,8 @@ fn main() {
             mark_briefing_read,
             start_orchestrator,
             open_meeting,
-            send_answer
+            send_answer,
+            build_images
         ])
         .build(tauri::generate_context!())
         .expect("failed to build the Officina window")

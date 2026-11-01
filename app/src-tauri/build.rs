@@ -40,6 +40,7 @@ const COMMANDS: &[&str] = &[
     "start_orchestrator",
     "open_meeting",
     "send_answer",
+    "build_images",
 ];
 
 fn main() {

@@ -6,6 +6,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { AuthorReason } from "./generated/AuthorReason";
 import type { AutoMode } from "./generated/AutoMode";
 import type { Board } from "./generated/Board";
+import type { BuildAnswer } from "./generated/BuildAnswer";
 import type { CardAnswer } from "./generated/CardAnswer";
 import type { CardChange } from "./generated/CardChange";
 import type { CardRequest } from "./generated/CardRequest";
@@ -242,6 +243,13 @@ export function markBriefingRead(): Promise<void> {
  *  live one forward (AD-89): how the Start was answered. */
 export function startOrchestrator(): Promise<StartAnswer> {
   return invoke<StartAnswer>("start_orchestrator");
+}
+
+/** Build images (AD-99): the gateway, the base and the project images,
+ *  on a pointer click only (D-28); whether the builds were queued or why
+ *  not. Each image's outcome reaches the workshop view as it ends. */
+export function buildImages(): Promise<BuildAnswer> {
+  return invoke<BuildAnswer>("build_images");
 }
 
 /** The meeting of `key` (AD-84, D-138): a card key, `sid:<session id>`
