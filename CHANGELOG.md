@@ -8,6 +8,13 @@ project uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- The workshop's routes through a proxy (v0.6, story 6.25): each allowed
+  host's route (direct, or through a proxy) decided in core from
+  `upstream_proxy` and Windows' proxy settings, refusing a SOCKS or HTTPS
+  answer and a PAC file it cannot read; doctor prints the setting, its
+  source and each route. Windows' settings are read from the registry
+  until the WinHTTP reader that evaluates PAC files is approved.
+
 - The workshop's entry point and packer (v0.6, story 6.7): `officina-entry
   run` clones the base, links the mounts as ignored folders, copies the
   login for a `login` floor and runs Claude Code under the run's deadline

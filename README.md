@@ -857,6 +857,40 @@ max_usd = 3.0                        # optional, two decimals at most
 - `ca_file` is a PEM file of certificates only, for a network that
   inspects TLS; it is baked into the workshop's images.
 
+### Proxies and a corporate root
+
+`upstream_proxy` says how each run's gateway reaches the outside, decided
+per allowed host when a run is issued and again at its launch:
+
+- `"system"` (the default) follows Windows' proxy settings for your user:
+  a PAC file, automatic detection, or a static proxy with its bypass list.
+  A PAC file is asked about `https://<host>/` for each allowed host; a
+  `*.` entry is asked about its suffix, an approximation. An answer naming
+  a SOCKS or HTTPS proxy refuses the launch, as does a PAC file that cannot
+  be read. This build reads Windows' settings from the registry and cannot
+  yet evaluate a PAC file or automatic detection: a PAC file refuses
+  launches, automatic detection is taken as finding none, and doctor says
+  so. Evaluating them needs one more Windows API feature, which waits for
+  approval.
+- `"none"` connects directly; `"host:port"` sends every host through that
+  proxy.
+
+The worker never sees your proxy: it reaches only its gateway, which
+connects through the proxy for it. A proxy that asks for credentials is not
+supported. `officina doctor` prints the setting, where it was resolved from
+and each host's route.
+
+When your network inspects TLS, export the root of the chain you see for
+`api.anthropic.com` once, from PowerShell, and name the file in `ca_file`:
+
+```powershell
+[Net.ServicePointManager]::SecurityProtocol='Tls12'; $w=[Net.HttpWebRequest]::Create('https://api.anthropic.com/'); $w.UseDefaultCredentials=$false; try { $w.GetResponse().Close() } catch {}; $c=New-Object Security.Cryptography.X509Certificates.X509Certificate2 $w.ServicePoint.Certificate; $ch=New-Object Security.Cryptography.X509Certificates.X509Chain; [void]$ch.Build($c); $r=$ch.ChainElements[$ch.ChainElements.Count-1].Certificate; @('-----BEGIN CERTIFICATE-----',[Convert]::ToBase64String($r.RawData,'InsertLineBreaks'),'-----END CERTIFICATE-----') | Set-Content -Encoding ascii officina-ca.pem; "exported: $($r.Subject)"
+```
+
+The root is baked into the workshop's images, so changing it rebuilds them;
+the images are per engine, so two floors with different roots on one
+machine rebuild each other's.
+
 ### What a worker holds
 
 A worker is a container of your engine, built by Officina's code from

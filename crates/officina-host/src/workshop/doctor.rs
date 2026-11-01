@@ -20,6 +20,11 @@ use crate::workshop::engine::{
     read_engine_state, resolve_binary,
 };
 use crate::workshop::git::ENV_GIT_BIN;
+use crate::workshop::proxy::{ProxyError, RegistryReader, SystemProxyReader, resolve};
+use officina_core::workshop::floor::UpstreamProxy;
+use officina_core::workshop::gateway::CLAUDE_CODE_HOSTS;
+use officina_core::workshop::proxy::{Route, Routes};
+use std::sync::Arc;
 
 /// The variables doctor names when set (D-228): those that choose the
 /// engine, the CLI's configuration, or Officina's own binaries.
@@ -50,6 +55,118 @@ pub struct WorkshopFacts {
     /// The workshop's folder when the Officina home lies in a sync
     /// client's folder (AD-39's test).
     pub synced_home: Option<PathBuf>,
+    /// The routes on this network, when the floor's workshop is valid.
+    pub proxy: Option<ProxyFacts>,
+}
+
+/// What doctor needs of the floor to resolve the routes (D-611).
+#[derive(Debug, Clone)]
+pub struct ProxyInput {
+    pub setting: UpstreamProxy,
+    /// Every entry any workshop project's worker may reach.
+    pub allow: Vec<String>,
+    pub ca_file: bool,
+}
+
+/// The routes doctor resolved, and what it knows of the resolution.
+#[derive(Debug, Clone)]
+pub struct ProxyFacts {
+    pub setting: String,
+    pub routes: Result<Routes, ProxyError>,
+    /// The reader evaluates PAC files and automatic detection.
+    pub evaluates_pac: bool,
+    /// Windows names a PAC URL or turns automatic detection on.
+    pub pac_or_auto_detect: bool,
+    pub ca_file: bool,
+}
+
+/// What doctor resolves for a valid `[workshop]` (D-611): the setting,
+/// every entry any workshop project's worker may reach, and whether a CA
+/// file is set; `None` while the workshop is off.
+pub fn proxy_input(
+    canonical: &officina_core::relay::catalogue::CanonicalCatalogue,
+) -> Option<ProxyInput> {
+    let workshop = canonical.workshop.as_ref()?;
+    let setting = UpstreamProxy::parse(&workshop.upstream_proxy).ok()?;
+    let mut allow = officina_core::workshop::launch::allow_list(workshop.auth, &[]);
+    for project in canonical.projects.values() {
+        if let Some(project) = &project.workshop {
+            for host in officina_core::workshop::launch::allow_list(workshop.auth, &project.hosts) {
+                if !allow.contains(&host) {
+                    allow.push(host);
+                }
+            }
+        }
+    }
+    Some(ProxyInput {
+        setting,
+        allow,
+        ca_file: workshop.ca_file.is_some(),
+    })
+}
+
+/// Resolves `input` with `reader`, for doctor.
+pub fn proxy_facts(input: &ProxyInput, reader: Arc<dyn SystemProxyReader>) -> ProxyFacts {
+    let pac_or_auto_detect = input.setting == UpstreamProxy::System
+        && reader
+            .config()
+            .is_ok_and(|c| c.auto_detect || c.pac_url.is_some());
+    ProxyFacts {
+        setting: input.setting.setting().to_owned(),
+        evaluates_pac: reader.evaluates_pac(),
+        routes: resolve(&input.setting, &input.allow, reader),
+        pac_or_auto_detect,
+        ca_file: input.ca_file,
+    }
+}
+
+fn proxy_findings(facts: &ProxyFacts) -> Vec<Finding> {
+    let mut found = Vec::new();
+    match &facts.routes {
+        Ok(routes) => {
+            let each: Vec<String> = routes
+                .routes
+                .iter()
+                .map(|(entry, route)| match route {
+                    Route::Direct => format!("{entry} direct"),
+                    Route::Proxy(proxy) => format!("{entry} via {proxy}"),
+                })
+                .collect();
+            found.push(Finding::new(
+                WorkshopCheck::ProxyRoutes,
+                format!(
+                    "upstream_proxy = \"{}\", resolved from {}: {}",
+                    facts.setting,
+                    routes.source.code(),
+                    each.join(", ")
+                ),
+            ));
+            let api_proxied = CLAUDE_CODE_HOSTS
+                .iter()
+                .any(|host| matches!(routes.routes.get(*host), Some(Route::Proxy(_))));
+            if api_proxied && !facts.ca_file {
+                found.push(Finding::new(
+                    WorkshopCheck::ProxyCaNote,
+                    "Claude Code's host goes through a proxy and no ca_file is set: if this proxy inspects TLS, export its root with the README's one-liner",
+                ));
+            }
+        }
+        Err(ProxyError::Refused(refusal)) => found.push(Finding::new(
+            WorkshopCheck::ProxyRefused,
+            format!("{} for {}", refusal.cause.code(), refusal.entry),
+        )),
+        Err(ProxyError::Unreadable(why)) => found.push(Finding::new(
+            WorkshopCheck::ProxyRefused,
+            format!("proxy_unresolved: {why}"),
+        )),
+    }
+    if facts.pac_or_auto_detect && !facts.evaluates_pac {
+        found.push(Finding::new(
+            WorkshopCheck::ProxyNotEvaluated,
+            "Windows names a PAC file or automatic detection, which this build cannot evaluate until its WinHTTP reader is approved: a PAC URL refuses launches, automatic detection is taken as finding none",
+        ));
+    }
+    found
 }
 
 /// The workshop's folder of `home` when `home` lies in a sync client's
@@ -114,7 +231,7 @@ fn read_call(
 
 /// Gathers the section's facts from `env` (doctor's environment) and the
 /// registry, running only read calls in `home`.
-pub fn gather(env: &[(String, String)], home: &Path) -> WorkshopFacts {
+pub fn gather(env: &[(String, String)], home: &Path, proxy: Option<&ProxyInput>) -> WorkshopFacts {
     let lookup = |name: &str| env_value(env, name).map(std::ffi::OsString::from);
     let docker = resolve_binary(
         "docker",
@@ -143,6 +260,7 @@ pub fn gather(env: &[(String, String)], home: &Path) -> WorkshopFacts {
             &crate::registry::store::onedrive_roots_from_env(),
             &crate::registry::store::SystemProbe,
         ),
+        proxy: proxy.map(|input| proxy_facts(input, Arc::new(RegistryReader))),
     };
     if let Ok((path, source)) = &facts.docker {
         let docker = ResolvedDocker::at(path.clone(), *source);
@@ -242,6 +360,9 @@ pub fn findings(facts: &WorkshopFacts) -> Vec<Finding> {
             }
         }
     }
+    if let Some(proxy) = &facts.proxy {
+        found.extend(proxy_findings(proxy));
+    }
     if let Some(dir) = &facts.synced_home {
         found.push(Finding::new(
             WorkshopCheck::HomeSynced,
@@ -290,7 +411,133 @@ mod tests {
             networks: Some(Vec::new()),
             volumes: Some(Vec::new()),
             synced_home: None,
+            proxy: None,
         }
+    }
+
+    use crate::workshop::proxy::IeProxyConfig;
+    use officina_core::workshop::proxy::PacAnswer;
+
+    struct Reader(IeProxyConfig, PacAnswer, bool);
+
+    impl SystemProxyReader for Reader {
+        fn config(&self) -> Result<IeProxyConfig, String> {
+            Ok(self.0.clone())
+        }
+        fn pac(&self, _url: &str, _config: &IeProxyConfig) -> PacAnswer {
+            self.1.clone()
+        }
+        fn evaluates_pac(&self) -> bool {
+            self.2
+        }
+    }
+
+    fn proxy_lines(reader: Reader, ca_file: bool) -> Vec<Check> {
+        let mut facts = facts();
+        facts.proxy = Some(proxy_facts(
+            &ProxyInput {
+                setting: UpstreamProxy::System,
+                allow: vec!["api.anthropic.com".into(), "index.crates.io".into()],
+                ca_file,
+            },
+            Arc::new(reader),
+        ));
+        checks(&facts)
+            .into_iter()
+            .filter(|c| c.title == "workshop proxy")
+            .collect()
+    }
+
+    #[test]
+    fn the_proxy_source_and_routes_are_named() {
+        let lines = proxy_lines(
+            Reader(
+                IeProxyConfig {
+                    static_proxy: Some("proxy.example.com:8080".into()),
+                    bypass: Some("*.crates.io".into()),
+                    ..IeProxyConfig::default()
+                },
+                PacAnswer::NoPac,
+                true,
+            ),
+            true,
+        );
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        assert!(
+            lines[0].detail.contains("resolved from static"),
+            "{lines:?}"
+        );
+        assert!(
+            lines[0]
+                .detail
+                .contains("api.anthropic.com via proxy.example.com:8080")
+        );
+        assert!(lines[0].detail.contains("index.crates.io direct"));
+    }
+
+    #[test]
+    fn a_socks_answer_fails_with_its_entry() {
+        let lines = proxy_lines(
+            Reader(
+                IeProxyConfig {
+                    pac_url: Some("http://wpad.example.com/proxy.pac".into()),
+                    ..IeProxyConfig::default()
+                },
+                PacAnswer::Answer("SOCKS socks.example.com:1080".into()),
+                true,
+            ),
+            true,
+        );
+        assert_eq!(lines[0].level, Level::Fail);
+        assert!(
+            lines[0]
+                .detail
+                .contains("proxy_unsupported for api.anthropic.com")
+        );
+    }
+
+    #[test]
+    fn a_proxied_api_host_without_a_ca_file_notes_the_export() {
+        let reader = || {
+            Reader(
+                IeProxyConfig {
+                    static_proxy: Some("proxy.example.com:8080".into()),
+                    ..IeProxyConfig::default()
+                },
+                PacAnswer::NoPac,
+                true,
+            )
+        };
+        assert!(
+            proxy_lines(reader(), false)
+                .iter()
+                .any(|c| c.detail.contains("export its root"))
+        );
+        assert!(
+            !proxy_lines(reader(), true)
+                .iter()
+                .any(|c| c.detail.contains("export its root"))
+        );
+    }
+
+    #[test]
+    fn an_unevaluated_auto_detect_is_named() {
+        let lines = proxy_lines(
+            Reader(
+                IeProxyConfig {
+                    auto_detect: true,
+                    ..IeProxyConfig::default()
+                },
+                PacAnswer::NoPac,
+                false,
+            ),
+            true,
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|c| c.level == Level::Warn && c.detail.contains("WinHTTP"))
+        );
     }
 
     struct Probe {

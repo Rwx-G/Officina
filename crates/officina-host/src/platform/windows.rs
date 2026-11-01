@@ -293,6 +293,41 @@ pub fn registry_string(hive: Hive, key: &str, value: &str) -> Option<String> {
     }
 }
 
+/// The `REG_BINARY` value `value` of `key` under `hive`, at most 64 KiB;
+/// `None` when the key or value is missing, of another type, or larger.
+pub fn registry_binary(hive: Hive, key: &str, value: &str) -> Option<Vec<u8>> {
+    use windows_sys::Win32::Foundation::ERROR_SUCCESS;
+    use windows_sys::Win32::System::Registry::{
+        HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, RRF_RT_REG_BINARY, RegGetValueW,
+    };
+    let root = match hive {
+        Hive::LocalMachine => HKEY_LOCAL_MACHINE,
+        Hive::CurrentUser => HKEY_CURRENT_USER,
+    };
+    let key: Vec<u16> = key.encode_utf16().chain(std::iter::once(0)).collect();
+    let value: Vec<u16> = value.encode_utf16().chain(std::iter::once(0)).collect();
+    let mut buf = vec![0u8; 64 * 1024];
+    let mut bytes = u32::try_from(buf.len()).unwrap_or(u32::MAX);
+    // SAFETY: `key` and `value` are NUL-terminated UTF-16 strings that
+    // outlive the call; `buf` holds `bytes` bytes, the size passed, and the
+    // call writes at most that many; the type pointer may be null.
+    let status = unsafe {
+        RegGetValueW(
+            root,
+            key.as_ptr(),
+            value.as_ptr(),
+            RRF_RT_REG_BINARY,
+            std::ptr::null_mut(),
+            buf.as_mut_ptr().cast(),
+            &mut bytes,
+        )
+    };
+    (status == ERROR_SUCCESS).then(|| {
+        buf.truncate(usize::try_from(bytes).unwrap_or(0).min(buf.len()));
+        buf
+    })
+}
+
 /// The blob of the generic credential `target` in the Windows Credential
 /// Manager (`CredReadW`, `CRED_TYPE_GENERIC`), copied out and freed with
 /// `CredFree`; `None` when no such credential exists (AD-36). The bytes are

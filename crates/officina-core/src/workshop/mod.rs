@@ -10,6 +10,7 @@ pub mod gateway;
 pub mod image;
 pub mod launch;
 pub mod names;
+pub mod proxy;
 pub mod review;
 pub mod run;
 pub mod scan;

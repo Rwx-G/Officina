@@ -502,6 +502,185 @@
       }
     ]
   },
+  "proxy": {
+    "allow": [
+      "api.anthropic.com",
+      "index.crates.io",
+      "*.pkg.example.com"
+    ],
+    "cases": [
+      {
+        "expect": {
+          "routes": {
+            "*.pkg.example.com": "direct",
+            "api.anthropic.com": "direct",
+            "index.crates.io": "direct"
+          },
+          "source": "none"
+        },
+        "name": "none",
+        "setting": "none",
+        "system": {
+          "auto_detect": false,
+          "bypass": null,
+          "pac_url": null,
+          "static_proxy": null
+        }
+      },
+      {
+        "expect": {
+          "routes": {
+            "*.pkg.example.com": {
+              "proxy": "proxy.example.com:8080"
+            },
+            "api.anthropic.com": {
+              "proxy": "proxy.example.com:8080"
+            },
+            "index.crates.io": {
+              "proxy": "proxy.example.com:8080"
+            }
+          },
+          "source": "floor"
+        },
+        "name": "an explicit proxy",
+        "setting": "proxy.example.com:8080",
+        "system": {
+          "auto_detect": false,
+          "bypass": null,
+          "pac_url": null,
+          "static_proxy": null
+        }
+      },
+      {
+        "expect": {
+          "routes": {
+            "*.pkg.example.com": "direct",
+            "api.anthropic.com": "direct",
+            "index.crates.io": "direct"
+          },
+          "source": "none"
+        },
+        "name": "system with nothing configured",
+        "setting": "system",
+        "system": {
+          "auto_detect": false,
+          "bypass": null,
+          "pac_url": null,
+          "static_proxy": null
+        }
+      },
+      {
+        "expect": {
+          "routes": {
+            "*.pkg.example.com": {
+              "proxy": "proxy.example.com:8443"
+            },
+            "api.anthropic.com": {
+              "proxy": "proxy.example.com:8443"
+            },
+            "index.crates.io": "direct"
+          },
+          "source": "static"
+        },
+        "name": "a static proxy with a bypass list",
+        "setting": "system",
+        "system": {
+          "auto_detect": false,
+          "bypass": "*.crates.io;<local>",
+          "pac_url": null,
+          "static_proxy": "http=web.example.com:80;https=proxy.example.com:8443"
+        }
+      },
+      {
+        "expect": {
+          "routes": {
+            "*.pkg.example.com": {
+              "proxy": "pac.example.com:3128"
+            },
+            "api.anthropic.com": {
+              "proxy": "pac.example.com:3128"
+            },
+            "index.crates.io": {
+              "proxy": "pac.example.com:3128"
+            }
+          },
+          "source": "pac"
+        },
+        "name": "a PAC answering a proxy then direct",
+        "setting": "system",
+        "system": {
+          "auto_detect": false,
+          "bypass": null,
+          "pac_url": "http://wpad.example.com/proxy.pac",
+          "static_proxy": null
+        }
+      },
+      {
+        "expect": {
+          "routes": {
+            "*.pkg.example.com": "direct",
+            "api.anthropic.com": "direct",
+            "index.crates.io": "direct"
+          },
+          "source": "auto_detect"
+        },
+        "name": "automatic detection finding a PAC",
+        "setting": "system",
+        "system": {
+          "auto_detect": true,
+          "bypass": null,
+          "pac_url": null,
+          "static_proxy": null
+        }
+      },
+      {
+        "expect": {
+          "routes": {
+            "*.pkg.example.com": "direct",
+            "api.anthropic.com": "direct",
+            "index.crates.io": "direct"
+          },
+          "source": "none"
+        },
+        "name": "automatic detection finding none",
+        "setting": "system",
+        "system": {
+          "auto_detect": true,
+          "bypass": null,
+          "pac_url": null,
+          "static_proxy": null
+        }
+      },
+      {
+        "expect": {
+          "entry": "api.anthropic.com",
+          "refused": "proxy_unsupported"
+        },
+        "name": "a PAC answering SOCKS",
+        "setting": "system",
+        "system": {
+          "auto_detect": false,
+          "bypass": null,
+          "pac_url": "http://wpad.example.com/proxy.pac",
+          "static_proxy": null
+        }
+      },
+      {
+        "expect": {
+          "entry": "api.anthropic.com",
+          "refused": "proxy_unresolved"
+        },
+        "name": "a PAC that cannot be fetched",
+        "setting": "system",
+        "system": {
+          "auto_detect": false,
+          "bypass": null,
+          "pac_url": "http://wpad.example.com/proxy.pac",
+          "static_proxy": null
+        }
+      }
+    ]
+  },
   "schema": 1,
   "vectors": {
     "launch_worker": [

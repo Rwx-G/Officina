@@ -67,6 +67,16 @@ closed_enum! {
         /// of up to 1 GiB and the scratch repository would sync (D-228,
         /// review F44).
         HomeSynced,
+        /// The proxy setting, its source and each entry's route (D-611).
+        ProxyRoutes,
+        /// An entry's route could not be decided (D-611).
+        ProxyRefused,
+        /// The reader cannot evaluate a PAC file or automatic detection
+        /// (D-1124): routes are assumed direct, or refused for a PAC URL.
+        ProxyNotEvaluated,
+        /// `api.anthropic.com` goes through a proxy and no `ca_file` is set
+        /// (D-612): if it inspects TLS, its root must be exported.
+        ProxyCaNote,
     }
 }
 
@@ -87,7 +97,10 @@ impl WorkshopCheck {
             | WorkshopCheck::EngineUnreachable
             | WorkshopCheck::OrphanNetworks
             | WorkshopCheck::OrphanVolumes
-            | WorkshopCheck::HomeSynced => CheckLevel::Warn,
+            | WorkshopCheck::HomeSynced
+            | WorkshopCheck::ProxyNotEvaluated => CheckLevel::Warn,
+            WorkshopCheck::ProxyRefused => CheckLevel::Fail,
+            WorkshopCheck::ProxyRoutes | WorkshopCheck::ProxyCaNote => CheckLevel::Inform,
             WorkshopCheck::DockerResolved
             | WorkshopCheck::GitResolved
             | WorkshopCheck::OverridesSet
@@ -117,6 +130,10 @@ impl WorkshopCheck {
             | WorkshopCheck::EngineUnreachable => "workshop engine",
             WorkshopCheck::OrphanNetworks | WorkshopCheck::OrphanVolumes => "workshop orphans",
             WorkshopCheck::HomeSynced => "workshop home",
+            WorkshopCheck::ProxyRoutes
+            | WorkshopCheck::ProxyRefused
+            | WorkshopCheck::ProxyNotEvaluated
+            | WorkshopCheck::ProxyCaNote => "workshop proxy",
         }
     }
 

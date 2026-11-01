@@ -954,8 +954,15 @@ pub fn run_with(collector: &Collector, exe: &Path, permissions: bool) -> Vec<Che
     checks.extend(registry_section(registry));
     checks.push(check_floor(collector));
     if workshop {
+        let proxy = relay_floor
+            .as_ref()
+            .and_then(|floor| crate::workshop::doctor::proxy_input(&floor.canonical));
         checks.extend(crate::workshop::doctor::checks(
-            &crate::workshop::doctor::gather(collector.base_env().vars(), &paths.officina_home),
+            &crate::workshop::doctor::gather(
+                collector.base_env().vars(),
+                &paths.officina_home,
+                proxy.as_ref(),
+            ),
         ));
     }
     let system_dir = crate::relay::home::system_dir();
