@@ -1418,6 +1418,57 @@ mod tests {
         );
     }
 
+    /// D-1000: a floor of free projects and templates, no action, puts the
+    /// relay in use: doctor says nothing is approved and lists the template
+    /// waiting, where a floor of free projects alone prints no relay line.
+    #[test]
+    fn a_templates_only_floor_gets_the_relay_lines() {
+        let dir = tempfile::tempdir().unwrap();
+        let floor = dir.path().join("officina.toml");
+        let home = RelayHome::new(dir.path(), Some(floor.clone()));
+        let inputs = RelayDoctor {
+            home: &home,
+            doctor_floor: None,
+            system_dir: None,
+            now_ms: 1_793_102_400_000,
+            reviews: None,
+            auto: None,
+        };
+        let free = "schema = 2\n[[project]]\nname = \"scratch\"\npath = \"Scratch\"\nautonomy = \"free\"\n";
+        std::fs::write(&floor, free).unwrap();
+        let none = checks_with(&inputs, &mut |_, _, _| Vec::new(), &store(&[]));
+        assert!(none.is_empty(), "{none:?}");
+
+        std::fs::write(
+            &floor,
+            format!("{free}[[template]]\nname = \"probe-note\"\ndescription = \"Write a probe file\"\nprojects = [\"scratch\"]\nprompt = \"Write officina-probe.txt.\"\n"),
+        )
+        .unwrap();
+        let checks = checks_with(&inputs, &mut |_, _, _| Vec::new(), &store(&[]));
+        let line = |title: &str| {
+            checks
+                .iter()
+                .find(|c| c.title == title)
+                .unwrap_or_else(|| panic!("no {title} line: {checks:?}"))
+        };
+        assert_eq!(line("relay approval").level, Level::Warn);
+        assert!(
+            line("relay approval")
+                .detail
+                .starts_with("nothing approved yet")
+        );
+        assert!(
+            line("templates")
+                .detail
+                .contains("templates added: probe-note"),
+            "{checks:?}"
+        );
+        assert!(
+            !home.known_projects_file().exists(),
+            "doctor writes nothing"
+        );
+    }
+
     /// Story 5.12 AC 1: the `CLAUDE.md` paragraph tells a session an `auto`
     /// action waits for its approval after its dry run, as a `human` one.
     #[test]

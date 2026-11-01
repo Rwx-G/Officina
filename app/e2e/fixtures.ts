@@ -56,6 +56,8 @@ export type RegistryScenario =
 
 export type RelayScenario =
   | "relay-clean"
+  | "relay-templates-only"
+  | "relay-templates-only-approved"
   | "relay-previous-format"
   | "relay-pending"
   | "relay-pending-again"

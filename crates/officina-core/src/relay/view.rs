@@ -1161,6 +1161,24 @@ mod tests {
         ));
         assert_eq!(nothing.pending, None, "a v0.1 floor has nothing to approve");
 
+        // D-1000: a floor of free projects and templates, no action, is
+        // offered for approval, its templates among what it adds.
+        let templates_only = load(
+            "schema = 2\n[[project]]\nname = \"scratch\"\npath = \"Scratch\"\nautonomy = \"free\"\n[[template]]\nname = \"probe-note\"\ndescription = \"Write a probe file\"\nprojects = [\"scratch\"]\nprompt = \"Write officina-probe.txt.\"\n",
+            FLOOR_PATH,
+        )
+        .unwrap();
+        let offered = build(&inputs(
+            SnapshotState::Missing,
+            FloorRead::Valid(&templates_only),
+            &[],
+        ))
+        .pending
+        .expect("a templates-only floor is offered for approval");
+        assert_eq!(offered.hash, templates_only.hash);
+        assert_eq!(offered.diff.templates.added, ["probe-note"]);
+        assert!(offered.diff.actions.added.is_empty());
+
         let broken = build(&inputs(
             SnapshotState::Unreadable("corrupt"),
             FloorRead::Valid(&v0_1),

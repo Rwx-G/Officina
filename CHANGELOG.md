@@ -1067,6 +1067,15 @@ project uses [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- A floor whose catalogue holds only templates (free projects, no action)
+  was never offered for approval: the window showed no catalogue banner,
+  its templates could never be approved, and no work order could run from
+  it (gate 4's window run). A template now puts the relay in use like an
+  action or a guarded project: the banner and the header chip offer the
+  catalogue, and `officina doctor` prints its relay lines. Such a floor
+  still guards nothing, its free projects stay free, and the window keeps
+  no known-projects record for it before its approval.
+
 - Doctor kept Officina's hook and statusline entries that named another
   `officina.exe` (a copy placed elsewhere earlier, an older install) as
   registered, so sessions kept running that copy and a block pasted after

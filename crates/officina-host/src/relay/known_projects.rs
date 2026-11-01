@@ -6,7 +6,7 @@ use std::collections::BTreeSet;
 use std::io;
 
 use officina_core::floor::parse_floor;
-use officina_core::relay::catalogue::{KNOWN_PROJECTS_SCHEMA, KnownProjects, relay_in_use};
+use officina_core::relay::catalogue::{KNOWN_PROJECTS_SCHEMA, KnownProjects, floor_feeds_gate};
 use officina_core::relay::journal::{GateError, GateFault, JournalEntry};
 
 use super::home::RelayHome;
@@ -16,11 +16,13 @@ use crate::files::atomic_write;
 /// Keeps the record current: on every valid read of the relay floor
 /// (phase 1) or of the snapshot, it holds the project paths of both and the
 /// approved hash, the recorded one when the snapshot cannot be read, and is
-/// written atomically when its content changes. Only while the relay is in
-/// use (a valid snapshot, a record already there, or a floor that declares
-/// an action or a guarded project): a record makes a broken floor guard
-/// every known project, which a workstation without the relay must not get.
-/// The error is the write's, when it fails.
+/// written atomically when its content changes. Only while the gate holds
+/// something (a valid snapshot, a record already there, or a floor that
+/// declares an action or a guarded project, [`floor_feeds_gate`]): a record
+/// makes a broken floor guard every known project, which a workstation
+/// without the relay must not get, nor a floor of free projects and
+/// templates not yet approved (D-1000). The error is the write's, when it
+/// fails.
 pub fn keep(home: &RelayHome) -> io::Result<()> {
     let approved = home.read_approved();
     let floor_path = home.relay_floor(&approved);
@@ -30,11 +32,11 @@ pub fn keep(home: &RelayHome) -> io::Result<()> {
     let snapshot = approved.approved();
     let existing = home.read_known_projects();
     let existing = existing.valid();
-    let floor_in_use = floor.as_ref().is_some_and(relay_in_use);
+    let floor_guards = floor.as_ref().is_some_and(floor_feeds_gate);
     if floor.is_none() && snapshot.is_none() {
         return Ok(());
     }
-    if snapshot.is_none() && existing.is_none() && !floor_in_use {
+    if snapshot.is_none() && existing.is_none() && !floor_guards {
         return Ok(());
     }
     let mut paths: BTreeSet<String> = floor

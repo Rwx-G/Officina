@@ -299,8 +299,26 @@ const againFloor = pendingFloor.replace(
 // today: the pending change shows the format change and the templates added.
 const goldenFloor = readFileSync(join(root, "crates", "officina-core", "tests", "data", "relay", "golden-floor.toml"), "utf8");
 
+// Gate 4's window run (D-1000): free projects and one template, no action
+// and no guarded project. The catalogue is still offered for approval.
+const templatesOnlyFloor = `schema = 2
+
+[[project]]
+name = "scratch"
+path = "C:/work/scratch"
+autonomy = "free"
+
+[[template]]
+name = "probe-note"
+description = "Write a probe file and report the working tree"
+projects = ["scratch"]
+prompt = "Create officina-probe.txt listing the environment variable names your Bash tool sees, then run git status."
+`;
+
 const relayScenarios = {
   "relay-clean": [["floor", relayFloor], ["approve"]],
+  "relay-templates-only": [["floor", templatesOnlyFloor]],
+  "relay-templates-only-approved": [["floor", templatesOnlyFloor], ["approve"]],
   "relay-previous-format": [["floor", goldenFloor], ["previous-format"]],
   "relay-pending": [["floor", relayFloor], ["approve"], ["floor", pendingFloor]],
   "relay-pending-again": [["floor", relayFloor], ["approve"], ["floor", againFloor]],

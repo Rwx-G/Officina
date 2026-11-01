@@ -446,6 +446,22 @@ fn known_projects_follow_the_floor() {
     until(&views, |_| true);
     assert!(!plain.relay_home().known_projects_file().exists());
     stop(handle);
+
+    // Nor does a floor of free projects and templates before its approval
+    // (D-1000): it guards nothing, so its breaking must not either; the
+    // window still offers it for approval.
+    let templates = common::TestEnv::new();
+    templates.write_floor(
+        "schema = 2\n[[project]]\nname = \"scratch\"\npath = \"Scratch\"\nautonomy = \"free\"\n[[template]]\nname = \"probe-note\"\ndescription = \"Write a probe file\"\nprojects = [\"scratch\"]\nprompt = \"Write officina-probe.txt.\"\n",
+    );
+    let (handle, _boards, views) = watch(&templates, None);
+    let offered = until(&views, |v| v.pending.is_some());
+    assert_eq!(
+        offered.pending.unwrap().diff.templates.added,
+        ["probe-note"]
+    );
+    assert!(!templates.relay_home().known_projects_file().exists());
+    stop(handle);
 }
 
 /// A relay floor approved in `env` with two credentials, `monitoring`

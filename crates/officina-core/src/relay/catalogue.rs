@@ -594,21 +594,43 @@ fn guarded_program_problem(entry: &str) -> Option<&'static str> {
     }
 }
 
-/// True when a floor asks something of the relay: an action (valid or not)
-/// or a guarded project. A floor without either, any schema 1 floor among
-/// them, has nothing to approve, and the window keeps no relay record for it.
+/// True when a floor asks something of the relay: an action (valid or not),
+/// a guarded project, or a work order template (D-1000). A floor without
+/// any of them, any schema 1 floor among them, has nothing to approve: the
+/// window offers no catalogue for it and doctor prints no relay line.
 ///
 /// ```
-/// let v0_1 = officina_core::floor::parse_floor(
-///     "schema = 1\n[[project]]\nname = \"api\"\npath = \"C:/work/api\"\n",
+/// use officina_core::{floor::parse_floor, relay::catalogue::relay_in_use};
+/// let v0_1 = parse_floor("schema = 1\n[[project]]\nname = \"api\"\npath = \"C:/work/api\"\n").unwrap();
+/// assert!(!relay_in_use(&v0_1));
+/// let guarded = parse_floor("schema = 2\n[[project]]\nname = \"api\"\npath = \"C:/work/api\"\n").unwrap();
+/// assert!(relay_in_use(&guarded));
+/// let templates_only = parse_floor(
+///     "schema = 2\n[[project]]\nname = \"api\"\npath = \"C:/work/api\"\nautonomy = \"free\"\n\
+///      [[template]]\nname = \"note\"\ndescription = \"A note\"\nprojects = [\"api\"]\nprompt = \"Write a note.\"\n",
 /// ).unwrap();
-/// assert!(!officina_core::relay::catalogue::relay_in_use(&v0_1));
-/// let guarded = officina_core::floor::parse_floor(
-///     "schema = 2\n[[project]]\nname = \"api\"\npath = \"C:/work/api\"\n",
-/// ).unwrap();
-/// assert!(officina_core::relay::catalogue::relay_in_use(&guarded));
+/// assert!(relay_in_use(&templates_only));
 /// ```
 pub fn relay_in_use(floor: &FloorFile) -> bool {
+    floor_feeds_gate(floor) || !floor.templates.is_empty()
+}
+
+/// True when a floor gives the gate something to hold: an action (valid or
+/// not) or a guarded project. Only such a floor has the window keep a
+/// known-projects record before anything is approved: the record makes a
+/// broken floor guard every project it names, and a floor of free projects
+/// and templates guards nothing while it is valid, so its breaking must not
+/// either (D-1000).
+///
+/// ```
+/// use officina_core::{floor::parse_floor, relay::catalogue::floor_feeds_gate};
+/// let templates_only = parse_floor(
+///     "schema = 2\n[[project]]\nname = \"api\"\npath = \"C:/work/api\"\nautonomy = \"free\"\n\
+///      [[template]]\nname = \"note\"\ndescription = \"A note\"\nprojects = [\"api\"]\nprompt = \"Write a note.\"\n",
+/// ).unwrap();
+/// assert!(!floor_feeds_gate(&templates_only));
+/// ```
+pub fn floor_feeds_gate(floor: &FloorFile) -> bool {
     !floor.actions.is_empty()
         || floor
             .projects

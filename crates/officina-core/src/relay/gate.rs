@@ -1239,6 +1239,28 @@ mod tests {
         );
     }
 
+    /// D-1000: a floor of free projects and templates guards nothing, before
+    /// its approval and after it, and its project stays free.
+    #[test]
+    fn a_templates_only_floor_guards_nothing() {
+        let text = "schema = 2\n[[project]]\nname = \"scratch\"\npath = \"Scratch\"\nautonomy = \"free\"\n[[template]]\nname = \"probe-note\"\ndescription = \"Write a probe file\"\nprojects = [\"scratch\"]\nprompt = \"Write officina-probe.txt.\"\n";
+        let written = floor(text);
+        let approved = snapshot_of(text);
+        for snapshot in [SnapshotInput::Missing, SnapshotInput::Valid(&approved)] {
+            let c = containment(
+                FloorInput::Valid {
+                    floor: &written,
+                    path: FLOOR_PATH,
+                },
+                snapshot,
+                None,
+            );
+            assert!(!c.guards_any(), "{snapshot:?}");
+            assert!(c.faults.is_empty(), "{snapshot:?}");
+            assert_eq!(name_for(&c, &["C:/path/to/Scratch/sub"]), None);
+        }
+    }
+
     /// D-173: a guarded root written through an alias matches the folder it
     /// resolves to once its final path is added, and still matches as
     /// written; a free project's final path is never added, so a forged one

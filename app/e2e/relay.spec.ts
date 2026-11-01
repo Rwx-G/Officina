@@ -48,6 +48,35 @@ test.describe("catalogue approval", () => {
     await expect(page.getByTestId("catalogue-chip")).toBeHidden();
   });
 
+  // D-1000, gate 4's window run: a floor of free projects and templates,
+  // no action, never approved. The real `officina relay --json` offers it.
+  test("a templates-only floor shows the banner and approves its hash", async ({ page }) => {
+    const pending = loadRelay("relay-templates-only");
+    const approved = loadRelay("relay-templates-only-approved");
+    expect(pending.approved_hash).toBeNull();
+    expect(Object.keys(pending.pending!.current.actions)).toEqual([]);
+    expect(approved.approved_hash).not.toBeNull();
+    expect(approved.pending).toBeNull();
+    await page.addInitScript((next) => {
+      window.__officinaRelayApproved = next;
+    }, approved);
+    await open(page, pending);
+
+    await expect(page.getByTestId("catalogue-chip")).toHaveText("catalogue change");
+    const banner = page.getByTestId("catalogue-banner");
+    await expect(banner).toBeVisible();
+    for (const name of pending.pending!.diff.templates.added) {
+      const added = banner.locator(`[data-testid="template-added"][data-name="${name}"]`);
+      await expect(added.getByTestId("template-added-prompt")).toHaveText(pending.pending!.current.templates[name]!.prompt);
+    }
+    await expect(banner.getByTestId("action-added")).toHaveCount(0);
+
+    await banner.getByTestId("approve-catalogue").click();
+    expect(await approvals(page)).toEqual([{ hash: pending.pending!.hash }]);
+    await expect(banner).toBeHidden();
+    await expect(page.getByTestId("catalogue-chip")).toBeHidden();
+  });
+
   test("the header chip marks a pending change", async ({ page }) => {
     await open(page, loadRelay("relay-pending"));
     const chip = page.getByTestId("catalogue-chip");
