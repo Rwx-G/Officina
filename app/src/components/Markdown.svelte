@@ -94,6 +94,13 @@
   .markdown ol {
     padding-left: 20px;
   }
+  /* Inside the exchange's own list, a browser would mark these as nested. */
+  .markdown ul {
+    list-style: disc;
+  }
+  .markdown ol {
+    list-style: decimal;
+  }
   .markdown code {
     padding: 0 4px;
     border-radius: var(--radius-control);
