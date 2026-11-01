@@ -114,6 +114,7 @@ binary without the gate, process-start noise: the next run read 4.7 ms.
 | 4.16 Walking's cost | review | AC 6 measured (E86): the walking run at 1.00 % of the machine, not under 1 %; walking on by default by the owner's decision (D-700) |
 | 4.17 Scene readability | review | the owner's two-second test on its screenshots passed with a caveat (story 4.14 AC 9, E87) |
 | 4.19 Session panel polish | review | the owner's look at the panel's edge and the exchange on the installed build (screenshots before and after, both screens, both themes) |
+| 4.20 The owner's second UI feedback | review | the owner's look at the seven items on the installed build (screenshots before and after, both themes) |
 
 ## Slice 0 order (story 4.14 AC 11)
 
@@ -250,6 +251,49 @@ D-508); the mutants job caught each of its three mutants and its control
 run passed; `cargo deny` ok, `pnpm audit` 1 low, ignored; `core-linux` in
 `rust:1-bookworm`: fmt and clippy clean, 1,168 passed, 0 failed, 9 ignored.
 
+## Story 4.20 (the owner's second feedback)
+
+The owner's seven remarks on the installed build (2026-11-01), with the
+decisions D-1040 to D-1046:
+
+1. The Undo note broke onto two lines: the note and the discard target
+   keep one line at one width from the minimum window up, a long name cut
+   and whole in the tooltip (D-1040).
+2. To sort, To resume and Done are one fixed-size indicator, its panel
+   naming each count with its action, opened on hover, focus or a click
+   (D-1041, the owner's revision of D-541).
+3. The five-hour quota: Claude Code still documents `five_hour`, and the
+   owner's screenshot showed it at 4 %, so no gauge is deleted; a gauge
+   shows only for a window the quota file carries, the weekly one first,
+   and doctor names the windows present (D-1042).
+4. Focus's empty state: centred, a static drawing in the theme's tokens, a
+   headline and the key that leaves it (D-1043).
+5. One name per session on every surface, the project as context, a
+   plaque's count as a head count (D-1044).
+6. The exchange renders a safe markdown subset from Officina's own parser,
+   every string a text node, no link, no image (D-1045, the owner's
+   revision of D-706).
+7. The waiting places are no longer drawn, and each waiting figure stands
+   a little off its spot, chosen from its key (D-1046).
+
+The full local gate on its code (`397cacd`, on `712e5d4`): fmt and clippy
+clean; 2,036 Rust tests passed, 0 failed, 16 ignored; the release perf run
+passed with CI's budgets on its third run (the first two, with the machine
+at 96 % CPU from other builds, measured an empty process's p95 between 7
+and 75 ms and failed an own-cost bound in code this story does not touch);
+the lexer, stress, crash, authority, registry and roots checks passed;
+svelte-check, ESLint clean, Vitest 381 passed; Playwright `--repeat-each=3`
+1,422 passed, 6 skipped (the baseline cases, D-508), after two runs that
+each lost two cases to the loaded machine (the preview server refusing a
+connection, then a 30 s timeout), every one green on its rerun; the
+mutants job caught each of its three mutants and its control run passed;
+`cargo deny` ok, `pnpm audit` 1 low and 1 moderate, both ignored;
+`core-linux` in `rust:1-bookworm`: fmt and clippy clean, 1,871 passed, 0
+failed, 14 ignored, the musl build and the entry point's Linux tests
+green. One workspace run also lost `board.rs >
+hanging_claude_times_out_instead_of_blocking` to the load (6.07 s against
+6 s); it passed three times alone and in the next run.
+
 ## Decisions taken under delegation, for the owner to confirm
 
 - D-529: the "relay stopped" chip in the danger colour.
@@ -272,3 +316,8 @@ run passed; `cargo deny` ok, `pnpm audit` 1 low, ignored; `core-linux` in
   inset surface rather than a header and panel sharing one edge), D-705
   (the labels "Your last prompt" and "Claude's last answer") and D-708 (no
   time on a message, since the card carries none).
+- D-1040 to D-1046 (story 4.20): above all D-1041 (the indicator's three
+  icons rather than words in the bar), D-1042 (the gauges following the
+  data, the weekly gauge moved first so the five-hour one moves nothing),
+  D-1044 (the session's own name as the one name, the project as context)
+  and D-1045 (links shown with their address and never clickable).

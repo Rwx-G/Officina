@@ -67,7 +67,7 @@ The owner's feedback of 2026-11-01, using the installed build:
 
 ### Completion Notes
 
-- AC 1 to 8: the cases above, green in the gate (the Epic 4 report's figures).
+- AC 1 to 8: the cases above, green in the gate on `397cacd`: 2,036 Rust tests passed on Windows and 1,871 in `rust:1-bookworm`, Vitest 381, Playwright `--repeat-each=3` 1,422 passed, 6 skipped; the loaded machine's reruns are in the Epic 4 report.
 - AC 9: screenshots under the session's scratchpad `shots-4.20/`, `before-*` from `7981eb4`, `after-*` from this story's code: the header (busy board), Focus's empty state, the scene with the decision office's queue (scene-c) and a session file with a markdown answer (scene-c's `link-fixes`), at 1920 x 1032 in both themes.
 
 ## File List
