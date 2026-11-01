@@ -1,5 +1,6 @@
 # Builds the Windows artifacts of a version tag (AD-18): the NSIS installer of
-# the window and a portable zip of both executables, with SHA-256 sums.
+# the window and a portable zip of both executables and the workshop's Linux
+# programs under linux/ (AD-100), with SHA-256 sums.
 # Binaries are unsigned until a signing certificate exists (risk R7).
 name: Release
 
@@ -29,13 +30,21 @@ jobs:
         run: |
           version=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
           test "v$version" = "$GITHUB_REF_NAME" || { echo "tag $GITHUB_REF_NAME, workspace $version"; exit 1; }
+      - name: The Linux programs' target
+        # AD-100: officina-gateway and officina-entry, static, linked with
+        # the toolchain's rust-lld (.cargo/config.toml).
+        run: rustup target add x86_64-unknown-linux-musl
       - name: Frontend install
         working-directory: app
         run: pnpm install --frozen-lockfile
       - name: Window and installer
         working-directory: app
-        # The bundle overlay builds the CLI first and ships it next to the app;
-        # both builds take --locked (the script and the overlay pass it on).
+        env:
+          # The OCI revision label of the images Build images makes (AD-99).
+          OFFICINA_REVISION: ${{ github.sha }}
+        # The bundle overlay builds the CLI and the Linux programs first and
+        # ships them next to the app, the programs under linux/ (AD-100);
+        # every build takes --locked (the script and the overlay pass it on).
         run: pnpm bundle
       - name: CLI
         run: cargo build --locked --release -p officina
@@ -78,15 +87,21 @@ jobs:
           version="${GITHUB_REF_NAME#v}"
           mkdir -p dist/portable
           cp target/release/officina.exe target/release/officina-app.exe README.md LICENSE dist/portable/
+          mkdir -p dist/portable/linux
+          for program in officina-gateway officina-entry; do
+            cp "target/x86_64-unknown-linux-musl/release/$program" dist/portable/linux/
+            cp "target/x86_64-unknown-linux-musl/release/$program" "dist/$program-${version}-linux-x64"
+          done
           (cd dist/portable && 7z a "../officina-${version}-windows-x64-portable.zip" . > /dev/null)
           cp target/release/bundle/nsis/*-setup.exe "dist/officina-${version}-windows-x64-setup.exe"
-          (cd dist && sha256sum *.zip *.exe > SHA256SUMS.txt)
+          (cd dist && sha256sum *.zip *.exe *-linux-x64 > SHA256SUMS.txt)
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: release
           path: |
             dist/*.zip
             dist/*.exe
+            dist/*-linux-x64
             dist/SHA256SUMS.txt
 
   publish:
