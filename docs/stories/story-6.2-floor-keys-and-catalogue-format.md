@@ -1,6 +1,6 @@
 # Story 6.2: Workshop floor keys, phase 2 rules, catalogue files and the canonical format
 
-**Status:** Approved
+**Status:** Review
 
 ## Story
 
@@ -20,14 +20,14 @@ so that a changed host, mount, Dockerfile, CA file or limit voids my approval fo
 
 ## Tasks
 
-- [ ] `floor.rs`: raw tables, `RELAY_KEYS` (AC 1)
-- [ ] `crates/officina-core/src/workshop/{mod,floor,image}.rs`: types, `CredentialKind`, defaults, rules, branch-name rule, `image::stages` (AC 2)
-- [ ] `IssueKind` variants and fixtures (AC 2)
-- [ ] `crates/officina-host/src/workshop/files.rs`; phase 2 signature; callers (AC 3)
-- [ ] `CanonicalWorkshop`, the relay-section hash in `approved.json`, the format bump, both golden hashes, the previous-format fixture (AC 4)
-- [ ] `officina run` on the relay-section hash (AC 6)
-- [ ] `catalogue::diff` sections and the banner (AC 5)
-- [ ] `CHANGELOG.md`, README (AC 7)
+- [x] `floor.rs`: raw tables, `RELAY_KEYS` (AC 1)
+- [x] `crates/officina-core/src/workshop/{mod,floor,image}.rs`: types, `CredentialKind`, defaults, rules, branch-name rule, `image::stages` (AC 2)
+- [x] `IssueKind` variants and fixtures (AC 2)
+- [x] `crates/officina-host/src/workshop/files.rs`; phase 2 signature; callers (AC 3)
+- [x] `CanonicalWorkshop`, the relay-section hash in `approved.json`, the format bump, both golden hashes, the previous-format fixture (AC 4)
+- [x] `officina run` on the relay-section hash (AC 6)
+- [x] `catalogue::diff` sections and the banner (AC 5)
+- [x] `CHANGELOG.md`, README (AC 7)
 
 ## Dev Notes
 
@@ -52,9 +52,28 @@ so that a changed host, mount, Dockerfile, CA file or limit voids my approval fo
 
 ### Debug Log
 
+- ts-rs writes one file per type name: a first `ReviewMode` for the review table overwrote the registry's `ReviewMode` binding; renamed `ReviewScope` (D-1107).
+- The previous-format fixture `approved-previous-format.json` is now the format 4 approval of the golden floor, serialized by `main` before the bump (D-131's rule); the golden floor gains every workshop table, and its CA file and Dockerfile are supplied in memory by `catalogue_hash.rs`.
+
 ### Completion Notes
 
+- AC 1: `floor.rs::tests::{schema_1_with_each_relay_key_names_schema_2, relay_keys_constant_matches_the_type}` cover the two new keys (the struct literal gains both raw fields); a malformed workshop table keeps the board floor through phase 1's raw `Spanned` value (`workshop/floor.rs` rules run in phase 2 only; `an_invalid_workshop_table_drops_every_workshop_template_only` shows relay actions and the project staying). The test names of the story were folded into these existing D-7 tests.
+- AC 2: `workshop/floor.rs::tests::{defaults_are_explicit, auth_defaults_to_oauth_token_and_upstream_proxy_to_system, every_credential_kind_parses, an_upstream_proxy_with_a_scheme_or_credentials_is_an_issue, the_ca_file_holds_certificates_only, branch_names_follow_git_rules, a_project_name_ending_in_a_dash_is_an_issue, memory_name_refuses_dot_dotdot_backslash_and_colon, mounts_differing_only_in_case_are_duplicates, hosts_are_lowercase_names_with_a_lettered_last_label, max_usd_is_stored_as_cents, the_dockerfile_rules_need_the_files_read, a_context_hash_covers_names_lengths_and_bytes, file_requests_follow_valid_keys_only}`; `workshop/image.rs::tests::{the_final_stage_must_descend_from_a_base, an_alias_chain_is_followed, a_builder_stage_may_name_any_image, a_heredoc_line_is_never_a_stage, malformed_files_are_refused}`; `catalogue.rs::tests::{every_issue_kind_has_a_case, an_invalid_workshop_table_drops_every_workshop_template_only, a_template_with_a_workshop_table_runs_only_in_the_workshop, a_workshop_project_name_rule_leaves_its_relay_actions, the_full_workshop_floor_is_valid}`. No issue kind for colliding image names (D-1105). `max_usd` is built while the gate 6 entry is open (D-1109): that part of the AC depends on the owner's gate 6 run.
+- AC 3: host `workshop/files.rs::tests::{reads_within_bounds, an_oversized_dockerfile_is_an_issue_not_a_truncation, a_subfolder_or_symlink_in_the_context_is_an_issue, a_missing_file_is_unreadable}`; `tests/relay_home.rs::the_hook_never_reads_catalogue_files`. `load_relay_floor` reads the files (window, doctor, `relay --json`), `load_relay_floor_for_run` does not (`officina run`, the approvals' project folders) (D-1106).
+- AC 4: `tests/catalogue_hash.rs::{golden_fixture_hash_is_pinned, relay_section_hash_is_pinned, a_previous_format_approval_is_void, formatting_and_excluded_fields_keep_the_hash, every_canonical_field_changes_the_hash}`; `catalogue.rs::tests::{a_changed_dockerfile_byte_changes_the_global_hash_only, a_changed_context_file_changes_the_global_hash_only, a_changed_ca_file_changes_the_global_hash_only, a_changed_action_changes_both_hashes, a_changed_workshop_key_changes_the_global_hash_only, host_order_does_not_change_the_hash, base_order_does_change_the_hash, diff_reports_the_format_change}`. `CANONICAL_FORMAT` is 5.
+- AC 5: `catalogue.rs::tests::{diff_lists_workshop_changes, diff_covers_every_canonical_field}`; Playwright `relay.spec.ts > the approval banner shows a workshop change` (fixture `relay-pending-workshop`), `relay-view.spec.ts > the pending diff shows the format change and the templates added` (now also the workshop section); Vitest `relay.test.ts` renders a hostile workshop value as text.
+- AC 6: CLI `run.rs::{an_edited_project_dockerfile_does_not_block_relay_actions, an_unreadable_ca_file_does_not_block_relay_actions, an_edited_action_still_refuses_until_approved}`.
+- AC 7: `CHANGELOG.md` Added and Changed; README "The workshop (v0.6, in progress)"; `readme.rs` green.
+
 ## File List
+
+- `crates/officina-core/src/workshop/{mod,floor,image}.rs` (new), `crates/officina-core/src/lib.rs`
+- `crates/officina-core/src/floor.rs`, `relay/catalogue.rs`, `relay/template.rs`, `relay/run.rs`, `relay/view.rs`, `relay/mod.rs`
+- `crates/officina-core/tests/catalogue_hash.rs`, `tests/data/relay/{golden-floor.toml,golden-floor-variant.toml,approved-previous-format.json}`
+- `crates/officina-host/src/workshop/{mod,files}.rs` (new), `src/lib.rs`, `src/relay/{home,doctor,approvals}.rs`, `src/relay/run/mod.rs`, `tests/relay_home.rs`, `tests/authority.rs`
+- `crates/officina/tests/run.rs`
+- `app/src/components/PendingCatalogue.svelte`, `app/src/lib/{relay-text,orchestrator-text}.ts`, `app/src/lib/relay.test.ts`, `app/src/lib/generated/*` (regenerated), `app/e2e/{relay,relay-view}.spec.ts`, `app/e2e/fixtures.ts`, `app/scripts/e2e-fixtures.mjs`
+- `README.md`, `CHANGELOG.md`, `docs/stories/epic-6-decisions.md` (D-1103 to D-1109), `docs/stories/sprint-status.yaml`
 
 ## Change Log
 
@@ -62,3 +81,4 @@ so that a changed host, mount, Dockerfile, CA file or limit voids my approval fo
 - 2026-10-28 reworked after review: relay-section hash, `officina run` reads no workshop file (F25); `memory_name` refuses `.`, `..`, `\`, `:` and mounts compare ignoring case (F11, F3); a project name may not end in `-` (F30); `CLAUDE_CODE_HOSTS` and its issue move to 6.5, so this story no longer waits for the gate 3 entry (F46); deny-unknown-fields noted
 - 2026-10-29 research-note entries named by subject, no number reserved (D-600)
 - 2026-10-29 the owner's answers: `auth` gains `login` (D-603), `upstream_proxy` takes `"system"` by default and `"none"` (D-611)
+- 2026-11-01 implemented: workshop tables, files, canonical format 5, relay-section hash, banner; D-1103 to D-1109

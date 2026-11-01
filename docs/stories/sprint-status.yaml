@@ -187,7 +187,8 @@ version: v0.6
 stories:
   # 6.1: gates 7 and 0 (E89, E90) and the agent's halves of gates 9, 1 and 2 (E91 to E93) recorded, login step 6 measured; the owner's steps (gate 1 mount, gates 3 to 6, the login check, question 10, the work network W1 to W4) packaged in workshop_gate_probe; gate 8 before 6.22.
   - {id: "6.1", file: story-6.1-workstation-gates.md, slice: "0", status: in-progress}
-  - {id: "6.2", file: story-6.2-floor-keys-and-catalogue-format.md, slice: A, status: approved}
+  # 6.2: done; max_usd waits on the owner's gate 6 entry (D-1109); D-1103 to D-1108 to confirm in the QA report.
+  - {id: "6.2", file: story-6.2-floor-keys-and-catalogue-format.md, slice: A, status: review}
   - {id: "6.3", file: story-6.3-engine-driver-and-host-git.md, slice: A, status: approved}
   - {id: "6.4", file: story-6.4-migration-3-and-workshop-records.md, slice: A, status: approved}
   - {id: "6.5", file: story-6.5-gateway-and-container-crate.md, slice: A, status: approved}
