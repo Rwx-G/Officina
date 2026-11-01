@@ -28,9 +28,12 @@ reported apart (D-578, D-581). Its entry state is below.
 What closes the epic, in order:
 
 1. The owner's gate runs: gate 1's window half (story 5.16 AC 10), which
-   also opens story 5.18's entry (D-841); gate 4's owner half (E22) and
-   window half (story 5.7 AC 11); gate 7's readability check on one of his
-   sessions (story 5.10 AC 4); gate 8's optional interactive half.
+   also opens story 5.18's entry (D-841); gate 7's readability check on
+   one of his sessions (story 5.10 AC 4); gate 8's optional interactive
+   half. Gate 4 is done: its owner half on 2026-10-30 (E88, story 5.24)
+   and its window half the same day (E88's window half, story 5.7 AC 11),
+   which passed with three findings fixed on 2026-11-01 (D-1000 to
+   D-1003).
 2. Real use on a build of `main` with every story merged: the Use, Auto
    and Delivery share rows of PRD section 7 read with
    `examples/use_metrics.rs` (story 5.19 AC 4), and question 8's values
@@ -69,7 +72,7 @@ closing commit" below), Windows 11 host; `core-linux` in a
 | E19 `--bg`, trust and agent view | E19 | verified (agent), items 1 to 3 hold |
 | E20 the bare `--` (gate 2) | E20 | verified (agent): both forms pass byte for byte; `--resume` from the binary's folder stops at the trust dialog (D-635) |
 | E21 resume delivery (gate 3) | E21 | verified (agent): delivered into a live idle session, refused on one waiting on a question |
-| E22 work order permissions (gate 4) | E22 | agent half verified: a `--bg` session takes the supervisor's environment (D-127's branch, README states it); **owner half and window half open** |
+| E22 work order permissions (gate 4) | E22, E88 | agent half verified: a `--bg` session takes the supervisor's environment (D-127's branch, README states it); owner half verified 2026-10-30 (E88: the project's own mode wins, D-980 to D-987); window half passed 2026-10-30 with findings (E88's window half: started, bound in 1.8 s; a templates-only floor not offered for approval, the composer's Create silent, the session's own worktree unnamed, fixed by D-1000 to D-1002) |
 | E23 `claude logs` (gate 7) | E23 | verified (agent): exit 0 in 0.89 s; agent readability check recorded; **owner readability check open** |
 | E24 the orchestrator's flag set (gate 1) | E24 | agent half and owner half passed (containment holds; D-690 to D-693); **window half open** (story 5.16 AC 10) |
 | E25 memory files in the review call | E25 | verified (agent): the parent's `CLAUDE.md` did not load; D-164's first branch |
@@ -122,7 +125,7 @@ of their own.
 | 5.4 Templates and catalogue format | review | |
 | 5.5 Work order validation | review | |
 | 5.6 Migration 2 and records | review | |
-| 5.7 Cards and launch | in progress | AC 11, gate 4's window half |
+| 5.7 Cards and launch | review | D-1000 to D-1002 to confirm (gate 4's window half passed with findings, D-1003) |
 | 5.8 Briefing and the Orchestrator view | review | D-677, D-679 to confirm |
 | 5.9 Composer and cards | review | D-680 to confirm |
 | 5.10 Meeting, receive | review | gate 7's readability on one of the owner's sessions |
@@ -345,18 +348,24 @@ own sessions load no user or project configuration (`--setting-sources
 | The meeting's filter lookup missed includes and the worktree config | D-686 | `crates/officina-host/src/git.rs` |
 | The review's input followed an unverified session claim | D-960, D-961 | `relay/review.rs`, `relay/run/request.rs`, `process_tree.rs`, `relay/gate.rs` (core), CHANGELOG Security |
 | `Card.cwd` unmarked, the console launcher outside the lint, proposal ids dated ahead counted, the proposals' origin labelled as the orchestrator | D-962 to D-965 | `board.rs`, `clippy.toml`, `orders/proposal.rs`, the meeting and Proposals components, CHANGELOG Security |
+| Gate 4's window half: a floor of free projects and templates was never offered for approval | D-1000 | `relay/catalogue.rs`, `relay/known_projects.rs`, CHANGELOG Fixed |
+| Gate 4's window half: the composer's Create gave no visible feedback | D-1001 | `Composer.svelte`, `WorkOrderCard.svelte`, `orchestrator.svelte.ts`, CHANGELOG Fixed |
+| Gate 4's window half: a session that worked in its own git worktree left no trace of where | D-1002 | `orders/view.rs`, `WorkOrderCard.svelte`, `WorkOrderHistory.svelte`, README, CHANGELOG Added |
 
 ## Open owner items
 
 Each with its one-liner, as the stories' Completion Notes give it.
 
-1. **Gate 4's owner half (E22, story 5.1 AC 5).** From the repository
+1. **Gate 4's owner half (E22, story 5.1 AC 5).** Done 2026-10-30,
+   recorded in E88 (story 5.24). The procedure it followed: from the repository
    root, in a console of his own: `cargo build -p officina-host --features
    window-authority --example gates_v05`, then
    `target\debug\examples\gates_v05.exe gate4`. Report:
    `target/gates-v05/report-gate4.md`, recorded in E22. It runs again once
    he switches his default mode (D-573).
-2. **Gate 4's window half (story 5.7 AC 11, D-673).** With a template
+2. **Gate 4's window half (story 5.7 AC 11, D-673).** Done 2026-10-30,
+   passed with findings, recorded in E88's window half (D-1003). The
+   procedure it followed: with a template
    approved on a trusted scratch repository: open the Orchestrator view,
    choose the template, the project and each value, click Launch with the
    mouse, leave the window open ten minutes, and record in E22 the
@@ -432,6 +441,9 @@ From `epic-5-decisions.md`, every decision marked "(To confirm.)":
 - D-833: the pending count in the view switch button's corner.
 - D-860: "in Your turn" read as live idle in Done for a background session.
 - D-865: the proposed answer's fixed slot in the panel.
+- D-1000: a template puts the relay in use; the known-projects record keeps the narrower rule before an approval.
+- D-1001: the composer's status line, the card scrolled into view at once and focused after a subject pick or an opened proposal.
+- D-1002: a work order names the folder its session worked in, not its branch; worktrees left to v0.7's merged detection.
 
 Confirmed only in part, from the same file: D-565 (provisionally; the
 owner's final validation in real use) and D-574 (in principle). And FR-10's

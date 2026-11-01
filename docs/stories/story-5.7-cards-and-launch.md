@@ -1,6 +1,6 @@
 # Story 5.7: Work order cards, the launch path, the injection battery and the mutants
 
-**Status:** In progress (AC 11, gate 4's window half, waits for story 5.9; every other AC done)
+**Status:** Review
 
 ## Story
 
@@ -33,7 +33,7 @@ so that one pointer click on values from my closed lists is the only way a work 
 - [x] Mutant features, `MUTANTS_ENABLED`, forwarding chain, CI job `mutants` (compile first, named failure, control), the app's compile-time assertion (AC 7)
 - [x] Zero-write and doctor (AC 8, 9)
 - [x] Update `CHANGELOG.md` (AC 10)
-- [ ] Gate 4's window half with the owner (AC 11)
+- [x] Gate 4's window half with the owner (AC 11), passed with findings fixed (D-1000 to D-1003)
 
 ## Dev Notes
 
@@ -51,7 +51,7 @@ so that one pointer click on values from my closed lists is the only way a work 
 - Host unit: `crates/officina-host/src/{orders,doctor}.rs`.
 - CLI integration: `crates/officina/tests/{watch,injection,quota_doctor}.rs`.
 - App crate: `app/src-tauri/src/main.rs` (compile-time assertion). CI: job `mutants`.
-- Manual: E22's window half (AC 11).
+- Manual: gate 4's window half (AC 11), research notes E88, pointed to from E22.
 
 ## Dev Agent Record
 
@@ -64,7 +64,7 @@ so that one pointer click on values from my closed lists is the only way a work 
 
 ### Completion Notes
 
-ACs 1 to 10 are implemented and proven by the tests named; AC 11 is the owner's and waits for story 5.9 (D-673). Decisions D-664 to D-673 (epic-5-decisions.md, "Implementation (2026-10-29)"); D-671 states E22's branch for the owner's information, D-673 is an owner item; none changes an approved decision. No new dependency and no new feature outside the three mutant features the story names.
+ACs 1 to 10 are implemented and proven by the tests named; AC 11, the owner's, passed on 2026-10-30 with three findings, fixed on 2026-11-01 (D-1000 to D-1003). Decisions D-664 to D-673 (epic-5-decisions.md, "Implementation (2026-10-29)"); D-671 states E22's branch for the owner's information, D-673 is an owner item; none changes an approved decision. No new dependency and no new feature outside the three mutant features the story names.
 
 - AC 1: core `crates/officina-core/src/orders/card.rs::tests::{a_card_carries_the_vector_spawn_built, an_edit_keeps_the_seq, an_edit_issues_a_new_card_and_supersedes_the_old, an_edit_outside_the_list_is_refused, the_single_open_subject_is_the_default, otherwise_a_new_subject_named_after_the_template, names_that_cannot_be_ones_are_refused_as_unknown, a_card_serializes_for_the_window}`; the `card` section of `tests/vectors/orders.json` through `crates/officina-core/tests/orders_vectors.rs::card_cases_match` (each issued card's `argv` also compared with `spawn::work_order` rebuilt with its `seq`). Refusal shapes: D-664.
 - AC 2: `card.rs::tests::checks_run_in_their_order` (iterates `LaunchRefusal::ALL`, each check alone and with every later one failing too); `orders_vectors.rs::every_launch_refusal_has_a_case` (iterates `LaunchRefusal::ALL`). The approved catalogue is the one the window's record vouches for (D-665).
@@ -76,7 +76,7 @@ ACs 1 to 10 are implemented and proven by the tests named; AC 11 is the owner's 
 - AC 8: `crates/officina/tests/quota_doctor.rs::no_command_writes_under_the_claude_config_dir` now issues a card and launches it through the collector's fake (`Started`) before the fingerprint is compared.
 - AC 9: host `crates/officina-host/src/doctor.rs::tests::{agent_view_off_in_the_environment_warns, agent_view_off_in_user_settings_warns, agent_view_set_to_0_does_not_warn}` (base environment and settings file as arguments). D-672.
 - AC 10: `CHANGELOG.md` `[Unreleased]`: Added (work orders launched from cards; doctor's agent view line), Security (the injection battery; the mutation job). README "The orchestrator (v0.5, in progress)", Work orders: cards and the one click, what a work order's session runs with (E22's branch, D-671), agent view.
-- AC 11: open, the owner's (D-673). One-liner, once story 5.9 merges: with a template approved on a trusted scratch repository, issue its card in the Orchestrator view and click Launch, then record in research notes E22 the outcome, `printed`, whether the row binds within 10 minutes and the names of the variables the session's Bash sees. E22 holds the instruction. Story 5.9 gives the window its composer and Launch (2026-10-29), so it can run now: approve a floor with one `[[template]]` whose project is the scratch repository (and approve it once in the Relay view), open the Orchestrator view, choose the template, the project and each value, check the card, click Launch with the mouse, and leave the window open ten minutes for the binding.
+- AC 11: passed with findings (D-1003), recorded in research notes E88 (window half) and pointed to from E22. The owner launched one `probe-note` card from the Orchestrator view of the installed window (built from `b60690f`, Claude Code 2.1.314) into a trusted scratch repository: outcome `started`, `printed` holding `backgrounded · <id> · probe-note-1`, the row bound 1.8 s after the launch, and the probe's Bash listed Officina's `OFFICINA_*` names (`OFFICINA_FLOOR` among them, as a session kind keeps them). Findings, each fixed with its tests: a floor of free projects and templates was never offered for approval (D-1000, `fix(relay)`); Create on the composer's subject picker gave no visible feedback (D-1001, `fix(ui)`); the session made its own git worktree under the project and worked there, which the card and the history now name (D-1002, `feat(relay)`), merging and removing it left to v0.7's merged detection. The instruction it followed, kept for the record: with a template approved on a trusted scratch repository, issue its card in the Orchestrator view and click Launch, then record in research notes E22 the outcome, `printed`, whether the row binds within 10 minutes and the names of the variables the session's Bash sees. E22 holds the instruction. Story 5.9 gives the window its composer and Launch (2026-10-29), so it can run now: approve a floor with one `[[template]]` whose project is the scratch repository (and approve it once in the Relay view), open the Orchestrator view, choose the template, the project and each value, check the card, click Launch with the mouse, and leave the window open ten minutes for the binding.
 - Gate (2026-10-29), on `f047594`: the full local replay of `ci.yml`. Windows green: Rust 1292 passed, 0 failed, 11 ignored; the launch half without the authority, perf, lexer differential, approvals stress, registry crash, authority markers, registry dependencies, bundled roots and e2e fixtures green (the fixtures unchanged); Vitest 279; Playwright 978 passed, 6 skipped (x3); the `mutants` step caught each mutant through its guarding case, control green; `cargo deny` ok; `pnpm audit` 1 low, ignored as before. Linux (`rust:1-bookworm`): 1154 passed, 0 failed, 9 ignored, and the spawn step alone; its first run failed `crates/officina/tests/fake_claude.rs::environment_wins_over_the_sidecar` with `Text file busy` (ETXTBSY: a copied fake executed while another test thread's fork still held it open for writing), a test this story does not touch, and passed on the rerun.
 
 ## File List
@@ -91,9 +91,11 @@ ACs 1 to 10 are implemented and proven by the tests named; AC 11 is the owner's 
 - `crates/officina/Cargo.toml`, `crates/officina/src/bin/officina-fake-claude.rs`
 - `crates/officina/tests/{quota_doctor,spawn,watch}.rs`, `crates/officina/tests/common/mod.rs`, `crates/officina/tests/common/orders.rs` (new), `crates/officina/tests/injection.rs` (new), `tests/vectors/injection.json` (new)
 - `docs/research-notes.md` (E22), `docs/stories/epic-5-decisions.md`, `docs/stories/sprint-status.yaml`, this file
+- Gate 4's window half (2026-11-01): `crates/officina-core/src/relay/{catalogue,gate,view}.rs`, `crates/officina-host/src/relay/{doctor,known_projects}.rs`, `crates/officina-core/src/orders/{briefing,view,work_order}.rs`, `crates/officina-host/examples/orchestrator_fixture.rs`, `crates/officina/tests/watch.rs`, `app/src/components/{Composer,OrchestratorView,WorkOrderCard,WorkOrderHistory}.svelte`, `app/src/lib/{orchestrator.svelte,orchestrator-text}.ts`, `app/src/lib/generated/WorkOrderView.ts`, `app/scripts/e2e-fixtures.mjs`, `app/e2e/{fixtures,relay.spec,orchestrator.spec}.ts`, `README.md`, `CHANGELOG.md`, `docs/research-notes.md` (E22, E88), `docs/qa/epic-5-report.md`
 
 ## Change Log
 
 - 2026-10-28 created
 - 2026-10-28 reworked after review: `seq` reserved at issue and kept by edits, `name_taken`, launched vector equal to the card's (F2); held pipes after exit 0 are `started`, a timeout kills only `claude` (F10); `LaunchOutcome` never dropped (F14); mutants compile first and fail on a named case (F22); gate 4's window half (F25); forwarding chain and compile-time assertion (F29); executables only (F28)
 - 2026-10-29 implemented; decisions D-664 to D-673; E22's branch recorded (D-671); status In progress on AC 11, the owner's, after story 5.9
+- 2026-11-01 AC 11 passed with findings (owner's run of 2026-10-30, E88 window half); the three findings fixed (D-1000 to D-1002); status Review

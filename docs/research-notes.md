@@ -522,13 +522,12 @@ Story 5.1 AC 5, AD-96 row 4, D-126, D-127, D-573.
   before removing the file and the session. Report:
   `target/gates-v05/report-gate4.md`. It runs again once the owner
   switches his default mode (D-573).
-- **Window half: pending** (story 5.7 AC 11, D-673). The launch path is
-  built with story 5.7; the window's controls come with story 5.9. Once
-  it merges: with a template approved on a trusted scratch repository,
-  issue its card in the Orchestrator view and click Launch, then record
-  the outcome, `printed`, whether the row binds within 10 minutes and the
-  names of the variables the session's Bash sees, here. The branch above
-  is recorded in epic-5-decisions.md D-671 and stated in the README.
+- **Window half: passed with findings, run 2026-10-30, recorded in E88**
+  (story 5.7 AC 11, D-1003): one card launched from the Orchestrator view
+  with the mouse started in the background and its row bound 1.8 s after
+  the launch; the probe's Bash listed Officina's `OFFICINA_*` names. Its
+  three findings are fixed by D-1000 to D-1002. The branch above is
+  recorded in epic-5-decisions.md D-671 and stated in the README.
 
 ## E23. `claude logs` (v0.5 gate 7)
 
@@ -1239,6 +1238,48 @@ ids are left out.
   (D-982 to D-986). The environment that a service a work order started
   hands to the author's own later background sessions is accepted and
   stated in the README (D-987).
+
+### Window half (story 5.7 AC 11)
+
+**Passed, with three findings** (D-1000 to D-1003). **Verified** by the
+owner on 2026-10-30 with Claude Code 2.1.314 and the installed window built from
+`b60690f`, started with `OFFICINA_FLOOR` naming a test floor: one `free`
+project on a trusted scratch git repository and one template,
+`probe-note`, whose prompt asks for `officina-probe.txt` listing the
+environment variable names the Bash tool sees, then `git status`.
+Workstation paths and ids are left out.
+
+- **Approval.** The catalogue banner did not appear: a floor of free
+  projects and templates, no action, was not counted as using the relay,
+  so nothing offered it for approval (finding 1, D-1000). Once a harmless
+  `free` action (`git --version`) was added to the floor, the header's
+  "catalogue change" chip appeared, the owner approved the catalogue in
+  Board with the mouse, and the chip went.
+- **Composing.** In the Orchestrator view, Create on the subject picker
+  seemed to do nothing, while the card `probe-note` stood just below
+  (finding 2, D-1001).
+- **Launch and binding.** The card read "started in the background". The
+  journal held `work_order_launched` with outcome `started`. The registry's
+  `work_order` row: outcome `started`, exit 0, `printed` holding
+  `backgrounded · <id> · probe-note-1`, `bg_id` and `session_id` set,
+  `bound_at_ms` 1.8 s after `launched_at_ms`, well within the 10 minutes.
+- **Where the session worked.** The session ended `done`, but Claude made
+  a git worktree itself, `<scratch>/.claude/worktrees/officina-probe` on
+  the branch `worktree-officina-probe` (locked), ran there (its `claude
+  agents` folder was that worktree) and wrote the probe file there, not in
+  the project's working tree; the worktree stayed after the session
+  (finding 3, D-1002). The binding held, since the folder lies under the
+  project's. Inferred, not verified: the session chose to use Claude
+  Code's own worktree tool, since the work order's vector passes no
+  worktree flag; whether every work order does so is not known from one
+  run.
+- **Environment.** The probe's Bash listed Officina's environment names,
+  `OFFICINA_FLOOR` among them: a session kind keeps the author's
+  `OFFICINA_*` settings (README, "How Officina starts `claude`"), as D-987
+  expects.
+- **Outcome.** AD-96 row 4's window half holds: one pointer click on a
+  core-issued card started the session, the row bound within seconds, and
+  `printed` names it. Story 5.7 AC 11 closes (D-1003).
 
 ## E7. Configuration directory
 

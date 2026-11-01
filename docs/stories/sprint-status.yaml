@@ -135,8 +135,8 @@ stories:
   - {id: "5.4", file: story-5.4-templates-and-catalogue-format.md, slice: A, status: review}
   - {id: "5.5", file: story-5.5-work-order-validation-and-vector.md, slice: A, status: review}
   - {id: "5.6", file: story-5.6-migration-2-and-work-order-records.md, slice: A, status: review}
-  # 5.7: ACs 1 to 10 done; AC 11 (gate 4's window half, the owner's) can run now that 5.9 gives the window its Launch (D-673).
-  - {id: "5.7", file: story-5.7-cards-and-launch.md, slice: A, status: in-progress}
+  # 5.7: done; AC 11 (gate 4's window half) passed with findings on 2026-10-30, fixed on 2026-11-01; D-1000 to D-1002 to confirm.
+  - {id: "5.7", file: story-5.7-cards-and-launch.md, slice: A, status: review}
   # 5.8: done; AC 7's Full HD fit holds by the lead's choice, D-679 (to confirm: no "contract held" in the header, 8 px view button sides).
   - {id: "5.8", file: story-5.8-briefing-and-orchestrator-view.md, slice: A, status: review}
   # 5.9: done; D-680 to confirm (no value chosen by default but a single-entry list).
