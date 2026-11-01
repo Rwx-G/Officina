@@ -5,9 +5,17 @@
   // name (AD-55), which names a subject, never a value. Each choice asks
   // core for a card, or edits the open one (AD-78); the card or the typed
   // refusal is shown. Templates and their descriptions come from the
-  // approved floor, rendered as text.
+  // approved floor, rendered as text. While a card is on screen a status
+  // line under the subject picker names it and its subject, so a choice
+  // shows its effect where it was made (D-1001); the line holds one line
+  // whatever it says, so nothing after it moves (D-516).
   import type { OrchestratorStore } from "../lib/orchestrator.svelte";
-  import { LAUNCH_REFUSAL_TEXT, TEMPLATE_CHANGE_TEXT, issueRefusalText } from "../lib/orchestrator-text";
+  import {
+    LAUNCH_REFUSAL_TEXT,
+    TEMPLATE_CHANGE_TEXT,
+    composerStatusText,
+    issueRefusalText,
+  } from "../lib/orchestrator-text";
   import SubjectPicker, { type PickerChoice } from "./SubjectPicker.svelte";
 
   interface Props {
@@ -111,6 +119,9 @@
             Suggested by the proposal: <span class="text">{card.proposal.suggested_subject}</span>
           </span>
         {/if}
+        <p class="status" role="status" data-testid="composer-status" title={composerStatusText(card)}>
+          {composerStatusText(card)}
+        </p>
       </div>
     {/if}
   {/if}
@@ -205,6 +216,15 @@
   .fault {
     color: var(--color-stopped-text);
     font-weight: 600;
+  }
+  /* One line whatever the names: a long one is cut, its whole text in the
+     title, so the card below never moves as the line changes. */
+  .status {
+    margin: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    unicode-bidi: isolate;
   }
   code {
     font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;

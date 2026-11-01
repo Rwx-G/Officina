@@ -5,7 +5,6 @@
 // shows it and sends its id and prompt hash back, never a prompt, a hash or
 // an argument of its own.
 import type { CardAnswer } from "./generated/CardAnswer";
-import type { CardChange } from "./generated/CardChange";
 import type { IssueRefusal } from "./generated/IssueRefusal";
 import type { LaunchAnswer } from "./generated/LaunchAnswer";
 import type { LaunchRefusal } from "./generated/LaunchRefusal";
@@ -31,6 +30,12 @@ export type ComposerFault =
   | { kind: "issue"; refusal: IssueRefusal }
   | { kind: "launch"; refusal: LaunchRefusal }
   | { kind: "error"; message: string };
+
+/** How a card just issued is shown (D-1001): scrolled into view after a
+ *  choice in the composer's lists, which keep the focus; scrolled and
+ *  focused after a subject pick or an opened proposal, whose next step is
+ *  the card; left where it is after a permission switch made on it. */
+export type Reveal = "none" | "scroll" | "focus";
 
 const NOTHING_CHOSEN: Choices = { template: "", project: "", values: {} };
 
@@ -76,6 +81,8 @@ export class OrchestratorStore {
   /** How the last Start was answered, or why it could not be sent. */
   started = $state<StartAnswer | null>(null);
   startError = $state<string | null>(null);
+  /** The card the author's last choice brought, to show him (D-1001). */
+  shown = $state<{ id: string; reveal: Reveal } | null>(null);
   /** Why the last dismissal of a proposal failed, and which. */
   proposalError = $state<{ id: string; message: string } | null>(null);
   /** Numbers the issue and edit requests: only the latest one's answer is
@@ -144,15 +151,15 @@ export class OrchestratorStore {
   async chooseValue(name: string, value: string): Promise<void> {
     this.choices.values[name] = value;
     const card = this.editable;
-    if (card) await this.edit(card, { kind: "value", name, value });
+    if (card) await this.ask(() => ipc.editCard(card.id, { kind: "value", name, value }), card, "scroll");
     else await this.compose();
   }
 
   /** The subject the card files its session under. */
   async chooseSubject(subject: SubjectChoice): Promise<void> {
     const card = this.editable;
-    if (card) await this.edit(card, { kind: "subject", subject });
-    else await this.compose(subject);
+    if (card) await this.ask(() => ipc.editCard(card.id, { kind: "subject", subject }), card, "focus");
+    else await this.compose(subject, "focus");
   }
 
   /** Opens the pending work order proposal `id` as the card on screen
@@ -161,7 +168,7 @@ export class OrchestratorStore {
    *  choices, and a choice edits it. */
   async openProposal(id: string): Promise<void> {
     this.drop();
-    await this.ask(() => ipc.issueCardFromProposal(id), null);
+    await this.ask(() => ipc.issueCardFromProposal(id), null, "focus");
   }
 
   /** Dismisses proposal `id` (FR-12); the next view shows it decided. */
@@ -204,7 +211,7 @@ export class OrchestratorStore {
   async setPermission(permission: WorkOrderPermission): Promise<void> {
     const card = this.editable;
     if (!card || card.permission === permission) return;
-    await this.ask(() => ipc.setWorkOrderPermission(card.id, permission), card);
+    await this.ask(() => ipc.setWorkOrderPermission(card.id, permission), card, "none");
   }
 
   /** Clears the card and its launch: the choices no longer match them. */
@@ -212,29 +219,27 @@ export class OrchestratorStore {
     this.request += 1;
     this.composing = false;
     this.card = null;
+    this.shown = null;
     this.launch = null;
     this.fault = null;
   }
 
   /** Issues a card for the choices once every one is made. */
-  private async compose(subject: SubjectChoice | null = null): Promise<void> {
+  private async compose(subject: SubjectChoice | null = null, reveal: Reveal = "scroll"): Promise<void> {
     const { template, project, values } = this.choices;
     const entries = Object.entries(values);
     if (template === "" || project === "" || entries.some(([, value]) => value === "")) {
       this.drop();
       return;
     }
-    await this.ask(() => ipc.issueCard({ template, project, values: entries, subject }), null);
-  }
-
-  private async edit(card: WorkOrderCard, change: CardChange): Promise<void> {
-    await this.ask(() => ipc.editCard(card.id, change), card);
+    await this.ask(() => ipc.issueCard({ template, project, values: entries, subject }), null, reveal);
   }
 
   /** Sends one issue or edit and shows its answer, if no later one was
    *  sent meanwhile. A refused edit keeps its card and puts the choices
-   *  back to it; a card the backend no longer holds open is dropped. */
-  private async ask(send: () => Promise<CardAnswer>, edited: WorkOrderCard | null): Promise<void> {
+   *  back to it; a card the backend no longer holds open is dropped. The
+   *  card issued is shown as `reveal` says. */
+  private async ask(send: () => Promise<CardAnswer>, edited: WorkOrderCard | null, reveal: Reveal): Promise<void> {
     const request = ++this.request;
     this.composing = true;
     this.fault = null;
@@ -243,6 +248,7 @@ export class OrchestratorStore {
       if (request !== this.request) return;
       if (answer.outcome === "issued") {
         this.card = answer.value;
+        this.shown = { id: answer.value.id, reveal };
         this.launch = null;
         this.choices = choicesOf(answer.value);
         return;

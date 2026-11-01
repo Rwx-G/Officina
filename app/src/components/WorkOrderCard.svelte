@@ -19,16 +19,22 @@
   // project's own mode gives nothing new, so the keyboard reaches it too.
   // The tooltip is laid over the card, never in its flow, so showing it
   // moves nothing.
+  // A card the author's choice just brought is scrolled into view, at once:
+  // the window's motion is fades and slides only (D-545), so no smooth
+  // scroll; it takes the focus after a subject pick or an opened proposal
+  // (D-1001).
   import type { LaunchAnswer } from "../lib/generated/LaunchAnswer";
   import type { WorkOrderCard } from "../lib/generated/WorkOrderCard";
   import type { WorkOrderPermission } from "../lib/generated/WorkOrderPermission";
   import type { WorkOrderView } from "../lib/generated/WorkOrderView";
+  import type { Reveal } from "../lib/orchestrator.svelte";
   import {
     LAUNCH_REFUSAL_TEXT,
     PERMISSION_SWITCH_TEXT,
     PERMISSION_TEXT,
     PERMISSION_TIP_TEXT,
     PHASE_TEXT,
+    cardSubjectText,
     launchOutcomeText,
   } from "../lib/orchestrator-text";
   import { isPointerClick } from "../lib/pointer";
@@ -44,20 +50,25 @@
     nowMs: number;
     /** An issue, an edit or a permission switch is on its way. */
     busy: boolean;
+    /** The card the author's last choice brought, and how to show it. */
+    shown?: { id: string; reveal: Reveal } | null;
     /** Launches the card: called on a pointer click only. */
     onLaunch: () => void;
     /** Switches the project's work orders to `permission`: called for
      *  Officina's default on a pointer click only (D-986). */
     onPermission: (permission: WorkOrderPermission) => void;
   }
-  let { card, order, launching, launch, nowMs, busy, onLaunch, onPermission }: Props = $props();
+  let { card, order, launching, launch, nowMs, busy, shown = null, onLaunch, onPermission }: Props = $props();
 
   const LAUNCH_LABELS = { idle: "Launch", launching: "Launching" } as const;
 
-  let subject = $derived.by(() => {
-    const chosen = card.subject;
-    if (chosen.kind === "new") return `a new subject, ${chosen.value}`;
-    return card.subject_options.find((s) => s.id === chosen.value)?.name ?? `subject ${chosen.value}`;
+  let subject = $derived(cardSubjectText(card));
+
+  let article: HTMLElement;
+  $effect(() => {
+    if (!shown || shown.id !== card.id || shown.reveal === "none") return;
+    article.scrollIntoView({ block: "nearest" });
+    if (shown.reveal === "focus") article.focus({ preventScroll: true });
   });
   /** The outcome shown: the click's answer, or the history's once the
    *  answer came back before the outcome did. */
@@ -96,7 +107,15 @@
   }
 </script>
 
-<article class="card" data-testid="work-order-card" data-card={card.id} data-state={card.state} aria-label="Work order {card.name}">
+<article
+  class="card"
+  bind:this={article}
+  tabindex="-1"
+  data-testid="work-order-card"
+  data-card={card.id}
+  data-state={card.state}
+  aria-label="Work order {card.name}"
+>
   <div class="head">
     <strong data-testid="card-template">{card.template}</strong>
     <span class="chip" data-testid="card-project">{card.project}</span>

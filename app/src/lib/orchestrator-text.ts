@@ -23,6 +23,7 @@ import type { SubjectStatus } from "./generated/SubjectStatus";
 import type { TargetView } from "./generated/TargetView";
 import type { TemplateChange } from "./generated/TemplateChange";
 import type { TemplateUnavailable } from "./generated/TemplateUnavailable";
+import type { WorkOrderCard } from "./generated/WorkOrderCard";
 import type { WorkOrderPermission } from "./generated/WorkOrderPermission";
 import type { WorkOrderRefusal } from "./generated/WorkOrderRefusal";
 import type { WorkOrderSource } from "./generated/WorkOrderSource";
@@ -308,6 +309,19 @@ export function launchOutcomeText(outcome: LaunchOutcome, cwd: string): string {
     case "unknown":
       return "Outcome unknown: the launch was recorded, its end was not. The history shows what the registry knows.";
   }
+}
+
+/** The subject a card files its session under, as words. */
+export function cardSubjectText(card: WorkOrderCard): string {
+  const chosen = card.subject;
+  if (chosen.kind === "new") return `a new subject, ${chosen.value}`;
+  return card.subject_options.find((s) => s.id === chosen.value)?.name ?? `subject ${chosen.value}`;
+}
+
+/** The composer's status line (D-1001): which card its choices gave and
+ *  where it files its session, so a choice shows its effect beside it. */
+export function composerStatusText(card: WorkOrderCard): string {
+  return `The card below is ready: ${card.name}, filed under ${cardSubjectText(card)}.`;
 }
 
 /** What the orchestrator is, beside its Start (AD-89, R110). */

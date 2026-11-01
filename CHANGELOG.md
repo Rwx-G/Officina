@@ -1076,6 +1076,12 @@ project uses [Semantic Versioning](https://semver.org/).
   still guards nothing, its free projects stay free, and the window keeps
   no known-projects record for it before its approval.
 
+- The composer's Create, which names a new subject, seemed to do nothing:
+  the card changed below, often out of view. A status line under the
+  subject picker now names the card and where it files its session, the
+  card is scrolled into view after each choice, and a subject picked or a
+  proposal opened gives it the focus.
+
 - Doctor kept Officina's hook and statusline entries that named another
   `officina.exe` (a copy placed elsewhere earlier, an older install) as
   registered, so sessions kept running that copy and a block pasted after

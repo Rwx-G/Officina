@@ -65,6 +65,7 @@
         launch={store.launch}
         {nowMs}
         busy={store.composing}
+        shown={store.shown}
         onLaunch={() => void store.launchCard()}
         onPermission={(permission) => void store.setPermission(permission)}
       />

@@ -22,7 +22,11 @@ import {
   transitionsDone,
   withPending,
 } from "./fixtures";
-import { PROPOSAL_STATUS_TEXT, invalidReasonText } from "../src/lib/orchestrator-text";
+import {
+  PROPOSAL_STATUS_TEXT,
+  composerStatusText,
+  invalidReasonText,
+} from "../src/lib/orchestrator-text";
 import type { CardAnswer } from "../src/lib/generated/CardAnswer";
 import type { LaunchAnswer } from "../src/lib/generated/LaunchAnswer";
 import type { MeetingView } from "../src/lib/generated/MeetingView";
@@ -360,6 +364,64 @@ test("changing a value sends edit_card and shows the new card", async ({ page })
     cardId: edited.id,
     change: { kind: "subject", subject: { kind: "new", value: name } },
   });
+});
+
+/** Scrolls every scrolled box of the page back to its top. */
+async function scrollToTop(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    for (const element of [document.scrollingElement, ...Array.from(document.querySelectorAll("*"))]) {
+      if (element && element.scrollTop > 0) element.scrollTop = 0;
+    }
+  });
+}
+
+// D-1001, gate 4's window run: Create on the subject picker seemed to do
+// nothing while the card changed below. The status line beside it now names
+// the card and its subject, the card comes into view and takes the focus,
+// and the line holds its size whatever it says (D-516).
+test("Create on the subject picker shows the card it gave", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 640 });
+  const first = card("card-bump");
+  await composeCard(page, first);
+  const status = page.getByTestId("composer-status");
+  await expect(status).toHaveText(composerStatusText(first));
+  const composer = page.getByTestId("composer");
+  const height = async () => (await composer.boundingBox())!.height;
+  const before = await height();
+  // Back to the view's top: the card is below the fold.
+  await scrollToTop(page);
+  const shown = page.getByTestId("work-order-card");
+  await expect(shown).not.toBeInViewport();
+
+  const renamed = card("card-bump-new-subject");
+  const long = { ...renamed, subject: { kind: "new" as const, value: `${"serde upgrades ".repeat(30)}<b>end</b>` } };
+  await answerCards(page, { outcome: "issued", value: long });
+  await page.getByTestId("picker-new-name").fill(long.subject.value);
+  await page.getByTestId("picker-create").click();
+
+  await expect(shown).toHaveAttribute("data-card", long.id);
+  await expect(status).toHaveText(composerStatusText(long));
+  await expect(status.locator("b")).toHaveCount(0);
+  await expect(shown).toBeFocused();
+  await expect(shown).toBeInViewport();
+  expect(await height()).toBe(before);
+});
+
+test("a choice in the composer's lists brings the card into view and leaves the focus", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 640 });
+  const first = card("card-bump");
+  const edited = card("card-bump-minor");
+  await composeCard(page, first);
+  await scrollToTop(page);
+  const shown = page.getByTestId("work-order-card");
+  await expect(shown).not.toBeInViewport();
+  const changed = edited.values.find((p) => p.value !== first.values.find((q) => q.name === p.name)!.value)!;
+  const select = page.locator(`[data-testid="composer-param"][data-param="${changed.name}"]`);
+  await answerCards(page, { outcome: "issued", value: edited });
+  await select.selectOption(changed.value);
+  await expect(shown).toHaveAttribute("data-card", edited.id);
+  await expect(shown).toBeInViewport();
+  await expect(shown).not.toBeFocused();
 });
 
 test("a refusal is shown on the composer", async ({ page }) => {
