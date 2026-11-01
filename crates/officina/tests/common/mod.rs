@@ -231,7 +231,12 @@ pub fn printed_hooks_block(doctor_stdout: &[u8]) -> serde_json::Value {
 
 pub fn run_with(mut cmd: Command, stdin: &[u8]) -> Output {
     let mut child = cmd.spawn().unwrap();
-    child.stdin.take().unwrap().write_all(stdin).unwrap();
+    match child.stdin.take().unwrap().write_all(stdin) {
+        // A command that refuses its arguments exits without reading its
+        // input; the write then races its exit, which the test asserts.
+        Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => {}
+        written => written.unwrap(),
+    }
     child.wait_with_output().unwrap()
 }
 
