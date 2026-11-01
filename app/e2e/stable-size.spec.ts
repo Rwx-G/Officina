@@ -164,11 +164,11 @@ const CASES: ToggleCase[] = [
   // The Walking toggle (D-469, D-517): a fixed control in every mode, as
   // the default leaves it (D-700).
   { name: "walking toggle", selector: '[data-testid="walking-toggle"]', scene: "sceneMode", pressed: DEFAULT_WALKING },
-  // To resume and Done in the header (D-541): a count that changes moves
-  // nothing beside it.
+  // To sort, To resume and Done in the header's one indicator (D-541,
+  // D-1041): a count that changes moves nothing beside it.
   {
-    name: "ended counts",
-    selector: '[data-testid="ended-to-resume"], [data-testid="ended-done"]',
+    name: "sessions indicator",
+    selector: '[data-testid="work-counts"]',
     scene: "board",
     act: (page) =>
       page.evaluate(() => {

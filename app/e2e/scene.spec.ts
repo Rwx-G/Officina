@@ -1014,9 +1014,11 @@ test.describe("acting from the scene", () => {
     // Only the orchestrator's empty chair, which is no session (D-567).
     await expect(scene(page).locator("[data-target]")).toHaveCount(1);
     await expect(scene(page).locator('[data-target="chair"]')).toHaveCount(1);
-    await expect(page.getByTestId("ended-to-resume")).toHaveAccessibleName("0 to resume");
-    await expect(page.getByTestId("ended-done")).toHaveAccessibleName("0 done");
-    await expect(page.getByTestId("ended-done")).toHaveAttribute("title", new RegExp(`in the last ${hours(board.done_window_ms)}:`));
+    await expect(page.getByTestId("work-count-to_resume")).toHaveText("0");
+    await expect(page.getByTestId("work-count-done")).toHaveText("0");
+    await page.getByTestId("work-counts").click();
+    await expect(page.getByTestId("counts-done")).toHaveAttribute("title", new RegExp(`in the last ${hours(board.done_window_ms)}:`));
+    await page.getByTestId("work-counts").click();
     // Escape with nothing open changes nothing.
     await scene(page).focus();
     await page.keyboard.press("Escape");
@@ -1120,15 +1122,17 @@ test.describe("acting from the scene", () => {
 
   // Story 4.15 (the owner's item 4, D-541): To resume and Done are counted
   // in the header, not under the scene; each opens Board mode on its column.
+  // Story 4.20 (D-1041) puts them in one indicator, its rows the actions.
   test("the header counts To resume and Done and opens Board mode on the column", async ({ page }) => {
     const board = loadBoard("busy");
     expect(board.columns.to_resume.length).toBeGreaterThan(0);
     await openScene(page, board);
-    await expect(scene(page).getByTestId("ended-counts")).toHaveCount(0);
-    await expect(page.locator("header").getByTestId("ended-counts")).toBeVisible();
-    await expect(page.getByTestId("ended-to-resume")).toHaveAccessibleName(`${board.columns.to_resume.length} to resume`);
-    await expect(page.getByTestId("ended-done")).toHaveAccessibleName(`${board.columns.done.length} done`);
-    await page.getByTestId("ended-counts").evaluate((root) => {
+    const indicator = page.getByTestId("work-counts");
+    await expect(scene(page).getByTestId("work-counts")).toHaveCount(0);
+    await expect(page.locator("header").getByTestId("work-counts")).toBeVisible();
+    await expect(page.getByTestId("work-count-to_resume")).toHaveText(String(board.columns.to_resume.length));
+    await expect(page.getByTestId("work-count-done")).toHaveText(String(board.columns.done.length));
+    await indicator.evaluate((root) => {
       const records: MutationRecord[] = [];
       new MutationObserver((list) => records.push(...list)).observe(root, { subtree: true, childList: true, attributes: true, characterData: true });
       (window as unknown as { __countRecords: MutationRecord[] }).__countRecords = records;
@@ -1140,25 +1144,28 @@ test.describe("acting from the scene", () => {
     await push(page, renamed);
     await expect(page.getByTestId("scene-summary")).toContainText("renamed-session");
     expect(await countRecords()).toBe(0);
-    // One more Done: they are, and the button keeps its box (D-517).
-    const before = await page.getByTestId("ended-done").boundingBox();
+    // One more Done: they are, and the indicator keeps its box (D-517).
+    const before = await indicator.boundingBox();
     const more = structuredClone(renamed);
     more.columns.done.push({ ...more.columns.done[0]!, key: `${more.columns.done[0]!.key}-again`, session_id: null });
     await push(page, more);
-    await expect(page.getByTestId("ended-done")).toHaveAccessibleName(`${more.columns.done.length} done`);
+    await expect(page.getByTestId("work-count-done")).toHaveText(String(more.columns.done.length));
     expect(await countRecords()).toBeGreaterThan(0);
-    expect(await page.getByTestId("ended-done").boundingBox()).toEqual(before);
-    await page.getByTestId("ended-done").click();
+    expect(await indicator.boundingBox()).toEqual(before);
+    await indicator.click();
+    await page.getByTestId("counts-done").click();
     await expect(page.getByTestId("column-done")).toBeVisible();
     await expect(page.locator("#title-done")).toBeFocused();
     await page.keyboard.press("m");
     await sceneSettled(page);
-    await page.getByTestId("ended-to-resume").click();
+    await indicator.click();
+    await page.getByTestId("counts-to_resume").click();
     await expect(page.getByTestId("column-to_resume")).toBeVisible();
     await expect(page.locator("#title-to_resume")).toBeFocused();
     // From another view too.
     await page.getByTestId("view-subjects").click();
-    await page.getByTestId("ended-done").click();
+    await indicator.click();
+    await page.getByTestId("counts-done").click();
     await expect(page.locator("#title-done")).toBeFocused();
   });
 

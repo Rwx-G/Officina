@@ -12,8 +12,8 @@ import AnswerComposer from "./AnswerComposer.svelte";
 import { ANSWER_REFUSAL_TEXT } from "../lib/meeting-text";
 import { meeting } from "../lib/meeting.svelte";
 import type { MeetingView } from "../lib/generated/MeetingView";
-import EndedCounts from "./EndedCounts.svelte";
 import QuotaGauges from "./QuotaGauges.svelte";
+import WorkCounts from "./WorkCounts.svelte";
 import Briefing from "./Briefing.svelte";
 import type { Briefing as BriefingPayload } from "../lib/generated/Briefing";
 import StableLabel from "./StableLabel.svelte";
@@ -911,30 +911,54 @@ describe("SessionFile", () => {
   });
 });
 
-describe("EndedCounts", () => {
-  /** The words a count shows: its visible label, the room it keeps hidden. */
-  const shown = (button: HTMLElement) => button.querySelector(".label:not(.inactive)")?.textContent;
+describe("WorkCounts", () => {
+  /** The counts the button shows, in order. */
+  const numbers = (root: HTMLElement) => Array.from(root.querySelectorAll(".number")).map((n) => n.textContent);
 
-  it("EndedCounts counts each column, words the Done window in its tooltip, and opens each column", async () => {
+  it("WorkCounts shows the three counts, words each with its action in its panel, and opens each", async () => {
     for (const board of fixturesOf<Board>("board").map((f) => f.data)) {
-      const onOpen = vi.fn();
-      const { getByTestId } = render(EndedCounts, {
+      const onEnded = vi.fn();
+      const onTriage = vi.fn();
+      const { getByTestId, queryByTestId } = render(WorkCounts, {
+        toSort: 3,
         toResume: board.columns.to_resume.length,
         done: board.columns.done.length,
         doneWindowMs: board.done_window_ms,
-        onOpen,
+        onTriage,
+        onEnded,
       });
-      expect(shown(getByTestId("ended-to-resume"))).toBe(`${board.columns.to_resume.length} to resume`);
-      expect(shown(getByTestId("ended-done"))).toBe(`${board.columns.done.length} done`);
-      expect(getByTestId("ended-done").getAttribute("title")).toContain(`in the last ${hours(board.done_window_ms)}:`);
-      await fireEvent.click(getByTestId("ended-to-resume"));
-      await fireEvent.click(getByTestId("ended-done"));
-      expect(onOpen.mock.calls).toEqual([["to_resume"], ["done"]]);
+      const button = getByTestId("work-counts");
+      expect(numbers(button)).toEqual(["3", String(board.columns.to_resume.length), String(board.columns.done.length)]);
+      expect(button.getAttribute("aria-label")).toBe(
+        `Sessions: 3 to sort, ${board.columns.to_resume.length} to resume, ${board.columns.done.length} done`,
+      );
+      expect(queryByTestId("work-counts-panel")).toBeNull();
+      await fireEvent.click(button);
+      expect(button.getAttribute("aria-expanded")).toBe("true");
+      expect(getByTestId("counts-done").getAttribute("title")).toContain(`in the last ${hours(board.done_window_ms)}:`);
+      await fireEvent.click(getByTestId("counts-to_resume"));
+      expect(queryByTestId("work-counts-panel")).toBeNull();
+      await fireEvent.click(button);
+      await fireEvent.click(getByTestId("counts-done"));
+      await fireEvent.click(button);
+      await fireEvent.click(getByTestId("counts-to_sort"));
+      expect(onEnded.mock.calls).toEqual([["to_resume"], ["done"]]);
+      expect(onTriage).toHaveBeenCalledTimes(1);
       cleanup();
     }
+  });
+
+  it("WorkCounts says what it does not know, caps a long column, and closes on Escape", async () => {
+    const { getByTestId, queryByTestId } = render(WorkCounts, { toSort: null, toResume: 120, done: 1, doneWindowMs: 12 * 3_600_000, onEnded: () => {} });
+    const button = getByTestId("work-counts");
+    expect(numbers(button)).toEqual(["--", "99+", "1"]);
+    await fireEvent.pointerEnter(button.parentElement!);
+    expect(getByTestId("counts-to_sort").textContent).toContain("To sort: unknown");
+    expect((getByTestId("counts-to_sort") as HTMLButtonElement).disabled).toBe(true);
     // Another window, another word: nothing is fixed at 24 h.
-    const { getByTestId } = render(EndedCounts, { toResume: 0, done: 1, doneWindowMs: 12 * 3_600_000, onOpen: () => {} });
-    expect(getByTestId("ended-done").getAttribute("title")).toContain("in the last 12 h:");
+    expect(getByTestId("counts-done").getAttribute("title")).toContain("in the last 12 h:");
+    await fireEvent.keyDown(button, { key: "Escape" });
+    expect(queryByTestId("work-counts-panel")).toBeNull();
   });
 });
 

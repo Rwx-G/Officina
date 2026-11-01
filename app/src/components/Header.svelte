@@ -6,7 +6,7 @@
   import { DEFAULT_WALKING, type Base, type Mode, type WindowView } from "../lib/view.svelte";
   import { RELAY_TOGGLE_TEXT } from "../lib/relay-text";
   import { switchText } from "../lib/orchestrator-text";
-  import EndedCounts, { type EndedColumn } from "./EndedCounts.svelte";
+  import WorkCounts, { type EndedColumn } from "./WorkCounts.svelte";
   import { fadeMotion } from "../lib/motion";
   import QuotaGauges from "./QuotaGauges.svelte";
   import ModeSwitch from "./ModeSwitch.svelte";
@@ -20,7 +20,7 @@
   interface Props {
     store: BoardStore;
     relay?: RelayStore;
-    /** Its rows to sort make the neutral "N to sort" chip (D-61). */
+    /** Its rows to sort, a count of the sessions indicator (D-61, D-1041). */
     registry?: RegistryStore;
     /** Its presence marks the Orchestrator view button (D-565). */
     orchestrator?: OrchestratorStore;
@@ -39,7 +39,7 @@
     /** The Walking toggle (AD-66), the scene's, shown in every view. */
     walking?: boolean;
     onWalking?: (walking: boolean) => void;
-    /** To resume and Done open Board mode on their column (D-541). */
+    /** To resume and Done open Board mode on their column (D-541, D-1041). */
     onEnded?: (column: EndedColumn) => void;
   }
   let {
@@ -60,9 +60,9 @@
     onEnded,
   }: Props = $props();
 
-  // Triage blocks no session: the chip is neutral, never amber, and the
+  // Triage blocks no session: its count is neutral, never amber, and the
   // rows it counts stay out of the title and the overlay (AD-55).
-  let toSort = $derived(registry?.view?.to_sort ?? 0);
+  let toSort = $derived(registry?.view ? registry.view.to_sort : null);
 
   function openTriage(): void {
     if (!registry || !onView) return;
@@ -160,11 +160,13 @@
   <div class="side">
     <div class="tools">
       {#if board && onEnded}
-        <EndedCounts
+        <WorkCounts
+          {toSort}
           toResume={board.columns.to_resume.length}
           done={board.columns.done.length}
           doneWindowMs={board.done_window_ms}
-          onOpen={onEnded}
+          onTriage={registry && onView ? openTriage : undefined}
+          {onEnded}
         />
       {/if}
       {#if onWalking}
@@ -210,11 +212,6 @@
       {/if}
       {#if relay?.pending}
         <div class="chip pending" data-testid="catalogue-chip" role="status" transition:fadeMotion>catalogue change</div>
-      {/if}
-      {#if toSort > 0 && onView}
-        <button class="chip to-sort" data-testid="to-sort-chip" transition:fadeMotion onclick={openTriage} title="Open the Triage panel">
-          {toSort} to sort
-        </button>
       {/if}
       <!-- The header shows exceptions only: a held contract shows nothing,
            so the status slot keeps its room for what waits (D-679). -->
@@ -342,14 +339,6 @@
   .chip.stopped {
     background: var(--color-danger);
     color: var(--color-surface);
-  }
-  .chip.to-sort {
-    border: 1px solid var(--color-border);
-    background: var(--color-surface);
-    color: var(--color-text);
-    font: inherit;
-    font-weight: 700;
-    cursor: pointer;
   }
   .tool.relay-toggle[aria-pressed="true"] {
     border-color: var(--color-stopped);

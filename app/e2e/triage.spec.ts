@@ -333,23 +333,14 @@ test.describe("Triage panel", () => {
     expect(isolation).toBe("isolate");
   });
 
-  test("the to-sort chip is neutral and opens the panel", async ({ page }) => {
+  test("the indicator's to-sort row opens the panel", async ({ page }) => {
     const view = loadRegistry("triage");
     await openBoard(page, loadBoard("triage-board"), {}, null, view);
-    const chip = page.getByTestId("to-sort-chip");
-    await expect(chip).toHaveText(`${view.to_sort} to sort`);
-    const colours = await chip.evaluate((element) => {
-      const probe = document.createElement("div");
-      probe.style.background = "var(--color-attention)";
-      document.body.append(probe);
-      const amber = getComputedStyle(probe).backgroundColor;
-      probe.remove();
-      return { chip: getComputedStyle(element).backgroundColor, amber };
-    });
-    expect(colours.amber).not.toBe("");
-    expect(colours.chip).not.toBe(colours.amber);
+    await expect(page.getByTestId("work-count-to_sort")).toHaveText(String(view.to_sort));
     await expect(page.getByTestId("subjects-view")).toHaveCount(0);
-    await chip.click();
+    await page.getByTestId("work-counts").click();
+    await expect(page.getByTestId("counts-to_sort")).toHaveText(new RegExp(`^${view.to_sort} to sort`));
+    await page.getByTestId("counts-to_sort").click();
     await expect(page.getByTestId("triage-panel")).toBeVisible();
     await expect.poll(() => focused(page)).toBe(view.triage[0]!.key);
   });
