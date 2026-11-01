@@ -877,6 +877,24 @@ prompts turned off: what it may do is what its container holds, so a
 prompt would only stop it. Officina still never sets a permission mode on
 a session that runs as you on your machine.
 
+### What a run sees of your workspace
+
+A run clones the base branch, so the tracked instructions (`CLAUDE.md`
+files, `.mcp.json`) come with it, and the mounts bring the rest
+(`.claude/` with its rules, skills, agents, commands, settings and hooks).
+Claude Code loads them as in any print-mode run in that folder: project
+hooks run and `.mcp.json` servers connect. Officina adds no setting file,
+hook, `CLAUDE.md` or MCP server; its only additions are the worker's flags
+and variables and, for a `login` floor, the login's copy in the run's own
+configuration folder.
+
+What a run does not see: instructions above the project folder (a
+`CLAUDE.md` in a parent directory or a workspace-level `.claude/`), your
+user-level configuration (user `CLAUDE.md`, skills, hooks, settings, MCP
+servers), `officina hook` and the relay gate, anything neither tracked nor
+mounted, and Windows behaviour: a hook written for Windows runs on Linux
+there.
+
 ### The gateway
 
 A worker reaches the outside through one program only, the run's gateway:

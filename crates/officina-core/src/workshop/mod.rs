@@ -12,6 +12,7 @@ pub mod launch;
 pub mod names;
 pub mod review;
 pub mod run;
+pub mod scan;
 pub mod vector;
 
 /// The workshop's folder under the Officina home (AD-124): run folders,

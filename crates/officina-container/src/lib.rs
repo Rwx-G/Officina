@@ -5,4 +5,6 @@
 //! `officina-core` and `serde_json` only: every rule they obey is decided in
 //! core, so the window and the container cannot disagree on one.
 
+#[cfg(unix)]
+pub mod entry;
 pub mod gateway;

@@ -46,6 +46,14 @@ jobs:
         # Story 6.5 AC 1 (AD-100, the gate 9 entry): officina-gateway and
         # officina-entry for the musl target with rust-lld, no C toolchain.
         run: cargo build --locked --release -p officina-container --target x86_64-unknown-linux-musl
+      - name: The entry point's Linux tests
+        # Story 6.7 AC 4 (D-224): run, pack, auth-status and scan with real
+        # git and a fake claude. The step fails when no test ran, so a cfg
+        # mistake that compiles them out turns the job red.
+        shell: bash
+        run: |
+          cargo test --locked -p officina-container --test entry_linux 2>&1 | tee "$RUNNER_TEMP/entry_linux.log"
+          grep -q -E "test result: ok\. [1-9][0-9]* passed" "$RUNNER_TEMP/entry_linux.log"
       - name: The launch half without the authority
         # Story 5.2 AC 7 (AD-73, D-128 review F5): the host's spawn tests
         # built alone, so no other package turns window-authority on; the

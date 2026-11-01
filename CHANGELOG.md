@@ -8,6 +8,16 @@ project uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- The workshop's entry point and packer (v0.6, story 6.7): `officina-entry
+  run` clones the base, links the mounts as ignored folders, copies the
+  login for a `login` floor and runs Claude Code under the run's deadline
+  with the prompt on stdin; `officina-entry pack` writes the tip, a bundle
+  of the commits past the base when there are any, and a manifest into a
+  fresh `out/`, its branch and base from its own command; `auth-status`
+  and `scan` read a stored login without letting it leave the container.
+  The credential scan's forms (raw, base64 at every alignment and across
+  wrapped lines, hex) are core's.
+
 - The workshop's container vectors and run plan (v0.6, story 6.6): one
   builder per container role, the only way a container's arguments are
   made, each with the fixed security options, limits, labels and an

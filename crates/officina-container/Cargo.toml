@@ -17,3 +17,7 @@ serde_json.workspace = true
 
 [lints]
 workspace = true
+
+# The Linux tests build their temporary roots with it.
+[dev-dependencies]
+tempfile = "3.27.0"

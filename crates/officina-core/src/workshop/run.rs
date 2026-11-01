@@ -132,6 +132,106 @@ impl<T> Recorded<T> {
     }
 }
 
+closed_enum! {
+    #[serde(rename_all = "snake_case")]
+    /// A step of `officina-entry run` (AD-108).
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+    pub enum EntryStep {
+        Plan,
+        Clone,
+        Branch,
+        Head,
+        Mounts,
+        Memory,
+        Login,
+        LoginMissing,
+        Claude,
+        Exit,
+    }
+}
+
+/// The longest status line the entry point prints and the window keeps
+/// (D-216).
+pub const MAX_ENTRY_LINE_BYTES: usize = 4 * 1024;
+
+/// One status line of the entry point on stderr (AD-108): a step, whether
+/// it went well, a detail, and at the end `claude`'s exit code. Worker
+/// text: any process of the container could print one (AD-109).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EntryLine {
+    pub step: EntryStep,
+    pub ok: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exit_code: Option<i32>,
+}
+
+impl EntryLine {
+    pub fn ok(step: EntryStep) -> EntryLine {
+        EntryLine {
+            step,
+            ok: true,
+            detail: None,
+            exit_code: None,
+        }
+    }
+
+    pub fn failed(step: EntryStep, detail: impl Into<String>) -> EntryLine {
+        EntryLine {
+            step,
+            ok: false,
+            detail: Some(detail.into()),
+            exit_code: None,
+        }
+    }
+
+    /// The last line: `claude`'s exit code.
+    pub fn exited(code: i32) -> EntryLine {
+        EntryLine {
+            step: EntryStep::Exit,
+            ok: code == 0,
+            detail: None,
+            exit_code: Some(code),
+        }
+    }
+
+    /// The line as printed, within [`MAX_ENTRY_LINE_BYTES`]: a detail that
+    /// would pass it is cut on a character boundary.
+    pub fn to_line(&self) -> String {
+        let mut line = self.clone();
+        loop {
+            let text = serde_json::to_string(&line).unwrap_or_default();
+            if text.len() <= MAX_ENTRY_LINE_BYTES {
+                return text;
+            }
+            let Some(detail) = line.detail.as_mut() else {
+                return text;
+            };
+            let keep = detail
+                .len()
+                .saturating_sub(text.len() - MAX_ENTRY_LINE_BYTES + 3);
+            let mut cut = keep.min(detail.len());
+            while cut > 0 && !detail.is_char_boundary(cut) {
+                cut -= 1;
+            }
+            detail.truncate(cut);
+            if cut == 0 {
+                line.detail = None;
+            }
+        }
+    }
+
+    /// A line the window read, `None` past [`MAX_ENTRY_LINE_BYTES`] or when
+    /// it is not one: counted and skipped (AD-109).
+    pub fn parse(line: &str) -> Option<EntryLine> {
+        if line.len() > MAX_ENTRY_LINE_BYTES {
+            return None;
+        }
+        serde_json::from_str(line).ok()
+    }
+}
+
 /// The version of [`RunFacts`]' JSON in `workshop_run.facts_json`.
 pub const RUN_FACTS_VERSION: u32 = 1;
 
@@ -325,6 +425,31 @@ mod tests {
             Recorded::parse("a_cause_of_a_later_build", FinishCause::from_code),
             Recorded::Unknown
         );
+    }
+
+    #[test]
+    fn entry_lines_round_trip() {
+        for line in [
+            EntryLine::ok(EntryStep::Clone),
+            EntryLine::failed(EntryStep::LoginMissing, ".credentials.json is missing"),
+            EntryLine::exited(7),
+        ] {
+            assert_eq!(EntryLine::parse(&line.to_line()), Some(line));
+        }
+    }
+
+    #[test]
+    fn an_oversized_entry_line_is_counted_not_kept() {
+        let long = EntryLine::failed(EntryStep::Claude, "é".repeat(MAX_ENTRY_LINE_BYTES));
+        let text = long.to_line();
+        assert!(text.len() <= MAX_ENTRY_LINE_BYTES);
+        assert!(EntryLine::parse(&text).is_some());
+        let forged = format!(
+            "{{\"step\":\"exit\",\"ok\":true,\"detail\":\"{}\"}}",
+            "x".repeat(MAX_ENTRY_LINE_BYTES)
+        );
+        assert_eq!(EntryLine::parse(&forged), None);
+        assert_eq!(EntryLine::parse("not json"), None);
     }
 
     #[test]
