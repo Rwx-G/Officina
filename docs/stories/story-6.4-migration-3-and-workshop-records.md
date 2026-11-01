@@ -1,6 +1,6 @@
 # Story 6.4: Migration 3, workshop records, the home folder and retention
 
-**Status:** Approved
+**Status:** Review
 
 ## Story
 
@@ -21,12 +21,12 @@ so that no later story needs to reshape a table my registry already has, and not
 
 ## Tasks
 
-- [ ] Enums in `crates/officina-core/src/workshop/{run,review,image,battery}.rs` (AC 1)
-- [ ] The workshop migration at `MIGRATIONS.len()`, pinned hash (AC 2, 3)
-- [ ] `crates/officina-host/src/registry/workshop.rs` writers, readers, queries (AC 4)
-- [ ] Home folders, D-13 protected directory, gate vector case (AC 5); doctor's sync-root warning (AC 6)
-- [ ] `run::retention`, the hourly pass, the bound test (AC 7)
-- [ ] `CHANGELOG.md`, README (AC 8)
+- [x] Enums in `crates/officina-core/src/workshop/{run,review,image,battery}.rs` (AC 1)
+- [x] The workshop migration at `MIGRATIONS.len()`, pinned hash (AC 2, 3)
+- [x] `crates/officina-host/src/registry/workshop.rs` writers, readers, queries (AC 4)
+- [x] Home folders, D-13 protected directory, gate vector case (AC 5); doctor's sync-root warning (AC 6)
+- [x] `run::retention`, the hourly pass, the bound test (AC 7)
+- [x] `CHANGELOG.md`, README (AC 8)
 
 ## Dev Notes
 
@@ -49,7 +49,21 @@ so that no later story needs to reshape a table my registry already has, and not
 
 ### Completion Notes
 
+- AC 1: core `workshop/run.rs::tests::{no_change_is_terminal, an_unknown_cause_is_kept_as_unknown, facts_read_back_with_defaults}`, `workshop/review.rs::tests::the_system_reasons_are_not_the_authors`. The verdict enum is `PackageVerdict` (D-1115); `FinishCause` lands with the record that reads it.
+- AC 2: `registry_schema.rs::{the_workshop_migration_backs_up_first, a_previous_version_registry_migrates_with_its_work_orders_as_host, every_enum_column_refuses_an_unknown_value, cause_columns_accept_any_text, a_battery_row_needs_its_vector_and_programs_digests}`, plus the existing `check_lists_match_the_core_enums`, `every_table_is_strict` and `columns_without_check_are_the_ones_d_88_names` extended to the new tables (the CHECK lists compared with each enum's `ALL`). The version derives from the entry that creates `workshop_run`; `tests/fixtures/registry/v2.sql` fills a version 2 registry. `work_order` is rebuilt rather than altered (D-1116).
+- AC 3: `registry_schema.rs::{the_workshop_migration_is_pinned, migration_hashes_are_pinned}`.
+- AC 4: host integration `tests/registry_workshop.rs::{a_run_and_its_work_order_insert_together, texts_read_back_untrusted, an_unknown_cause_reads_unknown, awaiting_counts_review_and_quarantined_only, a_verdict_sets_the_state_and_the_follow_up_query_sees_imports}` (in an integration file: a run needs a validated `WorkOrder`, D-1117). `insert_work_order` and `insert_workshop_run` share one row insert.
+- AC 5: host `relay/home.rs::tests::workshop_is_created_on_first_use`; core `relay/gate.rs::tests::the_workshop_folder_is_protected`; `tests/vectors/gate.json` case "protected: the workshop's run folders".
+- AC 6: host `workshop/doctor.rs::tests::a_home_in_a_sync_root_warns` (the probe as an argument), finding `WorkshopCheck::HomeSynced`.
+- AC 7: core `workshop/run.rs::tests::{retention_clears_texts_at_the_excerpt_ttl, run_folders_go_before_30_days, rows_go_at_90_days_with_their_folder}` (each with D-85's bound as a `const` assertion); host `tests/registry_workshop.rs::{workshop_rows_go_with_their_work_order, the_30_day_bound_holds_for_workshop_texts_and_folders}` (in that file rather than `registry_retention.rs`, D-1117). The hourly pass runs `retire_workshop` before the work orders.
+- AC 8: `CHANGELOG.md` Added; README "What the workshop stores".
+
 ## File List
+
+- `crates/officina-core/src/workshop/{run,review,battery}.rs` (new), `workshop/{mod,image,doctor}.rs`, `relay/gate.rs`, `tests/vectors/gate.json`
+- `crates/officina-host/src/registry/workshop.rs` (new), `registry/{mod,schema,orders,retention}.rs`, `relay/home.rs`, `workshop/{mod,git,doctor}.rs`
+- `crates/officina-host/tests/registry_workshop.rs` (new), `tests/registry_schema.rs`, `tests/fixtures/registry/v2.sql` (new)
+- `README.md`, `CHANGELOG.md`, `docs/stories/epic-6-decisions.md` (D-1115 to D-1117), `docs/stories/sprint-status.yaml`
 
 ## Change Log
 
@@ -57,3 +71,4 @@ so that no later story needs to reshape a table my registry already has, and not
 - 2026-10-28 reworked after review: battery `vector_sha256` and `programs_sha256`, image `programs_sha256` (F4); migration number, backup name and tests from `MIGRATIONS.len()` (F24); the retyped nullable-list test dropped, the pinned hash holds the shape (derived, not transcribed); doctor warns on a home in a sync root (F44)
 - 2026-10-29 research-note entries named by subject, no number reserved (D-600)
 - 2026-10-29 waits for story 6.2, whose `CredentialKind` (now with `login`, D-603) the migration's CHECK reads
+- 2026-11-01 implemented; D-1115 to D-1117; status Review
