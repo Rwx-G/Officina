@@ -47,6 +47,25 @@ pub struct WorkshopFacts {
     pub containers: Option<Vec<PsRow>>,
     pub networks: Option<Vec<ObjectRow>>,
     pub volumes: Option<Vec<ObjectRow>>,
+    /// The workshop's folder when the Officina home lies in a sync
+    /// client's folder (AD-39's test).
+    pub synced_home: Option<PathBuf>,
+}
+
+/// The workshop's folder of `home` when `home` lies in a sync client's
+/// folder or carries a Cloud Files attribute, by AD-39's classification
+/// with `probe` (D-228, review F44).
+pub fn synced_home(
+    home: &Path,
+    onedrive_roots: &[PathBuf],
+    probe: &dyn crate::registry::store::LocationProbe,
+) -> Option<PathBuf> {
+    match crate::registry::store::classify(home, onedrive_roots, probe) {
+        crate::registry::store::Location::Synced { .. } => {
+            Some(crate::workshop::workshop_dir(home))
+        }
+        crate::registry::store::Location::Local | crate::registry::store::Location::Network => None,
+    }
 }
 
 fn env_value<'e>(env: &'e [(String, String)], name: &str) -> Option<&'e str> {
@@ -119,6 +138,11 @@ pub fn gather(env: &[(String, String)], home: &Path) -> WorkshopFacts {
         containers: None,
         networks: None,
         volumes: None,
+        synced_home: synced_home(
+            home,
+            &crate::registry::store::onedrive_roots_from_env(),
+            &crate::registry::store::SystemProbe,
+        ),
     };
     if let Ok((path, source)) = &facts.docker {
         let docker = ResolvedDocker::at(path.clone(), *source);
@@ -218,6 +242,15 @@ pub fn findings(facts: &WorkshopFacts) -> Vec<Finding> {
             }
         }
     }
+    if let Some(dir) = &facts.synced_home {
+        found.push(Finding::new(
+            WorkshopCheck::HomeSynced,
+            format!(
+                "the Officina home lies in a synced folder: exclude {} from the sync client, or move the home (OFFICINA_HOME); base bundles of up to 1 GiB would sync",
+                dir.display()
+            ),
+        ));
+    }
     in_order(found)
 }
 
@@ -256,7 +289,46 @@ mod tests {
             containers: Some(Vec::new()),
             networks: Some(Vec::new()),
             volumes: Some(Vec::new()),
+            synced_home: None,
         }
+    }
+
+    struct Probe {
+        placeholder: PathBuf,
+    }
+
+    impl crate::registry::store::LocationProbe for Probe {
+        fn is_remote_drive(&self, _root: &str) -> bool {
+            false
+        }
+        fn exists(&self, _path: &Path) -> bool {
+            false
+        }
+        fn is_cloud_placeholder(&self, path: &Path) -> bool {
+            path == self.placeholder
+        }
+    }
+
+    #[test]
+    fn a_home_in_a_sync_root_warns() {
+        let synced = Path::new("C:/Users/user01/Sync");
+        let probe = Probe {
+            placeholder: synced.to_path_buf(),
+        };
+        let home = synced.join("officina");
+        assert_eq!(
+            synced_home(&home, &[], &probe),
+            Some(crate::workshop::workshop_dir(&home))
+        );
+        let local = Path::new("C:/Users/user01/.officina");
+        assert_eq!(synced_home(local, &[], &probe), None);
+        let mut facts = facts();
+        facts.synced_home = synced_home(&home, &[], &probe);
+        let line = checks(&facts)
+            .into_iter()
+            .find(|c| c.title == "workshop home")
+            .unwrap();
+        assert_eq!(line.level, Level::Warn);
     }
 
     fn of(facts: &WorkshopFacts, check: WorkshopCheck) -> Option<Finding> {

@@ -63,6 +63,10 @@ closed_enum! {
         OrphanNetworks,
         /// Volumes labelled by Officina that no container of theirs uses.
         OrphanVolumes,
+        /// The Officina home lies in a sync client's folder: base bundles
+        /// of up to 1 GiB and the scratch repository would sync (D-228,
+        /// review F44).
+        HomeSynced,
     }
 }
 
@@ -82,7 +86,8 @@ impl WorkshopCheck {
             | WorkshopCheck::EngineNotRunning
             | WorkshopCheck::EngineUnreachable
             | WorkshopCheck::OrphanNetworks
-            | WorkshopCheck::OrphanVolumes => CheckLevel::Warn,
+            | WorkshopCheck::OrphanVolumes
+            | WorkshopCheck::HomeSynced => CheckLevel::Warn,
             WorkshopCheck::DockerResolved
             | WorkshopCheck::GitResolved
             | WorkshopCheck::OverridesSet
@@ -111,6 +116,7 @@ impl WorkshopCheck {
             | WorkshopCheck::EngineWindowsContainers
             | WorkshopCheck::EngineUnreachable => "workshop engine",
             WorkshopCheck::OrphanNetworks | WorkshopCheck::OrphanVolumes => "workshop orphans",
+            WorkshopCheck::HomeSynced => "workshop home",
         }
     }
 

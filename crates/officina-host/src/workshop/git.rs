@@ -66,7 +66,7 @@ pub fn workshop_args(hooks_dir: &Path, args: &[&str]) -> Vec<String> {
 
 /// `<home>/workshop/empty-hooks` (AD-124).
 pub fn empty_hooks_dir(home: &Path) -> PathBuf {
-    home.join("workshop").join("empty-hooks")
+    super::workshop_dir(home).join("empty-hooks")
 }
 
 /// The hooks folder, created when absent; refused unless empty (AD-111), so

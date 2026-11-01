@@ -16,6 +16,7 @@ use officina_core::registry::types::{
     WorkOrderRecord, WorkOrderSource,
 };
 use officina_core::spawn;
+use officina_core::workshop::run::Runner;
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 
 use super::read;
@@ -180,6 +181,67 @@ fn settle_subject(conn: &Connection, id: &str, now_ms: i64) -> rusqlite::Result<
     Ok(())
 }
 
+/// Inserts `launch`'s `work_order` row in `tx` with outcome `launching`,
+/// runner `runner` and `argv` as the vector that runs, and sets the
+/// proposal it came from `accepted` (AD-81 step 1, AD-91, AD-119). A name
+/// or `(template, seq)` already held is [`NameTaken`], nothing written.
+pub(crate) fn insert_order_row(
+    tx: &Connection,
+    launch: &LaunchRecord,
+    argv: &[String],
+    runner: Runner,
+    now_ms: i64,
+) -> Result<Result<(), NameTaken>, RegistryError> {
+    let order = launch.order;
+    let (subject_id, new_subject_name) = match launch.subject {
+        SubjectChoice::Existing(id) => (Some(*id), None),
+        SubjectChoice::New(name) => (None, Some(name.as_str())),
+    };
+    let inserted = tx.execute(
+        "INSERT INTO work_order (id, seq, template, project, cwd, values_json, argv_json,
+             prompt_sha256, catalogue_hash, name, subject_id, new_subject_name, source,
+             proposal_id, launched_at_ms, outcome, runner)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
+        params![
+            launch.card_id,
+            launch.seq,
+            order.template(),
+            order.project(),
+            order.project_folder(),
+            json(order.values()),
+            json(&argv),
+            order.prompt_sha256(),
+            order.catalogue_hash(),
+            order_name(order.template(), launch.seq),
+            subject_id,
+            new_subject_name,
+            launch.source.code(),
+            launch.proposal_id,
+            now_ms,
+            LaunchOutcome::Launching.code(),
+            runner.code()
+        ],
+    );
+    match inserted {
+        Ok(_) => {}
+        Err(error) if is_unique_violation(&error) => return Ok(Err(NameTaken)),
+        Err(error) => return Err(error.into()),
+    }
+    if let Some(proposal) = launch.proposal_id {
+        tx.execute(
+            "UPDATE proposal SET status = ?2, decided_at_ms = ?3, work_order_id = ?4
+             WHERE id = ?1 AND status != ?2",
+            params![
+                proposal,
+                ProposalStatus::Accepted.code(),
+                now_ms,
+                launch.card_id
+            ],
+        )?;
+    }
+    Ok(Ok(()))
+}
+
 impl Writer {
     /// The highest `seq` the registry holds for `template`, which the card
     /// store reads when it reserves a card's `seq` (D-135).
@@ -216,57 +278,14 @@ impl Writer {
         launch: &LaunchRecord,
         now_ms: i64,
     ) -> Result<Result<(), NameTaken>, RegistryError> {
-        let order = launch.order;
-        let argv = spawn::work_order(order, launch.seq, None, launch.permission)
+        let argv = spawn::work_order(launch.order, launch.seq, None, launch.permission)
             .args()
             .to_vec();
-        let (subject_id, new_subject_name) = match launch.subject {
-            SubjectChoice::Existing(id) => (Some(*id), None),
-            SubjectChoice::New(name) => (None, Some(name.as_str())),
-        };
         let tx = self
             .conn
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let inserted = tx.execute(
-            "INSERT INTO work_order (id, seq, template, project, cwd, values_json, argv_json,
-                 prompt_sha256, catalogue_hash, name, subject_id, new_subject_name, source,
-                 proposal_id, launched_at_ms, outcome)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
-            params![
-                launch.card_id,
-                launch.seq,
-                order.template(),
-                order.project(),
-                order.project_folder(),
-                json(order.values()),
-                json(&argv),
-                order.prompt_sha256(),
-                order.catalogue_hash(),
-                order_name(order.template(), launch.seq),
-                subject_id,
-                new_subject_name,
-                launch.source.code(),
-                launch.proposal_id,
-                now_ms,
-                LaunchOutcome::Launching.code()
-            ],
-        );
-        match inserted {
-            Ok(_) => {}
-            Err(error) if is_unique_violation(&error) => return Ok(Err(NameTaken)),
-            Err(error) => return Err(error.into()),
-        }
-        if let Some(proposal) = launch.proposal_id {
-            tx.execute(
-                "UPDATE proposal SET status = ?2, decided_at_ms = ?3, work_order_id = ?4
-                 WHERE id = ?1 AND status != ?2",
-                params![
-                    proposal,
-                    ProposalStatus::Accepted.code(),
-                    now_ms,
-                    launch.card_id
-                ],
-            )?;
+        if let Err(taken) = insert_order_row(&tx, launch, &argv, Runner::Host, now_ms)? {
+            return Ok(Err(taken));
         }
         tx.commit()?;
         Ok(Ok(()))

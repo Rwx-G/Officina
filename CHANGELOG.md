@@ -8,6 +8,17 @@ project uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- The registry's workshop tables (v0.6, story 6.4): a migration, preceded
+  by a copy of the registry as `registry/backup/pre-v<version>-<date>.db`,
+  gives each work order its runner (every existing one runs on your
+  machine) and adds the workshop's runs, approvals, images, inventories
+  and batteries. A run's texts are cleared at 28 days less an hour, its
+  folder under `<home>/workshop/runs/` deleted at 30 days less an hour,
+  its row with its work order at 90 days; `<home>/workshop/` joins the
+  folders a guarded session's command may not name. Doctor warns when the
+  Officina home lies in a synced folder, which base bundles of up to 1 GiB
+  would fill.
+
 - The workshop's engine driver (v0.6, story 6.3): every `docker` call is built
   in core from typed inputs and run by one host function, its environment
   an allow list (the system names, `DOCKER_*` and nothing a session or

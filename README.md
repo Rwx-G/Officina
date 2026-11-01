@@ -408,6 +408,20 @@ At each start the window checks the registry's integrity. A damaged database is 
 
 `officina doctor` prints one registry section, always in the same order: the registry's location, version, integrity and copies, the event files waiting or rewritten, any quarantine and the last restore, the hook fields the running Claude Code version leaves out, and the triage model's state, calls and cost. A network folder and a failed integrity check fail it (exit 1); a synchronised folder, a newer version, a quarantine, a recent restore, waiting or rewritten event files, a missing hook field and a paused model only warn.
 
+### What the workshop stores
+
+The registry keeps one row per workshop run beside its work order, the
+groups you approved, the images built, each project's hook inventory and
+each escape battery. A run's texts (the report's tail, commit subjects,
+paths, refused hosts, where a credential was found) are cleared 28 days
+less an hour after its launch; its folder under `<home>/workshop/runs/`
+(the base bundle, the package) is deleted 30 days less an hour after
+launch, since those folders are in no registry copy; the row itself, with
+its work order and approvals, goes at 90 days, a battery's at 90 days, and
+an image's build output with the texts. `<home>/workshop/` is one of the
+folders a guarded session's command may not name. As for the rest of the
+registry, nothing expires while the window is closed.
+
 ### Privacy in the registry
 
 The window ingests the event files into the registry before it shows its first board, then whenever a hook writes, and once an hour; nothing is deleted before it is ingested. For each session it keeps its project, recorded the first time the session is seen, when it was first and last seen, its latest prompt and the beginning and end of its latest answer (the hook records the last 280 characters of a long answer beside the first 280).

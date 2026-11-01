@@ -158,6 +158,19 @@ impl RelayHome {
         self.relay_dir().join(PROMPTS_DIR)
     }
 
+    /// `workshop/` (AD-124): run folders, build contexts, the battery's
+    /// mount and the empty hooks folder; a guarded session's command naming
+    /// it is denied (D-13).
+    pub fn workshop_dir(&self) -> PathBuf {
+        crate::workshop::workshop_dir(&self.officina_home)
+    }
+
+    /// Creates `workshop/` and its folders on first use (AD-124); the
+    /// window's alone.
+    pub fn ensure_workshop(&self) -> Result<PathBuf, String> {
+        crate::workshop::ensure_home(&self.officina_home)
+    }
+
     /// `window/alive.json`: the window's liveness marker (D-579).
     pub fn window_marker_file(&self) -> PathBuf {
         self.officina_home.join(WINDOW_DIR).join(WINDOW_MARKER_FILE)
@@ -343,6 +356,32 @@ fn load(path: &Path, with_files: bool) -> Result<RelayFloor, RelayFloorError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn workshop_is_created_on_first_use() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = RelayHome::new(dir.path().join("home"), None);
+        assert!(!home.workshop_dir().exists());
+        let created = home.ensure_workshop().unwrap();
+        assert_eq!(created, home.workshop_dir());
+        for sub in ["runs", "build", "battery", "empty-hooks"] {
+            assert!(created.join(sub).is_dir(), "{sub}");
+        }
+        assert_eq!(
+            home.ensure_workshop().unwrap(),
+            created,
+            "a second use keeps it"
+        );
+        std::fs::write(
+            created.join("empty-hooks").join("post-checkout"),
+            "#!/bin/sh\n",
+        )
+        .unwrap();
+        assert!(
+            home.ensure_workshop().is_err(),
+            "a planted hook refuses the folder"
+        );
+    }
 
     #[test]
     fn metadata_error_other_than_not_found_is_stopped() {

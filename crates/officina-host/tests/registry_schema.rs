@@ -17,6 +17,11 @@ use officina_core::registry::types::{
     WorkOrderSource,
 };
 use officina_core::relay::auto::ReviewDecision;
+use officina_core::workshop::battery::BatteryOutcome;
+use officina_core::workshop::floor::CredentialKind;
+use officina_core::workshop::image::{BuildOutcome, ImageKind};
+use officina_core::workshop::review::{DiscardReason, PackageVerdict};
+use officina_core::workshop::run::{RunState, Runner, WorkshopOutcome};
 use officina_host::registry::schema::{MIGRATIONS, SCHEMA_VERSION, migrate};
 use officina_host::registry::store::{
     Integrity, WriterOpen, open_reader_expecting, open_writer, open_writer_with,
@@ -27,10 +32,22 @@ use rusqlite::types::Value;
 
 /// The SHA-256 of each shipped migration, in order (AD-41). A shipped
 /// entry never changes; a new entry fails here until its hash is pinned.
-const PINNED: [&str; 2] = [
+const PINNED: [&str; 3] = [
     "bd13f2dd8c256dad763a965aa411f772077a3b50cbd0aacfbeb1fbe418eefe7b",
     "fdf160193383b12b1d78d2e540bf509d5c801d7cad83521d882c3a6693fc16e1",
+    "23bd1f196d088f571497a0b1da0fc26cf9e62a5b6cda9969f1eb61ea0959f6ad",
 ];
+
+/// The tables the workshop migration creates (AD-119, D-212), and those of
+/// them keyed WITHOUT ROWID.
+const WORKSHOP_TABLES: [&str; 5] = [
+    "workshop_run",
+    "workshop_approval",
+    "workshop_image",
+    "workshop_inventory",
+    "workshop_battery",
+];
+const WORKSHOP_WITHOUT_ROWID: [&str; 2] = ["workshop_approval", "workshop_inventory"];
 
 /// The tables migration 2 creates (AD-82, D-133).
 const V2_TABLES: [&str; 4] = [
@@ -203,6 +220,36 @@ fn expected_checks() -> BTreeMap<&'static str, BTreeSet<String>> {
             codes(AuthorReason::ALL, AuthorReason::code),
         ),
         ("auto_review.rule_baseline", flag),
+        ("work_order.runner", codes(Runner::ALL, Runner::code)),
+        ("workshop_run.state", codes(RunState::ALL, RunState::code)),
+        (
+            "workshop_run.outcome",
+            codes(WorkshopOutcome::ALL, WorkshopOutcome::code),
+        ),
+        (
+            "workshop_run.credential_kind",
+            codes(CredentialKind::ALL, CredentialKind::code),
+        ),
+        (
+            "workshop_run.verdict",
+            codes(PackageVerdict::ALL, PackageVerdict::code),
+        ),
+        (
+            "workshop_run.discard_reason",
+            codes(DiscardReason::ALL, DiscardReason::code),
+        ),
+        (
+            "workshop_image.kind",
+            codes(ImageKind::ALL, ImageKind::code),
+        ),
+        (
+            "workshop_image.outcome",
+            codes(BuildOutcome::ALL, BuildOutcome::code),
+        ),
+        (
+            "workshop_battery.outcome",
+            codes(BatteryOutcome::ALL, BatteryOutcome::code),
+        ),
     ])
 }
 
@@ -220,11 +267,14 @@ fn every_table_is_strict() {
     for table in V2_TABLES {
         assert!(listed.iter().any(|(name, _, _)| name == table), "{table}");
     }
+    for table in WORKSHOP_TABLES {
+        assert!(listed.iter().any(|(name, _, _)| name == table), "{table}");
+    }
     for (name, strict, without_rowid) in listed {
         assert!(strict, "{name} is not STRICT");
         assert_eq!(
             without_rowid,
-            name == "session_fact",
+            name == "session_fact" || WORKSHOP_WITHOUT_ROWID.contains(&name.as_str()),
             "{name} WITHOUT ROWID"
         );
     }
@@ -252,6 +302,10 @@ fn every_table_is_strict() {
         "proposal(status, received_at_ms)",
         "auto_review(project, action, requested_at_ms)",
         "auto_review(requested_at_ms)",
+        "workshop_run(state)",
+        "workshop_run(finished_at_ms)",
+        "workshop_run(decided_at_ms)",
+        "workshop_battery(image_id, finished_at_ms)",
     ]
     .map(str::to_owned)
     .into();
@@ -317,6 +371,32 @@ fn columns_without_check_are_the_ones_d_88_names() {
         "auto_review.approval_id",
         "auto_review.request_key",
         "auto_review.run_id",
+        "workshop_run.id",
+        "workshop_run.image_id",
+        "workshop_run.gateway_image_id",
+        "workshop_run.base_commit",
+        "workshop_run.parent_run_id",
+        "workshop_run.plan_sha256",
+        "workshop_run.battery_id",
+        "workshop_run.package_sha256",
+        "workshop_run.tip_commit",
+        "workshop_approval.run_id",
+        "workshop_approval.group_key",
+        "workshop_approval.hunks_sha256",
+        "workshop_image.name",
+        "workshop_image.image_id",
+        "workshop_image.programs_sha256",
+        "workshop_inventory.image",
+        "workshop_inventory.image_id",
+        "workshop_inventory.inventory_key",
+        "workshop_battery.id",
+        "workshop_battery.image",
+        "workshop_battery.image_id",
+        "workshop_battery.gateway_image_id",
+        "workshop_battery.engine_key",
+        "workshop_battery.officina_version",
+        "workshop_battery.vector_sha256",
+        "workshop_battery.programs_sha256",
     ];
     let named_by_d_88_and_d_133 = [
         "session_fact.fact",
@@ -335,6 +415,16 @@ fn columns_without_check_are_the_ones_d_88_names() {
         "proposal.project",
         "auto_review.project",
         "auto_review.action",
+        // The causes grow with their stories (D-133, D-212); branches,
+        // images and projects are names.
+        "workshop_run.cause",
+        "workshop_run.quarantine_cause",
+        "workshop_battery.cause",
+        "workshop_run.image",
+        "workshop_run.base_branch",
+        "workshop_run.branch",
+        "workshop_image.project",
+        "workshop_inventory.project",
     ];
     let text = [
         "session_fact.value",
@@ -355,6 +445,14 @@ fn columns_without_check_are_the_ones_d_88_names() {
         "proposal.texts_json",
         "orchestrator_start.error",
         "auto_review.reason",
+        "workshop_run.plan_json",
+        "workshop_run.facts_json",
+        "workshop_run.texts_json",
+        "workshop_run.groups_json",
+        "workshop_image.labels_json",
+        "workshop_image.env_names_json",
+        "workshop_image.build_tail",
+        "workshop_inventory.inventory_json",
     ];
     let allowed: BTreeSet<&str> = identifiers
         .into_iter()
@@ -578,7 +676,7 @@ fn the_setting_rebuild_keeps_every_row() {
 /// AD-41, AD-82, story 5.6 AC 1: a version 1 registry with rows migrates
 /// to version 2 after a copy, and every row of schema 1 is still there.
 #[test]
-fn version_1_with_data_migrates_to_2() {
+fn version_1_with_data_migrates_to_the_current_version() {
     let home = home_at(1);
     let v1_tables: Vec<(String, Vec<Vec<Value>>)> = {
         let conn = read_only_connection(&home.paths().database()).unwrap();
@@ -600,13 +698,18 @@ fn version_1_with_data_migrates_to_2() {
                     copy: Some(copy),
                 },
         } => {
-            assert_eq!(writer.user_version().unwrap(), 2);
+            assert_eq!(writer.user_version().unwrap(), SCHEMA_VERSION);
             assert!(writer.work_orders().unwrap().is_empty());
             copy
         }
         other => panic!("{other:?}"),
     };
-    assert_eq!(copy, home.paths().backup_dir().join("pre-v2-2026-10-27.db"));
+    assert_eq!(
+        copy,
+        home.paths()
+            .backup_dir()
+            .join(format!("pre-v{SCHEMA_VERSION}-2026-10-27.db"))
+    );
     assert_eq!(user_version(&copy), 1, "the copy holds the version it left");
     let conn = read_only_connection(&home.paths().database()).unwrap();
     for (table, rows) in &v1_tables {
@@ -670,6 +773,7 @@ fn not_null_columns_are_the_ones_the_story_names() {
                 "source",
                 "launched_at_ms",
                 "outcome",
+                "runner",
             ],
         ),
         ("proposal", "TEXT", &["status", "received_at_ms"]),
@@ -892,4 +996,229 @@ fn orchestrator_start_keeps_the_pid_creation_time() {
         )
         .unwrap();
     assert_eq!(kept, (4242, NOW - 150));
+}
+
+// ---- story 6.4: the workshop migration (AD-119, D-212) ----
+
+/// The workshop migration's version: the entry of [`MIGRATIONS`] that
+/// creates `workshop_run` (P-53), so its number and the backup's name
+/// derive from the list, never from a literal.
+fn workshop_version() -> i64 {
+    let index = MIGRATIONS
+        .iter()
+        .position(|sql| sql.contains("CREATE TABLE workshop_run"))
+        .expect("a migration creates workshop_run");
+    i64::try_from(index).unwrap() + 1
+}
+
+#[test]
+fn the_workshop_migration_is_pinned() {
+    let index = usize::try_from(workshop_version() - 1).unwrap();
+    assert_eq!(
+        officina_core::sha256_hex(MIGRATIONS[index].as_bytes()),
+        PINNED[index],
+        "the workshop migration's text changed: a new variant or column is a later migration (D-133)"
+    );
+}
+
+#[test]
+fn the_workshop_migration_backs_up_first() {
+    let version = workshop_version();
+    let home = home_at(version - 1);
+    let copy = match open_writer(&home.home, &[], NOW) {
+        WriterOpen::Writable {
+            integrity:
+                Integrity::Migrated {
+                    from,
+                    copy: Some(copy),
+                },
+            ..
+        } => {
+            assert_eq!(from, version - 1);
+            copy
+        }
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(
+        copy,
+        home.paths()
+            .backup_dir()
+            .join(format!("pre-v{version}-2026-10-27.db"))
+    );
+    assert_eq!(user_version(&copy), version - 1);
+    let conn = read_only_connection(&copy).unwrap();
+    assert!(!tables(&conn).contains(&"workshop_run".to_owned()));
+}
+
+#[test]
+fn a_previous_version_registry_migrates_with_its_work_orders_as_host() {
+    let version = workshop_version();
+    let home = home_at(version - 1);
+    let before: Vec<Vec<Value>> = {
+        let conn = read_only_connection(&home.paths().database()).unwrap();
+        rows_of(&conn, "work_order")
+    };
+    assert!(!before.is_empty(), "the fixture holds work orders");
+    drop(writable(open_writer(&home.home, &[], NOW)));
+    let conn = read_only_connection(&home.paths().database()).unwrap();
+    let after = rows_of(&conn, "work_order");
+    assert_eq!(after.len(), before.len());
+    let runner = Value::Text(Runner::Host.code().to_owned());
+    for (old, new) in before.iter().zip(&after) {
+        // The rebuilt table puts `runner` after the columns it kept.
+        assert_eq!(
+            &new[..old.len()],
+            &old[..],
+            "every column of every row is kept"
+        );
+        assert_eq!(&new[old.len()..], std::slice::from_ref(&runner));
+    }
+    let index: i64 = conn
+        .query_row(
+            "SELECT count(*) FROM sqlite_master WHERE type = 'index' AND name = 'work_order_by_launch'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(index, 1, "the rebuilt table keeps its index");
+}
+
+/// A valid row of each workshop table holding an enum, every enum column at
+/// its enum's first value.
+fn valid_rows() -> Vec<(&'static str, Vec<(&'static str, Value)>)> {
+    let text = |s: &str| Value::Text(s.to_owned());
+    let int = Value::Integer;
+    vec![
+        (
+            "workshop_run",
+            vec![
+                ("id", text("0123456789abcdef0123456789abcdef")),
+                ("image", text("officina-workshop:local")),
+                ("image_id", text("sha256:aa")),
+                ("gateway_image_id", text("sha256:bb")),
+                ("base_branch", text("main")),
+                ("base_commit", text("cc")),
+                ("branch", text("officina/bump-1")),
+                ("uncommitted", int(0)),
+                ("plan_json", text("{}")),
+                ("plan_sha256", text("dd")),
+                ("credential_kind", text(CredentialKind::ALL[0].code())),
+                ("deadline_ms", int(NOW)),
+                ("battery_id", text("ee")),
+                ("state", text(RunState::ALL[0].code())),
+                ("state_at_ms", int(NOW)),
+                ("started_at_ms", int(NOW)),
+                ("outcome", text(WorkshopOutcome::ALL[0].code())),
+                ("verdict", text(PackageVerdict::ALL[0].code())),
+                ("discard_reason", text(DiscardReason::ALL[0].code())),
+                ("cause", text("exited")),
+                ("quarantine_cause", text("credential_found")),
+            ],
+        ),
+        (
+            "workshop_image",
+            vec![
+                ("name", text("officina-workshop:local")),
+                ("kind", text(ImageKind::ALL[0].code())),
+                ("built_at_ms", int(NOW)),
+                ("outcome", text(BuildOutcome::ALL[0].code())),
+            ],
+        ),
+        (
+            "workshop_battery",
+            vec![
+                ("id", text("ff")),
+                ("image", text("officina-workshop:local")),
+                ("image_id", text("sha256:aa")),
+                ("gateway_image_id", text("sha256:bb")),
+                ("engine_key", text("key")),
+                ("officina_version", text("0.1.0")),
+                ("vector_sha256", text("11")),
+                ("programs_sha256", text("22")),
+                ("started_at_ms", int(NOW)),
+                ("outcome", text(BatteryOutcome::ALL[0].code())),
+                ("cause", text("engine_lost")),
+            ],
+        ),
+    ]
+}
+
+fn insert(conn: &Connection, table: &str, row: &[(&str, Value)]) -> rusqlite::Result<usize> {
+    let names: Vec<&str> = row.iter().map(|(n, _)| *n).collect();
+    let marks: Vec<String> = (1..=row.len()).map(|i| format!("?{i}")).collect();
+    let values: Vec<&dyn rusqlite::ToSql> =
+        row.iter().map(|(_, v)| v as &dyn rusqlite::ToSql).collect();
+    conn.execute(
+        &format!(
+            "INSERT INTO {table} ({}) VALUES ({})",
+            names.join(", "),
+            marks.join(", ")
+        ),
+        values.as_slice(),
+    )
+}
+
+/// `row` with `column` set to `value`.
+fn with(row: &[(&'static str, Value)], column: &str, value: &str) -> Vec<(&'static str, Value)> {
+    row.iter()
+        .map(|(n, v)| {
+            let v = if *n == column {
+                Value::Text(value.to_owned())
+            } else {
+                v.clone()
+            };
+            (*n, v)
+        })
+        .collect()
+}
+
+#[test]
+fn every_enum_column_refuses_an_unknown_value() {
+    let checks = expected_checks();
+    for (table, row) in valid_rows() {
+        insert(&fresh(), table, &row).unwrap_or_else(|e| panic!("{table}: {e}"));
+        for (column, _) in &row {
+            if checks.contains_key(format!("{table}.{column}").as_str()) {
+                let bad = with(&row, column, "not_a_variant");
+                assert!(insert(&fresh(), table, &bad).is_err(), "{table}.{column}");
+            }
+        }
+    }
+    let rows = valid_rows();
+    for name in checks.keys().filter(|n| n.starts_with("workshop_")) {
+        let (table, column) = name.split_once('.').unwrap();
+        assert!(
+            rows.iter()
+                .any(|(t, row)| *t == table && row.iter().any(|(c, _)| *c == column)),
+            "{name} has no case"
+        );
+    }
+}
+
+#[test]
+fn cause_columns_accept_any_text() {
+    for (table, row) in valid_rows() {
+        for cause in ["cause", "quarantine_cause"] {
+            if row.iter().any(|(c, _)| *c == cause) {
+                let later = with(&row, cause, "a_cause_of_a_later_build");
+                insert(&fresh(), table, &later).unwrap_or_else(|e| panic!("{table}.{cause}: {e}"));
+            }
+        }
+    }
+}
+
+#[test]
+fn a_battery_row_needs_its_vector_and_programs_digests() {
+    let (_, row) = valid_rows()
+        .into_iter()
+        .find(|(t, _)| *t == "workshop_battery")
+        .unwrap();
+    for needed in ["vector_sha256", "programs_sha256"] {
+        let without: Vec<(&str, Value)> =
+            row.iter().filter(|(n, _)| *n != needed).cloned().collect();
+        assert!(
+            insert(&fresh(), "workshop_battery", &without).is_err(),
+            "{needed}"
+        );
+    }
 }

@@ -3,8 +3,9 @@
 //! Entry `i` of [`MIGRATIONS`] moves a database from version `i` to `i + 1`.
 //! A shipped entry never changes: `tests/registry_schema.rs` pins the
 //! SHA-256 of each one. Migrations are append-only: v0.3 shipped schema 1,
-//! and schema 2 reaches the owner's registry with a Slice A build of v0.5
-//! (D-133), so neither is edited again.
+//! schema 2 reaches the owner's registry with a Slice A build of v0.5
+//! (D-133), and schema 3 with v0.6's workshop (D-212), so none is edited
+//! again.
 //!
 //! Every column holding a registry enum carries a `CHECK` list of the enum's
 //! text forms; the schema test reads those lists from `sqlite_master` and
@@ -265,8 +266,150 @@ CREATE INDEX auto_review_by_action ON auto_review (project, action, requested_at
 CREATE INDEX auto_review_by_request ON auto_review (requested_at_ms);
 ";
 
+/// Schema version 3, the workshop (AD-119 as D-212 reads it, story 6.4).
+///
+/// `work_order` gains its runner, every existing row a `host` one; the
+/// table is rebuilt (create, copy, drop, rename, its index again, in this
+/// migration's transaction) so each column keeps a line of its own. The
+/// workshop's runs, approvals, images, inventories and batteries get their
+/// tables; every enum-valued column carries its enum's list, except the
+/// causes, whose enums grow and which read back as unknown when no variant
+/// parses (D-133). `workshop_inventory` is keyed by image and project,
+/// since the base image serves every project without a Dockerfile and each
+/// project's hooks give it another inventory (D-212). No foreign key:
+/// retention deletes a run with its `work_order` in one transaction.
+const V3: &str = "\
+CREATE TABLE work_order_v3 (
+    id TEXT PRIMARY KEY NOT NULL,
+    seq INTEGER NOT NULL,
+    template TEXT NOT NULL,
+    project TEXT NOT NULL,
+    cwd TEXT NOT NULL,
+    values_json TEXT NOT NULL,
+    argv_json TEXT NOT NULL,
+    prompt_sha256 TEXT NOT NULL,
+    catalogue_hash TEXT NOT NULL,
+    name TEXT NOT NULL,
+    subject_id INTEGER,
+    new_subject_name TEXT,
+    source TEXT NOT NULL CHECK (source IN ('composer', 'proposal')),
+    proposal_id TEXT,
+    launched_at_ms INTEGER NOT NULL,
+    outcome TEXT NOT NULL CHECK (outcome IN ('launching', 'started', 'untrusted_workspace', 'failed', 'unknown')),
+    exit_code INTEGER,
+    error TEXT,
+    printed TEXT,
+    bg_id TEXT,
+    session_id TEXT,
+    bound_at_ms INTEGER,
+    runner TEXT NOT NULL DEFAULT 'host' CHECK (runner IN ('host', 'workshop')),
+    UNIQUE (name),
+    UNIQUE (template, seq)
+) STRICT;
+INSERT INTO work_order_v3 (id, seq, template, project, cwd, values_json, argv_json, prompt_sha256, catalogue_hash, name, subject_id, new_subject_name, source, proposal_id, launched_at_ms, outcome, exit_code, error, printed, bg_id, session_id, bound_at_ms)
+SELECT id, seq, template, project, cwd, values_json, argv_json, prompt_sha256, catalogue_hash, name, subject_id, new_subject_name, source, proposal_id, launched_at_ms, outcome, exit_code, error, printed, bg_id, session_id, bound_at_ms FROM work_order;
+DROP TABLE work_order;
+ALTER TABLE work_order_v3 RENAME TO work_order;
+CREATE INDEX work_order_by_launch ON work_order (launched_at_ms);
+
+CREATE TABLE workshop_run (
+    id TEXT PRIMARY KEY NOT NULL,
+    image TEXT NOT NULL,
+    image_id TEXT NOT NULL,
+    gateway_image_id TEXT NOT NULL,
+    base_branch TEXT NOT NULL,
+    base_commit TEXT NOT NULL,
+    parent_run_id TEXT,
+    branch TEXT NOT NULL,
+    uncommitted INTEGER NOT NULL,
+    plan_json TEXT NOT NULL,
+    plan_sha256 TEXT NOT NULL,
+    credential_kind TEXT NOT NULL CHECK (credential_kind IN ('oauth-token', 'login', 'api-key')),
+    deadline_ms INTEGER NOT NULL,
+    battery_id TEXT NOT NULL,
+    state TEXT NOT NULL CHECK (state IN ('launching', 'running', 'stopping', 'collecting', 'review', 'quarantined', 'no_change', 'stopped', 'imported', 'discarded', 'failed', 'unknown')),
+    state_at_ms INTEGER NOT NULL,
+    cause TEXT,
+    outcome TEXT CHECK (outcome IN ('package', 'no_change', 'failed', 'not_collected', 'unknown')),
+    started_at_ms INTEGER NOT NULL,
+    finished_at_ms INTEGER,
+    exit_code INTEGER,
+    facts_json TEXT,
+    texts_json TEXT,
+    package_sha256 TEXT,
+    tip_commit TEXT,
+    commits_past_base INTEGER,
+    files_changed INTEGER,
+    groups_json TEXT,
+    quarantine_cause TEXT,
+    opened_at_ms INTEGER,
+    verdict TEXT CHECK (verdict IN ('imported', 'discarded')),
+    discard_reason TEXT CHECK (discard_reason IN ('should_not_have_run', 'poor_result', 'not_needed', 'expired', 'not_collected')),
+    decided_at_ms INTEGER,
+    stopped_at_ms INTEGER,
+    removed_at_ms INTEGER
+) STRICT;
+
+CREATE TABLE workshop_approval (
+    run_id TEXT NOT NULL,
+    group_key TEXT NOT NULL,
+    hunks_sha256 TEXT NOT NULL,
+    approved_at_ms INTEGER NOT NULL,
+    PRIMARY KEY (run_id, group_key)
+) STRICT, WITHOUT ROWID;
+
+CREATE TABLE workshop_image (
+    name TEXT PRIMARY KEY NOT NULL,
+    kind TEXT NOT NULL CHECK (kind IN ('workshop', 'browser', 'gateway', 'project')),
+    project TEXT,
+    image_id TEXT,
+    labels_json TEXT,
+    env_names_json TEXT,
+    programs_sha256 TEXT,
+    built_at_ms INTEGER NOT NULL,
+    outcome TEXT NOT NULL CHECK (outcome IN ('built', 'failed', 'not_from_base', 'stopped')),
+    build_tail TEXT
+) STRICT;
+
+CREATE TABLE workshop_inventory (
+    image TEXT NOT NULL,
+    project TEXT NOT NULL,
+    image_id TEXT NOT NULL,
+    inventory_key TEXT NOT NULL,
+    inventory_json TEXT NOT NULL,
+    inventory_at_ms INTEGER NOT NULL,
+    PRIMARY KEY (image, project)
+) STRICT, WITHOUT ROWID;
+
+CREATE TABLE workshop_battery (
+    id TEXT PRIMARY KEY NOT NULL,
+    image TEXT NOT NULL,
+    image_id TEXT NOT NULL,
+    gateway_image_id TEXT NOT NULL,
+    engine_key TEXT NOT NULL,
+    officina_version TEXT NOT NULL,
+    vector_sha256 TEXT NOT NULL,
+    programs_sha256 TEXT NOT NULL,
+    clock_skew_ms INTEGER,
+    started_at_ms INTEGER NOT NULL,
+    finished_at_ms INTEGER,
+    outcome TEXT CHECK (outcome IN ('passed', 'failed', 'stopped', 'error')),
+    attempts INTEGER,
+    refused INTEGER,
+    escaped INTEGER,
+    inconclusive INTEGER,
+    not_applicable INTEGER,
+    cause TEXT
+) STRICT;
+
+CREATE INDEX workshop_run_by_state ON workshop_run (state);
+CREATE INDEX workshop_run_by_finish ON workshop_run (finished_at_ms);
+CREATE INDEX workshop_run_by_decision ON workshop_run (decided_at_ms);
+CREATE INDEX workshop_battery_by_image ON workshop_battery (image_id, finished_at_ms);
+";
+
 /// Every migration, in order: entry `i` moves version `i` to `i + 1`.
-pub const MIGRATIONS: &[&str] = &[V1, V2];
+pub const MIGRATIONS: &[&str] = &[V1, V2, V3];
 
 /// The schema version this build reads and writes: the number of
 /// migrations.

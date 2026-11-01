@@ -432,8 +432,16 @@ fn reassigned(lexed: &Lexed) -> Option<Deny> {
 /// which hold the approvals and the record of what ran, and the event
 /// buffer and the orchestrator's folder, which hold what the review reads
 /// as the author's prompt and the proposals the window shows as the
-/// orchestrator's.
-pub const PROTECTED_DIRS: [&str; 4] = [RELAY_DIR, JOURNAL_DIR, EVENTS_DIR, ORCHESTRATOR_DIR];
+/// orchestrator's, and the workshop's folder, which holds the base bundles,
+/// the packages a worker made and the empty hooks folder host git runs
+/// with (AD-124).
+pub const PROTECTED_DIRS: [&str; 5] = [
+    RELAY_DIR,
+    JOURNAL_DIR,
+    EVENTS_DIR,
+    ORCHESTRATOR_DIR,
+    crate::workshop::WORKSHOP_DIR,
+];
 
 /// The protected directories of a home (D-13, D-961): each of
 /// [`PROTECTED_DIRS`] under `<home>`, normalised, plus its `.officina/`
@@ -1441,6 +1449,19 @@ mod tests {
             Offer::Unreadable,
         );
         assert!(reason.contains("officina doctor") && reason.contains(LIST_COMMAND));
+    }
+
+    #[test]
+    fn the_workshop_folder_is_protected() {
+        let dirs = protected_dirs("C:/Users/user01/.officina", true);
+        let workshop = crate::workshop::WORKSHOP_DIR;
+        for command in [
+            format!("rm -rf C:/Users/user01/.officina/{workshop}/empty-hooks"),
+            format!("cat ~/.officina/{workshop}/runs/x/in/plan.json"),
+        ] {
+            assert!(names_protected_dir(&command, &dirs), "{command}");
+        }
+        assert!(!names_protected_dir("cargo build -p workshop", &dirs));
     }
 
     #[test]

@@ -2,6 +2,35 @@
 //! descend from, and the one Dockerfile parser, [`stages`], which phase 2
 //! (story 6.2) and Build images (story 6.8) both use.
 
+use serde::{Deserialize, Serialize};
+
+closed_enum! {
+    #[serde(rename_all = "snake_case")]
+    /// What an image is (AD-99, D-212): the base, the browser base (Slice
+    /// B), the gateway, or a project's.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+    pub enum ImageKind {
+        Workshop,
+        Browser,
+        Gateway,
+        Project,
+    }
+}
+
+closed_enum! {
+    #[serde(rename_all = "snake_case")]
+    /// How a build ended (D-212): a project image that does not descend
+    /// from a base, or replaces its programs or reserved variables, is
+    /// `not_from_base` (D-233).
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+    pub enum BuildOutcome {
+        Built,
+        Failed,
+        NotFromBase,
+        Stopped,
+    }
+}
+
 /// The image every workshop project builds on (AD-99).
 pub const WORKSHOP_BASE: &str = "officina-workshop:local";
 /// The browser base, Slice B (AD-99, FR-16).

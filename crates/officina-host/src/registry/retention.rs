@@ -13,6 +13,9 @@ use officina_core::registry::retention::{
     TRIAGE_CALL_TTL_MS, WORK_ORDER_TTL_MS, event_file_deletable, excerpt_cutoff, kept,
 };
 
+use officina_core::workshop::names::RunId;
+use officina_core::workshop::run::{BATTERY_ROW_TTL_MS, RetentionAction, retention};
+
 use super::ingest::{IngestContext, IngestReport};
 use super::store::{
     Writer, copy_is_valid, daily_copies, pre_migration_day, quarantined, read_only_connection,
@@ -50,8 +53,41 @@ pub struct PassReport {
     pub deleted_proposals: usize,
     /// `proposal` rows whose texts were cleared (D-134).
     pub cleared_proposal_texts: usize,
+    /// What the workshop's retention did (AD-124, D-213).
+    pub workshop: WorkshopRetired,
     /// False when a reader kept the WAL from being truncated.
     pub checkpointed: bool,
+}
+
+/// What one pass retired of the workshop's records and folders (AD-124).
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct WorkshopRetired {
+    /// Runs whose texts were cleared.
+    pub cleared_texts: usize,
+    /// Runs deleted with their `work_order` and approvals.
+    pub deleted_runs: usize,
+    /// Run folders deleted.
+    pub deleted_folders: usize,
+    /// Run folders that could not be deleted, kept for the next pass.
+    pub kept_folders: usize,
+    /// `workshop_battery` rows past their 90 days.
+    pub deleted_batteries: usize,
+    /// Image rows whose build output was cleared.
+    pub cleared_build_tails: usize,
+}
+
+/// The names of the run folders under `runs`, each a run id.
+fn run_folders(runs: &Path) -> Vec<String> {
+    fs::read_dir(runs)
+        .map(|entries| {
+            entries
+                .flatten()
+                .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
+                .filter_map(|e| e.file_name().into_string().ok())
+                .filter(|name| RunId::parse(name).is_some())
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// The UTC day of a quarantine folder, named by its time in milliseconds.
@@ -108,6 +144,9 @@ impl Writer {
         report.deleted_event_files = self.retire_event_files(ctx.events_dir, now_ms)?;
         report.cleared_excerpts = self.clear_excerpts(ctx.no_excerpts, now_ms)?;
         report.deleted_calls = self.retire_triage_calls(now_ms)?;
+        // Before the work orders: a run goes with its own row in one
+        // transaction (AD-119).
+        report.workshop = self.retire_workshop(now_ms)?;
         (report.deleted_work_orders, report.cleared_work_order_texts) =
             self.retire_work_orders(now_ms)?;
         (report.deleted_auto_reviews, report.cleared_review_reasons) =
@@ -237,6 +276,39 @@ impl Writer {
         )?;
         tx.commit()?;
         Ok((deleted, cleared))
+    }
+
+    /// The workshop's part of the pass (AD-124, D-213): core's
+    /// [`retention`] over the runs and the run folders, then batteries past
+    /// [`BATTERY_ROW_TTL_MS`] and build output past the excerpt TTL. A
+    /// folder that cannot be deleted is kept for the next pass.
+    pub fn retire_workshop(&mut self, now_ms: i64) -> Result<WorkshopRetired, RegistryError> {
+        let runs = crate::workshop::runs_dir(self.paths().officina_home());
+        let actions = retention(&self.workshop_run_ages()?, &run_folders(&runs), now_ms);
+        let (cleared_texts, deleted_runs) = self.apply_workshop_retention(&actions)?;
+        let mut retired = WorkshopRetired {
+            cleared_texts,
+            deleted_runs,
+            ..WorkshopRetired::default()
+        };
+        for action in &actions {
+            if let RetentionAction::DeleteFolder(id) = action {
+                match fs::remove_dir_all(runs.join(id)) {
+                    Ok(()) => retired.deleted_folders += 1,
+                    Err(_) => retired.kept_folders += 1,
+                }
+            }
+        }
+        retired.deleted_batteries = self.conn.execute(
+            "DELETE FROM workshop_battery WHERE started_at_ms <= ?1",
+            [now_ms - BATTERY_ROW_TTL_MS],
+        )?;
+        retired.cleared_build_tails = self.conn.execute(
+            "UPDATE workshop_image SET build_tail = NULL
+             WHERE built_at_ms <= ?1 AND build_tail IS NOT NULL",
+            [excerpt_cutoff(now_ms)],
+        )?;
+        Ok(retired)
     }
 
     /// Deletes the `auto_review` rows requested [`AUTO_REVIEW_TTL_MS`] or

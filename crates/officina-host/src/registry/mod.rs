@@ -28,6 +28,7 @@ pub mod store;
 pub mod triage;
 #[cfg(feature = "window-authority")]
 pub mod window;
+pub mod workshop;
 #[cfg(feature = "window-authority")]
 pub mod write;
 
