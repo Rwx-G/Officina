@@ -38,6 +38,15 @@ pub const DIFF_CAP_BYTES: usize = 256 * 1024;
 /// latest turn is.
 pub const LOGS_KEPT_BYTES: usize = 64 * 1024;
 
+/// What a failed `claude logs` prints when Claude Code's background
+/// service is not running, as after a restart (E100): it cannot connect to
+/// the service's control pipe, `\\.\pipe\cc-daemon-<id>-control`.
+pub const LOGS_NO_SERVICE_MARKERS: &[&str] = &["connect ENOENT", "cc-daemon-"];
+
+/// The logs section's reason when `claude logs` failed for
+/// [`LOGS_NO_SERVICE_MARKERS`].
+pub const LOGS_NO_SERVICE_REASON: &str = "the logs are unavailable: Claude Code's background service is not running (as after a restart), so `claude logs` cannot reach it";
+
 /// How far back the meeting reads the journal for a session's runs: the
 /// journal's own retention (D-169).
 pub const RUNS_MAX_DAYS: i64 = crate::relay::journal::JOURNAL_RETENTION_DAYS;
@@ -1045,6 +1054,27 @@ fn keep_end(text: &str) -> (&str, u64) {
     (&text[from..], from as u64)
 }
 
+/// What a failed `claude logs` said, or, when its words are Claude Code's
+/// for a background service that is not running (every one of
+/// [`LOGS_NO_SERVICE_MARKERS`]), [`LOGS_NO_SERVICE_REASON`] (D-1021).
+///
+/// ```
+/// use officina_core::meeting::{LOGS_NO_SERVICE_REASON, logs_failure_reason};
+/// let stderr = r"claude exited with 1: connect ENOENT \\.\pipe\cc-daemon-1a2b-control";
+/// assert_eq!(logs_failure_reason(stderr), LOGS_NO_SERVICE_REASON);
+/// assert_eq!(logs_failure_reason("claude did not answer within 5 s"), "claude did not answer within 5 s");
+/// ```
+pub fn logs_failure_reason(reason: &str) -> String {
+    if LOGS_NO_SERVICE_MARKERS
+        .iter()
+        .all(|marker| reason.contains(marker))
+    {
+        LOGS_NO_SERVICE_REASON.to_owned()
+    } else {
+        reason.to_owned()
+    }
+}
+
 /// The logs section of `read`, or why there is none.
 pub fn logs_of(read: Option<&LogsRead>) -> Logs {
     match read {
@@ -1052,7 +1082,7 @@ pub fn logs_of(read: Option<&LogsRead>) -> Logs {
             reason: "the session has no background id to read its logs by".to_owned(),
         },
         Some(LogsRead::Failed(reason)) => Logs::Unavailable {
-            reason: reason.clone(),
+            reason: logs_failure_reason(reason),
         },
         Some(LogsRead::Output(bytes)) => {
             let rendered = crate::screen::render(bytes);
@@ -1537,6 +1567,25 @@ mod tests {
             "banner\nthe answer\n"
         );
         assert_eq!(logs.escapes_stripped as usize, escapes);
+    }
+
+    #[test]
+    fn a_background_service_not_running_is_named() {
+        let stderr = r"claude exited with 1: Error: connect ENOENT \\.\pipe\cc-daemon-0f1e-control";
+        assert_eq!(
+            logs_of(Some(&LogsRead::Failed(stderr.to_owned()))),
+            Logs::Unavailable {
+                reason: LOGS_NO_SERVICE_REASON.to_owned()
+            }
+        );
+        // One marker alone is another failure, its words kept.
+        for marker in LOGS_NO_SERVICE_MARKERS {
+            let reason = format!("claude exited with 1: {marker}");
+            assert_eq!(
+                logs_of(Some(&LogsRead::Failed(reason.clone()))),
+                Logs::Unavailable { reason }
+            );
+        }
     }
 
     #[test]

@@ -1190,7 +1190,10 @@ project uses [Semantic Versioning](https://semver.org/).
   Code repaints its screen from the top for every frame, and removing the
   escape sequences appended each frame to the last; `claude logs` is now
   played on a minimal terminal screen (cursor moves, erases, scrolling,
-  the alternate screen) and the meeting shows the final screen once.
+  the alternate screen) and the meeting shows the final screen once. When
+  `claude logs` fails because Claude Code's background service is not
+  running, as after a restart, the section says so instead of quoting the
+  error.
 
 - A floor whose catalogue holds only templates (free projects, no action)
   was never offered for approval: the window showed no catalogue banner,
