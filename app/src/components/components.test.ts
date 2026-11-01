@@ -13,6 +13,7 @@ import { ANSWER_REFUSAL_TEXT } from "../lib/meeting-text";
 import { meeting } from "../lib/meeting.svelte";
 import type { MeetingView } from "../lib/generated/MeetingView";
 import EndedCounts from "./EndedCounts.svelte";
+import QuotaGauges from "./QuotaGauges.svelte";
 import Briefing from "./Briefing.svelte";
 import type { Briefing as BriefingPayload } from "../lib/generated/Briefing";
 import StableLabel from "./StableLabel.svelte";
@@ -934,6 +935,24 @@ describe("EndedCounts", () => {
     // Another window, another word: nothing is fixed at 24 h.
     const { getByTestId } = render(EndedCounts, { toResume: 0, done: 1, doneWindowMs: 12 * 3_600_000, onOpen: () => {} });
     expect(getByTestId("ended-done").getAttribute("title")).toContain("in the last 12 h:");
+  });
+});
+
+describe("QuotaGauges", () => {
+  const base = fixturesOf<Board>("board").map((f) => f.data).find((b) => b.quota.five_hour && b.quota.seven_day)!;
+
+  it("QuotaGauges shows a window only when the quota data carries it, the week first", () => {
+    const both = render(QuotaGauges, { quota: base.quota, nowMs: base.generated_at_ms });
+    expect(Array.from(both.container.querySelectorAll("[data-testid^=gauge-]")).map((g) => g.getAttribute("data-testid"))).toEqual(["gauge-week", "gauge-5h"]);
+    cleanup();
+    const weekOnly = render(QuotaGauges, { quota: { ...base.quota, five_hour: null }, nowMs: base.generated_at_ms });
+    expect(weekOnly.queryByTestId("gauge-5h")).toBeNull();
+    expect(weekOnly.getByTestId("gauge-week").textContent).toContain(`${Math.round(base.quota.seven_day!.used_percentage)} %`);
+    cleanup();
+    // No quota file: the week says so, the five-hour window is not guessed.
+    const none = render(QuotaGauges, { quota: { ...base.quota, five_hour: null, seven_day: null, written_at_ms: null }, nowMs: base.generated_at_ms });
+    expect(none.queryByTestId("gauge-5h")).toBeNull();
+    expect(none.getByTestId("gauge-week").textContent).toContain("no data: see officina doctor");
   });
 });
 

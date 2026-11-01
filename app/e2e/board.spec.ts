@@ -157,7 +157,33 @@ test.describe("degraded states", () => {
     await openBoard(page, loadBoard("empty"));
     await expect(page.getByTestId("waiting-pill")).toHaveCount(0);
     await expect(page.getByText("Nothing here.")).toHaveCount(5);
-    await expect(page.getByTestId("gauge-5h")).toContainText("no data: see officina doctor");
+    // No quota file: the week says so, and no five-hour window is guessed
+    // (D-1042).
+    await expect(page.getByTestId("gauge-week")).toContainText("no data: see officina doctor");
+    await expect(page.getByTestId("gauge-5h")).toHaveCount(0);
+  });
+
+  // Story 4.20 item 3 (D-1042): a gauge shows when the quota data carries
+  // its window. The quota file comes from the real `officina quota write`
+  // fed a statusline with the weekly window only.
+  test("a quota file without the five-hour window shows the week only and moves no control", async ({ page }) => {
+    const weekOnly = loadBoard("quota-week-only");
+    expect(weekOnly.quota.five_hour).toBeNull();
+    expect(weekOnly.quota.seven_day).not.toBeNull();
+    await openBoard(page, weekOnly);
+    await expect(page.getByTestId("gauge-5h")).toHaveCount(0);
+    await expect(page.getByTestId("gauge-week")).toContainText("41 %");
+    const controls = page.locator('header [data-testid="gauge-week"], header button');
+    const boxes = () => controls.evaluateAll((elements) => elements.map((e) => JSON.stringify(e.getBoundingClientRect())));
+    const without = await boxes();
+    // An older file, or an account that has the window: it comes back,
+    // after the week, and nothing before it or on the right moves (D-517).
+    const busy = loadBoard("busy");
+    await page.evaluate((b) => window.__officinaPushBoard?.(b), { ...weekOnly, quota: busy.quota });
+    await expect(page.getByTestId("gauge-5h")).toContainText("62 %");
+    expect(await boxes()).toEqual(without);
+    const order = await page.locator('header [data-testid^="gauge-"]').evaluateAll((g) => g.map((e) => e.getAttribute("data-testid")));
+    expect(order).toEqual(["gauge-week", "gauge-5h"]);
   });
 
   test("a passed reset is shown as such, never as a stale percentage", async ({ page }) => {

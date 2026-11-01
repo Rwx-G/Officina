@@ -69,7 +69,7 @@ for (const [width, height] of [
     await expect(page.getByTestId("to-sort-chip")).toBeVisible();
     await expect(page.getByTestId("contract")).toHaveCount(0);
     const first = await headerBoxes(page);
-    expect(Object.keys(first).some((k) => k.startsWith("gauge-5h"))).toBe(true);
+    expect(Object.keys(first).some((k) => k.startsWith("gauge-week"))).toBe(true);
     for (const shown of SHOWN) {
       // Every view is reached from the Sessions view, as the author would.
       await page.getByTestId("view-sessions").click();

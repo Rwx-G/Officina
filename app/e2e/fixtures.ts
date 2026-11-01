@@ -19,6 +19,7 @@ export type Scenario =
   | "empty"
   | "stale"
   | "quota-reset"
+  | "quota-week-only"
   | "approvals"
   | "approvals-auto"
   | "registry-unavailable"

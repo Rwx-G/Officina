@@ -96,6 +96,12 @@ const quotaPayload = (fiveResetsS, weekResetsS) =>
     },
   });
 
+// Story 4.20 (D-1042): an account whose statusline carries the weekly
+// window only. Claude Code sends each window only while the account has
+// it, so the header shows the gauges the data carries.
+const weekOnlyPayload = (weekResetsS) =>
+  JSON.stringify({ session_id: sid(1), rate_limits: { seven_day: { used_percentage: 41, resets_at: weekResetsS } } });
+
 const scenarios = {
   busy: {
     agents: busyAgents,
@@ -104,6 +110,11 @@ const scenarios = {
   },
   empty: { agents: [], events: [], quota: null },
   stale: { agents: busyAgents, events: busyEvents, quota: null, mode: "exit1" },
+  "quota-week-only": {
+    agents: busyAgents.slice(4, 6),
+    events: [],
+    quota: weekOnlyPayload(Math.floor((now + 3 * 24 * HOUR) / 1000)),
+  },
   "quota-reset": {
     agents: busyAgents.slice(4, 6),
     events: [],

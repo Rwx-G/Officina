@@ -40,7 +40,7 @@
     launchOutcomeText,
   } from "../lib/orchestrator-text";
   import { isPointerClick } from "../lib/pointer";
-  import Gauge from "./Gauge.svelte";
+  import QuotaGauges from "./QuotaGauges.svelte";
   import StableLabel from "./StableLabel.svelte";
 
   interface Props {
@@ -183,22 +183,7 @@
     </p>
   {/if}
   <div class="gauges" aria-label="Quota when the card was issued">
-    <Gauge
-      label="5 h"
-      window={card.quota?.five_hour ?? null}
-      weekly={false}
-      writtenAtMs={card.quota?.written_at_ms ?? null}
-      staleAfterMs={card.quota?.stale_after_ms ?? 0}
-      {nowMs}
-    />
-    <Gauge
-      label="Week"
-      window={card.quota?.seven_day ?? null}
-      weekly={true}
-      writtenAtMs={card.quota?.written_at_ms ?? null}
-      staleAfterMs={card.quota?.stale_after_ms ?? 0}
-      {nowMs}
-    />
+    <QuotaGauges quota={card.quota} {nowMs} />
   </div>
   <div class="launch">
     <button

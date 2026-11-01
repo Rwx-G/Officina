@@ -8,7 +8,7 @@
   import { switchText } from "../lib/orchestrator-text";
   import EndedCounts, { type EndedColumn } from "./EndedCounts.svelte";
   import { fadeMotion } from "../lib/motion";
-  import Gauge from "./Gauge.svelte";
+  import QuotaGauges from "./QuotaGauges.svelte";
   import ModeSwitch from "./ModeSwitch.svelte";
   import StableLabel from "./StableLabel.svelte";
   import ThemeSwitch from "./ThemeSwitch.svelte";
@@ -150,22 +150,7 @@
 
   {#if board}
     <div class="gauges">
-      <Gauge
-        label="5 h"
-        window={board.quota.five_hour}
-        weekly={false}
-        writtenAtMs={board.quota.written_at_ms}
-        staleAfterMs={board.quota.stale_after_ms}
-        nowMs={store.nowMs}
-      />
-      <Gauge
-        label="Week"
-        window={board.quota.seven_day}
-        weekly={true}
-        writtenAtMs={board.quota.written_at_ms}
-        staleAfterMs={board.quota.stale_after_ms}
-        nowMs={store.nowMs}
-      />
+      <QuotaGauges quota={board.quota} nowMs={store.nowMs} />
     </div>
   {/if}
 
