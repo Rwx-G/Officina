@@ -47,6 +47,10 @@ jobs:
         # built alone, so no other package turns window-authority on; the
         # test that every launch kind is refused compiles only then.
         run: cargo test --locked -p officina-host --lib spawn
+      - name: The engine's launch half without the authority
+        # Story 6.3 AC 5 (AD-97, D-204): the engine driver built alone, so
+        # every launch kind is refused before any docker process starts.
+        run: cargo test --locked -p officina-host --lib workshop::engine
 
   windows:
     if: github.event_name != 'schedule'
@@ -78,6 +82,10 @@ jobs:
         # built alone, so no other package turns window-authority on; the
         # test that every launch kind is refused compiles only then.
         run: cargo test --locked -p officina-host --lib spawn
+      - name: The engine's launch half without the authority
+        # Story 6.3 AC 5 (AD-97, D-204): the engine driver built alone, so
+        # every launch kind is refused before any docker process starts.
+        run: cargo test --locked -p officina-host --lib workshop::engine
       - name: Hook and gate latency, concurrent appends
         # Every #[ignore]d test of perf.rs. Hosted runners start any process
         # several times slower than a workstation; the test still gates

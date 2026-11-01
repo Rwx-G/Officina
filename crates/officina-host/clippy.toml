@@ -1,11 +1,12 @@
 # One spawn module is a lint, not a promise (AD-73, D-128 as amended by
 # D-562): a process starts in `spawn` (claude), `relay::run` (catalogue
-# programs) or `git` (read-only git), each with an `expect` stating why;
+# programs), `git` (read-only git) or `workshop::engine` (docker, D-204),
+# each with an `expect` stating why;
 # tests and examples carry their own. The console launcher starts one
 # without `Command`, so it is named too (D-963); it exists on Windows only,
 # hence `allow-invalid` for the other targets. `tests/spawn_lint.rs` holds
 # `src/` to exactly those sites.
 disallowed-methods = [
-  { path = "std::process::Command::new", reason = "a process starts in spawn, relay::run or git (AD-73)" },
+  { path = "std::process::Command::new", reason = "a process starts in spawn, relay::run, git or workshop::engine (AD-73)" },
   { path = "officina_host::platform::windows::start_in_new_console", reason = "a console session starts in spawn only (AD-73, D-963)", allow-invalid = true },
 ]

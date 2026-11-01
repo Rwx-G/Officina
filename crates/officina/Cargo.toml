@@ -25,6 +25,18 @@ path = "src/bin/officina-fake-tool.rs"
 test = false
 doc = false
 
+[[bin]]
+name = "officina-fake-docker"
+path = "src/bin/officina-fake-docker.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "officina-git-logger"
+path = "src/bin/officina-git-logger.rs"
+test = false
+doc = false
+
 [dependencies]
 officina-host.workspace = true
 serde_json.workspace = true

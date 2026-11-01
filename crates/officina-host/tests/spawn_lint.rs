@@ -9,8 +9,14 @@ use std::path::{Path, PathBuf};
 
 /// The modules where a process starts, as files under `src/`, with how
 /// many `expect`s each holds: `spawn` starts claude both through `Command`
-/// and through the console launcher (D-963).
-const SITES: &[(&str, usize)] = &[("spawn.rs", 2), ("relay/run/spawn.rs", 1), ("git.rs", 1)];
+/// and through the console launcher (D-963); `workshop::engine` starts
+/// `docker` (D-204).
+const SITES: &[(&str, usize)] = &[
+    ("spawn.rs", 2),
+    ("relay/run/spawn.rs", 1),
+    ("git.rs", 1),
+    ("workshop/engine.rs", 1),
+];
 
 const EXPECT: &str = "#[expect(";
 const LINT: &str = "clippy::disallowed_methods";

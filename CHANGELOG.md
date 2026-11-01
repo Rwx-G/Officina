@@ -8,6 +8,13 @@ project uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- The workshop's engine driver (v0.6, story 6.3): every `docker` call is built
+  in core from typed inputs and run by one host function, its environment
+  an allow list (the system names, `DOCKER_*` and nothing a session or
+  Officina set), its stdout capped and its deadline enforced in a
+  kill-on-close job; the calls that create, start, copy, build or remove
+  compile only into the window. Nothing calls them yet.
+
 - The workshop's floor keys (v0.6, story 6.2): `[workshop]` (the credential
   kind, `oauth-token` by default, `login` or `api-key`; workers, CPUs and
   memory; `upstream_proxy`, `"system"` by default; an optional corporate
@@ -867,6 +874,12 @@ project uses [Semantic Versioning](https://semver.org/).
   request, asks what the owner sees and writes the taskbar check's report.
 
 ### Security
+
+- The workshop resolves `docker.exe` and its own `git` from their install
+  locations in HKLM before `PATH`, refuses a shim, runs every workshop
+  `git` call with no hook, fsck on transfers, local transfers only and no
+  signature check, and reads a container's state and labels only, never
+  its environment, which holds the credential (v0.6, story 6.3).
 
 - The review of an `auto` request reads only a session the request is
   bound to (v0.5, story 5.19's security audit, High): `officina run`

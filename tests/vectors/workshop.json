@@ -1,0 +1,431 @@
+{
+  "engine": {
+    "calls": [
+      {
+        "args": [
+          "version",
+          "--format",
+          "{{json .}}"
+        ],
+        "deadline_ms": 10000,
+        "kind": "version",
+        "launch": false,
+        "name": "version",
+        "stdin": false
+      },
+      {
+        "args": [
+          "info",
+          "--format",
+          "{{json .}}"
+        ],
+        "deadline_ms": 10000,
+        "kind": "info",
+        "launch": false,
+        "name": "info",
+        "stdin": false
+      },
+      {
+        "args": [
+          "ps",
+          "--all",
+          "--no-trunc",
+          "--filter",
+          "label=officina.managed=1",
+          "--format",
+          "{{json .}}"
+        ],
+        "deadline_ms": 10000,
+        "kind": "ps",
+        "launch": false,
+        "name": "ps",
+        "stdin": false
+      },
+      {
+        "args": [
+          "inspect",
+          "--type",
+          "container",
+          "--format",
+          "{\"state\":{{json .State}},\"labels\":{{json .Config.Labels}}}",
+          "officina-worker-0123456789abcdef0123456789abcdef"
+        ],
+        "deadline_ms": 10000,
+        "kind": "inspect",
+        "launch": false,
+        "name": "inspect",
+        "stdin": false
+      },
+      {
+        "args": [
+          "image",
+          "inspect",
+          "--format",
+          "{\"id\":{{json .Id}},\"labels\":{{json .Config.Labels}},\"env\":{{json .Config.Env}}}",
+          "officina-workshop:local"
+        ],
+        "deadline_ms": 10000,
+        "kind": "image_inspect",
+        "launch": false,
+        "name": "image inspect",
+        "stdin": false
+      },
+      {
+        "args": [
+          "network",
+          "ls",
+          "--no-trunc",
+          "--filter",
+          "label=officina.managed=1",
+          "--format",
+          "{{json .}}"
+        ],
+        "deadline_ms": 10000,
+        "kind": "network_ls",
+        "launch": false,
+        "name": "network ls",
+        "stdin": false
+      },
+      {
+        "args": [
+          "volume",
+          "ls",
+          "--filter",
+          "label=officina.managed=1",
+          "--format",
+          "{{json .}}"
+        ],
+        "deadline_ms": 10000,
+        "kind": "volume_ls",
+        "launch": false,
+        "name": "volume ls",
+        "stdin": false
+      },
+      {
+        "args": [
+          "logs",
+          "--follow",
+          "--timestamps",
+          "officina-worker-0123456789abcdef0123456789abcdef"
+        ],
+        "deadline_ms": null,
+        "kind": "logs",
+        "launch": false,
+        "name": "logs",
+        "stdin": false
+      },
+      {
+        "args": [
+          "stop",
+          "--time",
+          "3",
+          "officina-worker-0123456789abcdef0123456789abcdef"
+        ],
+        "deadline_ms": 10000,
+        "kind": "stop",
+        "launch": false,
+        "name": "stop",
+        "stdin": false
+      },
+      {
+        "args": [
+          "build",
+          "--progress",
+          "plain",
+          "--network",
+          "default",
+          "--pull=false",
+          "--builder",
+          "desktop-linux",
+          "--label",
+          "officina.floor=00000000000000aa",
+          "--label",
+          "officina.managed=1",
+          "--build-arg",
+          "CLAUDE_CODE_VERSION=2.1.316",
+          "--tag",
+          "officina-workshop:local",
+          "C:/path/to/home/workshop/build/officina-workshop"
+        ],
+        "deadline_ms": 1800000,
+        "kind": "build",
+        "launch": true,
+        "name": "build",
+        "stdin": false
+      },
+      {
+        "args": [
+          "network",
+          "create",
+          "--internal",
+          "--label",
+          "officina.floor=00000000000000aa",
+          "--label",
+          "officina.managed=1",
+          "officina-int-0123456789abcdef0123456789abcdef"
+        ],
+        "deadline_ms": 10000,
+        "kind": "network_create",
+        "launch": true,
+        "name": "network create",
+        "stdin": false
+      },
+      {
+        "args": [
+          "network",
+          "connect",
+          "officina-int-0123456789abcdef0123456789abcdef",
+          "officina-worker-0123456789abcdef0123456789abcdef"
+        ],
+        "deadline_ms": 10000,
+        "kind": "network_connect",
+        "launch": true,
+        "name": "network connect",
+        "stdin": false
+      },
+      {
+        "args": [
+          "network",
+          "rm",
+          "officina-int-0123456789abcdef0123456789abcdef"
+        ],
+        "deadline_ms": 10000,
+        "kind": "network_rm",
+        "launch": true,
+        "name": "network rm",
+        "stdin": false
+      },
+      {
+        "args": [
+          "volume",
+          "create",
+          "--label",
+          "officina.floor=00000000000000aa",
+          "--label",
+          "officina.managed=1",
+          "officina-vol-0123456789abcdef0123456789abcdef"
+        ],
+        "deadline_ms": 10000,
+        "kind": "volume_create",
+        "launch": true,
+        "name": "volume create",
+        "stdin": false
+      },
+      {
+        "args": [
+          "volume",
+          "rm",
+          "officina-vol-0123456789abcdef0123456789abcdef"
+        ],
+        "deadline_ms": 10000,
+        "kind": "volume_rm",
+        "launch": true,
+        "name": "volume rm",
+        "stdin": false
+      },
+      {
+        "args": [
+          "create",
+          "--name",
+          "officina-worker-0123456789abcdef0123456789abcdef",
+          "--user",
+          "1000:1000",
+          "--read-only",
+          "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+          "run"
+        ],
+        "deadline_ms": 30000,
+        "kind": "create",
+        "launch": true,
+        "name": "create",
+        "stdin": false
+      },
+      {
+        "args": [
+          "cp",
+          "C:/path/to/home/workshop/runs/x/in/.",
+          "officina-worker-0123456789abcdef0123456789abcdef:/work/.officina/in"
+        ],
+        "deadline_ms": 120000,
+        "kind": "cp_in",
+        "launch": true,
+        "name": "cp in",
+        "stdin": false
+      },
+      {
+        "args": [
+          "cp",
+          "officina-worker-0123456789abcdef0123456789abcdef:/work/.officina/out",
+          "-"
+        ],
+        "deadline_ms": 120000,
+        "kind": "cp_out",
+        "launch": true,
+        "name": "cp out",
+        "stdin": false
+      },
+      {
+        "args": [
+          "start",
+          "officina-worker-0123456789abcdef0123456789abcdef"
+        ],
+        "deadline_ms": 30000,
+        "kind": "start",
+        "launch": true,
+        "name": "start",
+        "stdin": false
+      },
+      {
+        "args": [
+          "start",
+          "--attach",
+          "officina-worker-0123456789abcdef0123456789abcdef"
+        ],
+        "deadline_ms": 120000,
+        "kind": "start_attached",
+        "launch": true,
+        "name": "start attached packer",
+        "stdin": false
+      },
+      {
+        "args": [
+          "rm",
+          "--force",
+          "--volumes",
+          "officina-worker-0123456789abcdef0123456789abcdef"
+        ],
+        "deadline_ms": 10000,
+        "kind": "rm",
+        "launch": true,
+        "name": "rm",
+        "stdin": false
+      }
+    ],
+    "outputs": [
+      {
+        "expect": {
+          "Ok": {
+            "kernel": "6.18.33.2-microsoft-standard-WSL2",
+            "platform": "Docker Desktop 4.95.0 (242831)",
+            "version": "29.8.2"
+          }
+        },
+        "input": "{\"Client\": {\"Version\": \"29.8.2\", \"ApiVersion\": \"1.56\", \"Os\": \"windows\", \"Arch\": \"amd64\", \"Context\": \"desktop-linux\"}, \"Server\": {\"Platform\": {\"Name\": \"Docker Desktop 4.95.0 (242831)\"}, \"Version\": \"29.8.2\", \"ApiVersion\": \"1.56\", \"Os\": \"linux\", \"Arch\": \"amd64\", \"KernelVersion\": \"6.18.33.2-microsoft-standard-WSL2\"}}",
+        "name": "version, Docker Desktop on the workstation",
+        "parser": "version"
+      },
+      {
+        "expect": {
+          "Err": "not_running"
+        },
+        "input": "{\"Client\": {\"Version\": \"29.8.2\"}, \"Server\": null}",
+        "name": "version, engine down",
+        "parser": "version"
+      },
+      {
+        "expect": {
+          "Err": "windows_containers"
+        },
+        "input": "{\"Server\": {\"Os\": \"windows\", \"Version\": \"29.8.2\"}}",
+        "name": "version, Windows containers",
+        "parser": "version"
+      },
+      {
+        "expect": {
+          "cpus": 24,
+          "memory_bytes": 50182352896,
+          "settings_digest": "bc0c2cb629e84064ba8f6a109e5cff2df723931a1d0a08d6f4a61e6c64f91fda",
+          "system_time": "2026-11-01T16:15:26.691244167Z"
+        },
+        "input": "{\"MemTotal\": 50182352896, \"NCPU\": 24, \"SystemTime\": \"2026-11-01T16:15:26.691244167Z\", \"SecurityOptions\": [\"name=seccomp,profile=builtin\", \"name=cgroupns\"], \"Runtimes\": {\"io.containerd.runc.v2\": {\"path\": \"runc\"}, \"nvidia\": {\"path\": \"nvidia-container-runtime\"}, \"runc\": {\"path\": \"runc\"}}, \"HttpProxy\": \"http.docker.internal:3128\", \"HttpsProxy\": \"http.docker.internal:3128\", \"NoProxy\": \"hubproxy.docker.internal\", \"OperatingSystem\": \"Docker Desktop\", \"ServerVersion\": \"29.8.2\"}",
+        "name": "info on the workstation",
+        "parser": "info"
+      },
+      {
+        "expect": [
+          {
+            "id": "af9c6af2673a",
+            "labels": {
+              "officina.managed": "1",
+              "officina.role": "worker",
+              "officina.run": "0123456789abcdef0123456789abcdef"
+            },
+            "name": "officina-worker-0123456789abcdef0123456789abcdef",
+            "state": "running"
+          },
+          {
+            "id": "c619e2e75d48",
+            "labels": {
+              "officina.managed": "1",
+              "officina.role": "gateway"
+            },
+            "name": "officina-gateway-0123456789abcdef0123456789abcdef",
+            "state": "exited"
+          }
+        ],
+        "input": "{\"ID\": \"af9c6af2673a\", \"Names\": \"officina-worker-0123456789abcdef0123456789abcdef\", \"State\": \"running\", \"Labels\": \"officina.managed=1,officina.role=worker,officina.run=0123456789abcdef0123456789abcdef\", \"Image\": \"sha256:4ada\", \"Status\": \"Up 2 minutes\"}\n{\"ID\": \"c619e2e75d48\", \"Names\": \"officina-gateway-0123456789abcdef0123456789abcdef\", \"State\": \"exited\", \"Labels\": \"officina.managed=1,officina.role=gateway\", \"Image\": \"sha256:77d8\", \"Status\": \"Exited (3) 1 minute ago\"}\nnot json",
+        "name": "ps with a line that is not JSON",
+        "parser": "ps"
+      },
+      {
+        "expect": {
+          "exit_code": 0,
+          "labels": {
+            "officina.managed": "1",
+            "officina.role": "worker"
+          },
+          "oom_killed": false,
+          "running": false,
+          "status": "exited"
+        },
+        "input": "{\"state\": {\"Status\": \"exited\", \"Running\": false, \"Paused\": false, \"OOMKilled\": false, \"Dead\": false, \"Pid\": 0, \"ExitCode\": 0, \"Error\": \"\", \"StartedAt\": \"2026-11-01T14:48:00Z\", \"FinishedAt\": \"2026-11-01T14:48:45Z\"}, \"labels\": {\"officina.managed\": \"1\", \"officina.role\": \"worker\"}}",
+        "name": "inspect of an exited worker",
+        "parser": "inspect"
+      },
+      {
+        "expect": {
+          "env_names": [
+            "PATH",
+            "SSL_CERT_FILE",
+            "UV_NATIVE_TLS"
+          ],
+          "id": "sha256:4ada0fe9e06c0ecda39d71cff91f3fb1a86c5d9595f2320ce6ab999db29fc406",
+          "labels": {
+            "officina.base": "workshop"
+          }
+        },
+        "input": "{\"id\": \"sha256:4ada0fe9e06c0ecda39d71cff91f3fb1a86c5d9595f2320ce6ab999db29fc406\", \"labels\": {\"officina.base\": \"workshop\"}, \"env\": [\"PATH=/opt/officina/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\", \"SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt\", \"UV_NATIVE_TLS=1\"]}",
+        "name": "image inspect of the probe base",
+        "parser": "image inspect"
+      },
+      {
+        "expect": [
+          {
+            "labels": {
+              "officina.floor": "00000000000000aa",
+              "officina.managed": "1"
+            },
+            "name": "officina-int-0123456789abcdef0123456789abcdef"
+          }
+        ],
+        "input": "{\"ID\": \"c0ffee\", \"Name\": \"officina-int-0123456789abcdef0123456789abcdef\", \"Driver\": \"bridge\", \"Labels\": \"officina.floor=00000000000000aa,officina.managed=1\", \"Scope\": \"local\"}",
+        "name": "network ls",
+        "parser": "network ls"
+      },
+      {
+        "expect": [
+          {
+            "labels": {
+              "officina.managed": "1"
+            },
+            "name": "officina-vol-0123456789abcdef0123456789abcdef"
+          }
+        ],
+        "input": "{\"Driver\": \"local\", \"Name\": \"officina-vol-0123456789abcdef0123456789abcdef\", \"Labels\": \"officina.managed=1\", \"Scope\": \"local\"}",
+        "name": "volume ls",
+        "parser": "volume ls"
+      }
+    ]
+  },
+  "schema": 1
+}

@@ -767,6 +767,23 @@ pub fn start_in_new_console(
 mod tests {
     use super::*;
 
+    /// Story 6.3 AC 1: the HKLM read the engine and git resolutions use
+    /// reads a value every Windows has.
+    #[test]
+    fn reads_a_known_hklm_string() {
+        let name = registry_string(
+            Hive::LocalMachine,
+            "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion",
+            "ProductName",
+        )
+        .expect("ProductName is set");
+        assert!(name.starts_with("Windows"), "{name}");
+        assert_eq!(
+            registry_string(Hive::LocalMachine, "SOFTWARE\\Officina-Missing-Key", "X"),
+            None
+        );
+    }
+
     #[test]
     fn own_process_has_ancestors() {
         let chain = ancestors(std::process::id());

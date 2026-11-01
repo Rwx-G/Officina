@@ -565,3 +565,153 @@ fn a_folder_outside_git_is_said() {
     );
     assert!(matches!(gone, GitRead::Unavailable(_)), "{gone:?}");
 }
+
+// ---- story 6.3: the workshop rule (AD-111, D-238) ----
+
+/// A repository with one commit and a `reference-transaction` hook that
+/// writes a marker, the hook a package's repository could carry.
+fn hooked_repo(test: &str) -> Option<(tempfile::TempDir, PathBuf, PathBuf, PathBuf)> {
+    let git = git_or_skip(test)?;
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path().join("repo");
+    std::fs::create_dir(&repo).unwrap();
+    git_ok(&git, &repo, &["init", "-q"]);
+    std::fs::write(repo.join("a.txt"), "a\n").unwrap();
+    git_ok(&git, &repo, &["add", "a.txt"]);
+    git_ok(&git, &repo, &["commit", "-q", "-m", "base"]);
+    let (program, ran) = marker_program(dir.path());
+    let hooks = repo.join(".git").join("hooks");
+    std::fs::create_dir_all(&hooks).unwrap();
+    let hook = hooks.join("reference-transaction");
+    std::fs::copy(&program, &hook).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    Some((dir, git, repo, ran))
+}
+
+fn base_env() -> Vec<(String, String)> {
+    std::env::vars().collect()
+}
+
+#[test]
+fn a_planted_hook_never_runs_under_the_workshop_rule() {
+    let Some((dir, git, repo, ran)) =
+        hooked_repo("a_planted_hook_never_runs_under_the_workshop_rule")
+    else {
+        return;
+    };
+    let hooks = officina_host::workshop::git::ensure_empty_hooks(dir.path()).unwrap();
+    let out = officina_host::workshop::git::run(
+        &git,
+        &repo,
+        &["update-ref", "refs/heads/officina/probe", "HEAD"],
+        &base_env(),
+        &hooks,
+        None,
+    )
+    .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        !ran.exists(),
+        "the planted hook ran under the workshop rule"
+    );
+}
+
+#[test]
+fn without_the_rule_the_planted_hook_runs() {
+    let Some((_dir, git, repo, ran)) = hooked_repo("without_the_rule_the_planted_hook_runs") else {
+        return;
+    };
+    git_ok(
+        &git,
+        &repo,
+        &["update-ref", "refs/heads/officina/probe", "HEAD"],
+    );
+    assert!(ran.exists(), "the control: plain git runs the hook");
+}
+
+#[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the control runs plain git, outside host::git"
+)]
+fn a_global_gpg_program_never_runs_on_log() {
+    let Some((dir, git, repo, _)) = hooked_repo("a_global_gpg_program_never_runs_on_log") else {
+        return;
+    };
+    let (program, ran) = marker_program(&dir.path().join("repo"));
+    let home = dir.path().join("home");
+    std::fs::create_dir(&home).unwrap();
+    std::fs::write(
+        home.join(".gitconfig"),
+        format!(
+            "[log]\n\tshowSignature = true\n[gpg]\n\tprogram = {}\n",
+            program.to_string_lossy().replace('\\', "/")
+        ),
+    )
+    .unwrap();
+    // A commit object carrying a signature header, written by hand: no gpg
+    // is needed to make it, and a log showing signatures would verify it.
+    let tree = run_git(&git, &repo, &["write-tree"]);
+    let tree = String::from_utf8_lossy(&tree.stdout).trim().to_owned();
+    let commit = format!(
+        "tree {tree}\nauthor user01 <user@example.com> 1700000000 +0000\ncommitter user01 <user@example.com> 1700000000 +0000\ngpgsig -----BEGIN PGP SIGNATURE-----\n \n iQEzBAABCAAdFiEE\n -----END PGP SIGNATURE-----\n\nsigned\n"
+    );
+    let object = dir.path().join("commit.txt");
+    std::fs::write(&object, commit).unwrap();
+    let written = run_git(
+        &git,
+        &repo,
+        &[
+            "hash-object",
+            "-t",
+            "commit",
+            "-w",
+            &object.to_string_lossy(),
+        ],
+    );
+    let id = String::from_utf8_lossy(&written.stdout).trim().to_owned();
+    assert_eq!(id.len(), 40, "{}", String::from_utf8_lossy(&written.stderr));
+    let mut env: Vec<(String, String)> = base_env()
+        .into_iter()
+        .filter(|(name, _)| {
+            !["HOME", "USERPROFILE", "XDG_CONFIG_HOME"]
+                .iter()
+                .any(|h| h.eq_ignore_ascii_case(name))
+        })
+        .collect();
+    env.push(("HOME".to_owned(), home.to_string_lossy().into_owned()));
+    env.push((
+        "USERPROFILE".to_owned(),
+        home.to_string_lossy().into_owned(),
+    ));
+    // The control: plain git with the same home runs the marker on log.
+    let plain = std::process::Command::new(&git)
+        .args(["log", "-1", &id])
+        .current_dir(&repo)
+        .env("HOME", &home)
+        .env("USERPROFILE", &home)
+        .output();
+    let control_ran = plain.is_ok() && ran.exists();
+    if ran.exists() {
+        std::fs::remove_file(&ran).unwrap();
+    }
+    let hooks = officina_host::workshop::git::ensure_empty_hooks(dir.path()).unwrap();
+    let out =
+        officina_host::workshop::git::run(&git, &repo, &["log", "-1", &id], &env, &hooks, None)
+            .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(!ran.exists(), "gpg.program ran on a workshop log");
+    assert!(control_ran, "the control: plain git log runs gpg.program");
+}
