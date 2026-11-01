@@ -119,7 +119,8 @@ for (const theme of THEMES) {
     await openFile(page, named(board, MARKUP_SESSION));
 
     const list = exchange(page);
-    await expect(list.getByRole("listitem")).toHaveCount(2);
+    // The messages are the list's own items; a message's markdown lists are inside them.
+    await expect(list.locator(":scope > li")).toHaveCount(2);
     const human = list.locator('[data-author="human"]');
     const agent = list.locator('[data-author="agent"]');
     // Read in order by assistive technology: the author's label, then the text.
@@ -144,32 +145,87 @@ for (const theme of THEMES) {
   });
 }
 
-test("the exchange shows markup and markdown as written, never rendered", async ({ page }) => {
+// Story 4.20 item 6 (the owner's revision of D-706, D-1045): the messages
+// read as markdown, through a safe subset written as text nodes. Markup is
+// shown as written, no link is made and no image is loaded.
+test("the exchange renders its markdown, markup shown as written, no link and no image", async ({ page }) => {
   await page.setViewportSize({ width: 1920, height: 1032 });
   const board = loadBoard("scene-c");
   const card = named(board, MARKUP_SESSION);
-  // The fixture holds what the test is about: markup in the prompt, a
-  // markdown answer the hook kept as head and tail.
+  // The fixture holds what the test is about: markup and markdown in the
+  // prompt, a markdown answer the hook kept as head and tail.
   expect(card.last_prompt).toContain("<img");
   expect(card.last_prompt).toContain("**");
   expect(card.last_message).toContain("## ");
   expect(card.last_message).toContain("<b>");
+  expect(card.last_message_tail).toContain("| --- |");
   expect(card.last_message_tail).toContain("<img");
   await openScene(page, board);
   await openFile(page, card);
 
-  const shown = await page.evaluate(() =>
-    ["file-prompt", "file-answer", "file-answer-tail"].map((id) => document.querySelector(`[data-testid=${id}]`)!.textContent),
-  );
-  expect(shown).toEqual([card.last_prompt, card.last_message, card.last_message_tail]);
-  // Nothing parsed: the list holds its items, their labels and their text
-  // paragraphs only, and no link is made of a markdown or HTML one.
+  const prompt = page.getByTestId("file-prompt");
+  const answer = page.getByTestId("file-answer");
+  const tail = page.getByTestId("file-answer-tail");
+  // The markdown, read: emphasis, code, a heading as a bold line, a list, a
+  // table as a table.
+  await expect(prompt.locator("strong")).toHaveText("install.md");
+  await expect(answer.locator("p.heading strong")).toHaveText("Link fixes");
+  await expect(answer.locator("h1, h2, h3, h4, h5, h6")).toHaveCount(0);
+  await expect(answer.locator("p:not(.heading) strong")).toHaveText("14");
+  await expect(answer.locator("code").first()).toHaveText("install.md");
+  await expect(answer.locator("ul > li")).toHaveCount(4);
+  await expect(tail.locator("th")).toHaveText(["file", "links"]);
+  await expect(tail.locator("tbody tr")).toHaveCount(2);
+  await expect(tail.locator("em")).toHaveText("run the link checker again");
+  // A link is its text and its address, never an anchor.
+  await expect(prompt.locator("[data-md-link]")).toHaveText("docs (https://example.com/docs)");
+  // Markup shown as written, nothing of it parsed or run.
+  await expect(answer).toContainText("<b>none</b> left.");
+  await expect(answer).toContainText('<a href="https://example.com">home</a>: kept as it was');
+  await expect(prompt).toContainText('<img src=x onerror="window.__officinaXss = 1">');
+  await expect(tail).toContainText('The <img src=x onerror="window.__officinaXss = 1"> tag');
+  await expect(file(page).locator("a, img, b, script, iframe")).toHaveCount(0);
   const tags = await exchange(page).evaluate((list) => [...new Set(Array.from(list.querySelectorAll("*")).map((e) => e.tagName))].sort());
-  expect(tags).toEqual(["LI", "P", "SPAN"]);
-  await expect(file(page).locator("a, img")).toHaveCount(0);
-  // The line breaks of the text are kept, as written.
-  expect(await page.getByTestId("file-answer").evaluate((p) => getComputedStyle(p).whiteSpace)).toBe("pre-wrap");
+  const subset = ["BLOCKQUOTE", "BR", "CODE", "DIV", "EM", "HR", "LI", "OL", "P", "PRE", "SPAN", "STRONG", "TABLE", "TBODY", "TD", "TH", "THEAD", "TR", "UL"];
+  for (const tag of tags) expect(subset).toContain(tag);
+  // The hook's cut is kept: the head ends and the tail starts with its
+  // ellipsis.
+  expect((await answer.textContent())!.trimEnd().endsWith("…")).toBe(true);
+  expect((await tail.textContent())!.trimStart().startsWith("…")).toBe(true);
   expect(await page.evaluate(() => (window as { __officinaXss?: number }).__officinaXss)).toBeUndefined();
+});
+
+test("a wide table scrolls inside its bubble", async ({ page }) => {
+  await page.setViewportSize({ width: 1920, height: 1032 });
+  const board = structuredClone(loadBoard("scene-c"));
+  const card = named(board, MARKUP_SESSION);
+  const columns = 12;
+  card.last_message_tail = [
+    `| ${Array.from({ length: columns }, (_, i) => `column-${i}`).join(" | ")} |`,
+    `| ${Array.from({ length: columns }, () => "---").join(" | ")} |`,
+    `| ${Array.from({ length: columns }, (_, i) => `value-${i}`).join(" | ")} |`,
+  ].join("\n");
+  await openScene(page, board);
+  await openFile(page, card);
+  const facts = await page.getByTestId("file-answer-tail").evaluate((tail) => {
+    const box = tail.querySelector<HTMLElement>("[data-md-table]")!;
+    const bubble = tail.closest("li")!.getBoundingClientRect();
+    const panel = document.querySelector("[data-testid=session-file]")!.getBoundingClientRect();
+    return {
+      scrolls: box.scrollWidth > box.clientWidth,
+      overflowX: getComputedStyle(box).overflowX,
+      boxRight: box.getBoundingClientRect().right,
+      bubbleRight: bubble.right,
+      panelRight: panel.right,
+      panelScrolls: document.querySelector<HTMLElement>("[data-testid=session-file]")!.scrollWidth >
+        document.querySelector<HTMLElement>("[data-testid=session-file]")!.clientWidth,
+    };
+  });
+  expect(facts.scrolls).toBe(true);
+  expect(facts.overflowX).toBe("auto");
+  expect(facts.boxRight).toBeLessThanOrEqual(facts.bubbleRight);
+  expect(facts.bubbleRight).toBeLessThanOrEqual(facts.panelRight);
+  expect(facts.panelScrolls).toBe(false);
 });
 
 test("a side the card does not carry shows nothing", async ({ page }) => {
@@ -182,7 +238,7 @@ test("a side the card does not carry shows nothing", async ({ page }) => {
   await openScene(page, board);
 
   await openFile(page, promptOnly!);
-  await expect(exchange(page).getByRole("listitem")).toHaveCount(1);
+  await expect(exchange(page).locator(":scope > li")).toHaveCount(1);
   await expect(exchange(page).locator('[data-author="human"]')).toHaveCount(1);
   await expect(page.getByTestId("file-answer")).toHaveCount(0);
   await page.keyboard.press("Escape");

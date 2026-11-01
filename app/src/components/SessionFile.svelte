@@ -28,6 +28,7 @@
   import { liveCards, zoneOf, MAX_NUMBER } from "../lib/scene/layout";
   import { COLUMN_WORDS, BADGE_WORDS, SIGN_WORDS, ZONE_WORDS, agentTypeWords } from "../lib/scene/text";
   import { clock, duration } from "../lib/time";
+  import Markdown from "./Markdown.svelte";
   import StableLabel from "./StableLabel.svelte";
   import { meeting } from "../lib/meeting.svelte";
   import type { OrchestratorStore } from "../lib/orchestrator.svelte";
@@ -241,20 +242,21 @@
     <!-- The exchange as a conversation (D-705): the author's last prompt on
          the right, Claude's last answer on the left, each labelled by its
          author; a side the card does not carry shows nothing. Last, after
-         the actions, as the longest part (D-707). -->
+         the actions, as the longest part (D-707). Each message is a safe
+         markdown subset (D-1045): text nodes only, no link, no image. -->
     {#if card.last_prompt || card.last_message || card.last_message_tail}
       <ol class="exchange" aria-label="Last exchange" data-testid="file-exchange">
         {#if card.last_prompt}
           <li class="message human" data-testid="file-message" data-author="human">
             <span class="author">Your last prompt</span>
-            <p class="text" data-testid="file-prompt">{card.last_prompt}</p>
+            <div class="text" data-testid="file-prompt"><Markdown text={card.last_prompt} /></div>
           </li>
         {/if}
         {#if card.last_message || card.last_message_tail}
           <li class="message agent" data-testid="file-message" data-author="agent">
             <span class="author">Claude's last answer</span>
-            {#if card.last_message}<p class="text" data-testid="file-answer">{card.last_message}</p>{/if}
-            {#if card.last_message_tail}<p class="text" data-testid="file-answer-tail">{card.last_message_tail}</p>{/if}
+            {#if card.last_message}<div class="text" data-testid="file-answer"><Markdown text={card.last_message} /></div>{/if}
+            {#if card.last_message_tail}<div class="text" data-testid="file-answer-tail"><Markdown text={card.last_message_tail} /></div>{/if}
           </li>
         {/if}
       </ol>
@@ -412,12 +414,9 @@
   .human .author {
     text-align: right;
   }
-  /* Untrusted text kept as written: its line breaks shown, nothing parsed. */
+  /* Untrusted text as a safe markdown subset (D-1045), never as HTML. */
   .text {
-    margin: 0;
-    font-size: 14px;
-    overflow-wrap: anywhere;
-    white-space: pre-wrap;
+    min-width: 0;
   }
   .actions {
     display: flex;
