@@ -1,6 +1,6 @@
 # Story 6.9: The hook-program inventory
 
-**Status:** Approved
+**Status:** Review
 
 ## Story
 
@@ -19,11 +19,11 @@ so that under bypass a guard that cannot start never silently becomes a guard th
 
 ## Tasks
 
-- [ ] `crates/officina-core/src/workshop/inventory.rs`; `inventory` section of `workshop.json` (AC 1, 4)
-- [ ] Host side: settings and `.mcp.json` reads, tracked scripts at the base commit (`GitRule::Workshop`) (AC 1)
-- [ ] `crates/officina-container/src/entry/inventory.rs`; `entry_linux.rs` cases (AC 2)
-- [ ] `crates/officina-host/src/workshop/inventory.rs`: runs, records; fake engine mode (AC 3)
-- [ ] Doctor (AC 5); README (AC 6)
+- [x] `crates/officina-core/src/workshop/inventory.rs`; `inventory` section of `workshop.json` (AC 1, 4)
+- [x] Host side: settings and `.mcp.json` reads, tracked scripts at the base commit (`GitRule::Workshop`) (AC 1)
+- [x] `crates/officina-container/src/entry/inventory.rs`; `entry_linux.rs` cases (AC 2)
+- [x] `crates/officina-host/src/workshop/inventory.rs`: runs, records; fake engine mode (AC 3)
+- [x] Doctor (AC 5); README (AC 6)
 
 ## Dev Notes
 
@@ -44,12 +44,31 @@ so that under bypass a guard that cannot start never silently becomes a guard th
 
 ### Debug Log
 
+- The first Linux run of the cherry-picked part failed `an_env_shebang_resolves_its_interpreter`: the test resolved twice on one root, and the second run's mount link already existed. A container's project tmpfs is fresh, so the entry point stays strict and the test helper clears the project folder before each run.
+- Review of the first part: only the first program of a line was resolved, so `cd "$CLAUDE_PROJECT_DIR" && python guard.py` would have refused on `cd`, and a guard's later program was never checked; a tracked script's mode was not read, though a `100644` script fails open as a missing one does. Both fixed (D-1138).
+- The first gate failed on Linux only: the build's inventory and doctor read each project's folder from the canonical catalogue, whose path is case folded for comparison, so a mixed-case folder was not found on a case-sensitive file system and no inventory was recorded. IO now takes the floor's own path (`join_project_path`), as the Dockerfile reads do. The same gate caught the README naming the project-folder variable, which `readme_names_no_session_variable` forbids.
+- The CLI fixture's project held a `.git` and a `.claude` folder beside its Dockerfile, which AD-101's context rule (no subfolder) drops; the inventory fixture's Dockerfile sits in `docker/`.
+
 ### Completion Notes
 
+- AC 1: `crates/officina-core/tests/workshop_vectors.rs::{inventory_extraction_cases_match, the_key_changes_with_a_tracked_script, tracked_settings_hooks_are_listed}` over the `inventory` section (regenerated for the tracked mode); core `inventory.rs::tests::{oversized_inputs_are_refused_not_truncated, a_tracked_script_absent_at_the_base_is_missing, a_tracked_pretooluse_hook_is_checked, the_first_line_keeps_a_carriage_return, project_paths_take_every_spelling_and_nothing_else, mounted_scripts_are_those_under_a_mount}`. The host reads mounted settings bounded from the project folder and tracked ones, `.mcp.json` and tracked scripts at the base commit by blob id under `GitRule::Workshop` (`workshop/inventory.rs::gather`), proven end to end by the CLI cases of AC 3 (web's tracked settings and executable script).
+- AC 2: `crates/officina-container/tests/entry_linux.rs::{a_python_hook_is_found_when_python_exists, a_missing_program_is_missing, an_env_shebang_resolves_its_interpreter, a_crlf_shebang_is_missing, a_variable_other_than_the_project_dir_is_dynamic, a_mounted_script_resolves_through_its_link, a_builtin_is_not_a_missing_program, a_tracked_script_is_judged_from_what_the_host_read}`, run in `rust:1-bookworm`; core `inventory.rs::tests::shebangs_are_read_raw`.
+- AC 3: CLI `crates/officina/tests/workshop_build.rs::{an_inventory_follows_each_build_per_project, a_changed_hook_reruns_the_inventory_at_launch, an_unchanged_key_does_not_rerun, no_inventory_runs_while_stopped, a_missing_guard_is_recorded_and_refuses, a_garbled_inventory_records_nothing}`; core `inventory.rs::tests::results_are_one_per_command_in_order`. The fake engine's attached `start` of role `inventory` reads the list and prints fixture results. The launch cases call `inventory::for_launch`, which story 6.11's launch calls on thread `workshop` (D-1137). The image's `ENV` names were recorded at build by story 6.8.
+- AC 4: core `inventory.rs::tests::{only_a_missing_pretooluse_program_refuses, other_events_and_mcp_servers_warn}`; story 6.11's `hook_program_missing` reads `StoredInventory::consequences`.
+- AC 5: host `crates/officina-host/src/workshop/doctor.rs::tests::{a_missing_pretooluse_program_fails, an_env_block_in_a_mounted_settings_file_warns_by_name, a_crlf_hook_script_warns}` (the section's module, D-1130, D-1139); core `inventory.rs::tests::exposed_names_are_names_only`.
+- AC 6: README "Hook programs"; `CHANGELOG.md` Added.
+
 ## File List
+
+- `crates/officina-core/src/workshop/inventory.rs` (new), `workshop/{mod,doctor}.rs`, `tests/workshop_vectors.rs`
+- `crates/officina-container/src/entry/inventory.rs` (new), `entry/mod.rs`, `src/bin/officina-entry.rs`, `tests/entry_linux.rs`
+- `crates/officina-host/src/workshop/inventory.rs` (new), `workshop/{mod,build,doctor}.rs`, `registry/{read,window}.rs`
+- `crates/officina/src/bin/officina-fake-docker.rs`, `tests/workshop_build.rs`
+- `tests/vectors/workshop.json`, `README.md`, `CHANGELOG.md`, `docs/stories/epic-6-decisions.md` (D-1137 to D-1139), `docs/stories/sprint-status.yaml`
 
 ## Change Log
 
 - 2026-10-28 created
 - 2026-10-28 reworked after review: tracked `.claude` settings join the inventory's input; a CRLF shebang is `missing` (`crlf_shebang`) and doctor warns on CRLF hook scripts (F12)
 - 2026-10-29 research-note entries named by subject, no number reserved (D-600)
+- 2026-11-01 implemented: extraction, key and judgement in core; `officina-entry inventory`; the run after Build images and for a launch; the fake engine's attached start; doctor's hook checks; README (D-1137 to D-1139)
