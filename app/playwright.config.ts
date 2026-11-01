@@ -14,6 +14,10 @@ export default defineConfig({
   testMatch: "**/*.spec.ts",
   testIgnore: "**/readme-assets.spec.ts",
   fullyParallel: true,
+  // The hosted Windows runner of a private repository has two cores, and
+  // the default of half the cores ran the three repeats on one worker in
+  // 23 minutes; the cases mostly wait on the page, so two share them (D-1074).
+  workers: process.env.CI ? 2 : undefined,
   reporter: process.env.CI ? [["list"], ["html", { open: "never" }]] : "list",
   use: {
     ...devices["Desktop Chrome"],
