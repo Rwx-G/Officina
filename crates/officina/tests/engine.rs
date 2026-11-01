@@ -26,7 +26,10 @@ struct FakeEngine {
 
 impl FakeEngine {
     fn new(sidecar: serde_json::Value) -> FakeEngine {
-        let dir = tempfile::tempdir().unwrap();
+        // Beside the built fake, so the hard link works: a copy written by
+        // this process stays open for writing in children other test threads
+        // fork, and Linux then refuses to run it ("Text file busy", D-884).
+        let dir = tempfile::tempdir_in(Path::new(FAKE_DOCKER).parent().unwrap()).unwrap();
         let name = Path::new(FAKE_DOCKER).file_name().unwrap();
         let exe = dir.path().join(name);
         if std::fs::hard_link(FAKE_DOCKER, &exe).is_err() {
@@ -265,7 +268,7 @@ fn the_logger_passes_through_and_logs_argv() {
         eprintln!("skipped: no git installed (D-23)");
         return;
     };
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir_in(Path::new(GIT_LOGGER).parent().unwrap()).unwrap();
     let exe = dir.path().join(Path::new(GIT_LOGGER).file_name().unwrap());
     if std::fs::hard_link(GIT_LOGGER, &exe).is_err() {
         std::fs::copy(GIT_LOGGER, &exe).unwrap();
