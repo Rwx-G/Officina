@@ -1,6 +1,6 @@
 # Story 6.6: Container vectors, the two networks and the run plan
 
-**Status:** Approved
+**Status:** Review
 
 ## Story
 
@@ -23,11 +23,11 @@ so that what a worker holds is a property of reviewed code, a project Dockerfile
 
 ## Tasks
 
-- [ ] `crates/officina-core/src/workshop/vector.rs`: builders, options, pids limits, environment `match`, `reserved_env_names`, mounts (AC 1 to 5)
-- [ ] `crates/officina-core/src/workshop/launch.rs`: `ApprovedWorkshopTemplate`, `BaseChoice`, `LaunchFacts`, `WorkshopLaunch`; `RunPlan`, `WORKER_DISALLOWED_TOOLS`, the `claude` vector (AC 6)
-- [ ] `vectors` section of `workshop.json`; coverage, comparison, shape and hash tests (AC 2 to 8)
-- [ ] README (AC 9)
-- [ ] `allow_list`, `login_command`, the `AuthProbe` and `Scanner` builders, the login mount on `Worker` and `Battery` (AC 3, 4, 10)
+- [x] `crates/officina-core/src/workshop/vector.rs`: builders, options, pids limits, environment `match`, `reserved_env_names`, mounts (AC 1 to 5)
+- [x] `crates/officina-core/src/workshop/launch.rs`: `ApprovedWorkshopTemplate`, `BaseChoice`, `LaunchFacts`, `WorkshopLaunch`; `RunPlan`, `WORKER_DISALLOWED_TOOLS`, the `claude` vector (AC 6)
+- [x] `vectors` section of `workshop.json`; coverage, comparison, shape and hash tests (AC 2 to 8)
+- [x] README (AC 9)
+- [x] `allow_list`, `login_command`, the `AuthProbe` and `Scanner` builders, the login mount on `Worker` and `Battery` (AC 3, 4, 10)
 
 ## Dev Notes
 
@@ -50,7 +50,23 @@ so that what a worker holds is a property of reviewed code, a project Dockerfile
 
 ### Completion Notes
 
+- Entry conditions: the gate 1, 2, 3 and 6 entries' owner halves and the login entry are not recorded. Built on what is recorded: no `--dns 0.0.0.0` nor fixed gateway address (the gate 2 first half saw no outside name resolve); `--max-budget-usd` kept (D-1109); the login kind's parts built, since the login entry's step 1 has not failed (D-610); `in/` copied into the volume (the gate 1 first half's copy worked). A recorded failure changes this story's code in the same change (D-203).
+- AC 1: core `workshop/vector.rs::tests::{every_role_carries_the_fixed_options, no_role_carries_a_forbidden_option, entrypoint_user_and_command_are_always_overridden, images_are_named_by_id}`, each over `ContainerRole::ALL`; the `compile_fail` doctest on a `ContainerVector` literal; the `engine` section's `create` case is a builder's worker (D-1121).
+- AC 2: `vector.rs::tests::a_run_creates_its_networks_in_order` over the `vectors` section's network calls.
+- AC 3: `vector.rs::tests::{only_worker_and_battery_carry_proxy_or_credential_names, exactly_one_credential_source_per_auth, a_login_worker_mounts_the_login_read_only_and_carries_no_credential_name, the_credential_value_never_appears_in_a_vector, reserved_names_are_derived_from_the_builders}`; the `Worker` and `login_worker` cases of `workshop.json`.
+- AC 4: `vector.rs::tests::{every_role_has_a_case, the_gateway_pids_limit_covers_its_threads, the_packer_takes_branch_and_base_from_its_command, only_worker_battery_probe_and_scanner_mount_the_login, the_login_is_never_mounted_writable}`; the packer also takes `--clone` (D-1120).
+- AC 5: `vector.rs::tests::{a_comma_in_a_mount_path_is_refused, spaces_and_accents_are_kept}`.
+- AC 6: `workshop/launch.rs::tests::{an_unapproved_template_is_refused, a_template_changed_since_approval_is_refused, a_base_outside_the_list_is_refused, the_plan_round_trips, the_argument_vector_is_fixed, max_usd_and_model_follow_the_template}`; `compile_fail` doctests on a `WorkshopLaunch` literal and on `run_plan` without one; the `worker_plan` and `launch_worker` cases (D-1122).
+- AC 7: `vector.rs::tests::{worker_and_battery_differ_only_where_they_must, the_comparison_sees_one_changed_option, every_project_shape_differs_from_the_battery_only_in_mount_count_and_memory}` (in core's unit tests, D-1121).
+- AC 8: `launch.rs::tests::{a_changed_deadline_changes_the_hash, a_changed_image_id_changes_the_hash, a_changed_route_changes_the_hash}`; the `plan_sha256` case.
+- AC 9: README "What a worker holds"; `readme.rs` green.
+- AC 10: `launch.rs::tests::{login_adds_every_login_host_once, token_kinds_add_no_host, the_login_command_carries_no_credential_name, the_login_command_renders_on_one_line}`; the `login_command` cases, direct and routed.
+
 ## File List
+
+- `crates/officina-core/src/workshop/{vector,launch}.rs` (`launch.rs` new), `workshop/{mod,engine}.rs`, `relay/template.rs`
+- `tests/vectors/workshop.json` (the `vectors` section, the `engine` section's `create` case)
+- `README.md`, `CHANGELOG.md`, `docs/stories/epic-6-decisions.md` (D-1120 to D-1122), `docs/stories/sprint-status.yaml`
 
 ## Change Log
 
@@ -59,3 +75,4 @@ so that what a worker holds is a property of reviewed code, a project Dockerfile
 - 2026-10-29 research-note entries named by subject, no number reserved (D-600)
 - 2026-10-29 the owner's answers: the `login` worker shape, `AuthProbe` and `Scanner`, routes in the launch facts and the plan hash, `allow_list` per kind and the login command (D-603, D-605, D-606, D-608, D-609, D-611)
 - 2026-10-29 adversarial pass: waits for the login entry, `LOGIN_HOSTS` as a constant (D-606, D-610)
+- 2026-11-01 implemented on the recorded gate halves; D-1120 to D-1122; status Review
