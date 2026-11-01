@@ -957,11 +957,23 @@ pub fn run_with(collector: &Collector, exe: &Path, permissions: bool) -> Vec<Che
         let proxy = relay_floor
             .as_ref()
             .and_then(|floor| crate::workshop::doctor::proxy_input(&floor.canonical));
+        let images = relay_floor
+            .as_ref()
+            .map(|floor| crate::workshop::doctor::ImageContext {
+                exe_dir: exe.parent().unwrap_or(Path::new("")).to_path_buf(),
+                canonical: floor.canonical.clone(),
+                floor_key: officina_core::workshop::names::floor_key(&floor.floor_path),
+                claude_version: version
+                    .as_deref()
+                    .and_then(claude_version)
+                    .map(|[a, b, c]| format!("{a}.{b}.{c}")),
+            });
         checks.extend(crate::workshop::doctor::checks(
             &crate::workshop::doctor::gather(
                 collector.base_env().vars(),
                 &paths.officina_home,
                 proxy.as_ref(),
+                images.as_ref(),
             ),
         ));
     }

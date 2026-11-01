@@ -5,7 +5,8 @@
 use std::path::{Path, PathBuf};
 
 use officina_core::workshop::doctor::{
-    CheckLevel, Finding, WorkshopCheck, docker_cli_config, in_order, orphans, overrides_set,
+    CaRead, CheckLevel, Finding, ImageInput, WorkshopCheck, ca_findings, claude_version_finding,
+    docker_cli_config, image_finding, in_order, memory_finding, orphans, overrides_set,
     plain_tcp_docker_host,
 };
 use officina_core::workshop::engine::{
@@ -57,6 +58,182 @@ pub struct WorkshopFacts {
     pub synced_home: Option<PathBuf>,
     /// The routes on this network, when the floor's workshop is valid.
     pub proxy: Option<ProxyFacts>,
+    /// The Linux programs and the images, when the floor's workshop is
+    /// valid (AD-123, story 6.8).
+    pub images: Option<ImageReport>,
+}
+
+/// What doctor needs to compare the images (AD-99, AD-123).
+#[derive(Debug, Clone)]
+pub struct ImageContext {
+    /// The executable's folder, where `linux/` sits (AD-100).
+    pub exe_dir: PathBuf,
+    pub canonical: officina_core::relay::catalogue::CanonicalCatalogue,
+    pub floor_key: String,
+    /// The host's Claude Code version, `x.y.z`.
+    pub claude_version: Option<String>,
+}
+
+/// The programs, images, Claude Code versions, CA and memory doctor read.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImageReport {
+    /// The Linux programs' folder and digests, or why they are missing.
+    pub programs: Result<(PathBuf, crate::workshop::build::ProgramDigests), String>,
+    pub images: Vec<ImageInput>,
+    pub host_claude: Option<String>,
+    pub base_claude: Option<String>,
+    pub ca: CaRead,
+    pub ca_approved: Option<String>,
+    pub base_ca_label: Option<String>,
+    /// `max_workers` and `memory_mib`.
+    pub workers: (u32, u32),
+}
+
+fn digest_of(path: &Path) -> Result<String, String> {
+    std::fs::read(path)
+        .map(|bytes| officina_core::sha256_hex(&bytes))
+        .map_err(|e| format!("{}: {e}", path.display()))
+}
+
+/// Reads what [`ImageReport`] holds: the programs found as Build images
+/// finds them, each image's facts with `image inspect` (a read call) when
+/// the engine answers, and its registry row.
+pub fn image_report(
+    context: &ImageContext,
+    env: &[(String, String)],
+    home: &Path,
+    docker: Option<&ResolvedDocker>,
+) -> Option<ImageReport> {
+    use officina_core::workshop::engine::parse_image_inspect;
+    use officina_core::workshop::image::{
+        GATEWAY_IMAGE, ImageKind, LABEL_CA, LABEL_CLAUDE_VERSION, ProjectLabels, Recorded,
+        WORKSHOP_BASE,
+    };
+    use officina_core::workshop::names::{ObjectName, project_image};
+    let workshop = context.canonical.workshop.as_ref()?;
+    let linux_override = env_value(env, ENV_LINUX_BIN_DIR).map(std::ffi::OsString::from);
+    let programs =
+        crate::workshop::build::find_programs(Some(&context.exe_dir), linux_override.as_deref())
+            .map_err(|refusal| refusal.code().to_owned())
+            .and_then(|found| {
+                Ok((
+                    found.dir.clone(),
+                    crate::workshop::build::ProgramDigests {
+                        entry: digest_of(&found.entry)?,
+                        gateway: digest_of(&found.gateway)?,
+                    },
+                ))
+            });
+    let reader = crate::registry::store::open_reader(home, &[]).ok();
+    let row = |tag: &str| {
+        reader
+            .as_ref()
+            .and_then(|r| r.workshop_image(tag).ok().flatten())
+    };
+    let inspect = |tag: &str| -> Option<officina_core::workshop::engine::ImageFacts> {
+        let docker = docker?;
+        let name = ObjectName::parse(tag)?;
+        read_call(docker, &EngineCall::image_inspect(&name), env, home)
+            .and_then(|out| parse_image_inspect(&out))
+    };
+    let recorded = |tag: &str| {
+        row(tag).map(|r| Recorded {
+            image_id: r.image_id,
+            programs_sha256: r.programs_sha256,
+            built: r.outcome == officina_core::workshop::image::BuildOutcome::Built,
+        })
+    };
+    let base = inspect(WORKSHOP_BASE);
+    let base_programs = row(WORKSHOP_BASE).and_then(|r| r.programs_sha256);
+    let mut images = Vec::new();
+    if let Ok((_, digests)) = &programs {
+        let ca = workshop.ca_sha256.as_deref();
+        for (tag, kind) in [
+            (GATEWAY_IMAGE.to_owned(), ImageKind::Gateway),
+            (WORKSHOP_BASE.to_owned(), ImageKind::Workshop),
+        ] {
+            images.push(ImageInput {
+                expected: crate::workshop::build::expected(kind, digests, ca, None, None),
+                inspected: inspect(&tag),
+                recorded: recorded(&tag),
+                tag,
+            });
+        }
+        for (name, project) in &context.canonical.projects {
+            let Some(w) = project.workshop.as_ref().filter(|w| w.dockerfile.is_some()) else {
+                continue;
+            };
+            let tag = project_image(&context.floor_key, name);
+            let labels = ProjectLabels {
+                floor_key: context.floor_key.clone(),
+                project: name.clone(),
+                dockerfile_sha256: w.dockerfile_sha256.clone().unwrap_or_default(),
+                context_sha256: w.context_sha256.clone().unwrap_or_default(),
+                base_id: base.as_ref().map(|b| b.id.clone()).unwrap_or_default(),
+            };
+            images.push(ImageInput {
+                expected: crate::workshop::build::expected(
+                    ImageKind::Project,
+                    digests,
+                    ca,
+                    Some(labels),
+                    base_programs.as_deref(),
+                ),
+                inspected: inspect(&tag),
+                recorded: recorded(&tag),
+                tag,
+            });
+        }
+    }
+    let ca = match &workshop.ca_file {
+        None => CaRead::None,
+        Some(path) => match digest_of(Path::new(path)) {
+            Ok(sha) => CaRead::Sha256(sha),
+            Err(why) => CaRead::Unreadable(why),
+        },
+    };
+    Some(ImageReport {
+        programs,
+        images,
+        host_claude: context.claude_version.clone(),
+        base_claude: base
+            .as_ref()
+            .and_then(|b| b.labels.get(LABEL_CLAUDE_VERSION).cloned()),
+        ca,
+        ca_approved: workshop.ca_sha256.clone(),
+        base_ca_label: base.as_ref().and_then(|b| b.labels.get(LABEL_CA).cloned()),
+        workers: (workshop.max_workers, workshop.memory_mib),
+    })
+}
+
+fn image_findings(report: &ImageReport, info: Option<&InfoFacts>) -> Vec<Finding> {
+    let mut found = vec![match &report.programs {
+        Ok((dir, _)) => Finding::new(WorkshopCheck::LinuxPrograms, dir.display().to_string()),
+        Err(why) => Finding::new(
+            WorkshopCheck::LinuxProgramsMissing,
+            format!(
+                "{why}: officina-gateway and officina-entry belong in linux/ beside officina.exe, or in {ENV_LINUX_BIN_DIR}"
+            ),
+        ),
+    }];
+    found.extend(report.images.iter().map(image_finding));
+    found.extend(claude_version_finding(
+        report.host_claude.as_deref(),
+        report.base_claude.as_deref(),
+    ));
+    found.extend(ca_findings(
+        &report.ca,
+        report.ca_approved.as_deref(),
+        report.base_ca_label.as_deref(),
+    ));
+    if let Some(info) = info {
+        found.extend(memory_finding(
+            report.workers.0,
+            report.workers.1,
+            info.memory_bytes,
+        ));
+    }
+    found
 }
 
 /// What doctor needs of the floor to resolve the routes (D-611).
@@ -231,7 +408,12 @@ fn read_call(
 
 /// Gathers the section's facts from `env` (doctor's environment) and the
 /// registry, running only read calls in `home`.
-pub fn gather(env: &[(String, String)], home: &Path, proxy: Option<&ProxyInput>) -> WorkshopFacts {
+pub fn gather(
+    env: &[(String, String)],
+    home: &Path,
+    proxy: Option<&ProxyInput>,
+    images: Option<&ImageContext>,
+) -> WorkshopFacts {
     let lookup = |name: &str| env_value(env, name).map(std::ffi::OsString::from);
     let docker = resolve_binary(
         "docker",
@@ -261,6 +443,7 @@ pub fn gather(env: &[(String, String)], home: &Path, proxy: Option<&ProxyInput>)
             &crate::registry::store::SystemProbe,
         ),
         proxy: proxy.map(|input| proxy_facts(input, Arc::new(RegistryReader))),
+        images: None,
     };
     if let Ok((path, source)) = &facts.docker {
         let docker = ResolvedDocker::at(path.clone(), *source);
@@ -276,7 +459,12 @@ pub fn gather(env: &[(String, String)], home: &Path, proxy: Option<&ProxyInput>)
             facts.volumes = read_call(&docker, &EngineCall::volume_ls(), env, home)
                 .map(|out| parse_object_rows(&out));
         }
+        let ready = state.info().is_some();
         facts.engine = Some(state);
+        facts.images =
+            images.and_then(|context| image_report(context, env, home, ready.then_some(&docker)));
+    } else {
+        facts.images = images.and_then(|context| image_report(context, env, home, None));
     }
     facts
 }
@@ -363,6 +551,9 @@ pub fn findings(facts: &WorkshopFacts) -> Vec<Finding> {
     if let Some(proxy) = &facts.proxy {
         found.extend(proxy_findings(proxy));
     }
+    if let Some(report) = &facts.images {
+        found.extend(image_findings(report, facts.info.as_ref()));
+    }
     if let Some(dir) = &facts.synced_home {
         found.push(Finding::new(
             WorkshopCheck::HomeSynced,
@@ -412,7 +603,158 @@ mod tests {
             volumes: Some(Vec::new()),
             synced_home: None,
             proxy: None,
+            images: None,
         }
+    }
+
+    fn report() -> ImageReport {
+        use officina_core::workshop::image::{
+            Expected, ImageKind, LABEL_CA, LABEL_CLAUDE_VERSION, Recorded,
+        };
+        let digests = crate::workshop::build::ProgramDigests {
+            entry: "e".repeat(64),
+            gateway: "g".repeat(64),
+        };
+        let expected: Expected =
+            crate::workshop::build::expected(ImageKind::Workshop, &digests, None, None, None);
+        let mut labels = expected.labels.clone();
+        labels.insert(LABEL_CLAUDE_VERSION.into(), "2.1.316".into());
+        ImageReport {
+            programs: Ok((PathBuf::from("C:/Officina/linux"), digests)),
+            images: vec![ImageInput {
+                tag: "officina-workshop:local".into(),
+                expected,
+                inspected: Some(officina_core::workshop::engine::ImageFacts {
+                    id: "sha256:aa".into(),
+                    labels: labels.clone(),
+                    env_names: vec!["PATH".into()],
+                }),
+                recorded: Some(Recorded {
+                    image_id: Some("sha256:aa".into()),
+                    programs_sha256: Some("p".repeat(64)),
+                    built: true,
+                }),
+            }],
+            host_claude: Some("2.1.316".into()),
+            base_claude: Some("2.1.316".into()),
+            ca: CaRead::None,
+            ca_approved: None,
+            base_ca_label: labels.get(LABEL_CA).cloned(),
+            workers: (2, 4096),
+        }
+    }
+
+    fn image_lines(report: ImageReport, info: Option<InfoFacts>) -> Vec<Finding> {
+        let mut facts = facts();
+        facts.info = info;
+        facts.images = Some(report);
+        findings(&facts)
+    }
+
+    fn found(lines: &[Finding], check: WorkshopCheck) -> Option<&Finding> {
+        lines.iter().find(|f| f.check == check)
+    }
+
+    #[test]
+    fn matching_images_and_programs_are_named() {
+        let lines = image_lines(report(), None);
+        assert!(found(&lines, WorkshopCheck::LinuxPrograms).is_some());
+        let image = found(&lines, WorkshopCheck::ImageMatches).expect("the base matches");
+        assert!(image.detail.contains("sha256:aa"));
+        for quiet in [
+            WorkshopCheck::ImageMismatch,
+            WorkshopCheck::ClaudeVersionDiffers,
+            WorkshopCheck::CaLabelMismatch,
+            WorkshopCheck::WorkersOverMemory,
+        ] {
+            assert!(found(&lines, quiet).is_none(), "{quiet:?}");
+        }
+        let label = found(&lines, WorkshopCheck::CaLabel).expect("the CA label found (D-208)");
+        assert!(label.detail.ends_with("none"));
+    }
+
+    #[test]
+    fn missing_linux_programs_fail() {
+        let mut report = report();
+        report.programs = Err("linux_programs_missing".into());
+        let lines = image_lines(report, None);
+        let missing = found(&lines, WorkshopCheck::LinuxProgramsMissing).unwrap();
+        assert_eq!(missing.check.level(), CheckLevel::Fail);
+        assert!(missing.detail.contains(ENV_LINUX_BIN_DIR));
+    }
+
+    #[test]
+    fn a_label_mismatch_is_named() {
+        let mut report = report();
+        report.images[0]
+            .expected
+            .labels
+            .insert("officina.version".into(), "9.9.9".into());
+        let lines = image_lines(report, None);
+        let mismatch = found(&lines, WorkshopCheck::ImageMismatch).unwrap();
+        assert_eq!(mismatch.check.level(), CheckLevel::Fail);
+        assert!(mismatch.detail.contains("officina.version"), "{mismatch:?}");
+        let mut absent = self::report();
+        absent.images[0].inspected = None;
+        let lines = image_lines(absent, None);
+        assert_eq!(
+            found(&lines, WorkshopCheck::ImageAbsent)
+                .unwrap()
+                .check
+                .level(),
+            CheckLevel::Warn
+        );
+    }
+
+    #[test]
+    fn a_claude_version_difference_warns() {
+        let mut report = report();
+        report.host_claude = Some("2.1.400".into());
+        let lines = image_lines(report, None);
+        let differs = found(&lines, WorkshopCheck::ClaudeVersionDiffers).unwrap();
+        assert_eq!(differs.check.level(), CheckLevel::Warn);
+        assert!(differs.detail.contains("2.1.316") && differs.detail.contains("2.1.400"));
+        assert!(
+            found(&lines, WorkshopCheck::ImageMatches).is_some(),
+            "the version is not compared at launch (AD-99)"
+        );
+    }
+
+    #[test]
+    fn a_ca_label_mismatch_is_named() {
+        let mut report = report();
+        report.ca = CaRead::Sha256("c".repeat(64));
+        report.ca_approved = Some("c".repeat(64));
+        let lines = image_lines(report, None);
+        let mismatch = found(&lines, WorkshopCheck::CaLabelMismatch).unwrap();
+        assert_eq!(mismatch.check.level(), CheckLevel::Fail);
+        assert!(mismatch.detail.contains("D-208"));
+        let mut unreadable = self::report();
+        unreadable.ca = CaRead::Unreadable("C:/path/to/ca.pem: not found".into());
+        let lines = image_lines(unreadable, None);
+        assert_eq!(
+            found(&lines, WorkshopCheck::CaUnreadable)
+                .unwrap()
+                .check
+                .level(),
+            CheckLevel::Fail
+        );
+    }
+
+    #[test]
+    fn workers_times_memory_over_the_engine_warns() {
+        let info = |gib: u64| InfoFacts {
+            memory_bytes: gib * 1024 * 1024 * 1024,
+            cpus: 8,
+            system_time: String::new(),
+            settings_digest: String::new(),
+        };
+        let lines = image_lines(report(), Some(info(6)));
+        let over = found(&lines, WorkshopCheck::WorkersOverMemory).unwrap();
+        assert_eq!(over.check.level(), CheckLevel::Warn);
+        assert!(over.detail.contains("8192 MiB"), "{over:?}");
+        let lines = image_lines(report(), Some(info(16)));
+        assert!(found(&lines, WorkshopCheck::WorkersOverMemory).is_none());
     }
 
     use crate::workshop::proxy::IeProxyConfig;

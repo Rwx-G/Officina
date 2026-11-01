@@ -78,7 +78,7 @@ fn the_workshop_section_reads_the_engine_and_counts_orphans() {
             let argv = call["argv"].as_array().unwrap();
             let word = |i: usize| argv.get(i).and_then(|w| w.as_str()).unwrap_or("");
             match word(0) {
-                "network" | "volume" => format!("{} {}", word(0), word(1)),
+                "network" | "volume" | "image" => format!("{} {}", word(0), word(1)),
                 first => first.to_owned(),
             }
         })

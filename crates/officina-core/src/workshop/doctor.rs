@@ -59,6 +59,29 @@ closed_enum! {
         EngineWindowsContainers,
         /// `docker version` gave no answer.
         EngineUnreachable,
+        /// `officina-gateway` and `officina-entry` found (AD-100).
+        LinuxPrograms,
+        /// Either Linux program is missing: Build images is refused.
+        LinuxProgramsMissing,
+        /// An image is present and matches what Officina would build now.
+        ImageMatches,
+        /// An image is not built yet.
+        ImageAbsent,
+        /// An image differs: the label or the measurement named (AD-99,
+        /// D-233); a launch on it is refused `image_mismatch`.
+        ImageMismatch,
+        /// The base image's Claude Code differs from the host's (AD-99:
+        /// not compared at launch).
+        ClaudeVersionDiffers,
+        /// The CA label found on the base image (D-208).
+        CaLabel,
+        /// `ca_file` cannot be read, or no longer hashes to the approved
+        /// digest.
+        CaUnreadable,
+        /// The base image's CA label is not the floor's CA file (D-208).
+        CaLabelMismatch,
+        /// `max_workers` times `memory_mib` exceeds the engine's memory.
+        WorkersOverMemory,
         /// Networks labelled by Officina that no container of theirs uses.
         OrphanNetworks,
         /// Volumes labelled by Officina that no container of theirs uses.
@@ -88,7 +111,11 @@ impl WorkshopCheck {
             | WorkshopCheck::DockerMissing
             | WorkshopCheck::GitShim
             | WorkshopCheck::GitMissing
-            | WorkshopCheck::EngineWindowsContainers => CheckLevel::Fail,
+            | WorkshopCheck::EngineWindowsContainers
+            | WorkshopCheck::LinuxProgramsMissing
+            | WorkshopCheck::ImageMismatch
+            | WorkshopCheck::CaUnreadable
+            | WorkshopCheck::CaLabelMismatch => CheckLevel::Fail,
             WorkshopCheck::DockerCliProxies
             | WorkshopCheck::DockerCliPluginDirs
             | WorkshopCheck::DockerCliConfigUnreadable
@@ -98,14 +125,20 @@ impl WorkshopCheck {
             | WorkshopCheck::OrphanNetworks
             | WorkshopCheck::OrphanVolumes
             | WorkshopCheck::HomeSynced
-            | WorkshopCheck::ProxyNotEvaluated => CheckLevel::Warn,
+            | WorkshopCheck::ProxyNotEvaluated
+            | WorkshopCheck::ImageAbsent
+            | WorkshopCheck::ClaudeVersionDiffers
+            | WorkshopCheck::WorkersOverMemory => CheckLevel::Warn,
             WorkshopCheck::ProxyRefused => CheckLevel::Fail,
             WorkshopCheck::ProxyRoutes | WorkshopCheck::ProxyCaNote => CheckLevel::Inform,
             WorkshopCheck::DockerResolved
             | WorkshopCheck::GitResolved
             | WorkshopCheck::OverridesSet
             | WorkshopCheck::DockerCliContext
-            | WorkshopCheck::EngineReady => CheckLevel::Inform,
+            | WorkshopCheck::EngineReady
+            | WorkshopCheck::LinuxPrograms
+            | WorkshopCheck::ImageMatches
+            | WorkshopCheck::CaLabel => CheckLevel::Inform,
         }
     }
 
@@ -128,6 +161,17 @@ impl WorkshopCheck {
             | WorkshopCheck::EngineNotRunning
             | WorkshopCheck::EngineWindowsContainers
             | WorkshopCheck::EngineUnreachable => "workshop engine",
+            WorkshopCheck::LinuxPrograms | WorkshopCheck::LinuxProgramsMissing => {
+                "workshop linux programs"
+            }
+            WorkshopCheck::ImageMatches
+            | WorkshopCheck::ImageAbsent
+            | WorkshopCheck::ImageMismatch => "workshop image",
+            WorkshopCheck::ClaudeVersionDiffers => "workshop claude version",
+            WorkshopCheck::CaLabel
+            | WorkshopCheck::CaUnreadable
+            | WorkshopCheck::CaLabelMismatch => "workshop ca",
+            WorkshopCheck::WorkersOverMemory => "workshop memory",
             WorkshopCheck::OrphanNetworks | WorkshopCheck::OrphanVolumes => "workshop orphans",
             WorkshopCheck::HomeSynced => "workshop home",
             WorkshopCheck::ProxyRoutes
@@ -167,6 +211,133 @@ impl Finding {
 pub fn in_order(mut findings: Vec<Finding>) -> Vec<Finding> {
     findings.sort_by_key(|finding| finding.check.order());
     findings
+}
+
+/// One image doctor compares (AD-99, AD-123): its tag, what the running
+/// Officina expects of it, what the engine and the registry hold.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImageInput {
+    pub tag: String,
+    pub expected: super::image::Expected,
+    pub inspected: Option<super::engine::ImageFacts>,
+    pub recorded: Option<super::image::Recorded>,
+}
+
+/// The image's line: matching, not built, or the label or measurement that
+/// differs, by [`super::image::check`], the launch's own rule.
+pub fn image_finding(input: &ImageInput) -> Finding {
+    use super::image::{ImageMismatch, check};
+    match check(
+        &input.expected,
+        input.inspected.as_ref(),
+        input.recorded.as_ref(),
+    ) {
+        Ok(id) => Finding::new(WorkshopCheck::ImageMatches, format!("{} {id}", input.tag)),
+        Err(mismatch) if mismatch.cause == ImageMismatch::Absent => Finding::new(
+            WorkshopCheck::ImageAbsent,
+            format!("{} is not built: Build images builds it", input.tag),
+        ),
+        Err(mismatch) => {
+            let what = mismatch
+                .label
+                .map_or_else(String::new, |label| format!(" ({label})"));
+            Finding::new(
+                WorkshopCheck::ImageMismatch,
+                format!(
+                    "{}: {}{what}; Build images rebuilds it",
+                    input.tag,
+                    mismatch.cause.code()
+                ),
+            )
+        }
+    }
+}
+
+/// A warning when the base image's Claude Code (its label) is not the
+/// host's version (AD-99: not compared at launch, since Claude Code updates
+/// itself on the host).
+pub fn claude_version_finding(host: Option<&str>, image: Option<&str>) -> Option<Finding> {
+    let (host, image) = (host?, image?);
+    (host != image).then(|| {
+        Finding::new(
+            WorkshopCheck::ClaudeVersionDiffers,
+            format!(
+                "the base image holds Claude Code {image}, the host {host}: Build images updates it"
+            ),
+        )
+    })
+}
+
+/// What doctor read of `ca_file` (D-208, D-612).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CaRead {
+    /// No `ca_file` is set.
+    None,
+    /// Read: its SHA-256.
+    Sha256(String),
+    /// Not readable, with why.
+    Unreadable(String),
+}
+
+/// The CA lines (D-208): the label found on the base image; a CA file that
+/// cannot be read or no longer hashes to the approved digest; a base label
+/// that is not the floor's CA.
+pub fn ca_findings(
+    read: &CaRead,
+    approved: Option<&str>,
+    base_label: Option<&str>,
+) -> Vec<Finding> {
+    let mut found = Vec::new();
+    if let Some(label) = base_label {
+        found.push(Finding::new(
+            WorkshopCheck::CaLabel,
+            format!("the base image's CA label is {label}"),
+        ));
+    }
+    let floor = match read {
+        CaRead::None => super::image::NO_CA.to_owned(),
+        CaRead::Unreadable(why) => {
+            found.push(Finding::new(
+                WorkshopCheck::CaUnreadable,
+                format!("ca_file: {why}"),
+            ));
+            return found;
+        }
+        CaRead::Sha256(sha) => {
+            if approved.is_some_and(|a| a != sha) {
+                found.push(Finding::new(
+                    WorkshopCheck::CaUnreadable,
+                    "ca_file changed since its approval: approve the catalogue again",
+                ));
+            }
+            sha.clone()
+        }
+    };
+    if let Some(label) = base_label.filter(|label| *label != floor) {
+        found.push(Finding::new(
+            WorkshopCheck::CaLabelMismatch,
+            format!(
+                "the base image was built with CA {label}, the floor's is {floor}: one CA per engine (D-208); Build images rebuilds it"
+            ),
+        ));
+    }
+    found
+}
+
+/// A warning when `max_workers` workers of `memory_mib` each need more
+/// than the engine's memory.
+pub fn memory_finding(max_workers: u32, memory_mib: u32, engine_bytes: u64) -> Option<Finding> {
+    let needed = u64::from(max_workers) * u64::from(memory_mib) * 1024 * 1024;
+    (needed > engine_bytes).then(|| {
+        Finding::new(
+            WorkshopCheck::WorkersOverMemory,
+            format!(
+                "{max_workers} workers of {memory_mib} MiB need {} MiB, the engine has {} MiB",
+                needed / (1024 * 1024),
+                engine_bytes / (1024 * 1024)
+            ),
+        )
+    })
 }
 
 /// The value of `name` in `env`, names compared ignoring ASCII case as
