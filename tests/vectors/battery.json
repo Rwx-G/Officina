@@ -1,0 +1,619 @@
+{
+  "attempts": [
+    {
+      "applies": "always",
+      "code": "tcp_public",
+      "docker_desktop_only": false,
+      "expected": null,
+      "family": "egress",
+      "judged": "failure",
+      "phase": 1
+    },
+    {
+      "applies": "always",
+      "code": "ipv6_socket",
+      "docker_desktop_only": false,
+      "expected": null,
+      "family": "egress",
+      "judged": "failure",
+      "phase": 1
+    },
+    {
+      "applies": "always",
+      "code": "udp_dns_public",
+      "docker_desktop_only": false,
+      "expected": null,
+      "family": "egress",
+      "judged": "failure",
+      "phase": 1
+    },
+    {
+      "applies": "always",
+      "code": "resolve_outside_name",
+      "docker_desktop_only": false,
+      "expected": null,
+      "family": "egress",
+      "judged": "failure",
+      "phase": 1
+    },
+    {
+      "applies": "always",
+      "code": "icmp",
+      "docker_desktop_only": false,
+      "expected": null,
+      "family": "egress",
+      "judged": "failure",
+      "phase": 1
+    },
+    {
+      "applies": "always",
+      "code": "off_list_host",
+      "docker_desktop_only": false,
+      "expected": "not_allowed",
+      "family": "gateway",
+      "judged": "gateway_line",
+      "phase": 1
+    },
+    {
+      "applies": "always",
+      "code": "ip_literal",
+      "docker_desktop_only": false,
+      "expected": "ip_literal",
+      "family": "gateway",
+      "judged": "gateway_line",
+      "phase": 1
+    },
+    {
+      "applies": "always",
+      "code": "port_80",
+      "docker_desktop_only": false,
+      "expected": "port",
+      "family": "gateway",
+      "judged": "gateway_line",
+      "phase": 1
+    },
+    {
+      "applies": "always",
+      "code": "port_22",
+      "docker_desktop_only": false,
+      "expected": "port",
+      "family": "gateway",
+      "judged": "gateway_line",
+      "phase": 1
+    },
+    {
+      "applies": "always",
+      "code": "absolute_get",
+      "docker_desktop_only": false,
+      "expected": "method",
+      "family": "gateway",
+      "judged": "gateway_line",
+      "phase": 1
+    },
+    {
+      "applies": "always",
+      "code": "malformed_request",
+      "docker_desktop_only": false,
+      "expected": "malformed",
+      "family": "gateway",
+      "judged": "gateway_line",
+      "phase": 1
+    },
+    {
+      "applies": "always",
+      "code": "oversized_request",
+      "docker_desktop_only": false,
+      "expected": "oversized",
+      "family": "gateway",
+      "judged": "gateway_line",
+      "phase": 1
+    },
+    {
+      "applies": "always",
+      "code": "sni_mismatch",
+      "docker_desktop_only": false,
+      "expected": "sni_mismatch",
+      "family": "gateway",
+      "judged": "gateway_line",
+      "phase": 1
+    },
+    {
+      "applies": "always",
+      "code": "loopback_name",
+      "docker_desktop_only": false,
+      "expected": "private_address",
+      "family": "gateway",
+      "judged": "gateway_line",
+      "phase": 1
+    },
+    {
+      "applies": "always",
+      "code": "engine_host_name",
+      "docker_desktop_only": false,
+      "expected": "private_address",
+      "family": "gateway",
+      "judged": "gateway_line",
+      "phase": 1
+    },
+    {
+      "applies": "always",
+      "code": "after_deadline",
+      "docker_desktop_only": false,
+      "expected": "deadline",
+      "family": "gateway",
+      "judged": "gateway_line",
+      "phase": 2
+    },
+    {
+      "applies": "always",
+      "code": "after_limit",
+      "docker_desktop_only": false,
+      "expected": "limit",
+      "family": "gateway",
+      "judged": "gateway_line",
+      "phase": 2
+    },
+    {
+      "applies": "always",
+      "code": "host_docker_internal",
+      "docker_desktop_only": true,
+      "expected": null,
+      "family": "host",
+      "judged": "failure",
+      "phase": 1
+    },
+    {
+      "applies": "always",
+      "code": "gateway_docker_internal",
+      "docker_desktop_only": true,
+      "expected": null,
+      "family": "host",
+      "judged": "failure",
+      "phase": 1
+    },
+    {
+      "applies": "always",
+      "code": "network_gateways",
+      "docker_desktop_only": false,
+      "expected": null,
+      "family": "host",
+      "judged": "failure",
+      "phase": 1
+    },
+    {
+      "applies": "always",
+      "code": "gateway_other_ports",
+      "docker_desktop_only": false,
+      "expected": null,
+      "family": "host",
+      "judged": "failure",
+      "phase": 1
+    },
+    {
+      "applies": "always",
+      "code": "decoy_other_network",
+      "docker_desktop_only": false,
+      "expected": null,
+      "family": "host",
+      "judged": "failure",
+      "phase": 1
+    },
+    {
+      "applies": "always",
+      "code": "engine_sockets",
+      "docker_desktop_only": false,
+      "expected": null,
+      "family": "host",
+      "judged": "fact",
+      "phase": 1
+    },
+    {
+      "applies": "always",
+      "code": "write_battery_mount",
+      "docker_desktop_only": false,
+      "expected": null,
+      "family": "files",
+      "judged": "failure",
+      "phase": 1
+    },
+    {
+      "applies": "always",
+      "code": "write_root",
+      "docker_desktop_only": false,
+      "expected": null,
+      "family": "files",
+      "judged": "failure",
+      "phase": 1
+    },
+    {
+      "applies": "always",
+      "code": "write_usr",
+      "docker_desktop_only": false,
+      "expected": null,
+      "family": "files",
+      "judged": "failure",
+      "phase": 1
+    },
+    {
+      "applies": "always",
+      "code": "write_officina_bin",
+      "docker_desktop_only": false,
+      "expected": null,
+      "family": "files",
+      "judged": "failure",
+      "phase": 1
+    },
+    {
+      "applies": "always",
+      "code": "write_etc",
+      "docker_desktop_only": false,
+      "expected": null,
+      "family": "files",
+      "judged": "failure",
+      "phase": 1
+    },
+    {
+      "applies": "always",
+      "code": "host_paths_absent",
+      "docker_desktop_only": false,
+      "expected": null,
+      "family": "files",
+      "judged": "fact",
+      "phase": 1
+    },
+    {
+      "applies": "always",
+      "code": "mount_command",
+      "docker_desktop_only": false,
+      "expected": null,
+      "family": "files",
+      "judged": "failure",
+      "phase": 1
+    },
+    {
+      "applies": "login_floor",
+      "code": "write_login_mount",
+      "docker_desktop_only": false,
+      "expected": null,
+      "family": "files",
+      "judged": "failure",
+      "phase": 1
+    },
+    {
+      "applies": "login_floor",
+      "code": "create_in_login_mount",
+      "docker_desktop_only": false,
+      "expected": null,
+      "family": "files",
+      "judged": "failure",
+      "phase": 1
+    },
+    {
+      "applies": "always",
+      "code": "uid_gid",
+      "docker_desktop_only": false,
+      "expected": null,
+      "family": "privileges",
+      "judged": "fact",
+      "phase": 1
+    },
+    {
+      "applies": "always",
+      "code": "capabilities",
+      "docker_desktop_only": false,
+      "expected": null,
+      "family": "privileges",
+      "judged": "fact",
+      "phase": 1
+    },
+    {
+      "applies": "always",
+      "code": "no_new_privs",
+      "docker_desktop_only": false,
+      "expected": null,
+      "family": "privileges",
+      "judged": "fact",
+      "phase": 1
+    },
+    {
+      "applies": "always",
+      "code": "seccomp",
+      "docker_desktop_only": false,
+      "expected": null,
+      "family": "privileges",
+      "judged": "fact",
+      "phase": 1
+    },
+    {
+      "applies": "always",
+      "code": "no_setuid_files",
+      "docker_desktop_only": false,
+      "expected": null,
+      "family": "privileges",
+      "judged": "fact",
+      "phase": 1
+    },
+    {
+      "applies": "always",
+      "code": "su_sudo",
+      "docker_desktop_only": false,
+      "expected": null,
+      "family": "privileges",
+      "judged": "fact",
+      "phase": 1
+    },
+    {
+      "applies": "always",
+      "code": "ssh_keys",
+      "docker_desktop_only": false,
+      "expected": null,
+      "family": "credentials",
+      "judged": "fact",
+      "phase": 1
+    },
+    {
+      "applies": "always",
+      "code": "agent_socket",
+      "docker_desktop_only": false,
+      "expected": null,
+      "family": "credentials",
+      "judged": "fact",
+      "phase": 1
+    },
+    {
+      "applies": "always",
+      "code": "git_credentials",
+      "docker_desktop_only": false,
+      "expected": null,
+      "family": "credentials",
+      "judged": "fact",
+      "phase": 1
+    },
+    {
+      "applies": "always",
+      "code": "netrc",
+      "docker_desktop_only": false,
+      "expected": null,
+      "family": "credentials",
+      "judged": "fact",
+      "phase": 1
+    },
+    {
+      "applies": "always",
+      "code": "cloud_credentials",
+      "docker_desktop_only": false,
+      "expected": null,
+      "family": "credentials",
+      "judged": "fact",
+      "phase": 1
+    },
+    {
+      "applies": "always",
+      "code": "engine_config",
+      "docker_desktop_only": false,
+      "expected": null,
+      "family": "credentials",
+      "judged": "fact",
+      "phase": 1
+    },
+    {
+      "applies": "always",
+      "code": "environment_names",
+      "docker_desktop_only": false,
+      "expected": null,
+      "family": "credentials",
+      "judged": "fact",
+      "phase": 1
+    },
+    {
+      "applies": "always",
+      "code": "process_limit",
+      "docker_desktop_only": false,
+      "expected": null,
+      "family": "resources",
+      "judged": "fact",
+      "phase": 1
+    },
+    {
+      "applies": "always",
+      "code": "memory_limit",
+      "docker_desktop_only": false,
+      "expected": null,
+      "family": "resources",
+      "judged": "fact",
+      "phase": 1
+    }
+  ],
+  "judge": [
+    {
+      "docker_desktop": true,
+      "dropped_refusals": [],
+      "expect": {
+        "failures": [],
+        "outcome": "passed"
+      },
+      "failed_controls": [],
+      "gateway_b_exit": null,
+      "kind": "oauth-token",
+      "name": "a passing run on Docker Desktop",
+      "outcomes": {}
+    },
+    {
+      "docker_desktop": true,
+      "dropped_refusals": [],
+      "expect": {
+        "failures": [],
+        "outcome": "passed"
+      },
+      "failed_controls": [],
+      "gateway_b_exit": null,
+      "kind": "login",
+      "name": "a passing login floor run",
+      "outcomes": {}
+    },
+    {
+      "docker_desktop": true,
+      "dropped_refusals": [],
+      "expect": {
+        "failures": [
+          "tcp_public: escaped"
+        ],
+        "outcome": "failed"
+      },
+      "failed_controls": [],
+      "gateway_b_exit": null,
+      "kind": "oauth-token",
+      "name": "one egress attempt escaped",
+      "outcomes": {
+        "tcp_public": "escaped"
+      }
+    },
+    {
+      "docker_desktop": true,
+      "dropped_refusals": [],
+      "expect": {
+        "failures": [
+          "host_docker_internal: inconclusive (its family's control failed)",
+          "gateway_docker_internal: inconclusive (its family's control failed)",
+          "network_gateways: inconclusive (its family's control failed)",
+          "gateway_other_ports: inconclusive (its family's control failed)",
+          "decoy_other_network: inconclusive (its family's control failed)"
+        ],
+        "outcome": "failed"
+      },
+      "failed_controls": [
+        "host"
+      ],
+      "gateway_b_exit": null,
+      "kind": "oauth-token",
+      "name": "the decoy never listened",
+      "outcomes": {}
+    },
+    {
+      "docker_desktop": true,
+      "dropped_refusals": [
+        "sni_mismatch"
+      ],
+      "expect": {
+        "failures": [
+          "sni_mismatch: inconclusive (no gateway refusal sni_mismatch)"
+        ],
+        "outcome": "failed"
+      },
+      "failed_controls": [],
+      "gateway_b_exit": null,
+      "kind": "oauth-token",
+      "name": "a gateway attempt refused without its line",
+      "outcomes": {}
+    },
+    {
+      "docker_desktop": true,
+      "dropped_refusals": [],
+      "expect": {
+        "failures": [
+          "gateway B exited Some(0), not 3"
+        ],
+        "outcome": "failed"
+      },
+      "failed_controls": [],
+      "gateway_b_exit": 0,
+      "kind": "oauth-token",
+      "name": "gateway B never reached its limit",
+      "outcomes": {}
+    },
+    {
+      "docker_desktop": false,
+      "dropped_refusals": [],
+      "expect": {
+        "failures": [],
+        "outcome": "passed"
+      },
+      "failed_controls": [],
+      "gateway_b_exit": null,
+      "kind": "api-key",
+      "name": "Docker Desktop's names off Docker Desktop",
+      "outcomes": {
+        "gateway_docker_internal": "not_applicable",
+        "host_docker_internal": "not_applicable"
+      }
+    },
+    {
+      "docker_desktop": true,
+      "dropped_refusals": [],
+      "expect": {
+        "failures": [
+          "host_docker_internal: not_applicable (not applicable here)"
+        ],
+        "outcome": "failed"
+      },
+      "failed_controls": [],
+      "gateway_b_exit": null,
+      "kind": "oauth-token",
+      "name": "Docker Desktop's names not applicable on Docker Desktop",
+      "outcomes": {
+        "host_docker_internal": "not_applicable"
+      }
+    }
+  ],
+  "plan": [
+    {
+      "expect": [
+        "--plan",
+        "{\"gateway\":\"officina-gateway-0123456789abcdef0123456789abcdef\",\"decoy_addresses\":[\"192.0.2.10\",\"198.51.100.20\"],\"decoy_port\":8080,\"mount\":\"/work/.officina/mounts/0\",\"login_mount\":null,\"expected_env\":[\"CLAUDE_CODE_OAUTH_TOKEN\",\"CLAUDE_CONFIG_DIR\",\"HOME\",\"HTTPS_PROXY\",\"PATH\",\"SSL_CERT_FILE\"],\"pids_limit\":512,\"memory_mib\":4096}"
+      ],
+      "input": {
+        "decoy_addresses": [
+          "192.0.2.10",
+          "198.51.100.20"
+        ],
+        "decoy_port": 8080,
+        "gateway": "officina-gateway-0123456789abcdef0123456789abcdef",
+        "image_env": [
+          "PATH",
+          "SSL_CERT_FILE",
+          "HOME"
+        ],
+        "login_mount": null,
+        "memory_mib": 4096,
+        "mount": "/work/.officina/mounts/0",
+        "pids_limit": 512,
+        "vector_env": [
+          "HOME",
+          "CLAUDE_CONFIG_DIR",
+          "HTTPS_PROXY",
+          "CLAUDE_CODE_OAUTH_TOKEN"
+        ]
+      },
+      "name": "a token floor"
+    },
+    {
+      "expect": [
+        "--plan",
+        "{\"gateway\":\"officina-gateway-0123456789abcdef0123456789abcdef\",\"decoy_addresses\":[\"192.0.2.10\",\"198.51.100.20\"],\"decoy_port\":8080,\"mount\":\"/work/.officina/mounts/0\",\"login_mount\":\"/work/.officina/login\",\"expected_env\":[\"CLAUDE_CONFIG_DIR\",\"HOME\",\"HTTPS_PROXY\",\"PATH\",\"SSL_CERT_FILE\"],\"pids_limit\":512,\"memory_mib\":4096}"
+      ],
+      "input": {
+        "decoy_addresses": [
+          "192.0.2.10",
+          "198.51.100.20"
+        ],
+        "decoy_port": 8080,
+        "gateway": "officina-gateway-0123456789abcdef0123456789abcdef",
+        "image_env": [
+          "PATH",
+          "SSL_CERT_FILE",
+          "HOME"
+        ],
+        "login_mount": "/work/.officina/login",
+        "memory_mib": 4096,
+        "mount": "/work/.officina/mounts/0",
+        "pids_limit": 512,
+        "vector_env": [
+          "HOME",
+          "CLAUDE_CONFIG_DIR",
+          "HTTPS_PROXY"
+        ]
+      },
+      "name": "a login floor: its login mount, no credential name"
+    }
+  ]
+}
