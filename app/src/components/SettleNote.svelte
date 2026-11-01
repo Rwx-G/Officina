@@ -3,7 +3,10 @@
   // 4.15, D-542). It floats over the window's bottom edge, so it moves
   // nothing on its way in or out (D-517). A verdict given from a card's
   // menu moved that card, and the focus with it: the note then takes the
-  // focus, on Undo when there is one.
+  // focus, on Undo when there is one. One line at a fixed width from the
+  // minimum window up (D-1040): the session's name can be any length, so
+  // the text is cut with an ellipsis, whole in its tooltip, and the note's
+  // box does not follow what it says.
   import type { BoardStore } from "../lib/board.svelte";
   import { slideMotion } from "../lib/motion";
 
@@ -29,7 +32,7 @@
 {#if note}
   {#key note}
     <div class="note" class:failed={note.failed} role="status" data-testid="settle-note" use:focusFirst transition:slideMotion>
-      <span class="text">{note.text}</span>
+      <span class="text" title={note.text} data-testid="settle-note-text">{note.text}</span>
       {#if note.undo}
         <button type="button" class="tool" data-testid="settle-undo" onclick={() => void undo()}>Undo</button>
       {/if}
@@ -47,7 +50,7 @@
     display: flex;
     align-items: center;
     gap: 10px;
-    max-width: min(640px, calc(100vw - 40px));
+    width: min(var(--note-width), calc(100vw - 40px));
     padding: 8px 8px 8px 16px;
     translate: -50% 0;
     border: 1px solid var(--color-border);
@@ -61,7 +64,11 @@
     color: var(--color-danger);
   }
   .text {
-    overflow-wrap: anywhere;
+    flex: 1 1 0;
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
   }
   .tool {
     flex: none;
@@ -72,6 +79,7 @@
     background: var(--color-surface);
     color: var(--color-text);
     font-weight: 600;
+    white-space: nowrap;
     cursor: pointer;
   }
 </style>

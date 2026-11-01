@@ -1,7 +1,8 @@
 <script lang="ts">
   // Where a dragged card goes to be discarded (story 4.15, D-536): shown
   // only while a card that can be discarded is dragged, over the window's
-  // bottom edge, so its coming and going moves nothing (D-517).
+  // bottom edge, so its coming and going moves nothing (D-517). The settle
+  // note's width and one line (D-1040), so the two read as one place.
   import { DROP_ATTRIBUTE, drag } from "../lib/drag.svelte";
   import { fadeMotion } from "../lib/motion";
 </script>
@@ -27,7 +28,7 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    width: min(420px, calc(100vw - 40px));
+    width: min(var(--note-width), calc(100vw - 40px));
     min-height: 64px;
     translate: -50% 0;
     border: 2px dashed var(--color-danger);
@@ -35,6 +36,7 @@
     background: var(--color-danger-surface);
     color: var(--color-danger);
     font-weight: 700;
+    white-space: nowrap;
   }
   .over {
     border-style: solid;

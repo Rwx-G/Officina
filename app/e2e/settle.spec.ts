@@ -5,8 +5,16 @@
 // `scripts/e2e-fixtures.mjs`). A verdict goes to the backend; the card
 // moves only with the next board, which a test pushes after checking the
 // call, as the collector would publish it.
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import { calls, loadBoard, loadRegistry, openBoard } from "./fixtures";
+
+const tauri = JSON.parse(readFileSync(join(dirname(fileURLToPath(import.meta.url)), "../src-tauri/tauri.conf.json"), "utf8")) as {
+  app: { windows: { label: string; minWidth: number; minHeight: number }[] };
+};
+const minimum = tauri.app.windows.find((w) => w.label === "main")!;
 
 const sid = (n: number): string => `00000000-0000-0000-0000-${String(n).padStart(12, "0")}`;
 const cardOf = (page: Page, n: number): Locator => page.locator(`[data-testid="card"][data-key="sid:${sid(n)}"]`);
@@ -85,6 +93,65 @@ test("dragging a card to the discard target discards it; Escape cancels a drag",
   await push(page, "settle-after-board");
   await expect(cardOf(page, 201)).toHaveCount(0);
   await expect(page.getByTestId("settle-note")).toContainText("Discarded billing-api.");
+});
+
+/** How many line boxes the text of `element` takes. */
+function lines(element: Locator): Promise<number> {
+  return element.evaluate((e) => {
+    const range = document.createRange();
+    range.selectNodeContents(e);
+    return new Set(Array.from(range.getClientRects()).map((r) => Math.round(r.top))).size;
+  });
+}
+
+// Story 4.20 item 1 (D-1040): the owner saw the bottom bar break onto two
+// lines. A session's name can be any length: the note and the discard
+// target keep one width and one line from the minimum window up, the
+// note's text cut and whole in its tooltip.
+test("the settle note and the discard target keep one line and one width at every window width", async ({ page }) => {
+  const board = loadBoard("settle-before-board");
+  const long = "a-session-whose-name-runs-on-".repeat(8);
+  const named = {
+    ...board,
+    columns: { ...board.columns, to_resume: board.columns.to_resume.map((c) => (c.session_id === sid(203) ? { ...c, name: long } : c)) },
+  };
+  await page.setViewportSize({ width: minimum.minWidth, height: minimum.minHeight });
+  await openBoard(page, named);
+  await dragTo(page, cardOf(page, 201), page.getByTestId("discard-target"), false);
+  const target = page.getByTestId("discard-target");
+  expect(await lines(target)).toBe(1);
+  const targetWidth = (await target.boundingBox())!.width;
+  await page.keyboard.press("Escape");
+  await page.mouse.up();
+
+  await cardOf(page, 203).getByTestId("card-menu").click();
+  await page.getByTestId("card-menu-done").click();
+  const note = page.getByTestId("settle-note");
+  const text = page.getByTestId("settle-note-text");
+  await expect(text).toHaveText(`Marked ${long} done.`);
+  await expect(text).toHaveAttribute("title", `Marked ${long} done.`);
+  const sizes: { width: number; height: number }[] = [];
+  for (const width of [minimum.minWidth, 1920, 3440]) {
+    await page.setViewportSize({ width, height: minimum.minHeight });
+    expect(await lines(text), `at ${width} px`).toBe(1);
+    expect(await text.evaluate((e) => e.scrollWidth > e.clientWidth), `cut at ${width} px`).toBe(true);
+    const box = (await note.boundingBox())!;
+    sizes.push({ width: box.width, height: box.height });
+  }
+  // One box whatever the width, the discard target's width.
+  for (const size of sizes) {
+    expect(Math.abs(size.width - sizes[0]!.width)).toBeLessThanOrEqual(0.5);
+    expect(Math.abs(size.height - sizes[0]!.height)).toBeLessThanOrEqual(0.5);
+  }
+  expect(Math.abs(sizes[0]!.width - targetWidth)).toBeLessThanOrEqual(0.5);
+  // A short text keeps the same box.
+  await page.getByTestId("settle-dismiss").click();
+  await cardOf(page, 204).getByTestId("card-menu").click();
+  await page.getByTestId("card-menu-done").click();
+  await expect(text).not.toHaveText(`Marked ${long} done.`);
+  const short = (await note.boundingBox())!;
+  expect(Math.abs(short.width - sizes[0]!.width)).toBeLessThanOrEqual(0.5);
+  expect(Math.abs(short.height - sizes[0]!.height)).toBeLessThanOrEqual(0.5);
 });
 
 test("a live card has no menu and does not drag", async ({ page }) => {

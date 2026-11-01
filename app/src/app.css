@@ -141,6 +141,9 @@
      panel's shadow whole (session-file.spec.ts). */
   --file-inset: 20px;
   --file-gap: 12px;
+  /* The board's bottom note and discard target (D-1040): one width, on
+     one line, from the minimum window up. */
+  --note-width: 720px;
   /* The halo's opacity at rest: after breathing, and from the start under
      reduced motion. */
   --halo-rest: 0.8;
