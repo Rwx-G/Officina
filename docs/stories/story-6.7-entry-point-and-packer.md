@@ -1,6 +1,6 @@
 # Story 6.7: The entry point and the packer
 
-**Status:** Approved
+**Status:** Review
 
 ## Story
 
@@ -19,11 +19,11 @@ so that Officina adds nothing to the workspace but its flags, and a killed, stop
 
 ## Tasks
 
-- [ ] `crates/officina-container/src/entry/{mod,run,pack}.rs`, `src/bin/officina-entry.rs` (AC 1, 2)
-- [ ] `EntryLine` in core (AC 3)
-- [ ] `crates/officina-container/tests/entry_linux.rs` with the fake `claude` script (AC 1, 2)
-- [ ] The login copy step; `crates/officina-container/src/entry/{auth_status,scan}.rs`; `crates/officina-core/src/workshop/scan.rs` with its core tests (AC 1, 5)
-- [ ] The named CI step (AC 4); README (AC 6)
+- [x] `crates/officina-container/src/entry/{mod,run,pack}.rs`, `src/bin/officina-entry.rs` (AC 1, 2)
+- [x] `EntryLine` in core (AC 3)
+- [x] `crates/officina-container/tests/entry_linux.rs` with the fake `claude` script (AC 1, 2)
+- [x] The login copy step; `crates/officina-container/src/entry/{auth_status,scan}.rs`; `crates/officina-core/src/workshop/scan.rs` with its core tests (AC 1, 5)
+- [x] The named CI step (AC 4); README (AC 6)
 
 ## Dev Notes
 
@@ -47,7 +47,18 @@ so that Officina adds nothing to the workspace but its flags, and a killed, stop
 
 ### Completion Notes
 
+- AC 1: `entry_linux.rs::{clone_branch_and_head_equal_the_base, mounts_are_excluded_and_linked, login_files_are_copied_with_mode_0600_and_never_printed, a_missing_login_file_exits_non_zero, the_fake_claude_gets_the_plan_vector_and_the_prompt_on_stdin, a_timeout_exits_124, the_exit_code_is_passed_through, an_unknown_plan_schema_exits_non_zero, nothing_is_added_to_the_clone_but_links_and_excludes}`, run in `rust:1-bookworm` (25 passed).
+- AC 2: `entry_linux.rs::{out_is_emptied_first, an_out_symlink_is_replaced, a_forged_plan_does_not_change_what_is_packed, a_commit_past_the_base_gives_tip_and_bundle, no_commit_gives_tip_and_no_bundle, a_branch_reset_behind_the_base_gives_its_tip_and_no_bundle, a_deleted_branch_gives_no_tip, an_oversized_bundle_is_deleted_and_reported, a_planted_hook_in_the_clone_never_runs}`. The packer also takes `--clone` (D-1120).
+- AC 3: core `workshop/run.rs::tests::{entry_lines_round_trip, an_oversized_entry_line_is_counted_not_kept}`.
+- AC 4: the `core-linux` step "The entry point's Linux tests" (fails when no test ran); `entry_windows.rs::officina_entry_exits_64_on_windows`.
+- AC 5: `entry_linux.rs::{auth_status_prints_one_line_without_email_or_organisation, auth_status_reports_a_missing_login, scan_reports_ranges_never_values, scan_finds_every_form_of_a_seeded_value, scan_never_takes_an_email_or_a_short_value_as_a_needle, scan_with_no_login_reports_zero_needles, an_oversized_record_is_refused}`; core `workshop/scan.rs::tests::{every_form_of_a_seeded_value_is_found, a_value_embedded_at_each_alignment_is_found_in_base64, a_wrapped_base64_form_is_found, replace_leaves_no_form, an_unrelated_text_is_not_found, login_values_skip_emails_and_short_values}`. The login parts are built: the login entry's step 1 has not failed (D-610).
+- AC 6: README "What a run sees of your workspace".
+
 ## File List
+
+- `crates/officina-container/src/entry/{mod,run,pack,auth_status,scan}.rs` (new), `src/lib.rs`, `src/bin/officina-entry.rs`, `tests/entry_linux.rs` (new), `Cargo.toml` (dev-dependency `tempfile`, already in the workspace), `Cargo.lock`
+- `crates/officina-core/src/workshop/scan.rs` (new), `workshop/{mod,run}.rs`
+- `.github/workflows/ci.yml`, `README.md`, `CHANGELOG.md`, `docs/stories/epic-6-decisions.md` (D-1123), `docs/stories/sprint-status.yaml`
 
 ## Change Log
 
@@ -56,3 +67,4 @@ so that Officina adds nothing to the workspace but its flags, and a killed, stop
 - 2026-10-29 research-note entries named by subject, no number reserved (D-600)
 - 2026-10-29 the owner's answers: the login copy step, `auth-status` and `scan` (D-606, D-608, D-609)
 - 2026-10-29 adversarial pass: needles never from an email or a short value; login parts left out if the login entry fails (D-609, D-610)
+- 2026-11-01 implemented; D-1123; status Review

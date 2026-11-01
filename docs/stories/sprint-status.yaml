@@ -197,7 +197,8 @@ stories:
   - {id: "6.5", file: story-6.5-gateway-and-container-crate.md, slice: A, status: review}
   # 6.6: done on the recorded gate halves (gates 1, 2, 3, 6 and the login entry may change it, D-203); D-1120 to D-1122 to confirm.
   - {id: "6.6", file: story-6.6-container-vectors-and-run-plan.md, slice: A, status: review}
-  - {id: "6.7", file: story-6.7-entry-point-and-packer.md, slice: A, status: approved}
+  # 6.7: done; D-1123 to confirm.
+  - {id: "6.7", file: story-6.7-entry-point-and-packer.md, slice: A, status: review}
   - {id: "6.8", file: story-6.8-images-and-build.md, slice: A, status: approved}
   - {id: "6.9", file: story-6.9-hook-program-inventory.md, slice: A, status: approved}
   - {id: "6.10", file: story-6.10-escape-battery.md, slice: A, status: approved}
