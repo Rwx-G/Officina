@@ -159,9 +159,397 @@ pub fn final_base(found: &[Stage]) -> Option<&'static str> {
     }
 }
 
+/// `docker/workshop.Dockerfile`, embedded: the build writes it into the
+/// base's context, and its SHA-256 is a label (AD-99).
+pub const WORKSHOP_DOCKERFILE: &str = include_str!("../../../../docker/workshop.Dockerfile");
+/// `docker/gateway.Dockerfile`, embedded.
+pub const GATEWAY_DOCKERFILE: &str = include_str!("../../../../docker/gateway.Dockerfile");
+/// The gateway image's tag (AD-99).
+pub const GATEWAY_IMAGE: &str = "officina-gateway:local";
+
+/// The labels Officina sets at build (AD-99): which base, the version and
+/// the SHA-256 of what went into the image.
+pub const LABEL_BASE: &str = "officina.base";
+pub const LABEL_VERSION: &str = "officina.version";
+pub const LABEL_DOCKERFILE: &str = "officina.dockerfile.sha256";
+pub const LABEL_ENTRY: &str = "officina.entry.sha256";
+pub const LABEL_GATEWAY: &str = "officina.gateway.sha256";
+pub const LABEL_CLAUDE_VERSION: &str = "officina.claude.version";
+pub const LABEL_CA: &str = "officina.ca.sha256";
+pub const LABEL_PROJECT: &str = "officina.project";
+pub const LABEL_PROJECT_DOCKERFILE: &str = "officina.project.dockerfile.sha256";
+pub const LABEL_PROJECT_CONTEXT: &str = "officina.project.context.sha256";
+pub const LABEL_BASE_ID: &str = "officina.base.id";
+/// `officina.ca.sha256` without a CA file.
+pub const NO_CA: &str = "none";
+
+/// The labels a check never compares: Claude Code updates itself on the
+/// host, and comparing its version would force a rebuild each time
+/// (AD-99); the OCI labels describe the build, not what is in it.
+pub fn is_compared(label: &str) -> bool {
+    label.starts_with("officina.") && label != LABEL_CLAUDE_VERSION
+}
+
+/// What a project image adds to the labels (AD-99).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectLabels {
+    pub floor_key: String,
+    pub project: String,
+    pub dockerfile_sha256: String,
+    pub context_sha256: String,
+    /// The base image's id at build time.
+    pub base_id: String,
+}
+
+/// What the labels of an image are made from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LabelInputs {
+    pub kind: super::image::ImageKind,
+    pub version: String,
+    pub revision: String,
+    pub created: String,
+    pub entry_sha256: String,
+    pub gateway_sha256: String,
+    pub claude_version: String,
+    pub ca_sha256: Option<String>,
+    pub project: Option<ProjectLabels>,
+}
+
+/// The `officina.base` value of each Officina image kind; a project image
+/// inherits its base's.
+pub const fn base_label(kind: ImageKind) -> Option<&'static str> {
+    match kind {
+        ImageKind::Workshop => Some("workshop"),
+        ImageKind::Browser => Some("browser"),
+        ImageKind::Gateway => Some("gateway"),
+        ImageKind::Project => None,
+    }
+}
+
+/// Every label of an image of `inputs` (AD-99): the OCI set, then
+/// Officina's.
+pub fn labels(inputs: &LabelInputs) -> std::collections::BTreeMap<String, String> {
+    let dockerfile = match inputs.kind {
+        ImageKind::Gateway => GATEWAY_DOCKERFILE,
+        ImageKind::Workshop | ImageKind::Browser | ImageKind::Project => WORKSHOP_DOCKERFILE,
+    };
+    let title = match inputs.kind {
+        ImageKind::Workshop => "officina-workshop",
+        ImageKind::Browser => "officina-workshop-browser",
+        ImageKind::Gateway => "officina-gateway",
+        ImageKind::Project => "officina-project",
+    };
+    let mut labels: std::collections::BTreeMap<String, String> = [
+        ("org.opencontainers.image.title", title.to_owned()),
+        (
+            "org.opencontainers.image.description",
+            "Officina's isolated workshop".to_owned(),
+        ),
+        (
+            "org.opencontainers.image.source",
+            "https://github.com/Rwx-G/Officina".to_owned(),
+        ),
+        ("org.opencontainers.image.version", inputs.version.clone()),
+        ("org.opencontainers.image.revision", inputs.revision.clone()),
+        ("org.opencontainers.image.licenses", "Apache-2.0".to_owned()),
+        ("org.opencontainers.image.created", inputs.created.clone()),
+        (LABEL_VERSION, inputs.version.clone()),
+        (LABEL_ENTRY, inputs.entry_sha256.clone()),
+        (LABEL_GATEWAY, inputs.gateway_sha256.clone()),
+        (LABEL_CLAUDE_VERSION, inputs.claude_version.clone()),
+        (
+            LABEL_CA,
+            inputs.ca_sha256.clone().unwrap_or_else(|| NO_CA.to_owned()),
+        ),
+    ]
+    .into_iter()
+    .map(|(k, v)| (k.to_owned(), v))
+    .collect();
+    if let Some(base) = base_label(inputs.kind) {
+        labels.insert(LABEL_BASE.to_owned(), base.to_owned());
+        labels.insert(
+            LABEL_DOCKERFILE.to_owned(),
+            crate::sha256_hex(dockerfile.as_bytes()),
+        );
+    }
+    if let Some(project) = &inputs.project {
+        labels.insert(
+            super::names::FLOOR_LABEL.to_owned(),
+            project.floor_key.clone(),
+        );
+        labels.insert(LABEL_PROJECT.to_owned(), project.project.clone());
+        labels.insert(
+            LABEL_PROJECT_DOCKERFILE.to_owned(),
+            project.dockerfile_sha256.clone(),
+        );
+        labels.insert(
+            LABEL_PROJECT_CONTEXT.to_owned(),
+            project.context_sha256.clone(),
+        );
+        labels.insert(LABEL_BASE_ID.to_owned(), project.base_id.clone());
+    }
+    labels
+}
+
+closed_enum! {
+    #[serde(rename_all = "snake_case")]
+    /// Why an image is not the one the running Officina would build now
+    /// (AD-99's `image_mismatch`).
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+    pub enum ImageMismatch {
+        /// The engine holds no such image.
+        Absent,
+        /// Officina has no record of building it, or its build failed.
+        NotRecorded,
+        /// A compared label differs.
+        LabelDiffers,
+        /// A project image was built on another base image.
+        BaseIdDiffers,
+        /// The image's measured programs are not the base's.
+        ProgramsDiffer,
+    }
+}
+
+/// A mismatch and the label it is about, when one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Mismatch {
+    pub cause: ImageMismatch,
+    pub label: Option<String>,
+}
+
+/// What the running Officina expects of an image (AD-99, D-233).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Expected {
+    /// The labels it would set now; only [`is_compared`] ones count.
+    pub labels: std::collections::BTreeMap<String, String>,
+    /// For a project image, the current base image's id.
+    pub base_id: Option<String>,
+    /// The base's measured programs, for a project or browser image.
+    pub base_programs_sha256: Option<String>,
+}
+
+/// What the registry recorded of the image's last build (D-233).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Recorded {
+    pub image_id: Option<String>,
+    pub programs_sha256: Option<String>,
+    pub built: bool,
+}
+
+/// The image check at launch (AD-99, D-207, D-233): the image exists, its
+/// compared labels equal what Officina would build now, a project image's
+/// base id is the current base's, and the programs measured at its build
+/// are the base's. A label is a claim; the measurement is the check.
+/// Returns the id a `create` names.
+pub fn check(
+    expected: &Expected,
+    inspected: Option<&super::engine::ImageFacts>,
+    recorded: Option<&Recorded>,
+) -> Result<String, Mismatch> {
+    let mismatch = |cause, label: Option<&str>| Mismatch {
+        cause,
+        label: label.map(str::to_owned),
+    };
+    let image = inspected.ok_or_else(|| mismatch(ImageMismatch::Absent, None))?;
+    let recorded = recorded
+        .filter(|r| r.built && r.image_id.as_deref() == Some(image.id.as_str()))
+        .ok_or_else(|| mismatch(ImageMismatch::NotRecorded, None))?;
+    for (label, value) in expected.labels.iter().filter(|(l, _)| is_compared(l)) {
+        if label == LABEL_BASE_ID {
+            continue;
+        }
+        if image.labels.get(label) != Some(value) {
+            return Err(mismatch(ImageMismatch::LabelDiffers, Some(label)));
+        }
+    }
+    if let Some(base_id) = &expected.base_id
+        && image.labels.get(LABEL_BASE_ID) != Some(base_id)
+    {
+        return Err(mismatch(ImageMismatch::BaseIdDiffers, Some(LABEL_BASE_ID)));
+    }
+    match (&expected.base_programs_sha256, &recorded.programs_sha256) {
+        (_, None) => return Err(mismatch(ImageMismatch::ProgramsDiffer, None)),
+        (Some(base), Some(own)) if base != own => {
+            return Err(mismatch(ImageMismatch::ProgramsDiffer, None));
+        }
+        _ => {}
+    }
+    Ok(image.id.clone())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn inputs(kind: ImageKind) -> LabelInputs {
+        LabelInputs {
+            kind,
+            version: "0.1.0".into(),
+            revision: "abc".into(),
+            created: "2026-11-01T00:00:00Z".into(),
+            entry_sha256: "e".repeat(64),
+            gateway_sha256: "g".repeat(64),
+            claude_version: "2.1.316".into(),
+            ca_sha256: None,
+            project: None,
+        }
+    }
+
+    #[test]
+    fn embedded_dockerfiles_hash_to_their_labels() {
+        let base = labels(&inputs(ImageKind::Workshop));
+        assert_eq!(
+            base[LABEL_DOCKERFILE],
+            crate::sha256_hex(WORKSHOP_DOCKERFILE.as_bytes())
+        );
+        assert_eq!(base[LABEL_BASE], "workshop");
+        assert_eq!(base[LABEL_CA], NO_CA);
+        let gateway = labels(&inputs(ImageKind::Gateway));
+        assert_eq!(
+            gateway[LABEL_DOCKERFILE],
+            crate::sha256_hex(GATEWAY_DOCKERFILE.as_bytes())
+        );
+        assert!(
+            stages(WORKSHOP_DOCKERFILE).unwrap()[0]
+                .image
+                .starts_with("debian:trixie-slim@sha256:")
+        );
+        assert_eq!(stages(GATEWAY_DOCKERFILE).unwrap()[0].image, "scratch");
+    }
+
+    #[test]
+    fn the_ca_step_precedes_every_https_download() {
+        let lines: Vec<&str> = WORKSHOP_DOCKERFILE.lines().collect();
+        let ca = lines
+            .iter()
+            .position(|l| l.contains("update-ca-certificates"))
+            .expect("the CA step");
+        let first_https = lines
+            .iter()
+            .position(|l| l.contains("https://"))
+            .expect("a download");
+        assert!(
+            ca < first_https,
+            "the CA step at {ca}, a download at {first_https}"
+        );
+        let apt = lines
+            .iter()
+            .position(|l| l.contains("apt-get install"))
+            .unwrap();
+        assert!(
+            apt < ca,
+            "the Debian packages come first, over Debian's mirror"
+        );
+    }
+
+    fn inspected(
+        labels: &std::collections::BTreeMap<String, String>,
+    ) -> crate::workshop::engine::ImageFacts {
+        crate::workshop::engine::ImageFacts {
+            id: "sha256:aa".into(),
+            labels: labels.clone(),
+            env_names: vec!["PATH".into()],
+        }
+    }
+
+    fn recorded(programs: Option<&str>) -> Recorded {
+        Recorded {
+            image_id: Some("sha256:aa".into()),
+            programs_sha256: programs.map(str::to_owned),
+            built: true,
+        }
+    }
+
+    #[test]
+    fn the_claude_version_is_not_compared() {
+        let built = labels(&inputs(ImageKind::Workshop));
+        let mut now = inputs(ImageKind::Workshop);
+        now.claude_version = "2.1.400".into();
+        now.created = "2026-12-01T00:00:00Z".into();
+        let expected = Expected {
+            labels: labels(&now),
+            base_id: None,
+            base_programs_sha256: None,
+        };
+        assert_eq!(
+            check(
+                &expected,
+                Some(&inspected(&built)),
+                Some(&recorded(Some("p")))
+            ),
+            Ok("sha256:aa".into())
+        );
+    }
+
+    #[test]
+    fn a_label_without_a_matching_measurement_mismatches() {
+        let mut project = inputs(ImageKind::Project);
+        project.project = Some(ProjectLabels {
+            floor_key: "0123456789abcdef".into(),
+            project: "api".into(),
+            dockerfile_sha256: "d".into(),
+            context_sha256: "c".into(),
+            base_id: "sha256:base".into(),
+        });
+        let built = labels(&project);
+        let expected = Expected {
+            labels: built.clone(),
+            base_id: Some("sha256:base".into()),
+            base_programs_sha256: Some("base-programs".into()),
+        };
+        assert_eq!(
+            check(
+                &expected,
+                Some(&inspected(&built)),
+                Some(&recorded(Some("replaced")))
+            )
+            .unwrap_err()
+            .cause,
+            ImageMismatch::ProgramsDiffer
+        );
+        assert_eq!(
+            check(
+                &expected,
+                Some(&inspected(&built)),
+                Some(&recorded(Some("base-programs")))
+            ),
+            Ok("sha256:aa".into())
+        );
+        let other_base = Expected {
+            base_id: Some("sha256:new-base".into()),
+            ..expected.clone()
+        };
+        assert_eq!(
+            check(
+                &other_base,
+                Some(&inspected(&built)),
+                Some(&recorded(Some("base-programs")))
+            )
+            .unwrap_err()
+            .cause,
+            ImageMismatch::BaseIdDiffers
+        );
+        assert_eq!(
+            check(&expected, None, None).unwrap_err().cause,
+            ImageMismatch::Absent
+        );
+        assert_eq!(
+            check(&expected, Some(&inspected(&built)), None)
+                .unwrap_err()
+                .cause,
+            ImageMismatch::NotRecorded
+        );
+        let mut changed = built.clone();
+        changed.insert(LABEL_ENTRY.into(), "other".into());
+        let mismatch = check(
+            &expected,
+            Some(&inspected(&changed)),
+            Some(&recorded(Some("base-programs"))),
+        )
+        .unwrap_err();
+        assert_eq!(mismatch.cause, ImageMismatch::LabelDiffers);
+        assert_eq!(mismatch.label.as_deref(), Some(LABEL_ENTRY));
+    }
 
     #[test]
     fn the_final_stage_must_descend_from_a_base() {
