@@ -250,6 +250,9 @@ pub struct Collector {
     review_timeout: Duration,
     /// How long an answer's resume is watched for `busy` (AD-85).
     confirm_window: Duration,
+    /// The engine as thread `workshop` last read it (AD-98); the collector
+    /// never reads it itself.
+    engine: Option<crate::workshop::engine::EngineState>,
 }
 
 impl Collector {
@@ -307,6 +310,7 @@ impl Collector {
             auto_escalations: BTreeMap::new(),
             review_timeout: Duration::from_millis(officina_core::relay::auto::REVIEW_TIMEOUT_MS),
             confirm_window: Duration::from_millis(officina_core::meeting::CONFIRM_WINDOW_MS),
+            engine: None,
         }
     }
 
@@ -315,6 +319,16 @@ impl Collector {
     pub fn with_base_env(mut self, base: BaseEnv) -> Collector {
         self.base_env = base;
         self
+    }
+
+    /// Records the engine's state thread `workshop` read (AD-98).
+    pub fn set_engine(&mut self, state: crate::workshop::engine::EngineState) {
+        self.engine = Some(state);
+    }
+
+    /// The engine's state as last read; `None` before the first read.
+    pub fn engine(&self) -> Option<&crate::workshop::engine::EngineState> {
+        self.engine.as_ref()
     }
 
     /// The environment every `claude` vector's own is built from.

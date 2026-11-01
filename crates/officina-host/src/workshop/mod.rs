@@ -4,3 +4,5 @@
 pub mod engine;
 pub mod files;
 pub mod git;
+#[cfg(feature = "window-authority")]
+pub mod threads;

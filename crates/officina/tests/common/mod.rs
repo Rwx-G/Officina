@@ -13,6 +13,7 @@ pub mod orders;
 #[path = "../../../../tests/support/previous_format.rs"]
 pub mod previous_format;
 pub mod relay;
+pub mod workshop;
 
 #[allow(unused_imports)] // a re-export each test file uses or not, as for dead_code above
 pub use git_support::git_dir_or_skip;

@@ -10,7 +10,7 @@ use std::process::Command;
 use std::time::Duration;
 
 use officina_core::workshop::engine::{
-    EngineCall, EngineCallKind, STDERR_CAP, STDOUT_CAP, engine_env,
+    EngineCall, EngineCallKind, EngineInfo, EngineUnavailable, STDERR_CAP, STDOUT_CAP, engine_env,
 };
 
 use crate::process::{JobRule, RunError, RunLimits, run_contained};
@@ -128,7 +128,7 @@ pub fn resolve_binary(
 }
 
 /// The `docker.exe` Docker Desktop's HKLM key names, if it says one.
-fn hklm_docker() -> Option<PathBuf> {
+pub(crate) fn hklm_docker() -> Option<PathBuf> {
     #[cfg(windows)]
     {
         use crate::platform::windows::{Hive, registry_string};
@@ -287,9 +287,72 @@ fn run(
     })
 }
 
+/// What the window knows of the engine (AD-98): read at window start, and
+/// again by the stories that launch, build and run the battery.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EngineState {
+    /// No `docker.exe` could be resolved, or the one found is a shim.
+    Unresolved(String),
+    /// `docker.exe` ran but gave no answer: it could not start, or it
+    /// passed its deadline.
+    Unreachable(String),
+    /// The engine answered and cannot run the workshop.
+    Unavailable(EngineUnavailable),
+    /// A Linux engine, with its identity.
+    Ready(EngineInfo),
+}
+
+impl EngineState {
+    /// The engine's identity when it can run the workshop.
+    pub fn info(&self) -> Option<&EngineInfo> {
+        match self {
+            EngineState::Ready(info) => Some(info),
+            _ => None,
+        }
+    }
+}
+
+/// Reads the engine's identity with `docker version` (AD-98: 10 s, the
+/// kind's deadline), from `docker` as resolved, `base` the window's
+/// environment and `home` the working directory.
+pub fn read_engine_state(
+    docker: Result<&ResolvedDocker, &ResolveError>,
+    base: &[(String, String)],
+    home: &Path,
+) -> EngineState {
+    let docker = match docker {
+        Ok(docker) => docker,
+        Err(e) => return EngineState::Unresolved(e.to_string()),
+    };
+    match execute(docker, &EngineCall::version(), base, home, None) {
+        Err(e) => EngineState::Unreachable(e.to_string()),
+        // A client whose daemon is down still prints its own half, with no
+        // `Server`: the parse says `not_running` whatever the exit code.
+        Ok(outcome) => match EngineInfo::parse(&String::from_utf8_lossy(&outcome.stdout)) {
+            Ok(info) => EngineState::Ready(info),
+            Err(why) => EngineState::Unavailable(why),
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_unresolved_docker_is_reported_without_a_process() {
+        let error = ResolveError::NotExe("docker.cmd".to_owned());
+        let state = read_engine_state(Err(&error), &[], Path::new("."));
+        assert!(matches!(state, EngineState::Unresolved(why) if why.contains("docker.cmd")));
+    }
+
+    #[test]
+    fn a_missing_binary_is_unreachable() {
+        let dir = tempfile::tempdir().unwrap();
+        let docker = ResolvedDocker::at(dir.path().join("absent.exe"), BinarySource::Override);
+        let state = read_engine_state(Ok(&docker), &[], dir.path());
+        assert!(matches!(state, EngineState::Unreachable(_)), "{state:?}");
+    }
 
     fn file(dir: &Path, name: &str) -> PathBuf {
         let path = dir.join(name);

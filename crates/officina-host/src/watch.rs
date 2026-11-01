@@ -166,6 +166,10 @@ pub enum AuthorCommand {
     /// answered once the session is confirmed or its window passed
     /// (D-135, D-139, review F14).
     AnswerOutcome(Box<crate::meeting::AnswerReport>),
+    /// What thread `workshop` read of the engine (AD-98): at window start,
+    /// and after each call that reads it again. Like a launch's outcome it
+    /// is never dropped (D-135's outcome pattern, D-239).
+    EngineState(Box<crate::workshop::engine::EngineState>),
 }
 
 impl AuthorAnswer {
@@ -327,6 +331,7 @@ impl AuthorRequest {
             AuthorCommand::LaunchOutcome(_)
                 | AuthorCommand::OrchestratorStarted(_)
                 | AuthorCommand::AnswerOutcome(_)
+                | AuthorCommand::EngineState(_)
         ) && now + AUTHOR_HEADROOM >= self.deadline
     }
 }
@@ -391,6 +396,9 @@ pub struct WatchHandle {
     /// The collector's paths, updated when a reloaded floor moves the config
     /// dir, so the window's focus and attach commands follow it.
     pub paths: Arc<RwLock<Paths>>,
+    /// The engine's state as thread `workshop` last read it (AD-98);
+    /// `None` until the first read reached the collector.
+    pub engine: Arc<RwLock<Option<crate::workshop::engine::EngineState>>>,
     pub thread: std::thread::JoinHandle<()>,
 }
 
@@ -875,6 +883,7 @@ struct Outputs<E> {
     registry: Published<RegistryView>,
     orchestrator: Published<OrchestratorView>,
     paths: Arc<RwLock<Paths>>,
+    engine: Arc<RwLock<Option<crate::workshop::engine::EngineState>>>,
     emit: E,
 }
 
@@ -888,6 +897,7 @@ pub fn spawn(mut collector: Collector, emit: impl Emit) -> std::io::Result<Watch
     let registry = Arc::new(RwLock::new(None));
     let orchestrator = Arc::new(RwLock::new(None));
     let paths = Arc::new(RwLock::new(collector.paths().clone()));
+    let engine = Arc::new(RwLock::new(None));
     let mut outputs = Outputs {
         board: Published::new(&board),
         next_escalation_at_ms: None,
@@ -895,6 +905,7 @@ pub fn spawn(mut collector: Collector, emit: impl Emit) -> std::io::Result<Watch
         registry: Published::new(&registry),
         orchestrator: Published::new(&orchestrator),
         paths: Arc::clone(&paths),
+        engine: Arc::clone(&engine),
         emit,
     };
     let thread = std::thread::Builder::new()
@@ -907,6 +918,7 @@ pub fn spawn(mut collector: Collector, emit: impl Emit) -> std::io::Result<Watch
         registry,
         orchestrator,
         paths,
+        engine,
         thread,
     })
 }
@@ -1250,6 +1262,7 @@ fn answer_author<E: Emit>(
             | AuthorCommand::AnswerOutcome(_)
             | AuthorCommand::IssueCard(_)
             | AuthorCommand::EditCard { .. }
+            | AuthorCommand::EngineState(_)
     );
     let quota = outputs.board.current().map(|board| board.quota);
     let reply = match request.command {
@@ -1384,6 +1397,13 @@ fn answer_author<E: Emit>(
                 now,
             )
             .map(|grant| AuthorAnswer::AnswerGrant(Box::new(grant)))
+        }
+        AuthorCommand::EngineState(state) => {
+            if let Ok(mut engine) = outputs.engine.write() {
+                *engine = Some((*state).clone());
+            }
+            collector.set_engine(*state);
+            Ok(AuthorAnswer::Done { created: None })
         }
         // Answered once the answer settles: at once, or, for a resume,
         // once the session was seen busy or its window passed (AD-85).

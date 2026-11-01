@@ -40,6 +40,7 @@ use officina_host::relay::authority::{self, AuthorityError};
 use officina_host::relay::home::RelayHome;
 use officina_host::spawn::BaseEnv;
 use officina_host::watch::{AUTHOR_WAIT, AuthorAnswer, AuthorCommand, CollectorMsg, Emit, spawn};
+use officina_host::workshop::threads::WorkshopThreads;
 use tauri::{AppHandle, Emitter, Manager, RunEvent, State, WindowEvent};
 
 /// Event carrying each new board to the window.
@@ -76,6 +77,13 @@ struct AppState {
     /// `current_exe()`: the `officina.exe` the orchestrator's MCP config
     /// runs sits there (D-144, D-167).
     exe_dir: Option<PathBuf>,
+    /// Threads `workshop` and `workshop-build` (AD-98): the collector never
+    /// runs `docker`, so every engine job runs on them.
+    #[expect(
+        dead_code,
+        reason = "held so both threads live as long as the window; the workshop's commands submit to them from story 6.8 on"
+    )]
+    workshop: WorkshopThreads,
 }
 
 impl AppState {
@@ -692,6 +700,7 @@ fn main() {
             let claude = collector.claude().map(std::path::Path::to_path_buf);
             let base_env = collector.base_env().clone();
             let relay_home = collector.relay().clone();
+            let officina_home = collector.paths().officina_home.clone();
             // D-167: read once here; tests pass a folder of their own.
             let exe_dir = std::env::current_exe()
                 .ok()
@@ -705,6 +714,13 @@ fn main() {
                 alerted: std::sync::Mutex::new(BTreeSet::new()),
             };
             let watch = spawn(collector, events)?;
+            let workshop = WorkshopThreads::spawn()?;
+            workshop.read_engine_at_start(
+                officina_host::workshop::engine::resolve(),
+                base_env.vars().to_vec(),
+                officina_home,
+                watch.sender.clone(),
+            );
             app.manage(AppState {
                 board: watch.board,
                 relay: watch.relay,
@@ -716,6 +732,7 @@ fn main() {
                 claude,
                 base_env,
                 exe_dir,
+                workshop,
             });
             Ok(())
         })

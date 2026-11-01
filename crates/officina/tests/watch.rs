@@ -4601,3 +4601,100 @@ fn prompt_files_older_than_24_h_are_removed() {
     left.sort();
     assert_eq!(left, [format!("{}.json", fresh.id)]);
 }
+
+/// The engine's state the collector holds once thread `workshop` read it,
+/// within 10 s.
+fn engine_state(handle: &WatchHandle) -> officina_host::workshop::engine::EngineState {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        if let Some(state) = handle.engine.read().unwrap().clone() {
+            return state;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "no engine state reached the collector"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+#[test]
+fn the_engine_state_reaches_the_collector() {
+    use officina_core::workshop::engine::EngineUnavailable;
+    use officina_host::workshop::engine::EngineState;
+    use officina_host::workshop::threads::WorkshopThreads;
+    for (mode, ready) in [("linux", true), ("down", false), ("windows", false)] {
+        let env = common::TestEnv::new();
+        let engine = common::workshop::FakeEngine::new(
+            &serde_json::json!({ "version": mode }),
+            &serde_json::json!({}),
+        );
+        let (handle, _boards, _relays) = watch(&env, None);
+        let threads = WorkshopThreads::spawn().unwrap();
+        assert!(threads.read_engine_at_start(
+            Ok(engine.docker()),
+            Vec::new(),
+            env.officina_home(),
+            handle.sender.clone(),
+        ));
+        let state = engine_state(&handle);
+        match (mode, &state) {
+            ("linux", EngineState::Ready(info)) => {
+                assert!(info.platform.starts_with("Docker Desktop"), "{info:?}");
+            }
+            ("down", EngineState::Unavailable(EngineUnavailable::NotRunning))
+            | ("windows", EngineState::Unavailable(EngineUnavailable::WindowsContainers)) => {}
+            _ => panic!("mode {mode} gave {state:?}"),
+        }
+        assert_eq!(state.info().is_some(), ready);
+        let calls = engine.log();
+        assert_eq!(calls.len(), 1, "one version call: {calls:?}");
+        assert_eq!(calls[0]["argv"][0], "version");
+        stop(handle);
+    }
+}
+
+#[test]
+fn the_collector_never_spawns_docker() {
+    use officina_host::workshop::engine::ENV_DOCKER_BIN;
+    use officina_host::workshop::git::ENV_GIT_BIN;
+    let Some(git) = common::git_support::git_or_skip("the_collector_never_spawns_docker") else {
+        return;
+    };
+    let env = common::TestEnv::new();
+    let engine = common::workshop::FakeEngine::new(&serde_json::json!({}), &serde_json::json!({}));
+    let logger = common::workshop::GitLogger::new(&git);
+    let floor = env.root.path().join("officina.toml");
+    write(
+        &floor,
+        &format!(
+            "[project.demo]\npath = '{}'\n",
+            env.root.path().join("demo").display()
+        ),
+    );
+    // The only way the collector could reach either binary is through the
+    // environment it builds its children's from: both overrides are there.
+    let base = officina_host::spawn::BaseEnv::new(vec![
+        (ENV_DOCKER_BIN.to_owned(), engine.exe.display().to_string()),
+        (ENV_GIT_BIN.to_owned(), logger.exe.display().to_string()),
+    ]);
+    let paths = paths_of(&env, Some(floor.clone()));
+    let collector = Collector::from_parts(
+        paths,
+        load_floor(Some(&floor)),
+        Some(PathBuf::from(common::FAKE_CLAUDE)),
+    )
+    .with_base_env(base);
+    let (sink, emitted) = common::sink(|_| {});
+    let handle = spawn(collector, sink).unwrap();
+    next(&emitted.boards);
+    for _ in 0..3 {
+        handle.sender.send(CollectorMsg::Refresh).unwrap();
+        handle.sender.send(CollectorMsg::RelayChanged).unwrap();
+    }
+    let _ = officina_host::watch::ask(&handle.sender, AuthorCommand::ListArchived, AUTHOR_WAIT);
+    std::thread::sleep(SETTLE);
+    stop(handle);
+    assert!(engine.log().is_empty(), "docker ran: {:?}", engine.log());
+    assert!(logger.log().is_empty(), "git ran: {:?}", logger.log());
+}
