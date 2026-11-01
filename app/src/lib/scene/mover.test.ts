@@ -7,7 +7,7 @@ import { ORCHESTRATOR_KEY, layoutScene, type SceneBriefing, type SceneLayout } f
 import { emptyMemory, type SceneMemory } from "./memory";
 import { BRIEFING_DWELL_MS, FADE_MS, FRAME_CAP_S, FRAME_GAP_S, GLIDE_MS, HELPER_HOLD_MS, MIN_FRAME_MS, Mover, WALK, restingFrames, type FigureFrame, type MotionEnv } from "./mover";
 import { CORNER_RADIUS, route } from "./paths";
-import { STAFF_CHAIR, STAFF_COUNTER, allSpots, briefingSpot, navGraph, restPoint, staffSpots } from "./places";
+import { STAFF_CHAIR, STAFF_COUNTER, allSpots, briefingSpot, navGraph, restPoint, restPointFor, staffSpots, waitingOffset } from "./places";
 import { board, card, fixtureBoards, presence } from "./testing";
 
 /** A frame source and clock the test steps by hand. */
@@ -104,13 +104,17 @@ describe("mover", () => {
     const graph = navGraph(b!.columns);
     const to = spotOf(b!, "w");
     const nodes = route(graph, from.id, to.id)!.map((id) => graph.nodes.get(id)!);
+    // A waiting place is a little off its spot (D-1046): the walk's last
+    // leg bends to it, no farther from the route than the offset.
+    const off = waitingOffset(to, "w");
+    const end = restPointFor(to, "w");
     const near = (f: FigureFrame) =>
       nodes.slice(1).some((n, i) => {
         const m = nodes[i]!;
         const dx = n.gx - m.gx;
         const dy = n.gy - m.gy;
         const t = Math.max(0, Math.min(1, ((f.gx - m.gx) * dx + (f.gy - m.gy) * dy) / (dx * dx + dy * dy)));
-        return Math.hypot(f.gx - m.gx - t * dx, f.gy - m.gy - t * dy) <= CORNER_RADIUS;
+        return Math.hypot(f.gx - m.gx - t * dx, f.gy - m.gy - t * dy) <= CORNER_RADIUS + Math.hypot(off.dgx, off.dgy);
       });
     let previous = { gx: from.gx, gy: from.gy };
     for (const f of path) {
@@ -119,7 +123,7 @@ describe("mover", () => {
       previous = f;
     }
     const last = path[path.length - 1]!;
-    expect([last.gx, last.gy]).toEqual([to.gx, to.gy]);
+    expect([last.gx, last.gy]).toEqual([end.gx, end.gy]);
     expect(last).toMatchObject({ moving: false, stride: null, pose: "standing", facing: to.facing, opacity: 1 });
     expect(mover.figures().get("w")).toEqual({ ...restingFrames(b!).get("w")!, flip: last.flip });
     expect(mover.transit()).toEqual(new Set());
@@ -224,7 +228,7 @@ describe("mover", () => {
     const [a, b] = layouts(working, waiting);
     mover.update(a!, false);
     const from = spotOf(a!, "w");
-    const to = spotOf(b!, "w");
+    const to = restPointFor(spotOf(b!, "w"), "w");
     mover.update(b!, false);
     const path = walk(frames, mover, "w");
     expect(path.length).toBe(Math.ceil(GLIDE_MS / 16));

@@ -32,7 +32,7 @@ import {
   type SharedZone,
 } from "./geometry";
 import type { LastPlace, SceneMemory } from "./memory";
-import { CAPACITY, officeSpots, restPoint, sharedSpots, staffSpots, type Facing, type Spot } from "./places";
+import { CAPACITY, officeSpots, restPoint, restPointFor, sharedSpots, staffSpots, type Facing, type Spot } from "./places";
 import { figureWords, groupWords, helperWords, orchestratorWords, plaqueText, summaryText, type FigureFacts } from "./text";
 
 /** What the orchestrator proposed (story 5.17): how many proposals are
@@ -514,7 +514,7 @@ export function layoutScene(input: SceneInput, memory: SceneMemory): SceneLayout
       question: zone === "unknown",
       received: card.key === received && at.spot !== null,
     };
-    const rest = at.spot ? restPoint(at.spot) : null;
+    const rest = at.spot ? restPointFor(at.spot, card.key) : null;
     const orderId = card.session_id !== null ? briefingOf.get(card.session_id) : undefined;
     return {
       key: card.key,

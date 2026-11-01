@@ -7,7 +7,7 @@ import { restingFrames, walkingMarks, type FigureFrame } from "./mover";
 import { DEPTH_BANDS } from "./geometry";
 import { DEPTH_QUANTUM, DEPTH_WINDOW, SceneObjects } from "./objects";
 import { deskLetter } from "./rig";
-import { allSpots } from "./places";
+import { allSpots, waitingOffset } from "./places";
 import { board, card, fixtureBoards, presence } from "./testing";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
@@ -58,7 +58,9 @@ describe("objects", () => {
     expect(objects.figureOrder().sort(), name).toEqual([...placed.map((e) => e.key), ...layout!.helpers.map((h) => h.key)].sort());
     for (const e of placed) {
       const spot = spots.get(e.spot!)!;
-      const depth = spot.gx + spot.gy;
+      // Its floor point, off its spot in a waiting zone (D-1046).
+      const off = waitingOffset(spot, e.key);
+      const depth = spot.gx + off.dgx + spot.gy + off.dgy;
       const node = figure(root, e.key)!;
       let before = node.previousElementSibling;
       while (before && before.hasAttribute("data-figure")) before = before.previousElementSibling;

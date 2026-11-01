@@ -6,13 +6,31 @@
 // spots: doors, halls and aisles inside each room, one corridor node per
 // door on the centre line.
 import {
+  COLUMN_COUNTS,
   CORR_Y,
   DECIDER,
+  HH,
+  HW,
+  MAX_COLUMNS,
   OFFICE_CELLS,
   ROWS,
   SHARED_CELLS,
+  canvas,
+  chipTarget,
+  deciderScreens,
+  entranceSignRect,
+  figureTarget,
+  intersects,
+  moreOfficesTarget,
+  officeCells,
   officesIn,
+  plaqueRect,
+  priorityPillRect,
+  projector,
   roomOrigin,
+  whiteboardPlane,
+  zoneGroupTarget,
+  type Rect,
   type Cell,
   type RoomKind,
   type SharedZone,
@@ -185,6 +203,156 @@ export function allSpots(columns: number): Spot[] {
  *  of a seat. Its target and its drawing sit here. */
 export function restPoint(s: Spot): { gx: number; gy: number } {
   return s.sit ? { gx: s.gx + s.sit.dx, gy: s.gy + s.sit.dy } : { gx: s.gx, gy: s.gy };
+}
+
+// ------------------------------------------------------------ waiting places
+
+/** The zones where figures wait their turn: their places are not drawn on
+ *  the floor, and each figure stands a little off its spot, so a queue
+ *  reads as people waiting rather than a grid (story 4.20, D-1046). */
+export const WAITING_ZONES: readonly SharedZone[] = ["decision", "alert"];
+
+/** How far off its spot a waiting figure may stand, in screen px: the
+ *  candidates each spot keeps those of that are clear of every other
+ *  place's target (`waitingOffsets`). */
+const WAIT_STEPS = { x: [-6, -3, 0, 3, 6], y: [-10, -6, -3, 0, 3, 6, 10] } as const;
+const WAIT_CANDIDATES: readonly { x: number; y: number }[] = WAIT_STEPS.y.flatMap((y) => WAIT_STEPS.x.map((x) => ({ x, y })));
+
+/** The part of a standing figure above its target's top, in px, with a
+ *  margin: `rig.ts` draws the head at 52.5 px, its cap 11.4 px above that
+ *  and its brim 13.4 px to the side, against the target's 56 px rise. */
+const HEAD_ABOVE_TARGET = { h: 12, halfWidth: 15 } as const;
+
+export interface Offset {
+  dgx: number;
+  dgy: number;
+}
+
+/** A screen offset in tiles: the projection's inverse, without height. */
+function toTiles(p: { x: number; y: number }): Offset {
+  return { dgx: p.x / (2 * HW) + p.y / (2 * HH), dgy: p.y / (2 * HH) - p.x / (2 * HW) };
+}
+
+let offsetsBySpot: Map<string, Offset[]> | null = null;
+
+/** What stands fixed on the floor, which no figure target may meet: the
+ *  plaques and signs, the group targets, the decider's screens and the
+ *  whiteboard (as their bounding boxes). Rooms never move when columns are
+ *  added, so the largest floor holds every one. */
+function fixedRects(): Rect[] {
+  const columns = MAX_COLUMNS;
+  const cells = officeCells(columns);
+  const boxOf = (corners: readonly { x: number; y: number }[]): Rect => {
+    const xs = corners.map((c) => c.x);
+    const ys = corners.map((c) => c.y);
+    return { x: Math.min(...xs), y: Math.min(...ys), w: Math.max(...xs) - Math.min(...xs), h: Math.max(...ys) - Math.min(...ys) };
+  };
+  const shared = Object.keys(SHARED_CELLS) as SharedZone[];
+  return [
+    ...shared.map((zone) => plaqueRect(columns, SHARED_CELLS[zone], zone)),
+    ...shared.map((zone) => zoneGroupTarget(columns, zone)),
+    ...cells.flatMap((cell) => [plaqueRect(columns, cell, "office"), priorityPillRect(columns, cell), chipTarget(columns, cell), moreOfficesTarget(columns, cell)]),
+    entranceSignRect(columns),
+    ...deciderScreens(columns).map((plane) => boxOf(plane.corners)),
+    boxOf(whiteboardPlane(columns).corners),
+  ];
+}
+
+/** The offsets each waiting spot may take, the spot itself first: built
+ *  once from every place of the largest floor, so that no figure target
+ *  meets another, or anything fixed, or leaves the smallest canvas,
+ *  whichever offsets two figures take. First each candidate must clear
+ *  the fixed things and every other place's spot; then, while two
+ *  candidates of two places meet, the farther from its spot is dropped.
+ *  The spot itself always stays, as the places meet nothing
+ *  (geometry.test.ts). */
+function waitingOffsetTable(): Map<string, Offset[]> {
+  if (offsetsBySpot) return offsetsBySpot;
+  const p = projector(MAX_COLUMNS);
+  const { chair, counter } = staffSpots();
+  const places = [...allSpots(MAX_COLUMNS), chair, counter];
+  const zero = { x: 0, y: 0 };
+  const isZero = (o: { x: number; y: number }) => o.x === 0 && o.y === 0;
+  const rect = (s: Spot, o: { x: number; y: number }) => {
+    const rest = restPoint(s);
+    const at = p(rest.gx, rest.gy);
+    return figureTarget({ x: at.x + o.x, y: at.y + o.y });
+  };
+  const fixed = fixedRects();
+  const room = canvas(COLUMN_COUNTS[0]!);
+  const clear = (s: Spot, o: { x: number; y: number }) => {
+    const r = rect(s, o);
+    if (r.x < 0 || r.y < 0 || r.x + r.w > room.w || r.y + r.h > room.h) return false;
+    // The head and its cap rise above the target: a plaque never covers
+    // them (readability.spec.ts), so the fixed things are kept off both.
+    const head = { x: r.x + r.w / 2 - HEAD_ABOVE_TARGET.halfWidth, y: r.y - HEAD_ABOVE_TARGET.h, w: 2 * HEAD_ABOVE_TARGET.halfWidth, h: HEAD_ABOVE_TARGET.h };
+    return !fixed.some((f) => intersects(r, f) || intersects(head, f)) && places.every((other) => other === s || !intersects(r, rect(other, zero)));
+  };
+  // The waiting zones' employee spots; the orchestrator's chair, in the
+  // decision office, is furniture and stays where it is.
+  const waitingIds = new Set(WAITING_ZONES.flatMap((zone) => sharedSpots(zone).map((s) => s.id)));
+  const candidates = new Map(
+    places.map((s) => {
+      const waiting = waitingIds.has(s.id);
+      return [s.id, waiting ? WAIT_CANDIDATES.filter((o) => isZero(o) || clear(s, o)) : [zero]];
+    }),
+  );
+  const size = (o: { x: number; y: number }) => Math.hypot(o.x, o.y);
+  const moving = places.filter((s) => candidates.get(s.id)!.length > 1);
+  for (let changed = true; changed; ) {
+    changed = false;
+    for (const a of moving) {
+      for (const b of moving) {
+        if (a.id >= b.id) continue;
+        const ca = candidates.get(a.id)!;
+        const cb = candidates.get(b.id)!;
+        for (const oa of ca.filter((o) => !isZero(o))) {
+          const ob = cb.find((o) => !isZero(o) && intersects(rect(a, oa), rect(b, o)));
+          if (!ob) continue;
+          const [list, drop] = size(oa) >= size(ob) ? [ca, oa] : [cb, ob];
+          list.splice(list.indexOf(drop), 1);
+          changed = true;
+          break;
+        }
+      }
+    }
+  }
+  offsetsBySpot = new Map(
+    [...candidates].map(([id, list]) => [id, [...list].sort((m, n) => size(m) - size(n)).map(toTiles)]),
+  );
+  return offsetsBySpot;
+}
+
+/** The offsets spot `id` may take, in tiles, the spot itself first. */
+export function waitingOffsets(id: string): readonly Offset[] {
+  return waitingOffsetTable().get(id) ?? [{ dgx: 0, dgy: 0 }];
+}
+
+/** FNV-1a 32-bit: a stable index from a session key, nothing secret. */
+function hashOf(text: string): number {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < text.length; i++) {
+    hash ^= text.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return hash >>> 0;
+}
+
+/** Where the figure of session `key` stands off spot `s`: chosen from the
+ *  key, so it is the same on every board and never jumps; none outside the
+ *  waiting zones. */
+export function waitingOffset(s: Pick<Spot, "id">, key: string): Offset {
+  const offsets = waitingOffsets(s.id);
+  return offsets[hashOf(key) % offsets.length]!;
+}
+
+/** Where the figure of session `key` rests at `s`: its rest point, plus
+ *  its offset in a waiting zone. Its target, its drawing and its walk's
+ *  end sit here. */
+export function restPointFor(s: Spot, key: string): { gx: number; gy: number } {
+  const rest = restPoint(s);
+  const off = waitingOffset(s, key);
+  return { gx: rest.gx + off.dgx, gy: rest.gy + off.dgy };
 }
 
 /** The decider's desk and chair: the orchestrator's while it is live

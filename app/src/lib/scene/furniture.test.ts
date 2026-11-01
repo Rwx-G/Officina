@@ -65,6 +65,15 @@ describe("furniture", () => {
     for (const shapes of grown) expect(shapes.length).toBeGreaterThan(base!.length);
   });
 
+  // Story 4.20 item 7 (D-1046): the owner saw the queue's places drawn on
+  // the decision office's and the alert room's floors.
+  it("no waiting place is drawn on the floor", () => {
+    for (const columns of COLUMN_COUNTS) {
+      const marks = floorShapes(columns).filter((s) => s.kind === "ellipse" && s.dash !== undefined);
+      expect(marks, `${columns} columns`).toEqual([]);
+    }
+  });
+
   it("the seed functions are the prototype's", () => {
     // FNV-1a's published test value for "a".
     expect(fnv1a("a")).toBe(0xe40c292c);

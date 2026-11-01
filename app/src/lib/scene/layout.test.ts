@@ -38,7 +38,7 @@ import {
 } from "./layout";
 import { emptyMemory, type SceneMemory } from "./memory";
 import { restingFrames } from "./mover";
-import { CAPACITY, allSpots, officeSpots, restPoint, sharedSpots, staffSpots } from "./places";
+import { CAPACITY, allSpots, officeSpots, restPoint, restPointFor, sharedSpots, staffSpots } from "./places";
 import { plaqueText } from "./text";
 import { approval, board, card, fixtureBoards, presence, project } from "./testing";
 
@@ -714,6 +714,24 @@ describe("layoutScene: targets", () => {
     expect([...depths].sort((x, y) => y - x)).toEqual(depths);
   });
 
+  // Story 4.20 item 7 (D-1046): off their spots, figures still never meet,
+  // and a figure that stays in the queue keeps its place on the next board.
+  it("waiting figures stand off their spots without meeting, each where it stood before", () => {
+    for (const { name, board: b } of fixtureBoards()) {
+      const first = lay(b);
+      const second = lay(b, first.memory);
+      const rects = first.targets.filter((t) => t.kind === "figure").map((t) => ({ id: t.id, rect: t.rect }));
+      for (let i = 0; i < rects.length; i++) {
+        for (let j = i + 1; j < rects.length; j++) {
+          expect(intersects(rects[i]!.rect, rects[j]!.rect), `${name} ${rects[i]!.id} x ${rects[j]!.id}`).toBe(false);
+        }
+      }
+      for (const e of first.employees) {
+        expect(second.employees.find((x) => x.key === e.key)!.at, `${name} ${e.key}`).toEqual(e.at);
+      }
+    }
+  });
+
   it("a figure's target sits at its place", () => {
     for (const { name, board: b } of fixtureBoards()) {
       const l = lay(b);
@@ -722,7 +740,8 @@ describe("layoutScene: targets", () => {
       for (const t of l.targets.filter((x) => x.kind === "figure")) {
         const e = employee(l, t.keys[0]!);
         const spot = spots.get(e.spot!)!;
-        const rest = restPoint(spot);
+        // Its rest point, a little off it in a waiting zone (D-1046).
+        const rest = restPointFor(spot, e.key);
         expect(e.at, `${name} ${e.key}`).toEqual(p(rest.gx, rest.gy));
         expect(t.rect, `${name} ${e.key}`).toEqual(figureTarget(e.at!));
       }

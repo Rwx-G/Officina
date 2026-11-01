@@ -28,6 +28,7 @@ import { beaconPair } from "../src/lib/alert";
 import { HALO_BREATHING_MS, HALO_CYCLE_MS } from "../src/lib/halo";
 import { MIN_SCALE, TARGET_CSS_MIN } from "../src/lib/scene/geometry";
 import { ORCHESTRATOR_KEY, SUBAGENT_SCALE, layoutScene, liveCards, nearestTarget, type Direction, type SceneLayout, type Target } from "../src/lib/scene/layout";
+import { allSpots, waitingOffset } from "../src/lib/scene/places";
 import { STORAGE_KEY, emptyMemory, type SceneMemory } from "../src/lib/scene/memory";
 import { FADE_MS, HELPER_HOLD_MS } from "../src/lib/scene/mover";
 import { ZONE_WORDS } from "../src/lib/scene/text";
@@ -1219,6 +1220,41 @@ test.describe("acting from the scene", () => {
     await expect(focusRow.getByTestId("focus-name")).toHaveText(lounge.name);
     const order = await focusRow.locator("button.main").evaluate((b) => Array.from(b.children).map((c) => c.className.split(" ")[0]));
     expect(order.indexOf("name")).toBeLessThan(order.indexOf("project"));
+  });
+
+  // Story 4.20 item 7 (D-1046): the waiting places are not drawn on the
+  // floor of the decision office or the alert room, and each waiting
+  // figure stands a little off its spot, by its key: the same place on the
+  // next board, its badge clear of every other.
+  test("the waiting places are not drawn and each waiting figure keeps its own place", async ({ page }) => {
+    const board = loadBoard("scene-c");
+    await openScene(page, board);
+    await expect(scene(page).locator('[data-layer="floor"] ellipse[stroke-dasharray]')).toHaveCount(0);
+    const [layout] = layouts(board);
+    const waiting = layout!.employees.filter((e) => e.spot !== null && (e.zone === "decision" || e.zone === "alert"));
+    expect(waiting.length).toBeGreaterThan(1);
+    // Some figure stands off its spot: the variation is drawn.
+    const spots = new Map(allSpots(layout!.columns).map((s) => [s.id, s]));
+    expect(waiting.some((e) => { const o = waitingOffset(spots.get(e.spot!)!, e.key); return o.dgx !== 0 || o.dgy !== 0; })).toBe(true);
+    const before = await figures(page);
+    // Another board where only a working session changes: the queue's
+    // figures stay where they stood.
+    await push(page, startsWorking(board, liveCards(board).find((c) => c.scene?.zone === "lounge")!.key));
+    await sceneSettled(page);
+    const after = await figures(page);
+    for (const e of waiting) expect(after[e.key]!.transform, e.key).toBe(before[e.key]!.transform);
+    // The queue's badges meet no other badge.
+    const badges = await scene(page).locator("[data-ticket-of]").evaluateAll((nodes) =>
+      nodes
+        .map((n) => ({ key: n.getAttribute("data-ticket-of"), r: n.getBoundingClientRect() }))
+        .filter((b) => b.r.width > 0)
+        .map((b) => ({ key: b.key, x: b.r.x, y: b.r.y, w: b.r.width, h: b.r.height })),
+    );
+    for (let i = 0; i < badges.length; i++) {
+      for (let j = i + 1; j < badges.length; j++) {
+        expect(meets(badges[i]!, badges[j]!), `${badges[i]!.key} x ${badges[j]!.key}`).toBe(false);
+      }
+    }
   });
 
   test("session text renders as text in the scene and the file", async ({ page }) => {

@@ -35,7 +35,7 @@ import {
   type Rect,
   type SharedZone,
 } from "./geometry";
-import { allSpots, officeCell, restPoint, staffSpots } from "./places";
+import { WAITING_ZONES, allSpots, officeCell, restPoint, staffSpots, waitingOffsets } from "./places";
 
 /** True when the convex polygon `quad` and `rect` share interior area: no
  *  axis of either separates them. */
@@ -64,6 +64,9 @@ interface Owned {
   rect: Rect;
   /** The plaques this target may meet. */
   owns: string[];
+  /** The spot it stands at, one of several offsets of a waiting spot
+   *  (D-1046): two offsets of one spot are one figure, never two. */
+  spot?: string;
 }
 
 const SHARED = Object.keys(SHARED_CELLS) as SharedZone[];
@@ -85,10 +88,13 @@ function fullOccupancy(columns: number, more: boolean): Owned[] {
   const p = projector(columns);
   const moreSlot = more ? officesIn(columns) - 1 : -1;
   const out: Owned[] = [];
+  // A waiting spot at every offset a figure may take there (D-1046).
   for (const s of allSpots(columns)) {
     if (s.slot === moreSlot) continue;
     const rest = restPoint(s);
-    out.push({ id: s.id, rect: figureTarget(p(rest.gx, rest.gy)), owns: [] });
+    waitingOffsets(s.id).forEach((o, i) => {
+      out.push({ id: i === 0 ? s.id : `${s.id}@${i}`, rect: figureTarget(p(rest.gx + o.dgx, rest.gy + o.dgy)), owns: [], spot: s.id });
+    });
   }
   // The orchestrator's figure, or its empty chair: one rectangle (D-567).
   const chair = restPoint(staffSpots().chair);
@@ -150,6 +156,7 @@ describe("geometry", () => {
         const meets: string[] = [];
         for (let i = 0; i < targets.length; i++) {
           for (let j = i + 1; j < targets.length; j++) {
+            if (targets[i]!.spot !== undefined && targets[i]!.spot === targets[j]!.spot) continue;
             if (intersects(targets[i]!.rect, targets[j]!.rect)) meets.push(`${targets[i]!.id} x ${targets[j]!.id}`);
           }
         }
@@ -200,6 +207,27 @@ describe("geometry", () => {
       });
     });
   }
+});
+
+// Story 4.20 item 7 (D-1046): a waiting figure stands a little off its
+// spot, chosen from its key; the places are kept apart whatever it takes.
+describe("waiting places", () => {
+  it("only the waiting zones' spots move, each keeping the spot itself and some room to vary", () => {
+    for (const s of allSpots(MAX_COLUMNS)) {
+      const offsets = waitingOffsets(s.id);
+      expect(offsets[0], s.id).toEqual({ dgx: 0, dgy: 0 });
+      const waiting = s.slot === null && (WAITING_ZONES as readonly string[]).includes(s.room);
+      if (!waiting) expect(offsets, s.id).toHaveLength(1);
+    }
+    // The variation is real, not a no-op: most of each waiting zone's spots
+    // vary. A spot hemmed in by its neighbours and its room's plaque (the
+    // alert room's back row) keeps its place.
+    for (const zone of WAITING_ZONES) {
+      const spots = allSpots(MAX_COLUMNS).filter((s) => s.slot === null && s.room === zone);
+      const varying = spots.filter((s) => waitingOffsets(s.id).length > 1);
+      expect(varying.length * 2, zone).toBeGreaterThan(spots.length);
+    }
+  });
 });
 
 describe("scale", () => {

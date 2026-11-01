@@ -32,6 +32,9 @@ import {
   restPoint,
   roomOf,
   sharedSpots,
+  WAITING_ZONES,
+  waitingOffset,
+  waitingOffsets,
   type NavGraph,
   type Spot,
 } from "./places";
@@ -138,6 +141,42 @@ function rooms(columns: number): string[] {
 }
 
 const onCentreLine = (graph: NavGraph, id: string) => Math.abs(graph.nodes.get(id)!.gy - CORR_Y) < 1e-9;
+
+// Story 4.20 item 7 (D-1046): a waiting figure stands a little off its
+// spot, the same place for the same session on every board.
+describe("waiting places", () => {
+  const waiting = WAITING_ZONES.flatMap((zone) => sharedSpots(zone));
+  const keys = Array.from({ length: 64 }, (_, i) => `sid:00000000-0000-0000-0000-${String(i).padStart(12, "0")}`);
+
+  it("a session's offset at a spot is the same every time and one the spot allows", () => {
+    for (const s of waiting) {
+      for (const k of keys) {
+        const first = waitingOffset(s, k);
+        expect(waitingOffset(s, k)).toEqual(first);
+        expect(waitingOffsets(s.id)).toContainEqual(first);
+      }
+    }
+  });
+
+  it("sessions vary in a waiting zone and stand on their spot elsewhere", () => {
+    // Every spot with room to vary gives different sessions different places.
+    for (const s of waiting.filter((x) => waitingOffsets(x.id).length > 1)) {
+      const distinct = new Set(keys.map((k) => JSON.stringify(waitingOffset(s, k))));
+      expect(distinct.size, s.id).toBeGreaterThan(1);
+    }
+    for (const zone of ["reception", "lounge"] as const) {
+      for (const s of sharedSpots(zone)) for (const k of keys) expect(waitingOffset(s, k), s.id).toEqual({ dgx: 0, dgy: 0 });
+    }
+    for (const s of officeSpots(0).desks) for (const k of keys) expect(waitingOffset(s, k)).toEqual({ dgx: 0, dgy: 0 });
+  });
+
+  it("an offset is small: the queue's order reads as before", () => {
+    const queue = sharedSpots("decision");
+    for (const s of queue) {
+      for (const o of waitingOffsets(s.id)) expect(Math.hypot(o.dgx, o.dgy), s.id).toBeLessThan(0.5);
+    }
+  });
+});
 
 describe("navigation graph", () => {
   it("every spot is reachable from the exit", () => {

@@ -15,7 +15,7 @@
 // be drawn.
 import { HH, HW } from "./geometry";
 import { ORCHESTRATOR_KEY, type Employee, type Helper, type Marks, type Pose, type Role, type SceneLayout, type Staff } from "./layout";
-import { allSpots, briefingSpot, navGraph, restPoint, staffSpots, type Facing, type NavGraph, type Spot } from "./places";
+import { allSpots, briefingSpot, navGraph, restPointFor, staffSpots, waitingOffset, type Facing, type NavGraph, type Offset, type Spot } from "./places";
 import { route, smooth, type RoutePoint, type RouteStart } from "./paths";
 
 /** One frame of the walk cycle: the legs' and the arms' angles in degrees,
@@ -190,12 +190,13 @@ export function restingFrames(layout: SceneLayout): Map<string, FigureFrame> {
   for (const e of placed) {
     const spot = e.spot === null ? undefined : spots.get(e.spot);
     if (!spot) continue;
-    const rest = restPoint(spot);
+    const rest = restPointFor(spot, e.key);
+    const off = waitingOffset(spot, e.key);
     out.set(e.key, {
       key: e.key,
       project: e.project,
-      gx: spot.gx,
-      gy: spot.gy,
+      gx: spot.gx + off.dgx,
+      gy: spot.gy + off.dgy,
       drawGx: rest.gx,
       drawGy: rest.gy,
       moving: false,
@@ -558,6 +559,9 @@ export class Mover {
       still: null,
       home: null,
     };
+    const off = this.#offsetAt(w, node);
+    w.gx += off.dgx;
+    w.gy += off.dgy;
     this.#walkers.set(e.key, w);
     return w;
   }
@@ -608,7 +612,11 @@ export class Mover {
     this.#standUp(w, now);
     w.goal = goal;
     w.sitAt = null;
-    const target = this.#graph!.nodes.get(goal)!;
+    const node = this.#graph!.nodes.get(goal)!;
+    // A waiting figure's place is a little off its spot (D-1046): the
+    // walk ends there, not on the spot's node.
+    const off = this.#offsetAt(w, goal);
+    const target = { gx: node.gx + off.dgx, gy: node.gy + off.dgy };
     if (instant) {
       this.#place(w, goal);
       this.#arrive(w, now, true);
@@ -632,6 +640,9 @@ export class Mover {
     }
     const raw: { x: number; y: number; node: string | null }[] = [{ x: w.gx, y: w.gy, node: w.at }];
     for (const id of ids) {
+      // A figure resting off its node (D-1046) leaves from where it
+      // stands, never stepping back onto the node first.
+      if (raw.length === 1 && id === w.at) continue;
       const n = this.#graph!.nodes.get(id)!;
       const last = raw[raw.length - 1]!;
       if (Math.hypot(n.gx - last.x, n.gy - last.y) < 1e-4) {
@@ -639,6 +650,13 @@ export class Mover {
         continue;
       }
       raw.push({ x: n.gx, y: n.gy, node: id });
+    }
+    const end = raw[raw.length - 1]!;
+    if (raw.length > 1 && end.node === goal) {
+      end.x = target.gx;
+      end.y = target.gy;
+    } else if (Math.hypot(target.gx - end.x, target.gy - end.y) >= 1e-4) {
+      raw.push({ x: target.gx, y: target.gy, node: goal });
     }
     w.glide = null;
     if (raw.length < 2) {
@@ -673,10 +691,18 @@ export class Mover {
     return w.sitAt === null ? 0 : clamp01((now - w.sitAt + SLIDE_MS / 2) / SLIDE_MS);
   }
 
+  /** How far off node `node` walker `w` rests: its waiting offset when
+   *  the node is the spot it is going to, none otherwise. */
+  #offsetAt(w: Walker, node: string): Offset {
+    const spot = w.leaving || node !== w.goal ? undefined : this.#spots.get(node);
+    return spot ? waitingOffset(spot, w.key) : { dgx: 0, dgy: 0 };
+  }
+
   #place(w: Walker, node: string): void {
     const n = this.#graph!.nodes.get(node)!;
-    w.gx = n.gx;
-    w.gy = n.gy;
+    const off = this.#offsetAt(w, node);
+    w.gx = n.gx + off.dgx;
+    w.gy = n.gy + off.dgy;
     w.at = node;
     w.route = null;
     w.glide = null;

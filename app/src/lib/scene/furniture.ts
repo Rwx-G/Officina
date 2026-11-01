@@ -599,11 +599,6 @@ function seams(p: Projector, cell: Cell): FloorShape[] {
   return out;
 }
 
-function spotMark(p: Projector, gx: number, gy: number): FloorShape {
-  const [x, y] = at(p, gx, gy);
-  return { kind: "ellipse", cx: r1(x), cy: r1(y), rx: 13, ry: 6.5, fill: "none", stroke: paint("scene-room-edge"), strokeWidth: 1.6, dash: "4 3" };
-}
-
 /** A window and a frame on the back wall behind `column`, the frame
  *  seeded by its column. */
 function backWallColumn(p: Projector, column: number): FloorShape[] {
@@ -623,7 +618,8 @@ export const ALERT_FLOOR = { fill: paint("scene-alert-floor"), stroke: paint("co
 
 /** Layer 1 for a floor of `columns` columns: ground, slab, walls and what
  *  hangs on them, the corridor, room floors and seams, rugs, the alert
- *  room's hazard outline, spot marks. */
+ *  room's hazard outline. The waiting places are not marked on the floor
+ *  (D-1046): people waiting read as a queue without them. */
 export function floorShapes(columns: number): FloorShape[] {
   const p = projector(columns);
   const fx = floorWidth(columns);
@@ -659,10 +655,8 @@ export function floorShapes(columns: number): FloorShape[] {
   }
   out.push(polygon(room(p, SHARED_CELLS.reception, -0.05, 0.95, 0.9, 2.25), paint("scene-metal-2"), { opacity: 0.35 }));
   out.push(...rug(p, SHARED_CELLS.decision, 0.95, 2.2, 3.85, 3.15, "scene-rug"));
-  for (const s of sharedSpots("decision").filter((s) => !s.corridor)) out.push(spotMark(p, s.gx, s.gy));
   out.push(...rug(p, SHARED_CELLS.lounge, 1.35, 1.5, 3.0, 2.95, "scene-rug-2"));
   out.push(polygon(room(p, SHARED_CELLS.alert, HAZARD.inset, HAZARD.inset, R - HAZARD.inset, R - HAZARD.inset), "none", { ...HAZARD.stroke, alert: "hazard" }));
-  for (const s of sharedSpots("alert")) out.push(spotMark(p, s.gx, s.gy));
   return out;
 }
 
