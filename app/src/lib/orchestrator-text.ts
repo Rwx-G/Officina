@@ -324,6 +324,11 @@ export function composerStatusText(card: WorkOrderCard): string {
   return `The card below is ready: ${card.name}, filed under ${cardSubjectText(card)}.`;
 }
 
+/** What follows a work order's folder when its session worked in another
+ *  one than the order's (D-1002). */
+export const SESSION_FOLDER_TEXT =
+  "not in the project's folder: its changes are there, on that worktree's branch when Claude made one. Merging and removing a worktree is yours.";
+
 /** What the orchestrator is, beside its Start (AD-89, R110). */
 export const ORCHESTRATOR_ABOUT =
   "A claude session in a console of its own, whose only tools are Officina's: it reads and proposes, and acts on nothing.";

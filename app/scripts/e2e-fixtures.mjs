@@ -1511,6 +1511,13 @@ const orchestratorScenarios = {
     ],
     orders: [
       bump("card-bound", 1, { launched_at_ms: now - 50 * MIN, printed: "backgrounded · bg0101 · dependency-bump-1", bind: { bg_id: "bg0101", session_id: sid(502) } }),
+      // Gate 4's window run (D-1002): the session made its own git worktree
+      // under the project and `claude agents` lists it there.
+      bump("card-worktree", 4, {
+        launched_at_ms: now - 45 * MIN,
+        printed: "backgrounded · bg0104 · dependency-bump-4",
+        bind: { bg_id: "bg0104", session_id: sid(506), cwd: `${work("billing-api")}/.claude/worktrees/officina-probe` },
+      }),
       bump("card-unbound", 2, { launched_at_ms: now - 25 * MIN, printed: "backgrounded · bg0102 · dependency-bump-2" }),
       bump("card-differs", 3, { launched_at_ms: now - 15 * MIN, printed: "backgrounded · bg9999 · dependency-bump-3", bind: { bg_id: "bg0103", session_id: sid(505) } }),
       {
@@ -1665,6 +1672,7 @@ for (const [name, scenario] of Object.entries(orchestratorScenarios)) {
     [!day || printed.work_orders.some((o) => o.printed_id_differs), "an order whose printed id differs"],
     [!day || printed.work_orders.some((o) => o.session !== null), "an order bound to its session"],
     [!day || printed.work_orders.some((o) => o.outcome === "failed"), "a failed order"],
+    [printed.work_orders.filter((o) => o.session_folder !== null).length === (day ? 1 : 0), "one order whose session worked in a worktree, on the day only"],
     [Boolean(scenario.orchestrator) === (printed.presence !== null), "the orchestrator's presence where it is listed"],
     [!scenario.orchestrator || printed.presence.status === scenario.orchestrator.status, "its status"],
     ...["pending", "invalid", "dismissed", "expired", "superseded"].map((status) => [

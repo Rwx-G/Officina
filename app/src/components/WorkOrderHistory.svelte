@@ -1,10 +1,12 @@
 <script lang="ts">
   // The work order history (AD-92, AD-93, D-136): the latest orders with
   // their template, project, values, outcome and binding, the derived
-  // "unbound" and "printed id differs" flags, and the bound session's state.
-  // What `claude` printed and its error are untrusted, rendered as text.
+  // "unbound" and "printed id differs" flags, and the bound session's state,
+  // with its folder when it worked in another one than the order's, a git
+  // worktree it made (D-1002). What `claude` printed, its error and the
+  // session's folder are untrusted, rendered as text.
   import type { WorkOrderView } from "../lib/generated/WorkOrderView";
-  import { OUTCOME_TEXT, PHASE_TEXT, SOURCE_TEXT } from "../lib/orchestrator-text";
+  import { OUTCOME_TEXT, PHASE_TEXT, SESSION_FOLDER_TEXT, SOURCE_TEXT } from "../lib/orchestrator-text";
   import { clock } from "../lib/time";
 
   interface Props {
@@ -57,6 +59,9 @@
               <span class="muted">No session.</span>
             {/if}
           </p>
+          {#if order.session_folder !== null}
+            <p data-testid="work-order-folder">Worked in <code>{order.session_folder}</code>, {SESSION_FOLDER_TEXT}</p>
+          {/if}
           {#if order.printed_id_differs}
             <p class="flag" data-testid="work-order-printed-differs">
               What claude printed does not hold the id it bound to.

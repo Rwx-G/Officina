@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 use crate::board::Board;
 use crate::orders::briefing::{self, Briefing, BriefingInput, Cursor, SessionBrief};
 use crate::orders::work_order::BIND_WINDOW_MS;
+use crate::quota::normalise_path;
 use crate::registry::types::{
     LaunchOutcome, SubjectRecord, SubjectRef, WorkOrderRecord, WorkOrderSource,
 };
@@ -88,6 +89,10 @@ pub struct WorkOrderView {
     pub bound_at_ms: Option<i64>,
     /// The bound session as it stands.
     pub session: Option<SessionBrief>,
+    /// The bound session's folder when it is not the order's own (D-1002):
+    /// a git worktree the session made under the project, say, where its
+    /// changes then are. The session chose it, so it is shown as text.
+    pub session_folder: Option<Untrusted<String>>,
     /// `started`, and still not bound [`BIND_WINDOW_MS`] after its launch
     /// (D-136).
     pub unbound: bool,
@@ -202,6 +207,24 @@ fn awaiting(pending: Option<&PendingChange>) -> Vec<AwaitingTemplate> {
     out
 }
 
+/// The bound session's folder, the board's live one else the registry's
+/// last, when it differs from the folder the order ran in as
+/// [`normalise_path`] reads both; `None` while unbound or unknown.
+fn session_folder(input: &BriefingInput, order: &WorkOrderRecord) -> Option<Untrusted<String>> {
+    let session_id = order.session_id.as_deref()?;
+    let folder = input
+        .card_of(session_id)
+        .and_then(|card| card.cwd.clone())
+        .or_else(|| {
+            order
+                .session
+                .as_ref()
+                .and_then(|record| record.cwd.as_ref())
+                .map(|cwd| cwd.value.clone())
+        })?;
+    (normalise_path(&folder) != normalise_path(&order.cwd)).then(|| Untrusted::new(folder))
+}
+
 /// `order` as the history shows it at `now_ms`, `unbound` and "printed id
 /// differs" computed from its stored columns, never stored (D-136).
 fn order_view(input: &BriefingInput, order: &WorkOrderRecord, now_ms: i64) -> WorkOrderView {
@@ -242,6 +265,7 @@ fn order_view(input: &BriefingInput, order: &WorkOrderRecord, now_ms: i64) -> Wo
         bg_id: order.bg_id.clone(),
         bound_at_ms: order.bound_at_ms,
         session: briefing::order_session(input, order),
+        session_folder: session_folder(input, order),
         unbound,
         printed_id_differs,
     }
@@ -463,6 +487,50 @@ values = ["minor"]
         assert_eq!(view.schema, ORCHESTRATOR_VIEW_SCHEMA);
         assert_eq!(view.presence, None);
         assert!(view.proposals.is_empty());
+    }
+
+    /// D-1002, gate 4's window run: a session that made its own git
+    /// worktree under the project worked there, not in the order's folder,
+    /// and the history says where; the order's own folder in another
+    /// spelling says nothing, nor does an order not bound.
+    #[test]
+    fn a_session_working_in_another_folder_is_shown_where() {
+        let worktree = "C:/work/backend/.claude/worktrees/officina-probe";
+        let in_folder = |cwd: &str| {
+            let mut bound = order("bound", LaunchOutcome::Started, NOW - 60_000);
+            bound.bg_id = Some("bg123".into());
+            bound.session_id = Some("s-1".into());
+            bound.bound_at_ms = Some(NOW - 58_000);
+            bound.session = Some(crate::registry::types::SessionRecord {
+                session_id: "s-1".into(),
+                cwd: Some(Sourced {
+                    value: cwd.to_owned(),
+                    src: Source::Agents,
+                    at_ms: NOW,
+                }),
+                ..Default::default()
+            });
+            bound
+        };
+        let orders = vec![
+            in_folder(worktree),
+            in_folder(r"c:\work\Backend\"),
+            order("unbound", LaunchOutcome::Started, NOW - 60_000),
+        ];
+        let view = build(
+            &ViewInput::of(None, None, None, &[], &orders, &[]),
+            Cursor::None,
+            NOW,
+        );
+        let folders: Vec<Option<Untrusted<String>>> = view
+            .work_orders
+            .iter()
+            .map(|o| o.session_folder.clone())
+            .collect();
+        assert_eq!(
+            folders,
+            [Some(Untrusted::new(worktree.to_owned())), None, None]
+        );
     }
 
     /// Story 5.17 AC 5 (AD-92, D-155): the view lists every pending

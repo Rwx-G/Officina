@@ -501,6 +501,11 @@ struct Order {
 struct Bind {
     bg_id: String,
     session_id: String,
+    /// The folder `claude agents` lists the session in, under the project's
+    /// (a git worktree the session made, D-1002); the project's own when
+    /// absent.
+    #[serde(default)]
+    cwd: Option<String>,
 }
 
 /// The order `order` validates to against the home's approved catalogue
@@ -570,7 +575,7 @@ fn record(
             "id": bind.bg_id,
             "sessionId": bind.session_id,
             "name": order_name(validated.template(), order.seq),
-            "cwd": validated.project_folder(),
+            "cwd": bind.cwd.as_deref().unwrap_or(validated.project_folder()),
             "kind": "background",
             "pid": 4900,
             "startedAt": order.launched_at_ms + 1_000,

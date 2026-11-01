@@ -25,6 +25,12 @@ bg_id: string | null, bound_at_ms: number | null,
  */
 session: SessionBrief | null, 
 /**
+ * The bound session's folder when it is not the order's own (D-1002):
+ * a git worktree the session made under the project, say, where its
+ * changes then are. The session chose it, so it is shown as text.
+ */
+session_folder: string | null, 
+/**
  * `started`, and still not bound [`BIND_WINDOW_MS`] after its launch
  * (D-136).
  */

@@ -365,7 +365,7 @@ impl BriefingInput<'_> {
     }
 
     /// The board card of `session_id`, when the board shows it.
-    fn card_of(&self, session_id: &str) -> Option<&Card> {
+    pub(crate) fn card_of(&self, session_id: &str) -> Option<&Card> {
         self.cards()
             .find(|card| card.session_id.as_deref() == Some(session_id))
     }

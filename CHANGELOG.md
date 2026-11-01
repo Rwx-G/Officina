@@ -8,6 +8,13 @@ project uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- A work order whose session worked in another folder than its project's,
+  such as a git worktree Claude made under `.claude/worktrees/`, names
+  that folder on its card and in the history, so you know where its
+  changes are: on that worktree's branch, not in the project's working
+  tree. Merging and removing the worktree stays yours until v0.7's merged
+  detection.
+
 - A project's own permission mode for work orders, or Officina's default
   (story 5.24): a work order runs in the permission mode its project's
   settings set, else your default, as gate 4 found it does, and one that

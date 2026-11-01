@@ -22,7 +22,8 @@
   // A card the author's choice just brought is scrolled into view, at once:
   // the window's motion is fades and slides only (D-545), so no smooth
   // scroll; it takes the focus after a subject pick or an opened proposal
-  // (D-1001).
+  // (D-1001). A session that worked in another folder than the order's, a
+  // git worktree it made, has that folder named (D-1002).
   import type { LaunchAnswer } from "../lib/generated/LaunchAnswer";
   import type { WorkOrderCard } from "../lib/generated/WorkOrderCard";
   import type { WorkOrderPermission } from "../lib/generated/WorkOrderPermission";
@@ -34,6 +35,7 @@
     PERMISSION_TEXT,
     PERMISSION_TIP_TEXT,
     PHASE_TEXT,
+    SESSION_FOLDER_TEXT,
     cardSubjectText,
     launchOutcomeText,
   } from "../lib/orchestrator-text";
@@ -230,6 +232,9 @@
             <span class="muted">Waiting for its background session.</span>
           {/if}
         </p>
+        {#if order?.session_folder}
+          <p data-testid="card-session-folder">Worked in <code>{order.session_folder}</code>, {SESSION_FOLDER_TEXT}</p>
+        {/if}
       {/if}
       {#if order && order.error !== null}
         <pre data-testid="card-error">{order.error}</pre>

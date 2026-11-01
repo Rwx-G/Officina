@@ -812,6 +812,34 @@ mod tests {
         assert!(bind(&[unbound("bump-1")], &[no_cwd], LAUNCHED + 1).is_empty());
     }
 
+    /// D-1002, gate 4's window run: a session that made its own git
+    /// worktree under the project lists that folder in `claude agents`, and
+    /// binds, since it lies under the order's; a worktree of another project,
+    /// or one beside the project's folder, does not.
+    #[test]
+    fn a_worktree_under_the_project_binds_and_one_elsewhere_does_not() {
+        let inside = entry(
+            "bump-1",
+            r"C:\Work\Backend\.claude\worktrees\officina-probe",
+            LAUNCHED + 1_000,
+        );
+        assert_eq!(
+            bind(&[unbound("bump-1")], &[inside], LAUNCHED + 2_000).len(),
+            1
+        );
+        for cwd in [
+            "C:/Work/Other/.claude/worktrees/officina-probe",
+            "C:/Work/Backend-worktrees/officina-probe",
+            "C:/Work/.claude/worktrees/officina-probe",
+        ] {
+            let elsewhere = entry("bump-1", cwd, LAUNCHED + 1_000);
+            assert!(
+                bind(&[unbound("bump-1")], &[elsewhere], LAUNCHED + 2_000).is_empty(),
+                "{cwd}"
+            );
+        }
+    }
+
     #[test]
     fn an_order_older_than_10_minutes_does_not_bind() {
         let session = entry("bump-1", FOLDER, LAUNCHED + 1_000);

@@ -24,6 +24,7 @@ import {
 } from "./fixtures";
 import {
   PROPOSAL_STATUS_TEXT,
+  SESSION_FOLDER_TEXT,
   composerStatusText,
   invalidReasonText,
 } from "../src/lib/orchestrator-text";
@@ -657,6 +658,31 @@ test("a started launch shows its session once bound", async ({ page }) => {
   await pushRow(page, bound);
   await expect(page.getByTestId("card-session")).toContainText(bound.session!.name ?? bound.session!.session_id);
   await expect(page.getByTestId("card-session")).toContainText("working");
+  await expect(page.getByTestId("card-session-folder")).toHaveCount(0);
+});
+
+// D-1002, gate 4's window run: the session made its own git worktree under
+// the project and worked there; the card and the history say where.
+test("the history names the folder a session worked in", async ({ page }) => {
+  const day = orchestrator("orchestrator-day");
+  await openOrchestrator(page, day);
+  const orders = page.getByTestId("work-order");
+  for (const [index, order] of day.work_orders.entries()) {
+    const folder = orders.nth(index).getByTestId("work-order-folder");
+    if (order.session_folder === null) await expect(folder).toHaveCount(0);
+    else await expect(folder).toHaveText(`Worked in ${order.session_folder}, ${SESSION_FOLDER_TEXT}`);
+  }
+  expect(day.work_orders.filter((order) => order.session_folder?.includes("/.claude/worktrees/"))).toHaveLength(1);
+});
+
+test("a launched card names the folder its session worked in", async ({ page }) => {
+  const issued = card("card-bump");
+  await composeCard(page, issued);
+  await answerLaunch(page, { outcome: "launched", value: "started" });
+  await page.getByTestId("launch").click();
+  const worked = rowFor(issued, (order) => order.session_folder !== null);
+  await pushRow(page, worked);
+  await expect(page.getByTestId("card-session-folder")).toHaveText(`Worked in ${worked.session_folder}, ${SESSION_FOLDER_TEXT}`);
 });
 
 test("workspace not trusted is explained, not retried", async ({ page }) => {
