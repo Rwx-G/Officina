@@ -95,7 +95,7 @@ closed_enum! {
         /// An entry's route could not be decided (D-611).
         ProxyRefused,
         /// The reader cannot evaluate a PAC file or automatic detection
-        /// (D-1124): routes are assumed direct, or refused for a PAC URL.
+        /// (a reader without WinHTTP, D-1136): routes are assumed direct, or refused for a PAC URL.
         ProxyNotEvaluated,
         /// `api.anthropic.com` goes through a proxy and no `ca_file` is set
         /// (D-612): if it inspects TLS, its root must be exported.

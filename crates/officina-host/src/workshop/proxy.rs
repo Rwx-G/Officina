@@ -3,13 +3,10 @@
 //! of Windows' configuration. Callers run [`resolve`] on thread `workshop`,
 //! never on the collector.
 //!
-//! The reader of record is WinHTTP (`WinHttpGetIEProxyConfigForCurrentUser`
-//! and `WinHttpGetProxyForUrl`), which needs the `windows-sys` feature
-//! `Win32_Networking_WinHttp`, awaiting the owner's approval. Until then
-//! [`RegistryReader`] reads the same configuration from the current user's
-//! registry and cannot evaluate a PAC file: a PAC URL resolves
-//! `proxy_unresolved`, and automatic detection is taken as finding none
-//! (D-1124), which doctor names.
+//! The reader is WinHTTP ([`WinHttpReader`]:
+//! `WinHttpGetIEProxyConfigForCurrentUser` and `WinHttpGetProxyForUrl`),
+//! which evaluates PAC files and automatic detection as Windows does
+//! (D-611, D-1136); it replaced the interim registry reader of D-1124.
 
 use std::sync::mpsc;
 use std::time::Duration;
@@ -102,44 +99,26 @@ pub fn resolve(
     routes(setting, allow, &system).map_err(ProxyError::Refused)
 }
 
-/// The interim reader (D-1124): the current user's Internet settings from
-/// the registry, which WinHTTP reads too; no PAC evaluation.
+/// The reader of record (D-611, D-1136): WinHTTP, which reads the current
+/// user's configuration (`WinHttpGetIEProxyConfigForCurrentUser`) and
+/// fetches and evaluates a PAC file or runs automatic detection
+/// (`WinHttpGetProxyForUrl`) as Windows does. Off Windows (CI) there is no
+/// system configuration: every route is direct, and it says it evaluates
+/// nothing.
 #[derive(Debug, Clone, Copy, Default)]
-pub struct RegistryReader;
+pub struct WinHttpReader;
 
-/// Where the current user's Internet settings live.
-#[cfg(windows)]
-const INTERNET_SETTINGS: &str = "Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings";
-
-/// The flags of `DefaultConnectionSettings` (the WinINet blob WinHTTP's
-/// configuration reads): byte 8, `0x02` a static proxy, `0x04` a PAC URL,
-/// `0x08` automatic detection.
-pub fn connection_flags(blob: &[u8]) -> Option<u8> {
-    blob.get(8).copied()
-}
-
-impl SystemProxyReader for RegistryReader {
+impl SystemProxyReader for WinHttpReader {
     fn config(&self) -> Result<IeProxyConfig, String> {
         #[cfg(windows)]
         {
-            use crate::platform::windows::{Hive, registry_binary, registry_string};
-            let flags = registry_binary(
-                Hive::CurrentUser,
-                &format!("{INTERNET_SETTINGS}\\Connections"),
-                "DefaultConnectionSettings",
-            )
-            .as_deref()
-            .and_then(connection_flags)
-            .unwrap_or(0);
-            let text = |name: &str| {
-                registry_string(Hive::CurrentUser, INTERNET_SETTINGS, name)
-                    .filter(|v| !v.is_empty())
-            };
+            let config =
+                crate::platform::windows::winhttp_ie_config().map_err(|e| e.to_string())?;
             Ok(IeProxyConfig {
-                auto_detect: flags & 0x08 != 0,
-                pac_url: text("AutoConfigURL").filter(|_| flags == 0 || flags & 0x04 != 0),
-                static_proxy: text("ProxyServer").filter(|_| flags & 0x02 != 0),
-                bypass: text("ProxyOverride"),
+                auto_detect: config.auto_detect,
+                pac_url: config.pac_url,
+                static_proxy: config.proxy,
+                bypass: config.bypass,
             })
         }
         #[cfg(not(windows))]
@@ -148,16 +127,34 @@ impl SystemProxyReader for RegistryReader {
         }
     }
 
-    fn pac(&self, _url: &str, config: &IeProxyConfig) -> PacAnswer {
-        if config.pac_url.is_some() {
-            PacAnswer::Failed
-        } else {
+    fn pac(&self, url: &str, config: &IeProxyConfig) -> PacAnswer {
+        #[cfg(windows)]
+        {
+            use crate::platform::windows::{WinHttpProxyAnswer, winhttp_proxy_for_url};
+            let timeout_ms = i32::try_from(READ_TIMEOUT.as_millis()).unwrap_or(i32::MAX);
+            match winhttp_proxy_for_url(
+                url,
+                config.auto_detect,
+                config.pac_url.as_deref(),
+                timeout_ms,
+            ) {
+                WinHttpProxyAnswer::Direct => PacAnswer::Answer("DIRECT".to_owned()),
+                WinHttpProxyAnswer::Named(list) => {
+                    PacAnswer::Answer(officina_core::workshop::proxy::winhttp_answer(&list))
+                }
+                WinHttpProxyAnswer::NoPac => PacAnswer::NoPac,
+                WinHttpProxyAnswer::Failed(_) => PacAnswer::Failed,
+            }
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = (url, config);
             PacAnswer::NoPac
         }
     }
 
     fn evaluates_pac(&self) -> bool {
-        false
+        cfg!(windows)
     }
 }
 
@@ -275,8 +272,8 @@ mod tests {
 
     #[test]
     fn handles_are_closed_on_error() {
-        // The interim reader holds no handle; an unreadable configuration
-        // is an error, never routes.
+        // WinHTTP's handles are closed by their guard on every path in
+        // platform/windows.rs; an unreadable configuration is an error, never routes.
         let fake = Arc::new(Fake {
             config: Err("unreadable".into()),
             answer: PacAnswer::NoPac,
@@ -289,28 +286,28 @@ mod tests {
         );
     }
 
+    /// Story 6.25 AC 1: the WinHTTP reader evaluates PAC files on Windows
+    /// and reads the current user's configuration, whatever it holds; a
+    /// PAC file it cannot fetch is `failed`, never a route.
     #[test]
-    fn the_connection_flags_are_byte_8() {
-        let mut blob = vec![0u8; 16];
-        blob[8] = 0x0b;
-        assert_eq!(connection_flags(&blob), Some(0x0b));
-        assert_eq!(connection_flags(&[0; 4]), None);
-    }
-
-    #[test]
-    fn the_registry_reader_cannot_evaluate_a_pac() {
-        let reader = RegistryReader;
-        assert!(!reader.evaluates_pac());
-        let with_pac = IeProxyConfig {
-            pac_url: Some("http://wpad.example.com/proxy.pac".into()),
+    fn the_winhttp_reader_evaluates_pac_files() {
+        let reader = WinHttpReader;
+        assert_eq!(reader.evaluates_pac(), cfg!(windows));
+        assert!(reader.config().is_ok());
+        let unreachable = IeProxyConfig {
+            pac_url: Some("http://127.0.0.1:9/officina-test.pac".into()),
             ..IeProxyConfig::default()
         };
-        assert_eq!(reader.pac("https://x/", &with_pac), PacAnswer::Failed);
+        let answer = reader.pac("https://api.anthropic.com/", &unreachable);
+        if cfg!(windows) {
+            assert_eq!(answer, PacAnswer::Failed);
+        } else {
+            assert_eq!(answer, PacAnswer::NoPac);
+        }
         assert_eq!(
-            reader.pac("https://x/", &IeProxyConfig::default()),
-            PacAnswer::NoPac
+            reader.pac("https://api.anthropic.com/", &IeProxyConfig::default()),
+            PacAnswer::NoPac,
+            "no PAC file and no detection asks nothing"
         );
-        // Reads the current user's settings, whatever they hold.
-        assert!(reader.config().is_ok());
     }
 }

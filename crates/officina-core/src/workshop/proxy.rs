@@ -126,6 +126,48 @@ pub fn pac_route(answer: &str) -> Result<Route, ProxyRefusal> {
     }
 }
 
+/// WinHTTP's proxy list for a URL (`WinHttpGetProxyForUrl`'s
+/// `lpszProxy`, entries separated by `;` or spaces, each
+/// `[<scheme>=][<scheme>://]host:port`) as the PAC answer [`pac_route`]
+/// reads: its first entry, a `socks` scheme as `SOCKS`, a TLS connection to
+/// the proxy (`https://`) as `HTTPS`, both refused there, anything else
+/// as `PROXY host:port`.
+///
+/// ```
+/// use officina_core::workshop::proxy::winhttp_answer;
+/// assert_eq!(winhttp_answer("proxy.example.com:8080;backup.example.com:80"), "PROXY proxy.example.com:8080");
+/// assert_eq!(winhttp_answer("socks=s.example.com:1080"), "SOCKS s.example.com:1080");
+/// ```
+pub fn winhttp_answer(list: &str) -> String {
+    let Some(first) = list
+        .split([';', ' ', '\t'])
+        .map(str::trim)
+        .find(|e| !e.is_empty())
+    else {
+        return "DIRECT".to_owned();
+    };
+    let (scheme, rest) = match first.split_once('=') {
+        Some((scheme, rest)) => (Some(scheme.to_ascii_lowercase()), rest),
+        None => (None, first),
+    };
+    let (url_scheme, target) = match rest.split_once("://") {
+        Some((scheme, target)) => (Some(scheme.to_ascii_lowercase()), target),
+        None => (None, rest),
+    };
+    let target = target.trim_end_matches('/');
+    let socks = [&scheme, &url_scheme]
+        .into_iter()
+        .flatten()
+        .any(|s| s.starts_with("socks"));
+    if socks {
+        format!("SOCKS {target}")
+    } else if url_scheme.as_deref() == Some("https") {
+        format!("HTTPS {target}")
+    } else {
+        format!("PROXY {target}")
+    }
+}
+
 fn is_host_port(text: &str) -> bool {
     text.rsplit_once(':').is_some_and(|(host, port)| {
         !host.is_empty()
@@ -331,6 +373,36 @@ mod tests {
             Ok(Route::Proxy("a.example.com:3128".into()))
         );
         assert_eq!(pac_route("DIRECT"), Ok(Route::Direct));
+    }
+
+    #[test]
+    fn winhttp_lists_map_to_pac_routes() {
+        let route = |list: &str| pac_route(&winhttp_answer(list));
+        assert_eq!(
+            route("proxy.example.com:8080"),
+            Ok(Route::Proxy("proxy.example.com:8080".into()))
+        );
+        assert_eq!(
+            route("http://proxy.example.com:8080/ backup.example.com:80"),
+            Ok(Route::Proxy("proxy.example.com:8080".into()))
+        );
+        assert_eq!(
+            route("https=proxy.example.com:3128"),
+            Ok(Route::Proxy("proxy.example.com:3128".into())),
+            "a per-scheme entry names a plain proxy"
+        );
+        for refused in [
+            "socks=s.example.com:1080",
+            "socks5://s.example.com:1080",
+            "https://p.example.com:443",
+        ] {
+            assert_eq!(
+                route(refused),
+                Err(ProxyRefusal::ProxyUnsupported),
+                "{refused}"
+            );
+        }
+        assert_eq!(route(""), Ok(Route::Direct));
     }
 
     #[test]

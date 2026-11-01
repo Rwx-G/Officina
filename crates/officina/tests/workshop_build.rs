@@ -26,7 +26,7 @@ use officina_host::registry::workshop::ImageRecord;
 use officina_host::spawn::BaseEnv;
 use officina_host::watch::{AUTHOR_WAIT, AuthorCommand, WatchHandle, ask, spawn};
 use officina_host::workshop::build::{BuildContext, CA_NAME as CA_NAME_IN_CONTEXT, build_images};
-use officina_host::workshop::proxy::RegistryReader;
+use officina_host::workshop::proxy::WinHttpReader;
 use officina_host::workshop::threads::{BUILD_THREAD, JobThread};
 
 use common::TestEnv;
@@ -150,7 +150,7 @@ impl BuildHome {
                 exe_dir: Some(self.exe_dir.clone()),
                 linux_override: None,
                 docker: Ok(self.engine.docker()),
-                reader: Arc::new(RegistryReader),
+                reader: Arc::new(WinHttpReader),
                 busy: Arc::clone(&self.busy),
                 now_ms: officina_host::files::now_ms,
             };

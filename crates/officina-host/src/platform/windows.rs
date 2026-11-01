@@ -293,39 +293,163 @@ pub fn registry_string(hive: Hive, key: &str, value: &str) -> Option<String> {
     }
 }
 
-/// The `REG_BINARY` value `value` of `key` under `hive`, at most 64 KiB;
-/// `None` when the key or value is missing, of another type, or larger.
-pub fn registry_binary(hive: Hive, key: &str, value: &str) -> Option<Vec<u8>> {
-    use windows_sys::Win32::Foundation::ERROR_SUCCESS;
-    use windows_sys::Win32::System::Registry::{
-        HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, RRF_RT_REG_BINARY, RegGetValueW,
+/// Windows' proxy configuration for the current user, as
+/// `WinHttpGetIEProxyConfigForCurrentUser` returns it (D-611).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct WinHttpIeConfig {
+    pub auto_detect: bool,
+    pub pac_url: Option<String>,
+    pub proxy: Option<String>,
+    pub bypass: Option<String>,
+}
+
+/// A WinHTTP string the caller owns: copied out, then released with
+/// `GlobalFree`, as the API documents for these fields.
+fn take_global_string(text: windows_sys::core::PWSTR) -> Option<String> {
+    if text.is_null() {
+        return None;
+    }
+    // SAFETY: `text` is a non-null, NUL-terminated UTF-16 string WinHTTP
+    // allocated for the caller; it is read up to its terminator, then freed
+    // exactly once with `GlobalFree` and never used again.
+    unsafe {
+        let mut len = 0usize;
+        while *text.add(len) != 0 {
+            len += 1;
+        }
+        let value = String::from_utf16_lossy(std::slice::from_raw_parts(text, len));
+        windows_sys::Win32::Foundation::GlobalFree(text.cast());
+        Some(value).filter(|v| !v.is_empty())
+    }
+}
+
+/// Reads the current user's proxy configuration with
+/// `WinHttpGetIEProxyConfigForCurrentUser` (D-611); read-only, its strings
+/// freed on every path.
+pub fn winhttp_ie_config() -> io::Result<WinHttpIeConfig> {
+    use windows_sys::Win32::Networking::WinHttp::{
+        WINHTTP_CURRENT_USER_IE_PROXY_CONFIG, WinHttpGetIEProxyConfigForCurrentUser,
     };
-    let root = match hive {
-        Hive::LocalMachine => HKEY_LOCAL_MACHINE,
-        Hive::CurrentUser => HKEY_CURRENT_USER,
-    };
-    let key: Vec<u16> = key.encode_utf16().chain(std::iter::once(0)).collect();
-    let value: Vec<u16> = value.encode_utf16().chain(std::iter::once(0)).collect();
-    let mut buf = vec![0u8; 64 * 1024];
-    let mut bytes = u32::try_from(buf.len()).unwrap_or(u32::MAX);
-    // SAFETY: `key` and `value` are NUL-terminated UTF-16 strings that
-    // outlive the call; `buf` holds `bytes` bytes, the size passed, and the
-    // call writes at most that many; the type pointer may be null.
-    let status = unsafe {
-        RegGetValueW(
-            root,
-            key.as_ptr(),
-            value.as_ptr(),
-            RRF_RT_REG_BINARY,
-            std::ptr::null_mut(),
-            buf.as_mut_ptr().cast(),
-            &mut bytes,
-        )
-    };
-    (status == ERROR_SUCCESS).then(|| {
-        buf.truncate(usize::try_from(bytes).unwrap_or(0).min(buf.len()));
-        buf
+    let mut config = WINHTTP_CURRENT_USER_IE_PROXY_CONFIG::default();
+    // SAFETY: `config` is a valid, zeroed out structure the call fills;
+    // every string it sets is taken and freed below, once.
+    let ok = unsafe { WinHttpGetIEProxyConfigForCurrentUser(&mut config) };
+    if ok == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(WinHttpIeConfig {
+        auto_detect: config.fAutoDetect != 0,
+        pac_url: take_global_string(config.lpszAutoConfigUrl),
+        proxy: take_global_string(config.lpszProxy),
+        bypass: take_global_string(config.lpszProxyBypass),
     })
+}
+
+/// What `WinHttpGetProxyForUrl` gave for one URL.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WinHttpProxyAnswer {
+    /// `WINHTTP_ACCESS_TYPE_NO_PROXY`: direct.
+    Direct,
+    /// `WINHTTP_ACCESS_TYPE_NAMED_PROXY` with its proxy list, as WinHTTP
+    /// writes it.
+    Named(String),
+    /// Automatic detection found no PAC file
+    /// (`ERROR_WINHTTP_AUTODETECTION_FAILED`).
+    NoPac,
+    /// The PAC file could not be fetched or evaluated, with the error.
+    Failed(u32),
+}
+
+/// A WinHTTP session handle, closed when dropped, on every path.
+struct WinHttpSession(*mut core::ffi::c_void);
+
+impl Drop for WinHttpSession {
+    fn drop(&mut self) {
+        if !self.0.is_null() {
+            // SAFETY: the handle came from `WinHttpOpen`, is non-null and is
+            // closed exactly once, here.
+            unsafe {
+                windows_sys::Win32::Networking::WinHttp::WinHttpCloseHandle(self.0);
+            }
+        }
+    }
+}
+
+/// Asks WinHTTP for the proxy of `url` under the PAC file `pac_url` or
+/// automatic detection, as Windows itself evaluates it (D-611): a session
+/// without a proxy of its own, each step bounded by `timeout_ms`, the
+/// answer's strings freed and the session closed on every path.
+pub fn winhttp_proxy_for_url(
+    url: &str,
+    auto_detect: bool,
+    pac_url: Option<&str>,
+    timeout_ms: i32,
+) -> WinHttpProxyAnswer {
+    use windows_sys::Win32::Networking::WinHttp::{
+        ERROR_WINHTTP_AUTODETECTION_FAILED, WINHTTP_ACCESS_TYPE_NAMED_PROXY,
+        WINHTTP_ACCESS_TYPE_NO_PROXY, WINHTTP_AUTO_DETECT_TYPE_DHCP,
+        WINHTTP_AUTO_DETECT_TYPE_DNS_A, WINHTTP_AUTOPROXY_AUTO_DETECT,
+        WINHTTP_AUTOPROXY_CONFIG_URL, WINHTTP_AUTOPROXY_OPTIONS, WINHTTP_PROXY_INFO,
+        WinHttpGetProxyForUrl, WinHttpOpen, WinHttpSetTimeouts,
+    };
+    let wide = |text: &str| -> Vec<u16> { text.encode_utf16().chain(std::iter::once(0)).collect() };
+    let agent = wide("Officina");
+    // SAFETY: `agent` is a NUL-terminated UTF-16 string that outlives the
+    // call; the proxy and bypass names may be null for this access type.
+    let session = WinHttpSession(unsafe {
+        WinHttpOpen(
+            agent.as_ptr(),
+            WINHTTP_ACCESS_TYPE_NO_PROXY,
+            std::ptr::null(),
+            std::ptr::null(),
+            0,
+        )
+    });
+    if session.0.is_null() {
+        return WinHttpProxyAnswer::Failed(
+            io::Error::last_os_error().raw_os_error().unwrap_or(0) as u32
+        );
+    }
+    // SAFETY: `session.0` is the open session handle; the call only sets
+    // its timeouts.
+    unsafe {
+        WinHttpSetTimeouts(session.0, timeout_ms, timeout_ms, timeout_ms, timeout_ms);
+    }
+    let url = wide(url);
+    let pac = pac_url.map(wide);
+    let mut options = WINHTTP_AUTOPROXY_OPTIONS::default();
+    match &pac {
+        Some(pac) => {
+            options.dwFlags = WINHTTP_AUTOPROXY_CONFIG_URL;
+            options.lpszAutoConfigUrl = pac.as_ptr();
+        }
+        None if auto_detect => {
+            options.dwFlags = WINHTTP_AUTOPROXY_AUTO_DETECT;
+            options.dwAutoDetectFlags =
+                WINHTTP_AUTO_DETECT_TYPE_DHCP | WINHTTP_AUTO_DETECT_TYPE_DNS_A;
+        }
+        None => return WinHttpProxyAnswer::NoPac,
+    }
+    options.fAutoLogonIfChallenged = 1;
+    let mut info = WINHTTP_PROXY_INFO::default();
+    // SAFETY: the session is open; `url` and the PAC URL `options` points at
+    // are NUL-terminated UTF-16 strings that outlive the call; `info` is a
+    // zeroed structure whose strings, when set, are taken and freed below.
+    let ok = unsafe { WinHttpGetProxyForUrl(session.0, url.as_ptr(), &mut options, &mut info) };
+    if ok == 0 {
+        let code = io::Error::last_os_error().raw_os_error().unwrap_or(0) as u32;
+        return if code == ERROR_WINHTTP_AUTODETECTION_FAILED {
+            WinHttpProxyAnswer::NoPac
+        } else {
+            WinHttpProxyAnswer::Failed(code)
+        };
+    }
+    let proxy = take_global_string(info.lpszProxy);
+    let _ = take_global_string(info.lpszProxyBypass);
+    match (info.dwAccessType, proxy) {
+        (WINHTTP_ACCESS_TYPE_NAMED_PROXY, Some(list)) => WinHttpProxyAnswer::Named(list),
+        _ => WinHttpProxyAnswer::Direct,
+    }
 }
 
 /// The blob of the generic credential `target` in the Windows Credential
@@ -801,6 +925,33 @@ pub fn start_in_new_console(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Story 6.25 AC 1: WinHTTP reads the current user's configuration
+    /// (whatever it holds), and asks for a URL's proxy without a PAC file
+    /// or detection only when one applies.
+    #[test]
+    fn reads_the_current_users_proxy_config() {
+        let config = winhttp_ie_config().expect("WinHTTP answers");
+        for text in [&config.pac_url, &config.proxy, &config.bypass]
+            .into_iter()
+            .flatten()
+        {
+            assert!(!text.is_empty() && !text.contains('\0'));
+        }
+        assert_eq!(
+            winhttp_proxy_for_url("https://api.anthropic.com/", false, None, 1000),
+            WinHttpProxyAnswer::NoPac
+        );
+        assert!(matches!(
+            winhttp_proxy_for_url(
+                "https://api.anthropic.com/",
+                false,
+                Some("http://127.0.0.1:9/officina-test.pac"),
+                1000
+            ),
+            WinHttpProxyAnswer::Failed(_)
+        ));
+    }
 
     /// Story 6.3 AC 1: the HKLM read the engine and git resolutions use
     /// reads a value every Windows has.

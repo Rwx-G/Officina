@@ -532,7 +532,7 @@ async fn build_images(state: State<'_, AppState>) -> Result<BuildAnswer, IpcErro
         exe_dir: state.exe_dir.clone(),
         linux_override: std::env::var_os(officina_host::workshop::ENV_LINUX_BIN_DIR),
         docker: officina_host::workshop::engine::resolve(),
-        reader: Arc::new(officina_host::workshop::proxy::RegistryReader),
+        reader: Arc::new(officina_host::workshop::proxy::WinHttpReader),
         busy: Arc::clone(&state.build_busy),
         now_ms,
     };

@@ -39,7 +39,7 @@ use officina_core::workshop::image::{BuildOutcome, GATEWAY_IMAGE, ImageKind, WOR
 use officina_core::workshop::names::ObjectName;
 use officina_host::workshop::build::{BuildReport, build_all, find_programs, plan_from, preflight};
 use officina_host::workshop::engine::{ResolvedDocker, resolve};
-use officina_host::workshop::proxy::{RegistryReader, SystemProxyReader};
+use officina_host::workshop::proxy::{SystemProxyReader, WinHttpReader};
 
 const USAGE: &str = "usage: battery_ci --floor <officina.toml> --linux <dir> --claude-version <x.y.z> [--home <dir>] [--resolve-proxy] [--worker-probe [--mount-dir <dir>]] [--keep-images]";
 const TEST_LABEL: &str = "officina-test=1";
@@ -195,7 +195,7 @@ fn main() -> ExitCode {
             return ExitCode::from(1);
         }
     };
-    let reader: Arc<dyn SystemProxyReader> = Arc::new(RegistryReader);
+    let reader: Arc<dyn SystemProxyReader> = Arc::new(WinHttpReader);
     let prepared = match preflight(&plan, &programs, &docker, Arc::clone(&reader)) {
         Ok(prepared) => prepared,
         Err(refusal) => {

@@ -25,8 +25,8 @@ project uses [Semantic Versioning](https://semver.org/).
   host's route (direct, or through a proxy) decided in core from
   `upstream_proxy` and Windows' proxy settings, refusing a SOCKS or HTTPS
   answer and a PAC file it cannot read; doctor prints the setting, its
-  source and each route. Windows' settings are read from the registry
-  until the WinHTTP reader that evaluates PAC files is approved.
+  source and each route. Windows' settings and PAC files are read and
+  evaluated through WinHTTP, as Windows does.
 
 - The workshop's entry point and packer (v0.6, story 6.7): `officina-entry
   run` clones the base, links the mounts as ignored folders, copies the

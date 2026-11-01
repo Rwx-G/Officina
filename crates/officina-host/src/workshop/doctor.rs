@@ -21,7 +21,7 @@ use crate::workshop::engine::{
     read_engine_state, resolve_binary,
 };
 use crate::workshop::git::ENV_GIT_BIN;
-use crate::workshop::proxy::{ProxyError, RegistryReader, SystemProxyReader, resolve};
+use crate::workshop::proxy::{ProxyError, SystemProxyReader, WinHttpReader, resolve};
 use officina_core::workshop::floor::UpstreamProxy;
 use officina_core::workshop::gateway::CLAUDE_CODE_HOSTS;
 use officina_core::workshop::proxy::{Route, Routes};
@@ -340,7 +340,7 @@ fn proxy_findings(facts: &ProxyFacts) -> Vec<Finding> {
     if facts.pac_or_auto_detect && !facts.evaluates_pac {
         found.push(Finding::new(
             WorkshopCheck::ProxyNotEvaluated,
-            "Windows names a PAC file or automatic detection, which this build cannot evaluate until its WinHTTP reader is approved: a PAC URL refuses launches, automatic detection is taken as finding none",
+            "Windows names a PAC file or automatic detection, which this reader cannot evaluate: a PAC URL refuses launches, automatic detection is taken as finding none",
         ));
     }
     found
@@ -442,7 +442,7 @@ pub fn gather(
             &crate::registry::store::onedrive_roots_from_env(),
             &crate::registry::store::SystemProbe,
         ),
-        proxy: proxy.map(|input| proxy_facts(input, Arc::new(RegistryReader))),
+        proxy: proxy.map(|input| proxy_facts(input, Arc::new(WinHttpReader))),
         images: None,
     };
     if let Ok((path, source)) = &facts.docker {
@@ -878,7 +878,7 @@ mod tests {
         assert!(
             lines
                 .iter()
-                .any(|c| c.level == Level::Warn && c.detail.contains("WinHTTP"))
+                .any(|c| c.level == Level::Warn && c.detail.contains("cannot evaluate"))
         );
     }
 
