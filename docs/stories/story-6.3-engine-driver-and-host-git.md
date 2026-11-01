@@ -1,6 +1,6 @@
 # Story 6.3: The engine driver, host git resolution and the fake engine
 
-**Status:** Approved
+**Status:** In Progress
 
 ## Story
 
@@ -24,16 +24,17 @@ so that no CLI path a session can reach starts a container, no child of Officina
 
 ## Tasks
 
-- [ ] `platform::windows` HKLM read and the `windows-sys` feature (AC 1)
-- [ ] `host::workshop::engine::resolve`, `host::git::resolve`; switch every git caller (AC 1)
-- [ ] `crates/officina-core/src/workshop/{engine,names}.rs`; `ContainerRole` and `ContainerVector` in `workshop/vector.rs`; `engine` section of `workshop.json`; `workshop_vectors.rs` (AC 2, 3)
-- [ ] `engine::execute`, environment rule, jobs, the Linux path, caps, deadlines (AC 4)
-- [ ] Authority split, no-feature test, CI steps (AC 5)
-- [ ] `spawn_lint.rs` to four sites (AC 6)
-- [ ] `GitRule::Workshop`, jobs, `tests/git.rs` with its controls (AC 7)
-- [ ] `officina-fake-docker`, `officina-git-logger`, their tests (AC 8)
-- [ ] Threads, engine state at start (AC 9)
-- [ ] Doctor (AC 10); `CHANGELOG.md` (AC 11)
+- [x] `platform::windows` HKLM read (already present, `Win32_System_Registry` approved for AD-36) and its test (AC 1)
+- [x] `host::workshop::engine::resolve`, the workshop's `git` resolution (`host::workshop::git::resolve`); the fingerprint and the meeting keep D-173 (D-1110) (AC 1)
+- [x] `crates/officina-core/src/workshop/{engine,names,vector}.rs`; `engine` section of `tests/vectors/workshop.json` (AC 2, 3)
+- [x] `engine::execute`, environment rule, jobs, caps, deadlines (AC 4)
+- [x] Authority split, no-feature test, CI steps (AC 5)
+- [x] `spawn_lint.rs` to four sites (AC 6)
+- [x] `GitRule::Workshop` (`host::workshop::git`), jobs, `tests/git.rs` with its controls (AC 7)
+- [x] `officina-fake-docker`, `officina-git-logger`, their tests (AC 8)
+- [ ] Threads, engine state at start (AC 9): not reached in this session
+- [ ] Doctor (AC 10): not reached in this session
+- [x] `CHANGELOG.md` (AC 11)
 
 ## Dev Notes
 
@@ -55,11 +56,26 @@ so that no CLI path a session can reach starts a container, no child of Officina
 
 ## Dev Agent Record
 
-### Debug Log
-
 ### Completion Notes
 
+- AC 1: `workshop/engine.rs::tests::{the_override_wins, a_cmd_shim_is_refused, the_source_is_reported}`, `workshop/git.rs::tests::{resolution_order_is_override_hklm_path, a_non_exe_git_is_refused}`, `platform/windows.rs::tests::reads_a_known_hklm_string`. The fingerprint and the meeting keep D-173's stricter resolution (D-1110): `relay_tree.rs` and the meeting tests are unchanged and green.
+- AC 2: core `workshop/engine.rs::tests::{every_engine_call_kind_has_a_case, engine_cases_match_their_builders, engine_outputs_parse_as_recorded, inspect_never_selects_the_environment, is_launch_names_every_kind, windows_containers_are_unavailable, a_missing_server_is_not_running, a_changed_security_option_changes_the_engine_key, create_copies_the_vector, image_env_keeps_names_only, a_name_cannot_read_as_an_option}`; `compile_fail` doctests on `EngineCall` and `ContainerVector`. The golden replay lives in core's unit tests (D-1112). `cp` out is launch (D-1111). Outputs in `workshop.json` are the workstation's engine, versions and platform names only.
+- AC 3: core `workshop/names.rs::tests::{object_names_derive_from_the_run_id, every_role_has_its_label, the_floor_key_is_the_quota_fnv, the_login_volume_and_credential_target_carry_the_floor_key}`.
+- AC 4: core `engine.rs::tests::the_environment_rule_names_every_kind`; CLI `tests/engine.rs::{seeded_session_and_credential_names_never_reach_docker, a_deadline_kills_the_child, stdout_is_capped}`. Followers and the stream are not captured (D-1112). AD-98's "a closed window leaves no docker.exe behind" rests on `run_contained`'s kill-on-close job (D-623), whose own tests cover it; no separate `closing_the_job_ends_the_child` was added.
+- AC 5: host `engine.rs::tests::execute_refuses_every_launch_kind_without_the_feature` (no-feature build only); CI steps on `core-linux` and `windows`; "officina holds no authority" green.
+- AC 6: `spawn_lint.rs::process_starts_are_expected_in_the_spawn_sites_only` lists `workshop/engine.rs` as the fourth site; the workshop's git starts through `host::git::command`, the existing site.
+- AC 7: host `workshop/git.rs::tests::{the_workshop_rule_carries_every_flag, a_non_empty_hooks_dir_is_refused, the_callers_git_names_are_removed}`; `tests/git.rs::{a_planted_hook_never_runs_under_the_workshop_rule, without_the_rule_the_planted_hook_runs, a_global_gpg_program_never_runs_on_log}` (the last with its plain-git control). A grandchild after the deadline is `run_contained`'s kill-on-close job, covered by its tests.
+- AC 8: CLI `tests/engine.rs::{the_log_is_one_json_object_per_call, version_modes_answer_as_recorded, state_survives_between_calls, formatted_inspect_never_returns_the_seeded_env, the_logger_passes_through_and_logs_argv}`. The fake reads its sidecar beside its executable, since the engine's environment is an allow list.
+- AC 9 and AC 10: open, not reached in this session (the window's `workshop` threads and engine state at start; doctor's workshop checks).
+- AC 11: `CHANGELOG.md` Added and Security.
+
 ## File List
+
+- `crates/officina-core/src/workshop/{engine,names,vector}.rs` (new), `workshop/mod.rs`, `relay/mod.rs`
+- `crates/officina-host/src/workshop/{engine,git}.rs` (new), `workshop/mod.rs`, `platform/windows.rs`, `clippy.toml`, `tests/spawn_lint.rs`, `tests/git.rs`
+- `crates/officina/src/bin/{officina-fake-docker,officina-git-logger}.rs` (new), `Cargo.toml`, `tests/engine.rs` (new)
+- `tests/vectors/workshop.json` (new)
+- `.github/workflows/ci.yml`, `CHANGELOG.md`, `docs/stories/epic-6-decisions.md` (D-1110 to D-1112), `docs/stories/sprint-status.yaml`
 
 ## Change Log
 
@@ -68,3 +84,4 @@ so that no CLI path a session can reach starts a container, no child of Officina
 - 2026-10-29 research-note entries named by subject, no number reserved (D-600)
 - 2026-10-29 the owner's answers: roles `AuthProbe` and `Scanner`, the floor's login volume and credential target named here (D-604, D-608, D-609)
 - 2026-10-29 aligned with v0.3 and v0.5 as built: the engine's environment is an allow list over the spawn module's system names (D-616, `epic-5-decisions.md` D-561, D-562); captured calls run through `process::run_contained` (D-623)
+- 2026-11-01 ACs 1 to 8 and 11 implemented; ACs 9 and 10 open; D-1110 to D-1112

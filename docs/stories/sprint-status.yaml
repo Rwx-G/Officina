@@ -189,7 +189,8 @@ stories:
   - {id: "6.1", file: story-6.1-workstation-gates.md, slice: "0", status: in-progress}
   # 6.2: done; max_usd waits on the owner's gate 6 entry (D-1109); D-1103 to D-1108 to confirm in the QA report.
   - {id: "6.2", file: story-6.2-floor-keys-and-catalogue-format.md, slice: A, status: review}
-  - {id: "6.3", file: story-6.3-engine-driver-and-host-git.md, slice: A, status: approved}
+  # 6.3: ACs 1 to 8 and 11 done; AC 9 (window threads, engine state at start) and AC 10 (doctor) open; D-1110 to D-1112 to confirm.
+  - {id: "6.3", file: story-6.3-engine-driver-and-host-git.md, slice: A, status: in-progress}
   - {id: "6.4", file: story-6.4-migration-3-and-workshop-records.md, slice: A, status: approved}
   - {id: "6.5", file: story-6.5-gateway-and-container-crate.md, slice: A, status: approved}
   - {id: "6.6", file: story-6.6-container-vectors-and-run-plan.md, slice: A, status: approved}
