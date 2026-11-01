@@ -12,6 +12,12 @@ pub const QUOTA_SCHEMA: u32 = 1;
 /// Quota data older than this is displayed as stale.
 pub const STALE_AFTER_MS: i64 = 30 * 60 * 1000;
 
+/// The statusline's name of the five-hour window, kept as the file's key.
+pub const FIVE_HOUR: &str = "five_hour";
+
+/// The statusline's name of the weekly window, kept as the file's key.
+pub const SEVEN_DAY: &str = "seven_day";
+
 /// Account key used when no config dir override applies.
 pub const DEFAULT_ACCOUNT_KEY: &str = "default";
 
@@ -26,7 +32,10 @@ pub struct QuotaWindow {
     pub resets_at: i64,
 }
 
-/// Content of `<officina home>/quota/<account key>.json`.
+/// Content of `<officina home>/quota/<account key>.json`. A window the
+/// statusline did not carry is absent from the file, never `null`: Claude
+/// Code sends each window only while the account has it, and the window
+/// shows a gauge only when the file carries it (D-1042).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct QuotaFile {
     pub schema: u32,
@@ -46,6 +55,18 @@ impl QuotaFile {
     /// writer to skip rewriting an unchanged file on every statusline tick.
     pub fn same_windows(&self, other: &QuotaFile) -> bool {
         self.five_hour == other.five_hour && self.seven_day == other.seven_day
+    }
+
+    /// The windows the file carries, by their statusline names, five-hour
+    /// first, as doctor names them.
+    pub fn window_names(&self) -> Vec<&'static str> {
+        [
+            (FIVE_HOUR, self.five_hour.is_some()),
+            (SEVEN_DAY, self.seven_day.is_some()),
+        ]
+        .into_iter()
+        .filter_map(|(name, present)| present.then_some(name))
+        .collect()
     }
 }
 
@@ -78,8 +99,8 @@ pub fn from_statusline(
     account_key: &str,
     now_s: i64,
 ) -> Option<QuotaFile> {
-    let five_hour = window(payload, "five_hour");
-    let seven_day = window(payload, "seven_day");
+    let five_hour = window(payload, FIVE_HOUR);
+    let seven_day = window(payload, SEVEN_DAY);
     if five_hour.is_none() && seven_day.is_none() {
         return None;
     }
@@ -148,6 +169,28 @@ mod tests {
         assert_eq!(file.five_hour.unwrap().used_percentage, 100.0);
         assert_eq!(file.seven_day.unwrap().resets_at, 20);
         assert_eq!(file.written_at, 7);
+    }
+
+    #[test]
+    fn a_window_the_statusline_leaves_out_is_absent_from_the_file() {
+        let payload = json!({"rate_limits": {
+            "seven_day": {"used_percentage": 41.0, "resets_at": 20}}});
+        let file = from_statusline(&payload, "k", 7).unwrap();
+        assert_eq!(file.five_hour, None);
+        assert_eq!(file.window_names(), [SEVEN_DAY]);
+        let text = serde_json::to_string(&file).unwrap();
+        assert!(!text.contains(FIVE_HOUR), "{text}");
+        // An older file with both windows still reads both.
+        let both = from_statusline(
+            &json!({"rate_limits": {
+                "five_hour": {"used_percentage": 1.0, "resets_at": 2},
+                "seven_day": {"used_percentage": 3.0, "resets_at": 4}}}),
+            "k",
+            5,
+        )
+        .unwrap();
+        let read = parse_quota_file(&serde_json::to_string(&both).unwrap()).unwrap();
+        assert_eq!(read.window_names(), [FIVE_HOUR, SEVEN_DAY]);
     }
 
     #[test]

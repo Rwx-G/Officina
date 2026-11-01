@@ -91,7 +91,24 @@ fn doctor_passes_once_the_block_is_merged() {
     assert!(text.contains("[ok  ] hooks"));
     assert!(text.contains("[ok  ] hook activity"));
     assert!(text.contains("[ok  ] quota"));
+    // The quota line names the windows the file carries (D-1042).
+    assert!(text.contains("windows five_hour and seven_day"), "{text}");
     assert!(text.contains("9.9.9"));
+
+    // A statusline without the five-hour window: the file and the line
+    // drop it, and the board carries no five-hour window.
+    env.run(
+        &["quota", "write"],
+        br#"{"session_id":"s1","rate_limits":{"seven_day":{"used_percentage":41.0,"resets_at":1800500000}}}"#,
+    );
+    let text = String::from_utf8_lossy(&env.run(&["doctor"], b"").stdout).to_string();
+    assert!(text.contains("[ok  ] quota"), "{text}");
+    assert!(text.contains("window seven_day"), "{text}");
+    assert!(!text.contains("five_hour"), "{text}");
+    let board: serde_json::Value =
+        serde_json::from_slice(&env.run(&["board", "--json"], b"").stdout).unwrap();
+    assert!(board["quota"]["five_hour"].is_null());
+    assert_eq!(board["quota"]["seven_day"]["used_percentage"], 41.0);
 }
 
 #[test]

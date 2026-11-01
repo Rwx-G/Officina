@@ -1665,9 +1665,10 @@ fn check_quota(
         .filter(|q| now - q.written_at * 1000 <= STALE_AFTER_MS)
     {
         let fresh = format!(
-            "account {} updated {} min ago",
+            "account {} updated {} min ago, {}",
             q.account_key,
-            (now / 1000 - q.written_at) / 60
+            (now / 1000 - q.written_at) / 60,
+            windows_words(q)
         );
         if user_stale.is_empty() {
             return (check(Level::Ok, "quota", fresh), Vec::new());
@@ -1683,11 +1684,14 @@ fn check_quota(
         };
         return (line, file.into_iter().collect());
     }
-    let state = format!(
-        "{} for account {}",
-        if found.is_some() { "stale" } else { "no data" },
-        collector.paths().account_key()
-    );
+    let state = match &found {
+        Some(q) => format!(
+            "stale for account {}, {}",
+            collector.paths().account_key(),
+            windows_words(q)
+        ),
+        None => format!("no data for account {}", collector.paths().account_key()),
+    };
     let overrides = statusline_overrides(
         &recent_session_folders(&collector.paths().events_dir(), now),
         exe,
@@ -1757,6 +1761,17 @@ fn check_quota(
         paste,
     };
     (line, files)
+}
+
+/// The windows a quota file carries, as the quota line names them (story
+/// 4.20, D-1042): the header shows a gauge for each and none for the
+/// others, so the line says which.
+fn windows_words(file: &officina_core::quota::QuotaFile) -> String {
+    match file.window_names().as_slice() {
+        [] => "no window".to_owned(),
+        [one] => format!("window {one}"),
+        names => format!("windows {}", names.join(" and ")),
+    }
 }
 
 /// Which permission mode each project's work orders start in (story 5.24,
