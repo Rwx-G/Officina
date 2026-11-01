@@ -305,6 +305,15 @@ impl Reader {
     pub fn proposals(&self) -> rusqlite::Result<Vec<ProposalView>> {
         proposals(&self.conn)
     }
+
+    /// The image row `name` (AD-99): doctor and `officina workshop
+    /// --json` read it.
+    pub fn workshop_image(
+        &self,
+        name: &str,
+    ) -> rusqlite::Result<Option<crate::registry::workshop::ImageRecord>> {
+        crate::registry::workshop::image(&self.conn, name)
+    }
 }
 
 /// A proposal row's columns, the order [`proposal_row`] reads.

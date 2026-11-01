@@ -14,6 +14,7 @@ pub mod proxy;
 pub mod review;
 pub mod run;
 pub mod scan;
+pub mod tar;
 pub mod vector;
 
 /// The workshop's folder under the Officina home (AD-124): run folders,

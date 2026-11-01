@@ -17,6 +17,7 @@ closed_enum! {
     pub enum EngineCallKind {
         Version,
         Info,
+        BuilderLs,
         Ps,
         Inspect,
         ImageInspect,
@@ -36,6 +37,7 @@ closed_enum! {
         Start,
         StartAttached,
         Rm,
+        ImageRm,
     }
 }
 
@@ -47,6 +49,7 @@ impl EngineCallKind {
         match self {
             EngineCallKind::Version
             | EngineCallKind::Info
+            | EngineCallKind::BuilderLs
             | EngineCallKind::Ps
             | EngineCallKind::Inspect
             | EngineCallKind::ImageInspect
@@ -65,7 +68,8 @@ impl EngineCallKind {
             | EngineCallKind::CpOut
             | EngineCallKind::Start
             | EngineCallKind::StartAttached
-            | EngineCallKind::Rm => true,
+            | EngineCallKind::Rm
+            | EngineCallKind::ImageRm => true,
         }
     }
 
@@ -75,11 +79,14 @@ impl EngineCallKind {
     pub const fn deadline_ms(self) -> Option<u64> {
         match self {
             EngineCallKind::Logs | EngineCallKind::StartAttached => None,
-            EngineCallKind::Create | EngineCallKind::Start => Some(30_000),
+            EngineCallKind::Create | EngineCallKind::Start | EngineCallKind::ImageRm => {
+                Some(30_000)
+            }
             EngineCallKind::CpIn | EngineCallKind::CpOut => Some(120_000),
             EngineCallKind::Build => Some(30 * 60 * 1000),
             EngineCallKind::Version
             | EngineCallKind::Info
+            | EngineCallKind::BuilderLs
             | EngineCallKind::Ps
             | EngineCallKind::Inspect
             | EngineCallKind::ImageInspect
@@ -219,6 +226,15 @@ impl EngineCall {
         EngineCall::new(
             EngineCallKind::Info,
             strings(["info", "--format", JSON_FORMAT]),
+        )
+    }
+
+    /// The engine's builders as JSON lines, to name the `docker`-driver
+    /// one a build passes (the gate 1 entry, D-203, review F41).
+    pub fn builder_ls() -> EngineCall {
+        EngineCall::new(
+            EngineCallKind::BuilderLs,
+            strings(["buildx", "ls", "--format", JSON_FORMAT]),
         )
     }
 
@@ -412,6 +428,40 @@ impl EngineCall {
         args.extend(containers.iter().map(|c| c.as_str().to_owned()));
         EngineCall::new(EngineCallKind::Rm, args)
     }
+
+    /// Removes an image a build refused (AD-99, D-233), by its tag.
+    pub fn image_rm(image: &ObjectName) -> EngineCall {
+        let mut args = strings(["image", "rm"]);
+        args.push(image.as_str().to_owned());
+        EngineCall::new(EngineCallKind::ImageRm, args)
+    }
+
+    /// Creates a container of `image` that is never started, so its
+    /// programs can be streamed out and measured (D-233): no network, a
+    /// read-only root, no capability, the image named by id and never
+    /// pulled.
+    pub fn create_unstarted(
+        container: &ObjectName,
+        image: &ObjectName,
+        labels: &BTreeMap<String, String>,
+    ) -> EngineCall {
+        let mut args = strings(["create", "--name"]);
+        args.push(container.as_str().to_owned());
+        args.extend(strings([
+            "--pull",
+            "never",
+            "--network",
+            "none",
+            "--read-only",
+            "--cap-drop",
+            "ALL",
+            "--security-opt",
+            "no-new-privileges:true",
+        ]));
+        args.extend(label_args(labels));
+        args.push(image.as_str().to_owned());
+        EngineCall::new(EngineCallKind::Create, args)
+    }
 }
 
 /// What reaches a `docker.exe` child of each kind (D-206 as D-616 amends
@@ -421,15 +471,24 @@ pub enum EngineEnvRule {
     /// The spawn module's contained system names found in the base, every
     /// `DOCKER_*` name, and `NoDefaultCurrentDirectoryInExePath=1`.
     SystemAndDocker,
+    /// [`EngineEnvRule::SystemAndDocker`] and `BUILDX_GIT_INFO=0`, so the
+    /// buildx plugin starts no `git` on a build context (D-1100).
+    Build,
 }
+
+/// What a build sets so buildx records no git provenance (D-1100): the
+/// plugin would otherwise start `git` from `PATH` on the context.
+pub const BUILDX_GIT_INFO: (&str, &str) = ("BUILDX_GIT_INFO", "0");
 
 /// The environment rule of `kind`, one exhaustive `match` (D-206): every
 /// kind takes the same allow list until a later story's role rule adds the
 /// one credential name to a worker's or a battery's `create` (AD-105).
 pub const fn env_rule(kind: EngineCallKind) -> EngineEnvRule {
     match kind {
+        EngineCallKind::Build => EngineEnvRule::Build,
         EngineCallKind::Version
         | EngineCallKind::Info
+        | EngineCallKind::BuilderLs
         | EngineCallKind::Ps
         | EngineCallKind::Inspect
         | EngineCallKind::ImageInspect
@@ -437,7 +496,6 @@ pub const fn env_rule(kind: EngineCallKind) -> EngineEnvRule {
         | EngineCallKind::VolumeLs
         | EngineCallKind::Logs
         | EngineCallKind::Stop
-        | EngineCallKind::Build
         | EngineCallKind::NetworkCreate
         | EngineCallKind::NetworkConnect
         | EngineCallKind::NetworkRm
@@ -448,7 +506,8 @@ pub const fn env_rule(kind: EngineCallKind) -> EngineEnvRule {
         | EngineCallKind::CpOut
         | EngineCallKind::Start
         | EngineCallKind::StartAttached
-        | EngineCallKind::Rm => EngineEnvRule::SystemAndDocker,
+        | EngineCallKind::Rm
+        | EngineCallKind::ImageRm => EngineEnvRule::SystemAndDocker,
     }
 }
 
@@ -460,20 +519,58 @@ pub const DOCKER_ENV_PREFIX: &str = "DOCKER_";
 /// compared ignoring ASCII case, the base's spelling kept, and
 /// [`crate::spawn::NO_CURRENT_DIR_VAR`] set to `1`.
 pub fn engine_env(kind: EngineCallKind, base: &[(String, String)]) -> Vec<(String, String)> {
-    let mut env: Vec<(String, String)> = match env_rule(kind) {
-        EngineEnvRule::SystemAndDocker => base
-            .iter()
-            .filter(|(name, _)| {
-                crate::spawn::CONTAINED_ENV_SYSTEM
-                    .iter()
-                    .any(|kept| kept.eq_ignore_ascii_case(name))
-                    || name.to_ascii_uppercase().starts_with(DOCKER_ENV_PREFIX)
-            })
-            .cloned()
-            .collect(),
-    };
+    let mut env: Vec<(String, String)> = base
+        .iter()
+        .filter(|(name, _)| {
+            crate::spawn::CONTAINED_ENV_SYSTEM
+                .iter()
+                .any(|kept| kept.eq_ignore_ascii_case(name))
+                || name.to_ascii_uppercase().starts_with(DOCKER_ENV_PREFIX)
+        })
+        .cloned()
+        .collect();
+    match env_rule(kind) {
+        EngineEnvRule::SystemAndDocker => {}
+        EngineEnvRule::Build => {
+            env.push((BUILDX_GIT_INFO.0.to_owned(), BUILDX_GIT_INFO.1.to_owned()));
+        }
+    }
     env.push((crate::spawn::NO_CURRENT_DIR_VAR.to_owned(), "1".to_owned()));
     env
+}
+
+/// The engine's `docker`-driver builder a build names (the gate 1 entry,
+/// D-203, review F41), from `buildx ls` as JSON lines: the current builder
+/// when its driver is `docker`; else the `docker`-driver builder named
+/// after the current builder's first endpoint, the context a
+/// `docker-container` builder runs on. `None` when neither exists: a
+/// builder that cannot see local images would build a project image on a
+/// pulled base, so the build is refused rather than guessed.
+pub fn docker_builder(output: &str) -> Option<String> {
+    let builders: Vec<serde_json::Value> = json_lines(output).collect();
+    let name = |b: &serde_json::Value| -> Option<String> {
+        let text = b.get("Name")?.as_str()?;
+        ObjectName::parse(text).map(|n| n.as_str().to_owned())
+    };
+    let is_docker = |b: &serde_json::Value| {
+        b.get("Driver").and_then(serde_json::Value::as_str) == Some("docker")
+    };
+    let current = builders
+        .iter()
+        .find(|b| b.get("Current").and_then(serde_json::Value::as_bool) == Some(true))?;
+    if is_docker(current) {
+        return name(current);
+    }
+    let endpoint = current
+        .get("Nodes")?
+        .as_array()?
+        .first()?
+        .get("Endpoint")?
+        .as_str()?;
+    builders
+        .iter()
+        .filter(|b| is_docker(b))
+        .find_map(|b| name(b).filter(|n| n == endpoint))
 }
 
 closed_enum! {
@@ -888,7 +985,8 @@ mod tests {
                     .iter()
                     .any(|s| s.eq_ignore_ascii_case(name))
                     || name.to_ascii_uppercase().starts_with(DOCKER_ENV_PREFIX)
-                    || *name == NO_CURRENT_DIR_VAR;
+                    || *name == NO_CURRENT_DIR_VAR
+                    || (*kind == EngineCallKind::Build && *name == BUILDX_GIT_INFO.0);
                 assert!(allowed, "{kind:?} passes {name}");
             }
             for system in CONTAINED_ENV_SYSTEM {
@@ -902,7 +1000,56 @@ mod tests {
                 names.iter().filter(|n| **n == NO_CURRENT_DIR_VAR).count(),
                 1
             );
+            let git_info = env
+                .iter()
+                .filter(|(n, v)| (n.as_str(), v.as_str()) == BUILDX_GIT_INFO)
+                .count();
+            assert_eq!(
+                git_info,
+                usize::from(*kind == EngineCallKind::Build),
+                "{kind:?}"
+            );
         }
+    }
+
+    /// The gate 1 entry (D-203, review F41): the current builder when it is
+    /// a `docker`-driver one, else the `docker`-driver builder of its
+    /// context, else none.
+    #[test]
+    fn the_docker_driver_builder_is_named() {
+        let line = |name: &str, driver: &str, current: bool, endpoint: &str| {
+            serde_json::json!({
+                "Name": name, "Driver": driver, "Current": current,
+                "Nodes": [{"Endpoint": endpoint, "Name": name}],
+            })
+            .to_string()
+        };
+        let desktop = [
+            line("default", "docker", false, "default"),
+            line("desktop-linux", "docker", true, "desktop-linux"),
+        ]
+        .join("\n");
+        assert_eq!(docker_builder(&desktop).as_deref(), Some("desktop-linux"));
+        let container = [
+            line("default", "docker", false, "default"),
+            line("desktop-linux", "docker", false, "desktop-linux"),
+            line("mybuilder", "docker-container", true, "desktop-linux"),
+        ]
+        .join("\n");
+        assert_eq!(docker_builder(&container).as_deref(), Some("desktop-linux"));
+        let remote = [
+            line("default", "docker", false, "default"),
+            line("remote", "remote", true, "tcp://buildkit.example.com:1234"),
+        ]
+        .join("\n");
+        assert_eq!(docker_builder(&remote), None);
+        assert_eq!(docker_builder(""), None);
+        let hostile = line("--privileged", "docker", true, "x");
+        assert_eq!(
+            docker_builder(&hostile),
+            None,
+            "a name must be an object name"
+        );
     }
 
     /// One builder call per kind, the golden cases of `workshop.json`'s
@@ -989,6 +1136,21 @@ mod tests {
                 "rm".to_owned(),
                 EngineCall::rm(std::slice::from_ref(&worker)),
             ),
+            ("builder ls".to_owned(), EngineCall::builder_ls()),
+            (
+                "image rm".to_owned(),
+                EngineCall::image_rm(&name("officina-project-01234567-api:local")),
+            ),
+            (
+                "create unstarted".to_owned(),
+                EngineCall::create_unstarted(
+                    &name("officina-measure-0123456789abcdef"),
+                    &name(
+                        "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+                    ),
+                    &labels,
+                ),
+            ),
         ]
     }
 
@@ -1063,6 +1225,7 @@ mod tests {
                 "network ls" | "volume ls" => {
                     serde_json::to_value(parse_object_rows(input)).unwrap()
                 }
+                "builder ls" => serde_json::to_value(docker_builder(input)).unwrap(),
                 other => panic!("unknown parser {other}"),
             };
             parsers.insert(case["parser"].as_str().unwrap().to_owned());
@@ -1084,6 +1247,7 @@ mod tests {
             "image inspect",
             "network ls",
             "volume ls",
+            "builder ls",
         ] {
             assert!(parsers.contains(parser), "{parser} has no output case");
         }

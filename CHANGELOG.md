@@ -8,6 +8,19 @@ project uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- The workshop's images and Build images (v0.6, story 6.8): the gateway,
+  the base and each project's image built on the engine from Dockerfiles
+  Officina ships or you approved, in that order, on the engine's
+  `docker`-driver builder, the corporate root and the proxy's route
+  reaching the builds; each image labelled with what built it and its
+  entry point and Claude Code measured in a container never started, a
+  project image replacing them or setting a reserved variable refused and
+  removed; doctor checks the Linux programs, each image, the base's Claude
+  Code, the CA label and the workers' memory. The release ships
+  `officina-gateway` and `officina-entry` under `linux/` in the portable
+  zip and the installer, with their SHA-256. The window's Build images
+  button comes with story 6.20.
+
 - The workshop's routes through a proxy (v0.6, story 6.25): each allowed
   host's route (direct, or through a proxy) decided in core from
   `upstream_proxy` and Windows' proxy settings, refusing a SOCKS or HTTPS

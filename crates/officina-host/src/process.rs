@@ -328,6 +328,209 @@ pub fn run_contained(
     })
 }
 
+/// A child that ran to its exit, with the last bytes of its output.
+#[derive(Debug)]
+pub struct Tailed {
+    pub status: ExitStatus,
+    /// The last bytes stdout and stderr wrote, interleaved as they came,
+    /// at most the cap given.
+    pub tail: Vec<u8>,
+}
+
+/// Runs `command` in a kill-on-close job with a null stdin, both output
+/// pipes drained into one buffer that keeps only the last `tail_cap`
+/// bytes: a build's progress runs to megabytes and its end says why it
+/// failed (AD-99's 64 KiB tail). Past `timeout` the child and its tree are
+/// ended.
+pub fn run_tail(
+    mut command: Command,
+    timeout: Duration,
+    tail_cap: usize,
+) -> Result<Tailed, RunError> {
+    let started = Instant::now();
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    hide_console(&mut command);
+    let mut child = command.spawn().map_err(RunError::Spawn)?;
+    let tree = match Tree::around(&child, JobRule::KillOnClose) {
+        Ok(tree) => tree,
+        Err(error) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(RunError::NotContained(error));
+        }
+    };
+    let tail = Arc::new(Mutex::new(std::collections::VecDeque::<u8>::new()));
+    let mut done = Vec::new();
+    for pipe in [
+        child
+            .stdout
+            .take()
+            .map(|p| Box::new(p) as Box<dyn Read + Send>),
+        child
+            .stderr
+            .take()
+            .map(|p| Box::new(p) as Box<dyn Read + Send>),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        let shared = Arc::clone(&tail);
+        let (sender, closed) = mpsc::channel();
+        done.push(closed);
+        std::thread::spawn(move || {
+            let mut pipe = pipe;
+            let mut chunk = [0u8; 8192];
+            loop {
+                match pipe.read(&mut chunk) {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => {
+                        let Ok(mut kept) = shared.lock() else { break };
+                        kept.extend(&chunk[..n]);
+                        let over = kept.len().saturating_sub(tail_cap);
+                        kept.drain(..over);
+                    }
+                }
+            }
+            let _ = sender.send(());
+        });
+    }
+    let status = match wait_until(&mut child, started + timeout) {
+        Waited::Exited(status) => status,
+        Waited::Deadline => {
+            tree.end(&mut child);
+            return Err(RunError::Timeout(timeout));
+        }
+        Waited::Lost(error) => {
+            tree.end(&mut child);
+            return Err(RunError::Lost(error));
+        }
+    };
+    tree.end(&mut child);
+    let drained_by = Instant::now() + Duration::from_millis(500);
+    for closed in done {
+        let _ = closed.recv_timeout(drained_by.saturating_duration_since(Instant::now()));
+    }
+    let tail = tail
+        .lock()
+        .map(|kept| kept.iter().copied().collect())
+        .unwrap_or_default();
+    Ok(Tailed { status, tail })
+}
+
+/// How a streamed child ended (D-218's reader).
+#[derive(Debug)]
+pub struct Streamed {
+    pub status: ExitStatus,
+    /// Every stdout byte the sink received.
+    pub bytes: u64,
+    /// At most the stderr cap.
+    pub stderr: Vec<u8>,
+}
+
+/// Why [`stream_contained`] stopped.
+#[derive(Debug, thiserror::Error)]
+pub enum StreamError {
+    #[error(transparent)]
+    Run(#[from] RunError),
+    /// More than the cap came: the child and its tree were ended.
+    #[error("more than {0} bytes came; the copy was stopped")]
+    TooLarge(u64),
+    /// The sink refused what it read: the child and its tree were ended.
+    #[error("the stream was refused: {0}")]
+    Refused(String),
+}
+
+/// Runs `command` in a kill-on-close job with a null stdin and hands its
+/// stdout to `sink` chunk by chunk as it comes, never keeping it: past
+/// `cap` bytes, past `timeout`, or when the sink refuses a chunk, the child
+/// and its tree are ended at once (D-218, D-623). Stderr is drained and
+/// its first `stderr_cap` bytes kept. Used for `docker cp <c>:<path> -`,
+/// whose output can be far larger than a captured call's cap.
+pub fn stream_contained(
+    mut command: Command,
+    timeout: Duration,
+    cap: u64,
+    stderr_cap: usize,
+    sink: &mut dyn FnMut(&[u8]) -> Result<(), String>,
+) -> Result<Streamed, StreamError> {
+    let started = Instant::now();
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    hide_console(&mut command);
+    let mut child = command.spawn().map_err(RunError::Spawn)?;
+    let tree = match Tree::around(&child, JobRule::KillOnClose) {
+        Ok(tree) => tree,
+        Err(error) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(RunError::NotContained(error).into());
+        }
+    };
+    let stderr = drain(child.stderr.take(), stderr_cap);
+    let (chunks, inbox) = mpsc::sync_channel::<Vec<u8>>(16);
+    if let Some(mut pipe) = child.stdout.take() {
+        std::thread::spawn(move || {
+            let mut chunk = vec![0u8; 64 * 1024];
+            loop {
+                match pipe.read(&mut chunk) {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => {
+                        if chunks.send(chunk[..n].to_vec()).is_err() {
+                            break;
+                        }
+                    }
+                }
+            }
+        });
+    }
+    let deadline = started + timeout;
+    let mut bytes: u64 = 0;
+    loop {
+        let left = deadline.saturating_duration_since(Instant::now());
+        match inbox.recv_timeout(left) {
+            Ok(chunk) => {
+                bytes += chunk.len() as u64;
+                if bytes > cap {
+                    tree.end(&mut child);
+                    return Err(StreamError::TooLarge(cap));
+                }
+                if let Err(why) = sink(&chunk) {
+                    tree.end(&mut child);
+                    return Err(StreamError::Refused(why));
+                }
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                tree.end(&mut child);
+                return Err(RunError::Timeout(timeout).into());
+            }
+        }
+    }
+    let status = match wait_until(&mut child, deadline) {
+        Waited::Exited(status) => status,
+        Waited::Deadline => {
+            tree.end(&mut child);
+            return Err(RunError::Timeout(timeout).into());
+        }
+        Waited::Lost(error) => {
+            tree.end(&mut child);
+            return Err(RunError::Lost(error).into());
+        }
+    };
+    tree.end(&mut child);
+    let _ = stderr.done.recv_timeout(Duration::from_millis(500));
+    Ok(Streamed {
+        status,
+        bytes,
+        stderr: stderr.kept().0,
+    })
+}
+
 #[cfg(all(test, windows))]
 #[expect(
     clippy::disallowed_methods,

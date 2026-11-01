@@ -374,6 +374,57 @@
         "launch": true,
         "name": "rm",
         "stdin": false
+      },
+      {
+        "args": [
+          "buildx",
+          "ls",
+          "--format",
+          "{{json .}}"
+        ],
+        "deadline_ms": 10000,
+        "kind": "builder_ls",
+        "launch": false,
+        "name": "builder ls",
+        "stdin": false
+      },
+      {
+        "args": [
+          "image",
+          "rm",
+          "officina-project-01234567-api:local"
+        ],
+        "deadline_ms": 30000,
+        "kind": "image_rm",
+        "launch": true,
+        "name": "image rm",
+        "stdin": false
+      },
+      {
+        "args": [
+          "create",
+          "--name",
+          "officina-measure-0123456789abcdef",
+          "--pull",
+          "never",
+          "--network",
+          "none",
+          "--read-only",
+          "--cap-drop",
+          "ALL",
+          "--security-opt",
+          "no-new-privileges:true",
+          "--label",
+          "officina.floor=00000000000000aa",
+          "--label",
+          "officina.managed=1",
+          "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+        ],
+        "deadline_ms": 30000,
+        "kind": "create",
+        "launch": true,
+        "name": "create unstarted",
+        "stdin": false
       }
     ],
     "outputs": [
@@ -499,9 +550,628 @@
         "input": "{\"Driver\": \"local\", \"Name\": \"officina-vol-0123456789abcdef0123456789abcdef\", \"Labels\": \"officina.managed=1\", \"Scope\": \"local\"}",
         "name": "volume ls",
         "parser": "volume ls"
+      },
+      {
+        "expect": "desktop-linux",
+        "input": "{\"Current\":false,\"Driver\":\"docker\",\"Dynamic\":false,\"Name\":\"default\",\"Nodes\":[{\"Endpoint\":\"default\",\"Name\":\"default\",\"Status\":\"running\"}]}\n{\"Current\":true,\"Driver\":\"docker\",\"Dynamic\":false,\"Name\":\"desktop-linux\",\"Nodes\":[{\"Endpoint\":\"desktop-linux\",\"Name\":\"desktop-linux\",\"Status\":\"running\"}]}\n",
+        "name": "builder ls on Docker Desktop: the current docker-driver builder",
+        "parser": "builder ls"
+      },
+      {
+        "expect": "desktop-linux",
+        "input": "{\"Current\":false,\"Driver\":\"docker\",\"Dynamic\":false,\"Name\":\"desktop-linux\",\"Nodes\":[{\"Endpoint\":\"desktop-linux\",\"Name\":\"desktop-linux\",\"Status\":\"running\"}]}\n{\"Current\":true,\"Driver\":\"docker-container\",\"Dynamic\":false,\"Name\":\"mybuilder\",\"Nodes\":[{\"Endpoint\":\"desktop-linux\",\"Name\":\"mybuilder\",\"Status\":\"running\"}]}\n",
+        "name": "builder ls with a docker-container builder current: its context's docker builder",
+        "parser": "builder ls"
       }
     ]
   },
+  "images": [
+    {
+      "expect": {
+        "ok": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "expected": {
+        "base_id": null,
+        "base_programs_sha256": null,
+        "labels": {
+          "officina.base": "workshop",
+          "officina.ca.sha256": "none",
+          "officina.claude.version": "2.1.316",
+          "officina.dockerfile.sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "officina.entry.sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "officina.gateway.sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+          "officina.version": "0.1.0",
+          "org.opencontainers.image.created": "2026-11-01T00:00:00Z"
+        }
+      },
+      "inspected": {
+        "env_names": [
+          "PATH"
+        ],
+        "id": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "labels": {
+          "officina.base": "workshop",
+          "officina.ca.sha256": "none",
+          "officina.claude.version": "2.1.316",
+          "officina.dockerfile.sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "officina.entry.sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "officina.gateway.sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+          "officina.version": "0.1.0",
+          "org.opencontainers.image.created": "2026-11-01T00:00:00Z"
+        }
+      },
+      "name": "the base as built matches",
+      "recorded": {
+        "built": true,
+        "image_id": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "programs_sha256": "pppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp"
+      }
+    },
+    {
+      "expect": {
+        "ok": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "expected": {
+        "base_id": null,
+        "base_programs_sha256": null,
+        "labels": {
+          "officina.base": "workshop",
+          "officina.ca.sha256": "none",
+          "officina.claude.version": "2.1.400",
+          "officina.dockerfile.sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "officina.entry.sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "officina.gateway.sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+          "officina.version": "0.1.0",
+          "org.opencontainers.image.created": "2026-12-01T00:00:00Z"
+        }
+      },
+      "inspected": {
+        "env_names": [
+          "PATH"
+        ],
+        "id": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "labels": {
+          "officina.base": "workshop",
+          "officina.ca.sha256": "none",
+          "officina.claude.version": "2.1.316",
+          "officina.dockerfile.sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "officina.entry.sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "officina.gateway.sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+          "officina.version": "0.1.0",
+          "org.opencontainers.image.created": "2026-11-01T00:00:00Z"
+        }
+      },
+      "name": "a newer Claude Code and build date still match",
+      "recorded": {
+        "built": true,
+        "image_id": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "programs_sha256": "pppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp"
+      }
+    },
+    {
+      "expect": {
+        "label": null,
+        "mismatch": "absent"
+      },
+      "expected": {
+        "base_id": null,
+        "base_programs_sha256": null,
+        "labels": {
+          "officina.base": "workshop",
+          "officina.ca.sha256": "none",
+          "officina.claude.version": "2.1.316",
+          "officina.dockerfile.sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "officina.entry.sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "officina.gateway.sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+          "officina.version": "0.1.0",
+          "org.opencontainers.image.created": "2026-11-01T00:00:00Z"
+        }
+      },
+      "inspected": null,
+      "name": "no such image",
+      "recorded": {
+        "built": true,
+        "image_id": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "programs_sha256": "pppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp"
+      }
+    },
+    {
+      "expect": {
+        "label": null,
+        "mismatch": "not_recorded"
+      },
+      "expected": {
+        "base_id": null,
+        "base_programs_sha256": null,
+        "labels": {
+          "officina.base": "workshop",
+          "officina.ca.sha256": "none",
+          "officina.claude.version": "2.1.316",
+          "officina.dockerfile.sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "officina.entry.sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "officina.gateway.sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+          "officina.version": "0.1.0",
+          "org.opencontainers.image.created": "2026-11-01T00:00:00Z"
+        }
+      },
+      "inspected": {
+        "env_names": [
+          "PATH"
+        ],
+        "id": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "labels": {
+          "officina.base": "workshop",
+          "officina.ca.sha256": "none",
+          "officina.claude.version": "2.1.316",
+          "officina.dockerfile.sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "officina.entry.sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "officina.gateway.sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+          "officina.version": "0.1.0",
+          "org.opencontainers.image.created": "2026-11-01T00:00:00Z"
+        }
+      },
+      "name": "an image Officina has no record of",
+      "recorded": null
+    },
+    {
+      "expect": {
+        "label": null,
+        "mismatch": "not_recorded"
+      },
+      "expected": {
+        "base_id": null,
+        "base_programs_sha256": null,
+        "labels": {
+          "officina.base": "workshop",
+          "officina.ca.sha256": "none",
+          "officina.claude.version": "2.1.316",
+          "officina.dockerfile.sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "officina.entry.sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "officina.gateway.sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+          "officina.version": "0.1.0",
+          "org.opencontainers.image.created": "2026-11-01T00:00:00Z"
+        }
+      },
+      "inspected": {
+        "env_names": [
+          "PATH"
+        ],
+        "id": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "labels": {
+          "officina.base": "workshop",
+          "officina.ca.sha256": "none",
+          "officina.claude.version": "2.1.316",
+          "officina.dockerfile.sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "officina.entry.sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "officina.gateway.sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+          "officina.version": "0.1.0",
+          "org.opencontainers.image.created": "2026-11-01T00:00:00Z"
+        }
+      },
+      "name": "a record of a failed build",
+      "recorded": {
+        "built": false,
+        "image_id": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "programs_sha256": "pppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp"
+      }
+    },
+    {
+      "expect": {
+        "label": null,
+        "mismatch": "not_recorded"
+      },
+      "expected": {
+        "base_id": null,
+        "base_programs_sha256": null,
+        "labels": {
+          "officina.base": "workshop",
+          "officina.ca.sha256": "none",
+          "officina.claude.version": "2.1.316",
+          "officina.dockerfile.sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "officina.entry.sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "officina.gateway.sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+          "officina.version": "0.1.0",
+          "org.opencontainers.image.created": "2026-11-01T00:00:00Z"
+        }
+      },
+      "inspected": {
+        "env_names": [
+          "PATH"
+        ],
+        "id": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "labels": {
+          "officina.base": "workshop",
+          "officina.ca.sha256": "none",
+          "officina.claude.version": "2.1.316",
+          "officina.dockerfile.sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "officina.entry.sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "officina.gateway.sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+          "officina.version": "0.1.0",
+          "org.opencontainers.image.created": "2026-11-01T00:00:00Z"
+        }
+      },
+      "name": "a record of another image id",
+      "recorded": {
+        "built": true,
+        "image_id": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "programs_sha256": "pppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp"
+      }
+    },
+    {
+      "expect": {
+        "label": "officina.version",
+        "mismatch": "label_differs"
+      },
+      "expected": {
+        "base_id": null,
+        "base_programs_sha256": null,
+        "labels": {
+          "officina.base": "workshop",
+          "officina.ca.sha256": "none",
+          "officina.claude.version": "2.1.316",
+          "officina.dockerfile.sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "officina.entry.sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "officina.gateway.sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+          "officina.version": "0.2.0",
+          "org.opencontainers.image.created": "2026-11-01T00:00:00Z"
+        }
+      },
+      "inspected": {
+        "env_names": [
+          "PATH"
+        ],
+        "id": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "labels": {
+          "officina.base": "workshop",
+          "officina.ca.sha256": "none",
+          "officina.claude.version": "2.1.316",
+          "officina.dockerfile.sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "officina.entry.sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "officina.gateway.sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+          "officina.version": "0.1.0",
+          "org.opencontainers.image.created": "2026-11-01T00:00:00Z"
+        }
+      },
+      "name": "another Officina version",
+      "recorded": {
+        "built": true,
+        "image_id": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "programs_sha256": "pppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp"
+      }
+    },
+    {
+      "expect": {
+        "label": "officina.ca.sha256",
+        "mismatch": "label_differs"
+      },
+      "expected": {
+        "base_id": null,
+        "base_programs_sha256": null,
+        "labels": {
+          "officina.base": "workshop",
+          "officina.ca.sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "officina.claude.version": "2.1.316",
+          "officina.dockerfile.sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "officina.entry.sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "officina.gateway.sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+          "officina.version": "0.1.0",
+          "org.opencontainers.image.created": "2026-11-01T00:00:00Z"
+        }
+      },
+      "inspected": {
+        "env_names": [
+          "PATH"
+        ],
+        "id": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "labels": {
+          "officina.base": "workshop",
+          "officina.ca.sha256": "none",
+          "officina.claude.version": "2.1.316",
+          "officina.dockerfile.sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "officina.entry.sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "officina.gateway.sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+          "officina.version": "0.1.0",
+          "org.opencontainers.image.created": "2026-11-01T00:00:00Z"
+        }
+      },
+      "name": "another CA file",
+      "recorded": {
+        "built": true,
+        "image_id": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "programs_sha256": "pppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp"
+      }
+    },
+    {
+      "expect": {
+        "label": "officina.entry.sha256",
+        "mismatch": "label_differs"
+      },
+      "expected": {
+        "base_id": null,
+        "base_programs_sha256": null,
+        "labels": {
+          "officina.base": "workshop",
+          "officina.ca.sha256": "none",
+          "officina.claude.version": "2.1.316",
+          "officina.dockerfile.sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "officina.entry.sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "officina.gateway.sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+          "officina.version": "0.1.0",
+          "org.opencontainers.image.created": "2026-11-01T00:00:00Z"
+        }
+      },
+      "inspected": {
+        "env_names": [
+          "PATH"
+        ],
+        "id": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "labels": {
+          "officina.base": "workshop",
+          "officina.ca.sha256": "none",
+          "officina.claude.version": "2.1.316",
+          "officina.dockerfile.sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "officina.gateway.sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+          "officina.version": "0.1.0",
+          "org.opencontainers.image.created": "2026-11-01T00:00:00Z"
+        }
+      },
+      "name": "a label the image lacks",
+      "recorded": {
+        "built": true,
+        "image_id": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "programs_sha256": "pppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp"
+      }
+    },
+    {
+      "expect": {
+        "ok": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "expected": {
+        "base_id": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "base_programs_sha256": "pppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp",
+        "labels": {
+          "officina.base": "workshop",
+          "officina.base.id": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "officina.ca.sha256": "none",
+          "officina.claude.version": "2.1.316",
+          "officina.dockerfile.sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "officina.entry.sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "officina.floor": "0123456789abcdef",
+          "officina.gateway.sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+          "officina.project": "api",
+          "officina.project.context.sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+          "officina.project.dockerfile.sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+          "officina.version": "0.1.0",
+          "org.opencontainers.image.created": "2026-11-01T00:00:00Z"
+        }
+      },
+      "inspected": {
+        "env_names": [
+          "PATH"
+        ],
+        "id": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "labels": {
+          "officina.base": "workshop",
+          "officina.base.id": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "officina.ca.sha256": "none",
+          "officina.claude.version": "2.1.316",
+          "officina.dockerfile.sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "officina.entry.sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "officina.floor": "0123456789abcdef",
+          "officina.gateway.sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+          "officina.project": "api",
+          "officina.project.context.sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+          "officina.project.dockerfile.sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+          "officina.version": "0.1.0",
+          "org.opencontainers.image.created": "2026-11-01T00:00:00Z"
+        }
+      },
+      "name": "a project image on the current base",
+      "recorded": {
+        "built": true,
+        "image_id": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "programs_sha256": "pppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp"
+      }
+    },
+    {
+      "expect": {
+        "label": "officina.base.id",
+        "mismatch": "base_id_differs"
+      },
+      "expected": {
+        "base_id": "sha256:9999999999999999999999999999999999999999999999999999999999999999",
+        "base_programs_sha256": "pppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp",
+        "labels": {
+          "officina.base": "workshop",
+          "officina.base.id": "sha256:9999999999999999999999999999999999999999999999999999999999999999",
+          "officina.ca.sha256": "none",
+          "officina.claude.version": "2.1.316",
+          "officina.dockerfile.sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "officina.entry.sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "officina.floor": "0123456789abcdef",
+          "officina.gateway.sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+          "officina.project": "api",
+          "officina.project.context.sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+          "officina.project.dockerfile.sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+          "officina.version": "0.1.0",
+          "org.opencontainers.image.created": "2026-11-01T00:00:00Z"
+        }
+      },
+      "inspected": {
+        "env_names": [
+          "PATH"
+        ],
+        "id": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "labels": {
+          "officina.base": "workshop",
+          "officina.base.id": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "officina.ca.sha256": "none",
+          "officina.claude.version": "2.1.316",
+          "officina.dockerfile.sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "officina.entry.sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "officina.floor": "0123456789abcdef",
+          "officina.gateway.sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+          "officina.project": "api",
+          "officina.project.context.sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+          "officina.project.dockerfile.sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+          "officina.version": "0.1.0",
+          "org.opencontainers.image.created": "2026-11-01T00:00:00Z"
+        }
+      },
+      "name": "a project image on an older base",
+      "recorded": {
+        "built": true,
+        "image_id": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "programs_sha256": "pppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp"
+      }
+    },
+    {
+      "expect": {
+        "label": "officina.project.dockerfile.sha256",
+        "mismatch": "label_differs"
+      },
+      "expected": {
+        "base_id": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "base_programs_sha256": "pppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp",
+        "labels": {
+          "officina.base": "workshop",
+          "officina.base.id": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "officina.ca.sha256": "none",
+          "officina.claude.version": "2.1.316",
+          "officina.dockerfile.sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "officina.entry.sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "officina.floor": "0123456789abcdef",
+          "officina.gateway.sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+          "officina.project": "api",
+          "officina.project.context.sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+          "officina.project.dockerfile.sha256": "3333333333333333333333333333333333333333333333333333333333333333",
+          "officina.version": "0.1.0",
+          "org.opencontainers.image.created": "2026-11-01T00:00:00Z"
+        }
+      },
+      "inspected": {
+        "env_names": [
+          "PATH"
+        ],
+        "id": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "labels": {
+          "officina.base": "workshop",
+          "officina.base.id": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "officina.ca.sha256": "none",
+          "officina.claude.version": "2.1.316",
+          "officina.dockerfile.sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "officina.entry.sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "officina.floor": "0123456789abcdef",
+          "officina.gateway.sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+          "officina.project": "api",
+          "officina.project.context.sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+          "officina.project.dockerfile.sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+          "officina.version": "0.1.0",
+          "org.opencontainers.image.created": "2026-11-01T00:00:00Z"
+        }
+      },
+      "name": "an edited project Dockerfile",
+      "recorded": {
+        "built": true,
+        "image_id": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "programs_sha256": "pppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp"
+      }
+    },
+    {
+      "expect": {
+        "label": null,
+        "mismatch": "programs_differ"
+      },
+      "expected": {
+        "base_id": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "base_programs_sha256": "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq",
+        "labels": {
+          "officina.base": "workshop",
+          "officina.base.id": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "officina.ca.sha256": "none",
+          "officina.claude.version": "2.1.316",
+          "officina.dockerfile.sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "officina.entry.sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "officina.floor": "0123456789abcdef",
+          "officina.gateway.sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+          "officina.project": "api",
+          "officina.project.context.sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+          "officina.project.dockerfile.sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+          "officina.version": "0.1.0",
+          "org.opencontainers.image.created": "2026-11-01T00:00:00Z"
+        }
+      },
+      "inspected": {
+        "env_names": [
+          "PATH"
+        ],
+        "id": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "labels": {
+          "officina.base": "workshop",
+          "officina.base.id": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "officina.ca.sha256": "none",
+          "officina.claude.version": "2.1.316",
+          "officina.dockerfile.sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "officina.entry.sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "officina.floor": "0123456789abcdef",
+          "officina.gateway.sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+          "officina.project": "api",
+          "officina.project.context.sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+          "officina.project.dockerfile.sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+          "officina.version": "0.1.0",
+          "org.opencontainers.image.created": "2026-11-01T00:00:00Z"
+        }
+      },
+      "name": "a project image whose programs are not the base's",
+      "recorded": {
+        "built": true,
+        "image_id": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "programs_sha256": "pppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp"
+      }
+    },
+    {
+      "expect": {
+        "label": null,
+        "mismatch": "programs_differ"
+      },
+      "expected": {
+        "base_id": null,
+        "base_programs_sha256": null,
+        "labels": {
+          "officina.base": "workshop",
+          "officina.ca.sha256": "none",
+          "officina.claude.version": "2.1.316",
+          "officina.dockerfile.sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "officina.entry.sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "officina.gateway.sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+          "officina.version": "0.1.0",
+          "org.opencontainers.image.created": "2026-11-01T00:00:00Z"
+        }
+      },
+      "inspected": {
+        "env_names": [
+          "PATH"
+        ],
+        "id": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "labels": {
+          "officina.base": "workshop",
+          "officina.ca.sha256": "none",
+          "officina.claude.version": "2.1.316",
+          "officina.dockerfile.sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "officina.entry.sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "officina.gateway.sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+          "officina.version": "0.1.0",
+          "org.opencontainers.image.created": "2026-11-01T00:00:00Z"
+        }
+      },
+      "name": "an image recorded without a measurement",
+      "recorded": {
+        "built": true,
+        "image_id": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "programs_sha256": null
+      }
+    }
+  ],
   "proxy": {
     "allow": [
       "api.anthropic.com",

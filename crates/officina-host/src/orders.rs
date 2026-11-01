@@ -112,7 +112,9 @@ impl CardStore {
 
 /// The approved catalogue the window's record confirms (D-175), and the
 /// floor the relay reads: what a card is issued from.
-fn catalogue(relay: &RelayHome) -> Result<(ApprovedCatalogue, RelayFloor), TemplateUnavailable> {
+pub(crate) fn catalogue(
+    relay: &RelayHome,
+) -> Result<(ApprovedCatalogue, RelayFloor), TemplateUnavailable> {
     let state = relay.read_approved();
     let current = load_relay_floor(&relay.relay_floor(&state));
     let approved = match state.approved() {

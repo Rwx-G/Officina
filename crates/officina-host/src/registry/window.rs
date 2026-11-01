@@ -566,6 +566,16 @@ impl WindowRegistry {
         self.with_writer(|writer| Ok(Ok(writer.mark_briefing_read(now_ms)?)))
     }
 
+    /// Records one image of Build images (AD-99), its build output as it
+    /// came; refused when the registry cannot be written.
+    pub fn record_workshop_image(
+        &mut self,
+        image: &crate::registry::workshop::ImageRecord,
+        build_tail: Option<&str>,
+    ) -> Result<(), IpcError> {
+        self.with_writer(|writer| Ok(Ok(writer.record_image(image, build_tail)?)))
+    }
+
     /// Records one Start of the orchestrator (AD-89, D-144); refused when
     /// the registry cannot be written.
     pub fn record_orchestrator_start(

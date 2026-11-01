@@ -948,6 +948,34 @@ way out); a service fronted inside TLS by an allowed name is reached; and
 under Encrypted ClientHello only the outer name is checked, which must
 still be an allowed host.
 
+### Images
+
+The workshop needs a Docker-compatible engine; Docker Desktop's subscription terms apply where it runs.
+
+Workers run on images Officina builds on your engine when you click Build
+images, never pulled ready-made: the gateway (`officina-gateway:local`,
+from scratch, its one program), the base every worker descends from
+(`officina-workshop:local`: Debian pinned by digest, a few packages, uv,
+Claude Code at your host's version, the entry point), then one image per
+project that declares a `dockerfile`. Officina's own Dockerfiles ship
+inside it; a project's is the one you approved, built from the files you
+approved, copied fresh. The two Linux programs come with Officina, under
+`linux/` beside `officina.exe`.
+
+A project Dockerfile's final stage descends from `officina-workshop:local`
+(an earlier stage may start from any image, for a toolchain); its own steps
+download what they download, at your risk. Each image is labelled with
+what built it, and after each build Officina measures the entry point and
+Claude Code inside it: a project image that replaces either, or sets an
+environment variable a worker's own configuration uses or one under
+`ANTHROPIC_`, `CLAUDE_CODE_` or `CLAUDE_CONFIG_`, is refused and removed. A
+launch names its image by id and checks its labels and that measurement
+first. Builds use the engine's default network and its `docker`-driver
+builder; a corporate root (`ca_file`) and your proxy's route for Claude
+Code's download host reach the base's build, which trusts the root before
+its first download. The images are per engine: one CA file per engine, or
+two floors rebuild each other's images.
+
 ### Checking the engine
 
 For a floor that declares `[workshop]`, `officina doctor` adds a workshop
@@ -956,8 +984,11 @@ starts no container): where `docker.exe` and the workshop's `git` were
 found (an override, the install location in HKLM, or `PATH`; a shim
 fails), the variables and Docker CLI settings that change what `docker`
 does, named and never valued, a `DOCKER_HOST` on plain TCP, whether the
-engine runs Linux containers and its identity, and networks and volumes
-Officina labelled that no container uses any more. The findings are the
+engine runs Linux containers and its identity, networks and volumes
+Officina labelled that no container uses any more, the Linux programs,
+each image matching or the label or measurement that differs, the base's
+Claude Code against your host's, the CA file against the images' label, and
+your workers' memory against the engine's. The findings are the
 variants of `WorkshopCheck`, each with its level.
 
 ### Approving workshop changes

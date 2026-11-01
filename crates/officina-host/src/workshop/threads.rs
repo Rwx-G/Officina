@@ -14,7 +14,7 @@ use crate::workshop::engine::{ResolveError, ResolvedDocker, read_engine_state};
 type Job = Box<dyn FnOnce() + Send>;
 
 /// One named thread that runs its jobs one at a time, in the order given.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct JobThread {
     jobs: Sender<Job>,
 }

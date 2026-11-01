@@ -29,6 +29,21 @@ pub fn battery_dir(home: &Path) -> PathBuf {
     workshop_dir(home).join("battery")
 }
 
+/// `<home>/workshop/stopped`: the workshop's stop flag (AD-116).
+pub fn stopped_file(home: &Path) -> PathBuf {
+    workshop_dir(home).join("stopped")
+}
+
+/// True when the workshop is stopped (AD-116): its flag exists, or cannot
+/// be looked at, AD-34's predicate on the workshop's own file (P-50).
+pub fn workshop_stopped(home: &Path) -> bool {
+    crate::relay::home::is_stopped(
+        std::fs::metadata(stopped_file(home))
+            .map(|_| ())
+            .map_err(|e| e.kind()),
+    )
+}
+
 /// Creates the workshop's folders on first use (AD-124), the window's
 /// alone; the empty hooks folder is refused unless empty (AD-111).
 pub fn ensure_home(home: &Path) -> Result<PathBuf, String> {
@@ -39,6 +54,7 @@ pub fn ensure_home(home: &Path) -> Result<PathBuf, String> {
     Ok(workshop_dir(home))
 }
 
+pub mod build;
 pub mod doctor;
 pub mod engine;
 pub mod files;

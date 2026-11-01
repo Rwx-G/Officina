@@ -146,6 +146,7 @@ pub enum JournalEntry {
     PromptDecided(PromptDecided),
     AutoModeDenied(AutoModeDenied),
     WorkOrderPermissionSet(WorkOrderPermissionSet),
+    WorkshopImageBuilt(WorkshopImageBuilt),
 }
 
 closed_enum! {
@@ -175,6 +176,7 @@ closed_enum! {
         PromptDecided,
         AutoModeDenied,
         WorkOrderPermissionSet,
+        WorkshopImageBuilt,
     }
 }
 
@@ -203,6 +205,7 @@ impl JournalEntry {
             JournalEntry::PromptDecided(_) => JournalKind::PromptDecided,
             JournalEntry::AutoModeDenied(_) => JournalKind::AutoModeDenied,
             JournalEntry::WorkOrderPermissionSet(_) => JournalKind::WorkOrderPermissionSet,
+            JournalEntry::WorkshopImageBuilt(_) => JournalKind::WorkshopImageBuilt,
         }
     }
 }
@@ -579,6 +582,23 @@ pub struct WorkOrderPermissionSet {
     pub mode: Option<String>,
 }
 
+/// One image of Build images, built or refused (AD-99, AD-120): the tag,
+/// the id when the engine holds one, what it is (`image_kind`: the line
+/// is tagged `kind`, so AD-120's `kind` field takes this name), how its build ended and
+/// how long it took; a `not_from_base` refusal says why (D-233). The build
+/// output stays in the registry, being untrusted text.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkshopImageBuilt {
+    pub image: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image_id: Option<String>,
+    pub image_kind: crate::workshop::image::ImageKind,
+    pub outcome: crate::workshop::image::BuildOutcome,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<crate::workshop::image::NotFromBase>,
+    pub duration_ms: i64,
+}
+
 /// A Start of the orchestrator (AD-89, D-144): how it ended, the pid it
 /// keeps when it spawned, the arguments it ran with, and why when it was
 /// refused or failed. The registry's `orchestrator_start` row holds the
@@ -940,6 +960,16 @@ mod tests {
                     mode: Some("auto".into()),
                 })
             }
+            JournalKind::WorkshopImageBuilt => {
+                JournalEntry::WorkshopImageBuilt(WorkshopImageBuilt {
+                    image: "officina-workshop:local".into(),
+                    image_id: Some(format!("sha256:{}", "a".repeat(64))),
+                    image_kind: crate::workshop::image::ImageKind::Workshop,
+                    outcome: crate::workshop::image::BuildOutcome::Built,
+                    detail: None,
+                    duration_ms: 1,
+                })
+            }
             JournalKind::PromptDecided => JournalEntry::PromptDecided(PromptDecided {
                 session_id: "0f1e2d3c-4b5a-4978-8796-a5b4c3d2e1f0".into(),
                 tool_name: None,
@@ -1171,6 +1201,36 @@ mod tests {
             (read.source, read.proposal_id),
             (AnswerSource::Author, None)
         );
+    }
+
+    /// Story 6.8 (AD-120, D-249): `workshop_image_built` reads back for
+    /// every outcome, a refusal with its detail.
+    #[test]
+    fn workshop_image_built_round_trips() {
+        use crate::workshop::image::{BuildOutcome, ImageKind, NotFromBase};
+        for outcome in BuildOutcome::ALL.iter().copied() {
+            let detail = (outcome == BuildOutcome::NotFromBase).then_some(NotFromBase::ReservedEnv);
+            let entry = JournalEntry::WorkshopImageBuilt(WorkshopImageBuilt {
+                image: "officina-project-01234567-api:local".into(),
+                image_id: (outcome == BuildOutcome::Built)
+                    .then(|| format!("sha256:{}", "a".repeat(64))),
+                image_kind: ImageKind::Project,
+                outcome,
+                detail,
+                duration_ms: 1234,
+            });
+            let line = JournalLine::new(4, entry.clone()).to_line();
+            let value: serde_json::Value = serde_json::from_str(&line).unwrap();
+            assert_eq!(value["kind"], "workshop_image_built");
+            assert_eq!(value["image_kind"], "project");
+            assert_eq!(line.matches("\"kind\"").count(), 1, "one kind key");
+            assert_eq!(value["outcome"], outcome.code());
+            assert_eq!(value.get("detail").is_some(), detail.is_some());
+            assert_eq!(
+                parse_line(line.trim_end()),
+                ParsedLine::Line(JournalLine::new(4, entry))
+            );
+        }
     }
 
     /// Story 5.24 (D-983): `work_order_permission_set` reads back for

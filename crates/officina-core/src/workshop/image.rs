@@ -204,7 +204,7 @@ pub struct ProjectLabels {
 /// What the labels of an image are made from.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LabelInputs {
-    pub kind: super::image::ImageKind,
+    pub kind: ImageKind,
     pub version: String,
     pub revision: String,
     pub created: String,
@@ -375,6 +375,158 @@ pub fn check(
         _ => {}
     }
     Ok(image.id.clone())
+}
+
+/// The host the native installer downloads Claude Code from
+/// (`network-config`, the gate 1 entry): a build takes this entry's route
+/// as its proxy build arguments (D-611).
+pub const INSTALLER_HOST: &str = "downloads.claude.ai";
+/// Where the base puts the entry point (AD-99, AD-100).
+pub const ENTRY_PATH: &str = "/opt/officina/bin/officina-entry";
+/// Where the base puts Claude Code (AD-99).
+pub const CLAUDE_PATH: &str = "/opt/officina/bin/claude";
+/// The programs measured in every base, browser and project image, in the
+/// order [`programs_sha256`] takes their digests (D-233).
+pub const MEASURED_PROGRAMS: [&str; 2] = [ENTRY_PATH, CLAUDE_PATH];
+/// The build argument carrying the host's Claude Code version (AD-99).
+pub const CLAUDE_VERSION_ARG: &str = "CLAUDE_CODE_VERSION";
+/// Docker's predefined proxy build arguments a build passes when the
+/// installer's host goes through a proxy (D-611); the engine keeps them out
+/// of the image's history.
+pub const PROXY_BUILD_ARGS: [&str; 4] = ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"];
+/// The predefined argument naming what bypasses the proxy.
+pub const NO_PROXY_BUILD_ARG: &str = "NO_PROXY";
+
+/// An image's `programs_sha256` (D-233): one digest over each measured
+/// program's path and SHA-256, in [`MEASURED_PROGRAMS`]' order, so a
+/// replaced entry point or Claude Code moves it.
+///
+/// ```
+/// use officina_core::workshop::image::programs_sha256;
+/// assert_ne!(programs_sha256(&["a".into(), "b".into()]), programs_sha256(&["b".into(), "a".into()]));
+/// ```
+pub fn programs_sha256(digests: &[String; 2]) -> String {
+    let text: String = MEASURED_PROGRAMS
+        .iter()
+        .zip(digests)
+        .map(|(path, digest)| format!("{path} {digest}\n"))
+        .collect();
+    crate::sha256_hex(text.as_bytes())
+}
+
+/// The build arguments of an Officina image (AD-99, D-611): the host's
+/// Claude Code version, and Docker's predefined proxy arguments when the
+/// installer's host has a proxy route.
+pub fn build_args(
+    claude_version: &str,
+    proxy: Option<&str>,
+) -> std::collections::BTreeMap<String, String> {
+    let mut args = std::collections::BTreeMap::from([(
+        CLAUDE_VERSION_ARG.to_owned(),
+        claude_version.to_owned(),
+    )]);
+    if let Some(proxy) = proxy {
+        let url = format!("http://{proxy}");
+        for name in PROXY_BUILD_ARGS {
+            args.insert(name.to_owned(), url.clone());
+        }
+        args.insert(
+            NO_PROXY_BUILD_ARG.to_owned(),
+            super::vector::NO_PROXY.to_owned(),
+        );
+    }
+    args
+}
+
+/// The prefixes no image `ENV` name may start with (D-233, review F13):
+/// Claude Code reads its configuration and credentials under them.
+pub const RESERVED_ENV_PREFIXES: &[&str] = &["ANTHROPIC_", "CLAUDE_CODE_", "CLAUDE_CONFIG_"];
+
+/// The first of `env_names` an image may not set (D-233, review F13): a
+/// name the worker's vector sets (derived from the builders), either
+/// credential name, or a reserved prefix, compared ignoring ASCII case.
+/// The image's `ENV` applies under the vector's names, so such a name
+/// would add a second credential or redirect the API.
+pub fn reserved_env(env_names: &[String]) -> Option<String> {
+    let mut reserved = super::vector::reserved_env_names();
+    for kind in super::floor::CredentialKind::ALL {
+        if let Some(name) = super::vector::credential_name(*kind) {
+            reserved.push(name.to_owned());
+        }
+    }
+    env_names
+        .iter()
+        .find(|name| {
+            let upper = name.to_ascii_uppercase();
+            reserved.iter().any(|r| r.eq_ignore_ascii_case(name))
+                || RESERVED_ENV_PREFIXES.iter().any(|p| upper.starts_with(p))
+        })
+        .cloned()
+}
+
+closed_enum! {
+    #[serde(rename_all = "snake_case")]
+    /// Why a built image is refused `not_from_base` and removed (AD-99,
+    /// D-233). No `BuildOutcome` variant is added for them.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+    pub enum NotFromBase {
+        /// The project Dockerfile's final stage does not descend from an
+        /// Officina base (checked before the build).
+        Stages,
+        /// The built image does not carry the base's `officina.base`.
+        NoBaseLabel,
+        /// Its measured programs are not the base's.
+        ProgramsReplaced,
+        /// Its `ENV` sets a reserved name.
+        ReservedEnv,
+    }
+}
+
+closed_enum! {
+    #[serde(rename_all = "snake_case")]
+    /// Why Build images did not start (AD-99, AD-100).
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+    #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+    pub enum BuildRefusal {
+        /// `officina-gateway` or `officina-entry` is not in `<exe
+        /// dir>/linux/` or `OFFICINA_LINUX_BIN_DIR` (AD-100).
+        LinuxProgramsMissing,
+        /// The workshop's stop flag is set (AD-116).
+        WorkshopStopped,
+        /// The floor declares no valid `[workshop]`.
+        WorkshopOff,
+        /// No catalogue was approved, or the window's record does not vouch
+        /// for it (D-175).
+        NotApproved,
+        /// The floor or a workshop file changed since its approval: a
+        /// Dockerfile, its folder or the CA file (D-244).
+        CatalogueChanged,
+        /// The host's Claude Code version is not known, so the base would
+        /// install a version nobody chose.
+        ClaudeVersionUnknown,
+        /// The engine is not a reachable Linux engine (AD-98).
+        EngineUnavailable,
+        /// The engine has no `docker`-driver builder for its context (the
+        /// gate 1 entry, review F41).
+        BuilderMissing,
+        /// The installer host's route could not be decided (D-611).
+        ProxyRefused,
+        /// A build context could not be written under the home.
+        ContextUnwritable,
+        /// A build is already running.
+        Busy,
+    }
+}
+
+/// How `build_images` was answered: queued on thread `workshop-build`,
+/// whose outcomes reach the registry and the journal per image, or refused
+/// before any build starts, with why.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(tag = "outcome", content = "detail", rename_all = "snake_case")]
+pub enum BuildAnswer {
+    Queued,
+    Refused(BuildRefusal),
 }
 
 #[cfg(test)]
@@ -602,5 +754,57 @@ mod tests {
         assert_eq!(stages("RUN x\nFROM a\n"), Err(StageError::BeforeFrom(1)));
         assert_eq!(stages("FROM\n"), Err(StageError::EmptyFrom(1)));
         assert_eq!(stages("FROM --platform=x\n"), Err(StageError::EmptyFrom(1)));
+    }
+
+    /// D-233, review F13: every name the worker's vector sets, both
+    /// credential names and each reserved prefix are refused, in any case;
+    /// the base's own `ENV` names pass.
+    #[test]
+    fn reserved_names_are_derived_from_the_builders() {
+        let mut refused: Vec<String> = crate::workshop::vector::reserved_env_names();
+        assert!(!refused.is_empty());
+        for kind in crate::workshop::floor::CredentialKind::ALL {
+            refused.extend(crate::workshop::vector::credential_name(*kind).map(str::to_owned));
+        }
+        refused.extend(RESERVED_ENV_PREFIXES.iter().map(|p| format!("{p}X")));
+        for name in refused {
+            for spelled in [name.clone(), name.to_ascii_lowercase()] {
+                let names = vec!["PATH".to_owned(), spelled.clone()];
+                assert_eq!(reserved_env(&names), Some(spelled), "{name}");
+            }
+        }
+        let base: Vec<String> = [
+            "PATH",
+            "SSL_CERT_FILE",
+            "REQUESTS_CA_BUNDLE",
+            "NODE_EXTRA_CA_CERTS",
+            "UV_NATIVE_TLS",
+        ]
+        .map(str::to_owned)
+        .to_vec();
+        assert_eq!(reserved_env(&base), None, "the base's own ENV passes");
+    }
+
+    #[test]
+    fn a_proxy_route_becomes_the_predefined_build_args() {
+        let direct = build_args("2.1.316", None);
+        assert_eq!(direct.len(), 1);
+        assert_eq!(direct[CLAUDE_VERSION_ARG], "2.1.316");
+        let routed = build_args("2.1.316", Some("proxy.example.com:8080"));
+        for name in PROXY_BUILD_ARGS {
+            assert_eq!(routed[name], "http://proxy.example.com:8080");
+        }
+        assert_eq!(
+            routed[NO_PROXY_BUILD_ARG],
+            crate::workshop::vector::NO_PROXY
+        );
+    }
+
+    #[test]
+    fn the_programs_digest_moves_with_either_program() {
+        let base = programs_sha256(&["e".repeat(64), "c".repeat(64)]);
+        assert_ne!(base, programs_sha256(&["f".repeat(64), "c".repeat(64)]));
+        assert_ne!(base, programs_sha256(&["e".repeat(64), "d".repeat(64)]));
+        assert_eq!(base, programs_sha256(&["e".repeat(64), "c".repeat(64)]));
     }
 }

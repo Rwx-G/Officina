@@ -170,6 +170,14 @@ pub enum AuthorCommand {
     /// and after each call that reads it again. Like a launch's outcome it
     /// is never dropped (D-135's outcome pattern, D-239).
     EngineState(Box<crate::workshop::engine::EngineState>),
+    /// A Build images click (AD-99): the stop flag, the approved catalogue
+    /// and the host's Claude Code version, answered with what thread
+    /// `workshop-build` builds.
+    GrantBuild,
+    /// One image's build outcome from thread `workshop-build`: its row and
+    /// journal line. Like a launch's outcome it is never dropped (D-135's
+    /// outcome pattern, D-239).
+    ImageBuilt(Box<crate::workshop::build::BuildReport>),
 }
 
 impl AuthorAnswer {
@@ -261,6 +269,20 @@ impl AuthorAnswer {
         }
     }
 
+    /// What a Build images click may build, or why not, for
+    /// `GrantBuild`'s answer.
+    pub fn into_build_grant(
+        self,
+    ) -> Result<
+        Result<crate::workshop::build::BuildPlan, officina_core::workshop::image::BuildRefusal>,
+        IpcError,
+    > {
+        match self {
+            AuthorAnswer::BuildGrant(grant) => Ok(*grant),
+            other => Err(other.unexpected()),
+        }
+    }
+
     /// The Start's ticket, refusal or "running", for `StartOrchestrator`'s
     /// answer.
     pub fn into_start(self) -> Result<StartGrant, IpcError> {
@@ -293,6 +315,11 @@ pub enum AuthorAnswer {
     Meeting(Box<MeetingGrant>),
     AnswerGrant(Box<crate::meeting::AnswerGrant>),
     Answered(officina_core::meeting::AnswerResult),
+    BuildGrant(
+        Box<
+            Result<crate::workshop::build::BuildPlan, officina_core::workshop::image::BuildRefusal>,
+        >,
+    ),
 }
 
 /// The collector's answer, or why there is none to give.
@@ -332,6 +359,7 @@ impl AuthorRequest {
                 | AuthorCommand::OrchestratorStarted(_)
                 | AuthorCommand::AnswerOutcome(_)
                 | AuthorCommand::EngineState(_)
+                | AuthorCommand::ImageBuilt(_)
         ) && now + AUTHOR_HEADROOM >= self.deadline
     }
 }
@@ -1263,6 +1291,7 @@ fn answer_author<E: Emit>(
             | AuthorCommand::IssueCard(_)
             | AuthorCommand::EditCard { .. }
             | AuthorCommand::EngineState(_)
+            | AuthorCommand::GrantBuild
     );
     let quota = outputs.board.current().map(|board| board.quota);
     let reply = match request.command {
@@ -1397,6 +1426,18 @@ fn answer_author<E: Emit>(
                 now,
             )
             .map(|grant| AuthorAnswer::AnswerGrant(Box::new(grant)))
+        }
+        AuthorCommand::GrantBuild => Ok(AuthorAnswer::BuildGrant(Box::new(
+            crate::workshop::build::grant(
+                collector.relay(),
+                &collector.paths().officina_home,
+                collector.claude_version(),
+                collector.base_env().vars(),
+            ),
+        ))),
+        AuthorCommand::ImageBuilt(report) => {
+            crate::workshop::build::record(registry, collector.relay(), &report, now)
+                .map(|()| AuthorAnswer::Done { created: None })
         }
         AuthorCommand::EngineState(state) => {
             if let Ok(mut engine) = outputs.engine.write() {

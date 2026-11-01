@@ -287,6 +287,100 @@ fn run(
     })
 }
 
+/// The build output kept as untrusted text (AD-99).
+pub const BUILD_TAIL_BYTES: usize = 64 * 1024;
+
+/// Runs `call`, a `build`, keeping the last [`BUILD_TAIL_BYTES`] of its
+/// output rather than the first (AD-99): a build's end says why it failed.
+/// Its environment is core's `Build` rule (D-1100). The window's alone.
+#[cfg(feature = "window-authority")]
+pub fn build(
+    docker: &ResolvedDocker,
+    call: &EngineCall,
+    base: &[(String, String)],
+    home: &Path,
+) -> Result<crate::process::Tailed, EngineError> {
+    if call.kind() != EngineCallKind::Build {
+        return Err(EngineError::NotCaptured(call.kind()));
+    }
+    let mut command = docker_command(docker);
+    command
+        .args(call.args())
+        .current_dir(home)
+        .env_clear()
+        .envs(engine_env(call.kind(), base));
+    let deadline = Duration::from_millis(call.deadline_ms().unwrap_or(30 * 60 * 1000));
+    crate::process::run_tail(command, deadline, BUILD_TAIL_BYTES).map_err(|cause| {
+        EngineError::Launch(LaunchError {
+            kind: call.kind(),
+            cause: Box::new(EngineError::Run(cause)),
+        })
+    })
+}
+
+/// Why a copy out gave no stream.
+#[derive(Debug, thiserror::Error)]
+pub enum StreamOutError {
+    #[error("{} is not a copy out", .0.code())]
+    NotCpOut(EngineCallKind),
+    #[error("docker cp: {0}")]
+    Stream(#[from] crate::process::StreamError),
+    /// Built without `window-authority`: only the window copies out.
+    #[error("cp out changes nothing but is a launch kind (D-1111); this build cannot")]
+    NoAuthority,
+}
+
+/// Streams `call`, a `cp` out (`docker cp <container>:<path> -`), to
+/// `sink` through D-218's capped reader: past `cap` bytes, past the kind's
+/// deadline or when the sink refuses a chunk, `docker.exe` and its tree are
+/// ended. A launch kind (D-1111): the window's alone.
+pub fn stream_out(
+    docker: &ResolvedDocker,
+    call: &EngineCall,
+    base: &[(String, String)],
+    home: &Path,
+    cap: u64,
+    sink: &mut dyn FnMut(&[u8]) -> Result<(), String>,
+) -> Result<crate::process::Streamed, StreamOutError> {
+    if call.kind() != EngineCallKind::CpOut {
+        return Err(StreamOutError::NotCpOut(call.kind()));
+    }
+    stream_launch(docker, call, base, home, cap, sink)
+}
+
+#[cfg(feature = "window-authority")]
+fn stream_launch(
+    docker: &ResolvedDocker,
+    call: &EngineCall,
+    base: &[(String, String)],
+    home: &Path,
+    cap: u64,
+    sink: &mut dyn FnMut(&[u8]) -> Result<(), String>,
+) -> Result<crate::process::Streamed, StreamOutError> {
+    let mut command = docker_command(docker);
+    command
+        .args(call.args())
+        .current_dir(home)
+        .env_clear()
+        .envs(engine_env(call.kind(), base));
+    let deadline = Duration::from_millis(call.deadline_ms().unwrap_or(120_000));
+    Ok(crate::process::stream_contained(
+        command, deadline, cap, STDERR_CAP, sink,
+    )?)
+}
+
+#[cfg(not(feature = "window-authority"))]
+fn stream_launch(
+    _docker: &ResolvedDocker,
+    _call: &EngineCall,
+    _base: &[(String, String)],
+    _home: &Path,
+    _cap: u64,
+    _sink: &mut dyn FnMut(&[u8]) -> Result<(), String>,
+) -> Result<crate::process::Streamed, StreamOutError> {
+    Err(StreamOutError::NoAuthority)
+}
+
 /// What the window knows of the engine (AD-98): read at window start, and
 /// again by the stories that launch, build and run the battery.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -486,6 +580,7 @@ mod tests {
                     false,
                 ),
                 EngineCallKind::Rm => EngineCall::rm(std::slice::from_ref(&name)),
+                EngineCallKind::ImageRm => EngineCall::image_rm(&name),
                 // `create` needs a vector only story 6.6's builders make; its
                 // kind is launch like the others, which the core test of
                 // `is_launch` proves.
@@ -508,6 +603,19 @@ mod tests {
             );
             assert!(!refused.to_string().contains(marker), "{refused}");
         }
+        // The program measurement's stream is a launch kind too (D-1111).
+        let streamed = stream_out(
+            &docker,
+            &EngineCall::cp_out(&name, "/opt/officina/bin/claude"),
+            &[],
+            dir.path(),
+            1024,
+            &mut |_| Ok(()),
+        );
+        assert!(
+            matches!(streamed, Err(StreamOutError::NoAuthority)),
+            "{streamed:?}"
+        );
         // The control: a read kind does try the missing binary.
         let read = execute(&docker, &EngineCall::version(), &[], dir.path(), None).unwrap_err();
         assert!(

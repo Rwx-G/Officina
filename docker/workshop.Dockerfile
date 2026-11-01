@@ -18,7 +18,7 @@ FROM base AS claude
 ARG CLAUDE_CODE_VERSION
 ENV CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
 RUN useradd -m -u 1000 builder
-USER builder
+USER 1000:1000
 WORKDIR /home/builder
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 RUN curl -fsSL https://claude.ai/install.sh -o install.sh \
@@ -38,12 +38,12 @@ COPY --chown=0:0 --chmod=0755 officina-entry /opt/officina/bin/officina-entry
 RUN useradd -m -u 1000 -s /bin/bash worker \
  && mkdir -p /work/.officina/in /work/.officina/out /work/.officina/home /work/.officina/config /work/.officina/mounts /work/.officina/login \
  && chown -R worker:worker /work \
- && (find / -xdev -perm /6000 -type f -exec chmod a-s {} + || true)
+ && find / -xdev -perm /6000 -type f -exec chmod a-s {} +
 ENV PATH=/opt/officina/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
     SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt \
     REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt \
     NODE_EXTRA_CA_CERTS=/etc/ssl/certs/ca-certificates.crt \
     UV_NATIVE_TLS=1
 WORKDIR /work
-USER worker
+USER 1000:1000
 ENTRYPOINT ["/opt/officina/bin/officina-entry"]

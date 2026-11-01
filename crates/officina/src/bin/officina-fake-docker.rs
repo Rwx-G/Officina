@@ -14,8 +14,11 @@
 //! `env`), `networks` and `volumes` (`name`, `labels`). Modes here:
 //! `version`, `info`, `ps`, `inspect` (formatted to state and labels when
 //! asked, the whole object with `Config.Env` otherwise), `image inspect`,
-//! `network ls`, `volume ls`; any other call is logged and exits 0. Later
-//! stories add theirs.
+//! `network ls`, `volume ls`; story 6.8's `buildx ls` (sidecar `builders`,
+//! else one current `docker`-driver builder), `build` (see [`build`]),
+//! `create` of a recorded image, `cp <container>:<path> -` streaming the
+//! program its image holds, `rm` and `image rm`; any other call is logged
+//! and exits 0. Later stories add theirs.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -78,7 +81,7 @@ fn main() {
     let argv: Vec<String> = std::env::args().skip(1).collect();
     log_call(&argv);
     let sidecar = read_json(&beside(SIDECAR));
-    let state = read_json(&beside(STATE));
+    let mut state = read_json(&beside(STATE));
     if let Some(ms) = sidecar["sleep_ms"].as_u64() {
         std::thread::sleep(Duration::from_millis(ms));
     }
@@ -185,7 +188,243 @@ fn main() {
             }
             0
         }
+        ["buildx", "ls", ..] => {
+            let default = serde_json::json!([{
+                "Name": "desktop-linux", "Driver": "docker", "Current": true,
+                "Nodes": [{"Endpoint": "desktop-linux", "Name": "desktop-linux"}],
+            }]);
+            let builders = if sidecar["builders"].is_array() {
+                &sidecar["builders"]
+            } else {
+                &default
+            };
+            for builder in builders.as_array().into_iter().flatten() {
+                println!("{builder}");
+            }
+            0
+        }
+        ["build", rest @ ..] => build(rest, &sidecar, &mut state),
+        ["create", rest @ ..] => create(rest, &mut state),
+        ["cp", source, "-"] => copy_out(source, &state),
+        ["rm", rest @ ..] => {
+            let names: Vec<&str> = rest
+                .iter()
+                .copied()
+                .filter(|a| !a.starts_with("--"))
+                .collect();
+            if let Some(containers) = state["containers"].as_array_mut() {
+                containers.retain(|c| !names.iter().any(|n| c["name"] == *n || c["id"] == *n));
+            }
+            save(&state);
+            0
+        }
+        ["image", "rm", name] => {
+            if let Some(images) = state["images"].as_array_mut() {
+                images.retain(|i| i["name"] != *name && i["id"] != *name);
+            }
+            save(&state);
+            0
+        }
         _ => 0,
     };
     std::process::exit(code);
+}
+
+fn save(state: &serde_json::Value) {
+    let _ = std::fs::write(beside(STATE), state.to_string());
+}
+
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+fn unhex(text: &str) -> Vec<u8> {
+    (0..text.len() / 2)
+        .filter_map(|i| u8::from_str_radix(text.get(2 * i..2 * i + 2)?, 16).ok())
+        .collect()
+}
+
+/// The value after each `flag` in `args`.
+fn values<'a>(args: &[&'a str], flag: &str) -> Vec<&'a str> {
+    args.windows(2)
+        .filter(|w| w[0] == flag)
+        .map(|w| w[1])
+        .collect()
+}
+
+fn pairs(items: &[&str]) -> serde_json::Map<String, serde_json::Value> {
+    items
+        .iter()
+        .filter_map(|item| item.split_once('='))
+        .map(|(k, v)| (k.to_owned(), serde_json::Value::String(v.to_owned())))
+        .collect()
+}
+
+fn push(state: &mut serde_json::Value, key: &str, item: serde_json::Value) {
+    if !state[key].is_array() {
+        state[key] = serde_json::json!([]);
+    }
+    if let Some(items) = state[key].as_array_mut() {
+        items.push(item);
+    }
+}
+
+/// `build`: an image recorded under its tag (D-223), its labels the
+/// `--label`s over those of the image its Dockerfile's last `FROM` names,
+/// its `ENV` the parent's (a fixed pair for a base on Debian, none on
+/// scratch), its programs the parent's, or for a base the context's
+/// `officina-entry` and a `claude` naming the version argument. Sidecar
+/// `build.<tag>`: `fail`, `env` (lines added), `replace` (program path to
+/// text), `drop_base_label`; `build_output` is printed first.
+fn build(args: &[&str], sidecar: &serde_json::Value, state: &mut serde_json::Value) -> i32 {
+    let tag = values(args, "--tag")
+        .first()
+        .copied()
+        .unwrap_or_default()
+        .to_owned();
+    let context = PathBuf::from(args.last().copied().unwrap_or_default());
+    let dockerfile = values(args, "--file")
+        .first()
+        .map_or_else(|| context.join("Dockerfile"), PathBuf::from);
+    let settings = &sidecar["build"][&tag];
+    if let Some(output) = sidecar["build_output"].as_str() {
+        eprintln!("{output}");
+    }
+    eprintln!("#1 building {tag}");
+    if settings["fail"].as_bool().unwrap_or(false) {
+        eprintln!("ERROR: failed to solve: process did not complete successfully");
+        return 1;
+    }
+    let text = std::fs::read_to_string(&dockerfile).unwrap_or_default();
+    let from = text
+        .lines()
+        .filter_map(|l| l.trim().strip_prefix("FROM "))
+        .next_back()
+        .and_then(|l| l.split_whitespace().next())
+        .unwrap_or_default()
+        .to_owned();
+    let parent = find(state, "images", &from).cloned();
+    let mut labels = parent
+        .as_ref()
+        .and_then(|p| p["labels"].as_object().cloned())
+        .unwrap_or_default();
+    labels.extend(pairs(&values(args, "--label")));
+    if settings["drop_base_label"].as_bool().unwrap_or(false) {
+        labels.remove("officina.base");
+    }
+    let mut env: Vec<serde_json::Value> = match &parent {
+        Some(p) => p["env"].as_array().cloned().unwrap_or_default(),
+        None if from == "scratch" => Vec::new(),
+        None => vec![
+            "PATH=/opt/officina/bin:/usr/bin:/bin".into(),
+            "SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt".into(),
+        ],
+    };
+    env.extend(settings["env"].as_array().cloned().unwrap_or_default());
+    let build_args = pairs(&values(args, "--build-arg"));
+    let mut programs = match &parent {
+        Some(p) => p["programs"].as_object().cloned().unwrap_or_default(),
+        None if from == "scratch" => serde_json::Map::new(),
+        None => {
+            let entry = std::fs::read(context.join("officina-entry")).unwrap_or_default();
+            let version = build_args
+                .get("CLAUDE_CODE_VERSION")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default();
+            serde_json::Map::from_iter([
+                (
+                    "/opt/officina/bin/officina-entry".to_owned(),
+                    hex(&entry).into(),
+                ),
+                (
+                    "/opt/officina/bin/claude".to_owned(),
+                    hex(format!("claude {version}").as_bytes()).into(),
+                ),
+            ])
+        }
+    };
+    for (path, content) in settings["replace"].as_object().into_iter().flatten() {
+        programs.insert(
+            path.clone(),
+            hex(content.as_str().unwrap_or_default().as_bytes()).into(),
+        );
+    }
+    let next = state["next_id"].as_u64().unwrap_or(1);
+    state["next_id"] = (next + 1).into();
+    let image = serde_json::json!({
+        "id": format!("sha256:{next:064x}"),
+        "name": tag,
+        "labels": labels,
+        "env": env,
+        "programs": programs,
+    });
+    if let Some(images) = state["images"].as_array_mut() {
+        images.retain(|i| i["name"] != tag);
+    }
+    push(state, "images", image);
+    save(state);
+    0
+}
+
+/// `create`: a container, `created`, of the image an argument names.
+fn create(args: &[&str], state: &mut serde_json::Value) -> i32 {
+    let name = values(args, "--name")
+        .first()
+        .copied()
+        .unwrap_or_default()
+        .to_owned();
+    if find(state, "containers", &name).is_some() {
+        eprintln!("Error: the container name is already in use");
+        return 125;
+    }
+    let image = args
+        .iter()
+        .find_map(|a| find(state, "images", a).map(|i| i["id"].clone()))
+        .unwrap_or_default();
+    let container = serde_json::json!({
+        "id": format!("c{name}"),
+        "name": name,
+        "state": "created",
+        "image": image,
+        "labels": pairs(&values(args, "--label")),
+    });
+    push(state, "containers", container);
+    save(state);
+    0
+}
+
+/// `cp <container>:<path> -`: the program the container's image holds at
+/// `path`, as a one-file ustar stream on stdout.
+fn copy_out(source: &str, state: &serde_json::Value) -> i32 {
+    let Some((name, path)) = source.split_once(':') else {
+        return 1;
+    };
+    let content = find(state, "containers", name)
+        .and_then(|c| find(state, "images", c["image"].as_str().unwrap_or_default()))
+        .and_then(|i| i["programs"][path].as_str())
+        .map(unhex);
+    let Some(bytes) = content else {
+        eprintln!("Error: Could not find the file {path} in container {name}");
+        return 1;
+    };
+    let file = path.rsplit('/').next().unwrap_or(path).as_bytes();
+    let mut header = [0u8; 512];
+    let n = file.len().min(100);
+    header[..n].copy_from_slice(&file[..n]);
+    header[100..107].copy_from_slice(b"0000755");
+    header[108..115].copy_from_slice(b"0000000");
+    header[116..123].copy_from_slice(b"0000000");
+    header[124..135].copy_from_slice(format!("{:011o}", bytes.len()).as_bytes());
+    header[136..147].copy_from_slice(b"00000000000");
+    header[156] = b'0';
+    header[257..263].copy_from_slice(b"ustar\0");
+    header[263..265].copy_from_slice(b"00");
+    header[148..156].copy_from_slice(b"        ");
+    let sum: u32 = header.iter().map(|b| u32::from(*b)).sum();
+    header[148..156].copy_from_slice(format!("{sum:06o}\0 ").as_bytes());
+    let mut out = header.to_vec();
+    out.extend_from_slice(&bytes);
+    out.resize(out.len().div_ceil(512) * 512 + 1024, 0);
+    let mut stdout = std::io::stdout().lock();
+    i32::from(stdout.write_all(&out).is_err())
 }
