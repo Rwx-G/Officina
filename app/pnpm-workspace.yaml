@@ -1,8 +1,11 @@
 # pnpm settings of the window's frontend.
 #
-# `pnpm audit` covers dev dependencies too (story 2.15). A finding is listed
-# here only when no fixed version is published, each with why it is
-# accepted and when to drop it.
+# `pnpm audit` covers dev dependencies too (story 2.15). A finding of a dev
+# dependency is listed here only when no fixed version is published, or
+# when a fixed version exists but no release of the package that pulls it
+# in accepts it yet (D-1004). Each entry says why it is accepted, when it
+# was reviewed or must be reviewed again, and when to drop it. A finding
+# in what the window ships is never listed.
 auditConfig:
   ignoreGhsas:
     # deepmerge 4.3.1, low, through @sveltejs/vite-plugin-svelte, a dev
@@ -13,3 +16,12 @@ auditConfig:
     # @sveltejs/vite-plugin-svelte 7.3.1, the newest, still depends on
     # deepmerge ^4.3.1.
     - GHSA-gcqx-w48m-w2h4
+    # minimatch 10.2.6, moderate (a denial of service through globparts
+    # amplification), reached only through ESLint and @typescript-eslint, dev
+    # dependencies that lint the repository's own files, never input from a
+    # session. minimatch 11.0.1 and later fix it, but no release accepts
+    # them yet: eslint, the newest, depends on minimatch ^10.2.6 and
+    # @typescript-eslint/typescript-estree on ^10.2.2 (npm registry,
+    # 2026-11-01). Review again by 2026-12-01, or earlier once eslint
+    # accepts minimatch 11; drop this entry then.
+    - GHSA-g3hv-75wg-m249
