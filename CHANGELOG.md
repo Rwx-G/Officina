@@ -8,6 +8,14 @@ project uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- The workshop's container vectors and run plan (v0.6, story 6.6): one
+  builder per container role, the only way a container's arguments are
+  made, each with the fixed security options, limits, labels and an
+  overridden entry point and user; a worker's environment names its
+  gateway and exactly one credential source; the run plan and its hash; the
+  allow-list per credential kind; and the login command printed for a
+  `login` floor. Nothing launches yet.
+
 - The workshop's gateway (v0.6, story 6.5): `officina-gateway`, a small
   std-only Linux program in the new `officina-container` crate, built for
   `x86_64-unknown-linux-musl` with the toolchain's own linker. It relays

@@ -830,7 +830,11 @@ mod tests {
 
     #[test]
     fn create_copies_the_vector() {
-        let vector = ContainerVector::sample(ContainerRole::Worker);
+        let vector = crate::workshop::vector::tests::sample_worker(
+            crate::workshop::floor::CredentialKind::OauthToken,
+            &[],
+            None,
+        );
         let call = EngineCall::create(&vector);
         assert_eq!(call.kind(), EngineCallKind::Create);
         assert_eq!(&call.args()[..2], ["create", "--name"]);
@@ -958,7 +962,11 @@ mod tests {
             ),
             (
                 "create".to_owned(),
-                EngineCall::create(&ContainerVector::sample(ContainerRole::Worker)),
+                EngineCall::create(&crate::workshop::vector::tests::sample_worker(
+                    crate::workshop::floor::CredentialKind::OauthToken,
+                    &[],
+                    None,
+                )),
             ),
             (
                 "cp in".to_owned(),

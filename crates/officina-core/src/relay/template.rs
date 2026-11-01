@@ -294,6 +294,27 @@ impl ApprovedTemplate {
         current: &RelayFloor,
         name: &TemplateName,
     ) -> Result<ApprovedTemplate, TemplateUnavailable> {
+        ApprovedTemplate::approve(approved, current, name, false)
+    }
+
+    /// The workshop template `name` of `approved` under [`Self::new`]'s
+    /// rules, for `ApprovedWorkshopTemplate` alone, which checks the
+    /// template's `[template.workshop]` itself (story 6.6): the work order
+    /// it validates runs only in the workshop.
+    pub(crate) fn new_for_workshop(
+        approved: &ApprovedCatalogue,
+        current: &RelayFloor,
+        name: &TemplateName,
+    ) -> Result<ApprovedTemplate, TemplateUnavailable> {
+        ApprovedTemplate::approve(approved, current, name, true)
+    }
+
+    fn approve(
+        approved: &ApprovedCatalogue,
+        current: &RelayFloor,
+        name: &TemplateName,
+        for_workshop: bool,
+    ) -> Result<ApprovedTemplate, TemplateUnavailable> {
         if current.hash != approved.hash {
             return Err(TemplateUnavailable::CatalogueChanged);
         }
@@ -302,7 +323,7 @@ impl ApprovedTemplate {
             .templates
             .get(name.as_str())
             .ok_or(TemplateUnavailable::NotApproved)?;
-        if template.workshop.is_some() {
+        if template.workshop.is_some() && !for_workshop {
             return Err(TemplateUnavailable::WorkshopOnly);
         }
         let folders = project_dirs(&current.floor, &current.floor_path);

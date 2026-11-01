@@ -857,6 +857,26 @@ max_usd = 3.0                        # optional, two decimals at most
 - `ca_file` is a PEM file of certificates only, for a network that
   inspects TLS; it is baked into the workshop's images.
 
+### What a worker holds
+
+A worker is a container of your engine, built by Officina's code from
+typed inputs only: it runs as an unprivileged user with every capability
+dropped, a read-only root file system, no new privileges, its own process,
+memory and CPU limits and a private `/tmp`; it is on a network that reaches
+its run's gateway and nothing else. It holds a clone of the base branch you
+chose (never your working tree), the folders you listed as `mounts`,
+read-only, its own Claude Code configuration folder, and exactly one
+credential: the token's name for the token kinds, whose value only the
+container's creation receives, or for a `login` floor a read-only copy of
+the login made in the workshop. It never holds your SSH keys, your git
+credentials, your user-level Claude Code settings, your other projects or
+the engine itself.
+
+Inside that container the worker runs with `bypassPermissions` and
+prompts turned off: what it may do is what its container holds, so a
+prompt would only stop it. Officina still never sets a permission mode on
+a session that runs as you on your machine.
+
 ### The gateway
 
 A worker reaches the outside through one program only, the run's gateway:
