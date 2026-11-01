@@ -193,7 +193,8 @@ stories:
   - {id: "6.3", file: story-6.3-engine-driver-and-host-git.md, slice: A, status: review}
   # 6.4: done; D-1115 to D-1117 to confirm in the QA report.
   - {id: "6.4", file: story-6.4-migration-3-and-workshop-records.md, slice: A, status: review}
-  - {id: "6.5", file: story-6.5-gateway-and-container-crate.md, slice: A, status: approved}
+  # 6.5: done; CLAUDE_CODE_HOSTS waits on the owner's gate 3 entry (D-1118); D-1118, D-1119 to confirm.
+  - {id: "6.5", file: story-6.5-gateway-and-container-crate.md, slice: A, status: review}
   - {id: "6.6", file: story-6.6-container-vectors-and-run-plan.md, slice: A, status: approved}
   - {id: "6.7", file: story-6.7-entry-point-and-packer.md, slice: A, status: approved}
   - {id: "6.8", file: story-6.8-images-and-build.md, slice: A, status: approved}

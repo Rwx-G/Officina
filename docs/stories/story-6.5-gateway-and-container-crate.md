@@ -1,6 +1,6 @@
 # Story 6.5: The gateway, the `officina-container` crate and the musl build
 
-**Status:** Approved
+**Status:** Review
 
 ## Story
 
@@ -20,12 +20,12 @@ so that the gateway and the host cannot disagree on a rule, and a regression in 
 
 ## Tasks
 
-- [ ] Workspace member `crates/officina-container`, `#[cfg(unix)]` entry modules and the Windows `main`; toolchain target; `.cargo/config.toml`; `deny.toml`; CI musl build and `-p officina-container` on both Linux steps (AC 1)
-- [ ] `crates/officina-core/src/workshop/gateway/{mod,addr,tls}.rs`, `CLAUDE_CODE_HOSTS` and its issue (AC 2 to 5)
-- [ ] `tests/vectors/gateway.json`, `crates/officina-core/tests/gateway_vectors.rs` (AC 2 to 5)
-- [ ] `crates/officina-container/src/bin/officina-gateway.rs` and its library module (AC 6)
-- [ ] `crates/officina-container/tests/gateway.rs` with the loopback test proxy and server (AC 6)
-- [ ] `CHANGELOG.md`, README (AC 7)
+- [x] Workspace member `crates/officina-container`, `#[cfg(unix)]` entry modules and the Windows `main`; toolchain target; `.cargo/config.toml`; `deny.toml`; CI musl build and `-p officina-container` on both Linux steps (AC 1)
+- [x] `crates/officina-core/src/workshop/gateway/{mod,addr,tls}.rs`, `CLAUDE_CODE_HOSTS` and its issue (AC 2 to 5)
+- [x] `tests/vectors/gateway.json`, `crates/officina-core/tests/gateway_vectors.rs` (AC 2 to 5)
+- [x] `crates/officina-container/src/bin/officina-gateway.rs` and its library module (AC 6)
+- [x] `crates/officina-container/tests/gateway.rs` with the loopback test proxy and server (AC 6)
+- [x] `CHANGELOG.md`, README (AC 7)
 
 ## Dev Notes
 
@@ -51,7 +51,20 @@ so that the gateway and the host cannot disagree on a rule, and a regression in 
 
 ### Completion Notes
 
+- AC 1: the CI steps (`core-linux` clippy and test name `-p officina-container`; the musl build on `core-linux` and `windows`, also run on the workstation and in `rust:1-bookworm`); `cargo deny` with the musl target; `tests/gateway.rs::the_crate_depends_on_core_and_serde_json_only`; `tests/entry_windows.rs::officina_entry_exits_64_on_windows`. `officina-entry` knows no subcommand yet and exits 64 everywhere (story 6.7 adds `run` and `pack`). No linker flavour flag is needed (the gate 9 entry).
+- AC 2: `gateway_vectors.rs::{request_cases_match, host_cases_match, every_refusal_has_a_case}` (the last unions the cases' refusals with the `program` section, which names the program test proving each cause the program alone decides, and compares with `GatewayRefusal::ALL`); core `workshop/floor.rs::tests::a_fixed_host_in_hosts_is_an_issue`. `CLAUDE_CODE_HOSTS` holds `api.anthropic.com` until the gate 3 entry (D-1118): the gate 3 owner half stays open.
+- AC 3: `gateway_vectors.rs::{every_range_has_a_case_inside_and_at_each_edge, embedded_ipv4_forms_are_unwrapped, the_first_ipv4_address_is_chosen}`; the tables live once in `addr.rs`, IANA named as their source. Public-address cases need a public address, so they use one outside every documentation range.
+- AC 4: `gateway_vectors.rs::client_hello_cases_match` (browser-shaped, fragmented, no SNI, two names, ECH, an overrunning length, application data, a server hello, a cut record); core `gateway/tls.rs::tests::{a_built_hello_parses_to_its_name, a_hello_split_across_records_parses, no_name_and_two_names_are_refused, plain_http_is_not_tls}`.
+- AC 5: core `gateway/mod.rs::tests::{the_limiter_trips_inside_the_window_only, args_round_trip, the_allow_list_starts_with_the_fixed_hosts, a_refused_host_is_made_printable, the_deadline_is_relative_seconds, a_route_must_name_an_allow_entry, a_407_reads_proxy_auth_required}`; `gateway_vectors.rs::line_cases_match`.
+- AC 6: `tests/gateway.rs::{upstream_mode_relays_an_allowed_host, a_routed_entry_goes_upstream_and_another_goes_direct, a_407_upstream_is_refused_with_its_status, every_refusal_reachable_offline_is_refused_with_its_cause, a_mismatched_server_name_is_refused, a_pipelined_client_hello_is_checked, an_oversized_request_is_refused, after_the_deadline_everything_is_refused, the_limit_exits_3, one_more_than_max_tunnels_is_busy, lines_are_one_json_object_each, direct_mode_refuses_localhost_as_private_address, the_started_line_reports_the_upstream_state}`, on Windows and in `rust:1-bookworm`. "Every refusal" skips, named from the enum, `no_ipv4` (a public resolver, story 6.10) and `busy`, `deadline`, `limit` (their own tests). Refusals after the `200` close without a status (D-1119).
+- AC 7: `CHANGELOG.md` Added; README "The gateway".
+
 ## File List
+
+- `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml`, `.cargo/config.toml` (new), `deny.toml`, `.github/workflows/ci.yml`
+- `crates/officina-container/` (new): `Cargo.toml`, `src/{lib,gateway}.rs`, `src/bin/{officina-gateway,officina-entry}.rs`, `tests/{gateway,entry_windows}.rs`
+- `crates/officina-core/src/workshop/gateway/{mod,addr,tls}.rs` (new), `workshop/{mod,floor}.rs`, `crates/officina-core/tests/gateway_vectors.rs` (new), `tests/vectors/gateway.json` (new)
+- `README.md`, `CHANGELOG.md`, `docs/stories/epic-6-decisions.md` (D-1118, D-1119), `docs/stories/sprint-status.yaml`
 
 ## Change Log
 
@@ -59,3 +72,4 @@ so that the gateway and the host cannot disagree on a rule, and a regression in 
 - 2026-10-28 reworked after review: a pipelined ClientHello is the one checked and forwarded (F6); `MAX_TUNNELS` and spawn failures answer `busy` (F7); the range table from IANA's registries, the first IPv4 address (F8); `--deadline-s` relative, no clock in `started` (F21); `officina-entry` on Windows, `-p officina-container` on Linux, `deny.toml` musl (F23); `CLAUDE_CODE_HOSTS` declared here, waits for the gate 3 entry (F46)
 - 2026-10-29 research-note entries named by subject, no number reserved (D-600)
 - 2026-10-29 the owner's answers: `--route` per allow-list entry replaces the single `--upstream`, each upstream's state in `started`, a `407` read as `proxy_auth_required` (D-611)
+- 2026-11-01 implemented; D-1118, D-1119; status Review (the gate 3 entry may still extend `CLAUDE_CODE_HOSTS`)
