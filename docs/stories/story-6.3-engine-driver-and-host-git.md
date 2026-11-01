@@ -1,6 +1,6 @@
 # Story 6.3: The engine driver, host git resolution and the fake engine
 
-**Status:** In Progress
+**Status:** Review
 
 ## Story
 
@@ -32,8 +32,8 @@ so that no CLI path a session can reach starts a container, no child of Officina
 - [x] `spawn_lint.rs` to four sites (AC 6)
 - [x] `GitRule::Workshop` (`host::workshop::git`), jobs, `tests/git.rs` with its controls (AC 7)
 - [x] `officina-fake-docker`, `officina-git-logger`, their tests (AC 8)
-- [ ] Threads, engine state at start (AC 9): not reached in this session
-- [ ] Doctor (AC 10): not reached in this session
+- [x] Threads, engine state at start (AC 9)
+- [x] Doctor (AC 10)
 - [x] `CHANGELOG.md` (AC 11)
 
 ## Dev Notes
@@ -66,7 +66,8 @@ so that no CLI path a session can reach starts a container, no child of Officina
 - AC 6: `spawn_lint.rs::process_starts_are_expected_in_the_spawn_sites_only` lists `workshop/engine.rs` as the fourth site; the workshop's git starts through `host::git::command`, the existing site.
 - AC 7: host `workshop/git.rs::tests::{the_workshop_rule_carries_every_flag, a_non_empty_hooks_dir_is_refused, the_callers_git_names_are_removed}`; `tests/git.rs::{a_planted_hook_never_runs_under_the_workshop_rule, without_the_rule_the_planted_hook_runs, a_global_gpg_program_never_runs_on_log}` (the last with its plain-git control). A grandchild after the deadline is `run_contained`'s kill-on-close job, covered by its tests.
 - AC 8: CLI `tests/engine.rs::{the_log_is_one_json_object_per_call, version_modes_answer_as_recorded, state_survives_between_calls, formatted_inspect_never_returns_the_seeded_env, the_logger_passes_through_and_logs_argv}`. The fake reads its sidecar beside its executable, since the engine's environment is an allow list.
-- AC 9 and AC 10: open, not reached in this session (the window's `workshop` threads and engine state at start; doctor's workshop checks).
+- AC 9: host `workshop/threads.rs::tests::jobs_run_in_order_on_the_named_thread`, `workshop/engine.rs::tests::{an_unresolved_docker_is_reported_without_a_process, a_missing_binary_is_unreachable}`; CLI `tests/watch.rs::{the_engine_state_reaches_the_collector, the_collector_never_spawns_docker}` (the first for the fake's `linux`, `down` and `windows` modes, one `version` call each; the second gives the collector both overrides in its base environment and asserts the fake engine's and the logging git's logs stay empty). `WorkshopThreads` (threads `workshop` and `workshop-build`) is compiled under `window-authority`; the window starts both and queues the engine read at start (D-1114).
+- AC 10: core `workshop/doctor.rs::tests::{every_check_has_a_title_and_a_place, findings_sort_into_the_declared_order, overrides_are_named_never_valued, a_plain_tcp_host_warns_unless_tls_is_on, docker_cli_config_entries_are_named, orphans_are_objects_whose_run_has_no_container}`; host `workshop/doctor.rs::tests::{docker_and_git_sources_are_reported, a_docker_shim_fails, overrides_are_named, docker_cli_config_entries_are_named, a_plain_tcp_docker_host_warns, windows_containers_fail, the_engine_key_is_reported_when_info_answers, the_config_path_follows_docker_config}` (the story names `doctor.rs::tests`; the section has its own module beside the engine driver rather than in the 4,500-line `doctor.rs`); CLI `tests/doctor_workshop.rs::{a_floor_without_a_workshop_runs_no_engine_call, the_workshop_section_reads_the_engine_and_counts_orphans, windows_containers_fail_doctor}` (every call doctor makes is a read kind, iterated from `EngineCallKind::ALL`). The section runs only for a floor that declares `[workshop]` (D-1113).
 - AC 11: `CHANGELOG.md` Added and Security.
 
 ## File List
@@ -76,6 +77,7 @@ so that no CLI path a session can reach starts a container, no child of Officina
 - `crates/officina/src/bin/{officina-fake-docker,officina-git-logger}.rs` (new), `Cargo.toml`, `tests/engine.rs` (new)
 - `tests/vectors/workshop.json` (new)
 - `.github/workflows/ci.yml`, `CHANGELOG.md`, `docs/stories/epic-6-decisions.md` (D-1110 to D-1112), `docs/stories/sprint-status.yaml`
+- ACs 9 and 10: `crates/officina-core/src/workshop/doctor.rs` (new), `crates/officina-host/src/workshop/{threads,doctor}.rs` (new), `workshop/{mod,engine,git}.rs`, `watch.rs`, `collector.rs`, `doctor.rs`; `app/src-tauri/src/main.rs`; `crates/officina/tests/common/workshop.rs` (new), `tests/common/mod.rs`, `tests/watch.rs`, `tests/doctor_workshop.rs` (new); `README.md`, `CHANGELOG.md`, `docs/stories/epic-6-decisions.md` (D-1113, D-1114)
 
 ## Change Log
 
@@ -85,3 +87,4 @@ so that no CLI path a session can reach starts a container, no child of Officina
 - 2026-10-29 the owner's answers: roles `AuthProbe` and `Scanner`, the floor's login volume and credential target named here (D-604, D-608, D-609)
 - 2026-10-29 aligned with v0.3 and v0.5 as built: the engine's environment is an allow list over the spawn module's system names (D-616, `epic-5-decisions.md` D-561, D-562); captured calls run through `process::run_contained` (D-623)
 - 2026-11-01 ACs 1 to 8 and 11 implemented; ACs 9 and 10 open; D-1110 to D-1112
+- 2026-11-01 ACs 9 and 10 implemented (threads `workshop` and `workshop-build`, the engine state at start, doctor's workshop section); D-1113, D-1114; status Review
