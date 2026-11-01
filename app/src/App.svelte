@@ -200,7 +200,7 @@
     {#if !board}
       <main class="loading" data-testid="loading">Asking Claude Code for its sessions...</main>
     {:else if windowView.mode === "focus"}
-      <FocusList {board} {store} onApprovals={() => windowView.setMode("board")} />
+      <FocusList {board} {store} onApprovals={() => windowView.setMode("board")} base={windowView.base} />
     {:else if scene}
       <main class="sessions-area" data-testid="sessions-area" in:fadeMotion>
         <Scene

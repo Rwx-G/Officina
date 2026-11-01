@@ -12,14 +12,17 @@
   import type { Board } from "../lib/generated/Board";
   import type { Card } from "../lib/generated/Card";
   import { outcomeText, visibleOutcome } from "../lib/outcome";
+  import type { Base } from "../lib/view.svelte";
 
   interface Props {
     board: Board;
     store: BoardStore;
     /** Opens the approvals where they are decided: Board mode. */
     onApprovals: () => void;
+    /** The mode Focus hides, which `f` brings back. */
+    base?: Base;
   }
-  let { board, store, onApprovals }: Props = $props();
+  let { board, store, onApprovals, base = "board" }: Props = $props();
 
   let approvals = $derived(board.approvals.length);
   let needsYou = $derived(board.columns.needs_you);
@@ -81,7 +84,23 @@
     </ul>
   {/if}
   {#if nothing}
-    <p class="quiet" data-testid="focus-nothing">Nothing waits for you.</p>
+    <!-- The empty state (story 4.20, D-1043): centred, a calm drawing in
+         the theme's own colours, what Focus will show and the key that
+         leaves it. Static, like the rest of Focus. -->
+    <section class="empty" data-testid="focus-nothing" aria-labelledby="focus-nothing-title">
+      <svg class="calm" viewBox="0 0 120 96" width="120" height="96" aria-hidden="true" data-testid="focus-nothing-art">
+        <ellipse class="shadow" cx="60" cy="86" rx="38" ry="5" />
+        <rect class="tray" x="22" y="40" width="76" height="40" rx="6" />
+        <path class="tray-lip" d="M22 58h22l5 8h22l5-8h22" />
+        <circle class="disc" cx="60" cy="30" r="20" />
+        <path class="tick" d="M51 30.5l6.5 6.5L70 24" />
+      </svg>
+      <h2 id="focus-nothing-title" class="headline">Nothing waits for you</h2>
+      <p class="secondary">
+        Sessions that need you, your turns and approvals show up here as they come. Press <kbd>F</kbd> to go back to the
+        {base === "scene" ? "scene" : "board"}.
+      </p>
+    </section>
   {/if}
   <p class="quiet" data-testid="focus-working">{plural(working, "session", "sessions")} working</p>
 </main>
@@ -203,5 +222,65 @@
   .quiet {
     margin: 16px 0 0;
     color: var(--color-text-muted);
+  }
+  .empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    min-height: 52vh;
+    padding: 24px 0 8px;
+    text-align: center;
+  }
+  .empty + .quiet {
+    text-align: center;
+  }
+  .calm {
+    margin-bottom: 6px;
+  }
+  .shadow {
+    fill: var(--color-border);
+    opacity: 0.6;
+  }
+  .tray {
+    fill: var(--color-surface);
+    stroke: var(--color-border);
+    stroke-width: 2;
+  }
+  .tray-lip {
+    fill: none;
+    stroke: var(--color-border);
+    stroke-width: 2;
+    stroke-linejoin: round;
+  }
+  .disc {
+    fill: var(--color-surface);
+    stroke: var(--color-working);
+    stroke-width: 2.5;
+  }
+  .tick {
+    fill: none;
+    stroke: var(--color-working);
+    stroke-width: 3.5;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+  .headline {
+    margin: 0;
+    color: var(--color-text);
+    font-size: 22px;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+  }
+  .secondary {
+    max-width: 420px;
+    margin: 0;
+    color: var(--color-text-muted);
+  }
+  .secondary kbd {
+    min-width: 0;
+    padding: 0 6px;
+    font-size: 13px;
   }
 </style>

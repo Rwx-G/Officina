@@ -284,6 +284,92 @@ test.describe("modes", () => {
     await sceneSettled(page);
   });
 
+  // Story 4.20 item 4 (D-1043): with nothing waiting, Focus shows a
+  // centred empty state, a static drawing in the theme's colours, a
+  // headline and what Focus will show with the key that leaves it.
+  for (const theme of ["light", "dark"] as const) {
+    test(`Focus with nothing waiting shows a centred empty state, ${theme}`, async ({ page }) => {
+      await page.emulateMedia({ colorScheme: theme });
+      await page.setViewportSize({ width: 1920, height: 1032 });
+      const board = loadBoard("empty");
+      await openFocus(page, board);
+      // Focus fades in once (D-545); then nothing runs.
+      await page.clock.runFor(1_000);
+      await transitionsDone(page);
+      const empty = page.getByTestId("focus-nothing");
+      await expect(empty.getByRole("heading", { name: "Nothing waits for you" })).toBeVisible();
+      await expect(empty).toContainText("Sessions that need you, your turns and approvals show up here as they come.");
+      await expect(empty).toContainText("Press F to go back to the board.");
+      await expect(page.getByTestId("focus-working")).toHaveText("0 sessions working");
+      const facts = await empty.evaluate((section) => {
+        const box = section.getBoundingClientRect();
+        const header = document.querySelector("header.bar")!.getBoundingClientRect();
+        const art = section.querySelector("svg")!;
+        const root = getComputedStyle(document.documentElement);
+        const colour = (name: string) => {
+          const probe = document.createElement("span");
+          probe.style.color = `var(${name})`;
+          document.body.append(probe);
+          const value = getComputedStyle(probe).color;
+          probe.remove();
+          return value;
+        };
+        return {
+          centreX: box.left + box.width / 2,
+          // The page's content box: the scrollbar's kept room is not page.
+          viewportCentre: document.body.getBoundingClientRect().left + document.body.getBoundingClientRect().width / 2,
+          artCentreX: art.getBoundingClientRect().left + art.getBoundingClientRect().width / 2,
+          top: box.top - header.bottom,
+          bottom: box.bottom,
+          height: window.innerHeight,
+          headline: getComputedStyle(section.querySelector("h2")!).color,
+          secondary: getComputedStyle(section.querySelector("p")!).color,
+          text: colour("--color-text"),
+          muted: colour("--color-text-muted"),
+          tick: getComputedStyle(art.querySelector(".tick")!).stroke,
+          working: colour("--color-working"),
+          images: section.querySelectorAll("img, image, use").length,
+          animations: document.getAnimations().filter((a) => a.playState === "running").length,
+          theme: root.getPropertyValue("color-scheme").trim(),
+        };
+      });
+      // Centred on the page, below the header, inside the window.
+      expect(Math.abs(facts.centreX - facts.viewportCentre)).toBeLessThanOrEqual(1);
+      expect(Math.abs(facts.artCentreX - facts.viewportCentre)).toBeLessThanOrEqual(1);
+      expect(facts.top).toBeGreaterThanOrEqual(0);
+      expect(facts.bottom).toBeLessThanOrEqual(facts.height);
+      // Drawn from the tokens of the theme, nothing loaded, nothing moving
+      // (FR-9).
+      expect(facts.theme).toBe(theme);
+      expect(facts.headline).toBe(facts.text);
+      expect(facts.secondary).toBe(facts.muted);
+      expect(facts.tick).toBe(facts.working);
+      expect(facts.images).toBe(0);
+      expect(facts.animations).toBe(0);
+      // The key it names leaves Focus for the base.
+      await page.keyboard.press("f");
+      await expect(focusList(page)).toHaveCount(0);
+      await expect(boardColumns(page)).toBeVisible();
+    });
+  }
+
+  test("Focus's empty state names the scene when Focus hides the scene", async ({ page }) => {
+    await page.addInitScript(
+      ([key, value]) => localStorage.setItem(key, value),
+      [VIEW_STORAGE_KEY, serialiseViewState({ ...defaultViewState(), base: "scene", focus: true })] as const,
+    );
+    const board = loadBoard("empty");
+    await page.clock.install({ time: board.generated_at_ms });
+    await page.addInitScript((b) => (window.__officinaBoard = b), board);
+    await page.goto("/");
+    await expect(page.getByTestId("focus-nothing")).toContainText("Press F to go back to the scene.");
+  });
+
+  test("Focus with something waiting shows no empty state", async ({ page }) => {
+    await openFocus(page, loadBoard("scene-c"));
+    await expect(page.getByTestId("focus-nothing")).toHaveCount(0);
+  });
+
   test("Focus lists Needs you then Your turn, with Working as a count", async ({ page }) => {
     const board = loadBoard("scene-c");
     await openFocus(page, board);
