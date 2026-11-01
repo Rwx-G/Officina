@@ -51,7 +51,11 @@ async function reported(code: string, file: string): Promise<string[]> {
   return (result?.messages ?? []).map((m) => m.ruleId ?? "");
 }
 
-describe("scene lint", () => {
+// The first case to run loads ESLint's parsers and plugins: 4 s alone and
+// 5.7 s beside the other files on the workstation, against 0.1 s for the
+// same work once loaded; past Vitest's 5 s default for a cost that is
+// ESLint's, not the scene's (D-1070).
+describe("scene lint", { timeout: 20_000 }, () => {
   it("each restricted name is reported under both scene globs and not outside them", async () => {
     const restricted = await snippets(INSIDE[0]!);
     expect(restricted.length).toBeGreaterThan(0);

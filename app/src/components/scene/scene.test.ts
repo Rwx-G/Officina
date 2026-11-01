@@ -144,15 +144,17 @@ describe("Scene", () => {
     expect(REGISTER.rows).toBe(MAX_NUMBER);
   });
 
-  it("one halo per employee in the decision office or the alert room", () => {
-    for (const { name, board: b } of fixtureBoards()) {
-      const { container, unmount } = renderScene(b);
-      const layout = layoutScene({ board: b }, emptyMemory(b.floor));
-      const expected = layout.employees.filter((e) => (e.zone === "decision" || e.zone === "alert") && e.at !== null).map((e) => e.key);
-      const halos = [...container.querySelectorAll("[data-halo]")].map((h) => h.getAttribute("data-halo"));
-      expect(halos.sort(), name).toEqual(expected.sort());
-      unmount();
-    }
+  // The fixture cases below are one case per fixture board, not one loop
+  // over them all: a render grows with every fixture a story adds, and a
+  // loop crossed Vitest's 5 s budget on the hosted Windows runner (D-1070).
+  // They still run in the board order, sharing the run's memory.
+  it.each(fixtureBoards())("one halo per employee in the decision office or the alert room ($name)", ({ name, board: b }) => {
+    const { container, unmount } = renderScene(b);
+    const layout = layoutScene({ board: b }, emptyMemory(b.floor));
+    const expected = layout.employees.filter((e) => (e.zone === "decision" || e.zone === "alert") && e.at !== null).map((e) => e.key);
+    const halos = [...container.querySelectorAll("[data-halo]")].map((h) => h.getAttribute("data-halo"));
+    expect(halos.sort(), name).toEqual(expected.sort());
+    unmount();
   });
 
   it("a halo in the alert room uses the alert colour", () => {
@@ -198,49 +200,43 @@ describe("Scene", () => {
     expect(quiet.container.querySelector("[data-beacon]")).toBeNull();
   });
 
-  it("one button per target with its accessible name", () => {
-    for (const { name, board: b } of fixtureBoards()) {
-      const { container, layout, unmount } = renderWithLayout(b);
-      const buttons = buttonsOf(container);
-      expect(buttons.length, name).toBe(layout.targets.length);
-      for (const target of layout.targets) {
-        const button = buttons.find((x) => x.dataset.target === target.id);
-        expect(button, `${name} ${target.id}`).toBeDefined();
-        expect(button!.getAttribute("aria-label"), target.id).toBe(target.label);
-        expect(button!.type).toBe("button");
-        if (target.kind === "figure") expect(button!.dataset.key, target.id).toBe(target.keys[0]);
-        else expect(button!.hasAttribute("data-key"), target.id).toBe(false);
-        // At its rectangle, in logical px under the shared transform.
-        expect([button!.style.left, button!.style.top, button!.style.width, button!.style.height], target.id).toEqual(
-          [target.rect.x, target.rect.y, target.rect.w, target.rect.h].map((v) => `${v}px`),
-        );
-      }
-      unmount();
+  it.each(fixtureBoards())("one button per target with its accessible name ($name)", ({ name, board: b }) => {
+    const { container, layout, unmount } = renderWithLayout(b);
+    const buttons = buttonsOf(container);
+    expect(buttons.length, name).toBe(layout.targets.length);
+    for (const target of layout.targets) {
+      const button = buttons.find((x) => x.dataset.target === target.id);
+      expect(button, `${name} ${target.id}`).toBeDefined();
+      expect(button!.getAttribute("aria-label"), target.id).toBe(target.label);
+      expect(button!.type).toBe("button");
+      if (target.kind === "figure") expect(button!.dataset.key, target.id).toBe(target.keys[0]);
+      else expect(button!.hasAttribute("data-key"), target.id).toBe(false);
+      // At its rectangle, in logical px under the shared transform.
+      expect([button!.style.left, button!.style.top, button!.style.width, button!.style.height], target.id).toEqual(
+        [target.rect.x, target.rect.y, target.rect.w, target.rect.h].map((v) => `${v}px`),
+      );
     }
+    unmount();
   });
 
-  it("DOM order equals the layout's tab order", () => {
-    for (const { name, board: b } of fixtureBoards()) {
-      const { container, layout, unmount } = renderWithLayout(b);
-      expect(buttonsOf(container).map((x) => x.dataset.target), name).toEqual(layout.targets.map((t) => t.id));
-      // No target takes a tab index of its own: DOM order is the order.
-      for (const button of buttonsOf(container)) expect(button.hasAttribute("tabindex")).toBe(false);
-      unmount();
-    }
+  it.each(fixtureBoards())("DOM order equals the layout's tab order ($name)", ({ name, board: b }) => {
+    const { container, layout, unmount } = renderWithLayout(b);
+    expect(buttonsOf(container).map((x) => x.dataset.target), name).toEqual(layout.targets.map((t) => t.id));
+    // No target takes a tab index of its own: DOM order is the order.
+    for (const button of buttonsOf(container)) expect(button.hasAttribute("tabindex")).toBe(false);
+    unmount();
   });
 
-  it("the name tag is in the button before any hover and ignores the pointer", () => {
-    for (const { name, board: b } of fixtureBoards()) {
-      const { container, layout, unmount } = renderWithLayout(b);
-      for (const button of buttonsOf(container)) {
-        const tag = button.querySelector<HTMLElement>("[data-tag]");
-        expect(tag, `${name} ${button.dataset.target}`).not.toBeNull();
-        expect(tag!.textContent).toBe(layout.targets.find((t) => t.id === button.dataset.target)!.tag);
-        expect(tag!.style.pointerEvents).toBe("none");
-        expect(tag!.getAttribute("aria-hidden")).toBe("true");
-      }
-      unmount();
+  it.each(fixtureBoards())("the name tag is in the button before any hover and ignores the pointer ($name)", ({ name, board: b }) => {
+    const { container, layout, unmount } = renderWithLayout(b);
+    for (const button of buttonsOf(container)) {
+      const tag = button.querySelector<HTMLElement>("[data-tag]");
+      expect(tag, `${name} ${button.dataset.target}`).not.toBeNull();
+      expect(tag!.textContent).toBe(layout.targets.find((t) => t.id === button.dataset.target)!.tag);
+      expect(tag!.style.pointerEvents).toBe("none");
+      expect(tag!.getAttribute("aria-hidden")).toBe("true");
     }
+    unmount();
   });
 
 });

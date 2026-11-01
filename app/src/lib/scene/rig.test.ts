@@ -83,16 +83,17 @@ describe("rig", () => {
     expect([...r.node.querySelectorAll("*")]).toEqual(nodes);
   });
 
-  it("markup holds no text node for every look, pose and colour", () => {
+  // One case per hair style: the product of every look, style, colour, cap
+  // and pose reached half of Vitest's 5 s budget on the hosted Windows
+  // runner, and it grows with each token added (D-1070).
+  it.each(HAIR_STYLES)("markup holds no text node for every look, pose and colour (%s hair)", (style) => {
     for (const [skin, hair] of LOOKS) {
-      for (const style of HAIR_STYLES) {
-        for (const colour of COLOURS) {
-          for (const cap of [true, false]) {
-            const r = createRig(document, { look: { skin, hair, style }, colour, cap, scale: 1, role: "employee" });
-            for (const pose of POSES) {
-              setPose(r, pose, "front", false);
-              expect(textNodes(r.node), `${skin}/${hair}/${style}/${colour}/${cap}/${pose}`).toEqual([]);
-            }
+      for (const colour of COLOURS) {
+        for (const cap of [true, false]) {
+          const r = createRig(document, { look: { skin, hair, style }, colour, cap, scale: 1, role: "employee" });
+          for (const pose of POSES) {
+            setPose(r, pose, "front", false);
+            expect(textNodes(r.node), `${skin}/${hair}/${style}/${colour}/${cap}/${pose}`).toEqual([]);
           }
         }
       }

@@ -46,42 +46,41 @@ const figure = (root: Element, key: string) =>
 const translate = (x: number, y: number) => `translate(${x} ${y})`;
 
 describe("objects", () => {
-  it("a placed figure sits among statics by its depth", () => {
-    for (const { name, board: b } of fixtureBoards()) {
-      const [layout] = layouts(b);
-      const { root, objects } = mount();
-      objects.update({ layout: layout!, colours: colours(b), snap: 1, figures: restingFrames(layout!) });
-      const spots = new Map(allSpots(layout!.columns).map((s) => [s.id, s]));
-      const placed = layout!.employees.filter((e) => e.spot !== null);
-      expect(objects.figureOrder().sort(), name).toEqual([...placed.map((e) => e.key), ...layout!.helpers.map((h) => h.key)].sort());
-      for (const e of placed) {
-        const spot = spots.get(e.spot!)!;
-        const depth = spot.gx + spot.gy;
-        const node = figure(root, e.key)!;
-        let before = node.previousElementSibling;
-        while (before && before.hasAttribute("data-figure")) before = before.previousElementSibling;
-        let after = node.nextElementSibling;
-        while (after && after.hasAttribute("data-figure")) after = after.nextElementSibling;
-        if (before) expect(Number(before.getAttribute("data-depth")), `${name} ${e.key} after`).toBeLessThanOrEqual(depth + 0.01);
-        if (after) expect(Number(after.getAttribute("data-depth")), `${name} ${e.key} before`).toBeGreaterThan(depth);
-      }
+  // One case per fixture board, not one loop over them all: the jsdom work
+  // grows with every fixture a story adds, and a loop crossed Vitest's
+  // 5 s budget on the hosted Windows runner (D-1070).
+  it.each(fixtureBoards())("a placed figure sits among statics by its depth ($name)", ({ name, board: b }) => {
+    const [layout] = layouts(b);
+    const { root, objects } = mount();
+    objects.update({ layout: layout!, colours: colours(b), snap: 1, figures: restingFrames(layout!) });
+    const spots = new Map(allSpots(layout!.columns).map((s) => [s.id, s]));
+    const placed = layout!.employees.filter((e) => e.spot !== null);
+    expect(objects.figureOrder().sort(), name).toEqual([...placed.map((e) => e.key), ...layout!.helpers.map((h) => h.key)].sort());
+    for (const e of placed) {
+      const spot = spots.get(e.spot!)!;
+      const depth = spot.gx + spot.gy;
+      const node = figure(root, e.key)!;
+      let before = node.previousElementSibling;
+      while (before && before.hasAttribute("data-figure")) before = before.previousElementSibling;
+      let after = node.nextElementSibling;
+      while (after && after.hasAttribute("data-figure")) after = after.nextElementSibling;
+      if (before) expect(Number(before.getAttribute("data-depth")), `${name} ${e.key} after`).toBeLessThanOrEqual(depth + 0.01);
+      if (after) expect(Number(after.getAttribute("data-depth")), `${name} ${e.key} before`).toBeGreaterThan(depth);
     }
   });
 
-  it("split into depth bands, the layer paints in the order of one root", () => {
+  it.each(fixtureBoards())("split into depth bands, the layer paints in the order of one root ($name)", ({ name, board: b }) => {
     const order = (roots: Element[]) => roots.flatMap((r) => [...r.children].map((n) => n.getAttribute("data-figure") ?? n.getAttribute("data-depth")));
-    for (const { name, board: b } of fixtureBoards()) {
-      const [first, second] = layouts(b, b);
-      const single = mount();
-      const svgs = Array.from({ length: DEPTH_BANDS }, layer);
-      const banded = new SceneObjects(svgs, layer());
-      for (const layout of [first!, second!]) {
-        for (const objects of [single.objects, banded]) objects.update({ layout, colours: colours(b), snap: 1, figures: restingFrames(layout) });
-      }
-      expect(svgs.every((g) => g.children.length > 0), name).toBe(true);
-      expect(order(svgs), name).toEqual(order([single.root]));
-      expect(banded.figureOrder(), name).toEqual(single.objects.figureOrder());
+    const [first, second] = layouts(b, b);
+    const single = mount();
+    const svgs = Array.from({ length: DEPTH_BANDS }, layer);
+    const banded = new SceneObjects(svgs, layer());
+    for (const layout of [first!, second!]) {
+      for (const objects of [single.objects, banded]) objects.update({ layout, colours: colours(b), snap: 1, figures: restingFrames(layout) });
     }
+    expect(svgs.every((g) => g.children.length > 0), name).toBe(true);
+    expect(order(svgs), name).toEqual(order([single.root]));
+    expect(banded.figureOrder(), name).toEqual(single.objects.figureOrder());
   });
 
   it("figures on one static keep their creation order", () => {
@@ -254,21 +253,19 @@ describe("objects", () => {
     expect(ring()).not.toBeNull();
   });
 
-  it("queue badges are drawn in the badge layer, above every object, at their figure", () => {
-    for (const { name, board: b } of fixtureBoards()) {
-      const [layout] = layouts(b);
-      const { root, badges, objects } = mount();
-      objects.update({ layout: layout!, colours: colours(b), snap: 1, figures: restingFrames(layout!) });
-      expect(root.querySelector('[data-mark="ticket"]'), name).toBeNull();
-      const ticketed = layout!.employees.filter((e) => e.at !== null && (e.marks.ticket !== null || e.marks.approval) && e.facing === "front" && e.pose !== "seated-working");
-      for (const e of ticketed) {
-        const badge = badges.querySelector(`[data-ticket-of="${e.key}"]`)!;
-        expect(badge.querySelector('[data-mark="ticket"]'), `${name} ${e.key}`).not.toBeNull();
-        expect(badge.getAttribute("transform"), `${name} ${e.key}`).toBe(figure(root, e.key)!.getAttribute("transform"));
-      }
-      const shown = [...badges.querySelectorAll("[data-ticket-of]")].filter((g) => g.childElementCount > 0);
-      expect(shown.length, name).toBe(ticketed.length);
+  it.each(fixtureBoards())("queue badges are drawn in the badge layer, above every object, at their figure ($name)", ({ name, board: b }) => {
+    const [layout] = layouts(b);
+    const { root, badges, objects } = mount();
+    objects.update({ layout: layout!, colours: colours(b), snap: 1, figures: restingFrames(layout!) });
+    expect(root.querySelector('[data-mark="ticket"]'), name).toBeNull();
+    const ticketed = layout!.employees.filter((e) => e.at !== null && (e.marks.ticket !== null || e.marks.approval) && e.facing === "front" && e.pose !== "seated-working");
+    for (const e of ticketed) {
+      const badge = badges.querySelector(`[data-ticket-of="${e.key}"]`)!;
+      expect(badge.querySelector('[data-mark="ticket"]'), `${name} ${e.key}`).not.toBeNull();
+      expect(badge.getAttribute("transform"), `${name} ${e.key}`).toBe(figure(root, e.key)!.getAttribute("transform"));
     }
+    const shown = [...badges.querySelectorAll("[data-ticket-of]")].filter((g) => g.childElementCount > 0);
+    expect(shown.length, name).toBe(ticketed.length);
   });
 
   describe("depth while moving (AD-171)", () => {
