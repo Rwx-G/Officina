@@ -1326,7 +1326,7 @@ Story 6.1 AC 2; D-611, D-613, D-615. Recorded on 2026-11-01.
 - **Outcome against AD-126 row 0.** Recorded; with E89 it opens Slice A
   (D-613). No code changes either way (D-203).
 
-## E91. The musl build (v0.6 gate 9, first half)
+## E91. The musl build (v0.6 gate 9)
 
 Story 6.1 AC 3; AD-100, D-202. **Verified** by the agent on 2026-11-01:
 Windows 11 Pro 10.0.26200, Rust 1.99.1 (the pinned toolchain), Docker
@@ -1353,8 +1353,26 @@ Desktop 4.95.0 (242831), engine 29.8.2, kernel
 - **Outcome against AD-126 row 9 (first half).** Pass; AD-100's fallback is
   not needed. The second half (the real `officina-gateway:local`) closes
   story 6.8.
+- **Second half** (story 6.8 AC 7, D-202). **Verified** by the agent on
+  2026-11-01, same versions, driven by `crates/officina-host/examples/battery_ci.rs`
+  on Docker Desktop with the window's resolution of `docker.exe`.
+  `officina-gateway:local` built by Build images' own code (`FROM
+  scratch`, the static program, `USER 65534:65534`) on the `desktop-linux`
+  builder (`docker` driver), then run with AD-102's `Gateway` vector as
+  core builds it (read-only root, every capability dropped, no new
+  privileges, `--init`, 0.5 CPU, 128 MiB, 136 processes, the local log
+  driver) on a test egress bridge, connected to a test internal network. A
+  probe client on the internal network, through `-x
+  http://<gateway>:3128`: `https://api.anthropic.com/` answered `404`
+  (reached), `https://example.com/` got `CONNECT tunnel failed, response
+  403`. The gateway's lines: `started` with its digest and no upstream,
+  `allowed` for `api.anthropic.com:443`, `refused` for `example.com:443`
+  with cause `not_allowed`.
+- **Outcome against AD-126 row 9 (second half).** Pass. Every test object
+  (`officina-test-*`, labelled `officina-test=1`) and the built images were
+  removed afterwards and the listings checked empty.
 
-## E92. Images, options, mounts, copies (v0.6 gate 1, first half)
+## E92. Images, options, mounts, copies (v0.6 gate 1)
 
 Story 6.1 AC 4; AD-99, AD-102, D-202, D-203. **Verified** by the agent on
 2026-11-01, same versions as E91, Claude Code 2.1.316 on the host. The
@@ -1434,6 +1452,46 @@ tree, and the junction question there) is open; it runs with
   no copy fallback, no `--build-context`, no release-manifest path. The
   synced-tree mount is the owner's (open). The second half (the real images
   and the real `Worker` vector) closes story 6.8.
+- **Second half, the agent's part** (story 6.8 AC 7, D-202). **Verified**
+  by the agent on 2026-11-01, same versions, Claude Code 2.1.316 on the
+  host, through `crates/officina-host/examples/battery_ci.rs --worker-probe`
+  on Docker Desktop (two runs, the second on the final Dockerfile).
+  `officina-gateway:local`, `officina-workshop:local` and one probe project
+  image (`FROM officina-workshop:local`, a scratch Dockerfile of two
+  lines) built by Build images' own code, in that order, with
+  `BUILDX_GIT_INFO=0`; the browser base is Slice B's. `docker image
+  inspect` of the base shows AD-99's labels (`officina.base`,
+  `officina.version`, the Dockerfile, entry and gateway SHA-256,
+  `officina.claude.version` 2.1.316, `officina.ca.sha256` `none`, the OCI
+  set). The measured programs (entry point and Claude Code, streamed out of
+  a container never started) were equal on the base and the project image,
+  and the measured entry point equal to the shipped program. `find / -xdev
+  -perm /6000 -type f` in the base found nothing (the Dockerfile's removal
+  step now fails the build if it cannot run). `/opt/officina/bin/claude
+  --version` in the base printed `2.1.316 (Claude Code)`, the host's. The
+  base run with `workshop.json`'s `Worker` vector (its options, limits,
+  tmpfs, the work volume and one read-only bind mount of a scratch folder
+  of the agent's at `/work/.officina/mounts/0`, a dummy credential name),
+  its command replaced by a probe: `uid=1000(worker) gid=1000(worker)`; a
+  write to `/` refused ("Read-only file system"); the mount read; a write
+  in the mount refused; a write in `/work` succeeded.
+- **The owner's half** (story 6.1 AC 4, D-202). **Verified** by the owner
+  on 2026-11-01, same versions, with `workshop_gate_probe mount` from his
+  own console: a git-ignored folder of one of his projects inside the
+  synced tree, bind-mounted read-only at `/work/.officina/mounts/0` with
+  AD-102's `Worker` options on the probe base: 89 files seen, 89 read,
+  none failed; a rewrite and a create both refused ("Read-only file
+  system"); a junction he made inside the mount, pointing at a scratch
+  folder outside it, was **not followed** ("No such file or directory"),
+  as in the agent's scratch run. D-236's branch: doctor does not count
+  reparse points inside a mount; the refusal of a mount or memory source
+  reached through a reparse point stays. The probe's objects were removed.
+  A run of `battery_ci.rs --worker-probe --mount-dir <the ignored
+  folder>` would repeat it on the real base; the probe base was drafted
+  to the same AD-99 rules, so it is not required.
+- **Outcome against AD-126 row 1.** Pass, both halves: the agent's on the
+  real images, the owner's on his synced tree. Every test object and the
+  built images were removed afterwards.
 
 ## E93. No route out (v0.6 gate 2, first half)
 
@@ -1475,6 +1533,109 @@ attempts, a Python script in the probe:
   and image carried `officina-probe=1`; after removal, the four label
   listings were empty. The pinned Debian base pulled by digest stays in the
   engine's store as a build cache layer, as D-201 allows.
+
+## E94. A worker authenticates with a setup token (v0.6 gate 3, first half)
+
+Story 6.1 AC 6; AD-126 row 3, D-202, D-203, D-1118. **Verified** by the
+owner on 2026-11-01 with `workshop_gate_probe token` from his own console,
+the token from `claude setup-token` set in that console only (the report
+holds no token); Docker Desktop 4.95.0, engine 29.8.2, Claude Code 2.1.316
+in the probe base. A worker by hand with AD-102's options on the probe
+internal network, behind the stub CONNECT proxy allowing
+`api.anthropic.com:443` alone: `system/init` with permission mode
+`bypassPermissions`, no `api_retry`, `result` subtype `success`, 2 turns,
+0.0267 USD, exit 0, one commit past the base. The stub allowed
+`api.anthropic.com:443` and refused nothing. `claude --help` in the image
+lists `--permission-prompts`.
+
+- **Outcome against AD-126 row 3 (first half).** Pass. `CLAUDE_CODE_HOSTS`
+  stays `api.anthropic.com` alone (D-203; D-1118 confirmed). The window
+  half closes story 6.19.
+
+## E95. Hooks from a read-only mount (v0.6 gate 4, first half)
+
+Story 6.1 AC 7; AD-126 row 4, D-202. **Verified** by the owner on
+2026-11-01, same run, a scratch repository whose git-ignored `.claude`
+was mounted read-only with a logging hook on six events: the stream
+carried `hook_started` and `hook_response` lines (exit 0 each) for
+`SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse` and `Stop`
+(10 lines), and the hooks log showed `SessionEnd` too, which the stream
+does not report. A hook line's keys: `exit_code`, `hook_event`, `hook_id`,
+`hook_name`, `outcome`, `output`, `session_id`, `stderr`, `stdout`,
+`subtype`, `type`, `uuid`. Result `success`, 2 turns, 0.0192 USD, exit 0.
+The source kinds of the work machine's instructions (`/memory`,
+`/hooks`) were not answered.
+
+- **Outcome against AD-126 row 4 (first half).** Pass. FR-9 needs no
+  amendment from it; the second half (one window run per owner project
+  with hooks) closes story 6.20.
+
+## E96. A missing hook program (v0.6 gate 5)
+
+Story 6.1 AC 8; AD-126 row 5, D-203. **Verified** by the owner on
+2026-11-01, same run: a `PreToolUse` hook whose program does not exist
+reported `hook_response` with exit code 127, and the run still
+**succeeded**: the tool call went ahead (`result` `success`, exit 0, one
+commit). A missing hook program fails open.
+
+- **Outcome against AD-126 row 5.** Pass for the fields (the hook lines
+  carry `exit_code`, so `hook_failed` is built, D-203); the consequence is
+  D-1133: the workshop never relies on a missing guard to block; the
+  inventory's `hook_program_missing` refusal before the launch (story 6.9)
+  is the guard.
+
+## E97. The budget cap (v0.6 gate 6)
+
+Story 6.1 AC 9; AD-126 row 6, D-1109. **Verified** by the owner on
+2026-11-01, same run: `--max-budget-usd 0.01` on a multi-step prompt
+stopped with `result` subtype `error_max_budget_usd`, `terminal_reason`
+`budget_exhausted`, exit 1, after 1 turn, having spent 0.0177 USD: the cap
+is checked after a turn, so a run can overspend it by up to one turn.
+
+- **Outcome against AD-126 row 6.** Pass: the budget stops a run, so
+  `max_usd` and `--max-budget-usd` stay (D-203); it is a soft cap (D-1134).
+
+## E98. Where a setup token is revoked (v0.6 question 10)
+
+Story 6.1 AC 11. Asked of the owner on 2026-11-01: not found by the owner,
+who did not look further. The README's revoke sentence (story 6.24) says
+that this place is not known.
+
+## E99. The login check (v0.6, D-610)
+
+Story 6.1 AC 15; D-605 to D-610. **Verified** by the owner on 2026-11-01
+with `workshop_gate_probe login` from his own console (no credential in
+the report), same versions as E94; step 6 is the agent's (D-1101).
+
+1. `claude auth login` in the probe base as uid 1000, `CLAUDE_CONFIG_DIR`
+   on a probe volume: the URL and pasted-code flow completed, "Login
+   successful"; files written, mode 600: `.claude.json`,
+   `.credentials.json` and a backup of `.claude.json`.
+2. `claude auth status` on that volume, with the bridge network and with
+   `--network none`: exit 0, logged in, `authMethod` `claude.ai`.
+3. A worker given only `.credentials.json` copied into a fresh config
+   dir, behind the stub: `success`, 0.0592 USD, exit 0. `.claude.json` is
+   not needed (D-606 copies `.credentials.json` alone).
+4. The run's copy of `.credentials.json` hashed the same as the stored file
+   afterwards, and a second run from the stored file authenticated: one
+   session does not rotate the stored login (D-606's attended-use branch
+   is not taken).
+5. After `claude auth logout` on the first volume (which revokes that
+   login), a run from a saved copy gave `system/api_retry` with
+   `authentication_failed`, then `result` with `is_error` true,
+   `terminal_reason` `api_error`, exit 1, cost 0. **`claude auth status` on
+   the revoked copy still said logged in**, with and without the network:
+   it reads the local file only, and cannot see a revoked or expired login.
+7. Hosts through the stub: allowed `api.anthropic.com:443` and
+   `platform.claude.com:443`; refused `mcp-proxy.anthropic.com:443`, with
+   no effect on the run.
+
+- **Outcome.** Pass (steps 1 and 3). The login kind is built (D-610). A
+  login run needs `platform.claude.com` beside `api.anthropic.com`, which
+  `LOGIN_HOSTS` already adds for the login kind alone (D-606); the token
+  kinds keep `api.anthropic.com` alone (E94); `mcp-proxy.anthropic.com` is
+  not needed. The auth probe cannot find a revoked or expired login
+  (D-1135).
 
 ## E7. Configuration directory
 

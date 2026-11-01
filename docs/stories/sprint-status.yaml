@@ -185,7 +185,7 @@ version: v0.6
 # 6.2 bumps the catalogue format once, with the relay-section hash (P-53, D-244); 6.4 writes the workshop migration whole, the next one relative to main (P-53, D-212).
 # 6.24 closes the PRD after real use and records the use entry (owner rule, epic-2-decisions.md P-7, epic-6-decisions.md P-52).
 stories:
-  # 6.1: gates 7 and 0 (E89, E90) and the agent's halves of gates 9, 1 and 2 (E91 to E93) recorded, login step 6 measured; the owner's steps (gate 1 mount, gates 3 to 6, the login check, question 10, the work network W1 to W4) packaged in workshop_gate_probe; gate 8 before 6.22.
+  # 6.1: gates 7 and 0 (E89, E90) and the agent's halves of gates 9, 1 and 2 (E91 to E93) recorded, gate 1's owner half passed (E92), login step 6 measured; gates 3 to 6 and question 10 recorded from the owner's run (E94 to E98); the login check recorded (E99); the owner's steps left (the work network W1 to W4) packaged in workshop_gate_probe; gate 8 before 6.22.
   - {id: "6.1", file: story-6.1-workstation-gates.md, slice: "0", status: in-progress}
   # 6.2: done; max_usd waits on the owner's gate 6 entry (D-1109); D-1103 to D-1108 to confirm in the QA report.
   - {id: "6.2", file: story-6.2-floor-keys-and-catalogue-format.md, slice: A, status: review}
@@ -199,8 +199,8 @@ stories:
   - {id: "6.6", file: story-6.6-container-vectors-and-run-plan.md, slice: A, status: review}
   # 6.7: done; D-1123 to confirm.
   - {id: "6.7", file: story-6.7-entry-point-and-packer.md, slice: A, status: review}
-  # 6.8: started; Dockerfiles and core's labels and image check done; host build, command, CI job, doctor and the gates' second halves left.
-  - {id: "6.8", file: story-6.8-images-and-build.md, slice: A, status: in-progress}
+  # 6.8: done; gates 9 and 1 recorded whole (E91, E92, the owner's mount included); D-1125 to D-1132, D-1125 to confirm.
+  - {id: "6.8", file: story-6.8-images-and-build.md, slice: A, status: review}
   - {id: "6.9", file: story-6.9-hook-program-inventory.md, slice: A, status: approved}
   - {id: "6.10", file: story-6.10-escape-battery.md, slice: A, status: approved}
   - {id: "6.11", file: story-6.11-workshop-card-and-launch.md, slice: A, status: approved}

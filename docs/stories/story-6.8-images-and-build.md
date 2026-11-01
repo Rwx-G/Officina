@@ -1,6 +1,6 @@
 # Story 6.8: Workshop images, Build images and the Linux programs
 
-**Status:** In Progress
+**Status:** Review
 
 ## Story
 
@@ -22,14 +22,14 @@ so that a worker never runs on an image I did not approve, a project image can n
 
 ## Tasks
 
-- [x] `docker/workshop.Dockerfile`, `docker/gateway.Dockerfile`; `crates/officina-core/src/workshop/image.rs` (embedding, labels, check) (AC 1, 2): hadolint in the CI `workshop` job is still to add
-- [ ] `images` section of `workshop.json` (AC 2)
-- [ ] `crates/officina-host/src/workshop/build.rs`: programs, contexts, builds with `--builder`, records, journal (AC 3, 4)
-- [ ] `build_images` command and its plumbing; fake engine `build` and program `cp` modes; `crates/officina/tests/workshop_build.rs` (AC 4, 5)
-- [ ] Program measurement and the reserved-name check (AC 5)
-- [ ] `release.yml`, `tauri.bundle.conf.json`; CI `workshop` job with its path filter and `examples/battery_ci.rs` (build part) (AC 6)
-- [ ] Gates 9 and 1, second halves (AC 7)
-- [ ] Doctor (AC 8); README, `CHANGELOG.md` (AC 9)
+- [x] `docker/workshop.Dockerfile`, `docker/gateway.Dockerfile`; `crates/officina-core/src/workshop/image.rs` (embedding, labels, check, build arguments, reserved names, `BuildRefusal`, `BuildAnswer`, `NotFromBase`) (AC 1, 2)
+- [x] `images` section of `workshop.json` and `crates/officina-core/tests/workshop_vectors.rs` (AC 2)
+- [x] `crates/officina-host/src/workshop/build.rs`: programs, grant, preflight, contexts, builds with `--builder`, records, journal (AC 3, 4); core `engine.rs` gains `builder_ls`, `image_rm`, `create_unstarted` and the build's environment (D-1126)
+- [x] `build_images` command and its plumbing; fake engine `build`, `buildx ls`, `create`, `cp` out, `rm` and `image rm` modes; `crates/officina/tests/workshop_build.rs` (AC 4, 5)
+- [x] Program measurement (`workshop::tar::FileDigest`, `process::stream_contained`, `engine::stream_out`) and the reserved-name check (AC 5)
+- [x] `release.yml`, `tauri.bundle.conf.json`; CI `workshop` job with its path filter and `examples/battery_ci.rs` (build part) (AC 6)
+- [x] Gates 9 and 1, second halves (AC 7)
+- [x] Doctor (AC 8); README, `CHANGELOG.md` (AC 9)
 
 ## Dev Notes
 
@@ -53,11 +53,29 @@ so that a worker never runs on an image I did not approve, a project image can n
 
 ### Debug Log
 
+- The first journal round trip passed while `workshop_image_built` serialised two `kind` keys (the line's tag and AD-120's field); the CLI test found no line. The field is `image_kind` and the test counts the keys (D-1129).
+- hadolint v2.15.1 failed the base Dockerfile on DL3066 (info, a named `USER`); the `USER` lines are numeric (D-1131).
+
 ### Completion Notes
 
-- Started 2026-11-01: the Dockerfiles (the gate 1 entry's probe base with `officina-entry` and the entry point; the gateway `FROM scratch`), core's embedding, label set and `image::check` with `image.rs::tests::{embedded_dockerfiles_hash_to_their_labels, the_ca_step_precedes_every_https_download, the_claude_version_is_not_compared, a_label_without_a_matching_measurement_mismatches}`. Only `officina.*` labels but `officina.claude.version` are compared; the OCI labels describe the build. Not done yet: the `images` section of `workshop.json`, the host build module, `build_images` and its plumbing, the fake engine's `build` and `cp` modes, the measurement, release and CI `workshop` job, doctor, gates 9 and 1 second halves, README.
+- AC 1: `image.rs::tests::{embedded_dockerfiles_hash_to_their_labels, the_ca_step_precedes_every_https_download}`; hadolint (pinned v2.15.1, checksum from the release's `checksums.sha256`) clean on both Dockerfiles, run in `rust:1-bookworm` and in the CI `workshop` job.
+- AC 2: `crates/officina-core/tests/workshop_vectors.rs::{image_check_cases_match, every_mismatch_has_a_case}` over the `images` section; `image.rs::tests::{the_claude_version_is_not_compared, a_label_without_a_matching_measurement_mismatches, reserved_names_are_derived_from_the_builders, a_proxy_route_becomes_the_predefined_build_args, the_programs_digest_moves_with_either_program}`.
+- AC 3: `crates/officina-host/src/workshop/build.rs::tests::{programs_come_from_the_exe_dir, the_override_wins, missing_programs_refuse_the_build}`; CLI `workshop_build.rs::missing_linux_programs_refuse_the_build`.
+- AC 4: `crates/officina/tests/workshop_build.rs::{builds_run_in_order_with_their_labels, a_project_image_not_from_the_base_is_removed, the_ca_file_reaches_every_context, a_resolved_proxy_reaches_every_build_as_build_args, no_route_means_no_proxy_build_arg, builds_name_the_docker_driver_builder, nothing_builds_while_stopped}`; `app/src-tauri/src/main.rs::tests::every_declared_command_is_allowed`; core `relay/journal.rs::tests::workshop_image_built_round_trips`; core `engine.rs::tests::{the_docker_driver_builder_is_named, the_environment_rule_names_every_kind}` (`BUILDX_GIT_INFO=0` on builds only, D-1100). A project folder whose final stage descends from no base is dropped by phase 2, so the CLI case proves no build and no row; the build's own `stages` check of the approved bytes stays behind it (D-1125). The pointer-only button is story 6.20's.
+- AC 5: `workshop_build.rs::{a_project_image_replacing_the_entry_point_is_refused, a_project_image_replacing_claude_is_refused, a_project_image_setting_a_credential_name_is_refused, a_project_image_setting_a_vector_name_is_refused, the_measuring_container_is_never_started}` (the reserved-name cases iterate `vector::reserved_env_names()`, `credential_name` and `RESERVED_ENV_PREFIXES`); core `tar.rs::tests::{a_regular_file_hashes_to_its_bytes_whatever_the_chunks, a_link_or_a_folder_is_refused, two_files_or_none_are_refused, a_cut_stream_or_a_bad_checksum_is_refused, the_saved_docker_stream_parses_its_pax_records, a_pax_size_overrides_the_header}`; host `engine.rs::tests::execute_refuses_every_launch_kind_without_the_feature` (the stream too, D-1111).
+- AC 6: CI job `workshop` (path filter computed in the job, D-1131); `release.yml` and `tauri.bundle.conf.json` ship both programs under `linux/` and as release assets with their SHA-256 (D-1132). The release dry run (`pnpm bundle` with the overlay, then the Package step) was not run in this session: open, to check once by hand before the first v0.6 tag, that the installer puts both programs in `linux/` beside `officina-app.exe`.
+- AC 7: the research notes' gate 9 entry (E91) and gate 1 entry (E92), second halves, run by the agent through `battery_ci.rs --worker-probe` on Docker Desktop: the gateway, the base and a probe project image built, AD-99's labels, equal measured programs, no setuid or setgid file, `claude --version` equal to the host's, the real gateway's `allowed` and `refused` lines, the `Worker` vector with a probe command on a scratch mount. The owner's mount (gate 1's owner half, story 6.1) passed on 2026-11-01: a git-ignored folder of one of his projects in the synced tree, read-only, a junction inside it not followed (E92).
+- AC 8: host `workshop/doctor.rs::tests::{missing_linux_programs_fail, a_label_mismatch_is_named, a_claude_version_difference_warns, a_ca_label_mismatch_is_named, workers_times_memory_over_the_engine_warns, matching_images_and_programs_are_named}` (the section's module, D-1130); CLI `doctor_workshop.rs` still sees read kinds only.
+- AC 9: README "Images" and "Checking the engine"; `CHANGELOG.md` Added.
 
 ## File List
+
+- `docker/workshop.Dockerfile`, `docker/gateway.Dockerfile` (new)
+- `crates/officina-core/src/workshop/{image,engine,doctor,mod}.rs`, `workshop/tar.rs` (new), `relay/{journal,view}.rs`, `tests/workshop_vectors.rs` (new), `tests/typescript_bindings.rs`
+- `crates/officina-host/src/workshop/build.rs` (new), `workshop/{mod,engine,doctor,threads}.rs`, `process.rs`, `watch.rs`, `orders.rs`, `doctor.rs`, `registry/{read,window}.rs`, `examples/battery_ci.rs` (new), `Cargo.toml`
+- `crates/officina/src/bin/officina-fake-docker.rs`, `tests/workshop_build.rs` (new), `tests/doctor_workshop.rs`
+- `app/src-tauri/{build.rs,src/main.rs,capabilities/default.json,tauri.bundle.conf.json}`, `app/src/{e2e-mock.ts,e2e-globals.d.ts,lib/ipc.ts}`, `app/src/lib/generated/{BuildAnswer,BuildRefusal}.ts` (new)
+- `tests/vectors/workshop.json`, `.github/workflows/{ci,release}.yml`, `README.md`, `CHANGELOG.md`, `docs/research-notes.md` (E91, E92 second halves), `docs/stories/epic-6-decisions.md` (D-1125 to D-1132), `docs/stories/sprint-status.yaml`
 
 ## Change Log
 
@@ -66,3 +84,5 @@ so that a worker never runs on an image I did not approve, a project image can n
 - 2026-10-29 research-note entries named by subject, no number reserved (D-600)
 - 2026-10-29 the owner's answers: the CA step before every HTTPS download, the resolved proxy as build arguments, `/work/.officina/login` in the image (D-605, D-611, D-612)
 - 2026-10-29 adversarial pass: the build reads the route of `downloads.claude.ai`; `battery_ci.rs --resolve-proxy` for story 6.25's work network half
+- 2026-11-01 started: the Dockerfiles, core's labels and image check
+- 2026-11-01 implemented: the host build, `build_images`, measurement, doctor, release, the CI job, gates 9 and 1 agent halves; D-1125 to D-1132; status Review

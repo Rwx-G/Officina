@@ -54,3 +54,4 @@ so that the workshop works with the sign-in I already use, no run can tamper wit
 ## Change Log
 
 - 2026-10-29 created from the owner's answer on authentication (D-603 to D-610, D-614, D-617, D-621)
+- 2026-11-01 the login entry (E99): `claude auth status` reads the stored file only and reports a revoked login as logged in, so `needs_login` comes from a run's `auth_failed` and the probe finds a missing login only (D-1135); `.credentials.json` alone authenticates a run; a run does not rotate the stored login; `platform.claude.com` is needed and already in `LOGIN_HOSTS`
