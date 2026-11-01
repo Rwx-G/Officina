@@ -27,10 +27,12 @@ reported apart (D-578, D-581). Its entry state is below.
 
 What closes the epic, in order:
 
-1. The owner's gate runs: gate 1's window half (story 5.16 AC 10), which
-   also opens story 5.18's entry (D-841); gate 7's readability check on
-   one of his sessions (story 5.10 AC 4); gate 8's optional interactive
-   half. Gate 4 is done: its owner half on 2026-10-30 (E88, story 5.24)
+1. The owner's gate runs: gate 7's readability rerun on one of his
+   sessions (story 5.10 AC 4): the first reading failed as built and the
+   meeting now keeps the final screen (E100, D-1020, D-1023); gate 8's
+   optional interactive half. Gate 1's window half passed on 2026-11-01
+   (E24, story 5.16 AC 10, D-1022), which met story 5.18's wait on it
+   (D-841). Gate 4 is done: its owner half on 2026-10-30 (E88, story 5.24)
    and its window half the same day (E88's window half, story 5.7 AC 11),
    which passed with three findings fixed on 2026-11-01 (D-1000 to
    D-1003).
@@ -73,8 +75,8 @@ closing commit" below), Windows 11 host; `core-linux` in a
 | E20 the bare `--` (gate 2) | E20 | verified (agent): both forms pass byte for byte; `--resume` from the binary's folder stops at the trust dialog (D-635) |
 | E21 resume delivery (gate 3) | E21 | verified (agent): delivered into a live idle session, refused on one waiting on a question |
 | E22 work order permissions (gate 4) | E22, E88 | agent half verified: a `--bg` session takes the supervisor's environment (D-127's branch, README states it); owner half verified 2026-10-30 (E88: the project's own mode wins, D-980 to D-987); window half passed 2026-10-30 with findings (E88's window half: started, bound in 1.8 s; a templates-only floor not offered for approval, the composer's Create silent, the session's own worktree unnamed, fixed by D-1000 to D-1002) |
-| E23 `claude logs` (gate 7) | E23 | verified (agent): exit 0 in 0.89 s; agent readability check recorded; **owner readability check open** |
-| E24 the orchestrator's flag set (gate 1) | E24 | agent half and owner half passed (containment holds; D-690 to D-693); **window half open** (story 5.16 AC 10) |
+| E23 `claude logs` (gate 7) | E23, E100 | verified (agent): exit 0 in 0.89 s; agent readability check recorded; owner readability check failed as built on 2026-11-01 (every repaint appended, E100), fixed by D-1020; **owner rerun open** (D-1023) |
+| E24 the orchestrator's flag set (gate 1) | E24 | agent half and owner half passed (containment holds; D-690 to D-693); window half passed 2026-11-01 (story 5.16 AC 10, D-1022) |
 | E25 memory files in the review call | E25 | verified (agent): the parent's `CLAUDE.md` did not load; D-164's first branch |
 | Gate 8, auto mode and `officina run` | E85 | passed in case a in print mode (agent): nothing added for the relay (D-573); **interactive half open, optional** |
 | Injection battery | `crates/officina/tests/injection.rs`, `tests/vectors/injection.json` | every entry point AD-95 and AD-182 name holds a section of `SECTIONS` (the card launch, the proposal file with work orders and answers, the MCP proposal tools, the seeded excerpt reaching the review and the MCP outputs, the review-approved run); the fake claude counts `--bg` and `--resume` spawns: none before the click, one after, its vector equal to the rebuild; `every_section_family_and_refusal_has_a_case` iterates the families and refusals |
@@ -128,15 +130,15 @@ of their own.
 | 5.7 Cards and launch | review | D-1000 to D-1002 to confirm (gate 4's window half passed with findings, D-1003) |
 | 5.8 Briefing and the Orchestrator view | review | D-677, D-679 to confirm |
 | 5.9 Composer and cards | review | D-680 to confirm |
-| 5.10 Meeting, receive | review | gate 7's readability on one of the owner's sessions |
+| 5.10 Meeting, receive | review | gate 7's readability rerun on one of the owner's sessions (D-1023); D-1020, D-1023 to confirm |
 | 5.11 Meeting, answers | review | |
 | 5.12 `auto` in run and approvals | review | |
 | 5.13 Review call and worker | review | |
 | 5.14 Shadow gate, toggle | review | |
 | 5.15 `officina mcp` | review | D-770 to confirm |
-| 5.16 Orchestrator session | in progress | AC 10, gate 1's window half |
+| 5.16 Orchestrator session | review | |
 | 5.17 Proposals and restart | review | |
-| 5.18 Orchestrator in the decision office | in progress | AC 1 and AC 10 (baselines, D-840); waits on 5.16 AC 10 (D-841) |
+| 5.18 Orchestrator in the decision office | in progress | AC 1 and AC 10 (baselines, D-840); the wait on 5.16 AC 10 is met (D-1022) |
 | 5.19 Docs, doctor, use and QA | in progress | ACs 4 to 7: real use, question 8, question 6, the owner's gate halves |
 | 5.20 Permission modes in doctor | review | |
 | 5.21 Answer proposals | review | |
@@ -371,19 +373,22 @@ Each with its one-liner, as the stories' Completion Notes give it.
    mouse, leave the window open ten minutes, and record in E22 the
    outcome, `printed`, whether the row binds and the variable names the
    session's Bash sees.
-3. **Gate 1's window half (story 5.16 AC 10).** Build the window from the
-   branch (with `officina.exe` beside `officina-app.exe`), then from his
+3. **Gate 1's window half (story 5.16 AC 10).** Done 2026-11-01, passed,
+   recorded in E24's window half (D-1022). The procedure it followed:
+   build the window from the branch (with `officina.exe` beside `officina-app.exe`), then from his
    own console: `cargo build -p officina-host --features window-authority
    --example gates_v05` and `target\debug\examples\gates_v05.exe
    gate1-window`; the report `target/gates-v05/report-gate1-window.md`
    goes to E24. A failure reopens FR-10 (D-126).
-4. **Story 5.18's entry (D-841).** Waits on item 3; then AC 1 and AC 10:
+4. **Story 5.18's entry (D-841).** Item 3 passed; AC 1 and AC 10 remain:
    the `workflow_dispatch` run with `update_snapshots`, the comparison
    with the prototype's target mode, the commit of the baselines (D-840).
-5. **Gate 7's readability (story 5.10 AC 4, D-126).** On one of his
-   background sessions: `cargo run -p officina-host --example logs_probe
-   -- <id>`, the id from `claude agents --json`; readable keeps the
-   section, unreadable removes it and the kind.
+5. **Gate 7's readability (story 5.10 AC 4, D-126).** The first reading
+   (2026-11-01) failed as built: every repaint was appended (E100). Rerun
+   after D-1020, on one of his background sessions: `cargo run -p
+   officina-host --example logs_probe -- <id>`, the id from `claude agents
+   --json`; the final screen shown once closes AC 4, an unreadable one
+   applies D-126 (D-1023).
 6. **Gate 8's interactive half (E85, optional).** `cargo build -p
    officina`, `cargo build -p officina-host --features window-authority
    --example gates_v05`, then `target\debug\examples\gates_v05.exe gate8`;
@@ -444,6 +449,8 @@ From `epic-5-decisions.md`, every decision marked "(To confirm.)":
 - D-1000: a template puts the relay in use; the known-projects record keeps the narrower rule before an approval.
 - D-1001: the composer's status line, the card scrolled into view at once and focused after a subject pick or an opened proposal.
 - D-1002: a work order names the folder its session worked in, not its branch; worktrees left to v0.7's merged detection.
+- D-1020: the logs play on a minimal screen that wraps no row below `MAX_COLUMNS`, reads a line feed as a newline and gives every character one column.
+- D-1023: gate 7's failed reading does not remove the logs section; the owner's rerun decides.
 
 Confirmed only in part, from the same file: D-565 (provisionally; the
 owner's final validation in real use) and D-574 (in principle). And FR-10's

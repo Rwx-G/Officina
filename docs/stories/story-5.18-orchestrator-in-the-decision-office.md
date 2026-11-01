@@ -1,6 +1,6 @@
 # Story 5.18: The orchestrator in the decision office, the briefing walk and the view switch's mark
 
-**Status:** In progress (ACs 2 to 9 and 11 done; AC 1 and AC 10's baselines are the owner's steps; the entry also waits on 5.16 AC 10, gate 1's window half, D-841)
+**Status:** In progress (ACs 2 to 9 and 11 done; AC 1 and AC 10's baselines are the owner's steps; the wait on 5.16 AC 10 is met, D-1022)
 
 ## Story
 
@@ -101,3 +101,4 @@ Screenshots of the decision office with the orchestrator live, light and dark, a
 - 2026-10-28 reworked after review: the attention-colour check is a Playwright computed-style case (F22); presence by name and folder (F27); baselines through D-119's `workflow_dispatch` path (F31); sole owner of the title and overlay assertion (F40)
 - 2026-10-28 rewritten against the addendum and v0.4 as built (file renamed from `story-5.18-orchestrator-room-and-chips.md`): the orchestrator takes v0.4's decision office at the decider's desk instead of an eighth cell, with its rig, tokens in both themes, plaque, screens and whiteboard (PRD section 9 item 1, AD-179, D-567); the briefing walk and the staff nodes (item 2, D-568); presence and proposals on the view switch instead of two chips; the empty chair's file offers Start, as PRD section 9 item 1 says (rework F1); under the header's stable-size and Full HD fit rules (D-564, D-565); the prototype v2's target mode is the reference (D-146 superseded)
 - 2026-10-29 implemented: ACs 2 to 9 and 11, AC 10's fixture; decisions D-830 to D-841; AC 1 and AC 10's baselines left to the owner, and the entry's wait on 5.16 AC 10 noted (D-841)
+- 2026-11-01 the entry's wait on 5.16 AC 10 is met (gate 1's window half passed, D-1022); AC 1 and AC 10's baselines still wait on the owner (D-840)

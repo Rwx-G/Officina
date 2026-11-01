@@ -1,6 +1,6 @@
 # Story 5.16: The orchestrator session: vector, lifecycle and presence
 
-**Status:** In Progress (AC 10, the owner's gate 1 window half, open)
+**Status:** Review
 
 ## Story
 
@@ -31,7 +31,7 @@ so that the orchestrator can read and propose while holding nothing that acts, a
 - [x] Ingestion exclusion (AC 6)
 - [x] Command, `ipc.ts`, mock, the view's Start and presence (AC 7)
 - [x] Retention, zero-write, doctor (AC 8, 9)
-- [ ] Gate 1's window half with the owner (AC 10): `gates_v05 gate1-window` guides it
+- [x] Gate 1's window half with the owner (AC 10): `gates_v05 gate1-window` guides it; passed 2026-11-01 (E24, D-1022)
 - [x] Update `CHANGELOG.md` and the README (AC 11)
 
 ## Dev Notes
@@ -74,7 +74,7 @@ ACs 1 to 9 and 11 are implemented and proven by the tests named in them, with th
 - AC 9: host `doctor.rs::tests::{a_non_empty_orchestrator_workdir_fails, a_missing_officina_exe_is_reported, a_stranger_under_the_orchestrator_folder_warns}` (D-779).
 - AC 11: `CHANGELOG.md` `[Unreleased]` Added; README "The orchestrator session" under "The orchestrator (v0.5, in progress)".
 
-**Open: AC 10**, the owner's. Build the window from this branch (with `officina.exe` beside `officina-app.exe`), then from his own console: `cargo build -p officina-host --features window-authority --example gates_v05` and `target\debug\examples\gates_v05.exe gate1-window`. It plants the marker `CLAUDE.md` in `<home>/orchestrator/`, walks through Start, the trust dialog, `/mcp`, `/context` (the tools derived from `McpTool::ALL`, the marker, no `advisor`), the status bar, `/config`, a typed first message, the board tool, `claude agents --json` and a second Start, removes the marker, and writes `target/gates-v05/report-gate1-window.md`; its outcome goes to E24. A failure there reopens FR-10 (D-126) and holds 5.17 and 5.18.
+**AC 10: passed** on 2026-11-01 with Claude Code 2.1.316, on the installed window built from `7ce75d2` (E24's window half, D-1022): every check held, the trust dialog accepted in the new console. FR-10 stands and stories 5.17 and 5.18 no longer wait on it. The procedure it followed: build the window from this branch (with `officina.exe` beside `officina-app.exe`), then from his own console: `cargo build -p officina-host --features window-authority --example gates_v05` and `target\debug\examples\gates_v05.exe gate1-window`. It plants the marker `CLAUDE.md` in `<home>/orchestrator/`, walks through Start, the trust dialog, `/mcp`, `/context` (the tools derived from `McpTool::ALL`, the marker, no `advisor`), the status bar, `/config`, a typed first message, the board tool, `claude agents --json` and a second Start, removes the marker, and writes `target/gates-v05/report-gate1-window.md`; its outcome goes to E24. A failure there reopens FR-10 (D-126) and holds 5.17 and 5.18.
 
 No new dependency and no new feature (Cargo or npm).
 
@@ -94,3 +94,4 @@ No new dependency and no new feature (Cargo or npm).
 - 2026-10-28 reworked after review: MCP config carries home, excerpt switch and `claude` path, contained-kind environment (F1); pid creation time stored and read back (F3); the gate checks the board tool (F4); memory files and the parent-folder refusal branch (F23); presence by name and folder, other entries are cards, exclusion narrowed (F27); executable directory as an argument (F38)
 - 2026-10-28 checked against the addendum and v0.3 and v0.4 as built: the orchestrator takes the contained allow list plus the names gate 1 records (D-561); Start keeps its box with a stable-size case (D-564); seams cited by file (D-563)
 - 2026-10-29 implemented (Rwx-G's delegation): ACs 1 to 9 and 11; AC 1, 2 and 10 marked amended by D-690 to D-692 and D-777; decisions D-773 to D-781; AC 10 open for the owner
+- 2026-11-01 AC 10 passed (gate 1's window half, E24, D-1022); status Review

@@ -141,7 +141,7 @@ stories:
   - {id: "5.8", file: story-5.8-briefing-and-orchestrator-view.md, slice: A, status: review}
   # 5.9: done; D-680 to confirm (no value chosen by default but a single-entry list).
   - {id: "5.9", file: story-5.9-composer-and-work-order-cards.md, slice: A, status: review}
-  # 5.10: ACs 1 to 8 done; AC 4's readability reading on one of the owner's sessions (D-126) is his, the agent's live check recorded in E23.
+  # 5.10: ACs 1 to 8 done; AC 4's readability failed as built on 2026-11-01 (E100), the logs now keep the final screen (D-1020, D-1021); the owner's rerun of logs_probe is open (D-1023); D-1020 and D-1023 to confirm.
   - {id: "5.10", file: story-5.10-meeting-receive.md, slice: A, status: review}
   - {id: "5.11", file: story-5.11-meeting-answers.md, slice: A, status: review}
   - {id: "5.12", file: story-5.12-auto-class-in-run-and-approvals.md, slice: B, status: review}
@@ -149,10 +149,10 @@ stories:
   - {id: "5.14", file: story-5.14-shadow-gate-toggle-and-relay-auto.md, slice: B, status: review}
   # 5.15: done; D-770 to confirm (no_excerpts withholds prompt and answer excerpts, not past command excerpts).
   - {id: "5.15", file: story-5.15-officina-mcp.md, slice: C, status: review}
-  # 5.16: ACs 1 to 9 and 11 done; AC 10 (gate 1's window half, the owner's) runs with gates_v05 gate1-window; D-773 and D-780 to confirm.
-  - {id: "5.16", file: story-5.16-orchestrator-session.md, slice: C, status: in-progress}
+  # 5.16: every AC done; AC 10 (gate 1's window half) passed on 2026-11-01 (E24, D-1022); D-773 and D-780 to confirm.
+  - {id: "5.16", file: story-5.16-orchestrator-session.md, slice: C, status: review}
   - {id: "5.17", file: story-5.17-proposals-and-restart.md, slice: C, status: review}
-  # 5.18: ACs 2 to 9 and 11 done; AC 1 and AC 10's baselines are the owner's (workflow_dispatch run, comparison, commit), and the entry waits on 5.16 AC 10 (D-841); D-830, D-832 and D-833 to confirm.
+  # 5.18: ACs 2 to 9 and 11 done; AC 1 and AC 10's baselines are the owner's (workflow_dispatch run, comparison, commit); the wait on 5.16 AC 10 is met (D-1022); D-830, D-832 and D-833 to confirm.
   - {id: "5.18", file: story-5.18-orchestrator-in-the-decision-office.md, slice: C, status: in-progress}
   # 5.19: ACs 1 to 3, 8 and the report of 9 done (docs/qa/epic-5-report.md, gate open); AC 4's reader built, ACs 4 to 7 wait on the owner's real use and gate halves; D-687 and D-797 to confirm.
   - {id: "5.19", file: story-5.19-docs-doctor-use-and-qa.md, slice: C, status: in-progress}

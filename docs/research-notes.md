@@ -565,10 +565,13 @@ stdout redirected to a file, no console.
   blank lines (D-806). No error marker matched that output (the shell's
   exit 3 prints none). The session was stopped and removed; nothing left
   behind. Cost: two Haiku turns, well under USD 0.01.
-- **Readability, owner check: pending** (D-126). On one of his background
-  sessions: `cargo run -p officina-host --example logs_probe -- <id>`,
-  the id from `claude agents --json`; readable keeps the section,
-  unreadable removes it and the kind.
+- **Readability, owner check (2026-11-01, 2.1.316): fail as built**
+  (E100): the stripped text repeated the whole screen once per repaint.
+  The meeting now plays the output on a minimal screen and keeps the
+  final one (D-1020); the owner's rerun on one of his background sessions
+  is pending (D-1023): `cargo run -p officina-host --example logs_probe --
+  <id>`, the id from `claude agents --json`; readable closes story 5.10
+  AC 4, unreadable applies D-126.
 
 ## E24. The orchestrator's flag set (v0.5 gate 1)
 
@@ -697,6 +700,31 @@ Story 5.1 AC 7, AD-96 row 1, D-126, D-164, D-561.
   reaches the model before the `officina` server connects, so story 5.16
   changes how the briefing is first asked for. `ORCHESTRATOR_ENV_EXTRA`
   stays empty (D-561).
+- **Window half (owner, 2026-11-01, 2.1.316): pass** (story 5.16 AC 10,
+  D-1022). Run with `gates_v05 gate1-window` on the installed window built
+  from `7ce75d2` (report `target/gates-v05/report-gate1-window.md`, not
+  committed), the marker `CLAUDE.md` in `<home>/orchestrator/` during the
+  run:
+  - Start: Claude Code's trust dialog for the workdir appeared in the new
+    console and the owner accepted it; Start's answer beside the button
+    said it started and to type a first message.
+  - `/mcp`: one server, `officina`, connected.
+  - `/context`: exactly the tools `McpTool::ALL` names, each
+    `mcp__officina__*` and no other; no `advisor` tool (D-692); the marker
+    memory file not listed (D-164).
+  - The status bar read "don't ask on" (D-690); `/config` had no inbound
+    messages row.
+  - The typed first message: the briefing tool was called, a tool call
+    shown in the console, before the answer (D-691); the board tool named
+    the sessions live at that moment (review F4); no answer started with
+    the marker's word.
+  - `claude agents --json` listed `officina-orchestrator` in the workdir;
+    the window's Orchestrator button showed the filled dot and the view
+    said Live.
+  - A second Start brought the orchestrator's console to the front, the
+    window saying it already runs, and no second console opened.
+  - `claude agents --json --all` held the owner's same rows before and
+    after; the marker was removed.
 
 ## E25. Memory files in the review call (v0.5, story 5.13)
 
@@ -1636,6 +1664,55 @@ the report), same versions as E94; step 6 is the agent's (D-1101).
   kinds keep `api.anthropic.com` alone (E94); `mcp-proxy.anthropic.com` is
   not needed. The auth probe cannot find a revoked or expired login
   (D-1135).
+
+## E100. `claude logs` repaints and a stopped background service (v0.5 gate 7)
+
+Story 5.10 AC 4, D-126, D-806, D-1020, D-1021, D-1023.
+
+- **Owner readability check (2026-11-01, 2.1.316): fail as built.**
+  `target\debug\examples\logs_probe.exe <bg id>` on a live background
+  session: `claude logs` exit 0 in 711 ms, 111,535 bytes, 3,770 ESC
+  bytes; the stripping removed the 3,770 sequences, kept 65,529 bytes and
+  dropped 25,970 from the start. The text repeated the whole screen about
+  thirty times, each repaint (the banner, the status bar "bypass
+  permissions on", spinner lines such as "Determining… (3s · ↓ 124
+  tokens)", the prompt line, the box-drawn table of the answer) after the
+  one before. Everything that mattered was there (the prompt, "Ran 1
+  shell command", the answer and its table, "Brewed for 7s · done 21:06"),
+  buried among the frames.
+- **Why (agent capture, 2026-11-01, 2.1.316).** One Haiku background
+  session (`claude --bg --name logs-fixture --model haiku`, a one-line
+  prompt asking for a markdown table, no tool call) in the owner's trusted
+  probe scratch folder (a scratch folder under `target/` was refused as
+  untrusted, and trusting it would have written Claude Code's
+  configuration), read with `claude logs <id>` once done, then stopped and
+  removed: exit 0, 65,535 bytes, empty stderr. Its sequences: EL 1,380,
+  SGR 851, home (`CSI H`) 30, CUP 30 (all `CSI 47;3H`, the input row), ECH
+  30 and CUF 30 (the effort indicator placed at column 181), ED 2; no OSC,
+  no scroll region, no alternate screen; 1,440 line feeds, each after a
+  carriage return. So thirty frames, each starting at home, every row
+  ended by EL, the cursor parked on the input row at the end. The screen
+  is 200 columns by 50 rows (full-width rules of 200 `─`; the input row is
+  47 with three rows below), and the rule above the input row is followed
+  by `❯ ` with no line break, which relies on the terminal's deferred
+  wrap. Nothing in the output gives the screen's size. The capture is
+  committed as `crates/officina-core/tests/data/logs/claude-2.1.316-repaints.ansi`,
+  its one home-relative path redacted, marked binary in `.gitattributes`
+  so its carriage returns stay. Cost: one Haiku turn, well under USD 0.01.
+- **After D-1020 (agent).** The capture renders to its last frame once:
+  the banner, the prompt, the table whole, `✻ Baked for 2s · done 9:10
+  PM`, the effort indicator, the two rules and the mode footer; the first
+  frames' spinner is gone (`screen::tests::the_capture_renders_its_final_screen_once`).
+  With no width known, the input row's `❯` stays at the end of the rule
+  above it (D-1020). The owner's rerun on one of his sessions is pending
+  (D-1023).
+- **A stopped background service (owner, 2026-11-01, 2.1.316).** After a
+  reboot, `claude logs` of a finished session failed with `connect ENOENT
+  \\.\pipe\cc-daemon-<id>-control`, the background service's control
+  pipe, while that service was not running; the probe printed "no logs
+  section" with the error. Starting a background session prints "Starting
+  background service…" first (agent, same day). The meeting names that
+  case (D-1021).
 
 ## E7. Configuration directory
 
