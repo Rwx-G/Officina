@@ -67,3 +67,4 @@ pub mod launch;
 pub mod proxy;
 #[cfg(feature = "window-authority")]
 pub mod threads;
+pub mod verify;
