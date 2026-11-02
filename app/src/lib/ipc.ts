@@ -5,6 +5,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { AuthorReason } from "./generated/AuthorReason";
 import type { AutoMode } from "./generated/AutoMode";
+import type { BatteryAnswer } from "./generated/BatteryAnswer";
 import type { Board } from "./generated/Board";
 import type { BuildAnswer } from "./generated/BuildAnswer";
 import type { CardAnswer } from "./generated/CardAnswer";
@@ -250,6 +251,14 @@ export function startOrchestrator(): Promise<StartAnswer> {
  *  not. Each image's outcome reaches the workshop view as it ends. */
 export function buildImages(): Promise<BuildAnswer> {
   return invoke<BuildAnswer>("build_images");
+}
+
+/** Run escape battery (AD-117): on `image`, or every image whose battery
+ *  is stale when `image` is null, on a pointer click only (D-28); which
+ *  batteries were queued or why none. Each one's outcome reaches the
+ *  workshop view as it ends. */
+export function runBattery(image: string | null): Promise<BatteryAnswer> {
+  return invoke<BatteryAnswer>("run_battery", { image });
 }
 
 /** The meeting of `key` (AD-84, D-138): a card key, `sid:<session id>`

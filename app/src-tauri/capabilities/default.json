@@ -44,6 +44,7 @@
     "allow-start-orchestrator",
     "allow-open-meeting",
     "allow-send-answer",
-    "allow-build-images"
+    "allow-build-images",
+    "allow-run-battery"
   ]
 }

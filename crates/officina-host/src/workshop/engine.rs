@@ -209,9 +209,28 @@ pub fn execute(
     stdin: Option<Vec<u8>>,
 ) -> Result<EngineOutcome, EngineError> {
     if call.kind().is_launch() {
-        return launch(docker, call, base, home, stdin);
+        return launch(docker, call, base, home, stdin, None);
     }
-    run(docker, call, base, home, stdin)
+    run(docker, call, base, home, stdin, None)
+}
+
+/// Runs `call`, a `create` of a worker-shaped container, with the one
+/// credential name and its value added to the child's environment, the
+/// container's `--env` naming it alone (AD-105, D-206): a battery passes
+/// `battery::DUMMY_CREDENTIAL`, never a value from the window's
+/// environment. Any other kind is refused before a process starts.
+#[cfg(feature = "window-authority")]
+pub fn create_with_credential(
+    docker: &ResolvedDocker,
+    call: &EngineCall,
+    base: &[(String, String)],
+    home: &Path,
+    credential: (&str, &str),
+) -> Result<EngineOutcome, EngineError> {
+    if call.kind() != EngineCallKind::Create {
+        return Err(EngineError::NotCaptured(call.kind()));
+    }
+    launch(docker, call, base, home, None, Some(credential))
 }
 
 #[cfg(feature = "window-authority")]
@@ -221,8 +240,9 @@ fn launch(
     base: &[(String, String)],
     home: &Path,
     stdin: Option<Vec<u8>>,
+    credential: Option<(&str, &str)>,
 ) -> Result<EngineOutcome, EngineError> {
-    run(docker, call, base, home, stdin).map_err(|cause| {
+    run(docker, call, base, home, stdin, credential).map_err(|cause| {
         EngineError::Launch(LaunchError {
             kind: call.kind(),
             cause: Box::new(cause),
@@ -237,6 +257,7 @@ fn launch(
     _base: &[(String, String)],
     _home: &Path,
     _stdin: Option<Vec<u8>>,
+    _credential: Option<(&str, &str)>,
 ) -> Result<EngineOutcome, EngineError> {
     Err(EngineError::NoAuthority(call.kind()))
 }
@@ -255,6 +276,7 @@ fn run(
     base: &[(String, String)],
     home: &Path,
     stdin: Option<Vec<u8>>,
+    credential: Option<(&str, &str)>,
 ) -> Result<EngineOutcome, EngineError> {
     let Some(deadline_ms) = call.deadline_ms() else {
         return Err(EngineError::NotCaptured(call.kind()));
@@ -267,7 +289,8 @@ fn run(
         .args(call.args())
         .current_dir(home)
         .env_clear()
-        .envs(engine_env(call.kind(), base));
+        .envs(engine_env(call.kind(), base))
+        .envs(credential);
     crate::process::hide_console(&mut command);
     let limits = RunLimits {
         timeout: Duration::from_millis(deadline_ms),

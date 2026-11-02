@@ -585,6 +585,36 @@ impl WindowRegistry {
         self.with_writer(|writer| Ok(Ok(writer.record_inventory(inventory)?)))
     }
 
+    /// Records a finished escape battery (AD-117); refused when the
+    /// registry cannot be written.
+    pub fn record_workshop_battery(
+        &mut self,
+        battery: &crate::registry::workshop::BatteryRecord,
+    ) -> Result<(), IpcError> {
+        self.with_writer(|writer| Ok(Ok(writer.record_battery(battery)?)))
+    }
+
+    /// The image rows and each one's newest batteries (AD-117), for Run
+    /// escape battery's grant.
+    pub fn workshop_battery_inputs(
+        &mut self,
+    ) -> Result<
+        Vec<(
+            crate::registry::workshop::ImageRecord,
+            Vec<crate::registry::workshop::BatteryRecord>,
+        )>,
+        IpcError,
+    > {
+        self.with_writer(|writer| {
+            let mut out = Vec::new();
+            for image in writer.workshop_images()? {
+                let batteries = writer.workshop_batteries(&image.name)?;
+                out.push((image, batteries));
+            }
+            Ok(Ok(out))
+        })
+    }
+
     /// Records one Start of the orchestrator (AD-89, D-144); refused when
     /// the registry cannot be written.
     pub fn record_orchestrator_start(

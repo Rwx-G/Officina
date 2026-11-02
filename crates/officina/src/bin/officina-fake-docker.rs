@@ -18,8 +18,12 @@
 //! else one current `docker`-driver builder), `build` (see [`build`]),
 //! `create` of a recorded image, `cp <container>:<path> -` streaming the
 //! program its image holds, `rm` and `image rm`; story 6.9's attached
-//! `start` (see [`start_attached`]); any other call is logged and exits 0.
-//! Later stories add theirs.
+//! `start` (see [`start_attached`]); story 6.10's battery: a detached
+//! `start`, `logs` without `--follow`, `stop`, `network` and `volume`
+//! `create` and `rm` kept in the state, and the battery worker's, the
+//! gateways' and the decoy's output from the sidecar (see
+//! [`battery_output`], [`logs_once`]); any other call is logged and exits 0. Later stories add
+//! theirs.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -205,9 +209,47 @@ fn main() {
             0
         }
         ["build", rest @ ..] => build(rest, &sidecar, &mut state),
-        ["create", rest @ ..] => create(rest, &mut state),
+        ["create", rest @ ..] => create(rest, &sidecar, &mut state),
         ["cp", source, "-"] => copy_out(source, &state),
         ["start", "--attach", .., name] => start_attached(name, &sidecar, &mut state),
+        ["start", name] => start_detached(name, &sidecar, &mut state),
+        ["logs", name] => logs_once(name, &sidecar, &state),
+        ["stop", rest @ ..] => {
+            for container in state["containers"].as_array_mut().into_iter().flatten() {
+                if rest.iter().any(|n| container["name"] == *n) && container["state"] == "running" {
+                    container["state"] = "exited".into();
+                    container["exit_code"] = 0.into();
+                }
+            }
+            save(&state);
+            0
+        }
+        ["network", "create", rest @ ..] | ["volume", "create", rest @ ..] => {
+            let key = if words[0] == "network" {
+                "networks"
+            } else {
+                "volumes"
+            };
+            let item = serde_json::json!({
+                "name": rest.last().copied().unwrap_or_default(),
+                "labels": pairs(&values(rest, "--label")),
+            });
+            push(&mut state, key, item);
+            save(&state);
+            0
+        }
+        ["network", "rm", names @ ..] | ["volume", "rm", names @ ..] => {
+            let key = if words[0] == "network" {
+                "networks"
+            } else {
+                "volumes"
+            };
+            if let Some(items) = state[key].as_array_mut() {
+                items.retain(|i| !names.iter().any(|n| i["name"] == *n));
+            }
+            save(&state);
+            0
+        }
         ["rm", rest @ ..] => {
             let names: Vec<&str> = rest
                 .iter()
@@ -369,7 +411,7 @@ fn build(args: &[&str], sidecar: &serde_json::Value, state: &mut serde_json::Val
 }
 
 /// `create`: a container, `created`, of the image an argument names.
-fn create(args: &[&str], state: &mut serde_json::Value) -> i32 {
+fn create(args: &[&str], sidecar: &serde_json::Value, state: &mut serde_json::Value) -> i32 {
     let name = values(args, "--name")
         .first()
         .copied()
@@ -389,7 +431,22 @@ fn create(args: &[&str], state: &mut serde_json::Value) -> i32 {
         "state": "created",
         "image": image,
         "labels": pairs(&values(args, "--label")),
+        "phase": values(args, "--phase").first(),
+        "plan": values(args, "--plan").first(),
+        "probe": args.contains(&"--probe"),
     });
+    // Whether a credential the create received is the battery's dummy, as
+    // a yes or no: the value itself is never kept (D-223).
+    for name in ["CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY"] {
+        if let Some(value) = std::env::var_os(name) {
+            let seen = serde_json::json!({
+                "container": name_of(&container),
+                "name": name,
+                "dummy": sidecar["dummy_credential"].as_str().is_some_and(|d| value == d),
+            });
+            push(state, "credentials", seen);
+        }
+    }
     push(state, "containers", container);
     save(state);
     0
@@ -415,6 +472,10 @@ fn start_attached(name: &str, sidecar: &serde_json::Value, state: &mut serde_jso
         .as_str()
         .unwrap_or_default()
         .to_owned();
+    let started = container.clone();
+    if role == "battery" {
+        battery_output(&started, sidecar, state);
+    }
     save(state);
     if role != "inventory" {
         return 0;
@@ -445,6 +506,89 @@ fn start_attached(name: &str, sidecar: &serde_json::Value, state: &mut serde_jso
         result["index"] = index.into();
         println!("{result}");
     }
+    0
+}
+
+fn name_of(container: &serde_json::Value) -> String {
+    container["name"].as_str().unwrap_or_default().to_owned()
+}
+
+fn role_of(container: &serde_json::Value) -> &str {
+    container["labels"]["officina.role"]
+        .as_str()
+        .unwrap_or_default()
+}
+
+/// The prefix of the battery's second gateway (story 6.10).
+const GATEWAY_B: &str = "officina-gateway-b-";
+
+/// `start <container>` (story 6.10): a decoy probe ends at once, its exit
+/// code sidecar `decoy_probe_exit` (0); anything else runs.
+fn start_detached(name: &str, sidecar: &serde_json::Value, state: &mut serde_json::Value) -> i32 {
+    let Some(container) = state["containers"]
+        .as_array_mut()
+        .and_then(|all| all.iter_mut().find(|c| c["name"] == name))
+    else {
+        eprintln!("Error: No such container: {name}");
+        return 1;
+    };
+    if container["probe"].as_bool().unwrap_or(false) {
+        container["state"] = "exited".into();
+        container["exit_code"] = sidecar["decoy_probe_exit"].as_i64().unwrap_or(0).into();
+    } else {
+        container["state"] = "running".into();
+    }
+    save(state);
+    0
+}
+
+/// A battery worker's output (story 6.10): sidecar `battery_lines.<phase>`,
+/// which the test derives from core's attempts, the phase read from the
+/// container's `--phase`. Phase 2 ends gateway B with sidecar
+/// `gateway_b_exit` (3).
+fn battery_output(
+    container: &serde_json::Value,
+    sidecar: &serde_json::Value,
+    state: &mut serde_json::Value,
+) {
+    let phase = container["phase"].as_str().unwrap_or("1");
+    if phase == "2" {
+        for gateway in state["containers"].as_array_mut().into_iter().flatten() {
+            if gateway["name"]
+                .as_str()
+                .is_some_and(|n| n.starts_with(GATEWAY_B))
+            {
+                gateway["state"] = "exited".into();
+                gateway["exit_code"] = sidecar["gateway_b_exit"].as_i64().unwrap_or(3).into();
+            }
+        }
+    }
+    if let Some(lines) = sidecar["battery_lines"][phase].as_str() {
+        print!("{lines}");
+    }
+}
+
+/// `logs <container>` (story 6.10): a decoy prints sidecar `decoy_logs`, a
+/// probe nothing; a battery gateway prints sidecar `gateway_logs.a` or
+/// `gateway_logs.b`.
+fn logs_once(name: &str, sidecar: &serde_json::Value, state: &serde_json::Value) -> i32 {
+    let Some(container) = find(state, "containers", name) else {
+        eprintln!("Error: No such container: {name}");
+        return 1;
+    };
+    let text = match role_of(container) {
+        "decoy" if !container["probe"].as_bool().unwrap_or(false) => sidecar["decoy_logs"].as_str(),
+        "battery_gateway" => {
+            let key = if name.starts_with(GATEWAY_B) {
+                "b"
+            } else {
+                "a"
+            };
+            sidecar["gateway_logs"][key].as_str()
+        }
+        _ => None,
+    };
+    print!("{}", text.unwrap_or_default());
     0
 }
 

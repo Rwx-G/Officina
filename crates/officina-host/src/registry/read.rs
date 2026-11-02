@@ -315,6 +315,19 @@ impl Reader {
         crate::registry::workshop::image(&self.conn, name)
     }
 
+    /// Every image row (AD-99): doctor reads each one's battery.
+    pub fn workshop_images(&self) -> rusqlite::Result<Vec<crate::registry::workshop::ImageRecord>> {
+        crate::registry::workshop::images(&self.conn)
+    }
+
+    /// The newest batteries of image tag `image` (AD-117, AD-123).
+    pub fn workshop_batteries(
+        &self,
+        image: &str,
+    ) -> rusqlite::Result<Vec<crate::registry::workshop::BatteryRecord>> {
+        crate::registry::workshop::batteries_of(&self.conn, image)
+    }
+
     /// The inventory of `project` on `image` (AD-118): doctor and a
     /// launch read it.
     pub fn workshop_inventory(

@@ -1001,6 +1001,38 @@ recorded inventory, a mounted settings file's `env` block or
 `apiKeyHelper` by name only (the worker can read them), and mounted hook
 scripts with CRLF line endings.
 
+### The escape battery
+
+The workshop claims a boundary only where evidence shows it. Before a
+worker runs on an image, Officina plays a fixed battery of escape
+attempts on it, in a container built exactly as a worker is (the same
+vector, its command replaced, one empty read-only mount and a dummy
+credential; on a `login` floor an empty volume of its own where the login
+goes, never your login). The attempts are core's `battery::ATTEMPTS`, in
+seven families: reaching the outside without the gateway, getting past
+the gateway (each refusal must also appear in the gateway's own log, in
+order), reaching the host or another network, writing where nothing may
+be written, privileges, credentials and names in the environment, and
+resource limits. Every attempt judged from a failure has a control in the
+same run that must succeed first, so a refusal means a refusal: the
+gateway answers an allowed request, `/tmp` and `/work` take a write, and a
+decoy container listening on its own network is reached by a second
+container there. A second phase starts a gateway with a 15-second
+deadline and a 20-refusal limit, and checks both, the gateway exiting with
+its limit code. Any escape, any inconclusive attempt or failed control,
+fails the battery.
+
+A passing battery stays valid for 30 days, and only while nothing it ran
+on changed: the engine (its version, kernel and the settings that change
+exposure), the image, the gateway image, the programs measured in the
+image, the container's vector, and Officina's version. Anything else
+makes it stale, and a launch on that image waits for a new one. Run
+escape battery runs it for one image or every stale one; each battery is
+one registry row and journal lines for each attempt, each gateway refusal
+and the totals. Doctor shows each image's last battery and its age, why a
+stale one is stale, and the engine's clock against the window's at the
+last battery.
+
 ### Checking the engine
 
 For a floor that declares `[workshop]`, `officina doctor` adds a workshop

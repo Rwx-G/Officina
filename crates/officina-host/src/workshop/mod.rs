@@ -54,6 +54,7 @@ pub fn ensure_home(home: &Path) -> Result<PathBuf, String> {
     Ok(workshop_dir(home))
 }
 
+pub mod battery;
 pub mod build;
 pub mod doctor;
 pub mod engine;

@@ -41,6 +41,7 @@ const COMMANDS: &[&str] = &[
     "open_meeting",
     "send_answer",
     "build_images",
+    "run_battery",
 ];
 
 fn main() {

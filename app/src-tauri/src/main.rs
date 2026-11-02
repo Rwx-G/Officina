@@ -28,6 +28,7 @@ use officina_core::registry::types::{AuthorReason, Settlement};
 use officina_core::registry::view::{DiscardedSession, RegistryView, SubjectView};
 use officina_core::relay::auto::AutoMode;
 use officina_core::relay::view::RelayView;
+use officina_core::workshop::battery::BatteryAnswer;
 use officina_core::workshop::image::BuildAnswer;
 use officina_host::collector::Collector;
 use officina_host::files::now_ms;
@@ -543,6 +544,38 @@ async fn build_images(state: State<'_, AppState>) -> Result<BuildAnswer, IpcErro
     .map_err(|e| IpcError::internal(e.to_string()))?
 }
 
+/// Run escape battery (AD-117, D-249): a pointer click in the window
+/// (D-28, story 6.20's button), for `image` or every image whose battery
+/// is stale. The collector grants it; thread `workshop-build`, which Build
+/// images shares, reads the engine, picks the batteries and runs them; the
+/// answer says which were queued or why none.
+#[tauri::command]
+async fn run_battery(
+    state: State<'_, AppState>,
+    image: Option<String>,
+) -> Result<BatteryAnswer, IpcError> {
+    let sender = state
+        .collector()
+        .ok_or_else(|| IpcError::internal("the collector is not running"))?;
+    let thread = state.workshop.build.clone();
+    let context = officina_host::workshop::battery::BatteryContext {
+        docker: officina_host::workshop::engine::resolve(),
+        busy: Arc::clone(&state.build_busy),
+        now_ms,
+    };
+    tauri::async_runtime::spawn_blocking(move || {
+        officina_host::workshop::battery::run_battery(
+            &sender,
+            &thread,
+            context,
+            image,
+            Box::new(|| {}),
+        )
+    })
+    .await
+    .map_err(|e| IpcError::internal(e.to_string()))?
+}
+
 /// The meeting of `key` (AD-84, D-138): a card key, `sid:<session id>`
 /// or `subject:<id>`. The collector answers what it holds; the event
 /// lines, the journal, `git` and `claude logs` are read on this command's
@@ -824,7 +857,8 @@ fn main() {
             start_orchestrator,
             open_meeting,
             send_answer,
-            build_images
+            build_images,
+            run_battery
         ])
         .build(tauri::generate_context!())
         .expect("failed to build the Officina window")

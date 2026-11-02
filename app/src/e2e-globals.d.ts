@@ -1,5 +1,6 @@
 // Globals the e2e build exposes to Playwright (see src/e2e-mock.ts). Shared by
 // the app and the e2e tests, which type-check under different tsconfigs.
+import type { BatteryAnswer } from "./lib/generated/BatteryAnswer";
 import type { Board } from "./lib/generated/Board";
 import type { BuildAnswer } from "./lib/generated/BuildAnswer";
 import type { AuthorRefusal } from "./lib/generated/AuthorRefusal";
@@ -68,6 +69,8 @@ declare global {
     __officinaStartAnswer?: StartAnswer;
     /** What `build_images` answers (story 6.8); else `queued`. */
     __officinaBuildAnswer?: BuildAnswer;
+    /** What `run_battery` answers (story 6.10); else the base queued. */
+    __officinaBatteryAnswer?: BatteryAnswer;
     /** Holds `start_orchestrator`'s answer until `__officinaReleaseStart`
      *  is called (story 5.16): a Start in flight. */
     __officinaStartHeld?: boolean;

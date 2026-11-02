@@ -8,6 +8,17 @@ project uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- The workshop's escape battery (v0.6, story 6.10): a fixed set of
+  escape attempts played on each image in a container built as a worker
+  is, with a dummy credential, each attempt judged from a failure counted
+  only after its control succeeded in the same run, the gateway's own
+  refusals matched in order, and a second phase checking the gateway's
+  deadline and refusal limit. A pass stays valid 30 days and only while
+  the engine, its settings, the images, the measured programs, the vector
+  and Officina's version are unchanged. Run escape battery (for one image
+  or every stale one) records one row and journals each attempt, each
+  gateway refusal and the totals; doctor shows each image's last battery,
+  why a stale one is stale, and the engine's clock skew.
 - The session file's exchange reads as markdown (story 4.20): paragraphs
   and line breaks, emphasis, inline and fenced code, headings as bold
   lines, lists, quotes and tables, a wide table scrolling inside its

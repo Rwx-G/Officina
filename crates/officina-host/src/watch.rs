@@ -178,6 +178,13 @@ pub enum AuthorCommand {
     /// journal line. Like a launch's outcome it is never dropped (D-135's
     /// outcome pattern, D-239).
     ImageBuilt(Box<crate::workshop::build::BuildReport>),
+    /// A Run escape battery click (AD-117): the stop flag, the approved
+    /// catalogue, the images built and their batteries, for one image or
+    /// every stale one.
+    GrantBattery(Option<String>),
+    /// One battery's report from thread `workshop-build`: its row and
+    /// journal lines. Never dropped, like a build's outcome.
+    BatteryRecorded(Box<crate::workshop::battery::BatteryReport>),
 }
 
 impl AuthorAnswer {
@@ -283,6 +290,23 @@ impl AuthorAnswer {
         }
     }
 
+    /// What a Run escape battery click may run, or why not, for
+    /// `GrantBattery`'s answer.
+    pub fn into_battery_grant(
+        self,
+    ) -> Result<
+        Result<
+            crate::workshop::battery::BatteryPlan,
+            officina_core::workshop::battery::BatteryRefusal,
+        >,
+        IpcError,
+    > {
+        match self {
+            AuthorAnswer::BatteryGrant(grant) => Ok(*grant),
+            other => Err(other.unexpected()),
+        }
+    }
+
     /// The Start's ticket, refusal or "running", for `StartOrchestrator`'s
     /// answer.
     pub fn into_start(self) -> Result<StartGrant, IpcError> {
@@ -318,6 +342,14 @@ pub enum AuthorAnswer {
     BuildGrant(
         Box<
             Result<crate::workshop::build::BuildPlan, officina_core::workshop::image::BuildRefusal>,
+        >,
+    ),
+    BatteryGrant(
+        Box<
+            Result<
+                crate::workshop::battery::BatteryPlan,
+                officina_core::workshop::battery::BatteryRefusal,
+            >,
         >,
     ),
 }
@@ -360,6 +392,7 @@ impl AuthorRequest {
                 | AuthorCommand::AnswerOutcome(_)
                 | AuthorCommand::EngineState(_)
                 | AuthorCommand::ImageBuilt(_)
+                | AuthorCommand::BatteryRecorded(_)
         ) && now + AUTHOR_HEADROOM >= self.deadline
     }
 }
@@ -1292,6 +1325,7 @@ fn answer_author<E: Emit>(
             | AuthorCommand::EditCard { .. }
             | AuthorCommand::EngineState(_)
             | AuthorCommand::GrantBuild
+            | AuthorCommand::GrantBattery(_)
     );
     let quota = outputs.board.current().map(|board| board.quota);
     let reply = match request.command {
@@ -1437,6 +1471,19 @@ fn answer_author<E: Emit>(
         ))),
         AuthorCommand::ImageBuilt(report) => {
             crate::workshop::build::record(registry, collector.relay(), &report, now)
+                .map(|()| AuthorAnswer::Done { created: None })
+        }
+        AuthorCommand::GrantBattery(only) => Ok(AuthorAnswer::BatteryGrant(Box::new(
+            crate::workshop::battery::grant(
+                collector.relay(),
+                &collector.paths().officina_home,
+                registry,
+                only.as_deref(),
+                collector.base_env().vars(),
+            ),
+        ))),
+        AuthorCommand::BatteryRecorded(report) => {
+            crate::workshop::battery::record(registry, collector.relay(), &report, now)
                 .map(|()| AuthorAnswer::Done { created: None })
         }
         AuthorCommand::EngineState(state) => {

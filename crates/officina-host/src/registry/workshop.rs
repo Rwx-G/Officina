@@ -336,22 +336,51 @@ pub struct BatteryTotals {
     pub not_applicable: u32,
 }
 
+/// The columns [`battery_row`] reads, in its order.
+const BATTERY_COLUMNS: &str = "id, image, image_id, gateway_image_id, engine_key, officina_version,
+     vector_sha256, programs_sha256, clock_skew_ms, started_at_ms, finished_at_ms,
+     outcome, attempts, refused, escaped, inconclusive, not_applicable, cause";
+
+fn battery_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<BatteryRecord> {
+    Ok(BatteryRecord {
+        id: row.get(0)?,
+        image: row.get(1)?,
+        key: BatteryKey {
+            image_id: row.get(2)?,
+            gateway_image_id: row.get(3)?,
+            engine_key: row.get(4)?,
+            officina_version: row.get(5)?,
+            vector_sha256: row.get(6)?,
+            programs_sha256: row.get(7)?,
+        },
+        clock_skew_ms: row.get(8)?,
+        started_at_ms: row.get(9)?,
+        finished_at_ms: row.get(10)?,
+        outcome: optional(row, 11, BatteryOutcome::from_code)?,
+        totals: BatteryTotals {
+            attempts: count(row, 12)?.unwrap_or(0),
+            refused: count(row, 13)?.unwrap_or(0),
+            escaped: count(row, 14)?.unwrap_or(0),
+            inconclusive: count(row, 15)?.unwrap_or(0),
+            not_applicable: count(row, 16)?.unwrap_or(0),
+        },
+        cause: row.get(17)?,
+    })
+}
+
 /// The newest battery that passed for exactly `key` (story 6.10's
 /// validity reads it).
 pub fn newest_passing_battery(
     conn: &Connection,
     key: &BatteryKey,
 ) -> rusqlite::Result<Option<BatteryRecord>> {
-    conn.prepare_cached(
-        "SELECT id, image, image_id, gateway_image_id, engine_key, officina_version,
-                vector_sha256, programs_sha256, clock_skew_ms, started_at_ms, finished_at_ms,
-                outcome, attempts, refused, escaped, inconclusive, not_applicable, cause
-         FROM workshop_battery
+    conn.prepare_cached(&format!(
+        "SELECT {BATTERY_COLUMNS} FROM workshop_battery
          WHERE image_id = ?1 AND gateway_image_id = ?2 AND engine_key = ?3
            AND officina_version = ?4 AND vector_sha256 = ?5 AND programs_sha256 = ?6
            AND outcome = ?7
-         ORDER BY finished_at_ms DESC, id LIMIT 1",
-    )?
+         ORDER BY finished_at_ms DESC, id LIMIT 1"
+    ))?
     .query_row(
         params![
             key.image_id,
@@ -362,34 +391,36 @@ pub fn newest_passing_battery(
             key.programs_sha256,
             BatteryOutcome::Passed.code()
         ],
-        |row| {
-            Ok(BatteryRecord {
-                id: row.get(0)?,
-                image: row.get(1)?,
-                key: BatteryKey {
-                    image_id: row.get(2)?,
-                    gateway_image_id: row.get(3)?,
-                    engine_key: row.get(4)?,
-                    officina_version: row.get(5)?,
-                    vector_sha256: row.get(6)?,
-                    programs_sha256: row.get(7)?,
-                },
-                clock_skew_ms: row.get(8)?,
-                started_at_ms: row.get(9)?,
-                finished_at_ms: row.get(10)?,
-                outcome: optional(row, 11, BatteryOutcome::from_code)?,
-                totals: BatteryTotals {
-                    attempts: count(row, 12)?.unwrap_or(0),
-                    refused: count(row, 13)?.unwrap_or(0),
-                    escaped: count(row, 14)?.unwrap_or(0),
-                    inconclusive: count(row, 15)?.unwrap_or(0),
-                    not_applicable: count(row, 16)?.unwrap_or(0),
-                },
-                cause: row.get(17)?,
-            })
-        },
+        battery_row,
     )
     .optional()
+}
+
+/// The most battery rows read per image: validity needs the newest
+/// passing one, doctor the newest of all.
+pub const BATTERIES_PER_IMAGE: u32 = 50;
+
+/// The newest batteries of image tag `image`, newest first (AD-117,
+/// AD-123): validity and doctor read them.
+pub fn batteries_of(conn: &Connection, image: &str) -> rusqlite::Result<Vec<BatteryRecord>> {
+    conn.prepare_cached(&format!(
+        "SELECT {BATTERY_COLUMNS} FROM workshop_battery WHERE image = ?1
+         ORDER BY started_at_ms DESC, id LIMIT ?2"
+    ))?
+    .query_map(params![image, BATTERIES_PER_IMAGE], battery_row)?
+    .collect()
+}
+
+/// Every image row, by name (AD-99): the battery picks the stale ones.
+pub fn images(conn: &Connection) -> rusqlite::Result<Vec<ImageRecord>> {
+    let names: Vec<String> = conn
+        .prepare_cached("SELECT name FROM workshop_image ORDER BY name")?
+        .query_map([], |row| row.get(0))?
+        .collect::<rusqlite::Result<_>>()?;
+    names
+        .iter()
+        .filter_map(|name| image(conn, name).transpose())
+        .collect()
 }
 
 #[cfg(feature = "window-authority")]
@@ -758,6 +789,55 @@ mod writers {
             project: &str,
         ) -> Result<Option<InventoryRecord>, RegistryError> {
             Ok(inventory(&self.conn, image_name, project)?)
+        }
+
+        /// Records a finished battery whole (AD-117): its start and its
+        /// end in one transaction, so no row is ever left without an
+        /// outcome by a window that closed mid-battery.
+        pub fn record_battery(&mut self, record: &BatteryRecord) -> Result<(), RegistryError> {
+            let tx = self
+                .conn
+                .transaction_with_behavior(TransactionBehavior::Immediate)?;
+            tx.execute(
+                "INSERT INTO workshop_battery (id, image, image_id, gateway_image_id, engine_key,
+                     officina_version, vector_sha256, programs_sha256, clock_skew_ms, started_at_ms,
+                     finished_at_ms, outcome, attempts, refused, escaped, inconclusive,
+                     not_applicable, cause)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16,
+                     ?17, ?18)",
+                params![
+                    record.id,
+                    record.image,
+                    record.key.image_id,
+                    record.key.gateway_image_id,
+                    record.key.engine_key,
+                    record.key.officina_version,
+                    record.key.vector_sha256,
+                    record.key.programs_sha256,
+                    record.clock_skew_ms,
+                    record.started_at_ms,
+                    record.finished_at_ms,
+                    record.outcome.map(BatteryOutcome::code),
+                    record.totals.attempts,
+                    record.totals.refused,
+                    record.totals.escaped,
+                    record.totals.inconclusive,
+                    record.totals.not_applicable,
+                    record.cause
+                ],
+            )?;
+            tx.commit()?;
+            Ok(())
+        }
+
+        /// Every image row.
+        pub fn workshop_images(&self) -> Result<Vec<ImageRecord>, RegistryError> {
+            Ok(images(&self.conn)?)
+        }
+
+        /// The newest batteries of image tag `image`.
+        pub fn workshop_batteries(&self, image: &str) -> Result<Vec<BatteryRecord>, RegistryError> {
+            Ok(batteries_of(&self.conn, image)?)
         }
 
         /// The newest passing battery for `key`.
