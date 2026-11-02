@@ -226,19 +226,20 @@ stories:
 epic: 7
 version: v0.7
 # approved: written and approved, implementation not started.
-# Epic 7's research-note entries are E60 to E79 (epic-7-decisions.md D-301); Epic 6 reserves none, its entries taking the next free number (epic-6-decisions.md D-600).
-# Slice 0 is two stories (epic-7-decisions.md P-62): 7.1 records gates 1, 2, 3 and 6 (E60 to E63) before any Slice A story; 7.13 closes Slice A on its own table and records gates 0, 4 and 5 (E64 to E66) and the Slice B entry conditions (D-331).
-# Halves (D-302): gate 6's second half closes 7.3; gate 5's first half is in 7.13, its second half closes 7.17. Gate 4 stops the worker container from outside (D-347).
-# Slice A (7.2-7.12: FR-1 to FR-6, FR-10, FR-11 in shadow, FR-17 and FR-18 without launch controls) launches nothing; Decision has no Launch variant (D-326).
-# One quota regime (D-304): on an api-key floor 7.7 and 7.8 stay unimplemented and 7.9 builds usd_budget on enforced caps only; E60 or E61 failing also leaves 7.8 unimplemented (D-303). A worker's reported cost gates nothing (P-64).
-# Implemented after v0.2 to v0.6; each seam has one owning story (epic-7-decisions.md D-300).
-# 7.2, 7.3 and 7.4 are independent; 7.5 needs 7.4; 7.6 needs 7.2, 7.4 and 7.5; 7.8 needs 7.7; 7.9 needs 7.3, 7.4, 7.7 and 7.8; 7.10 needs 7.2 to 7.4 and 7.6 to 7.9; 7.11 needs 7.10; 7.12 needs 7.5, 7.6 and 7.11.
-# 7.13 runs after 5 shadow working days (D-353); its Slice B decision is go, wait (v0.8 starts, PRD section 6.1.1) or not built.
-# Slice B (7.14-7.20: FR-8, FR-9's enforcement, FR-12 to FR-16, launch controls) starts only on 7.13's go; each story states its entry conditions. 7.15 needs 7.14; 7.16 needs 7.14 and 7.15; 7.17 needs 7.16 and E66's first half; 7.18 needs 7.16.
+# Reworked 2026-11-02 against v0.4 to v0.6 as built (epic-7-decisions.md D-1200 to D-1221, R129 to R132): every story aligned (files on main, journal record/append, the single header, D-564's UI list, the local gate while GitHub CI is off); 7.21 (worktrees of work orders, merged and cleaned up, D-1214), 7.22 and 7.23 (the critic and research helpers, D-1219, D-1221) added. Visible effects for the owner: D-1209 (one header slot, no governor chips), D-1214 (worktree cleanup commands on the card), D-1218 (order of v0.7 and v0.8), D-1219 (helpers' Keep verdict).
+# Order with v0.8 (D-1218, the owner's call): recommended v0.8 first once v0.6's Slice A closes (6.20); no Epic 7 story depends on Epic 8, so either order holds. v1 is re-baselined at v0.8's close.
+# Research-note entries take the next free number when written and are named by subject: the v0.7 gate 1, 2, 3, 6, 0, 4 and 5 entries, the v0.7 Slice A entry, the Slice B decision entry, the v0.7 measure entry (D-1200, which releases E60 to E79). Every gate runs on the home PC, the personal floor's machine (D-1216).
+# Slice 0 is two stories (P-62): 7.1 records gates 1, 2, 3 and 6; 7.13 closes Slice A on its own table and records gates 0, 4 and 5 and the Slice B entry conditions (D-331). Halves (D-302): gate 6's second half closes 7.3; gate 5's first half is in 7.13, its second half closes 7.17. Gate 4 stops the worker container from outside (D-347).
+# Entry (D-1203, D-1202): every story waits for its v0.6 seams (D-300). Gates hold only the stories whose facts they are: 7.2, 7.4, 7.5, 7.6 and 7.21 need no gate; 7.3 needs gate 6's first half; 7.7 gate 2; 7.8 gates 1 and 2; 7.9 gate 3 (which needs v0.6's Slice A closed and one clicked run). 7.21 needs only 7.4 and v0.5 (it builds 7.5's classify and git thread if it merges first), so it may land before v0.6 closes.
+# Slice A (7.2-7.12, 7.21: FR-1 to FR-6, FR-10, FR-11 in shadow, FR-17 and FR-18 without launch controls, D-1214) launches nothing; Decision has no Launch variant (D-326).
+# One quota regime, the subscription one (D-1204): FR-7 is not built; an api-key floor makes the governor unavailable. The gate 1 or 2 entry failing leaves 7.8 unimplemented (D-303). A worker's reported cost gates nothing (P-64); max_usd is a soft cap (D-1205).
+# Needs merged (code): 7.2 and 7.4 are independent; 7.3 needs gate 6's first half; 7.5 needs 7.4 and v0.6's Import (6.16); 7.21 needs 7.4 (whichever of 7.5 and 7.21 merges first builds merge::classify and the governor-git thread); 7.6 needs 7.2, 7.4 and 7.5; 7.8 needs 7.7; 7.9 needs 7.3, 7.4, 7.7 and 7.8; 7.10 needs 7.2 to 7.4 and 7.6 to 7.9; 7.11 needs 7.10; 7.12 needs 7.5, 7.6 and 7.11.
+# 7.13 runs after 5 shadow working days (D-353) and question 10's answer (D-1220); its Slice B decision is go, wait (v0.8 starts if it has not, D-1218) or not built.
+# Slice B (7.14-7.20, 7.22, 7.23: FR-8, FR-9's enforcement, FR-12 to FR-16, launch controls, PRD section 9) starts only on 7.13's go; each story states its entry conditions. 7.15 needs 7.14; 7.16 needs 7.14 and 7.15; 7.17 needs 7.16 and gate 5's first half; 7.18 needs 7.16; 7.22 needs 7.14 and 7.15; 7.23 needs 7.22 and v0.6's scene workers (6.23).
 # No build offers mode on before scope quarantine and held packages exist: 7.15 (scope, holding, the self-stop writer) merges before 7.16 (mode on), D-345.
-# Reworked after the story review (epic-7-decisions.md P-65, review F1 to F41; new decisions D-343 to D-355). F22 (this block in docs/stories/sprint-status.yaml) is left to the coordinator.
-# 7.19 closes the built slices (v0.8 may start); 7.20 reads the two-week measure alongside v0.8, at the latest at v1's close (P-62, PRD section 6.1.1's exception to P-7 and P-16, for the owner's confirmation).
-# Addendum 2026-10-28 (prd-v0.7.md section 9, architecture-v0.7.md section 6, epic-7-decisions.md D-492, D-493): the critic and research helpers are Slice B work; their stories are written with Slice B.
+# Every v0.7 key (helpers' role included) lands in 7.2's one format bump, every column (helpers' kept/report/role, worktree_check) in 7.4's one migration, relative to main at each merge (P-63, D-1219).
+# Reworked after the story review (epic-7-decisions.md P-65, review F1 to F41; new decisions D-343 to D-355).
+# 7.19 closes the built slices; 7.20 reads the two-week measure alongside or after v0.8, at the latest at v1's close (P-62, PRD section 6.1.1's exception to P-7 and P-16, for the owner's confirmation).
 stories:
   - {id: "7.1", file: story-7.1-workstation-gates.md, slice: "0", status: approved}
   - {id: "7.2", file: story-7.2-floor-keys-and-catalogue-format.md, slice: A, status: approved}
@@ -252,31 +253,36 @@ stories:
   - {id: "7.10", file: story-7.10-the-decision.md, slice: A, status: approved}
   - {id: "7.11", file: story-7.11-governor-step-and-shadow.md, slice: A, status: approved}
   - {id: "7.12", file: story-7.12-governor-view-and-section.md, slice: A, status: approved}
+  - {id: "7.21", file: story-7.21-worktree-merges-and-cleanup.md, slice: A, status: approved}
   - {id: "7.13", file: story-7.13-slice-a-close-and-slice-b-entry.md, slice: "0", status: approved}
   - {id: "7.14", file: story-7.14-grant-and-launch.md, slice: B, status: approved}
   - {id: "7.15", file: story-7.15-held-packages-and-scope.md, slice: B, status: approved}
   - {id: "7.16", file: story-7.16-modes-guards-and-self-stop.md, slice: B, status: approved}
   - {id: "7.17", file: story-7.17-stop-shortcut.md, slice: B, status: approved}
   - {id: "7.18", file: story-7.18-automations-table.md, slice: B, status: approved}
+  - {id: "7.22", file: story-7.22-helper-runs-and-reports.md, slice: B, status: approved}
+  - {id: "7.23", file: story-7.23-helpers-in-the-scene.md, slice: B, status: approved}
   - {id: "7.19", file: story-7.19-docs-doctor-and-qa.md, slice: B, status: approved}
   - {id: "7.20", file: story-7.20-two-week-measure.md, slice: B, status: approved}
 ---
 epic: 8
 version: v0.8
 # approved: written and approved, implementation not started.
-# Slice 0 (8.1) records gates 0 to 3 of architecture-v0.8.md AD-166, gates 2 and 3 in halves (epic-8-decisions.md D-401 to D-403); E-numbers are given when each entry is written (D-401).
-# Gate 0 (the owner's count of production writes) comes first: no other v0.8 story starts before it is recorded (FR-0). Gate 1 before 8.3, 8.5 and any Slice A or B story; the first halves of gates 2 and 3 before 8.9 and 8.11.
+# Reworked 2026-11-02 against v0.4 to v0.6 as built (epic-8-decisions.md D-1300 to D-1314, R149, R150): every story aligned with main's names and files (D-1306), no v0.7 condition in either order (D-1301), entries named by subject (D-1300), CI proofs replayed by the local gate (D-1303), the v0.2 owner checks v0.8 rests on made entry conditions (D-1302). Visible effects for the owner: D-1302, D-1309 (no header element; fixed-height scope block), D-1310 (what gate 0 and the two weeks hold), D-1311 (per-action identity in doctor). Order with v0.7: the owner's call, v0.8 first recommended (epic-7-decisions.md D-1218); v1 is re-baselined at v0.8's close.
+# Slice 0 (8.1) records gates 0 to 3 of architecture-v0.8.md AD-166, gates 2 and 3 in halves (epic-8-decisions.md D-401 to D-403); each entry takes the next free E-number when written and is named by subject (D-1300). Every gate runs on the work laptop, the work floor's machine.
+# Gate 0 (the owner's count of production writes, on the work laptop) holds 8.3 to 8.16 (FR-0, D-1310); 8.1's agent half (gate 2's first half, runnable now on v0.6's base image) and 8.2's code may come first. Gate 1 before 8.3, 8.5 and any Slice A or B story; the first halves of gates 2 and 3 before 8.9. Story 2.10 AC 10 is recorded in gate 3's sitting (D-1302).
 # Second halves (D-402): gate 3 closes 8.11, gate 2 closes 8.12.
-# 8.2 (Slice 0) reads story 2.8's two weeks at work and records whether Slice A is built (D-404); it holds 8.6 and 8.7, and 8.8 through its Decision time row only, never Slice B.
-# 8.2's code (metrics, journal::read_days, the two examples) is exempt from the ordering below: it lands once stories 2.8 and 2.13 have merged, before the owner's two weeks begin, which start after 2.13 merged (D-400, D-404).
-# Keys (8.3, 8.4) and the shared scope core (8.5) are built with whichever slice comes first; 8.3 starts only once a slice is confirmed (8.2's trigger, or the gate 2 and 3 first halves passed) or 8.8 is called for, and needs story 2.13 (P-72). 8.3 bumps the catalogue format once and 8.6 again (P-73, D-405).
-# Slice A, conditional (8.6, 8.7: FR-1 to FR-3 enforced): implemented only after 8.2 records a trigger; until then approved and unimplemented (P-72).
+# 8.2's code (relay::metrics over the existing read_days, the two examples) lands first, exempt from ordering and gate 0 (D-400, D-1304, D-1310): stories 2.8 and 2.13 are on main, and the owner's two weeks at work start only once it is on his work build. 8.2 records whether Slice A is built (D-404); it holds 8.6 and 8.7, and 8.8 through its Decision time row only, never Slice B.
+# Keys (8.3, 8.4) and the shared scope core (8.5) are built with whichever slice comes first; 8.3 starts only once a slice is confirmed (8.2's trigger, or the gate 2 and 3 first halves passed) or 8.8 is called for (P-72). 8.3 bumps the catalogue format once and 8.6 again, each relative to main at its merge, whichever of v0.7 and v0.8 comes first (P-73, D-405, D-1301).
+# Slice A, conditional (8.6, 8.7: FR-1 to FR-3 enforced): implemented only after 8.2 records a trigger, and only once stories 2.4 AC 18, 2.12 AC 6 and 2.17 AC 7 are recorded at work, the owner's sessions running in bypassPermissions by default (D-1302, R149); until then approved and unimplemented (P-72).
 # 8.8 (FR-4, bound paths): only when gate 1 finds ignored roles or collections under a guarded project, whatever Slice A's trigger (P-70); otherwise approved and unimplemented.
-# Slice B (8.9-8.15: FR-5 to FR-8, Slice B parts of FR-9 and FR-10) is built unless gate 2 and its fallback both fail (FR-6, P-72).
+# Slice B (8.9-8.15: FR-5 to FR-8, Slice B parts of FR-9 and FR-10) starts once v0.6's Slice A closed (6.20) and is built unless gate 2 and its fallback both fail (FR-6, P-72, D-1313). v0.6 seams by story: 8.11 needs 6.12 and 6.17; 8.12 needs 6.11 to 6.13 and 6.17; 8.13 needs 6.10; 8.14 needs 6.13, 6.16, 6.18, 6.19; 8.15 needs 6.9.
 # Slice B order: 8.9 needs the gate 2 and 3 first halves; 8.10 needs 8.3, 8.5 and 8.9; 8.11 needs 8.10; 8.12 needs 8.9 and 8.11; 8.13, 8.14 and 8.15 need 8.12.
-# Implemented after v0.2 to v0.6 have merged (story 2.8 as amended by D-170, stories 2.11 and 2.13 included) and v0.7's built slices closed (epic-7-decisions.md P-62); each seam has one owning story (epic-8-decisions.md D-400).
+# No v0.7 story is an entry condition (D-1301): v0.8 consumes no governor code; D-425's governor-launched case runs only if story 7.14 merged first. Each seam has one owning story (epic-8-decisions.md D-400), read through the files on main (D-1306).
+# Every UI change carries epic-5-decisions.md D-564 / epic-6-decisions.md D-620's list; v0.8 adds no header element (D-1309).
+# GitHub CI stays disabled: every CI-job proof is that job of ci.yml replayed by the local gate (D-1303).
 # The workstation browser slice is PRD section 5's backlog note: no story; 8.16 lists it for the owner's confirmation (question 9).
-# 8.16 closes the built slices after real use (owner rule, epic-2-decisions.md P-7, with the exception of epic-8-decisions.md P-72).
+# 8.16 closes the built slices after real use (owner rule, epic-2-decisions.md P-7, with the exception of epic-8-decisions.md P-72); Slice B's real use is at work once v0.6 works on the work floor (6.25 AC 5 and a passing battery there, D-1312).
 # Reworked after the story review (review-stories-epic8.md, F1 to F40; epic-8-decisions.md P-74, new decisions D-426 to D-434); F1's v0.2-wide part and F8's journal fields are story 2.13 (D-172).
 stories:
   - {id: "8.1", file: story-8.1-workstation-gates.md, slice: "0", status: approved}
