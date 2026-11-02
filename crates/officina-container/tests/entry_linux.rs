@@ -1,6 +1,7 @@
 //! `officina-entry` on Linux with real git in a temporary root and a fake
 //! `claude` script (story 6.7 AC 1, 2, 5; AD-108, AD-110, D-606, D-608,
-//! D-609) and the inventory (story 6.9 AC 2, AD-118, D-211). `/work`
+//! D-609), the inventory (story 6.9 AC 2, AD-118, D-211) and the escape
+//! battery and its decoy (story 6.10 AC 2, AD-117, D-235). `/work`
 //! lives under the temporary root (`--root`).
 #![cfg(target_os = "linux")]
 
@@ -754,4 +755,271 @@ fn a_tracked_script_is_judged_from_what_the_host_read() {
     assert_eq!(results[2]["detail"], "not_executable");
     assert_eq!(results[3]["detail"], "crlf_shebang");
     assert_eq!(results[4]["detail"], "interpreter");
+}
+
+// --- The escape battery (story 6.10 AC 2) ---
+
+/// A root for the battery: `/tmp` and `/work` writable, `/proc/self/status`
+/// a fixture; the gateway and the decoy are loopback ports nothing
+/// listens on, unless a test opens them.
+struct BatteryRoot {
+    _dir: tempfile::TempDir,
+    root: PathBuf,
+}
+
+const WORKER_STATUS: &str = "Name:\tofficina-entry\nUid:\t1000\t1000\t1000\t1000\nGid:\t1000\t1000\t1000\t1000\nCapInh:\t0000000000000000\nCapPrm:\t0000000000000000\nCapEff:\t0000000000000000\nCapBnd:\t0000000000000000\nCapAmb:\t0000000000000000\nNoNewPrivs:\t1\nSeccomp:\t2\n";
+
+impl BatteryRoot {
+    fn new(status: &str) -> BatteryRoot {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        for sub in ["tmp", "work/.officina/mounts/0", "proc/self", "etc", "usr"] {
+            fs::create_dir_all(root.join(sub)).unwrap();
+        }
+        fs::write(root.join("proc/self/status"), status).unwrap();
+        BatteryRoot { _dir: dir, root }
+    }
+
+    fn plan(&self, expected_env: &[&str]) -> officina_core::workshop::battery::Plan {
+        officina_core::workshop::battery::Plan {
+            gateway: "127.0.0.1".into(),
+            gateway_port: 9,
+            decoy: officina_core::workshop::battery::DecoyAddresses {
+                own: vec!["127.0.0.1".into()],
+                host_docker_internal: Vec::new(),
+                gateway_docker_internal: Vec::new(),
+            },
+            decoy_port: 9,
+            mount: "/work/.officina/mounts/0".into(),
+            login_mount: None,
+            expected_env: expected_env.iter().map(|n| (*n).to_owned()).collect(),
+            pids_limit: 4,
+            memory_mib: 1,
+            wait_s: 0,
+            bad_requests: 1,
+        }
+    }
+
+    /// Runs `phase` of `plan` with exactly `env`; one parsed line each.
+    fn run(
+        &self,
+        phase: u8,
+        plan: &officina_core::workshop::battery::Plan,
+        env: &[(&str, &str)],
+    ) -> Vec<officina_core::workshop::battery::BatteryLine> {
+        let out = Command::new(ENTRY)
+            .args(["battery", "--phase", &phase.to_string()])
+            .args(officina_core::workshop::battery::plan(plan))
+            .arg("--root")
+            .arg(&self.root)
+            .env_clear()
+            .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+            .envs(env.iter().copied())
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{out:?}");
+        let text = String::from_utf8(out.stdout).unwrap();
+        text.lines()
+            .map(|l| officina_core::workshop::battery::parse_line(l).expect(l))
+            .collect()
+    }
+}
+
+fn attempt_line<'l>(
+    lines: &'l [officina_core::workshop::battery::BatteryLine],
+    code: &str,
+) -> &'l officina_core::workshop::battery::AttemptLine {
+    lines
+        .iter()
+        .find_map(|l| match l {
+            officina_core::workshop::battery::BatteryLine::Attempt(a) if a.attempt == code => {
+                Some(a)
+            }
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("no line for {code}"))
+}
+
+#[test]
+fn the_battery_prints_one_line_per_attempt() {
+    use officina_core::workshop::battery::{BatteryLine, attempts_for};
+    use officina_core::workshop::floor::CredentialKind;
+    let root = BatteryRoot::new(WORKER_STATUS);
+    for phase in [1, 2] {
+        let lines = root.run(phase, &root.plan(&["PATH"]), &[]);
+        let attempts: Vec<&str> = lines
+            .iter()
+            .filter_map(|l| match l {
+                BatteryLine::Attempt(a) => Some(a.attempt.as_str()),
+                BatteryLine::Control(_) => None,
+            })
+            .collect();
+        let expected: Vec<&str> = attempts_for(CredentialKind::OauthToken, phase)
+            .map(|a| a.code)
+            .collect();
+        assert_eq!(attempts, expected, "phase {phase}");
+    }
+}
+
+#[test]
+fn a_control_runs_before_its_family() {
+    use officina_core::workshop::battery::{BatteryFamily, BatteryLine, Control};
+    let root = BatteryRoot::new(WORKER_STATUS);
+    let lines = root.run(1, &root.plan(&["PATH"]), &[]);
+    let index = |pick: &dyn Fn(&BatteryLine) -> bool| lines.iter().position(pick);
+    for family in BatteryFamily::ALL {
+        let Some(control) = family.control() else {
+            continue;
+        };
+        let control_at = index(&|l| matches!(l, BatteryLine::Control(c) if c.family == *family));
+        let first_attempt = index(&|l| matches!(l, BatteryLine::Attempt(a) if a.family == *family));
+        if control == Control::DecoyListening {
+            assert_eq!(control_at, None, "the host plays the decoy's control");
+            continue;
+        }
+        assert!(
+            control_at.unwrap() < first_attempt.unwrap(),
+            "{family:?}'s control comes first"
+        );
+    }
+}
+
+#[test]
+fn the_files_family_reads_read_only_as_refused() {
+    use officina_core::workshop::battery::{AttemptOutcome, BatteryLine, ControlStatus};
+    let root = BatteryRoot::new(WORKER_STATUS);
+    // A file where a folder is expected refuses every write, as a root
+    // that cannot be written does, even to a test running as root.
+    for blocked in ["usr", "etc", "opt/officina/bin", "work/.officina/mounts/0"] {
+        let path = root.root.join(blocked);
+        let _ = fs::remove_dir_all(&path);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, b"read-only").unwrap();
+    }
+    let lines = root.run(1, &root.plan(&["PATH"]), &[]);
+    let control = lines.iter().find_map(|l| match l {
+        BatteryLine::Control(c) if c.family.code() == "files" => Some(c.status),
+        _ => None,
+    });
+    assert_eq!(control, Some(ControlStatus::Ok));
+    for code in [
+        "write_battery_mount",
+        "write_usr",
+        "write_etc",
+        "write_officina_bin",
+    ] {
+        assert_eq!(
+            attempt_line(&lines, code).outcome,
+            AttemptOutcome::Refused,
+            "{code}"
+        );
+    }
+    assert_eq!(
+        attempt_line(&lines, "write_root").outcome,
+        AttemptOutcome::Escaped,
+        "a write that holds is seen: the temporary root is writable"
+    );
+}
+
+#[test]
+fn the_privileges_family_reads_proc_self_status() {
+    use officina_core::workshop::battery::AttemptOutcome;
+    let held = BatteryRoot::new(WORKER_STATUS);
+    let lines = held.run(1, &held.plan(&["PATH"]), &[]);
+    for code in ["uid_gid", "capabilities", "no_new_privs", "seccomp"] {
+        assert_eq!(
+            attempt_line(&lines, code).outcome,
+            AttemptOutcome::Refused,
+            "{code}"
+        );
+    }
+    let loose = WORKER_STATUS
+        .replace("CapEff:\t0000000000000000", "CapEff:\t00000000a80425fb")
+        .replace("Uid:\t1000\t1000\t1000\t1000", "Uid:\t0\t0\t0\t0")
+        .replace("NoNewPrivs:\t1", "NoNewPrivs:\t0")
+        .replace("Seccomp:\t2", "Seccomp:\t0");
+    let escaped = BatteryRoot::new(&loose);
+    let lines = escaped.run(1, &escaped.plan(&["PATH"]), &[]);
+    for code in ["uid_gid", "capabilities", "no_new_privs", "seccomp"] {
+        assert_eq!(
+            attempt_line(&lines, code).outcome,
+            AttemptOutcome::Escaped,
+            "{code}"
+        );
+    }
+}
+
+#[test]
+fn the_environment_family_compares_names_only() {
+    use officina_core::workshop::battery::AttemptOutcome;
+    let root = BatteryRoot::new(WORKER_STATUS);
+    let plan = root.plan(&["HOME", "PATH"]);
+    let lines = root.run(1, &plan, &[("HOME", "/work/.officina/home")]);
+    assert_eq!(
+        attempt_line(&lines, "environment_names").outcome,
+        AttemptOutcome::Refused
+    );
+    let lines = root.run(
+        1,
+        &plan,
+        &[
+            ("HOME", "/work/.officina/home"),
+            ("OFFICINA_TEST_EXTRA", "a-value-never-printed"),
+        ],
+    );
+    let line = attempt_line(&lines, "environment_names");
+    assert_eq!(line.outcome, AttemptOutcome::Escaped);
+    let detail = line.detail.as_deref().unwrap();
+    assert!(detail.contains("OFFICINA_TEST_EXTRA"), "{detail}");
+    assert!(!detail.contains("a-value-never-printed"), "{detail}");
+}
+
+#[test]
+fn the_decoy_prints_listening_after_its_own_connect() {
+    use officina_core::workshop::battery::{DecoyLine, parse_decoy};
+    use std::io::BufRead;
+    let root = BatteryRoot::new(WORKER_STATUS);
+    fs::write(root.root.join("etc/hostname"), "localhost\n").unwrap();
+    let port = std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port();
+    let mut decoy = Command::new(ENTRY)
+        .args(["decoy", "--port", &port.to_string(), "--root"])
+        .arg(&root.root)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut reader = std::io::BufReader::new(decoy.stdout.take().unwrap());
+    let mut printed = String::new();
+    for _ in 0..2 {
+        reader.read_line(&mut printed).unwrap();
+    }
+    let lines = parse_decoy(&printed);
+    assert!(matches!(lines[0], DecoyLine::Addresses(_)), "{printed}");
+    assert_eq!(lines[1], DecoyLine::Listening { port });
+    let probe = |target: &str| {
+        let out = Command::new(ENTRY)
+            .args(["decoy", "--probe", target])
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        (
+            out.status.success(),
+            parse_decoy(&String::from_utf8_lossy(&out.stdout)),
+        )
+    };
+    assert_eq!(
+        probe(&format!("127.0.0.1:{port}")),
+        (true, vec![DecoyLine::Connected])
+    );
+    decoy.kill().unwrap();
+    decoy.wait().unwrap();
+    assert_eq!(
+        probe(&format!("127.0.0.1:{port}")),
+        (false, vec![DecoyLine::Unreachable])
+    );
 }

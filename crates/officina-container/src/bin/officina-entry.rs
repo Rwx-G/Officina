@@ -1,4 +1,4 @@
-//! `officina-entry <subcommand>` (AD-108, AD-110, D-608, D-609): the fixed
+//! `officina-entry <subcommand>` (AD-108, AD-110, AD-117, D-608, D-609): the fixed
 //! code a workshop container runs. Linux only; on Windows it exits 64. An
 //! unknown subcommand or a missing argument is a usage error, exit 64.
 //! `--root` and `--claude` move `/` and Claude Code for the tests; in a
@@ -38,6 +38,9 @@ fn main() {
         Some("auth-status") => entry::auth_status::auth_status(&layout),
         Some("scan") => entry::scan::scan(&layout),
         Some("inventory") => entry::inventory::inventory(&layout),
+        Some("battery") => entry::battery::battery(&layout, &args),
+        Some("battery-hog") => entry::battery::hog(&args),
+        Some("decoy") => entry::decoy::decoy(&layout, &args),
         other => {
             eprintln!(
                 "officina-entry: unknown subcommand {:?}",

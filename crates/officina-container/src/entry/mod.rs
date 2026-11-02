@@ -1,8 +1,10 @@
-//! `officina-entry`'s subcommands (AD-108, AD-110, D-608, D-609): fixed
+//! `officina-entry`'s subcommands (AD-108, AD-110, AD-117, D-608, D-609): fixed
 //! code a workshop container runs. Unix only: symbolic links, file modes
 //! and coreutils' `timeout`.
 
 pub mod auth_status;
+pub mod battery;
+pub mod decoy;
 pub mod inventory;
 pub mod pack;
 pub mod run;
