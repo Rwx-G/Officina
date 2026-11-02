@@ -33,7 +33,9 @@ fn sources(dir: &Path, found: &mut Vec<PathBuf>) {
 }
 
 /// `text` without its top-level `#[cfg(test)]` (or `#[cfg(all(test, ..))]`)
-/// modules: from the attribute to the module's closing brace at column 0.
+/// modules, private or crate-visible (a module whose helpers a sibling's
+/// tests share): from the attribute to the module's closing brace at
+/// column 0.
 fn outside_test_modules(text: &str) -> String {
     let mut kept = String::new();
     let mut pending: Vec<&str> = Vec::new();
@@ -57,7 +59,7 @@ fn outside_test_modules(text: &str) -> String {
             let opens_test_module = pending
                 .iter()
                 .any(|l| l.starts_with("#[cfg(test)]") || l.starts_with("#[cfg(all(test"))
-                && line.starts_with("mod ")
+                && (line.starts_with("mod ") || line.starts_with("pub(crate) mod "))
                 && line.trim_end().ends_with('{');
             if opens_test_module {
                 for inner in lines.by_ref() {
