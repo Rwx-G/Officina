@@ -1,6 +1,6 @@
 # Story 6.11: Workshop cards, launch checks, the credential and the launch flow
 
-**Status:** Approved
+**Status:** Review
 
 ## Story
 
@@ -23,14 +23,14 @@ so that one pointer click on what I saw is the only way a container starts, and 
 
 ## Tasks
 
-- [ ] `WorkshopCardFacts`, base choices, `EditCard::Base`, readiness on thread `workshop` (AC 1)
-- [ ] The credential through 2.11's `CredentialStore` and `Secret`; the per-floor target; the run's needles with story 6.7's `scan` (AC 2, 3)
-- [ ] `LaunchRefusal` variants, evaluation and reporting order, tracked mounts, reparse points, the `launch` section of `workshop.json` (AC 4)
-- [ ] `crates/officina-core/src/workshop/bundle.rs` (`parse_header`), `tests/vectors/bundle.json` headers, `bundle_vectors.rs` (AC 5)
-- [ ] `crates/officina-host/src/workshop/launch.rs`: steps, removal on failure, skew, journal; the D-136 sweep skip; fake engine modes; `workshop_launch.rs` (AC 5)
-- [ ] Commands and their plumbing; history rows, schema bump, bindings (AC 6)
-- [ ] `workshop_card` section of `injection.json` (AC 7)
-- [ ] Doctor (AC 8); zero-write cases (AC 9); README, `CHANGELOG.md` (AC 10)
+- [x] `WorkshopCardFacts`, base choices, `EditCard::Base`, readiness on thread `workshop` (AC 1)
+- [x] The credential through 2.11's `CredentialStore` and `Secret`; the per-floor target; the run's needles with story 6.7's `scan` (AC 2, 3)
+- [x] `LaunchRefusal` variants, evaluation and reporting order, tracked mounts, reparse points, the `launch` section of `workshop.json` (AC 4)
+- [x] `crates/officina-core/src/workshop/bundle.rs` (`parse_header`), `tests/vectors/bundle.json` headers, `bundle_vectors.rs` (AC 5)
+- [x] `crates/officina-host/src/workshop/launch.rs`: steps, removal on failure, skew, journal; the D-136 sweep skip; fake engine modes; `workshop_launch.rs` (AC 5)
+- [x] Commands and their plumbing; history rows, schema bump, bindings (AC 6)
+- [x] `workshop_card` section of `injection.json` (AC 7)
+- [x] Doctor (AC 8); zero-write cases (AC 9); README, `CHANGELOG.md` (AC 10)
 
 ## Dev Notes
 
@@ -52,9 +52,31 @@ so that one pointer click on what I saw is the only way a container starts, and 
 
 ### Debug Log
 
+- The drift check of the TypeScript bindings found the workshop's `RunState` and `Runner` overwriting the relay's files of the same names: exported as `WorkshopRunState` and `OrderRunner` (D-1150).
+- The first launch through the fake engine was refused `image_mismatch`: story 6.8's image check always failed the gateway image, which holds no measured program (D-1154, fixed with its vector case).
+- `workshop_off` is unreachable from any floor the catalogue accepts: the template leaves with its `[workshop]`; its injection case edits the snapshot (D-1156).
+- The fake engine gained `fail_when`, `touch_when` and `start_sleep_ms`; a case sets them after the build and the battery, whose own calls would match.
+
 ### Completion Notes
 
+- AC 1: core `crates/officina-core/src/orders/workshop_card.rs::tests::{a_workshop_card_carries_its_facts, the_first_base_is_the_default, an_imported_branch_names_its_parent, a_base_outside_the_list_is_refused, edit_base_keeps_the_seq}` (the card's workshop half lives in its own module beside `card.rs`); host `crates/officina-host/src/workshop/launch.rs::tests::tips_and_uncommitted_count_come_from_git` (real git, D-23); `imported_bases_older_than_7_days_are_not_offered` is `crates/officina-host/tests/registry_workshop.rs`'s (the 7 days are the registry query's bound). The collector-side test is `crates/officina/tests/workshop_launch.rs::the_collector_never_spawns_docker_for_a_workshop_card` (the issue and the grant asked of the collector directly leave the fake engine's log unchanged, a proxy resolution configured); `watch.rs::the_collector_never_spawns_docker` keeps its assertion unchanged. Thread split: D-1152.
+- AC 2: `compile_fail` doctests on `Secret` (no `Display`, no `Serialize`) and on `RunNeedles`; `secret_debug_is_redacted` kept; CLI `workshop_launch.rs::{the_credential_reaches_only_the_worker_create, two_floors_read_two_targets, a_login_floor_is_refused_until_its_story}` (the first searches the fake's log, every file under the Officina home and every argument for the seeded value).
+- AC 3: host `launch.rs::tests::needles_never_serialize_and_a_login_run_has_none`; `needles_are_kept_for_a_running_run` is asserted in `workshop_launch.rs::zero_creates_and_starts_before_the_click_and_one_of_each_after` (the window's followed runs hold the run's needles).
+- AC 4: section `launch` of `tests/vectors/workshop.json` through `crates/officina-core/tests/workshop_vectors.rs::{launch_checks_report_in_ads_order, every_new_launch_refusal_has_a_case}`; core `workshop_card.rs::tests::{a_rebuilt_image_after_issue_is_plan_changed, the_inventory_runs_only_after_every_other_check_passed, a_login_floor_is_credential_missing_until_its_story}`; host `launch.rs::tests::{a_force_added_file_in_a_mount_is_tracked, a_junction_on_the_mount_path_is_refused, a_mount_differing_only_in_case_is_found, a_mount_ignored_only_by_exclude_is_ready, a_comma_in_a_mount_path_is_unsupported}`; `an_injected_needs_state_is_credential_expired` is the `workshop_card` injection case "a credential known to have expired" (a fixed `CredentialStateSource`); CLI `workshop_launch.rs::routes_follow_the_network_from_issue_to_launch` (routes at issue reach the gateway's `--route`, a network change is `plan_changed`, an unevaluable PAC is `proxy_unresolved`). Order and details: D-1151.
+- AC 5: CLI `workshop_launch.rs::{zero_creates_and_starts_before_the_click_and_one_of_each_after, a_failed_step_removes_what_was_created, the_stop_flag_between_steps_ends_the_launch, a_launch_writes_workshop_started_only, a_double_click_launches_once}`; the golden rebuild is the run row's plan hash equal to the card's (a `create`'s vector is built from that plan's launch only); `a_slow_workshop_launch_is_not_swept` and `binding_skips_workshop_rows` are `crates/officina-host/tests/registry_workshop.rs`'s (the sweep and the binding are the registry's queries); core `relay/journal.rs::tests::{workshop_started_round_trips, workshop_removed_round_trips}`; section `headers` of `tests/vectors/bundle.json` (real git's bundles, v2, v3, two references, a prerequisite, and refusals cut from them) through `crates/officina-core/tests/bundle_vectors.rs::header_cases_match`, plus `bundle.rs::tests`. Removal and skew: D-1157, D-1158.
+- AC 6: `issue_card` and `launch_work_order(card_id, prompt_sha256, plan_sha256?)` go through thread `workshop` for a workshop card (`orders::issue_card`, `orders::launch_card`); `edit_card` takes `Base`; `ipc.ts` sends the card's plan hash, with its Vitest case in `app/src/lib/orchestrator.test.ts`; the command names are unchanged, so `build.rs` and the capabilities are, and `every_declared_command_is_allowed` passes; core `orders/view.rs::tests::history_rows_name_their_runner`; `ORCHESTRATOR_VIEW_SCHEMA` 2; bindings regenerated (drift check).
+- AC 7: section `workshop_card` of `tests/vectors/injection.json` through `crates/officina/tests/injection.rs::{workshop_card_cases, every_section_family_and_refusal_has_a_case}`: a forged id, a superseded card, a prompt and a plan hash mismatch, a base outside the list, a keyboard case (tagged, story 6.19's), the stop flag, and one case per new `LaunchRefusal`; each refusal leaves the run's gateway and worker uncreated (D-1158 for the inventory's container), the valid one creates exactly both and runs the card's plan.
+- AC 8: host `crates/officina-host/src/workshop/doctor.rs::credential_and_mount_tests::{a_missing_credential_prints_the_floors_cmdkey_line_and_writes_its_file, the_cmdkey_file_goes_once_the_credential_exists, a_mount_ignored_only_by_exclude_is_named, a_mount_holding_tracked_files_fails, a_placeholder_file_in_a_mount_warns, a_comma_in_a_mount_path_fails, a_reparse_point_on_a_mount_path_fails}` (the section's module, D-1130's placement); the lines are core's `WorkshopCheck` variants, judged by `credential_finding` and `mount_findings` (D-1153).
+- AC 9: `workshop_launch.rs::a_launch_leaves_the_project_repository_unchanged` (a tracked file's time moved first; references, index, work tree and the Claude config dir unchanged); `quota_doctor.rs::no_command_writes_under_the_claude_config_dir` keeps its host launch.
+- AC 10: README "The workshop card and its launch", "The workshop credential" and the doctor paragraph; `CHANGELOG.md` Added and Fixed.
+
 ## File List
+
+- `crates/officina-core/src/orders/{card,view,mod}.rs`, `src/orders/workshop_card.rs` (new), `src/workshop/{launch,run,image,doctor,mod}.rs`, `src/workshop/bundle.rs` (new), `src/relay/{journal,view}.rs`, `src/registry/types.rs`, `tests/{orders_vectors,workshop_vectors}.rs`, `tests/bundle_vectors.rs` (new)
+- `crates/officina-host/src/workshop/launch.rs`, `src/workshop/launch/window.rs` (new), `src/workshop/{battery,doctor,inventory,mod}.rs`, `src/orders.rs`, `src/watch.rs`, `src/doctor.rs`, `src/relay/credential.rs`, `src/registry/{orders,read,window}.rs`, `tests/registry_workshop.rs`
+- `crates/officina/src/bin/officina-fake-docker.rs`, `tests/workshop_launch.rs` (new), `tests/common/workshop_home.rs` (new), `tests/common/{mod,orders,workshop}.rs`, `tests/{injection,quota_doctor,watch,workshop_battery}.rs`
+- `app/src-tauri/src/main.rs`, `app/src/lib/{ipc,orchestrator.svelte,orchestrator-text,orchestrator.test}.ts`, `app/src/lib/generated/*` (regenerated)
+- `tests/vectors/{workshop,injection}.json`, `tests/vectors/bundle.json` (new), `README.md`, `CHANGELOG.md`, `docs/stories/epic-6-decisions.md` (D-1150 to D-1159), `docs/stories/sprint-status.yaml`
 
 ## Change Log
 
@@ -63,3 +85,4 @@ so that one pointer click on what I saw is the only way a container starts, and 
 - 2026-10-29 research-note entries named by subject, no number reserved (D-600)
 - 2026-10-29 the owner's answers: the per-floor credential target and its doctor file, `login` refused until story 6.26, `credential_expired`, `proxy_unresolved` and `proxy_unsupported` declared, the allow-list per kind with its routes; `scan` moved to story 6.7 (D-603, D-604, D-607, D-609, D-611, D-617, D-621)
 - 2026-10-29 adversarial pass: the credential state read through `CredentialStateSource`, `missing` reported as `credential_missing`; the route wiring and its tests owned here, not by 6.25 (D-607, D-611)
+- 2026-11-02 implemented: workshop cards and their facts on thread `workshop`, the launch's checks and steps, the bundle header, the credential and needles, doctor's credential and mount lines, the injection section; the gateway image check fixed (D-1150 to D-1159)
