@@ -64,7 +64,9 @@ fn log_call(argv: &[String]) {
         .append(true)
         .open(beside(LOG))
     {
-        let _ = writeln!(file, "{line}");
+        // One write per line: followers run beside other calls, and a
+        // line written in pieces interleaves with theirs.
+        let _ = file.write_all(format!("{line}\n").as_bytes());
     }
 }
 

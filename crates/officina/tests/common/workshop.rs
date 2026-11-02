@@ -74,9 +74,12 @@ fn linked(binary: &str) -> (tempfile::TempDir, PathBuf) {
     (dir, exe)
 }
 
+/// Every complete line of `path`: a call still being written by a fake
+/// running beside the reader (a follower, say) has no newline yet.
 fn json_lines(path: &Path) -> Vec<serde_json::Value> {
-    std::fs::read_to_string(path)
-        .unwrap_or_default()
+    let text = std::fs::read_to_string(path).unwrap_or_default();
+    let complete = &text[..text.rfind('\n').map_or(0, |at| at + 1)];
+    complete
         .lines()
         .map(|line| serde_json::from_str(line).expect("one JSON object per line"))
         .collect()
