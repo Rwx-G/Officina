@@ -531,7 +531,7 @@ test("Launch sends the card id and the prompt hash", async ({ page }) => {
   await expect(page.getByTestId("card-outcome")).toHaveAttribute("data-outcome", "started");
   await expect(launch).toBeDisabled();
   await expect(launch).toHaveAccessibleName("Launch");
-  expect(await callsOf(page, "launch_work_order")).toEqual([{ cardId: issued.id, promptSha256: issued.prompt_sha256 }]);
+  expect(await callsOf(page, "launch_work_order")).toEqual([{ cardId: issued.id, promptSha256: issued.prompt_sha256, planSha256: null }]);
 });
 
 test("a keyboard press never launches", async ({ page }) => {
@@ -790,7 +790,7 @@ test("a valid proposal opens as a card with its rationale under the label", asyn
   await expect(shown.locator("img")).toHaveCount(0);
   // The card launches as the author's: on a click, its id and hash.
   await page.getByTestId("launch").click();
-  expect(await callsOf(page, "launch_work_order")).toEqual([{ cardId: issued.id, promptSha256: issued.prompt_sha256 }]);
+  expect(await callsOf(page, "launch_work_order")).toEqual([{ cardId: issued.id, promptSha256: issued.prompt_sha256, planSha256: null }]);
 });
 
 test("dismiss sends dismiss_proposal", async ({ page }) => {
