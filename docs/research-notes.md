@@ -1733,6 +1733,23 @@ Story 5.10 AC 4, D-126, D-806, D-1020, D-1021, D-1023.
   background service…" first (agent, same day). The meeting names that
   case (D-1021).
 
+## E101. A denied tool is absent from the first `system/init` (v0.6, story 6.12)
+
+Story 6.12 AC 3, AD-109, D-1166. **Verified** by the lead session on
+2026-11-02 with Claude Code 2.1.3xx: `claude -p ... --disallowedTools
+WebSearch --output-format stream-json --verbose` emits a `system/init`
+whose `tools` list does not hold `WebSearch` (`WebFetch` is there). The
+stream's first lines can be `system/hook_started` and
+`system/hook_response` before `system/init`, so the init is found by its
+subtype, never by its position.
+
+- **Consequence.** `unexpected_tool` holds as built: a worker started with
+  the vector's `--disallowedTools` lists none of `WORKER_DISALLOWED_TOOLS`
+  in its first init, so the stop fires only on a stream that is not the
+  one the vector started. The saved invalid-token stream of the login
+  entry (E99) came from a probe run without the worker's flags; its fold
+  case starts after its init (story 6.12's note, now closed).
+
 ## E7. Configuration directory
 
 - **Documented.** `CLAUDE_CONFIG_DIR` redirects settings, session history and

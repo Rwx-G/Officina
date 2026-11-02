@@ -1,6 +1,6 @@
 # Story 6.12: Following a run, its limits and restart reconciliation
 
-**Status:** Approved
+**Status:** Review
 
 ## Story
 
@@ -21,11 +21,11 @@ so that no line a container prints can keep a run going or mark it done, and a r
 
 ## Tasks
 
-- [ ] `crates/officina-core/src/workshop/{run,stream}.rs`: transitions, fold, `STREAM_FIELDS` from the gate 5 entry, stops, `FinishCause`, reconcile; `tests/vectors/stream.json`, `stream_vectors.rs`; `run`, `finish` and `reconcile` sections of `workshop.json` (AC 1 to 3, 6, 7)
-- [ ] `crates/officina-host/src/workshop/follow.rs`: followers, bounded readers, deadline and cap stops, journal of refusals; fake engine `logs` mode (AC 4, 6)
-- [ ] Reconciliation at start and after the engine returns; orphans; needles rebuilt (AC 5, 7)
-- [ ] `scan::replace` on every untrusted text before journal, store or emit; holding when no needles (AC 5)
-- [ ] `ENVIRONMENT_FAILURE_CAUSES`, `is_environment_failure` (AC 6); README (AC 8)
+- [x] `crates/officina-core/src/workshop/{run,stream}.rs`: transitions, fold, `STREAM_FIELDS` from the gate 5 entry, stops, `FinishCause`, reconcile; `tests/vectors/stream.json`, `stream_vectors.rs`; `run`, `finish` and `reconcile` sections of `workshop.json` (AC 1 to 3, 6, 7)
+- [x] `crates/officina-host/src/workshop/follow.rs`: followers, bounded readers, deadline and cap stops, journal of refusals; fake engine `logs` mode (AC 4, 6)
+- [x] Reconciliation at start and after the engine returns; orphans; needles rebuilt (AC 5, 7)
+- [x] `scan::replace` on every untrusted text before journal, store or emit; holding when no needles (AC 5)
+- [x] `ENVIRONMENT_FAILURE_CAUSES`, `is_environment_failure` (AC 6); README (AC 8)
 
 ## Dev Notes
 
@@ -46,12 +46,29 @@ so that no line a container prints can keep a run going or mark it done, and a r
 
 ### Debug Log
 
-- Work in progress (branch `wip/story-6.12`, 2026-11-02): core's half only. `workshop::lifecycle` (`RunEvent`, `EDGES`, `transition`, `StopReason`, `FinishInput`, `finish_cause`, `ENVIRONMENT_FAILURE_CAUSES`, `is_environment_failure`, `RowSeen`, `ContainerSeen`, `ReconcileAction`, `reconcile`, `is_run_role`) and `workshop::stream` (`STREAM_FIELDS`, `StreamFacts`, `fold`, `StreamStop`), with the `run`, `finish` and `reconcile` sections of `tests/vectors/workshop.json` and `tests/vectors/stream.json` (`fold`, `stops`) replayed by `workshop_vectors.rs` and `stream_vectors.rs`. Not started: the host's followers (`follow.rs`), the deadline and cap stops, reconciliation at start and after the engine returns, `scan::replace` before journal, store and emit, the CLI tests, README, decisions.
-- To confirm at gate 3's window half (story 6.19): `unexpected_tool` assumes Claude Code leaves a `--disallowedTools` tool out of the first `system/init`'s `tools`; the saved invalid-token stream's init came from a probe run without the worker's flags and lists `WebSearch`, so its case starts after the init. If a real worker's init lists it, every run would stop `unexpected_tool`.
+- 2026-11-02, first agent: core's half on `wip/story-6.12` (`workshop::lifecycle`, `workshop::stream`, the `run`, `finish` and `reconcile` sections of `workshop.json`, `stream.json`).
+- 2026-11-02, second agent: the host's half. The note to confirm `unexpected_tool` at gate 3's window half is closed by the lead's verified fact (research notes E101, D-1166): a denied tool is absent from the first init, which the fold finds by subtype after any hook lines.
+- The fold runs beside the followers rather than in the collector (D-1160); a follower's end is judged by inspecting its container (D-1163).
 
 ### Completion Notes
 
+- AC 1: `workshop_vectors.rs::{every_allowed_edge_has_a_case, every_other_pair_is_refused}` (first agent).
+- AC 2: `stream_vectors.rs::{fold_cases_match, a_second_init_is_ignored, a_forged_result_changes_no_outcome, every_stream_field_is_read_by_a_case}` (first agent).
+- AC 3: `stream.rs::tests::{a_disallowed_tool_stops, exit_126_and_127_stop, three_auth_failures_in_a_row_stop, interleaved_success_resets_the_auth_run}`; `stream_vectors.rs::stop_cases_match` with the invalid-token stream. `hook_failed` is built: the gate 5 entry (E96) found exit codes.
+- AC 4: `workshop_follow.rs::{facts_rebuild_identically_after_a_restart, an_oversized_line_is_skipped_and_counted, a_flood_of_allowed_wildcard_hosts_keeps_256_entries, each_refusal_is_journaled_once}`; core `output.rs::tests::{allowed_hosts_are_bounded, a_replay_ranks_refusals_the_same}`; host `process.rs::line_tests::a_long_line_is_skipped_to_its_newline`. The fake engine's `logs --follow` replays sidecar lines per role (`follow`, `follow_cut_first`). Gate 3's saved stream was not kept as a file; the cases build their lines from the gate entries' shapes.
+- AC 5: `workshop_follow.rs::{a_token_in_a_refused_host_is_replaced_before_the_journal, a_token_in_a_wildcard_allowed_host_is_replaced_before_the_view, a_token_in_a_mid_run_report_tail_is_replaced_before_the_view, without_a_credential_hosts_wait_for_collection}`; host `follow.rs::tests::{a_login_run_holds_its_texts_until_collection, a_refusal_is_replaced_and_journaled_once}` (a `login` run cannot launch before 6.26); core `output.rs::tests::texts_are_replaced`. `WorkshopView` lands in 6.18: "the view" here is `Followed::texts`, which it will read, and the stored `RunTexts`.
+- AC 6: `workshop_vectors.rs::every_finish_cause_has_a_case`; `workshop_follow.rs::{the_deadline_stops_the_worker, the_output_cap_stops_the_worker, a_stream_stop_stops_the_worker, a_limit_sets_no_flag}`; `lifecycle.rs::tests::environment_failures_follow_d217`; core `output.rs::tests::the_output_cap_stops`.
+- AC 7: `workshop_vectors.rs::reconcile_cases_match`; `workshop_follow.rs::{a_window_restart_finds_and_follows_a_live_run, an_engine_down_at_start_changes_no_row, an_engine_back_reconciles, a_lost_container_is_unknown_never_finished, an_orphan_is_listed_not_adopted, job_and_login_containers_are_never_orphans}`; `journal.rs::tests::workshop_finished_round_trips` (D-249).
+- AC 8: README "Following a run and its limits", its numbers held by `readme.rs::readme_states_the_run_limits`; CHANGELOG.
+
 ## File List
+
+- `crates/officina-core/src/workshop/{lifecycle,stream,output,run,mod}.rs`, `crates/officina-core/src/relay/{journal,view}.rs`, `crates/officina-core/src/untrusted.rs`
+- `crates/officina-core/tests/{workshop_vectors,stream_vectors}.rs`, `tests/vectors/{workshop,stream}.json`
+- `crates/officina-host/src/workshop/{follow,engine,launch,mod}.rs`, `crates/officina-host/src/workshop/launch/window.rs`, `crates/officina-host/src/{process,collector,watch}.rs`, `crates/officina-host/src/registry/{window,workshop}.rs`
+- `crates/officina/src/bin/officina-fake-docker.rs`, `crates/officina/tests/{workshop_follow,workshop_launch,readme}.rs`, `crates/officina/tests/common/workshop.rs`
+- `app/src-tauri/src/main.rs`
+- `README.md`, `CHANGELOG.md`, `docs/research-notes.md` (E101), `docs/stories/epic-6-decisions.md` (D-1160 to D-1166), `docs/stories/sprint-status.yaml`
 
 ## Change Log
 
@@ -60,3 +77,4 @@ so that no line a container prints can keep a run going or mark it done, and a r
 - 2026-10-29 research-note entries named by subject, no number reserved (D-600)
 - 2026-10-29 the owner's answers: `auth_failed` also reads the login entry's failure shapes; a `login` run always holds its texts until collection (D-607, D-609, D-610)
 - 2026-10-29 adversarial pass: only run roles can be orphans; job containers and the owner's login container never are (D-605)
+- 2026-11-02 implemented: followers, limits and reconciliation on the host; E101 recorded; D-1160 to D-1166
