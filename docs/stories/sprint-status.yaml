@@ -205,7 +205,8 @@ stories:
   - {id: "6.8", file: story-6.8-images-and-build.md, slice: A, status: review}
   # 6.9: done; the launch calls inventory::for_launch from 6.11 (D-1137); D-1137 to D-1139.
   - {id: "6.9", file: story-6.9-hook-program-inventory.md, slice: A, status: review}
-  - {id: "6.10", file: story-6.10-escape-battery.md, slice: A, status: approved}
+  # 6.10: done but AC 7's owner half (the battery on each owner project image, with his floor); D-1140 to D-1148, D-1140 and D-1145 to confirm.
+  - {id: "6.10", file: story-6.10-escape-battery.md, slice: A, status: review}
   - {id: "6.11", file: story-6.11-workshop-card-and-launch.md, slice: A, status: approved}
   - {id: "6.12", file: story-6.12-follow-limits-and-reconciliation.md, slice: A, status: approved}
   - {id: "6.13", file: story-6.13-collection-verification-and-no-change.md, slice: A, status: approved}

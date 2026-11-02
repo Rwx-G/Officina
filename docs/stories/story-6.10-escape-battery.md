@@ -1,6 +1,6 @@
 # Story 6.10: The escape battery
 
-**Status:** Approved
+**Status:** Review
 
 ## Story
 
@@ -22,11 +22,11 @@ so that a launch rests on a battery played on what actually runs, and an engine 
 
 ## Tasks
 
-- [ ] `crates/officina-core/src/workshop/battery.rs`: `ATTEMPTS`, families, controls, plan, lines, judge, validity; `tests/vectors/battery.json`; `battery_vectors.rs` (AC 1, 4, 5)
-- [ ] `crates/officina-container/src/entry/{battery,decoy}.rs`; `entry_linux.rs` cases (AC 2)
-- [ ] `crates/officina-host/src/workshop/battery.rs`: containers, controls, phases, collection of lines, records, journal; `run_battery` and its plumbing; fake engine modes; `workshop_battery.rs` (AC 3, 5)
-- [ ] `examples/battery_ci.rs` battery part; CI job step (AC 6)
-- [ ] Gate 2's second half (AC 7); doctor (AC 8); README (AC 9)
+- [x] `crates/officina-core/src/workshop/battery.rs`: `ATTEMPTS`, families, controls, plan, lines, judge, validity; `tests/vectors/battery.json`; `battery_vectors.rs` (AC 1, 4, 5)
+- [x] `crates/officina-container/src/entry/{battery,decoy}.rs`; `entry_linux.rs` cases (AC 2)
+- [x] `crates/officina-host/src/workshop/battery.rs`: containers, controls, phases, collection of lines, records, journal; `run_battery` and its plumbing; fake engine modes; `workshop_battery.rs` (AC 3, 5)
+- [x] `examples/battery_ci.rs` battery part; CI job step (AC 6)
+- [x] Gate 2's second half on the base image (AC 7; each owner project image is the owner's run); doctor (AC 8); README (AC 9)
 
 ## Dev Notes
 
@@ -51,9 +51,33 @@ so that a launch rests on a battery played on what actually runs, and an engine 
 
 ### Debug Log
 
+- The machine was shut down after the attempts, judgement and validity were declared (the first commit); the rest was written on top of it once story 6.9 was gated and pushed.
+- The plan first carried the decoy's addresses as one list, which could not tell `host.docker.internal` from `gateway.docker.internal` nor the decoy's own address; `DecoyAddresses` keeps the three apart and the `decoy` program prints them as one line.
+- The SNI attempt cannot pass the gateway's checks on a name that resolves to a documentation address (all non-public): gateway A resolves the test host to a public address it never connects to (D-1140).
+- A real worker carries `HOSTNAME`, set by the runtime: the expected environment adds it (D-1141).
+- The fake engine first used core's types to print the battery's lines, but the CLI crate's binaries take core only as a test dependency; the test now derives the lines from core and hands them to the fake in its sidecar (D-1148).
+- Story 6.9's gate surfaced a port race in the Linux gateway tests, fixed and pushed with 6.9 (D-1149).
+
 ### Completion Notes
 
+- AC 1: `tests/vectors/battery.json` sections `attempts` and `plan` through `crates/officina-core/tests/battery_vectors.rs::{the_attempts_section_is_the_constant, every_family_has_an_attempt, every_attempt_has_a_case, every_family_judged_from_a_failure_has_a_control, plan_cases_match, login_attempts_are_played_on_a_login_floor_only}`; core `battery.rs::tests::{the_plan_expects_the_kinds_credential_name_only, a_line_round_trips_and_its_detail_is_bounded, attempt_codes_are_unique}`. The canonical input's shape test is story 6.6's `vector.rs::tests::every_project_shape_differs_from_the_battery_only_in_mount_count_and_memory`.
+- AC 2: `crates/officina-container/tests/entry_linux.rs::{the_battery_prints_one_line_per_attempt, a_control_runs_before_its_family, the_files_family_reads_read_only_as_refused, the_privileges_family_reads_proc_self_status, the_environment_family_compares_names_only, the_decoy_prints_listening_after_its_own_connect}`, run in `rust:1-bookworm`; `--root` is the test-only argument (paths under the root, egress aimed at loopback, D-1147).
+- AC 3: CLI `crates/officina/tests/workshop_battery.rs::{a_battery_creates_and_removes_its_containers, the_battery_worker_vector_is_the_worker_vector_normalised, the_dummy_credential_is_the_only_credential, a_login_floor_battery_mounts_its_own_empty_volume_never_the_login, the_decoy_control_needs_a_second_container, nothing_starts_while_stopped, an_escape_or_a_wrong_gateway_exit_fails}`; core `battery.rs::tests::{the_skew_is_the_engine_against_the_calls_midpoint, gateway_lines_give_the_refusals_in_order}`; `dates.rs` doctest `parse_rfc3339_ms`. Attached starts take `phase_limit_ms` plus 60 s (`engine::attached_deadline_ms`); the stop flag is read before every start.
+- AC 4: `battery_vectors.rs::{judge_cases_match, one_escape_fails, one_inconclusive_fails, a_failed_control_is_inconclusive, an_unmatched_gateway_attempt_fails, gateway_b_not_exiting_3_fails, not_applicable_fails_on_docker_desktop}`.
+- AC 5: core `battery.rs::tests::{validity_needs_every_key, validity_needs_the_vector_digest, validity_needs_the_programs_digest, validity_lasts_30_days, a_failed_battery_never_validates, the_canonical_digest_is_every_real_batterys, the_digest_moves_with_the_vector_and_the_image_env}`; `relay/journal.rs::tests::{escape_attempt_round_trips, escape_battery_round_trips, gateway_refused_round_trips}`; CLI `workshop_battery.rs::one_row_and_its_journal_lines_per_battery` (through the collector: one row, a line per attempt and per gateway refusal, one `escape_battery`, `nothing_stale` once valid, one image on demand); `app/src-tauri/src/main.rs::tests::every_declared_command_is_allowed`; `BatteryAnswer` in the bindings drift check.
+- AC 6: the `workshop` job runs `battery_ci.rs`, which now plays the battery on every image it built and fails unless each passes; run locally with the job's own steps on Docker Desktop (BATTERY-CI-OK).
+- AC 7: research notes E93, second half: the base image passed 45 of 45 on Docker Desktop. Open for the owner: the battery on each owner project image, with his floor (`cargo run -p officina-host --features window-authority --example battery_ci -- --floor <his officina.toml> --linux <musl release dir> --claude-version <x.y.z>`).
+- AC 8: host `crates/officina-host/src/workshop/doctor.rs::tests::{a_stale_battery_names_the_key_that_moved, the_last_clock_skew_is_shown}` (the section's module, D-1130); the lines are core's `battery_findings`.
+- AC 9: README "The escape battery"; `CHANGELOG.md` Added.
+
 ## File List
+
+- `crates/officina-core/src/workshop/{battery,names,vector,engine,doctor}.rs`, `src/dates.rs`, `src/relay/{journal,view}.rs`, `tests/battery_vectors.rs`, `tests/typescript_bindings.rs`
+- `crates/officina-container/src/entry/{battery,decoy}.rs` (new), `entry/mod.rs`, `src/bin/officina-entry.rs`, `tests/entry_linux.rs`
+- `crates/officina-host/src/workshop/battery.rs` (new), `workshop/{mod,engine,doctor}.rs`, `src/watch.rs`, `src/registry/{workshop,read,window}.rs`, `examples/battery_ci.rs`
+- `crates/officina/src/bin/officina-fake-docker.rs`, `tests/workshop_battery.rs` (new)
+- `app/src-tauri/{build.rs,capabilities/default.json,src/main.rs}`, `app/src/lib/ipc.ts`, `app/src/e2e-mock.ts`, `app/src/e2e-globals.d.ts`, `app/src/lib/generated/{BatteryAnswer,BatteryRefusal}.ts`
+- `tests/vectors/{battery,workshop}.json`, `.github/workflows/ci.yml` (comment), `README.md`, `CHANGELOG.md`, `docs/research-notes.md` (E93), `docs/stories/epic-6-decisions.md` (D-1140 to D-1149), `docs/stories/sprint-status.yaml`
 
 ## Change Log
 
@@ -61,3 +85,4 @@ so that a launch rests on a battery played on what actually runs, and an engine 
 - 2026-10-28 reworked after review: validity keyed on the vector and programs digests (F4 a) and an `EngineKey` settings digest (F52); gate 2 driven by `battery_ci.rs` (F5); a control per family judged from a failure (F9); one canonical shape (F10); relative gateway deadlines, skew a diagnostic only (F21); `gateway_refused` first written and round-tripped here (F32); `run_battery` plumbing owned here (F33); upstream note (F51)
 - 2026-10-29 research-note entries named by subject, no number reserved (D-600)
 - 2026-10-29 the owner's answers: the battery plays the floor's credential kind, a `login` floor with its own empty read-only volume and a write attempt there; the CONNECT through the work network's proxy moves to story 6.25 (D-603, D-606, D-621)
+- 2026-11-02 implemented: the program and the decoy, the host's containers, phases, records and journal, `run_battery`, doctor, the battery in `battery_ci.rs`, README; gate 2's second half on the base image (D-1140 to D-1148)

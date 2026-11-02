@@ -1557,6 +1557,25 @@ attempts, a Python script in the probe:
   resolve, so the `--dns 0.0.0.0` branch is not taken (D-203). The second
   half (the real battery on Docker Desktop) closes story 6.10; the CONNECT
   through the work network's proxy closes story 6.25.
+- **Second half** (story 6.10 AC 7; AD-117, D-202). **Verified** by the
+  agent on 2026-11-02 on Docker Desktop 4.95.0 (engine 29.8.2, kernel
+  6.18.33.2-microsoft-standard-WSL2), Claude Code 2.1.316 in the base,
+  driven by `crates/officina-host/examples/battery_ci.rs` with the
+  window's resolution of `docker.exe`, a floor with `auth =
+  "oauth-token"` and the dummy credential: Build images' own code built
+  the gateway and base images, then `workshop::battery::run` played the
+  real battery on the base: the decoy on its bridge and its probe (the
+  host family's control), phase 1 behind gateway A, phase 2 behind gateway
+  B. **Pass**: 45 attempts, 45 `refused`, none `escaped`, `inconclusive` or
+  `not_applicable` (Docker Desktop's names resolved for the decoy and were
+  unreachable from the worker), every gateway-family refusal matched in
+  order in the gateways' logs, gateway B exited 3; clock skew 251 ms (a
+  diagnostic). No owner project image was built in this run, since none
+  declares a Dockerfile on the agent's floor: the battery on each owner
+  project image runs with the owner's floor (`battery_ci.rs --floor
+  <owner floor>`), recorded here when run. Every object carried
+  `officina.managed=1` and the battery's id, and was removed; the images
+  were removed at the end.
 - **Cleanup** (gates 9, 1 and 2): every probe container, network, volume
   and image carried `officina-probe=1`; after removal, the four label
   listings were empty. The pinned Debian base pulled by digest stays in the
