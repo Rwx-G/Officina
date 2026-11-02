@@ -424,3 +424,33 @@ fn reconcile_cases_match() {
         assert_eq!(got, case["expect"], "{}", case["name"]);
     }
 }
+
+/// Story 6.13 AC 4 (AD-110's table): each row has a case, and every
+/// outcome collection decides is reached.
+#[test]
+fn every_outcome_row_has_a_case() {
+    use officina_core::workshop::package::{PackageAssessment, outcome};
+    use officina_core::workshop::run::{FinishCause, WorkshopOutcome};
+    let cases = section("outcome");
+    for case in &cases {
+        let cause = FinishCause::from_code(case["cause"].as_str().unwrap()).unwrap();
+        let assessment: Option<PackageAssessment> =
+            serde_json::from_value(case["assessment"].clone()).unwrap();
+        assert_eq!(
+            outcome(cause, assessment.as_ref()).code(),
+            case["expect"],
+            "{}",
+            case["name"]
+        );
+    }
+    for decided in [
+        WorkshopOutcome::Package,
+        WorkshopOutcome::NoChange,
+        WorkshopOutcome::Failed,
+    ] {
+        assert!(
+            cases.iter().any(|c| c["expect"] == decided.code()),
+            "{decided:?} has no outcome case"
+        );
+    }
+}

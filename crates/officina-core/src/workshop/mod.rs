@@ -14,6 +14,7 @@ pub mod launch;
 pub mod lifecycle;
 pub mod names;
 pub mod output;
+pub mod package;
 pub mod proxy;
 pub mod review;
 pub mod run;

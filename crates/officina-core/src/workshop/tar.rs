@@ -303,6 +303,298 @@ impl FileDigest {
     }
 }
 
+/// The `path` a PAX record set gives, if any; called after
+/// [`pax_records`] accepted the set.
+fn pax_path(bytes: &[u8]) -> Option<String> {
+    let mut rest = bytes;
+    let mut path = None;
+    while let Some(space) = rest.iter().position(|b| *b == b' ') {
+        let length: usize = std::str::from_utf8(&rest[..space]).ok()?.parse().ok()?;
+        let record = rest.get(space + 1..length.checked_sub(1)?)?;
+        if let Some(value) = record.strip_prefix(b"path=") {
+            path = Some(String::from_utf8_lossy(value).into_owned());
+        }
+        rest = rest.get(length..)?;
+    }
+    path
+}
+
+/// The files a package may hold (D-229): every other name in the stream
+/// is `bundle_invalid`. Compared exactly: a backslash, a drive or stream
+/// colon, a device name, a trailing dot or space, another case or any
+/// other path fails the comparison before anything is written.
+pub const PACKAGE_DIR: &str = "out/";
+/// The tip's name in the stream.
+pub const PACKAGE_TIP: &str = "out/tip";
+/// The manifest's name in the stream.
+pub const PACKAGE_MANIFEST: &str = "out/manifest.json";
+/// The bundle's name in the stream.
+pub const PACKAGE_BUNDLE: &str = "out/work.bundle";
+
+/// The most bytes of `tip` kept in memory.
+pub const MAX_TIP_BYTES: usize = 128;
+/// The most bytes of `manifest.json` kept in memory.
+pub const MAX_MANIFEST_BYTES: usize = 64 * 1024;
+
+/// Why a package stream is refused: every reason is `bundle_invalid`
+/// (D-229), the variant says which for the record.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum PackageError {
+    #[error(transparent)]
+    Tar(#[from] TarError),
+    #[error("a name outside the package's list")]
+    NameRefused,
+    #[error("a name the stream holds twice")]
+    Duplicate,
+    #[error("an entry of a type the package never holds")]
+    TypeRefused,
+    #[error("the tip or the manifest is larger than its bound")]
+    TooLong,
+    #[error("the host refused the bundle's bytes: {0}")]
+    Sink(String),
+}
+
+/// One stream entry's name and type as the reader classified it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Slot {
+    Skip,
+    Tip,
+    Manifest,
+    Bundle,
+}
+
+/// What a package stream held (AD-110, D-229): the tip and the manifest in
+/// memory, and how many bundle bytes went to the host's sink.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Package {
+    pub tip: Option<Vec<u8>>,
+    pub manifest: Option<Vec<u8>>,
+    pub bundle_bytes: Option<u64>,
+}
+
+/// Reads `docker cp <packer>:/work/.officina/out -` chunk by chunk (D-218,
+/// D-229): only the allow-listed names, `tip` and `manifest.json` kept in
+/// memory within their bounds, `work.bundle`'s bytes handed to the host's
+/// sink, which writes them under a name Officina chose.
+#[derive(Debug, Default)]
+pub struct PackageReader {
+    buffer: Vec<u8>,
+    phase: Phase,
+    pax_size: Option<u64>,
+    pax_path: Option<String>,
+    seen: Vec<String>,
+    zero_blocks: u32,
+    package: Package,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+enum Phase {
+    #[default]
+    Header,
+    Pax {
+        size: u64,
+        global: bool,
+    },
+    Content {
+        slot: Slot,
+        left: u64,
+        pad: u64,
+    },
+    Padding {
+        left: u64,
+    },
+    End,
+}
+
+/// The entry's name: the ustar prefix joined to the name field, or the
+/// PAX `path`.
+fn header_name(header: &[u8]) -> String {
+    let field = |range: std::ops::Range<usize>| {
+        let bytes = &header[range];
+        let end = bytes.iter().position(|b| *b == 0).unwrap_or(bytes.len());
+        String::from_utf8_lossy(&bytes[..end]).into_owned()
+    };
+    let name = field(0..100);
+    let prefix = if &header[257..262] == b"ustar" {
+        field(345..500)
+    } else {
+        String::new()
+    };
+    if prefix.is_empty() {
+        name
+    } else {
+        format!("{prefix}/{name}")
+    }
+}
+
+impl PackageReader {
+    pub fn new() -> PackageReader {
+        PackageReader::default()
+    }
+
+    /// Feeds the next bytes; the bundle's bytes go to `sink`.
+    pub fn push(
+        &mut self,
+        mut chunk: &[u8],
+        sink: &mut dyn FnMut(&[u8]) -> Result<(), String>,
+    ) -> Result<(), PackageError> {
+        while !chunk.is_empty() {
+            match self.phase {
+                Phase::End => return Ok(()),
+                Phase::Header => {
+                    let take = (BLOCK - self.buffer.len()).min(chunk.len());
+                    self.buffer.extend_from_slice(&chunk[..take]);
+                    chunk = &chunk[take..];
+                    if self.buffer.len() == BLOCK {
+                        let header = std::mem::take(&mut self.buffer);
+                        self.header(&header)?;
+                    }
+                }
+                Phase::Pax { size, global } => {
+                    let want = usize::try_from(size).unwrap_or(usize::MAX);
+                    let take = (want - self.buffer.len()).min(chunk.len());
+                    self.buffer.extend_from_slice(&chunk[..take]);
+                    chunk = &chunk[take..];
+                    if self.buffer.len() == want {
+                        let records = std::mem::take(&mut self.buffer);
+                        let size = pax_records(&records)?;
+                        if !global {
+                            self.pax_size = size;
+                            self.pax_path = pax_path(&records);
+                        }
+                        self.phase = Phase::Padding {
+                            left: padding(records.len() as u64),
+                        };
+                    }
+                }
+                Phase::Content { slot, left, pad } => {
+                    let take = usize::try_from(left).unwrap_or(usize::MAX).min(chunk.len());
+                    let part = &chunk[..take];
+                    match slot {
+                        Slot::Tip => keep(&mut self.package.tip, part, MAX_TIP_BYTES)?,
+                        Slot::Manifest => {
+                            keep(&mut self.package.manifest, part, MAX_MANIFEST_BYTES)?
+                        }
+                        Slot::Bundle => {
+                            sink(part).map_err(PackageError::Sink)?;
+                            let total = self.package.bundle_bytes.get_or_insert(0);
+                            *total += take as u64;
+                        }
+                        Slot::Skip => {}
+                    }
+                    chunk = &chunk[take..];
+                    let left = left - take as u64;
+                    self.phase = if left == 0 {
+                        Phase::Padding { left: pad }
+                    } else {
+                        Phase::Content { slot, left, pad }
+                    };
+                }
+                Phase::Padding { left } => {
+                    let take = usize::try_from(left).unwrap_or(usize::MAX).min(chunk.len());
+                    chunk = &chunk[take..];
+                    self.phase = Phase::Padding {
+                        left: left - take as u64,
+                    };
+                }
+            }
+            if self.phase == (Phase::Padding { left: 0 }) {
+                self.phase = Phase::Header;
+            }
+        }
+        Ok(())
+    }
+
+    fn header(&mut self, header: &[u8]) -> Result<(), PackageError> {
+        if header.iter().all(|b| *b == 0) {
+            self.zero_blocks += 1;
+            if self.zero_blocks == 2 {
+                self.phase = Phase::End;
+            }
+            return Ok(());
+        }
+        if self.zero_blocks > 0 || !checksum_ok(header)? {
+            return Err(TarError::BadChecksum.into());
+        }
+        let size = number(&header[124..136])?;
+        if matches!(header[156], b'x' | b'g') {
+            if size > MAX_PAX_BYTES as u64 {
+                return Err(TarError::PaxTooLarge(MAX_PAX_BYTES).into());
+            }
+            self.phase = if size == 0 {
+                Phase::Header
+            } else {
+                Phase::Pax {
+                    size,
+                    global: header[156] == b'g',
+                }
+            };
+            return Ok(());
+        }
+        let name = self.pax_path.take().unwrap_or_else(|| header_name(header));
+        let size = self.pax_size.take().unwrap_or(size);
+        let folded = name.to_lowercase();
+        if self.seen.contains(&folded) {
+            return Err(PackageError::Duplicate);
+        }
+        self.seen.push(folded);
+        let slot = match (header[156], name.as_str()) {
+            (b'5', PACKAGE_DIR) => Slot::Skip,
+            (b'0' | 0, PACKAGE_TIP) => Slot::Tip,
+            (b'0' | 0, PACKAGE_MANIFEST) => Slot::Manifest,
+            (b'0' | 0, PACKAGE_BUNDLE) => Slot::Bundle,
+            (b'0' | 0 | b'5', _) => return Err(PackageError::NameRefused),
+            _ => return Err(PackageError::TypeRefused),
+        };
+        match slot {
+            Slot::Tip => self.package.tip = Some(Vec::new()),
+            Slot::Manifest => self.package.manifest = Some(Vec::new()),
+            Slot::Bundle => self.package.bundle_bytes = Some(0),
+            Slot::Skip => {}
+        }
+        self.phase = if size == 0 {
+            Phase::Header
+        } else {
+            Phase::Content {
+                slot,
+                left: size,
+                pad: padding(size),
+            }
+        };
+        Ok(())
+    }
+
+    /// What the stream held, once it ended.
+    pub fn finish(self) -> Result<Package, PackageError> {
+        match self.phase {
+            Phase::End | Phase::Header if self.buffer.is_empty() => Ok(self.package),
+            _ => Err(TarError::Truncated.into()),
+        }
+    }
+}
+
+fn keep(kept: &mut Option<Vec<u8>>, part: &[u8], bound: usize) -> Result<(), PackageError> {
+    let kept = kept.get_or_insert_with(Vec::new);
+    if kept.len() + part.len() > bound {
+        return Err(PackageError::TooLong);
+    }
+    kept.extend_from_slice(part);
+    Ok(())
+}
+
+/// A ustar stream of `entries` (name, bytes, type), ended by two zero
+/// blocks: for tests and the fake engine's package.
+pub fn stream_of(entries: &[(&str, &[u8], u8)]) -> Vec<u8> {
+    let mut out = Vec::new();
+    for (name, bytes, kind) in entries {
+        let mut one = single_file(name, bytes, *kind);
+        one.truncate(one.len() - 2 * BLOCK);
+        out.extend(one);
+    }
+    out.resize(out.len() + 2 * BLOCK, 0);
+    out
+}
+
 /// A one-file ustar stream holding `bytes` at `name`, of entry type
 /// `kind`, as `docker cp` writes it: for tests and the fake engine.
 pub fn single_file(name: &str, bytes: &[u8], kind: u8) -> Vec<u8> {

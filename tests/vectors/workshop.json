@@ -1777,6 +1777,74 @@
       ]
     }
   ],
+  "outcome": [
+    {
+      "name": "exit 0 and no commit",
+      "cause": "exited",
+      "assessment": {
+        "kind": "no_commit",
+        "tip": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      },
+      "expect": "no_change"
+    },
+    {
+      "name": "another cause and no commit",
+      "cause": "deadline",
+      "assessment": {
+        "kind": "no_commit",
+        "tip": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      },
+      "expect": "failed"
+    },
+    {
+      "name": "a failed exit and no commit",
+      "cause": "failed",
+      "assessment": {
+        "kind": "no_commit",
+        "tip": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      },
+      "expect": "failed"
+    },
+    {
+      "name": "commits past the base",
+      "cause": "exited",
+      "assessment": {
+        "kind": "package",
+        "tip": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "commits_past_base": 2,
+        "cause": null
+      },
+      "expect": "package"
+    },
+    {
+      "name": "commits past the base after a stop",
+      "cause": "output_cap",
+      "assessment": {
+        "kind": "package",
+        "tip": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "commits_past_base": 2,
+        "cause": null
+      },
+      "expect": "package"
+    },
+    {
+      "name": "the branch gone",
+      "cause": "exited",
+      "assessment": {
+        "kind": "package",
+        "tip": null,
+        "commits_past_base": 0,
+        "cause": "branch_missing"
+      },
+      "expect": "package"
+    },
+    {
+      "name": "collection failed",
+      "cause": "exited",
+      "assessment": null,
+      "expect": "failed"
+    }
+  ],
   "proxy": {
     "allow": [
       "api.anthropic.com",

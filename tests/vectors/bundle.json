@@ -122,5 +122,1216 @@
     "error": "malformed"
    }
   }
- ]
+ ],
+ "tar": {
+  "_doc": "Package streams (story 6.13 AC 2, D-229): each case's entries are built into a ustar stream by core's stream_of; the type is the ustar type byte as a character.",
+  "cases": [
+   {
+    "name": "the package as the packer writes it",
+    "entries": [
+     [
+      "out/",
+      "",
+      "5"
+     ],
+     [
+      "out/tip",
+      "c93e110a6a285ebb37e2e83f242cc4215695d93f\n",
+      "0"
+     ],
+     [
+      "out/manifest.json",
+      "{}",
+      "0"
+     ],
+     [
+      "out/work.bundle",
+      "BUNDLE",
+      "0"
+     ]
+    ],
+    "expect": {
+     "ok": {
+      "tip": "c93e110a6a285ebb37e2e83f242cc4215695d93f\n",
+      "manifest": "{}",
+      "bundle": "BUNDLE"
+     }
+    }
+   },
+   {
+    "name": "a package without a bundle",
+    "entries": [
+     [
+      "out/",
+      "",
+      "5"
+     ],
+     [
+      "out/tip",
+      "c93e110a6a285ebb37e2e83f242cc4215695d93f\n",
+      "0"
+     ],
+     [
+      "out/manifest.json",
+      "{}",
+      "0"
+     ]
+    ],
+    "expect": {
+     "ok": {
+      "tip": "c93e110a6a285ebb37e2e83f242cc4215695d93f\n",
+      "manifest": "{}",
+      "bundle": null
+     }
+    }
+   },
+   {
+    "name": "a backslash",
+    "entries": [
+     [
+      "out/",
+      "",
+      "5"
+     ],
+     [
+      "out\\work.bundle",
+      "x",
+      "0"
+     ]
+    ],
+    "expect": {
+     "err": "name_refused"
+    }
+   },
+   {
+    "name": "a drive prefix",
+    "entries": [
+     [
+      "out/",
+      "",
+      "5"
+     ],
+     [
+      "C:out/tip",
+      "x",
+      "0"
+     ]
+    ],
+    "expect": {
+     "err": "name_refused"
+    }
+   },
+   {
+    "name": "a colon and a stream",
+    "entries": [
+     [
+      "out/",
+      "",
+      "5"
+     ],
+     [
+      "out/tip:s",
+      "x",
+      "0"
+     ]
+    ],
+    "expect": {
+     "err": "name_refused"
+    }
+   },
+   {
+    "name": "a device name",
+    "entries": [
+     [
+      "out/",
+      "",
+      "5"
+     ],
+     [
+      "out/CON",
+      "x",
+      "0"
+     ]
+    ],
+    "expect": {
+     "err": "name_refused"
+    }
+   },
+   {
+    "name": "a device name with an extension",
+    "entries": [
+     [
+      "out/",
+      "",
+      "5"
+     ],
+     [
+      "out/aux.txt",
+      "x",
+      "0"
+     ]
+    ],
+    "expect": {
+     "err": "name_refused"
+    }
+   },
+   {
+    "name": "a device name in another case",
+    "entries": [
+     [
+      "out/",
+      "",
+      "5"
+     ],
+     [
+      "out/nul.json",
+      "x",
+      "0"
+     ]
+    ],
+    "expect": {
+     "err": "name_refused"
+    }
+   },
+   {
+    "name": "a trailing dot",
+    "entries": [
+     [
+      "out/",
+      "",
+      "5"
+     ],
+     [
+      "out/tip.",
+      "x",
+      "0"
+     ]
+    ],
+    "expect": {
+     "err": "name_refused"
+    }
+   },
+   {
+    "name": "a trailing space",
+    "entries": [
+     [
+      "out/",
+      "",
+      "5"
+     ],
+     [
+      "out/tip ",
+      "x",
+      "0"
+     ]
+    ],
+    "expect": {
+     "err": "name_refused"
+    }
+   },
+   {
+    "name": "another case",
+    "entries": [
+     [
+      "out/",
+      "",
+      "5"
+     ],
+     [
+      "out/TIP",
+      "x",
+      "0"
+     ]
+    ],
+    "expect": {
+     "err": "name_refused"
+    }
+   },
+   {
+    "name": "an extra file",
+    "entries": [
+     [
+      "out/",
+      "",
+      "5"
+     ],
+     [
+      "out/extra",
+      "x",
+      "0"
+     ]
+    ],
+    "expect": {
+     "err": "name_refused"
+    }
+   },
+   {
+    "name": "a dot-dot segment",
+    "entries": [
+     [
+      "out/",
+      "",
+      "5"
+     ],
+     [
+      "out/../tip",
+      "x",
+      "0"
+     ]
+    ],
+    "expect": {
+     "err": "name_refused"
+    }
+   },
+   {
+    "name": "an absolute name",
+    "entries": [
+     [
+      "out/",
+      "",
+      "5"
+     ],
+     [
+      "/out/tip",
+      "x",
+      "0"
+     ]
+    ],
+    "expect": {
+     "err": "name_refused"
+    }
+   },
+   {
+    "name": "a name outside out",
+    "entries": [
+     [
+      "out/",
+      "",
+      "5"
+     ],
+     [
+      "tip",
+      "x",
+      "0"
+     ]
+    ],
+    "expect": {
+     "err": "name_refused"
+    }
+   },
+   {
+    "name": "a case duplicate",
+    "entries": [
+     [
+      "out/",
+      "",
+      "5"
+     ],
+     [
+      "out/tip",
+      "c93e110a6a285ebb37e2e83f242cc4215695d93f\n",
+      "0"
+     ],
+     [
+      "OUT/",
+      "",
+      "5"
+     ]
+    ],
+    "expect": {
+     "err": "duplicate"
+    }
+   },
+   {
+    "name": "a symlink",
+    "entries": [
+     [
+      "out/",
+      "",
+      "5"
+     ],
+     [
+      "out/tip",
+      "",
+      "2"
+     ]
+    ],
+    "expect": {
+     "err": "type_refused"
+    }
+   },
+   {
+    "name": "a hard link",
+    "entries": [
+     [
+      "out/",
+      "",
+      "5"
+     ],
+     [
+      "out/tip",
+      "",
+      "1"
+     ]
+    ],
+    "expect": {
+     "err": "type_refused"
+    }
+   },
+   {
+    "name": "a tip over its bound",
+    "entries": [
+     [
+      "out/",
+      "",
+      "5"
+     ],
+     [
+      "out/tip",
+      "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+      "0"
+     ]
+    ],
+    "expect": {
+     "err": "too_long"
+    }
+   },
+   {
+    "name": "a linkpath record",
+    "entries": [
+     [
+      "out/",
+      "",
+      "5"
+     ],
+     [
+      "PaxHeaders/tip",
+      "17 linkpath=/etc\n",
+      "x"
+     ],
+     [
+      "out/tip",
+      "c93e110a6a285ebb37e2e83f242cc4215695d93f\n",
+      "0"
+     ]
+    ],
+    "expect": {
+     "err": "tar"
+    }
+   }
+  ]
+ },
+ "assess": {
+  "_doc": "AD-111's checks in order (story 6.13 AC 3): each case's outputs as host git gave them, the run's base, branch and mounts in expected; header is a parsed header or a BundleError code.",
+  "expected": {
+   "base_commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "branch_ref": "refs/heads/officina/bump-1",
+   "mounts": [
+    ".claude"
+   ]
+  },
+  "cases": [
+   {
+    "name": "a clean package",
+    "outputs": {
+     "tip": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n",
+     "bundle_bytes": 1000,
+     "header": {
+      "version": 2,
+      "capabilities": [],
+      "prerequisites": [
+       "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      ],
+      "references": [
+       {
+        "oid": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "name": "refs/heads/officina/bump-1"
+       }
+      ]
+     },
+     "verified": true,
+     "fetched": true,
+     "base_is_ancestor": true,
+     "commits": 2,
+     "paths": [
+      "src/lib.rs"
+     ],
+     "inflated_bytes": 5000
+    },
+    "expect": {
+     "done": {
+      "kind": "package",
+      "tip": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "commits_past_base": 2,
+      "cause": null
+     }
+    }
+   },
+   {
+    "name": "no tip",
+    "outputs": {
+     "tip": null,
+     "bundle_bytes": 1000,
+     "header": {
+      "version": 2,
+      "capabilities": [],
+      "prerequisites": [
+       "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      ],
+      "references": [
+       {
+        "oid": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "name": "refs/heads/officina/bump-1"
+       }
+      ]
+     },
+     "verified": true,
+     "fetched": true,
+     "base_is_ancestor": true,
+     "commits": 2,
+     "paths": [
+      "src/lib.rs"
+     ],
+     "inflated_bytes": 5000
+    },
+    "expect": {
+     "done": {
+      "kind": "package",
+      "tip": null,
+      "commits_past_base": 0,
+      "cause": "branch_missing"
+     }
+    }
+   },
+   {
+    "name": "a tip that is not an object id",
+    "outputs": {
+     "tip": "--upload-pack=x\n",
+     "bundle_bytes": 1000,
+     "header": {
+      "version": 2,
+      "capabilities": [],
+      "prerequisites": [
+       "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      ],
+      "references": [
+       {
+        "oid": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "name": "refs/heads/officina/bump-1"
+       }
+      ]
+     },
+     "verified": true,
+     "fetched": true,
+     "base_is_ancestor": true,
+     "commits": 2,
+     "paths": [
+      "src/lib.rs"
+     ],
+     "inflated_bytes": 5000
+    },
+    "expect": {
+     "done": {
+      "kind": "package",
+      "tip": null,
+      "commits_past_base": 0,
+      "cause": "branch_missing"
+     }
+    }
+   },
+   {
+    "name": "no bundle, the tip not checked yet",
+    "outputs": {
+     "tip": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    },
+    "expect": {
+     "next": "check_tip_held"
+    }
+   },
+   {
+    "name": "no bundle, a held tip, no commit",
+    "outputs": {
+     "tip": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+     "tip_held": true,
+     "commits": 0
+    },
+    "expect": {
+     "done": {
+      "kind": "no_commit",
+      "tip": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+     }
+    }
+   },
+   {
+    "name": "no bundle, a tip the host does not hold",
+    "outputs": {
+     "tip": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+     "tip_held": false
+    },
+    "expect": {
+     "done": {
+      "kind": "package",
+      "tip": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "commits_past_base": 0,
+      "cause": "bundle_invalid"
+     }
+    }
+   },
+   {
+    "name": "no bundle, a held tip with commits",
+    "outputs": {
+     "tip": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+     "tip_held": true,
+     "commits": 3
+    },
+    "expect": {
+     "done": {
+      "kind": "package",
+      "tip": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "commits_past_base": 3,
+      "cause": "bundle_invalid"
+     }
+    }
+   },
+   {
+    "name": "a bundle over its bound",
+    "outputs": {
+     "tip": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n",
+     "bundle_bytes": 67108865,
+     "header": {
+      "version": 2,
+      "capabilities": [],
+      "prerequisites": [
+       "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      ],
+      "references": [
+       {
+        "oid": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "name": "refs/heads/officina/bump-1"
+       }
+      ]
+     },
+     "verified": true,
+     "fetched": true,
+     "base_is_ancestor": true,
+     "commits": 2,
+     "paths": [
+      "src/lib.rs"
+     ],
+     "inflated_bytes": 5000
+    },
+    "expect": {
+     "done": {
+      "kind": "package",
+      "tip": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "commits_past_base": 0,
+      "cause": "too_large"
+     }
+    }
+   },
+   {
+    "name": "a header that does not parse",
+    "outputs": {
+     "tip": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n",
+     "bundle_bytes": 1000,
+     "header": "signature",
+     "verified": true,
+     "fetched": true,
+     "base_is_ancestor": true,
+     "commits": 2,
+     "paths": [
+      "src/lib.rs"
+     ],
+     "inflated_bytes": 5000
+    },
+    "expect": {
+     "done": {
+      "kind": "package",
+      "tip": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "commits_past_base": 0,
+      "cause": "bundle_invalid"
+     }
+    }
+   },
+   {
+    "name": "another base",
+    "outputs": {
+     "tip": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n",
+     "bundle_bytes": 1000,
+     "header": {
+      "version": 2,
+      "capabilities": [],
+      "prerequisites": [
+       "cccccccccccccccccccccccccccccccccccccccc"
+      ],
+      "references": [
+       {
+        "oid": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "name": "refs/heads/officina/bump-1"
+       }
+      ]
+     },
+     "verified": true,
+     "fetched": true,
+     "base_is_ancestor": true,
+     "commits": 2,
+     "paths": [
+      "src/lib.rs"
+     ],
+     "inflated_bytes": 5000
+    },
+    "expect": {
+     "done": {
+      "kind": "package",
+      "tip": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "commits_past_base": 0,
+      "cause": "wrong_base"
+     }
+    }
+   },
+   {
+    "name": "two references",
+    "outputs": {
+     "tip": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n",
+     "bundle_bytes": 1000,
+     "header": {
+      "version": 2,
+      "capabilities": [],
+      "prerequisites": [
+       "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      ],
+      "references": [
+       {
+        "oid": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "name": "refs/heads/officina/bump-1"
+       },
+       {
+        "oid": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "name": "refs/heads/officina/bump-1"
+       }
+      ]
+     },
+     "verified": true,
+     "fetched": true,
+     "base_is_ancestor": true,
+     "commits": 2,
+     "paths": [
+      "src/lib.rs"
+     ],
+     "inflated_bytes": 5000
+    },
+    "expect": {
+     "done": {
+      "kind": "package",
+      "tip": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "commits_past_base": 0,
+      "cause": "extra_ref"
+     }
+    }
+   },
+   {
+    "name": "a reference that is not the tip",
+    "outputs": {
+     "tip": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n",
+     "bundle_bytes": 1000,
+     "header": {
+      "version": 2,
+      "capabilities": [],
+      "prerequisites": [
+       "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      ],
+      "references": [
+       {
+        "oid": "dddddddddddddddddddddddddddddddddddddddd",
+        "name": "refs/heads/officina/bump-1"
+       }
+      ]
+     },
+     "verified": true,
+     "fetched": true,
+     "base_is_ancestor": true,
+     "commits": 2,
+     "paths": [
+      "src/lib.rs"
+     ],
+     "inflated_bytes": 5000
+    },
+    "expect": {
+     "done": {
+      "kind": "package",
+      "tip": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "commits_past_base": 0,
+      "cause": "bundle_invalid"
+     }
+    }
+   },
+   {
+    "name": "a bundle that does not verify",
+    "outputs": {
+     "tip": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n",
+     "bundle_bytes": 1000,
+     "header": {
+      "version": 2,
+      "capabilities": [],
+      "prerequisites": [
+       "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      ],
+      "references": [
+       {
+        "oid": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "name": "refs/heads/officina/bump-1"
+       }
+      ]
+     },
+     "verified": false,
+     "fetched": true,
+     "base_is_ancestor": true,
+     "commits": 2,
+     "paths": [
+      "src/lib.rs"
+     ],
+     "inflated_bytes": 5000
+    },
+    "expect": {
+     "done": {
+      "kind": "package",
+      "tip": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "commits_past_base": 0,
+      "cause": "bundle_invalid"
+     }
+    }
+   },
+   {
+    "name": "a fetch that fails fsck",
+    "outputs": {
+     "tip": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n",
+     "bundle_bytes": 1000,
+     "header": {
+      "version": 2,
+      "capabilities": [],
+      "prerequisites": [
+       "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      ],
+      "references": [
+       {
+        "oid": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "name": "refs/heads/officina/bump-1"
+       }
+      ]
+     },
+     "verified": true,
+     "fetched": false,
+     "base_is_ancestor": true,
+     "commits": 2,
+     "paths": [
+      "src/lib.rs"
+     ],
+     "inflated_bytes": 5000
+    },
+    "expect": {
+     "done": {
+      "kind": "package",
+      "tip": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "commits_past_base": 0,
+      "cause": "bundle_invalid"
+     }
+    }
+   },
+   {
+    "name": "a tip not descending from the base",
+    "outputs": {
+     "tip": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n",
+     "bundle_bytes": 1000,
+     "header": {
+      "version": 2,
+      "capabilities": [],
+      "prerequisites": [
+       "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      ],
+      "references": [
+       {
+        "oid": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "name": "refs/heads/officina/bump-1"
+       }
+      ]
+     },
+     "verified": true,
+     "fetched": true,
+     "base_is_ancestor": false,
+     "commits": 2,
+     "paths": [
+      "src/lib.rs"
+     ],
+     "inflated_bytes": 5000
+    },
+    "expect": {
+     "done": {
+      "kind": "package",
+      "tip": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "commits_past_base": 2,
+      "cause": "wrong_base"
+     }
+    }
+   },
+   {
+    "name": "a branch reset to the base",
+    "outputs": {
+     "tip": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n",
+     "bundle_bytes": 1000,
+     "header": {
+      "version": 2,
+      "capabilities": [],
+      "prerequisites": [
+       "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      ],
+      "references": [
+       {
+        "oid": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "name": "refs/heads/officina/bump-1"
+       }
+      ]
+     },
+     "verified": true,
+     "fetched": true,
+     "base_is_ancestor": true,
+     "commits": 0,
+     "paths": [
+      "src/lib.rs"
+     ],
+     "inflated_bytes": 5000
+    },
+    "expect": {
+     "done": {
+      "kind": "no_commit",
+      "tip": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+     }
+    }
+   },
+   {
+    "name": "too many commits",
+    "outputs": {
+     "tip": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n",
+     "bundle_bytes": 1000,
+     "header": {
+      "version": 2,
+      "capabilities": [],
+      "prerequisites": [
+       "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      ],
+      "references": [
+       {
+        "oid": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "name": "refs/heads/officina/bump-1"
+       }
+      ]
+     },
+     "verified": true,
+     "fetched": true,
+     "base_is_ancestor": true,
+     "commits": 501,
+     "paths": [
+      "src/lib.rs"
+     ],
+     "inflated_bytes": 5000
+    },
+    "expect": {
+     "done": {
+      "kind": "package",
+      "tip": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "commits_past_base": 501,
+      "cause": "too_large"
+     }
+    }
+   },
+   {
+    "name": "objects inflating too far",
+    "outputs": {
+     "tip": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n",
+     "bundle_bytes": 1000,
+     "header": {
+      "version": 2,
+      "capabilities": [],
+      "prerequisites": [
+       "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      ],
+      "references": [
+       {
+        "oid": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "name": "refs/heads/officina/bump-1"
+       }
+      ]
+     },
+     "verified": true,
+     "fetched": true,
+     "base_is_ancestor": true,
+     "commits": 2,
+     "paths": [
+      "src/lib.rs"
+     ],
+     "inflated_bytes": 536870913
+    },
+    "expect": {
+     "done": {
+      "kind": "package",
+      "tip": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "commits_past_base": 2,
+      "cause": "too_large"
+     }
+    }
+   },
+   {
+    "name": "the next step after the header",
+    "outputs": {
+     "tip": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n",
+     "bundle_bytes": 1000,
+     "header": {
+      "version": 2,
+      "capabilities": [],
+      "prerequisites": [
+       "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      ],
+      "references": [
+       {
+        "oid": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "name": "refs/heads/officina/bump-1"
+       }
+      ]
+     },
+     "verified": null,
+     "fetched": null,
+     "base_is_ancestor": true,
+     "commits": 2,
+     "paths": [
+      "src/lib.rs"
+     ],
+     "inflated_bytes": 5000
+    },
+    "expect": {
+     "next": "verify"
+    }
+   },
+   {
+    "name": "a path in the mount: .claude/settings.json",
+    "outputs": {
+     "tip": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n",
+     "bundle_bytes": 1000,
+     "header": {
+      "version": 2,
+      "capabilities": [],
+      "prerequisites": [
+       "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      ],
+      "references": [
+       {
+        "oid": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "name": "refs/heads/officina/bump-1"
+       }
+      ]
+     },
+     "verified": true,
+     "fetched": true,
+     "base_is_ancestor": true,
+     "commits": 2,
+     "paths": [
+      "src/a.rs",
+      ".claude/settings.json"
+     ],
+     "inflated_bytes": 5000
+    },
+    "expect": {
+     "done": {
+      "kind": "package",
+      "tip": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "commits_past_base": 2,
+      "cause": "mount_committed"
+     }
+    }
+   },
+   {
+    "name": "a path in the mount: .Claude/x",
+    "outputs": {
+     "tip": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n",
+     "bundle_bytes": 1000,
+     "header": {
+      "version": 2,
+      "capabilities": [],
+      "prerequisites": [
+       "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      ],
+      "references": [
+       {
+        "oid": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "name": "refs/heads/officina/bump-1"
+       }
+      ]
+     },
+     "verified": true,
+     "fetched": true,
+     "base_is_ancestor": true,
+     "commits": 2,
+     "paths": [
+      "src/a.rs",
+      ".Claude/x"
+     ],
+     "inflated_bytes": 5000
+    },
+    "expect": {
+     "done": {
+      "kind": "package",
+      "tip": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "commits_past_base": 2,
+      "cause": "mount_committed"
+     }
+    }
+   },
+   {
+    "name": "a path in the mount: .claude./x",
+    "outputs": {
+     "tip": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n",
+     "bundle_bytes": 1000,
+     "header": {
+      "version": 2,
+      "capabilities": [],
+      "prerequisites": [
+       "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      ],
+      "references": [
+       {
+        "oid": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "name": "refs/heads/officina/bump-1"
+       }
+      ]
+     },
+     "verified": true,
+     "fetched": true,
+     "base_is_ancestor": true,
+     "commits": 2,
+     "paths": [
+      "src/a.rs",
+      ".claude./x"
+     ],
+     "inflated_bytes": 5000
+    },
+    "expect": {
+     "done": {
+      "kind": "package",
+      "tip": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "commits_past_base": 2,
+      "cause": "mount_committed"
+     }
+    }
+   },
+   {
+    "name": "a path in the mount: .claude /x",
+    "outputs": {
+     "tip": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n",
+     "bundle_bytes": 1000,
+     "header": {
+      "version": 2,
+      "capabilities": [],
+      "prerequisites": [
+       "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      ],
+      "references": [
+       {
+        "oid": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "name": "refs/heads/officina/bump-1"
+       }
+      ]
+     },
+     "verified": true,
+     "fetched": true,
+     "base_is_ancestor": true,
+     "commits": 2,
+     "paths": [
+      "src/a.rs",
+      ".claude /x"
+     ],
+     "inflated_bytes": 5000
+    },
+    "expect": {
+     "done": {
+      "kind": "package",
+      "tip": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "commits_past_base": 2,
+      "cause": "mount_committed"
+     }
+    }
+   },
+   {
+    "name": "a path in the mount: .claude",
+    "outputs": {
+     "tip": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n",
+     "bundle_bytes": 1000,
+     "header": {
+      "version": 2,
+      "capabilities": [],
+      "prerequisites": [
+       "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      ],
+      "references": [
+       {
+        "oid": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "name": "refs/heads/officina/bump-1"
+       }
+      ]
+     },
+     "verified": true,
+     "fetched": true,
+     "base_is_ancestor": true,
+     "commits": 2,
+     "paths": [
+      "src/a.rs",
+      ".claude"
+     ],
+     "inflated_bytes": 5000
+    },
+    "expect": {
+     "done": {
+      "kind": "package",
+      "tip": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "commits_past_base": 2,
+      "cause": "mount_committed"
+     }
+    }
+   },
+   {
+    "name": "a path in the mount: .CLAUDE",
+    "outputs": {
+     "tip": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n",
+     "bundle_bytes": 1000,
+     "header": {
+      "version": 2,
+      "capabilities": [],
+      "prerequisites": [
+       "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      ],
+      "references": [
+       {
+        "oid": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "name": "refs/heads/officina/bump-1"
+       }
+      ]
+     },
+     "verified": true,
+     "fetched": true,
+     "base_is_ancestor": true,
+     "commits": 2,
+     "paths": [
+      "src/a.rs",
+      ".CLAUDE"
+     ],
+     "inflated_bytes": 5000
+    },
+    "expect": {
+     "done": {
+      "kind": "package",
+      "tip": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "commits_past_base": 2,
+      "cause": "mount_committed"
+     }
+    }
+   }
+  ]
+ }
 }
