@@ -343,32 +343,382 @@ pub const LOOPBACK_NAME: &str = "officina-loopback.test";
 /// The allow-listed name gateway A resolves to the engine host (AD-117).
 pub const ENGINE_HOST_NAME: &str = "officina-host.test";
 
+/// The public address gateway A resolves [`TEST_HOST`] to (D-1140): the
+/// SNI attempt needs a name that passes every check before the
+/// ClientHello, and the gateway refuses that attempt before it connects,
+/// so nothing is ever sent there.
+pub const TEST_HOST_ADDRESS: &str = "1.1.1.1";
+/// The egress family's public targets (AD-117): TCP addresses, an IPv6
+/// one, a public resolver for the UDP query, a name to resolve and an
+/// address to ping. Public anycast resolvers, so a success means a route
+/// out, not a reachable test service.
+pub const PUBLIC_TCP: &[&str] = &["1.1.1.1:443", "8.8.8.8:53"];
+pub const PUBLIC_IPV6: &str = "[2606:4700:4700::1111]:443";
+pub const PUBLIC_RESOLVER: &str = "1.1.1.1:53";
+pub const OUTSIDE_NAME: &str = "example.com";
+pub const ICMP_TARGET: &str = "1.1.1.1";
+/// The off-list name the gateway family asks for (AD-117).
+pub const OFF_LIST_HOST: &str = "officina-off-list.test";
+/// The name the SNI attempt's ClientHello carries instead of the test
+/// host (AD-117).
+pub const OTHER_SNI_HOST: &str = "officina-other.test";
+/// The documentation address the IP-literal attempt asks for.
+pub const LITERAL_ADDRESS: &str = "192.0.2.10";
+/// The port the decoy listens on (AD-117).
+pub const DECOY_PORT: u16 = 47_821;
+/// The ports the host family tries on each address it aims at (AD-117).
+pub const HOST_PORTS: &[u16] = &[22, 80, 2375, 2376];
+/// Docker Desktop's names the decoy resolves (AD-117), in the order of
+/// [`DecoyAddresses`]' fields.
+pub const DOCKER_DESKTOP_NAMES: &[&str] = &["host.docker.internal", "gateway.docker.internal"];
+/// The names the container runtime itself sets in every container, beside
+/// the vector's and the image's: `docker create` adds `HOSTNAME` (D-1141).
+pub const RUNTIME_ENV: &[&str] = &["HOSTNAME"];
+
+/// What the decoy saw (AD-117): its own addresses on its bridge, and what
+/// each of [`DOCKER_DESKTOP_NAMES`] resolved to (empty off Docker Desktop).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DecoyAddresses {
+    pub own: Vec<String>,
+    pub host_docker_internal: Vec<String>,
+    pub gateway_docker_internal: Vec<String>,
+}
+
+/// A line of `officina-entry decoy` (AD-117): its addresses, then
+/// `listening` once it connected to its own port; a probe prints
+/// `connected` or `unreachable`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "line", rename_all = "snake_case")]
+pub enum DecoyLine {
+    Addresses(DecoyAddresses),
+    Listening { port: u16 },
+    Connected,
+    Unreachable,
+}
+
+impl DecoyLine {
+    pub fn to_json(&self) -> String {
+        serde_json::to_string(self).unwrap_or_default()
+    }
+}
+
+/// The decoy's lines in `output`, those within [`MAX_LINE_BYTES`] that
+/// parse; anything else is skipped.
+pub fn parse_decoy(output: &str) -> Vec<DecoyLine> {
+    output
+        .lines()
+        .filter(|l| l.len() <= MAX_LINE_BYTES)
+        .filter_map(|l| serde_json::from_str(l.trim()).ok())
+        .collect()
+}
+
 /// What `officina-entry battery` is told (AD-117): the plan core builds
 /// and the program parses back, so the two cannot disagree.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Plan {
+    /// The gateway's name on the battery's internal network.
     pub gateway: String,
-    pub decoy_addresses: Vec<String>,
+    pub gateway_port: u16,
+    pub decoy: DecoyAddresses,
     pub decoy_port: u16,
     /// The battery mount's path in the container.
     pub mount: String,
     /// A `login` floor's login mount path (D-603, D-606).
     pub login_mount: Option<String>,
-    /// The environment's names, sorted: the vector's, the credential's
-    /// and the image's recorded `ENV` names (AD-102, PRD amendment 4).
+    /// The environment's names, sorted: the vector's, the credential's,
+    /// the image's recorded `ENV` names and [`RUNTIME_ENV`] (AD-102, PRD
+    /// amendment 4).
     pub expected_env: Vec<String>,
     pub pids_limit: u32,
     pub memory_mib: u32,
+    /// Phase 2 waits this long from its own start before it tries, so the
+    /// gateway started before it is past its deadline (AD-117).
+    pub wait_s: u64,
+    /// The bad requests phase 2 sends after its try (AD-117).
+    pub bad_requests: u32,
 }
 
 /// The expected environment names (AD-117): `vector` (the battery
-/// vector's names, the credential's among them for a token kind) and the
-/// image's recorded `ENV` names, sorted and deduplicated.
+/// vector's names, the credential's among them for a token kind), the
+/// image's recorded `ENV` names and [`RUNTIME_ENV`], sorted and
+/// deduplicated.
 pub fn expected_env(vector: &[String], image_env: &[String]) -> Vec<String> {
-    let mut names: Vec<String> = vector.iter().chain(image_env).cloned().collect();
+    let mut names: Vec<String> = vector
+        .iter()
+        .chain(image_env)
+        .cloned()
+        .chain(RUNTIME_ENV.iter().map(|n| (*n).to_owned()))
+        .collect();
     names.sort();
     names.dedup();
     names
+}
+
+/// How long gateway A lives, from its own start (AD-117, D-242).
+pub const PHASE_1_DEADLINE_S: u64 = 600;
+/// Gateway A's refusal limit: high enough that phase 1 never trips it.
+pub const PHASE_1_LIMIT: u32 = 1000;
+/// Gateway B's deadline, from its own start (AD-117).
+pub const PHASE_2_DEADLINE_S: u64 = 15;
+/// Gateway B's refusal limit (AD-117), the gateway's own.
+pub const PHASE_2_LIMIT: u32 = super::gateway::REFUSAL_LIMIT;
+/// The margin phase 2 waits past gateway B's deadline.
+pub const PHASE_2_MARGIN_S: u64 = 1;
+
+/// A phase's time limit in milliseconds, which the attached start's
+/// deadline adds 60 s to (D-205): phase 1 its gateway's deadline, phase 2
+/// its wait.
+pub const fn phase_limit_ms(phase: u8) -> u64 {
+    match phase {
+        1 => PHASE_1_DEADLINE_S * 1000,
+        _ => (PHASE_2_DEADLINE_S + PHASE_2_MARGIN_S) * 1000,
+    }
+}
+
+/// The battery gateway of `phase` (AD-117): the test names allow-listed,
+/// direct mode (P-55), gateway A's long deadline and high limit, gateway
+/// B's short ones.
+pub fn gateway_config(run: &str, phase: u8) -> super::gateway::GatewayConfig {
+    let hosts = [TEST_HOST, LOOPBACK_NAME, ENGINE_HOST_NAME].map(str::to_owned);
+    let (deadline_s, limit) = match phase {
+        1 => (PHASE_1_DEADLINE_S, PHASE_1_LIMIT),
+        _ => (PHASE_2_DEADLINE_S, PHASE_2_LIMIT),
+    };
+    let mut config = super::gateway::GatewayConfig::new(
+        run,
+        &hosts,
+        deadline_s,
+        std::collections::BTreeMap::new(),
+    );
+    config.refusal_limit = limit;
+    config
+}
+
+/// The gateways' refusals in `output`, in order (AD-117): each `refused`
+/// line's cause, and a `limit` line as [`GatewayRefusal::Limit`]; other
+/// lines and anything over [`MAX_LINE_BYTES`] are skipped.
+pub fn gateway_refusals(output: &str) -> Vec<GatewayRefusal> {
+    use super::gateway::GatewayLine;
+    output
+        .lines()
+        .filter(|l| l.len() <= MAX_LINE_BYTES)
+        .filter_map(|l| serde_json::from_str::<GatewayLine>(l.trim()).ok())
+        .filter_map(|line| match line {
+            GatewayLine::Refused { cause, .. } => Some(cause),
+            GatewayLine::Limit {} => Some(GatewayRefusal::Limit),
+            GatewayLine::Started { .. } | GatewayLine::Allowed { .. } => None,
+        })
+        .collect()
+}
+
+/// The program's lines in `output` that parse, in order.
+pub fn battery_lines(output: &str) -> Vec<BatteryLine> {
+    output.lines().filter_map(parse_line).collect()
+}
+
+/// The plan as it keys validity (D-232): the run's names and what the
+/// decoy saw cleared, so two batteries of one build and image agree.
+pub fn canonical_plan(plan: &Plan) -> Plan {
+    Plan {
+        gateway: String::new(),
+        decoy: DecoyAddresses::default(),
+        ..plan.clone()
+    }
+}
+
+/// `vector_sha256` (D-232): SHA-256 over D-210's normalised `Battery`
+/// vector and the canonical plan, one per line.
+pub fn vector_sha256(normalised_vector: &[String], plan: &Plan) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    for part in normalised_vector {
+        hasher.update(part.as_bytes());
+        hasher.update(b"\n");
+    }
+    hasher.update(serde_json::to_string(&canonical_plan(plan)).unwrap_or_default());
+    crate::hex(&hasher.finalize())
+}
+
+/// The work-order label value of a battery's objects (D-215).
+pub const BATTERY_WORK_ORDER: &str = "battery";
+/// The commit identity a battery worker carries: a battery commits nothing,
+/// and a fixed one keeps its vector's digest the same across batteries.
+pub const BATTERY_GIT_NAME: &str = "Officina battery";
+pub const BATTERY_GIT_EMAIL: &str = "battery@officina.invalid";
+/// A battery id for the canonical digest: names are normalised away, so
+/// any valid id gives the same digest.
+const CANONICAL_ID: &str = "00000000000000000000000000000000";
+
+/// What a battery is built from (AD-117, D-232): the floor's credential
+/// kind and worker limits, the image and the build that run it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BatterySpec {
+    pub kind: CredentialKind,
+    pub cpus: u32,
+    pub memory_mib: u32,
+    pub floor_key: String,
+    pub version: String,
+    pub image_id: String,
+    /// The image's recorded `ENV` names (D-233).
+    pub image_env: Vec<String>,
+}
+
+/// One phase's battery worker and its plan.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PhaseWorker {
+    pub vector: super::vector::ContainerVector,
+    pub plan: Plan,
+}
+
+impl BatterySpec {
+    fn limits(&self) -> super::vector::Limits {
+        super::vector::Limits::worker(self.cpus, self.memory_mib)
+    }
+
+    /// The labels of the battery's object in `role` (D-215).
+    pub fn labels(
+        &self,
+        battery: &super::names::RunId,
+        role: super::vector::ContainerRole,
+    ) -> std::collections::BTreeMap<String, String> {
+        super::names::run_labels(
+            &self.floor_key,
+            &self.version,
+            battery,
+            role,
+            BATTERY_WORK_ORDER,
+        )
+    }
+
+    /// The credential source of the battery worker (D-206, D-603): the
+    /// kind's name, or the battery's own empty login volume.
+    pub fn credential(
+        &self,
+        names: &super::names::BatteryNames,
+    ) -> super::vector::CredentialSource {
+        match super::vector::credential_name(self.kind) {
+            Some(name) => super::vector::CredentialSource::Name(name),
+            None => super::vector::CredentialSource::Volume(names.login_volume.clone()),
+        }
+    }
+
+    /// The battery worker of `phase` (AD-117): the `Worker` vector's shape
+    /// with the battery's command, its one mount at `mount_source`, and the
+    /// plan it is told, its gateway the phase's and `decoy` what the decoy
+    /// printed.
+    pub fn worker(
+        &self,
+        battery: &super::names::RunId,
+        phase: u8,
+        mount_source: &str,
+        decoy: &DecoyAddresses,
+    ) -> PhaseWorker {
+        use super::vector::{
+            ContainerRole, GATEWAY_PORT, GitIdentity, LOGIN_DIR, MOUNTS_DIR, WorkerShape,
+        };
+        let names = super::names::BatteryNames::of(battery);
+        let (name, gateway) = match phase {
+            1 => (&names.run.worker, &names.run.gateway),
+            _ => (&names.worker_b, &names.gateway_b),
+        };
+        let labels = self.labels(battery, ContainerRole::Battery);
+        let credential = self.credential(&names);
+        let git = GitIdentity {
+            name: BATTERY_GIT_NAME.to_owned(),
+            email: BATTERY_GIT_EMAIL.to_owned(),
+        };
+        let mounts = [mount_source.to_owned()];
+        let shape = WorkerShape {
+            name,
+            labels: &labels,
+            image_id: &self.image_id,
+            network: &names.run.internal,
+            volume: &names.run.volume,
+            gateway,
+            limits: self.limits(),
+            mounts: &mounts,
+            credential: &credential,
+            git: &git,
+            memory: None,
+        };
+        let env = super::vector::battery(&shape, phase, &[]).env_names();
+        let limits = self.limits();
+        let plan = Plan {
+            gateway: gateway.as_str().to_owned(),
+            gateway_port: GATEWAY_PORT,
+            decoy: decoy.clone(),
+            decoy_port: DECOY_PORT,
+            mount: format!("{MOUNTS_DIR}/0"),
+            login_mount: (self.kind == CredentialKind::Login).then(|| LOGIN_DIR.to_owned()),
+            expected_env: expected_env(&env, &self.image_env),
+            pids_limit: limits.pids,
+            memory_mib: limits.memory_mib,
+            wait_s: PHASE_2_DEADLINE_S + PHASE_2_MARGIN_S,
+            bad_requests: PHASE_2_LIMIT,
+        };
+        PhaseWorker {
+            vector: super::vector::battery(&shape, phase, &self::plan(&plan)),
+            plan,
+        }
+    }
+
+    /// `vector_sha256` of this spec (D-232): the canonical battery's, so
+    /// the window can tell a stale image without running one.
+    pub fn vector_sha256(&self) -> String {
+        let Some(id) = super::names::RunId::parse(CANONICAL_ID) else {
+            return String::new();
+        };
+        let worker = self.worker(&id, 1, "", &DecoyAddresses::default());
+        vector_sha256(&super::vector::normalised(&worker.vector), &worker.plan)
+    }
+}
+
+closed_enum! {
+    #[serde(rename_all = "snake_case")]
+    /// Why Run escape battery did not start (AD-117).
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+    #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+    pub enum BatteryRefusal {
+        /// The workshop's stop flag is set (AD-116).
+        WorkshopStopped,
+        /// The floor declares no valid `[workshop]`.
+        WorkshopOff,
+        /// No catalogue was approved, or the window's record does not vouch
+        /// for it (D-175).
+        NotApproved,
+        /// The floor changed since its approval (D-244).
+        CatalogueChanged,
+        /// The image asked for, or the gateway image, has no successful
+        /// build on record.
+        ImageMissing,
+        /// No image's battery is stale.
+        NothingStale,
+        /// The engine is not a reachable Linux engine (AD-98).
+        EngineUnavailable,
+        /// A build or a battery is already running on thread
+        /// `workshop-build`.
+        Busy,
+    }
+}
+
+/// How `run_battery` was answered: queued on thread `workshop-build`, each
+/// battery's row and lines reaching the registry and the journal, or
+/// refused before any container starts, with why.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(tag = "outcome", content = "detail", rename_all = "snake_case")]
+pub enum BatteryAnswer {
+    /// The images whose battery is queued, by tag.
+    Queued(Vec<String>),
+    Refused(BatteryRefusal),
+}
+
+/// The engine's clock against the window's around the `info` call
+/// (D-242): the engine's `SystemTime` minus the call's midpoint, a
+/// diagnostic only; `None` when the time does not parse.
+pub fn clock_skew_ms(system_time: &str, before_ms: i64, after_ms: i64) -> Option<i64> {
+    let engine = crate::dates::parse_rfc3339_ms(system_time)?;
+    Some(engine - (before_ms + (after_ms - before_ms) / 2))
 }
 
 /// The plan as arguments after `--phase <n>` (AD-117): one `--plan` and
@@ -728,6 +1078,143 @@ mod tests {
         assert!(parsed.detail.unwrap().len() <= MAX_DETAIL_BYTES);
         assert!(parse_line("{\"line\":\"attempt\"}").is_none());
         assert!(parse_line(&"x".repeat(MAX_LINE_BYTES + 1)).is_none());
+    }
+
+    fn spec(kind: CredentialKind) -> BatterySpec {
+        BatterySpec {
+            kind,
+            cpus: 2,
+            memory_mib: 4096,
+            floor_key: "0123456789abcdef".into(),
+            version: "0.6.0".into(),
+            image_id: format!("sha256:{}", "a".repeat(64)),
+            image_env: vec!["PATH".into(), "SSL_CERT_FILE".into()],
+        }
+    }
+
+    /// D-232: a real battery's digest, either phase, equals the one the
+    /// window computes to tell a stale image, whatever its id, mount
+    /// source and decoy addresses.
+    #[test]
+    fn the_canonical_digest_is_every_real_batterys() {
+        use crate::workshop::names::RunId;
+        for kind in CredentialKind::ALL {
+            let spec = spec(*kind);
+            let id = RunId::parse("fedcba9876543210fedcba9876543210").unwrap();
+            let decoy = DecoyAddresses {
+                own: vec!["172.18.0.2".into()],
+                host_docker_internal: vec!["192.168.65.254".into()],
+                gateway_docker_internal: vec!["192.168.65.1".into()],
+            };
+            for phase in [1, 2] {
+                let real = spec.worker(&id, phase, "C:/officina/workshop/battery/mount", &decoy);
+                assert_eq!(
+                    vector_sha256(
+                        &crate::workshop::vector::normalised(&real.vector),
+                        &real.plan
+                    ),
+                    spec.vector_sha256(),
+                    "{kind:?} phase {phase}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_digest_moves_with_the_vector_and_the_image_env() {
+        let base = spec(CredentialKind::OauthToken);
+        let digests = [
+            base.vector_sha256(),
+            BatterySpec {
+                memory_mib: 2048,
+                ..base.clone()
+            }
+            .vector_sha256(),
+            BatterySpec {
+                image_env: vec!["PATH".into()],
+                ..base.clone()
+            }
+            .vector_sha256(),
+            spec(CredentialKind::Login).vector_sha256(),
+        ];
+        for (i, a) in digests.iter().enumerate() {
+            for b in &digests[i + 1..] {
+                assert_ne!(a, b);
+            }
+        }
+    }
+
+    /// AD-117, D-603: a token battery expects its credential's name, a
+    /// login one none, and plays its login mount.
+    #[test]
+    fn the_plan_expects_the_kinds_credential_name_only() {
+        use crate::workshop::names::RunId;
+        let id = RunId::parse("fedcba9876543210fedcba9876543210").unwrap();
+        let token =
+            spec(CredentialKind::OauthToken).worker(&id, 1, "m", &DecoyAddresses::default());
+        assert!(
+            token
+                .plan
+                .expected_env
+                .contains(&"CLAUDE_CODE_OAUTH_TOKEN".to_owned())
+        );
+        assert!(token.plan.expected_env.contains(&"HOSTNAME".to_owned()));
+        assert_eq!(token.plan.login_mount, None);
+        let login = spec(CredentialKind::Login).worker(&id, 1, "m", &DecoyAddresses::default());
+        assert!(
+            !login
+                .plan
+                .expected_env
+                .iter()
+                .any(|n| n.ends_with("_TOKEN") || n.ends_with("_API_KEY"))
+        );
+        assert_eq!(
+            login.plan.login_mount.as_deref(),
+            Some(crate::workshop::vector::LOGIN_DIR)
+        );
+        assert_eq!(parse_plan(&plan(&login.plan)), Some(login.plan.clone()));
+    }
+
+    #[test]
+    fn gateway_lines_give_the_refusals_in_order() {
+        use crate::workshop::gateway::GatewayLine;
+        let output = [
+            GatewayLine::Started {
+                digest: "d".into(),
+                upstreams: Vec::new(),
+            },
+            GatewayLine::refused("a.test", 443, GatewayRefusal::NotAllowed, None),
+            GatewayLine::Allowed {
+                host: "api.anthropic.com".into(),
+                port: 443,
+                ech: false,
+            },
+            GatewayLine::refused("", 0, GatewayRefusal::Malformed, None),
+            GatewayLine::Limit {},
+        ]
+        .iter()
+        .map(GatewayLine::to_line)
+        .chain(["not json".to_owned(), "x".repeat(MAX_LINE_BYTES + 1)])
+        .collect::<Vec<_>>()
+        .join("\n");
+        assert_eq!(
+            gateway_refusals(&output),
+            [
+                GatewayRefusal::NotAllowed,
+                GatewayRefusal::Malformed,
+                GatewayRefusal::Limit
+            ]
+        );
+    }
+
+    #[test]
+    fn the_skew_is_the_engine_against_the_calls_midpoint() {
+        assert_eq!(clock_skew_ms("1970-01-01T00:00:01Z", 900, 1100), Some(0));
+        assert_eq!(
+            clock_skew_ms("1970-01-01T00:00:03.5Z", 1000, 1000),
+            Some(2500)
+        );
+        assert_eq!(clock_skew_ms("not a time", 0, 0), None);
     }
 
     #[test]

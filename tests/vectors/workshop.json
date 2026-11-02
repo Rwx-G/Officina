@@ -2000,6 +2000,8 @@
         "--network",
         "officina-out-0123456789abcdef0123456789abcdef",
         "--add-host",
+        "officina-allowed.test:1.1.1.1",
+        "--add-host",
         "officina-loopback.test:127.0.0.1",
         "--add-host",
         "officina-host.test:host-gateway",

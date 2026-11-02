@@ -94,6 +94,43 @@ pub fn day_start_ms(day: (i64, u32, u32)) -> i64 {
     (era * 146_097 + doe - 719_468) * DAY_MS
 }
 
+/// An RFC 3339 time as the engine prints it (`2026-11-02T10:00:00.5Z`,
+/// `...+01:00`) in Unix milliseconds; fractions past milliseconds are cut.
+///
+/// ```
+/// use officina_core::dates::parse_rfc3339_ms;
+/// assert_eq!(parse_rfc3339_ms("1970-01-02T00:00:01.25Z"), Some(86_401_250));
+/// assert_eq!(parse_rfc3339_ms("1970-01-01T01:00:00+01:00"), Some(0));
+/// assert_eq!(parse_rfc3339_ms("yesterday"), None);
+/// ```
+pub fn parse_rfc3339_ms(text: &str) -> Option<i64> {
+    let (date, time) = text.split_once(['T', 't'])?;
+    let day = parse_utc_day(date)?;
+    let (clock, offset_ms) = if let Some(clock) = time.strip_suffix(['Z', 'z']) {
+        (clock, 0)
+    } else {
+        let at = time.rfind(['+', '-'])?;
+        let (clock, offset) = time.split_at(at);
+        let sign = if offset.starts_with('-') { -1 } else { 1 };
+        let (h, m) = offset.get(1..)?.split_once(':')?;
+        let minutes = h.parse::<i64>().ok()? * 60 + m.parse::<i64>().ok()?;
+        (clock, sign * minutes * 60_000)
+    };
+    let (whole, fraction) = clock.split_once('.').unwrap_or((clock, ""));
+    let mut parts = whole.split(':').map(|p| p.parse::<i64>().ok());
+    let (h, m, s) = (parts.next()??, parts.next()??, parts.next()??);
+    if parts.next().is_some() || h > 23 || m > 59 || s > 60 {
+        return None;
+    }
+    if !fraction.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let millis = format!("{:0<3}", fraction.get(..3).unwrap_or(fraction))
+        .parse::<i64>()
+        .ok()?;
+    Some(day_start_ms(day) + ((h * 60 + m) * 60 + s) * 1000 + millis - offset_ms)
+}
+
 /// Event file name for the UTC day containing `unix_ms`: `YYYY-MM-DD.jsonl`.
 ///
 /// ```

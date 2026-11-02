@@ -140,6 +140,52 @@ impl RunNames {
     }
 }
 
+/// The objects one escape battery owns (AD-117), named from its id like a
+/// run's (D-215): phase 1 takes the run names, phase 2 its own worker and
+/// gateway; the decoy, its probe and its bridge; a `login` floor's empty
+/// battery volume (D-603).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BatteryNames {
+    pub run: RunNames,
+    pub worker_b: ObjectName,
+    pub gateway_b: ObjectName,
+    pub decoy: ObjectName,
+    pub decoy_probe: ObjectName,
+    pub decoy_network: ObjectName,
+    pub login_volume: ObjectName,
+}
+
+impl BatteryNames {
+    pub fn of(battery: &RunId) -> BatteryNames {
+        BatteryNames {
+            run: RunNames::of(battery),
+            worker_b: named("officina-worker-b-", battery),
+            gateway_b: named("officina-gateway-b-", battery),
+            decoy: named("officina-decoy-", battery),
+            decoy_probe: named("officina-decoy-probe-", battery),
+            decoy_network: named("officina-decoy-net-", battery),
+            login_volume: named("officina-battery-login-", battery),
+        }
+    }
+
+    /// The battery's containers, for its removal.
+    pub fn containers(&self) -> [&ObjectName; 6] {
+        [
+            &self.run.worker,
+            &self.run.gateway,
+            &self.worker_b,
+            &self.gateway_b,
+            &self.decoy,
+            &self.decoy_probe,
+        ]
+    }
+
+    /// The battery's networks, for its removal.
+    pub fn networks(&self) -> [&ObjectName; 3] {
+        [&self.run.internal, &self.run.egress, &self.decoy_network]
+    }
+}
+
 /// The floor's login volume (D-604, D-605).
 pub fn login_volume(floor_key: &str) -> ObjectName {
     ObjectName(format!("officina-login-{floor_key}"))

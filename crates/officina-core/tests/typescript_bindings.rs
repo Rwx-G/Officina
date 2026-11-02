@@ -27,6 +27,7 @@ use officina_core::registry::confirm::{ConfirmItem, ItemAnswer, SubjectOrigin};
 use officina_core::registry::types::Settlement;
 use officina_core::registry::view::{DiscardedSession, RegistryView};
 use officina_core::relay::view::RelayView;
+use officina_core::workshop::battery::BatteryAnswer;
 use officina_core::workshop::image::BuildAnswer;
 use ts_rs::{Config, TS};
 
@@ -73,6 +74,7 @@ fn export(dir: &Path) {
     AnswerResult::export_all(&cfg).unwrap();
     ProposalInvalidReason::export_all(&cfg).unwrap();
     BuildAnswer::export_all(&cfg).unwrap();
+    BatteryAnswer::export_all(&cfg).unwrap();
 }
 
 #[test]

@@ -165,7 +165,11 @@ fn judge_cases_match() {
 }
 
 fn planned(case: &Value) -> Value {
-    use officina_core::workshop::battery::{Plan, expected_env, parse_plan, plan};
+    use officina_core::workshop::battery::{
+        DECOY_PORT, DecoyAddresses, PHASE_2_DEADLINE_S, PHASE_2_LIMIT, PHASE_2_MARGIN_S, Plan,
+        expected_env, parse_plan, plan,
+    };
+    use officina_core::workshop::vector::GATEWAY_PORT;
     let strings = |v: &Value| -> Vec<String> {
         v.as_array()
             .into_iter()
@@ -174,10 +178,16 @@ fn planned(case: &Value) -> Value {
             .collect()
     };
     let input = &case["input"];
+    let decoy = &input["decoy"];
     let built = Plan {
         gateway: input["gateway"].as_str().unwrap().to_owned(),
-        decoy_addresses: strings(&input["decoy_addresses"]),
-        decoy_port: u16::try_from(input["decoy_port"].as_u64().unwrap()).unwrap(),
+        gateway_port: GATEWAY_PORT,
+        decoy: DecoyAddresses {
+            own: strings(&decoy["own"]),
+            host_docker_internal: strings(&decoy["host_docker_internal"]),
+            gateway_docker_internal: strings(&decoy["gateway_docker_internal"]),
+        },
+        decoy_port: DECOY_PORT,
         mount: input["mount"].as_str().unwrap().to_owned(),
         login_mount: input["login_mount"].as_str().map(str::to_owned),
         expected_env: expected_env(
@@ -186,6 +196,8 @@ fn planned(case: &Value) -> Value {
         ),
         pids_limit: u32::try_from(input["pids_limit"].as_u64().unwrap()).unwrap(),
         memory_mib: u32::try_from(input["memory_mib"].as_u64().unwrap()).unwrap(),
+        wait_s: PHASE_2_DEADLINE_S + PHASE_2_MARGIN_S,
+        bad_requests: PHASE_2_LIMIT,
     };
     let args = plan(&built);
     assert_eq!(

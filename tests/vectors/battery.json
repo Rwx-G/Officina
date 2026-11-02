@@ -559,14 +559,20 @@
     {
       "expect": [
         "--plan",
-        "{\"gateway\":\"officina-gateway-0123456789abcdef0123456789abcdef\",\"decoy_addresses\":[\"192.0.2.10\",\"198.51.100.20\"],\"decoy_port\":8080,\"mount\":\"/work/.officina/mounts/0\",\"login_mount\":null,\"expected_env\":[\"CLAUDE_CODE_OAUTH_TOKEN\",\"CLAUDE_CONFIG_DIR\",\"HOME\",\"HTTPS_PROXY\",\"PATH\",\"SSL_CERT_FILE\"],\"pids_limit\":512,\"memory_mib\":4096}"
+        "{\"gateway\":\"officina-gateway-0123456789abcdef0123456789abcdef\",\"gateway_port\":3128,\"decoy\":{\"own\":[\"192.0.2.30\"],\"host_docker_internal\":[\"192.0.2.10\"],\"gateway_docker_internal\":[\"198.51.100.20\"]},\"decoy_port\":47821,\"mount\":\"/work/.officina/mounts/0\",\"login_mount\":null,\"expected_env\":[\"CLAUDE_CODE_OAUTH_TOKEN\",\"CLAUDE_CONFIG_DIR\",\"HOME\",\"HOSTNAME\",\"HTTPS_PROXY\",\"PATH\",\"SSL_CERT_FILE\"],\"pids_limit\":512,\"memory_mib\":4096,\"wait_s\":16,\"bad_requests\":20}"
       ],
       "input": {
-        "decoy_addresses": [
-          "192.0.2.10",
-          "198.51.100.20"
-        ],
-        "decoy_port": 8080,
+        "decoy": {
+          "gateway_docker_internal": [
+            "198.51.100.20"
+          ],
+          "host_docker_internal": [
+            "192.0.2.10"
+          ],
+          "own": [
+            "192.0.2.30"
+          ]
+        },
         "gateway": "officina-gateway-0123456789abcdef0123456789abcdef",
         "image_env": [
           "PATH",
@@ -589,14 +595,20 @@
     {
       "expect": [
         "--plan",
-        "{\"gateway\":\"officina-gateway-0123456789abcdef0123456789abcdef\",\"decoy_addresses\":[\"192.0.2.10\",\"198.51.100.20\"],\"decoy_port\":8080,\"mount\":\"/work/.officina/mounts/0\",\"login_mount\":\"/work/.officina/login\",\"expected_env\":[\"CLAUDE_CONFIG_DIR\",\"HOME\",\"HTTPS_PROXY\",\"PATH\",\"SSL_CERT_FILE\"],\"pids_limit\":512,\"memory_mib\":4096}"
+        "{\"gateway\":\"officina-gateway-0123456789abcdef0123456789abcdef\",\"gateway_port\":3128,\"decoy\":{\"own\":[\"192.0.2.30\"],\"host_docker_internal\":[\"192.0.2.10\"],\"gateway_docker_internal\":[\"198.51.100.20\"]},\"decoy_port\":47821,\"mount\":\"/work/.officina/mounts/0\",\"login_mount\":\"/work/.officina/login\",\"expected_env\":[\"CLAUDE_CONFIG_DIR\",\"HOME\",\"HOSTNAME\",\"HTTPS_PROXY\",\"PATH\",\"SSL_CERT_FILE\"],\"pids_limit\":512,\"memory_mib\":4096,\"wait_s\":16,\"bad_requests\":20}"
       ],
       "input": {
-        "decoy_addresses": [
-          "192.0.2.10",
-          "198.51.100.20"
-        ],
-        "decoy_port": 8080,
+        "decoy": {
+          "gateway_docker_internal": [
+            "198.51.100.20"
+          ],
+          "host_docker_internal": [
+            "192.0.2.10"
+          ],
+          "own": [
+            "192.0.2.30"
+          ]
+        },
         "gateway": "officina-gateway-0123456789abcdef0123456789abcdef",
         "image_env": [
           "PATH",

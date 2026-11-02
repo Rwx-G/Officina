@@ -284,6 +284,20 @@ impl EngineCall {
         EngineCall::new(EngineCallKind::Logs, args)
     }
 
+    /// What a container has printed so far, read once (the battery's
+    /// gateways and decoy, AD-117, D-1142): no `--follow`, so it ends at
+    /// once, captured under AD-98's cap within 30 s.
+    pub fn logs_once(container: &ObjectName) -> EngineCall {
+        let mut args = strings(["logs"]);
+        args.push(container.as_str().to_owned());
+        EngineCall {
+            kind: EngineCallKind::Logs,
+            args,
+            deadline_ms: Some(30_000),
+            stdin: false,
+        }
+    }
+
     /// Stops containers with AD-102's 3 s grace (AD-116).
     pub fn stop(containers: &[ObjectName]) -> EngineCall {
         let mut args = strings(["stop", "--time", "3"]);

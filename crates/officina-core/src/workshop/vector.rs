@@ -500,12 +500,13 @@ pub fn gateway(
     )
 }
 
-/// The battery's test names its gateway resolves itself (AD-117): one to
-/// loopback, one to the engine host, both allow-listed and expected
-/// `private_address`.
+/// The battery's test names its gateway resolves itself (AD-117): the
+/// test host to a public address for the SNI attempt (D-1140), one name to
+/// loopback and one to the engine host, both expected `private_address`.
 pub const BATTERY_TEST_HOSTS: &[(&str, &str)] = &[
-    ("officina-loopback.test", "127.0.0.1"),
-    ("officina-host.test", "host-gateway"),
+    (super::battery::TEST_HOST, super::battery::TEST_HOST_ADDRESS),
+    (super::battery::LOOPBACK_NAME, "127.0.0.1"),
+    (super::battery::ENGINE_HOST_NAME, "host-gateway"),
 ];
 
 /// A battery gateway (AD-117), the gateway's vector with the test names.
@@ -624,6 +625,20 @@ pub fn decoy(
     }
 }
 
+/// The decoy's control (D-235): the `Decoy` vector with another name, on
+/// the decoy's network, connecting to `target` (`<address>:<port>`).
+pub fn decoy_probe(
+    name: &ObjectName,
+    labels: &BTreeMap<String, String>,
+    image_id: &str,
+    network: &ObjectName,
+    target: &str,
+) -> ContainerVector {
+    let mut probe = decoy(name, labels, image_id, network);
+    probe.command = vec!["decoy".to_owned(), "--probe".to_owned(), target.to_owned()];
+    probe
+}
+
 /// A container reading the floor's login (D-608, D-609): the base image,
 /// no network, the login read-only, a tmpfs `/tmp`.
 fn login_reader(
@@ -688,6 +703,56 @@ pub fn scanner(
         floor_key,
         "scan",
     )
+}
+
+/// D-210's normalisation (FR-15): the run's names, mount sources, the
+/// role, run and work-order label values, the proxy values and the command
+/// set aside, so a worker and the battery of one image read equal, and the
+/// battery's validity keys on the rest (D-232).
+pub fn normalised(vector: &ContainerVector) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut skip_next = false;
+    for (i, option) in vector.options().iter().enumerate() {
+        if skip_next {
+            skip_next = false;
+            continue;
+        }
+        let next = vector.options().get(i + 1);
+        match (option.as_str(), next) {
+            ("--label", Some(label))
+                if ["officina.role=", "officina.run=", "officina.work_order="]
+                    .iter()
+                    .any(|p| label.starts_with(p)) =>
+            {
+                out.push(format!("--label {}", label.split('=').next().unwrap_or("")));
+                skip_next = true;
+            }
+            ("--network", Some(_)) => {
+                out.push("--network <net>".into());
+                skip_next = true;
+            }
+            ("--mount", Some(mount)) => {
+                let without_source: Vec<&str> = mount
+                    .split(',')
+                    .filter(|f| !f.starts_with("source="))
+                    .collect();
+                out.push(format!("--mount {}", without_source.join(",")));
+                skip_next = true;
+            }
+            ("--env", Some(env))
+                if env.starts_with("HTTPS_PROXY=")
+                    || env.starts_with("https_proxy=")
+                    || env.starts_with("HTTP_PROXY=")
+                    || env.starts_with("http_proxy=") =>
+            {
+                out.push(format!("--env {}", env.split('=').next().unwrap_or("")));
+                skip_next = true;
+            }
+            _ => out.push(option.clone()),
+        }
+    }
+    out.push(vector.image().to_owned());
+    out
 }
 
 /// The names the builders set in a worker-shaped container, derived from
@@ -1290,54 +1355,6 @@ pub(crate) mod tests {
             serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
         file["vectors"] = value;
         std::fs::write(path, serde_json::to_string_pretty(&file).unwrap() + "\n").unwrap();
-    }
-
-    /// FR-15, D-210: after normalising what must differ, the worker and the
-    /// battery of the same image and the battery's input are equal.
-    pub(crate) fn normalised(vector: &ContainerVector) -> Vec<String> {
-        let mut out: Vec<String> = Vec::new();
-        let mut skip_next = false;
-        for (i, option) in vector.options().iter().enumerate() {
-            if skip_next {
-                skip_next = false;
-                continue;
-            }
-            let next = vector.options().get(i + 1);
-            match (option.as_str(), next) {
-                ("--label", Some(label))
-                    if ["officina.role=", "officina.run=", "officina.work_order="]
-                        .iter()
-                        .any(|p| label.starts_with(p)) =>
-                {
-                    out.push(format!("--label {}", label.split('=').next().unwrap_or("")));
-                    skip_next = true;
-                }
-                ("--network", Some(_)) => {
-                    out.push("--network <net>".into());
-                    skip_next = true;
-                }
-                ("--mount", Some(mount)) => {
-                    let without_source: Vec<&str> = mount
-                        .split(',')
-                        .filter(|f| !f.starts_with("source="))
-                        .collect();
-                    out.push(format!("--mount {}", without_source.join(",")));
-                    skip_next = true;
-                }
-                ("--env", Some(env))
-                    if env.starts_with("HTTPS_PROXY=")
-                        || env.starts_with("https_proxy=")
-                        || env.starts_with("HTTP_PROXY=")
-                        || env.starts_with("http_proxy=") =>
-                {
-                    out.push(format!("--env {}", env.split('=').next().unwrap_or("")));
-                    skip_next = true;
-                }
-                _ => out.push(option.clone()),
-            }
-        }
-        out.push(vector.image().to_owned());
-        out
     }
 
     fn battery_like_worker() -> (ContainerVector, ContainerVector) {
