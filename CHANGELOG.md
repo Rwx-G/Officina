@@ -8,6 +8,20 @@ project uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Workshop cards and their launch (v0.6, story 6.11): a template with
+  `[template.workshop]` issues a card showing its base choices and tips,
+  the uncommitted changes a run will not carry, each mount's state, the
+  hosts and their routes, the image, the minutes, the budget, the
+  credential's kind and every check that would refuse a launch now, with
+  the hash of what would run. Launch checks the card, the workshop, the
+  engine, the image and its battery, the mounts, the hook programs, the
+  capacity, the credential, the proxy and the base again, reports the
+  first failing one, then records the run, bundles the base, creates both
+  networks, the volume, the gateway and the worker (the credential in that
+  one `create`'s environment), copies the run's input and starts them;
+  a failing step removes what it created. Doctor adds the workshop
+  credential with its `cmdkey` line and file, and each mount's state.
+
 - The workshop's escape battery (v0.6, story 6.10): a fixed set of
   escape attempts played on each image in a container built as a worker
   is, with a dummy credential, each attempt judged from a failure counted
@@ -1231,6 +1245,8 @@ project uses [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- The image check no longer reports the gateway image as changed: it
+  holds no measured program to compare (story 6.11).
 - The board's Undo note and discard target broke onto two lines; they now
   keep one line and one width at every window width, a long session name
   cut with an ellipsis and whole in the tooltip (story 4.20).

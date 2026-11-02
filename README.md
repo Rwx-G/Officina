@@ -800,8 +800,9 @@ The first start of v0.5 also moves the registry to its version 2, which adds the
 The workshop runs a work order's Claude Code session unattended in a
 container on your Docker engine, behind an egress gateway, and hands back a
 package you review before anything reaches your repository. It is being
-built story by story; until it can launch, the keys below are validated and
-approved, and nothing runs.
+built story by story: a workshop card can be issued and launched; following
+the run, collecting its package and reviewing it come in the next stories,
+and the window's buttons with them.
 
 ### Declaring the workshop
 
@@ -1033,6 +1034,59 @@ and the totals. Doctor shows each image's last battery and its age, why a
 stale one is stale, and the engine's clock against the window's at the
 last battery.
 
+### The workshop card and its launch
+
+A template with `[template.workshop]` gets a workshop card. Besides the
+prompt and the values, it shows the base the run clones (the template's
+list first, its first entry the default, then the `officina/` branches
+imported from that template's runs in the last 7 days, each with the run it
+came from), each base's tip, how many uncommitted changes your folder holds
+(a run never carries them), each mount and its state, the hosts the run
+may reach and how each leaves (direct, or through which proxy), the image
+with its short id and build time, the minutes and the budget (checked after
+each turn, never a hard limit), the credential's kind, and every check
+that would refuse the launch now. Issuing a card reads git, the engine and
+the proxy configuration; it creates nothing.
+
+The click on Launch sends the card's id, its prompt hash and its plan
+hash, the hash of exactly what would run. The launch reads everything
+again and refuses with a `LaunchRefusal` naming the first failing check, in
+a fixed order, before the engine creates anything: the card itself (an
+unknown, replaced or used card, a prompt or plan that is not the one shown),
+the catalogue and the workshop (off or stopped), the engine and the image
+(no Linux engine, an image Officina would not build now, no valid escape
+battery), the mounts (missing, not git-ignored or holding tracked files, a
+path the engine cannot carry or reached through a link), the hook
+programs (the inventory, run last because it starts a container), the
+workshop's capacity (every worker slot taken, too many packages awaiting
+your verdict), the credential (absent or known to have expired), the
+proxy (undecidable or unsupported on this network), and the project (its
+folder gone, its base branch moved since the card, or anything else that
+changed what would run: a rebuilt image, another network's proxy). A
+moved base or a changed plan asks for a new card. Then the card is used
+once: the run's rows, a bundle of the base branch checked to hold the
+card's commit and nothing else, the prompt and the plan, both networks,
+the volume, the gateway and the worker, a copy of the run's input into
+the worker's volume, and the two starts. The first step that fails ends
+the launch `failed` and removes what it created; the stop flag is read
+between the steps. The journal gets one `workshop_started` line with every
+step's outcome, and `workshop_removed` after a removal.
+
+### The workshop credential
+
+A token floor's credential is the Windows Credential Manager entry
+`officina:workshop:<floor key>`, one per floor, so a personal and a work
+floor keep their own accounts. You store it with the `cmdkey` line doctor
+prints (also written to `<home>/doctor/workshop-cmdkey.txt` while it is
+missing); Officina never shows it and never asks for it. It is read at
+launch for the worker's creation only, set in the environment of that one
+`docker` process while the container's arguments carry the variable's
+name alone, and turned into the forms the run's texts are later searched
+for, which stay in the window's memory. A process running as you can read
+it back from the engine while the container exists (`docker inspect`):
+that is why containers are removed right after collection. A `login` floor
+is refused until its own launch path lands.
+
 ### Checking the engine
 
 For a floor that declares `[workshop]`, `officina doctor` adds a workshop
@@ -1044,9 +1098,14 @@ does, named and never valued, a `DOCKER_HOST` on plain TCP, whether the
 engine runs Linux containers and its identity, networks and volumes
 Officina labelled that no container uses any more, the Linux programs,
 each image matching or the label or measurement that differs, the base's
-Claude Code against your host's, the CA file against the images' label, and
-your workers' memory against the engine's. The findings are the
-variants of `WorkshopCheck`, each with its level.
+Claude Code against your host's, the CA file against the images' label,
+your workers' memory against the engine's, the floor's credential (stored
+or not, never read for display, with its `cmdkey` line when missing), and
+each project's mounts: missing, not git-ignored, ignored only by a rule
+the repository does not carry (`.git/info/exclude`, named), holding files
+the base tracks, a path the engine cannot carry or reached through a
+reparse point, and a count of Cloud Files placeholders. The findings are
+the variants of `WorkshopCheck`, each with its level.
 
 ### Approving workshop changes
 
