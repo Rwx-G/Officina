@@ -110,8 +110,24 @@ impl Drop for Gateway {
     }
 }
 
+/// How many ports [`Gateway::start`] tries: a port `free_port` found free
+/// can be taken by a parallel test before the gateway binds it, and the
+/// gateway then exits before its `started` line.
+const START_ATTEMPTS: u32 = 5;
+
 impl Gateway {
-    fn start(mut config: GatewayConfig) -> Gateway {
+    fn start(config: GatewayConfig) -> Gateway {
+        for _ in 1..START_ATTEMPTS {
+            if let Some(gateway) = Gateway::try_start(config.clone()) {
+                return gateway;
+            }
+        }
+        Gateway::try_start(config).expect("the gateway started on a free port")
+    }
+
+    /// The gateway on a fresh port, or `None` when it exited before its
+    /// first line.
+    fn try_start(mut config: GatewayConfig) -> Option<Gateway> {
         let port = free_port();
         config.listen = format!("127.0.0.1:{port}");
         let mut child = Command::new(GATEWAY)
@@ -138,9 +154,14 @@ impl Gateway {
             }
         });
         let gateway = Gateway { child, port, lines };
-        let started = gateway.next_line();
-        assert!(started.contains("\"started\""), "{started}");
-        gateway
+        match gateway.lines.recv_timeout(Duration::from_secs(20)) {
+            Ok(started) => {
+                assert!(started.contains("\"started\""), "{started}");
+                Some(gateway)
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => None,
+            Err(mpsc::RecvTimeoutError::Timeout) => panic!("the gateway printed nothing"),
+        }
     }
 
     fn next_line(&self) -> String {
