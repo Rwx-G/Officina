@@ -117,6 +117,14 @@ closed_enum! {
         SettingsExposed,
         /// A mounted hook script has CRLF line endings (review F12).
         HookScriptCrlf,
+        /// An image's last escape battery: its outcome and age (AD-117).
+        BatteryLast,
+        /// No battery valid for what would run now: `battery_stale`, named
+        /// with the key that moved (AD-117, D-232); a launch is refused.
+        BatteryStale,
+        /// The engine's clock against the window's at the newest battery,
+        /// a diagnostic only (D-242).
+        BatteryClockSkew,
     }
 }
 
@@ -150,7 +158,8 @@ impl WorkshopCheck {
             | WorkshopCheck::HookProgramWarning
             | WorkshopCheck::InventoryAbsent
             | WorkshopCheck::SettingsExposed
-            | WorkshopCheck::HookScriptCrlf => CheckLevel::Warn,
+            | WorkshopCheck::HookScriptCrlf
+            | WorkshopCheck::BatteryStale => CheckLevel::Warn,
             WorkshopCheck::ProxyRefused => CheckLevel::Fail,
             WorkshopCheck::ProxyRoutes | WorkshopCheck::ProxyCaNote => CheckLevel::Inform,
             WorkshopCheck::DockerResolved
@@ -161,7 +170,9 @@ impl WorkshopCheck {
             | WorkshopCheck::LinuxPrograms
             | WorkshopCheck::ImageMatches
             | WorkshopCheck::CaLabel
-            | WorkshopCheck::HookProgramsFound => CheckLevel::Inform,
+            | WorkshopCheck::HookProgramsFound
+            | WorkshopCheck::BatteryLast
+            | WorkshopCheck::BatteryClockSkew => CheckLevel::Inform,
         }
     }
 
@@ -208,6 +219,8 @@ impl WorkshopCheck {
             WorkshopCheck::SettingsExposed | WorkshopCheck::HookScriptCrlf => {
                 "workshop project settings"
             }
+            WorkshopCheck::BatteryLast | WorkshopCheck::BatteryStale => "workshop battery",
+            WorkshopCheck::BatteryClockSkew => "workshop clock",
         }
     }
 
@@ -218,6 +231,91 @@ impl WorkshopCheck {
             .position(|check| *check == self)
             .unwrap_or(WorkshopCheck::ALL.len())
     }
+}
+
+/// One image's batteries as doctor reads them (AD-117, AD-123): what a
+/// battery would key on now, when the engine answered, and the recorded
+/// batteries, newest first, with the newest one's clock skew.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BatteryFacts {
+    pub image: String,
+    pub current: Option<super::battery::ValidityKey>,
+    pub runs: Vec<super::battery::BatteryRun>,
+    pub newest_skew_ms: Option<i64>,
+}
+
+/// An age in the largest whole unit: minutes, hours or days.
+fn age(ms: i64) -> String {
+    let minutes = ms.max(0) / 60_000;
+    match minutes {
+        m if m < 60 => format!("{m} min"),
+        m if m < 48 * 60 => format!("{} h", m / 60),
+        m => format!("{} days", m / (24 * 60)),
+    }
+}
+
+/// Doctor's battery lines (AD-117, AD-123, D-232, D-242): each image's
+/// last outcome and age, `battery_stale` with the keys that moved since
+/// the newest passing battery, and the engine's clock skew at the newest
+/// battery of all.
+pub fn battery_findings(images: &[BatteryFacts], now_ms: i64) -> Vec<Finding> {
+    use super::battery::{BatteryOutcome, is_valid};
+    let mut found = Vec::new();
+    for facts in images {
+        let newest = facts.runs.first();
+        match newest {
+            None => found.push(Finding::new(
+                WorkshopCheck::BatteryStale,
+                format!("{}: battery_stale: no escape battery has run", facts.image),
+            )),
+            Some(run) => found.push(Finding::new(
+                WorkshopCheck::BatteryLast,
+                format!(
+                    "{}: {} {} ago",
+                    facts.image,
+                    run.outcome.map_or("unfinished", BatteryOutcome::code),
+                    run.finished_at_ms
+                        .map_or_else(|| "?".to_owned(), |at| age(now_ms - at))
+                ),
+            )),
+        }
+        let Some(current) = &facts.current else {
+            continue;
+        };
+        if newest.is_none() || is_valid(&facts.runs, current, now_ms).is_some() {
+            continue;
+        }
+        let passing = facts
+            .runs
+            .iter()
+            .find(|run| run.outcome == Some(BatteryOutcome::Passed));
+        let why = match passing {
+            None => "no battery passed".to_owned(),
+            Some(run) => {
+                let moved = run.key.moved(current);
+                if moved.is_empty() {
+                    "the last pass is older than 30 days".to_owned()
+                } else {
+                    format!("since the last pass, the {} moved", moved.join(", "))
+                }
+            }
+        };
+        found.push(Finding::new(
+            WorkshopCheck::BatteryStale,
+            format!("{}: battery_stale: {why}", facts.image),
+        ));
+    }
+    let skew = images
+        .iter()
+        .filter_map(|f| Some((f.runs.first()?.finished_at_ms?, f.newest_skew_ms?)))
+        .max_by_key(|(at, _)| *at);
+    if let Some((_, skew)) = skew {
+        found.push(Finding::new(
+            WorkshopCheck::BatteryClockSkew,
+            format!("the engine's clock was {skew:+} ms from the window's at the last battery"),
+        ));
+    }
+    found
 }
 
 /// What doctor read about one project's hooks (AD-123, story 6.9 AC 5).

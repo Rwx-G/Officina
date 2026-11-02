@@ -64,6 +64,10 @@ pub struct WorkshopFacts {
     /// Each workshop project's hooks against its recorded inventory
     /// (AD-123, story 6.9).
     pub hooks: Vec<HookFacts>,
+    /// Each image's batteries (AD-123, story 6.10).
+    pub batteries: Vec<officina_core::workshop::doctor::BatteryFacts>,
+    /// When doctor read them, for the batteries' ages.
+    pub now_ms: i64,
 }
 
 /// What doctor needs to compare the images (AD-99, AD-123).
@@ -536,6 +540,8 @@ pub fn gather(
         hooks: images
             .map(|context| hook_facts(context, home))
             .unwrap_or_default(),
+        batteries: Vec::new(),
+        now_ms: crate::files::now_ms(),
     };
     if let Ok((path, source)) = &facts.docker {
         let docker = ResolvedDocker::at(path.clone(), *source);
@@ -552,13 +558,89 @@ pub fn gather(
                 .map(|out| parse_object_rows(&out));
         }
         let ready = state.info().is_some();
+        let key = state
+            .info()
+            .zip(facts.info.as_ref())
+            .map(|(info, read)| engine_key(info, read));
+        if let Some(context) = images {
+            facts.batteries = battery_facts(context, home, key.as_deref());
+        }
         facts.engine = Some(state);
         facts.images =
             images.and_then(|context| image_report(context, env, home, ready.then_some(&docker)));
     } else {
         facts.images = images.and_then(|context| image_report(context, env, home, None));
+        if let Some(context) = images {
+            facts.batteries = battery_facts(context, home, None);
+        }
     }
     facts
+}
+
+/// Each built image's batteries from the registry, and, when the engine's
+/// key is known, what a battery of it would key on now (AD-117, D-232).
+pub fn battery_facts(
+    context: &ImageContext,
+    home: &Path,
+    engine_key: Option<&str>,
+) -> Vec<officina_core::workshop::doctor::BatteryFacts> {
+    use officina_core::workshop::battery::{BatterySpec, ValidityKey};
+    use officina_core::workshop::image::{BuildOutcome, ImageKind};
+    let Some(workshop) = context.canonical.workshop.as_ref() else {
+        return Vec::new();
+    };
+    let Ok(reader) = crate::registry::store::open_reader(home, &[]) else {
+        return Vec::new();
+    };
+    let rows = reader.workshop_images().unwrap_or_default();
+    let built = |row: &&crate::registry::workshop::ImageRecord| {
+        row.outcome == BuildOutcome::Built && row.image_id.is_some()
+    };
+    let gateway_id = rows
+        .iter()
+        .filter(built)
+        .find(|row| row.kind == ImageKind::Gateway)
+        .and_then(|row| row.image_id.clone());
+    rows.iter()
+        .filter(built)
+        .filter(|row| row.kind != ImageKind::Gateway)
+        .map(|row| {
+            let records = reader.workshop_batteries(&row.name).unwrap_or_default();
+            let image_id = row.image_id.clone().unwrap_or_default();
+            let current = engine_key
+                .zip(gateway_id.as_ref())
+                .zip(row.programs_sha256.as_ref())
+                .map(|((engine_key, gateway_id), programs)| {
+                    let spec = BatterySpec {
+                        kind: workshop.auth,
+                        cpus: workshop.cpus,
+                        memory_mib: workshop.memory_mib,
+                        floor_key: context.floor_key.clone(),
+                        version: crate::workshop::build::VERSION.to_owned(),
+                        image_id: image_id.clone(),
+                        image_env: row
+                            .env_names_json
+                            .as_deref()
+                            .and_then(|json| serde_json::from_str(json).ok())
+                            .unwrap_or_default(),
+                    };
+                    ValidityKey {
+                        engine_key: engine_key.to_owned(),
+                        image_id: image_id.clone(),
+                        gateway_image_id: gateway_id.clone(),
+                        officina_version: crate::workshop::build::VERSION.to_owned(),
+                        vector_sha256: spec.vector_sha256(),
+                        programs_sha256: programs.clone(),
+                    }
+                });
+            officina_core::workshop::doctor::BatteryFacts {
+                image: row.name.clone(),
+                current,
+                newest_skew_ms: records.first().and_then(|r| r.clock_skew_ms),
+                runs: crate::workshop::battery::runs_of(&records),
+            }
+        })
+        .collect()
 }
 
 fn binary_findings(
@@ -649,6 +731,10 @@ pub fn findings(facts: &WorkshopFacts) -> Vec<Finding> {
     for hooks in &facts.hooks {
         found.extend(hook_findings(hooks));
     }
+    found.extend(officina_core::workshop::doctor::battery_findings(
+        &facts.batteries,
+        facts.now_ms,
+    ));
     if let Some(dir) = &facts.synced_home {
         found.push(Finding::new(
             WorkshopCheck::HomeSynced,
@@ -700,6 +786,8 @@ mod tests {
             proxy: None,
             images: None,
             hooks: Vec::new(),
+            batteries: Vec::new(),
+            now_ms: 1_800_000_000_000,
         }
     }
 
@@ -772,6 +860,96 @@ mod tests {
             CheckLevel::Warn => Level::Warn,
             CheckLevel::Inform => Level::Ok,
         }
+    }
+
+    fn battery_key() -> officina_core::workshop::battery::ValidityKey {
+        officina_core::workshop::battery::ValidityKey {
+            engine_key: "Docker Desktop|29.8.2|6.18|digest".into(),
+            image_id: format!("sha256:{}", "a".repeat(64)),
+            gateway_image_id: format!("sha256:{}", "b".repeat(64)),
+            officina_version: "0.6.0".into(),
+            vector_sha256: "v".repeat(64),
+            programs_sha256: "p".repeat(64),
+        }
+    }
+
+    fn battery_lines(batteries: Vec<officina_core::workshop::doctor::BatteryFacts>) -> Vec<Check> {
+        checks(&WorkshopFacts {
+            batteries,
+            ..facts()
+        })
+    }
+
+    /// Story 6.10 AC 8 (AD-117, D-232): a battery whose key moved since
+    /// its pass is stale, named with the key; a valid one is not.
+    #[test]
+    fn a_stale_battery_names_the_key_that_moved() {
+        use officina_core::workshop::battery::{BatteryOutcome, BatteryRun};
+        use officina_core::workshop::doctor::BatteryFacts;
+        let now = facts().now_ms;
+        let passed = BatteryRun {
+            key: battery_key(),
+            outcome: Some(BatteryOutcome::Passed),
+            finished_at_ms: Some(now - 3 * 60 * 60 * 1000),
+        };
+        let image = |current| BatteryFacts {
+            image: "officina-workshop:local".into(),
+            current: Some(current),
+            runs: vec![passed.clone()],
+            newest_skew_ms: None,
+        };
+        let valid = battery_lines(vec![image(battery_key())]);
+        assert!(line_of(&valid, WorkshopCheck::BatteryStale).is_none());
+        let last = line_of(&valid, WorkshopCheck::BatteryLast).unwrap();
+        assert!(last.detail.contains("passed 3 h ago"), "{}", last.detail);
+        let mut moved = battery_key();
+        moved.engine_key = "Docker Desktop|29.9.0|6.18|digest".into();
+        let stale = battery_lines(vec![image(moved)]);
+        let line = line_of(&stale, WorkshopCheck::BatteryStale).unwrap();
+        assert_eq!(line.level, level_of(WorkshopCheck::BatteryStale));
+        assert!(line.detail.contains("battery_stale"), "{}", line.detail);
+        assert!(line.detail.contains("the engine moved"), "{}", line.detail);
+        let never = battery_lines(vec![BatteryFacts {
+            runs: Vec::new(),
+            ..image(battery_key())
+        }]);
+        assert!(
+            line_of(&never, WorkshopCheck::BatteryStale)
+                .unwrap()
+                .detail
+                .contains("no escape battery has run")
+        );
+    }
+
+    /// Story 6.10 AC 8 (D-242): the newest battery's clock skew is shown,
+    /// a diagnostic only.
+    #[test]
+    fn the_last_clock_skew_is_shown() {
+        use officina_core::workshop::battery::{BatteryOutcome, BatteryRun};
+        use officina_core::workshop::doctor::BatteryFacts;
+        let now = facts().now_ms;
+        let run = |at| BatteryRun {
+            key: battery_key(),
+            outcome: Some(BatteryOutcome::Passed),
+            finished_at_ms: Some(at),
+        };
+        let lines = battery_lines(vec![
+            BatteryFacts {
+                image: "officina-workshop:local".into(),
+                current: None,
+                runs: vec![run(now - 10_000)],
+                newest_skew_ms: Some(-1500),
+            },
+            BatteryFacts {
+                image: "officina-project-01234567-api:local".into(),
+                current: None,
+                runs: vec![run(now - 99_000)],
+                newest_skew_ms: Some(40),
+            },
+        ]);
+        let skew = line_of(&lines, WorkshopCheck::BatteryClockSkew).unwrap();
+        assert_eq!(skew.level, level_of(WorkshopCheck::BatteryClockSkew));
+        assert!(skew.detail.contains("-1500 ms"), "{}", skew.detail);
     }
 
     #[test]
