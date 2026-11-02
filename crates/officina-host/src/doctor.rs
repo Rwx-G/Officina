@@ -988,6 +988,7 @@ pub fn run_with(collector: &Collector, exe: &Path, permissions: bool) -> Vec<Che
                 &paths.officina_home,
                 proxy.as_ref(),
                 images.as_ref(),
+                &crate::relay::credential::SystemCredentialStore,
             ),
         ));
     }

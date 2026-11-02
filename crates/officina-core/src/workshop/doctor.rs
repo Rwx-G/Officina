@@ -125,6 +125,29 @@ closed_enum! {
         /// The engine's clock against the window's at the newest battery,
         /// a diagnostic only (D-242).
         BatteryClockSkew,
+        /// The floor's credential is stored (never read for display), or
+        /// the floor's kind holds none on the host (AD-105, D-604).
+        CredentialPresent,
+        /// The floor's credential is absent: the floor's `cmdkey` line,
+        /// also written to a file (D-38, D-617); a launch is refused.
+        CredentialAbsent,
+        /// A mount is a folder, git-ignored, holding no tracked file.
+        MountReady,
+        /// A mount is ignored only by a rule outside the tracked files
+        /// (`.git/info/exclude`, `core.excludesFile`), named (FR-2).
+        MountIgnoredUntracked,
+        /// A mount's folder is missing (FR-2).
+        MountMissing,
+        /// A mount is not git-ignored (FR-2).
+        MountNotIgnored,
+        /// A mount holds files the base tracks (D-231, review F3).
+        MountTracked,
+        /// A mount's path holds a character the engine cannot carry, or
+        /// goes through a reparse point (D-236).
+        MountPathUnsupported,
+        /// A mount holds Cloud Files placeholders, which the engine cannot
+        /// read offline (R55), with their count.
+        MountPlaceholders,
     }
 }
 
@@ -141,7 +164,12 @@ impl WorkshopCheck {
             | WorkshopCheck::ImageMismatch
             | WorkshopCheck::CaUnreadable
             | WorkshopCheck::CaLabelMismatch
-            | WorkshopCheck::HookProgramMissing => CheckLevel::Fail,
+            | WorkshopCheck::HookProgramMissing
+            | WorkshopCheck::CredentialAbsent
+            | WorkshopCheck::MountMissing
+            | WorkshopCheck::MountNotIgnored
+            | WorkshopCheck::MountTracked
+            | WorkshopCheck::MountPathUnsupported => CheckLevel::Fail,
             WorkshopCheck::DockerCliProxies
             | WorkshopCheck::DockerCliPluginDirs
             | WorkshopCheck::DockerCliConfigUnreadable
@@ -159,7 +187,8 @@ impl WorkshopCheck {
             | WorkshopCheck::InventoryAbsent
             | WorkshopCheck::SettingsExposed
             | WorkshopCheck::HookScriptCrlf
-            | WorkshopCheck::BatteryStale => CheckLevel::Warn,
+            | WorkshopCheck::BatteryStale
+            | WorkshopCheck::MountPlaceholders => CheckLevel::Warn,
             WorkshopCheck::ProxyRefused => CheckLevel::Fail,
             WorkshopCheck::ProxyRoutes | WorkshopCheck::ProxyCaNote => CheckLevel::Inform,
             WorkshopCheck::DockerResolved
@@ -172,7 +201,10 @@ impl WorkshopCheck {
             | WorkshopCheck::CaLabel
             | WorkshopCheck::HookProgramsFound
             | WorkshopCheck::BatteryLast
-            | WorkshopCheck::BatteryClockSkew => CheckLevel::Inform,
+            | WorkshopCheck::BatteryClockSkew
+            | WorkshopCheck::CredentialPresent
+            | WorkshopCheck::MountReady
+            | WorkshopCheck::MountIgnoredUntracked => CheckLevel::Inform,
         }
     }
 
@@ -221,6 +253,16 @@ impl WorkshopCheck {
             }
             WorkshopCheck::BatteryLast | WorkshopCheck::BatteryStale => "workshop battery",
             WorkshopCheck::BatteryClockSkew => "workshop clock",
+            WorkshopCheck::CredentialPresent | WorkshopCheck::CredentialAbsent => {
+                "workshop credential"
+            }
+            WorkshopCheck::MountReady
+            | WorkshopCheck::MountIgnoredUntracked
+            | WorkshopCheck::MountMissing
+            | WorkshopCheck::MountNotIgnored
+            | WorkshopCheck::MountTracked
+            | WorkshopCheck::MountPathUnsupported
+            | WorkshopCheck::MountPlaceholders => "workshop mounts",
         }
     }
 
@@ -415,6 +457,93 @@ impl Finding {
             detail: detail.into(),
         }
     }
+}
+
+/// The floor's credential line (AD-105, D-604, D-617): its kind, and
+/// whether it is stored; for a token kind not stored, the floor's
+/// `cmdkey` line, which the file `cmdkey_file` also holds. A `login`
+/// floor's credential is its login volume, never a host value (D-603).
+pub fn credential_finding(
+    kind: super::floor::CredentialKind,
+    present: bool,
+    floor_key: &str,
+    cmdkey_file: &str,
+) -> Finding {
+    use super::floor::CredentialKind;
+    match (kind, present) {
+        (CredentialKind::Login, _) => Finding::new(
+            WorkshopCheck::CredentialPresent,
+            "login: the worker's login is a volume; the host holds no value",
+        ),
+        (_, true) => Finding::new(
+            WorkshopCheck::CredentialPresent,
+            format!("{}: stored, never shown", kind.code()),
+        ),
+        (_, false) => Finding::new(
+            WorkshopCheck::CredentialAbsent,
+            format!(
+                "{}: not stored; run `{}` (also in {cmdkey_file}); Officina never asks for it",
+                kind.code(),
+                super::names::cmdkey_line(floor_key)
+            ),
+        ),
+    }
+}
+
+/// What doctor found of one mount (FR-2, D-231, D-236).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MountFacts {
+    pub project: String,
+    pub path: String,
+    pub state: crate::orders::workshop_card::MountState,
+    /// The rule's source when only an untracked rule ignores it.
+    pub untracked_rule: Option<String>,
+    /// How many Cloud Files placeholders it holds (R55).
+    pub placeholders: u32,
+}
+
+/// One mount's lines.
+pub fn mount_findings(mount: &MountFacts) -> Vec<Finding> {
+    use crate::orders::workshop_card::MountState;
+    let name = format!("{}: {}", mount.project, mount.path);
+    let mut found = vec![match mount.state {
+        MountState::Ready => match &mount.untracked_rule {
+            Some(source) => Finding::new(
+                WorkshopCheck::MountIgnoredUntracked,
+                format!("{name} is ignored only by {source}, which the repository does not carry"),
+            ),
+            None => Finding::new(WorkshopCheck::MountReady, format!("{name} is ignored")),
+        },
+        MountState::Missing => {
+            Finding::new(WorkshopCheck::MountMissing, format!("{name} is missing"))
+        }
+        MountState::NotIgnored => Finding::new(
+            WorkshopCheck::MountNotIgnored,
+            format!("{name} is not git-ignored"),
+        ),
+        MountState::Tracked => Finding::new(
+            WorkshopCheck::MountTracked,
+            format!("{name} holds files the base tracks"),
+        ),
+        MountState::PathUnsupported => Finding::new(
+            WorkshopCheck::MountPathUnsupported,
+            format!("{name}: a comma, a quote or a control character the engine cannot carry"),
+        ),
+        MountState::ReparsePoint => Finding::new(
+            WorkshopCheck::MountPathUnsupported,
+            format!("{name} is reached through a reparse point"),
+        ),
+    }];
+    if mount.placeholders > 0 {
+        found.push(Finding::new(
+            WorkshopCheck::MountPlaceholders,
+            format!(
+                "{name} holds {} Cloud Files placeholder(s): make them available offline",
+                mount.placeholders
+            ),
+        ));
+    }
+    found
 }
 
 /// The findings in section order, a check's several lines kept in the order

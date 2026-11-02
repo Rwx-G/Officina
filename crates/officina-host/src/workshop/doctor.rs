@@ -68,6 +68,167 @@ pub struct WorkshopFacts {
     pub batteries: Vec<officina_core::workshop::doctor::BatteryFacts>,
     /// When doctor read them, for the batteries' ages.
     pub now_ms: i64,
+    /// The floor's credential kind and whether it is stored (AD-105).
+    pub credential: Option<CredentialFacts>,
+    /// Each workshop project's mounts (FR-2, story 6.11 AC 8).
+    pub mounts: Vec<officina_core::workshop::doctor::MountFacts>,
+}
+
+/// The floor's credential as doctor reads it: present or not, never shown.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CredentialFacts {
+    pub kind: officina_core::workshop::floor::CredentialKind,
+    pub floor_key: String,
+    pub present: bool,
+    /// Where the `cmdkey` line is written while the credential is absent.
+    pub cmdkey_file: PathBuf,
+}
+
+/// `<home>/doctor/workshop-cmdkey.txt` (D-617).
+pub fn cmdkey_file(home: &Path) -> PathBuf {
+    home.join("doctor").join("workshop-cmdkey.txt")
+}
+
+/// The floor's credential (AD-105): read through `store` and dropped at
+/// once. The `cmdkey` file is written while a token kind's credential is
+/// absent and removed once it is stored (D-617).
+pub fn credential_facts(
+    context: &ImageContext,
+    home: &Path,
+    store: &dyn crate::relay::credential::CredentialStore,
+) -> Option<CredentialFacts> {
+    use officina_core::workshop::floor::CredentialKind;
+    let kind = context.canonical.workshop.as_ref()?.auth;
+    let present = crate::workshop::launch::credential_present(store, kind, &context.floor_key);
+    let file = cmdkey_file(home);
+    if kind != CredentialKind::Login && !present {
+        let line = format!(
+            "{}\n",
+            officina_core::workshop::names::cmdkey_line(&context.floor_key)
+        );
+        let _ = std::fs::create_dir_all(home.join("doctor"));
+        let _ = std::fs::write(&file, line);
+    } else {
+        let _ = std::fs::remove_file(&file);
+    }
+    Some(CredentialFacts {
+        kind,
+        floor_key: context.floor_key.clone(),
+        present,
+        cmdkey_file: file,
+    })
+}
+
+/// File attributes a Cloud Files placeholder carries: offline, recall on
+/// open, recall on data access (R55).
+const PLACEHOLDER_ATTRIBUTES: u32 = 0x1000 | 0x4_0000 | 0x40_0000;
+
+/// True for the attributes of a file whose bytes are not on the disk.
+pub fn is_placeholder(attributes: u32) -> bool {
+    attributes & PLACEHOLDER_ATTRIBUTES != 0
+}
+
+/// How many placeholders `dir` holds, its first entries only.
+fn placeholders(dir: &Path) -> u32 {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        let mut count = 0u32;
+        let mut stack = vec![dir.to_path_buf()];
+        let mut seen = 0usize;
+        while let Some(at) = stack.pop() {
+            for entry in std::fs::read_dir(&at).into_iter().flatten().flatten() {
+                seen += 1;
+                if seen > 100_000 {
+                    return count;
+                }
+                let Ok(meta) = entry.metadata() else {
+                    continue;
+                };
+                if is_placeholder(meta.file_attributes()) {
+                    count = count.saturating_add(1);
+                } else if meta.is_dir() && !meta.file_type().is_symlink() {
+                    stack.push(entry.path());
+                }
+            }
+        }
+        count
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = dir;
+        0
+    }
+}
+
+/// The base a project's mounts are judged against: the first base of the
+/// first workshop template, in name order, naming the project (D-1137).
+fn first_base(
+    canonical: &officina_core::relay::catalogue::CanonicalCatalogue,
+    project: &str,
+) -> Option<String> {
+    canonical
+        .templates
+        .values()
+        .filter(|t| t.projects.iter().any(|p| p == project))
+        .find_map(|t| t.workshop.as_ref()?.base.first().cloned())
+}
+
+/// The source of the rule ignoring `mount` when it is not a tracked
+/// file's (`check-ignore -v`): `.git/info/exclude` or a path outside the
+/// project.
+fn untracked_rule(
+    git: &crate::workshop::inventory::WorkshopGit,
+    dir: &Path,
+    mount: &str,
+) -> Option<String> {
+    let path = format!("{}/", mount.trim_end_matches('/'));
+    let out = git
+        .output(dir, &["check-ignore", "-v", "--no-index", "--", &path])
+        .ok()?;
+    let text = String::from_utf8_lossy(&out);
+    let source = text.split(':').next()?.trim().to_owned();
+    let untracked =
+        source.starts_with(".git/") || Path::new(&source).is_absolute() || source.contains(":/");
+    (untracked && !source.is_empty()).then_some(source)
+}
+
+/// Each workshop project's mounts (FR-2, D-231, D-236): their state, the
+/// untracked rule ignoring them, their placeholders. Read-only `git`
+/// under the workshop rule; nothing starts in the engine.
+pub fn mount_facts(
+    context: &ImageContext,
+    git: Option<&crate::workshop::inventory::WorkshopGit>,
+) -> Vec<officina_core::workshop::doctor::MountFacts> {
+    use officina_core::orders::workshop_card::MountState;
+    let mut found = Vec::new();
+    for (name, project) in &context.canonical.projects {
+        let Some(workshop) = project.workshop.as_ref() else {
+            continue;
+        };
+        let Some(dir) = context.project_dirs.get(name) else {
+            continue;
+        };
+        let tip = first_base(&context.canonical, name)
+            .and_then(|branch| git.and_then(|g| g.branch_commit(dir, &branch)));
+        for mount in &workshop.mounts {
+            let state = crate::workshop::launch::mount_state(dir, mount, git, tip.as_deref());
+            found.push(officina_core::workshop::doctor::MountFacts {
+                project: name.clone(),
+                path: mount.clone(),
+                state,
+                untracked_rule: (state == MountState::Ready)
+                    .then(|| git.and_then(|g| untracked_rule(g, dir, mount)))
+                    .flatten(),
+                placeholders: if state == MountState::Ready {
+                    placeholders(&dir.join(mount))
+                } else {
+                    0
+                },
+            });
+        }
+    }
+    found
 }
 
 /// What doctor needs to compare the images (AD-99, AD-123).
@@ -506,6 +667,7 @@ pub fn gather(
     home: &Path,
     proxy: Option<&ProxyInput>,
     images: Option<&ImageContext>,
+    store: &dyn crate::relay::credential::CredentialStore,
 ) -> WorkshopFacts {
     let lookup = |name: &str| env_value(env, name).map(std::ffi::OsString::from);
     let docker = resolve_binary(
@@ -542,7 +704,19 @@ pub fn gather(
             .unwrap_or_default(),
         batteries: Vec::new(),
         now_ms: crate::files::now_ms(),
+        credential: images.and_then(|context| credential_facts(context, home, store)),
+        mounts: Vec::new(),
     };
+    if let (Some(context), Ok((git, _))) = (images, &facts.git) {
+        let workshop_git = crate::workshop::git::ensure_empty_hooks(home)
+            .ok()
+            .map(|hooks_dir| crate::workshop::inventory::WorkshopGit {
+                git: git.clone(),
+                hooks_dir,
+                base_env: env.to_vec(),
+            });
+        facts.mounts = mount_facts(context, workshop_git.as_ref());
+    }
     if let Ok((path, source)) = &facts.docker {
         let docker = ResolvedDocker::at(path.clone(), *source);
         let _ = std::fs::create_dir_all(home);
@@ -731,6 +905,17 @@ pub fn findings(facts: &WorkshopFacts) -> Vec<Finding> {
     for hooks in &facts.hooks {
         found.extend(hook_findings(hooks));
     }
+    if let Some(credential) = &facts.credential {
+        found.push(officina_core::workshop::doctor::credential_finding(
+            credential.kind,
+            credential.present,
+            &credential.floor_key,
+            &credential.cmdkey_file.to_string_lossy(),
+        ));
+    }
+    for mount in &facts.mounts {
+        found.extend(officina_core::workshop::doctor::mount_findings(mount));
+    }
     found.extend(officina_core::workshop::doctor::battery_findings(
         &facts.batteries,
         facts.now_ms,
@@ -788,6 +973,8 @@ mod tests {
             hooks: Vec::new(),
             batteries: Vec::new(),
             now_ms: 1_800_000_000_000,
+            credential: None,
+            mounts: Vec::new(),
         }
     }
 
@@ -1407,6 +1594,194 @@ mod tests {
                     .join(".docker")
                     .join("config.json")
             )
+        );
+    }
+}
+
+/// Story 6.11 AC 8 (AD-123, D-228, D-604, D-617): the credential's line
+/// and its `cmdkey` file, and each mount's lines, on real repositories.
+#[cfg(test)]
+mod credential_and_mount_tests {
+    use super::*;
+    use crate::relay::credential::{CredentialStore, Secret, StoreError};
+    use crate::workshop::launch::tests::{commit, repo};
+    use officina_core::workshop::doctor::{CheckLevel, WorkshopCheck, mount_findings};
+
+    struct Store(Option<&'static str>);
+
+    impl CredentialStore for Store {
+        fn read(&self, _name: &str) -> Result<Option<Secret>, StoreError> {
+            Ok(self.0.map(|v| Secret::new(v.to_owned())))
+        }
+    }
+
+    const FLOOR_PATH: &str = "C:/path/to/floor/officina.toml";
+
+    fn context(project: &Path, mount: &str) -> ImageContext {
+        let text = format!(
+            "schema = 2\n[workshop]\n\n[[project]]\nname = \"api\"\npath = \"{}\"\n\n[project.workshop]\nmounts = [\"{mount}\"]\n\n[[template]]\nname = \"bump\"\ndescription = \"d\"\nprojects = [\"api\"]\nprompt = \"Bump.\"\n\n[template.workshop]\nbase = [\"main\"]\n",
+            project.to_string_lossy().replace('\\', "/")
+        );
+        let floor = officina_core::relay::catalogue::load(&text, FLOOR_PATH).unwrap();
+        ImageContext {
+            exe_dir: PathBuf::new(),
+            canonical: floor.canonical.clone(),
+            floor_key: officina_core::workshop::names::floor_key(FLOOR_PATH),
+            project_dirs: std::collections::BTreeMap::from([(
+                "api".to_owned(),
+                project.to_path_buf(),
+            )]),
+            claude_version: None,
+        }
+    }
+
+    #[test]
+    fn a_missing_credential_prints_the_floors_cmdkey_line_and_writes_its_file() {
+        let home = tempfile::tempdir().unwrap();
+        let context = context(home.path(), ".claude");
+        let facts = credential_facts(&context, home.path(), &Store(None)).unwrap();
+        assert!(!facts.present);
+        let finding = officina_core::workshop::doctor::credential_finding(
+            facts.kind,
+            facts.present,
+            &facts.floor_key,
+            &facts.cmdkey_file.to_string_lossy(),
+        );
+        assert_eq!(finding.check, WorkshopCheck::CredentialAbsent);
+        assert_eq!(finding.check.level(), CheckLevel::Fail);
+        let line = officina_core::workshop::names::cmdkey_line(&context.floor_key);
+        assert!(finding.detail.contains(&line), "{}", finding.detail);
+        assert!(finding.detail.contains("workshop-cmdkey.txt"));
+        assert_eq!(
+            std::fs::read_to_string(cmdkey_file(home.path())).unwrap(),
+            format!("{line}\n")
+        );
+    }
+
+    #[test]
+    fn the_cmdkey_file_goes_once_the_credential_exists() {
+        let home = tempfile::tempdir().unwrap();
+        let context = context(home.path(), ".claude");
+        credential_facts(&context, home.path(), &Store(None)).unwrap();
+        assert!(cmdkey_file(home.path()).exists());
+        let facts = credential_facts(&context, home.path(), &Store(Some("a-value"))).unwrap();
+        assert!(facts.present);
+        assert!(!cmdkey_file(home.path()).exists());
+        let finding = officina_core::workshop::doctor::credential_finding(
+            facts.kind,
+            facts.present,
+            &facts.floor_key,
+            "",
+        );
+        assert_eq!(finding.check, WorkshopCheck::CredentialPresent);
+        assert!(!finding.detail.contains("a-value"));
+    }
+
+    fn checks_of(
+        context: &ImageContext,
+        git: &crate::workshop::inventory::WorkshopGit,
+    ) -> Vec<WorkshopCheck> {
+        mount_facts(context, Some(git))
+            .iter()
+            .flat_map(mount_findings)
+            .map(|f| f.check)
+            .collect()
+    }
+
+    #[test]
+    fn a_mount_ignored_only_by_exclude_is_named() {
+        let (home, git) = repo();
+        let dir = home.path().join("project");
+        commit(&git, &dir, "empty");
+        std::fs::create_dir_all(dir.join("notes")).unwrap();
+        std::fs::write(dir.join(".git").join("info").join("exclude"), "notes/\n").unwrap();
+        let context = context(&dir, "notes");
+        let found = mount_facts(&context, Some(&git));
+        assert_eq!(
+            found[0].untracked_rule.as_deref(),
+            Some(".git/info/exclude")
+        );
+        assert_eq!(
+            checks_of(&context, &git),
+            [WorkshopCheck::MountIgnoredUntracked]
+        );
+    }
+
+    #[test]
+    fn a_mount_holding_tracked_files_fails() {
+        let (home, git) = repo();
+        let dir = home.path().join("project");
+        std::fs::write(dir.join(".gitignore"), ".claude/\n").unwrap();
+        std::fs::create_dir_all(dir.join(".claude")).unwrap();
+        std::fs::write(dir.join(".claude").join("a.json"), "{}").unwrap();
+        commit(&git, &dir, "ignore");
+        let context = context(&dir, ".claude");
+        assert_eq!(checks_of(&context, &git), [WorkshopCheck::MountReady]);
+        git.output(&dir, &["add", "-f", ".claude/a.json"]).unwrap();
+        commit(&git, &dir, "force");
+        assert_eq!(checks_of(&context, &git), [WorkshopCheck::MountTracked]);
+        assert_eq!(WorkshopCheck::MountTracked.level(), CheckLevel::Fail);
+    }
+
+    #[test]
+    fn a_placeholder_file_in_a_mount_warns() {
+        const RECALL_ON_DATA_ACCESS: u32 = 0x40_0000;
+        const NORMAL: u32 = 0x80;
+        assert!(is_placeholder(RECALL_ON_DATA_ACCESS));
+        assert!(!is_placeholder(NORMAL));
+        let found = mount_findings(&officina_core::workshop::doctor::MountFacts {
+            project: "api".into(),
+            path: ".claude".into(),
+            state: officina_core::orders::workshop_card::MountState::Ready,
+            untracked_rule: None,
+            placeholders: 3,
+        });
+        let warned = found
+            .iter()
+            .find(|f| f.check == WorkshopCheck::MountPlaceholders)
+            .unwrap();
+        assert_eq!(warned.check.level(), CheckLevel::Warn);
+        assert!(warned.detail.contains("3 Cloud Files placeholder"));
+    }
+
+    #[test]
+    fn a_comma_in_a_mount_path_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("a,b")).unwrap();
+        let context = context(dir.path(), "a,b");
+        let found: Vec<WorkshopCheck> = mount_facts(&context, None)
+            .iter()
+            .flat_map(mount_findings)
+            .map(|f| f.check)
+            .collect();
+        assert_eq!(found, [WorkshopCheck::MountPathUnsupported]);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the test makes a junction with cmd's mklink, which needs no privilege"
+    )]
+    fn a_reparse_point_on_a_mount_path_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let made = std::process::Command::new("cmd")
+            .args(["/c", "mklink", "/J"])
+            .arg(dir.path().join("linked"))
+            .arg(outside.path())
+            .output()
+            .unwrap();
+        assert!(made.status.success());
+        let context = context(dir.path(), "linked");
+        let found = mount_facts(&context, None);
+        assert_eq!(
+            found[0].state,
+            officina_core::orders::workshop_card::MountState::ReparsePoint
+        );
+        assert_eq!(
+            mount_findings(&found[0])[0].check,
+            WorkshopCheck::MountPathUnsupported
         );
     }
 }
