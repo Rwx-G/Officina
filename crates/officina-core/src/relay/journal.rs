@@ -152,6 +152,7 @@ pub enum JournalEntry {
     GatewayRefused(GatewayRefused),
     WorkshopStarted(Box<WorkshopStarted>),
     WorkshopRemoved(WorkshopRemoved),
+    WorkshopFinished(Box<WorkshopFinished>),
 }
 
 closed_enum! {
@@ -187,6 +188,7 @@ closed_enum! {
         GatewayRefused,
         WorkshopStarted,
         WorkshopRemoved,
+        WorkshopFinished,
     }
 }
 
@@ -221,6 +223,7 @@ impl JournalEntry {
             JournalEntry::GatewayRefused(_) => JournalKind::GatewayRefused,
             JournalEntry::WorkshopStarted(_) => JournalKind::WorkshopStarted,
             JournalEntry::WorkshopRemoved(_) => JournalKind::WorkshopRemoved,
+            JournalEntry::WorkshopFinished(_) => JournalKind::WorkshopFinished,
         }
     }
 }
@@ -694,6 +697,37 @@ pub struct WorkshopRemoved {
     pub cause: crate::workshop::run::RemovalCause,
 }
 
+/// How a run ended and what it produced (AD-120), written once when its
+/// outcome is known. `result_subtype` is worker text, its credential forms
+/// replaced (D-230); the cost is in millionths of a USD so the line keeps
+/// an exact equality (D-1161).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkshopFinished {
+    pub run_id: String,
+    pub template: String,
+    pub project: String,
+    pub base_branch: String,
+    pub base_commit: String,
+    pub cause: crate::workshop::run::FinishCause,
+    pub outcome: crate::workshop::run::WorkshopOutcome,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub commits_past_base: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tip: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exit_code: Option<i64>,
+    pub duration_ms: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost_usd_micros: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turns: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result_subtype: Option<String>,
+    pub hooks: BTreeMap<String, crate::workshop::stream::HookCounts>,
+    pub refused: u32,
+    pub stream_bytes: u64,
+}
+
 /// A refusal a gateway logged (AD-120): a run's, or a battery's (story
 /// 6.10 writes it first, D-249). The host is worker text, made printable
 /// and cut by the gateway's own line rule.
@@ -1089,6 +1123,9 @@ mod tests {
                 run_id: "0123456789abcdef0123456789abcdef".into(),
                 cause: crate::workshop::run::RemovalCause::LaunchFailed,
             }),
+            JournalKind::WorkshopFinished => {
+                JournalEntry::WorkshopFinished(Box::new(workshop_finished()))
+            }
             JournalKind::PromptDecided => JournalEntry::PromptDecided(PromptDecided {
                 session_id: "0f1e2d3c-4b5a-4978-8796-a5b4c3d2e1f0".into(),
                 tool_name: None,
@@ -1498,6 +1535,55 @@ mod tests {
                 parse_line(line.trim_end()),
                 ParsedLine::Line(JournalLine::new(4, entry))
             );
+        }
+    }
+
+    fn workshop_finished() -> WorkshopFinished {
+        WorkshopFinished {
+            run_id: "0123456789abcdef0123456789abcdef".into(),
+            template: "bump".into(),
+            project: "api".into(),
+            base_branch: "main".into(),
+            base_commit: "a".repeat(40),
+            cause: crate::workshop::run::FinishCause::EngineLost,
+            outcome: crate::workshop::run::WorkshopOutcome::Unknown,
+            commits_past_base: None,
+            tip: None,
+            exit_code: None,
+            duration_ms: 1,
+            cost_usd_micros: None,
+            turns: None,
+            result_subtype: None,
+            hooks: BTreeMap::new(),
+            refused: 0,
+            stream_bytes: 0,
+        }
+    }
+
+    /// Story 6.12 (AD-120, D-249): `workshop_finished` reads back for every
+    /// cause and outcome, its optional fields absent when unknown.
+    #[test]
+    fn workshop_finished_round_trips() {
+        use crate::workshop::run::{FinishCause, WorkshopOutcome};
+        for cause in FinishCause::ALL.iter().copied() {
+            for outcome in WorkshopOutcome::ALL.iter().copied() {
+                let entry = JournalEntry::WorkshopFinished(Box::new(WorkshopFinished {
+                    cause,
+                    outcome,
+                    exit_code: (cause == FinishCause::Exited).then_some(0),
+                    ..workshop_finished()
+                }));
+                let line = JournalLine::new(4, entry.clone()).to_line();
+                let value: serde_json::Value = serde_json::from_str(&line).unwrap();
+                assert_eq!(value["kind"], "workshop_finished");
+                assert_eq!(value["cause"], cause.code());
+                assert_eq!(value["outcome"], outcome.code());
+                assert!(value.get("tip").is_none());
+                assert_eq!(
+                    parse_line(line.trim_end()),
+                    ParsedLine::Line(JournalLine::new(4, entry))
+                );
+            }
         }
     }
 

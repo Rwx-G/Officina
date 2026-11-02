@@ -253,6 +253,9 @@ pub struct Collector {
     /// The engine as thread `workshop` last read it (AD-98); the collector
     /// never reads it itself.
     engine: Option<crate::workshop::engine::EngineState>,
+    /// The run containers of this floor no row owns (AD-109), as the last
+    /// reconciliation listed them.
+    workshop_orphans: Vec<String>,
 }
 
 impl Collector {
@@ -311,6 +314,7 @@ impl Collector {
             review_timeout: Duration::from_millis(officina_core::relay::auto::REVIEW_TIMEOUT_MS),
             confirm_window: Duration::from_millis(officina_core::meeting::CONFIRM_WINDOW_MS),
             engine: None,
+            workshop_orphans: Vec::new(),
         }
     }
 
@@ -327,6 +331,16 @@ impl Collector {
     }
 
     /// The engine's state as last read; `None` before the first read.
+    /// Keeps the orphans reconciliation listed (AD-109, D-215).
+    pub fn set_workshop_orphans(&mut self, orphans: Vec<String>) {
+        self.workshop_orphans = orphans;
+    }
+
+    /// The run containers of this floor no row owns: listed, never adopted.
+    pub fn workshop_orphans(&self) -> &[String] {
+        &self.workshop_orphans
+    }
+
     pub fn engine(&self) -> Option<&crate::workshop::engine::EngineState> {
         self.engine.as_ref()
     }

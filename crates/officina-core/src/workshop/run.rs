@@ -307,6 +307,12 @@ pub struct RunFacts {
     /// How many credential locations the scan found (D-212): the count
     /// outlives the texts, so the revoke advice does too.
     pub credential_locations: Option<u32>,
+    /// Why the window stopped the worker (AD-109), when it did.
+    pub stop_reason: Option<super::lifecycle::StopReason>,
+    /// How many of the gateway's refusals are journaled (AD-120): a
+    /// follower that reads again from the start journals only the ones
+    /// past it, so each refusal is journaled once (AD-109).
+    pub refusals_journaled: u32,
 }
 
 impl Default for RunFacts {
@@ -315,6 +321,8 @@ impl Default for RunFacts {
             version: RUN_FACTS_VERSION,
             clock_skew_ms: None,
             credential_locations: None,
+            stop_reason: None,
+            refusals_journaled: 0,
         }
     }
 }

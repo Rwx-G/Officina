@@ -53,7 +53,7 @@ fn zero_creates_and_starts_before_the_click_and_one_of_each_after() {
     // needles_are_kept_for_a_running_run (AD-112, D-230): in the window's
     // memory while it follows the run.
     let followed = runtime.followed.lock().unwrap();
-    assert!(!followed[&card.id].needles().is_empty());
+    assert!(!followed[&card.id].needles().unwrap().needles().is_empty());
     assert_eq!(
         Some(run.plan_sha256.clone()),
         facts.plan_sha256,

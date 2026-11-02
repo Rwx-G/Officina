@@ -54,6 +54,7 @@ pub fn runtime(
         reader: Arc::new(WinHttpReader),
         followed: Arc::default(),
         now_ms: super::now_ms,
+        engine_retry: std::time::Duration::from_millis(200),
     }
 }
 

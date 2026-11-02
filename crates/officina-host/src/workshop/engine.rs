@@ -310,6 +310,35 @@ fn run(
     })
 }
 
+/// Starts `call`, a follower (`docker logs --follow`), in a kill-on-close
+/// job, its lines handed to `on_line` through a reader bounded at
+/// `max_line` (AD-109, D-216) and `on_end` run once both pipes closed. A
+/// read kind: `officina.exe` could follow too, though only the window does.
+pub fn follow(
+    docker: &ResolvedDocker,
+    call: &EngineCall,
+    base: &[(String, String)],
+    home: &Path,
+    max_line: usize,
+    on_line: std::sync::Arc<
+        dyn Fn(crate::process::FollowedPipe, crate::process::BoundedLine) + Send + Sync,
+    >,
+    on_end: Box<dyn FnOnce() + Send>,
+) -> Result<crate::process::Following, EngineError> {
+    if call.kind() != EngineCallKind::Logs || call.deadline_ms().is_some() {
+        return Err(EngineError::NotCaptured(call.kind()));
+    }
+    let mut command = docker_command(docker);
+    command
+        .args(call.args())
+        .current_dir(home)
+        .env_clear()
+        .envs(engine_env(call.kind(), base));
+    Ok(crate::process::follow_contained(
+        command, max_line, on_line, on_end,
+    )?)
+}
+
 /// The build output kept as untrusted text (AD-99).
 pub const BUILD_TAIL_BYTES: usize = 64 * 1024;
 

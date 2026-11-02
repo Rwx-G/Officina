@@ -248,6 +248,152 @@ impl Tree {
     }
 }
 
+/// One line [`read_line_bounded`] read.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BoundedLine {
+    /// The line's bytes, without its newline.
+    Line(Vec<u8>),
+    /// A line past the bound, discarded to its newline (D-216).
+    Oversized,
+}
+
+/// Reads one line of `reader`, keeping at most `max` bytes: a longer line
+/// is discarded to its next newline and reported [`BoundedLine::Oversized`],
+/// so no line costs more than `max + 1` bytes of memory (D-216). `None` at
+/// the end of the stream; a last line without a newline is still a line.
+pub fn read_line_bounded(
+    reader: &mut impl std::io::BufRead,
+    max: usize,
+) -> std::io::Result<Option<BoundedLine>> {
+    let mut kept = Vec::new();
+    let mut over = false;
+    let mut any = false;
+    loop {
+        let buf = reader.fill_buf()?;
+        if buf.is_empty() {
+            return Ok(any.then(|| finished(kept, over)));
+        }
+        any = true;
+        let (part, done) = match buf.iter().position(|b| *b == b'\n') {
+            Some(at) => (&buf[..at], Some(at + 1)),
+            None => (buf, None),
+        };
+        if !over {
+            if kept.len() + part.len() > max {
+                over = true;
+                kept = Vec::new();
+            } else {
+                kept.extend_from_slice(part);
+            }
+        }
+        let used = done.unwrap_or(buf.len());
+        reader.consume(used);
+        if done.is_some() {
+            return Ok(Some(finished(kept, over)));
+        }
+    }
+}
+
+fn finished(mut kept: Vec<u8>, over: bool) -> BoundedLine {
+    if over {
+        return BoundedLine::Oversized;
+    }
+    if kept.last() == Some(&b'\r') {
+        kept.pop();
+    }
+    BoundedLine::Line(kept)
+}
+
+/// Which pipe of a followed child a line came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FollowedPipe {
+    Stdout,
+    Stderr,
+}
+
+/// A child whose lines are being read (AD-109): in a kill-on-close job,
+/// ended when this is dropped.
+pub struct Following {
+    child: Child,
+    tree: Tree,
+}
+
+impl Following {
+    /// Ends the child and its tree.
+    pub fn end(mut self) {
+        self.tree.end(&mut self.child);
+    }
+}
+
+impl Drop for Following {
+    fn drop(&mut self) {
+        self.tree.end(&mut self.child);
+    }
+}
+
+/// Starts `command` in a kill-on-close job and reads its two pipes on a
+/// thread each, line by line through [`read_line_bounded`] at `max_line`
+/// (AD-109, D-216), handing each to `on_line`; `on_end` runs once both
+/// pipes closed. No deadline: a follower runs as long as its container.
+pub fn follow_contained(
+    mut command: Command,
+    max_line: usize,
+    on_line: Arc<dyn Fn(FollowedPipe, BoundedLine) + Send + Sync>,
+    on_end: Box<dyn FnOnce() + Send>,
+) -> Result<Following, RunError> {
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    hide_console(&mut command);
+    let mut child = command.spawn().map_err(RunError::Spawn)?;
+    let tree = match Tree::around(&child, JobRule::KillOnClose) {
+        Ok(tree) => tree,
+        Err(error) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(RunError::NotContained(error));
+        }
+    };
+    let (closed, both) = mpsc::channel::<()>();
+    let pipes: [(FollowedPipe, Option<Box<dyn Read + Send>>); 2] = [
+        (
+            FollowedPipe::Stdout,
+            child
+                .stdout
+                .take()
+                .map(|p| Box::new(p) as Box<dyn Read + Send>),
+        ),
+        (
+            FollowedPipe::Stderr,
+            child
+                .stderr
+                .take()
+                .map(|p| Box::new(p) as Box<dyn Read + Send>),
+        ),
+    ];
+    for (pipe, reader) in pipes {
+        let on_line = Arc::clone(&on_line);
+        let closed = closed.clone();
+        std::thread::spawn(move || {
+            if let Some(reader) = reader {
+                let mut reader = std::io::BufReader::with_capacity(64 * 1024, reader);
+                while let Ok(Some(line)) = read_line_bounded(&mut reader, max_line) {
+                    on_line(pipe, line);
+                }
+            }
+            let _ = closed.send(());
+        });
+    }
+    drop(closed);
+    std::thread::spawn(move || {
+        let _ = both.recv();
+        let _ = both.recv();
+        on_end();
+    });
+    Ok(Following { child, tree })
+}
+
 /// Runs `command` within `limits`, with `stdin` written on a thread of its
 /// own (a child that never reads it must not hold the caller on a full
 /// pipe), or a null stdin. Both output pipes are drained on threads of
@@ -568,5 +714,31 @@ mod tests {
         assert!(child.try_wait().unwrap().is_none(), "not killed");
         child.kill().unwrap();
         child.wait().unwrap();
+    }
+}
+
+#[cfg(test)]
+mod line_tests {
+    use super::*;
+
+    /// D-216: a line past the bound is discarded to its newline, counted
+    /// as one, and the next line reads whole.
+    #[test]
+    fn a_long_line_is_skipped_to_its_newline() {
+        let text = format!("short\r\n{}\nnext\nlast", "x".repeat(40));
+        let mut reader = std::io::BufReader::with_capacity(8, text.as_bytes());
+        let mut read = Vec::new();
+        while let Some(line) = read_line_bounded(&mut reader, 10).unwrap() {
+            read.push(line);
+        }
+        assert_eq!(
+            read,
+            vec![
+                BoundedLine::Line(b"short".to_vec()),
+                BoundedLine::Oversized,
+                BoundedLine::Line(b"next".to_vec()),
+                BoundedLine::Line(b"last".to_vec()),
+            ]
+        );
     }
 }

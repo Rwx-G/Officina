@@ -107,6 +107,7 @@ impl AppState {
             reader: Arc::new(officina_host::workshop::proxy::WinHttpReader),
             followed: Arc::clone(&self.followed),
             now_ms,
+            engine_retry: officina_host::workshop::follow::ENGINE_RETRY,
         }
     }
 
@@ -813,9 +814,10 @@ fn main() {
             workshop.read_engine_at_start(
                 officina_host::workshop::engine::resolve(),
                 base_env.vars().to_vec(),
-                officina_home,
+                officina_home.clone(),
                 watch.sender.clone(),
             );
+            let collector_sender = watch.sender.clone();
             app.manage(AppState {
                 board: watch.board,
                 relay: watch.relay,
@@ -831,6 +833,17 @@ fn main() {
                 build_busy: Arc::new(std::sync::atomic::AtomicBool::new(false)),
                 followed: Arc::default(),
             });
+            // At window start every run not terminal is found again and
+            // followed (AD-109), after the engine read queued above.
+            let state = app.state::<AppState>();
+            officina_host::workshop::follow::reconcile_on_thread(
+                officina_host::workshop::follow::FollowContext {
+                    runtime: state.workshop_runtime(),
+                    collector: collector_sender,
+                    home: officina_home,
+                    base_env: state.base_env.vars().to_vec(),
+                },
+            );
             Ok(())
         })
         .on_window_event(|window, event| {

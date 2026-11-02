@@ -1072,6 +1072,54 @@ the launch `failed` and removes what it created; the stop flag is read
 between the steps. The journal gets one `workshop_started` line with every
 step's outcome, and `workshop_removed` after a removal.
 
+### Following a run and its limits
+
+The window reads each live container's output with `docker logs --follow`,
+one line at a time with a bound: a line over 1 MiB is skipped and counted,
+an entry point or gateway line over 4 KiB is skipped, and the gateway's
+allowed hosts are counted by name for the first 256, the rest under
+`other`. Everything a container prints is untrusted: any process in the
+worker runs as the same user as Claude Code and can print a line that
+looks like one. So the stream can only stop a run sooner, never keep it
+going or mark it done: only the first `system/init` counts (a tool the
+worker is denied in its tool list stops the run, `unexpected_tool`), a
+hook whose program cannot run (exit 126 or 127) stops it (`hook_failed`),
+and a refused credential stops it (`auth_failed`, from three
+`authentication_failed` retries in a row or a result the API refused with
+401 or 403). The last `result` is shown, never trusted.
+
+A run also stops at its deadline: the entry point's own timeout, the
+gateway's, and the window stopping the worker one minute past the
+deadline, also when the window starts after it. It stops at the budget
+(Claude Code's own cap, checked after each turn), at the gateway's refusal
+limit, at 64 MiB of worker output (`output_cap`), and at the engine's
+memory and process limits. Stopping one run is `docker stop` of its
+worker, its reason recorded; it never sets the workshop's or the relay's
+stop flag. How the worker ended is its `FinishCause`; what it produced is
+decided after collection.
+
+The window may close while a run goes on. When it starts again, and when
+an engine that stopped answering comes back (the window asks again every
+30 seconds while a run is not finished), every run is found again: a
+running one is followed from the start of its logs, its facts rebuilt, each
+gateway refusal journaled once; a launch that never came back is failed and
+its objects removed; a run whose container the engine no longer knows is
+`unknown`, never finished; a container labelled for this floor with no run
+is listed as an orphan, never adopted. An engine that does not answer
+changes no run.
+
+Every text a run produces (refused and allowed host names, the report's
+tail, the entry point's details) has the credential's forms replaced before
+it is journaled, stored or shown; when the window cannot read the
+credential at that moment, or the run uses a `login` floor whose login the
+host never reads, the texts wait in memory for collection's scan.
+
+The first-`system/init` check is best effort after log rotation: the
+engine keeps three files of 32 MiB per container, so a worker that prints
+more than 96 MiB while the window is closed rotates its real first
+`system/init` away, and the first one read after the restart could be
+forged. A run the window follows meets `output_cap` first.
+
 ### The workshop credential
 
 A token floor's credential is the Windows Credential Manager entry

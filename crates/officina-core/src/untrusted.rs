@@ -148,6 +148,18 @@ impl<T: AsRef<str>> Untrusted<T> {
         Untrusted(self.0.as_ref().chars().take(chars).collect())
     }
 
+    /// The text rewritten by `rewrite`, still untrusted: the credential's
+    /// forms replaced before it is stored or shown (D-230).
+    ///
+    /// ```
+    /// use officina_core::untrusted::Untrusted;
+    /// let u = Untrusted::new("a secret b").mapped(|t| t.replace("secret", "[x]"));
+    /// assert_eq!(u, Untrusted::new(String::from("a [x] b")));
+    /// ```
+    pub fn mapped(&self, rewrite: impl FnOnce(&str) -> String) -> Untrusted<String> {
+        Untrusted(rewrite(self.0.as_ref()))
+    }
+
     /// The number, from 1, of the first line holding any of `needles`;
     /// `None` when no line does.
     ///

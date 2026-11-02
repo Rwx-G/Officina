@@ -59,6 +59,8 @@ pub mod build;
 pub mod doctor;
 pub mod engine;
 pub mod files;
+#[cfg(feature = "window-authority")]
+pub mod follow;
 pub mod git;
 pub mod inventory;
 pub mod launch;

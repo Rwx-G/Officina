@@ -8,6 +8,21 @@ project uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Following a workshop run, its limits and reconciliation (v0.6, story
+  6.12): the window follows each live container's logs with bounded
+  lines, folds the worker's stream (the first `system/init`, hook counts,
+  retries, the last result, the report's tail) as untrusted text, counts
+  the gateway's allowed hosts and journals each refusal once
+  (`gateway_refused`). A run stops sooner on a denied tool in the first
+  init, a hook that cannot run, a refused credential, the output cap or
+  its deadline, by `docker stop` of its worker with no stop flag set; its
+  `FinishCause` is decided from the engine's facts. At window start and
+  when the engine answers again, runs are found again: followed, failed
+  when their launch never came back, `unknown` when the engine lost them
+  (`workshop_finished`), and unowned containers listed as orphans. Every
+  run text has the credential's forms replaced before it leaves memory,
+  or waits for collection when the window holds no credential.
+
 - Workshop cards and their launch (v0.6, story 6.11): a template with
   `[template.workshop]` issues a card showing its base choices and tips,
   the uncommitted changes a run will not carry, each mount's state, the

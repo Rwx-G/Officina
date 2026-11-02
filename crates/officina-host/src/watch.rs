@@ -158,6 +158,11 @@ pub enum AuthorCommand {
     /// How a workshop launch's steps ended (AD-107 step 4). Never dropped,
     /// like a launch's outcome.
     WorkshopLaunched(Box<crate::workshop::launch::WorkshopLaunchReport>),
+    /// What a run's follower or reconciliation found (AD-109). Never
+    /// dropped.
+    WorkshopFollow(Box<crate::workshop::follow::FollowEvent>),
+    /// The runs reconciliation judges and the floor's key (AD-109).
+    WorkshopRowsToReconcile,
     /// How a granted launch ended (AD-81 step 3). It carries no deadline:
     /// the collector records it however late it comes, and never drops it
     /// (D-135, review F14).
@@ -397,6 +402,9 @@ pub enum AuthorAnswer {
             >,
         >,
     ),
+    /// The runs reconciliation judges, and the floor's key when the
+    /// approved floor reads.
+    WorkshopRows(Box<(Vec<crate::registry::workshop::RunRecord>, Option<String>)>),
 }
 
 /// The collector's answer, or why there is none to give.
@@ -441,6 +449,7 @@ impl AuthorRequest {
                 | AuthorCommand::WorkshopCardFacts(_)
                 | AuthorCommand::WorkshopInventory(_)
                 | AuthorCommand::WorkshopLaunched(_)
+                | AuthorCommand::WorkshopFollow(_)
         ) && now + AUTHOR_HEADROOM >= self.deadline
     }
 }
@@ -1448,6 +1457,13 @@ fn answer_author<E: Emit>(
         AuthorCommand::WorkshopLaunched(report) => {
             crate::orders::record_workshop_launch(collector, registry, &report, now)
                 .map(|()| AuthorAnswer::Done { created: None })
+        }
+        AuthorCommand::WorkshopFollow(event) => {
+            crate::workshop::follow::record(collector, registry, &event, now)
+                .map(|()| AuthorAnswer::Done { created: None })
+        }
+        AuthorCommand::WorkshopRowsToReconcile => {
+            crate::workshop::follow::rows_to_reconcile(collector, registry)
         }
         AuthorCommand::EditCard { card_id, change } => crate::orders::edit(
             cards,

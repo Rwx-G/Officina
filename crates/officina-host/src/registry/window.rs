@@ -677,6 +677,77 @@ impl WindowRegistry {
         })
     }
 
+    /// The runs reconciliation judges (AD-109): every one not terminal and
+    /// not kept by Stop all.
+    pub fn workshop_runs_to_reconcile(
+        &mut self,
+    ) -> Result<Vec<crate::registry::workshop::RunRecord>, IpcError> {
+        use officina_core::workshop::run::RunState;
+        self.with_writer(|writer| {
+            Ok(Ok(writer.workshop_runs_in(&[
+                RunState::Launching,
+                RunState::Running,
+                RunState::Stopping,
+                RunState::Collecting,
+            ])?))
+        })
+    }
+
+    /// Moves run `id` by `event` (AD-109) and lets `amend` change its facts
+    /// in the same step; the row as it was, or `None` when the registry
+    /// holds no such run or no edge allows the move, which changes nothing.
+    pub fn move_workshop_run(
+        &mut self,
+        id: &str,
+        event: officina_core::workshop::lifecycle::RunEvent,
+        now_ms: i64,
+        amend: impl FnOnce(&mut crate::registry::workshop::RunRecord),
+    ) -> Result<Option<crate::registry::workshop::RunRecord>, IpcError> {
+        self.with_writer(|writer| {
+            let Some(before) = writer.workshop_run(id)? else {
+                return Ok(Ok(None));
+            };
+            let Ok(to) = officina_core::workshop::lifecycle::transition(before.state, event) else {
+                return Ok(Ok(None));
+            };
+            let mut after = before.clone();
+            amend(&mut after);
+            writer.set_run_state(id, to, now_ms)?;
+            writer.set_run_facts(id, &after.facts)?;
+            if let Some(texts) = after.texts.as_ref().filter(|_| after.texts != before.texts) {
+                writer.set_run_texts(id, texts)?;
+            }
+            if let Some(officina_core::workshop::run::Recorded::Known(cause)) = after.cause
+                && after.cause != before.cause
+            {
+                match after.outcome {
+                    Some(outcome) => {
+                        writer.set_run_finished(id, cause, outcome, after.exit_code, now_ms)?;
+                    }
+                    None => {
+                        writer.set_run_cause(id, cause, after.exit_code)?;
+                    }
+                }
+            }
+            Ok(Ok(Some(before)))
+        })
+    }
+
+    /// Changes run `id`'s facts, its state kept; false when no such run.
+    pub fn amend_workshop_facts(
+        &mut self,
+        id: &str,
+        amend: impl FnOnce(&mut officina_core::workshop::run::RunFacts),
+    ) -> Result<bool, IpcError> {
+        self.with_writer(|writer| {
+            let Some(mut run) = writer.workshop_run(id)? else {
+                return Ok(Ok(false));
+            };
+            amend(&mut run.facts);
+            Ok(Ok(writer.set_run_facts(id, &run.facts)?))
+        })
+    }
+
     /// Records one Start of the orchestrator (AD-89, D-144); refused when
     /// the registry cannot be written.
     pub fn record_orchestrator_start(

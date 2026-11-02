@@ -13,6 +13,7 @@ pub mod inventory;
 pub mod launch;
 pub mod lifecycle;
 pub mod names;
+pub mod output;
 pub mod proxy;
 pub mod review;
 pub mod run;

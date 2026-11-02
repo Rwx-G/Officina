@@ -107,6 +107,9 @@ pub struct WorkshopRuntime {
     pub reader: Arc<dyn SystemProxyReader>,
     pub followed: FollowedRuns,
     pub now_ms: fn() -> i64,
+    /// How long thread `workshop` waits before asking an engine that did
+    /// not answer again (D-216): [`crate::workshop::follow::ENGINE_RETRY`].
+    pub engine_retry: std::time::Duration,
 }
 
 impl std::fmt::Debug for WorkshopRuntime {
@@ -591,17 +594,20 @@ fn launch(
             outcome,
         },
     };
-    if !removed
-        && let Some(needles) = ended.ok().flatten()
-        && let Ok(mut followed) = runtime.followed.lock()
-    {
-        followed.insert(card.id().to_owned(), needles);
-    }
     let (request, _answer) = AuthorRequest::new(
         AuthorCommand::WorkshopLaunched(Box::new(report)),
         AUTHOR_WAIT,
     );
     let _ = collector.send(CollectorMsg::Author(request));
+    if let Ok(needles) = ended {
+        let context = crate::workshop::follow::FollowContext {
+            runtime: runtime.clone(),
+            collector: collector.clone(),
+            home: ticket.home.clone(),
+            base_env: ticket.base_env.clone(),
+        };
+        crate::workshop::follow::after_launch(&context, card.id(), row.deadline_ms, needles);
+    }
     Ok(LaunchAnswer::Launched(outcome))
 }
 

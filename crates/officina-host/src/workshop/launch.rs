@@ -93,9 +93,8 @@ impl std::fmt::Debug for RunNeedles {
     }
 }
 
-/// The needles of every run the window follows, by run id.
-pub type FollowedRuns =
-    std::sync::Arc<std::sync::Mutex<std::collections::BTreeMap<String, RunNeedles>>>;
+#[cfg(feature = "window-authority")]
+pub use crate::workshop::follow::FollowedRuns;
 
 /// A character the engine's `--mount` cannot carry in a source path
 /// (D-236): its options are comma-separated and may be quoted.

@@ -26,7 +26,8 @@
 //! (`prefix`, and `contains`) fails every call matching it, exit 1;
 //! `touch_when` (`prefix`, `contains`, `path`) writes an empty file at
 //! `path` when a call matches, as a hand setting a flag between two steps
-//! would; `start_sleep_ms` delays each `start`. Any other call is logged
+//! would; `start_sleep_ms` delays each `start`; story 6.12's followers
+//! (see [`follow_logs`]). Any other call is logged
 //! and exits 0. Later stories add theirs.
 
 use std::io::Write;
@@ -240,6 +241,7 @@ fn main() {
         ["cp", source, "-"] => copy_out(source, &state),
         ["start", "--attach", .., name] => start_attached(name, &sidecar, &mut state),
         ["start", name] => start_detached(name, &sidecar, &mut state),
+        ["logs", "--follow", "--timestamps", name] => follow_logs(name, &sidecar),
         ["logs", name] => logs_once(name, &sidecar, &state),
         ["stop", rest @ ..] => {
             for container in state["containers"].as_array_mut().into_iter().flatten() {
@@ -616,6 +618,67 @@ fn logs_once(name: &str, sidecar: &serde_json::Value, state: &serde_json::Value)
         _ => None,
     };
     print!("{}", text.unwrap_or_default());
+    0
+}
+
+/// The timestamp the fake engine puts before each followed line.
+const STAMP: &str = "2026-01-01T00:00:00.000000000Z";
+
+/// `logs --follow --timestamps <container>` (story 6.12): sidecar
+/// `follow.<role>.stdout` and `.stderr` printed with a timestamp, then
+/// `follow.<role>.bulk_bytes` of 64 KiB lines on stdout; the follower then
+/// runs while the container does, as the engine's would, reading the
+/// state again every 20 ms. With `follow_cut_first` set, a container's
+/// first follow ends at once while it still runs, as a follower the
+/// engine dropped would (counted in `fake-docker-follows.json`).
+fn follow_logs(name: &str, sidecar: &serde_json::Value) -> i32 {
+    let state = read_json(&beside(STATE));
+    let Some(container) = find(&state, "containers", name) else {
+        eprintln!("Error: No such container: {name}");
+        return 1;
+    };
+    let settings = &sidecar["follow"][role_of(container)];
+    let mut out = std::io::stdout().lock();
+    let mut err = std::io::stderr().lock();
+    for line in settings["stdout"].as_str().unwrap_or_default().lines() {
+        let _ = writeln!(out, "{STAMP} {line}");
+    }
+    let bulk = settings["bulk_bytes"].as_u64().unwrap_or(0);
+    let row = format!("{STAMP} {}\n", "x".repeat(64 * 1024));
+    let mut written = 0u64;
+    while written < bulk {
+        if out.write_all(row.as_bytes()).is_err() {
+            return 0;
+        }
+        written += row.len() as u64;
+    }
+    for line in settings["stderr"].as_str().unwrap_or_default().lines() {
+        let _ = writeln!(err, "{STAMP} {line}");
+    }
+    let _ = out.flush();
+    let _ = err.flush();
+    drop((out, err));
+    let follows_path = beside("fake-docker-follows.json");
+    let mut follows = read_json(&follows_path);
+    let seen = follows[name].as_u64().unwrap_or(0);
+    follows[name] = (seen + 1).into();
+    let _ = std::fs::write(&follows_path, follows.to_string());
+    if seen == 0 && sidecar["follow_cut_first"].as_bool().unwrap_or(false) {
+        return 0;
+    }
+    for _ in 0..3000 {
+        if !beside(STATE).exists() {
+            return 0;
+        }
+        let now = read_json(&beside(STATE));
+        match find(&now, "containers", name) {
+            Some(c) if c["state"] == "running" => {}
+            // A state file caught mid-write reads empty: look again.
+            None if now.as_object().is_none_or(serde_json::Map::is_empty) => {}
+            _ => return 0,
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
     0
 }
 

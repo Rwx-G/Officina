@@ -548,6 +548,20 @@ mod writers {
             )? == 1)
         }
 
+        /// Records how run `id`'s worker ended (AD-109), before collection
+        /// decides what it produced.
+        pub fn set_run_cause(
+            &mut self,
+            id: &str,
+            cause: FinishCause,
+            exit_code: Option<i64>,
+        ) -> Result<bool, RegistryError> {
+            Ok(self.conn.execute(
+                "UPDATE workshop_run SET cause = ?2, exit_code = ?3 WHERE id = ?1",
+                params![id, cause.code(), exit_code],
+            )? == 1)
+        }
+
         /// Replaces run `id`'s facts.
         pub fn set_run_facts(&mut self, id: &str, facts: &RunFacts) -> Result<bool, RegistryError> {
             Ok(self.conn.execute(

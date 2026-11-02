@@ -432,3 +432,33 @@ fn readme_names_no_session_variable() {
         "positive control: the constant is named"
     );
 }
+
+/// Story 6.12 AC 8: the run limits the README states are the constants'.
+#[test]
+fn readme_states_the_run_limits() {
+    use officina_core::workshop::lifecycle::DEADLINE_GRACE_MS;
+    use officina_core::workshop::output::{MAX_ALLOWED_HOSTS, OUTPUT_CAP_BYTES};
+    use officina_core::workshop::run::MAX_ENTRY_LINE_BYTES;
+    use officina_core::workshop::stream::MAX_LINE_BYTES;
+    let text = readme();
+    let start = text.find("### Following a run and its limits").unwrap();
+    let end = start + 4 + text[start + 4..].find("\n### ").unwrap();
+    let section = text[start..end]
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    let mib = |bytes: u64| bytes / (1024 * 1024);
+    for stated in [
+        format!("a line over {} MiB is skipped", mib(MAX_LINE_BYTES as u64)),
+        format!("over {} KiB is skipped", MAX_ENTRY_LINE_BYTES / 1024),
+        format!("for the first {MAX_ALLOWED_HOSTS}"),
+        format!("at {} MiB of worker output", mib(OUTPUT_CAP_BYTES)),
+        format!(
+            "asks again every {} seconds",
+            officina_host::workshop::follow::ENGINE_RETRY.as_secs()
+        ),
+    ] {
+        assert!(section.contains(&stated), "missing {stated:?}");
+    }
+    assert_eq!(DEADLINE_GRACE_MS, 60 * 1000, "the README says one minute");
+}

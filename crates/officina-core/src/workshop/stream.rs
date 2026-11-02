@@ -248,3 +248,81 @@ pub fn fold(facts: &mut StreamFacts, line: &str) {
         _ => {}
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn folded(lines: &[serde_json::Value]) -> StreamFacts {
+        let mut facts = StreamFacts::default();
+        for line in lines {
+            fold(&mut facts, &line.to_string());
+        }
+        facts
+    }
+
+    fn init(tools: &[&str]) -> serde_json::Value {
+        serde_json::json!({"type": "system", "subtype": "init", "tools": tools})
+    }
+
+    fn retry(error: &str) -> serde_json::Value {
+        serde_json::json!({"type": "system", "subtype": "api_retry", "error": error})
+    }
+
+    /// AD-109, E101: a denied tool in the first init stops the run; the
+    /// init is found by its subtype, after any hook lines.
+    #[test]
+    fn a_disallowed_tool_stops() {
+        let hooks = [
+            serde_json::json!({"type": "system", "subtype": "hook_started", "hook_event": "SessionStart"}),
+            serde_json::json!({"type": "system", "subtype": "hook_response", "hook_event": "SessionStart", "exit_code": 0}),
+        ];
+        for tool in WORKER_DISALLOWED_TOOLS {
+            let mut lines = hooks.to_vec();
+            lines.push(init(&["Bash", tool]));
+            assert_eq!(folded(&lines).stop, Some(StreamStop::UnexpectedTool));
+        }
+        let mut clean = hooks.to_vec();
+        clean.push(init(&["Bash", "WebFetch"]));
+        let facts = folded(&clean);
+        assert_eq!(facts.stop, None);
+        assert!(facts.init.is_some());
+    }
+
+    /// Gate 5 (E96): a hook whose program cannot run stops the run.
+    #[test]
+    fn exit_126_and_127_stop() {
+        for code in HOOK_FAILED_EXITS {
+            let line = serde_json::json!({"type": "system", "subtype": "hook_response", "hook_event": "PreToolUse", "exit_code": code});
+            let facts = folded(&[line]);
+            assert_eq!(facts.stop, Some(StreamStop::HookFailed));
+            assert_eq!(facts.hooks["PreToolUse"].failed, 1);
+        }
+    }
+
+    /// AD-109: three `authentication_failed` retries in a row stop the run.
+    #[test]
+    fn three_auth_failures_in_a_row_stop() {
+        let run: Vec<serde_json::Value> = (0..AUTH_FAILURES_IN_A_ROW)
+            .map(|_| retry(AUTH_ERROR))
+            .collect();
+        assert_eq!(folded(&run[..run.len() - 1]).stop, None);
+        assert_eq!(folded(&run).stop, Some(StreamStop::AuthFailed));
+    }
+
+    /// AD-109: another retry or an assistant turn ends the run of failures.
+    #[test]
+    fn interleaved_success_resets_the_auth_run() {
+        let said = serde_json::json!({"type": "assistant", "message": {"content": []}});
+        let mut lines = Vec::new();
+        for _ in 0..AUTH_FAILURES_IN_A_ROW - 1 {
+            lines.push(retry(AUTH_ERROR));
+        }
+        lines.push(said);
+        lines.push(retry("overloaded"));
+        lines.push(retry(AUTH_ERROR));
+        let facts = folded(&lines);
+        assert_eq!(facts.stop, None);
+        assert_eq!(facts.auth_run, 1);
+    }
+}
