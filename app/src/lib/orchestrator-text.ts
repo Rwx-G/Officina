@@ -237,7 +237,7 @@ export const LAUNCH_REFUSAL_TEXT: Record<LaunchRefusal, string> = {
   credential_expired: "The floor's credential expired: store a new one, then launch again.",
   proxy_unresolved: "The proxy for an allowed host could not be decided on this network.",
   proxy_unsupported: "An allowed host goes through a proxy the gateway cannot use.",
-  project_missing: "The project's folder is not a folder any more.",
+  project_missing: "The workshop project's folder is gone: issue a new card once it is back.",
   base_moved: "The base branch moved since this card was issued: issue a new card.",
   plan_changed: "What would run is not what this card showed: issue a new card.",
 };
