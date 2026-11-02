@@ -19,6 +19,7 @@ Implemented only once story 7.13's Slice B decision entry records **go** (D-331;
 3. **Where it shows** (AD-144, AD-145, FR-17). `GovernorView` gains the rows (schema per P-63); `AutomationsTable.svelte` in the Governor section; the briefing (AD-83) gains an "Automations" section of the rows changed since the cursor, served by `officina mcp`'s `briefing`. Proof: core `crates/officina-core/src/orders/briefing.rs::tests::automations_changed_since_the_cursor`; Playwright `app/e2e/governor.spec.ts::the_automations_table_lists_each_kind_with_its_last_change`.
 4. **Untrusted text stays out** (AD-74, D-305). Causes are enum names and numbers; no row carries a session's, a model's or a worker's text. Proof: story 7.2's source scan over `governor/automations.rs`; a vector case whose `setting` row carries a reason text the table does not copy.
 5. **Documentation** (D-340). `CHANGELOG.md` `[Unreleased]` under Added. README "The governor (v0.7, in progress)": the table, what it reads, that it changes nothing. Proof: review.
+6. **The table as built** (D-1210, D-1202). The automations it reads exist on `main`: the triage model's and auto-archive's `setting` rows (v0.3) and `auto_approval_set` lines (v0.5, story 5.14); standing orders of role templates are rows of kind `standing_order` like any other. The table carries D-564's list (stable boxes, tokens, Playwright in both themes). Proof: a vector case per `AutomationKind` built from lines the v0.5 code writes (`auto_approval_set` round-trip fixture); `app/e2e/governor.spec.ts > the automations table ({light,dark})`.
 
 ## Tasks
 
@@ -28,6 +29,7 @@ Implemented only once story 7.13's Slice B decision entry records **go** (D-331;
 
 ## Dev Notes
 
+- Reworked 2026-11-02 (D-1202, D-1210): sources checked against `main`; helpers need no new kind.
 - Requirements: FR-15, FR-17's Automations table. Decisions: AD-1, AD-50, AD-83, AD-88, AD-144, AD-145, AD-146. Epic decisions: D-69 (Epic 3); D-162 (Epic 5); P-63, D-300, D-305, D-337, D-340.
 - Seams (D-300): the triage model and auto-archive setting rows (3.10, 3.11), `auto_approval_set` (5.14), the briefing (5.8).
 - Waits for: story 7.16.
@@ -49,3 +51,4 @@ Implemented only once story 7.13's Slice B decision entry records **go** (D-331;
 ## Change Log
 
 - 2026-10-28 created
+- 2026-11-02 reworked against v0.4 to v0.6 as built: sources as built and UI constraints (D-1202, D-1210, AC 6)
