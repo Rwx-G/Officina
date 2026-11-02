@@ -3,6 +3,7 @@
 //! the crate, and compiled for the musl target too.
 
 pub mod battery;
+pub mod bundle;
 pub mod doctor;
 pub mod engine;
 pub mod floor;
