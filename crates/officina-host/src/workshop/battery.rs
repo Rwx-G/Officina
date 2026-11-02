@@ -651,7 +651,6 @@ mod window {
         base_env: &[(String, String)],
     ) -> Result<BatteryPlan, BatteryRefusal> {
         use officina_core::relay::template::TemplateUnavailable;
-        use officina_core::workshop::image::{BuildOutcome, ImageKind};
         if crate::workshop::workshop_stopped(home) {
             return Err(BatteryRefusal::WorkshopStopped);
         }
@@ -664,6 +663,28 @@ mod window {
         if approved.hash != current.hash {
             return Err(BatteryRefusal::CatalogueChanged);
         }
+        let plan = plan_of(&current, home, registry, base_env)?;
+        if let Some(name) = only
+            && !plan.candidates.iter().any(|c| c.image == name)
+        {
+            return Err(BatteryRefusal::ImageMissing);
+        }
+        Ok(BatteryPlan {
+            only: only.map(str::to_owned),
+            ..plan
+        })
+    }
+
+    /// The images built and their batteries for the floor `current`
+    /// (AD-117): what a Run escape battery click runs on, and what a
+    /// launch's validity check reads (story 6.11).
+    pub fn plan_of(
+        current: &officina_core::relay::catalogue::RelayFloor,
+        home: &Path,
+        registry: &mut crate::registry::window::WindowRegistry,
+        base_env: &[(String, String)],
+    ) -> Result<BatteryPlan, BatteryRefusal> {
+        use officina_core::workshop::image::{BuildOutcome, ImageKind};
         let workshop = current
             .canonical
             .workshop
@@ -697,11 +718,6 @@ mod window {
                 })
             })
             .collect();
-        if let Some(name) = only
-            && !candidates.iter().any(|c| c.image == name)
-        {
-            return Err(BatteryRefusal::ImageMissing);
-        }
         Ok(BatteryPlan {
             home: home.to_path_buf(),
             base_env: base_env.to_vec(),
@@ -711,7 +727,7 @@ mod window {
             memory_mib: workshop.memory_mib,
             gateway_image_id,
             candidates,
-            only: only.map(str::to_owned),
+            only: None,
         })
     }
 

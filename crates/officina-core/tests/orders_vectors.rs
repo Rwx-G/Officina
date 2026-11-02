@@ -465,7 +465,8 @@ fn card_cases_match() {
 #[test]
 fn every_launch_refusal_has_a_case() {
     let set = load_set();
-    for refusal in LaunchRefusal::ALL {
+    // The workshop's refusals are `workshop.json`'s `launch` section's.
+    for refusal in LaunchRefusal::ALL.iter().filter(|r| !r.is_workshop()) {
         let wanted = serde_json::json!({ "refused": refusal });
         assert!(
             set.card
@@ -813,6 +814,8 @@ fn order_of(row: &OrderRow) -> WorkOrderRecord {
         session_id: row.session.clone(),
         bound_at_ms: row.session.as_ref().map(|_| row.at),
         session: None,
+        runner: Default::default(),
+        run_state: None,
     }
 }
 

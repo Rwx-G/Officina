@@ -189,7 +189,11 @@ export class OrchestratorStore {
     this.launching = true;
     this.fault = null;
     try {
-      const answer = await ipc.launchWorkOrder(card.id, card.prompt_sha256);
+      const answer = await ipc.launchWorkOrder(
+        card.id,
+        card.prompt_sha256,
+        card.workshop?.plan_sha256 ?? null,
+      );
       if (this.card?.id !== card.id) return;
       if (answer.outcome === "refused" && answer.value === "unknown_card") {
         this.card = null;

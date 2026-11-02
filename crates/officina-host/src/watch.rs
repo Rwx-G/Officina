@@ -134,7 +134,30 @@ pub enum AuthorCommand {
     LaunchCard {
         card_id: String,
         prompt_sha256: String,
+        /// The plan hash a workshop card showed (AD-107); none for a host
+        /// card.
+        plan_sha256: Option<String>,
     },
+    /// The facts thread `workshop` read for a workshop card (AD-107,
+    /// D-239), which the collector issues it from. Never dropped: the
+    /// facts were read.
+    WorkshopCardFacts(
+        Box<(
+            crate::workshop::launch::WorkshopTicket,
+            officina_core::orders::workshop_card::GatheredFacts,
+        )>,
+    ),
+    /// A workshop launch whose checks passed on thread `workshop`: the
+    /// card consumed and its rows written (AD-107 step 1), or why not.
+    ConsumeWorkshopCard {
+        card_id: String,
+        run: Box<crate::workshop::launch::RunRow>,
+    },
+    /// An inventory a launch ran again (AD-118, D-1137). Never dropped.
+    WorkshopInventory(Box<crate::registry::workshop::InventoryRecord>),
+    /// How a workshop launch's steps ended (AD-107 step 4). Never dropped,
+    /// like a launch's outcome.
+    WorkshopLaunched(Box<crate::workshop::launch::WorkshopLaunchReport>),
     /// How a granted launch ended (AD-81 step 3). It carries no deadline:
     /// the collector records it however late it comes, and never drops it
     /// (D-135, review F14).
@@ -268,6 +291,26 @@ impl AuthorAnswer {
         }
     }
 
+    /// A host card's answer or a workshop card's ticket, for
+    /// `IssueCard`'s answer.
+    pub fn into_issue_step(self) -> Result<crate::orders::IssueStep, IpcError> {
+        match self {
+            AuthorAnswer::IssueStep(step) => Ok(step),
+            other => Err(other.unexpected()),
+        }
+    }
+
+    /// Why a workshop card was not consumed, for `ConsumeWorkshopCard`'s
+    /// answer; none when it was.
+    pub fn into_launch_refusal(
+        self,
+    ) -> Result<Option<officina_core::orders::card::LaunchRefusal>, IpcError> {
+        match self {
+            AuthorAnswer::LaunchChecked(refusal) => Ok(refusal),
+            other => Err(other.unexpected()),
+        }
+    }
+
     /// The launch's ticket or its refusal, for `LaunchCard`'s answer.
     pub fn into_launch(self) -> Result<LaunchGrant, IpcError> {
         match self {
@@ -334,6 +377,8 @@ pub enum AuthorAnswer {
         cases: u32,
     },
     Card(CardAnswer),
+    IssueStep(crate::orders::IssueStep),
+    LaunchChecked(Option<officina_core::orders::card::LaunchRefusal>),
     Launch(LaunchGrant),
     Start(StartGrant),
     Meeting(Box<MeetingGrant>),
@@ -393,6 +438,9 @@ impl AuthorRequest {
                 | AuthorCommand::EngineState(_)
                 | AuthorCommand::ImageBuilt(_)
                 | AuthorCommand::BatteryRecorded(_)
+                | AuthorCommand::WorkshopCardFacts(_)
+                | AuthorCommand::WorkshopInventory(_)
+                | AuthorCommand::WorkshopLaunched(_)
         ) && now + AUTHOR_HEADROOM >= self.deadline
     }
 }
@@ -1322,6 +1370,7 @@ fn answer_author<E: Emit>(
             }
             | AuthorCommand::AnswerOutcome(_)
             | AuthorCommand::IssueCard(_)
+            | AuthorCommand::WorkshopCardFacts(_)
             | AuthorCommand::EditCard { .. }
             | AuthorCommand::EngineState(_)
             | AuthorCommand::GrantBuild
@@ -1375,7 +1424,31 @@ fn answer_author<E: Emit>(
             &card_request,
             now,
         )
-        .map(AuthorAnswer::Card),
+        .map(AuthorAnswer::IssueStep),
+        AuthorCommand::WorkshopCardFacts(facts) => {
+            let (ticket, gathered) = *facts;
+            crate::orders::issue_workshop_card(
+                cards,
+                collector,
+                registry,
+                quota.as_ref(),
+                &ticket,
+                &gathered,
+                now,
+            )
+            .map(AuthorAnswer::Card)
+        }
+        AuthorCommand::ConsumeWorkshopCard { card_id, run } => {
+            crate::orders::consume_workshop(cards, collector, registry, &card_id, &run, now)
+                .map(AuthorAnswer::LaunchChecked)
+        }
+        AuthorCommand::WorkshopInventory(record) => registry
+            .record_workshop_inventory(&record)
+            .map(|()| AuthorAnswer::Done { created: None }),
+        AuthorCommand::WorkshopLaunched(report) => {
+            crate::orders::record_workshop_launch(collector, registry, &report, now)
+                .map(|()| AuthorAnswer::Done { created: None })
+        }
         AuthorCommand::EditCard { card_id, change } => crate::orders::edit(
             cards,
             collector,
@@ -1414,8 +1487,17 @@ fn answer_author<E: Emit>(
         AuthorCommand::LaunchCard {
             card_id,
             prompt_sha256,
-        } => crate::orders::grant(cards, collector, registry, &card_id, &prompt_sha256, now)
-            .map(AuthorAnswer::Launch),
+            plan_sha256,
+        } => crate::orders::grant(
+            cards,
+            collector,
+            registry,
+            &card_id,
+            &prompt_sha256,
+            plan_sha256.as_deref(),
+            now,
+        )
+        .map(AuthorAnswer::Launch),
         AuthorCommand::LaunchOutcome(report) => {
             crate::orders::record(collector, registry, &report, now)
                 .map(|()| AuthorAnswer::Done { created: None })

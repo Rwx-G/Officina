@@ -15,7 +15,22 @@ use officina_core::relay::credential::BlobError;
 use officina_core::relay::credential::{decode_blob, target};
 
 /// A credential's secret. Read it with [`Secret::expose`], at the one place
-/// that builds the request header.
+/// that builds the request header, or that hands a workshop worker's
+/// `create` its value (story 6.11, AD-105).
+///
+/// It has no `Display`:
+///
+/// ```compile_fail
+/// let secret = officina_host::relay::credential::Secret::new("x".into());
+/// let shown = format!("{secret}");
+/// ```
+///
+/// and no `Serialize`:
+///
+/// ```compile_fail
+/// fn wants<T: serde::Serialize>(_: &T) {}
+/// wants(&officina_host::relay::credential::Secret::new("x".into()));
+/// ```
 pub struct Secret(String);
 
 impl Secret {

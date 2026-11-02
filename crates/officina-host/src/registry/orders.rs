@@ -82,11 +82,16 @@ pub(crate) fn bind_orders(
     let unbound: Vec<UnboundOrder> = conn
         .prepare_cached(
             "SELECT id, name, cwd, launched_at_ms FROM work_order
-             WHERE outcome = ?1 AND bound_at_ms IS NULL AND launched_at_ms > ?2
+             WHERE outcome = ?1 AND bound_at_ms IS NULL AND launched_at_ms > ?2 AND runner = ?3
              ORDER BY launched_at_ms, id",
         )?
         .query_map(
-            params![LaunchOutcome::Started.code(), now_ms - BIND_WINDOW_MS],
+            // A workshop run starts no session on the host (AD-107).
+            params![
+                LaunchOutcome::Started.code(),
+                now_ms - BIND_WINDOW_MS,
+                Runner::Host.code()
+            ],
             |row| {
                 Ok(UnboundOrder {
                     id: row.get(0)?,
@@ -331,13 +336,17 @@ impl Writer {
     /// Turns the `launching` rows older than [`LAUNCHING_EXPIRY_MS`] at
     /// `now_ms` into `unknown` (D-136): the start sequence runs it before
     /// the first view, and the collector on its own tick. Returns how many.
+    /// A workshop row is left to AD-109's reconciliation (D-240): its
+    /// launch may outlast the sweep.
     pub fn expire_launching(&mut self, now_ms: i64) -> Result<usize, RegistryError> {
         Ok(self.conn.execute(
-            "UPDATE work_order SET outcome = ?1 WHERE outcome = ?2 AND launched_at_ms < ?3",
+            "UPDATE work_order SET outcome = ?1
+             WHERE outcome = ?2 AND launched_at_ms < ?3 AND runner = ?4",
             params![
                 LaunchOutcome::Unknown.code(),
                 LaunchOutcome::Launching.code(),
-                now_ms - LAUNCHING_EXPIRY_MS
+                now_ms - LAUNCHING_EXPIRY_MS,
+                Runner::Host.code()
             ],
         )?)
     }

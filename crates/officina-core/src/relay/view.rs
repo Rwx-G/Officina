@@ -810,6 +810,8 @@ fn recent(lines: &[JournalLine], now_ms: i64, rows: &[AutoRow]) -> Vec<RecentEnt
                 | JournalEntry::EscapeAttempt(_)
                 | JournalEntry::EscapeBattery(_)
                 | JournalEntry::GatewayRefused(_)
+                | JournalEntry::WorkshopStarted(_)
+                | JournalEntry::WorkshopRemoved(_)
                 | JournalEntry::OrchestratorStarted(_)
                 | JournalEntry::MeetingAnswer(_) => return None,
             };
@@ -1399,6 +1401,8 @@ mod tests {
                 | JournalKind::EscapeAttempt
                 | JournalKind::EscapeBattery
                 | JournalKind::GatewayRefused
+                | JournalKind::WorkshopStarted
+                | JournalKind::WorkshopRemoved
                 | JournalKind::OrchestratorStarted
                 | JournalKind::MeetingAnswer => continue,
             };

@@ -524,5 +524,247 @@
       "setup": "tree_change",
       "expect": "check_not_satisfied"
     }
+  ],
+  "workshop_card": [
+    {
+      "name": "a valid workshop card launched by its click",
+      "family": "control",
+      "steps": [
+        {"issue": {}, "expect": {"outcome": "issued"}},
+        {"launch": {"card": 0}, "expect": {"outcome": "launched", "value": "started"}}
+      ],
+      "creates": 2
+    },
+    {
+      "name": "a forged card id",
+      "family": "unknown_reference",
+      "steps": [
+        {"issue": {}, "expect": {"outcome": "issued"}},
+        {"launch": {"card": 0, "id": "forged"}, "expect": {"outcome": "refused", "value": "unknown_card"}}
+      ],
+      "creates": 0
+    },
+    {
+      "name": "a superseded workshop card",
+      "family": "stale_card",
+      "steps": [
+        {"issue": {}, "expect": {"outcome": "issued"}},
+        {"edit": {"card": 0, "change": {"kind": "base", "base": {"listed": {"branch": "main"}}}}, "expect": {"outcome": "issued"}},
+        {"launch": {"card": 0}, "expect": {"outcome": "refused", "value": "superseded"}}
+      ],
+      "creates": 0
+    },
+    {
+      "name": "a prompt hash mismatch",
+      "family": "edited_snapshot",
+      "steps": [
+        {"issue": {}, "expect": {"outcome": "issued"}},
+        {"launch": {"card": 0, "hash": "other"}, "expect": {"outcome": "refused", "value": "prompt_hash_mismatch"}}
+      ],
+      "creates": 0
+    },
+    {
+      "name": "a plan hash mismatch",
+      "family": "edited_snapshot",
+      "steps": [
+        {"issue": {}, "expect": {"outcome": "issued"}},
+        {"launch": {"card": 0, "plan": "other"}, "expect": {"outcome": "refused", "value": "plan_changed"}}
+      ],
+      "creates": 0
+    },
+    {
+      "name": "a base outside the card's list",
+      "family": "outside_list",
+      "steps": [
+        {"issue": {}, "expect": {"outcome": "issued"}},
+        {"edit": {"card": 0, "change": {"kind": "base", "base": {"listed": {"branch": "release"}}}}, "expect": {"outcome": "refused", "value": {"kind": "base_not_offered"}}},
+        {"launch": {"card": 0}, "expect": {"outcome": "launched", "value": "started"}}
+      ],
+      "creates": 2
+    },
+    {
+      "name": "a keyboard launch",
+      "family": "launch_now",
+      "tags": ["keyboard"],
+      "steps": [
+        {"issue": {}, "expect": {"outcome": "issued"}},
+        {"launch": {"card": 0, "detail": 0}, "expect": {"outcome": "refused", "value": "unknown_card"}}
+      ],
+      "creates": 0
+    },
+    {
+      "name": "the workshop off in an approved snapshot edited by hand",
+      "family": "edited_snapshot",
+      "steps": [
+        {"tamper": {"kind": "snapshot_workshop_off"}},
+        {"issue": {}, "expect": {"outcome": "refused", "value": {"kind": "workshop", "detail": "workshop_off"}}}
+      ],
+      "creates": 0
+    },
+    {
+      "name": "workshop stopped at the click",
+      "family": "launch_conditions",
+      "steps": [
+        {"issue": {}, "expect": {"outcome": "issued"}},
+        {"tamper": {"kind": "stop"}},
+        {"launch": {"card": 0}, "expect": {"outcome": "refused", "value": "workshop_stopped"}}
+      ],
+      "creates": 0
+    },
+    {
+      "name": "engine unavailable at the click",
+      "family": "launch_conditions",
+      "steps": [
+        {"issue": {}, "expect": {"outcome": "issued"}},
+        {"tamper": {"kind": "engine_down"}},
+        {"launch": {"card": 0}, "expect": {"outcome": "refused", "value": "engine_unavailable"}}
+      ],
+      "creates": 0
+    },
+    {
+      "name": "image mismatch at the click",
+      "family": "launch_conditions",
+      "steps": [
+        {"issue": {}, "expect": {"outcome": "issued"}},
+        {"tamper": {"kind": "image_gone"}},
+        {"launch": {"card": 0}, "expect": {"outcome": "refused", "value": "image_mismatch"}}
+      ],
+      "creates": 0
+    },
+    {
+      "name": "no valid battery",
+      "family": "launch_conditions",
+      "home": {"battery": false},
+      "steps": [
+        {"issue": {}, "expect": {"outcome": "issued"}},
+        {"launch": {"card": 0}, "expect": {"outcome": "refused", "value": "battery_stale"}}
+      ],
+      "creates": 0
+    },
+    {
+      "name": "mount missing at the click",
+      "family": "launch_conditions",
+      "steps": [
+        {"issue": {}, "expect": {"outcome": "issued"}},
+        {"tamper": {"kind": "mount_gone"}},
+        {"launch": {"card": 0}, "expect": {"outcome": "refused", "value": "mount_missing"}}
+      ],
+      "creates": 0
+    },
+    {
+      "name": "mount not ignored at the click",
+      "family": "launch_conditions",
+      "steps": [
+        {"issue": {}, "expect": {"outcome": "issued"}},
+        {"tamper": {"kind": "mount_not_ignored"}},
+        {"launch": {"card": 0}, "expect": {"outcome": "refused", "value": "mount_not_ignored"}}
+      ],
+      "creates": 0
+    },
+    {
+      "name": "mount path unsupported at the click",
+      "family": "launch_conditions",
+      "steps": [
+        {"issue": {}, "expect": {"outcome": "issued"}},
+        {"tamper": {"kind": "mount_junction"}},
+        {"launch": {"card": 0}, "expect": {"outcome": "refused", "value": "mount_path_unsupported"}}
+      ],
+      "creates": 0
+    },
+    {
+      "name": "hook program missing at the click, the inventory's container alone created",
+      "family": "launch_conditions",
+      "steps": [
+        {"issue": {}, "expect": {"outcome": "issued"}},
+        {"tamper": {"kind": "hook_missing"}},
+        {"launch": {"card": 0}, "expect": {"outcome": "refused", "value": "hook_program_missing"}}
+      ],
+      "creates": 1
+    },
+    {
+      "name": "max_workers runs live",
+      "family": "launch_conditions",
+      "home": {"max_workers": 1},
+      "steps": [
+        {"issue": {}, "expect": {"outcome": "issued"}},
+        {"launch": {"card": 0}, "expect": {"outcome": "launched", "value": "started"}},
+        {"issue": {}, "expect": {"outcome": "issued"}},
+        {"launch": {"card": 1}, "expect": {"outcome": "refused", "value": "workshop_full"}}
+      ],
+      "creates": 2
+    },
+    {
+      "name": "reviews pending at the click",
+      "family": "launch_conditions",
+      "steps": [
+        {"issue": {}, "expect": {"outcome": "issued"}},
+        {"tamper": {"kind": "reviews_pending"}},
+        {"launch": {"card": 0}, "expect": {"outcome": "refused", "value": "reviews_pending"}}
+      ],
+      "creates": 0
+    },
+    {
+      "name": "no credential stored",
+      "family": "launch_conditions",
+      "runtime": {"store": "empty"},
+      "steps": [
+        {"issue": {}, "expect": {"outcome": "issued"}},
+        {"launch": {"card": 0}, "expect": {"outcome": "refused", "value": "credential_missing"}}
+      ],
+      "creates": 0
+    },
+    {
+      "name": "a credential known to have expired",
+      "family": "launch_conditions",
+      "runtime": {"state": "needs_new_credential"},
+      "steps": [
+        {"issue": {}, "expect": {"outcome": "issued"}},
+        {"launch": {"card": 0}, "expect": {"outcome": "refused", "value": "credential_expired"}}
+      ],
+      "creates": 0
+    },
+    {
+      "name": "an unresolvable PAC",
+      "family": "launch_conditions",
+      "home": {"upstream_proxy": "system"},
+      "steps": [
+        {"issue": {}, "expect": {"outcome": "issued"}},
+        {"tamper": {"kind": "proxy", "mode": 3}},
+        {"launch": {"card": 0}, "expect": {"outcome": "refused", "value": "proxy_unresolved"}}
+      ],
+      "creates": 0
+    },
+    {
+      "name": "a SOCKS proxy",
+      "family": "launch_conditions",
+      "home": {"upstream_proxy": "system"},
+      "steps": [
+        {"issue": {}, "expect": {"outcome": "issued"}},
+        {"tamper": {"kind": "proxy", "mode": 4}},
+        {"launch": {"card": 0}, "expect": {"outcome": "refused", "value": "proxy_unsupported"}}
+      ],
+      "creates": 0
+    },
+    {
+      "name": "the project folder gone",
+      "family": "launch_conditions",
+      "home": {"mount": false},
+      "steps": [
+        {"issue": {}, "expect": {"outcome": "issued"}},
+        {"tamper": {"kind": "project_gone"}},
+        {"launch": {"card": 0}, "expect": {"outcome": "refused", "value": "project_missing"}}
+      ],
+      "creates": 0
+    },
+    {
+      "name": "base moved at the click",
+      "family": "launch_conditions",
+      "steps": [
+        {"issue": {}, "expect": {"outcome": "issued"}},
+        {"tamper": {"kind": "commit"}},
+        {"launch": {"card": 0}, "expect": {"outcome": "refused", "value": "base_moved"}}
+      ],
+      "creates": 0
+    }
   ]
 }

@@ -7,6 +7,7 @@ import type { QuotaView } from "./QuotaView";
 import type { SubjectChoice } from "./SubjectChoice";
 import type { SubjectOption } from "./SubjectOption";
 import type { WorkOrderPermission } from "./WorkOrderPermission";
+import type { WorkshopCardFacts } from "./WorkshopCardFacts";
 
 /**
  * A card as the window shows it (AD-78): the rendered prompt, its
@@ -46,4 +47,8 @@ proposal: CardProposal | null,
  * Where its permission mode comes from (D-980): `argv` carries
  * `--permission-mode` only for [`WorkOrderPermission::Officina`].
  */
-permission: WorkOrderPermission, };
+permission: WorkOrderPermission, 
+/**
+ * A workshop card's facts (AD-107, AD-121); none for a host card.
+ */
+workshop: WorkshopCardFacts | null, };

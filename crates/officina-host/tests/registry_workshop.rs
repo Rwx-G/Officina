@@ -267,3 +267,76 @@ fn the_30_day_bound_holds_for_workshop_texts_and_folders() {
         "a folder with no row is gone"
     );
 }
+
+/// Story 6.11 AC 5 (D-240, review F19): v0.5's 2-minute `launching` sweep
+/// skips a workshop row, whose launch may outlast it; a host row of the
+/// same age is swept.
+#[test]
+fn a_slow_workshop_launch_is_not_swept() {
+    let home = Home::new();
+    let mut writer = home.writer(NOW);
+    let order = order(&home);
+    launch(&mut writer, &order, RUN, 1, NOW).unwrap();
+    let swept = writer.expire_launching(NOW + 10 * 60_000).unwrap();
+    assert_eq!(swept, 0);
+    let row = writer.work_orders().unwrap().remove(0);
+    assert_eq!(
+        row.outcome,
+        officina_core::registry::types::LaunchOutcome::Launching
+    );
+}
+
+/// Story 6.11 AC 5 (AD-81 as AD-107 amends it): a started workshop row
+/// is never bound to a background session, even one of its name and
+/// folder.
+#[test]
+fn binding_skips_workshop_rows() {
+    use officina_core::agents::{AgentRecord, SessionKind};
+    use officina_core::orders::work_order::order_name;
+    use officina_core::registry::types::LaunchOutcome;
+    let home = Home::new();
+    let mut writer = home.writer(NOW);
+    let order = order(&home);
+    launch(&mut writer, &order, RUN, 1, NOW).unwrap();
+    writer
+        .record_launch_outcome(RUN, LaunchOutcome::Started, None, None, None, NOW + 500)
+        .unwrap();
+    let listed = AgentRecord {
+        id: Some("bg-s-1".to_owned()),
+        session_id: Some("s-1".to_owned()),
+        name: Some(order_name(order.template(), 1)),
+        cwd: Some(order.project_folder().to_owned()),
+        kind: Some(SessionKind::Background),
+        started_at_ms: Some(NOW + 600),
+        ..AgentRecord::default()
+    };
+    let mut snapshot = None;
+    writer
+        .apply_agents(&mut snapshot, &[listed], &[], NOW + 2_000)
+        .unwrap();
+    let row = writer.work_orders().unwrap().remove(0);
+    assert_eq!(row.bound_at_ms, None);
+    assert_eq!(row.session_id, None);
+}
+
+/// Story 6.11 AC 1 (AD-107): an imported run is offered as a base for 7
+/// days after its verdict, not after.
+#[test]
+fn imported_bases_older_than_7_days_are_not_offered() {
+    use officina_core::orders::workshop_card::IMPORTED_BASE_MS;
+    let home = Home::new();
+    let mut writer = home.writer(NOW);
+    let order = order(&home);
+    launch(&mut writer, &order, RUN, 1, NOW).unwrap();
+    writer
+        .set_verdict(RUN, PackageVerdict::Imported, None, NOW)
+        .unwrap();
+    let offered = |at: i64| {
+        writer
+            .workshop_imported_since(order.template(), at - IMPORTED_BASE_MS)
+            .unwrap()
+            .len()
+    };
+    assert_eq!(offered(NOW + IMPORTED_BASE_MS), 1);
+    assert_eq!(offered(NOW + IMPORTED_BASE_MS + 1), 0);
+}

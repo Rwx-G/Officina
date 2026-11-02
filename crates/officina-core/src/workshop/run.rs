@@ -17,6 +17,10 @@ closed_enum! {
     /// Where a work order runs (AD-119): on the author's machine (v0.5) or
     /// in the workshop.
     #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+    #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+    // ts-rs writes one file per name: the relay's `RunState` and
+    // `Runner` hold theirs (D-1107's lesson, D-1150).
+    #[cfg_attr(feature = "ts", ts(rename = "OrderRunner"))]
     pub enum Runner {
         #[default]
         Host,
@@ -30,6 +34,10 @@ closed_enum! {
     /// then a package awaiting a verdict, a run with nothing to review, a
     /// run Stop all kept, or a terminal state.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+    #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+    // ts-rs writes one file per name: the relay's `RunState` and
+    // `Runner` hold theirs (D-1107's lesson, D-1150).
+    #[cfg_attr(feature = "ts", ts(rename = "WorkshopRunState"))]
     pub enum RunState {
         Launching,
         Running,
@@ -79,6 +87,57 @@ impl RunState {
     /// `reviews_pending`, the board's Needs you).
     pub const fn awaits_verdict(self) -> bool {
         matches!(self, RunState::Review | RunState::Quarantined)
+    }
+}
+
+closed_enum! {
+    #[serde(rename_all = "snake_case")]
+    /// One step of a launch (AD-107 steps 1 to 4), as `workshop_started`
+    /// records it.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+    pub enum LaunchStep {
+        /// The `work_order` and `workshop_run` rows.
+        Record,
+        /// `git bundle create` and its header read back.
+        Bundle,
+        /// `prompt.txt` and `plan.json`.
+        Files,
+        /// Both networks.
+        Networks,
+        Volume,
+        /// The gateway's create and its connection to the internal network.
+        Gateway,
+        /// The worker's create, with the credential.
+        Worker,
+        /// `in/` into the worker's volume.
+        Copy,
+        /// The gateway's start, then the worker's.
+        Start,
+    }
+}
+
+closed_enum! {
+    #[serde(rename_all = "snake_case")]
+    /// How one launch step went.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+    pub enum StepOutcome {
+        Ok,
+        Failed,
+        /// The workshop's stop flag was set before it.
+        Stopped,
+    }
+}
+
+closed_enum! {
+    #[serde(rename_all = "snake_case")]
+    /// Why a run's engine objects were removed (AD-120).
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+    pub enum RemovalCause {
+        Collected,
+        KeptExpired,
+        Resume,
+        LaunchFailed,
+        Orphan,
     }
 }
 

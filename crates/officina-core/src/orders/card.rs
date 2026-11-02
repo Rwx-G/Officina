@@ -96,6 +96,55 @@ closed_enum! {
         SubjectClosed,
         /// The registry already holds the card's name (D-135).
         NameTaken,
+        /// The approved catalogue holds no valid `[workshop]` table
+        /// (AD-107). From here on, the workshop's checks, declared in
+        /// AD-107's reporting order (D-247).
+        WorkshopOff,
+        /// The workshop's stop flag is set (AD-116).
+        WorkshopStopped,
+        /// No Linux engine answered (AD-98).
+        EngineUnavailable,
+        /// The image is not the one Officina would build now (AD-99).
+        ImageMismatch,
+        /// No passing battery holds for the image on this engine (AD-117).
+        BatteryStale,
+        /// A mount's folder is missing (FR-2).
+        MountMissing,
+        /// A mount is not git-ignored, or holds tracked files (FR-2,
+        /// D-231).
+        MountNotIgnored,
+        /// A mount's path holds a character the engine cannot carry, or
+        /// goes through a reparse point (D-236).
+        MountPathUnsupported,
+        /// A hook's program is missing from the image (AD-118).
+        HookProgramMissing,
+        /// `max_workers` runs are live (AD-107).
+        WorkshopFull,
+        /// Too many packages await a verdict (AD-107).
+        ReviewsPending,
+        /// The floor's credential is absent (AD-105, D-604).
+        CredentialMissing,
+        /// The floor's credential is known to have expired (D-607).
+        CredentialExpired,
+        /// A route's proxy could not be decided (D-611).
+        ProxyUnresolved,
+        /// A route names a proxy the gateway cannot use (D-611).
+        ProxyUnsupported,
+        /// The project's folder is not a folder any more.
+        ProjectMissing,
+        /// The base branch's tip is not the card's (AD-107).
+        BaseMoved,
+        /// What would run is not what the card showed (AD-102, D-207).
+        PlanChanged,
+    }
+}
+
+impl LaunchRefusal {
+    /// True for the workshop's checks (AD-107), declared after AD-78's:
+    /// [`check_launch`] never returns one.
+    pub fn is_workshop(self) -> bool {
+        let at = |refusal: LaunchRefusal| LaunchRefusal::ALL.iter().position(|r| *r == refusal);
+        at(self) >= at(LaunchRefusal::WorkshopOff)
     }
 }
 
@@ -140,6 +189,13 @@ pub enum IssueRefusal {
     CardNotOpen(CardState),
     /// The proposal a card was asked from opens none.
     Proposal(ProposalRefusal),
+    /// A workshop card cannot be issued (AD-107): the floor's workshop is
+    /// off, or the project declares none.
+    Workshop(LaunchRefusal),
+    /// The base asked for is not one of the card's (AD-107).
+    BaseNotOffered,
+    /// The change does not apply to this kind of card.
+    NotApplicable,
 }
 
 /// What the window asks a card for (AD-78): names and values as the
@@ -160,8 +216,17 @@ pub struct CardRequest {
 #[serde(tag = "kind", rename_all = "snake_case")]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub enum CardChange {
-    Value { name: String, value: String },
-    Subject { subject: SubjectChoice },
+    Value {
+        name: String,
+        value: String,
+    },
+    Subject {
+        subject: SubjectChoice,
+    },
+    /// A workshop card's base, from the card's closed list (AD-107).
+    Base {
+        base: crate::workshop::launch::BaseChoice,
+    },
 }
 
 /// One parameter of a card: its value and its whole list, the composer's
@@ -246,6 +311,8 @@ pub struct WorkOrderCard {
     /// Where its permission mode comes from (D-980): `argv` carries
     /// `--permission-mode` only for [`WorkOrderPermission::Officina`].
     pub permission: WorkOrderPermission,
+    /// A workshop card's facts (AD-107, AD-121); none for a host card.
+    pub workshop: Option<crate::orders::workshop_card::WorkshopCardFacts>,
 }
 
 /// What the window gets back from an issue or an edit.
@@ -273,7 +340,10 @@ pub enum LaunchAnswer {
 pub struct IssuedCard {
     card: WorkOrderCard,
     order: WorkOrder,
-    vector: ClaudeVector,
+    /// The host's vector; none for a workshop card, whose run is built by
+    /// `WorkshopLaunch` (AD-107).
+    vector: Option<ClaudeVector>,
+    workshop: Option<Box<crate::orders::workshop_card::WorkshopIssue>>,
 }
 
 impl IssuedCard {
@@ -285,9 +355,30 @@ impl IssuedCard {
         &self.order
     }
 
-    /// The vector a launch runs, byte for byte the card's `argv`.
-    pub fn vector(&self) -> &ClaudeVector {
-        &self.vector
+    /// The vector a host launch runs, byte for byte the card's `argv`;
+    /// none for a workshop card.
+    pub fn vector(&self) -> Option<&ClaudeVector> {
+        self.vector.as_ref()
+    }
+
+    /// What a workshop card was issued from (AD-107); none for a host
+    /// card.
+    pub fn workshop_issue(&self) -> Option<&crate::orders::workshop_card::WorkshopIssue> {
+        self.workshop.as_deref()
+    }
+
+    /// A workshop card (AD-107), built by `issue_workshop` only.
+    pub(crate) fn workshop(
+        card: WorkOrderCard,
+        order: WorkOrder,
+        issue: crate::orders::workshop_card::WorkshopIssue,
+    ) -> IssuedCard {
+        IssuedCard {
+            card,
+            order,
+            vector: None,
+            workshop: Some(Box::new(issue)),
+        }
     }
 
     pub fn id(&self) -> &str {
@@ -308,7 +399,7 @@ impl IssuedCard {
     }
 
     /// The request this card answers, its values as the order keeps them.
-    fn request(&self) -> CardRequest {
+    pub fn request(&self) -> CardRequest {
         CardRequest {
             template: self.card.template.clone(),
             project: self.card.project.clone(),
@@ -409,11 +500,13 @@ pub fn issue(
         state: CardState::Open,
         proposal: None,
         permission,
+        workshop: None,
     };
     Ok(IssuedCard {
         card,
         order,
-        vector,
+        vector: Some(vector),
+        workshop: None,
     })
 }
 
@@ -431,6 +524,7 @@ pub fn edit(
         return Err(IssueRefusal::CardNotOpen(previous.state()));
     }
     let mut request = previous.request();
+    let mut base = previous.workshop_issue().map(|issue| issue.base.clone());
     match change {
         CardChange::Value { name, value } => {
             match request.values.iter_mut().find(|(given, _)| given == name) {
@@ -439,8 +533,26 @@ pub fn edit(
             }
         }
         CardChange::Subject { subject } => request.subject = Some(subject.clone()),
+        CardChange::Base { base: chosen } => match &mut base {
+            Some(base) => base.clone_from(chosen),
+            None => return Err(IssueRefusal::NotApplicable),
+        },
     }
-    issued_again(previous, &request, id, inputs)
+    match previous.workshop_issue() {
+        Some(issue) => {
+            let mut issued = crate::orders::workshop_card::issue_workshop(
+                id,
+                previous.seq(),
+                &request,
+                inputs,
+                &issue.gathered,
+                base.as_ref(),
+            )?;
+            issued.card.proposal.clone_from(&previous.card.proposal);
+            Ok(issued)
+        }
+        None => issued_again(previous, &request, id, inputs),
+    }
 }
 
 /// The card `id` that replaces `previous` as it stands, under the same
@@ -511,7 +623,7 @@ pub fn issue_from_proposal(
 }
 
 /// The project's subjects that are not archived.
-fn open_subjects<'a>(
+pub(crate) fn open_subjects<'a>(
     project: &'a str,
     subjects: &'a [SubjectRecord],
 ) -> impl Iterator<Item = &'a SubjectRecord> {
@@ -535,7 +647,7 @@ pub fn default_subject(order: &WorkOrder, subjects: &[SubjectRecord]) -> Subject
 /// order's project that is not archived, or a new name D-57's rules accept,
 /// trimmed as they store it; a name another open subject holds is kept, and
 /// files into that subject at `started` (D-158).
-fn checked_subject(
+pub(crate) fn checked_subject(
     wanted: &SubjectChoice,
     order: &WorkOrder,
     subjects: &[SubjectRecord],
@@ -778,7 +890,7 @@ mod tests {
         .unwrap();
         let rebuilt = spawn::work_order(&order, 7, Some(CONFIG), WorkOrderPermission::Project);
         assert_eq!(card.argv, rebuilt.args());
-        assert_eq!(issued.vector(), &rebuilt);
+        assert_eq!(issued.vector(), Some(&rebuilt));
         assert_eq!(card.prompt, order.prompt());
         assert_eq!(card.prompt_sha256, order.prompt_sha256());
         assert_eq!(card.cwd, order.project_folder());
@@ -808,7 +920,7 @@ mod tests {
         assert_eq!(second.card().name, first.card().name);
         assert!(second.card().prompt.contains("patch"));
         assert_eq!(
-            second.vector().args(),
+            second.vector().unwrap().args(),
             spawn::work_order(
                 second.order(),
                 4,
@@ -1021,16 +1133,22 @@ mod tests {
                 LaunchRefusal::ProjectFolderMissing => facts.folder_exists = false,
                 LaunchRefusal::SubjectClosed => facts.subject_open = false,
                 LaunchRefusal::NameTaken => facts.name_taken = true,
+                workshop => unreachable!("{workshop:?} is the workshop's check"),
             }
         }
-        for (at, refusal) in LaunchRefusal::ALL.iter().enumerate() {
+        let host: Vec<LaunchRefusal> = LaunchRefusal::ALL
+            .iter()
+            .copied()
+            .filter(|r| !r.is_workshop())
+            .collect();
+        for (at, refusal) in host.iter().enumerate() {
             let mut alone = passing(&open);
             broken(*refusal, &mut alone, [&superseded, &consumed]);
             assert_eq!(check_launch(&alone), Err(*refusal), "{refusal:?} alone");
             let mut with_later = passing(&open);
             // A card state and the unknown card are one fact: the later
             // breakage is applied first, so the earlier one stands.
-            for later in LaunchRefusal::ALL[at..].iter().rev() {
+            for later in host[at..].iter().rev() {
                 broken(*later, &mut with_later, [&superseded, &consumed]);
             }
             assert_eq!(
@@ -1213,7 +1331,7 @@ mod tests {
         );
         assert_eq!(after.card().prompt, before.card().prompt);
         assert_eq!(
-            after.vector(),
+            after.vector().unwrap(),
             &spawn::work_order(
                 after.order(),
                 5,
@@ -1221,7 +1339,7 @@ mod tests {
                 WorkOrderPermission::Officina
             )
         );
-        assert_eq!(after.card().argv, after.vector().args());
+        assert_eq!(after.card().argv, after.vector().unwrap().args());
         assert_eq!(
             check_launch(&facts_for(after.card(), WorkOrderPermission::Officina)),
             Ok(())

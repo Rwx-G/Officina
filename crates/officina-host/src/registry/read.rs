@@ -315,6 +315,15 @@ impl Reader {
         crate::registry::workshop::image(&self.conn, name)
     }
 
+    /// The run `id` (AD-119): `officina workshop --json` and the tests
+    /// read it.
+    pub fn workshop_run(
+        &self,
+        id: &str,
+    ) -> rusqlite::Result<Option<crate::registry::workshop::RunRecord>> {
+        crate::registry::workshop::run(&self.conn, id)
+    }
+
     /// Every image row (AD-99): doctor reads each one's battery.
     pub fn workshop_images(&self) -> rusqlite::Result<Vec<crate::registry::workshop::ImageRecord>> {
         crate::registry::workshop::images(&self.conn)
@@ -1054,7 +1063,8 @@ pub const WORK_ORDERS_READ: u32 = 50;
 
 const WORK_ORDER_COLUMNS: &str = "id, seq, template, project, cwd, values_json, argv_json,
     prompt_sha256, catalogue_hash, name, subject_id, new_subject_name, source, proposal_id,
-    launched_at_ms, outcome, exit_code, error, printed, bg_id, session_id, bound_at_ms";
+    launched_at_ms, outcome, exit_code, error, printed, bg_id, session_id, bound_at_ms, runner,
+    (SELECT r.state FROM workshop_run r WHERE r.id = work_order.id)";
 
 /// A JSON column written by the window, read back; text that does not
 /// parse is a type error, as for a code no variant parses.
@@ -1098,6 +1108,15 @@ fn work_order_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<WorkOrderRecord> 
         session_id: row.get(20)?,
         bound_at_ms: row.get(21)?,
         session: None,
+        runner: code_of(row, 22, officina_core::workshop::run::Runner::from_code)?,
+        run_state: row
+            .get::<_, Option<String>>(23)?
+            .map(|code| {
+                officina_core::workshop::run::RunState::from_code(&code).ok_or_else(|| {
+                    rusqlite::Error::InvalidColumnType(23, code, rusqlite::types::Type::Text)
+                })
+            })
+            .transpose()?,
     })
 }
 

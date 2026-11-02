@@ -2649,7 +2649,14 @@ fn a_double_click_launches_once() {
         .map(|_| {
             let (sender, id, sha) = (sender.clone(), card.id.clone(), card.prompt_sha256.clone());
             std::thread::spawn(move || {
-                officina_host::orders::launch_card(&sender, &id, &sha).unwrap()
+                officina_host::orders::launch_card(
+                    &sender,
+                    &id,
+                    &sha,
+                    None,
+                    &common::workshop::host_runtime(),
+                )
+                .unwrap()
             })
         })
         .collect();
@@ -2677,6 +2684,7 @@ fn a_late_launch_outcome_is_still_recorded() {
         AuthorCommand::LaunchCard {
             card_id: card.id.clone(),
             prompt_sha256: card.prompt_sha256.clone(),
+            plan_sha256: None,
         },
         AUTHOR_WAIT,
     )
@@ -2734,8 +2742,16 @@ fn the_board_keeps_its_pace_while_a_launch_spawns() {
     let card = home.bump("serde_json", "minor");
     let sender = home.handle().sender.clone();
     let (id, sha) = (card.id.clone(), card.prompt_sha256.clone());
-    let launched =
-        std::thread::spawn(move || officina_host::orders::launch_card(&sender, &id, &sha).unwrap());
+    let launched = std::thread::spawn(move || {
+        officina_host::orders::launch_card(
+            &sender,
+            &id,
+            &sha,
+            None,
+            &common::workshop::host_runtime(),
+        )
+        .unwrap()
+    });
     {
         let deadline = Instant::now() + Duration::from_secs(10);
         while home.bg_calls().is_empty() {

@@ -1170,6 +1170,47 @@
         "image_id": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "programs_sha256": null
       }
+    },
+    {
+      "expect": {
+        "ok": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "expected": {
+        "base_id": null,
+        "base_programs_sha256": null,
+        "labels": {
+          "officina.base": "gateway",
+          "officina.ca.sha256": "none",
+          "officina.claude.version": "2.1.316",
+          "officina.dockerfile.sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "officina.entry.sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "officina.gateway.sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+          "officina.version": "0.1.0",
+          "org.opencontainers.image.created": "2026-11-01T00:00:00Z"
+        }
+      },
+      "inspected": {
+        "env_names": [
+          "PATH"
+        ],
+        "id": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "labels": {
+          "officina.base": "gateway",
+          "officina.ca.sha256": "none",
+          "officina.claude.version": "2.1.316",
+          "officina.dockerfile.sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "officina.entry.sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "officina.gateway.sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+          "officina.version": "0.1.0",
+          "org.opencontainers.image.created": "2026-11-01T00:00:00Z"
+        }
+      },
+      "name": "the gateway as built matches, never measured",
+      "recorded": {
+        "built": true,
+        "image_id": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "programs_sha256": null
+      }
     }
   ],
   "inventory": [
@@ -1301,6 +1342,329 @@
         {
           "source": "mounted_local",
           "text": "{not json"
+        }
+      ]
+    }
+  ],
+  "launch": [
+    {
+      "name": "every check passes",
+      "checks": {},
+      "inventory": true,
+      "expect": "launched",
+      "readiness": []
+    },
+    {
+      "name": "the workshop is off",
+      "checks": {
+        "workshop_on": false
+      },
+      "inventory": true,
+      "expect": {
+        "refused": "workshop_off"
+      }
+    },
+    {
+      "name": "the stop flag is set",
+      "checks": {
+        "stopped": true
+      },
+      "inventory": true,
+      "expect": {
+        "refused": "workshop_stopped"
+      }
+    },
+    {
+      "name": "no engine answers",
+      "checks": {
+        "engine_ready": false
+      },
+      "inventory": true,
+      "expect": {
+        "refused": "engine_unavailable"
+      }
+    },
+    {
+      "name": "the image differs",
+      "checks": {
+        "image_matches": false
+      },
+      "inventory": true,
+      "expect": {
+        "refused": "image_mismatch"
+      }
+    },
+    {
+      "name": "no valid battery",
+      "checks": {
+        "battery_valid": false
+      },
+      "inventory": true,
+      "expect": {
+        "refused": "battery_stale"
+      }
+    },
+    {
+      "name": "a missing mount",
+      "checks": {
+        "mounts": [
+          "missing"
+        ]
+      },
+      "inventory": true,
+      "expect": {
+        "refused": "mount_missing"
+      }
+    },
+    {
+      "name": "a mount not ignored",
+      "checks": {
+        "mounts": [
+          "not_ignored"
+        ]
+      },
+      "inventory": true,
+      "expect": {
+        "refused": "mount_not_ignored"
+      }
+    },
+    {
+      "name": "a mount holding tracked files",
+      "checks": {
+        "mounts": [
+          "tracked"
+        ]
+      },
+      "inventory": true,
+      "expect": {
+        "refused": "mount_not_ignored"
+      },
+      "readiness": [
+        {
+          "refusal": "mount_not_ignored",
+          "detail": "tracked"
+        }
+      ]
+    },
+    {
+      "name": "a comma in a mount path",
+      "checks": {
+        "mounts": [
+          "path_unsupported"
+        ]
+      },
+      "inventory": true,
+      "expect": {
+        "refused": "mount_path_unsupported"
+      }
+    },
+    {
+      "name": "a junction on a mount path",
+      "checks": {
+        "mounts": [
+          "reparse_point"
+        ]
+      },
+      "inventory": true,
+      "expect": {
+        "refused": "mount_path_unsupported"
+      },
+      "readiness": [
+        {
+          "refusal": "mount_path_unsupported",
+          "detail": "reparse_point"
+        }
+      ]
+    },
+    {
+      "name": "a hook program missing",
+      "checks": {},
+      "inventory": false,
+      "expect": {
+        "refused": "hook_program_missing"
+      }
+    },
+    {
+      "name": "max_workers runs live",
+      "checks": {
+        "live_runs": 2
+      },
+      "inventory": true,
+      "expect": {
+        "refused": "workshop_full"
+      }
+    },
+    {
+      "name": "ten packages await a verdict",
+      "checks": {
+        "reviews_pending": 10
+      },
+      "inventory": true,
+      "expect": {
+        "refused": "reviews_pending"
+      }
+    },
+    {
+      "name": "no credential stored",
+      "checks": {
+        "credential_present": false
+      },
+      "inventory": true,
+      "expect": {
+        "refused": "credential_missing"
+      }
+    },
+    {
+      "name": "a login floor before its story",
+      "checks": {
+        "credential_kind": "login"
+      },
+      "inventory": true,
+      "expect": {
+        "refused": "credential_missing"
+      },
+      "readiness": [
+        {
+          "refusal": "credential_missing",
+          "detail": "login"
+        }
+      ]
+    },
+    {
+      "name": "a credential known to have expired",
+      "checks": {
+        "credential_state": "needs_new_credential"
+      },
+      "inventory": true,
+      "expect": {
+        "refused": "credential_expired"
+      }
+    },
+    {
+      "name": "an unresolvable PAC",
+      "checks": {
+        "proxy": "proxy_unresolved"
+      },
+      "inventory": true,
+      "expect": {
+        "refused": "proxy_unresolved"
+      }
+    },
+    {
+      "name": "a SOCKS proxy",
+      "checks": {
+        "proxy": "proxy_unsupported"
+      },
+      "inventory": true,
+      "expect": {
+        "refused": "proxy_unsupported"
+      }
+    },
+    {
+      "name": "the project folder is gone",
+      "checks": {
+        "project_exists": false
+      },
+      "inventory": true,
+      "expect": {
+        "refused": "project_missing"
+      }
+    },
+    {
+      "name": "the base moved",
+      "checks": {
+        "base_matches": false
+      },
+      "inventory": true,
+      "expect": {
+        "refused": "base_moved"
+      }
+    },
+    {
+      "name": "the base does not resolve",
+      "checks": {
+        "base_matches": null
+      },
+      "inventory": true,
+      "expect": {
+        "refused": "base_moved"
+      },
+      "readiness": [
+        {
+          "refusal": "base_moved",
+          "detail": "unresolved"
+        }
+      ]
+    },
+    {
+      "name": "the plan changed",
+      "checks": {
+        "plan_matches": false
+      },
+      "inventory": true,
+      "expect": {
+        "refused": "plan_changed"
+      }
+    },
+    {
+      "name": "every check fails: the first in AD-107's order is reported",
+      "checks": {
+        "workshop_on": false,
+        "stopped": true,
+        "engine_ready": false,
+        "plan_matches": false,
+        "live_runs": 9,
+        "credential_present": false
+      },
+      "inventory": true,
+      "expect": {
+        "refused": "workshop_off"
+      },
+      "readiness": [
+        {
+          "refusal": "workshop_off",
+          "detail": null
+        },
+        {
+          "refusal": "workshop_stopped",
+          "detail": null
+        },
+        {
+          "refusal": "engine_unavailable",
+          "detail": null
+        },
+        {
+          "refusal": "workshop_full",
+          "detail": null
+        },
+        {
+          "refusal": "credential_missing",
+          "detail": null
+        },
+        {
+          "refusal": "plan_changed",
+          "detail": null
+        }
+      ]
+    },
+    {
+      "name": "a later check evaluated first is still reported after an earlier one",
+      "checks": {
+        "plan_matches": false,
+        "image_matches": false
+      },
+      "inventory": false,
+      "expect": {
+        "refused": "image_mismatch"
+      },
+      "readiness": [
+        {
+          "refusal": "image_mismatch",
+          "detail": null
+        },
+        {
+          "refusal": "plan_changed",
+          "detail": null
         }
       ]
     }

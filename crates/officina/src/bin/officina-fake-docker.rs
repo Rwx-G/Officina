@@ -22,8 +22,12 @@
 //! `start`, `logs` without `--follow`, `stop`, `network` and `volume`
 //! `create` and `rm` kept in the state, and the battery worker's, the
 //! gateways' and the decoy's output from the sidecar (see
-//! [`battery_output`], [`logs_once`]); any other call is logged and exits 0. Later stories add
-//! theirs.
+//! [`battery_output`], [`logs_once`]); story 6.11's launch: `fail_when`
+//! (`prefix`, and `contains`) fails every call matching it, exit 1;
+//! `touch_when` (`prefix`, `contains`, `path`) writes an empty file at
+//! `path` when a call matches, as a hand setting a flag between two steps
+//! would; `start_sleep_ms` delays each `start`. Any other call is logged
+//! and exits 0. Later stories add theirs.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -103,6 +107,29 @@ fn main() {
         }
     }
     let words: Vec<&str> = argv.iter().map(String::as_str).collect();
+    let joined = words.join(" ");
+    let matches = |key: &str| {
+        sidecar[key]["prefix"]
+            .as_str()
+            .is_some_and(|prefix| joined.starts_with(prefix))
+            && sidecar[key]["contains"]
+                .as_str()
+                .is_none_or(|part| joined.contains(part))
+    };
+    if matches("touch_when")
+        && let Some(path) = sidecar["touch_when"]["path"].as_str()
+    {
+        let _ = std::fs::write(path, b"");
+    }
+    if matches("fail_when") {
+        eprintln!("Error: the fake engine fails this call");
+        std::process::exit(1);
+    }
+    if words.first() == Some(&"start")
+        && let Some(ms) = sidecar["start_sleep_ms"].as_u64()
+    {
+        std::thread::sleep(Duration::from_millis(ms));
+    }
     let code = match words.as_slice() {
         ["version", ..] => match sidecar["version"].as_str().unwrap_or("linux") {
             "down" => {

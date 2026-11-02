@@ -23,7 +23,7 @@ use crate::relay::view::{PendingChange, RelayView};
 use crate::untrusted::Untrusted;
 
 /// The payload's version; P-13's rule moves it.
-pub const ORCHESTRATOR_VIEW_SCHEMA: u32 = 1;
+pub const ORCHESTRATOR_VIEW_SCHEMA: u32 = 2;
 
 pub use crate::orders::orchestrator::OrchestratorPresence;
 
@@ -98,6 +98,10 @@ pub struct WorkOrderView {
     pub unbound: bool,
     /// What `claude --bg` printed does not hold the id it bound to (D-136).
     pub printed_id_differs: bool,
+    /// Where it runs (AD-121): on the host, or in the workshop.
+    pub runner: crate::workshop::run::Runner,
+    /// A workshop run's state; none for a host order.
+    pub run_state: Option<crate::workshop::run::RunState>,
 }
 
 /// The Orchestrator view (AD-92).
@@ -268,6 +272,8 @@ fn order_view(input: &BriefingInput, order: &WorkOrderRecord, now_ms: i64) -> Wo
         session_folder: session_folder(input, order),
         unbound,
         printed_id_differs,
+        runner: order.runner,
+        run_state: order.run_state,
     }
 }
 
@@ -420,6 +426,8 @@ values = ["minor"]
             session_id: None,
             bound_at_ms: None,
             session: None,
+            runner: Default::default(),
+            run_state: None,
         }
     }
 
@@ -531,6 +539,37 @@ values = ["minor"]
             folders,
             [Some(Untrusted::new(worktree.to_owned())), None, None]
         );
+    }
+
+    /// Story 6.11 AC 6 (AD-121): a history row names where it runs, and a
+    /// workshop row its run's state.
+    #[test]
+    fn history_rows_name_their_runner() {
+        use crate::workshop::run::{RunState, Runner};
+        let host = order("host", LaunchOutcome::Started, NOW - 60_000);
+        let mut workshop = order("workshop", LaunchOutcome::Started, NOW - 30_000);
+        workshop.runner = Runner::Workshop;
+        workshop.run_state = Some(RunState::Running);
+        let view = build(
+            &ViewInput::of(None, None, None, &[], &[host, workshop], &[]),
+            Cursor::None,
+            NOW,
+        );
+        let rows: Vec<(Runner, Option<RunState>)> = view
+            .work_orders
+            .iter()
+            .map(|o| (o.runner, o.run_state))
+            .collect();
+        assert_eq!(
+            rows,
+            [
+                (Runner::Host, None),
+                (Runner::Workshop, Some(RunState::Running))
+            ]
+        );
+        let json = serde_json::to_value(&view.work_orders[1]).unwrap();
+        assert_eq!(json["runner"], "workshop");
+        assert_eq!(json["run_state"], "running");
     }
 
     /// Story 5.17 AC 5 (AD-92, D-155): the view lists every pending

@@ -35,12 +35,22 @@ use officina_core::relay::journal::{JournalEntry, WorkOrderLaunched};
 use officina_core::relay::template::TemplateUnavailable;
 use officina_core::spawn::ClaudeVector;
 
+use officina_core::orders::workshop_card::{GatheredFacts, IMPORTED_BASE_MS, issue_workshop};
+use officina_core::relay::template::{ProjectName, TemplateName};
+use officina_core::workshop::launch::{
+    ApprovedWorkshopTemplate, BaseChoice, WorkshopTemplateUnavailable, allow_list,
+};
+
 use crate::collector::Collector;
 use crate::registry::orders::LaunchRecord;
 use crate::registry::window::WindowRegistry;
+use crate::registry::workshop::RunInsert;
 use crate::relay::home::{RelayHome, load_relay_floor};
 use crate::spawn::{self, BaseEnv, ResolvedClaude, SpawnError, SpawnOutcome};
 use crate::watch::{AUTHOR_WAIT, AuthorCommand, CollectorMsg, ask};
+use crate::workshop::launch::{
+    RunRow, StoredFacts, WorkshopLaunchReport, WorkshopRuntime, WorkshopTicket,
+};
 
 /// How many cards the store keeps (D-135); the oldest goes first, and an
 /// id it evicted is unknown.
@@ -52,6 +62,9 @@ pub const CARD_CAPACITY: usize = 32;
 pub struct CardStore {
     cards: VecDeque<IssuedCard>,
     counter: u64,
+    /// The `seq`s reserved for workshop cards whose facts thread
+    /// `workshop` is still reading (AD-107), so no other card takes one.
+    pending: Vec<(String, u32)>,
 }
 
 impl CardStore {
@@ -79,8 +92,24 @@ impl CardStore {
             self.cards
                 .iter()
                 .filter(|issued| issued.card().template == template)
-                .map(IssuedCard::seq),
+                .map(IssuedCard::seq)
+                .chain(
+                    self.pending
+                        .iter()
+                        .filter(|(t, _)| t == template)
+                        .map(|(_, seq)| *seq),
+                ),
         )
+    }
+
+    /// Holds `seq` of `template` while a workshop card's facts are read.
+    fn hold(&mut self, template: &str, seq: u32) {
+        self.pending.push((template.to_owned(), seq));
+    }
+
+    /// Lets `seq` of `template` go once its card is issued or refused.
+    fn release(&mut self, template: &str, seq: u32) {
+        self.pending.retain(|(t, s)| !(t == template && *s == seq));
     }
 
     /// Keeps `issued`, evicting the oldest card past [`CARD_CAPACITY`].
@@ -150,8 +179,28 @@ fn config_dir(collector: &Collector) -> Option<String> {
         .map(|dir| dir.to_string_lossy().into_owned())
 }
 
+/// What an issue answers on the collector thread: a host card's answer,
+/// or for a workshop template the ticket thread `workshop` reads its
+/// facts from (AD-107, D-239).
+#[derive(Debug, Clone, PartialEq)]
+pub enum IssueStep {
+    Card(CardAnswer),
+    Workshop(Box<WorkshopTicket>),
+}
+
+/// True when the approved template `name` has `[template.workshop]`.
+fn is_workshop_template(approved: &ApprovedCatalogue, name: &str) -> bool {
+    approved
+        .canonical
+        .templates
+        .get(name)
+        .is_some_and(|template| template.workshop.is_some())
+}
+
 /// Issues a card for `request` (AD-78) on the collector thread: the
 /// registry's highest `seq` and the store's reserve the card's (D-135).
+/// A workshop template's card waits for its facts (AD-107): its id and
+/// `seq` go into the ticket, the `seq` held until they come back.
 pub(crate) fn issue(
     store: &mut CardStore,
     collector: &Collector,
@@ -159,14 +208,31 @@ pub(crate) fn issue(
     quota: Option<&QuotaView>,
     request: &CardRequest,
     now_ms: i64,
-) -> Result<CardAnswer, IpcError> {
+) -> Result<IssueStep, IpcError> {
     let (approved, current) = match catalogue(collector.relay()) {
         Ok(found) => found,
-        Err(unavailable) => return Ok(CardAnswer::Refused(IssueRefusal::Template(unavailable))),
+        Err(unavailable) => {
+            return Ok(IssueStep::Card(CardAnswer::Refused(
+                IssueRefusal::Template(unavailable),
+            )));
+        }
     };
     let (subjects, highest) = registry.card_reads(&request.template)?;
     let seq = store.reserve_seq(&request.template, highest);
     let id = store.new_id(now_ms);
+    if is_workshop_template(&approved, &request.template) {
+        return Ok(
+            match workshop_ticket(
+                collector, registry, &approved, &current, request, &id, seq, None, now_ms,
+            )? {
+                Ok(ticket) => {
+                    store.hold(&request.template, seq);
+                    IssueStep::Workshop(Box::new(ticket))
+                }
+                Err(refusal) => IssueStep::Card(CardAnswer::Refused(refusal)),
+            },
+        );
+    }
     let config = config_dir(collector);
     let permissions = collector.relay().read_work_order_permissions().effective();
     let inputs = CardInputs {
@@ -178,14 +244,156 @@ pub(crate) fn issue(
         permissions: &permissions,
         now_ms,
     };
-    Ok(match card::issue(&id, seq, request, &inputs) {
-        Ok(issued) => {
-            let shown = issued.card().clone();
-            store.insert(issued);
-            CardAnswer::Issued(Box::new(shown))
+    Ok(IssueStep::Card(
+        match card::issue(&id, seq, request, &inputs) {
+            Ok(issued) => {
+                let shown = issued.card().clone();
+                store.insert(issued);
+                CardAnswer::Issued(Box::new(shown))
+            }
+            Err(refusal) => CardAnswer::Refused(refusal),
+        },
+    ))
+}
+
+/// The ticket of a workshop card (AD-107): what thread `workshop` reads
+/// its facts from, the registry's and the catalogue's read here. A
+/// template or project the workshop cannot run is refused here.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the issue's and the launch's shared reads"
+)]
+fn workshop_ticket(
+    collector: &Collector,
+    registry: &mut WindowRegistry,
+    approved: &ApprovedCatalogue,
+    current: &RelayFloor,
+    request: &CardRequest,
+    card_id: &str,
+    seq: u32,
+    base: Option<BaseChoice>,
+    now_ms: i64,
+) -> Result<Result<WorkshopTicket, IssueRefusal>, IpcError> {
+    let Some(name) = TemplateName::parse(&request.template) else {
+        return Ok(Err(IssueRefusal::Template(
+            TemplateUnavailable::NotApproved,
+        )));
+    };
+    let template = match ApprovedWorkshopTemplate::new(approved, current, &name) {
+        Ok(template) => template,
+        Err(WorkshopTemplateUnavailable::Unavailable(why)) => {
+            return Ok(Err(IssueRefusal::Template(why)));
         }
-        Err(refusal) => CardAnswer::Refused(refusal),
-    })
+        Err(WorkshopTemplateUnavailable::NotWorkshop) => {
+            return Ok(Err(IssueRefusal::NotApplicable));
+        }
+        Err(WorkshopTemplateUnavailable::WorkshopOff) => {
+            return Ok(Err(IssueRefusal::Workshop(LaunchRefusal::WorkshopOff)));
+        }
+    };
+    let found = ProjectName::parse(&request.project).and_then(|project| {
+        Some((
+            template.template().project_folder(&project)?.to_owned(),
+            template.project(&project)?.clone(),
+        ))
+    });
+    let Some((folder, workshop)) = found else {
+        return Ok(Err(IssueRefusal::Order(
+            officina_core::orders::work_order::WorkOrderRefusal::ProjectNotAllowed,
+        )));
+    };
+    let floor_key = officina_core::workshop::names::floor_key(&current.floor_path);
+    let kind = template.floor().auth;
+    let image_tag = if workshop.dockerfile.is_some() {
+        officina_core::workshop::names::project_image(&floor_key, &request.project)
+    } else {
+        officina_core::workshop::image::WORKSHOP_BASE.to_owned()
+    };
+    let (live_runs, reviews_pending, imported, inventory) = registry.workshop_card_reads(
+        &request.template,
+        &request.project,
+        &image_tag,
+        now_ms - IMPORTED_BASE_MS,
+    )?;
+    let home = collector.paths().officina_home.clone();
+    let base_env = collector.base_env().vars().to_vec();
+    let battery = crate::workshop::battery::plan_of(current, &home, registry, &base_env).ok();
+    Ok(Ok(WorkshopTicket {
+        card_id: card_id.to_owned(),
+        seq,
+        request: request.clone(),
+        base,
+        project: request.project.clone(),
+        project_dir: std::path::PathBuf::from(folder),
+        mounts: workshop.mounts.clone(),
+        allow: allow_list(kind, &workshop.hosts),
+        upstream_proxy: template.floor().upstream_proxy.clone(),
+        floor_key,
+        kind,
+        listed: template.workshop().base.clone(),
+        image_tag,
+        canonical: (*approved.canonical).clone(),
+        home,
+        base_env,
+        stored: StoredFacts {
+            live_runs,
+            max_workers: template.floor().max_workers,
+            reviews_pending,
+            imported,
+            inventory,
+            battery,
+        },
+        card: None,
+        clicked_plan: None,
+    }))
+}
+
+/// Issues the workshop card of `ticket` from the facts thread `workshop`
+/// gathered (AD-107, D-239), on the collector thread: the catalogue and
+/// the subjects read again, core's issue, the card kept.
+pub(crate) fn issue_workshop_card(
+    store: &mut CardStore,
+    collector: &Collector,
+    registry: &mut WindowRegistry,
+    quota: Option<&QuotaView>,
+    ticket: &WorkshopTicket,
+    gathered: &GatheredFacts,
+    now_ms: i64,
+) -> Result<CardAnswer, IpcError> {
+    store.release(&ticket.request.template, ticket.seq);
+    let (approved, current) = match catalogue(collector.relay()) {
+        Ok(found) => found,
+        Err(unavailable) => return Ok(CardAnswer::Refused(IssueRefusal::Template(unavailable))),
+    };
+    let (subjects, _) = registry.card_reads(&ticket.request.template)?;
+    let config = config_dir(collector);
+    let permissions = collector.relay().read_work_order_permissions().effective();
+    let inputs = CardInputs {
+        approved: &approved,
+        current: &current,
+        subjects: &subjects,
+        quota,
+        config_dir: config.as_deref(),
+        permissions: &permissions,
+        now_ms,
+    };
+    Ok(
+        match issue_workshop(
+            &ticket.card_id,
+            ticket.seq,
+            &ticket.request,
+            &inputs,
+            gathered,
+            ticket.base.as_ref(),
+        ) {
+            Ok(issued) => {
+                let shown = issued.card().clone();
+                store.insert(issued);
+                CardAnswer::Issued(Box::new(shown))
+            }
+            Err(refusal) => CardAnswer::Refused(refusal),
+        },
+    )
 }
 
 /// The approved snapshot the window's record confirms (D-175), which
@@ -370,10 +578,13 @@ pub struct LaunchTicket {
     pub line: WorkOrderLaunched,
 }
 
-/// The collector's answer to a click: the ticket, or the refusal.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// The collector's answer to a click: the ticket, or the refusal. A
+/// workshop card's ticket goes to thread `workshop`, which runs the rest
+/// of AD-107's checks and the launch (D-239).
+#[derive(Debug, Clone, PartialEq)]
 pub enum LaunchGrant {
     Granted(Box<LaunchTicket>),
+    Workshop(Box<WorkshopTicket>),
     Refused(LaunchRefusal),
 }
 
@@ -387,11 +598,22 @@ pub(crate) fn grant(
     registry: &mut WindowRegistry,
     card_id: &str,
     clicked_sha256: &str,
+    clicked_plan: Option<&str>,
     now_ms: i64,
 ) -> Result<LaunchGrant, IpcError> {
     let Some(issued) = store.get(card_id).cloned() else {
         return Ok(LaunchGrant::Refused(LaunchRefusal::UnknownCard));
     };
+    if issued.workshop_issue().is_some() {
+        return workshop_grant(
+            collector,
+            registry,
+            &issued,
+            clicked_sha256,
+            clicked_plan,
+            now_ms,
+        );
+    }
     let shown = issued.card();
     let relay = collector.relay();
     let state = relay.read_approved();
@@ -430,6 +652,9 @@ pub(crate) fn grant(
     let Some(claude) = claude.cloned() else {
         return Ok(LaunchGrant::Refused(LaunchRefusal::ClaudeNotExecutable));
     };
+    let Some(vector) = issued.vector() else {
+        return Ok(LaunchGrant::Refused(LaunchRefusal::UnknownCard));
+    };
     // A card opened from a proposal records it, and accepts it (AD-91).
     let proposal_id = shown.proposal.as_ref().map(|p| p.id.as_str());
     let record = LaunchRecord {
@@ -451,7 +676,7 @@ pub(crate) fn grant(
     store.mark(card_id, CardState::Consumed);
     Ok(LaunchGrant::Granted(Box::new(LaunchTicket {
         order_id: card_id.to_owned(),
-        vector: issued.vector().clone(),
+        vector: vector.clone(),
         claude,
         base_env: collector.base_env().clone(),
         line: WorkOrderLaunched {
@@ -460,13 +685,193 @@ pub(crate) fn grant(
             template: shown.template.clone(),
             project: shown.project.clone(),
             values: card_values(shown),
-            argv: issued.vector().args().to_vec(),
+            argv: vector.args().to_vec(),
             prompt_sha256: shown.prompt_sha256.clone(),
             catalogue_hash: shown.catalogue_hash.clone(),
             outcome: LaunchOutcome::Launching,
             exit_code: None,
         },
     })))
+}
+
+/// AD-78's checks on a workshop card (D-239): `claude`'s is not its, and
+/// a missing folder is AD-107's `project_missing`, in its place; then the
+/// ticket thread `workshop` runs the rest of AD-107's checks from.
+fn workshop_grant(
+    collector: &Collector,
+    registry: &mut WindowRegistry,
+    issued: &IssuedCard,
+    clicked_sha256: &str,
+    clicked_plan: Option<&str>,
+    now_ms: i64,
+) -> Result<LaunchGrant, IpcError> {
+    let shown = issued.card();
+    let relay = collector.relay();
+    let state = relay.read_approved();
+    let approved = state.approved().filter(|a| confirmed(relay, &a.hash));
+    let current = load_relay_floor(&relay.relay_floor(&state)).ok();
+    let permission = relay
+        .read_work_order_permissions()
+        .effective()
+        .of(&shown.project, issued.order().project_folder());
+    let mut facts = LaunchFacts {
+        card: Some(shown),
+        clicked_sha256,
+        approved_hash: approved.map(|a| a.hash.as_str()),
+        current_hash: current.as_ref().map(|c| c.hash.as_str()),
+        permission,
+        template_approved: approved
+            .is_some_and(|a| a.canonical.templates.contains_key(&shown.template)),
+        claude_native: true,
+        folder_exists: true,
+        subject_open: true,
+        name_taken: false,
+    };
+    if let Err(refusal) = check_launch(&facts) {
+        return Ok(LaunchGrant::Refused(refusal));
+    }
+    let (subjects, name_taken) = registry.launch_reads(&shown.template, shown.seq)?;
+    facts.subject_open = subject_open(&shown.subject, &subjects);
+    facts.name_taken = name_taken;
+    if let Err(refusal) = check_launch(&facts) {
+        return Ok(LaunchGrant::Refused(refusal));
+    }
+    let (Some(approved), Some(current)) = (approved, current) else {
+        return Ok(LaunchGrant::Refused(LaunchRefusal::CatalogueChanged));
+    };
+    let base = issued.workshop_issue().map(|issue| issue.base.clone());
+    Ok(
+        match workshop_ticket(
+            collector,
+            registry,
+            approved,
+            &current,
+            &issued.request(),
+            issued.id(),
+            issued.seq(),
+            base,
+            now_ms,
+        )? {
+            Ok(mut ticket) => {
+                ticket.card = Some(Box::new(issued.clone()));
+                ticket.clicked_plan = clicked_plan.map(str::to_owned);
+                LaunchGrant::Workshop(Box::new(ticket))
+            }
+            Err(IssueRefusal::Workshop(refusal)) => LaunchGrant::Refused(refusal),
+            Err(_) => LaunchGrant::Refused(LaunchRefusal::TemplateNotApproved),
+        },
+    )
+}
+
+/// Consumes workshop card `card_id` and records its rows (AD-107 step 1),
+/// once thread `workshop`'s checks passed: a card no longer open, the stop
+/// flag, or a name the registry holds refuses, writing nothing; a second
+/// click's launch ends here.
+pub(crate) fn consume_workshop(
+    store: &mut CardStore,
+    collector: &Collector,
+    registry: &mut WindowRegistry,
+    card_id: &str,
+    run: &RunRow,
+    now_ms: i64,
+) -> Result<Option<LaunchRefusal>, IpcError> {
+    let Some(issued) = store.get(card_id).cloned() else {
+        return Ok(Some(LaunchRefusal::UnknownCard));
+    };
+    match issued.state() {
+        CardState::Open => {}
+        CardState::Superseded => return Ok(Some(LaunchRefusal::Superseded)),
+        CardState::Consumed => return Ok(Some(LaunchRefusal::Consumed)),
+    }
+    if crate::workshop::workshop_stopped(&collector.paths().officina_home) {
+        return Ok(Some(LaunchRefusal::WorkshopStopped));
+    }
+    let shown = issued.card();
+    let proposal_id = shown.proposal.as_ref().map(|p| p.id.as_str());
+    let record = LaunchRecord {
+        order: issued.order(),
+        card_id,
+        seq: issued.seq(),
+        source: if proposal_id.is_some() {
+            WorkOrderSource::Proposal
+        } else {
+            WorkOrderSource::Composer
+        },
+        subject: &shown.subject,
+        proposal_id,
+        permission: shown.permission,
+    };
+    let insert = RunInsert {
+        image: &run.image,
+        image_id: &run.image_id,
+        gateway_image_id: &run.gateway_image_id,
+        base_branch: &run.base_branch,
+        base_commit: &run.base_commit,
+        parent_run_id: run.parent_run_id.as_deref(),
+        branch: &run.branch,
+        uncommitted: run.uncommitted,
+        plan_json: &run.plan_json,
+        plan_sha256: &run.plan_sha256,
+        credential_kind: run.credential_kind,
+        deadline_ms: run.deadline_ms,
+        battery_id: &run.battery_id,
+        argv: &run.argv,
+    };
+    if registry
+        .insert_workshop_run(&record, &insert, now_ms)?
+        .is_err()
+    {
+        return Ok(Some(LaunchRefusal::NameTaken));
+    }
+    store.mark(card_id, CardState::Consumed);
+    Ok(None)
+}
+
+/// Records how a workshop launch's steps ended (AD-107 step 4) on the
+/// collector thread: the run `running` or `failed` with its clock skew,
+/// the `work_order` outcome (its subject filed when `started`), then the
+/// journal's `workshop_started` and, after a removal, `workshop_removed`;
+/// never a `work_order_launched` (D-214).
+pub(crate) fn record_workshop_launch(
+    collector: &Collector,
+    registry: &mut WindowRegistry,
+    report: &WorkshopLaunchReport,
+    now_ms: i64,
+) -> Result<(), IpcError> {
+    use officina_core::workshop::run::{RunFacts, RunState};
+    let state = if report.outcome == LaunchOutcome::Started {
+        RunState::Running
+    } else {
+        RunState::Failed
+    };
+    let facts = RunFacts {
+        clock_skew_ms: report.clock_skew_ms,
+        ..RunFacts::default()
+    };
+    registry.record_workshop_launch(&report.run_id, state, &facts, now_ms)?;
+    let failed = report
+        .line
+        .steps
+        .iter()
+        .find(|s| s.outcome != officina_core::workshop::run::StepOutcome::Ok);
+    registry.record_launch_outcome(
+        &report.run_id,
+        &LaunchResult {
+            outcome: report.outcome,
+            exit_code: None,
+            error: failed.map(|s| {
+                format!(
+                    "{}: {}",
+                    s.step.code(),
+                    s.detail.clone().unwrap_or_default()
+                )
+            }),
+            printed: None,
+        },
+        now_ms,
+    )?;
+    crate::relay::journal::record(collector.relay(), &report.journal_lines(), now_ms)
+        .map_err(|e| IpcError::new(IpcErrorCode::JournalUnavailable, e.to_string()))
 }
 
 /// True when `subject` is new, or exists and is not archived.
@@ -574,13 +979,19 @@ pub fn launch_card(
     collector: &Sender<CollectorMsg>,
     card_id: &str,
     prompt_sha256: &str,
+    plan_sha256: Option<&str>,
+    workshop: &WorkshopRuntime,
 ) -> Result<LaunchAnswer, IpcError> {
     let command = AuthorCommand::LaunchCard {
         card_id: card_id.to_owned(),
         prompt_sha256: prompt_sha256.to_owned(),
+        plan_sha256: plan_sha256.map(str::to_owned),
     };
     let ticket = match ask(collector, command, AUTHOR_WAIT)?.into_launch()? {
         LaunchGrant::Refused(refusal) => return Ok(LaunchAnswer::Refused(refusal)),
+        LaunchGrant::Workshop(ticket) => {
+            return crate::workshop::launch::launch_on_thread(collector, workshop, *ticket);
+        }
         LaunchGrant::Granted(ticket) => ticket,
     };
     let result = launch_result(spawn::execute(
@@ -602,6 +1013,22 @@ pub fn launch_card(
         AUTHOR_WAIT,
     );
     Ok(LaunchAnswer::Launched(outcome))
+}
+
+/// The `issue_card` command (AD-78, AD-107): the collector answers a
+/// host card, or a workshop card's ticket, whose facts thread `workshop`
+/// reads before the collector issues it.
+pub fn issue_card(
+    collector: &Sender<CollectorMsg>,
+    request: CardRequest,
+    workshop: &WorkshopRuntime,
+) -> Result<CardAnswer, IpcError> {
+    match ask(collector, AuthorCommand::IssueCard(request), AUTHOR_WAIT)?.into_issue_step()? {
+        IssueStep::Card(answer) => Ok(answer),
+        IssueStep::Workshop(ticket) => {
+            crate::workshop::launch::issue_on_thread(collector, workshop, *ticket)
+        }
+    }
 }
 
 #[cfg(test)]

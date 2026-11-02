@@ -50,6 +50,12 @@ pub struct WorkshopGit {
 }
 
 impl WorkshopGit {
+    /// The stdout of `git <args>` in `dir` under the workshop rule; an
+    /// error when it exits non-zero or its output passed the cap.
+    pub fn output(&self, dir: &Path, args: &[&str]) -> Result<Vec<u8>, String> {
+        self.run(dir, args)
+    }
+
     fn run(&self, dir: &Path, args: &[&str]) -> Result<Vec<u8>, String> {
         let ran =
             crate::workshop::git::run(&self.git, dir, args, &self.base_env, &self.hooks_dir, None)

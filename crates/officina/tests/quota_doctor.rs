@@ -14,7 +14,7 @@ use officina_core::relay::gate::{gated_tools, gated_tools_matcher};
 use officina_core::relay::run::{EXIT_NOT_STARTED, EXIT_REFUSED};
 use officina_host::collector::{Collector, LoadedFloor};
 use officina_host::paths::Paths;
-use officina_host::watch::{AUTHOR_WAIT, AuthorCommand, CollectorMsg, ask, spawn};
+use officina_host::watch::{CollectorMsg, spawn};
 
 const STATUSLINE: &str = r#"{"session_id":"s1","model":{"display_name":"Opus"},
   "rate_limits":{"five_hour":{"used_percentage":62.0,"resets_at":1800000000},
@@ -406,20 +406,24 @@ fn no_command_writes_under_the_claude_config_dir() {
         values: vec![("host".to_owned(), "web01".to_owned())],
         subject: None,
     };
-    let card = match ask(
+    let card = match officina_host::orders::issue_card(
         &watch.sender,
-        AuthorCommand::IssueCard(request),
-        AUTHOR_WAIT,
+        request,
+        &common::workshop::host_runtime(),
     )
-    .unwrap()
-    .into_card()
     .unwrap()
     {
         CardAnswer::Issued(card) => card,
         refused => panic!("{refused:?}"),
     };
     assert_eq!(
-        officina_host::orders::launch_card(&watch.sender, &card.id, &card.prompt_sha256),
+        officina_host::orders::launch_card(
+            &watch.sender,
+            &card.id,
+            &card.prompt_sha256,
+            None,
+            &common::workshop::host_runtime()
+        ),
         Ok(LaunchAnswer::Launched(LaunchOutcome::Started))
     );
 

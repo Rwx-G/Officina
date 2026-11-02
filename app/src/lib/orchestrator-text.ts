@@ -222,6 +222,24 @@ export const LAUNCH_REFUSAL_TEXT: Record<LaunchRefusal, string> = {
   project_folder_missing: "The project's folder is not a folder any more.",
   subject_closed: "The subject this card files under was archived or merged since: choose another.",
   name_taken: "The registry already holds this session's name: compose the order again.",
+  workshop_off: "The approved catalogue holds no valid workshop table.",
+  workshop_stopped: "The workshop is stopped: resume it first.",
+  engine_unavailable: "No Linux engine answered: start Docker Desktop, then see officina doctor.",
+  image_mismatch: "The image is not the one Officina would build now: Build images.",
+  battery_stale: "No passing escape battery holds for this image on this engine: Run escape battery.",
+  mount_missing: "A mount's folder is missing: see officina doctor.",
+  mount_not_ignored: "A mount is not git-ignored, or holds tracked files: see officina doctor.",
+  mount_path_unsupported: "A mount's path cannot be carried, or goes through a link: see officina doctor.",
+  hook_program_missing: "A guard hook's program is missing from the image: see officina doctor.",
+  workshop_full: "Every worker slot is taken: wait for a run to end.",
+  reviews_pending: "Too many packages await your verdict: review them first.",
+  credential_missing: "The floor's credential is not stored: see officina doctor for its cmdkey line.",
+  credential_expired: "The floor's credential expired: store a new one, then launch again.",
+  proxy_unresolved: "The proxy for an allowed host could not be decided on this network.",
+  proxy_unsupported: "An allowed host goes through a proxy the gateway cannot use.",
+  project_missing: "The project's folder is not a folder any more.",
+  base_moved: "The base branch moved since this card was issued: issue a new card.",
+  plan_changed: "What would run is not what this card showed: issue a new card.",
 };
 
 /** Where a work order's permission mode comes from (story 5.24, D-980). */
@@ -291,6 +309,12 @@ export function issueRefusalText(refusal: IssueRefusal): string {
       return `This card is ${CARD_STATE_TEXT[refusal.detail]}: compose the order again.`;
     case "proposal":
       return `No card: ${PROPOSAL_REFUSAL_TEXT[refusal.detail]}.`;
+    case "workshop":
+      return `No card: ${LAUNCH_REFUSAL_TEXT[refusal.detail]}`;
+    case "base_not_offered":
+      return "No card: that base is not one this card offers.";
+    case "not_applicable":
+      return "No card: the change does not apply to this card.";
   }
 }
 

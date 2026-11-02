@@ -846,6 +846,10 @@ pub struct WorkOrderRecord {
     pub bound_at_ms: Option<i64>,
     /// The bound session as the registry holds it.
     pub session: Option<SessionRecord>,
+    /// Where it runs (AD-119): a host order, or a workshop run.
+    pub runner: crate::workshop::run::Runner,
+    /// A workshop run's state, from its `workshop_run` row.
+    pub run_state: Option<crate::workshop::run::RunState>,
 }
 
 #[cfg(test)]

@@ -22,3 +22,4 @@ pub mod permission;
 pub mod proposal;
 pub mod view;
 pub mod work_order;
+pub mod workshop_card;

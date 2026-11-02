@@ -971,6 +971,8 @@ mod tests {
             session_id: session_id.map(str::to_owned),
             bound_at_ms: session_id.map(|_| launched_at_ms + 1_000),
             session: None,
+            runner: Default::default(),
+            run_state: None,
         }
     }
 

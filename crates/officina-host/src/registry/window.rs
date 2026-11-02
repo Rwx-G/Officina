@@ -615,6 +615,68 @@ impl WindowRegistry {
         })
     }
 
+    /// What a workshop card reads from the registry (AD-107): how many runs
+    /// are live, how many packages await a verdict, the runs of `template`
+    /// imported since `since_ms` (each one's branch and id), and the
+    /// inventory of `project` on `image`.
+    #[expect(clippy::type_complexity, reason = "four reads of one transaction")]
+    pub fn workshop_card_reads(
+        &mut self,
+        template: &str,
+        project: &str,
+        image: &str,
+        since_ms: i64,
+    ) -> Result<
+        (
+            u32,
+            u32,
+            Vec<(String, String)>,
+            Option<crate::registry::workshop::InventoryRecord>,
+        ),
+        IpcError,
+    > {
+        self.with_writer(|writer| {
+            Ok(Ok((
+                writer.workshop_live_count()?,
+                u32::try_from(writer.workshop_awaiting_verdict()?.len()).unwrap_or(u32::MAX),
+                writer
+                    .workshop_imported_since(template, since_ms)?
+                    .into_iter()
+                    .map(|run| (run.branch, run.id))
+                    .collect(),
+                writer.workshop_inventory(image, project)?,
+            )))
+        })
+    }
+
+    /// Records a workshop launch (AD-107 step 1): its `work_order` and
+    /// `workshop_run` rows in one transaction; a name the registry holds
+    /// answers [`NameTaken`] and writes nothing.
+    pub fn insert_workshop_run(
+        &mut self,
+        launch: &LaunchRecord,
+        run: &crate::registry::workshop::RunInsert,
+        now_ms: i64,
+    ) -> Result<Result<(), NameTaken>, IpcError> {
+        self.with_writer(|writer| Ok(Ok(writer.insert_workshop_run(launch, run, now_ms)?)))
+    }
+
+    /// Records how a launch's steps ended (AD-107 step 4): the run's state
+    /// and its facts.
+    pub fn record_workshop_launch(
+        &mut self,
+        id: &str,
+        state: officina_core::workshop::run::RunState,
+        facts: &officina_core::workshop::run::RunFacts,
+        now_ms: i64,
+    ) -> Result<(), IpcError> {
+        self.with_writer(|writer| {
+            writer.set_run_state(id, state, now_ms)?;
+            writer.set_run_facts(id, facts)?;
+            Ok(Ok(()))
+        })
+    }
+
     /// Records one Start of the orchestrator (AD-89, D-144); refused when
     /// the registry cannot be written.
     pub fn record_orchestrator_start(

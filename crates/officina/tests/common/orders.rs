@@ -118,14 +118,12 @@ impl OrdersHome {
 
     /// The card `request` gets, as `issue_card` answers.
     pub fn issue(&self, request: &CardRequest) -> CardAnswer {
-        ask(
+        officina_host::orders::issue_card(
             &self.handle().sender,
-            AuthorCommand::IssueCard(request.clone()),
-            AUTHOR_WAIT,
+            request.clone(),
+            &super::workshop::host_runtime(),
         )
         .expect("the collector answers")
-        .into_card()
-        .unwrap()
     }
 
     /// A card of `bump` with these values, its default subject.
@@ -172,8 +170,14 @@ impl OrdersHome {
 
     /// What `launch_work_order` answers, through the function it calls.
     pub fn launch(&self, card_id: &str, prompt_sha256: &str) -> LaunchAnswer {
-        officina_host::orders::launch_card(&self.handle().sender, card_id, prompt_sha256)
-            .expect("the collector answers")
+        officina_host::orders::launch_card(
+            &self.handle().sender,
+            card_id,
+            prompt_sha256,
+            None,
+            &super::workshop::host_runtime(),
+        )
+        .expect("the collector answers")
     }
 
     /// `<home>/orchestrator/proposals`, where the proposal tools write.

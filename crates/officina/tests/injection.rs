@@ -57,6 +57,7 @@ const SECTIONS: &[&str] = &[
     "mcp_tool",
     "proposal_file",
     "review_excerpt",
+    "workshop_card",
 ];
 
 /// The attack families of PRD section 7's Gesture and Auto fail-closed
@@ -1453,8 +1454,12 @@ fn every_section_family_and_refusal_has_a_case() {
     }
     for refusal in LaunchRefusal::ALL {
         let wanted = serde_json::json!({"outcome": "refused", "value": refusal});
+        // A workshop refusal no launch reaches, the catalogue's checks
+        // coming first, is refused at the issue (AD-107).
+        let at_issue = serde_json::json!({"outcome": "refused", "value": {"kind": "workshop", "detail": refusal}});
         assert!(
-            expectations.contains(&&wanted),
+            expectations.contains(&&wanted)
+                || (refusal.is_workshop() && expectations.contains(&&at_issue)),
             "{refusal:?} has no case in injection.json"
         );
     }
@@ -1503,4 +1508,303 @@ fn every_section_family_and_refusal_has_a_case() {
             "MUTANTS_ENABLED does not count {mutant}"
         );
     }
+}
+
+/// The workshop order the home's approved template validates, for rows a
+/// tamper writes by hand.
+fn workshop_order(home: &common::workshop_home::Home) -> WorkOrder {
+    use officina_core::workshop::launch::ApprovedWorkshopTemplate;
+    let relay = home.env.relay_home();
+    let state = relay.read_approved();
+    let approved = state.approved().expect("an approved catalogue");
+    let current = load_relay_floor(&relay.relay_floor(&state)).unwrap();
+    let template =
+        ApprovedWorkshopTemplate::new(approved, &current, &TemplateName::parse("bump").unwrap())
+            .unwrap();
+    WorkOrder::validate(
+        template.template(),
+        &ProjectName::parse("api").unwrap(),
+        &[(ParamName::parse("package").unwrap(), "serde_json")],
+    )
+    .unwrap()
+}
+
+/// What a `workshop_card` tamper changes between the issue and the click.
+fn workshop_tamper(home: &common::workshop_home::Home, step: &Value) -> Result<(), String> {
+    let project = home.project();
+    let moved = |path: &std::path::Path| {
+        let mut to = path.as_os_str().to_owned();
+        to.push("-moved");
+        std::fs::rename(path, PathBuf::from(to)).unwrap();
+    };
+    match step["kind"].as_str() {
+        Some("stop") => {
+            let flag = officina_host::workshop::stopped_file(&home.env.officina_home());
+            std::fs::write(flag, b"").unwrap();
+        }
+        Some("snapshot_workshop_off") => {
+            // The snapshot edited by hand, its hash kept (D-654): every
+            // floor the catalogue accepts drops a workshop template with
+            // its `[workshop]`, so no other path reaches `workshop_off`.
+            let file = home.env.relay_home().approved_file();
+            let mut approved: Value =
+                serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+            approved["canonical"]["workshop"] = Value::Null;
+            let parsed: ApprovedCatalogue = serde_json::from_value(approved).unwrap();
+            std::fs::write(&file, serde_json::to_vec(&parsed).unwrap()).unwrap();
+        }
+        Some("engine_down") => home.set_engine("version", Value::from("down")),
+        Some("image_gone") => home.set_engine_state("images", serde_json::json!([])),
+        Some("mount_gone") => moved(&project.join(".claude")),
+        Some("mount_not_ignored") => std::fs::write(project.join(".gitignore"), "").unwrap(),
+        Some("mount_junction") => {
+            let outside = home.env.root.path().join("outside");
+            std::fs::create_dir_all(&outside).unwrap();
+            std::fs::remove_dir_all(project.join(".claude")).unwrap();
+            make_link(&project.join(".claude"), &outside)?;
+        }
+        Some("hook_missing") => {
+            let guard = "officina-test-missing-guard";
+            let settings = serde_json::json!({"hooks": {"PreToolUse": [{"matcher": "Bash",
+                "hooks": [{"type": "command", "command": guard}]}]}});
+            std::fs::write(
+                project.join(".claude").join("settings.json"),
+                settings.to_string(),
+            )
+            .unwrap();
+            home.set_engine(
+                "inventory",
+                serde_json::json!({ guard: {"resolution": "missing", "detail": "not_on_path"} }),
+            );
+        }
+        Some("reviews_pending") => reviews_pending(home),
+        Some("proxy") => home.set_proxy(u8::try_from(step["mode"].as_u64().unwrap()).unwrap()),
+        Some("project_gone") => moved(&project),
+        Some("commit") => {
+            std::fs::write(project.join("README.md"), "moved\n").unwrap();
+            home.git(&["commit", "-q", "-am", "moved"]);
+        }
+        other => return Err(format!("unknown workshop tamper {other:?}")),
+    }
+    Ok(())
+}
+
+/// A junction on Windows (no privilege needed), a symbolic link elsewhere.
+fn make_link(link: &std::path::Path, target: &std::path::Path) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        let made = std::process::Command::new("cmd")
+            .args(["/c", "mklink", "/J"])
+            .arg(link)
+            .arg(target)
+            .output()
+            .map_err(|e| e.to_string())?;
+        made.status
+            .success()
+            .then_some(())
+            .ok_or_else(|| String::from_utf8_lossy(&made.stderr).into_owned())
+    }
+    #[cfg(not(windows))]
+    {
+        std::os::unix::fs::symlink(target, link).map_err(|e| e.to_string())
+    }
+}
+
+/// Ten packages awaiting a verdict, written as collection would leave
+/// them (AD-107's `reviews_pending`).
+fn reviews_pending(home: &common::workshop_home::Home) {
+    use officina_core::orders::workshop_card::MAX_PENDING_REVIEWS;
+    use officina_core::workshop::run::RunState;
+    use officina_host::registry::workshop::RunInsert;
+    let order = workshop_order(home);
+    let now = common::now_ms();
+    let mut writer = open_writer(&home.env.officina_home(), &[], now)
+        .writer()
+        .unwrap();
+    let argv = vec!["-p".to_owned()];
+    for at in 0..MAX_PENDING_REVIEWS {
+        let id = format!("{:032x}", 0xabc0_0000 + u64::from(at));
+        writer
+            .insert_workshop_run(
+                &LaunchRecord {
+                    order: &order,
+                    card_id: &id,
+                    seq: 100 + at,
+                    source: WorkOrderSource::Composer,
+                    subject: &SubjectChoice::New("Elsewhere".into()),
+                    proposal_id: None,
+                    permission: officina_core::orders::permission::WorkOrderPermission::Project,
+                },
+                &RunInsert {
+                    image: "officina-workshop:local",
+                    image_id: "sha256:aa",
+                    gateway_image_id: "sha256:bb",
+                    base_branch: "main",
+                    base_commit: "cc",
+                    parent_run_id: None,
+                    branch: "officina/bump-100",
+                    uncommitted: 0,
+                    plan_json: "{}",
+                    plan_sha256: "dd",
+                    credential_kind: officina_core::workshop::floor::CredentialKind::OauthToken,
+                    deadline_ms: 0,
+                    battery_id: "ee",
+                    argv: &argv,
+                },
+                now,
+            )
+            .unwrap()
+            .unwrap();
+        writer.set_run_state(&id, RunState::Review, now).unwrap();
+    }
+}
+
+/// One `workshop_card` case (story 6.11 AC 7, AD-125, D-147): a home of
+/// the case's options, cards issued, tampered, edited and clicked through
+/// the window's functions; each step's answer, and no engine change
+/// before the first click and `creates` `create` calls in all. A case
+/// tagged `keyboard` is story 6.19's Vitest's, against the Launch button.
+fn run_workshop_card(case: &Value) -> Result<(), String> {
+    use common::workshop::SeededStore;
+    use common::workshop_home::{FixedState, Home, Options, SEEDED, changes};
+    let home_options = &case["home"];
+    let options = Options {
+        upstream_proxy: match home_options["upstream_proxy"].as_str() {
+            Some("system") => "system",
+            _ => "none",
+        },
+        mount: home_options["mount"].as_bool().unwrap_or(true),
+        max_workers: home_options["max_workers"]
+            .as_u64()
+            .map_or(2, |n| u32::try_from(n).unwrap()),
+        battery: home_options["battery"].as_bool().unwrap_or(true),
+        ..Options::default()
+    };
+    let Some(home) = Home::start(&options) else {
+        return Ok(());
+    };
+    let store = match case["runtime"]["store"].as_str() {
+        Some("empty") => SeededStore(None),
+        _ => SeededStore(Some(SEEDED.to_owned())),
+    };
+    let mut runtime = home.runtime(store);
+    if let Some(state) = case["runtime"]["state"].as_str() {
+        runtime.states = std::sync::Arc::new(FixedState(
+            officina_core::workshop::launch::CredentialState::from_code(state).unwrap(),
+        ));
+    }
+    let start = home.engine.log().len();
+    let mut cards: Vec<WorkOrderCard> = Vec::new();
+    let mut clicked = false;
+    for (at, step) in case["steps"].as_array().unwrap().iter().enumerate() {
+        let failed = |why: String| format!("step {at}: {why}");
+        if !clicked && changes(&home, start) != 0 {
+            return Err(failed("the engine changed before the click".to_owned()));
+        }
+        if step.get("issue").is_some() {
+            take_card(home.issue_answer(&runtime), &step["expect"], &mut cards).map_err(failed)?;
+        } else if let Some(edit) = step.get("edit") {
+            let card = card_at(&cards, &edit["card"]).map_err(failed)?.id.clone();
+            let change: CardChange = serde_json::from_value(edit["change"].clone()).unwrap();
+            let answer = ask(
+                home.sender(),
+                AuthorCommand::EditCard {
+                    card_id: card,
+                    change,
+                },
+                AUTHOR_WAIT,
+            )
+            .and_then(officina_host::watch::AuthorAnswer::into_card)
+            .map_err(|e| failed(format!("{e:?}")))?;
+            take_card(answer, &step["expect"], &mut cards).map_err(failed)?;
+        } else if let Some(change) = step.get("tamper") {
+            workshop_tamper(&home, change).map_err(failed)?;
+        } else if let Some(launch) = step.get("launch") {
+            clicked = true;
+            let card = card_at(&cards, &launch["card"]).map_err(failed)?;
+            let id = match launch["id"].as_str() {
+                Some("forged") => "f".repeat(32),
+                _ => card.id.clone(),
+            };
+            let hash = match launch["hash"].as_str() {
+                Some("other") => "f".repeat(64),
+                _ => card.prompt_sha256.clone(),
+            };
+            let plan = match launch["plan"].as_str() {
+                Some("other") => Some("f".repeat(64)),
+                _ => card.workshop.as_ref().and_then(|w| w.plan_sha256.clone()),
+            };
+            let answer = home.launch_with(&id, &hash, plan.as_deref(), &runtime);
+            let got = serde_json::to_value(answer).unwrap();
+            if got != step["expect"] {
+                return Err(failed(format!("expected {}, got {got}", step["expect"])));
+            }
+            if got["outcome"] == "launched" {
+                let run = home.run(&id);
+                let shown = card.workshop.as_ref().and_then(|w| w.plan_sha256.clone());
+                if Some(run.plan_sha256.clone()) != shown {
+                    return Err(failed("the run's plan is not the card's".to_owned()));
+                }
+            }
+        } else {
+            return Err(failed(format!("unknown step {step}")));
+        }
+    }
+    let creates = home.count(start, &["create"]) as u64;
+    let expected = case["creates"].as_u64().unwrap();
+    if creates != expected {
+        return Err(format!("{creates} creates, expected {expected}"));
+    }
+    if expected == 0 && home.count(start, &["start"]) != 0 {
+        return Err("a start without a create".to_owned());
+    }
+    Ok(())
+}
+
+/// Story 6.11 AC 7 (AD-125, D-147): every `workshop_card` case but the
+/// keyboard's (story 6.19 replays it) gets its answers, with no engine
+/// change before the click and its count of `create`s.
+#[test]
+fn workshop_card_cases() {
+    let set = load();
+    let cases: Vec<Value> = cases(&set, "workshop_card")
+        .into_iter()
+        .filter(|case| {
+            !case["tags"]
+                .as_array()
+                .is_some_and(|tags| tags.iter().any(|t| t == "keyboard"))
+        })
+        .collect();
+    assert!(!cases.is_empty());
+    let mut failures = Vec::new();
+    for chunk in cases.chunks(PARALLEL_CASES) {
+        let results: Vec<(String, Result<(), String>)> = std::thread::scope(|scope| {
+            let runs: Vec<_> = chunk
+                .iter()
+                .map(|case| scope.spawn(move || run_workshop_card(case)))
+                .collect();
+            chunk
+                .iter()
+                .zip(runs)
+                .map(|(case, run)| {
+                    (
+                        case["name"].as_str().unwrap().to_owned(),
+                        run.join()
+                            .unwrap_or_else(|_| Err("the case panicked".to_owned())),
+                    )
+                })
+                .collect()
+        });
+        for (name, result) in results {
+            if let Err(why) = result {
+                failures.push(format!("case {name}: {why}"));
+            }
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "{} case(s) failed:\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
 }

@@ -367,7 +367,12 @@ pub fn check(
     {
         return Err(mismatch(ImageMismatch::BaseIdDiffers, Some(LABEL_BASE_ID)));
     }
+    // The gateway image holds no measured program (D-233): it is built
+    // `FROM scratch` with the gateway alone, whose digest is a label.
+    let measured =
+        expected.labels.get(LABEL_BASE).map(String::as_str) != Some(ImageKind::Gateway.code());
     match (&expected.base_programs_sha256, &recorded.programs_sha256) {
+        (_, None) if !measured => {}
         (_, None) => return Err(mismatch(ImageMismatch::ProgramsDiffer, None)),
         (Some(base), Some(own)) if base != own => {
             return Err(mismatch(ImageMismatch::ProgramsDiffer, None));

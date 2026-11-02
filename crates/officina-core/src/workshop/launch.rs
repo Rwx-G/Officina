@@ -57,6 +57,37 @@ pub fn allow_list(kind: CredentialKind, hosts: &[String]) -> Vec<String> {
     allow
 }
 
+closed_enum! {
+    #[serde(rename_all = "snake_case")]
+    /// What is known of a floor's credential (D-607). This story reads it
+    /// through the host's `CredentialStateSource`, which answers
+    /// `unchecked`; story 6.26 folds the journal into it. `missing` is
+    /// computed, never journaled.
+    #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+    #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+    pub enum CredentialState {
+        #[default]
+        Unchecked,
+        Ok,
+        Missing,
+        /// The login kind's login expired or was revoked.
+        NeedsLogin,
+        /// A token kind's credential expired or was revoked.
+        NeedsNewCredential,
+    }
+}
+
+impl CredentialState {
+    /// True for the states that refuse a launch `credential_expired`
+    /// (D-607).
+    pub const fn needs_new(self) -> bool {
+        matches!(
+            self,
+            CredentialState::NeedsLogin | CredentialState::NeedsNewCredential
+        )
+    }
+}
+
 /// Why a workshop template cannot be launched.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WorkshopTemplateUnavailable {
@@ -144,6 +175,7 @@ impl ApprovedWorkshopTemplate {
 /// or an imported `officina/` branch with the run it came from.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub enum BaseChoice {
     Listed {
         branch: String,
@@ -296,7 +328,9 @@ impl WorkshopLaunch {
         allow_list(self.credential_kind(), &self.project.hosts)
     }
 
-    fn labels(&self, role: vector::ContainerRole) -> BTreeMap<String, String> {
+    /// The labels of the run's objects of `role` (D-215): its networks and
+    /// volume take the role of the container they serve.
+    pub fn labels(&self, role: vector::ContainerRole) -> BTreeMap<String, String> {
         let run = crate::workshop::names::RunId::parse(&self.facts.run_id);
         match run {
             Some(run) => crate::workshop::names::run_labels(

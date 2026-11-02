@@ -85,9 +85,31 @@ struct AppState {
     workshop: WorkshopThreads,
     /// Set while Build images runs on thread `workshop-build` (AD-99).
     build_busy: Arc<std::sync::atomic::AtomicBool>,
+    /// The needles of each run the window follows (AD-112, D-230).
+    followed: officina_host::workshop::launch::FollowedRuns,
 }
 
 impl AppState {
+    /// What a workshop card's facts and launch run with (AD-107): thread
+    /// `workshop`, the resolved `docker` and `git`, the Credential
+    /// Manager, the credential state and Windows' proxy configuration.
+    fn workshop_runtime(&self) -> officina_host::workshop::launch::WorkshopRuntime {
+        officina_host::workshop::launch::WorkshopRuntime {
+            thread: self.workshop.workshop.clone(),
+            docker: officina_host::workshop::engine::resolve().ok(),
+            git: officina_host::workshop::git::resolve()
+                .ok()
+                .map(|(git, _)| git),
+            exe_dir: self.exe_dir.clone().unwrap_or_default(),
+            linux_override: std::env::var_os(officina_host::workshop::ENV_LINUX_BIN_DIR),
+            store: Arc::new(officina_host::relay::credential::SystemCredentialStore),
+            states: Arc::new(officina_host::workshop::launch::UncheckedStates),
+            reader: Arc::new(officina_host::workshop::proxy::WinHttpReader),
+            followed: Arc::clone(&self.followed),
+            now_ms,
+        }
+    }
+
     /// What focus and attach need, from the paths in use now.
     fn focus_context(&self) -> Option<FocusContext> {
         let paths = self.paths.read().ok()?;
@@ -415,15 +437,20 @@ async fn evaluate_triage_model(state: State<'_, AppState>) -> Result<u32, IpcErr
 }
 
 /// Issues a work order card for `request` (AD-78): the card, with the
-/// argument vector exactly as it would run, or the refusal.
+/// argument vector exactly as it would run, or the refusal. A workshop
+/// card's facts are read on thread `workshop` first (AD-107, D-239).
 #[tauri::command]
 async fn issue_card(
     state: State<'_, AppState>,
     request: CardRequest,
 ) -> Result<CardAnswer, IpcError> {
-    ask(state, AuthorCommand::IssueCard(request))
-        .await?
-        .into_card()
+    let sender = state
+        .collector()
+        .ok_or_else(|| IpcError::internal("the collector is not running"))?;
+    let runtime = state.workshop_runtime();
+    tauri::async_runtime::spawn_blocking(move || orders::issue_card(&sender, request, &runtime))
+        .await
+        .map_err(|e| IpcError::internal(e.to_string()))?
 }
 
 /// A new card in place of `card_id` with one value, from its list, or the
@@ -482,19 +509,29 @@ async fn dismiss_proposal(state: State<'_, AppState>, proposal_id: String) -> Re
 }
 
 /// Launches card `card_id`, the prompt shown hashing to `prompt_sha256`
-/// (AD-78, AD-81): the checks and the record on the collector thread, the
-/// spawn on this command's blocking thread, never the collector's (AD-3).
+/// and, for a workshop card, its plan to `plan_sha256` (AD-78, AD-81,
+/// AD-107): the checks and the record on the collector thread, the spawn
+/// on this command's blocking thread and a workshop run's steps on thread
+/// `workshop`, never the collector's (AD-3).
 #[tauri::command]
 async fn launch_work_order(
     state: State<'_, AppState>,
     card_id: String,
     prompt_sha256: String,
+    plan_sha256: Option<String>,
 ) -> Result<LaunchAnswer, IpcError> {
     let sender = state
         .collector()
         .ok_or_else(|| IpcError::internal("the collector is not running"))?;
+    let runtime = state.workshop_runtime();
     tauri::async_runtime::spawn_blocking(move || {
-        orders::launch_card(&sender, &card_id, &prompt_sha256)
+        orders::launch_card(
+            &sender,
+            &card_id,
+            &prompt_sha256,
+            plan_sha256.as_deref(),
+            &runtime,
+        )
     })
     .await
     .map_err(|e| IpcError::internal(e.to_string()))?
@@ -792,6 +829,7 @@ fn main() {
                 exe_dir,
                 workshop,
                 build_busy: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                followed: Arc::default(),
             });
             Ok(())
         })

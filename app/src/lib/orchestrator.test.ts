@@ -99,7 +99,7 @@ describe("OrchestratorStore cards", () => {
     await store.launchCard();
     await store.launchCard();
     expect(launchWorkOrder).toHaveBeenCalledTimes(1);
-    expect(launchWorkOrder).toHaveBeenCalledWith(first.id, first.prompt_sha256);
+    expect(launchWorkOrder).toHaveBeenCalledWith(first.id, first.prompt_sha256, null);
     expect(store.launch).toEqual({ outcome: "launched", value: "started" });
     // The launched card is not edited: a new one is issued.
     const param = first.values[0]!;
@@ -108,6 +108,16 @@ describe("OrchestratorStore cards", () => {
     expect(editCard).not.toHaveBeenCalled();
     expect(issueCard).toHaveBeenCalledTimes(2);
     expect(store.launch).toBeNull();
+  });
+
+  it("a workshop card's launch sends the plan hash it shows (AD-107)", async () => {
+    const { store, first } = await composed();
+    const plan = "a".repeat(64);
+    const workshop = { ...first, workshop: { plan_sha256: plan } } as unknown as WorkOrderCard;
+    store.card = workshop;
+    launchWorkOrder.mockResolvedValueOnce({ outcome: "launched", value: "started" });
+    await store.launchCard();
+    expect(launchWorkOrder).toHaveBeenCalledWith(first.id, first.prompt_sha256, plan);
   });
 
   it("a slow answer never replaces a newer card", async () => {

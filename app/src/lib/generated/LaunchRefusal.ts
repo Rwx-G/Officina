@@ -4,4 +4,4 @@
  * Why a launch was refused, in the order [`check_launch`] checks
  * (AD-78, D-135).
  */
-export type LaunchRefusal = "unknown_card" | "superseded" | "consumed" | "prompt_hash_mismatch" | "catalogue_changed" | "permission_changed" | "template_not_approved" | "claude_not_executable" | "project_folder_missing" | "subject_closed" | "name_taken";
+export type LaunchRefusal = "unknown_card" | "superseded" | "consumed" | "prompt_hash_mismatch" | "catalogue_changed" | "permission_changed" | "template_not_approved" | "claude_not_executable" | "project_folder_missing" | "subject_closed" | "name_taken" | "workshop_off" | "workshop_stopped" | "engine_unavailable" | "image_mismatch" | "battery_stale" | "mount_missing" | "mount_not_ignored" | "mount_path_unsupported" | "hook_program_missing" | "workshop_full" | "reviews_pending" | "credential_missing" | "credential_expired" | "proxy_unresolved" | "proxy_unsupported" | "project_missing" | "base_moved" | "plan_changed";

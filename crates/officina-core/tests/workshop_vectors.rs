@@ -232,3 +232,99 @@ fn tracked_settings_hooks_are_listed() {
     );
     assert!(commands.iter().any(|c| c["event"] == "PostToolUse"));
 }
+
+/// The passing checks every `launch` case starts from.
+fn passing_checks() -> Value {
+    use officina_core::orders::workshop_card::{MountState, WorkshopChecks};
+    use officina_core::workshop::floor::CredentialKind;
+    use officina_core::workshop::launch::CredentialState;
+    serde_json::to_value(WorkshopChecks {
+        workshop_on: true,
+        stopped: false,
+        engine_ready: true,
+        image_matches: true,
+        battery_valid: true,
+        mounts: vec![MountState::Ready],
+        live_runs: 0,
+        max_workers: 2,
+        reviews_pending: 0,
+        credential_kind: CredentialKind::OauthToken,
+        credential_present: true,
+        credential_state: CredentialState::Unchecked,
+        proxy: None,
+        project_exists: true,
+        base_matches: Some(true),
+        plan_matches: true,
+        hooks_found: None,
+    })
+    .unwrap()
+}
+
+fn launch_cases() -> Vec<Value> {
+    let all: Value = serde_json::from_str(VECTORS).expect("workshop.json parses");
+    all["launch"].as_array().expect("a launch section").clone()
+}
+
+/// Story 6.11 AC 4 (AD-107, D-247): each case's checks give its refusal,
+/// the first failing one in AD-107's order whatever the evaluation order,
+/// the inventory run only when every other check passed, and the
+/// readiness the card shows in that order.
+#[test]
+fn launch_checks_report_in_ads_order() {
+    use officina_core::orders::card::LaunchRefusal;
+    use officina_core::orders::workshop_card::{WorkshopChecks, check_workshop_launch, readiness};
+    let cases = launch_cases();
+    assert!(!cases.is_empty());
+    for case in &cases {
+        let name = case["name"].as_str().unwrap();
+        let mut checks = passing_checks();
+        for (key, value) in case["checks"].as_object().unwrap() {
+            assert!(checks.get(key).is_some(), "{name}: no check {key}");
+            checks[key] = value.clone();
+        }
+        let checks: WorkshopChecks = serde_json::from_value(checks).unwrap();
+        let mut ran = false;
+        let got = check_workshop_launch(&checks, || {
+            ran = true;
+            case["inventory"].as_bool().unwrap()
+        });
+        let got = match got {
+            Ok(()) => Value::from("launched"),
+            Err(refusal) => serde_json::json!({ "refused": refusal }),
+        };
+        assert_eq!(got, case["expect"], "{name}");
+        let shown = readiness(&checks);
+        assert_eq!(
+            ran,
+            shown.is_empty(),
+            "{name}: the inventory runs last, alone"
+        );
+        let order: Vec<usize> = shown
+            .iter()
+            .map(|r| {
+                LaunchRefusal::ALL
+                    .iter()
+                    .position(|x| *x == r.refusal)
+                    .unwrap()
+            })
+            .collect();
+        assert!(order.windows(2).all(|w| w[0] <= w[1]), "{name}: {shown:?}");
+        if let Some(wanted) = case.get("readiness") {
+            assert_eq!(serde_json::to_value(&shown).unwrap(), *wanted, "{name}");
+        }
+    }
+}
+
+/// Every workshop refusal (AD-107) has a `launch` case that reports it.
+#[test]
+fn every_new_launch_refusal_has_a_case() {
+    use officina_core::orders::card::LaunchRefusal;
+    let cases = launch_cases();
+    for refusal in LaunchRefusal::ALL.iter().filter(|r| r.is_workshop()) {
+        let wanted = serde_json::json!({ "refused": refusal });
+        assert!(
+            cases.iter().any(|c| c["expect"] == wanted),
+            "{refusal:?} has no launch case in tests/vectors/workshop.json"
+        );
+    }
+}

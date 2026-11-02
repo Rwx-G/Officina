@@ -216,10 +216,15 @@ export function dismissProposal(proposalId: string): Promise<void> {
 }
 
 /** Launches card `cardId`, whose shown prompt hashes to `promptSha256`
- *  (AD-78): how it ended, or why it was refused. The caller sends it on a
- *  pointer click only (D-28). */
-export function launchWorkOrder(cardId: string, promptSha256: string): Promise<LaunchAnswer> {
-  return invoke<LaunchAnswer>("launch_work_order", { cardId, promptSha256 });
+ *  and, for a workshop card, whose shown plan hashes to `planSha256`
+ *  (AD-78, AD-107): how it ended, or why it was refused. The caller sends
+ *  it on a pointer click only (D-28). */
+export function launchWorkOrder(
+  cardId: string,
+  promptSha256: string,
+  planSha256: string | null,
+): Promise<LaunchAnswer> {
+  return invoke<LaunchAnswer>("launch_work_order", { cardId, promptSha256, planSha256 });
 }
 
 export const ORCHESTRATOR_EVENT = "orchestrator://updated";

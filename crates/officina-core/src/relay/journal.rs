@@ -150,6 +150,8 @@ pub enum JournalEntry {
     EscapeAttempt(EscapeAttempt),
     EscapeBattery(EscapeBattery),
     GatewayRefused(GatewayRefused),
+    WorkshopStarted(Box<WorkshopStarted>),
+    WorkshopRemoved(WorkshopRemoved),
 }
 
 closed_enum! {
@@ -183,6 +185,8 @@ closed_enum! {
         EscapeAttempt,
         EscapeBattery,
         GatewayRefused,
+        WorkshopStarted,
+        WorkshopRemoved,
     }
 }
 
@@ -215,6 +219,8 @@ impl JournalEntry {
             JournalEntry::EscapeAttempt(_) => JournalKind::EscapeAttempt,
             JournalEntry::EscapeBattery(_) => JournalKind::EscapeBattery,
             JournalEntry::GatewayRefused(_) => JournalKind::GatewayRefused,
+            JournalEntry::WorkshopStarted(_) => JournalKind::WorkshopStarted,
+            JournalEntry::WorkshopRemoved(_) => JournalKind::WorkshopRemoved,
         }
     }
 }
@@ -639,6 +645,55 @@ pub struct EscapeBattery {
     pub cause: Option<String>,
 }
 
+/// One launch step's outcome (AD-120), its detail Officina's own text.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StepLine {
+    pub step: crate::workshop::run::LaunchStep,
+    pub outcome: crate::workshop::run::StepOutcome,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+}
+
+/// A workshop launch (AD-107 step 4, AD-120): what was launched, every
+/// step's outcome, and how it ended; one line per launch, never a
+/// `work_order_launched` (D-214). The credential's value is in no field.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkshopStarted {
+    pub run_id: String,
+    pub name: String,
+    pub template: String,
+    pub project: String,
+    pub values: BTreeMap<String, String>,
+    pub image: String,
+    pub image_id: String,
+    pub base_branch: String,
+    pub base_commit: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_run_id: Option<String>,
+    pub hosts: Vec<String>,
+    pub mounts: Vec<String>,
+    pub deadline_ms: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_usd_cents: Option<u32>,
+    pub credential_kind: crate::workshop::floor::CredentialKind,
+    /// The worker's `claude` vector.
+    pub argv: Vec<String>,
+    pub plan_sha256: String,
+    pub catalogue_hash: String,
+    pub prompt_sha256: String,
+    /// The battery the launch's check relied on (D-212).
+    pub battery_id: String,
+    pub steps: Vec<StepLine>,
+    pub outcome: crate::registry::types::LaunchOutcome,
+}
+
+/// A run's engine objects removed (AD-120), and why.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkshopRemoved {
+    pub run_id: String,
+    pub cause: crate::workshop::run::RemovalCause,
+}
+
 /// A refusal a gateway logged (AD-120): a run's, or a battery's (story
 /// 6.10 writes it first, D-249). The host is worker text, made printable
 /// and cut by the gateway's own line rule.
@@ -1027,6 +1082,13 @@ mod tests {
             JournalKind::EscapeAttempt => JournalEntry::EscapeAttempt(escape_attempt()),
             JournalKind::EscapeBattery => JournalEntry::EscapeBattery(escape_battery()),
             JournalKind::GatewayRefused => JournalEntry::GatewayRefused(gateway_refused()),
+            JournalKind::WorkshopStarted => {
+                JournalEntry::WorkshopStarted(Box::new(workshop_started()))
+            }
+            JournalKind::WorkshopRemoved => JournalEntry::WorkshopRemoved(WorkshopRemoved {
+                run_id: "0123456789abcdef0123456789abcdef".into(),
+                cause: crate::workshop::run::RemovalCause::LaunchFailed,
+            }),
             JournalKind::PromptDecided => JournalEntry::PromptDecided(PromptDecided {
                 session_id: "0f1e2d3c-4b5a-4978-8796-a5b4c3d2e1f0".into(),
                 tool_name: None,
@@ -1368,6 +1430,89 @@ mod tests {
                 value.get("battery_id").is_some(),
                 refused.battery_id.is_some()
             );
+            assert_eq!(
+                parse_line(line.trim_end()),
+                ParsedLine::Line(JournalLine::new(4, entry))
+            );
+        }
+    }
+
+    fn workshop_started() -> WorkshopStarted {
+        use crate::workshop::run::{LaunchStep, StepOutcome};
+        WorkshopStarted {
+            run_id: "0123456789abcdef0123456789abcdef".into(),
+            name: "bump-4".into(),
+            template: "bump".into(),
+            project: "api".into(),
+            values: BTreeMap::from([("package".into(), "serde_json".into())]),
+            image: "officina-workshop:local".into(),
+            image_id: format!("sha256:{}", "a".repeat(64)),
+            base_branch: "main".into(),
+            base_commit: "c93e110a6a285ebb37e2e83f242cc4215695d93f".into(),
+            parent_run_id: None,
+            hosts: vec!["api.anthropic.com".into()],
+            mounts: vec![".claude".into()],
+            deadline_ms: 1_800_000,
+            max_usd_cents: Some(250),
+            credential_kind: crate::workshop::floor::CredentialKind::OauthToken,
+            argv: vec!["-p".into()],
+            plan_sha256: "b".repeat(64),
+            catalogue_hash: "c".repeat(64),
+            prompt_sha256: "d".repeat(64),
+            battery_id: "fedcba9876543210fedcba9876543210".into(),
+            steps: LaunchStep::ALL
+                .iter()
+                .map(|step| StepLine {
+                    step: *step,
+                    outcome: StepOutcome::Ok,
+                    detail: None,
+                })
+                .collect(),
+            outcome: crate::registry::types::LaunchOutcome::Started,
+        }
+    }
+
+    /// Story 6.11 (AD-120, D-214): `workshop_started` reads back with every
+    /// step, then a failed launch with its failing step's detail and an
+    /// imported base's parent.
+    #[test]
+    fn workshop_started_round_trips() {
+        use crate::workshop::run::{LaunchStep, StepOutcome};
+        let started = workshop_started();
+        let mut failed = started.clone();
+        failed.parent_run_id = Some("fedcba9876543210fedcba9876543211".into());
+        failed.outcome = crate::registry::types::LaunchOutcome::Failed;
+        failed.steps.truncate(6);
+        failed.steps.push(StepLine {
+            step: LaunchStep::Worker,
+            outcome: StepOutcome::Failed,
+            detail: Some("exit 1".into()),
+        });
+        for (entry, outcome) in [(started, "started"), (failed, "failed")] {
+            let entry = JournalEntry::WorkshopStarted(Box::new(entry));
+            let line = JournalLine::new(4, entry.clone()).to_line();
+            let value: serde_json::Value = serde_json::from_str(&line).unwrap();
+            assert_eq!(value["kind"], "workshop_started");
+            assert_eq!(value["outcome"], outcome);
+            assert_eq!(
+                parse_line(line.trim_end()),
+                ParsedLine::Line(JournalLine::new(4, entry))
+            );
+        }
+    }
+
+    /// Story 6.11 (AD-120, D-249): `workshop_removed` reads back for every
+    /// cause; 6.11 is its first writer (`launch_failed`).
+    #[test]
+    fn workshop_removed_round_trips() {
+        for cause in crate::workshop::run::RemovalCause::ALL.iter().copied() {
+            let entry = JournalEntry::WorkshopRemoved(WorkshopRemoved {
+                run_id: "0123456789abcdef0123456789abcdef".into(),
+                cause,
+            });
+            let line = JournalLine::new(4, entry.clone()).to_line();
+            let value: serde_json::Value = serde_json::from_str(&line).unwrap();
+            assert_eq!(value["cause"], cause.code());
             assert_eq!(
                 parse_line(line.trim_end()),
                 ParsedLine::Line(JournalLine::new(4, entry))
