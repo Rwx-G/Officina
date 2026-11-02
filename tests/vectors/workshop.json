@@ -565,6 +565,114 @@
       }
     ]
   },
+  "finish": [
+    {
+      "name": "a clean exit",
+      "input": {
+        "exit_code": 0
+      },
+      "expect": "exited"
+    },
+    {
+      "name": "a failed exit",
+      "input": {
+        "exit_code": 1
+      },
+      "expect": "failed"
+    },
+    {
+      "name": "the deadline",
+      "input": {
+        "stop": "deadline",
+        "exit_code": 143
+      },
+      "expect": "deadline"
+    },
+    {
+      "name": "the budget",
+      "input": {
+        "exit_code": 1,
+        "result_subtype": "error_max_budget_usd"
+      },
+      "expect": "budget"
+    },
+    {
+      "name": "a forged budget result on a clean exit is an exit",
+      "input": {
+        "exit_code": 0,
+        "result_subtype": "error_max_budget_usd"
+      },
+      "expect": "exited"
+    },
+    {
+      "name": "the gateway's limit",
+      "input": {
+        "exit_code": 1,
+        "gateway_exit": 3
+      },
+      "expect": "gateway_limit"
+    },
+    {
+      "name": "the output cap",
+      "input": {
+        "stop": "output_cap",
+        "exit_code": 143
+      },
+      "expect": "output_cap"
+    },
+    {
+      "name": "a disallowed tool",
+      "input": {
+        "stop": "unexpected_tool",
+        "exit_code": 143
+      },
+      "expect": "unexpected_tool"
+    },
+    {
+      "name": "a failed hook",
+      "input": {
+        "stop": "hook_failed",
+        "exit_code": 143
+      },
+      "expect": "hook_failed"
+    },
+    {
+      "name": "an authentication failure",
+      "input": {
+        "stop": "auth_failed",
+        "exit_code": 143
+      },
+      "expect": "auth_failed"
+    },
+    {
+      "name": "the engine's memory kill",
+      "input": {
+        "oom_killed": true,
+        "exit_code": 137
+      },
+      "expect": "memory"
+    },
+    {
+      "name": "Stop all",
+      "input": {
+        "stop": "stop_all",
+        "exit_code": 143
+      },
+      "expect": "stopped"
+    },
+    {
+      "name": "the engine lost the container",
+      "input": {
+        "lost": true
+      },
+      "expect": "engine_lost"
+    },
+    {
+      "name": "no exit code read",
+      "input": {},
+      "expect": "failed"
+    }
+  ],
   "images": [
     {
       "expect": {
@@ -1848,6 +1956,365 @@
       }
     ]
   },
+  "reconcile": [
+    {
+      "name": "a running row with its worker running is followed",
+      "rows": [
+        {
+          "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "state": "running",
+          "started_at_ms": 1799999400000,
+          "deadline_ms": 3600000,
+          "has_package": false
+        }
+      ],
+      "containers": [
+        {
+          "name": "officina-worker-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "run_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "role": "worker",
+          "running": true
+        },
+        {
+          "name": "officina-gateway-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "run_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "role": "gateway",
+          "running": true
+        }
+      ],
+      "expect": [
+        {
+          "action": "follow",
+          "run_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }
+      ]
+    },
+    {
+      "name": "a running row past its deadline plus the grace is stopped",
+      "rows": [
+        {
+          "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "state": "running",
+          "started_at_ms": 1799992800000,
+          "deadline_ms": 3600000,
+          "has_package": false
+        }
+      ],
+      "containers": [
+        {
+          "name": "officina-worker-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "run_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "role": "worker",
+          "running": true
+        }
+      ],
+      "expect": [
+        {
+          "action": "stop_past_deadline",
+          "run_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }
+      ]
+    },
+    {
+      "name": "a running row within the grace is followed",
+      "rows": [
+        {
+          "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "state": "running",
+          "started_at_ms": 1799996370000,
+          "deadline_ms": 3600000,
+          "has_package": false
+        }
+      ],
+      "containers": [
+        {
+          "name": "officina-worker-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "run_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "role": "worker",
+          "running": true
+        }
+      ],
+      "expect": [
+        {
+          "action": "follow",
+          "run_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }
+      ]
+    },
+    {
+      "name": "a running row whose worker exited is collected",
+      "rows": [
+        {
+          "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "state": "running",
+          "started_at_ms": 1799999400000,
+          "deadline_ms": 3600000,
+          "has_package": false
+        }
+      ],
+      "containers": [
+        {
+          "name": "officina-worker-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "run_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "role": "worker",
+          "running": false
+        }
+      ],
+      "expect": [
+        {
+          "action": "collect",
+          "run_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }
+      ]
+    },
+    {
+      "name": "a launching row older than 2 minutes fails",
+      "rows": [
+        {
+          "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "state": "launching",
+          "started_at_ms": 1799999820000,
+          "deadline_ms": 3600000,
+          "has_package": false
+        }
+      ],
+      "containers": [],
+      "expect": [
+        {
+          "action": "fail_launch",
+          "run_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }
+      ]
+    },
+    {
+      "name": "a young launching row is left to its launch",
+      "rows": [
+        {
+          "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "state": "launching",
+          "started_at_ms": 1799999940000,
+          "deadline_ms": 3600000,
+          "has_package": false
+        }
+      ],
+      "containers": [],
+      "expect": []
+    },
+    {
+      "name": "a lost container without a package is unknown, never finished",
+      "rows": [
+        {
+          "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "state": "running",
+          "started_at_ms": 1799999400000,
+          "deadline_ms": 3600000,
+          "has_package": false
+        }
+      ],
+      "containers": [],
+      "expect": [
+        {
+          "action": "lost",
+          "run_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }
+      ]
+    },
+    {
+      "name": "a lost container with a package on the host is collected",
+      "rows": [
+        {
+          "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "state": "collecting",
+          "started_at_ms": 1799999400000,
+          "deadline_ms": 3600000,
+          "has_package": true
+        }
+      ],
+      "containers": [],
+      "expect": [
+        {
+          "action": "collect",
+          "run_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }
+      ]
+    },
+    {
+      "name": "a run container with no row is an orphan, never adopted",
+      "rows": [],
+      "containers": [
+        {
+          "name": "officina-worker-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "run_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "role": "worker",
+          "running": true
+        },
+        {
+          "name": "officina-packer-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "run_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "role": "packer",
+          "running": false
+        }
+      ],
+      "expect": [
+        {
+          "action": "orphan",
+          "name": "officina-worker-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        },
+        {
+          "action": "orphan",
+          "name": "officina-packer-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        }
+      ]
+    },
+    {
+      "name": "a job's containers and the owner's login container are never orphans",
+      "rows": [],
+      "containers": [
+        {
+          "name": "officina-inventory-x",
+          "run_id": null,
+          "role": "inventory",
+          "running": true
+        },
+        {
+          "name": "officina-battery-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "run_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "role": "battery",
+          "running": true
+        },
+        {
+          "name": "officina-login-x",
+          "run_id": null,
+          "role": "login",
+          "running": true
+        }
+      ],
+      "expect": []
+    },
+    {
+      "name": "a kept run is left as it is",
+      "rows": [
+        {
+          "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "state": "stopped",
+          "started_at_ms": 1799999400000,
+          "deadline_ms": 3600000,
+          "has_package": false
+        }
+      ],
+      "containers": [
+        {
+          "name": "officina-worker-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "run_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "role": "worker",
+          "running": false
+        }
+      ],
+      "expect": []
+    }
+  ],
+  "run": [
+    {
+      "from": "launching",
+      "event": "started",
+      "to": "running"
+    },
+    {
+      "from": "launching",
+      "event": "launch_failed",
+      "to": "failed"
+    },
+    {
+      "from": "running",
+      "event": "stop_asked",
+      "to": "stopping"
+    },
+    {
+      "from": "running",
+      "event": "exited",
+      "to": "collecting"
+    },
+    {
+      "from": "running",
+      "event": "stop_all",
+      "to": "stopped"
+    },
+    {
+      "from": "running",
+      "event": "lost",
+      "to": "unknown"
+    },
+    {
+      "from": "stopping",
+      "event": "exited",
+      "to": "collecting"
+    },
+    {
+      "from": "stopping",
+      "event": "stop_all",
+      "to": "stopped"
+    },
+    {
+      "from": "stopping",
+      "event": "lost",
+      "to": "unknown"
+    },
+    {
+      "from": "collecting",
+      "event": "packaged",
+      "to": "review"
+    },
+    {
+      "from": "collecting",
+      "event": "quarantined",
+      "to": "quarantined"
+    },
+    {
+      "from": "collecting",
+      "event": "nothing_changed",
+      "to": "no_change"
+    },
+    {
+      "from": "collecting",
+      "event": "collection_failed",
+      "to": "failed"
+    },
+    {
+      "from": "collecting",
+      "event": "lost",
+      "to": "unknown"
+    },
+    {
+      "from": "stopped",
+      "event": "resumed",
+      "to": "collecting"
+    },
+    {
+      "from": "stopped",
+      "event": "removed",
+      "to": "discarded"
+    },
+    {
+      "from": "stopped",
+      "event": "lost",
+      "to": "unknown"
+    },
+    {
+      "from": "review",
+      "event": "imported",
+      "to": "imported"
+    },
+    {
+      "from": "review",
+      "event": "discarded",
+      "to": "discarded"
+    },
+    {
+      "from": "quarantined",
+      "event": "discarded",
+      "to": "discarded"
+    }
+  ],
   "schema": 1,
   "vectors": {
     "launch_worker": [

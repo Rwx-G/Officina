@@ -46,6 +46,9 @@ so that no line a container prints can keep a run going or mark it done, and a r
 
 ### Debug Log
 
+- Work in progress (branch `wip/story-6.12`, 2026-11-02): core's half only. `workshop::lifecycle` (`RunEvent`, `EDGES`, `transition`, `StopReason`, `FinishInput`, `finish_cause`, `ENVIRONMENT_FAILURE_CAUSES`, `is_environment_failure`, `RowSeen`, `ContainerSeen`, `ReconcileAction`, `reconcile`, `is_run_role`) and `workshop::stream` (`STREAM_FIELDS`, `StreamFacts`, `fold`, `StreamStop`), with the `run`, `finish` and `reconcile` sections of `tests/vectors/workshop.json` and `tests/vectors/stream.json` (`fold`, `stops`) replayed by `workshop_vectors.rs` and `stream_vectors.rs`. Not started: the host's followers (`follow.rs`), the deadline and cap stops, reconciliation at start and after the engine returns, `scan::replace` before journal, store and emit, the CLI tests, README, decisions.
+- To confirm at gate 3's window half (story 6.19): `unexpected_tool` assumes Claude Code leaves a `--disallowedTools` tool out of the first `system/init`'s `tools`; the saved invalid-token stream's init came from a probe run without the worker's flags and lists `WebSearch`, so its case starts after the init. If a real worker's init lists it, every run would stop `unexpected_tool`.
+
 ### Completion Notes
 
 ## File List

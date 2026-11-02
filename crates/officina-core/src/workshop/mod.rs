@@ -11,11 +11,13 @@ pub mod gateway;
 pub mod image;
 pub mod inventory;
 pub mod launch;
+pub mod lifecycle;
 pub mod names;
 pub mod proxy;
 pub mod review;
 pub mod run;
 pub mod scan;
+pub mod stream;
 pub mod tar;
 pub mod vector;
 

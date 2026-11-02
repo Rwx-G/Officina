@@ -328,3 +328,99 @@ fn every_new_launch_refusal_has_a_case() {
         );
     }
 }
+
+fn section(name: &str) -> Vec<Value> {
+    let all: Value = serde_json::from_str(VECTORS).expect("workshop.json parses");
+    all[name]
+        .as_array()
+        .unwrap_or_else(|| panic!("a {name} section"))
+        .clone()
+}
+
+/// Story 6.12 AC 1 (AD-109): every edge of `lifecycle::EDGES` has its
+/// case, and every case's edge is allowed.
+#[test]
+fn every_allowed_edge_has_a_case() {
+    use officina_core::workshop::lifecycle::{EDGES, RunEvent, transition};
+    use officina_core::workshop::run::RunState;
+    let cases = section("run");
+    let parsed: Vec<(RunState, RunEvent, RunState)> = cases
+        .iter()
+        .map(|c| {
+            serde_json::from_value(serde_json::json!([c["from"], c["event"], c["to"]])).unwrap()
+        })
+        .collect();
+    for (from, event, to) in &parsed {
+        assert_eq!(transition(*from, *event), Ok(*to), "{from:?} on {event:?}");
+    }
+    for edge in EDGES {
+        assert!(parsed.contains(edge), "{edge:?} has no case");
+    }
+}
+
+/// Story 6.12 AC 1: every pair the `run` section does not list is refused,
+/// over `RunState::ALL` and `RunEvent::ALL`.
+#[test]
+fn every_other_pair_is_refused() {
+    use officina_core::workshop::lifecycle::{RunEvent, transition};
+    use officina_core::workshop::run::RunState;
+    let cases = section("run");
+    for from in RunState::ALL {
+        for event in RunEvent::ALL {
+            let listed = cases
+                .iter()
+                .any(|c| c["from"] == from.code() && c["event"] == event.code());
+            assert_eq!(
+                transition(*from, *event).is_ok(),
+                listed,
+                "{from:?} on {event:?}"
+            );
+        }
+    }
+}
+
+/// Story 6.12 AC 6 (AD-109): each `finish` case gives its cause, and
+/// every `FinishCause` has one.
+#[test]
+fn every_finish_cause_has_a_case() {
+    use officina_core::workshop::lifecycle::{FinishInput, StopReason, finish_cause};
+    use officina_core::workshop::run::FinishCause;
+    let cases = section("finish");
+    for case in &cases {
+        let input = &case["input"];
+        let got = finish_cause(&FinishInput {
+            lost: input["lost"].as_bool().unwrap_or(false),
+            stop: input["stop"]
+                .as_str()
+                .map(|s| StopReason::from_code(s).unwrap()),
+            oom_killed: input["oom_killed"].as_bool().unwrap_or(false),
+            exit_code: input["exit_code"].as_i64(),
+            gateway_exit: input["gateway_exit"].as_i64(),
+            result_subtype: input["result_subtype"].as_str().map(str::to_owned),
+        });
+        assert_eq!(got.code(), case["expect"], "{}", case["name"]);
+    }
+    for cause in FinishCause::ALL {
+        assert!(
+            cases.iter().any(|c| c["expect"] == cause.code()),
+            "{cause:?} has no finish case"
+        );
+    }
+}
+
+/// Story 6.12 AC 7 (AD-109, D-216): each `reconcile` case's rows and
+/// containers give its actions, in order.
+#[test]
+fn reconcile_cases_match() {
+    use officina_core::workshop::lifecycle::{ContainerSeen, RowSeen, reconcile};
+    const NOW: i64 = 1_800_000_000_000;
+    let cases = section("reconcile");
+    assert!(!cases.is_empty());
+    for case in &cases {
+        let rows: Vec<RowSeen> = serde_json::from_value(case["rows"].clone()).unwrap();
+        let containers: Vec<ContainerSeen> =
+            serde_json::from_value(case["containers"].clone()).unwrap();
+        let got = serde_json::to_value(reconcile(&rows, &containers, NOW)).unwrap();
+        assert_eq!(got, case["expect"], "{}", case["name"]);
+    }
+}
