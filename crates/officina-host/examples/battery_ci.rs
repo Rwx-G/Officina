@@ -24,6 +24,10 @@
 //! 4. `--worker-probe`: the base image with `workshop.json`'s `Worker`
 //!    vector, its command replaced by a probe (`id`, a write to `/`, a read
 //!    and a write in the mounted folder, `--mount-dir` or a scratch one).
+//! 5. The escape battery (story 6.10 AC 6 and 7) on the base and each
+//!    project image, with the window's own code (`workshop::battery::run`)
+//!    and the floor's credential kind and limits: every attempt's verdict
+//!    printed, the run failing unless each battery passes.
 //!
 //! Test objects are named `officina-test-*` and labelled
 //! `officina-test=1`; the images Build images names are removed at the end
@@ -34,9 +38,11 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Output};
 use std::sync::Arc;
 
+use officina_core::workshop::battery::DUMMY_CREDENTIAL;
 use officina_core::workshop::gateway::GatewayConfig;
 use officina_core::workshop::image::{BuildOutcome, GATEWAY_IMAGE, ImageKind, WORKSHOP_BASE};
 use officina_core::workshop::names::ObjectName;
+use officina_host::workshop::battery::{BatteryEngine, BatteryJob};
 use officina_host::workshop::build::{BuildReport, build_all, find_programs, plan_from, preflight};
 use officina_host::workshop::engine::{ResolvedDocker, resolve};
 use officina_host::workshop::proxy::{SystemProxyReader, WinHttpReader};
@@ -49,7 +55,6 @@ const GATEWAY: &str = "officina-test-gateway";
 const VOLUME: &str = "officina-test-vol";
 const ALLOWED_HOST: &str = "api.anthropic.com";
 const REFUSED_HOST: &str = "example.com";
-const DUMMY_CREDENTIAL: &str = "officina-battery-dummy-credential";
 
 struct Options {
     floor: PathBuf,
@@ -173,6 +178,10 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
+    let Some(workshop) = floor.canonical.workshop.clone() else {
+        eprintln!("the floor declares no valid [workshop]");
+        return ExitCode::from(2);
+    };
     let mut plan = match plan_from(
         floor,
         &options.home,
@@ -250,6 +259,25 @@ fn main() -> ExitCode {
                 options.mount_dir.as_deref(),
                 &options.home,
             );
+        }
+        let engine = BatteryEngine {
+            docker: docker.clone(),
+            base_env: base_env.clone(),
+            home: options.home.clone(),
+        };
+        let images: Vec<&BuildReport> = of(ImageKind::Workshop)
+            .chain(of(ImageKind::Project))
+            .filter(built)
+            .collect();
+        for (index, image) in images.into_iter().enumerate() {
+            let battery = Battery {
+                image,
+                gateway_id: &gateway_id,
+                floor_key: &plan.floor_key,
+                workshop: &workshop,
+                index,
+            };
+            escape_battery(&mut run, &engine, &battery);
         }
     }
     cleanup(&run, &reports, options.keep_images);
@@ -545,6 +573,81 @@ fn worker_probe(run: &mut Run, base_id: &str, mount_dir: Option<&Path>, home: &P
     run.check(out.contains("WORK_WRITE_OK"), "a write in /work succeeds");
     let _ = run.docker(&["rm", "--force", "officina-test-worker"], &[]);
     let _ = run.docker(&["volume", "rm", VOLUME], &[]);
+}
+
+/// One image's battery, as the build left it.
+struct Battery<'a> {
+    image: &'a BuildReport,
+    gateway_id: &'a str,
+    floor_key: &'a str,
+    workshop: &'a officina_core::workshop::floor::CanonicalWorkshop,
+    index: usize,
+}
+
+/// The escape battery on one image with the window's code (AD-117,
+/// D-202): a dummy credential for a token kind, the battery's own empty
+/// login volume for `login`.
+fn escape_battery(run: &mut Run, engine: &BatteryEngine, battery: &Battery<'_>) {
+    use officina_core::workshop::battery::{BatteryOutcome, BatterySpec};
+    let now = officina_host::files::now_ms;
+    let record = &battery.image.record;
+    let counter = u64::try_from(battery.index).unwrap_or(0);
+    let Some(id) = officina_host::workshop::battery::new_battery_id(now(), counter) else {
+        run.check(false, "a battery id");
+        return;
+    };
+    let job = BatteryJob {
+        id,
+        image: record.name.clone(),
+        spec: BatterySpec {
+            kind: battery.workshop.auth,
+            cpus: battery.workshop.cpus,
+            memory_mib: battery.workshop.memory_mib,
+            floor_key: battery.floor_key.to_owned(),
+            version: officina_host::workshop::build::VERSION.to_owned(),
+            image_id: record.image_id.clone().unwrap_or_default(),
+            image_env: record
+                .env_names_json
+                .as_deref()
+                .and_then(|json| serde_json::from_str(json).ok())
+                .unwrap_or_default(),
+        },
+        programs_sha256: record.programs_sha256.clone().unwrap_or_default(),
+        gateway_image_id: battery.gateway_id.to_owned(),
+    };
+    println!("escape battery {} on {}", job.id.as_str(), job.image);
+    let report = officina_host::workshop::battery::run(engine, &job, &now);
+    for verdict in &report.attempts {
+        let reason = verdict
+            .reason
+            .as_deref()
+            .map(|r| format!(" ({r})"))
+            .unwrap_or_default();
+        println!(
+            "  {:<12} {:<26} {}{reason}",
+            verdict.family.code(),
+            verdict.attempt,
+            verdict.outcome.code()
+        );
+    }
+    let done = &report.record;
+    println!(
+        "  totals {:?}, clock skew {:?} ms, engine {}",
+        done.totals, done.clock_skew_ms, done.key.engine_key
+    );
+    let cause = done
+        .cause
+        .as_deref()
+        .map(|c| format!(" ({c})"))
+        .unwrap_or_default();
+    run.check(
+        done.outcome == Some(BatteryOutcome::Passed),
+        &format!(
+            "the escape battery passed on {}: {}{cause}",
+            job.image,
+            done.outcome.map_or("none", BatteryOutcome::code)
+        ),
+    );
 }
 
 fn cleanup(run: &Run, reports: &[BuildReport], keep_images: bool) {

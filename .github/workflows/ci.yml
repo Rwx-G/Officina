@@ -339,7 +339,7 @@ jobs:
     # job reads it. hadolint, the musl build, the gateway and base images
     # built through battery_ci.rs with Build images' own code, the programs
     # measured, one allowed and one refused connection through the real
-    # gateway; the escape battery joins in story 6.10.
+    # gateway, then the escape battery on every image (story 6.10).
     needs: changes
     if: needs.changes.outputs.workshop == 'true'
     runs-on: ubuntu-latest
