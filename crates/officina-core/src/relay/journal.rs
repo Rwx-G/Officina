@@ -147,6 +147,9 @@ pub enum JournalEntry {
     AutoModeDenied(AutoModeDenied),
     WorkOrderPermissionSet(WorkOrderPermissionSet),
     WorkshopImageBuilt(WorkshopImageBuilt),
+    EscapeAttempt(EscapeAttempt),
+    EscapeBattery(EscapeBattery),
+    GatewayRefused(GatewayRefused),
 }
 
 closed_enum! {
@@ -177,6 +180,9 @@ closed_enum! {
         AutoModeDenied,
         WorkOrderPermissionSet,
         WorkshopImageBuilt,
+        EscapeAttempt,
+        EscapeBattery,
+        GatewayRefused,
     }
 }
 
@@ -206,6 +212,9 @@ impl JournalEntry {
             JournalEntry::AutoModeDenied(_) => JournalKind::AutoModeDenied,
             JournalEntry::WorkOrderPermissionSet(_) => JournalKind::WorkOrderPermissionSet,
             JournalEntry::WorkshopImageBuilt(_) => JournalKind::WorkshopImageBuilt,
+            JournalEntry::EscapeAttempt(_) => JournalKind::EscapeAttempt,
+            JournalEntry::EscapeBattery(_) => JournalKind::EscapeBattery,
+            JournalEntry::GatewayRefused(_) => JournalKind::GatewayRefused,
         }
     }
 }
@@ -599,6 +608,51 @@ pub struct WorkshopImageBuilt {
     pub duration_ms: i64,
 }
 
+/// One attempt of an escape battery as judged (AD-117, AD-120): what the
+/// program printed, or why the judgement changed it (`reason`). The
+/// program's detail is container text and is not journaled.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EscapeAttempt {
+    pub battery_id: String,
+    pub image: String,
+    pub family: crate::workshop::battery::BatteryFamily,
+    pub attempt: String,
+    pub outcome: crate::workshop::battery::AttemptOutcome,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+/// An escape battery's end (AD-117, AD-120): its keys, totals and
+/// outcome, and what failed it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EscapeBattery {
+    pub battery_id: String,
+    pub image: String,
+    pub image_id: String,
+    pub gateway_image_id: String,
+    pub engine_key: String,
+    pub officina_version: String,
+    #[serde(flatten)]
+    pub totals: crate::workshop::battery::Totals,
+    pub outcome: crate::workshop::battery::BatteryOutcome,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cause: Option<String>,
+}
+
+/// A refusal a gateway logged (AD-120): a run's, or a battery's (story
+/// 6.10 writes it first, D-249). The host is worker text, made printable
+/// and cut by the gateway's own line rule.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GatewayRefused {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub battery_id: Option<String>,
+    pub host: String,
+    pub port: u16,
+    pub cause: crate::workshop::gateway::GatewayRefusal,
+}
+
 /// A Start of the orchestrator (AD-89, D-144): how it ended, the pid it
 /// keeps when it spawned, the arguments it ran with, and why when it was
 /// refused or failed. The registry's `orchestrator_start` row holds the
@@ -970,6 +1024,9 @@ mod tests {
                     duration_ms: 1,
                 })
             }
+            JournalKind::EscapeAttempt => JournalEntry::EscapeAttempt(escape_attempt()),
+            JournalKind::EscapeBattery => JournalEntry::EscapeBattery(escape_battery()),
+            JournalKind::GatewayRefused => JournalEntry::GatewayRefused(gateway_refused()),
             JournalKind::PromptDecided => JournalEntry::PromptDecided(PromptDecided {
                 session_id: "0f1e2d3c-4b5a-4978-8796-a5b4c3d2e1f0".into(),
                 tool_name: None,
@@ -1201,6 +1258,121 @@ mod tests {
             (read.source, read.proposal_id),
             (AnswerSource::Author, None)
         );
+    }
+
+    fn escape_attempt() -> EscapeAttempt {
+        EscapeAttempt {
+            battery_id: "0123456789abcdef0123456789abcdef".into(),
+            image: "officina-workshop:local".into(),
+            family: crate::workshop::battery::BatteryFamily::Gateway,
+            attempt: "port_22".into(),
+            outcome: crate::workshop::battery::AttemptOutcome::Refused,
+            reason: None,
+        }
+    }
+
+    fn escape_battery() -> EscapeBattery {
+        EscapeBattery {
+            battery_id: "0123456789abcdef0123456789abcdef".into(),
+            image: "officina-workshop:local".into(),
+            image_id: format!("sha256:{}", "a".repeat(64)),
+            gateway_image_id: format!("sha256:{}", "b".repeat(64)),
+            engine_key: "e".repeat(64),
+            officina_version: "0.6.0".into(),
+            totals: crate::workshop::battery::Totals {
+                attempts: 3,
+                refused: 2,
+                escaped: 1,
+                inconclusive: 0,
+                not_applicable: 0,
+            },
+            outcome: crate::workshop::battery::BatteryOutcome::Failed,
+            cause: Some("port_22: escaped".into()),
+        }
+    }
+
+    fn gateway_refused() -> GatewayRefused {
+        GatewayRefused {
+            run_id: None,
+            battery_id: Some("0123456789abcdef0123456789abcdef".into()),
+            host: "officina-off-list.test".into(),
+            port: 443,
+            cause: crate::workshop::gateway::GatewayRefusal::NotAllowed,
+        }
+    }
+
+    /// Story 6.10 AC 5 (AD-120, D-249): `escape_attempt` reads back for
+    /// every outcome, with and without a reason.
+    #[test]
+    fn escape_attempt_round_trips() {
+        use crate::workshop::battery::AttemptOutcome;
+        for outcome in AttemptOutcome::ALL.iter().copied() {
+            for reason in [None, Some("no line".to_owned())] {
+                let entry = JournalEntry::EscapeAttempt(EscapeAttempt {
+                    outcome,
+                    reason: reason.clone(),
+                    ..escape_attempt()
+                });
+                let line = JournalLine::new(4, entry.clone()).to_line();
+                let value: serde_json::Value = serde_json::from_str(&line).unwrap();
+                assert_eq!(value["kind"], "escape_attempt");
+                assert_eq!(value["outcome"], outcome.code());
+                assert_eq!(value.get("reason").is_some(), reason.is_some());
+                assert_eq!(
+                    parse_line(line.trim_end()),
+                    ParsedLine::Line(JournalLine::new(4, entry))
+                );
+            }
+        }
+    }
+
+    /// Story 6.10 AC 5 (AD-120): `escape_battery` reads back for every
+    /// outcome, its totals flat beside its keys.
+    #[test]
+    fn escape_battery_round_trips() {
+        use crate::workshop::battery::BatteryOutcome;
+        for outcome in BatteryOutcome::ALL.iter().copied() {
+            let entry = JournalEntry::EscapeBattery(EscapeBattery {
+                outcome,
+                ..escape_battery()
+            });
+            let line = JournalLine::new(4, entry.clone()).to_line();
+            let value: serde_json::Value = serde_json::from_str(&line).unwrap();
+            assert_eq!(value["kind"], "escape_battery");
+            assert_eq!(value["escaped"], 1);
+            assert_eq!(value["outcome"], outcome.code());
+            assert_eq!(
+                parse_line(line.trim_end()),
+                ParsedLine::Line(JournalLine::new(4, entry))
+            );
+        }
+    }
+
+    /// Story 6.10 AC 5 (AD-120, D-249): `gateway_refused` reads back for a
+    /// battery and for a run, one id each.
+    #[test]
+    fn gateway_refused_round_trips() {
+        let for_run = GatewayRefused {
+            run_id: Some("fedcba9876543210fedcba9876543210".into()),
+            battery_id: None,
+            ..gateway_refused()
+        };
+        for refused in [gateway_refused(), for_run] {
+            let entry = JournalEntry::GatewayRefused(refused.clone());
+            let line = JournalLine::new(4, entry.clone()).to_line();
+            let value: serde_json::Value = serde_json::from_str(&line).unwrap();
+            assert_eq!(value["kind"], "gateway_refused");
+            assert_eq!(value["cause"], "not_allowed");
+            assert_eq!(value.get("run_id").is_some(), refused.run_id.is_some());
+            assert_eq!(
+                value.get("battery_id").is_some(),
+                refused.battery_id.is_some()
+            );
+            assert_eq!(
+                parse_line(line.trim_end()),
+                ParsedLine::Line(JournalLine::new(4, entry))
+            );
+        }
     }
 
     /// Story 6.8 (AD-120, D-249): `workshop_image_built` reads back for

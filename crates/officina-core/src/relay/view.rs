@@ -797,7 +797,8 @@ fn recent(lines: &[JournalLine], now_ms: i64, rows: &[AutoRow]) -> Vec<RecentEnt
                 // history shows work orders, from the registry (AD-92).
                 // A review shows on its request's decision, and the
                 // switch's state in the `auto` section. A routed prompt
-                // has no window surface until the routing story (D-580).
+                // has no window surface until the routing story (D-580). The
+                // workshop's images and batteries show in its own section.
                 JournalEntry::WorkOrderLaunched(_)
                 | JournalEntry::PromptRouted(_)
                 | JournalEntry::PromptDecided(_)
@@ -806,6 +807,9 @@ fn recent(lines: &[JournalLine], now_ms: i64, rows: &[AutoRow]) -> Vec<RecentEnt
                 | JournalEntry::AutoApprovalSet(_)
                 | JournalEntry::WorkOrderPermissionSet(_)
                 | JournalEntry::WorkshopImageBuilt(_)
+                | JournalEntry::EscapeAttempt(_)
+                | JournalEntry::EscapeBattery(_)
+                | JournalEntry::GatewayRefused(_)
                 | JournalEntry::OrchestratorStarted(_)
                 | JournalEntry::MeetingAnswer(_) => return None,
             };
@@ -1392,6 +1396,9 @@ mod tests {
                 | JournalKind::AutoApprovalSet
                 | JournalKind::WorkOrderPermissionSet
                 | JournalKind::WorkshopImageBuilt
+                | JournalKind::EscapeAttempt
+                | JournalKind::EscapeBattery
+                | JournalKind::GatewayRefused
                 | JournalKind::OrchestratorStarted
                 | JournalKind::MeetingAnswer => continue,
             };
