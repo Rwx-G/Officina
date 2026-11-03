@@ -64,13 +64,15 @@ test("every transition is short and moves opacity or transform only, and none ou
   await openBoard(page, loadBoard("busy"), {}, loadRelay("relay-clean"));
   await record(page);
   await drive(page);
-  const all = await seen(page);
-  expect(all.filter((one) => one.duration > 0).length, "transitions ran").toBeGreaterThan(5);
-  for (const one of all) {
+  // Svelte first starts a zero-length placeholder and only starts the timed
+  // animation when that one finishes, a frame later: the alert band and the
+  // chip are visible before theirs exist, so the count is waited for.
+  await expect.poll(async () => (await seen(page)).filter((one) => one.duration > 0).length, { message: "transitions ran" }).toBeGreaterThan(5);
+  await transitionsDone(page);
+  for (const one of await seen(page)) {
     expect(one.duration).toBeLessThanOrEqual(MOTION_MS);
     for (const property of one.properties) expect(["opacity", "transform"], property).toContain(property);
   }
-  await transitionsDone(page);
 });
 
 test("under reduced motion no transition takes any time", async ({ page }) => {
@@ -78,5 +80,7 @@ test("under reduced motion no transition takes any time", async ({ page }) => {
   await openBoard(page, loadBoard("busy"), {}, loadRelay("relay-clean"));
   await record(page);
   await drive(page);
-  expect((await seen(page)).filter((one) => one.duration > 0)).toEqual([]);
+  // Not even the placeholder a timed animation waits behind: one would be
+  // seen here before its timed animation starts.
+  expect(await seen(page)).toEqual([]);
 });
