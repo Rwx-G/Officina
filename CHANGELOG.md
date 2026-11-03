@@ -8,6 +8,21 @@ project uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Stop all and Resume (v0.6, story 6.17): `stop_workshop`, on its own
+  blocking thread, writes `workshop/stopped` and `relay/stopped` (`since_ms`
+  and `by`, a present flag left alone), latches thread `workshop` before
+  each `start`, ends the engine call thread `workshop` and the build thread
+  are running, stops the floor's running containers with one `ps` and one
+  `stop`, waits for the latch's acknowledgement and runs a second pass;
+  live runs become `stopped` with their time and keep their containers.
+  `officina stop --all` writes both flags, never removes one, and stops
+  every managed container of any floor (exit 1 when the engine could not
+  be reached). `resume_workshop` (window only, pointer only) collects or
+  removes each kept run and resumes the relay when asked; `remove_run`
+  removes a kept or orphan run's objects of the window's floor. The hourly
+  pass removes kept containers 7 days after their stop, even while
+  stopped. Journal kinds `workshop_stopped` and `workshop_resumed`; doctor
+  names both flags and each kept run's age.
 - Import and Discard (v0.6, story 6.16): `import_package`, a pointer
   click, checks the review again (in review, every group approved for the
   hunks computed now, the tip shown), refuses an existing

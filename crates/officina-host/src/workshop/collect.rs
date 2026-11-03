@@ -259,7 +259,10 @@ pub fn collect(context: &FollowContext, run_id: &str) {
         _ => FinishCause::Failed,
     };
     let found = package(context, &row, &names, &floor_key);
-    if matches!(found, Err(Short::Stopped)) {
+    // Stop all during the collection (its engine call ended, story 6.17):
+    // nothing is removed or recorded; the run becomes `stopped` and is
+    // collected again at Resume, `out/` emptied first.
+    if matches!(found, Err(Short::Stopped)) || crate::workshop::workshop_stopped(&context.home) {
         return;
     }
     let removed = remove(context, &names);

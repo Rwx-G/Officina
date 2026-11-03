@@ -260,6 +260,11 @@ impl Home {
     }
 
     fn build(&self) {
+        assert_eq!(self.build_answer(), BuildAnswer::Queued);
+    }
+
+    /// What a Build images click answers; once queued, the build ran.
+    pub fn build_answer(&self) -> BuildAnswer {
         let thread = JobThread::spawn(BUILD_THREAD).unwrap();
         let (done, finished) = std::sync::mpsc::channel();
         let answer = build_images(
@@ -278,12 +283,20 @@ impl Home {
             }),
         )
         .expect("an answer");
-        assert_eq!(answer, BuildAnswer::Queued);
-        finished.recv_timeout(Duration::from_secs(60)).unwrap();
-        self.settle();
+        if answer == BuildAnswer::Queued {
+            finished.recv_timeout(Duration::from_secs(60)).unwrap();
+            self.settle();
+        }
+        answer
     }
 
     fn battery(&self) {
+        let answer = self.battery_answer();
+        assert!(matches!(answer, BatteryAnswer::Queued(_)), "{answer:?}");
+    }
+
+    /// What a Run escape battery click answers; once queued, it ran.
+    pub fn battery_answer(&self) -> BatteryAnswer {
         let thread = JobThread::spawn(BUILD_THREAD).unwrap();
         let (done, finished) = std::sync::mpsc::channel();
         let answer = run_battery(
@@ -300,9 +313,11 @@ impl Home {
             }),
         )
         .expect("an answer");
-        assert!(matches!(answer, BatteryAnswer::Queued(_)), "{answer:?}");
-        finished.recv_timeout(Duration::from_secs(60)).unwrap();
-        self.settle();
+        if matches!(answer, BatteryAnswer::Queued(_)) {
+            finished.recv_timeout(Duration::from_secs(60)).unwrap();
+            self.settle();
+        }
+        answer
     }
 
     pub fn runtime(&self, store: SeededStore) -> WorkshopRuntime {

@@ -72,6 +72,10 @@ pub struct WorkshopFacts {
     pub credential: Option<CredentialFacts>,
     /// Each workshop project's mounts (FR-2, story 6.11 AC 8).
     pub mounts: Vec<officina_core::workshop::doctor::MountFacts>,
+    /// Both stop flags (AD-116).
+    pub stop_flags: crate::relay::home::StopFlags,
+    /// The runs Stop all kept, with their stop times, from the registry.
+    pub kept: Vec<(String, Option<i64>)>,
 }
 
 /// The floor's credential as doctor reads it: present or not, never shown.
@@ -722,6 +726,8 @@ pub fn gather(
         now_ms: crate::files::now_ms(),
         credential: images.and_then(|context| credential_facts(context, home, store)),
         mounts: Vec::new(),
+        stop_flags: crate::relay::home::RelayHome::new(home, None).stop_flags(),
+        kept: kept_runs(home),
     };
     if let (Some(context), Ok((git, _))) = (images, &facts.git) {
         let workshop_git = crate::workshop::git::ensure_empty_hooks(home)
@@ -765,6 +771,20 @@ pub fn gather(
         }
     }
     facts
+}
+
+/// The runs Stop all kept, with their stop times (AD-116), read-only;
+/// none when the registry cannot be read.
+pub fn kept_runs(home: &Path) -> Vec<(String, Option<i64>)> {
+    let Ok(reader) = crate::registry::store::open_reader(home, &[]) else {
+        return Vec::new();
+    };
+    reader
+        .workshop_runs_in(&[officina_core::workshop::run::RunState::Stopped])
+        .unwrap_or_default()
+        .into_iter()
+        .map(|row| (row.id, row.stopped_at_ms))
+        .collect()
 }
 
 /// Each built image's batteries from the registry, and, when the engine's
@@ -912,6 +932,12 @@ pub fn findings(facts: &WorkshopFacts) -> Vec<Finding> {
             }
         }
     }
+    found.extend(officina_core::workshop::doctor::stop_findings(
+        facts.stop_flags.relay,
+        facts.stop_flags.workshop,
+        &facts.kept,
+        facts.now_ms,
+    ));
     if let Some(proxy) = &facts.proxy {
         found.extend(proxy_findings(proxy));
     }
@@ -991,7 +1017,73 @@ mod tests {
             now_ms: 1_800_000_000_000,
             credential: None,
             mounts: Vec::new(),
+            stop_flags: crate::relay::home::StopFlags {
+                relay: false,
+                workshop: false,
+            },
+            kept: Vec::new(),
         }
+    }
+
+    fn lines_titled(facts: &WorkshopFacts, title: &str) -> Vec<Check> {
+        checks(facts)
+            .into_iter()
+            .filter(|c| c.title == title)
+            .collect()
+    }
+
+    /// Story 6.17 AC 7 (AD-123): both flags are named, each for what it
+    /// stops, the line pointing at the window once the workshop stopped.
+    #[test]
+    fn both_flags_are_reported() {
+        for (relay, workshop) in [(false, false), (true, false), (false, true), (true, true)] {
+            let mut facts = facts();
+            facts.stop_flags = crate::relay::home::StopFlags { relay, workshop };
+            let lines = lines_titled(&facts, "workshop stop flags");
+            assert_eq!(lines.len(), 1);
+            let state = |s: bool| if s { "stopped" } else { "running" };
+            assert!(
+                lines[0].detail.starts_with(&format!(
+                    "relay {}, workshop {}",
+                    state(relay),
+                    state(workshop)
+                )),
+                "{}",
+                lines[0].detail
+            );
+            assert_eq!(lines[0].detail.contains("resume from the window"), workshop);
+        }
+    }
+
+    /// Story 6.17 AC 7 (AD-116, AD-123): each kept run shows the age of its
+    /// stop and the time left before removal, as a warning.
+    #[test]
+    fn kept_containers_show_their_age() {
+        let mut facts = facts();
+        let day = 24 * 60 * 60 * 1000;
+        facts.kept = vec![
+            (
+                "0123456789abcdef0123456789abcdef".into(),
+                Some(facts.now_ms - 2 * day),
+            ),
+            ("fedcba9876543210fedcba9876543210".into(), None),
+        ];
+        let lines = lines_titled(&facts, "workshop kept containers");
+        assert_eq!(lines.len(), 2);
+        assert!(lines.iter().all(|c| c.level == Level::Warn));
+        assert!(
+            lines[0].detail.contains("run 01234567: stopped 2 days ago")
+                && lines[0].detail.contains("in 5 days"),
+            "{}",
+            lines[0].detail
+        );
+        assert!(
+            lines[1].detail.contains("time unknown"),
+            "{}",
+            lines[1].detail
+        );
+        facts.kept.clear();
+        assert!(lines_titled(&facts, "workshop kept containers").is_empty());
     }
 
     fn report() -> ImageReport {

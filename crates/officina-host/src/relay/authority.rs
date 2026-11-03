@@ -13,7 +13,6 @@ use std::path::Path;
 use officina_core::ipc::{IpcError, IpcErrorCode};
 use officina_core::orders::permission::{WorkOrderPermission, WorkOrderPermissions};
 use officina_core::registry::types::AuthorReason;
-use officina_core::relay::StopFlag;
 use officina_core::relay::approvals::{
     ApprovalBy, DecideRefusal, Decision, FileKind, decidable, file_name, reason_fits,
     review_decidable,
@@ -32,6 +31,7 @@ use officina_core::relay::record::{
     DecisionRecord, RecordState, RecordedDecision, Verdict, holds_decisions, record_anomaly_key,
 };
 use officina_core::relay::run::is_stopped;
+use officina_core::relay::{StopBy, StopFlag};
 use serde::Serialize;
 
 use super::approvals::{self, ContextSources};
@@ -435,7 +435,13 @@ pub fn set_relay_stopped(home: &RelayHome, stopped: bool) -> Result<bool, Author
         Err(e) => return Err(e),
     }
     let line = if stopped {
-        write_json(&flag, &StopFlag { since_ms: now })?;
+        write_json(
+            &flag,
+            &StopFlag {
+                since_ms: now,
+                by: Some(StopBy::Window),
+            },
+        )?;
         JournalEntry::RelayStopped
     } else {
         match std::fs::remove_file(&flag) {

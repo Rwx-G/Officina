@@ -33,6 +33,7 @@ use officina_core::workshop::image::BuildAnswer;
 use officina_core::workshop::review::{
     ApprovalAnswer, DiscardAnswer, DiscardReason, ImportAnswer, ReviewView,
 };
+use officina_core::workshop::run::{RemoveRunAnswer, ResumeAnswer, ResumeChoice, StopAnswer};
 use officina_host::collector::Collector;
 use officina_host::files::now_ms;
 use officina_host::focus::{
@@ -867,6 +868,71 @@ async fn discard_package(
     .map_err(|e| IpcError::internal(e.to_string()))?
 }
 
+impl AppState {
+    /// Where the workshop's commands that stop, resume and remove work
+    /// from.
+    fn workshop_context(&self) -> Result<officina_host::workshop::follow::FollowContext, IpcError> {
+        let collector = self
+            .collector()
+            .ok_or_else(|| IpcError::internal("the collector is not running"))?;
+        let home = self
+            .paths
+            .read()
+            .map(|paths| paths.officina_home.clone())
+            .map_err(|_| IpcError::internal("the paths lock is poisoned"))?;
+        Ok(officina_host::workshop::follow::FollowContext {
+            runtime: self.workshop_runtime(),
+            collector,
+            home,
+            base_env: self.base_env.vars().to_vec(),
+        })
+    }
+}
+
+/// Stop all (AD-116, D-241): on its command's own blocking thread, never
+/// behind a job. It only reduces, so the keyboard reaches it.
+#[tauri::command]
+async fn stop_workshop(state: State<'_, AppState>) -> Result<StopAnswer, IpcError> {
+    let context = state.workshop_context()?;
+    let build = state.workshop.build.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        officina_host::workshop::stop::stop_workshop(&context, Some(&build))
+    })
+    .await
+    .map_err(|e| IpcError::internal(e.to_string()))?
+}
+
+/// Resume (AD-116, D-28): window only, pointer only; each kept run to
+/// collect or remove, and the relay resumed too when `resume_relay`.
+#[tauri::command]
+async fn resume_workshop(
+    state: State<'_, AppState>,
+    choices: Vec<ResumeChoice>,
+    resume_relay: bool,
+) -> Result<ResumeAnswer, IpcError> {
+    let context = state.workshop_context()?;
+    tauri::async_runtime::spawn_blocking(move || {
+        officina_host::workshop::resume::resume_workshop(&context, &choices, resume_relay)
+    })
+    .await
+    .map_err(|e| IpcError::internal(e.to_string()))?
+}
+
+/// Removes a kept or orphan run's objects of this floor (AD-121, D-215).
+/// It only reduces, so the keyboard reaches it.
+#[tauri::command]
+async fn remove_run(
+    state: State<'_, AppState>,
+    run_id: String,
+) -> Result<RemoveRunAnswer, IpcError> {
+    let context = state.workshop_context()?;
+    tauri::async_runtime::spawn_blocking(move || {
+        officina_host::workshop::stop::remove_run(&context, &run_id)
+    })
+    .await
+    .map_err(|e| IpcError::internal(e.to_string()))?
+}
+
 /// Stops or resumes the relay (FR-11, AD-34, D-26). Returns whether the
 /// state changed.
 #[tauri::command]
@@ -902,10 +968,15 @@ fn main() {
             }
         }))
         .setup(|app| {
+            // Both stop flags before anything else (AD-116): a workshop
+            // stopped before this start keeps thread `workshop` latched.
+            let flags = RelayHome::from_env().map(|home| home.stop_flags());
             // Every `claude` the window starts has its environment built
             // from the window's own, read once here (D-86), by its kind's
             // rule (D-561).
-            let collector = Collector::new(floor_arg().as_deref())?;
+            let hourly = officina_host::collector::HourlyWorkshop::default();
+            let collector =
+                Collector::new(floor_arg().as_deref())?.with_hourly_workshop(hourly.clone());
             let claude = collector.claude().map(std::path::Path::to_path_buf);
             let base_env = collector.base_env().clone();
             let relay_home = collector.relay().clone();
@@ -924,6 +995,9 @@ fn main() {
             };
             let watch = spawn(collector, events)?;
             let workshop = WorkshopThreads::spawn()?;
+            workshop
+                .workshop
+                .set_latch(flags.is_none_or(|flags| flags.workshop));
             workshop.read_engine_at_start(
                 officina_host::workshop::engine::resolve(),
                 base_env.vars().to_vec(),
@@ -950,14 +1024,18 @@ fn main() {
             // At window start every run not terminal is found again and
             // followed (AD-109), after the engine read queued above.
             let state = app.state::<AppState>();
-            officina_host::workshop::follow::reconcile_on_thread(
-                officina_host::workshop::follow::FollowContext {
-                    runtime: state.workshop_runtime(),
-                    collector: collector_sender,
-                    home: officina_home,
-                    base_env: state.base_env.vars().to_vec(),
-                },
-            );
+            let context = officina_host::workshop::follow::FollowContext {
+                runtime: state.workshop_runtime(),
+                collector: collector_sender,
+                home: officina_home,
+                base_env: state.base_env.vars().to_vec(),
+            };
+            officina_host::workshop::follow::reconcile_on_thread(context.clone());
+            // The hourly pass's engine half: kept containers past 7 days
+            // removed on thread `workshop` (AD-116, D-213).
+            hourly.set(Box::new(move || {
+                officina_host::workshop::stop::expire_kept_on_thread(&context);
+            }));
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -1027,7 +1105,10 @@ fn main() {
             open_review,
             approve_sensitive,
             import_package,
-            discard_package
+            discard_package,
+            stop_workshop,
+            resume_workshop,
+            remove_run
         ])
         .build(tauri::generate_context!())
         .expect("failed to build the Officina window")

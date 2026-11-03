@@ -470,10 +470,386 @@ pub fn retention(rows: &[RunAge], folders: &[String], now_ms: i64) -> Vec<Retent
     actions
 }
 
+/// What looking at a stop flag gave (AD-34, AD-116).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FlagLookup {
+    Missing,
+    Present,
+    /// Anything but "not found": the flag may be there.
+    Unreadable,
+}
+
+/// True when the flag stops its consumer (AD-34's predicate, per file,
+/// P-50): present, or not readable, so a flag the process cannot look at
+/// never lets an action start.
+pub const fn flag_set(lookup: FlagLookup) -> bool {
+    !matches!(lookup, FlagLookup::Missing)
+}
+
+/// The flag a writer writes (AD-116): one when the flag is missing; none
+/// when it is present or may be, since a writer leaves a present flag and
+/// its first time alone.
+pub fn flag_to_write(
+    lookup: FlagLookup,
+    since_ms: i64,
+    by: crate::relay::StopBy,
+) -> Option<crate::relay::StopFlag> {
+    match lookup {
+        FlagLookup::Missing => Some(crate::relay::StopFlag {
+            since_ms,
+            by: Some(by),
+        }),
+        FlagLookup::Present | FlagLookup::Unreadable => None,
+    }
+}
+
+/// How long Stop all may take with the engine answering (AD-116).
+pub const STOP_BUDGET_MS: u64 = 10_000;
+
+/// How long a stopped run keeps its containers (AD-116): they hold the
+/// credential in their engine configuration until removed.
+pub const KEPT_TTL_MS: i64 = 7 * 24 * 60 * 60 * 1000;
+
+closed_enum! {
+    #[serde(rename_all = "snake_case")]
+    /// Which containers a stop reached (AD-116): the window's floor, or
+    /// every floor of the engine from a terminal (D-30).
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+    pub enum StopScope {
+        Floor,
+        All,
+    }
+}
+
+/// The running managed containers a stop reaches (AD-116): of the floor
+/// whose key is given, or of every floor when none is.
+pub fn stop_targets(
+    rows: &[super::engine::PsRow],
+    floor_key: Option<&str>,
+) -> Vec<super::names::ObjectName> {
+    rows.iter()
+        .filter(|row| row.state == "running")
+        .filter(|row| managed(&row.labels) && on_floor(&row.labels, floor_key))
+        .filter_map(|row| super::names::ObjectName::parse(&row.name))
+        .collect()
+}
+
+/// The engine objects of one run on one floor (AD-121, D-215): those
+/// labelled managed, with the run's id and the floor's key, and nothing
+/// else.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RunObjects {
+    pub containers: Vec<super::names::ObjectName>,
+    pub networks: Vec<super::names::ObjectName>,
+    pub volumes: Vec<super::names::ObjectName>,
+}
+
+impl RunObjects {
+    pub fn is_empty(&self) -> bool {
+        self.containers.is_empty() && self.networks.is_empty() && self.volumes.is_empty()
+    }
+}
+
+/// The objects of `run_id` on `floor_key` among the engine's listings.
+pub fn run_objects(
+    containers: &[super::engine::PsRow],
+    networks: &[super::engine::ObjectRow],
+    volumes: &[super::engine::ObjectRow],
+    run_id: &str,
+    floor_key: &str,
+) -> RunObjects {
+    let ours = |labels: &std::collections::BTreeMap<String, String>| {
+        managed(labels)
+            && on_floor(labels, Some(floor_key))
+            && labels.get(super::names::RUN_LABEL).map(String::as_str) == Some(run_id)
+    };
+    let names =
+        |rows: &mut dyn Iterator<Item = (&String, &std::collections::BTreeMap<String, String>)>| {
+            rows.filter(|(_, labels)| ours(labels))
+                .filter_map(|(name, _)| super::names::ObjectName::parse(name))
+                .collect::<Vec<_>>()
+        };
+    RunObjects {
+        containers: names(&mut containers.iter().map(|r| (&r.name, &r.labels))),
+        networks: names(&mut networks.iter().map(|r| (&r.name, &r.labels))),
+        volumes: names(&mut volumes.iter().map(|r| (&r.name, &r.labels))),
+    }
+}
+
+fn managed(labels: &std::collections::BTreeMap<String, String>) -> bool {
+    let (key, value) = super::names::MANAGED_LABEL;
+    labels.get(key).map(String::as_str) == Some(value)
+}
+
+fn on_floor(labels: &std::collections::BTreeMap<String, String>, floor_key: Option<&str>) -> bool {
+    floor_key
+        .is_none_or(|key| labels.get(super::names::FLOOR_LABEL).map(String::as_str) == Some(key))
+}
+
+/// The stopped runs whose kept containers are due for removal at `now_ms`
+/// (AD-116, D-213): [`KEPT_TTL_MS`] after `stopped_at_ms`. A run without
+/// its stop time is kept: Stop all writes it with the state.
+pub fn kept_expired(stopped: &[(String, Option<i64>)], now_ms: i64) -> Vec<String> {
+    stopped
+        .iter()
+        .filter(|(_, at)| at.is_some_and(|at| at <= now_ms - KEPT_TTL_MS))
+        .map(|(id, _)| id.clone())
+        .collect()
+}
+
+/// What Stop all did (AD-116), for the window and its tests.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct StopAnswer {
+    /// The containers both passes stopped.
+    pub containers: u32,
+    /// The runs that became `stopped`.
+    pub runs: u32,
+    /// False when the engine could not be reached: containers may still
+    /// run.
+    pub engine_reached: bool,
+    /// How long it took, against [`STOP_BUDGET_MS`].
+    pub elapsed_ms: u64,
+}
+
+impl StopAnswer {
+    /// True when Stop all ended within [`STOP_BUDGET_MS`].
+    pub const fn within_budget(&self) -> bool {
+        self.elapsed_ms <= STOP_BUDGET_MS
+    }
+}
+
+closed_enum! {
+    #[serde(rename_all = "snake_case")]
+    /// What Resume does with one kept run (AD-116): collect it (the
+    /// default) or remove it.
+    #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+    #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+    pub enum KeptChoice {
+        #[default]
+        Collect,
+        Remove,
+    }
+}
+
+/// One kept run and the author's choice for it, as the Resume dialog
+/// sends it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct ResumeChoice {
+    pub run_id: String,
+    pub choice: KeptChoice,
+}
+
+/// What Resume did (AD-116).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct ResumeAnswer {
+    /// The runs queued for collection.
+    pub collected: u32,
+    /// The runs queued for removal.
+    pub removed: u32,
+    /// True when the relay was resumed too.
+    pub relay_resumed: bool,
+}
+
+/// Each kept run's choice: the author's, else collect (AD-116). A choice
+/// naming no kept run is ignored, so a stale dialog never reaches another
+/// run.
+pub fn resume_plan(kept: &[String], choices: &[ResumeChoice]) -> Vec<(String, KeptChoice)> {
+    kept.iter()
+        .map(|id| {
+            let choice = choices
+                .iter()
+                .find(|c| &c.run_id == id)
+                .map_or(KeptChoice::Collect, |c| c.choice);
+            (id.clone(), choice)
+        })
+        .collect()
+}
+
+closed_enum! {
+    #[serde(rename_all = "snake_case")]
+    /// Why `remove_run` removed nothing (AD-121, D-215).
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+    #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+    pub enum RemoveRunRefusal {
+        /// Not 32 lowercase hex characters.
+        MalformedId,
+        /// Neither kept nor an orphan of the window's floor.
+        NotRemovable,
+        /// No approved floor, so no floor key to act on.
+        NoFloor,
+        EngineUnavailable,
+    }
+}
+
+/// What `remove_run` answers.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "status", content = "detail", rename_all = "snake_case")]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub enum RemoveRunAnswer {
+    /// The run's objects removed: how many.
+    Removed(u32),
+    Refused(RemoveRunRefusal),
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::registry::retention::{COPY_LIFETIME_MS, EXCERPT_TTL_MS};
+
+    /// Story 6.17 AC 1 (AD-34 as amended, P-50): a flag that cannot be
+    /// looked at stops, as a present one does.
+    #[test]
+    fn an_unreadable_flag_counts_as_set() {
+        assert!(flag_set(FlagLookup::Present));
+        assert!(flag_set(FlagLookup::Unreadable));
+        assert!(!flag_set(FlagLookup::Missing));
+    }
+
+    /// Story 6.17 AC 1 (AD-116): a writer creates a missing flag with its
+    /// writer and time, and leaves a present one, or one it cannot read.
+    #[test]
+    fn a_present_flag_is_left_alone() {
+        use crate::relay::StopBy;
+        for by in StopBy::ALL {
+            assert_eq!(
+                flag_to_write(FlagLookup::Missing, 7, *by),
+                Some(crate::relay::StopFlag {
+                    since_ms: 7,
+                    by: Some(*by)
+                })
+            );
+            assert_eq!(flag_to_write(FlagLookup::Present, 7, *by), None);
+            assert_eq!(flag_to_write(FlagLookup::Unreadable, 7, *by), None);
+        }
+    }
+
+    /// Story 6.17 AC 5 (AD-116, D-213): kept containers go 7 days after
+    /// the stop, not before; a run without a stop time is kept.
+    #[test]
+    fn kept_containers_expire_after_7_days() {
+        let stopped = [
+            ("young".to_owned(), Some(NOW - KEPT_TTL_MS + 1)),
+            ("due".to_owned(), Some(NOW - KEPT_TTL_MS)),
+            ("untimed".to_owned(), None),
+        ];
+        assert_eq!(kept_expired(&stopped, NOW), ["due".to_owned()]);
+    }
+
+    fn ps_row(name: &str, state: &str, labels: &[(&str, &str)]) -> super::super::engine::PsRow {
+        super::super::engine::PsRow {
+            id: format!("id-{name}"),
+            name: name.to_owned(),
+            state: state.to_owned(),
+            labels: labels
+                .iter()
+                .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+                .collect(),
+        }
+    }
+
+    /// AD-116: the window stops its floor's running containers; the CLI
+    /// every floor's; an unmanaged or exited container is never named.
+    #[test]
+    fn stop_targets_are_running_managed_containers_of_the_floor() {
+        let rows = [
+            ps_row(
+                "officina-worker-a",
+                "running",
+                &[("officina.managed", "1"), ("officina.floor", "f1")],
+            ),
+            ps_row(
+                "officina-worker-b",
+                "running",
+                &[("officina.managed", "1"), ("officina.floor", "f2")],
+            ),
+            ps_row(
+                "officina-worker-c",
+                "exited",
+                &[("officina.managed", "1"), ("officina.floor", "f1")],
+            ),
+            ps_row("someone-else", "running", &[("officina.floor", "f1")]),
+        ];
+        let names = |found: Vec<super::super::names::ObjectName>| {
+            found
+                .iter()
+                .map(|n| n.as_str().to_owned())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            names(stop_targets(&rows, Some("f1"))),
+            ["officina-worker-a"]
+        );
+        assert_eq!(
+            names(stop_targets(&rows, None)),
+            ["officina-worker-a", "officina-worker-b"]
+        );
+    }
+
+    /// AD-121, D-215: a run's objects are those with its id and the
+    /// floor's key, never another floor's or another run's.
+    #[test]
+    fn run_objects_are_labelled_with_the_run_and_the_floor() {
+        let run = "0123456789abcdef0123456789abcdef";
+        let mine = [
+            ("officina.managed", "1"),
+            ("officina.floor", "f1"),
+            ("officina.run", run),
+        ];
+        let other_floor = [
+            ("officina.managed", "1"),
+            ("officina.floor", "f2"),
+            ("officina.run", run),
+        ];
+        let rows = [
+            ps_row("officina-worker-mine", "exited", &mine),
+            ps_row("officina-worker-theirs", "exited", &other_floor),
+        ];
+        let object = |name: &str, labels: &[(&str, &str)]| super::super::engine::ObjectRow {
+            name: name.to_owned(),
+            labels: labels
+                .iter()
+                .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+                .collect(),
+        };
+        let networks = [
+            object("officina-net-mine", &mine),
+            object("officina-net-theirs", &other_floor),
+        ];
+        let volumes = [object("officina-work-mine", &mine)];
+        let found = run_objects(&rows, &networks, &volumes, run, "f1");
+        assert_eq!(found.containers.len(), 1);
+        assert_eq!(found.containers[0].as_str(), "officina-worker-mine");
+        assert_eq!(found.networks.len(), 1);
+        assert_eq!(found.volumes.len(), 1);
+        assert!(run_objects(&rows, &networks, &volumes, run, "f3").is_empty());
+    }
+
+    /// AD-116: a kept run the dialog does not name is collected; a choice
+    /// for a run that is not kept is ignored.
+    #[test]
+    fn resume_collects_unless_told_otherwise() {
+        let kept = ["a".to_owned(), "b".to_owned()];
+        let choices = [
+            ResumeChoice {
+                run_id: "b".into(),
+                choice: KeptChoice::Remove,
+            },
+            ResumeChoice {
+                run_id: "z".into(),
+                choice: KeptChoice::Remove,
+            },
+        ];
+        assert_eq!(
+            resume_plan(&kept, &choices),
+            [
+                ("a".to_owned(), KeptChoice::Collect),
+                ("b".to_owned(), KeptChoice::Remove)
+            ]
+        );
+    }
 
     const NOW: i64 = 1_793_102_400_000;
 

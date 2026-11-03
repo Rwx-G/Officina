@@ -78,6 +78,9 @@ pub const EDGES: &[(RunState, RunEvent, RunState)] = &[
         RunState::Failed,
     ),
     (RunState::Collecting, RunEvent::Lost, RunState::Unknown),
+    // A collection Stop all interrupted is collected again at Resume,
+    // the packer emptying `out/` first (story 6.17 AC 2).
+    (RunState::Collecting, RunEvent::StopAll, RunState::Stopped),
     (RunState::Stopped, RunEvent::Resumed, RunState::Collecting),
     (RunState::Stopped, RunEvent::Removed, RunState::Discarded),
     (RunState::Stopped, RunEvent::Lost, RunState::Unknown),

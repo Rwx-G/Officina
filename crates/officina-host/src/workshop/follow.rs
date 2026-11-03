@@ -846,7 +846,7 @@ pub(crate) fn rows_to_reconcile(
     Ok(AuthorAnswer::WorkshopRows(Box::new((rows, floor_key))))
 }
 
-fn finished_line(
+pub(crate) fn finished_line(
     row: &RunRecord,
     cause: FinishCause,
     outcome: WorkshopOutcome,

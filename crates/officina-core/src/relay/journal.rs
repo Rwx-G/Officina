@@ -159,6 +159,8 @@ pub enum JournalEntry {
     SensitiveApproved(SensitiveApproved),
     ReviewImported(ReviewImported),
     ReviewDiscarded(ReviewDiscarded),
+    WorkshopStopped(WorkshopStopped),
+    WorkshopResumed(WorkshopResumed),
 }
 
 closed_enum! {
@@ -201,6 +203,8 @@ closed_enum! {
         SensitiveApproved,
         ReviewImported,
         ReviewDiscarded,
+        WorkshopStopped,
+        WorkshopResumed,
     }
 }
 
@@ -242,6 +246,8 @@ impl JournalEntry {
             JournalEntry::SensitiveApproved(_) => JournalKind::SensitiveApproved,
             JournalEntry::ReviewImported(_) => JournalKind::ReviewImported,
             JournalEntry::ReviewDiscarded(_) => JournalKind::ReviewDiscarded,
+            JournalEntry::WorkshopStopped(_) => JournalKind::WorkshopStopped,
+            JournalEntry::WorkshopResumed(_) => JournalKind::WorkshopResumed,
         }
     }
 }
@@ -818,6 +824,25 @@ pub struct ReviewDiscarded {
     pub reason: crate::workshop::review::DiscardReason,
 }
 
+/// Stop all (AD-116, AD-120): from the window on its floor, or from
+/// `officina stop --all` on every floor, and how many containers it
+/// stopped.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkshopStopped {
+    pub scope: crate::workshop::run::StopScope,
+    pub by: super::StopBy,
+    pub containers: u32,
+}
+
+/// Resume (AD-116, AD-120): the kept runs collected and removed, and
+/// whether the relay resumed with the workshop.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkshopResumed {
+    pub collected: u32,
+    pub removed: u32,
+    pub relay_resumed: bool,
+}
+
 /// A refusal a gateway logged (AD-120): a run's, or a battery's (story
 /// 6.10 writes it first, D-249). The host is worker text, made printable
 /// and cut by the gateway's own line rule.
@@ -1228,6 +1253,16 @@ mod tests {
             JournalKind::ReviewDiscarded => JournalEntry::ReviewDiscarded(ReviewDiscarded {
                 run_id: "0123456789abcdef0123456789abcdef".into(),
                 reason: crate::workshop::review::DiscardReason::PoorResult,
+            }),
+            JournalKind::WorkshopStopped => JournalEntry::WorkshopStopped(WorkshopStopped {
+                scope: crate::workshop::run::StopScope::Floor,
+                by: super::super::StopBy::Window,
+                containers: 2,
+            }),
+            JournalKind::WorkshopResumed => JournalEntry::WorkshopResumed(WorkshopResumed {
+                collected: 1,
+                removed: 1,
+                relay_resumed: true,
             }),
             JournalKind::PromptDecided => JournalEntry::PromptDecided(PromptDecided {
                 session_id: "0f1e2d3c-4b5a-4978-8796-a5b4c3d2e1f0".into(),
@@ -1760,6 +1795,54 @@ mod tests {
             let value: serde_json::Value = serde_json::from_str(&line).unwrap();
             assert_eq!(value["kind"], "review_discarded");
             assert_eq!(value["reason"], reason.code());
+            assert_eq!(
+                parse_line(line.trim_end()),
+                ParsedLine::Line(JournalLine::new(4, entry))
+            );
+        }
+    }
+
+    /// Story 6.17 AC 2 (AD-120, D-249): `workshop_stopped` reads back for
+    /// every scope and writer, with its container count; 6.17 is its first
+    /// writer.
+    #[test]
+    fn workshop_stopped_round_trips() {
+        for scope in crate::workshop::run::StopScope::ALL {
+            for by in super::super::StopBy::ALL {
+                let entry = JournalEntry::WorkshopStopped(WorkshopStopped {
+                    scope: *scope,
+                    by: *by,
+                    containers: 3,
+                });
+                let line = JournalLine::new(4, entry.clone()).to_line();
+                let value: serde_json::Value = serde_json::from_str(&line).unwrap();
+                assert_eq!(value["kind"], "workshop_stopped");
+                assert_eq!(value["scope"], scope.code());
+                assert_eq!(value["by"], by.code());
+                assert_eq!(value["containers"], 3);
+                assert_eq!(
+                    parse_line(line.trim_end()),
+                    ParsedLine::Line(JournalLine::new(4, entry))
+                );
+            }
+        }
+    }
+
+    /// Story 6.17 AC 4 (AD-120, D-249): `workshop_resumed` reads back with
+    /// its counts and the relay's choice.
+    #[test]
+    fn workshop_resumed_round_trips() {
+        for relay_resumed in [true, false] {
+            let entry = JournalEntry::WorkshopResumed(WorkshopResumed {
+                collected: 2,
+                removed: 1,
+                relay_resumed,
+            });
+            let line = JournalLine::new(4, entry.clone()).to_line();
+            let value: serde_json::Value = serde_json::from_str(&line).unwrap();
+            assert_eq!(value["kind"], "workshop_resumed");
+            assert_eq!(value["collected"], 2);
+            assert_eq!(value["removed"], 1);
             assert_eq!(
                 parse_line(line.trim_end()),
                 ParsedLine::Line(JournalLine::new(4, entry))

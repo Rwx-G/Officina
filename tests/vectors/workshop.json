@@ -2353,6 +2353,11 @@
       "to": "unknown"
     },
     {
+      "from": "collecting",
+      "event": "stop_all",
+      "to": "stopped"
+    },
+    {
       "from": "stopped",
       "event": "resumed",
       "to": "collecting"

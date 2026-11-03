@@ -5,6 +5,7 @@ use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 use officina_core::agents::{AgentRecord, parse_agents};
@@ -206,6 +207,34 @@ impl TreeCache {
     }
 }
 
+/// A job the hourly pass hands to thread `workshop` (AD-116, D-213): the
+/// collector never runs `docker`, so the window sets what queues it once
+/// its threads and the collector's sender exist.
+#[derive(Clone, Default)]
+pub struct HourlyWorkshop(Arc<OnceLock<Box<dyn Fn() + Send + Sync>>>);
+
+impl HourlyWorkshop {
+    /// Sets the job, once; a second call changes nothing.
+    pub fn set(&self, job: Box<dyn Fn() + Send + Sync>) {
+        let _ = self.0.set(job);
+    }
+
+    /// Queues the job, when one is set.
+    pub fn run(&self) {
+        if let Some(job) = self.0.get() {
+            job();
+        }
+    }
+}
+
+impl std::fmt::Debug for HourlyWorkshop {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("HourlyWorkshop")
+            .field(&self.0.get().is_some())
+            .finish()
+    }
+}
+
 /// The collector's state between two boards: every field private, so what
 /// it reads and writes goes through its methods.
 #[derive(Debug)]
@@ -256,6 +285,10 @@ pub struct Collector {
     /// The run containers of this floor no row owns (AD-109), as the last
     /// reconciliation listed them.
     workshop_orphans: Vec<String>,
+    /// What the hourly pass queues on thread `workshop` (AD-116, D-213):
+    /// the removal of kept containers past 7 days; set by the window once
+    /// its threads run.
+    hourly_workshop: HourlyWorkshop,
 }
 
 impl Collector {
@@ -315,6 +348,7 @@ impl Collector {
             confirm_window: Duration::from_millis(officina_core::meeting::CONFIRM_WINDOW_MS),
             engine: None,
             workshop_orphans: Vec::new(),
+            hourly_workshop: HourlyWorkshop::default(),
         }
     }
 
@@ -374,6 +408,17 @@ impl Collector {
     /// next board's approval cards show (AD-87, D-143).
     pub fn set_auto_escalations(&mut self, escalations: BTreeMap<String, Escalation>) {
         self.auto_escalations = escalations;
+    }
+
+    /// The collector whose hourly pass runs `hourly` (AD-116, D-213).
+    pub fn with_hourly_workshop(mut self, hourly: HourlyWorkshop) -> Collector {
+        self.hourly_workshop = hourly;
+        self
+    }
+
+    /// What the hourly pass hands to thread `workshop`.
+    pub fn hourly_workshop(&self) -> &HourlyWorkshop {
+        &self.hourly_workshop
     }
 
     /// The collector giving each review call at most `timeout` (a test's

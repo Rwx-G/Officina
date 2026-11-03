@@ -86,6 +86,12 @@ closed_enum! {
         OrphanNetworks,
         /// Volumes labelled by Officina that no container of theirs uses.
         OrphanVolumes,
+        /// Both stop flags, each for what it stops (AD-116, P-50).
+        StopFlags,
+        /// Runs Stop all kept, with their age: their containers hold the
+        /// credential in their engine configuration until removed at 7
+        /// days or by Resume (AD-116).
+        KeptContainers,
         /// The Officina home lies in a sync client's folder: base bundles
         /// of up to 1 GiB and the scratch repository would sync (D-228,
         /// review F44).
@@ -182,6 +188,7 @@ impl WorkshopCheck {
             | WorkshopCheck::EngineUnreachable
             | WorkshopCheck::OrphanNetworks
             | WorkshopCheck::OrphanVolumes
+            | WorkshopCheck::KeptContainers
             | WorkshopCheck::HomeSynced
             | WorkshopCheck::ProxyNotEvaluated
             | WorkshopCheck::ImageAbsent
@@ -196,7 +203,8 @@ impl WorkshopCheck {
             WorkshopCheck::ProxyRefused => CheckLevel::Fail,
             WorkshopCheck::ProxyRoutes
             | WorkshopCheck::ProxyCaNote
-            | WorkshopCheck::UpstreamState => CheckLevel::Inform,
+            | WorkshopCheck::UpstreamState
+            | WorkshopCheck::StopFlags => CheckLevel::Inform,
             WorkshopCheck::DockerResolved
             | WorkshopCheck::GitResolved
             | WorkshopCheck::OverridesSet
@@ -245,6 +253,8 @@ impl WorkshopCheck {
             | WorkshopCheck::CaLabelMismatch => "workshop ca",
             WorkshopCheck::WorkersOverMemory => "workshop memory",
             WorkshopCheck::OrphanNetworks | WorkshopCheck::OrphanVolumes => "workshop orphans",
+            WorkshopCheck::StopFlags => "workshop stop flags",
+            WorkshopCheck::KeptContainers => "workshop kept containers",
             WorkshopCheck::HomeSynced => "workshop home",
             WorkshopCheck::ProxyRoutes
             | WorkshopCheck::ProxyRefused
@@ -301,6 +311,44 @@ fn age(ms: i64) -> String {
         m if m < 48 * 60 => format!("{} h", m / 60),
         m => format!("{} days", m / (24 * 60)),
     }
+}
+
+/// Doctor's stop lines (AD-116, AD-123): both flags, each for what it
+/// stops, and each kept run with the age of its stop and the time left
+/// before its containers go.
+pub fn stop_findings(
+    relay_stopped: bool,
+    workshop_stopped: bool,
+    kept: &[(String, Option<i64>)],
+    now_ms: i64,
+) -> Vec<Finding> {
+    let state = |stopped: bool| if stopped { "stopped" } else { "running" };
+    let mut found = vec![Finding::new(
+        WorkshopCheck::StopFlags,
+        format!(
+            "relay {}, workshop {}{}",
+            state(relay_stopped),
+            state(workshop_stopped),
+            if workshop_stopped {
+                "; resume from the window"
+            } else {
+                ""
+            }
+        ),
+    )];
+    for (id, stopped_at) in kept {
+        let shown = id.get(..8).unwrap_or(id);
+        let detail = match stopped_at {
+            Some(at) => format!(
+                "run {shown}: stopped {} ago; its containers hold the credential until removed, at the latest in {}",
+                age(now_ms - at),
+                age(at + super::run::KEPT_TTL_MS - now_ms)
+            ),
+            None => format!("run {shown}: stopped, time unknown"),
+        };
+        found.push(Finding::new(WorkshopCheck::KeptContainers, detail));
+    }
+    found
 }
 
 /// Doctor's battery lines (AD-117, AD-123, D-232, D-242): each image's

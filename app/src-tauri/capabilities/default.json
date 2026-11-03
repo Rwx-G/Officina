@@ -49,6 +49,9 @@
     "allow-open-review",
     "allow-approve-sensitive",
     "allow-import-package",
-    "allow-discard-package"
+    "allow-discard-package",
+    "allow-stop-workshop",
+    "allow-resume-workshop",
+    "allow-remove-run"
   ]
 }

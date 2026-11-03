@@ -693,6 +693,14 @@ impl WindowRegistry {
         })
     }
 
+    /// The runs in one of `states`.
+    pub fn workshop_runs_in(
+        &mut self,
+        states: &[officina_core::workshop::run::RunState],
+    ) -> Result<Vec<crate::registry::workshop::RunRecord>, IpcError> {
+        self.with_writer(|writer| Ok(Ok(writer.workshop_runs_in(states)?)))
+    }
+
     /// Moves run `id` by `event` (AD-109) and lets `amend` change its facts
     /// in the same step; the row as it was, or `None` when the registry
     /// holds no such run or no edge allows the move, which changes nothing.
@@ -714,6 +722,18 @@ impl WindowRegistry {
             amend(&mut after);
             writer.set_run_state(id, to, now_ms)?;
             writer.set_run_facts(id, &after.facts)?;
+            if let Some(at) = after
+                .stopped_at_ms
+                .filter(|_| after.stopped_at_ms != before.stopped_at_ms)
+            {
+                writer.set_run_stopped_at(id, at)?;
+            }
+            if after.discard_reason
+                == Some(officina_core::workshop::review::DiscardReason::NotCollected)
+                && before.discard_reason.is_none()
+            {
+                writer.set_run_not_collected(id, now_ms)?;
+            }
             if let Some(texts) = after.texts.as_ref().filter(|_| after.texts != before.texts) {
                 writer.set_run_texts(id, texts)?;
             }
@@ -728,6 +748,9 @@ impl WindowRegistry {
                         writer.set_run_cause(id, cause, after.exit_code)?;
                     }
                 }
+            } else if let Some(outcome) = after.outcome.filter(|_| after.outcome != before.outcome)
+            {
+                writer.set_run_outcome(id, outcome, now_ms)?;
             }
             Ok(Ok(Some(before)))
         })

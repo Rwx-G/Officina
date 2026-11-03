@@ -32,6 +32,7 @@ use officina_core::workshop::image::BuildAnswer;
 use officina_core::workshop::review::{
     ApprovalAnswer, DiscardAnswer, DiscardReason, ImportAnswer, ReviewView,
 };
+use officina_core::workshop::run::{RemoveRunAnswer, ResumeAnswer, ResumeChoice, StopAnswer};
 use ts_rs::{Config, TS};
 
 fn committed_dir() -> PathBuf {
@@ -83,6 +84,10 @@ fn export(dir: &Path) {
     ImportAnswer::export_all(&cfg).unwrap();
     DiscardAnswer::export_all(&cfg).unwrap();
     DiscardReason::export_all(&cfg).unwrap();
+    StopAnswer::export_all(&cfg).unwrap();
+    ResumeChoice::export_all(&cfg).unwrap();
+    ResumeAnswer::export_all(&cfg).unwrap();
+    RemoveRunAnswer::export_all(&cfg).unwrap();
 }
 
 #[test]

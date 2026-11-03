@@ -9,6 +9,10 @@ import type { Board } from "./lib/generated/Board";
 import type { ApprovalAnswer } from "./lib/generated/ApprovalAnswer";
 import type { DiscardAnswer } from "./lib/generated/DiscardAnswer";
 import type { ImportAnswer } from "./lib/generated/ImportAnswer";
+import type { RemoveRunAnswer } from "./lib/generated/RemoveRunAnswer";
+import type { ResumeAnswer } from "./lib/generated/ResumeAnswer";
+import type { ResumeChoice } from "./lib/generated/ResumeChoice";
+import type { StopAnswer } from "./lib/generated/StopAnswer";
 import type { BuildAnswer } from "./lib/generated/BuildAnswer";
 import type { CardAnswer } from "./lib/generated/CardAnswer";
 import type { ConfirmItem } from "./lib/generated/ConfirmItem";
@@ -120,6 +124,12 @@ export function installE2eMock(): void {
           return importPackage((args as { runId: string }).runId);
         case "discard_package":
           return discardPackage();
+        case "stop_workshop":
+          return stopWorkshop();
+        case "resume_workshop":
+          return resumeWorkshop((args as { choices: ResumeChoice[] }).choices, (args as { resumeRelay: boolean }).resumeRelay);
+        case "remove_run":
+          return removeRun();
         case "send_answer":
           return answer((args as { proposalId?: string }).proposalId ?? null);
         default:
@@ -330,6 +340,32 @@ function importPackage(runId: string): Promise<ImportAnswer> {
  *  sets in `__officinaDiscardAnswer`, else `discarded`. */
 function discardPackage(): Promise<DiscardAnswer> {
   return Promise.resolve(window.__officinaDiscardAnswer ?? { outcome: "discarded" });
+}
+
+/** Mirrors the answer to `stop_workshop` (AD-116): the answer the test
+ *  sets in `__officinaStopAnswer`, else nothing stopped, within budget.
+ *  Every call is counted in `__officinaStopCalls`. */
+function stopWorkshop(): Promise<StopAnswer> {
+  window.__officinaStopCalls = (window.__officinaStopCalls ?? 0) + 1;
+  return Promise.resolve(
+    window.__officinaStopAnswer ?? { containers: 0, runs: 0, engine_reached: true, elapsed_ms: 0 },
+  );
+}
+
+/** Mirrors the answer to `resume_workshop` (AD-116): the choices counted
+ *  as sent, the relay as asked; every call's arguments kept in
+ *  `__officinaResumeCalls`, so a keyboard Resume can be shown to make
+ *  none (D-28). */
+function resumeWorkshop(choices: ResumeChoice[], resumeRelay: boolean): Promise<ResumeAnswer> {
+  window.__officinaResumeCalls = [...(window.__officinaResumeCalls ?? []), { choices, resumeRelay }];
+  const removed = choices.filter((c) => c.choice === "remove").length;
+  return Promise.resolve({ collected: choices.length - removed, removed, relay_resumed: resumeRelay });
+}
+
+/** Mirrors the answer to `remove_run` (AD-121): the answer the test sets
+ *  in `__officinaRemoveRunAnswer`, else two objects removed. */
+function removeRun(): Promise<RemoveRunAnswer> {
+  return Promise.resolve(window.__officinaRemoveRunAnswer ?? { status: "removed", detail: 2 });
 }
 
 /** Mirrors the answer to `start_orchestrator` (AD-89): the answer the

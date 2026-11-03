@@ -70,7 +70,10 @@ pub mod inventory;
 pub mod launch;
 pub mod proxy;
 #[cfg(feature = "window-authority")]
+pub mod resume;
+#[cfg(feature = "window-authority")]
 pub mod review;
+pub mod stop;
 #[cfg(feature = "window-authority")]
 pub mod threads;
 pub mod verify;

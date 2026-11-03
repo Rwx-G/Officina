@@ -182,6 +182,26 @@ pub enum AuthorCommand {
         run_id: String,
         reason: officina_core::workshop::review::DiscardReason,
     },
+    /// Stop all's record (AD-116): every live run but a launching one
+    /// moved to `stopped`, and `workshop_stopped` journaled. Never dropped:
+    /// the containers were stopped.
+    WorkshopStopAll { containers: u32 },
+    /// The stopped runs with their stop times, and the floor's key (AD-116).
+    KeptRuns,
+    /// Resume (AD-116): the workshop's flag deleted (and the relay's when
+    /// asked), `workshop_resumed` journaled, the runs to collect moved to
+    /// `collecting`; answered with each kept run's choice.
+    ResumeWorkshop {
+        choices: Vec<officina_core::workshop::run::ResumeChoice>,
+        resume_relay: bool,
+    },
+    /// Kept runs whose engine objects thread `workshop` removed (AD-116):
+    /// `discarded`, reason `not_collected`. Never dropped: the objects are
+    /// gone.
+    RemoveKept {
+        ids: Vec<String>,
+        cause: officina_core::workshop::run::RemovalCause,
+    },
     /// How a granted launch ended (AD-81 step 3). It carries no deadline:
     /// the collector records it however late it comes, and never drops it
     /// (D-135, review F14).
@@ -434,6 +454,13 @@ pub enum AuthorAnswer {
     Import(officina_core::workshop::review::ImportAnswer),
     /// How a Discard was answered (AD-114).
     Discard(officina_core::workshop::review::DiscardAnswer),
+    /// How many runs Stop all moved to `stopped` (AD-116).
+    Stopped(u32),
+    /// The stopped runs with their stop times, and the floor's key.
+    KeptRuns(Box<crate::workshop::stop::KeptRuns>),
+    /// Resume's plan: each kept run's choice, and whether the relay
+    /// resumed (AD-116).
+    Resumed(Box<crate::workshop::resume::ResumePlan>),
 }
 
 /// The collector's answer, or why there is none to give.
@@ -481,6 +508,8 @@ impl AuthorRequest {
                 | AuthorCommand::WorkshopFollow(_)
                 | AuthorCommand::RecordApproval(_)
                 | AuthorCommand::RecordImport(_)
+                | AuthorCommand::WorkshopStopAll { .. }
+                | AuthorCommand::RemoveKept { .. }
         ) && now + AUTHOR_HEADROOM >= self.deadline
     }
 }
@@ -1151,6 +1180,9 @@ fn hourly_pass(collector: &mut Collector, registry: &mut WindowRegistry) {
         collector.record_hook_sightings(&pass.ingested.hook_sightings);
         crate::workshop::import::journal_expired(collector, &pass.workshop.expired, now);
     }
+    // Kept containers go through thread `workshop`, even while stopped:
+    // removal only reduces (AD-116, D-213).
+    collector.hourly_workshop().run();
     crate::focus::prune_focus_log(&collector.paths().state_dir(), now_ms());
     crate::relay::approvals::prune(collector.relay(), SystemTime::now());
     crate::relay::journal::prune(collector.relay(), now_ms());
@@ -1417,6 +1449,7 @@ fn answer_author<E: Emit>(
             | AuthorCommand::EngineState(_)
             | AuthorCommand::GrantBuild
             | AuthorCommand::GrantBattery(_)
+            | AuthorCommand::KeptRuns
     );
     let quota = outputs.board.current().map(|board| board.quota);
     let reply = match request.command {
@@ -1513,6 +1546,23 @@ fn answer_author<E: Emit>(
         }
         AuthorCommand::DiscardPackage { run_id, reason } => {
             crate::workshop::import::discard_on_collector(collector, registry, &run_id, reason, now)
+        }
+        AuthorCommand::WorkshopStopAll { containers } => {
+            crate::workshop::stop::stop_all_on_collector(collector, registry, containers, now)
+        }
+        AuthorCommand::KeptRuns => crate::workshop::stop::kept_on_collector(collector, registry),
+        AuthorCommand::ResumeWorkshop {
+            choices,
+            resume_relay,
+        } => crate::workshop::resume::resume_on_collector(
+            collector,
+            registry,
+            &choices,
+            resume_relay,
+            now,
+        ),
+        AuthorCommand::RemoveKept { ids, cause } => {
+            crate::workshop::stop::remove_kept_on_collector(collector, registry, &ids, cause, now)
         }
         AuthorCommand::EditCard { card_id, change } => crate::orders::edit(
             cards,

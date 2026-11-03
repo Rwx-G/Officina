@@ -366,6 +366,8 @@ fn run_captured(
             RunError::Spawn(e) => SpawnError::Spawn(e.to_string()),
             RunError::NotContained(e) => SpawnError::NotContained(e.to_string()),
             RunError::Lost(e) => SpawnError::Lost(e.to_string()),
+            // Never on a job thread; read as a lost child if it ever were.
+            RunError::Interrupted => SpawnError::Lost(RunError::Interrupted.to_string()),
         })
 }
 

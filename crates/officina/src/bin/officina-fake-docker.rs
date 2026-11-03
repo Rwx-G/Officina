@@ -26,7 +26,9 @@
 //! (`prefix`, and `contains`) fails every call matching it, exit 1;
 //! `touch_when` (`prefix`, `contains`, `path`) writes an empty file at
 //! `path` when a call matches, as a hand setting a flag between two steps
-//! would; `start_sleep_ms` delays each `start`; story 6.12's followers
+//! would; `start_latency_ms` holds a detached `start` that long after the
+//! engine accepted it, as a slow client does, and `stop_latency_ms` holds a
+//! `stop` that long before it acts (story 6.17); story 6.12's followers
 //! (see [`follow_logs`]); story 6.13's packer copy (see
 //! [`copy_package`]). Any other call is logged
 //! and exits 0. Later stories add theirs.
@@ -129,10 +131,12 @@ fn main() {
         eprintln!("Error: the fake engine fails this call");
         std::process::exit(1);
     }
-    if words.first() == Some(&"start")
-        && let Some(ms) = sidecar["start_sleep_ms"].as_u64()
+    if words.first() == Some(&"stop")
+        && let Some(ms) = sidecar["stop_latency_ms"].as_u64()
     {
         std::thread::sleep(Duration::from_millis(ms));
+        // What other calls changed while this one waited stands.
+        state = read_json(&beside(STATE));
     }
     let code = match words.as_slice() {
         ["version", ..] => match sidecar["version"].as_str().unwrap_or("linux") {
@@ -243,7 +247,13 @@ fn main() {
         ["create", rest @ ..] => create(rest, &sidecar, &mut state),
         ["cp", source, "-"] => copy_out(source, &sidecar, &state),
         ["start", "--attach", .., name] => start_attached(name, &sidecar, &mut state),
-        ["start", name] => start_detached(name, &sidecar, &mut state),
+        ["start", name] => {
+            let code = start_detached(name, &sidecar, &mut state);
+            if let Some(ms) = sidecar["start_latency_ms"].as_u64() {
+                std::thread::sleep(Duration::from_millis(ms));
+            }
+            code
+        }
         ["logs", "--follow", "--timestamps", name] => follow_logs(name, &sidecar),
         ["logs", name] => logs_once(name, &sidecar, &state),
         ["stop", rest @ ..] => {

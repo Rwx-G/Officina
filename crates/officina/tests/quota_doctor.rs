@@ -651,6 +651,13 @@ fn no_command_writes_under_the_claude_config_dir() {
         ingested.contains(&"s".to_owned()),
         "the collector ingested: {ingested:?}"
     );
+    // `officina stop --all` last, since it stops the relay (story 6.17
+    // AC 3): no engine resolves here, so it writes the flags and exits 1.
+    let mut stop = env.officina(&["stop", "--all"]);
+    stop.current_dir(&lab);
+    let out = common::run_with(stop, b"");
+    assert_eq!(out.status.code(), Some(1), "{out:?}");
+    assert!(env.relay_home().stop_flags().workshop);
     assert_eq!(fingerprint(&config), before);
     assert_eq!(std::fs::read(&claude_json).unwrap(), claude_json_before);
 }

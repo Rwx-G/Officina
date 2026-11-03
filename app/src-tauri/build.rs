@@ -46,6 +46,9 @@ const COMMANDS: &[&str] = &[
     "approve_sensitive",
     "import_package",
     "discard_package",
+    "stop_workshop",
+    "resume_workshop",
+    "remove_run",
 ];
 
 fn main() {

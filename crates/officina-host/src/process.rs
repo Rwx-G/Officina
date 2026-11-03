@@ -2,8 +2,10 @@
 //! way to wait for it against a deadline, and one way to run it contained
 //! (its tree in a job, its pipes drained, a deadline and a grace).
 
+use std::cell::RefCell;
 use std::io::{Read, Write};
 use std::process::{Child, Command, ExitStatus, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -37,13 +39,66 @@ pub enum Waited {
 /// Waits for `child` until `deadline`, a look every [`POLL_TICK`]. Never
 /// kills: what a deadline ends (the child, its job) is the caller's choice.
 pub fn wait_until(child: &mut Child, deadline: Instant) -> Waited {
+    wait_unless(child, deadline, None).unwrap_or(Waited::Deadline)
+}
+
+/// [`wait_until`], ending early with `None` once `watch` fired.
+fn wait_unless(child: &mut Child, deadline: Instant, watch: Option<&Watch>) -> Option<Waited> {
     loop {
         match child.try_wait() {
-            Ok(Some(status)) => return Waited::Exited(status),
-            Ok(None) if Instant::now() >= deadline => return Waited::Deadline,
+            Ok(Some(status)) => return Some(Waited::Exited(status)),
+            Ok(None) if watch.is_some_and(Watch::fired) => return None,
+            Ok(None) if Instant::now() >= deadline => return Some(Waited::Deadline),
             Ok(None) => std::thread::sleep(POLL_TICK),
-            Err(e) => return Waited::Lost(e),
+            Err(e) => return Some(Waited::Lost(e)),
         }
+    }
+}
+
+/// What ends the children a job thread is running before their deadline
+/// (AD-116): Stop all fires it, and every child a thread watching it had
+/// started by then is ended with its tree. A child started afterwards is
+/// not, so the job's own clean-up still runs.
+#[derive(Debug, Default)]
+pub struct Interrupts {
+    fired: AtomicU64,
+}
+
+impl Interrupts {
+    /// Ends every child the threads watching `self` are running now.
+    pub fn fire(&self) {
+        self.fired.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+thread_local! {
+    static WATCHED: RefCell<Option<Arc<Interrupts>>> = const { RefCell::new(None) };
+}
+
+/// Makes the calling thread's children end when `interrupts` fires: a job
+/// thread calls it once, before its first job.
+pub fn watch_interrupts(interrupts: Arc<Interrupts>) {
+    WATCHED.with(|watched| *watched.borrow_mut() = Some(interrupts));
+}
+
+/// The calling thread's interrupts as they stand when a child starts.
+struct Watch {
+    interrupts: Arc<Interrupts>,
+    at: u64,
+}
+
+impl Watch {
+    fn now() -> Option<Watch> {
+        WATCHED.with(|watched| {
+            watched.borrow().as_ref().map(|interrupts| Watch {
+                at: interrupts.fired.load(Ordering::SeqCst),
+                interrupts: Arc::clone(interrupts),
+            })
+        })
+    }
+
+    fn fired(&self) -> bool {
+        self.interrupts.fired.load(Ordering::SeqCst) != self.at
     }
 }
 
@@ -152,6 +207,9 @@ pub enum RunError {
     Lost(std::io::Error),
     #[error("it exited but a process it started still holds its output")]
     OutputHeld,
+    /// Stop all ended it and its tree (AD-116).
+    #[error("stopped by Stop all; it and its tree were ended")]
+    Interrupted,
 }
 
 /// One output pipe drained on a thread of its own: what it kept once the
@@ -406,6 +464,7 @@ pub fn run_contained(
     limits: &RunLimits,
 ) -> Result<Contained, RunError> {
     let started = Instant::now();
+    let watch = Watch::now();
     command
         .stdin(if stdin.is_some() {
             Stdio::piped()
@@ -431,13 +490,17 @@ pub fn run_contained(
     }
     let stdout = drain(child.stdout.take(), limits.stdout_cap);
     let stderr = drain(child.stderr.take(), limits.stderr_cap);
-    let status = match wait_until(&mut child, started + limits.timeout) {
-        Waited::Exited(status) => status,
-        Waited::Deadline => {
+    let status = match wait_unless(&mut child, started + limits.timeout, watch.as_ref()) {
+        None => {
+            tree.end(&mut child);
+            return Err(RunError::Interrupted);
+        }
+        Some(Waited::Exited(status)) => status,
+        Some(Waited::Deadline) => {
             tree.end(&mut child);
             return Err(RunError::Timeout(limits.timeout));
         }
-        Waited::Lost(error) => {
+        Some(Waited::Lost(error)) => {
             tree.end(&mut child);
             return Err(RunError::Lost(error));
         }
@@ -494,6 +557,7 @@ pub fn run_tail(
     tail_cap: usize,
 ) -> Result<Tailed, RunError> {
     let started = Instant::now();
+    let watch = Watch::now();
     command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -543,13 +607,17 @@ pub fn run_tail(
             let _ = sender.send(());
         });
     }
-    let status = match wait_until(&mut child, started + timeout) {
-        Waited::Exited(status) => status,
-        Waited::Deadline => {
+    let status = match wait_unless(&mut child, started + timeout, watch.as_ref()) {
+        None => {
+            tree.end(&mut child);
+            return Err(RunError::Interrupted);
+        }
+        Some(Waited::Exited(status)) => status,
+        Some(Waited::Deadline) => {
             tree.end(&mut child);
             return Err(RunError::Timeout(timeout));
         }
-        Waited::Lost(error) => {
+        Some(Waited::Lost(error)) => {
             tree.end(&mut child);
             return Err(RunError::Lost(error));
         }
@@ -635,9 +703,20 @@ pub fn stream_contained(
         });
     }
     let deadline = started + timeout;
+    let watch = Watch::now();
     let mut bytes: u64 = 0;
     loop {
-        let left = deadline.saturating_duration_since(Instant::now());
+        if watch.as_ref().is_some_and(Watch::fired) {
+            tree.end(&mut child);
+            return Err(RunError::Interrupted.into());
+        }
+        let left = deadline
+            .saturating_duration_since(Instant::now())
+            .min(POLL_TICK);
+        if left.is_zero() {
+            tree.end(&mut child);
+            return Err(RunError::Timeout(timeout).into());
+        }
         match inbox.recv_timeout(left) {
             Ok(chunk) => {
                 bytes += chunk.len() as u64;
@@ -651,19 +730,20 @@ pub fn stream_contained(
                 }
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
-            Err(mpsc::RecvTimeoutError::Timeout) => {
-                tree.end(&mut child);
-                return Err(RunError::Timeout(timeout).into());
-            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
         }
     }
-    let status = match wait_until(&mut child, deadline) {
-        Waited::Exited(status) => status,
-        Waited::Deadline => {
+    let status = match wait_unless(&mut child, deadline, watch.as_ref()) {
+        None => {
+            tree.end(&mut child);
+            return Err(RunError::Interrupted.into());
+        }
+        Some(Waited::Exited(status)) => status,
+        Some(Waited::Deadline) => {
             tree.end(&mut child);
             return Err(RunError::Timeout(timeout).into());
         }
-        Waited::Lost(error) => {
+        Some(Waited::Lost(error)) => {
             tree.end(&mut child);
             return Err(RunError::Lost(error).into());
         }
@@ -714,6 +794,49 @@ mod tests {
         assert!(child.try_wait().unwrap().is_none(), "not killed");
         child.kill().unwrap();
         child.wait().unwrap();
+    }
+
+    fn limits() -> RunLimits {
+        RunLimits {
+            timeout: Duration::from_secs(30),
+            stdout_cap: 1024,
+            stderr_cap: 1024,
+            grace: Duration::from_millis(500),
+            job: JobRule::KillOnClose,
+            keep_held_output: false,
+        }
+    }
+
+    /// Story 6.17 AC 2 (AD-116): firing the interrupts a thread watches
+    /// ends the child it is running at once, and a child it starts
+    /// afterwards runs to its exit.
+    #[test]
+    fn firing_ends_the_running_child_and_spares_the_next() {
+        let interrupts = Arc::new(Interrupts::default());
+        let watched = Arc::clone(&interrupts);
+        let (ran, done) = mpsc::channel();
+        std::thread::spawn(move || {
+            watch_interrupts(watched);
+            let started = Instant::now();
+            let first = run_contained(cmd("ping -n 30 127.0.0.1"), None, &limits());
+            let first_took = started.elapsed();
+            let second = run_contained(cmd("exit 4"), None, &limits());
+            ran.send((first, first_took, second)).unwrap();
+        });
+        std::thread::sleep(Duration::from_millis(500));
+        interrupts.fire();
+        let (first, took, second) = done.recv_timeout(Duration::from_secs(20)).unwrap();
+        assert!(matches!(first, Err(RunError::Interrupted)), "{first:?}");
+        assert!(took < Duration::from_secs(10), "{took:?}");
+        assert_eq!(second.unwrap().status.code(), Some(4));
+    }
+
+    /// A thread that watches nothing is never interrupted.
+    #[test]
+    fn an_unwatched_thread_runs_to_its_exit() {
+        Arc::new(Interrupts::default()).fire();
+        let ran = run_contained(cmd("exit 5"), None, &limits()).unwrap();
+        assert_eq!(ran.status.code(), Some(5));
     }
 }
 

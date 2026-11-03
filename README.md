@@ -801,9 +801,9 @@ The workshop runs a work order's Claude Code session unattended in a
 container on your Docker engine, behind an egress gateway, and hands back a
 package you review before anything reaches your repository. It is being
 built story by story: a workshop card can be issued and launched, its run
-is followed and its package collected and verified; the credential scan,
-Import and Discard come in the next stories, and the window's buttons with
-them.
+is followed, its package collected, verified and scanned, imported or
+discarded, and every run can be stopped at once and resumed; the window's
+workshop view and its buttons come in the next stories.
 
 ### Declaring the workshop
 
@@ -1274,6 +1274,42 @@ your reasons: a `no_change` or failed run, and a package `expired` or
 shows its `expired` count beside an acceptance they do not lower. The
 workshop view (story 6.18) shows the table.
 
+### Stop all and Resume
+
+Stop all stops every worker and gateway of your floor within 10 seconds
+with the engine answering, stops the relay, and keeps the containers so
+you can look at them; your own Claude Code sessions are untouched. It
+writes two flags, `<home>/workshop/stopped` and `<home>/relay/stopped`,
+each holding when and by whom (`window` or `cli`); each consumer reads its
+own, so the workshop's flag alone never stops the relay and the Relay
+view's own toggle keeps its meaning. A flag that cannot be read counts as
+set. While the workshop's flag is set nothing launches, builds, runs a
+battery or collects; followers keep reading, and Import and Discard stay
+possible since they start nothing. A launch caught in flight ends
+`workshop_stopped` with what it created removed, and a collection caught
+in flight is collected again at Resume. The flags survive a restart: the
+window reads both before anything else.
+
+`officina stop --all` does the same from any terminal, with no authority:
+it writes both flags (leaving a present one as it is, never removing
+one), stops every `officina.managed` running container of the engine, of
+any floor, since it cannot know which floor the window reads, and
+journals one line. It exits 0, or 1 when the engine could not be reached:
+the flags are written, and the message says containers may still run.
+
+Resume is the window's only, on a pointer click: stopping is safe from
+any process, resuming is not. Its dialog lists the kept runs, each to
+collect (the default) or remove, and offers to resume the relay too
+(checked by default). Confirming deletes the workshop's flag, and the
+relay's when checked, journals `workshop_resumed` with the counts, then
+collects or removes; a removed run is `discarded` with the system's
+reason `not_collected`. A kept container holds the credential in its
+engine configuration until it is removed, so kept containers go 7 days
+after their stop, by the hourly pass, even while stopped. A kept or orphan
+run can also be removed alone; that acts only on the objects labelled with
+the run and your floor. `officina doctor` names both flags and each kept
+run with its age.
+
 ### The workshop credential
 
 A token floor's credential is the Windows Credential Manager entry
@@ -1330,6 +1366,7 @@ for one approval, as every catalogue format change does.
 | `officina run <action> [name=value ...]` | run an approved relay action from its project (run by sessions) |
 | `officina run --list` | list the actions of the current folder's project |
 | `officina relay --json` | print the relay's state once: catalogue, pending change, recent activity |
+| `officina stop --all` | stop the relay and every workshop container of the engine, of any floor; writes the stop flags, never removes one (exit 1 when the engine could not be reached) |
 | `officina subjects --json` | print the registry's subjects and sessions once, read-only (exit 3 when it cannot be read) |
 | `officina version` | print the version |
 

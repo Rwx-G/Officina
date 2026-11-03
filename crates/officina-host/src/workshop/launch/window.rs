@@ -698,27 +698,44 @@ impl Steps<'_> {
         }
     }
 
+    /// True once Stop all latched thread `workshop` or wrote the workshop's
+    /// flag (AD-116, D-241).
+    fn stopped(&self) -> bool {
+        self.runtime.thread.latched() || crate::workshop::workshop_stopped(&self.ticket.home)
+    }
+
     fn not_stopped(&self) -> Result<(), Failed> {
-        if crate::workshop::workshop_stopped(&self.ticket.home) {
-            Err(Failed("the workshop is stopped".to_owned()))
+        if self.stopped() {
+            Err(Failed(LaunchRefusal::WorkshopStopped.code().to_owned()))
         } else {
             Ok(())
         }
     }
 
-    /// Runs one step, recording it; a stop flag set before it is
-    /// `stopped`.
+    /// One `start`, the latch read right before it under the start gate
+    /// Stop all's acknowledgement waits on (D-241).
+    fn start(&self, container: &ObjectName) -> Result<(), Failed> {
+        let _gate = self.runtime.thread.start_gate();
+        self.not_stopped()?;
+        self.call(&EngineCall::start(container))
+    }
+
+    /// Runs one step unless Stop all came first, recording it; a step
+    /// stopped, or failed once Stop all came (an engine call it ended), is
+    /// `stopped` with `workshop_stopped` (story 6.17 AC 2).
     fn step(
         &self,
         steps: &mut Vec<StepLine>,
         step: LaunchStep,
         run: impl FnOnce() -> Result<(), Failed>,
     ) -> Result<(), ()> {
-        let (outcome, detail) = match run() {
+        let ran = self.not_stopped().and_then(|()| run());
+        let (outcome, detail) = match ran {
             Ok(()) => (StepOutcome::Ok, None),
-            Err(Failed(why)) if why == "the workshop is stopped" => {
-                (StepOutcome::Stopped, Some(why))
-            }
+            Err(Failed(_)) if self.stopped() => (
+                StepOutcome::Stopped,
+                Some(LaunchRefusal::WorkshopStopped.code().to_owned()),
+            ),
             Err(Failed(why)) => (StepOutcome::Failed, Some(why)),
         };
         steps.push(StepLine {
@@ -783,9 +800,8 @@ impl Steps<'_> {
             self.call(&EngineCall::cp_in(&source, &names.worker, IN_DIR))
         })?;
         self.step(steps, LaunchStep::Start, || {
-            self.not_stopped()?;
-            self.call(&EngineCall::start(&names.gateway))?;
-            self.call(&EngineCall::start(&names.worker))
+            self.start(&names.gateway)?;
+            self.start(&names.worker)
         })?;
         Ok(needles)
     }

@@ -1,6 +1,6 @@
 //! `officina`: the console binary. Claude Code runs `hook` and `quota write`;
 //! sessions run `run`; the orchestrator's MCP config runs `mcp`; the
-//! author runs `doctor`, `board --json`, `relay --json` and
+//! author runs `doctor`, `board --json`, `relay --json`, `stop --all` and
 //! `subjects --json`.
 //! Arguments are parsed by hand (AD-16, AD-29): a few subcommands do not
 //! justify a parser in the hook's image.
@@ -49,6 +49,10 @@ usage: officina <command>
                                   up to <s> seconds (exit: its own code, 126
                                   refused, 124 timed out, 127 not started)
   run --list                      list the actions this folder's project may run
+  stop --all                      stop the relay and every workshop container of
+                                  the engine, of any floor (exit 1 when the
+                                  engine could not be reached); writes the stop
+                                  flags, never removes one: resume from the window
   subjects --json [--floor <path>]
                                   print the registry's subjects and sessions once,
                                   read-only (exit 3 when it cannot be read)
@@ -358,6 +362,49 @@ fn relay_json() -> ExitCode {
     }
 }
 
+/// `officina stop --all` (AD-116, D-215): both stop flags written when
+/// missing, never removed; every `officina.managed` running container of
+/// the engine stopped through the read half, of any floor; one journal
+/// line. Exit 0, or 1 when the home cannot be determined or the engine
+/// could not be reached (the flags are written; containers may still run).
+fn stop_all_cmd() -> ExitCode {
+    let Some(home) = RelayHome::from_env() else {
+        eprintln!("officina: no Officina home, set OFFICINA_HOME or USERPROFILE");
+        return ExitCode::FAILURE;
+    };
+    let docker = officina_host::workshop::engine::resolve().ok();
+    let base = officina_host::spawn::BaseEnv::from_process();
+    let stopped = match officina_host::workshop::stop::stop_from_cli(
+        &home,
+        docker.as_ref(),
+        base.vars(),
+        now_ms(),
+    ) {
+        Ok(stopped) => stopped,
+        Err(e) => {
+            eprintln!("officina: the stop flags could not be written: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    if !stopped.journaled {
+        eprintln!("officina: the journal could not be written");
+    }
+    match stopped.containers {
+        Some(count) => {
+            println!(
+                "officina: the relay and the workshop are stopped; {count} container(s) stopped. Resume from the window."
+            );
+            ExitCode::SUCCESS
+        }
+        None => {
+            eprintln!(
+                "officina: the stop flags are written, but the engine could not be reached: workshop containers may still run."
+            );
+            ExitCode::FAILURE
+        }
+    }
+}
+
 /// `officina mcp [--floor <path>]` (AD-90): the orchestrator's MCP server.
 /// Exit 0 at the end of stdin, 1 with one line on stderr when it does not
 /// run as the orchestrator's server or its streams fail, 64 on usage.
@@ -426,6 +473,7 @@ fn main() -> ExitCode {
         Some("mcp") => mcp_cmd(rest),
         Some("run") => run_cmd(rest),
         Some("relay") if rest == ["--json"] => relay_json(),
+        Some("stop") if rest == ["--all"] => stop_all_cmd(),
         Some("subjects") if rest.iter().any(|a| a == "--json") => with_floor(rest, subjects_json),
         Some("version" | "--version") => {
             println!("officina {}", env!("CARGO_PKG_VERSION"));

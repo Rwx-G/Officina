@@ -541,6 +541,28 @@ mod writers {
             )? == 1)
         }
 
+        /// Records when Stop all kept run `id`'s containers (AD-116).
+        pub fn set_run_stopped_at(&mut self, id: &str, at_ms: i64) -> Result<bool, RegistryError> {
+            Ok(self.conn.execute(
+                "UPDATE workshop_run SET stopped_at_ms = ?2 WHERE id = ?1",
+                params![id, at_ms],
+            )? == 1)
+        }
+
+        /// Records a kept run removed without collection (AD-116): its
+        /// removal time and the system's reason `not_collected`.
+        pub fn set_run_not_collected(
+            &mut self,
+            id: &str,
+            now_ms: i64,
+        ) -> Result<bool, RegistryError> {
+            Ok(self.conn.execute(
+                "UPDATE workshop_run SET removed_at_ms = ?2, discard_reason = ?3, decided_at_ms = ?2
+                 WHERE id = ?1",
+                params![id, now_ms, DiscardReason::NotCollected.code()],
+            )? == 1)
+        }
+
         /// Records how run `id` ended (AD-109).
         pub fn set_run_finished(
             &mut self,

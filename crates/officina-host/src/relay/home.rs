@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 
 use officina_core::floor::{FloorError, parse_floor};
 use officina_core::orders::permission::WorkOrderPermissions;
+use officina_core::relay::StopBy;
 use officina_core::relay::approvals::OUTPUTS_DIR;
 use officina_core::relay::catalogue::{
     self, ApprovedCatalogue, KnownProjects, RelayFloor, parse_known_projects,
@@ -15,6 +16,7 @@ use officina_core::relay::prompts::{PROMPTS_DIR, WINDOW_DIR, WINDOW_MARKER_FILE}
 use officina_core::relay::record::{DECISION_RECORD_FILE, RecordState, parse_record};
 use officina_core::relay::{JOURNAL_DIR, RELAY_DIR};
 use officina_core::workshop::floor::CatalogueFiles;
+use officina_core::workshop::run::{FlagLookup, flag_to_write};
 
 use crate::paths::{ENV_FLOOR, env_path, officina_home_from_env};
 
@@ -305,7 +307,78 @@ impl RelayHome {
 /// gave: present means stopped, and so does any failure but "not found",
 /// so a flag the process cannot read never lets an action run.
 pub fn is_stopped(lookup: Result<(), io::ErrorKind>) -> bool {
-    !matches!(lookup, Err(io::ErrorKind::NotFound))
+    officina_core::workshop::run::flag_set(flag_lookup(lookup))
+}
+
+fn flag_lookup(lookup: Result<(), io::ErrorKind>) -> FlagLookup {
+    match lookup {
+        Ok(()) => FlagLookup::Present,
+        Err(io::ErrorKind::NotFound) => FlagLookup::Missing,
+        Err(_) => FlagLookup::Unreadable,
+    }
+}
+
+/// What looking at the flag at `path` gives.
+pub fn look_at_flag(path: &Path) -> FlagLookup {
+    flag_lookup(fs::metadata(path).map(|_| ()).map_err(|e| e.kind()))
+}
+
+/// Both stop flags (AD-116), each read with AD-34's per-file predicate:
+/// the relay reads its own, the workshop its own (P-50). The window reads
+/// them at start before anything else.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StopFlags {
+    pub relay: bool,
+    pub workshop: bool,
+}
+
+impl RelayHome {
+    /// Both stop flags as they stand.
+    pub fn stop_flags(&self) -> StopFlags {
+        StopFlags {
+            relay: self.relay_stopped(),
+            workshop: crate::workshop::workshop_stopped(&self.officina_home),
+        }
+    }
+}
+
+/// Writes the stop flag at `path` when it is missing (AD-116): a present
+/// flag, or one that cannot be looked at, is left as it is, never
+/// replaced and never removed. True when this call wrote it.
+pub fn write_stop_flag(path: &Path, by: StopBy, now_ms: i64) -> io::Result<bool> {
+    let Some(flag) = flag_to_write(look_at_flag(path), now_ms, by) else {
+        return Ok(false);
+    };
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let text = serde_json::to_string(&flag).map_err(io::Error::other)?;
+    match fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+    {
+        Ok(mut file) => {
+            io::Write::write_all(&mut file, text.as_bytes())?;
+            Ok(true)
+        }
+        // Another writer got there first: its flag stands.
+        Err(e) if e.kind() == io::ErrorKind::AlreadyExists => Ok(false),
+        Err(e) => Err(e),
+    }
+}
+
+/// `officina stop --all`'s flags (AD-116): both written when missing,
+/// neither ever removed; which ones this call wrote.
+pub fn write_both_flags(home: &RelayHome, by: StopBy, now_ms: i64) -> io::Result<StopFlags> {
+    Ok(StopFlags {
+        relay: write_stop_flag(&home.stopped_file(), by, now_ms)?,
+        workshop: write_stop_flag(
+            &crate::workshop::stopped_file(&home.officina_home),
+            by,
+            now_ms,
+        )?,
+    })
 }
 
 /// The Windows system directory, where `wsl.exe` is taken from (AD-30):
@@ -400,5 +473,82 @@ mod tests {
         fs::create_dir_all(home.relay_dir()).unwrap();
         fs::write(home.stopped_file(), b"{\"since_ms\":1}").unwrap();
         assert!(home.relay_stopped());
+    }
+
+    /// Story 6.17 AC 1 (AD-116): the window's first read sees each flag
+    /// for what it is, in every combination.
+    #[test]
+    fn both_flags_are_read_at_start() {
+        for (relay, workshop) in [(false, false), (true, false), (false, true), (true, true)] {
+            let dir = tempfile::tempdir().unwrap();
+            let home = RelayHome::new(dir.path(), None);
+            if relay {
+                write_stop_flag(&home.stopped_file(), StopBy::Window, 1).unwrap();
+            }
+            if workshop {
+                write_stop_flag(&crate::workshop::stopped_file(dir.path()), StopBy::Cli, 1)
+                    .unwrap();
+            }
+            assert_eq!(home.stop_flags(), StopFlags { relay, workshop });
+        }
+    }
+
+    /// Story 6.17 AC 1 and 3 (AD-116): the CLI's writer creates a missing
+    /// flag with its writer, and leaves a present one as it was, its time
+    /// and writer kept; nothing it does removes one.
+    #[test]
+    fn the_cli_never_removes_a_flag() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = RelayHome::new(dir.path(), None);
+        let workshop = crate::workshop::stopped_file(dir.path());
+        write_stop_flag(&workshop, StopBy::Window, 5).unwrap();
+        let before = fs::read(&workshop).unwrap();
+        let written = write_both_flags(&home, StopBy::Cli, 9).unwrap();
+        assert_eq!(
+            written,
+            StopFlags {
+                relay: true,
+                workshop: false
+            }
+        );
+        assert_eq!(fs::read(&workshop).unwrap(), before, "left alone");
+        let relay = officina_core::relay::StopFlag::parse(&fs::read(home.stopped_file()).unwrap());
+        assert_eq!(
+            relay,
+            Some(officina_core::relay::StopFlag {
+                since_ms: 9,
+                by: Some(StopBy::Cli)
+            })
+        );
+        let again = write_both_flags(&home, StopBy::Cli, 11).unwrap();
+        assert_eq!(
+            again,
+            StopFlags {
+                relay: false,
+                workshop: false
+            }
+        );
+        assert!(home.stop_flags().relay && home.stop_flags().workshop);
+    }
+
+    /// Story 6.17 AC 1 (P-50, review F42): the workshop's flag alone never
+    /// stops the relay, and the relay's alone never stops the workshop.
+    #[test]
+    fn the_workshop_flag_alone_does_not_stop_the_relay() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = RelayHome::new(dir.path(), None);
+        write_stop_flag(
+            &crate::workshop::stopped_file(dir.path()),
+            StopBy::Window,
+            1,
+        )
+        .unwrap();
+        assert!(!home.relay_stopped());
+        assert!(crate::workshop::workshop_stopped(dir.path()));
+        let other = tempfile::tempdir().unwrap();
+        let home = RelayHome::new(other.path(), None);
+        write_stop_flag(&home.stopped_file(), StopBy::Window, 1).unwrap();
+        assert!(home.relay_stopped());
+        assert!(!crate::workshop::workshop_stopped(other.path()));
     }
 }

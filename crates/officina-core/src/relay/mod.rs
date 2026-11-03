@@ -54,20 +54,39 @@ pub const RELAY_DIR: &str = "relay";
 /// The journal's directory under the Officina home (AD-25, AD-32).
 pub const JOURNAL_DIR: &str = "journal";
 
-/// Content of `relay/stopped` (AD-25, AD-34), written by the window only.
-/// The file's presence stops the relay, whatever it holds.
+closed_enum! {
+    #[serde(rename_all = "snake_case")]
+    /// Who wrote a stop flag (AD-116): the window, or `officina stop --all`
+    /// from a terminal.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+    #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+    pub enum StopBy {
+        Window,
+        Cli,
+    }
+}
+
+/// Content of `relay/stopped` (AD-25, AD-34) and `workshop/stopped`
+/// (AD-116). The file's presence stops, whatever it holds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StopFlag {
-    /// When the author stopped the relay, Unix milliseconds.
+    /// When the flag was written, Unix milliseconds.
     pub since_ms: i64,
+    /// Who wrote it; absent from a relay flag written before v0.6.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub by: Option<StopBy>,
 }
 
 impl StopFlag {
-    /// The flag's time, when its content is a well-formed flag.
+    /// The flag's time and writer, when its content is a well-formed flag.
     ///
     /// ```
-    /// use officina_core::relay::StopFlag;
-    /// assert_eq!(StopFlag::parse(br#"{"since_ms":5}"#), Some(StopFlag { since_ms: 5 }));
+    /// use officina_core::relay::{StopBy, StopFlag};
+    /// assert_eq!(StopFlag::parse(br#"{"since_ms":5}"#), Some(StopFlag { since_ms: 5, by: None }));
+    /// assert_eq!(
+    ///     StopFlag::parse(br#"{"since_ms":5,"by":"cli"}"#),
+    ///     Some(StopFlag { since_ms: 5, by: Some(StopBy::Cli) })
+    /// );
     /// assert_eq!(StopFlag::parse(b""), None);
     /// ```
     pub fn parse(content: &[u8]) -> Option<StopFlag> {

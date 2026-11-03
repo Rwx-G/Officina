@@ -3,6 +3,9 @@
 import type { ApprovalAnswer } from "./lib/generated/ApprovalAnswer";
 import type { DiscardAnswer } from "./lib/generated/DiscardAnswer";
 import type { ImportAnswer } from "./lib/generated/ImportAnswer";
+import type { RemoveRunAnswer } from "./lib/generated/RemoveRunAnswer";
+import type { ResumeChoice } from "./lib/generated/ResumeChoice";
+import type { StopAnswer } from "./lib/generated/StopAnswer";
 import type { BatteryAnswer } from "./lib/generated/BatteryAnswer";
 import type { Board } from "./lib/generated/Board";
 import type { BuildAnswer } from "./lib/generated/BuildAnswer";
@@ -86,6 +89,14 @@ declare global {
     __officinaImportCalls?: number;
     /** What `discard_package` answers (story 6.16); else `discarded`. */
     __officinaDiscardAnswer?: DiscardAnswer;
+    /** What `stop_workshop` answers (story 6.17); else nothing stopped. */
+    __officinaStopAnswer?: StopAnswer;
+    /** How many times `stop_workshop` was called (story 6.17). */
+    __officinaStopCalls?: number;
+    /** Each `resume_workshop` call's arguments (story 6.17). */
+    __officinaResumeCalls?: { choices: ResumeChoice[]; resumeRelay: boolean }[];
+    /** What `remove_run` answers (story 6.17); else two objects removed. */
+    __officinaRemoveRunAnswer?: RemoveRunAnswer;
     /** Holds `start_orchestrator`'s answer until `__officinaReleaseStart`
      *  is called (story 5.16): a Start in flight. */
     __officinaStartHeld?: boolean;

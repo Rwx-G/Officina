@@ -324,6 +324,14 @@ impl Reader {
         crate::registry::workshop::run(&self.conn, id)
     }
 
+    /// The runs in one of `states`: doctor reads the kept ones (AD-116).
+    pub fn workshop_runs_in(
+        &self,
+        states: &[officina_core::workshop::run::RunState],
+    ) -> rusqlite::Result<Vec<crate::registry::workshop::RunRecord>> {
+        crate::registry::workshop::runs_in(&self.conn, states)
+    }
+
     /// The packages awaiting the author's verdict (AD-107's
     /// `reviews_pending`).
     pub fn workshop_awaiting_verdict(

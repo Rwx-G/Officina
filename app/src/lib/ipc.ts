@@ -11,6 +11,10 @@ import type { ApprovalAnswer } from "./generated/ApprovalAnswer";
 import type { DiscardAnswer } from "./generated/DiscardAnswer";
 import type { DiscardReason } from "./generated/DiscardReason";
 import type { ImportAnswer } from "./generated/ImportAnswer";
+import type { RemoveRunAnswer } from "./generated/RemoveRunAnswer";
+import type { ResumeAnswer } from "./generated/ResumeAnswer";
+import type { ResumeChoice } from "./generated/ResumeChoice";
+import type { StopAnswer } from "./generated/StopAnswer";
 import type { BuildAnswer } from "./generated/BuildAnswer";
 import type { CardAnswer } from "./generated/CardAnswer";
 import type { CardChange } from "./generated/CardChange";
@@ -302,6 +306,25 @@ export function importPackage(runId: string, tip: string): Promise<ImportAnswer>
  *  system's. */
 export function discardPackage(runId: string, reason: DiscardReason): Promise<DiscardAnswer> {
   return invoke<DiscardAnswer>("discard_package", { runId, reason });
+}
+
+/** Stop all (AD-116): every worker and gateway of this floor stopped, the
+ *  relay too, and nothing launched until Resume; it only reduces, so the
+ *  keyboard reaches it. */
+export function stopWorkshop(): Promise<StopAnswer> {
+  return invoke<StopAnswer>("stop_workshop");
+}
+
+/** Resume (AD-116), pointer only: each kept run to collect (the default)
+ *  or remove, and the relay resumed too when `resumeRelay`. */
+export function resumeWorkshop(choices: ResumeChoice[], resumeRelay: boolean): Promise<ResumeAnswer> {
+  return invoke<ResumeAnswer>("resume_workshop", { choices, resumeRelay });
+}
+
+/** Removes a kept or orphan run's objects of this floor (AD-121); it only
+ *  reduces, so the keyboard reaches it. */
+export function removeRun(runId: string): Promise<RemoveRunAnswer> {
+  return invoke<RemoveRunAnswer>("remove_run", { runId });
 }
 
 /** The meeting of `key` (AD-84, D-138): a card key, `sid:<session id>`
