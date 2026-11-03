@@ -217,7 +217,8 @@ stories:
   - {id: "6.14", file: story-6.14-credential-scan.md, slice: A, status: review}
   # 6.15: done; groups computed once at collection under the approved rules (D-1178), hunks bind modes, ids and paths (D-1179); D-1178 to D-1182, D-246 to confirm (P-56).
   - {id: "6.15", file: story-6.15-sensitive-groups-and-approvals.md, slice: A, status: review}
-  - {id: "6.16", file: story-6.16-import-discard-and-template-table.md, slice: A, status: approved}
+  # 6.16: done; ImportRefusal split per cause (D-1183), Import crosses threads as approvals do (D-1184), expiry at the folder's age (D-1186), the extra-ref mutant in bundle::branch_reference (D-1187); D-1183 to D-1189.
+  - {id: "6.16", file: story-6.16-import-discard-and-template-table.md, slice: A, status: review}
   - {id: "6.17", file: story-6.17-stop-all-and-resume.md, slice: A, status: approved}
   - {id: "6.18", file: story-6.18-workshop-view-board-and-cli.md, slice: A, status: approved}
   - {id: "6.19", file: story-6.19-card-and-review-panel-frontend.md, slice: A, status: approved}

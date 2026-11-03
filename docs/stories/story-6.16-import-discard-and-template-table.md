@@ -1,6 +1,6 @@
 # Story 6.16: Import, Discard, the per-template table, and the import battery
 
-**Status:** Approved
+**Status:** Review
 
 ## Story
 
@@ -21,12 +21,12 @@ so that my repository changes only when I click Import on a verified, approved p
 
 ## Tasks
 
-- [ ] `crates/officina-host/src/workshop/import.rs`: Import, `ImportRefusal`, Discard; commands (AC 1, 3)
-- [ ] Zero-write cases (AC 2)
-- [ ] Expiry in the hourly pass (AC 4)
-- [ ] `view::template_table` (AC 5)
-- [ ] `workshop_import` section of `injection.json` (AC 6)
-- [ ] Two mutant features, forwarding, CI job (AC 7); README, `CHANGELOG.md` (AC 8)
+- [x] `crates/officina-host/src/workshop/import.rs`: Import, `ImportRefusal`, Discard; commands (AC 1, 3)
+- [x] Zero-write cases (AC 2)
+- [x] Expiry in the hourly pass (AC 4)
+- [x] `view::template_table` (AC 5)
+- [x] `workshop_import` section of `injection.json` (AC 6)
+- [x] Two mutant features, forwarding, CI job (AC 7); README, `CHANGELOG.md` (AC 8)
 
 ## Dev Notes
 
@@ -44,11 +44,29 @@ so that my repository changes only when I click Import on a verified, approved p
 
 ### Debug Log
 
+- Every new test passed on its first run. The extra-ref mutant was run by hand against `workshop_collect` and the group-approval mutant against `injection` before the gate: each failed with its `(guarded by ...)` line, the second also on the stale-hash case.
+
 ### Completion Notes
 
+- AC 1: CLI `workshop_review.rs::{import_adds_exactly_one_reference, import_refuses_an_existing_branch, import_refuses_a_branch_named_officina_as_a_conflict, import_refuses_a_stale_tip, import_refuses_an_unapproved_group, import_refuses_a_quarantined_package, a_branch_created_between_check_and_update_is_not_moved}` (the last through `import_package_staged`'s hook, the branch created at the base right before `update-ref`, which fails on the zero old value and leaves it there); core `review.rs::tests::import_checks_state_groups_then_tip`, `relay/journal.rs::tests::review_imported_round_trips`; host `workshop::import::tests::the_zero_id_follows_the_object_format`; `app/src-tauri/src/main.rs::tests::every_declared_command_is_allowed` covers `import_package` and `discard_package` through `build.rs` and the capabilities; `watch.rs::the_collector_never_spawns_docker` sends both collector halves. Refusals and threads: D-1183, D-1184.
+- AC 2: `quota_doctor.rs::{a_quarantine_and_a_discard_leave_the_project_unchanged, import_changes_only_its_reference_and_objects}`, each with a tracked file's modification time moved first; the first compares the whole project folder `.git` included and the Claude config dir, the second every file under `.git` but `objects/` (exactly the new loose reference and its folders added: no `FETCH_HEAD`, no reflog, the index unchanged), every earlier object kept byte for byte, at least one object added, the work tree and the Claude config dir unchanged.
+- AC 3: CLI `workshop_review.rs::{discard_records_the_reason, the_author_cannot_send_a_system_reason, a_no_change_run_refuses_discard}` (and `import_refuses_a_quarantined_package`, which discards it); core `review.rs::tests::discard_takes_an_authors_reason_on_a_package`, `relay/journal.rs::tests::review_discarded_round_trips`. D-1185.
+- AC 4: core `run.rs::tests::{an_undecided_package_expires_with_its_folder, no_undecided_package_outlives_its_folder}`; host `registry_retention.rs::an_expired_package_is_discarded_with_its_reason` (review and quarantined rows expire with their folders, a younger and a decided row stay, the next pass expires nothing) and `workshop::import::tests::each_expired_package_is_journaled_expired` (the window's `review_discarded` lines). D-1186.
+- AC 5: core `view.rs::tests::{no_change_and_failed_are_not_decided, expired_and_not_collected_are_not_decided, imported_over_decided_counts_author_verdicts_only}`; the last also checks the notice from verdict lines (D-1181's fold). D-1188.
+- AC 6: `injection.rs::{workshop_import_cases, every_section_family_and_refusal_has_a_case}`: `workshop_import` holds the keyboard case (skipped, expecting no call, D-1189), a tip mismatch, an unapproved group (guarding `mutant-skip-group-approval`), a stale `hunks_sha256` (the stored approval rewritten), a quarantined package, an existing branch, a `no_change` run, and a forged id, a branch named `officina`, the scratch repository gone and no `git` so every `ImportRefusal` has a case; each asserts its answer, the references, index and work tree unchanged (one reference more for the control) and no engine `create` or `start` after collection.
+- AC 7: core features `mutant-accept-extra-ref` (`bundle::branch_reference`, D-1187) and `mutant-skip-group-approval` (`review::groups_approved`), forwarded by `officina-host` and `officina`, counted by `MUTANTS_ENABLED`; CI's `mutants` job runs `workshop_collect` for the first (`workshop_collect.rs::a_bundle_with_an_extra_reference_is_quarantined` names it) and `injection` for the second, then both targets as the control. The job itself is run locally by the gate script (CI is disabled).
+- AC 8: README "Import and Discard" under the workshop's review (one local branch, never a merge or a push, Discard's reasons, `expired` and `not_collected`, the per-template table, Acceptance's denominator); `CHANGELOG.md`.
+
 ## File List
+
+- `crates/officina-core/src/workshop/review.rs`, `crates/officina-core/src/workshop/view.rs`, `crates/officina-core/src/workshop/run.rs`, `crates/officina-core/src/workshop/bundle.rs`, `crates/officina-core/src/workshop/package.rs`, `crates/officina-core/src/relay/journal.rs`, `crates/officina-core/src/relay/view.rs`, `crates/officina-core/src/lib.rs`, `crates/officina-core/Cargo.toml`, `crates/officina-core/tests/typescript_bindings.rs`
+- `crates/officina-host/src/workshop/import.rs` (new), `crates/officina-host/src/workshop/mod.rs`, `crates/officina-host/src/workshop/review.rs`, `crates/officina-host/src/watch.rs`, `crates/officina-host/src/registry/workshop.rs`, `crates/officina-host/src/registry/retention.rs`, `crates/officina-host/src/registry/window.rs`, `crates/officina-host/Cargo.toml`, `crates/officina-host/tests/registry_retention.rs`, `crates/officina-host/tests/registry_workshop.rs`
+- `crates/officina/Cargo.toml`, `crates/officina/tests/workshop_review.rs`, `crates/officina/tests/workshop_collect.rs`, `crates/officina/tests/injection.rs`, `crates/officina/tests/quota_doctor.rs`, `crates/officina/tests/watch.rs`, `crates/officina/tests/common/package_run.rs`, `tests/vectors/injection.json`
+- `app/src-tauri/build.rs`, `app/src-tauri/capabilities/default.json`, `app/src-tauri/src/main.rs`, `app/src/lib/ipc.ts`, `app/src/e2e-mock.ts`, `app/src/e2e-globals.d.ts`, `app/src/lib/generated/` (`ImportAnswer`, `ImportRefusal`, `DiscardAnswer`, `DiscardRefusal`, `DiscardReason`)
+- `.github/workflows/ci.yml`, `README.md`, `CHANGELOG.md`, `docs/stories/epic-6-decisions.md`, `docs/stories/sprint-status.yaml`
 
 ## Change Log
 
 - 2026-10-28 created
 - 2026-10-28 reworked after review: Import and Discard plumbing owned here (F33); the mutants job names its test target per mutant (F36); expiry at `RUN_FOLDER_TTL_MS` with the folder (F39); `branch_conflict` (F47)
+- 2026-11-03 implemented (D-1183 to D-1189); status review
