@@ -1,6 +1,6 @@
 # Story 6.17: Stop all, the stop flags, Resume and kept containers
 
-**Status:** Approved
+**Status:** Review
 
 ## Story
 
@@ -21,12 +21,12 @@ so that a looping or misbehaving run is stopped without touching my own sessions
 
 ## Tasks
 
-- [ ] Flags and `is_stopped` amended (AC 1)
-- [ ] `stop_workshop` on its own blocking thread; the latch, its acknowledgement and the second pass; job termination; state changes; plumbing (AC 2)
-- [ ] `officina stop --all` in `crates/officina/src/main.rs` with the read half (AC 3)
-- [ ] `crates/officina-host/src/workshop/resume.rs`, `resume_workshop` (AC 4)
-- [ ] Kept-container expiry (AC 5); `remove_run` (AC 6)
-- [ ] Doctor (AC 7); README, `CHANGELOG.md` (AC 8)
+- [x] Flags and `is_stopped` amended (AC 1)
+- [x] `stop_workshop` on its own blocking thread; the latch, its acknowledgement and the second pass; job termination; state changes; plumbing (AC 2)
+- [x] `officina stop --all` in `crates/officina/src/main.rs` with the read half (AC 3)
+- [x] `crates/officina-host/src/workshop/resume.rs`, `resume_workshop` (AC 4)
+- [x] Kept-container expiry (AC 5); `remove_run` (AC 6)
+- [x] Doctor (AC 7); README, `CHANGELOG.md` (AC 8)
 
 ## Dev Notes
 
@@ -46,11 +46,31 @@ so that a looping or misbehaving run is stopped without touching my own sessions
 
 ### Debug Log
 
+- Every new Rust test passed on its first run; the doctor age expectation was corrected once (an age of 48 h prints as "2 days"). The reduced-motion e2e case was checked against a mutant that ignores reduced motion (it fails).
+- The first gate failed two steps, both real: the Linux job's `workshop_follow.rs::a_token_in_a_mid_run_report_tail_is_replaced_before_the_view` read a run in `collecting` before its texts, a torn write of the run's move (fixed, D-1199, own `fix(registry)` commit); and the zero-write test's `stop --all` resolved the machine's own Docker through the registry (it stopped nothing; the test now names a missing engine, D-1199).
+- The motion spec's flaky positive control (gated with this story, own `test(ui)` commit): Svelte 5 starts each transition as a zero-length placeholder animation and creates the timed one in that placeholder's `onfinish`, a frame later. The spec read its record as soon as the relay chip was visible, so under load the alert band's and the chip's timed animations were not recorded yet and the count landed on 5 (reproduced locally with `--repeat-each 4`: one run saw 5, the same run 1 s later 8). It now polls the count, then checks durations and properties once every transition ended; under reduced motion it requires no animation at all, placeholder included.
+
 ### Completion Notes
 
+- AC 1: core `run.rs::tests::{an_unreadable_flag_counts_as_set, a_present_flag_is_left_alone}`; host `relay/home.rs::tests::{both_flags_are_read_at_start, the_cli_never_removes_a_flag, the_workshop_flag_alone_does_not_stop_the_relay}`; the window reads both flags first and latches thread `workshop` (D-1198). `StopFlag` gains `by` (D-1193).
+- AC 2: CLI `workshop_stop.rs::{stop_all_ends_every_run_within_10_s, a_slow_engine_past_10_s_fails_the_budget_check, flags_survive_a_restart, a_launch_racing_stop_all_is_stopped, nothing_launches_builds_or_collects_while_set, followers_keep_reading_while_stopped, import_and_discard_stay_possible_while_stopped, a_collecting_run_is_collected_again_at_resume}`; core `relay/journal.rs::tests::{workshop_stopped_round_trips, workshop_resumed_round_trips}`, `run.rs::tests::stop_targets_are_running_managed_containers_of_the_floor`, the `run` vector case for `collecting` on `stop_all` (`workshop_vectors.rs::every_allowed_edge_has_a_case`); host `process.rs::tests::{firing_ends_the_running_child_and_spares_the_next, an_unwatched_thread_runs_to_its_exit}`, `threads.rs::tests::the_acknowledgement_waits_for_a_start_in_flight`. Plumbing: `build.rs`, capabilities, `every_declared_command_is_allowed`, `ipc.ts` `stopWorkshop`, `e2e-mock.ts`. D-1190, D-1191, D-1192, D-1194.
+- AC 3: CLI `workshop_stop.rs::{cli_stop_writes_both_flags_and_stops_every_floor, cli_stop_with_the_engine_down_exits_1_with_flags_written, cli_stop_never_removes_a_flag}` (the second also checks usage exit 64); `readme.rs::readme_mentions_every_subcommand`; `quota_doctor.rs::no_command_writes_under_the_claude_config_dir` runs `stop --all` last. D-1193.
+- AC 4: CLI `workshop_stop.rs::{resume_collects_by_default, resume_removes_what_the_author_chose, resume_can_leave_the_relay_stopped}`; core `run.rs::tests::resume_collects_unless_told_otherwise`. `resume_workshop` lives in `crates/officina-host/src/workshop/resume.rs`; plumbing as AC 2. D-1195.
+- AC 5: core `run.rs::tests::kept_containers_expire_after_7_days`; CLI `workshop_stop.rs::{kept_containers_are_removed_after_7_days, an_engine_down_delays_the_removal}`. The hourly pass hands the removal to thread `workshop` through the collector's `HourlyWorkshop`, which the window sets (D-1196); no automated test drives the window's own hourly timer.
+- AC 6: CLI `workshop_stop.rs::{remove_run_refuses_a_malformed_id, remove_run_never_touches_another_floor}`; core `run.rs::tests::run_objects_are_labelled_with_the_run_and_the_floor`. D-1195.
+- AC 7: host `workshop/doctor.rs::tests::{both_flags_are_reported, kept_containers_show_their_age}` (in the workshop section's module, D-1197).
+- AC 8: README "Stop all and Resume" (Stop all, `officina stop --all` on any floor never removing a flag, Resume from the window only, kept containers holding the credential until removed at 7 days) and the command table; `CHANGELOG.md`.
+
 ## File List
+
+- `crates/officina-core/src/workshop/run.rs`, `crates/officina-core/src/workshop/lifecycle.rs`, `crates/officina-core/src/workshop/doctor.rs`, `crates/officina-core/src/relay/mod.rs`, `crates/officina-core/src/relay/journal.rs`, `crates/officina-core/src/relay/view.rs`, `crates/officina-core/tests/typescript_bindings.rs`, `tests/vectors/workshop.json`
+- `crates/officina-host/src/workshop/stop.rs` (new), `crates/officina-host/src/workshop/resume.rs` (new), `crates/officina-host/src/workshop/mod.rs`, `crates/officina-host/src/workshop/threads.rs`, `crates/officina-host/src/workshop/launch/window.rs`, `crates/officina-host/src/workshop/collect.rs`, `crates/officina-host/src/workshop/follow.rs`, `crates/officina-host/src/workshop/doctor.rs`, `crates/officina-host/src/process.rs`, `crates/officina-host/src/spawn.rs`, `crates/officina-host/src/collector.rs`, `crates/officina-host/src/watch.rs`, `crates/officina-host/src/relay/home.rs`, `crates/officina-host/src/relay/authority.rs`, `crates/officina-host/src/registry/read.rs`, `crates/officina-host/src/registry/window.rs`, `crates/officina-host/src/registry/workshop.rs`
+- `crates/officina/src/main.rs`, `crates/officina/src/bin/officina-fake-docker.rs`, `crates/officina/tests/workshop_stop.rs` (new), `crates/officina/tests/quota_doctor.rs`, `crates/officina/tests/common/workshop_home.rs`
+- `app/src-tauri/build.rs`, `app/src-tauri/capabilities/default.json`, `app/src-tauri/src/main.rs`, `app/src/lib/ipc.ts`, `app/src/e2e-mock.ts`, `app/src/e2e-globals.d.ts`, `app/src/lib/generated/` (`StopAnswer`, `ResumeChoice`, `ResumeAnswer`, `KeptChoice`, `RemoveRunAnswer`, `RemoveRunRefusal`), `app/e2e/motion.spec.ts` (test fix)
+- `README.md`, `CHANGELOG.md`, `docs/stories/epic-6-decisions.md`, `docs/stories/sprint-status.yaml`
 
 ## Change Log
 
 - 2026-10-28 created
 - 2026-10-28 reworked after review: a latch read before each `start`, an acknowledgement and a second pass (F20); each consumer reads its own flag (F42); command plumbing owned here (F33)
+- 2026-11-03 implemented (D-1190 to D-1199); status review
