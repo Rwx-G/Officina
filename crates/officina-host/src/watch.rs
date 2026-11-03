@@ -163,6 +163,11 @@ pub enum AuthorCommand {
     WorkshopFollow(Box<crate::workshop::follow::FollowEvent>),
     /// The runs reconciliation judges and the floor's key (AD-109).
     WorkshopRowsToReconcile,
+    /// Run `id` as the registry holds it, for collection (AD-110).
+    WorkshopRun(String),
+    /// Receive on a run's review (AD-121, D-239): its stored facts, the
+    /// first Receive journaled `review_opened`.
+    OpenReview(String),
     /// How a granted launch ended (AD-81 step 3). It carries no deadline:
     /// the collector records it however late it comes, and never drops it
     /// (D-135, review F14).
@@ -405,6 +410,8 @@ pub enum AuthorAnswer {
     /// The runs reconciliation judges, and the floor's key when the
     /// approved floor reads.
     WorkshopRows(Box<(Vec<crate::registry::workshop::RunRecord>, Option<String>)>),
+    /// One run's row, when the registry holds it.
+    WorkshopRun(Option<Box<crate::registry::workshop::RunRecord>>),
 }
 
 /// The collector's answer, or why there is none to give.
@@ -1464,6 +1471,12 @@ fn answer_author<E: Emit>(
         }
         AuthorCommand::WorkshopRowsToReconcile => {
             crate::workshop::follow::rows_to_reconcile(collector, registry)
+        }
+        AuthorCommand::WorkshopRun(id) => registry
+            .workshop_run(&id)
+            .map(|row| AuthorAnswer::WorkshopRun(row.map(Box::new))),
+        AuthorCommand::OpenReview(id) => {
+            crate::workshop::review::open_on_collector(collector, registry, &id, now)
         }
         AuthorCommand::EditCard { card_id, change } => crate::orders::edit(
             cards,

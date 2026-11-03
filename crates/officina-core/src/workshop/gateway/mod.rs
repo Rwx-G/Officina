@@ -39,6 +39,7 @@ closed_enum! {
     #[serde(rename_all = "snake_case")]
     /// Why the gateway refused a request (AD-103).
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+    #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
     pub enum GatewayRefusal {
         Malformed,
         Oversized,

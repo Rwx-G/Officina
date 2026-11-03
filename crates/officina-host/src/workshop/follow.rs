@@ -29,7 +29,7 @@ use officina_core::workshop::output::{
     without_timestamp,
 };
 use officina_core::workshop::run::{
-    FinishCause, Recorded, RemovalCause, RunFacts, RunState, RunTexts, WorkshopOutcome,
+    FinishCause, Recorded, RemovalCause, RunFacts, RunRefusal, RunState, RunTexts, WorkshopOutcome,
 };
 use officina_core::workshop::stream::{HookCounts, MAX_LINE_BYTES};
 use officina_core::workshop::vector::ContainerRole;
@@ -60,8 +60,8 @@ pub struct Followed {
     /// Refusals read while no needles exist, bounded (D-216): journaled
     /// only after collection's scan (story 6.14).
     pub held: Vec<Refusal>,
-    /// Refused hosts as journaled, replaced, bounded.
-    refused_hosts: Vec<String>,
+    /// Refusals as journaled, their hosts replaced, bounded.
+    refusals: Vec<RunRefusal>,
     gateway_exit: Option<i64>,
     watching: bool,
 }
@@ -76,7 +76,7 @@ impl Followed {
             stop: None,
             journaled: 0,
             held: Vec::new(),
-            refused_hosts: Vec::new(),
+            refusals: Vec::new(),
             gateway_exit: None,
             watching: false,
         }
@@ -94,22 +94,25 @@ impl Followed {
             .map(|needles| self.output.texts(needles.needles()))
     }
 
-    fn run_texts(&self) -> Option<RunTexts> {
+    /// The texts the registry keeps of the run (AD-119), replaced; `None`
+    /// while the window holds no needles (D-230).
+    pub fn run_texts(&self) -> Option<RunTexts> {
         let texts = self.texts()?;
         Some(RunTexts {
             report_tail: texts.assistant_tail,
-            refused_hosts: self
-                .refused_hosts
-                .iter()
-                .cloned()
-                .map(Untrusted::new)
-                .collect(),
+            refusals: self.refusals.clone(),
+            allowed_hosts: texts.allowed_hosts,
             ..RunTexts::default()
         })
     }
 
+    /// The gateway's exit code, once its container exited.
+    pub fn gateway_exit(&self) -> Option<i64> {
+        self.gateway_exit
+    }
+
     /// The facts a `workshop_finished` line carries (AD-120).
-    fn summary(&self) -> RunSummary {
+    pub fn summary(&self) -> RunSummary {
         let result = self.output.stream.result.as_ref();
         RunSummary {
             hooks: self.output.stream.hooks.clone(),
@@ -179,6 +182,9 @@ pub enum FollowEvent {
         lost: Vec<(String, RunSummary)>,
         orphans: Vec<String>,
     },
+    /// What collection found (AD-110): the row's outcome, its package
+    /// fields and the journal lines it owes.
+    Collected(Box<crate::workshop::collect::Collected>),
 }
 
 /// Where a run's watcher works from.
@@ -435,8 +441,12 @@ impl Followed {
                     match self.needles.as_ref() {
                         Some(needles) => {
                             let host = clean_host(&refusal.host, needles.needles());
-                            if self.refused_hosts.len() < MAX_HELD_REFUSALS {
-                                self.refused_hosts.push(host.clone());
+                            if self.refusals.len() < MAX_HELD_REFUSALS {
+                                self.refusals.push(RunRefusal {
+                                    host: Untrusted::new(host.clone()),
+                                    port: refusal.port,
+                                    cause: refusal.cause,
+                                });
                             }
                             journal.push(FollowEvent::Refused {
                                 line: GatewayRefused {
@@ -564,6 +574,9 @@ fn watch(context: &FollowContext, run: &RunToFollow) {
                         } else {
                             worker_done = true;
                             worker_exited(context, &run.run_id, &state);
+                            // AD-110: collection starts once the gateway
+                            // is stopped and its follower drained.
+                            stop_gateway(context, &names);
                         }
                     }
                     // The engine answered without the container, or did
@@ -585,6 +598,23 @@ fn watch(context: &FollowContext, run: &RunToFollow) {
         }
     }
     done(context);
+    if worker_done && gateway_done {
+        crate::workshop::collect::collect_on_thread(context, &run.run_id);
+    }
+}
+
+/// Stops the run's gateway once its worker exited (AD-110), on the
+/// watcher's thread: its follower then ends and is drained.
+fn stop_gateway(context: &FollowContext, names: &RunNames) {
+    if let Some(docker) = context.docker() {
+        let _ = execute(
+            docker,
+            &EngineCall::stop(std::slice::from_ref(&names.gateway)),
+            &context.base_env,
+            &context.home,
+            None,
+        );
+    }
 }
 
 /// The containers of this floor the engine lists, as reconciliation reads
@@ -703,9 +733,25 @@ pub fn reconcile_now(context: &FollowContext) -> Vec<ReconcileAction> {
     for action in actions.clone() {
         let row_of = |id: &str| rows.iter().find(|row| row.id == id);
         match action {
-            ReconcileAction::Follow { run_id } | ReconcileAction::Collect { run_id } => {
-                if let Some(row) = row_of(&run_id).filter(|r| r.state != RunState::Collecting) {
+            ReconcileAction::Follow { run_id } => {
+                if let Some(row) = row_of(&run_id) {
                     follow_row(context, row, floor_key.as_deref());
+                }
+            }
+            // A worker still listed is followed again, so its facts are
+            // rebuilt before the watcher collects; without one, what the
+            // engine still holds is collected at once (AD-110).
+            ReconcileAction::Collect { run_id } => {
+                let worker_listed = containers.iter().any(|c| {
+                    c.run_id.as_deref() == Some(run_id.as_str())
+                        && c.role == ContainerRole::Worker.code()
+                });
+                match row_of(&run_id) {
+                    Some(row) if worker_listed => follow_row(context, row, floor_key.as_deref()),
+                    Some(row) if row.state == RunState::Collecting => {
+                        crate::workshop::collect::collect_on_thread(context, &run_id);
+                    }
+                    _ => {}
                 }
             }
             ReconcileAction::StopPastDeadline { run_id } => {
@@ -880,6 +926,9 @@ pub(crate) fn record(
             }
             collector.set_workshop_orphans(orphans.clone());
         }
+        FollowEvent::Collected(collected) => {
+            record_collected(registry, collected, now_ms, &mut lines)?;
+        }
     }
     if lines.is_empty() {
         return Ok(());
@@ -890,6 +939,108 @@ pub(crate) fn record(
             e.to_string(),
         )
     })
+}
+
+/// The collector's half of a collection (AD-110, AD-120): the row moved
+/// to what the run produced, its facts, texts and package fields, and the
+/// lines it owes: `gateway_summary`, `workshop_removed` (`collected`),
+/// `review_package` for a package, and its one `workshop_finished`.
+fn record_collected(
+    registry: &mut WindowRegistry,
+    collected: &crate::workshop::collect::Collected,
+    now_ms: i64,
+    lines: &mut Vec<JournalEntry>,
+) -> Result<(), officina_core::ipc::IpcError> {
+    use officina_core::relay::journal::{GatewaySummary, ReviewPackage};
+    use officina_core::workshop::package::{PackageAssessment, PackageState};
+    let (tip, commits, cause) = match &collected.assessment {
+        Some(PackageAssessment::Package {
+            tip,
+            commits_past_base,
+            cause,
+        }) => (tip.clone(), Some(*commits_past_base), *cause),
+        Some(PackageAssessment::NoCommit { tip }) => (Some(tip.clone()), Some(0), None),
+        None => (None, None, None),
+    };
+    let event = match collected.outcome {
+        WorkshopOutcome::Package if cause.is_some() => RunEvent::Quarantined,
+        WorkshopOutcome::Package => RunEvent::Packaged,
+        WorkshopOutcome::NoChange => RunEvent::NothingChanged,
+        _ => RunEvent::CollectionFailed,
+    };
+    let summary = &collected.summary;
+    let package = crate::registry::workshop::PackageFields {
+        package_sha256: collected.bundle_sha256.as_deref(),
+        tip_commit: tip.as_deref(),
+        commits_past_base: commits,
+        files_changed: collected.files_changed,
+        groups_json: None,
+        quarantine_cause: cause.map(|c| c.code()),
+    };
+    let moved = registry.record_workshop_collection(
+        &collected.run_id,
+        event,
+        collected.outcome,
+        &package,
+        now_ms,
+        |row| {
+            let facts = &mut row.facts;
+            facts.cost_usd_micros = summary.cost_usd_micros;
+            facts.turns = summary.turns;
+            facts.hooks = summary.hooks.clone();
+            facts.refused = summary.refused;
+            facts.stream_bytes = summary.stream_bytes;
+            facts.gateway_exit = collected.gateway_exit;
+            facts.upstream = collected.upstream;
+            facts.insertions = collected.insertions;
+            facts.deletions = collected.deletions;
+            facts.collect_failed = collected.failure;
+            if let Some(texts) = &collected.texts {
+                row.texts = Some(texts.clone());
+            }
+        },
+    )?;
+    let Some(row) = moved else {
+        return Ok(());
+    };
+    lines.push(JournalEntry::GatewaySummary(Box::new(GatewaySummary {
+        run_id: row.id.clone(),
+        allowed: collected.allowed.clone(),
+        refused: summary.refused,
+        exit_code: collected.gateway_exit,
+        upstream: collected.upstream,
+    })));
+    if collected.removed {
+        lines.push(JournalEntry::WorkshopRemoved(WorkshopRemoved {
+            run_id: row.id.clone(),
+            cause: RemovalCause::Collected,
+        }));
+    }
+    if collected.outcome == WorkshopOutcome::Package {
+        lines.push(JournalEntry::ReviewPackage(ReviewPackage {
+            run_id: row.id.clone(),
+            bundle_sha256: collected.bundle_sha256.clone(),
+            commits: commits.unwrap_or(0),
+            files: collected.files_changed.unwrap_or(0),
+            insertions: collected.insertions.unwrap_or(0),
+            deletions: collected.deletions.unwrap_or(0),
+            groups: 0,
+            outcome: if cause.is_some() {
+                PackageState::Quarantined
+            } else {
+                PackageState::Review
+            },
+            cause,
+            credential_locations: None,
+        }));
+    }
+    let mut finished = finished_line(&row, collected.cause, collected.outcome, summary, now_ms);
+    if let JournalEntry::WorkshopFinished(line) = &mut finished {
+        line.commits_past_base = commits;
+        line.tip = tip;
+    }
+    lines.push(finished);
+    Ok(())
 }
 
 /// Starts following a run the window just launched (AD-107 step 4): its

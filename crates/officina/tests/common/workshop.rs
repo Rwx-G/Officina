@@ -53,6 +53,7 @@ pub fn runtime(
         states: Arc::new(UncheckedStates),
         reader: Arc::new(WinHttpReader),
         followed: Arc::default(),
+        reviews: Arc::default(),
         now_ms: super::now_ms,
         engine_retry: std::time::Duration::from_millis(200),
     }

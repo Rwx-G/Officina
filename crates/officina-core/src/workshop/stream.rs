@@ -74,6 +74,7 @@ pub struct InitFacts {
 
 /// One hook event's counts.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct HookCounts {
     pub ran: u32,
     pub failed: u32,

@@ -30,6 +30,7 @@ use officina_core::relay::auto::AutoMode;
 use officina_core::relay::view::RelayView;
 use officina_core::workshop::battery::BatteryAnswer;
 use officina_core::workshop::image::BuildAnswer;
+use officina_core::workshop::review::ReviewView;
 use officina_host::collector::Collector;
 use officina_host::files::now_ms;
 use officina_host::focus::{
@@ -87,6 +88,8 @@ struct AppState {
     build_busy: Arc<std::sync::atomic::AtomicBool>,
     /// The needles of each run the window follows (AD-112, D-230).
     followed: officina_host::workshop::launch::FollowedRuns,
+    /// What host git showed of each package (D-239).
+    reviews: officina_host::workshop::review::ReviewCache,
 }
 
 impl AppState {
@@ -106,6 +109,7 @@ impl AppState {
             states: Arc::new(officina_host::workshop::launch::UncheckedStates),
             reader: Arc::new(officina_host::workshop::proxy::WinHttpReader),
             followed: Arc::clone(&self.followed),
+            reviews: Arc::clone(&self.reviews),
             now_ms,
             engine_retry: officina_host::workshop::follow::ENGINE_RETRY,
         }
@@ -754,6 +758,28 @@ async fn decide_approval(
     .await
 }
 
+/// Receive on a workshop run's review (AD-121, D-239): the stored facts,
+/// then host git's commits, files and diff from thread `workshop`; the
+/// first Receive of a package journals `review_opened`.
+#[tauri::command]
+async fn open_review(state: State<'_, AppState>, run_id: String) -> Result<ReviewView, IpcError> {
+    let sender = state
+        .collector()
+        .ok_or_else(|| IpcError::internal("the collector is not running"))?;
+    let runtime = state.workshop_runtime();
+    let home = state
+        .paths
+        .read()
+        .map(|paths| paths.officina_home.clone())
+        .map_err(|_| IpcError::internal("the paths lock is poisoned"))?;
+    let base_env = state.base_env.vars().to_vec();
+    tauri::async_runtime::spawn_blocking(move || {
+        officina_host::workshop::review::open_review(&sender, &runtime, &home, &base_env, &run_id)
+    })
+    .await
+    .map_err(|e| IpcError::internal(e.to_string()))?
+}
+
 /// Stops or resumes the relay (FR-11, AD-34, D-26). Returns whether the
 /// state changed.
 #[tauri::command]
@@ -832,6 +858,7 @@ fn main() {
                 workshop,
                 build_busy: Arc::new(std::sync::atomic::AtomicBool::new(false)),
                 followed: Arc::default(),
+                reviews: Arc::default(),
             });
             // At window start every run not terminal is found again and
             // followed (AD-109), after the engine read queued above.
@@ -909,7 +936,8 @@ fn main() {
             open_meeting,
             send_answer,
             build_images,
-            run_battery
+            run_battery,
+            open_review
         ])
         .build(tauri::generate_context!())
         .expect("failed to build the Officina window")

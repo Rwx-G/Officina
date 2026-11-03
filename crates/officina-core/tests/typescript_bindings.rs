@@ -29,6 +29,7 @@ use officina_core::registry::view::{DiscardedSession, RegistryView};
 use officina_core::relay::view::RelayView;
 use officina_core::workshop::battery::BatteryAnswer;
 use officina_core::workshop::image::BuildAnswer;
+use officina_core::workshop::review::ReviewView;
 use ts_rs::{Config, TS};
 
 fn committed_dir() -> PathBuf {
@@ -75,6 +76,7 @@ fn export(dir: &Path) {
     ProposalInvalidReason::export_all(&cfg).unwrap();
     BuildAnswer::export_all(&cfg).unwrap();
     BatteryAnswer::export_all(&cfg).unwrap();
+    ReviewView::export_all(&cfg).unwrap();
 }
 
 #[test]

@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use super::gateway::{GatewayLine, GatewayRefusal, MAX_LINE_HOST_CHARS};
+use super::gateway::{GatewayLine, GatewayRefusal, MAX_LINE_HOST_CHARS, UpstreamState};
 use super::lifecycle::StopReason;
 use super::run::{EntryLine, MAX_ENTRY_LINE_BYTES};
 use super::scan::{Needles, replace};
@@ -107,6 +107,9 @@ pub struct GatewayFacts {
     pub refused: u32,
     /// The gateway reached its refusal limit.
     pub limit: bool,
+    /// Its upstreams at start (AD-120 `gateway_summary`): unreachable when
+    /// any was, none without an upstream.
+    pub upstream: Option<UpstreamState>,
     pub skipped: u64,
 }
 
@@ -232,7 +235,20 @@ impl RunOutput {
             .then(|| serde_json::from_str::<GatewayLine>(line).ok())
             .flatten();
         match parsed {
-            Some(GatewayLine::Started { .. }) => self.gateway.started = true,
+            Some(GatewayLine::Started { upstreams, .. }) => {
+                self.gateway.started = true;
+                self.gateway.upstream =
+                    upstreams
+                        .iter()
+                        .map(|probe| probe.state)
+                        .reduce(|seen, state| {
+                            if state == UpstreamState::Unreachable {
+                                state
+                            } else {
+                                seen
+                            }
+                        });
+            }
             Some(GatewayLine::Allowed { host, .. }) => {
                 self.gateway
                     .count_allowed(&super::gateway::printable(&host));

@@ -145,6 +145,7 @@ closed_enum! {
     #[serde(rename_all = "snake_case")]
     /// What a run produced, decided after collection (AD-109, AD-110).
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+    #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
     pub enum WorkshopOutcome {
         Package,
         NoChange,
@@ -159,6 +160,7 @@ closed_enum! {
     /// Why a run ended (AD-109). Story 6.12 decides it; the column holding
     /// it carries no `CHECK`, since the list grows (D-133).
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+    #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
     pub enum FinishCause {
         Exited,
         Failed,
@@ -291,6 +293,31 @@ impl EntryLine {
     }
 }
 
+closed_enum! {
+    #[serde(rename_all = "snake_case")]
+    /// Where a collection stopped before host git had anything to check
+    /// (AD-110's `collect_failed` row).
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+    #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+    pub enum CollectFailure {
+        /// The packer's create or attached start failed, or passed 120 s.
+        Packer,
+        /// `docker cp` failed or passed its deadline.
+        Copy,
+        /// The host could not write the bundle or run its own git.
+        Host,
+    }
+}
+
+/// One gateway refusal as the run's texts keep it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct RunRefusal {
+    pub host: Untrusted<String>,
+    pub port: u16,
+    pub cause: super::gateway::GatewayRefusal,
+}
+
 /// The version of [`RunFacts`]' JSON in `workshop_run.facts_json`.
 pub const RUN_FACTS_VERSION: u32 = 1;
 
@@ -313,6 +340,22 @@ pub struct RunFacts {
     /// follower that reads again from the start journals only the ones
     /// past it, so each refusal is journaled once (AD-109).
     pub refusals_journaled: u32,
+    /// What the run's output told when it was collected (AD-120's
+    /// `workshop_finished` and `gateway_summary`), kept so the review view
+    /// reads it after a window restart.
+    pub cost_usd_micros: Option<u64>,
+    pub turns: Option<u64>,
+    pub hooks: std::collections::BTreeMap<String, super::stream::HookCounts>,
+    pub refused: u32,
+    pub stream_bytes: u64,
+    pub gateway_exit: Option<i64>,
+    /// The gateway's upstreams at start: unreachable when any was.
+    pub upstream: Option<super::gateway::UpstreamState>,
+    /// Host git's `--shortstat` of the package (AD-120 `review_package`).
+    pub insertions: Option<u32>,
+    pub deletions: Option<u32>,
+    /// Why collection gave nothing to check (AD-110 `collect_failed`).
+    pub collect_failed: Option<CollectFailure>,
 }
 
 impl Default for RunFacts {
@@ -323,6 +366,16 @@ impl Default for RunFacts {
             credential_locations: None,
             stop_reason: None,
             refusals_journaled: 0,
+            cost_usd_micros: None,
+            turns: None,
+            hooks: std::collections::BTreeMap::new(),
+            refused: 0,
+            stream_bytes: 0,
+            gateway_exit: None,
+            upstream: None,
+            insertions: None,
+            deletions: None,
+            collect_failed: None,
         }
     }
 }
@@ -336,7 +389,10 @@ pub struct RunTexts {
     pub report_tail: Option<Untrusted<String>>,
     pub commit_subjects: Vec<Untrusted<String>>,
     pub paths: Vec<Untrusted<String>>,
-    pub refused_hosts: Vec<Untrusted<String>>,
+    /// The gateway's refusals, their hosts replaced (D-230), bounded.
+    pub refusals: Vec<RunRefusal>,
+    /// The hosts the gateway allowed, with their counts, replaced.
+    pub allowed_hosts: Vec<(Untrusted<String>, u32)>,
     /// Where the scan found the credential (AD-112): paths, never a value.
     pub credential_locations: Vec<Untrusted<String>>,
     pub memory_proposals: Vec<Untrusted<String>>,

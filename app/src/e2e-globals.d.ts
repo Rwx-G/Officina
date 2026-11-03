@@ -14,6 +14,7 @@ import type { AnswerResult } from "./lib/generated/AnswerResult";
 import type { OrchestratorView } from "./lib/generated/OrchestratorView";
 import type { RegistryView } from "./lib/generated/RegistryView";
 import type { RelayView } from "./lib/generated/RelayView";
+import type { ReviewView } from "./lib/generated/ReviewView";
 import type { StartAnswer } from "./lib/generated/StartAnswer";
 import type { SubjectView } from "./lib/generated/SubjectView";
 
@@ -71,6 +72,9 @@ declare global {
     __officinaBuildAnswer?: BuildAnswer;
     /** What `run_battery` answers (story 6.10); else the base queued. */
     __officinaBatteryAnswer?: BatteryAnswer;
+    /** What `open_review` answers, by run id (story 6.13); else a
+     *  `no_change` view of that run. */
+    __officinaReviews?: Record<string, ReviewView>;
     /** Holds `start_orchestrator`'s answer until `__officinaReleaseStart`
      *  is called (story 5.16): a Start in flight. */
     __officinaStartHeld?: boolean;

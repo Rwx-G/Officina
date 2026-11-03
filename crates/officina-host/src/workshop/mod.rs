@@ -56,6 +56,8 @@ pub fn ensure_home(home: &Path) -> Result<PathBuf, String> {
 
 pub mod battery;
 pub mod build;
+#[cfg(feature = "window-authority")]
+pub mod collect;
 pub mod doctor;
 pub mod engine;
 pub mod files;
@@ -65,6 +67,8 @@ pub mod git;
 pub mod inventory;
 pub mod launch;
 pub mod proxy;
+#[cfg(feature = "window-authority")]
+pub mod review;
 #[cfg(feature = "window-authority")]
 pub mod threads;
 pub mod verify;

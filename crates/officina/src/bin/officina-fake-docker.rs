@@ -27,7 +27,8 @@
 //! `touch_when` (`prefix`, `contains`, `path`) writes an empty file at
 //! `path` when a call matches, as a hand setting a flag between two steps
 //! would; `start_sleep_ms` delays each `start`; story 6.12's followers
-//! (see [`follow_logs`]). Any other call is logged
+//! (see [`follow_logs`]); story 6.13's packer copy (see
+//! [`copy_package`]). Any other call is logged
 //! and exits 0. Later stories add theirs.
 
 use std::io::Write;
@@ -240,7 +241,7 @@ fn main() {
         }
         ["build", rest @ ..] => build(rest, &sidecar, &mut state),
         ["create", rest @ ..] => create(rest, &sidecar, &mut state),
-        ["cp", source, "-"] => copy_out(source, &state),
+        ["cp", source, "-"] => copy_out(source, &sidecar, &state),
         ["start", "--attach", .., name] => start_attached(name, &sidecar, &mut state),
         ["start", name] => start_detached(name, &sidecar, &mut state),
         ["logs", "--follow", "--timestamps", name] => follow_logs(name, &sidecar),
@@ -684,12 +685,43 @@ fn follow_logs(name: &str, sidecar: &serde_json::Value) -> i32 {
     0
 }
 
+/// A packer's `out/` (story 6.13): the bytes of the file sidecar
+/// `package` names, then sidecar `package_extra_bytes` zero bytes, so a
+/// test can pass the copy's cap without writing that much.
+fn copy_package(sidecar: &serde_json::Value) -> i32 {
+    let Some(bytes) = sidecar["package"]
+        .as_str()
+        .and_then(|path| std::fs::read(path).ok())
+    else {
+        eprintln!("Error: Could not find the file /work/.officina/out");
+        return 1;
+    };
+    let mut stdout = std::io::stdout().lock();
+    if stdout.write_all(&bytes).is_err() {
+        return 1;
+    }
+    let mut extra = sidecar["package_extra_bytes"].as_u64().unwrap_or(0);
+    let zeros = vec![0u8; 64 * 1024];
+    while extra > 0 {
+        let n = usize::try_from(extra.min(zeros.len() as u64)).unwrap_or(zeros.len());
+        if stdout.write_all(&zeros[..n]).is_err() {
+            return 1;
+        }
+        extra -= n as u64;
+    }
+    0
+}
+
 /// `cp <container>:<path> -`: the program the container's image holds at
-/// `path`, as a one-file ustar stream on stdout.
-fn copy_out(source: &str, state: &serde_json::Value) -> i32 {
+/// `path`, as a one-file ustar stream on stdout; a packer's `out/` from
+/// [`copy_package`].
+fn copy_out(source: &str, sidecar: &serde_json::Value, state: &serde_json::Value) -> i32 {
     let Some((name, path)) = source.split_once(':') else {
         return 1;
     };
+    if name.starts_with("officina-pack-") {
+        return copy_package(sidecar);
+    }
     let content = find(state, "containers", name)
         .and_then(|c| find(state, "images", c["image"].as_str().unwrap_or_default()))
         .and_then(|i| i["programs"][path].as_str())

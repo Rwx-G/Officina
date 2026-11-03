@@ -56,6 +56,10 @@ pub struct RunRecord {
     pub decided_at_ms: Option<i64>,
     pub stopped_at_ms: Option<i64>,
     pub removed_at_ms: Option<i64>,
+    /// The project's folder the launch ran from (its `work_order` row).
+    pub project_dir: String,
+    /// The run plan the launch wrote (AD-102), Officina's own JSON.
+    pub plan_json: String,
 }
 
 const RUN_COLUMNS: &str = "r.id, w.template, w.project, w.name, r.image, r.image_id,
@@ -64,7 +68,7 @@ const RUN_COLUMNS: &str = "r.id, w.template, w.project, w.name, r.image, r.image
     r.cause, r.outcome, r.started_at_ms, r.finished_at_ms, r.exit_code, r.facts_json,
     r.texts_json, r.package_sha256, r.tip_commit, r.commits_past_base, r.files_changed,
     r.groups_json, r.quarantine_cause, r.opened_at_ms, r.verdict, r.discard_reason,
-    r.decided_at_ms, r.stopped_at_ms, r.removed_at_ms";
+    r.decided_at_ms, r.stopped_at_ms, r.removed_at_ms, w.cwd, r.plan_json";
 
 const RUN_FROM: &str = "FROM workshop_run r JOIN work_order w ON w.id = r.id";
 
@@ -142,6 +146,8 @@ fn run_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<RunRecord> {
         decided_at_ms: row.get(34)?,
         stopped_at_ms: row.get(35)?,
         removed_at_ms: row.get(36)?,
+        project_dir: row.get(37)?,
+        plan_json: row.get(38)?,
     })
 }
 
@@ -545,6 +551,28 @@ mod writers {
                 "UPDATE workshop_run SET cause = ?2, outcome = ?3, exit_code = ?4, finished_at_ms = ?5
                  WHERE id = ?1",
                 params![id, cause.code(), outcome.code(), exit_code, now_ms],
+            )? == 1)
+        }
+
+        /// Records what run `id` produced (AD-110) and when it finished.
+        pub fn set_run_outcome(
+            &mut self,
+            id: &str,
+            outcome: WorkshopOutcome,
+            now_ms: i64,
+        ) -> Result<bool, RegistryError> {
+            Ok(self.conn.execute(
+                "UPDATE workshop_run SET outcome = ?2, finished_at_ms = ?3 WHERE id = ?1",
+                params![id, outcome.code(), now_ms],
+            )? == 1)
+        }
+
+        /// Records run `id`'s first Receive at `now_ms` (AD-120); false
+        /// when it was opened before, or no such run.
+        pub fn set_run_opened(&mut self, id: &str, now_ms: i64) -> Result<bool, RegistryError> {
+            Ok(self.conn.execute(
+                "UPDATE workshop_run SET opened_at_ms = ?2 WHERE id = ?1 AND opened_at_ms IS NULL",
+                params![id, now_ms],
             )? == 1)
         }
 

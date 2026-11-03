@@ -50,6 +50,8 @@ pub struct Options {
     pub max_workers: u32,
     /// A battery runs after the build.
     pub battery: bool,
+    /// The project's repository uses SHA-256 object ids.
+    pub sha256: bool,
 }
 
 impl Default for Options {
@@ -60,6 +62,7 @@ impl Default for Options {
             mount: true,
             max_workers: 2,
             battery: true,
+            sha256: false,
         }
     }
 }
@@ -153,7 +156,12 @@ impl Home {
         std::fs::write(project.join(".gitignore"), ".claude/\n").unwrap();
         std::fs::write(project.join("README.md"), "api\n").unwrap();
         std::fs::write(project.join(".claude").join("notes.md"), "local\n").unwrap();
-        super::git(&git_dir, &project, &["init", "-q"]);
+        let format = if options.sha256 { "sha256" } else { "sha1" };
+        super::git(
+            &git_dir,
+            &project,
+            &["init", "-q", &format!("--object-format={format}")],
+        );
         super::git(&git_dir, &project, &["add", "-A"]);
         super::git(&git_dir, &project, &["commit", "-q", "-m", "base"]);
         env.write_floor(&floor(

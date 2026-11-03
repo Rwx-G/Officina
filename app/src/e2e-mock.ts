@@ -17,6 +17,7 @@ import type { AnswerResult } from "./lib/generated/AnswerResult";
 import type { OrchestratorView } from "./lib/generated/OrchestratorView";
 import type { RegistryView } from "./lib/generated/RegistryView";
 import type { RelayView } from "./lib/generated/RelayView";
+import type { ReviewView } from "./lib/generated/ReviewView";
 import type { StartAnswer } from "./lib/generated/StartAnswer";
 import type { WorkOrderPermission } from "./lib/generated/WorkOrderPermission";
 
@@ -108,6 +109,8 @@ export function installE2eMock(): void {
           return buildImages();
         case "run_battery":
           return runBattery();
+        case "open_review":
+          return openReview((args as { runId: string }).runId);
         case "send_answer":
           return answer((args as { proposalId?: string }).proposalId ?? null);
         default:
@@ -250,6 +253,47 @@ function runBattery(): Promise<BatteryAnswer> {
   return Promise.resolve(
     window.__officinaBatteryAnswer ?? { outcome: "queued", detail: ["officina-workshop:local"] },
   );
+}
+
+/** Mirrors the answer to `open_review` (AD-121): the view the test sets
+ *  in `__officinaReviews` for that run, else a `no_change` view of it. */
+function openReview(runId: string): Promise<ReviewView> {
+  const set = window.__officinaReviews?.[runId];
+  if (set) return Promise.resolve(set);
+  const base = "0".repeat(40);
+  return Promise.resolve({
+    run_id: runId,
+    template: "bump",
+    project: "api",
+    base_branch: "main",
+    base_commit: base,
+    tip: base,
+    state: "no_change",
+    outcome: "no_change",
+    cause: "exited",
+    quarantine_cause: null,
+    nothing_to_review: true,
+    report_tail: null,
+    facts: {
+      duration_ms: null,
+      cost_usd_micros: null,
+      turns: null,
+      exit_code: 0,
+      hooks: {},
+      allowed: [],
+      refused: 0,
+      refusals: [],
+      clock_skew_ms: null,
+      commits_past_base: 0,
+      files_changed: null,
+      insertions: null,
+      deletions: null,
+      collect_failed: null,
+    },
+    commits: [],
+    files: [],
+    diff: null,
+  });
 }
 
 /** Mirrors the answer to `start_orchestrator` (AD-89): the answer the

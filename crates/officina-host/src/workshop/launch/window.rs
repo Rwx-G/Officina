@@ -106,6 +106,8 @@ pub struct WorkshopRuntime {
     pub states: Arc<dyn CredentialStateSource + Send + Sync>,
     pub reader: Arc<dyn SystemProxyReader>,
     pub followed: FollowedRuns,
+    /// What host git showed of each package (D-239).
+    pub reviews: crate::workshop::review::ReviewCache,
     pub now_ms: fn() -> i64,
     /// How long thread `workshop` waits before asking an engine that did
     /// not answer again (D-216): [`crate::workshop::follow::ENGINE_RETRY`].

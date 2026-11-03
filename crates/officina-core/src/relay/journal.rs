@@ -153,6 +153,9 @@ pub enum JournalEntry {
     WorkshopStarted(Box<WorkshopStarted>),
     WorkshopRemoved(WorkshopRemoved),
     WorkshopFinished(Box<WorkshopFinished>),
+    GatewaySummary(Box<GatewaySummary>),
+    ReviewPackage(ReviewPackage),
+    ReviewOpened(ReviewOpened),
 }
 
 closed_enum! {
@@ -189,6 +192,9 @@ closed_enum! {
         WorkshopStarted,
         WorkshopRemoved,
         WorkshopFinished,
+        GatewaySummary,
+        ReviewPackage,
+        ReviewOpened,
     }
 }
 
@@ -224,6 +230,9 @@ impl JournalEntry {
             JournalEntry::WorkshopStarted(_) => JournalKind::WorkshopStarted,
             JournalEntry::WorkshopRemoved(_) => JournalKind::WorkshopRemoved,
             JournalEntry::WorkshopFinished(_) => JournalKind::WorkshopFinished,
+            JournalEntry::GatewaySummary(_) => JournalKind::GatewaySummary,
+            JournalEntry::ReviewPackage(_) => JournalKind::ReviewPackage,
+            JournalEntry::ReviewOpened(_) => JournalKind::ReviewOpened,
         }
     }
 }
@@ -728,6 +737,46 @@ pub struct WorkshopFinished {
     pub stream_bytes: u64,
 }
 
+/// What a run's gateway did, written at collection (AD-120): allowed
+/// connections per host (worker-influenced names, their credential forms
+/// replaced, D-230), the refusals, its exit code and its upstreams' state.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GatewaySummary {
+    pub run_id: String,
+    pub allowed: BTreeMap<String, u32>,
+    pub refused: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exit_code: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub upstream: Option<crate::workshop::gateway::UpstreamState>,
+}
+
+/// A package that reached the author (AD-120), written once for a run
+/// whose outcome is `package`; the credential's value never appears.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReviewPackage {
+    pub run_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bundle_sha256: Option<String>,
+    pub commits: u32,
+    pub files: u32,
+    pub insertions: u32,
+    pub deletions: u32,
+    pub groups: u32,
+    pub outcome: crate::workshop::package::PackageState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cause: Option<crate::workshop::package::QuarantineCause>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credential_locations: Option<u32>,
+}
+
+/// The author's first Receive on a run's review (AD-120): PRD section 7's
+/// Review cost starts here.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReviewOpened {
+    pub run_id: String,
+}
+
 /// A refusal a gateway logged (AD-120): a run's, or a battery's (story
 /// 6.10 writes it first, D-249). The host is worker text, made printable
 /// and cut by the gateway's own line rule.
@@ -1126,6 +1175,13 @@ mod tests {
             JournalKind::WorkshopFinished => {
                 JournalEntry::WorkshopFinished(Box::new(workshop_finished()))
             }
+            JournalKind::GatewaySummary => {
+                JournalEntry::GatewaySummary(Box::new(gateway_summary()))
+            }
+            JournalKind::ReviewPackage => JournalEntry::ReviewPackage(review_package()),
+            JournalKind::ReviewOpened => JournalEntry::ReviewOpened(ReviewOpened {
+                run_id: "0123456789abcdef0123456789abcdef".into(),
+            }),
             JournalKind::PromptDecided => JournalEntry::PromptDecided(PromptDecided {
                 session_id: "0f1e2d3c-4b5a-4978-8796-a5b4c3d2e1f0".into(),
                 tool_name: None,
@@ -1585,6 +1641,100 @@ mod tests {
                 );
             }
         }
+    }
+
+    fn gateway_summary() -> GatewaySummary {
+        GatewaySummary {
+            run_id: "0123456789abcdef0123456789abcdef".into(),
+            allowed: BTreeMap::from([("index.crates.io".to_owned(), 3)]),
+            refused: 1,
+            exit_code: Some(0),
+            upstream: None,
+        }
+    }
+
+    fn review_package() -> ReviewPackage {
+        ReviewPackage {
+            run_id: "0123456789abcdef0123456789abcdef".into(),
+            bundle_sha256: Some("b".repeat(64)),
+            commits: 2,
+            files: 3,
+            insertions: 10,
+            deletions: 4,
+            groups: 0,
+            outcome: crate::workshop::package::PackageState::Review,
+            cause: None,
+            credential_locations: None,
+        }
+    }
+
+    /// Story 6.13 (AD-120): `gateway_summary` reads back with and without
+    /// its upstream state and exit code.
+    #[test]
+    fn gateway_summary_round_trips() {
+        use crate::workshop::gateway::UpstreamState;
+        for upstream in [
+            None,
+            Some(UpstreamState::Reachable),
+            Some(UpstreamState::Unreachable),
+        ] {
+            let entry = JournalEntry::GatewaySummary(Box::new(GatewaySummary {
+                upstream,
+                exit_code: upstream.map(|_| 3),
+                ..gateway_summary()
+            }));
+            let line = JournalLine::new(4, entry.clone()).to_line();
+            let value: serde_json::Value = serde_json::from_str(&line).unwrap();
+            assert_eq!(value["kind"], "gateway_summary");
+            assert_eq!(value.get("upstream").is_some(), upstream.is_some());
+            assert_eq!(
+                parse_line(line.trim_end()),
+                ParsedLine::Line(JournalLine::new(4, entry))
+            );
+        }
+    }
+
+    /// Story 6.13 (AD-120): `review_package` reads back for each package
+    /// state and every quarantine cause.
+    #[test]
+    fn review_package_round_trips() {
+        use crate::workshop::package::{PackageState, QuarantineCause};
+        let causes = std::iter::once(None).chain(QuarantineCause::ALL.iter().copied().map(Some));
+        for cause in causes {
+            let entry = JournalEntry::ReviewPackage(ReviewPackage {
+                outcome: if cause.is_some() {
+                    PackageState::Quarantined
+                } else {
+                    PackageState::Review
+                },
+                cause,
+                bundle_sha256: cause.is_none().then(|| "c".repeat(64)),
+                ..review_package()
+            });
+            let line = JournalLine::new(4, entry.clone()).to_line();
+            let value: serde_json::Value = serde_json::from_str(&line).unwrap();
+            assert_eq!(value["kind"], "review_package");
+            assert_eq!(
+                parse_line(line.trim_end()),
+                ParsedLine::Line(JournalLine::new(4, entry))
+            );
+        }
+    }
+
+    /// Story 6.13 (AD-120, D-249): `review_opened` reads back; 6.13 is
+    /// its first writer.
+    #[test]
+    fn review_opened_round_trips() {
+        let entry = JournalEntry::ReviewOpened(ReviewOpened {
+            run_id: "0123456789abcdef0123456789abcdef".into(),
+        });
+        let line = JournalLine::new(4, entry.clone()).to_line();
+        let value: serde_json::Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(value["kind"], "review_opened");
+        assert_eq!(
+            parse_line(line.trim_end()),
+            ParsedLine::Line(JournalLine::new(4, entry))
+        );
     }
 
     /// Story 6.11 (AD-120, D-249): `workshop_removed` reads back for every

@@ -79,7 +79,7 @@ pub fn scratch(
     let alternates = dir.join("objects").join("info").join("alternates");
     std::fs::write(
         &alternates,
-        format!("{}\n", objects.to_string_lossy().replace('\\', "/")),
+        officina_core::workshop::bundle::alternates_line(&objects.to_string_lossy()),
     )
     .map_err(|e| VerifyError(e.to_string()))?;
     Ok(dir)
@@ -93,6 +93,17 @@ pub fn verify(
     received: &Received,
     expected: &Expected,
 ) -> Result<PackageAssessment, VerifyError> {
+    verify_with_paths(git, scratch, received, expected).map(|(assessment, _)| assessment)
+}
+
+/// [`verify`], with every path step 6's diff named when it ran: data for
+/// display and counting, never an argument (D-219).
+pub fn verify_with_paths(
+    git: &WorkshopGit,
+    scratch: &Path,
+    received: &Received,
+    expected: &Expected,
+) -> Result<(PackageAssessment, Option<Vec<String>>), VerifyError> {
     let mut outputs = Outputs {
         tip: received.tip.clone(),
         bundle_bytes: received.bundle_bytes,
@@ -114,7 +125,7 @@ pub fn verify(
             .unwrap_or_default();
         let range = format!("{base}..{tip}");
         match assess(&outputs, expected) {
-            Assessed::Done(done) => return Ok(done),
+            Assessed::Done(done) => return Ok((done, outputs.paths)),
             Assessed::CheckTipHeld => {
                 outputs.tip_held = Some(succeeds(
                     git,

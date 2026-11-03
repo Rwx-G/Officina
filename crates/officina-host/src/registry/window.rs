@@ -733,6 +733,53 @@ impl WindowRegistry {
         })
     }
 
+    /// Records what collection found (AD-110): run `id` moved by `event`,
+    /// its outcome and finish time, the package fields, and the facts and
+    /// texts `amend` sets, in one step; the row as it was, or `None` when
+    /// no edge allows the move, which changes nothing.
+    pub fn record_workshop_collection(
+        &mut self,
+        id: &str,
+        event: officina_core::workshop::lifecycle::RunEvent,
+        outcome: officina_core::workshop::run::WorkshopOutcome,
+        package: &crate::registry::workshop::PackageFields<'_>,
+        now_ms: i64,
+        amend: impl FnOnce(&mut crate::registry::workshop::RunRecord),
+    ) -> Result<Option<crate::registry::workshop::RunRecord>, IpcError> {
+        self.with_writer(|writer| {
+            let Some(before) = writer.workshop_run(id)? else {
+                return Ok(Ok(None));
+            };
+            let Ok(to) = officina_core::workshop::lifecycle::transition(before.state, event) else {
+                return Ok(Ok(None));
+            };
+            let mut after = before.clone();
+            amend(&mut after);
+            writer.set_run_state(id, to, now_ms)?;
+            writer.set_run_facts(id, &after.facts)?;
+            if let Some(texts) = after.texts.as_ref().filter(|_| after.texts != before.texts) {
+                writer.set_run_texts(id, texts)?;
+            }
+            writer.set_run_outcome(id, outcome, now_ms)?;
+            writer.set_run_package(id, package)?;
+            Ok(Ok(Some(before)))
+        })
+    }
+
+    /// Marks run `id`'s review opened at `now_ms` (AD-120 `review_opened`);
+    /// true only for the first Receive.
+    pub fn open_workshop_review(&mut self, id: &str, now_ms: i64) -> Result<bool, IpcError> {
+        self.with_writer(|writer| Ok(Ok(writer.set_run_opened(id, now_ms)?)))
+    }
+
+    /// Run `id`, if the registry holds it.
+    pub fn workshop_run(
+        &mut self,
+        id: &str,
+    ) -> Result<Option<crate::registry::workshop::RunRecord>, IpcError> {
+        self.with_writer(|writer| Ok(Ok(writer.workshop_run(id)?)))
+    }
+
     /// Changes run `id`'s facts, its state kept; false when no such run.
     pub fn amend_workshop_facts(
         &mut self,

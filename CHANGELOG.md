@@ -8,6 +8,22 @@ project uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Collection, host verification and the run's outcome (v0.6, story 6.13):
+  once a worker exits, the window stops its gateway, packages the run in a
+  separate packer container (no network, no credential, no mount), streams
+  its `out/` through a 65 MiB cap, keeps the tip and manifest in memory and
+  writes only the bundle, under its own name, after an allow-list of names
+  that refuses every Windows path form. Host `git` verifies the bundle in a
+  scratch repository in the project's object format that borrows the
+  project's objects read-only, each failure a `QuarantineCause`; the
+  outcome comes from host `git`'s count, never the worker's report: a run
+  with no commit past the base is `no_change` (finished at once, nothing to
+  review) or `failed`. Every engine object of the run is then removed. The
+  journal gains `gateway_summary`, `review_package` and `review_opened`;
+  `open_review` returns the first form of the review view (facts, report
+  tail, commits, files, diff); doctor shows the upstream's state the
+  newest run found.
+
 - Following a workshop run, its limits and reconciliation (v0.6, story
   6.12): the window follows each live container's logs with bounded
   lines, folds the worker's stream (the first `system/init`, hook counts,

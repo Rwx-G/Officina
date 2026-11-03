@@ -303,7 +303,9 @@ fn a_token_in_a_mid_run_report_tail_is_replaced_before_the_view() {
     let texts = runtime.followed.lock().unwrap()[&id].texts().unwrap();
     assert!(!serde_json::to_string(&texts).unwrap().contains(SEEDED));
     set_container(&home, &worker(&id), Some(("exited", 0)));
-    until("collecting", || home.run(&id).state == RunState::Collecting);
+    until("collected", || {
+        matches!(home.run(&id).state, RunState::Collecting | RunState::Failed)
+    });
     let stored = serde_json::to_string(&home.run(&id).texts).unwrap();
     assert!(!stored.contains(SEEDED), "{stored}");
     assert!(stored.contains(officina_core::workshop::scan::REPLACEMENT));
@@ -362,7 +364,7 @@ fn the_deadline_stops_the_worker() {
         home.run(&id).cause == Some(Recorded::Known(FinishCause::Deadline))
     });
     let run = home.run(&id);
-    assert_eq!(run.state, RunState::Collecting);
+    assert!(matches!(run.state, RunState::Collecting | RunState::Failed));
     assert_eq!(run.facts.stop_reason, Some(StopReason::Deadline));
     assert!(home.count(0, &["stop"]) >= 1);
 }

@@ -324,6 +324,14 @@ impl Reader {
         crate::registry::workshop::run(&self.conn, id)
     }
 
+    /// The packages awaiting the author's verdict (AD-107's
+    /// `reviews_pending`).
+    pub fn workshop_awaiting_verdict(
+        &self,
+    ) -> rusqlite::Result<Vec<crate::registry::workshop::RunRecord>> {
+        crate::registry::workshop::awaiting_verdict(&self.conn)
+    }
+
     /// Every image row (AD-99): doctor reads each one's battery.
     pub fn workshop_images(&self) -> rusqlite::Result<Vec<crate::registry::workshop::ImageRecord>> {
         crate::registry::workshop::images(&self.conn)

@@ -150,9 +150,27 @@ pub fn holds_only(header: &BundleHeader, branch: &str, commit: &str) -> bool {
         )
 }
 
+/// The `objects/info/alternates` line of the scratch repository (AD-111,
+/// review F44): the project's object directory as one line, its separators
+/// forward, every other character kept exactly. Git reads the line
+/// literally unless it starts with a double quote, which no Windows path
+/// does.
+pub fn alternates_line(objects_dir: &str) -> String {
+    format!("{}\n", objects_dir.replace('\\', "/"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Review F44: a path with spaces and accents is written exactly.
+    #[test]
+    fn an_alternates_path_with_spaces_and_accents_is_written_exactly() {
+        assert_eq!(
+            alternates_line("C:\\Users\\user01\\Mes Projets\\Réseau été\\.git\\objects"),
+            "C:/Users/user01/Mes Projets/Réseau été/.git/objects\n"
+        );
+    }
 
     const OID: &str = "c93e110a6a285ebb37e2e83f242cc4215695d93f";
 

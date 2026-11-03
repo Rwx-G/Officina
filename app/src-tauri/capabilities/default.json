@@ -45,6 +45,7 @@
     "allow-open-meeting",
     "allow-send-answer",
     "allow-build-images",
-    "allow-run-battery"
+    "allow-run-battery",
+    "allow-open-review"
   ]
 }

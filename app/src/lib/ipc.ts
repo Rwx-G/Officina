@@ -23,6 +23,7 @@ import type { Delivery } from "./generated/Delivery";
 import type { OrchestratorView } from "./generated/OrchestratorView";
 import type { RegistryView } from "./generated/RegistryView";
 import type { RelayView } from "./generated/RelayView";
+import type { ReviewView } from "./generated/ReviewView";
 import type { StartAnswer } from "./generated/StartAnswer";
 import type { Settlement } from "./generated/Settlement";
 import type { SubjectOrigin } from "./generated/SubjectOrigin";
@@ -264,6 +265,14 @@ export function buildImages(): Promise<BuildAnswer> {
  *  workshop view as it ends. */
 export function runBattery(image: string | null): Promise<BatteryAnswer> {
   return invoke<BatteryAnswer>("run_battery", { image });
+}
+
+/** Receive on workshop run `runId`'s review (AD-121, D-239): the stored
+ *  facts, then host git's commits, files and diff; a `no_change` run
+ *  answers `nothing_to_review`. The first Receive of a package journals
+ *  `review_opened`. */
+export function openReview(runId: string): Promise<ReviewView> {
+  return invoke<ReviewView>("open_review", { runId });
 }
 
 /** The meeting of `key` (AD-84, D-138): a card key, `sid:<session id>`

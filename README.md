@@ -800,9 +800,10 @@ The first start of v0.5 also moves the registry to its version 2, which adds the
 The workshop runs a work order's Claude Code session unattended in a
 container on your Docker engine, behind an egress gateway, and hands back a
 package you review before anything reaches your repository. It is being
-built story by story: a workshop card can be issued and launched; following
-the run, collecting its package and reviewing it come in the next stories,
-and the window's buttons with them.
+built story by story: a workshop card can be issued and launched, its run
+is followed and its package collected and verified; the credential scan,
+Import and Discard come in the next stories, and the window's buttons with
+them.
 
 ### Declaring the workshop
 
@@ -1119,6 +1120,65 @@ engine keeps three files of 32 MiB per container, so a worker that prints
 more than 96 MiB while the window is closed rotates its real first
 `system/init` away, and the first one read after the restart could be
 forged. A run the window follows meets `output_cap` first.
+
+### Collection: the package
+
+Once the worker has exited, however it ended, the window stops the
+gateway, then packages the run with a second container, the packer: the
+run's image and volume, no network, no credential, no mount, its branch
+and base given on its command line, never read from the worker's files. It
+writes the branch's tip and, when the clone holds commits past the base, a
+git bundle of them. Nothing is collected while the workshop is stopped.
+
+The window copies the packer's output as a stream, `docker cp ... -`,
+stopped past 64 MiB and 1 MiB (the run's package is then quarantined
+`too_large`, nothing written). The stream may hold four names and no
+other: its folder, `tip`, `manifest.json` and `work.bundle`. Any other
+name, a link, a backslash, a drive or a colon, a Windows device name, a
+trailing dot or space, or a name given twice in another case is
+`bundle_invalid`. The tip and the manifest stay in memory; the bundle is
+the only file written, under a name Officina chooses, in the run's `out`
+folder, after the path is checked to stay there. A partial `out` an
+interrupted collection left is deleted first.
+
+Your own `git` then verifies the package in a scratch repository
+(`verify.git`, in your project's object format) that borrows your
+project's objects read-only: the tip must be one object id, the bundle
+must name your base as its one prerequisite and the run's branch as its
+one reference, pass `git bundle verify` and a fetch with fsck, descend
+from the base, hold at most 500 commits, change at most 10,000 paths, none
+of them in or under a mount (compared as Windows compares names), and
+inflate to at most 512 MiB. A worker value reaches `git` only as a
+validated object id, never as an option, a path or a revision expression.
+Each failure quarantines the package with a `QuarantineCause`, of three
+families: a package whose shape is wrong (its branch, its bundle, its
+references or its base), one past a size bound, and one that commits into
+a mount. A quarantined package is shown, never imported.
+
+What the run produced is decided from what your `git` finds, never from
+what the worker says: a worker that exited 0 with no commit past the base
+is `no_change`; any other ending with no commit is `failed`; a commit past
+the base is a package to review (or quarantined), whatever the report
+claims; a failed collection is `failed`. A worker that resets its branch to
+the base produced `no_change`. A `no_change` run is finished at once: its
+`out` and `verify.git` are deleted, it never asks for your review, counts
+in no pending review, and offers neither Import nor Discard.
+
+Once the package is on the host, the worker, the packer, the gateway, the
+volume and both networks are removed, so the credential leaves the engine,
+and the run's `in` folder is deleted. The journal records the gateway's
+summary (`gateway_summary`: allowed connections per host, refusals, its
+exit code, whether its upstream answered), the removal, a `review_package`
+line for a package, and one `workshop_finished` per run. With
+`upstream_proxy` set, doctor shows the upstream's state the newest run's
+gateway found, or unknown before any run.
+
+The boundary ends at the package: verification proves what the package
+holds and that it reaches no further than the run's branch, not that its
+change is right. Reading the diff before Import is yours. Receive on a run
+(`open_review`) shows its facts, its report's tail, its commits, its file
+list whole and the diff (cut at 256 KiB), every worker text untrusted; the
+first Receive of a package is journaled `review_opened`.
 
 ### The workshop credential
 

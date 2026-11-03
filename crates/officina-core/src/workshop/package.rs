@@ -30,6 +30,7 @@ closed_enum! {
     #[serde(rename_all = "snake_case")]
     /// Why a package is quarantined (AD-111); story 6.14 adds the scan's.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+    #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
     pub enum QuarantineCause {
         BranchMissing,
         BundleInvalid,
@@ -37,6 +38,17 @@ closed_enum! {
         WrongBase,
         ExtraRef,
         MountCommitted,
+    }
+}
+
+closed_enum! {
+    #[serde(rename_all = "snake_case")]
+    /// What a package is for the author (AD-120 `review_package`): one to
+    /// review, or one quarantined with its cause.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+    pub enum PackageState {
+        Review,
+        Quarantined,
     }
 }
 
