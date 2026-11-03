@@ -47,6 +47,8 @@
     "allow-build-images",
     "allow-run-battery",
     "allow-open-review",
-    "allow-approve-sensitive"
+    "allow-approve-sensitive",
+    "allow-import-package",
+    "allow-discard-package"
   ]
 }

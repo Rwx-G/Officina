@@ -211,15 +211,18 @@ pub fn imported_since(
 
 /// What retention reads of every run (AD-124).
 pub fn run_ages(conn: &Connection) -> rusqlite::Result<Vec<RunAge>> {
-    conn.prepare_cached("SELECT id, started_at_ms, texts_json IS NOT NULL FROM workshop_run")?
-        .query_map([], |row| {
-            Ok(RunAge {
-                id: row.get(0)?,
-                started_at_ms: row.get(1)?,
-                has_texts: row.get(2)?,
-            })
-        })?
-        .collect()
+    conn.prepare_cached(
+        "SELECT id, started_at_ms, texts_json IS NOT NULL, state FROM workshop_run",
+    )?
+    .query_map([], |row| {
+        Ok(RunAge {
+            id: row.get(0)?,
+            started_at_ms: row.get(1)?,
+            has_texts: row.get(2)?,
+            awaits_verdict: required(3, row.get(3)?, RunState::from_code)?.awaits_verdict(),
+        })
+    })?
+    .collect()
 }
 
 /// The approved groups of run `run_id`: each group's key and the hunks'
@@ -895,18 +898,49 @@ mod writers {
             Ok(run_ages(&self.conn)?)
         }
 
-        /// Applies retention's registry actions (AD-124): texts cleared,
-        /// and each run deleted with its `work_order` and approvals in one
-        /// transaction; folder actions are the caller's. Returns the texts
-        /// cleared and the runs deleted.
+        /// Applies retention's registry actions (AD-124, D-213): texts
+        /// cleared, each undecided package discarded `expired` at `now_ms`
+        /// while it still awaits a verdict, and each run deleted with its
+        /// `work_order` and approvals, in one transaction; folder actions
+        /// are the caller's. Returns the texts cleared, the runs deleted and
+        /// the ids of the packages expired, for their journal lines.
         pub fn apply_workshop_retention(
             &mut self,
             actions: &[RetentionAction],
-        ) -> Result<(usize, usize), RegistryError> {
+            now_ms: i64,
+        ) -> Result<(usize, usize, Vec<String>), RegistryError> {
             let tx = self.conn.transaction()?;
-            let (mut cleared, mut deleted) = (0, 0);
+            let (mut cleared, mut deleted, mut expired) = (0, 0, Vec::new());
             for action in actions {
                 match action {
+                    RetentionAction::Expire(id) => {
+                        let state: Option<String> = tx
+                            .query_row(
+                                "SELECT state FROM workshop_run WHERE id = ?1",
+                                [id],
+                                |row| row.get(0),
+                            )
+                            .optional()?;
+                        let awaits = state
+                            .as_deref()
+                            .and_then(RunState::from_code)
+                            .is_some_and(RunState::awaits_verdict);
+                        if awaits {
+                            tx.execute(
+                                "UPDATE workshop_run SET state = ?2, state_at_ms = ?5, verdict = ?3,
+                                     discard_reason = ?4, decided_at_ms = ?5
+                                 WHERE id = ?1",
+                                params![
+                                    id,
+                                    RunState::Discarded.code(),
+                                    PackageVerdict::Discarded.code(),
+                                    DiscardReason::Expired.code(),
+                                    now_ms
+                                ],
+                            )?;
+                            expired.push(id.clone());
+                        }
+                    }
                     RetentionAction::ClearTexts(id) => {
                         cleared += tx.execute(
                             "UPDATE workshop_run SET texts_json = NULL WHERE id = ?1",
@@ -922,7 +956,7 @@ mod writers {
                 }
             }
             tx.commit()?;
-            Ok((cleared, deleted))
+            Ok((cleared, deleted, expired))
         }
     }
 }

@@ -189,10 +189,10 @@ pub fn assess(outputs: &Outputs, expected: &Expected) -> Assessed {
     if header.prerequisites.len() != 1 || header.prerequisites[0] != expected.base_commit {
         return quarantined(tip, 0, QuarantineCause::WrongBase);
     }
-    if header.references.len() != 1 || header.references[0].name != expected.branch_ref {
+    let Some(reference) = super::bundle::branch_reference(header, &expected.branch_ref) else {
         return quarantined(tip, 0, QuarantineCause::ExtraRef);
-    }
-    if tip != Some(header.references[0].oid.as_str()) {
+    };
+    if tip != Some(reference.oid.as_str()) {
         return quarantined(tip, 0, QuarantineCause::BundleInvalid);
     }
     match outputs.verified {

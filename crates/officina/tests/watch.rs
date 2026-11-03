@@ -4721,11 +4721,30 @@ fn the_collector_never_spawns_docker() {
         &handle.sender,
         AuthorCommand::RecordApproval(Box::new(
             officina_host::workshop::review::SensitiveApproval {
-                run_id,
+                run_id: run_id.clone(),
                 group_key: "build_scripts".to_owned(),
                 hunks_sha256: "0".repeat(64),
             },
         )),
+        AUTHOR_WAIT,
+    );
+    // Import's and Discard's collector halves (story 6.16): the git of an
+    // Import is thread `workshop`'s; Discard runs none.
+    let _ = officina_host::watch::ask(
+        &handle.sender,
+        AuthorCommand::RecordImport(Box::new(officina_host::workshop::import::ImportRecord {
+            run_id: run_id.clone(),
+            branch: "officina/bump-1".to_owned(),
+            tip: "0".repeat(40),
+        })),
+        AUTHOR_WAIT,
+    );
+    let _ = officina_host::watch::ask(
+        &handle.sender,
+        AuthorCommand::DiscardPackage {
+            run_id,
+            reason: officina_core::workshop::review::DiscardReason::PoorResult,
+        },
         AUTHOR_WAIT,
     );
     std::thread::sleep(SETTLE);

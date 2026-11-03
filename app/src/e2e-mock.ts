@@ -7,6 +7,8 @@ import type { AutoMode } from "./lib/generated/AutoMode";
 import type { BatteryAnswer } from "./lib/generated/BatteryAnswer";
 import type { Board } from "./lib/generated/Board";
 import type { ApprovalAnswer } from "./lib/generated/ApprovalAnswer";
+import type { DiscardAnswer } from "./lib/generated/DiscardAnswer";
+import type { ImportAnswer } from "./lib/generated/ImportAnswer";
 import type { BuildAnswer } from "./lib/generated/BuildAnswer";
 import type { CardAnswer } from "./lib/generated/CardAnswer";
 import type { ConfirmItem } from "./lib/generated/ConfirmItem";
@@ -114,6 +116,10 @@ export function installE2eMock(): void {
           return openReview((args as { runId: string }).runId);
         case "approve_sensitive":
           return approveSensitive();
+        case "import_package":
+          return importPackage((args as { runId: string }).runId);
+        case "discard_package":
+          return discardPackage();
         case "send_answer":
           return answer((args as { proposalId?: string }).proposalId ?? null);
         default:
@@ -307,6 +313,23 @@ function openReview(runId: string): Promise<ReviewView> {
  *  test sets in `__officinaApprovalAnswer`, else `approved`. */
 function approveSensitive(): Promise<ApprovalAnswer> {
   return Promise.resolve(window.__officinaApprovalAnswer ?? { outcome: "approved" });
+}
+
+/** Mirrors the answer to `import_package` (AD-114): the answer the test
+ *  sets in `__officinaImportAnswer`, else `imported` on the run's own
+ *  branch name. Every call is counted in `__officinaImportCalls`, so a
+ *  keyboard Import can be shown to make none (D-225). */
+function importPackage(runId: string): Promise<ImportAnswer> {
+  window.__officinaImportCalls = (window.__officinaImportCalls ?? 0) + 1;
+  return Promise.resolve(
+    window.__officinaImportAnswer ?? { outcome: "imported", detail: `officina/${runId}` },
+  );
+}
+
+/** Mirrors the answer to `discard_package` (AD-114): the answer the test
+ *  sets in `__officinaDiscardAnswer`, else `discarded`. */
+function discardPackage(): Promise<DiscardAnswer> {
+  return Promise.resolve(window.__officinaDiscardAnswer ?? { outcome: "discarded" });
 }
 
 /** Mirrors the answer to `start_orchestrator` (AD-89): the answer the

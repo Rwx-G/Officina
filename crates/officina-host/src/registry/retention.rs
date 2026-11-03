@@ -66,6 +66,9 @@ pub struct WorkshopRetired {
     pub cleared_texts: usize,
     /// Runs deleted with their `work_order` and approvals.
     pub deleted_runs: usize,
+    /// Undecided packages discarded `expired` (D-213), by run id: the
+    /// window journals `review_discarded` for each.
+    pub expired: Vec<String>,
     /// Run folders deleted.
     pub deleted_folders: usize,
     /// Run folders that could not be deleted, kept for the next pass.
@@ -279,16 +282,19 @@ impl Writer {
     }
 
     /// The workshop's part of the pass (AD-124, D-213): core's
-    /// [`retention`] over the runs and the run folders, then batteries past
+    /// [`retention`] over the runs and the run folders (an undecided
+    /// package expiring with its folder), then batteries past
     /// [`BATTERY_ROW_TTL_MS`] and build output past the excerpt TTL. A
     /// folder that cannot be deleted is kept for the next pass.
     pub fn retire_workshop(&mut self, now_ms: i64) -> Result<WorkshopRetired, RegistryError> {
         let runs = crate::workshop::runs_dir(self.paths().officina_home());
         let actions = retention(&self.workshop_run_ages()?, &run_folders(&runs), now_ms);
-        let (cleared_texts, deleted_runs) = self.apply_workshop_retention(&actions)?;
+        let (cleared_texts, deleted_runs, expired) =
+            self.apply_workshop_retention(&actions, now_ms)?;
         let mut retired = WorkshopRetired {
             cleared_texts,
             deleted_runs,
+            expired,
             ..WorkshopRetired::default()
         };
         for action in &actions {

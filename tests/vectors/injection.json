@@ -766,5 +766,119 @@
       ],
       "creates": 0
     }
+  ],
+  "workshop_import": [
+    {
+      "name": "an approved package imported by its click",
+      "family": "control",
+      "package": "sensitive",
+      "steps": [
+        {"approve": {}},
+        {"import": {}, "expect": {"outcome": "imported"}}
+      ]
+    },
+    {
+      "name": "a keyboard Import",
+      "family": "launch_now",
+      "tags": ["keyboard"],
+      "package": "sensitive",
+      "steps": [
+        {"approve": {}},
+        {"import": {"detail": 0}, "expect": {"calls": 0}}
+      ]
+    },
+    {
+      "name": "a tip other than the recorded one",
+      "family": "stale_card",
+      "package": "plain",
+      "steps": [
+        {"approve": {}},
+        {"import": {"tip": "base"}, "expect": {"outcome": "refused", "detail": "state_changed"}}
+      ]
+    },
+    {
+      "name": "a group left unapproved",
+      "family": "launch_conditions",
+      "guards": "mutant-skip-group-approval",
+      "package": "sensitive",
+      "steps": [
+        {"import": {}, "expect": {"outcome": "refused", "detail": "unapproved"}}
+      ]
+    },
+    {
+      "name": "an approval of a stale hunks_sha256",
+      "family": "stale_card",
+      "package": "sensitive",
+      "steps": [
+        {"approve": {}},
+        {"tamper": {"kind": "stale_approval"}},
+        {"import": {}, "expect": {"outcome": "refused", "detail": "unapproved"}}
+      ]
+    },
+    {
+      "name": "a quarantined package",
+      "family": "launch_conditions",
+      "package": "quarantined",
+      "steps": [
+        {"import": {}, "expect": {"outcome": "refused", "detail": "not_in_review"}}
+      ]
+    },
+    {
+      "name": "the branch already in the project",
+      "family": "launch_conditions",
+      "package": "plain",
+      "steps": [
+        {"approve": {}},
+        {"tamper": {"kind": "branch_exists"}},
+        {"import": {}, "expect": {"outcome": "refused", "detail": "branch_exists"}}
+      ]
+    },
+    {
+      "name": "a branch named officina in the project",
+      "family": "launch_conditions",
+      "package": "plain",
+      "steps": [
+        {"approve": {}},
+        {"tamper": {"kind": "branch_named_officina"}},
+        {"import": {}, "expect": {"outcome": "refused", "detail": "branch_conflict"}}
+      ]
+    },
+    {
+      "name": "a no_change run",
+      "family": "launch_conditions",
+      "package": "no_change",
+      "steps": [
+        {"import": {}, "expect": {"outcome": "refused", "detail": "not_in_review"}}
+      ]
+    },
+    {
+      "name": "a forged run id",
+      "family": "unknown_reference",
+      "package": "plain",
+      "steps": [
+        {"approve": {}},
+        {"import": {"id": "forged"}, "expect": {"outcome": "refused", "detail": "unknown_run"}}
+      ]
+    },
+    {
+      "name": "the scratch repository gone",
+      "family": "launch_conditions",
+      "package": "plain",
+      "steps": [
+        {"approve": {}},
+        {"tamper": {"kind": "scratch_gone"}},
+        {"import": {}, "expect": {"outcome": "refused", "detail": "package_changed"}}
+      ]
+    },
+    {
+      "name": "the workshop's git unavailable",
+      "family": "launch_conditions",
+      "package": "plain",
+      "steps": [
+        {"approve": {}},
+        {"tamper": {"kind": "git_gone"}},
+        {"import": {}, "expect": {"outcome": "refused", "detail": "unavailable"}}
+      ]
+    }
   ]
 }

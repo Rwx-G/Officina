@@ -140,6 +140,24 @@ pub fn parse_header(bytes: &[u8]) -> Result<BundleHeader, BundleError> {
     Ok(header)
 }
 
+/// The work branch's reference of a package bundle's `header` (AD-111
+/// step 3): its one reference when that is `branch_ref`; `None` for any
+/// other reference or for more than one, which is `extra_ref`.
+#[cfg(not(feature = "mutant-accept-extra-ref"))]
+pub fn branch_reference<'h>(header: &'h BundleHeader, branch_ref: &str) -> Option<&'h Reference> {
+    match header.references.as_slice() {
+        [only] if only.name == branch_ref => Some(only),
+        _ => None,
+    }
+}
+
+/// The mutant `mutant-accept-extra-ref` (AD-125, D-225): the single
+/// reference check skipped, the work branch found among any others.
+#[cfg(feature = "mutant-accept-extra-ref")]
+pub fn branch_reference<'h>(header: &'h BundleHeader, branch_ref: &str) -> Option<&'h Reference> {
+    header.references.iter().find(|r| r.name == branch_ref)
+}
+
 /// True when `header` holds `refs/heads/<branch>` at `commit` and nothing
 /// else (AD-107 step 2): no prerequisite, one reference.
 pub fn holds_only(header: &BundleHeader, branch: &str, commit: &str) -> bool {

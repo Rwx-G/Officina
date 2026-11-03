@@ -1,6 +1,8 @@
 // Globals the e2e build exposes to Playwright (see src/e2e-mock.ts). Shared by
 // the app and the e2e tests, which type-check under different tsconfigs.
 import type { ApprovalAnswer } from "./lib/generated/ApprovalAnswer";
+import type { DiscardAnswer } from "./lib/generated/DiscardAnswer";
+import type { ImportAnswer } from "./lib/generated/ImportAnswer";
 import type { BatteryAnswer } from "./lib/generated/BatteryAnswer";
 import type { Board } from "./lib/generated/Board";
 import type { BuildAnswer } from "./lib/generated/BuildAnswer";
@@ -78,6 +80,12 @@ declare global {
     __officinaReviews?: Record<string, ReviewView>;
     /** What `approve_sensitive` answers (story 6.15); else `approved`. */
     __officinaApprovalAnswer?: ApprovalAnswer;
+    /** What `import_package` answers (story 6.16); else `imported`. */
+    __officinaImportAnswer?: ImportAnswer;
+    /** How many times `import_package` was called (story 6.16). */
+    __officinaImportCalls?: number;
+    /** What `discard_package` answers (story 6.16); else `discarded`. */
+    __officinaDiscardAnswer?: DiscardAnswer;
     /** Holds `start_orchestrator`'s answer until `__officinaReleaseStart`
      *  is called (story 5.16): a Start in flight. */
     __officinaStartHeld?: boolean;

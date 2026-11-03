@@ -23,11 +23,15 @@ workspace = true
 [features]
 # Generates the TypeScript types of the board contract (AD-13).
 ts = ["dep:ts-rs"]
-# The mutants of AD-95 (D-148), each skipping one check of the launch path
-# at its own site, for CI's `mutants` job only: it builds the injection
-# battery with each one and expects the case that guards it to fail.
+# The mutants of AD-95 and AD-125 (D-148, D-225), each skipping one check of
+# the launch or the import path at its own site, for CI's `mutants` job only:
+# it builds the test target the job names for each one (the injection
+# battery unless it names another) and expects the case that guards it to
+# fail.
 # `MUTANTS_ENABLED` is true with any of them, and the window refuses to
 # compile then. `--all-features` is never used in this workspace.
 mutant-accept-any-value = []
 mutant-accept-superseded = []
 mutant-skip-prompt-hash = []
+mutant-accept-extra-ref = []
+mutant-skip-group-approval = []

@@ -817,6 +817,8 @@ fn recent(lines: &[JournalLine], now_ms: i64, rows: &[AutoRow]) -> Vec<RecentEnt
                 | JournalEntry::ReviewPackage(_)
                 | JournalEntry::ReviewOpened(_)
                 | JournalEntry::SensitiveApproved(_)
+                | JournalEntry::ReviewImported(_)
+                | JournalEntry::ReviewDiscarded(_)
                 | JournalEntry::OrchestratorStarted(_)
                 | JournalEntry::MeetingAnswer(_) => return None,
             };
@@ -1413,6 +1415,8 @@ mod tests {
                 | JournalKind::ReviewPackage
                 | JournalKind::ReviewOpened
                 | JournalKind::SensitiveApproved
+                | JournalKind::ReviewImported
+                | JournalKind::ReviewDiscarded
                 | JournalKind::OrchestratorStarted
                 | JournalKind::MeetingAnswer => continue,
             };

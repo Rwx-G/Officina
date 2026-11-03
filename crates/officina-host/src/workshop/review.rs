@@ -154,7 +154,10 @@ fn stored_refusal(row: &RunRecord, group_key: &str) -> Option<ApprovalRefusal> {
     (!groups_of(row).iter().any(|g| g.key == group_key)).then_some(ApprovalRefusal::UnknownGroup)
 }
 
-fn floor_key(sender: &std::sync::mpsc::Sender<CollectorMsg>) -> Result<Option<String>, IpcError> {
+/// The approved floor's key, for the credential's needles (D-230).
+pub(crate) fn floor_key(
+    sender: &std::sync::mpsc::Sender<CollectorMsg>,
+) -> Result<Option<String>, IpcError> {
     Ok(
         match ask(sender, AuthorCommand::WorkshopRowsToReconcile, AUTHOR_WAIT)? {
             AuthorAnswer::WorkshopRows(rows) => rows.1,
@@ -164,7 +167,7 @@ fn floor_key(sender: &std::sync::mpsc::Sender<CollectorMsg>) -> Result<Option<St
 }
 
 /// Runs `job` on thread `workshop` and waits for what it sends.
-fn on_workshop<T: Send + 'static>(
+pub(crate) fn on_workshop<T: Send + 'static>(
     runtime: &WorkshopRuntime,
     job: impl FnOnce() -> T + Send + 'static,
 ) -> Result<T, IpcError> {
@@ -331,7 +334,7 @@ fn needles_of(runtime: &WorkshopRuntime, row: &RunRecord, floor_key: &str) -> Op
 /// Host git's display of `row`'s package (AD-111 step 8), from the cache
 /// or the scratch repository; none for a run that is not a package, or
 /// whose package was never fetched.
-fn display_of(
+pub(crate) fn display_of(
     runtime: &WorkshopRuntime,
     home: &Path,
     base_env: &[(String, String)],

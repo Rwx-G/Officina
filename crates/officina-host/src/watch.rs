@@ -174,6 +174,14 @@ pub enum AuthorCommand {
     /// An approval thread `workshop` checked against the group's hunks
     /// (AD-113, D-239). Like a launch's outcome it is never dropped.
     RecordApproval(Box<crate::workshop::review::SensitiveApproval>),
+    /// An Import thread `workshop` carried out (AD-114): its reference
+    /// exists, so like a launch's outcome it is never dropped.
+    RecordImport(Box<crate::workshop::import::ImportRecord>),
+    /// Discard on a package with the author's reason (AD-114).
+    DiscardPackage {
+        run_id: String,
+        reason: officina_core::workshop::review::DiscardReason,
+    },
     /// How a granted launch ended (AD-81 step 3). It carries no deadline:
     /// the collector records it however late it comes, and never drops it
     /// (D-135, review F14).
@@ -422,6 +430,10 @@ pub enum AuthorAnswer {
     WorkshopReview(Option<Box<crate::workshop::review::StoredReview>>),
     /// How an approval was recorded (AD-113).
     Approval(officina_core::workshop::review::ApprovalAnswer),
+    /// How an Import was recorded (AD-114).
+    Import(officina_core::workshop::review::ImportAnswer),
+    /// How a Discard was answered (AD-114).
+    Discard(officina_core::workshop::review::DiscardAnswer),
 }
 
 /// The collector's answer, or why there is none to give.
@@ -468,6 +480,7 @@ impl AuthorRequest {
                 | AuthorCommand::WorkshopLaunched(_)
                 | AuthorCommand::WorkshopFollow(_)
                 | AuthorCommand::RecordApproval(_)
+                | AuthorCommand::RecordImport(_)
         ) && now + AUTHOR_HEADROOM >= self.deadline
     }
 }
@@ -1132,9 +1145,11 @@ fn ingest_proposals(
 fn hourly_pass(collector: &mut Collector, registry: &mut WindowRegistry) {
     let events = collector.paths().events_dir();
     let ctx = ingest_context(collector, &events);
-    let pass = registry.hourly_pass(&ctx, now_ms());
+    let now = now_ms();
+    let pass = registry.hourly_pass(&ctx, now);
     if let Some(pass) = pass {
         collector.record_hook_sightings(&pass.ingested.hook_sightings);
+        crate::workshop::import::journal_expired(collector, &pass.workshop.expired, now);
     }
     crate::focus::prune_focus_log(&collector.paths().state_dir(), now_ms());
     crate::relay::approvals::prune(collector.relay(), SystemTime::now());
@@ -1492,6 +1507,12 @@ fn answer_author<E: Emit>(
         AuthorCommand::ReviewRow(id) => crate::workshop::review::stored_on_collector(registry, &id),
         AuthorCommand::RecordApproval(approval) => {
             crate::workshop::review::record_on_collector(collector, registry, &approval, now)
+        }
+        AuthorCommand::RecordImport(record) => {
+            crate::workshop::import::record_import_on_collector(collector, registry, &record, now)
+        }
+        AuthorCommand::DiscardPackage { run_id, reason } => {
+            crate::workshop::import::discard_on_collector(collector, registry, &run_id, reason, now)
         }
         AuthorCommand::EditCard { card_id, change } => crate::orders::edit(
             cards,

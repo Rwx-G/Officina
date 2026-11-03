@@ -44,6 +44,8 @@ const COMMANDS: &[&str] = &[
     "run_battery",
     "open_review",
     "approve_sensitive",
+    "import_package",
+    "discard_package",
 ];
 
 fn main() {

@@ -285,6 +285,38 @@ fn each_quarantine_cause_from_a_crafted_package() {
     }
 }
 
+/// AD-111 step 3, D-225: a bundle holding the work branch and another
+/// reference at the same commit is `extra_ref`, never a package: the case
+/// CI's `mutants` job expects `mutant-accept-extra-ref` to turn red.
+#[test]
+fn a_bundle_with_an_extra_reference_is_quarantined() {
+    const GUARD: &str = "(guarded by mutant-accept-extra-ref)";
+    let Some(home) = home(&Options::default(), &[]) else {
+        return;
+    };
+    let run = launch(&home, home.seeded());
+    let clone = run.clone();
+    let base = run.row().base_commit;
+    let branch = format!("refs/heads/{}", run.row().branch);
+    run.commit(&clone, "a.txt", "a\n");
+    git_text(&home, &clone, &["branch", "extra"]);
+    run.serve(
+        &run.packed(
+            &clone,
+            Some((&[branch.as_str(), "refs/heads/extra"], &base)),
+        ),
+        0,
+    );
+    run.exit(0);
+    let row = run.collected();
+    assert_eq!(row.state, RunState::Quarantined, "{GUARD}");
+    assert_eq!(
+        quarantined(&row),
+        Some(QuarantineCause::ExtraRef),
+        "{GUARD}"
+    );
+}
+
 /// D-219, review F38: a forged tip and a path shaped like an option
 /// never reach git as an argument.
 #[test]

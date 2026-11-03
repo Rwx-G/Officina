@@ -797,6 +797,17 @@ impl WindowRegistry {
         })
     }
 
+    /// Records the author's verdict on run `id` (AD-114).
+    pub fn set_workshop_verdict(
+        &mut self,
+        id: &str,
+        verdict: officina_core::workshop::review::PackageVerdict,
+        reason: Option<officina_core::workshop::review::DiscardReason>,
+        now_ms: i64,
+    ) -> Result<bool, IpcError> {
+        self.with_writer(|writer| Ok(Ok(writer.set_verdict(id, verdict, reason, now_ms)?)))
+    }
+
     /// Run `id`, if the registry holds it.
     pub fn workshop_run(
         &mut self,

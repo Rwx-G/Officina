@@ -1,19 +1,21 @@
-//! Sensitive groups and their approvals end to end (story 6.15; AD-113,
-//! D-219, D-239): packages built by real git in a clone of the project
-//! (D-23), collected by the window on the fake engine, then reviewed and
-//! approved through the functions the window's commands call.
+//! Sensitive groups and their approvals (story 6.15; AD-113, D-219,
+//! D-239), Import and Discard (story 6.16; AD-114) end to end: packages
+//! built by real git in a clone of the project (D-23), collected by the
+//! window on the fake engine, then reviewed, approved and decided through
+//! the functions the window's commands call.
 
 mod common;
 
 use officina_core::relay::journal::JournalEntry;
 use officina_core::workshop::review::{
-    ApprovalAnswer, ApprovalRefusal, NotReadyCause, ReviewGroup, ReviewView,
+    ApprovalAnswer, ApprovalRefusal, DiscardAnswer, DiscardReason, DiscardRefusal, ImportAnswer,
+    ImportRefusal, NotReadyCause, PackageVerdict, ReviewGroup, ReviewView,
 };
 use officina_core::workshop::run::RunState;
 use officina_core::workshop::sensitive::{ChangedFile, SensitiveGroup, hunks_sha256};
 use officina_host::workshop::launch::WorkshopRuntime;
 
-use common::package_run::{Run, base_env, git_text, home, launch};
+use common::package_run::{Run, base_env, git_text, home, launch, references, work_tree};
 use common::workshop::GitLogger;
 use common::workshop_home::{Home, Options};
 
@@ -365,4 +367,274 @@ fn review_all_makes_one_group_per_file() {
     let first = serde_json::to_string(&view.files[0].paths).unwrap();
     assert!(first.contains("src/a.rs"), "{first}");
     assert_eq!(view.files[0].groups, ["file:0"]);
+}
+
+// Story 6.16 AC 1: Import (AD-114).
+
+const SOURCE: &str = "pub fn a() {}\n";
+
+/// The branch Import creates for `run`, as a reference name.
+fn branch_ref(run: &Run<'_>) -> String {
+    format!("refs/heads/{}", run.row().branch)
+}
+
+/// The commit `reference` names in the project, if any.
+fn named(home: &Home, reference: &str) -> Option<String> {
+    references(home).into_iter().find_map(|line| {
+        line.strip_prefix(&format!("{reference} "))
+            .map(str::to_owned)
+    })
+}
+
+/// AD-114: Import adds `refs/heads/officina/<name>` at the tip and
+/// nothing else: every other reference, `HEAD`, the index and the work
+/// tree stay; the run is `imported` and `review_imported` names the
+/// branch and the tip.
+#[test]
+fn import_adds_exactly_one_reference() {
+    let Some(home) = home(&Options::default(), &[]) else {
+        return;
+    };
+    let run = a_package(&home, home.seeded(), &[("build.rs", BUILD_RS)]);
+    run.approve_all();
+    let refs = references(&home);
+    let tree = work_tree(&home);
+    let tip = run.row().tip_commit.unwrap();
+    let branch = run.row().branch;
+    assert_eq!(run.import(), ImportAnswer::Imported(branch.clone()));
+    let mut expected = refs.clone();
+    expected.push(format!("{} {tip}", branch_ref(&run)));
+    let mut after = references(&home);
+    expected.sort();
+    after.sort();
+    assert_eq!(after, expected);
+    assert_eq!(work_tree(&home), tree);
+    let row = run.row();
+    assert_eq!(row.state, RunState::Imported);
+    assert_eq!(row.verdict, Some(PackageVerdict::Imported));
+    let imported: Vec<_> = run
+        .lines()
+        .into_iter()
+        .filter_map(|l| match l {
+            JournalEntry::ReviewImported(l) => Some((l.branch, l.tip)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(imported, [(branch, tip)]);
+    // A second Import of a decided run is refused before any git.
+    assert_eq!(
+        run.import(),
+        ImportAnswer::Refused(ImportRefusal::NotInReview)
+    );
+}
+
+/// AD-114 step 2: an existing `officina/<name>` is refused and kept.
+#[test]
+fn import_refuses_an_existing_branch() {
+    let Some(home) = home(&Options::default(), &[]) else {
+        return;
+    };
+    let run = a_package(&home, home.seeded(), &[("src/a.rs", SOURCE)]);
+    run.approve_all();
+    home.git(&["branch", &run.row().branch]);
+    let refs = references(&home);
+    assert_eq!(
+        run.import(),
+        ImportAnswer::Refused(ImportRefusal::BranchExists)
+    );
+    assert_eq!(references(&home), refs);
+    assert_eq!(run.row().state, RunState::Review);
+}
+
+/// D-248, review F47: a branch named `officina` makes `officina/<name>`
+/// impossible, refused `branch_conflict` before any fetch.
+#[test]
+fn import_refuses_a_branch_named_officina_as_a_conflict() {
+    let Some(home) = home(&Options::default(), &[]) else {
+        return;
+    };
+    let run = a_package(&home, home.seeded(), &[("src/a.rs", SOURCE)]);
+    run.approve_all();
+    home.git(&["branch", "officina"]);
+    let refs = references(&home);
+    assert_eq!(
+        run.import(),
+        ImportAnswer::Refused(ImportRefusal::BranchConflict)
+    );
+    assert_eq!(references(&home), refs);
+}
+
+/// AD-114 step 1: a tip other than the recorded one is `state_changed`.
+#[test]
+fn import_refuses_a_stale_tip() {
+    let Some(home) = home(&Options::default(), &[]) else {
+        return;
+    };
+    let run = a_package(&home, home.seeded(), &[("src/a.rs", SOURCE)]);
+    run.approve_all();
+    let refs = references(&home);
+    let stale = run.row().base_commit;
+    assert_eq!(
+        run.import_with(&run.runtime, &stale),
+        ImportAnswer::Refused(ImportRefusal::StateChanged)
+    );
+    assert_eq!(references(&home), refs);
+}
+
+/// AD-113, AD-114 step 1: a group not approved keeps Import refused.
+#[test]
+fn import_refuses_an_unapproved_group() {
+    let Some(home) = home(&Options::default(), &[]) else {
+        return;
+    };
+    let run = a_package(&home, home.seeded(), &[("build.rs", BUILD_RS)]);
+    let refs = references(&home);
+    assert_eq!(
+        run.import(),
+        ImportAnswer::Refused(ImportRefusal::Unapproved)
+    );
+    assert_eq!(references(&home), refs);
+    assert_eq!(run.row().state, RunState::Review);
+}
+
+/// AD-114: a quarantined package offers Discard only.
+#[test]
+fn import_refuses_a_quarantined_package() {
+    let Some(home) = home(&Options::default(), &[]) else {
+        return;
+    };
+    let run = a_package(&home, home.seeded(), &[(".claude/settings.json", "{}\n")]);
+    assert_eq!(run.row().state, RunState::Quarantined);
+    let refs = references(&home);
+    assert_eq!(
+        run.import(),
+        ImportAnswer::Refused(ImportRefusal::NotInReview)
+    );
+    assert_eq!(references(&home), refs);
+    assert_eq!(
+        run.discard(DiscardReason::PoorResult),
+        DiscardAnswer::Discarded
+    );
+}
+
+/// AD-114 step 5 (amendment 10): a branch created after the checks, right
+/// before `update-ref`, is never moved: the zero old value makes the
+/// update fail, and the run stays in review.
+#[test]
+fn a_branch_created_between_check_and_update_is_not_moved() {
+    let Some(home) = home(&Options::default(), &[]) else {
+        return;
+    };
+    let run = a_package(&home, home.seeded(), &[("src/a.rs", SOURCE)]);
+    run.approve_all();
+    let tip = run.row().tip_commit.unwrap();
+    let base = run.row().base_commit;
+    let planted = run.row().branch;
+    let (git_dir, project) = (home.git_dir.clone(), home.project());
+    let answer = officina_host::workshop::import::import_package_staged(
+        home.sender(),
+        &run.runtime,
+        &home.env.officina_home(),
+        &base_env(),
+        &run.id,
+        &tip,
+        move || common::git(&git_dir, &project, &["branch", &planted]),
+    )
+    .unwrap();
+    assert_eq!(answer, ImportAnswer::Refused(ImportRefusal::BranchExists));
+    assert_eq!(named(&home, &branch_ref(&run)), Some(base));
+    assert_eq!(run.row().state, RunState::Review);
+    assert!(
+        !run.lines()
+            .iter()
+            .any(|l| matches!(l, JournalEntry::ReviewImported(_)))
+    );
+}
+
+// Story 6.16 AC 3: Discard (AD-114).
+
+/// AD-114: Discard records the author's reason in the row and in
+/// `review_discarded`; a decided run and an unknown one are refused.
+#[test]
+fn discard_records_the_reason() {
+    let Some(home) = home(&Options::default(), &[]) else {
+        return;
+    };
+    let run = a_package(&home, home.seeded(), &[("src/a.rs", SOURCE)]);
+    assert_eq!(
+        run.discard(DiscardReason::NotNeeded),
+        DiscardAnswer::Discarded
+    );
+    let row = run.row();
+    assert_eq!(row.state, RunState::Discarded);
+    assert_eq!(row.verdict, Some(PackageVerdict::Discarded));
+    assert_eq!(row.discard_reason, Some(DiscardReason::NotNeeded));
+    let reasons: Vec<_> = run
+        .lines()
+        .into_iter()
+        .filter_map(|l| match l {
+            JournalEntry::ReviewDiscarded(l) => Some(l.reason),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(reasons, [DiscardReason::NotNeeded]);
+    assert_eq!(
+        run.discard(DiscardReason::PoorResult),
+        DiscardAnswer::Refused(DiscardRefusal::NoPackage)
+    );
+    assert_eq!(
+        officina_host::workshop::import::discard_package(
+            home.sender(),
+            &"f".repeat(32),
+            DiscardReason::PoorResult
+        )
+        .unwrap(),
+        DiscardAnswer::Refused(DiscardRefusal::UnknownRun)
+    );
+}
+
+/// AD-114: `expired` and `not_collected` are the system's; the author's
+/// command refuses them and changes nothing.
+#[test]
+fn the_author_cannot_send_a_system_reason() {
+    let Some(home) = home(&Options::default(), &[]) else {
+        return;
+    };
+    let run = a_package(&home, home.seeded(), &[("src/a.rs", SOURCE)]);
+    for reason in DiscardReason::ALL.iter().filter(|r| !r.is_authors()) {
+        assert_eq!(
+            run.discard(*reason),
+            DiscardAnswer::Refused(DiscardRefusal::SystemReason),
+            "{reason:?}"
+        );
+    }
+    assert_eq!(run.row().state, RunState::Review);
+    assert!(
+        !run.lines()
+            .iter()
+            .any(|l| matches!(l, JournalEntry::ReviewDiscarded(_)))
+    );
+}
+
+/// AD-110, AD-114: a `no_change` run has no verdict, neither Discard nor
+/// Import.
+#[test]
+fn a_no_change_run_refuses_discard() {
+    let Some(home) = home(&Options::default(), &[]) else {
+        return;
+    };
+    let run = launch(&home, home.seeded());
+    let clone = run.clone();
+    run.serve(&run.packed(&clone, None), 0);
+    run.exit(0);
+    assert_eq!(run.collected().state, RunState::NoChange);
+    assert_eq!(
+        run.discard(DiscardReason::PoorResult),
+        DiscardAnswer::Refused(DiscardRefusal::NoPackage)
+    );
+    assert_eq!(
+        run.import(),
+        ImportAnswer::Refused(ImportRefusal::NotInReview)
+    );
+    assert_eq!(run.row().state, RunState::NoChange);
 }

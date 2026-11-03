@@ -1236,6 +1236,44 @@ After 10 decided packages of a template, a group present in more than half
 of them gives that template a notice: keep the group, or narrow the
 template.
 
+#### Import and Discard
+
+Import is a pointer click on a package in review whose groups are all
+approved. It adds one new local branch, `officina/<template>-<n>`, to the
+project at the package's tip, and nothing else: never a merge, never a
+push, never a change to your work tree, your index, `HEAD` or any other
+branch, and no reflog entry. On the workshop's thread it checks again that
+the run is in review, that every group is approved for the hunks computed
+now and that the tip is the one the review showed, then refuses a branch of
+that name that already exists, or a branch named `officina` (which makes
+every `officina/...` name impossible), fetches the package's objects from
+the run's scratch repository without writing any reference, checks the tip
+is there, and creates the branch only if it still does not exist, so a
+branch made in between is never moved. Each refusal is one of
+`ImportRefusal`'s, and the import is journaled `review_imported` with the
+branch and the tip. Merging, rebasing or deleting the branch is yours, with
+your own git.
+
+Discard takes one of your three reasons (should not have run, poor result,
+not needed) and is reachable from the keyboard, since it only reduces. A
+quarantined package offers Discard only; a `no_change` run has nothing to
+import or discard. Two reasons are the system's, never yours: `expired`,
+for a package still undecided when its run folder is deleted, 30 days less
+one hourly pass after its launch, in the same pass, so Import is never
+offered on a folder already gone; and `not_collected`, for a stopped run
+removed without collection. Each discard is journaled `review_discarded`
+with its reason. A discarded package's folder stays until then, so you can
+still look at it.
+
+The per-template table counts, from the journal, each template's runs,
+`no_change` runs, failed runs, quarantined packages, imports, discards by
+reason and decided packages, with FR-11's notices. Acceptance is imports
+over decided packages, decided meaning an Import or a Discard with one of
+your reasons: a `no_change` or failed run, and a package `expired` or
+`not_collected`, is no verdict, so a template whose packages you let expire
+shows its `expired` count beside an acceptance they do not lower. The
+workshop view (story 6.18) shows the table.
+
 ### The workshop credential
 
 A token floor's credential is the Windows Credential Manager entry

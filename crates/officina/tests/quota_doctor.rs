@@ -801,6 +801,117 @@ fn doctor_reports_hook_fields_missing_and_not_observed() {
     assert_eq!(out.status.code(), Some(1));
 }
 
+/// The project's files under `.git` but its objects, by content: where a
+/// reference, the index, `FETCH_HEAD`, a reflog or the configuration
+/// would change.
+fn git_dir_but_objects(project: &std::path::Path) -> Vec<(String, Vec<u8>)> {
+    fingerprint(&project.join(".git"))
+        .into_iter()
+        .filter(|(path, _)| !path.starts_with("objects/"))
+        .collect()
+}
+
+/// A tracked file's modification time moved, so a plain `git status` (or
+/// any call taking the optional index lock) would rewrite the index.
+fn touch_tracked(project: &std::path::Path) {
+    let file = std::fs::File::options()
+        .write(true)
+        .open(project.join("README.md"))
+        .unwrap();
+    file.set_modified(std::time::SystemTime::now() + Duration::from_secs(5))
+        .unwrap();
+}
+
+/// Story 6.16 AC 2 (PRD section 7 Host untouched, AD-125, D-80, D-163):
+/// a launch, a collection, a quarantine and a discard through the fake
+/// engine leave the Claude config dir and the project repository (its
+/// references, index, objects and work tree) as they were.
+#[test]
+fn a_quarantine_and_a_discard_leave_the_project_unchanged() {
+    use common::package_run::{home, launch, work_tree};
+    use common::workshop_home::Options;
+    use officina_core::workshop::review::{DiscardAnswer, DiscardReason};
+    use officina_core::workshop::run::RunState;
+
+    let Some(home) = home(&Options::default(), &[]) else {
+        return;
+    };
+    let project = home.project();
+    touch_tracked(&project);
+    let config = fingerprint(&home.env.claude_config());
+    let repository = fingerprint(&project);
+    let tree = work_tree(&home);
+    for (path, state) in [
+        (".claude/settings.json", RunState::Quarantined),
+        ("src/a.rs", RunState::Review),
+    ] {
+        let run = launch(&home, home.seeded());
+        let clone = run.clone();
+        run.commit(&clone, path, "{}\n");
+        run.serve(&run.packed_branch(&clone), 0);
+        run.exit(0);
+        assert_eq!(run.collected().state, state, "{path}");
+        assert_eq!(
+            run.discard(DiscardReason::ShouldNotHaveRun),
+            DiscardAnswer::Discarded
+        );
+    }
+    assert_eq!(fingerprint(&home.env.claude_config()), config);
+    assert_eq!(fingerprint(&project), repository);
+    assert_eq!(work_tree(&home), tree);
+}
+
+/// Story 6.16 AC 2 (AD-114, AD-125): Import adds
+/// `refs/heads/officina/<name>` and objects, and nothing else: no other
+/// file under `.git` (no `FETCH_HEAD`, no reflog, the index as it was),
+/// no object removed or rewritten, the work tree and the Claude config
+/// dir untouched.
+#[test]
+fn import_changes_only_its_reference_and_objects() {
+    use common::package_run::{home, launch, work_tree};
+    use common::workshop_home::Options;
+    use officina_core::workshop::review::ImportAnswer;
+
+    let Some(home) = home(&Options::default(), &[]) else {
+        return;
+    };
+    let project = home.project();
+    touch_tracked(&project);
+    let config = fingerprint(&home.env.claude_config());
+    let run = launch(&home, home.seeded());
+    let clone = run.clone();
+    run.commit(&clone, "build.rs", "fn main() {}\n");
+    run.serve(&run.packed_branch(&clone), 0);
+    run.exit(0);
+    run.collected();
+    run.approve_all();
+    let git_dir = git_dir_but_objects(&project);
+    let objects = fingerprint(&project.join(".git").join("objects"));
+    let tree = work_tree(&home);
+    let row = run.row();
+    let tip = row.tip_commit.clone().unwrap();
+    assert_eq!(run.import(), ImportAnswer::Imported(row.branch.clone()));
+    let mut expected = git_dir.clone();
+    let reference = format!("refs/heads/{}", row.branch);
+    let segments: Vec<&str> = reference.split('/').collect();
+    for end in 1..segments.len() {
+        let dir = format!("{}/", segments[..end].join("/"));
+        if !expected.iter().any(|(path, _)| *path == dir) {
+            expected.push((dir, Vec::new()));
+        }
+    }
+    expected.push((reference, format!("{tip}\n").into_bytes()));
+    expected.sort();
+    assert_eq!(git_dir_but_objects(&project), expected);
+    let after = fingerprint(&project.join(".git").join("objects"));
+    for object in &objects {
+        assert!(after.contains(object), "{} changed or went", object.0);
+    }
+    assert!(after.len() > objects.len(), "no object was fetched");
+    assert_eq!(work_tree(&home), tree);
+    assert_eq!(fingerprint(&home.env.claude_config()), config);
+}
+
 /// Runs `officina hook` on a `PermissionRequest` through every end of its
 /// path (story 5.22 AC 6): no window (the collector's marker routes
 /// nothing, D-580), then a routing marker with allow, deny and decline

@@ -30,7 +30,9 @@ use officina_core::relay::auto::AutoMode;
 use officina_core::relay::view::RelayView;
 use officina_core::workshop::battery::BatteryAnswer;
 use officina_core::workshop::image::BuildAnswer;
-use officina_core::workshop::review::{ApprovalAnswer, ReviewView};
+use officina_core::workshop::review::{
+    ApprovalAnswer, DiscardAnswer, DiscardReason, ImportAnswer, ReviewView,
+};
 use officina_host::collector::Collector;
 use officina_host::files::now_ms;
 use officina_host::focus::{
@@ -817,6 +819,54 @@ async fn approve_sensitive(
     .map_err(|e| IpcError::internal(e.to_string()))?
 }
 
+/// Import on a workshop package (AD-114): pointer only. On thread
+/// `workshop`, the review's state, approvals and `tip` (the tip the panel
+/// showed) are checked again, the package's objects fetched into the
+/// project, and `refs/heads/officina/<name>` created only if it does not
+/// exist; nothing else in the project changes and nothing is pushed.
+#[tauri::command]
+async fn import_package(
+    state: State<'_, AppState>,
+    run_id: String,
+    tip: String,
+) -> Result<ImportAnswer, IpcError> {
+    let sender = state
+        .collector()
+        .ok_or_else(|| IpcError::internal("the collector is not running"))?;
+    let runtime = state.workshop_runtime();
+    let home = state
+        .paths
+        .read()
+        .map(|paths| paths.officina_home.clone())
+        .map_err(|_| IpcError::internal("the paths lock is poisoned"))?;
+    let base_env = state.base_env.vars().to_vec();
+    tauri::async_runtime::spawn_blocking(move || {
+        officina_host::workshop::import::import_package(
+            &sender, &runtime, &home, &base_env, &run_id, &tip,
+        )
+    })
+    .await
+    .map_err(|e| IpcError::internal(e.to_string()))?
+}
+
+/// Discard on a workshop package with one of the author's reasons
+/// (AD-114). It only reduces, so the keyboard reaches it.
+#[tauri::command]
+async fn discard_package(
+    state: State<'_, AppState>,
+    run_id: String,
+    reason: DiscardReason,
+) -> Result<DiscardAnswer, IpcError> {
+    let sender = state
+        .collector()
+        .ok_or_else(|| IpcError::internal("the collector is not running"))?;
+    tauri::async_runtime::spawn_blocking(move || {
+        officina_host::workshop::import::discard_package(&sender, &run_id, reason)
+    })
+    .await
+    .map_err(|e| IpcError::internal(e.to_string()))?
+}
+
 /// Stops or resumes the relay (FR-11, AD-34, D-26). Returns whether the
 /// state changed.
 #[tauri::command]
@@ -975,7 +1025,9 @@ fn main() {
             build_images,
             run_battery,
             open_review,
-            approve_sensitive
+            approve_sensitive,
+            import_package,
+            discard_package
         ])
         .build(tauri::generate_context!())
         .expect("failed to build the Officina window")

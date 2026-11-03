@@ -1,6 +1,6 @@
 //! A package as the author reviews it (AD-121, FR-10) and the verdict on
-//! it (AD-114, FR-12). Story 6.16 adds Import and Discard; the verdict's
-//! values are frozen by the workshop migration (D-212).
+//! it (AD-114, FR-12): what Import and Discard check before the host acts;
+//! the verdict's values are frozen by the workshop migration (D-212).
 
 use std::collections::BTreeMap;
 
@@ -415,14 +415,116 @@ closed_enum! {
 
 closed_enum! {
     #[serde(rename_all = "snake_case")]
+    /// Why `import_package` refused (AD-114, D-248).
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+    #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+    pub enum ImportRefusal {
+        /// The registry holds no such run.
+        UnknownRun,
+        /// The run is not in state `review`: quarantined, `no_change`, or
+        /// already decided.
+        NotInReview,
+        /// A group is not approved for the hunks host git computes now.
+        Unapproved,
+        /// The tip given is not the run's recorded tip.
+        StateChanged,
+        /// `refs/heads/officina/<name>` exists in the project.
+        BranchExists,
+        /// A branch named `officina` exists, so `officina/<name>` cannot.
+        BranchConflict,
+        /// The scratch repository no longer yields the tip's commit.
+        PackageChanged,
+        /// The workshop's `git` is missing or failed.
+        Unavailable,
+    }
+}
+
+/// How `import_package(run_id, tip)` was answered: the branch created, or
+/// refused with why.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(tag = "outcome", content = "detail", rename_all = "snake_case")]
+pub enum ImportAnswer {
+    /// The new local branch, `officina/<name>`.
+    Imported(String),
+    Refused(ImportRefusal),
+}
+
+/// What the review `view` refuses of an Import of `tip` (AD-114 step 1):
+/// the run in state `review`, every group approved for the hunks shown,
+/// `tip` the recorded tip. `None` when it holds.
+pub fn import_refusal(view: &ReviewView, tip: &str) -> Option<ImportRefusal> {
+    if view.state != RunState::Review {
+        return Some(ImportRefusal::NotInReview);
+    }
+    if !groups_approved(&view.readiness) {
+        return Some(ImportRefusal::Unapproved);
+    }
+    if view.tip.as_deref() != Some(tip) {
+        return Some(ImportRefusal::StateChanged);
+    }
+    None
+}
+
+/// True when no group keeps Import disabled (AD-113).
+#[cfg(not(feature = "mutant-skip-group-approval"))]
+fn groups_approved(readiness: &ImportReadiness) -> bool {
+    readiness.reasons.iter().all(|r| r.group.is_none())
+}
+
+/// The mutant `mutant-skip-group-approval` (AD-125, D-225): the check
+/// skipped.
+#[cfg(feature = "mutant-skip-group-approval")]
+fn groups_approved(_readiness: &ImportReadiness) -> bool {
+    true
+}
+
+closed_enum! {
+    #[serde(rename_all = "snake_case")]
+    /// Why `discard_package` refused (AD-114).
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+    #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+    pub enum DiscardRefusal {
+        /// The registry holds no such run.
+        UnknownRun,
+        /// The run holds no package awaiting a verdict: `no_change`,
+        /// failed, still running, or already decided.
+        NoPackage,
+        /// `expired` and `not_collected` are the system's reasons.
+        SystemReason,
+    }
+}
+
+/// How `discard_package(run_id, reason)` was answered.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(tag = "outcome", content = "detail", rename_all = "snake_case")]
+pub enum DiscardAnswer {
+    Discarded,
+    Refused(DiscardRefusal),
+}
+
+/// What the author's Discard with `reason` of a run in `state` meets
+/// (AD-114): a reason of his own, a package awaiting a verdict (a
+/// quarantined one offers Discard only). `None` when it holds.
+pub fn discard_refusal(state: RunState, reason: DiscardReason) -> Option<DiscardRefusal> {
+    if !reason.is_authors() {
+        return Some(DiscardRefusal::SystemReason);
+    }
+    (!state.awaits_verdict()).then_some(DiscardRefusal::NoPackage)
+}
+
+closed_enum! {
+    #[serde(rename_all = "snake_case")]
     /// Why a package was discarded (AD-114): the author's three reasons,
     /// and the two the system gives.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+    #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
     pub enum DiscardReason {
         ShouldNotHaveRun,
         PoorResult,
         NotNeeded,
-        /// Still undecided when its texts reached D-85's bound (AD-124).
+        /// Still undecided when its run folder was deleted (AD-124, D-213).
         Expired,
         /// A stopped run removed without collection (AD-116).
         NotCollected,
@@ -630,6 +732,68 @@ mod tests {
         );
         assert_eq!(parse_shortstat(b" 1 file changed, 1 deletion(-)\n"), (0, 1));
         assert_eq!(parse_shortstat(b""), (0, 0));
+    }
+
+    /// AD-114 step 1: Import refuses a run not in review, then a group
+    /// not approved for the hunks shown, then a tip other than the
+    /// recorded one.
+    #[test]
+    fn import_checks_state_groups_then_tip() {
+        let tip = "a".repeat(40);
+        let unapproved = in_review(Vec::new());
+        assert_eq!(
+            import_refusal(&unapproved, &tip),
+            Some(ImportRefusal::Unapproved)
+        );
+        let mut inputs = inputs(WorkshopOutcome::Package);
+        inputs.state = RunState::Review;
+        inputs.groups = vec![ci_group()];
+        inputs.approvals = vec![("ci".into(), "c".repeat(64))];
+        let ready = ReviewView::build(inputs.clone(), Some(display("x")));
+        assert_eq!(import_refusal(&ready, &tip), None);
+        assert_eq!(
+            import_refusal(&ready, &"b".repeat(40)),
+            Some(ImportRefusal::StateChanged)
+        );
+        for state in RunState::ALL.iter().filter(|s| **s != RunState::Review) {
+            inputs.state = *state;
+            let view = ReviewView::build(inputs.clone(), Some(display("x")));
+            assert_eq!(
+                import_refusal(&view, &tip),
+                Some(ImportRefusal::NotInReview),
+                "{state:?}"
+            );
+        }
+    }
+
+    /// AD-114: the author's Discard takes one of his reasons, on a package
+    /// awaiting a verdict, a quarantined one included.
+    #[test]
+    fn discard_takes_an_authors_reason_on_a_package() {
+        for reason in DiscardReason::ALL {
+            for state in RunState::ALL {
+                let expected = if !reason.is_authors() {
+                    Some(DiscardRefusal::SystemReason)
+                } else if state.awaits_verdict() {
+                    None
+                } else {
+                    Some(DiscardRefusal::NoPackage)
+                };
+                assert_eq!(
+                    discard_refusal(*state, *reason),
+                    expected,
+                    "{state:?} {reason:?}"
+                );
+            }
+        }
+        assert_eq!(
+            discard_refusal(RunState::Quarantined, DiscardReason::PoorResult),
+            None
+        );
+        assert_eq!(
+            discard_refusal(RunState::NoChange, DiscardReason::PoorResult),
+            Some(DiscardRefusal::NoPackage)
+        );
     }
 
     #[test]

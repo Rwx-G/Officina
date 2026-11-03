@@ -157,6 +157,8 @@ pub enum JournalEntry {
     ReviewPackage(ReviewPackage),
     ReviewOpened(ReviewOpened),
     SensitiveApproved(SensitiveApproved),
+    ReviewImported(ReviewImported),
+    ReviewDiscarded(ReviewDiscarded),
 }
 
 closed_enum! {
@@ -197,6 +199,8 @@ closed_enum! {
         ReviewPackage,
         ReviewOpened,
         SensitiveApproved,
+        ReviewImported,
+        ReviewDiscarded,
     }
 }
 
@@ -236,6 +240,8 @@ impl JournalEntry {
             JournalEntry::ReviewPackage(_) => JournalKind::ReviewPackage,
             JournalEntry::ReviewOpened(_) => JournalKind::ReviewOpened,
             JournalEntry::SensitiveApproved(_) => JournalKind::SensitiveApproved,
+            JournalEntry::ReviewImported(_) => JournalKind::ReviewImported,
+            JournalEntry::ReviewDiscarded(_) => JournalKind::ReviewDiscarded,
         }
     }
 }
@@ -795,6 +801,23 @@ pub struct SensitiveApproved {
     pub hunks_sha256: String,
 }
 
+/// The author imported a package (AD-114, AD-120): the new local branch
+/// and the commit it names.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReviewImported {
+    pub run_id: String,
+    pub branch: String,
+    pub tip: String,
+}
+
+/// A package was discarded (AD-114, AD-120): by the author with one of his
+/// reasons, or by the system (`expired`, `not_collected`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReviewDiscarded {
+    pub run_id: String,
+    pub reason: crate::workshop::review::DiscardReason,
+}
+
 /// A refusal a gateway logged (AD-120): a run's, or a battery's (story
 /// 6.10 writes it first, D-249). The host is worker text, made printable
 /// and cut by the gateway's own line rule.
@@ -1201,6 +1224,11 @@ mod tests {
                 run_id: "0123456789abcdef0123456789abcdef".into(),
             }),
             JournalKind::SensitiveApproved => JournalEntry::SensitiveApproved(sensitive_approved()),
+            JournalKind::ReviewImported => JournalEntry::ReviewImported(review_imported()),
+            JournalKind::ReviewDiscarded => JournalEntry::ReviewDiscarded(ReviewDiscarded {
+                run_id: "0123456789abcdef0123456789abcdef".into(),
+                reason: crate::workshop::review::DiscardReason::PoorResult,
+            }),
             JournalKind::PromptDecided => JournalEntry::PromptDecided(PromptDecided {
                 session_id: "0f1e2d3c-4b5a-4978-8796-a5b4c3d2e1f0".into(),
                 tool_name: None,
@@ -1693,6 +1721,49 @@ mod tests {
             run_id: "0123456789abcdef0123456789abcdef".into(),
             group: "file:3".into(),
             hunks_sha256: "d".repeat(64),
+        }
+    }
+
+    fn review_imported() -> ReviewImported {
+        ReviewImported {
+            run_id: "0123456789abcdef0123456789abcdef".into(),
+            branch: "officina/bump-3".into(),
+            tip: "e".repeat(40),
+        }
+    }
+
+    /// Story 6.16 (AD-120, D-249): `review_imported` reads back with its
+    /// branch and tip; 6.16 is its first writer.
+    #[test]
+    fn review_imported_round_trips() {
+        let entry = JournalEntry::ReviewImported(review_imported());
+        let line = JournalLine::new(4, entry.clone()).to_line();
+        let value: serde_json::Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(value["kind"], "review_imported");
+        assert_eq!(value["branch"], "officina/bump-3");
+        assert_eq!(
+            parse_line(line.trim_end()),
+            ParsedLine::Line(JournalLine::new(4, entry))
+        );
+    }
+
+    /// Story 6.16 (AD-120, D-249): `review_discarded` reads back for every
+    /// reason, the author's and the system's; 6.16 is its first writer.
+    #[test]
+    fn review_discarded_round_trips() {
+        for reason in crate::workshop::review::DiscardReason::ALL {
+            let entry = JournalEntry::ReviewDiscarded(ReviewDiscarded {
+                run_id: "0123456789abcdef0123456789abcdef".into(),
+                reason: *reason,
+            });
+            let line = JournalLine::new(4, entry.clone()).to_line();
+            let value: serde_json::Value = serde_json::from_str(&line).unwrap();
+            assert_eq!(value["kind"], "review_discarded");
+            assert_eq!(value["reason"], reason.code());
+            assert_eq!(
+                parse_line(line.trim_end()),
+                ParsedLine::Line(JournalLine::new(4, entry))
+            );
         }
     }
 

@@ -417,6 +417,8 @@ pub struct RunAge {
     pub started_at_ms: i64,
     /// `texts_json` is not cleared yet.
     pub has_texts: bool,
+    /// The run holds a package still undecided (`review`, `quarantined`).
+    pub awaits_verdict: bool,
 }
 
 /// One thing the hourly pass does for the workshop (AD-124, D-213).
@@ -426,6 +428,9 @@ pub enum RetentionAction {
     ClearTexts(String),
     /// Delete the run's folder under `<home>/workshop/runs/`.
     DeleteFolder(String),
+    /// Discard the run's undecided package with reason `expired`, its
+    /// folder going in the same pass (D-213).
+    Expire(String),
     /// Delete the run's row, its `work_order` and its approvals, in one
     /// transaction.
     DeleteRun(String),
@@ -436,11 +441,17 @@ pub enum RetentionAction {
 /// at the excerpt TTL after launch, folders deleted at
 /// [`RUN_FOLDER_TTL_MS`], rows at [`RUN_ROW_TTL_MS`]. A folder the
 /// registry holds no row for is deleted: a launch inserts its row before
-/// it writes its folder (AD-107), and the row outlives the folder.
+/// it writes its folder (AD-107), and the row outlives the folder. A
+/// package still undecided at [`RUN_FOLDER_TTL_MS`] expires in the same
+/// pass, whether its folder is still on disk or not, so no Import is
+/// offered on a folder already gone (D-213, review F39).
 pub fn retention(rows: &[RunAge], folders: &[String], now_ms: i64) -> Vec<RetentionAction> {
     let mut actions = Vec::new();
     let texts_cutoff = excerpt_cutoff(now_ms);
     for row in rows {
+        if row.awaits_verdict && row.started_at_ms <= now_ms - RUN_FOLDER_TTL_MS {
+            actions.push(RetentionAction::Expire(row.id.clone()));
+        }
         if row.started_at_ms <= now_ms - RUN_ROW_TTL_MS {
             actions.push(RetentionAction::DeleteRun(row.id.clone()));
         } else if row.has_texts && row.started_at_ms <= texts_cutoff {
@@ -488,6 +499,58 @@ mod tests {
             id: id.to_owned(),
             started_at_ms: NOW - age_ms,
             has_texts,
+            awaits_verdict: false,
+        }
+    }
+
+    fn undecided(id: &str, age_ms: i64) -> RunAge {
+        RunAge {
+            awaits_verdict: true,
+            ..row(id, age_ms, false)
+        }
+    }
+
+    /// D-213, review F39: an undecided package expires in the pass that
+    /// deletes its folder, never before; a decided one is left alone.
+    #[test]
+    fn an_undecided_package_expires_with_its_folder() {
+        let rows = [
+            undecided("young", RUN_FOLDER_TTL_MS - 1),
+            undecided("due", RUN_FOLDER_TTL_MS),
+            row("decided", RUN_FOLDER_TTL_MS, false),
+        ];
+        let folders = ["young".to_owned(), "due".to_owned(), "decided".to_owned()];
+        assert_eq!(
+            retention(&rows, &folders, NOW),
+            [
+                RetentionAction::Expire("due".into()),
+                RetentionAction::DeleteFolder("due".into()),
+                RetentionAction::DeleteFolder("decided".into()),
+            ]
+        );
+        // A folder already gone (a credential found, a failed deletion
+        // retried) does not keep the package offered.
+        assert_eq!(
+            retention(&rows[1..2], &[], NOW),
+            [RetentionAction::Expire("due".into())]
+        );
+    }
+
+    /// D-213: across a range of ages, every pass that deletes an undecided
+    /// package's folder expires it, and every expiry is at or past the
+    /// folder's age.
+    #[test]
+    fn no_undecided_package_outlives_its_folder() {
+        let step = PASS_INTERVAL_MS / 2;
+        let mut age = RUN_FOLDER_TTL_MS - 4 * PASS_INTERVAL_MS;
+        while age <= RUN_ROW_TTL_MS + PASS_INTERVAL_MS {
+            let rows = [undecided("p", age)];
+            let actions = retention(&rows, &["p".to_owned()], NOW);
+            let deleted = actions.contains(&RetentionAction::DeleteFolder("p".into()));
+            let expired = actions.contains(&RetentionAction::Expire("p".into()));
+            assert_eq!(deleted, expired, "age {age}");
+            assert_eq!(expired, age >= RUN_FOLDER_TTL_MS, "age {age}");
+            age += step;
         }
     }
 

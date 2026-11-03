@@ -8,6 +8,22 @@ project uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Import and Discard (v0.6, story 6.16): `import_package`, a pointer
+  click, checks the review again (in review, every group approved for the
+  hunks computed now, the tip shown), refuses an existing
+  `officina/<name>` branch or a branch named `officina`, fetches the
+  package's objects from the run's scratch repository and creates the one
+  new local branch with a zero old value, so an existing reference is
+  never moved; nothing else in the project changes and nothing is pushed.
+  `discard_package` takes one of the author's three reasons; the hourly
+  pass discards a package still undecided `expired` in the pass that
+  deletes its run folder. Both are journaled (`review_imported`,
+  `review_discarded`). Core's per-template table counts runs, `no_change`
+  and failed runs, quarantines, imports, discards by reason and the
+  author's verdicts (Acceptance's denominator) with FR-11's notices. The
+  injection battery gains `workshop_import`, and CI's `mutants` job two
+  mutants (`mutant-accept-extra-ref` caught by `workshop_collect`,
+  `mutant-skip-group-approval` by the battery).
 - Sensitive groups and their approvals (v0.6, story 6.15): collection
   sorts a package's changed files into groups (Claude Code configuration,
   git, CI, build and package scripts, toolchain configuration, editor and

@@ -231,7 +231,10 @@ fn workshop_rows_go_with_their_work_order() {
         .unwrap();
     let actions = retention(&writer.workshop_run_ages().unwrap(), &[], NOW);
     assert_eq!(actions, [RetentionAction::DeleteRun(old.to_owned())]);
-    assert_eq!(writer.apply_workshop_retention(&actions).unwrap(), (0, 1));
+    assert_eq!(
+        writer.apply_workshop_retention(&actions, NOW).unwrap(),
+        (0, 1, Vec::new())
+    );
     assert!(writer.workshop_run(old).unwrap().is_none());
     assert!(writer.workshop_approvals(old).unwrap().is_empty());
     let left: Vec<String> = writer

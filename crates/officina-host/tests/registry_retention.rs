@@ -749,6 +749,124 @@ fn work_order_texts_are_cleared_with_the_excerpt_ttl() {
     }
 }
 
+/// Records a workshop run of the golden order as `id`, launched at `at`,
+/// left in `state`.
+fn workshop_run(
+    writer: &mut officina_host::registry::store::Writer,
+    home: &Home,
+    id: &str,
+    seq: u32,
+    at: i64,
+    state: officina_core::workshop::run::RunState,
+) {
+    use officina_core::orders::work_order::SubjectChoice;
+    use officina_core::registry::types::WorkOrderSource;
+    use officina_core::spawn::VectorKind;
+    use officina_host::registry::orders::LaunchRecord;
+    use officina_host::registry::workshop::RunInsert;
+
+    let order = spawn_cases::load()
+        .cases
+        .into_iter()
+        .find(|case| case.kind() == VectorKind::WorkOrder)
+        .unwrap()
+        .work_order(Some(&home.root.to_string_lossy()));
+    let argv = vec!["-p".to_owned()];
+    let branch = format!("officina/bump-{seq}");
+    writer
+        .insert_workshop_run(
+            &LaunchRecord {
+                order: &order,
+                card_id: id,
+                seq,
+                source: WorkOrderSource::Composer,
+                subject: &SubjectChoice::New("bump".to_owned()),
+                proposal_id: None,
+                permission: officina_core::orders::permission::WorkOrderPermission::Project,
+            },
+            &RunInsert {
+                image: "officina-workshop:local",
+                image_id: "sha256:aa",
+                gateway_image_id: "sha256:bb",
+                base_branch: "main",
+                base_commit: "cc",
+                parent_run_id: None,
+                branch: &branch,
+                uncommitted: 0,
+                plan_json: "{}",
+                plan_sha256: "dd",
+                credential_kind: officina_core::workshop::floor::CredentialKind::OauthToken,
+                deadline_ms: 3_600_000,
+                battery_id: "ee",
+                argv: &argv,
+            },
+            at,
+        )
+        .unwrap()
+        .unwrap();
+    writer.set_run_state(id, state, at).unwrap();
+}
+
+/// Story 6.16 AC 4 (AD-124, D-213, review F39): the hourly pass discards
+/// a package still undecided at `RUN_FOLDER_TTL_MS` with reason `expired`,
+/// in the pass that deletes its folder, and reports it for its journal
+/// line; a younger package and a decided one keep their state.
+#[test]
+fn an_expired_package_is_discarded_with_its_reason() {
+    use officina_core::workshop::review::{DiscardReason, PackageVerdict};
+    use officina_core::workshop::run::{RUN_FOLDER_TTL_MS, RunState};
+
+    let home = Home::new();
+    let mut writer = home.writer(NOW);
+    let due = "11111111111111111111111111111111";
+    let quarantined = "22222222222222222222222222222222";
+    let young = "33333333333333333333333333333333";
+    let decided = "44444444444444444444444444444444";
+    let old = NOW - RUN_FOLDER_TTL_MS;
+    workshop_run(&mut writer, &home, due, 1, old, RunState::Review);
+    workshop_run(
+        &mut writer,
+        &home,
+        quarantined,
+        2,
+        old,
+        RunState::Quarantined,
+    );
+    workshop_run(&mut writer, &home, young, 3, old + 1, RunState::Review);
+    workshop_run(&mut writer, &home, decided, 4, old, RunState::Imported);
+    let runs = home.home.join("workshop").join("runs");
+    for id in [due, quarantined, young, decided] {
+        std::fs::create_dir_all(runs.join(id).join("verify.git")).unwrap();
+    }
+    let report = writer.hourly_pass(&home.ctx(), NOW).unwrap();
+    let mut expired = report.workshop.expired.clone();
+    expired.sort();
+    assert_eq!(expired, [due, quarantined]);
+    for id in [due, quarantined] {
+        let row = writer.workshop_run(id).unwrap().unwrap();
+        assert_eq!(row.state, RunState::Discarded, "{id}");
+        assert_eq!(row.verdict, Some(PackageVerdict::Discarded), "{id}");
+        assert_eq!(row.discard_reason, Some(DiscardReason::Expired), "{id}");
+        assert_eq!(row.decided_at_ms, Some(NOW), "{id}");
+        assert!(
+            !runs.join(id).exists(),
+            "{id}'s folder went in the same pass"
+        );
+    }
+    assert_eq!(
+        writer.workshop_run(young).unwrap().unwrap().state,
+        RunState::Review
+    );
+    assert!(runs.join(young).exists());
+    assert_eq!(
+        writer.workshop_run(decided).unwrap().unwrap().state,
+        RunState::Imported
+    );
+    // The next pass finds nothing left to expire.
+    let again = writer.hourly_pass(&home.ctx(), NOW).unwrap();
+    assert!(again.workshop.expired.is_empty());
+}
+
 /// Quality audit M2: a read of the cards' subjects that fails is reported,
 /// never shown as a ready registry with no subject.
 #[test]

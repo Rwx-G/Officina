@@ -64,6 +64,8 @@ pub mod files;
 #[cfg(feature = "window-authority")]
 pub mod follow;
 pub mod git;
+#[cfg(feature = "window-authority")]
+pub mod import;
 pub mod inventory;
 pub mod launch;
 pub mod proxy;

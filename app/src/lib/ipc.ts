@@ -8,6 +8,9 @@ import type { AutoMode } from "./generated/AutoMode";
 import type { BatteryAnswer } from "./generated/BatteryAnswer";
 import type { Board } from "./generated/Board";
 import type { ApprovalAnswer } from "./generated/ApprovalAnswer";
+import type { DiscardAnswer } from "./generated/DiscardAnswer";
+import type { DiscardReason } from "./generated/DiscardReason";
+import type { ImportAnswer } from "./generated/ImportAnswer";
 import type { BuildAnswer } from "./generated/BuildAnswer";
 import type { CardAnswer } from "./generated/CardAnswer";
 import type { CardChange } from "./generated/CardChange";
@@ -285,6 +288,20 @@ export function approveSensitive(
   hunksSha256: string,
 ): Promise<ApprovalAnswer> {
   return invoke<ApprovalAnswer>("approve_sensitive", { runId, groupKey, hunksSha256 });
+}
+
+/** Import on run `runId`'s package (AD-114), pointer only: `tip` is the
+ *  tip the review showed. The answer names the new local branch, or why
+ *  Import was refused; nothing is merged or pushed. */
+export function importPackage(runId: string, tip: string): Promise<ImportAnswer> {
+  return invoke<ImportAnswer>("import_package", { runId, tip });
+}
+
+/** Discard on run `runId`'s package with one of the author's reasons
+ *  (AD-114); `expired` and `not_collected` are refused, being the
+ *  system's. */
+export function discardPackage(runId: string, reason: DiscardReason): Promise<DiscardAnswer> {
+  return invoke<DiscardAnswer>("discard_package", { runId, reason });
 }
 
 /** The meeting of `key` (AD-84, D-138): a card key, `sid:<session id>`

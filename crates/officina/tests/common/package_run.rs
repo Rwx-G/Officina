@@ -83,9 +83,128 @@ pub fn git_text(home: &Home, dir: &Path, args: &[&str]) -> String {
     String::from_utf8_lossy(&out.stdout).trim().to_owned()
 }
 
+/// The project's references and what each names
+/// (`for-each-ref` and `HEAD`): what Import may add one line to.
+pub fn references(home: &Home) -> Vec<String> {
+    let project = home.project();
+    let mut refs: Vec<String> = git_text(
+        home,
+        &project,
+        &["for-each-ref", "--format=%(refname) %(objectname)"],
+    )
+    .lines()
+    .map(str::to_owned)
+    .collect();
+    refs.push(format!(
+        "HEAD {}",
+        std::fs::read_to_string(project.join(".git").join("HEAD")).unwrap()
+    ));
+    refs
+}
+
+/// The project's index and work tree, byte for byte with each file's
+/// modification time (`.git` aside but its index): what neither Import
+/// nor anything else of the workshop may change.
+pub fn work_tree(home: &Home) -> Vec<(String, Vec<u8>, std::time::SystemTime)> {
+    fn walk(base: &Path, dir: &Path, out: &mut Vec<(String, Vec<u8>, std::time::SystemTime)>) {
+        for entry in std::fs::read_dir(dir).unwrap().flatten() {
+            let path = entry.path();
+            let rel = path
+                .strip_prefix(base)
+                .unwrap()
+                .to_string_lossy()
+                .replace('\\', "/");
+            if rel == ".git" {
+                continue;
+            }
+            let modified = entry.metadata().unwrap().modified().unwrap();
+            if path.is_dir() {
+                out.push((format!("{rel}/"), Vec::new(), modified));
+                walk(base, &path, out);
+            } else {
+                out.push((rel, std::fs::read(&path).unwrap(), modified));
+            }
+        }
+    }
+    let project = home.project();
+    let mut out = Vec::new();
+    walk(&project, &project, &mut out);
+    let index = project.join(".git").join("index");
+    out.push((
+        ".git/index".to_owned(),
+        std::fs::read(&index).unwrap(),
+        std::fs::metadata(&index).unwrap().modified().unwrap(),
+    ));
+    out.sort();
+    out
+}
+
 impl Run<'_> {
     pub fn row(&self) -> RunRecord {
         self.home.run(&self.id)
+    }
+
+    /// The review opened and every group approved for the hunks shown.
+    pub fn approve_all(&self) {
+        let open = || {
+            officina_host::workshop::review::open_review(
+                self.home.sender(),
+                &self.runtime,
+                &self.home.env.officina_home(),
+                &base_env(),
+                &self.id,
+            )
+            .unwrap()
+        };
+        for group in open().groups {
+            let answer = officina_host::workshop::review::approve_sensitive(
+                self.home.sender(),
+                &self.runtime,
+                &self.home.env.officina_home(),
+                &base_env(),
+                &self.id,
+                &group.key,
+                group.hunks_sha256.as_deref().unwrap_or_default(),
+            )
+            .unwrap();
+            assert_eq!(
+                answer,
+                officina_core::workshop::review::ApprovalAnswer::Approved
+            );
+        }
+        assert!(open().readiness.ready);
+    }
+
+    /// Import on this run with `tip`, through `runtime`.
+    pub fn import_with(
+        &self,
+        runtime: &WorkshopRuntime,
+        tip: &str,
+    ) -> officina_core::workshop::review::ImportAnswer {
+        officina_host::workshop::import::import_package(
+            self.home.sender(),
+            runtime,
+            &self.home.env.officina_home(),
+            &base_env(),
+            &self.id,
+            tip,
+        )
+        .unwrap()
+    }
+
+    /// Import on this run with its recorded tip.
+    pub fn import(&self) -> officina_core::workshop::review::ImportAnswer {
+        let tip = self.row().tip_commit.unwrap_or_default();
+        self.import_with(&self.runtime, &tip)
+    }
+
+    /// Discard on this run with `reason`.
+    pub fn discard(
+        &self,
+        reason: officina_core::workshop::review::DiscardReason,
+    ) -> officina_core::workshop::review::DiscardAnswer {
+        officina_host::workshop::import::discard_package(self.home.sender(), &self.id, reason)
+            .unwrap()
     }
 
     pub fn run_dir(&self) -> PathBuf {
@@ -239,6 +358,8 @@ pub fn run_of(entry: &JournalEntry) -> Option<&str> {
         JournalEntry::ReviewPackage(l) => Some(&l.run_id),
         JournalEntry::ReviewOpened(l) => Some(&l.run_id),
         JournalEntry::SensitiveApproved(l) => Some(&l.run_id),
+        JournalEntry::ReviewImported(l) => Some(&l.run_id),
+        JournalEntry::ReviewDiscarded(l) => Some(&l.run_id),
         _ => None,
     }
 }

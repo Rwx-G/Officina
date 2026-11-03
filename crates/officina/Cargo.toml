@@ -57,6 +57,8 @@ tempfile = "3.27.0"
 mutant-accept-any-value = ["officina-host/mutant-accept-any-value"]
 mutant-accept-superseded = ["officina-host/mutant-accept-superseded"]
 mutant-skip-prompt-hash = ["officina-host/mutant-skip-prompt-hash"]
+mutant-accept-extra-ref = ["officina-host/mutant-accept-extra-ref"]
+mutant-skip-group-approval = ["officina-host/mutant-skip-group-approval"]
 
 [lints]
 workspace = true

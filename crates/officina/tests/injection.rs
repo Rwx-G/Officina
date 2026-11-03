@@ -15,7 +15,9 @@
 //! Sections: `card_launch` (story 5.7), `review_excerpt` (story 5.13),
 //! `auto_approved_run` (story 5.14), `mcp_tool` and `mcp_output` (story 5.15),
 //! `proposal_file` (story 5.17), whose answer cases and the `mcp_tool` ones
-//! of `propose_answer` story 5.21 adds, counting `--resume` spawns.
+//! of `propose_answer` story 5.21 adds, counting `--resume` spawns;
+//! `workshop_card` (story 6.11) and `workshop_import` (story 6.16), on the
+//! fake engine.
 
 mod common;
 
@@ -47,6 +49,8 @@ const CORE_MANIFEST: &str = include_str!("../../officina-core/Cargo.toml");
 const HOST_MANIFEST: &str = include_str!("../../officina-host/Cargo.toml");
 const CLI_MANIFEST: &str = include_str!("../Cargo.toml");
 const CORE_LIB: &str = include_str!("../../officina-core/src/lib.rs");
+/// The CI workflow, whose `mutants` job names each mutant's test target.
+const CI_WORKFLOW: &str = include_str!("../../../.github/workflows/ci.yml");
 
 /// The entry points the battery covers, one section each (D-147), in the
 /// order the vector set's keys read back.
@@ -58,6 +62,7 @@ const SECTIONS: &[&str] = &[
     "proposal_file",
     "review_excerpt",
     "workshop_card",
+    "workshop_import",
 ];
 
 /// The attack families of PRD section 7's Gesture and Auto fail-closed
@@ -1401,10 +1406,11 @@ fn mcp_output_cases() {
 }
 
 /// D-147: every section has a case, every family a case and every case a
-/// declared family; every variant of `WorkOrderRefusal` and
-/// `LaunchRefusal` is some case's refusal, and every variant of
-/// `ProposalInvalidReason` some `proposal_file` case's; and every mutant of core is
-/// guarded by a case, forwarded under its name by the host and the CLI
+/// declared family; every variant of `WorkOrderRefusal`, `LaunchRefusal`
+/// and `ImportRefusal` is some case's refusal, and every variant of
+/// `ProposalInvalidReason` some `proposal_file` case's; and every mutant of
+/// core is guarded by a case (here, or in the target the `mutants` job
+/// names for it, D-225), forwarded under its name by the host and the CLI
 /// crates, and counted by `MUTANTS_ENABLED` (D-148).
 #[test]
 fn every_section_family_and_refusal_has_a_case() {
@@ -1463,6 +1469,13 @@ fn every_section_family_and_refusal_has_a_case() {
             "{refusal:?} has no case in injection.json"
         );
     }
+    for refusal in officina_core::workshop::review::ImportRefusal::ALL {
+        let wanted = serde_json::json!({"outcome": "refused", "detail": refusal});
+        assert!(
+            expectations.contains(&&wanted),
+            "{refusal:?} has no case in injection.json"
+        );
+    }
     let files = cases(&set, "proposal_file");
     for reason in officina_core::orders::proposal::ProposalInvalidReason::ALL {
         assert!(
@@ -1485,10 +1498,30 @@ fn every_section_family_and_refusal_has_a_case() {
         }
     }
     for mutant in &mutants {
-        assert!(
-            all.iter().any(|case| case["guards"] == mutant.as_str()),
-            "{mutant} is guarded by no case"
-        );
+        let in_battery = all.iter().any(|case| case["guards"] == mutant.as_str());
+        if !in_battery {
+            // D-225: a mutant whose guarding case lives in another test
+            // target is named, with that target, in the `mutants` job, and
+            // the target's source names it in a failure message.
+            let target = CI_WORKFLOW
+                .lines()
+                .find_map(|line| {
+                    line.trim()
+                        .strip_prefix(&format!("{mutant}) target="))
+                        .and_then(|rest| rest.strip_suffix(" ;;"))
+                })
+                .unwrap_or_else(|| panic!("{mutant} is guarded by no case"));
+            let source = std::fs::read_to_string(
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("tests")
+                    .join(format!("{target}.rs")),
+            )
+            .unwrap_or_else(|e| panic!("{mutant}'s target {target}: {e}"));
+            assert!(
+                source.contains(&format!("(guarded by {mutant})")),
+                "{target}.rs names no case guarded by {mutant}"
+            );
+        }
         for (crate_name, manifest, forwarded) in [
             (
                 "officina-host",
@@ -1798,6 +1831,202 @@ fn workshop_card_cases() {
         for (name, result) in results {
             if let Err(why) = result {
                 failures.push(format!("case {name}: {why}"));
+            }
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "{} case(s) failed:\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
+}
+
+/// What a `workshop_import` tamper changes after collection.
+fn import_tamper(
+    run: &common::package_run::Run<'_>,
+    runtime: &mut officina_host::workshop::launch::WorkshopRuntime,
+    step: &Value,
+) -> Result<(), String> {
+    let home = run.home;
+    match step["kind"].as_str() {
+        Some("stale_approval") => {
+            // The approvals rewritten by hand to a hash no hunks have.
+            let groups: Vec<String> = home
+                .env
+                .journal()
+                .into_iter()
+                .filter_map(|line| match line.entry {
+                    officina_core::relay::journal::JournalEntry::SensitiveApproved(l)
+                        if l.run_id == run.id =>
+                    {
+                        Some(l.group)
+                    }
+                    _ => None,
+                })
+                .collect();
+            if groups.is_empty() {
+                return Err("no approval to make stale".to_owned());
+            }
+            let mut writer = open_writer(&home.env.officina_home(), &[], common::now_ms())
+                .writer()
+                .unwrap();
+            for group in groups {
+                writer
+                    .approve_group(&run.id, &group, &"0".repeat(64), common::now_ms())
+                    .unwrap();
+            }
+        }
+        Some("branch_exists") => home.git(&["branch", &run.row().branch]),
+        Some("branch_named_officina") => home.git(&["branch", "officina"]),
+        Some("scratch_gone") => {
+            let scratch = run.run_dir().join("verify.git");
+            let mut moved = scratch.as_os_str().to_owned();
+            moved.push("-moved");
+            std::fs::rename(&scratch, PathBuf::from(moved)).map_err(|e| e.to_string())?;
+        }
+        Some("git_gone") => runtime.git = None,
+        other => return Err(format!("unknown import tamper {other:?}")),
+    }
+    Ok(())
+}
+
+/// One `workshop_import` case (story 6.16 AC 6, AD-125, D-225): a package
+/// of the case's kind launched and collected on the fake engine with real
+/// git, then approved, tampered and imported through the window's
+/// functions; each Import's answer, no engine `create` or `start` after
+/// collection, and the project's references, index and work tree
+/// unchanged unless the answer is `imported`, which adds exactly its
+/// branch. A case tagged `keyboard` is story 6.19's Vitest's, against the
+/// Import button.
+fn run_workshop_import(case: &Value) -> Result<(), String> {
+    use common::package_run::{home, launch, references, work_tree};
+    use common::workshop_home::Options;
+    let Some(home) = home(&Options::default(), &[]) else {
+        return Ok(());
+    };
+    let run = launch(&home, home.seeded());
+    let clone = run.clone();
+    let committed = match case["package"].as_str() {
+        Some("sensitive") => Some("build.rs"),
+        Some("plain") => Some("src/a.rs"),
+        Some("quarantined") => Some(".claude/settings.json"),
+        Some("no_change") => None,
+        other => return Err(format!("unknown package {other:?}")),
+    };
+    match committed {
+        Some(path) => {
+            run.commit(&clone, path, "{}\n");
+            run.serve(&run.packed_branch(&clone), 0);
+        }
+        None => run.serve(&run.packed(&clone, None), 0),
+    }
+    run.exit(0);
+    run.collected();
+    let collected = home.engine.log().len();
+    let mut runtime = run.runtime.clone();
+    for (at, step) in case["steps"].as_array().unwrap().iter().enumerate() {
+        let failed = |why: String| format!("step {at}: {why}");
+        if step.get("approve").is_some() {
+            run.approve_all();
+        } else if let Some(change) = step.get("tamper") {
+            import_tamper(&run, &mut runtime, change).map_err(failed)?;
+        } else if let Some(import) = step.get("import") {
+            let refs = references(&home);
+            let tree = work_tree(&home);
+            let id = match import["id"].as_str() {
+                Some("forged") => "f".repeat(32),
+                _ => run.id.clone(),
+            };
+            let tip = match import["tip"].as_str() {
+                Some("base") => run.row().base_commit,
+                _ => run.row().tip_commit.unwrap_or_default(),
+            };
+            let answer = officina_host::workshop::import::import_package(
+                home.sender(),
+                &runtime,
+                &home.env.officina_home(),
+                &common::package_run::base_env(),
+                &id,
+                &tip,
+            )
+            .map_err(|e| failed(format!("{e:?}")))?;
+            let got = serde_json::to_value(&answer).unwrap();
+            if got["outcome"] != step["expect"]["outcome"]
+                || (got["outcome"] == "refused" && got != step["expect"])
+            {
+                return Err(failed(format!("expected {}, got {got}", step["expect"])));
+            }
+            let mut expected = refs;
+            if got["outcome"] == "imported" {
+                let row = run.row();
+                expected.push(format!(
+                    "refs/heads/{} {}",
+                    row.branch,
+                    row.tip_commit.unwrap_or_default()
+                ));
+            }
+            let mut after = references(&home);
+            expected.sort();
+            after.sort();
+            if after != expected {
+                return Err(failed(format!("the project's references moved: {after:?}")));
+            }
+            if work_tree(&home) != tree {
+                return Err(failed("the project's work tree moved".to_owned()));
+            }
+        } else {
+            return Err(failed(format!("unknown step {step}")));
+        }
+    }
+    if home.count(collected, &["create"]) + home.count(collected, &["start"]) != 0 {
+        return Err("an engine create or start after collection".to_owned());
+    }
+    Ok(())
+}
+
+/// Story 6.16 AC 6 (AD-125, D-225): every `workshop_import` case but the
+/// keyboard's (story 6.19 replays it) gets its answer, the project
+/// unchanged by every refusal; a failing case names the mutant it guards.
+#[test]
+fn workshop_import_cases() {
+    let set = load();
+    let cases: Vec<Value> = cases(&set, "workshop_import")
+        .into_iter()
+        .filter(|case| {
+            !case["tags"]
+                .as_array()
+                .is_some_and(|tags| tags.iter().any(|t| t == "keyboard"))
+        })
+        .collect();
+    assert!(!cases.is_empty());
+    let mut failures = Vec::new();
+    for chunk in cases.chunks(PARALLEL_CASES) {
+        let results: Vec<(String, Option<String>, Result<(), String>)> =
+            std::thread::scope(|scope| {
+                let runs: Vec<_> = chunk
+                    .iter()
+                    .map(|case| scope.spawn(move || run_workshop_import(case)))
+                    .collect();
+                chunk
+                    .iter()
+                    .zip(runs)
+                    .map(|(case, run)| {
+                        (
+                            case["name"].as_str().unwrap().to_owned(),
+                            case["guards"].as_str().map(str::to_owned),
+                            run.join()
+                                .unwrap_or_else(|_| Err("the case panicked".to_owned())),
+                        )
+                    })
+                    .collect()
+            });
+        for (name, guards, result) in results {
+            if let Err(why) = result {
+                let guarded = guards
+                    .map(|feature| format!(" (guarded by {feature})"))
+                    .unwrap_or_default();
+                failures.push(format!("case {name}{guarded}: {why}"));
             }
         }
     }
