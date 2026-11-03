@@ -242,6 +242,29 @@ impl WindowRegistry {
         }
     }
 
+    /// [`WindowRegistry::with_writer`] in one transaction: a run's state
+    /// and the facts, texts and outcome that go with it are seen together
+    /// by any reader, never the state first (the test reader of
+    /// `workshop_follow.rs` saw `collecting` before the texts).
+    fn with_writer_atomic<T>(
+        &mut self,
+        step: impl FnOnce(&mut Writer) -> Result<Result<T, IpcError>, RegistryError>,
+    ) -> Result<T, IpcError> {
+        self.with_writer(|writer| {
+            writer.conn.execute_batch("BEGIN IMMEDIATE")?;
+            match step(writer) {
+                Ok(answer) => {
+                    writer.conn.execute_batch("COMMIT")?;
+                    Ok(answer)
+                }
+                Err(error) => {
+                    let _ = writer.conn.execute_batch("ROLLBACK");
+                    Err(error)
+                }
+            }
+        })
+    }
+
     /// What the window is told when the registry failed it: unavailable
     /// when the database is damaged (and so until the next start, AD-42),
     /// else `code`, the registry staying usable.
@@ -711,7 +734,7 @@ impl WindowRegistry {
         now_ms: i64,
         amend: impl FnOnce(&mut crate::registry::workshop::RunRecord),
     ) -> Result<Option<crate::registry::workshop::RunRecord>, IpcError> {
-        self.with_writer(|writer| {
+        self.with_writer_atomic(|writer| {
             let Some(before) = writer.workshop_run(id)? else {
                 return Ok(Ok(None));
             };
@@ -769,7 +792,7 @@ impl WindowRegistry {
         now_ms: i64,
         amend: impl FnOnce(&mut crate::registry::workshop::RunRecord),
     ) -> Result<Option<crate::registry::workshop::RunRecord>, IpcError> {
-        self.with_writer(|writer| {
+        self.with_writer_atomic(|writer| {
             let Some(before) = writer.workshop_run(id)? else {
                 return Ok(Ok(None));
             };
