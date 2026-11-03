@@ -211,7 +211,8 @@ stories:
   - {id: "6.11", file: story-6.11-workshop-card-and-launch.md, slice: A, status: review}
   # 6.12: done; a real followed run is gate 3's window half (6.19); D-1160 to D-1166, D-1160 to confirm.
   - {id: "6.12", file: story-6.12-follow-limits-and-reconciliation.md, slice: A, status: review}
-  - {id: "6.13", file: story-6.13-collection-verification-and-no-change.md, slice: A, status: approved}
+  # 6.13: done; the first real run to a package is gate 3's window half (6.19); D-1167 to D-1172.
+  - {id: "6.13", file: story-6.13-collection-verification-and-no-change.md, slice: A, status: review}
   - {id: "6.14", file: story-6.14-credential-scan.md, slice: A, status: approved}
   - {id: "6.15", file: story-6.15-sensitive-groups-and-approvals.md, slice: A, status: approved}
   - {id: "6.16", file: story-6.16-import-discard-and-template-table.md, slice: A, status: approved}

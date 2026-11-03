@@ -1,6 +1,6 @@
 # Story 6.13: Collection, host verification, the run's outcome and `no_change`
 
-**Status:** Approved
+**Status:** Review
 
 ## Story
 
@@ -22,13 +22,13 @@ so that a forged bundle is quarantined, no worker-chosen name is ever written to
 
 ## Tasks
 
-- [ ] `crates/officina-core/src/workshop/tar.rs` (names, PAX, allow-list); `tar` section of `bundle.json` with the hostile-shape table and gate 1's stream (AC 2)
-- [ ] `crates/officina-host/src/workshop/collect.rs`: partial cleanup, packer, capped stream, the resolved-path check, the one write, removal; fake engine `cp` out mode (AC 1, 2, 6)
-- [ ] `crates/officina-host/src/workshop/verify.rs` on thread `workshop`, `verify.git` object format, and `bundle::assess`; `assess` section of `bundle.json` (AC 3)
-- [ ] `run::outcome`; `outcome` section of `workshop.json` (AC 4)
-- [ ] `no_change` handling (AC 5); records and journal kinds (AC 6)
-- [ ] `ReviewView`, `open_review` and its plumbing, the hunk cache, bindings (AC 7); doctor (AC 8)
-- [ ] README, `CHANGELOG.md` (AC 9)
+- [x] `crates/officina-core/src/workshop/tar.rs` (names, PAX, allow-list); `tar` section of `bundle.json` with the hostile-shape table and gate 1's stream (AC 2)
+- [x] `crates/officina-host/src/workshop/collect.rs`: partial cleanup, packer, capped stream, the resolved-path check, the one write, removal; fake engine `cp` out mode (AC 1, 2, 6)
+- [x] `crates/officina-host/src/workshop/verify.rs` on thread `workshop`, `verify.git` object format, and `bundle::assess`; `assess` section of `bundle.json` (AC 3)
+- [x] `run::outcome`; `outcome` section of `workshop.json` (AC 4)
+- [x] `no_change` handling (AC 5); records and journal kinds (AC 6)
+- [x] `ReviewView`, `open_review` and its plumbing, the hunk cache, bindings (AC 7); doctor (AC 8)
+- [x] README, `CHANGELOG.md` (AC 9)
 
 ## Dev Notes
 
@@ -51,16 +51,34 @@ so that a forged bundle is quarantined, no worker-chosen name is ever written to
 
 ### Debug Log
 
-- Work in progress (branch `wip/story-6.13`, 2026-11-03), on top of story 6.12:
-  - Done: core `workshop::tar::PackageReader` (allow-list `PACKAGE_DIR`, `PACKAGE_TIP`, `PACKAGE_MANIFEST`, `PACKAGE_BUNDLE`; tip and manifest in memory within `MAX_TIP_BYTES` and `MAX_MANIFEST_BYTES`; the bundle's bytes to a sink; case-insensitive duplicates, links and every other name refused) with the `tar` section of `bundle.json` (`tar_cases_match`, `every_hostile_shape_is_bundle_invalid`, `a_real_docker_stream_with_pax_records_is_read`); core `workshop::package` (`QuarantineCause` without `credential_found`, which story 6.14 adds with its case; `Outputs`, `Expected`, `assess` as a step function returning the next step or the answer; `outcome`; the mount comparison of D-231) with the `assess` section of `bundle.json` (`assess_cases_match`, `every_quarantine_cause_has_a_case`, `every_mount_shape_is_mount_committed`) and the `outcome` section of `workshop.json` (`every_outcome_row_has_a_case`); host `workshop::verify` (`scratch` with the project's object format and alternates, `verify` running the steps `assess` asks for, `raw_paths`, the inflated size through `cat-file --batch-check`) with real-git unit tests.
-  - Not started: `collect.rs` (the trigger after the worker's follower drained and the gateway was stopped, from story 6.12's watcher and reconciliation's `Collect`; partial `out/` cleanup; the packer from `vector::packer` with `run_labels`, its clone path `/work/<project>`; `stream_out` through `PackageReader` at `MAX_PACKAGE_STREAM_BYTES`, the one write after the resolved-path check; the stop flag); the collector's records (states by `RunEvent::{Packaged, Quarantined, NothingChanged, CollectionFailed}`, `set_run_package`, `workshop_finished`, `workshop_removed` `collected`, `in/` deleted, `no_change` deleting `out/` and `verify.git`); journal kinds `review_package`, `gateway_summary`, `review_opened`; the fake engine's `cp` out of a fixture package; `workshop_collect.rs`; the display step 8; `ReviewView` and `open_review` with its plumbing; doctor's upstream state; README, CHANGELOG, decisions.
+- 2026-11-03, first agent (branch `wip/story-6.13`): core's package reader, `assess` and `outcome` with their vector sections, host verification with real git.
+- 2026-11-03, second agent: collection (`workshop::collect`), its trigger in the watcher and reconciliation (D-1169), the collector's record (D-1168), the three journal kinds, `open_review` and its plumbing, doctor's upstream state, the fake engine's packer copy (sidecar `package`, `package_extra_bytes`), `workshop_collect.rs`.
+- Story 6.14's `credential_found` joins `QuarantineCause` with its scan after step 7 of `verify_with_paths`; nothing else in this story waits for it.
 
 ### Completion Notes
 
+- AC 1: `workshop_collect.rs::{an_oversized_stream_writes_nothing, the_packer_has_no_network_no_credential_no_mount, nothing_is_collected_while_stopped, a_partial_out_is_deleted_before_the_copy}`.
+- AC 2: `bundle_vectors.rs::{tar_cases_match, every_hostile_shape_is_bundle_invalid, a_real_docker_stream_with_pax_records_is_read}` (first agent); `collect.rs::tests::{only_work_bundle_reaches_the_disk, a_path_leaving_the_out_folder_is_refused_before_any_write}`; `workshop_collect.rs::an_extra_file_in_out_is_bundle_invalid_and_never_written`.
+- AC 3: `bundle_vectors.rs::{assess_cases_match, every_quarantine_cause_has_a_case, every_mount_shape_is_mount_committed}` (first agent); `verify.rs::tests` (real git, first agent); `workshop_collect.rs::{each_quarantine_cause_from_a_crafted_package, a_forged_tip_never_reaches_git_as_an_option, verification_never_writes_the_project_objects, a_sha256_project_verifies_in_a_sha256_scratch_repository}`; `bundle.rs::tests::an_alternates_path_with_spaces_and_accents_is_written_exactly`.
+- AC 4: `workshop_vectors.rs::every_outcome_row_has_a_case` (first agent); `workshop_collect.rs::{exit_0_and_no_commit_is_no_change, a_non_zero_exit_and_no_commit_is_failed, a_report_claiming_no_changes_with_a_commit_is_a_package, a_branch_reset_to_the_base_is_no_change}`. A failed collection moves by `CollectionFailed` with `RunFacts.collect_failed` (D-1167).
+- AC 5: `workshop_collect.rs::{no_change_writes_no_review_package, no_change_deletes_out_at_once, no_change_is_not_awaiting_a_verdict, no_change_offers_neither_import_nor_discard}`.
+- AC 6: `journal.rs::tests::{workshop_finished_round_trips, review_package_round_trips, gateway_summary_round_trips}`; `workshop_collect.rs::{the_credential_leaves_the_engine_after_collection, one_workshop_finished_per_run}`. Groups stay empty until story 6.15; without needles `gateway_summary` holds no host name until 6.14's scan (D-1170).
+- AC 7: `review.rs::tests::{a_no_change_view_has_nothing_to_review, every_worker_text_is_untrusted}`; `journal.rs::tests::review_opened_round_trips`; `workshop_collect.rs::review_opened_is_journaled_once`; `typescript_bindings.rs` over `ReviewView`; `main.rs::tests::every_declared_command_is_allowed` with `open_review`. A quarantined package shows no diff (D-1171).
+- AC 8: `doctor.rs::tests::the_upstream_state_comes_from_the_newest_summary` (D-1172).
+- AC 9: README "Collection: the package"; CHANGELOG.
+
 ## File List
+
+- `crates/officina-core/src/workshop/{tar,package,bundle,review,run,output,doctor,stream,mod}.rs`, `crates/officina-core/src/workshop/gateway/mod.rs`, `crates/officina-core/src/relay/{journal,view}.rs`
+- `crates/officina-core/tests/{bundle_vectors,workshop_vectors,typescript_bindings}.rs`, `tests/vectors/{bundle,workshop}.json`
+- `crates/officina-host/src/workshop/{collect,review,verify,follow,doctor,mod}.rs`, `crates/officina-host/src/workshop/launch/window.rs`, `crates/officina-host/src/registry/{workshop,window,read}.rs`, `crates/officina-host/src/{watch,doctor}.rs`, `crates/officina-host/tests/registry_workshop.rs`
+- `crates/officina/src/bin/officina-fake-docker.rs`, `crates/officina/tests/{workshop_collect,workshop_follow}.rs`, `crates/officina/tests/common/{workshop,workshop_home}.rs`
+- `app/src-tauri/{build.rs,capabilities/default.json,src/main.rs}`, `app/src/lib/ipc.ts`, `app/src/e2e-mock.ts`, `app/src/e2e-globals.d.ts`, `app/src/lib/generated/` (bindings)
+- `README.md`, `CHANGELOG.md`, `docs/stories/epic-6-decisions.md` (D-1167 to D-1172), `docs/stories/sprint-status.yaml`
 
 ## Change Log
 
 - 2026-10-28 created
 - 2026-10-28 reworked after review: an allow-list of names, Windows path forms refused, one write under Officina's name after a resolved-path check (F1); mount comparison case-insensitive and equal-or-under, deletions and renames (F3); gate 3's window half moved to 6.19 (F5); PAX records and a real stream fixture (F16); `verify.git` in the project's object format, `--no-show-signature` (F17); `open_review` on thread `workshop` with a hunk cache (F18); `review_opened` first written here (F32); `open_review` plumbing and bindings (F33); the logging git proves the forged tip (F38); alternates path golden (F44); partial `out` deleted first (F53)
 - 2026-10-29 research-note entries named by subject, no number reserved (D-600)
+- 2026-11-03 implemented: collection, verification, the outcome, the review view's first form; D-1167 to D-1172
