@@ -652,9 +652,14 @@ fn no_command_writes_under_the_claude_config_dir() {
         "the collector ingested: {ingested:?}"
     );
     // `officina stop --all` last, since it stops the relay (story 6.17
-    // AC 3): no engine resolves here, so it writes the flags and exits 1.
+    // AC 3). Its engine is a path that does not exist, so the machine's
+    // own Docker, found through the registry, is never reached: it writes
+    // the flags and exits 1.
     let mut stop = env.officina(&["stop", "--all"]);
-    stop.current_dir(&lab);
+    stop.current_dir(&lab).env(
+        "OFFICINA_DOCKER_BIN",
+        env.root.path().join("no-docker").join("docker.exe"),
+    );
     let out = common::run_with(stop, b"");
     assert_eq!(out.status.code(), Some(1), "{out:?}");
     assert!(env.relay_home().stop_flags().workshop);
