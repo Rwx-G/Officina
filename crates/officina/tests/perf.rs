@@ -87,21 +87,30 @@ fn hook_latency_p95() {
 /// Times `payload` through the hook: p95 of 200 runs against an empty
 /// process's, Officina's own cost under 30 ms and the p95 under
 /// `OFFICINA_HOOK_P95_BUDGET_MS` (see [`hook_latency_p95`]).
+///
+/// The two are timed in pairs, as the gate's own cost is: timed one block
+/// after the other, a slow spell of the machine during the hook's block
+/// alone read as Officina's own cost, and the local gate saw own costs of
+/// 63 and 72 ms that no rerun reproduced.
 fn hook_own_cost_within_budget(env: &TestEnv, label: &str, payload: &[u8]) {
     for _ in 0..5 {
         env.run(&["hook"], payload);
     }
-    let hook = p95(timed(200, || {
-        let out = env.run(&["hook"], payload);
-        assert!(out.status.success() && out.stdout.is_empty());
-    }));
-    let baseline = p95(timed(200, || {
-        let out = std::process::Command::new(common::FAKE_CLAUDE)
-            .arg("--version")
-            .output()
-            .unwrap();
-        assert!(out.status.success());
-    }));
+    let (hook, baseline) = timed_pairs(
+        200,
+        || {
+            let out = env.run(&["hook"], payload);
+            assert!(out.status.success() && out.stdout.is_empty());
+        },
+        || {
+            let out = std::process::Command::new(common::FAKE_CLAUDE)
+                .arg("--version")
+                .output()
+                .unwrap();
+            assert!(out.status.success());
+        },
+    );
+    let (hook, baseline) = (p95(hook), p95(baseline));
     let own_cost = hook.saturating_sub(baseline);
     let budget = Duration::from_millis(
         std::env::var("OFFICINA_HOOK_P95_BUDGET_MS")
