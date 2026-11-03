@@ -7,6 +7,7 @@ import type { AuthorReason } from "./generated/AuthorReason";
 import type { AutoMode } from "./generated/AutoMode";
 import type { BatteryAnswer } from "./generated/BatteryAnswer";
 import type { Board } from "./generated/Board";
+import type { ApprovalAnswer } from "./generated/ApprovalAnswer";
 import type { BuildAnswer } from "./generated/BuildAnswer";
 import type { CardAnswer } from "./generated/CardAnswer";
 import type { CardChange } from "./generated/CardChange";
@@ -273,6 +274,17 @@ export function runBattery(image: string | null): Promise<BatteryAnswer> {
  *  `review_opened`. */
 export function openReview(runId: string): Promise<ReviewView> {
   return invoke<ReviewView>("open_review", { runId });
+}
+
+/** Approve on group `groupKey` of run `runId`'s package (AD-113), pointer
+ *  only: `hunksSha256` is the hash the panel showed, and a group whose
+ *  hunks hash otherwise now is refused `hunks_changed`. */
+export function approveSensitive(
+  runId: string,
+  groupKey: string,
+  hunksSha256: string,
+): Promise<ApprovalAnswer> {
+  return invoke<ApprovalAnswer>("approve_sensitive", { runId, groupKey, hunksSha256 });
 }
 
 /** The meeting of `key` (AD-84, D-138): a card key, `sid:<session id>`

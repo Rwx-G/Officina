@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 use officina_core::workshop::bundle::{MAX_HEADER_BYTES, parse_header};
 use officina_core::workshop::package::{Assessed, Expected, Outputs, PackageAssessment, assess};
 use officina_core::workshop::scan::{Place, ScanRecord};
+use officina_core::workshop::sensitive::{ChangedFile, mark_binary, parse_raw, sort_files};
 
 use crate::workshop::inventory::WorkshopGit;
 
@@ -221,6 +222,39 @@ pub fn raw_paths(out: &[u8]) -> Vec<String> {
         }
     }
     paths
+}
+
+/// The files `base..tip` changes, in the package's sorted order (AD-113):
+/// `diff --raw -z --no-abbrev` for the modes, whole ids and paths,
+/// `diff --numstat -z` for the blobs git reads as binary. Ids only reach
+/// git (D-219).
+pub fn package_changes(
+    git: &WorkshopGit,
+    scratch: &Path,
+    base: &str,
+    tip: &str,
+) -> Result<Vec<ChangedFile>, VerifyError> {
+    let diff = |format: &str| {
+        git.output(
+            scratch,
+            &[
+                "diff",
+                format,
+                "-z",
+                "-M",
+                "--no-abbrev",
+                "--no-ext-diff",
+                "--no-textconv",
+                base,
+                tip,
+            ],
+        )
+        .map_err(VerifyError)
+    };
+    let mut files = parse_raw(&diff("--raw")?);
+    mark_binary(&mut files, &diff("--numstat")?);
+    sort_files(&mut files);
+    Ok(files)
 }
 
 /// Every record of AD-112's package scope past `base` up to `tip`: each

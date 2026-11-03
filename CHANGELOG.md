@@ -8,6 +8,20 @@ project uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Sensitive groups and their approvals (v0.6, story 6.15): collection
+  sorts a package's changed files into groups (Claude Code configuration,
+  git, CI, build and package scripts, toolchain configuration, editor and
+  shell, the floor file, file modes, binary blobs, the project's
+  `sensitive_paths`; one group per file with `review = "all"`) from core's
+  `SENSITIVE_PATTERNS`, extended beyond FR-11's list with Rust toolchain
+  files, pnpm and yarn hooks, dev containers and workspace and IDE
+  folders. The review view lists each file's groups and each group's hunks
+  (computed from blob ids, never from a path), their SHA-256 and approval
+  state, and Import readiness with its reasons. `approve_sensitive` binds
+  an approval to the hash shown, refuses `hunks_changed` and groups past
+  1 MiB, and journals `sensitive_approved`; `review_package` carries its
+  groups. Core computes FR-11's per-template notice for story 6.18's
+  table.
 - The credential scan (v0.6, story 6.14): collection searches every blob,
   path, commit message, author and committer past the base, the report's
   tail, the stream texts kept, the gateway's hosts and the manifest for

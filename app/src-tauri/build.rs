@@ -43,6 +43,7 @@ const COMMANDS: &[&str] = &[
     "build_images",
     "run_battery",
     "open_review",
+    "approve_sensitive",
 ];
 
 fn main() {

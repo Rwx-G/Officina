@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use super::package::QuarantineCause;
 use super::run::{CollectFailure, FinishCause, RunRefusal, RunState, WorkshopOutcome};
+use super::sensitive::{MAX_GROUP_HUNK_BYTES, PackageGroup, SensitiveGroup};
 use super::stream::HookCounts;
 use crate::meeting::DiffView;
 use crate::untrusted::Untrusted;
@@ -52,13 +53,171 @@ pub struct ReviewCommit {
     pub at_ms: i64,
 }
 
+/// One changed file as host git reported it (`diff --raw`), in the
+/// package's sorted order: its status letter and its path, both sides of a
+/// rename or copy.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShownFile {
+    pub status: String,
+    pub paths: Vec<Untrusted<String>>,
+}
+
+/// One group's hunks as host git computed them (AD-113): the text shown,
+/// none past [`MAX_GROUP_HUNK_BYTES`], and the size and SHA-256 of the raw
+/// bytes, which an approval binds to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShownHunks {
+    pub text: Option<Untrusted<String>>,
+    pub bytes: u64,
+    pub sha256: String,
+}
+
+impl ShownHunks {
+    /// True when the group can be approved in the panel (AD-113).
+    pub fn approvable(&self) -> bool {
+        self.text.is_some() && self.bytes <= MAX_GROUP_HUNK_BYTES as u64
+    }
+}
+
 /// What host git showed of a package (AD-111 step 8): its commits, the
-/// diff capped as AD-84 and the file list whole (D-220 bounds it).
+/// diff capped as AD-84, the file list whole (D-220 bounds it) and each
+/// group's hunks by key (D-239's cache).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PackageDisplay {
     pub commits: Vec<ReviewCommit>,
-    pub files: Vec<Untrusted<String>>,
+    pub files: Vec<ShownFile>,
     pub diff: DiffView,
+    pub hunks: BTreeMap<String, ShownHunks>,
+}
+
+/// A changed file in the review (AD-121): its index in the package's
+/// sorted list, its status, its paths and the keys of its groups.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct ReviewFile {
+    pub index: u32,
+    pub status: String,
+    pub paths: Vec<Untrusted<String>>,
+    pub groups: Vec<String>,
+}
+
+/// A sensitive group in the review (AD-113, AD-121): its hunks inline,
+/// their SHA-256, and whether it can be and was approved. An approval
+/// counts only for the hash shown.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct ReviewGroup {
+    pub key: String,
+    pub group: SensitiveGroup,
+    pub files: Vec<u32>,
+    pub hunks: Option<Untrusted<String>>,
+    pub hunks_bytes: Option<u64>,
+    pub hunks_sha256: Option<String>,
+    pub approvable: bool,
+    pub approved: bool,
+}
+
+closed_enum! {
+    #[serde(rename_all = "snake_case")]
+    /// Why Import is not enabled (AD-113, AD-114).
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+    #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+    pub enum NotReadyCause {
+        /// The run is not in state `review`.
+        NotInReview,
+        /// A group waits for its approval.
+        Unapproved,
+        /// A group's hunks pass 1 MiB, or could not be shown: the package
+        /// can only be discarded.
+        TooLarge,
+    }
+}
+
+/// One reason Import is not enabled, with the group it concerns.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct NotReady {
+    pub cause: NotReadyCause,
+    pub group: Option<String>,
+}
+
+/// Whether Import is enabled (AD-113): the run in state `review` and every
+/// group approved; otherwise each reason.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct ImportReadiness {
+    pub ready: bool,
+    pub reasons: Vec<NotReady>,
+}
+
+impl ImportReadiness {
+    /// The readiness of a run in `state` whose groups are `groups`.
+    pub fn of(state: RunState, groups: &[ReviewGroup]) -> ImportReadiness {
+        let mut reasons = Vec::new();
+        if state != RunState::Review {
+            reasons.push(NotReady {
+                cause: NotReadyCause::NotInReview,
+                group: None,
+            });
+        }
+        for group in groups.iter().filter(|g| !g.approved) {
+            reasons.push(NotReady {
+                cause: if group.approvable {
+                    NotReadyCause::Unapproved
+                } else {
+                    NotReadyCause::TooLarge
+                },
+                group: Some(group.key.clone()),
+            });
+        }
+        ImportReadiness {
+            ready: reasons.is_empty(),
+            reasons,
+        }
+    }
+}
+
+closed_enum! {
+    #[serde(rename_all = "snake_case")]
+    /// Why `approve_sensitive` refused (AD-113).
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+    #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+    pub enum ApprovalRefusal {
+        /// The registry holds no such run.
+        UnknownRun,
+        /// The run is not in state `review`.
+        NotInReview,
+        /// The package has no group of that key.
+        UnknownGroup,
+        /// The hunks computed now differ from the ones shown.
+        HunksChanged,
+        /// The group's hunks pass 1 MiB: the package can only be discarded.
+        TooLarge,
+        /// Host git could not compute the group's hunks.
+        Unavailable,
+    }
+}
+
+/// How `approve_sensitive(run_id, group_key, hunks_sha256)` was answered:
+/// the approval stored and journaled, or refused with why.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[serde(tag = "outcome", content = "detail", rename_all = "snake_case")]
+pub enum ApprovalAnswer {
+    Approved,
+    Refused(ApprovalRefusal),
+}
+
+/// What an approval of `group_key` for `hunks_sha256` meets, decided from
+/// the group's hunks as host git computes them now (AD-113, AD-24's
+/// pattern): `None` when it holds.
+pub fn approval_refusal(shown: Option<&ShownHunks>, hunks_sha256: &str) -> Option<ApprovalRefusal> {
+    match shown {
+        None => Some(ApprovalRefusal::Unavailable),
+        Some(hunks) if !hunks.approvable() => Some(ApprovalRefusal::TooLarge),
+        Some(hunks) if hunks.sha256 != hunks_sha256 => Some(ApprovalRefusal::HunksChanged),
+        Some(_) => None,
+    }
 }
 
 /// What the registry holds of a run, as the review view reads it.
@@ -76,6 +235,10 @@ pub struct ReviewInputs {
     pub quarantine_cause: Option<QuarantineCause>,
     pub report_tail: Option<Untrusted<String>>,
     pub facts: ReviewFacts,
+    /// The package's groups as collection recorded them (AD-113).
+    pub groups: Vec<PackageGroup>,
+    /// Each approved group's key and the SHA-256 it was approved for.
+    pub approvals: Vec<(String, String)>,
 }
 
 /// A run's review (AD-121, first form; stories 6.14 to 6.16 extend it):
@@ -99,8 +262,10 @@ pub struct ReviewView {
     pub report_tail: Option<Untrusted<String>>,
     pub facts: ReviewFacts,
     pub commits: Vec<ReviewCommit>,
-    pub files: Vec<Untrusted<String>>,
+    pub files: Vec<ReviewFile>,
     pub diff: Option<DiffView>,
+    pub groups: Vec<ReviewGroup>,
+    pub readiness: ImportReadiness,
 }
 
 impl ReviewView {
@@ -109,10 +274,24 @@ impl ReviewView {
     pub fn build(inputs: ReviewInputs, display: Option<PackageDisplay>) -> ReviewView {
         let nothing_to_review = inputs.outcome == Some(WorkshopOutcome::NoChange);
         let display = display.filter(|_| !nothing_to_review);
+        let groups: Vec<ReviewGroup> = if nothing_to_review {
+            Vec::new()
+        } else {
+            inputs
+                .groups
+                .iter()
+                .map(|group| review_group(group, display.as_ref(), &inputs.approvals))
+                .collect()
+        };
         let (commits, files, diff) = match display {
-            Some(shown) => (shown.commits, shown.files, Some(shown.diff)),
+            Some(shown) => (
+                shown.commits,
+                review_files(shown.files, &groups),
+                Some(shown.diff),
+            ),
             None => (Vec::new(), Vec::new(), None),
         };
+        let readiness = ImportReadiness::of(inputs.state, &groups);
         ReviewView {
             run_id: inputs.run_id,
             template: inputs.template,
@@ -130,8 +309,57 @@ impl ReviewView {
             commits,
             files,
             diff,
+            groups,
+            readiness,
         }
     }
+}
+
+/// `group` with the hunks `display` computed for it and its approval,
+/// which counts only when its hash equals the one shown.
+fn review_group(
+    group: &PackageGroup,
+    display: Option<&PackageDisplay>,
+    approvals: &[(String, String)],
+) -> ReviewGroup {
+    let shown = display.and_then(|d| d.hunks.get(&group.key));
+    let sha256 = shown.map(|h| h.sha256.clone());
+    let approved = sha256.as_ref().is_some_and(|hash| {
+        approvals
+            .iter()
+            .any(|(key, approved)| *key == group.key && approved == hash)
+    });
+    ReviewGroup {
+        key: group.key.clone(),
+        group: group.group,
+        files: group.files.clone(),
+        hunks: shown.and_then(|h| h.text.clone()),
+        hunks_bytes: shown.map(|h| h.bytes),
+        hunks_sha256: sha256,
+        approvable: shown.is_some_and(ShownHunks::approvable),
+        approved,
+    }
+}
+
+/// The files of a package with the keys of the groups holding each.
+fn review_files(files: Vec<ShownFile>, groups: &[ReviewGroup]) -> Vec<ReviewFile> {
+    files
+        .into_iter()
+        .enumerate()
+        .map(|(index, file)| {
+            let index = u32::try_from(index).unwrap_or(u32::MAX);
+            ReviewFile {
+                index,
+                status: file.status,
+                paths: file.paths,
+                groups: groups
+                    .iter()
+                    .filter(|g| g.files.contains(&index))
+                    .map(|g| g.key.clone())
+                    .collect(),
+            }
+        })
+        .collect()
 }
 
 /// The `log` format of AD-111 step 8, read by [`parse_log`]: hash,
@@ -232,6 +460,8 @@ mod tests {
             quarantine_cause: None,
             report_tail: Some(Untrusted::new("nothing to do".into())),
             facts: ReviewFacts::default(),
+            groups: Vec::new(),
+            approvals: Vec::new(),
         }
     }
 
@@ -240,12 +470,104 @@ mod tests {
             commits: parse_log(
                 format!("{}\0{mark}\0{mark}\01700000000\0", "b".repeat(40)).as_bytes(),
             ),
-            files: vec![Untrusted::new(mark.into())],
+            files: vec![ShownFile {
+                status: "M".into(),
+                paths: vec![Untrusted::new(mark.into())],
+            }],
             diff: crate::meeting::shape_diff(
                 format!("diff --git a/{mark} b/{mark}\n@@ -1 +1 @@\n-a\n+b\n").as_bytes(),
                 false,
             ),
+            hunks: BTreeMap::from([(
+                "ci".to_owned(),
+                ShownHunks {
+                    text: Some(Untrusted::new(format!("+{mark}\n"))),
+                    bytes: 3,
+                    sha256: "c".repeat(64),
+                },
+            )]),
         }
+    }
+
+    fn ci_group() -> PackageGroup {
+        PackageGroup {
+            key: "ci".into(),
+            group: SensitiveGroup::Ci,
+            files: vec![0],
+        }
+    }
+
+    /// A package in `review` with the `ci` group and a `binary` one whose
+    /// hunks passed the bound.
+    fn in_review(approvals: Vec<(String, String)>) -> ReviewView {
+        let mut inputs = inputs(WorkshopOutcome::Package);
+        inputs.state = RunState::Review;
+        inputs.groups = vec![
+            ci_group(),
+            PackageGroup {
+                key: "binary".into(),
+                group: SensitiveGroup::Binary,
+                files: vec![0],
+            },
+        ];
+        inputs.approvals = approvals;
+        let mut shown = display("x");
+        shown.hunks.insert(
+            "binary".into(),
+            ShownHunks {
+                text: None,
+                bytes: MAX_GROUP_HUNK_BYTES as u64 + 1,
+                sha256: "e".repeat(64),
+            },
+        );
+        ReviewView::build(inputs, Some(shown))
+    }
+
+    /// AD-113, AD-121: each group carries its hunks, their hash and
+    /// whether it can be and was approved; an approval of another hash is
+    /// none; each file names its groups.
+    #[test]
+    fn groups_carry_their_hash_and_state() {
+        let view = in_review(vec![("ci".into(), "c".repeat(64))]);
+        let ci = &view.groups[0];
+        assert_eq!(ci.hunks_sha256.as_deref(), Some("c".repeat(64).as_str()));
+        assert!(ci.approvable && ci.approved);
+        assert_eq!(ci.hunks.as_ref().map(Untrusted::char_count), Some(3));
+        let binary = &view.groups[1];
+        assert!(!binary.approvable && !binary.approved && binary.hunks.is_none());
+        assert_eq!(view.files[0].groups, ["ci", "binary"]);
+        let stale = in_review(vec![("ci".into(), "f".repeat(64))]);
+        assert!(!stale.groups[0].approved);
+    }
+
+    /// AD-113: Import needs state `review` and every group approved; each
+    /// unapproved group is named, a group past the bound as too large.
+    #[test]
+    fn readiness_names_unapproved_groups() {
+        let view = in_review(Vec::new());
+        assert!(!view.readiness.ready);
+        assert_eq!(
+            view.readiness.reasons,
+            [
+                NotReady {
+                    cause: NotReadyCause::Unapproved,
+                    group: Some("ci".into())
+                },
+                NotReady {
+                    cause: NotReadyCause::TooLarge,
+                    group: Some("binary".into())
+                },
+            ]
+        );
+        let mut inputs = inputs(WorkshopOutcome::Package);
+        inputs.state = RunState::Review;
+        inputs.groups = vec![ci_group()];
+        inputs.approvals = vec![("ci".into(), "c".repeat(64))];
+        let ready = ReviewView::build(inputs.clone(), Some(display("x")));
+        assert!(ready.readiness.ready && ready.readiness.reasons.is_empty());
+        inputs.state = RunState::Quarantined;
+        let held = ReviewView::build(inputs, Some(display("x")));
+        assert_eq!(held.readiness.reasons[0].cause, NotReadyCause::NotInReview);
     }
 
     /// AD-121: a `no_change` view has its facts, tail, base and tip, and
@@ -276,6 +598,7 @@ mod tests {
             port: 443,
             cause: crate::workshop::gateway::GatewayRefusal::NotAllowed,
         }];
+        inputs.groups = vec![ci_group()];
         let view = ReviewView::build(inputs, Some(display(MARK)));
         let diff = view.diff.as_ref().unwrap();
         let held: Vec<&Untrusted<String>> = [
@@ -284,7 +607,8 @@ mod tests {
             &view.facts.refusals[0].host,
             &view.commits[0].subject,
             &view.commits[0].author,
-            &view.files[0],
+            &view.files[0].paths[0],
+            view.groups[0].hunks.as_ref().unwrap(),
             &diff.text,
             &diff.files[0].path,
         ]

@@ -772,6 +772,31 @@ impl WindowRegistry {
         self.with_writer(|writer| Ok(Ok(writer.set_run_opened(id, now_ms)?)))
     }
 
+    /// The approved groups of run `id`, each with the SHA-256 it was
+    /// approved for (AD-113).
+    pub fn workshop_approvals(&mut self, id: &str) -> Result<Vec<(String, String)>, IpcError> {
+        self.with_writer(|writer| Ok(Ok(writer.workshop_approvals(id)?)))
+    }
+
+    /// Records the approval of group `group_key` of run `id` for
+    /// `hunks_sha256` (AD-113).
+    pub fn approve_workshop_group(
+        &mut self,
+        id: &str,
+        group_key: &str,
+        hunks_sha256: &str,
+        now_ms: i64,
+    ) -> Result<(), IpcError> {
+        self.with_writer(|writer| {
+            Ok(Ok(writer.approve_group(
+                id,
+                group_key,
+                hunks_sha256,
+                now_ms,
+            )?))
+        })
+    }
+
     /// Run `id`, if the registry holds it.
     pub fn workshop_run(
         &mut self,

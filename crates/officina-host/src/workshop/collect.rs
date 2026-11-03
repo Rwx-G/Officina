@@ -34,7 +34,9 @@ use crate::workshop::engine::{ResolvedDocker, StreamOutError, execute, stream_ou
 use crate::workshop::follow::{FollowContext, FollowEvent, Followed, RunSummary, fresh_needles};
 use crate::workshop::inventory::WorkshopGit;
 use crate::workshop::launch::{RunNeedles, run_dir};
-use crate::workshop::verify::{Received, SCRATCH_DIR, package_records, scratch, verify_with_paths};
+use crate::workshop::verify::{
+    Received, SCRATCH_DIR, package_changes, package_records, scratch, verify_with_paths,
+};
 
 /// The one file collection writes from a package, under a name Officina
 /// chooses (D-229).
@@ -202,6 +204,9 @@ pub struct Collected {
     pub texts: Option<officina_core::workshop::run::RunTexts>,
     /// The run's engine objects were removed (`workshop_removed`).
     pub removed: bool,
+    /// The files a package that passed every check changes, in its sorted
+    /// order, from which the collector computes its groups (AD-113).
+    pub changes: Option<Vec<officina_core::workshop::sensitive::ChangedFile>>,
 }
 
 /// Where a collection stopped short.
@@ -305,6 +310,12 @@ pub fn collect(context: &FollowContext, run_id: &str) {
             collected.files_changed = found.files_changed;
             collected.insertions = found.insertions;
             collected.deletions = found.deletions;
+            if matches!(
+                collected.assessment,
+                Some(PackageAssessment::Package { cause: None, .. })
+            ) {
+                collected.changes = found.changes;
+            }
         }
         Err(short) => {
             collected.outcome = WorkshopOutcome::Failed;
@@ -349,6 +360,7 @@ fn summarise(entry: Option<&Followed>, run_id: &str, cause: FinishCause) -> Coll
         upstream: entry.and_then(|e| e.output.gateway.upstream),
         texts: None,
         removed: false,
+        changes: None,
     }
 }
 
@@ -526,6 +538,7 @@ struct Found {
     /// The package's records for the scan (AD-112).
     records: Vec<ScanRecord>,
     manifest: Option<Vec<u8>>,
+    changes: Option<Vec<officina_core::workshop::sensitive::ChangedFile>>,
 }
 
 impl Found {
@@ -542,6 +555,7 @@ impl Found {
             deletions: None,
             records: Vec::new(),
             manifest: None,
+            changes: None,
         }
     }
 }
@@ -696,16 +710,20 @@ fn verify(context: &FollowContext, row: &RunRecord, unpacked: &Unpacked) -> Resu
     // Only a package that passed every check is scanned: before step 7's
     // bound its objects could inflate past any size (AD-111), and a package
     // refused earlier may hold none on the host.
-    let records = match &assessment {
+    let (records, changes) = match &assessment {
         PackageAssessment::Package {
             tip: Some(tip),
             cause: None,
             ..
-        } => package_records(&git, &scratch, &row.base_commit, tip).map_err(|_| host())?,
-        _ => Vec::new(),
+        } => (
+            package_records(&git, &scratch, &row.base_commit, tip).map_err(|_| host())?,
+            Some(package_changes(&git, &scratch, &row.base_commit, tip).map_err(|_| host())?),
+        ),
+        _ => (Vec::new(), None),
     };
     Ok(Found {
         records,
+        changes,
         manifest: unpacked.manifest.clone(),
         files_changed: paths
             .as_ref()

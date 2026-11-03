@@ -10,6 +10,7 @@ pub mod fake_output;
 pub mod git_support;
 pub mod mcp;
 pub mod orders;
+pub mod package_run;
 #[path = "../../../../tests/support/previous_format.rs"]
 pub mod previous_format;
 pub mod relay;

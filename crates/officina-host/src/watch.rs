@@ -168,6 +168,12 @@ pub enum AuthorCommand {
     /// Receive on a run's review (AD-121, D-239): its stored facts, the
     /// first Receive journaled `review_opened`.
     OpenReview(String),
+    /// A run's row and approvals for an approval (AD-113): nothing
+    /// journaled.
+    ReviewRow(String),
+    /// An approval thread `workshop` checked against the group's hunks
+    /// (AD-113, D-239). Like a launch's outcome it is never dropped.
+    RecordApproval(Box<crate::workshop::review::SensitiveApproval>),
     /// How a granted launch ended (AD-81 step 3). It carries no deadline:
     /// the collector records it however late it comes, and never drops it
     /// (D-135, review F14).
@@ -412,6 +418,10 @@ pub enum AuthorAnswer {
     WorkshopRows(Box<(Vec<crate::registry::workshop::RunRecord>, Option<String>)>),
     /// One run's row, when the registry holds it.
     WorkshopRun(Option<Box<crate::registry::workshop::RunRecord>>),
+    /// One run's row and approvals, when the registry holds it.
+    WorkshopReview(Option<Box<crate::workshop::review::StoredReview>>),
+    /// How an approval was recorded (AD-113).
+    Approval(officina_core::workshop::review::ApprovalAnswer),
 }
 
 /// The collector's answer, or why there is none to give.
@@ -457,6 +467,7 @@ impl AuthorRequest {
                 | AuthorCommand::WorkshopInventory(_)
                 | AuthorCommand::WorkshopLaunched(_)
                 | AuthorCommand::WorkshopFollow(_)
+                | AuthorCommand::RecordApproval(_)
         ) && now + AUTHOR_HEADROOM >= self.deadline
     }
 }
@@ -1477,6 +1488,10 @@ fn answer_author<E: Emit>(
             .map(|row| AuthorAnswer::WorkshopRun(row.map(Box::new))),
         AuthorCommand::OpenReview(id) => {
             crate::workshop::review::open_on_collector(collector, registry, &id, now)
+        }
+        AuthorCommand::ReviewRow(id) => crate::workshop::review::stored_on_collector(registry, &id),
+        AuthorCommand::RecordApproval(approval) => {
+            crate::workshop::review::record_on_collector(collector, registry, &approval, now)
         }
         AuthorCommand::EditCard { card_id, change } => crate::orders::edit(
             cards,

@@ -816,6 +816,7 @@ fn recent(lines: &[JournalLine], now_ms: i64, rows: &[AutoRow]) -> Vec<RecentEnt
                 | JournalEntry::GatewaySummary(_)
                 | JournalEntry::ReviewPackage(_)
                 | JournalEntry::ReviewOpened(_)
+                | JournalEntry::SensitiveApproved(_)
                 | JournalEntry::OrchestratorStarted(_)
                 | JournalEntry::MeetingAnswer(_) => return None,
             };
@@ -1411,6 +1412,7 @@ mod tests {
                 | JournalKind::GatewaySummary
                 | JournalKind::ReviewPackage
                 | JournalKind::ReviewOpened
+                | JournalKind::SensitiveApproved
                 | JournalKind::OrchestratorStarted
                 | JournalKind::MeetingAnswer => continue,
             };

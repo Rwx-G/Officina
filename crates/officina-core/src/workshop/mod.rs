@@ -19,9 +19,11 @@ pub mod proxy;
 pub mod review;
 pub mod run;
 pub mod scan;
+pub mod sensitive;
 pub mod stream;
 pub mod tar;
 pub mod vector;
+pub mod view;
 
 /// The workshop's folder under the Officina home (AD-124): run folders,
 /// build contexts, the battery's mount and the empty hooks folder. A

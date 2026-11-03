@@ -52,6 +52,8 @@ pub struct Options {
     pub battery: bool,
     /// The project's repository uses SHA-256 object ids.
     pub sha256: bool,
+    /// Lines added to `[project.workshop]` (`review`, `sensitive_paths`).
+    pub project_workshop: &'static str,
 }
 
 impl Default for Options {
@@ -63,6 +65,7 @@ impl Default for Options {
             max_workers: 2,
             battery: true,
             sha256: false,
+            project_workshop: "",
         }
     }
 }
@@ -75,8 +78,9 @@ fn floor(project: &str, options: &Options) -> String {
         options.auth, options.upstream_proxy, options.max_workers
     );
     let mounts = if options.mount { "\".claude\"" } else { "" };
+    let extra = options.project_workshop;
     format!(
-        "schema = 2\n{workshop}[[project]]\nname = \"api\"\npath = \"{project}\"\n\n[project.workshop]\nmounts = [{mounts}]\nhosts = [\"index.crates.io\"]\n\n[[template]]\nname = \"bump\"\ndescription = \"Bump one dependency\"\nprojects = [\"api\"]\nprompt = \"Bump {{package}}.\"\n\n[template.params.package]\nvalues = [\"serde_json\"]\n\n[template.workshop]\nbase = [\"main\"]\nmax_minutes = 30\n"
+        "schema = 2\n{workshop}[[project]]\nname = \"api\"\npath = \"{project}\"\n\n[project.workshop]\nmounts = [{mounts}]\nhosts = [\"index.crates.io\"]\n{extra}\n[[template]]\nname = \"bump\"\ndescription = \"Bump one dependency\"\nprojects = [\"api\"]\nprompt = \"Bump {{package}}.\"\n\n[template.params.package]\nvalues = [\"serde_json\"]\n\n[template.workshop]\nbase = [\"main\"]\nmax_minutes = 30\n"
     )
 }
 

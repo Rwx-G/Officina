@@ -46,6 +46,7 @@
     "allow-send-answer",
     "allow-build-images",
     "allow-run-battery",
-    "allow-open-review"
+    "allow-open-review",
+    "allow-approve-sensitive"
   ]
 }

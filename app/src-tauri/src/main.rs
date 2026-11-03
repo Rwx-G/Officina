@@ -30,7 +30,7 @@ use officina_core::relay::auto::AutoMode;
 use officina_core::relay::view::RelayView;
 use officina_core::workshop::battery::BatteryAnswer;
 use officina_core::workshop::image::BuildAnswer;
-use officina_core::workshop::review::ReviewView;
+use officina_core::workshop::review::{ApprovalAnswer, ReviewView};
 use officina_host::collector::Collector;
 use officina_host::files::now_ms;
 use officina_host::focus::{
@@ -780,6 +780,43 @@ async fn open_review(state: State<'_, AppState>, run_id: String) -> Result<Revie
     .map_err(|e| IpcError::internal(e.to_string()))?
 }
 
+/// Approve on one sensitive group of a workshop package (AD-113, D-239):
+/// pointer only. The group's hunks, from the review's cache or recomputed
+/// on thread `workshop`, must still hash to `hunks_sha256`, the value the
+/// panel showed; the collector then records the approval and journals
+/// `sensitive_approved`.
+#[tauri::command]
+async fn approve_sensitive(
+    state: State<'_, AppState>,
+    run_id: String,
+    group_key: String,
+    hunks_sha256: String,
+) -> Result<ApprovalAnswer, IpcError> {
+    let sender = state
+        .collector()
+        .ok_or_else(|| IpcError::internal("the collector is not running"))?;
+    let runtime = state.workshop_runtime();
+    let home = state
+        .paths
+        .read()
+        .map(|paths| paths.officina_home.clone())
+        .map_err(|_| IpcError::internal("the paths lock is poisoned"))?;
+    let base_env = state.base_env.vars().to_vec();
+    tauri::async_runtime::spawn_blocking(move || {
+        officina_host::workshop::review::approve_sensitive(
+            &sender,
+            &runtime,
+            &home,
+            &base_env,
+            &run_id,
+            &group_key,
+            &hunks_sha256,
+        )
+    })
+    .await
+    .map_err(|e| IpcError::internal(e.to_string()))?
+}
+
 /// Stops or resumes the relay (FR-11, AD-34, D-26). Returns whether the
 /// state changed.
 #[tauri::command]
@@ -937,7 +974,8 @@ fn main() {
             send_answer,
             build_images,
             run_battery,
-            open_review
+            open_review,
+            approve_sensitive
         ])
         .build(tauri::generate_context!())
         .expect("failed to build the Officina window")

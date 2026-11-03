@@ -1,0 +1,151 @@
+{
+  "schema": 1,
+  "_doc": "Sensitive groups (AD-113, FR-11, D-246), replayed by crates/officina-core/tests/sensitive_vectors.rs. `patterns` holds one matching and one non-matching path per entry of workshop::sensitive::SENSITIVE_PATTERNS, and the test refuses a pattern without its case or a case without its pattern; it derives case and depth variants itself. `packages` lists a package's changed files in any order and the groups they give, file indices in the package's sorted order. Exempt from every formatter.",
+  "patterns": [
+    {"pattern": ".claude/**", "matches": ".claude/settings.json", "misses": "claude/settings.json"},
+    {"pattern": "CLAUDE.md", "matches": "CLAUDE.md", "misses": "docs/CLAUDE.md.bak"},
+    {"pattern": "CLAUDE.local.md", "matches": "CLAUDE.local.md", "misses": "CLAUDE.local.txt"},
+    {"pattern": "AGENTS.md", "matches": "AGENTS.md", "misses": "AGENTS.markdown"},
+    {"pattern": ".mcp.json", "matches": ".mcp.json", "misses": "mcp.json"},
+    {"pattern": ".git*", "matches": ".gitattributes", "misses": "src/x.git"},
+    {"pattern": ".github/**", "matches": ".github/workflows/ci.yml", "misses": "github/workflows/ci.yml"},
+    {"pattern": ".gitlab-ci.yml", "matches": ".gitlab-ci.yml", "misses": "gitlab-ci.yml"},
+    {"pattern": ".gitlab/**", "matches": ".gitlab/issue_templates/bug.md", "misses": "gitlab/bug.md"},
+    {"pattern": "azure-pipelines.yml", "matches": "azure-pipelines.yml", "misses": "azure-pipelines.yaml"},
+    {"pattern": "Jenkinsfile", "matches": "Jenkinsfile", "misses": "Jenkinsfile.groovy"},
+    {"pattern": "build.rs", "matches": "build.rs", "misses": "src/builder.rs"},
+    {"pattern": "package.json", "matches": "package.json", "misses": "package-lock.json"},
+    {"pattern": "pnpm-workspace.yaml", "matches": "pnpm-workspace.yaml", "misses": "pnpm-workspace.yml"},
+    {"pattern": ".npmrc", "matches": ".npmrc", "misses": "npmrc"},
+    {"pattern": ".pnpmfile.cjs", "matches": ".pnpmfile.cjs", "misses": "pnpmfile.cjs"},
+    {"pattern": ".yarnrc.yml", "matches": ".yarnrc.yml", "misses": ".yarnrc"},
+    {"pattern": "pyproject.toml", "matches": "pyproject.toml", "misses": "pyproject.toml.bak"},
+    {"pattern": "setup.py", "matches": "setup.py", "misses": "setup_utils.py"},
+    {"pattern": "setup.cfg", "matches": "setup.cfg", "misses": "setup.cfg.in"},
+    {"pattern": "Makefile", "matches": "Makefile", "misses": "Makefile.am"},
+    {"pattern": "justfile", "matches": "justfile", "misses": "justfile.txt"},
+    {"pattern": "Dockerfile*", "matches": "Dockerfile.dev", "misses": "docker/compose.yml"},
+    {"pattern": ".cargo/config.toml", "matches": ".cargo/config.toml", "misses": "cargo/config.toml"},
+    {"pattern": ".cargo/config", "matches": ".cargo/config", "misses": ".cargo/config.d"},
+    {"pattern": "Cargo.toml", "matches": "Cargo.toml", "misses": "Cargo.lock"},
+    {"pattern": "rust-toolchain.toml", "matches": "rust-toolchain.toml", "misses": "rust-toolchain.json"},
+    {"pattern": "rust-toolchain", "matches": "rust-toolchain", "misses": "rust-toolchains"},
+    {"pattern": "conftest.py", "matches": "conftest.py", "misses": "test_conftest.py"},
+    {"pattern": "tox.ini", "matches": "tox.ini", "misses": "tox.cfg"},
+    {"pattern": "noxfile.py", "matches": "noxfile.py", "misses": "noxfile_utils.py"},
+    {"pattern": "requirements*.txt", "matches": "requirements-dev.txt", "misses": "requirements.in"},
+    {"pattern": "ansible.cfg", "matches": "ansible.cfg", "misses": "ansible.yml"},
+    {"pattern": "library/**", "matches": "library/my_module.py", "misses": "libraries/my_module.py"},
+    {"pattern": "filter_plugins/**", "matches": "filter_plugins/f.py", "misses": "filter_plugin/f.py"},
+    {"pattern": "callback_plugins/**", "matches": "callback_plugins/c.py", "misses": "callbacks/c.py"},
+    {"pattern": ".vscode/**", "matches": ".vscode/settings.json", "misses": "vscode/settings.json"},
+    {"pattern": ".envrc", "matches": ".envrc", "misses": "envrc"},
+    {"pattern": ".pre-commit-config.yaml", "matches": ".pre-commit-config.yaml", "misses": ".pre-commit-config.yml"},
+    {"pattern": ".husky/**", "matches": ".husky/pre-commit", "misses": "husky/pre-commit"},
+    {"pattern": ".devcontainer/**", "matches": ".devcontainer/devcontainer.json", "misses": "devcontainer.json"},
+    {"pattern": "*.code-workspace", "matches": "team.code-workspace", "misses": "team.code-workspace.bak"},
+    {"pattern": ".idea/**", "matches": ".idea/workspace.xml", "misses": "idea/workspace.xml"}
+  ],
+  "packages": [
+    {
+      "name": "families",
+      "rules": {"review": "groups", "sensitive_paths": [], "floor_in_project": null},
+      "files": [
+        {"status": "M", "old_mode": "100644", "new_mode": "100644", "paths": ["src/lib.rs"]},
+        {"status": "A", "old_mode": "000000", "new_mode": "100644", "paths": [".claude/settings.json"]},
+        {"status": "M", "old_mode": "100644", "new_mode": "100644", "paths": [".github/workflows/ci.yml"]},
+        {"status": "M", "old_mode": "100644", "new_mode": "100644", "paths": [".gitignore"]},
+        {"status": "A", "old_mode": "000000", "new_mode": "100644", "paths": [".vscode/settings.json"]},
+        {"status": "M", "old_mode": "100644", "new_mode": "100644", "paths": ["Cargo.toml"]}
+      ],
+      "groups": [
+        {"key": "claude_config", "group": "claude_config", "files": [0]},
+        {"key": "git", "group": "git", "files": [2]},
+        {"key": "ci", "group": "ci", "files": [1]},
+        {"key": "toolchain_config", "group": "toolchain_config", "files": [4]},
+        {"key": "editor_shell", "group": "editor_shell", "files": [3]}
+      ]
+    },
+    {
+      "name": "rename",
+      "rules": {"review": "groups", "sensitive_paths": [], "floor_in_project": null},
+      "files": [
+        {"status": "R", "old_mode": "100644", "new_mode": "100644", "paths": ["docs/old.md", ".mcp.json"]},
+        {"status": "R", "old_mode": "100644", "new_mode": "100644", "paths": [".npmrc", "notes/npmrc.txt"]},
+        {"status": "R", "old_mode": "100644", "new_mode": "100644", "paths": ["docs/a.md", "docs/b.md"]}
+      ],
+      "groups": [
+        {"key": "claude_config", "group": "claude_config", "files": [2]},
+        {"key": "build_scripts", "group": "build_scripts", "files": [0]}
+      ]
+    },
+    {
+      "name": "modes",
+      "rules": {"review": "groups", "sensitive_paths": [], "floor_in_project": null},
+      "files": [
+        {"status": "A", "old_mode": "000000", "new_mode": "120000", "paths": ["link"]},
+        {"status": "M", "old_mode": "100644", "new_mode": "100755", "paths": ["run.sh"]},
+        {"status": "A", "old_mode": "000000", "new_mode": "160000", "paths": ["vendor/sub"]},
+        {"status": "D", "old_mode": "120000", "new_mode": "000000", "paths": ["old-link"]},
+        {"status": "M", "old_mode": "100755", "new_mode": "100755", "paths": ["bin/tool"]},
+        {"status": "A", "old_mode": "000000", "new_mode": "100755", "paths": ["new-tool"]}
+      ],
+      "groups": [
+        {"key": "git", "group": "git", "files": [5]},
+        {"key": "file_modes", "group": "file_modes", "files": [1, 2, 4]}
+      ]
+    },
+    {
+      "name": "8.3 alias",
+      "rules": {"review": "groups", "sensitive_paths": [], "floor_in_project": null},
+      "files": [
+        {"status": "A", "old_mode": "000000", "new_mode": "100644", "paths": ["PROGRA~1/x.txt"]},
+        {"status": "A", "old_mode": "000000", "new_mode": "100644", "paths": ["notes~draft.md"]},
+        {"status": "R", "old_mode": "100644", "new_mode": "100644", "paths": ["a.txt", "docs/GIT~2"]}
+      ],
+      "groups": [
+        {"key": "file_modes", "group": "file_modes", "files": [0, 1]}
+      ]
+    },
+    {
+      "name": "binary",
+      "rules": {"review": "groups", "sensitive_paths": [], "floor_in_project": null},
+      "files": [
+        {"status": "A", "old_mode": "000000", "new_mode": "100644", "paths": ["assets/logo.png"], "binary": true},
+        {"status": "M", "old_mode": "100644", "new_mode": "100644", "paths": ["docs/readme.txt"]}
+      ],
+      "groups": [
+        {"key": "binary", "group": "binary", "files": [0]}
+      ]
+    },
+    {
+      "name": "officina and project",
+      "rules": {"review": "groups", "sensitive_paths": ["deploy/**", "*.pem"], "floor_in_project": "ops/officina.toml"},
+      "files": [
+        {"status": "M", "old_mode": "100644", "new_mode": "100644", "paths": ["OPS/Officina.toml"]},
+        {"status": "A", "old_mode": "000000", "new_mode": "100644", "paths": ["deploy/hosts.ini"]},
+        {"status": "A", "old_mode": "000000", "new_mode": "100644", "paths": ["src/deploy.rs"]},
+        {"status": "A", "old_mode": "000000", "new_mode": "100644", "paths": ["certs/Server.PEM"]},
+        {"status": "A", "old_mode": "000000", "new_mode": "100644", "paths": ["officina.toml"]}
+      ],
+      "groups": [
+        {"key": "officina", "group": "officina", "files": [0]},
+        {"key": "project", "group": "project", "files": [1, 2]}
+      ]
+    },
+    {
+      "name": "review all",
+      "rules": {"review": "all", "sensitive_paths": [], "floor_in_project": null},
+      "files": [
+        {"status": "M", "old_mode": "100644", "new_mode": "100644", "paths": ["b/c.txt"]},
+        {"status": "M", "old_mode": "100644", "new_mode": "100644", "paths": [".github/x.yml"]},
+        {"status": "A", "old_mode": "000000", "new_mode": "100755", "paths": ["a.txt"]}
+      ],
+      "groups": [
+        {"key": "file:0", "group": "file", "files": [0]},
+        {"key": "file:1", "group": "file", "files": [1]},
+        {"key": "file:2", "group": "file", "files": [2]}
+      ]
+    }
+  ]
+}

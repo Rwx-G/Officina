@@ -1201,6 +1201,41 @@ change is right. Reading the diff before Import is yours. Receive on a run
 list whole and the diff (cut at 256 KiB), every worker text untrusted; the
 first Receive of a package is journaled `review_opened`.
 
+#### Sensitive groups
+
+Sensitive groups direct your attention; they are not the boundary. Review
+an imported branch as you would a pull request from a stranger: it runs
+with your identity the next time you build, test or open it.
+
+A package that changes a path configuring Claude Code, git, CI, a build or
+package script, a toolchain, your editor or shell, or the floor file (when
+it lies in the project) falls in that family's group, and so does a path
+matching the project's own `sensitive_paths`. The patterns live in core's
+`SENSITIVE_PATTERNS`, the only list, each with a case in
+`tests/vectors/sensitive.json`; a pattern without `/` matches a file name
+at any depth, one with `/` a trailing run of folders, case-insensitively,
+and both sides of a rename count. Three more groups come from what git
+reports rather than from names: `file_modes` (a new symbolic link, an
+executable bit added, or a path segment shaped as a Windows 8.3 short name
+such as `GIT~1`), `binary` (a blob git reads as binary) and `git` (a
+submodule entry). With `[project.workshop] review = "all"`, every changed
+file is its own group instead, one approval per file: use it for an
+infrastructure repository, where every line runs on a server with your
+key.
+
+Each group shows its hunks inline: for each file, what `git diff --raw`
+reported (status, modes, blob ids, paths), then the diff of its two blobs.
+Approve is a pointer click and binds to the SHA-256 of the exact bytes
+shown: if the hunks computed again differ, the approval is refused
+`hunks_changed`, and an approval counts only for the hash it was given. A
+group whose hunks pass 1 MiB cannot be approved, so its package can only be
+discarded. An approval holds for one package and is journaled
+`sensitive_approved`. Import is enabled once the run is in review and
+every group is approved; the review view names each group still waiting.
+After 10 decided packages of a template, a group present in more than half
+of them gives that template a notice: keep the group, or narrow the
+template.
+
 ### The workshop credential
 
 A token floor's credential is the Windows Credential Manager entry

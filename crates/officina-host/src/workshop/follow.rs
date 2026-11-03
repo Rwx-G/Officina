@@ -31,6 +31,7 @@ use officina_core::workshop::output::{
 use officina_core::workshop::run::{
     FinishCause, Recorded, RemovalCause, RunFacts, RunRefusal, RunState, RunTexts, WorkshopOutcome,
 };
+use officina_core::workshop::sensitive::PackageGroup;
 use officina_core::workshop::stream::{HookCounts, MAX_LINE_BYTES};
 use officina_core::workshop::vector::ContainerRole;
 
@@ -953,7 +954,8 @@ pub(crate) fn record(
             collector.set_workshop_orphans(orphans.clone());
         }
         FollowEvent::Collected(collected) => {
-            record_collected(registry, collected, now_ms, &mut lines)?;
+            let groups = collected_groups(collector, registry, collected)?;
+            record_collected(registry, collected, &groups, now_ms, &mut lines)?;
         }
     }
     if lines.is_empty() {
@@ -967,13 +969,37 @@ pub(crate) fn record(
     })
 }
 
+/// The groups of a collected package that passed every check (AD-113),
+/// under its project's rules as the approved catalogue holds them; none
+/// for any other outcome.
+fn collected_groups(
+    collector: &Collector,
+    registry: &mut WindowRegistry,
+    collected: &crate::workshop::collect::Collected,
+) -> Result<Option<Vec<PackageGroup>>, officina_core::ipc::IpcError> {
+    use officina_core::workshop::sensitive::{SensitiveRules, groups};
+    let Some(changes) = &collected.changes else {
+        return Ok(None);
+    };
+    let Some(row) = registry.workshop_run(&collected.run_id)? else {
+        return Ok(None);
+    };
+    let rules = match collector.relay().read_approved().approved() {
+        Some(approved) => SensitiveRules::of_approved(&approved.canonical, &row.project),
+        None => SensitiveRules::default(),
+    };
+    Ok(Some(groups(changes, &rules)))
+}
+
 /// The collector's half of a collection (AD-110, AD-120): the row moved
-/// to what the run produced, its facts, texts and package fields, and the
-/// lines it owes: `gateway_summary`, `workshop_removed` (`collected`),
-/// `review_package` for a package, and its one `workshop_finished`.
+/// to what the run produced, its facts, texts, package fields and groups,
+/// and the lines it owes: `gateway_summary`, `workshop_removed`
+/// (`collected`), `review_package` for a package, and its one
+/// `workshop_finished`.
 fn record_collected(
     registry: &mut WindowRegistry,
     collected: &crate::workshop::collect::Collected,
+    groups: &Option<Vec<PackageGroup>>,
     now_ms: i64,
     lines: &mut Vec<JournalEntry>,
 ) -> Result<(), officina_core::ipc::IpcError> {
@@ -995,12 +1021,18 @@ fn record_collected(
         _ => RunEvent::CollectionFailed,
     };
     let summary = &collected.summary;
+    let groups = groups.as_deref().unwrap_or_default();
+    let groups_json = (cause.is_none() && collected.changes.is_some())
+        .then(|| serde_json::to_string(groups).unwrap_or_default());
+    let mut families: Vec<_> = groups.iter().map(|g| g.group).collect();
+    families.sort();
+    families.dedup();
     let package = crate::registry::workshop::PackageFields {
         package_sha256: collected.bundle_sha256.as_deref(),
         tip_commit: tip.as_deref(),
         commits_past_base: commits,
         files_changed: collected.files_changed,
-        groups_json: None,
+        groups_json: groups_json.as_deref(),
         quarantine_cause: cause.map(|c| c.code()),
     };
     let moved = registry.record_workshop_collection(
@@ -1062,7 +1094,8 @@ fn record_collected(
             files: collected.files_changed.unwrap_or(0),
             insertions: collected.insertions.unwrap_or(0),
             deletions: collected.deletions.unwrap_or(0),
-            groups: 0,
+            groups: u32::try_from(groups.len()).unwrap_or(u32::MAX),
+            sensitive: families,
             outcome: if cause.is_some() {
                 PackageState::Quarantined
             } else {

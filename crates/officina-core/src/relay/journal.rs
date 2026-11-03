@@ -156,6 +156,7 @@ pub enum JournalEntry {
     GatewaySummary(Box<GatewaySummary>),
     ReviewPackage(ReviewPackage),
     ReviewOpened(ReviewOpened),
+    SensitiveApproved(SensitiveApproved),
 }
 
 closed_enum! {
@@ -195,6 +196,7 @@ closed_enum! {
         GatewaySummary,
         ReviewPackage,
         ReviewOpened,
+        SensitiveApproved,
     }
 }
 
@@ -233,6 +235,7 @@ impl JournalEntry {
             JournalEntry::GatewaySummary(_) => JournalKind::GatewaySummary,
             JournalEntry::ReviewPackage(_) => JournalKind::ReviewPackage,
             JournalEntry::ReviewOpened(_) => JournalKind::ReviewOpened,
+            JournalEntry::SensitiveApproved(_) => JournalKind::SensitiveApproved,
         }
     }
 }
@@ -768,6 +771,11 @@ pub struct ReviewPackage {
     pub cause: Option<crate::workshop::package::QuarantineCause>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub credential_locations: Option<u32>,
+    /// The families of the package's groups, each once (AD-113): what
+    /// FR-11's notice counts per template. Absent from lines before v0.6's
+    /// story 6.15, which read as none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sensitive: Vec<crate::workshop::sensitive::SensitiveGroup>,
 }
 
 /// The author's first Receive on a run's review (AD-120): PRD section 7's
@@ -775,6 +783,16 @@ pub struct ReviewPackage {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReviewOpened {
     pub run_id: String,
+}
+
+/// The author approved one sensitive group of a package against the
+/// SHA-256 of the hunks shown (AD-113, AD-120): `group` is its key, never
+/// worker text.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SensitiveApproved {
+    pub run_id: String,
+    pub group: String,
+    pub hunks_sha256: String,
 }
 
 /// A refusal a gateway logged (AD-120): a run's, or a battery's (story
@@ -1182,6 +1200,7 @@ mod tests {
             JournalKind::ReviewOpened => JournalEntry::ReviewOpened(ReviewOpened {
                 run_id: "0123456789abcdef0123456789abcdef".into(),
             }),
+            JournalKind::SensitiveApproved => JournalEntry::SensitiveApproved(sensitive_approved()),
             JournalKind::PromptDecided => JournalEntry::PromptDecided(PromptDecided {
                 session_id: "0f1e2d3c-4b5a-4978-8796-a5b4c3d2e1f0".into(),
                 tool_name: None,
@@ -1665,7 +1684,57 @@ mod tests {
             outcome: crate::workshop::package::PackageState::Review,
             cause: None,
             credential_locations: None,
+            sensitive: Vec::new(),
         }
+    }
+
+    fn sensitive_approved() -> SensitiveApproved {
+        SensitiveApproved {
+            run_id: "0123456789abcdef0123456789abcdef".into(),
+            group: "file:3".into(),
+            hunks_sha256: "d".repeat(64),
+        }
+    }
+
+    /// Story 6.15 (AD-120, D-249): `sensitive_approved` reads back with its
+    /// group's key and hash; 6.15 is its first writer.
+    #[test]
+    fn sensitive_approved_round_trips() {
+        for group in ["file:3", "claude_config"] {
+            let entry = JournalEntry::SensitiveApproved(SensitiveApproved {
+                group: group.into(),
+                ..sensitive_approved()
+            });
+            let line = JournalLine::new(4, entry.clone()).to_line();
+            let value: serde_json::Value = serde_json::from_str(&line).unwrap();
+            assert_eq!(value["kind"], "sensitive_approved");
+            assert_eq!(value["group"], group);
+            assert_eq!(
+                parse_line(line.trim_end()),
+                ParsedLine::Line(JournalLine::new(4, entry))
+            );
+        }
+    }
+
+    /// Story 6.15 (AD-113): `review_package` carries its groups' families,
+    /// and a line written before them reads as none.
+    #[test]
+    fn review_package_carries_its_families() {
+        use crate::workshop::sensitive::SensitiveGroup;
+        let entry = JournalEntry::ReviewPackage(ReviewPackage {
+            groups: 2,
+            sensitive: vec![SensitiveGroup::Ci, SensitiveGroup::File],
+            ..review_package()
+        });
+        let line = JournalLine::new(4, entry.clone()).to_line();
+        let value: serde_json::Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(value["sensitive"], serde_json::json!(["ci", "file"]));
+        assert_eq!(
+            parse_line(line.trim_end()),
+            ParsedLine::Line(JournalLine::new(4, entry))
+        );
+        let before = JournalLine::new(4, JournalEntry::ReviewPackage(review_package())).to_line();
+        assert!(!before.contains("sensitive"));
     }
 
     /// Story 6.13 (AD-120): `gateway_summary` reads back with and without

@@ -6,6 +6,7 @@ import { emit } from "@tauri-apps/api/event";
 import type { AutoMode } from "./lib/generated/AutoMode";
 import type { BatteryAnswer } from "./lib/generated/BatteryAnswer";
 import type { Board } from "./lib/generated/Board";
+import type { ApprovalAnswer } from "./lib/generated/ApprovalAnswer";
 import type { BuildAnswer } from "./lib/generated/BuildAnswer";
 import type { CardAnswer } from "./lib/generated/CardAnswer";
 import type { ConfirmItem } from "./lib/generated/ConfirmItem";
@@ -111,6 +112,8 @@ export function installE2eMock(): void {
           return runBattery();
         case "open_review":
           return openReview((args as { runId: string }).runId);
+        case "approve_sensitive":
+          return approveSensitive();
         case "send_answer":
           return answer((args as { proposalId?: string }).proposalId ?? null);
         default:
@@ -295,7 +298,15 @@ function openReview(runId: string): Promise<ReviewView> {
     commits: [],
     files: [],
     diff: null,
+    groups: [],
+    readiness: { ready: false, reasons: [{ cause: "not_in_review", group: null }] },
   });
+}
+
+/** Mirrors the answer to `approve_sensitive` (AD-113): the answer the
+ *  test sets in `__officinaApprovalAnswer`, else `approved`. */
+function approveSensitive(): Promise<ApprovalAnswer> {
+  return Promise.resolve(window.__officinaApprovalAnswer ?? { outcome: "approved" });
 }
 
 /** Mirrors the answer to `start_orchestrator` (AD-89): the answer the

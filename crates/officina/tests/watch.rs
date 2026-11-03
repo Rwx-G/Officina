@@ -4709,6 +4709,25 @@ fn the_collector_never_spawns_docker() {
         handle.sender.send(CollectorMsg::RelayChanged).unwrap();
     }
     let _ = officina_host::watch::ask(&handle.sender, AuthorCommand::ListArchived, AUTHOR_WAIT);
+    // An approval's collector half (story 6.15, D-239): the stored row and
+    // the record; the hunks are thread `workshop`'s.
+    let run_id = "0123456789abcdef0123456789abcdef".to_owned();
+    let _ = officina_host::watch::ask(
+        &handle.sender,
+        AuthorCommand::ReviewRow(run_id.clone()),
+        AUTHOR_WAIT,
+    );
+    let _ = officina_host::watch::ask(
+        &handle.sender,
+        AuthorCommand::RecordApproval(Box::new(
+            officina_host::workshop::review::SensitiveApproval {
+                run_id,
+                group_key: "build_scripts".to_owned(),
+                hunks_sha256: "0".repeat(64),
+            },
+        )),
+        AUTHOR_WAIT,
+    );
     std::thread::sleep(SETTLE);
     stop(handle);
     assert!(engine.log().is_empty(), "docker ran: {:?}", engine.log());
