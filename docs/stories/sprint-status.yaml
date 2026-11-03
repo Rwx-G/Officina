@@ -213,7 +213,8 @@ stories:
   - {id: "6.12", file: story-6.12-follow-limits-and-reconciliation.md, slice: A, status: review}
   # 6.13: done; the first real run to a package is gate 3's window half (6.19); D-1167 to D-1172.
   - {id: "6.13", file: story-6.13-collection-verification-and-no-change.md, slice: A, status: review}
-  - {id: "6.14", file: story-6.14-credential-scan.md, slice: A, status: approved}
+  # 6.14: done; a blob's location is its path (D-1173); a login run has no scan source until 6.26 (D-1175); D-1173 to D-1177.
+  - {id: "6.14", file: story-6.14-credential-scan.md, slice: A, status: review}
   - {id: "6.15", file: story-6.15-sensitive-groups-and-approvals.md, slice: A, status: approved}
   - {id: "6.16", file: story-6.16-import-discard-and-template-table.md, slice: A, status: approved}
   - {id: "6.17", file: story-6.17-stop-all-and-resume.md, slice: A, status: approved}

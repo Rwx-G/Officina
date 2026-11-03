@@ -1,6 +1,6 @@
 # Story 6.14: The credential scan and the credential end to end
 
-**Status:** Approved
+**Status:** Review
 
 ## Story
 
@@ -17,8 +17,8 @@ so that a careless leak is quarantined and replaced before it reaches my reposit
 
 ## Tasks
 
-- [ ] The collection scan pass in `crates/officina-host/src/workshop/verify.rs`: scope with author and committer fields; placeholders; deletion; needles dropped (AC 1, 2)
-- [ ] `crates/officina/tests/credential.rs` with the hostile fixture stream and `inspect` state (AC 3); README (AC 4)
+- [x] The collection scan pass: the package's records in `crates/officina-host/src/workshop/verify.rs` (`package_records`), the pass in `crates/officina-host/src/workshop/collect.rs` (`TextRecords`, `scan_pass`), `ScanSource`, `Place`, `apply` and `locations` in core's `scan`; scope with author and committer fields; placeholders; deletion; needles dropped (AC 1, 2)
+- [x] `crates/officina/tests/credential.rs` with the hostile fixture stream and `inspect` state (AC 3); README (AC 4)
 
 ## Dev Notes
 
@@ -37,9 +37,31 @@ so that a careless leak is quarantined and replaced before it reaches my reposit
 
 ### Debug Log
 
+- The lead's guess for the perf false failure (perf tests loading each other in parallel) did not hold: every perf test holds `SERIAL`. The hook's own cost compared two blocks timed one after the other; it is now timed in pairs (D-1177).
+
 ### Completion Notes
 
+- AC 1: `workshop_collect.rs::{a_token_in_a_blob_quarantines, a_token_in_a_commit_message_quarantines, a_token_in_a_path_quarantines, a_token_in_an_author_email_quarantines, a_wrapped_base64_token_in_a_blob_quarantines, a_token_in_the_report_tail_is_found, a_token_in_a_refused_host_is_found, a_token_in_a_no_change_run_is_replaced, needles_are_dropped_after_collection, ranges_from_any_source_are_applied_alike}`, each over the raw, base64 and hex forms derived from the seeded value (a refused host skips the base64 form, whose `+`, `/` and `=` a host name cannot hold); `each_quarantine_cause_from_a_crafted_package` covers `credential_found`; core `scan::tests::{apply_cuts_and_merges_foreign_ranges, locations_never_carry_the_value}`.
+- AC 2: `workshop_collect.rs::{found_deletes_out_and_verify_at_once, stored_texts_hold_the_placeholder_not_the_value, the_revoke_advice_outlives_the_texts}`; `review_package` carries the count. A blob's location is its path, not its commit and path (D-1173). The card's and the review panel's revoke sentence are 6.18 and 6.19's surfaces (D-1176); the view carries the count and the places.
+- AC 3: `credential.rs::{the_value_is_nowhere_after_a_full_run, the_value_is_nowhere_after_a_quarantine, the_value_is_nowhere_while_the_run_is_live, the_value_is_nowhere_after_a_restart}`: every file under the test home (registry, WAL, journal, logs, run folders), the run's row, the review view, the card and the launch answer, and the fake engine's call log, searched with core's `find` over every needle form; the credential's name on the worker's `create` only. The Workshop view does not exist yet (6.18), and the `Board` is not read by this test.
+- AC 4: README, the workshop's collection section: what the scan catches, careless leaks only, the revoke advice with E98's unknown place, the rotation limit, a `login` run until its scanner.
+- A `login` run has no scan source until 6.26 (D-1175).
+
 ## File List
+
+- `crates/officina-core/src/workshop/scan.rs`
+- `crates/officina-core/src/workshop/package.rs`
+- `crates/officina-core/src/workshop/review.rs`
+- `crates/officina-core/src/untrusted.rs`
+- `crates/officina-core/tests/bundle_vectors.rs`
+- `crates/officina-host/src/workshop/verify.rs`
+- `crates/officina-host/src/workshop/collect.rs`
+- `crates/officina-host/src/workshop/follow.rs`
+- `crates/officina-host/src/workshop/review.rs`
+- `crates/officina/tests/workshop_collect.rs`
+- `crates/officina/tests/credential.rs`
+- `app/src/lib/generated/QuarantineCause.ts`, `app/src/lib/generated/ReviewFacts.ts`, `app/src/e2e-mock.ts`
+- `README.md`, `CHANGELOG.md`, `docs/stories/epic-6-decisions.md`, `docs/stories/sprint-status.yaml`
 
 ## Change Log
 
@@ -47,3 +69,4 @@ so that a careless leak is quarantined and replaced before it reaches my reposit
 - 2026-10-28 reworked after review: `scan` itself moved to 6.11, where launch and following need it first; the end-to-end search covers a forged refused host, a wildcard-allowed host, a mid-run tail and a restart (F2) and a seeded `Config.Env` (F14); author and committer fields, wrapped base64, the rotation limit (F15); the extra-file route closed by 6.13's allow-list (F1)
 - 2026-10-29 research-note entries named by subject, no number reserved (D-600)
 - 2026-10-29 the owner's answers: the pass applies byte ranges from a `ScanSource`, host needles or story 6.26's `Scanner` for a `login` run; `scan` is story 6.7's (D-609)
+- 2026-11-03 implemented (D-1173 to D-1177); status review
