@@ -3,7 +3,7 @@
 // theme set before the app mounts, and the header logo following it. Token
 // values are read from the page's own style sheet, never retyped.
 import { expect, test, type Page } from "@playwright/test";
-import { loadBoard, openBoard } from "./fixtures";
+import { loadBoard, openBoard, stylesheetApplied } from "./fixtures";
 import { VIEW_STORAGE_KEY, defaultViewState, serialiseViewState } from "../src/lib/view.svelte";
 import type { Theme } from "../src/lib/theme";
 
@@ -93,6 +93,7 @@ test.describe("themes", () => {
       expect(await page.evaluate(() => document.documentElement.getAttribute("data-theme"))).toBe(manual);
       await expectTheme(page, manual);
       await page.reload();
+      await stylesheetApplied(page);
       await page.getByTestId("column-needs_you").waitFor();
       await expect(themeSwitch(page)).toHaveAttribute("data-theme-choice", manual);
       await expectTheme(page, manual);

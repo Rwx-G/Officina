@@ -113,6 +113,17 @@ async function load(
     [board, focus, relay, registry, stored] as const,
   );
   await page.goto("/");
+  await stylesheetApplied(page);
+}
+
+/** Waits until the app stylesheet's tokens resolve on the root. Under a
+ *  loaded run the window drew before them once: the meeting panel measured
+ *  transparent, `--color-surface` empty. Every colour a spec measures goes
+ *  through these tokens, so a navigation waits for them first. */
+export async function stylesheetApplied(page: Page): Promise<void> {
+  await expect
+    .poll(() => page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue("--color-surface").trim()))
+    .not.toBe("");
 }
 
 /** Opens the board with `board` as the backend's answer and the clock frozen

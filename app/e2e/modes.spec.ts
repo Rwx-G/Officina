@@ -2,7 +2,7 @@
 // the view switch's names, the mode switch, `m`, the stored mode and its
 // defaults, and the banners above the sessions area.
 import { expect, test, type Page } from "@playwright/test";
-import { calls, loadBoard, loadRelay, openBoard, openScene, openWalkingScene, sceneSettled, transitionsDone } from "./fixtures";
+import { calls, loadBoard, loadRelay, openBoard, openScene, openWalkingScene, sceneSettled, stylesheetApplied, transitionsDone } from "./fixtures";
 import { DEFAULT_WALKING, VIEW_STORAGE_KEY, defaultViewState, readViewState, serialiseViewState } from "../src/lib/view.svelte";
 import { FOCUS_REPEAT_GUARD_MS } from "../src/lib/board.svelte";
 import type { Board } from "../src/lib/generated/Board";
@@ -32,6 +32,7 @@ async function openFocus(page: Page, board: Board): Promise<void> {
   await page.clock.install({ time: board.generated_at_ms });
   await page.addInitScript((b) => (window.__officinaBoard = b), board);
   await page.goto("/");
+  await stylesheetApplied(page);
   await expect(focusList(page)).toBeVisible();
 }
 
