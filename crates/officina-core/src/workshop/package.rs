@@ -28,7 +28,8 @@ pub const MAX_INFLATED_BYTES: u64 = 512 * 1024 * 1024;
 
 closed_enum! {
     #[serde(rename_all = "snake_case")]
-    /// Why a package is quarantined (AD-111); story 6.14 adds the scan's.
+    /// Why a package is quarantined: host git's checks (AD-111), or the
+    /// credential scan's (AD-112), which collection decides after them.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
     #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
     pub enum QuarantineCause {
@@ -38,6 +39,7 @@ closed_enum! {
         WrongBase,
         ExtraRef,
         MountCommitted,
+        CredentialFound,
     }
 }
 

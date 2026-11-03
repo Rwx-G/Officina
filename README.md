@@ -1173,6 +1173,27 @@ line for a package, and one `workshop_finished` per run. With
 `upstream_proxy` set, doctor shows the upstream's state the newest run's
 gateway found, or unknown before any run.
 
+Before you see anything a run hands back, collection searches it for the
+run's credential: raw, in base64 at every alignment (also when wrapped at
+76 columns) and in hex. It searches every blob, path and commit message
+past the base of a package that passed every check (a quarantined one is
+never imported, and its objects are not read past a size bound), each
+commit's author and committer, the report's tail and
+the stream texts kept, the hosts the gateway refused or allowed, and the
+manifest, for every outcome, `no_change` and `failed` included. A value
+found quarantines the package `credential_found` and deletes its `out` and
+`verify.git` at once; every text Officina keeps holds `[credential]` in its
+place; the run records where it was found (a file's path, a commit, the
+author lines, the report, a gateway line), never the value, and how many
+places, which outlives the texts. **Revoke that token and store a new
+one**: a value the scan found has left the worker. Where your account lets
+you revoke a `setup-token` token is not known yet (research note E98). The
+scan catches careless leaks only: a worker steered to leak can send the
+value through `api.anthropic.com`, which no scan sees. A run kept over a
+credential rotation is searched for the new value only. A `login` run is
+not searched on the host, which never reads the login: until its scanner
+lands, its texts are not kept and its refusals not journaled.
+
 The boundary ends at the package: verification proves what the package
 holds and that it reaches no further than the run's branch, not that its
 change is right. Reading the diff before Import is yours. Receive on a run

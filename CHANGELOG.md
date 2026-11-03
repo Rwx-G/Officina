@@ -8,6 +8,16 @@ project uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- The credential scan (v0.6, story 6.14): collection searches every blob,
+  path, commit message, author and committer past the base, the report's
+  tail, the stream texts kept, the gateway's hosts and the manifest for
+  the run's credential (raw, base64 at every alignment, wrapped or not, and
+  hex), for every outcome. A value found quarantines the package
+  `credential_found`, deletes its `out` and `verify.git` at once, replaces
+  the value with `[credential]` in every text kept, and records where it
+  was found and how many places, never the value; the review view carries
+  the count after the texts are cleared. Refusals read without needles are
+  journaled once the scan replaced their hosts.
 - Collection, host verification and the run's outcome (v0.6, story 6.13):
   once a worker exits, the window stops its gateway, packages the run in a
   separate packer container (no network, no credential, no mount), streams

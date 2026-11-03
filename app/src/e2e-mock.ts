@@ -289,6 +289,8 @@ function openReview(runId: string): Promise<ReviewView> {
       insertions: null,
       deletions: null,
       collect_failed: null,
+      credential_locations: null,
+      credential_places: [],
     },
     commits: [],
     files: [],

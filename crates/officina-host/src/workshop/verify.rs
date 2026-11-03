@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 
 use officina_core::workshop::bundle::{MAX_HEADER_BYTES, parse_header};
 use officina_core::workshop::package::{Assessed, Expected, Outputs, PackageAssessment, assess};
+use officina_core::workshop::scan::{Place, ScanRecord};
 
 use crate::workshop::inventory::WorkshopGit;
 
@@ -220,6 +221,109 @@ pub fn raw_paths(out: &[u8]) -> Vec<String> {
         }
     }
     paths
+}
+
+/// Every record of AD-112's package scope past `base` up to `tip`: each
+/// path `rev-list --objects` names, each tree's listing (names a path
+/// line cannot carry whole), each blob's content, each commit's header
+/// (author and committer, D-237) and message. Run after step 7, so the
+/// objects read here inflate within its bound.
+pub fn package_records(
+    git: &WorkshopGit,
+    scratch: &Path,
+    base: &str,
+    tip: &str,
+) -> Result<Vec<ScanRecord>, VerifyError> {
+    let listed = git
+        .output(
+            scratch,
+            &["rev-list", "--objects", &format!("{base}..{tip}")],
+        )
+        .map_err(VerifyError)?;
+    let mut records = Vec::new();
+    let mut path_of: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    let mut ids = String::new();
+    for line in listed.split(|b| *b == b'\n').filter(|l| !l.is_empty()) {
+        let (id, path) = match line.iter().position(|b| *b == b' ') {
+            Some(at) => (&line[..at], Some(&line[at + 1..])),
+            None => (line, None),
+        };
+        let Some(id) = std::str::from_utf8(id)
+            .ok()
+            .filter(|id| officina_core::workshop::package::object_id(id).is_some())
+        else {
+            records.push(ScanRecord {
+                place: Place::Path,
+                bytes: line.to_vec(),
+            });
+            continue;
+        };
+        if let Some(path) = path {
+            path_of.entry(id.to_owned()).or_insert(records.len());
+            records.push(ScanRecord {
+                place: Place::Path,
+                bytes: path.to_vec(),
+            });
+        }
+        ids.push_str(id);
+        ids.push('\n');
+    }
+    let ran = crate::workshop::git::run(
+        &git.git,
+        scratch,
+        &["cat-file", "--batch"],
+        &git.base_env,
+        &git.hooks_dir,
+        Some(ids.into_bytes()),
+    )
+    .map_err(|e| VerifyError(e.to_string()))?;
+    if !ran.status.success() {
+        return Err(VerifyError("cat-file --batch".to_owned()));
+    }
+    let mut rest = ran.stdout.as_slice();
+    while !rest.is_empty() {
+        let end = rest
+            .iter()
+            .position(|b| *b == b'\n')
+            .ok_or_else(|| VerifyError("cat-file --batch header".to_owned()))?;
+        let header = String::from_utf8_lossy(&rest[..end]).into_owned();
+        let fields: Vec<&str> = header.split(' ').collect();
+        let [id, kind, size] = fields.as_slice() else {
+            return Err(VerifyError(format!("cat-file --batch: {header}")));
+        };
+        let size: usize = size
+            .parse()
+            .map_err(|_| VerifyError(format!("cat-file --batch: {header}")))?;
+        let content = rest
+            .get(end + 1..end + 1 + size)
+            .ok_or_else(|| VerifyError("cat-file --batch content".to_owned()))?;
+        rest = rest.get(end + 2 + size..).unwrap_or_default();
+        match *kind {
+            "commit" => {
+                let split = content
+                    .windows(2)
+                    .position(|w| w == b"\n\n")
+                    .unwrap_or(content.len());
+                records.push(ScanRecord {
+                    place: Place::Author((*id).to_owned()),
+                    bytes: content[..split].to_vec(),
+                });
+                records.push(ScanRecord {
+                    place: Place::CommitMessage((*id).to_owned()),
+                    bytes: content.get(split..).unwrap_or_default().to_vec(),
+                });
+            }
+            "blob" => records.push(ScanRecord {
+                place: Place::File(path_of.get(*id).copied()),
+                bytes: content.to_vec(),
+            }),
+            _ => records.push(ScanRecord {
+                place: Place::Path,
+                bytes: content.to_vec(),
+            }),
+        }
+    }
+    Ok(records)
 }
 
 /// The inflated size of every object past the base (AD-111 step 7):

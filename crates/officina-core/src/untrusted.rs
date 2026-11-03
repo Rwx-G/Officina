@@ -126,6 +126,12 @@ impl<T: AsRef<str>> Untrusted<T> {
         DisplayText(self.0.as_ref())
     }
 
+    /// The text's bytes for the credential scan, and nothing else
+    /// (AD-112): searched, never shown.
+    pub fn scan_bytes(&self) -> &[u8] {
+        self.0.as_ref().as_bytes()
+    }
+
     /// How many characters the text holds.
     ///
     /// ```

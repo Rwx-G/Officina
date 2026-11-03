@@ -10,15 +10,20 @@ use std::io::Write;
 use std::path::{Component, Path, PathBuf};
 
 use officina_core::relay::StreamHash;
+use officina_core::untrusted::Untrusted;
 use officina_core::workshop::engine::EngineCall;
+use officina_core::workshop::gateway::MAX_LINE_HOST_CHARS;
 use officina_core::workshop::launch::RunPlan;
 use officina_core::workshop::names::{RunId, RunNames, run_labels};
-use officina_core::workshop::output::clean_host;
+use officina_core::workshop::output::Refusal;
 use officina_core::workshop::package::{
     Expected, MAX_PACKAGE_STREAM_BYTES, PackageAssessment, QuarantineCause, outcome,
 };
 use officina_core::workshop::review::parse_shortstat;
-use officina_core::workshop::run::{CollectFailure, FinishCause, Recorded, WorkshopOutcome};
+use officina_core::workshop::run::{
+    CollectFailure, FinishCause, Recorded, RunRefusal, RunTexts, WorkshopOutcome,
+};
+use officina_core::workshop::scan::{Needles, ScanRecord, ScanSource, apply, locations};
 use officina_core::workshop::tar::{PackageError, PackageReader};
 use officina_core::workshop::vector::{ContainerRole, WORK_DIR, packer};
 
@@ -26,10 +31,10 @@ use crate::process::StreamError;
 use crate::registry::workshop::RunRecord;
 use crate::watch::{AUTHOR_WAIT, AuthorAnswer, AuthorCommand, ask};
 use crate::workshop::engine::{ResolvedDocker, StreamOutError, execute, stream_out};
-use crate::workshop::follow::{FollowContext, FollowEvent, RunSummary};
+use crate::workshop::follow::{FollowContext, FollowEvent, Followed, RunSummary, fresh_needles};
 use crate::workshop::inventory::WorkshopGit;
-use crate::workshop::launch::run_dir;
-use crate::workshop::verify::{Received, SCRATCH_DIR, scratch, verify_with_paths};
+use crate::workshop::launch::{RunNeedles, run_dir};
+use crate::workshop::verify::{Received, SCRATCH_DIR, package_records, scratch, verify_with_paths};
 
 /// The one file collection writes from a package, under a name Officina
 /// chooses (D-229).
@@ -74,6 +79,8 @@ pub fn checked_target(out_dir: &Path, name: &str) -> Result<PathBuf, String> {
 pub struct Unpacked {
     pub received: Received,
     pub bundle_sha256: Option<String>,
+    /// `manifest.json`, kept in memory for the scan (AD-112).
+    pub manifest: Option<Vec<u8>>,
 }
 
 /// Writes a package stream into `out_dir` as it comes: core's reader
@@ -147,6 +154,7 @@ impl PackageWriter {
         }
         Ok(Unpacked {
             bundle_sha256: package.bundle_bytes.map(|_| self.hash.hex()),
+            manifest: package.manifest,
             received: Received {
                 tip: package.tip,
                 bundle,
@@ -180,9 +188,15 @@ pub struct Collected {
     pub insertions: Option<u32>,
     pub deletions: Option<u32>,
     pub summary: RunSummary,
-    /// The gateway's allowed hosts, replaced (D-230); empty while the
-    /// window holds no needles (story 6.14 journals them after its scan).
+    /// The gateway's allowed hosts, replaced (D-230); empty when no scan
+    /// ran (a `login` run until story 6.26's `Scanner`).
     pub allowed: std::collections::BTreeMap<String, u32>,
+    /// Refusals held without needles, their hosts replaced by the scan:
+    /// journaled now (D-230).
+    pub released: Vec<Refusal>,
+    /// How many places the scan found the credential in; none when no
+    /// scan ran (AD-112, D-212).
+    pub credential_locations: Option<u32>,
     pub gateway_exit: Option<i64>,
     pub upstream: Option<officina_core::workshop::gateway::UpstreamState>,
     pub texts: Option<officina_core::workshop::run::RunTexts>,
@@ -246,10 +260,45 @@ pub fn collect(context: &FollowContext, run_id: &str) {
     let removed = remove(context, &names);
     let run = run_dir(&context.home, &row.id);
     let _ = clear(&run.join("in"));
-    let mut collected = summarise(context, &row.id, cause);
+    // Out of the window's memory: the scan runs without its lock, and the
+    // run's needles go with the entry once it is done (D-230).
+    let entry = context
+        .runtime
+        .followed
+        .lock()
+        .ok()
+        .and_then(|mut followed| followed.remove(&row.id));
+    let mut collected = summarise(entry.as_ref(), &row.id, cause);
     collected.removed = removed;
+    let (manifest, records) = match &found {
+        Ok(found) => (found.manifest.as_deref(), found.records.as_slice()),
+        Err(_) => (None, &[][..]),
+    };
+    let fresh: Option<RunNeedles>;
+    let needles: Option<&Needles> = match entry.as_ref().and_then(Followed::needles) {
+        Some(held) => Some(held.needles()),
+        None => {
+            fresh = fresh_needles(context, &row, &floor_key);
+            fresh.as_ref().map(RunNeedles::needles)
+        }
+    };
+    let texts = entry.as_ref().map(TextRecords::of).unwrap_or_default();
+    let scanned = needles.and_then(|mut source| scan_pass(&texts, manifest, records, &mut source));
+    let found_value = scanned.as_ref().is_some_and(|s| !s.locations.is_empty());
+    if let Some(scanned) = scanned {
+        collected.credential_locations =
+            Some(u32::try_from(scanned.locations.len()).unwrap_or(u32::MAX));
+        collected.texts = Some(scanned.texts);
+        collected.allowed = scanned.allowed;
+        collected.released = scanned.released;
+    }
     match found {
-        Ok(found) => {
+        Ok(mut found) => {
+            if let (true, PackageAssessment::Package { cause, .. }) =
+                (found_value, &mut found.assessment)
+            {
+                *cause = Some(QuarantineCause::CredentialFound);
+            }
             collected.outcome = outcome(cause, Some(&found.assessment));
             collected.assessment = Some(found.assessment);
             collected.bundle_sha256 = found.bundle_sha256;
@@ -265,13 +314,13 @@ pub fn collect(context: &FollowContext, run_id: &str) {
             });
         }
     }
-    if collected.outcome != WorkshopOutcome::Package {
+    // A found value deletes the package and the scratch repository at
+    // once: both hold it (AD-112).
+    if collected.outcome != WorkshopOutcome::Package || found_value {
         let _ = clear(&run.join("out"));
         let _ = clear(&run.join(SCRATCH_DIR));
     }
-    if let Ok(mut followed) = context.runtime.followed.lock() {
-        followed.remove(&row.id);
-    }
+    drop(entry);
     let _ = ask(
         &context.collector,
         AuthorCommand::WorkshopFollow(Box::new(FollowEvent::Collected(Box::new(collected)))),
@@ -279,23 +328,9 @@ pub fn collect(context: &FollowContext, run_id: &str) {
     );
 }
 
-/// The facts the run's output gave, from the window's memory.
-fn summarise(context: &FollowContext, run_id: &str, cause: FinishCause) -> Collected {
-    let followed = context.runtime.followed.lock().ok();
-    let entry = followed.as_ref().and_then(|f| f.get(run_id));
-    let allowed = entry
-        .and_then(|e| {
-            let needles = e.needles()?;
-            Some(
-                e.output
-                    .gateway
-                    .allowed
-                    .iter()
-                    .map(|(host, count)| (clean_host(host, needles.needles()), *count))
-                    .collect(),
-            )
-        })
-        .unwrap_or_default();
+/// The facts the run's output gave, from the window's memory; its texts
+/// and hosts are the scan's to give.
+fn summarise(entry: Option<&Followed>, run_id: &str, cause: FinishCause) -> Collected {
     Collected {
         run_id: run_id.to_owned(),
         cause,
@@ -306,13 +341,179 @@ fn summarise(context: &FollowContext, run_id: &str, cause: FinishCause) -> Colle
         files_changed: None,
         insertions: None,
         deletions: None,
-        summary: entry.map(|e| e.summary()).unwrap_or_default(),
-        allowed,
-        gateway_exit: entry.and_then(|e| e.gateway_exit()),
+        summary: entry.map(Followed::summary).unwrap_or_default(),
+        allowed: std::collections::BTreeMap::new(),
+        released: Vec::new(),
+        credential_locations: None,
+        gateway_exit: entry.and_then(Followed::gateway_exit),
         upstream: entry.and_then(|e| e.output.gateway.upstream),
-        texts: entry.and_then(|e| e.run_texts()),
+        texts: None,
         removed: false,
     }
+}
+
+/// The texts collection's scan reads of a followed run (AD-112, D-230),
+/// copied out of the window's memory.
+#[derive(Debug, Default)]
+pub struct TextRecords {
+    report: Option<Vec<u8>>,
+    stream: Vec<Vec<u8>>,
+    allowed: Vec<(Vec<u8>, u32)>,
+    held: Vec<Refusal>,
+    refusals: Vec<RunRefusal>,
+    hits: u32,
+}
+
+impl TextRecords {
+    /// What `entry` holds: the report tail, the stream texts kept, the
+    /// gateway's allowed hosts, the refusals held without needles, and
+    /// those journaled replaced with how many the needles replaced.
+    pub fn of(entry: &Followed) -> TextRecords {
+        let stream = &entry.output.stream;
+        TextRecords {
+            report: stream
+                .assistant_tail
+                .as_ref()
+                .map(|tail| tail.scan_bytes().to_vec()),
+            stream: entry
+                .output
+                .entry
+                .iter()
+                .filter_map(|line| line.detail.as_deref())
+                .map(|detail| detail.as_bytes().to_vec())
+                .chain(
+                    stream
+                        .result
+                        .as_ref()
+                        .and_then(|r| r.subtype.as_ref())
+                        .map(|s| s.scan_bytes().to_vec()),
+                )
+                .collect(),
+            allowed: entry
+                .output
+                .gateway
+                .allowed
+                .iter()
+                .map(|(host, count)| (host.as_bytes().to_vec(), *count))
+                .collect(),
+            held: entry.held.clone(),
+            refusals: entry.refusals().to_vec(),
+            hits: entry.credential_hits(),
+        }
+    }
+}
+
+/// What collection's scan gave (AD-112): the run's texts and hosts with
+/// every range replaced, the held refusals to journal, the locations.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Scanned {
+    pub texts: RunTexts,
+    pub allowed: std::collections::BTreeMap<String, u32>,
+    pub released: Vec<Refusal>,
+    pub locations: Vec<String>,
+}
+
+/// A host name with its ranges replaced, cut to the gateway's bound
+/// again: a replacement can lengthen it.
+fn host_of(bytes: &[u8], ranges: &[std::ops::Range<usize>]) -> String {
+    apply(bytes, ranges)
+        .chars()
+        .take(MAX_LINE_HOST_CHARS)
+        .collect()
+}
+
+/// Collection's scan (AD-112, D-237, D-609): `texts`, the `manifest` and
+/// the package's `records` handed to `source` in one call, its ranges
+/// applied alike whatever the source. `None` when the source could not
+/// scan, so nothing held is released.
+pub fn scan_pass(
+    texts: &TextRecords,
+    manifest: Option<&[u8]>,
+    records: &[ScanRecord],
+    source: &mut dyn ScanSource,
+) -> Option<Scanned> {
+    use officina_core::workshop::scan::Place;
+    let mut own: Vec<ScanRecord> = Vec::new();
+    let mut push = |place: Place, bytes: &[u8]| {
+        own.push(ScanRecord {
+            place,
+            bytes: bytes.to_vec(),
+        });
+    };
+    if let Some(report) = &texts.report {
+        push(Place::Report, report);
+    }
+    texts.stream.iter().for_each(|t| push(Place::Stream, t));
+    texts
+        .allowed
+        .iter()
+        .for_each(|(host, _)| push(Place::GatewayLine, host));
+    texts
+        .held
+        .iter()
+        .for_each(|r| push(Place::GatewayLine, r.host.as_bytes()));
+    if let Some(manifest) = manifest {
+        push(Place::Manifest, manifest);
+    }
+    let slices: Vec<&[u8]> = own
+        .iter()
+        .chain(records)
+        .map(|r| r.bytes.as_slice())
+        .collect();
+    let mut ranges = source.ranges(&slices)?;
+    if ranges.len() != slices.len() {
+        return None;
+    }
+    let package_ranges = ranges.split_off(own.len());
+    let mut found = locations(&own, &ranges);
+    found.extend((0..texts.hits).map(|_| "gateway line".to_owned()));
+    found.extend(locations(records, &package_ranges));
+    let mut slots = ranges.iter();
+    let mut next = || slots.next().map(Vec::as_slice).unwrap_or_default();
+    let report_tail = texts
+        .report
+        .as_ref()
+        .map(|report| Untrusted::new(apply(report, next())));
+    texts.stream.iter().for_each(|_| {
+        next();
+    });
+    let allowed: std::collections::BTreeMap<String, u32> = texts
+        .allowed
+        .iter()
+        .map(|(host, count)| (host_of(host, next()), *count))
+        .collect();
+    let released: Vec<Refusal> = texts
+        .held
+        .iter()
+        .map(|r| Refusal {
+            host: host_of(r.host.as_bytes(), next()),
+            ..r.clone()
+        })
+        .collect();
+    Some(Scanned {
+        texts: RunTexts {
+            report_tail,
+            refusals: texts
+                .refusals
+                .iter()
+                .cloned()
+                .chain(released.iter().map(|r| RunRefusal {
+                    host: Untrusted::new(r.host.clone()),
+                    port: r.port,
+                    cause: r.cause,
+                }))
+                .collect(),
+            allowed_hosts: allowed
+                .iter()
+                .map(|(host, count)| (Untrusted::new(host.clone()), *count))
+                .collect(),
+            credential_locations: found.iter().cloned().map(Untrusted::new).collect(),
+            ..RunTexts::default()
+        },
+        allowed,
+        released,
+        locations: found,
+    })
 }
 
 /// What the package was, once on the host and verified.
@@ -322,6 +523,9 @@ struct Found {
     files_changed: Option<u32>,
     insertions: Option<u32>,
     deletions: Option<u32>,
+    /// The package's records for the scan (AD-112).
+    records: Vec<ScanRecord>,
+    manifest: Option<Vec<u8>>,
 }
 
 impl Found {
@@ -336,6 +540,8 @@ impl Found {
             files_changed: None,
             insertions: None,
             deletions: None,
+            records: Vec::new(),
+            manifest: None,
         }
     }
 }
@@ -487,7 +693,20 @@ fn verify(context: &FollowContext, row: &RunRecord, unpacked: &Unpacked) -> Resu
             .unwrap_or((None, None)),
         _ => (None, None),
     };
+    // Only a package that passed every check is scanned: before step 7's
+    // bound its objects could inflate past any size (AD-111), and a package
+    // refused earlier may hold none on the host.
+    let records = match &assessment {
+        PackageAssessment::Package {
+            tip: Some(tip),
+            cause: None,
+            ..
+        } => package_records(&git, &scratch, &row.base_commit, tip).map_err(|_| host())?,
+        _ => Vec::new(),
+    };
     Ok(Found {
+        records,
+        manifest: unpacked.manifest.clone(),
         files_changed: paths
             .as_ref()
             .map(|p| u32::try_from(p.len()).unwrap_or(u32::MAX)),

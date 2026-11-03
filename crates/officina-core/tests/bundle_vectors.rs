@@ -245,11 +245,15 @@ fn assess_cases_match() {
     }
 }
 
-/// Story 6.13 AC 3: every quarantine cause the checks give has a case.
+/// Story 6.13 AC 3: every quarantine cause the checks give has a case;
+/// the scan's is collection's, after them (AD-112).
 #[test]
 fn every_quarantine_cause_has_a_case() {
     let (_, cases) = assess_section();
-    for cause in QuarantineCause::ALL {
+    for cause in QuarantineCause::ALL
+        .iter()
+        .filter(|c| **c != QuarantineCause::CredentialFound)
+    {
         assert!(
             cases
                 .iter()

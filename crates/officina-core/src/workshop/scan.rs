@@ -144,16 +144,105 @@ pub fn find(text: &[u8], needles: &Needles) -> Vec<Range<usize>> {
 
 /// `text` with every range [`find`] reports replaced by [`REPLACEMENT`].
 pub fn replace(text: &str, needles: &Needles) -> String {
-    let bytes = text.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len());
+    apply(text.as_bytes(), &find(text.as_bytes(), needles))
+}
+
+/// `text` with each of `ranges` replaced by [`REPLACEMENT`], read as
+/// UTF-8 lossily. The ranges may come from outside the window (D-609's
+/// `Scanner`): they are merged, and cut to the text, before use.
+pub fn apply(text: &[u8], ranges: &[Range<usize>]) -> String {
+    let within: Vec<Range<usize>> = ranges
+        .iter()
+        .map(|r| r.start.min(text.len())..r.end.min(text.len()))
+        .filter(|r| r.start < r.end)
+        .collect();
+    let mut out = Vec::with_capacity(text.len());
     let mut at = 0;
-    for range in find(bytes, needles) {
-        out.extend_from_slice(&bytes[at..range.start]);
+    for range in merge(within) {
+        out.extend_from_slice(&text[at..range.start]);
         out.extend_from_slice(REPLACEMENT.as_bytes());
         at = range.end;
     }
-    out.extend_from_slice(&bytes[at..]);
+    out.extend_from_slice(&text[at..]);
     String::from_utf8_lossy(&out).into_owned()
+}
+
+/// Where collection's scan gets the credential's byte ranges in the
+/// run's records (AD-112, D-609): the run's needles on the host for the
+/// token kinds, the `Scanner` container for a `login` run. Whatever the
+/// source, the pass applies the ranges alike.
+pub trait ScanSource {
+    /// The ranges of each of `records`, in their order; `None` when the
+    /// source could not scan, so nothing scanned is released.
+    fn ranges(&mut self, records: &[&[u8]]) -> Option<Vec<Vec<Range<usize>>>>;
+}
+
+impl ScanSource for &Needles {
+    fn ranges(&mut self, records: &[&[u8]]) -> Option<Vec<Vec<Range<usize>>>> {
+        Some(records.iter().map(|record| find(record, self)).collect())
+    }
+}
+
+/// Where a scanned record came from (AD-112): what a location names,
+/// never the value.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Place {
+    Report,
+    /// A stream text kept: an entry line's detail, the result's subtype.
+    Stream,
+    GatewayLine,
+    Manifest,
+    /// A commit's message, by commit id.
+    CommitMessage(String),
+    /// A commit's author and committer lines, by commit id.
+    Author(String),
+    /// A path the package names, or a tree listing names.
+    Path,
+    /// A blob's content, by the record holding its path.
+    File(Option<usize>),
+}
+
+/// One record the scan reads.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScanRecord {
+    pub place: Place,
+    pub bytes: Vec<u8>,
+}
+
+/// The first 12 characters of a commit id, as a location shows it.
+fn short(id: &str) -> &str {
+    id.get(..12).unwrap_or(id)
+}
+
+/// The location of every record where `ranges` found the value, in
+/// record order (AD-112): "commit message <id>", "author <id>", "file
+/// <path>" with the path's own ranges applied, "path", "report",
+/// "stream", "gateway line", "manifest".
+pub fn locations(records: &[ScanRecord], ranges: &[Vec<Range<usize>>]) -> Vec<String> {
+    let cleaned = |index: usize| {
+        let empty = Vec::new();
+        let found = ranges.get(index).unwrap_or(&empty);
+        records
+            .get(index)
+            .map(|record| apply(&record.bytes, found))
+            .unwrap_or_default()
+    };
+    records
+        .iter()
+        .zip(ranges)
+        .filter(|(_, found)| !found.is_empty())
+        .map(|(record, _)| match &record.place {
+            Place::Report => "report".to_owned(),
+            Place::Stream => "stream".to_owned(),
+            Place::GatewayLine => "gateway line".to_owned(),
+            Place::Manifest => "manifest".to_owned(),
+            Place::CommitMessage(id) => format!("commit message {}", short(id)),
+            Place::Author(id) => format!("author {}", short(id)),
+            Place::Path => "path".to_owned(),
+            Place::File(Some(path)) => format!("file {}", cleaned(*path)),
+            Place::File(None) => "file".to_owned(),
+        })
+        .collect()
 }
 
 /// The values of a stored credentials file that become needles (D-609):
@@ -194,6 +283,59 @@ mod tests {
     fn forms(value: &[u8]) -> Vec<Vec<u8>> {
         let n = needles(value);
         n.plain.iter().chain(&n.base64).cloned().collect()
+    }
+
+    /// D-609: ranges from another source are cut to the text and merged
+    /// before they are applied; none past the end, none reversed.
+    #[test]
+    fn apply_cuts_and_merges_foreign_ranges() {
+        let text = b"abcdefghij";
+        assert_eq!(apply(text, &[2..4, 3..6]), "ab[credential]ghij");
+        let past_the_end = std::iter::once(8..40).collect::<Vec<_>>();
+        assert_eq!(apply(text, &past_the_end), "abcdefgh[credential]");
+        assert_eq!(apply(text, &[20..30, 5..5]), "abcdefghij");
+        assert_eq!(apply(text, &[]), "abcdefghij");
+    }
+
+    /// AD-112: a location names where, never the value: a file's path
+    /// carries its own ranges applied.
+    #[test]
+    fn locations_never_carry_the_value() {
+        let value = seeded();
+        let n = needles(&value);
+        let mut path = b"docs/".to_vec();
+        path.extend_from_slice(&value);
+        let records = vec![
+            ScanRecord {
+                place: Place::Path,
+                bytes: path,
+            },
+            ScanRecord {
+                place: Place::File(Some(0)),
+                bytes: value.clone(),
+            },
+            ScanRecord {
+                place: Place::Report,
+                bytes: b"nothing here".to_vec(),
+            },
+            ScanRecord {
+                place: Place::CommitMessage("a".repeat(40)),
+                bytes: value.clone(),
+            },
+        ];
+        let slices: Vec<&[u8]> = records.iter().map(|r| r.bytes.as_slice()).collect();
+        let ranges = (&n).ranges(&slices).unwrap();
+        let found = locations(&records, &ranges);
+        assert_eq!(
+            found,
+            [
+                "path".to_owned(),
+                format!("file docs/{REPLACEMENT}"),
+                format!("commit message {}", "a".repeat(12)),
+            ]
+        );
+        let value = String::from_utf8(value).unwrap();
+        assert!(found.iter().all(|l| !l.contains(&value)));
     }
 
     #[test]

@@ -62,6 +62,9 @@ pub struct Followed {
     pub held: Vec<Refusal>,
     /// Refusals as journaled, their hosts replaced, bounded.
     refusals: Vec<RunRefusal>,
+    /// Refusal hosts the needles replaced while following (D-230): each
+    /// a "gateway line" location for collection's scan (AD-112).
+    credential_hits: u32,
     gateway_exit: Option<i64>,
     watching: bool,
 }
@@ -77,6 +80,7 @@ impl Followed {
             journaled: 0,
             held: Vec::new(),
             refusals: Vec::new(),
+            credential_hits: 0,
             gateway_exit: None,
             watching: false,
         }
@@ -84,6 +88,16 @@ impl Followed {
 
     pub fn needles(&self) -> Option<&RunNeedles> {
         self.needles.as_ref()
+    }
+
+    /// The refusals journaled while following, their hosts replaced.
+    pub fn refusals(&self) -> &[RunRefusal] {
+        &self.refusals
+    }
+
+    /// How many refusal hosts the needles replaced while following.
+    pub fn credential_hits(&self) -> u32 {
+        self.credential_hits
     }
 
     /// The run's texts as they may leave memory (D-230): replaced, or
@@ -441,6 +455,14 @@ impl Followed {
                     match self.needles.as_ref() {
                         Some(needles) => {
                             let host = clean_host(&refusal.host, needles.needles());
+                            if !officina_core::workshop::scan::find(
+                                refusal.host.as_bytes(),
+                                needles.needles(),
+                            )
+                            .is_empty()
+                            {
+                                self.credential_hits = self.credential_hits.saturating_add(1);
+                            }
                             if self.refusals.len() < MAX_HELD_REFUSALS {
                                 self.refusals.push(RunRefusal {
                                     host: Untrusted::new(host.clone()),
@@ -651,7 +673,11 @@ fn listed(context: &FollowContext, floor_key: Option<&str>) -> Option<Vec<Contai
 
 /// The needles of `row` from a fresh read of the credential (D-230); none
 /// for a `login` run or a credential the window cannot read.
-fn fresh_needles(context: &FollowContext, row: &RunRecord, floor_key: &str) -> Option<RunNeedles> {
+pub(crate) fn fresh_needles(
+    context: &FollowContext,
+    row: &RunRecord,
+    floor_key: &str,
+) -> Option<RunNeedles> {
     if row.credential_kind == CredentialKind::Login {
         return None;
     }
@@ -995,6 +1021,7 @@ fn record_collected(
             facts.insertions = collected.insertions;
             facts.deletions = collected.deletions;
             facts.collect_failed = collected.failure;
+            facts.credential_locations = collected.credential_locations;
             if let Some(texts) = &collected.texts {
                 row.texts = Some(texts.clone());
             }
@@ -1003,6 +1030,17 @@ fn record_collected(
     let Some(row) = moved else {
         return Ok(());
     };
+    // The refusals held without needles, journaled once the scan replaced
+    // their hosts (D-230).
+    for refusal in &collected.released {
+        lines.push(JournalEntry::GatewayRefused(GatewayRefused {
+            run_id: Some(row.id.clone()),
+            battery_id: None,
+            host: refusal.host.clone(),
+            port: refusal.port,
+            cause: refusal.cause,
+        }));
+    }
     lines.push(JournalEntry::GatewaySummary(Box::new(GatewaySummary {
         run_id: row.id.clone(),
         allowed: collected.allowed.clone(),
@@ -1031,7 +1069,7 @@ fn record_collected(
                 PackageState::Review
             },
             cause,
-            credential_locations: None,
+            credential_locations: collected.credential_locations,
         }));
     }
     let mut finished = finished_line(&row, collected.cause, collected.outcome, summary, now_ms);

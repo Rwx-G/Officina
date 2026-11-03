@@ -35,6 +35,11 @@ pub struct ReviewFacts {
     pub insertions: Option<u32>,
     pub deletions: Option<u32>,
     pub collect_failed: Option<CollectFailure>,
+    /// How many places the credential scan found the value in (AD-112):
+    /// from the facts, so the revoke advice outlives the texts (D-212).
+    pub credential_locations: Option<u32>,
+    /// Where it found it, while the texts are kept: never the value.
+    pub credential_places: Vec<Untrusted<String>>,
 }
 
 /// One commit of a package, for display (AD-111 step 8): worker text.

@@ -20,4 +20,13 @@ allowed: Array<[string, number]>, refused: number, refusals: Array<RunRefusal>,
 /**
  * The engine's clock against the window's at launch (D-242).
  */
-clock_skew_ms: number | null, commits_past_base: number | null, files_changed: number | null, insertions: number | null, deletions: number | null, collect_failed: CollectFailure | null, };
+clock_skew_ms: number | null, commits_past_base: number | null, files_changed: number | null, insertions: number | null, deletions: number | null, collect_failed: CollectFailure | null, 
+/**
+ * How many places the credential scan found the value in (AD-112):
+ * from the facts, so the revoke advice outlives the texts (D-212).
+ */
+credential_locations: number | null, 
+/**
+ * Where it found it, while the texts are kept: never the value.
+ */
+credential_places: Array<string>, };

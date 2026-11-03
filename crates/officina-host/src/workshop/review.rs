@@ -139,6 +139,8 @@ pub fn inputs_of(row: &RunRecord) -> ReviewInputs {
             insertions: row.facts.insertions,
             deletions: row.facts.deletions,
             collect_failed: row.facts.collect_failed,
+            credential_locations: row.facts.credential_locations,
+            credential_places: texts.credential_locations,
         },
     }
 }
