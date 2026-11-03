@@ -509,6 +509,9 @@ pub struct ProxyFacts {
     /// Windows names a PAC URL or turns automatic detection on.
     pub pac_or_auto_detect: bool,
     pub ca_file: bool,
+    /// The upstream's state the newest `gateway_summary` reported; none
+    /// before any run (AD-123).
+    pub upstream: Option<officina_core::workshop::gateway::UpstreamState>,
 }
 
 /// What doctor resolves for a valid `[workshop]` (D-611): the setting,
@@ -548,6 +551,7 @@ pub fn proxy_facts(input: &ProxyInput, reader: Arc<dyn SystemProxyReader>) -> Pr
         routes: resolve(&input.setting, &input.allow, reader),
         pac_or_auto_detect,
         ca_file: input.ca_file,
+        upstream: None,
     }
 }
 
@@ -590,6 +594,18 @@ fn proxy_findings(facts: &ProxyFacts) -> Vec<Finding> {
             WorkshopCheck::ProxyRefused,
             format!("proxy_unresolved: {why}"),
         )),
+    }
+    if facts.setting != officina_core::workshop::floor::UPSTREAM_DIRECT {
+        let state = facts
+            .upstream
+            .map_or("unknown, no run yet", |state| match state {
+                officina_core::workshop::gateway::UpstreamState::Reachable => "reachable",
+                officina_core::workshop::gateway::UpstreamState::Unreachable => "unreachable",
+            });
+        found.push(Finding::new(
+            WorkshopCheck::UpstreamState,
+            format!("upstream at the newest run's start: {state}"),
+        ));
     }
     if facts.pac_or_auto_detect && !facts.evaluates_pac {
         found.push(Finding::new(

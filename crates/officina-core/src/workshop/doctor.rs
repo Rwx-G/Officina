@@ -100,6 +100,10 @@ closed_enum! {
         /// `api.anthropic.com` goes through a proxy and no `ca_file` is set
         /// (D-612): if it inspects TLS, its root must be exported.
         ProxyCaNote,
+        /// With `upstream_proxy` set: whether the upstream answered the
+        /// newest run's gateway at its start, or unknown before any run
+        /// (AD-123 as amended by amendment 14).
+        UpstreamState,
         /// A project's hook and MCP programs all resolved in its image
         /// (AD-118).
         HookProgramsFound,
@@ -190,7 +194,9 @@ impl WorkshopCheck {
             | WorkshopCheck::BatteryStale
             | WorkshopCheck::MountPlaceholders => CheckLevel::Warn,
             WorkshopCheck::ProxyRefused => CheckLevel::Fail,
-            WorkshopCheck::ProxyRoutes | WorkshopCheck::ProxyCaNote => CheckLevel::Inform,
+            WorkshopCheck::ProxyRoutes
+            | WorkshopCheck::ProxyCaNote
+            | WorkshopCheck::UpstreamState => CheckLevel::Inform,
             WorkshopCheck::DockerResolved
             | WorkshopCheck::GitResolved
             | WorkshopCheck::OverridesSet
@@ -244,6 +250,7 @@ impl WorkshopCheck {
             | WorkshopCheck::ProxyRefused
             | WorkshopCheck::ProxyNotEvaluated
             | WorkshopCheck::ProxyCaNote => "workshop proxy",
+            WorkshopCheck::UpstreamState => "workshop upstream",
             WorkshopCheck::HookProgramsFound
             | WorkshopCheck::HookProgramMissing
             | WorkshopCheck::HookProgramWarning

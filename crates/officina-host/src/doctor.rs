@@ -982,15 +982,18 @@ pub fn run_with(collector: &Collector, exe: &Path, permissions: bool) -> Vec<Che
                     .and_then(claude_version)
                     .map(|[a, b, c]| format!("{a}.{b}.{c}")),
             });
-        checks.extend(crate::workshop::doctor::checks(
-            &crate::workshop::doctor::gather(
-                collector.base_env().vars(),
-                &paths.officina_home,
-                proxy.as_ref(),
-                images.as_ref(),
-                &crate::relay::credential::SystemCredentialStore,
-            ),
-        ));
+        let mut facts = crate::workshop::doctor::gather(
+            collector.base_env().vars(),
+            &paths.officina_home,
+            proxy.as_ref(),
+            images.as_ref(),
+            &crate::relay::credential::SystemCredentialStore,
+        );
+        if let Some(proxy) = facts.proxy.as_mut() {
+            let (lines, _) = crate::relay::journal::read_recent(collector.relay(), now);
+            proxy.upstream = newest_upstream(&lines);
+        }
+        checks.extend(crate::workshop::doctor::checks(&facts));
     }
     let system_dir = crate::relay::home::system_dir();
     let reader = registry_store::open_reader(&paths.officina_home, &onedrive_roots).ok();
@@ -2153,6 +2156,24 @@ pub fn check_triage(
     checks
 }
 
+/// The upstream's state the newest `gateway_summary` of `lines` reported
+/// (AD-123 as amended by amendment 14); none before any run, or when that
+/// run's gateway had no upstream.
+fn newest_upstream(
+    lines: &[officina_core::relay::journal::JournalLine],
+) -> Option<officina_core::workshop::gateway::UpstreamState> {
+    lines
+        .iter()
+        .filter_map(|line| match &line.entry {
+            officina_core::relay::journal::JournalEntry::GatewaySummary(summary) => {
+                Some((line.ts, summary.upstream))
+            }
+            _ => None,
+        })
+        .max_by_key(|(ts, _)| *ts)
+        .and_then(|(_, upstream)| upstream)
+}
+
 /// The floor file, if any, loaded without error.
 fn check_floor(collector: &Collector) -> Check {
     let view_issues = || {
@@ -2243,6 +2264,35 @@ mod tests {
 
     use officina_core::relay::gate::gated_tools_matcher;
     use std::path::PathBuf;
+
+    /// Story 6.13 AC 8 (AD-123): the newest `gateway_summary` decides the
+    /// upstream's state, whatever the order lines are read in; none before
+    /// any run.
+    #[test]
+    fn the_upstream_state_comes_from_the_newest_summary() {
+        use officina_core::relay::journal::{GatewaySummary, JournalEntry, JournalLine};
+        use officina_core::workshop::gateway::UpstreamState;
+        let at = |ts: i64, upstream: Option<UpstreamState>| {
+            JournalLine::new(
+                ts,
+                JournalEntry::GatewaySummary(Box::new(GatewaySummary {
+                    run_id: format!("{ts:032x}"),
+                    allowed: std::collections::BTreeMap::new(),
+                    refused: 0,
+                    exit_code: Some(0),
+                    upstream,
+                })),
+            )
+        };
+        assert_eq!(newest_upstream(&[]), None);
+        let lines = [
+            at(3, Some(UpstreamState::Unreachable)),
+            at(1, Some(UpstreamState::Reachable)),
+        ];
+        assert_eq!(newest_upstream(&lines), Some(UpstreamState::Unreachable));
+        let later = [lines[0].clone(), at(5, Some(UpstreamState::Reachable))];
+        assert_eq!(newest_upstream(&later), Some(UpstreamState::Reachable));
+    }
 
     fn summary(checks: &[Check]) -> Vec<(&str, Level, bool)> {
         checks
