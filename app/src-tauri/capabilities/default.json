@@ -52,6 +52,7 @@
     "allow-discard-package",
     "allow-stop-workshop",
     "allow-resume-workshop",
-    "allow-remove-run"
+    "allow-remove-run",
+    "allow-get-workshop"
   ]
 }

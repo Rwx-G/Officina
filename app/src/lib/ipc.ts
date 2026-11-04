@@ -37,6 +37,7 @@ import type { Settlement } from "./generated/Settlement";
 import type { SubjectOrigin } from "./generated/SubjectOrigin";
 import type { SubjectView } from "./generated/SubjectView";
 import type { WorkOrderPermission } from "./generated/WorkOrderPermission";
+import type { WorkshopView } from "./generated/WorkshopView";
 
 export const BOARD_EVENT = "board://updated";
 
@@ -246,6 +247,18 @@ export function getOrchestrator(): Promise<OrchestratorView | null> {
 
 export function onOrchestrator(handler: (view: OrchestratorView) => void): Promise<UnlistenFn> {
   return listen<OrchestratorView>(ORCHESTRATOR_EVENT, (event) => handler(event.payload));
+}
+
+export const WORKSHOP_EVENT = "workshop://updated";
+
+/** The last Workshop view, for the first paint; later ones come as events
+ *  (AD-121). */
+export function getWorkshop(): Promise<WorkshopView | null> {
+  return invoke<WorkshopView | null>("get_workshop");
+}
+
+export function onWorkshop(handler: (view: WorkshopView) => void): Promise<UnlistenFn> {
+  return listen<WorkshopView>(WORKSHOP_EVENT, (event) => handler(event.payload));
 }
 
 /** Records that the author read the briefing, on leaving the Orchestrator

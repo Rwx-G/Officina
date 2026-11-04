@@ -9,6 +9,7 @@ closed_enum! {
     /// What an image is (AD-99, D-212): the base, the browser base (Slice
     /// B), the gateway, or a project's.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+    #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
     pub enum ImageKind {
         Workshop,
         Browser,
@@ -296,6 +297,7 @@ closed_enum! {
     /// Why an image is not the one the running Officina would build now
     /// (AD-99's `image_mismatch`).
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+    #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
     pub enum ImageMismatch {
         /// The engine holds no such image.
         Absent,

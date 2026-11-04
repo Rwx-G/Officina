@@ -22,6 +22,7 @@ import type { LaunchAnswer } from "./lib/generated/LaunchAnswer";
 import type { MeetingView } from "./lib/generated/MeetingView";
 import type { AnswerResult } from "./lib/generated/AnswerResult";
 import type { OrchestratorView } from "./lib/generated/OrchestratorView";
+import type { WorkshopView } from "./lib/generated/WorkshopView";
 import type { RegistryView } from "./lib/generated/RegistryView";
 import type { RelayView } from "./lib/generated/RelayView";
 import type { ReviewView } from "./lib/generated/ReviewView";
@@ -106,6 +107,8 @@ export function installE2eMock(): void {
           return launch();
         case "get_orchestrator":
           return window.__officinaOrchestrator ?? null;
+        case "get_workshop":
+          return window.__officinaWorkshop ?? null;
         case "mark_briefing_read":
           return null;
         case "start_orchestrator":
@@ -150,6 +153,10 @@ export function installE2eMock(): void {
   window.__officinaPushRegistry = async (view: RegistryView) => {
     window.__officinaRegistry = view;
     await emit("registry://updated", view);
+  };
+  window.__officinaPushWorkshop = async (view: WorkshopView) => {
+    window.__officinaWorkshop = view;
+    await emit("workshop://updated", view);
   };
   window.__officinaPushOrchestrator = async (view: OrchestratorView) => {
     window.__officinaOrchestrator = view;

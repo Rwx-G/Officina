@@ -3,4 +3,4 @@
 /**
  * Session kind as shown on a card.
  */
-export type SessionKindView = "interactive" | "background";
+export type SessionKindView = "interactive" | "background" | "workshop";

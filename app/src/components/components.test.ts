@@ -98,6 +98,7 @@ function card(overrides: Partial<Card> = {}): Card {
     scene: null,
     settled: null,
     subagents: [],
+    run_state: null,
     ...overrides,
   };
 }
@@ -1064,6 +1065,7 @@ describe("Briefing", () => {
       work_orders: section([]),
       proposals: section([]),
       changed: section([{ kind: "started_waiting", key: "k1", name: hostile, column: "needs_you", at_ms: NOW }], 3),
+      workshop: section([]),
     };
   }
 

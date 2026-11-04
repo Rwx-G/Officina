@@ -209,6 +209,29 @@ pub fn imported_since(
     .collect()
 }
 
+/// What the board and the Workshop view read of every run (AD-121),
+/// oldest launch first: no facts, texts or plan.
+pub fn board_runs(
+    conn: &Connection,
+) -> rusqlite::Result<Vec<officina_core::workshop::view::BoardRun>> {
+    conn.prepare_cached(&format!(
+        "SELECT r.id, w.template, w.project, w.name, r.state, r.state_at_ms, r.started_at_ms
+         {RUN_FROM} ORDER BY r.started_at_ms, r.id"
+    ))?
+    .query_map([], |row| {
+        Ok(officina_core::workshop::view::BoardRun {
+            id: row.get(0)?,
+            template: row.get(1)?,
+            project: row.get(2)?,
+            name: row.get(3)?,
+            state: required(4, row.get(4)?, RunState::from_code)?,
+            state_at_ms: row.get(5)?,
+            started_at_ms: row.get(6)?,
+        })
+    })?
+    .collect()
+}
+
 /// What retention reads of every run (AD-124).
 pub fn run_ages(conn: &Connection) -> rusqlite::Result<Vec<RunAge>> {
     conn.prepare_cached(

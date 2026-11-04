@@ -207,13 +207,14 @@ impl TreeCache {
     }
 }
 
-/// A job the hourly pass hands to thread `workshop` (AD-116, D-213): the
-/// collector never runs `docker`, so the window sets what queues it once
-/// its threads and the collector's sender exist.
+/// A job the collector hands to thread `workshop`: the hourly pass's
+/// removal of kept containers (AD-116, D-213), the Workshop view's re-read
+/// (AD-121). The collector never runs `docker`, so the window sets what
+/// queues it once its threads and the collector's sender exist.
 #[derive(Clone, Default)]
-pub struct HourlyWorkshop(Arc<OnceLock<Box<dyn Fn() + Send + Sync>>>);
+pub struct WorkshopJob(Arc<OnceLock<Box<dyn Fn() + Send + Sync>>>);
 
-impl HourlyWorkshop {
+impl WorkshopJob {
     /// Sets the job, once; a second call changes nothing.
     pub fn set(&self, job: Box<dyn Fn() + Send + Sync>) {
         let _ = self.0.set(job);
@@ -227,9 +228,9 @@ impl HourlyWorkshop {
     }
 }
 
-impl std::fmt::Debug for HourlyWorkshop {
+impl std::fmt::Debug for WorkshopJob {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_tuple("HourlyWorkshop")
+        f.debug_tuple("WorkshopJob")
             .field(&self.0.get().is_some())
             .finish()
     }
@@ -288,7 +289,16 @@ pub struct Collector {
     /// What the hourly pass queues on thread `workshop` (AD-116, D-213):
     /// the removal of kept containers past 7 days; set by the window once
     /// its threads run.
-    hourly_workshop: HourlyWorkshop,
+    hourly_workshop: WorkshopJob,
+    /// Every workshop run, from the same holder as the subjects (AD-121).
+    workshop_runs: Vec<officina_core::workshop::view::BoardRun>,
+    /// What thread `workshop` last read of the engine and the approved
+    /// catalogue for the Workshop view (AD-121); `None` before the first
+    /// read.
+    workshop_half: Option<officina_core::workshop::view::EngineHalf>,
+    /// What re-reads that half on thread `workshop` after an action that
+    /// changes it; set by the window once its threads run.
+    workshop_reread: WorkshopJob,
 }
 
 impl Collector {
@@ -348,7 +358,10 @@ impl Collector {
             confirm_window: Duration::from_millis(officina_core::meeting::CONFIRM_WINDOW_MS),
             engine: None,
             workshop_orphans: Vec::new(),
-            hourly_workshop: HourlyWorkshop::default(),
+            hourly_workshop: WorkshopJob::default(),
+            workshop_runs: Vec::new(),
+            workshop_half: None,
+            workshop_reread: WorkshopJob::default(),
         }
     }
 
@@ -404,6 +417,39 @@ impl Collector {
         self.settlements = settlements;
     }
 
+    /// Records every workshop run, which the next board shows as workshop
+    /// cards (AD-121); empty when the registry could not be read.
+    pub fn set_workshop_runs(&mut self, runs: Vec<officina_core::workshop::view::BoardRun>) {
+        self.workshop_runs = runs;
+    }
+
+    /// The workshop runs as last recorded.
+    pub fn workshop_runs(&self) -> &[officina_core::workshop::view::BoardRun] {
+        &self.workshop_runs
+    }
+
+    /// Records what thread `workshop` read for the Workshop view.
+    pub fn set_workshop_half(&mut self, half: officina_core::workshop::view::EngineHalf) {
+        self.workshop_half = Some(half);
+    }
+
+    /// The Workshop view's engine half as last read.
+    pub fn workshop_half(&self) -> Option<&officina_core::workshop::view::EngineHalf> {
+        self.workshop_half.as_ref()
+    }
+
+    /// The collector whose actions re-read the Workshop view's engine half
+    /// with `reread` (AD-121).
+    pub fn with_workshop_reread(mut self, reread: WorkshopJob) -> Collector {
+        self.workshop_reread = reread;
+        self
+    }
+
+    /// What queues a re-read of the Workshop view's engine half.
+    pub fn workshop_reread(&self) -> &WorkshopJob {
+        &self.workshop_reread
+    }
+
     /// Records why each pending `auto` request is the author's, which the
     /// next board's approval cards show (AD-87, D-143).
     pub fn set_auto_escalations(&mut self, escalations: BTreeMap<String, Escalation>) {
@@ -411,13 +457,13 @@ impl Collector {
     }
 
     /// The collector whose hourly pass runs `hourly` (AD-116, D-213).
-    pub fn with_hourly_workshop(mut self, hourly: HourlyWorkshop) -> Collector {
+    pub fn with_hourly_workshop(mut self, hourly: WorkshopJob) -> Collector {
         self.hourly_workshop = hourly;
         self
     }
 
     /// What the hourly pass hands to thread `workshop`.
-    pub fn hourly_workshop(&self) -> &HourlyWorkshop {
+    pub fn hourly_workshop(&self) -> &WorkshopJob {
         &self.hourly_workshop
     }
 
@@ -703,6 +749,7 @@ impl Collector {
             alert_after_minutes: floor_file.map(FloorFile::alert_after_minutes),
             previous_scene: self.last_scene.borrow().clone(),
             officina_home: Some(self.paths.officina_home.to_string_lossy().into_owned()),
+            workshop_runs: self.workshop_runs.clone(),
         };
         let mut board = build_board(&input, now_ms);
         *self.last_scene.borrow_mut() = states_by_key(&board.columns);

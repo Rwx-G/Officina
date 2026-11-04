@@ -41,6 +41,7 @@ function card(key: string): Card {
     scene: null,
     settled: null,
     subagents: [],
+    run_state: null,
   };
 }
 

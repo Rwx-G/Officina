@@ -802,8 +802,9 @@ container on your Docker engine, behind an egress gateway, and hands back a
 package you review before anything reaches your repository. It is being
 built story by story: a workshop card can be issued and launched, its run
 is followed, its package collected, verified and scanned, imported or
-discarded, and every run can be stopped at once and resumed; the window's
-workshop view and its buttons come in the next stories.
+discarded, and every run can be stopped at once and resumed; runs show on
+the board and in `officina workshop --json`; the window's Workshop section
+and its buttons come in the next stories.
 
 ### Declaring the workshop
 
@@ -1272,7 +1273,34 @@ over decided packages, decided meaning an Import or a Discard with one of
 your reasons: a `no_change` or failed run, and a package `expired` or
 `not_collected`, is no verdict, so a template whose packages you let expire
 shows its `expired` count beside an acceptance they do not lower. The
-workshop view (story 6.18) shows the table.
+Workshop view shows the table.
+
+### Runs on the board and `officina workshop --json`
+
+Each workshop run is a board card of its own kind, keyed by its run: in
+Working while it launches, runs, stops or is collected; in Needs you while
+its package waits for your verdict or was quarantined ("review"), counted
+like any waiting card; in To resume while Stop all keeps it; in Done for
+24 hours after a verdict, a failure, an unknown end or a `no_change` run
+(badge "no change", never Needs you). The board carries the number of
+live runs. Workshop runs have no place in the scene yet. The
+orchestrator's briefing
+lists live runs, packages awaiting a verdict, and quarantined, failed and
+unknown runs of the last 24 hours; `officina mcp` adds no tool, and none
+imports, discards or stops.
+
+`officina workshop --json` prints the Workshop view once, read-only, with
+the window open or closed: the engine's state and key, both stop flags,
+each image's state (`absent`, `building`, `ready`, `mismatch`, `failed`),
+inventories and newest battery with its validity, the live, kept and
+orphan runs, the per-template table and its notices, this week's workshop
+share (workshop launches over every work order launch that started, per
+UTC ISO week) and environment failures, the limits, the credential's kind
+and state with what to do about it (the login command, or `claude
+setup-token` then the floor's `cmdkey` line; never a value), and each
+allow-list entry's route. It holds no worker text. It runs only read
+calls on the engine, and with the engine down it still prints what the
+registry holds. It exits 3 when the registry cannot be read.
 
 ### Stop all and Resume
 
@@ -1369,6 +1397,7 @@ for one approval, as every catalogue format change does.
 | `officina stop --all` | stop the relay and every workshop container of the engine, of any floor; writes the stop flags, never removes one (exit 1 when the engine could not be reached) |
 | `officina subjects --json` | print the registry's subjects and sessions once, read-only (exit 3 when it cannot be read) |
 | `officina version` | print the version |
+| `officina workshop --json` | print the workshop once: engine, images, batteries, runs, per-template table, credential state and routes; read-only (exit 3 when the registry cannot be read) |
 
 ## Roadmap
 

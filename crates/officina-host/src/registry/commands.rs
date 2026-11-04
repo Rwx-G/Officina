@@ -13,8 +13,8 @@ use super::store::{ReaderFailure, onedrive_roots_from_env, open_reader, reader_r
 use crate::collector::Collector;
 
 /// Opens the registry of `collector`'s home read-only and hands the
-/// collector its state, the subject of each filed session and what settles
-/// each ended one (story 4.15): with the
+/// collector its state, the subject of each filed session, what settles
+/// each ended one (story 4.15) and the workshop's runs (AD-121): with the
 /// registry in any other state than readable, cards show no subject and the
 /// board says why (D-47).
 pub fn read_registry(collector: &mut Collector) -> Result<Reader, ReaderFailure> {
@@ -22,13 +22,14 @@ pub fn read_registry(collector: &mut Collector) -> Result<Reader, ReaderFailure>
     let mut report = reader_report(&opened);
     if let Ok(reader) = &opened {
         match reader.card_subjects().and_then(|subjects| {
-            reader
-                .card_settlements()
-                .map(|settlements| (subjects, settlements))
+            let settlements = reader.card_settlements()?;
+            let runs = reader.workshop_board_runs()?;
+            Ok((subjects, settlements, runs))
         }) {
-            Ok((subjects, settlements)) => {
+            Ok((subjects, settlements, runs)) => {
                 collector.set_subjects(subjects);
                 collector.set_settlements(settlements);
+                collector.set_workshop_runs(runs);
             }
             Err(error) => {
                 report = RegistryReport {

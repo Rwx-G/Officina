@@ -2012,6 +2012,161 @@ for (const [name, scenario] of Object.entries(meetingScenarios)) {
   console.log(`fixture ${name}: exit ${view.status}`);
 }
 
+// Workshop runs (story 6.18 AC 5, D-181's kind `workshop`, D-1230): a
+// hand-written, redacted floor with a workshop template approved through
+// `approve_fixture`; one run in each run state written by the window's
+// writer through `workshop_fixture`, at explicit times; the journal lines
+// their launches, finishes and verdicts leave. The real
+// `officina workshop --json` and `board --json` of that home are the
+// fixtures, on an engine path that does not exist, so no fixture reads the
+// machine's own Docker.
+{
+  const name = "workshop-runs";
+  const workshopRunsFloor = `schema = 2
+
+[workshop]
+max_workers = 2
+upstream_proxy = "none"
+
+[[project]]
+name = "billing-api"
+path = "C:/work/billing-api"
+
+[project.workshop]
+hosts = ["index.crates.io"]
+
+[[template]]
+name = "dependency-bump"
+description = "Bump one dependency and fix what breaks"
+projects = ["billing-api"]
+prompt = "Bump {package} to its latest patch release, run the tests, fix what breaks, commit."
+
+[template.params.package]
+values = ["serde_json"]
+
+[template.workshop]
+base = ["main"]
+max_minutes = 30
+`;
+  const runStates = ["launching", "running", "stopping", "collecting", "review", "quarantined", "no_change", "stopped", "imported", "discarded", "failed", "unknown"];
+  const runId = (n) => n.toString(16).padStart(32, "0");
+  const runs = runStates.map((state, i) => ({
+    id: runId(0x6180 + i),
+    template: "dependency-bump",
+    project: "billing-api",
+    seq: i + 1,
+    values: [["package", "serde_json"]],
+    state,
+    started_at_ms: now - (i + 2) * 10 * MIN,
+    state_at_ms: now - (i + 1) * MIN,
+  }));
+  const finishes = {
+    review: ["exited", "package"],
+    quarantined: ["exited", "package"],
+    no_change: ["exited", "no_change"],
+    imported: ["exited", "package"],
+    discarded: ["exited", "package"],
+    failed: ["gateway_limit", "failed"],
+    unknown: ["engine_lost", "unknown"],
+  };
+  const journalLines = [];
+  for (const run of runs) {
+    journalLines.push({
+      ts: run.started_at_ms, kind: "workshop_started", run_id: run.id, name: `dependency-bump-${run.seq}`,
+      template: run.template, project: run.project, values: { package: "serde_json" },
+      image: "officina-workshop:local", image_id: "sha256:0", base_branch: "main", base_commit: "0".repeat(40),
+      hosts: ["index.crates.io"], mounts: [], deadline_ms: 30 * MIN, credential_kind: "oauth-token",
+      argv: ["-p"], plan_sha256: "0".repeat(64), catalogue_hash: "0".repeat(64), prompt_sha256: "0".repeat(64),
+      battery_id: "0".repeat(32), steps: [], outcome: "started",
+    });
+    const finish = finishes[run.state];
+    if (finish) {
+      journalLines.push({
+        ts: run.state_at_ms - 1_000, kind: "workshop_finished", run_id: run.id, template: run.template,
+        project: run.project, base_branch: "main", base_commit: "0".repeat(40), cause: finish[0],
+        outcome: finish[1], duration_ms: 5 * MIN, hooks: {}, refused: finish[0] === "gateway_limit" ? 1 : 0, stream_bytes: 2048,
+      });
+    }
+    if (finish?.[1] === "package") {
+      journalLines.push({
+        ts: run.state_at_ms - 500, kind: "review_package", run_id: run.id, commits: 1, files: 2, insertions: 4,
+        deletions: 1, groups: 1, outcome: run.state === "quarantined" ? "quarantined" : "review",
+        ...(run.state === "quarantined" ? { cause: "too_large" } : {}),
+        sensitive: ["ci"],
+      });
+    }
+    if (run.state === "imported") {
+      journalLines.push({ ts: run.state_at_ms, kind: "review_imported", run_id: run.id, branch: `officina/dependency-bump-${run.seq}`, tip: "1".repeat(40) });
+    }
+    if (run.state === "discarded") {
+      journalLines.push({ ts: run.state_at_ms, kind: "review_discarded", run_id: run.id, reason: "poor_result" });
+    }
+  }
+  const workshopFixture = join(targetDir, "debug", "examples", `workshop_fixture${exe}`);
+  execFileSync(
+    "cargo",
+    ["build", "--quiet", "--locked", "-p", "officina-host", "--example", "workshop_fixture", "--features", "window-authority"],
+    { cwd: root, stdio: ["ignore", "ignore", "inherit"] },
+  );
+  const tmp = mkdtempSync(join(tmpdir(), `officina-fixture-${name}-`));
+  const home = join(tmp, "home");
+  const officinaHome = join(tmp, "officina");
+  mkdirSync(join(home, ".claude", "sessions"), { recursive: true });
+  mkdirSync(officinaHome, { recursive: true });
+  writeFileSync(join(officinaHome, "floor.toml"), workshopRunsFloor);
+  approveFixture(officinaHome, "approve");
+  const script = join(tmp, "runs.json");
+  writeFileSync(script, JSON.stringify({ runs }));
+  execFileSync(workshopFixture, [officinaHome, script], { stdio: ["ignore", "ignore", "inherit"] });
+  mkdirSync(join(officinaHome, "journal"), { recursive: true });
+  for (const line of journalLines) {
+    appendFileSync(join(officinaHome, "journal", `${utcDay(line.ts)}.jsonl`), JSON.stringify({ v: 1, ...line }) + "\n");
+  }
+  const agents = join(tmp, "agents.json");
+  writeFileSync(agents, "[]");
+  const env = {
+    SYSTEMROOT: process.env.SYSTEMROOT ?? "",
+    USERPROFILE: home,
+    HOME: home,
+    OFFICINA_HOME: officinaHome,
+    OFFICINA_CLAUDE_BIN: fakeClaude,
+    FAKE_CLAUDE_FIXTURE: agents,
+    FAKE_CLAUDE_MODE: "ok",
+    OFFICINA_DOCKER_BIN: join(tmp, "no-docker", "docker.exe"),
+  };
+  const view = officinaJson(["workshop", "--json"], env);
+  if (view.status !== 0) throw new Error(`${name}: officina workshop exited ${view.status}: ${view.stderr}`);
+  const board = officinaJson(["board", "--json"], env);
+  if (board.status !== 0) throw new Error(`${name}: officina board exited ${board.status}: ${board.stderr}`);
+  const printed = JSON.parse(view.stdout);
+  const boardJson = JSON.parse(board.stdout);
+  const cards = Object.values(boardJson.columns).flat().filter((c) => c.kind === "workshop");
+  // A line of the last hours may fall in last week, whose share and
+  // failures this week's view does not count.
+  const monday = new Date(now);
+  const weekStart = Date.UTC(monday.getUTCFullYear(), monday.getUTCMonth(), monday.getUTCDate() - ((monday.getUTCDay() + 6) % 7));
+  const earlyInWeek = now - weekStart < 3 * HOUR;
+  const checks = [
+    [printed.enabled, "the workshop on"],
+    [printed.runs.live.length === 4 && printed.runs.kept.length === 1, "four live runs and one kept"],
+    [printed.templates.length === 1 && printed.templates[0].decided === 2, "the template's two verdicts"],
+    [earlyInWeek || printed.share.workshop === runStates.length, "every launch in the week's share"],
+    [earlyInWeek || printed.environment_failures.failures === 1, "one environment failure"],
+    [cards.length === runStates.length, "a card for each run state"],
+    [boardJson.workshop_live === 4, "the live-run count"],
+  ];
+  for (const [held, what] of checks) {
+    if (!held) throw new Error(`${name}: expected ${what}: ${view.stdout}`);
+  }
+  for (const text of [view.stdout, board.stdout]) {
+    if (text.includes(tmp.replaceAll("\\", "/")) || text.includes(tmp)) throw new Error(`${name}: a payload names its temporary folder`);
+  }
+  writeFixture(name, "workshop", view.stdout);
+  writeFixture(`${name}-board`, "workshop", board.stdout);
+  rmSync(tmp, { recursive: true, force: true });
+  console.log(`fixture ${name}: exit ${view.status}`);
+}
+
 // D-181: every fixture file and its kind, for the loader the specs and the
 // Vitest cases share (`e2e/fixture-index.ts`).
 writeFileSync(join(outDir, "index.json"), JSON.stringify({ files: fixtureKinds }, null, 2) + "\n");

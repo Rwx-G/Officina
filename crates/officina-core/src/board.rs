@@ -27,7 +27,9 @@ use crate::untrusted::Untrusted;
 /// v0.4 stories (P-22 as amended by D-461). 5: an approval's class and
 /// state (v0.5, AD-92), extended under this number by the later v0.5
 /// stories (P-26), the orchestrator's presence among them (story 5.16).
-pub const BOARD_SCHEMA: u32 = 5;
+/// 6: workshop runs as cards of their own kind and the live-run count
+/// (v0.6, AD-121, P-53).
+pub const BOARD_SCHEMA: u32 = 6;
 
 /// What a pending `auto` request's card says of why it is the author's
 /// (AD-87, D-143): in shadow mode, a cause found before any call as it is
@@ -119,11 +121,20 @@ pub enum Badge {
     Stopped,
     /// Interactive session the author exited.
     Ended,
+    /// A workshop run whose work branch has no commit past its base
+    /// (AD-110): nothing to review, never a failure.
+    NoChange,
 }
 
 impl Badge {
     /// Every badge.
-    pub const ALL: [Badge; 4] = [Self::Unknown, Self::Interrupted, Self::Stopped, Self::Ended];
+    pub const ALL: [Badge; 5] = [
+        Self::Unknown,
+        Self::Interrupted,
+        Self::Stopped,
+        Self::Ended,
+        Self::NoChange,
+    ];
 }
 
 /// Where one session lands.
@@ -191,6 +202,9 @@ pub struct Card {
     /// one's first start, at most [`MAX_SUBAGENTS`]; empty for To resume
     /// and Done.
     pub subagents: Vec<SubagentView>,
+    /// A workshop card's run state (AD-121); `None` for a session.
+    #[serde(default)]
+    pub run_state: Option<crate::workshop::run::RunState>,
 }
 
 /// A running sub-agent of a card's session (AD-176): only what its
@@ -233,6 +247,9 @@ pub struct SessionSettlement {
 pub enum SessionKindView {
     Interactive,
     Background,
+    /// A workshop run (AD-121): no session of the author's machine, so no
+    /// focus, attach or answer reaches it.
+    Workshop,
 }
 
 impl From<SessionKind> for SessionKindView {
@@ -366,6 +383,11 @@ pub struct Board {
     /// never a card, never counted in `waiting_count`.
     #[serde(default)]
     pub orchestrator: Option<OrchestratorPresence>,
+    /// Workshop runs that may hold a container now (`launching` to
+    /// `collecting`): the Orchestrator view switch's live-run count
+    /// (D-618).
+    #[serde(default)]
+    pub workshop_live: u32,
 }
 
 /// A declared project, path already resolved and normalised.
@@ -428,6 +450,9 @@ pub struct BoardInput {
     /// The Officina home, whose `orchestrator/workdir` the orchestrator's
     /// agents entry works in (AD-89); `None` shows it as any session.
     pub officina_home: Option<String>,
+    /// The workshop's runs the registry holds (AD-121); empty when it
+    /// could not be read.
+    pub workshop_runs: Vec<crate::workshop::view::BoardRun>,
 }
 
 /// Events of one session, reduced to what a card shows.
@@ -831,6 +856,7 @@ fn new_card(
         } else {
             Vec::new()
         },
+        run_state: None,
     }
 }
 
@@ -1065,6 +1091,26 @@ pub fn build_board(input: &BoardInput, now_ms: i64) -> Board {
             previous: &input.previous_scene,
         },
     );
+    // After the scene: a workshop card has no place in it until story
+    // 6.23 (D-619), so the scene's rules never see one.
+    let workshop =
+        crate::workshop::view::workshop_cards(&input.workshop_runs, &input.projects, now_ms);
+    let workshop_waiting = workshop
+        .iter()
+        .filter(|card| card.column == Column::NeedsYou)
+        .count();
+    for card in workshop {
+        columns.get_mut(card.column).push(card);
+    }
+    for column in Column::ALL {
+        sort_column(column, columns.get_mut(column));
+    }
+    let waiting = waiting + workshop_waiting;
+    let workshop_live = input
+        .workshop_runs
+        .iter()
+        .filter(|run| run.state.is_live())
+        .count();
 
     Board {
         schema: BOARD_SCHEMA,
@@ -1093,6 +1139,7 @@ pub fn build_board(input: &BoardInput, now_ms: i64) -> Board {
         next_escalation_at_ms: crate::scene::next_escalation_at_ms(&columns, alert_after_ms),
         columns,
         orchestrator,
+        workshop_live: u32::try_from(workshop_live).unwrap_or(u32::MAX),
     }
 }
 

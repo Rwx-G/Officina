@@ -181,6 +181,51 @@
         {"key": "pid:5004:1761553000000", "column": "working", "badge": null, "waiting_for": null},
         {"key": "pid:5003:1761552000000", "column": "working", "badge": null, "waiting_for": null}
       ]
+    },
+    {
+      "name": "workshop runs live, awaiting a verdict and kept (AD-121): a kept run waits to be resumed whatever its age",
+      "now_ms": 1761555600000,
+      "agents": [],
+      "events": [],
+      "workshop": [
+        {"id": "0000000000000000000000000000a001", "template": "bump", "project": "repo-a", "name": "bump-a001", "state": "launching", "state_at_ms": 1761555599900, "started_at_ms": 1761555599900},
+        {"id": "0000000000000000000000000000a002", "template": "bump", "project": "repo-a", "name": "bump-a002", "state": "running", "state_at_ms": 1761555599800, "started_at_ms": 1761555599700},
+        {"id": "0000000000000000000000000000a003", "template": "bump", "project": "repo-a", "name": "bump-a003", "state": "stopping", "state_at_ms": 1761555599950, "started_at_ms": 1761555599600},
+        {"id": "0000000000000000000000000000a004", "template": "bump", "project": "repo-a", "name": "bump-a004", "state": "collecting", "state_at_ms": 1761555599940, "started_at_ms": 1761555599500},
+        {"id": "0000000000000000000000000000a005", "template": "bump", "project": "repo-a", "name": "bump-a005", "state": "review", "state_at_ms": 1761555599000, "started_at_ms": 1761555598000},
+        {"id": "0000000000000000000000000000a006", "template": "bump", "project": "repo-a", "name": "bump-a006", "state": "quarantined", "state_at_ms": 1761555599100, "started_at_ms": 1761555597900},
+        {"id": "0000000000000000000000000000a007", "template": "bump", "project": "repo-a", "name": "bump-a007", "state": "stopped", "state_at_ms": 1761296400000, "started_at_ms": 1761296399999}
+      ],
+      "expect": [
+        {"key": "ws:0000000000000000000000000000a005", "column": "needs_you", "badge": null, "waiting_for": "review"},
+        {"key": "ws:0000000000000000000000000000a006", "column": "needs_you", "badge": null, "waiting_for": "review"},
+        {"key": "ws:0000000000000000000000000000a001", "column": "working", "badge": null, "waiting_for": null},
+        {"key": "ws:0000000000000000000000000000a002", "column": "working", "badge": null, "waiting_for": null},
+        {"key": "ws:0000000000000000000000000000a003", "column": "working", "badge": null, "waiting_for": null},
+        {"key": "ws:0000000000000000000000000000a004", "column": "working", "badge": null, "waiting_for": null},
+        {"key": "ws:0000000000000000000000000000a007", "column": "to_resume", "badge": null, "waiting_for": null}
+      ]
+    },
+    {
+      "name": "workshop runs done for 24 h after their state (AD-121): no change is never Needs you",
+      "now_ms": 1761555600000,
+      "agents": [],
+      "events": [],
+      "workshop": [
+        {"id": "0000000000000000000000000000b001", "template": "bump", "project": "repo-a", "name": "bump-b001", "state": "no_change", "state_at_ms": 1761555599900, "started_at_ms": 1761555599000},
+        {"id": "0000000000000000000000000000b002", "template": "bump", "project": "repo-a", "name": "bump-b002", "state": "imported", "state_at_ms": 1761555599800, "started_at_ms": 1761555599000},
+        {"id": "0000000000000000000000000000b003", "template": "bump", "project": "repo-a", "name": "bump-b003", "state": "discarded", "state_at_ms": 1761555599700, "started_at_ms": 1761555599000},
+        {"id": "0000000000000000000000000000b004", "template": "bump", "project": "repo-a", "name": "bump-b004", "state": "failed", "state_at_ms": 1761555599600, "started_at_ms": 1761555599000},
+        {"id": "0000000000000000000000000000b005", "template": "bump", "project": "repo-a", "name": "bump-b005", "state": "unknown", "state_at_ms": 1761555599500, "started_at_ms": 1761555599000},
+        {"id": "0000000000000000000000000000b006", "template": "bump", "project": "repo-a", "name": "bump-b006", "state": "failed", "state_at_ms": 1761469199999, "started_at_ms": 1761469199998}
+      ],
+      "expect": [
+        {"key": "ws:0000000000000000000000000000b001", "column": "done", "badge": "no_change", "waiting_for": null},
+        {"key": "ws:0000000000000000000000000000b002", "column": "done", "badge": null, "waiting_for": null},
+        {"key": "ws:0000000000000000000000000000b003", "column": "done", "badge": null, "waiting_for": null},
+        {"key": "ws:0000000000000000000000000000b004", "column": "done", "badge": "interrupted", "waiting_for": null},
+        {"key": "ws:0000000000000000000000000000b005", "column": "done", "badge": "unknown", "waiting_for": null}
+      ]
     }
   ]
 }

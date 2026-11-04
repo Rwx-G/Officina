@@ -12,6 +12,7 @@ closed_enum! {
     #[serde(rename_all = "snake_case")]
     /// Where a run's routes came from (D-611), as doctor names it.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+    #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
     pub enum ProxySource {
         /// An explicit `host:port` in the floor.
         Floor,

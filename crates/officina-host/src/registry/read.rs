@@ -324,6 +324,13 @@ impl Reader {
         crate::registry::workshop::run(&self.conn, id)
     }
 
+    /// Every run as the board and the Workshop view read it (AD-121).
+    pub fn workshop_board_runs(
+        &self,
+    ) -> rusqlite::Result<Vec<officina_core::workshop::view::BoardRun>> {
+        crate::registry::workshop::board_runs(&self.conn)
+    }
+
     /// The runs in one of `states`: doctor reads the kept ones (AD-116).
     pub fn workshop_runs_in(
         &self,

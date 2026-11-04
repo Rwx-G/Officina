@@ -3,6 +3,8 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import type { Board } from "../src/lib/generated/Board";
+import type { WorkshopView } from "../src/lib/generated/WorkshopView";
 import { fixtureOf, fixturesOf, readFixtureIndex } from "./fixture-index";
 
 function dirWith(files: Record<string, unknown>): string {
@@ -45,5 +47,19 @@ describe("fixture index", () => {
     });
     expect(fixtureOf("orchestrator", "orchestrator-day", listed)).toEqual({ schema: 1 });
     expect(() => fixtureOf("orchestrator", "orchestrator-empty", listed)).toThrow(/named orchestrator-empty.*pnpm e2e:fixtures/);
+  });
+
+  // Story 6.18 AC 5: the kind `workshop` holds the real Workshop view and
+  // the board of the same home, one card per run state.
+  it("the workshop kind loads the view and its board", () => {
+    const view = fixtureOf<WorkshopView>("workshop", "workshop-runs");
+    expect(view.schema).toBe(1);
+    expect(view.runs.live.length).toBeGreaterThan(0);
+    const board = fixtureOf<Board>("workshop", "workshop-runs-board");
+    const cards = Object.values(board.columns)
+      .flat()
+      .filter((card) => card.kind === "workshop");
+    expect(new Set(cards.map((card) => card.run_state)).size).toBe(cards.length);
+    expect(board.workshop_live).toBe(view.runs.live.length);
   });
 });

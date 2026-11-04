@@ -3,4 +3,4 @@
 /**
  * Qualifier shown on a card.
  */
-export type Badge = "unknown" | "interrupted" | "stopped" | "ended";
+export type Badge = "unknown" | "interrupted" | "stopped" | "ended" | "no_change";

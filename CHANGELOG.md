@@ -8,6 +8,19 @@ project uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Workshop runs on the board and `officina workshop --json` (v0.6, story
+  6.18): each run is a board card of kind `workshop` (Working while live,
+  Needs you while its package awaits a verdict or is quarantined, To
+  resume while kept, Done for 24 h after it ends, a `no_change` run with
+  its badge and never Needs you), with the live-run count on the board;
+  the board's schema moves to 6. The Workshop view (schema 1, event
+  `workshop://updated`, command `get_workshop`) holds the engine, both
+  flags, the images with their inventories and battery, the live, kept
+  and orphan runs, the per-template table, this week's workshop share and
+  environment failures, the limits, the credential's state and action and
+  the routes; `officina workshop --json` prints it read-only (exit 3 when
+  the registry cannot be read). The briefing gains a workshop section;
+  `officina mcp` adds no tool.
 - Stop all and Resume (v0.6, story 6.17): `stop_workshop`, on its own
   blocking thread, writes `workshop/stopped` and `relay/stopped` (`since_ms`
   and `by`, a present flag left alone), latches thread `workshop` before

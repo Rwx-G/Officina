@@ -49,6 +49,7 @@ const COMMANDS: &[&str] = &[
     "stop_workshop",
     "resume_workshop",
     "remove_run",
+    "get_workshop",
 ];
 
 fn main() {

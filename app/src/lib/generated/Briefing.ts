@@ -9,6 +9,7 @@ import type { Section } from "./Section";
 import type { SubjectItem } from "./SubjectItem";
 import type { TriageItem } from "./TriageItem";
 import type { WaitingItem } from "./WaitingItem";
+import type { WorkshopItem } from "./WorkshopItem";
 
 /**
  * The briefing (AD-83).
@@ -22,4 +23,9 @@ proposals: Section<ProposalView>,
 /**
  * Newest first.
  */
-changed: Section<ChangedItem>, };
+changed: Section<ChangedItem>, 
+/**
+ * Live runs, packages awaiting a verdict, and quarantined, failed and
+ * unknown runs of the last 24 h (AD-121), in board order.
+ */
+workshop: Section<WorkshopItem>, };

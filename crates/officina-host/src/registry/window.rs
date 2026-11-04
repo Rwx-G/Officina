@@ -148,6 +148,14 @@ impl WindowRegistry {
             .unwrap_or_default()
     }
 
+    /// Every workshop run as the board and the Workshop view read it
+    /// (AD-121), while the registry is writable; empty otherwise, as
+    /// [`Self::card_subjects`].
+    pub fn workshop_board_runs(&mut self) -> Vec<officina_core::workshop::view::BoardRun> {
+        self.on_writer(|writer| Ok(crate::registry::workshop::board_runs(&writer.conn)?))
+            .unwrap_or_default()
+    }
+
     /// What the board says of the registry (`Diagnostics.registry`).
     pub fn report(&self) -> RegistryReport {
         let (state, detail, location) = match &self.slot {

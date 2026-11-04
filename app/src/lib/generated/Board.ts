@@ -47,4 +47,10 @@ next_escalation_at_ms: number | null,
  * The orchestrator while an agents entry shows it (AD-89, D-166):
  * never a card, never counted in `waiting_count`.
  */
-orchestrator: OrchestratorPresence | null, };
+orchestrator: OrchestratorPresence | null, 
+/**
+ * Workshop runs that may hold a container now (`launching` to
+ * `collecting`): the Orchestrator view switch's live-run count
+ * (D-618).
+ */
+workshop_live: number, };

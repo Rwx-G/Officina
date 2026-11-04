@@ -18,6 +18,7 @@ import type { LaunchAnswer } from "./lib/generated/LaunchAnswer";
 import type { MeetingView } from "./lib/generated/MeetingView";
 import type { AnswerResult } from "./lib/generated/AnswerResult";
 import type { OrchestratorView } from "./lib/generated/OrchestratorView";
+import type { WorkshopView } from "./lib/generated/WorkshopView";
 import type { RegistryView } from "./lib/generated/RegistryView";
 import type { RelayView } from "./lib/generated/RelayView";
 import type { ReviewView } from "./lib/generated/ReviewView";
@@ -59,6 +60,10 @@ declare global {
     __officinaLaunchHeld?: boolean;
     /** Sends the held launch's answer; set by the mock while one is held. */
     __officinaReleaseLaunch?: () => void;
+    /** The Workshop view `get_workshop` answers (story 6.18). */
+    __officinaWorkshop?: WorkshopView | null;
+    /** Sets the Workshop view and emits `workshop://updated`. */
+    __officinaPushWorkshop?: (view: WorkshopView) => Promise<void>;
     /** The Orchestrator view `get_orchestrator` answers (story 5.8). */
     __officinaOrchestrator?: OrchestratorView | null;
     /** What `open_meeting` answers, by key (story 5.10); a key not named

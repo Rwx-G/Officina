@@ -651,6 +651,15 @@ fn no_command_writes_under_the_claude_config_dir() {
         ingested.contains(&"s".to_owned()),
         "the collector ingested: {ingested:?}"
     );
+    // `officina workshop --json` (story 6.18 AC 3), on the same missing
+    // engine: it reads the registry and prints the view.
+    let mut workshop = env.officina(&["workshop", "--json"]);
+    workshop.current_dir(&lab).env(
+        "OFFICINA_DOCKER_BIN",
+        env.root.path().join("no-docker").join("docker.exe"),
+    );
+    let out = common::run_with(workshop, b"");
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
     // `officina stop --all` last, since it stops the relay (story 6.17
     // AC 3). Its engine is a path that does not exist, so the machine's
     // own Docker, found through the registry, is never reached: it writes

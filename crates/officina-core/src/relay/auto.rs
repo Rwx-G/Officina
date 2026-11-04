@@ -366,7 +366,9 @@ pub fn session_bound(caller: &[CallerProcess], claimed: Option<&ClaimedSession>)
     let authors_prompts = match claimed.kind {
         Some(SessionKindView::Interactive) => true,
         Some(SessionKindView::Background) => claimed.work_order,
-        None => false,
+        // A workshop worker runs in a container: no process of this
+        // machine is its session.
+        Some(SessionKindView::Workshop) | None => false,
     };
     let (Some(pid), Some(started)) = (claimed.pid, claimed.started) else {
         return false;

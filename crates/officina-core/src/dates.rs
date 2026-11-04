@@ -94,6 +94,39 @@ pub fn day_start_ms(day: (i64, u32, u32)) -> i64 {
     (era * 146_097 + doe - 719_468) * DAY_MS
 }
 
+/// Unix milliseconds at which the UTC ISO week holding `unix_ms` begins:
+/// its Monday at 00:00 UTC (the Workshop share's week, D-214).
+///
+/// ```
+/// use officina_core::dates::{iso_week_start_ms, day_start_ms};
+/// // 2026-11-04 is a Wednesday; its week begins on Monday 2026-11-02.
+/// let wednesday = day_start_ms((2026, 11, 4)) + 5;
+/// assert_eq!(iso_week_start_ms(wednesday), day_start_ms((2026, 11, 2)));
+/// ```
+pub fn iso_week_start_ms(unix_ms: i64) -> i64 {
+    let days = unix_ms.div_euclid(DAY_MS);
+    // 1970-01-01 was a Thursday, the fourth day of an ISO week.
+    let weekday = (days + 3).rem_euclid(7);
+    (days - weekday) * DAY_MS
+}
+
+/// The UTC ISO week holding `unix_ms`, written `YYYY-Www`: the year is the
+/// one its Thursday falls in, as ISO 8601 numbers weeks.
+///
+/// ```
+/// use officina_core::dates::{iso_week_text, day_start_ms};
+/// assert_eq!(iso_week_text(day_start_ms((2026, 11, 4))), "2026-W45");
+/// // 2027-01-01 is a Friday: its week is the last of 2026.
+/// assert_eq!(iso_week_text(day_start_ms((2027, 1, 1))), "2026-W53");
+/// assert_eq!(iso_week_text(day_start_ms((2024, 12, 30))), "2025-W01");
+/// ```
+pub fn iso_week_text(unix_ms: i64) -> String {
+    let thursday = iso_week_start_ms(unix_ms) + 3 * DAY_MS;
+    let (year, _, _) = utc_date(thursday);
+    let week = (thursday - day_start_ms((year, 1, 1))) / DAY_MS / 7 + 1;
+    format!("{year:04}-W{week:02}")
+}
+
 /// An RFC 3339 time as the engine prints it (`2026-11-02T10:00:00.5Z`,
 /// `...+01:00`) in Unix milliseconds; fractions past milliseconds are cut.
 ///

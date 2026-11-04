@@ -7,6 +7,7 @@ import type { SessionKindView } from "./SessionKindView";
 import type { Settled } from "./Settled";
 import type { SubagentView } from "./SubagentView";
 import type { SubjectRef } from "./SubjectRef";
+import type { WorkshopRunState } from "./WorkshopRunState";
 
 /**
  * One session on the board.
@@ -55,4 +56,8 @@ settled: Settled | null,
  * one's first start, at most [`MAX_SUBAGENTS`]; empty for To resume
  * and Done.
  */
-subagents: Array<SubagentView>, };
+subagents: Array<SubagentView>, 
+/**
+ * A workshop card's run state (AD-121); `None` for a session.
+ */
+run_state: WorkshopRunState | null, };

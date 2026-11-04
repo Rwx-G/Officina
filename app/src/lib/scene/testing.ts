@@ -62,6 +62,7 @@ export function card(key: string, zone: Zone, o: CardOptions = {}): Card {
     subject: null,
     settled: null,
     subagents: o.subagents ?? [],
+    run_state: null,
     scene: {
       zone,
       waiting_since_ms: null,

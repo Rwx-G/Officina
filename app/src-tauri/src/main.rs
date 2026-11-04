@@ -34,6 +34,7 @@ use officina_core::workshop::review::{
     ApprovalAnswer, DiscardAnswer, DiscardReason, ImportAnswer, ReviewView,
 };
 use officina_core::workshop::run::{RemoveRunAnswer, ResumeAnswer, ResumeChoice, StopAnswer};
+use officina_core::workshop::view::WorkshopView;
 use officina_host::collector::Collector;
 use officina_host::files::now_ms;
 use officina_host::focus::{
@@ -58,6 +59,8 @@ const RELAY_EVENT: &str = "relay://updated";
 const REGISTRY_EVENT: &str = "registry://updated";
 /// Event carrying each new Orchestrator view to the window (AD-92).
 const ORCHESTRATOR_EVENT: &str = "orchestrator://updated";
+/// Event carrying each new Workshop view to the window (AD-121).
+const WORKSHOP_EVENT: &str = "workshop://updated";
 /// How long closing the window waits for the briefing's reading to be
 /// recorded (AD-83): the collector drops a request within
 /// `AUTHOR_HEADROOM` of its deadline, so this leaves it a second to start,
@@ -71,6 +74,13 @@ struct AppState {
     registry: Arc<RwLock<Option<RegistryView>>>,
     /// The last Orchestrator view, for `get_orchestrator`'s first paint.
     orchestrator: Arc<RwLock<Option<OrchestratorView>>>,
+    /// The last Workshop view, for `get_workshop`'s first paint.
+    workshop_view: Arc<RwLock<Option<WorkshopView>>>,
+    /// Set from a Build images click until its job ends: the Workshop
+    /// view's `building` (AD-121).
+    images_building: Arc<std::sync::atomic::AtomicBool>,
+    /// Queues a re-read of the Workshop view's engine half (AD-121).
+    workshop_reread: officina_host::collector::WorkshopJob,
     /// The relay home the collector reads, which the authority writes.
     relay_home: RelayHome,
     sender: std::sync::Mutex<std::sync::mpsc::Sender<CollectorMsg>>,
@@ -115,6 +125,21 @@ impl AppState {
             reviews: Arc::clone(&self.reviews),
             now_ms,
             engine_retry: officina_host::workshop::follow::ENGINE_RETRY,
+        }
+    }
+
+    /// What the Workshop view's engine half is read with (AD-121): the
+    /// window's environment, the Credential Manager, the credential state
+    /// and Windows' proxy configuration.
+    fn engine_reader(&self) -> officina_host::workshop::view::EngineReader {
+        officina_host::workshop::view::EngineReader {
+            relay: self.relay_home.clone(),
+            exe_dir: self.exe_dir.clone().unwrap_or_default(),
+            env: self.base_env.vars().to_vec(),
+            docker: officina_host::workshop::engine::resolve(),
+            store: Arc::new(officina_host::relay::credential::SystemCredentialStore),
+            states: Arc::new(officina_host::workshop::launch::UncheckedStates),
+            proxy: Arc::new(officina_host::workshop::proxy::WinHttpReader),
         }
     }
 
@@ -176,6 +201,10 @@ impl Emit for WindowEvents {
 
     fn orchestrator(&self, view: &OrchestratorView) {
         let _ = self.app.emit(ORCHESTRATOR_EVENT, view);
+    }
+
+    fn workshop(&self, view: &WorkshopView) {
+        let _ = self.app.emit(WORKSHOP_EVENT, view);
     }
 }
 
@@ -239,6 +268,13 @@ fn get_registry(state: State<'_, AppState>) -> Option<RegistryView> {
 #[tauri::command]
 fn get_orchestrator(state: State<'_, AppState>) -> Option<OrchestratorView> {
     state.orchestrator.read().ok().and_then(|o| o.clone())
+}
+
+/// The last Workshop view, for the first paint, from the cache: never
+/// through the collector; later ones come as events (AD-121).
+#[tauri::command]
+fn get_workshop(state: State<'_, AppState>) -> Option<WorkshopView> {
+    state.workshop_view.read().ok().and_then(|w| w.clone())
 }
 
 /// Records that the author read the briefing now, on leaving the
@@ -582,11 +618,29 @@ async fn build_images(state: State<'_, AppState>) -> Result<BuildAnswer, IpcErro
         busy: Arc::clone(&state.build_busy),
         now_ms,
     };
-    tauri::async_runtime::spawn_blocking(move || {
-        officina_host::workshop::build::build_images(&sender, &thread, context, Box::new(|| {}))
+    // The Workshop view shows `building` from the click to the job's end
+    // (AD-121): a click refused before the job is queued clears it at once.
+    let building = Arc::clone(&state.images_building);
+    building.store(true, std::sync::atomic::Ordering::SeqCst);
+    let reread = state.workshop_reread.clone();
+    let done = {
+        let building = Arc::clone(&building);
+        let reread = reread.clone();
+        Box::new(move || {
+            building.store(false, std::sync::atomic::Ordering::SeqCst);
+            reread.run();
+        })
+    };
+    let answer = tauri::async_runtime::spawn_blocking(move || {
+        officina_host::workshop::build::build_images(&sender, &thread, context, done)
     })
     .await
-    .map_err(|e| IpcError::internal(e.to_string()))?
+    .map_err(|e| IpcError::internal(e.to_string()))?;
+    if !matches!(answer, Ok(BuildAnswer::Queued)) {
+        building.store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+    reread.run();
+    answer
 }
 
 /// Run escape battery (AD-117, D-249): a pointer click in the window
@@ -974,9 +1028,11 @@ fn main() {
             // Every `claude` the window starts has its environment built
             // from the window's own, read once here (D-86), by its kind's
             // rule (D-561).
-            let hourly = officina_host::collector::HourlyWorkshop::default();
-            let collector =
-                Collector::new(floor_arg().as_deref())?.with_hourly_workshop(hourly.clone());
+            let hourly = officina_host::collector::WorkshopJob::default();
+            let reread = officina_host::collector::WorkshopJob::default();
+            let collector = Collector::new(floor_arg().as_deref())?
+                .with_hourly_workshop(hourly.clone())
+                .with_workshop_reread(reread.clone());
             let claude = collector.claude().map(std::path::Path::to_path_buf);
             let base_env = collector.base_env().clone();
             let relay_home = collector.relay().clone();
@@ -1005,11 +1061,15 @@ fn main() {
                 watch.sender.clone(),
             );
             let collector_sender = watch.sender.clone();
+            let watch_sender = watch.sender.clone();
             app.manage(AppState {
                 board: watch.board,
                 relay: watch.relay,
                 registry: watch.registry,
                 orchestrator: watch.orchestrator,
+                workshop_view: watch.workshop,
+                images_building: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                workshop_reread: reread.clone(),
                 relay_home,
                 sender: std::sync::Mutex::new(watch.sender),
                 paths: watch.paths,
@@ -1036,6 +1096,22 @@ fn main() {
             hourly.set(Box::new(move || {
                 officina_host::workshop::stop::expire_kept_on_thread(&context);
             }));
+            // The Workshop view's engine half (AD-121): read now, after the
+            // engine read queued above, and again after each action that
+            // changes it.
+            let job = state.workshop.workshop.clone();
+            let engine_reader = state.engine_reader();
+            let building = Arc::clone(&state.images_building);
+            let to_collector = watch_sender.clone();
+            reread.set(Box::new(move || {
+                officina_host::workshop::view::reread_on_thread(
+                    &job,
+                    engine_reader.clone(),
+                    Arc::clone(&building),
+                    to_collector.clone(),
+                );
+            }));
+            reread.run();
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -1096,6 +1172,7 @@ fn main() {
             dismiss_proposal,
             launch_work_order,
             get_orchestrator,
+            get_workshop,
             mark_briefing_read,
             start_orchestrator,
             open_meeting,

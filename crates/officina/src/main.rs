@@ -1,7 +1,7 @@
 //! `officina`: the console binary. Claude Code runs `hook` and `quota write`;
 //! sessions run `run`; the orchestrator's MCP config runs `mcp`; the
-//! author runs `doctor`, `board --json`, `relay --json`, `stop --all` and
-//! `subjects --json`.
+//! author runs `doctor`, `board --json`, `relay --json`, `stop --all`,
+//! `subjects --json` and `workshop --json`.
 //! Arguments are parsed by hand (AD-16, AD-29): a few subcommands do not
 //! justify a parser in the hook's image.
 //!
@@ -56,7 +56,11 @@ usage: officina <command>
   subjects --json [--floor <path>]
                                   print the registry's subjects and sessions once,
                                   read-only (exit 3 when it cannot be read)
-  version                         print the version";
+  version                         print the version
+  workshop --json                 print the workshop once: engine, images,
+                                  batteries, runs, per-template table, the
+                                  credential's state and the routes; read-only
+                                  (exit 3 when the registry cannot be read)";
 
 /// Everything Claude Code wrote on stdin. A read error is not reported: the
 /// hook and the quota writer must exit 0 whatever happens (FR-3), and the
@@ -405,6 +409,41 @@ fn stop_all_cmd() -> ExitCode {
     }
 }
 
+/// `officina workshop --json` (AD-121): the Workshop view from the
+/// read-only registry and, when it answers, the engine's read half. Exit 0,
+/// 3 when the registry cannot be read (D-47), 1 when the home cannot be
+/// determined.
+fn workshop_json() -> ExitCode {
+    let Some(relay) = RelayHome::from_env() else {
+        eprintln!("officina: no Officina home, set OFFICINA_HOME or USERPROFILE");
+        return ExitCode::FAILURE;
+    };
+    let reader = officina_host::workshop::view::EngineReader {
+        relay,
+        exe_dir: std::env::current_exe()
+            .ok()
+            .and_then(|exe| exe.parent().map(std::path::Path::to_path_buf))
+            .unwrap_or_default(),
+        env: officina_host::spawn::BaseEnv::from_process()
+            .vars()
+            .to_vec(),
+        docker: officina_host::workshop::engine::resolve(),
+        store: std::sync::Arc::new(officina_host::relay::credential::SystemCredentialStore),
+        states: std::sync::Arc::new(officina_host::workshop::launch::UncheckedStates),
+        proxy: std::sync::Arc::new(officina_host::workshop::proxy::WinHttpReader),
+    };
+    match officina_host::workshop::view::cli_view(&reader, now_ms()) {
+        Ok(view) => match print_json(serde_json::to_string_pretty(&view)) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(code) => code,
+        },
+        Err(unread) => {
+            eprintln!("officina: the registry could not be read: {}", unread.0);
+            ExitCode::from(EXIT_UNREADABLE)
+        }
+    }
+}
+
 /// `officina mcp [--floor <path>]` (AD-90): the orchestrator's MCP server.
 /// Exit 0 at the end of stdin, 1 with one line on stderr when it does not
 /// run as the orchestrator's server or its streams fail, 64 on usage.
@@ -475,6 +514,7 @@ fn main() -> ExitCode {
         Some("relay") if rest == ["--json"] => relay_json(),
         Some("stop") if rest == ["--all"] => stop_all_cmd(),
         Some("subjects") if rest.iter().any(|a| a == "--json") => with_floor(rest, subjects_json),
+        Some("workshop") if rest == ["--json"] => workshop_json(),
         Some("version" | "--version") => {
             println!("officina {}", env!("CARGO_PKG_VERSION"));
             ExitCode::SUCCESS

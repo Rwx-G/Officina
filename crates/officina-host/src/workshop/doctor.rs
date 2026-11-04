@@ -668,7 +668,7 @@ fn read_docker_config(env: &[(String, String)]) -> Option<String> {
 }
 
 /// The stdout of a read call, when it succeeded.
-fn read_call(
+pub(crate) fn read_call(
     docker: &ResolvedDocker,
     call: &EngineCall,
     env: &[(String, String)],

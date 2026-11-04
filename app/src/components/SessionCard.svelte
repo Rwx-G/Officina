@@ -18,7 +18,13 @@
   }
   let { card, store, index }: Props = $props();
 
-  const BADGE_TEXT = { unknown: "unknown", interrupted: "interrupted", stopped: "stopped", ended: "ended" } as const;
+  const BADGE_TEXT = {
+    unknown: "unknown",
+    interrupted: "interrupted",
+    stopped: "stopped",
+    ended: "ended",
+    no_change: "no change",
+  } as const;
   /** Why a card is in Done though Claude Code did not say it finished. */
   const SETTLED_TEXT = { marked_done: "marked done", subject_archived: "subject archived" } as const;
 

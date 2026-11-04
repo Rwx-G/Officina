@@ -242,6 +242,7 @@ mod tests {
             scene: None,
             settled: None,
             subagents: Vec::new(),
+            run_state: None,
         }
     }
 

@@ -237,6 +237,65 @@ pub struct OrderItem {
 
 closed_enum! {
     #[serde(rename_all = "snake_case")]
+    /// Where a workshop run of the briefing stands (AD-121, FR-17).
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+    #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+    pub enum WorkshopKind {
+        /// `launching` to `collecting`: a container may live.
+        Live,
+        /// A package in `review`.
+        AwaitingVerdict,
+        Quarantined,
+        /// Failed in the last 24 h.
+        Failed,
+        /// Unknown in the last 24 h.
+        Unknown,
+    }
+}
+
+/// A workshop run the orchestrator should know of (AD-121): read from the
+/// board's workshop cards, so the briefing and the board agree.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct WorkshopItem {
+    pub run_id: String,
+    pub kind: WorkshopKind,
+    pub project: String,
+    /// The work order's name, `<template>-<seq>`, as the board's card
+    /// carries it.
+    pub name: Untrusted<String>,
+    /// When the run entered its state.
+    pub at_ms: Option<i64>,
+}
+
+/// The briefing's line of a workshop card, when it is one the briefing
+/// lists: kept, imported, discarded and `no_change` runs are not, a
+/// `no_change` run being neither a failure nor a package (amendment 15).
+fn workshop_item(card: &Card) -> Option<WorkshopItem> {
+    use crate::workshop::run::RunState;
+    let state = card.run_state?;
+    let kind = match state {
+        s if s.is_live() => WorkshopKind::Live,
+        RunState::Review => WorkshopKind::AwaitingVerdict,
+        RunState::Quarantined => WorkshopKind::Quarantined,
+        RunState::Failed => WorkshopKind::Failed,
+        RunState::Unknown => WorkshopKind::Unknown,
+        _ => return None,
+    };
+    Some(WorkshopItem {
+        run_id: card
+            .key
+            .strip_prefix(crate::workshop::view::CARD_KEY_PREFIX)?
+            .to_owned(),
+        kind,
+        project: card.project.name.clone(),
+        name: card.name.clone(),
+        at_ms: card.last_event_at_ms,
+    })
+}
+
+closed_enum! {
+    #[serde(rename_all = "snake_case")]
     /// What kind of change a `changed` item is.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
     pub enum ChangeKind {
@@ -334,6 +393,9 @@ pub struct Briefing {
     pub proposals: Section<ProposalView>,
     /// Newest first.
     pub changed: Section<ChangedItem>,
+    /// Live runs, packages awaiting a verdict, and quarantined, failed and
+    /// unknown runs of the last 24 h (AD-121), in board order.
+    pub workshop: Section<WorkshopItem>,
 }
 
 /// What the briefing is built from (AD-83): the board's cards and pending
@@ -634,6 +696,7 @@ fn assemble(input: &BriefingInput, cursor: Cursor, now_ms: i64) -> Briefing {
                 .collect(),
         ),
         changed: Section::of(changed(input, cursor)),
+        workshop: Section::of(input.cards().filter_map(workshop_item).collect()),
     }
 }
 
@@ -681,6 +744,12 @@ impl Dated for OrderItem {
 impl Dated for ProposalView {
     fn dated(&self) -> Option<i64> {
         Some(self.written_at_ms)
+    }
+}
+
+impl Dated for WorkshopItem {
+    fn dated(&self) -> Option<i64> {
+        self.at_ms
     }
 }
 
@@ -736,7 +805,7 @@ fn drop_from<T>(section: &mut Section<T>, number: usize, gone: &BTreeSet<(usize,
 }
 
 /// How many lists [`Briefing::candidates`] numbers.
-const SECTION_LISTS: usize = 8;
+const SECTION_LISTS: usize = 9;
 
 impl Briefing {
     /// Every list item, numbered by section in the payload's order.
@@ -750,6 +819,7 @@ impl Briefing {
         candidates_of(&self.work_orders, 5, &mut out);
         candidates_of(&self.proposals, 6, &mut out);
         candidates_of(&self.changed, 7, &mut out);
+        candidates_of(&self.workshop, 8, &mut out);
         out
     }
 
@@ -762,6 +832,7 @@ impl Briefing {
         drop_from(&mut self.work_orders, 5, gone);
         drop_from(&mut self.proposals, 6, gone);
         drop_from(&mut self.changed, 7, gone);
+        drop_from(&mut self.workshop, 8, gone);
     }
 }
 
@@ -1440,5 +1511,81 @@ mod tests {
         let marked =
             wrapped(|| serde_json::to_vec(&build(&fixture.input(), Cursor::None, NOW))).unwrap();
         assert!(marked.len() <= BRIEFING_MAX_BYTES);
+    }
+    fn workshop_columns(states: &[crate::workshop::run::RunState]) -> Columns {
+        let runs = states
+            .iter()
+            .enumerate()
+            .map(|(n, state)| crate::workshop::view::BoardRun {
+                id: format!("{n:032x}"),
+                template: "bump".into(),
+                project: "api".into(),
+                name: format!("bump-{n}"),
+                state: *state,
+                state_at_ms: NOW,
+                started_at_ms: NOW - 1,
+            })
+            .collect();
+        crate::board::build_board(
+            &crate::board::BoardInput {
+                agents: Some(Vec::new()),
+                workshop_runs: runs,
+                ..Default::default()
+            },
+            NOW,
+        )
+        .columns
+    }
+
+    /// AD-121: live runs, packages awaiting a verdict, and quarantined,
+    /// failed and unknown runs of the board's 24 h; kept, imported and
+    /// discarded runs are not listed.
+    #[test]
+    fn the_briefing_lists_workshop_sections() {
+        use crate::workshop::run::RunState;
+        let columns = workshop_columns(RunState::ALL);
+        let input = BriefingInput {
+            columns: Some(&columns),
+            ..Default::default()
+        };
+        let briefing = build(&input, Cursor::None, NOW);
+        let mut kinds: Vec<WorkshopKind> = briefing.workshop.items.iter().map(|i| i.kind).collect();
+        kinds.sort_by_key(|k| k.code());
+        let mut expected: Vec<WorkshopKind> = RunState::ALL
+            .iter()
+            .filter_map(|state| match state {
+                s if s.is_live() => Some(WorkshopKind::Live),
+                RunState::Review => Some(WorkshopKind::AwaitingVerdict),
+                RunState::Quarantined => Some(WorkshopKind::Quarantined),
+                RunState::Failed => Some(WorkshopKind::Failed),
+                RunState::Unknown => Some(WorkshopKind::Unknown),
+                _ => None,
+            })
+            .collect();
+        expected.sort_by_key(|k| k.code());
+        assert_eq!(kinds, expected);
+        assert!(
+            briefing
+                .workshop
+                .items
+                .iter()
+                .all(|item| item.run_id.len() == 32 && item.project == "api")
+        );
+    }
+
+    /// Amendment 15: a `no_change` run is neither a failure nor a package,
+    /// so the briefing's workshop section leaves it out.
+    #[test]
+    fn no_change_runs_are_not_failures_in_the_briefing() {
+        use crate::workshop::run::RunState;
+        let columns = workshop_columns(&[RunState::NoChange]);
+        let input = BriefingInput {
+            columns: Some(&columns),
+            ..Default::default()
+        };
+        let briefing = build(&input, Cursor::None, NOW);
+        assert_eq!(columns.done.len(), 1);
+        assert!(briefing.workshop.items.is_empty());
+        assert!(briefing.runs.items.is_empty());
     }
 }

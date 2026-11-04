@@ -326,6 +326,131 @@ fn session_text_is_wrapped_untrusted() {
     assert!(seen > 0);
 }
 
+/// Seeds one workshop run awaiting a verdict on `home`'s registry, its
+/// report tail holding `marker`, as collection would leave it (AD-110).
+fn seed_workshop_run(home: &McpHome, marker: &str) -> String {
+    use officina_core::orders::work_order::{SubjectChoice, WorkOrder};
+    use officina_core::registry::types::WorkOrderSource;
+    use officina_core::relay::template::{ApprovedTemplate, ProjectName, TemplateName};
+    use officina_core::untrusted::Untrusted;
+    use officina_core::workshop::run::{RunState, RunTexts};
+    use officina_host::registry::orders::LaunchRecord;
+    use officina_host::registry::workshop::RunInsert;
+    let relay = home.env.relay_home();
+    let state = relay.read_approved();
+    let approved = state.approved().expect("an approved catalogue");
+    let current = officina_host::relay::home::load_relay_floor(&relay.relay_floor(&state)).unwrap();
+    let template = ApprovedTemplate::new(
+        approved,
+        &current,
+        &TemplateName::parse("probe-notes").unwrap(),
+    )
+    .unwrap();
+    let order = WorkOrder::validate(
+        &template,
+        &ProjectName::parse("lab").unwrap(),
+        &[(
+            officina_core::relay::template::ParamName::parse("host").unwrap(),
+            "web01",
+        )],
+    )
+    .unwrap();
+    let id = "ab".repeat(16);
+    let now = now_ms();
+    let mut writer = home.window(now);
+    let argv = vec!["-p".to_owned()];
+    writer
+        .insert_workshop_run(
+            &LaunchRecord {
+                order: &order,
+                card_id: &id,
+                seq: 7,
+                source: WorkOrderSource::Composer,
+                subject: &SubjectChoice::New("Workshop".into()),
+                proposal_id: None,
+                permission: officina_core::orders::permission::WorkOrderPermission::Project,
+            },
+            &RunInsert {
+                image: "officina-workshop:local",
+                image_id: "sha256:aa",
+                gateway_image_id: "sha256:bb",
+                base_branch: "main",
+                base_commit: "cc",
+                parent_run_id: None,
+                branch: "officina/probe-notes-7",
+                uncommitted: 0,
+                plan_json: "{}",
+                plan_sha256: "dd",
+                credential_kind: officina_core::workshop::floor::CredentialKind::OauthToken,
+                deadline_ms: 0,
+                battery_id: "ee",
+                argv: &argv,
+            },
+            now,
+        )
+        .unwrap()
+        .unwrap();
+    writer
+        .set_run_texts(
+            &id,
+            &RunTexts {
+                report_tail: Some(Untrusted::new(format!("report {marker}"))),
+                ..RunTexts::default()
+            },
+        )
+        .unwrap();
+    writer.set_run_state(&id, RunState::Review, now).unwrap();
+    id
+}
+
+/// AD-121, D-153: `board` and `briefing` serve the workshop run, a
+/// package awaiting a verdict, and no output holds a run text outside a
+/// wrapper: the run's own texts are the review panel's, never a tool's.
+#[test]
+fn workshop_texts_are_wrapped_untrusted() {
+    const MARK: &str = "MARK-ws-5e2a";
+    let home = McpHome::new();
+    let sources = Sources::neutral();
+    let subject = home.seed(&sources);
+    let run_id = seed_workshop_run(&home, MARK);
+    let (_, responses) = home.session(&every_tool(&sources, subject));
+    let outputs = by_tool(&responses);
+    for (tool, out) in &outputs {
+        let (_, plain) = marker_places(out, MARK);
+        assert!(plain.is_empty(), "{tool:?}: {plain:?}");
+    }
+    let board = &outputs
+        .iter()
+        .find(|(tool, _)| *tool == McpTool::Board)
+        .expect("the board tool")
+        .1;
+    let card = format!("ws:{run_id}");
+    assert!(board.to_string().contains(&card), "{board}");
+    let briefing = &outputs
+        .iter()
+        .find(|(tool, _)| *tool == McpTool::Briefing)
+        .expect("the briefing tool")
+        .1;
+    assert!(
+        briefing.to_string().contains("awaiting_verdict"),
+        "{briefing}"
+    );
+}
+
+/// AD-121: the workshop adds no tool; none imports, discards, stops,
+/// launches or builds.
+#[test]
+fn the_tool_list_is_unchanged() {
+    for tool in McpTool::ALL {
+        let code = tool.code();
+        for verb in [
+            "workshop", "import", "discard", "stop", "launch", "build", "resume",
+        ] {
+            assert!(!code.contains(verb), "{code} acts on the workshop");
+        }
+    }
+}
+
 fn assert_no_excerpt(home: &McpHome, cmd: std::process::Command) {
     const PROMPT: &str = "PROMPT-ONLY-1b2c";
     const ANSWER: &str = "ANSWER-ONLY-3d4e";

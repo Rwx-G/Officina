@@ -237,6 +237,10 @@ pub enum AuthorCommand {
     /// and after each call that reads it again. Like a launch's outcome it
     /// is never dropped (D-135's outcome pattern, D-239).
     EngineState(Box<crate::workshop::engine::EngineState>),
+    /// What thread `workshop` read of the engine and the approved
+    /// catalogue for the Workshop view (AD-121): at window start and after
+    /// each action that changes it. Never dropped, like the engine's state.
+    WorkshopRead(Box<officina_core::workshop::view::EngineHalf>),
     /// A Build images click (AD-99): the stop flag, the approved catalogue
     /// and the host's Claude Code version, answered with what thread
     /// `workshop-build` builds.
@@ -500,6 +504,7 @@ impl AuthorRequest {
                 | AuthorCommand::OrchestratorStarted(_)
                 | AuthorCommand::AnswerOutcome(_)
                 | AuthorCommand::EngineState(_)
+                | AuthorCommand::WorkshopRead(_)
                 | AuthorCommand::ImageBuilt(_)
                 | AuthorCommand::BatteryRecorded(_)
                 | AuthorCommand::WorkshopCardFacts(_)
@@ -557,6 +562,7 @@ pub trait Emit: Send + 'static {
     fn relay(&self, view: &RelayView);
     fn registry(&self, view: &RegistryView);
     fn orchestrator(&self, view: &OrchestratorView);
+    fn workshop(&self, view: &officina_core::workshop::view::WorkshopView);
 }
 
 /// Handle on a running collector thread.
@@ -571,6 +577,9 @@ pub struct WatchHandle {
     /// The last Orchestrator view, for the window's first paint
     /// (`get_orchestrator`), which never goes through the collector.
     pub orchestrator: Arc<RwLock<Option<OrchestratorView>>>,
+    /// The last Workshop view, for the window's first paint
+    /// (`get_workshop`), which never goes through the collector (AD-121).
+    pub workshop: Arc<RwLock<Option<officina_core::workshop::view::WorkshopView>>>,
     /// The collector's paths, updated when a reloaded floor moves the config
     /// dir, so the window's focus and attach commands follow it.
     pub paths: Arc<RwLock<Paths>>,
@@ -1060,6 +1069,9 @@ struct Outputs<E> {
     relay: Published<RelayView>,
     registry: Published<RegistryView>,
     orchestrator: Published<OrchestratorView>,
+    workshop: Published<officina_core::workshop::view::WorkshopView>,
+    /// The journal lines the Workshop view counts (AD-121).
+    journal: crate::workshop::view::JournalCache,
     paths: Arc<RwLock<Paths>>,
     engine: Arc<RwLock<Option<crate::workshop::engine::EngineState>>>,
     emit: E,
@@ -1074,6 +1086,7 @@ pub fn spawn(mut collector: Collector, emit: impl Emit) -> std::io::Result<Watch
     let relay = Arc::new(RwLock::new(None));
     let registry = Arc::new(RwLock::new(None));
     let orchestrator = Arc::new(RwLock::new(None));
+    let workshop = Arc::new(RwLock::new(None));
     let paths = Arc::new(RwLock::new(collector.paths().clone()));
     let engine = Arc::new(RwLock::new(None));
     let mut outputs = Outputs {
@@ -1082,6 +1095,8 @@ pub fn spawn(mut collector: Collector, emit: impl Emit) -> std::io::Result<Watch
         relay: Published::new(&relay),
         registry: Published::new(&registry),
         orchestrator: Published::new(&orchestrator),
+        workshop: Published::new(&workshop),
+        journal: crate::workshop::view::JournalCache::default(),
         paths: Arc::clone(&paths),
         engine: Arc::clone(&engine),
         emit,
@@ -1095,6 +1110,7 @@ pub fn spawn(mut collector: Collector, emit: impl Emit) -> std::io::Result<Watch
         relay,
         registry,
         orchestrator,
+        workshop,
         paths,
         engine,
         thread,
@@ -1131,9 +1147,11 @@ fn report_registry(collector: &mut Collector, registry: &mut WindowRegistry) {
     // The subjects first: a read that fails there shows in the report.
     let subjects = registry.card_subjects();
     let settlements = registry.card_settlements();
+    let runs = registry.workshop_board_runs();
     collector.set_registry(registry.report());
     collector.set_subjects(subjects);
     collector.set_settlements(settlements);
+    collector.set_workshop_runs(runs);
 }
 
 /// Folds the session list the collector just received into the window's
@@ -1393,6 +1411,33 @@ fn rebuild_and_publish<E: Emit>(
     publish(board, outputs);
     publish_registry(view, outputs, force);
     publish_orchestrator(registry, outputs, force, now);
+    publish_workshop(collector, outputs, now);
+}
+
+/// Builds the Workshop view at `now` from the engine half thread
+/// `workshop` read last and the collector's runs, orphans, flags and
+/// journal, shares it with `get_workshop`, and emits it when it differs
+/// from the last one emitted, generation time aside (AD-5, AD-121).
+fn publish_workshop<E: Emit>(collector: &Collector, outputs: &mut Outputs<E>, now: i64) {
+    let flags = collector.relay().stop_flags();
+    let half = collector.workshop_half().cloned().unwrap_or_default();
+    let lines = outputs.journal.lines(collector.relay(), now);
+    let view = officina_core::workshop::view::build_view(
+        &half,
+        &officina_core::workshop::view::RegistryHalf {
+            runs: collector.workshop_runs(),
+            orphans: collector.workshop_orphans(),
+            lines,
+            relay_stopped: flags.relay,
+            workshop_stopped: flags.workshop,
+        },
+        now,
+    );
+    let mut comparable = view.clone();
+    comparable.generated_at_ms = 0;
+    if outputs.workshop.share(&view, &comparable, false) {
+        outputs.emit.workshop(&view);
+    }
 }
 
 /// What the collector thread holds for the author's requests beside the
@@ -1447,9 +1492,21 @@ fn answer_author<E: Emit>(
             | AuthorCommand::WorkshopCardFacts(_)
             | AuthorCommand::EditCard { .. }
             | AuthorCommand::EngineState(_)
+            | AuthorCommand::WorkshopRead(_)
             | AuthorCommand::GrantBuild
             | AuthorCommand::GrantBattery(_)
             | AuthorCommand::KeptRuns
+    );
+    // What changes the images, batteries, credential or engine the
+    // Workshop view shows (AD-121): read again on thread `workshop`.
+    let rereads_workshop = matches!(
+        request.command,
+        AuthorCommand::GrantBuild
+            | AuthorCommand::ImageBuilt(_)
+            | AuthorCommand::BatteryRecorded(_)
+            | AuthorCommand::WorkshopStopAll { .. }
+            | AuthorCommand::ResumeWorkshop { .. }
+            | AuthorCommand::RemoveKept { .. }
     );
     let quota = outputs.board.current().map(|board| board.quota);
     let reply = match request.command {
@@ -1690,6 +1747,11 @@ fn answer_author<E: Emit>(
             collector.set_engine(*state);
             Ok(AuthorAnswer::Done { created: None })
         }
+        AuthorCommand::WorkshopRead(half) => {
+            collector.set_workshop_half(*half);
+            publish_workshop(collector, outputs, now);
+            Ok(AuthorAnswer::Done { created: None })
+        }
         // Answered once the answer settles: at once, or, for a resume,
         // once the session was seen busy or its window passed (AD-85).
         AuthorCommand::AnswerOutcome(report) => {
@@ -1702,6 +1764,9 @@ fn answer_author<E: Emit>(
             return false;
         }
     };
+    if rereads_workshop {
+        collector.workshop_reread().run();
+    }
     // Every command reports the registry's state, a failure included
     // (quality audit M3); those that write publish the views at once.
     report_registry(collector, registry);
@@ -2312,5 +2377,73 @@ mod tests {
             sessions_fingerprint(&dir.path().join("missing")),
             sessions_fingerprint(&dir.path().join("missing2"))
         );
+    }
+
+    /// Counts the Workshop views emitted; every other payload is ignored.
+    struct WorkshopCount(std::sync::Arc<std::sync::atomic::AtomicUsize>);
+
+    impl Emit for WorkshopCount {
+        fn board(&self, _: &Board) {}
+        fn relay(&self, _: &RelayView) {}
+        fn registry(&self, _: &RegistryView) {}
+        fn orchestrator(&self, _: &OrchestratorView) {}
+        fn workshop(&self, _: &officina_core::workshop::view::WorkshopView) {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
+    /// AD-5, AD-121: the Workshop view is emitted when its bytes change,
+    /// its generation time aside, and shared with `get_workshop` each time.
+    #[test]
+    fn the_workshop_view_is_emitted_on_change_only() {
+        use officina_core::workshop::run::RunState;
+        use officina_core::workshop::view::BoardRun;
+        use std::sync::atomic::Ordering;
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths {
+            officina_home: dir.path().join("officina"),
+            claude_config_dir: dir.path().join("config"),
+            claude_config_override: None,
+            floor_file: None,
+        };
+        let mut collector = Collector::from_parts(
+            paths.clone(),
+            crate::collector::LoadedFloor::default(),
+            None,
+        );
+        let count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let slot = Arc::new(RwLock::new(None));
+        let mut outputs = Outputs {
+            board: Published::new(&Arc::new(RwLock::new(None))),
+            next_escalation_at_ms: None,
+            relay: Published::new(&Arc::new(RwLock::new(None))),
+            registry: Published::new(&Arc::new(RwLock::new(None))),
+            orchestrator: Published::new(&Arc::new(RwLock::new(None))),
+            workshop: Published::new(&slot),
+            journal: crate::workshop::view::JournalCache::default(),
+            paths: Arc::new(RwLock::new(paths)),
+            engine: Arc::new(RwLock::new(None)),
+            emit: WorkshopCount(std::sync::Arc::clone(&count)),
+        };
+        publish_workshop(&collector, &mut outputs, 1_000);
+        publish_workshop(&collector, &mut outputs, 2_000);
+        assert_eq!(count.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            slot.read().unwrap().as_ref().map(|v| v.generated_at_ms),
+            Some(2_000)
+        );
+        collector.set_workshop_runs(vec![BoardRun {
+            id: "a".repeat(32),
+            template: "bump".into(),
+            project: "api".into(),
+            name: "bump-1".into(),
+            state: RunState::Running,
+            state_at_ms: 1,
+            started_at_ms: 1,
+        }]);
+        publish_workshop(&collector, &mut outputs, 3_000);
+        assert_eq!(count.load(Ordering::SeqCst), 2);
+        let shared = slot.read().unwrap().clone().unwrap();
+        assert_eq!(shared.runs.live.len(), 1);
     }
 }

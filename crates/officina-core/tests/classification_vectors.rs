@@ -22,6 +22,9 @@ struct Case {
     now_ms: i64,
     agents: Vec<serde_json::Value>,
     events: Vec<EventLine>,
+    /// The workshop's runs the registry holds (AD-121).
+    #[serde(default)]
+    workshop: Vec<officina_core::workshop::view::BoardRun>,
     expect: Vec<Expected>,
 }
 
@@ -46,6 +49,7 @@ fn every_case_classifies_as_expected() {
         let input = BoardInput {
             agents: Some(parse_agents(&agents_json).unwrap()),
             events: case.events,
+            workshop_runs: case.workshop,
             ..Default::default()
         };
         let board = build_board(&input, case.now_ms);
@@ -86,7 +90,11 @@ fn vector_set_covers_every_column_badge_and_documented_value() {
     let mut states = BTreeSet::new();
     let mut end_reasons = BTreeSet::new();
     let mut notifications = BTreeSet::new();
+    let mut run_states = BTreeSet::new();
     for case in &set.cases {
+        for run in &case.workshop {
+            run_states.insert(serialized(&run.state));
+        }
         for e in &case.expect {
             columns.insert(serialized(&e.column));
             if let Some(b) = e.badge {
@@ -138,6 +146,12 @@ fn vector_set_covers_every_column_badge_and_documented_value() {
         assert!(
             end_reasons.contains(reason),
             "no case for SessionEnd reason {reason}"
+        );
+    }
+    for state in officina_core::workshop::run::RunState::ALL {
+        assert!(
+            run_states.contains(&serialized(state)),
+            "no case for workshop run state {state:?}"
         );
     }
     for notification in officina_core::board::BLOCKING_NOTIFICATIONS {

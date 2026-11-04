@@ -37,6 +37,7 @@ export const BADGE_WORDS: Record<Badge, string> = {
   interrupted: "interrupted",
   stopped: "stopped",
   ended: "ended",
+  no_change: "no change",
 };
 
 export const ALERT_WORDS: Record<AlertCause, string> = {

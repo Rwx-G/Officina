@@ -77,3 +77,4 @@ pub mod stop;
 #[cfg(feature = "window-authority")]
 pub mod threads;
 pub mod verify;
+pub mod view;
