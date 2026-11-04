@@ -7,7 +7,8 @@ import type { WorkshopKind } from "./WorkshopKind";
  */
 export type WorkshopItem = { run_id: string, kind: WorkshopKind, project: string, 
 /**
- * The work order's name, which a proposal may have written.
+ * The work order's name, `<template>-<seq>`, as the board's card
+ * carries it.
  */
 name: string, 
 /**
