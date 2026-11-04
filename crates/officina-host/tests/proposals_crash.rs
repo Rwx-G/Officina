@@ -25,7 +25,9 @@ use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use common::registry::{DAY, Home, example};
-use officina_core::orders::proposal::{PROPOSAL_HOUR_MS, id_of_file, is_temporary_file};
+use officina_core::orders::proposal::{
+    PROPOSAL_HOUR_MS, id_of_file, is_temporary_file, written_at,
+};
 use officina_core::registry::types::{OrchestratorStartOutcome, ProposalStatus};
 use officina_host::registry::orders::OrchestratorStartRecord;
 use officina_host::registry::store::{Writer, open_reader, open_writer};
@@ -187,9 +189,15 @@ fn killed_writers_lose_and_duplicate_nothing() {
         complete.len(),
         temporary.len()
     );
+    let torn: Vec<&String> = renamed
+        .iter()
+        .filter(|line| written_at(line).is_none())
+        .collect();
+    assert!(torn.is_empty(), "a torn line in the helper's log: {torn:?}");
+    let missing: Vec<&String> = renamed.difference(&complete).collect();
     assert!(
-        renamed.is_subset(&complete),
-        "a proposal logged as renamed is missing before ingestion"
+        missing.is_empty(),
+        "a proposal logged as renamed is missing before ingestion: {missing:?}"
     );
     let now = wall_ms();
     let mut writer = home.writer(now);

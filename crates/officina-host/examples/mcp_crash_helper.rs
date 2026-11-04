@@ -69,7 +69,12 @@ fn main() -> ExitCode {
         };
         match write_proposal_staged(Path::new(dir), &file, first + n * step, &mut stall_here) {
             Ok(id) => {
-                let logged = writeln!(log, "{id}").and_then(|()| log.sync_data());
+                // One write call: `writeln!` issues the id and the newline
+                // as two, and a kill between them glues this id to the
+                // next run's line.
+                let logged = log
+                    .write_all(format!("{id}\n").as_bytes())
+                    .and_then(|()| log.sync_data());
                 if logged.is_err() {
                     eprintln!("mcp_crash_helper: cannot log {id}");
                     return ExitCode::FAILURE;
