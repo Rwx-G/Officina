@@ -1302,6 +1302,37 @@ allow-list entry's route. It holds no worker text. It runs only read
 calls on the engine, and with the engine down it still prints what the
 registry holds. It exits 3 when the registry cannot be read.
 
+### The workshop card and the review panel
+
+A work order card for a workshop template carries a "workshop" chip and
+what the run will and will not hold: its base, picked from the template's
+list and the branches imported in the last 7 days (each with its tip, an
+imported one with the run it came from; changing it issues a new card),
+the project's uncommitted changes, which the run never carries, the
+allow-list, the mounts (read-only), the image's tag and short id, the
+minutes and the budget. Each check that fails now is listed with what to
+do: Run escape battery for a stale battery; for an expired credential,
+the login command or the `claude setup-token` step and the floor's
+`cmdkey` line, each with Copy; for a proxy that cannot be decided or
+used, the entry and `officina doctor`. Launch stays disabled while any of
+them holds, and acts on a pointer click only.
+
+On the board a working run shows "isolated" in a neutral colour; only a
+run waiting for your verdict in Needs you takes the attention colour.
+Receive on a Needs you or Done run opens its review in the meeting's
+slot, 640 px wide: the worker's report, the facts (time, cost, turns,
+exit code, hosts reached and refused), the commits, the diff, and one
+section per sensitive group with its hunks inline and their SHA-256.
+Approve sends the hash the panel shows, and Import creates a local branch
+at the tip shown; both act on a pointer click only, and Import is enabled
+once every group is approved. Discard takes one of three reasons from the
+keyboard too. A quarantined package shows its cause, with the advice to
+revoke the credential when the scan found it, and offers Discard only; a
+run with no change says there is nothing to review and offers nothing.
+Every text the worker wrote renders as text, and each bidirectional or
+invisible format character as a visible escape such as `<U+202E>`, so a
+hunk cannot reorder what you approve; the hash is still the raw bytes'.
+
 ### Stop all and Resume
 
 Stop all stops every worker and gateway of your floor within 10 seconds

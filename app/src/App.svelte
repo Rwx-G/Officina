@@ -22,6 +22,8 @@
   import Scene from "./components/scene/Scene.svelte";
   import MeetingPanel from "./components/MeetingPanel.svelte";
   import { meeting } from "./lib/meeting.svelte";
+  import { workshop } from "./lib/workshop.svelte";
+  import ReviewPanel from "./components/ReviewPanel.svelte";
   import type { MeetingRun } from "./lib/generated/MeetingRun";
 
   const store = new BoardStore();
@@ -32,8 +34,12 @@
   const DONE_VISIBLE = 5;
 
   // A meeting is held in the Sessions view (AD-93): Receive from the
-  // Subjects view shows it there.
-  meeting.onOpen = () => (windowView.view = "sessions");
+  // Subjects view shows it there. It takes the review panel's slot, one
+  // panel at a time (AD-84, AD-122).
+  meeting.onOpen = () => {
+    workshop.close();
+    windowView.view = "sessions";
+  };
   // The open meeting asks again when the board shows its card changed.
   $effect(() => {
     if (store.board) meeting.boardChanged(store.board);
@@ -102,6 +108,7 @@
       () => relay.start(),
       () => registry.start(),
       () => orchestrator.start(),
+      () => workshop.start(),
     ),
   );
 
@@ -253,6 +260,9 @@
   {/if}
   {#if meeting.key !== null && view === "sessions"}
     <MeetingPanel {board} {store} onJournal={(run) => void showJournal(run)} />
+  {/if}
+  {#if workshop.runId !== null && view === "sessions"}
+    <ReviewPanel nowMs={store.nowMs} />
   {/if}
   <DiscardTarget />
   <SettleNote {store} onUndone={undone} />

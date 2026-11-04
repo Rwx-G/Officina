@@ -1,0 +1,45 @@
+{
+  "_doc": "Rebuilt from officina_core::relay::params::FORBIDDEN_FORMAT_RANGES by crates/officina-core/tests/format_ranges_vector.rs; each range is [first, last] code point, inclusive.",
+  "ranges": [
+    [
+      173,
+      173
+    ],
+    [
+      1564,
+      1564
+    ],
+    [
+      6158,
+      6158
+    ],
+    [
+      8203,
+      8207
+    ],
+    [
+      8234,
+      8238
+    ],
+    [
+      8288,
+      8292
+    ],
+    [
+      8294,
+      8303
+    ],
+    [
+      65279,
+      65279
+    ],
+    [
+      65529,
+      65531
+    ],
+    [
+      917504,
+      917631
+    ]
+  ]
+}

@@ -68,6 +68,7 @@
         shown={store.shown}
         onLaunch={() => void store.launchCard()}
         onPermission={(permission) => void store.setPermission(permission)}
+        onBase={(base) => void store.chooseBase(base)}
       />
     {/if}
     <WorkOrderHistory orders={view.work_orders} {nowMs} />

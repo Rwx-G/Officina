@@ -4,6 +4,7 @@
 // issued for it, and its launch. The card is core's (AD-78): the window
 // shows it and sends its id and prompt hash back, never a prompt, a hash or
 // an argument of its own.
+import type { BaseChoice } from "./generated/BaseChoice";
 import type { CardAnswer } from "./generated/CardAnswer";
 import type { IssueRefusal } from "./generated/IssueRefusal";
 import type { LaunchAnswer } from "./generated/LaunchAnswer";
@@ -160,6 +161,13 @@ export class OrchestratorStore {
     const card = this.editable;
     if (card) await this.ask(() => ipc.editCard(card.id, { kind: "subject", subject }), card, "focus");
     else await this.compose(subject, "focus");
+  }
+
+  /** The base a workshop card runs from, from its closed list: the card
+   *  is issued again under the same `seq` (AD-78, AD-107). */
+  async chooseBase(base: BaseChoice): Promise<void> {
+    const card = this.editable;
+    if (card) await this.ask(() => ipc.editCard(card.id, { kind: "base", base }), card, "none");
   }
 
   /** Opens the pending work order proposal `id` as the card on screen

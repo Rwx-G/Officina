@@ -42,6 +42,8 @@
   import { isPointerClick } from "../lib/pointer";
   import QuotaGauges from "./QuotaGauges.svelte";
   import StableLabel from "./StableLabel.svelte";
+  import WorkshopFacts from "./WorkshopFacts.svelte";
+  import type { BaseChoice } from "../lib/generated/BaseChoice";
 
   interface Props {
     card: WorkOrderCard;
@@ -59,8 +61,11 @@
     /** Switches the project's work orders to `permission`: called for
      *  Officina's default on a pointer click only (D-986). */
     onPermission: (permission: WorkOrderPermission) => void;
+    /** Issues a workshop card again from another base of its list. */
+    onBase?: (base: BaseChoice) => void;
   }
-  let { card, order, launching, launch, nowMs, busy, shown = null, onLaunch, onPermission }: Props = $props();
+  let { card, order, launching, launch, nowMs, busy, shown = null, onLaunch, onPermission, onBase = () => {} }: Props =
+    $props();
 
   const LAUNCH_LABELS = { idle: "Launch", launching: "Launching" } as const;
 
@@ -79,9 +84,11 @@
     return launch.value === "launching" && order ? order.outcome : launch.value;
   });
   let done = $derived(launch !== null || card.state !== "open");
+  /** A workshop card launches only once no readiness cause holds (AD-107). */
+  let blocked = $derived((card.workshop?.readiness.length ?? 0) > 0);
 
   function clicked(event: MouseEvent): void {
-    if (!isPointerClick(event) || launching || done) return;
+    if (!isPointerClick(event) || launching || done || blocked) return;
     onLaunch();
   }
 
@@ -122,6 +129,7 @@
     <strong data-testid="card-template">{card.template}</strong>
     <span class="chip" data-testid="card-project">{card.project}</span>
     <span class="muted" data-testid="card-name">{card.name}</span>
+    {#if card.workshop}<span class="chip" data-testid="workshop-chip">workshop</span>{/if}
   </div>
   <p class="muted" data-testid="card-description">{card.description}</p>
   {#if card.proposal}
@@ -153,6 +161,9 @@
     </ol>
   </div>
   <p data-testid="card-cwd"><span class="label">In</span> <code>{card.cwd}</code></p>
+  {#if card.workshop}
+    <WorkshopFacts cardId={card.id} facts={card.workshop} locked={done || launching || busy} {onBase} />
+  {/if}
   <p data-testid="card-subject"><span class="label">Filed under</span> {subject}</p>
   <div class="permission" data-testid="card-permission" data-permission={card.permission}>
     <span class="label">Permissions</span>
@@ -189,13 +200,17 @@
     <button
       type="button"
       data-testid="launch"
-      disabled={launching || done}
+      disabled={launching || done || blocked}
       onclick={clicked}
       onkeydown={noKeyLaunches}
     >
       <StableLabel labels={LAUNCH_LABELS} current={launching ? "launching" : "idle"} />
     </button>
-    <span class="muted">The session runs as you, in the project's folder, under its own settings.</span>
+    {#if card.workshop}
+      <span class="muted">The run works in an isolated container, on the base's commit, and returns a package to review.</span>
+    {:else}
+      <span class="muted">The session runs as you, in the project's folder, under its own settings.</span>
+    {/if}
   </div>
   {#if launching}
     <p data-testid="card-launching">Launching: waiting for claude.</p>

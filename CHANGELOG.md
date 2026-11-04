@@ -8,6 +8,22 @@ project uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- The workshop card, the board's workshop cards and the review panel in
+  the window (v0.6, story 6.19): a workshop card shows its base from a
+  closed `<select>` (changing it issues a new card), the uncommitted
+  changes it does not carry, the allow-list, the read-only mounts, the
+  image, the limits and each readiness cause with what to do (Run escape
+  battery, the login or `setup-token` step with Copy, `officina doctor`
+  for a proxy); Launch stays disabled while a cause holds. Workshop runs
+  on the board show "isolated" while working and "review" in Needs you;
+  Receive on a Needs you or Done run opens the review panel in the
+  meeting's slot, 640 px wide: the report, facts, commits, diff and each
+  sensitive group with its hunks, a pointer-only Approve and Import, and
+  Discard with three reasons; a quarantined package offers Discard only
+  and a run with no change offers nothing. Every run text renders as text
+  with each bidirectional or invisible format character shown as an
+  escape such as `<U+202E>`, read from `tests/vectors/format_ranges.json`,
+  which a core test rebuilds from the constant.
 - Workshop runs on the board and `officina workshop --json` (v0.6, story
   6.18): each run is a board card of kind `workshop` (Working while live,
   Needs you while its package awaits a verdict or is quarantined, To

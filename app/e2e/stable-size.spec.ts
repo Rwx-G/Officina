@@ -6,6 +6,9 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import { fixtureOf } from "./fixture-index";
 import { PENDING_LIMIT, loadBoard, loadRegistry, loadRelay, openBoard, openScene, sceneBoardOrchestrator, sceneView, transitionsDone, withPending } from "./fixtures";
+import { approvedReview, review } from "./workshop-fixtures";
+import type { Board } from "../src/lib/generated/Board";
+import type { Card } from "../src/lib/generated/Card";
 import type { MeetingView } from "../src/lib/generated/MeetingView";
 import type { OrchestratorView } from "../src/lib/generated/OrchestratorView";
 import type { RegistryView } from "../src/lib/generated/RegistryView";
@@ -18,7 +21,18 @@ const TOLERANCE_PX = 0.5;
 /** What makes an element a toggle this spec must cover. */
 const TOGGLE = '[aria-pressed], [role="radio"], [data-stable-slot], :has(> [data-stable-label])';
 
-type SceneName = "board" | "autoApproval" | "sceneMode" | "chairFile" | "relay" | "relayAuto" | "subjects" | "triage" | "orchestrator" | "meeting";
+type SceneName =
+  | "board"
+  | "autoApproval"
+  | "sceneMode"
+  | "chairFile"
+  | "relay"
+  | "relayAuto"
+  | "subjects"
+  | "triage"
+  | "orchestrator"
+  | "meeting"
+  | "review";
 
 const SCENES: Record<SceneName, (page: Page) => Promise<void>> = {
   board: async (page) => {
@@ -105,6 +119,24 @@ const SCENES: Record<SceneName, (page: Page) => Promise<void>> = {
     await page.locator(`[data-testid="card"][data-key=${JSON.stringify(key)}]`).getByTestId("receive").click();
     await expect(page.getByTestId("answer-composer")).toBeVisible();
   },
+  // The workshop fixture's run in review received (story 6.19): its
+  // sensitive group's Approve; the next reading shows the group approved.
+  review: async (page) => {
+    const board = fixtureOf<Board>("workshop", "workshop-runs-board");
+    const card = Object.values(board.columns)
+      .flat()
+      .find((c: Card) => c.run_state === "review")!;
+    const runId = card.key.slice("ws:".length);
+    await openBoard(page, board);
+    await page.evaluate((r) => (window.__officinaReviews = r), { [runId]: { ...review(), run_id: runId } });
+    await page.locator(`[data-testid="card"][data-key=${JSON.stringify(card.key)}]`).getByTestId("receive").click();
+    await expect(page.getByTestId("sensitive-group")).toBeVisible();
+    // The whole panel unscrolled: a click would scroll it to the button,
+    // and the shorter readiness list after the approval would then shift a
+    // panel scrolled to its end, neither of which is the label's box.
+    await page.setViewportSize({ width: 1920, height: 2400 });
+    await page.evaluate((r) => (window.__officinaReviews = r), { [runId]: { ...approvedReview(), run_id: runId } });
+  },
 };
 
 interface ToggleCase {
@@ -120,6 +152,8 @@ interface ToggleCase {
 
 const CASES: ToggleCase[] = [
   { name: "view switch", selector: '[data-testid="view-switch"] > button', scene: "board" },
+  // Story 6.19: Approve reads Approved once the group is.
+  { name: "review Approve", selector: '[data-testid="approve-group"]', scene: "review" },
   // Story 5.18 AC 9 (D-565, D-833): presence turns live and the count
   // goes to the most proposals that can be pending; the button keeps its
   // box and the mode switch after it stays.

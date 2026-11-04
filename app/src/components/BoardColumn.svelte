@@ -8,6 +8,7 @@
   import { fadeMotion, flipMotion } from "../lib/motion";
   import ApprovalCard from "./ApprovalCard.svelte";
   import SessionCard from "./SessionCard.svelte";
+  import WorkshopCard from "./WorkshopCard.svelte";
 
   interface Props {
     column: Column;
@@ -58,7 +59,11 @@
     {/each}
     {#each visible as card, i (card.key)}
       <div class="slot" animate:flipMotion in:fadeMotion out:fadeMotion>
-        <SessionCard {card} {store} index={numbered ? i : undefined} />
+        {#if card.kind === "workshop"}
+          <WorkshopCard {card} nowMs={store.nowMs} index={numbered ? i : undefined} />
+        {:else}
+          <SessionCard {card} {store} index={numbered ? i : undefined} />
+        {/if}
       </div>
     {:else}
       {#if approvals.length === 0}<p class="empty">Nothing here.</p>{/if}
