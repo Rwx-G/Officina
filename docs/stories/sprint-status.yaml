@@ -223,7 +223,8 @@ stories:
   - {id: "6.17", file: story-6.17-stop-all-and-resume.md, slice: A, status: review}
   # 6.18: done; runs are board cards of kind `workshop` (D-1230), the Workshop view read in two halves (D-1231), credential state `unchecked` until 6.26 (D-1232), fixtures seeded through the writer (D-1235); D-1230 to D-1235.
   - {id: "6.18", file: story-6.18-workshop-view-board-and-cli.md, slice: A, status: review}
-  - {id: "6.19", file: story-6.19-card-and-review-panel-frontend.md, slice: A, status: approved}
+  # 6.19: done but AC 8; review views are typed literals (D-1236), format ranges through a pinned vector file (D-1237), one workshop store and one panel at a time (D-1238); gate 3's window half is the owner's; a failed e2e stylesheet loaded again (D-1240); D-1236 to D-1240.
+  - {id: "6.19", file: story-6.19-card-and-review-panel-frontend.md, slice: A, status: review}
   - {id: "6.20", file: story-6.20-workshop-section-header-and-slice-a-close.md, slice: A, status: approved}
   # 6.25: done but AC 5; the WinHTTP reader replaced the registry reader (D-1136, D-611 confirmed); AC 5 is the owner's, on the work network.
   - {id: "6.25", file: story-6.25-system-proxy-and-corporate-ca.md, slice: A, status: review}
