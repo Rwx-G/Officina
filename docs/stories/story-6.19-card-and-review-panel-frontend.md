@@ -1,6 +1,6 @@
 # Story 6.19: The workshop card, the board card and the review panel in the window
 
-**Status:** Approved
+**Status:** Review
 
 ## Story
 
@@ -21,12 +21,12 @@ so that what I click is what I saw, no worker text can act in the window, and a 
 
 ## Tasks
 
-- [ ] `WorkOrderCard.svelte` workshop facts, base select, Launch (AC 1)
-- [ ] `WorkshopCard.svelte`, board columns (AC 2)
-- [ ] `ReviewPanel.svelte`, `SensitiveGroup.svelte`, side slot (AC 3)
-- [ ] `lib/workshop.svelte.ts` (AC 5)
-- [ ] Format-range escapes in the panel and `SensitiveGroup.svelte` (AC 4)
-- [ ] Vitest and Playwright cases (AC 1 to 6); README, `CHANGELOG.md` (AC 7)
+- [x] `WorkOrderCard.svelte` workshop facts, base select, Launch (AC 1)
+- [x] `WorkshopCard.svelte`, board columns (AC 2)
+- [x] `ReviewPanel.svelte`, `SensitiveGroup.svelte`, side slot (AC 3)
+- [x] `lib/workshop.svelte.ts` (AC 5)
+- [x] Format-range escapes in the panel and `SensitiveGroup.svelte` (AC 4)
+- [x] Vitest and Playwright cases (AC 1 to 6); README, `CHANGELOG.md` (AC 7)
 - [ ] Gate 3's window half with the owner (AC 8)
 
 ## Dev Notes
@@ -46,9 +46,28 @@ so that what I click is what I saw, no worker text can act in the window, and a 
 
 ### Debug Log
 
+- The frontend cannot import a Rust constant, and retyping the format ranges in TypeScript would be a transcription: they reach `inert.ts` through a vector file a core test rebuilds and pins (D-1237).
+- No fixture run collects a package, so the review views are typed literals beside the real `card-bump` card and the real workshop board (D-1236).
+- Import first had a transitional label; the mock answers at once, so `stable-size.spec.ts` could not see it flip, and a disabled button says the same: Import has one label (D-1239).
+
 ### Completion Notes
 
+- AC 1: Vitest `workshop.test.ts > the workshop card > {the base select offers the closed list only, launch is disabled while a cause holds, launch ignores detail 0, a stale battery offers the battery, an expired credential shows its action for each kind, injection keyboard cases never call launch}` (the last replays the `workshop_card` cases tagged `keyboard` of `tests/vectors/injection.json`); Playwright `workshop.spec.ts > {a workshop card shows its facts, changing the base issues a new card}`.
+- AC 2: Playwright `workshop.spec.ts > {each run state sits in its column, receive opens the review panel}` on story 6.18's `workshop-runs-board` fixture; Vitest `workshop.test.ts > the board card > receive is offered on Needs you and Done only, and the isolated chip on Working only`.
+- AC 3: Vitest `workshop.test.ts > the review panel > {approve and import ignore detail 0, import stays disabled until every group is approved, injection keyboard import cases never call import, discard is keyboard reachable, a quarantined package offers discard only, no change shows nothing to review and no action}`; Playwright `review.spec.ts > {a package is approved then imported, a stale approval shows the refusal, a no change run shows nothing to review}`; the 640 px width in `workshop.spec.ts > receive opens the review panel`.
+- AC 4: Vitest `workshop.test.ts > inert text > {review texts are inert, every format range renders as an escape, the approval hash stays the raw bytes'}`, iterating `UNTRUSTED_SOURCES` and `FORMAT_RANGES` (checked to fail with the escape removed); core `format_ranges_vector.rs::the_file_is_the_constant`; Playwright `review.spec.ts > {markup in a report stays text, a seeded RLO does not reorder the rendered line}`. D-1237.
+- AC 5: `lib/workshop.svelte.ts` through the `ipc.ts` wrappers and the `e2e-mock.ts` answers of stories 6.11 to 6.16; `pnpm check`. D-1238.
+- AC 6: Playwright `workshop.spec.ts > {chips never use the attention colour, the card's workshop chip never uses the attention colour}` in the light and the dark theme; no new colour token; `stable-size.spec.ts` gains the `review` scene and the `review Approve` case. D-1239.
+- AC 7: README "The workshop card and the review panel"; `CHANGELOG.md`.
+- AC 8: open, the owner's: gate 3's window half with a build of this story.
+
 ## File List
+
+- `app/src/components/WorkOrderCard.svelte`, `app/src/components/WorkshopFacts.svelte` (new), `app/src/components/WorkshopCard.svelte` (new), `app/src/components/ReviewPanel.svelte` (new), `app/src/components/SensitiveGroup.svelte` (new), `app/src/components/BoardColumn.svelte`, `app/src/components/OrchestratorView.svelte`, `app/src/App.svelte`
+- `app/src/lib/workshop.svelte.ts` (new), `app/src/lib/workshop-text.ts` (new), `app/src/lib/inert.ts` (new), `app/src/lib/orchestrator.svelte.ts`
+- `app/src/components/workshop.test.ts` (new), `app/e2e/workshop.spec.ts` (new), `app/e2e/review.spec.ts` (new), `app/e2e/workshop-fixtures.ts` (new), `app/e2e/stable-size.spec.ts`
+- `crates/officina-core/tests/format_ranges_vector.rs` (new), `tests/vectors/format_ranges.json` (new)
+- `README.md`, `CHANGELOG.md`, `docs/stories/epic-6-decisions.md`, `docs/stories/sprint-status.yaml`
 
 ## Change Log
 
@@ -57,3 +76,4 @@ so that what I click is what I saw, no worker text can act in the window, and a 
 - 2026-10-29 research-note entries named by subject, no number reserved (D-600)
 - 2026-10-29 the owner's answers: the card shows `credential_expired`'s action per kind with Copy, and the proxy refusals (D-607, D-611)
 - 2026-10-29 aligned with v0.4 and v0.5 as built: colour cases in both themes, tokens with `PAIRS`, stable boxes, seams by files (D-620)
+- 2026-11-04 implemented but AC 8 (D-1236 to D-1239); status review
