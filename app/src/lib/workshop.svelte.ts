@@ -1,14 +1,22 @@
 // The workshop's state in the window (AD-121, AD-122, D-249): the last
-// Workshop view, and the review panel's run, view, approvals in flight and
-// answers. Every call goes through the `ipc.ts` wrappers. The panel takes
-// the meeting's slot, one panel at a time (AD-84).
+// Workshop view, the review panel's run, view, approvals in flight and
+// answers, and the Workshop section's actions and their answers. Every
+// call goes through the `ipc.ts` wrappers. The panel takes the meeting's
+// slot, one panel at a time (AD-84).
 import * as ipc from "./ipc";
 import type { ApprovalRefusal } from "./generated/ApprovalRefusal";
 import type { BatteryAnswer } from "./generated/BatteryAnswer";
+import type { BuildAnswer } from "./generated/BuildAnswer";
+import type { CheckLoginAnswer } from "./generated/CheckLoginAnswer";
 import type { DiscardAnswer } from "./generated/DiscardAnswer";
 import type { DiscardReason } from "./generated/DiscardReason";
 import type { ImportAnswer } from "./generated/ImportAnswer";
+import type { PrepareLoginAnswer } from "./generated/PrepareLoginAnswer";
+import type { RemoveRunAnswer } from "./generated/RemoveRunAnswer";
+import type { ResumeAnswer } from "./generated/ResumeAnswer";
+import type { ResumeChoice } from "./generated/ResumeChoice";
 import type { ReviewView } from "./generated/ReviewView";
+import type { StopAnswer } from "./generated/StopAnswer";
 import type { WorkshopView } from "./generated/WorkshopView";
 import { meeting } from "./meeting.svelte";
 
@@ -32,6 +40,23 @@ export class WorkshopStore {
   discarded = $state<DiscardAnswer | null>(null);
   battery = $state<BatteryAnswer | null>(null);
   batteryError = $state<string | null>(null);
+  /** The section's last answer of each action, and its failure. */
+  building = $state(false);
+  build = $state<BuildAnswer | null>(null);
+  buildError = $state<string | null>(null);
+  stopping = $state(false);
+  stopped = $state<StopAnswer | null>(null);
+  stopError = $state<string | null>(null);
+  resuming = $state(false);
+  resumed = $state<ResumeAnswer | null>(null);
+  resumeError = $state<string | null>(null);
+  /** Removals on their way, and their answers, by run id. */
+  removing = $state<Record<string, boolean>>({});
+  removed = $state<Record<string, RemoveRunAnswer | string>>({});
+  login = $state<PrepareLoginAnswer | null>(null);
+  loginError = $state<string | null>(null);
+  checkingLogin = $state(false);
+  loginCheck = $state<CheckLoginAnswer | null>(null);
   #asked = 0;
   #returnFocus: HTMLElement | null = null;
 
@@ -143,6 +168,95 @@ export class WorkshopStore {
     } catch (error) {
       this.battery = null;
       this.batteryError = ipc.errorMessage(error);
+    }
+  }
+
+  /** Build images (AD-99): on a pointer click only, each build starting
+   *  containers. Each image's outcome reaches the view as it ends. */
+  async buildImages(): Promise<void> {
+    if (this.building) return;
+    this.building = true;
+    this.buildError = null;
+    try {
+      this.build = await ipc.buildImages();
+    } catch (error) {
+      this.build = null;
+      this.buildError = ipc.errorMessage(error);
+    } finally {
+      this.building = false;
+    }
+  }
+
+  /** Stop all (AD-116): it only reduces, so the keyboard reaches it. */
+  async stopAll(): Promise<void> {
+    if (this.stopping) return;
+    this.stopping = true;
+    this.stopError = null;
+    try {
+      this.stopped = await ipc.stopWorkshop();
+    } catch (error) {
+      this.stopped = null;
+      this.stopError = ipc.errorMessage(error);
+    } finally {
+      this.stopping = false;
+    }
+  }
+
+  /** Resume (AD-116) with each kept run's choice: on a pointer click only. */
+  async resume(choices: ResumeChoice[], resumeRelay: boolean): Promise<boolean> {
+    if (this.resuming) return false;
+    this.resuming = true;
+    this.resumeError = null;
+    try {
+      this.resumed = await ipc.resumeWorkshop(choices, resumeRelay);
+      return true;
+    } catch (error) {
+      this.resumed = null;
+      this.resumeError = ipc.errorMessage(error);
+      return false;
+    } finally {
+      this.resuming = false;
+    }
+  }
+
+  /** Removes a kept or orphan run's objects: it only reduces. */
+  async removeRun(runId: string): Promise<void> {
+    if (this.removing[runId]) return;
+    this.removing[runId] = true;
+    try {
+      this.removed[runId] = await ipc.removeRun(runId);
+    } catch (error) {
+      this.removed[runId] = ipc.errorMessage(error);
+    } finally {
+      delete this.removing[runId];
+    }
+  }
+
+  /** Log in for the workshop (D-605): on a pointer click only, since it
+   *  creates the login volume. Answers the command the author runs. */
+  async prepareLogin(): Promise<void> {
+    this.loginError = null;
+    try {
+      this.login = await ipc.prepareLogin();
+    } catch (error) {
+      this.login = null;
+      this.loginError = ipc.errorMessage(error);
+    }
+  }
+
+  /** Check login (D-608): on a pointer click only, since it starts the
+   *  probe's container. */
+  async checkLogin(): Promise<void> {
+    if (this.checkingLogin) return;
+    this.checkingLogin = true;
+    this.loginError = null;
+    try {
+      this.loginCheck = await ipc.checkLogin();
+    } catch (error) {
+      this.loginCheck = null;
+      this.loginError = ipc.errorMessage(error);
+    } finally {
+      this.checkingLogin = false;
     }
   }
 }

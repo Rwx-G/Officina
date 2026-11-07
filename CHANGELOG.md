@@ -8,6 +8,19 @@ project uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- The Workshop section, the live-run count and Stop all in the window
+  (v0.6, story 6.20): the Orchestrator view ends with the workshop's
+  runs (live, kept, orphans) with Stop all, Resume and Remove, its images
+  with Build images, each image's battery with its validity and Run escape
+  battery, the floor's credential with Log in for the workshop, Check
+  login or the `setup-token` step and `cmdkey` line with Copy, the
+  network's routes, and the per-template table with the week's share and
+  environment failures. While a run is live, the Orchestrator view switch
+  shows the number of live runs and Stop all stands in the header; neither
+  is amber, in the title or the overlay. `officina workshop --json` now
+  gives each orphan container with the run its label names, which Remove
+  takes. `crates/officina-host/examples/slice_a_check.rs` walks the owner
+  through Slice A's window checks and writes a report.
 - The workshop's login path and credential state (v0.6, story 6.26): a
   `login` floor now launches. Log in for the workshop creates the floor's
   login volume and gives the command you run yourself (doctor prints it

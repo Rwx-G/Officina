@@ -1,0 +1,7 @@
+{
+  "_doc": "Rebuilt from officina_core::workshop::floor::MAX_WORKERS_RANGE by crates/officina-core/tests/window_limits_vector.rs; [first, last], inclusive.",
+  "max_workers": [
+    1,
+    4
+  ]
+}

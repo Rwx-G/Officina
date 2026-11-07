@@ -100,6 +100,10 @@ declare global {
     __officinaStopAnswer?: StopAnswer;
     /** How many times `stop_workshop` was called (story 6.17). */
     __officinaStopCalls?: number;
+    /** Holds `stop_workshop`'s answer until `__officinaReleaseStop` is
+     *  called (story 6.20): a Stop all in flight. */
+    __officinaStopHeld?: boolean;
+    __officinaReleaseStop?: () => void;
     /** Each `resume_workshop` call's arguments (story 6.17). */
     __officinaResumeCalls?: { choices: ResumeChoice[]; resumeRelay: boolean }[];
     /** What `remove_run` answers (story 6.17); else two objects removed. */

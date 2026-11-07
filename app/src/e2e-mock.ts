@@ -357,12 +357,17 @@ function discardPackage(): Promise<DiscardAnswer> {
 
 /** Mirrors the answer to `stop_workshop` (AD-116): the answer the test
  *  sets in `__officinaStopAnswer`, else nothing stopped, within budget.
- *  Every call is counted in `__officinaStopCalls`. */
+ *  Every call is counted in `__officinaStopCalls`. With
+ *  `__officinaStopHeld` set, it waits until the test calls
+ *  `__officinaReleaseStop`, as a stop in progress does. */
 function stopWorkshop(): Promise<StopAnswer> {
   window.__officinaStopCalls = (window.__officinaStopCalls ?? 0) + 1;
-  return Promise.resolve(
-    window.__officinaStopAnswer ?? { containers: 0, runs: 0, engine_reached: true, elapsed_ms: 0 },
-  );
+  const answer = (): StopAnswer =>
+    window.__officinaStopAnswer ?? { containers: 0, runs: 0, engine_reached: true, elapsed_ms: 0 };
+  if (!window.__officinaStopHeld) return Promise.resolve(answer());
+  return new Promise((resolve) => {
+    window.__officinaReleaseStop = () => resolve(answer());
+  });
 }
 
 /** Mirrors the answer to `resume_workshop` (AD-116): the choices counted

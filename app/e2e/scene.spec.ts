@@ -40,6 +40,7 @@ import type { Board } from "../src/lib/generated/Board";
 import type { Card } from "../src/lib/generated/Card";
 import type { FocusOutcome } from "../src/lib/generated/FocusOutcome";
 import type { MeetingView } from "../src/lib/generated/MeetingView";
+import { MAX_WORKERS_RANGE } from "../src/lib/limits";
 
 const scene = (page: Page) => page.getByTestId("scene");
 
@@ -484,6 +485,8 @@ test.describe("scene", () => {
       await page.setViewportSize({ width: 1920, height: 1001 });
       const board = loadBoard("scene-eight");
       board.orchestrator = sceneBoardOrchestrator();
+      // Story 6.20 (D-618): the live-run count at its widest and Stop all.
+      board.workshop_live = MAX_WORKERS_RANGE[1];
       await answerOrchestrator(page, withPending(sceneView(), PENDING_LIMIT));
       if (alert) {
         const first = board.columns.needs_you[0]!;
@@ -495,6 +498,8 @@ test.describe("scene", () => {
       await openScene(page, board, loadRelay("relay-clean"));
       if (alert) await expect(page.getByTestId("alert-band")).toBeVisible();
       await expect(page.getByTestId("orchestrator-pending")).toHaveText(String(PENDING_LIMIT));
+      await expect(page.getByTestId("workshop-live")).toHaveText(String(MAX_WORKERS_RANGE[1]));
+      await expect(page.getByTestId("header-stop-all")).toBeVisible();
       await expect(scene(page).locator("[data-orchestrator]")).toHaveCount(1);
       // The header on one line (D-526), every fixed control included.
       const tops = await page.locator("header.bar > *").evaluateAll((items) => items.map((e) => Math.round(e.getBoundingClientRect().top)));

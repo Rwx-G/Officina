@@ -2,7 +2,8 @@
   // The Orchestrator view (AD-93): the briefing Officina's own code builds,
   // the orchestrator's proposals, the composer over the approved templates
   // with the card core issued for its choices or for a proposal, and the
-  // work order history. No model is involved. Leaving the view records the
+  // work order history, then the Workshop section, which needs no
+  // briefing. No model is involved. Leaving the view records the
   // briefing's reading (App.svelte).
   import type { Board } from "../lib/generated/Board";
   import type { Card } from "../lib/generated/Card";
@@ -15,6 +16,8 @@
   import ProposalList from "./ProposalList.svelte";
   import WorkOrderCard from "./WorkOrderCard.svelte";
   import WorkOrderHistory from "./WorkOrderHistory.svelte";
+  import WorkshopSection from "./WorkshopSection.svelte";
+  import { workshop } from "../lib/workshop.svelte";
 
   interface Props {
     store: OrchestratorStore;
@@ -73,6 +76,7 @@
     {/if}
     <WorkOrderHistory orders={view.work_orders} {nowMs} />
   {/if}
+  <WorkshopSection view={workshop.view} {nowMs} />
   {#if store.readError}
     <p class="fault" role="alert" data-testid="briefing-read-error">
       The briefing's reading could not be recorded: {store.readError}

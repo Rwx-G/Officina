@@ -6,6 +6,9 @@
   import { DEFAULT_WALKING, type Base, type Mode, type WindowView } from "../lib/view.svelte";
   import { RELAY_TOGGLE_TEXT } from "../lib/relay-text";
   import { switchText } from "../lib/orchestrator-text";
+  import { workshop } from "../lib/workshop.svelte";
+  import { LIVE_WIDTH_CH } from "../lib/limits";
+  import { STOP_ALL_TEXT, liveText } from "../lib/workshop-text";
   import WorkCounts, { type EndedColumn } from "./WorkCounts.svelte";
   import { fadeMotion } from "../lib/motion";
   import QuotaGauges from "./QuotaGauges.svelte";
@@ -84,7 +87,13 @@
   // are pending, their count in the button's corner (D-833).
   let orchestratorLive = $derived((store.board?.orchestrator ?? orchestrator?.view?.presence ?? null) !== null);
   let pending = $derived(orchestrator?.view?.proposals.filter((p) => p.status === "pending").length ?? 0);
-  let orchestratorName = $derived(switchText(orchestratorLive, pending));
+  // D-618: the workshop's live runs on the same button, a neutral number
+  // in a slot as wide as `max_workers`' upper bound needs, under the
+  // pending count; Stop all in the status slot while any run is live.
+  let live = $derived(store.board?.workshop_live ?? 0);
+  let orchestratorName = $derived(
+    live > 0 ? `${switchText(orchestratorLive, pending)}, ${liveText(live)}` : switchText(orchestratorLive, pending),
+  );
 
   // The Relay position only where the relay is in use (story 2.9).
   let views = $derived(VIEWS.filter((option) => option.id !== "relay" || relay?.inUse));
@@ -129,6 +138,9 @@
             {#if pending > 0}
               <span class="pending" data-testid="orchestrator-pending" aria-hidden="true">{pending}</span>
             {/if}
+            <span class="workshop-count" data-testid="workshop-live" data-stable-slot style:width="{LIVE_WIDTH_CH}ch" aria-hidden="true"
+              >{live > 0 ? live : ""}</span
+            >
           </button>
         {:else}
           <button
@@ -204,6 +216,20 @@
       {/if}
     </div>
     <div class="status" data-testid="header-status">
+      <!-- First of the slot, whose items keep to its end: appearing, it
+           moves none of them (D-517, D-618). -->
+      {#if live > 0}
+        <button
+          class="tool stop-all"
+          data-testid="header-stop-all"
+          data-stable-slot
+          disabled={workshop.stopping}
+          title="Stop every workshop run and the relay; nothing launches until you resume"
+          onclick={() => void workshop.stopAll()}
+        >
+          <StableLabel labels={STOP_ALL_TEXT} current={workshop.stopping ? "stopping" : "ready"} />
+        </button>
+      {/if}
       {#if waiting > 0}
         <div class="pill" data-testid="waiting-pill" role="status" transition:fadeMotion>{waiting} waiting</div>
       {/if}
@@ -311,6 +337,22 @@
     font-variant-numeric: tabular-nums;
   }
   .view[aria-pressed="true"] .pending {
+    color: currentColor;
+  }
+  /* The live-run count under the pending count, in the bottom padding:
+     like it, it takes no width of the line (D-618). */
+  .workshop-count {
+    position: absolute;
+    bottom: 3px;
+    right: 3px;
+    color: var(--color-text-muted);
+    font-size: 10.5px;
+    font-weight: 700;
+    line-height: 1;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+  .view[aria-pressed="true"] .workshop-count {
     color: currentColor;
   }
   /* A count badge: the one pill of the header (D-539). */

@@ -803,8 +803,10 @@ package you review before anything reaches your repository. It is being
 built story by story: a workshop card can be issued and launched, its run
 is followed, its package collected, verified and scanned, imported or
 discarded, and every run can be stopped at once and resumed; runs show on
-the board and in `officina workshop --json`; the window's Workshop section
-and its buttons come in the next stories.
+the board, in the Orchestrator view's Workshop section and in `officina
+workshop --json`. Slice A, the workshop without the scene, memory
+proposals or browser images, is usable end to end: see "Slice A end to
+end" below. Workshop runs have no place in the scene yet.
 
 ### Declaring the workshop
 
@@ -1297,8 +1299,8 @@ imports, discards or stops.
 `officina workshop --json` prints the Workshop view once, read-only, with
 the window open or closed: the engine's state and key, both stop flags,
 each image's state (`absent`, `building`, `ready`, `mismatch`, `failed`),
-inventories and newest battery with its validity, the live, kept and
-orphan runs, the per-template table and its notices, this week's workshop
+inventories and newest battery with its validity, the live and kept runs
+and the orphan containers (each with the run its label names), the per-template table and its notices, this week's workshop
 share (workshop launches over every work order launch that started, per
 UTC ISO week) and environment failures, the limits, the credential's kind
 and state with what to do about it (the login command, or `claude
@@ -1389,8 +1391,8 @@ it back from the engine while the container exists (`docker inspect`):
 that is why containers are removed right after collection.
 
 A `login` floor uses the `/login` you make once inside the workshop. **Log
-in for the workshop** (a pointer click; story 6.20 places the button)
-creates the engine volume `officina-login-<floor key>` and shows the
+in for the workshop** (a pointer click, in the Workshop section's
+Credential part) creates the engine volume `officina-login-<floor key>` and shows the
 command to run yourself; doctor prints the same command while the login is
 missing or needed, and writes it to `<home>/doctor/workshop-login.txt`.
 Run it from PowerShell or `cmd`, not Git Bash, open the URL it prints in
@@ -1445,6 +1447,72 @@ the repository does not carry (`.git/info/exclude`, named), holding files
 the base tracks, a path the engine cannot carry or reached through a
 reparse point, and a count of Cloud Files placeholders. The findings are
 the variants of `WorkshopCheck`, each with its level.
+
+### The Workshop section and Stop all
+
+The Orchestrator view ends with the Workshop section, the window's own
+reading of the Workshop view, refreshed as it changes:
+
+- **Runs**: the live runs, the runs Stop all kept, and the orphan
+  containers of this floor, listed by name and grouped by the run their
+  label names. **Stop all** stops every worker and gateway and the relay
+  within its budget and says how many containers and runs it stopped and
+  how long it took; **Remove** takes a kept run's or an orphan's objects.
+  While the workshop is stopped, nothing launches until **Resume**, whose
+  dialog offers each kept run to collect (the default) or remove, and the
+  relay resumed too (checked by default).
+- **Images**: each image's state (absent, building, ready, out of date
+  with the label its comparison stopped at, build failed), the projects
+  whose inventory it holds, and **Build images**.
+- **Escape battery**: each image's newest battery, its outcome and age,
+  and whether it is still valid on the engine as read now; a battery that
+  no longer is reads stale, and a launch on that image is refused until
+  **Run escape battery** passes again.
+- **Credential**: the floor's credential kind and state. For a `login`
+  floor, **Log in for the workshop** and **Check login**; for a token
+  floor whose credential is missing or needs replacing, `claude
+  setup-token` and the floor's `cmdkey` line with **Copy**. Then the
+  network: the `upstream_proxy` setting, where the routes came from, and
+  each allow-list entry's route.
+- **Templates**: each template's runs, no change, failed, quarantined,
+  imported and discarded counts apart, its acceptance (imported over the
+  packages you decided), FR-11's notices, this week's workshop share and
+  environment failures.
+
+Build images, Run escape battery, Resume, Log in for the workshop and
+Check login act on a pointer click only, since each starts a container,
+creates a volume or launches what the stop held back; Stop all, Remove
+and Copy take the keyboard, since they only reduce or copy.
+
+While a run is live, the Orchestrator view switch carries the number of
+live runs in its corner (its tooltip and accessible name say "N in the
+workshop") and **Stop all** stands first in the header's status line, in
+every view and mode. Neither uses the colour of what waits on you, and
+neither reaches the window title or the taskbar overlay: a run waits on
+you only once its package is in review, as its board card says.
+
+### Slice A end to end
+
+1. **An account.** A Claude subscription account of any origin works.
+   `claude setup-token` is recommended for unattended workers: run it,
+   then store its token with the `cmdkey` line the Credential part (or
+   `officina doctor`) shows. Or set `auth = "login"` and use Log in for
+   the workshop once, then Check login.
+2. **The floor.** Declare `[workshop]`, each project's `[project.workshop]`
+   and each template's `[template.workshop]` as in "Declaring the
+   workshop"; keep `upstream_proxy = "system"` to follow Windows' proxy
+   settings, and on a network that inspects TLS export its root to the
+   file `ca_file` names ("Proxies and a corporate root"). Approve the catalogue
+   in the Relay view.
+3. **Images and battery.** Click Build images, then Run escape battery,
+   in the Workshop section; `officina doctor` lists anything left to fix.
+4. **Launch.** Compose a workshop template in the Orchestrator view and
+   click Launch on its card; the run shows in Working.
+5. **Review.** When the card reaches Needs you, click Receive, approve each
+   sensitive group, then Import (the branch `officina/<name>` is created
+   in the project) or Discard with a reason.
+6. **Stop.** Stop all in the header stops everything at once; Resume in
+   the section collects or removes what it kept.
 
 ### Approving workshop changes
 

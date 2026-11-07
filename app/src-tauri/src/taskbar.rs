@@ -498,6 +498,52 @@ mod tests {
         }
     }
 
+    /// Story 6.20 AC 2 (AD-55, D-618): live workshop runs leave the title
+    /// and the overlay as the author's waits make them; the live-run count
+    /// is the Orchestrator view switch's only.
+    #[test]
+    fn the_window_title_never_counts_workshop_runs() {
+        use officina_core::workshop::run::RunState;
+        use officina_core::workshop::view::BoardRun;
+        let live: Vec<BoardRun> = RunState::ALL
+            .iter()
+            .copied()
+            .filter(|state| state.is_live())
+            .enumerate()
+            .map(|(i, state)| BoardRun {
+                id: format!("{i:032x}"),
+                template: "bump".into(),
+                project: "calm".into(),
+                name: format!("bump-{i}"),
+                state,
+                state_at_ms: NOW,
+                started_at_ms: NOW,
+            })
+            .collect();
+        assert!(!live.is_empty());
+        for waiting in [0, 2] {
+            let plain = board(waiting, 0);
+            let agents: Vec<serde_json::Value> = (0..waiting)
+                .map(|i| {
+                    serde_json::json!({"pid": 100 + i, "sessionId": format!("s{i}"), "kind": "interactive",
+                        "status": "waiting", "cwd": "C:/work/calm", "startedAt": 1})
+                })
+                .collect();
+            let with = build_board(
+                &BoardInput {
+                    workshop_runs: live.clone(),
+                    ..input(&agents)
+                },
+                NOW,
+            );
+            assert_eq!(with.workshop_live as usize, live.len());
+            assert_eq!(window_title(&with), window_title(&plain));
+            for size in sizes() {
+                assert_eq!(overlay_for(&with, size), overlay_for(&plain, size));
+            }
+        }
+    }
+
     #[test]
     fn the_badge_turns_to_the_alert_colour() {
         for size in sizes() {

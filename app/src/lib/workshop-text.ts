@@ -1,8 +1,20 @@
-// The window's words for the workshop card and the review panel (AD-122,
-// FR-6, FR-10 to FR-12). Each table is keyed by its generated union, so a
+// The window's words for the workshop card, the review panel and the
+// Workshop section (AD-122, FR-6, FR-10 to FR-12, FR-17). Each table is keyed by its generated union, so a
 // value the backend adds fails `pnpm check` until it has its text.
 import type { ApprovalRefusal } from "./generated/ApprovalRefusal";
 import type { BaseChoice } from "./generated/BaseChoice";
+import type { BatteryOutcome } from "./generated/BatteryOutcome";
+import type { BatteryRefusal } from "./generated/BatteryRefusal";
+import type { BuildRefusal } from "./generated/BuildRefusal";
+import type { CredentialKind } from "./generated/CredentialKind";
+import type { CredentialState } from "./generated/CredentialState";
+import type { EngineStatus } from "./generated/EngineStatus";
+import type { ImageKind } from "./generated/ImageKind";
+import type { ImageMismatch } from "./generated/ImageMismatch";
+import type { ImageState } from "./generated/ImageState";
+import type { LoginRefusal } from "./generated/LoginRefusal";
+import type { ProxySource } from "./generated/ProxySource";
+import type { RemoveRunRefusal } from "./generated/RemoveRunRefusal";
 import type { DiscardReason } from "./generated/DiscardReason";
 import type { DiscardRefusal } from "./generated/DiscardRefusal";
 import type { ImportRefusal } from "./generated/ImportRefusal";
@@ -128,3 +140,112 @@ export function sameBase(a: BaseChoice, b: BaseChoice): boolean {
 export function dollars(cents: number): string {
   return `$${(cents / 100).toFixed(2)}`;
 }
+
+export const ENGINE_STATUS_TEXT: Record<EngineStatus, string> = {
+  unresolved: "No Docker program found",
+  unreachable: "Docker did not answer in time",
+  unavailable: "Docker cannot run the workshop",
+  ready: "Docker ready",
+};
+
+export const IMAGE_KIND_TEXT: Record<ImageKind, string> = {
+  workshop: "base",
+  browser: "browser base",
+  gateway: "gateway",
+  project: "project",
+};
+
+/** What Build images would do to an image in each state. */
+export const IMAGE_STATE_TEXT: Record<ImageState, string> = {
+  absent: "absent",
+  building: "building",
+  ready: "ready",
+  mismatch: "out of date",
+  failed: "build failed",
+};
+
+export const IMAGE_MISMATCH_TEXT: Record<ImageMismatch, string> = {
+  absent: "not on the engine",
+  not_recorded: "no build recorded",
+  label_differs: "a label differs",
+  base_id_differs: "built on another base",
+  programs_differ: "built with other Linux programs",
+};
+
+export const BATTERY_OUTCOME_TEXT: Record<BatteryOutcome, string> = {
+  passed: "passed",
+  failed: "failed",
+  stopped: "stopped",
+  error: "could not run",
+};
+
+export const BUILD_REFUSAL_TEXT: Record<BuildRefusal, string> = {
+  linux_programs_missing: "The Linux programs are not next to Officina.",
+  workshop_stopped: "The workshop is stopped: resume it first.",
+  workshop_off: "The floor declares no valid [workshop] table.",
+  not_approved: "No catalogue is approved.",
+  catalogue_changed: "The floor or a workshop file changed since its approval: approve it again.",
+  claude_version_unknown: "The host's Claude Code version is not known.",
+  engine_unavailable: "Docker cannot run the workshop.",
+  builder_missing: "Docker has no builder for its context.",
+  proxy_refused: "The installer host's route could not be decided: see officina doctor.",
+  context_unwritable: "A build context could not be written under Officina's home.",
+  busy: "A build or a battery is already running.",
+};
+
+export const BATTERY_REFUSAL_TEXT: Record<BatteryRefusal, string> = {
+  workshop_stopped: "The workshop is stopped: resume it first.",
+  workshop_off: "The floor declares no valid [workshop] table.",
+  not_approved: "No catalogue is approved.",
+  catalogue_changed: "The floor changed since its approval: approve it again.",
+  image_missing: "An image has no successful build: build images first.",
+  nothing_stale: "No battery is stale.",
+  engine_unavailable: "Docker cannot run the workshop.",
+  busy: "A build or a battery is already running.",
+};
+
+export const LOGIN_REFUSAL_TEXT: Record<LoginRefusal, string> = {
+  workshop_stopped: "The workshop is stopped: resume it first.",
+  no_floor: "No approved floor.",
+  not_login_floor: "This floor does not use the login kind.",
+  engine_unavailable: "Docker cannot run the workshop.",
+  base_image_missing: "The base image is not built: build images first.",
+};
+
+export const REMOVE_REFUSAL_TEXT: Record<RemoveRunRefusal, string> = {
+  malformed_id: "That is not a run id.",
+  not_removable: "The run is neither kept nor an orphan.",
+  no_floor: "No approved floor.",
+  engine_unavailable: "Docker could not remove its objects.",
+};
+
+export const CREDENTIAL_KIND_TEXT: Record<CredentialKind, string> = {
+  "oauth-token": "setup-token",
+  login: "login",
+  "api-key": "API key",
+};
+
+/** `ok` reads as `unchecked`: nothing sets it in v0.6 (D-1241). */
+export const CREDENTIAL_STATE_TEXT: Record<CredentialState, string> = {
+  unchecked: "unchecked",
+  ok: "unchecked",
+  missing: "missing",
+  needs_login: "login needed",
+  needs_new_credential: "a new credential needed",
+};
+
+export const PROXY_SOURCE_TEXT: Record<ProxySource, string> = {
+  floor: "the floor's proxy",
+  pac: "the PAC file Windows names",
+  auto_detect: "Windows' automatic detection",
+  static: "Windows' static proxy",
+  none: "no proxy",
+};
+
+/** The live-run count's accessible name and tooltip (D-618). */
+export function liveText(count: number): string {
+  return `${count} in the workshop`;
+}
+
+/** Stop all's label, the same box whether in flight or not (D-517). */
+export const STOP_ALL_TEXT = { ready: "Stop all", stopping: "Stopping" } as const;

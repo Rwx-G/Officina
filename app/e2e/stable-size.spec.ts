@@ -13,7 +13,9 @@ import type { MeetingView } from "../src/lib/generated/MeetingView";
 import type { OrchestratorView } from "../src/lib/generated/OrchestratorView";
 import type { RegistryView } from "../src/lib/generated/RegistryView";
 import type { WorkOrderCard } from "../src/lib/generated/WorkOrderCard";
+import type { WorkshopView } from "../src/lib/generated/WorkshopView";
 import { DEFAULT_WALKING } from "../src/lib/view.svelte";
+import { MAX_WORKERS_RANGE } from "../src/lib/limits";
 
 /** Sub-pixel rounding between two layouts, never a real move. */
 const TOLERANCE_PX = 0.5;
@@ -32,7 +34,9 @@ type SceneName =
   | "triage"
   | "orchestrator"
   | "meeting"
-  | "review";
+  | "review"
+  | "workshop"
+  | "workshopSection";
 
 const SCENES: Record<SceneName, (page: Page) => Promise<void>> = {
   board: async (page) => {
@@ -137,6 +141,22 @@ const SCENES: Record<SceneName, (page: Page) => Promise<void>> = {
     await page.setViewportSize({ width: 1920, height: 2400 });
     await page.evaluate((r) => (window.__officinaReviews = r), { [runId]: { ...approvedReview(), run_id: runId } });
   },
+  // Story 6.20: the workshop fixture's board, its runs live: the live-run
+  // count on the Orchestrator view switch and Stop all in the header.
+  workshop: async (page) => {
+    await openBoard(page, fixtureOf<Board>("workshop", "workshop-runs-board"));
+    await expect(page.getByTestId("header-stop-all")).toBeVisible();
+  },
+  // The Workshop section on story 6.18's real view: Stop all and the
+  // credential's Copy.
+  workshopSection: async (page) => {
+    await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+    await page.addInitScript((v) => (window.__officinaWorkshop = v), fixtureOf<WorkshopView>("workshop", "workshop-runs"));
+    await openBoard(page, fixtureOf<Board>("workshop", "workshop-runs-board"));
+    await page.getByTestId("view-orchestrator").click();
+    await expect(page.getByTestId("credential-copy")).toBeVisible();
+    await transitionsDone(page);
+  },
 };
 
 interface ToggleCase {
@@ -150,8 +170,30 @@ interface ToggleCase {
   pressed?: boolean;
 }
 
+/** Holds Stop all in flight and clicks it: its label reads Stopping. */
+async function stopHeld(page: Page, control: Locator): Promise<void> {
+  await page.evaluate(() => (window.__officinaStopHeld = true));
+  await control.click();
+}
+
 const CASES: ToggleCase[] = [
   { name: "view switch", selector: '[data-testid="view-switch"] > button', scene: "board" },
+  // Story 6.20 (D-618): the live-run count goes to the other end of
+  // `max_workers`' range in its own slot; Stop all, held in flight, reads
+  // Stopping in its box, in the header and in the section.
+  {
+    name: "workshop live count",
+    selector: '[data-testid="workshop-live"]',
+    scene: "workshop",
+    act: (page) =>
+      page.evaluate(([low, high]) => {
+        const board = window.__officinaBoard!;
+        return window.__officinaPushBoard?.({ ...board, workshop_live: board.workshop_live === high ? low : high });
+      }, MAX_WORKERS_RANGE),
+  },
+  { name: "header Stop all", selector: '[data-testid="header-stop-all"]', scene: "workshop", act: stopHeld },
+  { name: "section Stop all", selector: '[data-testid="stop-all"]', scene: "workshopSection", act: stopHeld },
+  { name: "workshop credential Copy", selector: '[data-testid="credential-copy"]', scene: "workshopSection" },
   // Story 6.19: Approve reads Approved once the group is.
   { name: "review Approve", selector: '[data-testid="approve-group"]', scene: "review" },
   // Story 5.18 AC 9 (D-565, D-833): presence turns live and the count
@@ -509,17 +551,20 @@ test.describe("controls keep their size whatever their state", () => {
     expect(quiet.length).toBeGreaterThan(3);
     const pending = loadRelay("relay-pending");
     await page.evaluate(
-      ([b, r]) =>
+      ([b, r, high]) =>
         Promise.all([
           window.__officinaPushBoard?.({
             ...b,
             contract: { ...b.contract, held: false, missing: ["a field"], hook_missing: ["Stop.cwd"] },
+            workshop_live: high,
           }),
           window.__officinaPushRelay?.({ ...r, stopped: true }),
         ]),
-      [board, pending] as const,
+      [board, pending, MAX_WORKERS_RANGE[1]] as const,
     );
-    for (const chip of ["waiting-pill", "relay-stopped-chip", "catalogue-chip", "contract", "contract-hook"]) {
+    // Story 6.20 (D-618): the live-run count and Stop all appear too.
+    await expect(page.getByTestId("workshop-live")).toHaveText(String(MAX_WORKERS_RANGE[1]));
+    for (const chip of ["waiting-pill", "relay-stopped-chip", "catalogue-chip", "contract", "contract-hook", "header-stop-all"]) {
       await expect(page.getByTestId(chip)).toBeVisible();
     }
     const busy = await boxes();
