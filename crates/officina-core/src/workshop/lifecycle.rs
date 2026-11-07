@@ -249,8 +249,12 @@ pub enum ReconcileAction {
     FailLaunch { run_id: String },
     /// The engine lacks the container and no package exists: `unknown`.
     Lost { run_id: String },
-    /// A run container of this floor with no row: listed, never adopted.
-    Orphan { name: String },
+    /// A run container of this floor with no row: listed, never adopted;
+    /// `run_id` is its `officina.run` label, by which it can be removed.
+    Orphan {
+        name: String,
+        run_id: Option<String>,
+    },
 }
 
 /// True for the roles a run owns (AD-109): a job's containers belong to
@@ -317,6 +321,7 @@ pub fn reconcile(
         if !owned {
             actions.push(ReconcileAction::Orphan {
                 name: container.name.clone(),
+                run_id: container.run_id.clone(),
             });
         }
     }

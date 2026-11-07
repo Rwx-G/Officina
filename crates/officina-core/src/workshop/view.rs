@@ -482,7 +482,17 @@ impl WorkshopRunView {
 pub struct RunLists {
     pub live: Vec<WorkshopRunView>,
     pub kept: Vec<WorkshopRunView>,
-    pub orphans: Vec<String>,
+    pub orphans: Vec<OrphanView>,
+}
+
+/// An orphan container (AD-109) and the run id its `officina.run` label
+/// names, which `remove_run` takes (D-215); `None` for a container
+/// without the label, which Officina lists but cannot remove by run.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+pub struct OrphanView {
+    pub name: String,
+    pub run_id: Option<String>,
 }
 
 /// PRD section 7's Workshop share for one UTC ISO week (D-214): workshop
@@ -722,7 +732,7 @@ pub struct EngineHalf {
 #[derive(Debug, Clone, Copy)]
 pub struct RegistryHalf<'a> {
     pub runs: &'a [BoardRun],
-    pub orphans: &'a [String],
+    pub orphans: &'a [OrphanView],
     pub lines: &'a [crate::relay::journal::JournalLine],
     pub relay_stopped: bool,
     pub workshop_stopped: bool,
@@ -1205,7 +1215,10 @@ mod tests {
         let lines = [line(NOW, finished(1, "bump", WorkshopOutcome::Package))];
         let registry = RegistryHalf {
             runs: &runs,
-            orphans: &["officina-w-x".into()],
+            orphans: &[OrphanView {
+                name: "officina-w-x".into(),
+                run_id: None,
+            }],
             lines: &lines,
             relay_stopped: false,
             workshop_stopped: true,

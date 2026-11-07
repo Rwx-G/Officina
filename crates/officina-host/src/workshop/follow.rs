@@ -34,6 +34,7 @@ use officina_core::workshop::run::{
 use officina_core::workshop::sensitive::PackageGroup;
 use officina_core::workshop::stream::{HookCounts, MAX_LINE_BYTES};
 use officina_core::workshop::vector::ContainerRole;
+use officina_core::workshop::view::OrphanView;
 
 use crate::collector::Collector;
 use crate::process::{BoundedLine, FollowedPipe, Following};
@@ -195,7 +196,7 @@ pub enum FollowEvent {
     Reconciled {
         failed: Vec<String>,
         lost: Vec<(String, RunSummary)>,
-        orphans: Vec<String>,
+        orphans: Vec<OrphanView>,
     },
     /// What collection found (AD-110): the row's outcome, its package
     /// fields and the journal lines it owes.
@@ -803,7 +804,7 @@ pub fn reconcile_now(context: &FollowContext) -> Vec<ReconcileAction> {
                     .unwrap_or_default();
                 lost.push((run_id, summary));
             }
-            ReconcileAction::Orphan { name } => orphans.push(name),
+            ReconcileAction::Orphan { name, run_id } => orphans.push(OrphanView { name, run_id }),
         }
     }
     context.tell(FollowEvent::Reconciled {

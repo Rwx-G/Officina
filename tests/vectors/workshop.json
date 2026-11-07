@@ -2240,11 +2240,13 @@
       "expect": [
         {
           "action": "orphan",
-          "name": "officina-worker-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+          "name": "officina-worker-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "run_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
         },
         {
           "action": "orphan",
-          "name": "officina-packer-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+          "name": "officina-packer-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "run_id": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
         }
       ]
     },

@@ -17,7 +17,7 @@ use officina_core::workshop::lifecycle::{ContainerSeen, ReconcileAction, RowSeen
 use officina_core::workshop::names::{FLOOR_LABEL, ROLE_LABEL, RUN_LABEL};
 use officina_core::workshop::view::{
     BoardRun, EngineHalf, EngineStatus, EngineView, ImageFacts, InventoryView, NetworkView,
-    RegistryHalf, WorkshopCredential, WorkshopView, build_view, credential_action,
+    OrphanView, RegistryHalf, WorkshopCredential, WorkshopView, build_view, credential_action,
 };
 
 use crate::relay::credential::CredentialStore;
@@ -269,7 +269,7 @@ pub fn read_engine_half(reader: &EngineReader, building: bool) -> EngineRead {
 
 /// The run containers of `floor_key` no row owns (AD-109), by
 /// reconciliation's own rule: listed, never adopted.
-pub fn orphans(containers: &[PsRow], floor_key: &str, runs: &[BoardRun]) -> Vec<String> {
+pub fn orphans(containers: &[PsRow], floor_key: &str, runs: &[BoardRun]) -> Vec<OrphanView> {
     let seen: Vec<ContainerSeen> = containers
         .iter()
         .filter(|row| row.labels.get(FLOOR_LABEL).map(String::as_str) == Some(floor_key))
@@ -295,7 +295,7 @@ pub fn orphans(containers: &[PsRow], floor_key: &str, runs: &[BoardRun]) -> Vec<
     reconcile(&rows, &seen, 0)
         .into_iter()
         .filter_map(|action| match action {
-            ReconcileAction::Orphan { name } => Some(name),
+            ReconcileAction::Orphan { name, run_id } => Some(OrphanView { name, run_id }),
             _ => None,
         })
         .collect()
@@ -453,7 +453,13 @@ mod tests {
             container("lost", "f1", Some("b"), worker),
             container("other-floor", "f2", Some("c"), worker),
         ];
-        assert_eq!(orphans(&containers, "f1", &[run("a")]), ["lost"]);
+        assert_eq!(
+            orphans(&containers, "f1", &[run("a")]),
+            [OrphanView {
+                name: "lost".into(),
+                run_id: Some("b".into()),
+            }]
+        );
     }
 
     /// D-607: a token floor without its entry and a `login` floor without

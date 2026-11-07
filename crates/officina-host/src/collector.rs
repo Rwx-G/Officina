@@ -285,7 +285,7 @@ pub struct Collector {
     engine: Option<crate::workshop::engine::EngineState>,
     /// The run containers of this floor no row owns (AD-109), as the last
     /// reconciliation listed them.
-    workshop_orphans: Vec<String>,
+    workshop_orphans: Vec<officina_core::workshop::view::OrphanView>,
     /// What the hourly pass queues on thread `workshop` (AD-116, D-213):
     /// the removal of kept containers past 7 days; set by the window once
     /// its threads run.
@@ -379,12 +379,15 @@ impl Collector {
 
     /// The engine's state as last read; `None` before the first read.
     /// Keeps the orphans reconciliation listed (AD-109, D-215).
-    pub fn set_workshop_orphans(&mut self, orphans: Vec<String>) {
+    pub fn set_workshop_orphans(
+        &mut self,
+        orphans: Vec<officina_core::workshop::view::OrphanView>,
+    ) {
         self.workshop_orphans = orphans;
     }
 
     /// The run containers of this floor no row owns: listed, never adopted.
-    pub fn workshop_orphans(&self) -> &[String] {
+    pub fn workshop_orphans(&self) -> &[officina_core::workshop::view::OrphanView] {
         &self.workshop_orphans
     }
 

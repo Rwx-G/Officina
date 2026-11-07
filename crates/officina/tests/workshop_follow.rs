@@ -553,7 +553,10 @@ fn an_orphan_is_listed_not_adopted() {
     add_container(&home, &orphan, &floor, ContainerRole::Worker.code());
     let again = home.seeded();
     let actions = reconcile_now(&context(&home, again.clone()));
-    assert!(actions.contains(&ReconcileAction::Orphan { name: orphan }));
+    assert!(actions.contains(&ReconcileAction::Orphan {
+        name: orphan,
+        run_id: Some("f".repeat(32)),
+    }));
     assert!(!again.followed.lock().unwrap().contains_key(&"f".repeat(32)));
 }
 
@@ -583,6 +586,7 @@ fn job_and_login_containers_are_never_orphans() {
     for role in roles {
         let listed = actions.contains(&ReconcileAction::Orphan {
             name: format!("officina-{role}-orphan-probe"),
+            run_id: Some("f".repeat(32)),
         });
         assert_eq!(
             listed,
