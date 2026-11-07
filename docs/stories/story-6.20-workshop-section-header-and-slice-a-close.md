@@ -1,6 +1,6 @@
 # Story 6.20: The Workshop section, the live count and Stop all, and Slice A's close
 
-**Status:** Approved
+**Status:** Review
 
 ## Story
 
@@ -20,11 +20,11 @@ so that the workshop is set up and watched from one place, and Slice A is usable
 
 ## Tasks
 
-- [ ] `WorkshopSection.svelte` and its parts, through the `ipc.ts` wrappers and `e2e-mock.ts` answers the backend stories own (6.8, 6.10, 6.17, 6.18, 6.26; review F33), `CredentialPanel.svelte` among them (AC 1)
-- [ ] The count on the Orchestrator view switch, Stop all in a stable slot of `Header.svelte`, the `stable-size.spec.ts` cases (AC 2)
-- [ ] Vitest and Playwright cases (AC 1, 2)
-- [ ] Workstation: Stop all once, gate 4's second half, Slice A end to end with each credential kind built, with the owner (AC 3 to 5); the work network entry checked recorded (AC 6)
-- [ ] README, `CHANGELOG.md` (AC 7)
+- [x] `WorkshopSection.svelte` and its parts, through the `ipc.ts` wrappers and `e2e-mock.ts` answers the backend stories own (6.8, 6.10, 6.17, 6.18, 6.26; review F33), `CredentialPanel.svelte` among them (AC 1); orphans carry their run id so Remove can take one (D-1247)
+- [x] The count on the Orchestrator view switch, Stop all in a stable slot of `Header.svelte`, the `stable-size.spec.ts` cases (AC 2)
+- [x] Vitest and Playwright cases (AC 1, 2)
+- [ ] Workstation: Stop all once, gate 4's second half, Slice A end to end with each credential kind built, with the owner (AC 3 to 5); the work network entry checked recorded (AC 6); packaged in `examples/slice_a_check.rs` (D-1249)
+- [x] README, `CHANGELOG.md` (AC 7)
 
 ## Dev Notes
 
@@ -44,9 +44,26 @@ so that the workshop is set up and watched from one place, and Slice A is usable
 
 ### Debug Log
 
+- `remove_run` takes a run id, and the view listed orphans by container name only: `OrphanView` carries the run its label names (D-1247).
+- The count's first class, `.live`, matched D-565's `.presence.live` and took the presence mark out of the flow; `stable-size.spec.ts > orchestrator view switch mark` caught it.
+- The Playwright loader refuses a JSON import without an import attribute, so the limits vector has its own module, `lib/limits.ts`, imported with `with { type: "json" }` (D-1248).
+- The window title is the Rust shell's, so AC 2's title case is a Rust test (D-1248).
+
 ### Completion Notes
 
+- AC 1: Vitest `workshop.test.ts > the Workshop section > {build images ignores detail 0, run escape battery ignores detail 0, resume ignores detail 0, log in and check login ignore detail 0, the login command renders as text with a copy button, each credential state shows its action, stop all is keyboard reachable, resume defaults to collect and to resuming the relay, a kept run and a labelled orphan can be removed by keyboard}`; Playwright `workshop.spec.ts > {the section shows each image state, a stale battery is named, the template table shows no change and failed apart}`; core `workshop_vectors.rs::reconcile_cases_match` and host `view.rs::tests::orphans_are_unowned_run_containers_of_this_floor` with the orphan's run; CLI `workshop_follow.rs::{an_orphan_is_listed_not_adopted, job_and_login_containers_are_never_orphans}`. D-1246, D-1247.
+- AC 2: Playwright `workshop.spec.ts > {the view switch counts live runs (board mode), the view switch counts live runs (scene mode), the count never uses the attention colour in the light theme, ... in the dark theme, stop all appears only while a run is live}`; `stable-size.spec.ts` gains the `workshop` and `workshopSection` scenes and the cases `workshop live count`, `header Stop all`, `section Stop all`, `workshop credential Copy`, and its header status test shows the count and Stop all among the chips (board and scene modes); `scene.spec.ts > eight projects fit a maximised Full HD window with the alert band` (and without) with the count at its widest and Stop all shown; Rust `taskbar.rs::tests::the_window_title_never_counts_workshop_runs` in place of the Vitest case; core `window_limits_vector.rs::the_file_is_the_constant`. D-1248.
+- AC 3 to 6: open, the owner's: `cargo build -p officina-host --example slice_a_check`, then `target\debug\examples\slice_a_check.exe stop`, `hooks` and `slice-a` (once per credential kind built) from his console beside the window, each appending to `slice-a-check-report.md`; the work network entry is story 6.1's W1 to W4 in `workshop_gate_probe`. D-1249.
+- AC 7: README "The workshop (v0.6, in progress)" opening, "The Workshop section and Stop all", "Slice A end to end"; `CHANGELOG.md`; `readme.rs` green.
+
 ## File List
+
+- `app/src/components/WorkshopSection.svelte`, `RunList.svelte`, `ResumeDialog.svelte`, `ImageTable.svelte`, `BatteryStatus.svelte`, `CredentialPanel.svelte`, `TemplateTable.svelte` (new), `app/src/components/Header.svelte`, `app/src/components/OrchestratorView.svelte`
+- `app/src/lib/limits.ts` (new), `app/src/lib/workshop.svelte.ts`, `app/src/lib/workshop-text.ts`, `app/src/lib/generated/{RunLists,OrphanView}.ts`, `app/src/e2e-mock.ts`, `app/src/e2e-globals.d.ts`
+- `app/src/components/workshop.test.ts`, `app/e2e/workshop.spec.ts`, `app/e2e/stable-size.spec.ts`, `app/e2e/scene.spec.ts`, `app/src-tauri/src/taskbar.rs`
+- `crates/officina-core/src/workshop/{lifecycle,view}.rs`, `crates/officina-core/tests/window_limits_vector.rs` (new), `tests/vectors/window_limits.json` (new), `tests/vectors/workshop.json`
+- `crates/officina-host/src/collector.rs`, `crates/officina-host/src/workshop/{follow,view}.rs`, `crates/officina-host/examples/slice_a_check.rs` (new), `crates/officina/tests/workshop_follow.rs`
+- `README.md`, `CHANGELOG.md`, `docs/stories/epic-6-decisions.md`, `docs/stories/sprint-status.yaml`
 
 ## Change Log
 
@@ -55,3 +72,4 @@ so that the workshop is set up and watched from one place, and Slice A is usable
 - 2026-10-29 research-note entries named by subject, no number reserved (D-600)
 - 2026-10-29 the owner's answers: `CredentialPanel.svelte` (Log in for the workshop, Check login, the token steps, the routes); Slice A run once per credential kind built; the work network entry recorded before the close (D-605, D-607, D-610, D-611, D-613)
 - 2026-10-29 aligned with v0.4 and v0.5 as built: the live count on the Orchestrator view switch and Stop all in a stable slot, with `stable-size.spec.ts` cases and the eight-projects fit; seams by files (D-618, D-620)
+- 2026-11-07 implemented but AC 3 to 6 (D-1246 to D-1249); the owner's halves packaged in `slice_a_check`; status review
