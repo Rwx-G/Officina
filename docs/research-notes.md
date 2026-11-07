@@ -1750,6 +1750,23 @@ subtype, never by its position.
   entry (E99) came from a probe run without the worker's flags; its fold
   case starts after its init (story 6.12's note, now closed).
 
+## E102. Where Claude Code's managed settings live on Windows (v0.6, story 6.26)
+
+Story 6.26 AC 7, D-614, D-1245. **Documented** (code.claude.com/docs/en/managed-settings,
+read 2026-11-07): the file-based managed settings are `managed-settings.json`,
+an optional `managed-settings.d/` folder beside it and `managed-mcp.json`, in
+the system directory `C:\Program Files\ClaudeCode\` on Windows
+(`/Library/Application Support/ClaudeCode/` on macOS, `/etc/claude-code/` on
+Linux and WSL); MDM, the HKLM registry and server-managed settings are other
+delivery mechanisms. The settings page says a managed-settings file on a
+device does not reach a cloud session, which reads only server-managed
+settings.
+
+- **Consequence.** Doctor looks for `managed-settings.json` and
+  `managed-settings.d` under `%ProgramFiles%\ClaudeCode` by presence only.
+  A worker's container reads no host file, so none of these reaches it;
+  whether server-managed settings reach a worker stays undocumented (D-614).
+
 ## E7. Configuration directory
 
 - **Documented.** `CLAUDE_CONFIG_DIR` redirects settings, session history and

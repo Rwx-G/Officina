@@ -1,6 +1,6 @@
 # Story 6.26: The login path and the credential state
 
-**Status:** Approved
+**Status:** Review
 
 ## Story
 
@@ -21,12 +21,12 @@ so that the workshop works with the sign-in I already use, no run can tamper wit
 
 ## Tasks
 
-- [ ] `prepare_login` and its plumbing; doctor's login command and file (AC 1)
-- [ ] The `login` launch path; remove story 6.11's interim refusal (AC 2)
-- [ ] `crates/officina-core/src/workshop/credential.rs`, `workshop_credential`, the triggers, `LastWritten` through 2.11's store (AC 3, 4)
-- [ ] `check_login`, the `AuthProbe` run; fake engine modes for `AuthProbe` and `Scanner` (AC 5, 6)
-- [ ] The `Scanner` as story 6.14's second `ScanSource`; `credential.rs` end-to-end case (AC 6)
-- [ ] Doctor (AC 7); README, `CHANGELOG.md` (AC 8)
+- [x] `prepare_login` and its plumbing; doctor's login command and file (AC 1)
+- [x] The `login` launch path; remove story 6.11's interim refusal (AC 2)
+- [x] `crates/officina-core/src/workshop/credential.rs`, `workshop_credential`, the triggers, `LastWritten` through 2.11's store (AC 3, 4)
+- [x] `check_login`, the `AuthProbe` run; fake engine modes for `AuthProbe` and `Scanner` (AC 5, 6)
+- [x] The `Scanner` as story 6.14's second `ScanSource`; `credential.rs` end-to-end case (AC 6)
+- [x] Doctor (AC 7); README, `CHANGELOG.md` (AC 8)
 
 ## Dev Notes
 
@@ -47,11 +47,32 @@ so that the workshop works with the sign-in I already use, no run can tamper wit
 
 ### Debug Log
 
+- D-1135 leaves the probe unable to see a revoked login, so AC 3's `probe_passed` to `ok` and `probe_failed` to `needs_login` became `missing` and `unchecked` moves, and only a Check login click clears `needs_login` (D-1241); nothing sets `ok`.
+- The fake engine's attached `auth_probe` and `scanner` modes stand for the stored login: `auth_probe_line`, and `scanner_needle` for a value planted in it.
+- The Windows `LastWritten` read is a second `CredRead` that copies no blob (`platform::windows::generic_credential_written_ms`), behind a default trait method so test stores answer none.
+
 ### Completion Notes
 
+- AC 1: CLI `workshop_login.rs::{prepare_login_creates_the_labelled_volume_once, prepare_login_returns_the_golden_command, nothing_reads_the_login_volume, prepare_login_refuses_while_stopped}`; host `doctor.rs::credential_and_mount_tests::{a_login_floor_prints_and_writes_the_login_command, the_login_file_goes_once_the_state_is_ok}`; `main.rs::tests::every_declared_command_is_allowed` (two commands added). D-1243, D-1245.
+- AC 2: CLI `workshop_launch.rs::{a_login_launch_mounts_the_login_read_only, a_login_launch_sets_no_credential_name, a_login_launch_without_its_volume_is_credential_missing, a_login_run_allows_the_refresh_host}`; core `workshop_card.rs::tests::a_login_floor_is_missing_only_without_its_volume`; `tests/vectors/workshop.json`'s three login launch cases. `LOGIN_FILES` and `LOGIN_HOSTS` unchanged (E99). D-1244.
+- AC 3: core `credential.rs::tests::{the_last_line_wins, another_floors_lines_are_ignored, a_changed_kind_starts_unchecked, a_forged_auth_failure_cannot_clear_a_state, every_state_and_cause_has_a_case}`; `relay/journal.rs::tests::workshop_credential_round_trips`; host `workshop/credential.rs::tests::{a_move_survives_a_reload_and_a_reader_writes_nothing, a_token_written_after_the_state_returns_it_to_unchecked}`, `platform/windows.rs::tests::an_absent_credential_has_no_write_time`; CLI `workshop_login.rs::{an_auth_failed_run_sets_needs_login, a_replaced_token_returns_to_unchecked, the_state_survives_a_restart, an_expired_state_refuses_the_launch}`. D-1241, D-1242.
+- AC 4: CLI `workshop_login.rs::{the_probe_runs_once_per_trigger, no_probe_runs_without_a_trigger}` (the second runs a succeeding run and the hourly pass, the window's only timer).
+- AC 5: CLI `workshop_login.rs::{check_login_reads_only_logged_in_and_method, an_unreadable_probe_line_fails_closed, check_login_refuses_while_stopped}`; core `credential.rs::tests::the_probe_line_reads_only_its_two_fields` (the container prints core's `AuthStatusLine`).
+- AC 6: CLI `workshop_collect.rs::{a_login_run_is_scanned_in_the_scanner, scanner_ranges_quarantine_like_host_needles, a_login_run_with_no_needles_says_so}`, `credential.rs::the_value_is_nowhere_after_a_login_run`; core `scan.rs::tests::the_scanners_lines_read_back` (the container prints core's lines).
+- AC 7: host `doctor.rs::credential_and_mount_tests::{the_credential_state_prints_its_action, a_managed_settings_file_warns_by_presence_only}`; the locations from E102. D-1245.
+- AC 8: README "The workshop credential" (the login path, Login needed, nothing retries, setup-token recommended, R128, a company account's policies), the scan paragraph and doctor's list; `CHANGELOG.md`.
+
 ## File List
+
+- `crates/officina-core/src/workshop/credential.rs` (new), `crates/officina-core/src/workshop/{mod,launch,scan,engine,doctor,run}.rs`, `crates/officina-core/src/orders/workshop_card.rs`, `crates/officina-core/src/relay/{journal,view}.rs`, `crates/officina-core/tests/typescript_bindings.rs`, `tests/vectors/workshop.json`
+- `crates/officina-container/src/entry/{auth_status,scan}.rs`
+- `crates/officina-host/src/workshop/credential.rs` (new), `crates/officina-host/src/workshop/login.rs` (new), `crates/officina-host/src/workshop/{mod,collect,doctor,follow,launch,view}.rs`, `crates/officina-host/src/workshop/launch/window.rs`, `crates/officina-host/src/relay/credential.rs`, `crates/officina-host/src/platform/windows.rs`
+- `crates/officina/src/main.rs`, `crates/officina/src/bin/officina-fake-docker.rs`, `crates/officina/tests/workshop_login.rs` (new), `crates/officina/tests/{workshop_launch,workshop_collect,credential}.rs`, `crates/officina/tests/common/workshop_home.rs`
+- `app/src-tauri/{build.rs,capabilities/default.json,src/main.rs}`, `app/src/lib/ipc.ts`, `app/src/e2e-mock.ts`, `app/src/e2e-globals.d.ts`, `app/src/lib/generated/{CheckLoginAnswer,LoginCheck,LoginRefusal,PrepareLoginAnswer,CredentialState}.ts`
+- `README.md`, `CHANGELOG.md`, `docs/research-notes.md` (E102), `docs/stories/epic-6-decisions.md`, `docs/stories/sprint-status.yaml`
 
 ## Change Log
 
 - 2026-10-29 created from the owner's answer on authentication (D-603 to D-610, D-614, D-617, D-621)
 - 2026-11-01 the login entry (E99): `claude auth status` reads the stored file only and reports a revoked login as logged in, so `needs_login` comes from a run's `auth_failed` and the probe finds a missing login only (D-1135); `.credentials.json` alone authenticates a run; a run does not rotate the stored login; `platform.claude.com` is needed and already in `LOGIN_HOSTS`
+- 2026-11-07 implemented (D-1241 to D-1245, E102); status review

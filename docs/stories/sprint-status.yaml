@@ -228,7 +228,8 @@ stories:
   - {id: "6.20", file: story-6.20-workshop-section-header-and-slice-a-close.md, slice: A, status: approved}
   # 6.25: done but AC 5; the WinHTTP reader replaced the registry reader (D-1136, D-611 confirmed); AC 5 is the owner's, on the work network.
   - {id: "6.25", file: story-6.25-system-proxy-and-corporate-ca.md, slice: A, status: review}
-  - {id: "6.26", file: story-6.26-login-path-and-credential-state.md, slice: A, status: approved}
+  # 6.26: done; the probe clears needs_login on a Check login click only (D-1241), the state folded from workshop_credential lines with LastWritten for a replaced token (D-1242), the login commands on thread workshop (D-1243), the login volume by name and labels and the scanner as a login run's scan source (D-1244), doctor's action lines and managed settings by presence (D-1245); D-1241 to D-1245.
+  - {id: "6.26", file: story-6.26-login-path-and-credential-state.md, slice: A, status: review}
   - {id: "6.21", file: story-6.21-memory-as-proposal.md, slice: B, status: approved}
   - {id: "6.22", file: story-6.22-browser-base-image.md, slice: B, status: approved}
   - {id: "6.23", file: story-6.23-scene-workers.md, slice: B, status: approved}
