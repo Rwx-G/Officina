@@ -14,7 +14,7 @@ use officina_core::workshop::floor::{CredentialKind, UpstreamProxy};
 use officina_core::workshop::image::{GATEWAY_IMAGE, ImageKind, WORKSHOP_BASE};
 use officina_core::workshop::launch::CredentialState;
 use officina_core::workshop::lifecycle::{ContainerSeen, ReconcileAction, RowSeen, reconcile};
-use officina_core::workshop::names::{FLOOR_LABEL, ROLE_LABEL, RUN_LABEL, login_volume};
+use officina_core::workshop::names::{FLOOR_LABEL, ROLE_LABEL, RUN_LABEL};
 use officina_core::workshop::view::{
     BoardRun, EngineHalf, EngineStatus, EngineView, ImageFacts, InventoryView, NetworkView,
     RegistryHalf, WorkshopCredential, WorkshopView, build_view, credential_action,
@@ -76,6 +76,26 @@ fn approved_context(relay: &RelayHome, exe_dir: &Path) -> Option<(ImageContext, 
     ))
 }
 
+/// What the login steps run on (D-605, story 6.26): the floor's key and
+/// `auth`, and each allow-list entry's route resolved now (D-611), so the
+/// login command follows the same route as the view shows; `None` while
+/// no valid `[workshop]` is approved.
+pub fn login_target(
+    reader: &EngineReader,
+) -> Option<(
+    String,
+    CredentialKind,
+    std::collections::BTreeMap<String, String>,
+)> {
+    let (context, proxy) = approved_context(&reader.relay, &reader.exe_dir)?;
+    let auth = context.canonical.workshop.as_ref()?.auth;
+    let routes = resolve(&proxy.setting, &proxy.allow, Arc::clone(&reader.proxy))
+        .as_ref()
+        .map(officina_core::workshop::proxy::Routes::gateway_routes)
+        .unwrap_or_default();
+    Some((context.floor_key, auth, routes))
+}
+
 fn engine_view(state: &EngineState, key: Option<String>) -> EngineView {
     let (status, detail) = match state {
         EngineState::Unresolved(why) => (EngineStatus::Unresolved, Some(why.clone())),
@@ -109,7 +129,7 @@ fn kind_of(tag: &str) -> ImageKind {
 /// The credential's state as the view shows it (D-607): the source's
 /// state, `missing` when a token floor has no Credential Manager entry or
 /// a `login` floor no login volume on an engine that answered.
-fn credential_state(
+pub fn credential_state(
     kind: CredentialKind,
     source: CredentialState,
     present: bool,
@@ -220,10 +240,9 @@ pub fn read_engine_half(reader: &EngineReader, building: bool) -> EngineRead {
     }
     let floor_key = context.floor_key.clone();
     let present = credential_present(reader.store.as_ref(), workshop.auth, &floor_key);
-    let login_seen = volumes.as_ref().map(|rows| {
-        let name = login_volume(&floor_key);
-        rows.iter().any(|row| row.name == name.as_str())
-    });
+    let login_seen = volumes
+        .as_ref()
+        .map(|rows| officina_core::workshop::launch::login_volume_listed(rows, &floor_key));
     let routes = resolve(&proxy.setting, &proxy.allow, Arc::clone(&reader.proxy));
     let gateway_routes = routes
         .as_ref()

@@ -11,7 +11,9 @@ use std::path::{Component, Path, PathBuf};
 
 use officina_core::relay::StreamHash;
 use officina_core::untrusted::Untrusted;
+use officina_core::workshop::credential::CredentialSignal;
 use officina_core::workshop::engine::EngineCall;
+use officina_core::workshop::floor::CredentialKind;
 use officina_core::workshop::gateway::MAX_LINE_HOST_CHARS;
 use officina_core::workshop::launch::RunPlan;
 use officina_core::workshop::names::{RunId, RunNames, run_labels};
@@ -34,6 +36,7 @@ use crate::workshop::engine::{ResolvedDocker, StreamOutError, execute, stream_ou
 use crate::workshop::follow::{FollowContext, FollowEvent, Followed, RunSummary, fresh_needles};
 use crate::workshop::inventory::WorkshopGit;
 use crate::workshop::launch::{RunNeedles, run_dir};
+use crate::workshop::login::{LoginEngine, ScannerSource};
 use crate::workshop::verify::{
     Received, SCRATCH_DIR, package_changes, package_records, scratch, verify_with_paths,
 };
@@ -191,7 +194,7 @@ pub struct Collected {
     pub deletions: Option<u32>,
     pub summary: RunSummary,
     /// The gateway's allowed hosts, replaced (D-230); empty when no scan
-    /// ran (a `login` run until story 6.26's `Scanner`).
+    /// ran.
     pub allowed: std::collections::BTreeMap<String, u32>,
     /// Refusals held without needles, their hosts replaced by the scan:
     /// journaled now (D-230).
@@ -199,6 +202,8 @@ pub struct Collected {
     /// How many places the scan found the credential in; none when no
     /// scan ran (AD-112, D-212).
     pub credential_locations: Option<u32>,
+    /// A login run whose stored login gave the scanner no needle (D-609).
+    pub login_without_needles: bool,
     pub gateway_exit: Option<i64>,
     pub upstream: Option<officina_core::workshop::gateway::UpstreamState>,
     pub texts: Option<officina_core::workshop::run::RunTexts>,
@@ -265,6 +270,7 @@ pub fn collect(context: &FollowContext, run_id: &str) {
     if matches!(found, Err(Short::Stopped)) || crate::workshop::workshop_stopped(&context.home) {
         return;
     }
+    after_auth_failure(context, &row, &floor_key, cause);
     let removed = remove(context, &names);
     let run = run_dir(&context.home, &row.id);
     let _ = clear(&run.join("in"));
@@ -291,7 +297,26 @@ pub fn collect(context: &FollowContext, run_id: &str) {
         }
     };
     let texts = entry.as_ref().map(TextRecords::of).unwrap_or_default();
-    let scanned = needles.and_then(|mut source| scan_pass(&texts, manifest, records, &mut source));
+    // A login run's credential is never on the host: the scanner reads the
+    // stored login in a container and answers ranges (D-609).
+    let login = (row.credential_kind == CredentialKind::Login)
+        .then(|| login_engine(context, &floor_key))
+        .flatten();
+    let mut login_without_needles = false;
+    let scanned = match (needles, &login) {
+        (Some(mut source), _) => scan_pass(&texts, manifest, records, &mut source),
+        (None, Some(engine)) => {
+            let mut source = ScannerSource {
+                engine,
+                no_needles: false,
+            };
+            let scanned = scan_pass(&texts, manifest, records, &mut source);
+            login_without_needles = source.no_needles;
+            scanned
+        }
+        (None, None) => None,
+    };
+    collected.login_without_needles = login_without_needles;
     let found_value = scanned.as_ref().is_some_and(|s| !s.locations.is_empty());
     if let Some(scanned) = scanned {
         collected.credential_locations =
@@ -342,6 +367,50 @@ pub fn collect(context: &FollowContext, run_id: &str) {
     );
 }
 
+/// The engine the login's containers run with, on `floor_key`.
+fn login_engine(context: &FollowContext, floor_key: &str) -> Option<LoginEngine> {
+    Some(LoginEngine {
+        docker: context.runtime.docker.clone()?,
+        base_env: context.base_env.clone(),
+        home: context.home.clone(),
+        floor_key: floor_key.to_owned(),
+    })
+}
+
+/// A run that finished `auth_failed` moves its floor's credential state
+/// (D-607); on a `login` floor the auth probe then runs once, which can
+/// find the login missing but never clears the run's evidence (D-1135,
+/// D-1240). Nothing is relaunched.
+fn after_auth_failure(
+    context: &FollowContext,
+    row: &RunRecord,
+    floor_key: &str,
+    cause: FinishCause,
+) {
+    if cause != FinishCause::AuthFailed || floor_key.is_empty() {
+        return;
+    }
+    let states = &context.runtime.states;
+    states.signal(
+        floor_key,
+        row.credential_kind,
+        CredentialSignal::RunAuthFailed,
+    );
+    if row.credential_kind == CredentialKind::Login
+        && let Some(engine) = login_engine(context, floor_key)
+        && let Ok(answer) = engine.probe()
+    {
+        states.signal(
+            floor_key,
+            row.credential_kind,
+            CredentialSignal::Probe {
+                logged_in: answer.logged_in,
+                by_click: false,
+            },
+        );
+    }
+}
+
 /// The facts the run's output gave, from the window's memory; its texts
 /// and hosts are the scan's to give.
 fn summarise(entry: Option<&Followed>, run_id: &str, cause: FinishCause) -> Collected {
@@ -359,6 +428,7 @@ fn summarise(entry: Option<&Followed>, run_id: &str, cause: FinishCause) -> Coll
         allowed: std::collections::BTreeMap::new(),
         released: Vec::new(),
         credential_locations: None,
+        login_without_needles: false,
         gateway_exit: entry.and_then(Followed::gateway_exit),
         upstream: entry.and_then(|e| e.output.gateway.upstream),
         texts: None,

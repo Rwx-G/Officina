@@ -12,6 +12,8 @@ import type { DiscardAnswer } from "./generated/DiscardAnswer";
 import type { DiscardReason } from "./generated/DiscardReason";
 import type { ImportAnswer } from "./generated/ImportAnswer";
 import type { RemoveRunAnswer } from "./generated/RemoveRunAnswer";
+import type { PrepareLoginAnswer } from "./generated/PrepareLoginAnswer";
+import type { CheckLoginAnswer } from "./generated/CheckLoginAnswer";
 import type { ResumeAnswer } from "./generated/ResumeAnswer";
 import type { ResumeChoice } from "./generated/ResumeChoice";
 import type { StopAnswer } from "./generated/StopAnswer";
@@ -338,6 +340,18 @@ export function resumeWorkshop(choices: ResumeChoice[], resumeRelay: boolean): P
  *  reduces, so the keyboard reaches it. */
 export function removeRun(runId: string): Promise<RemoveRunAnswer> {
   return invoke<RemoveRunAnswer>("remove_run", { runId });
+}
+
+/** Log in for the workshop (D-605), pointer only: the floor's login volume
+ *  created when absent, and the command the author runs himself. */
+export function prepareLogin(): Promise<PrepareLoginAnswer> {
+  return invoke<PrepareLoginAnswer>("prepare_login");
+}
+
+/** Check login (D-608), pointer only: the auth probe once, and the state
+ *  after it. */
+export function checkLogin(): Promise<CheckLoginAnswer> {
+  return invoke<CheckLoginAnswer>("check_login");
 }
 
 /** The meeting of `key` (AD-84, D-138): a card key, `sid:<session id>`

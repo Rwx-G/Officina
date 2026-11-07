@@ -33,10 +33,6 @@ pub const MAX_PENDING_REVIEWS: u32 = 10;
 /// How many characters of an image id the card shows.
 pub const SHORT_ID_CHARS: usize = 12;
 
-/// The detail of a `credential_missing` refusal for a `login` floor until
-/// story 6.26 gives that kind its launch (D-621).
-pub const LOGIN_DETAIL: &str = "login";
-
 /// The detail of a `base_moved` refusal whose branch does not resolve.
 pub const UNRESOLVED_DETAIL: &str = "unresolved";
 
@@ -165,7 +161,8 @@ pub struct WorkshopChecks {
     pub max_workers: u32,
     pub reviews_pending: u32,
     pub credential_kind: CredentialKind,
-    /// Whether the floor's credential is stored; ignored for `login`.
+    /// Whether the floor's credential is stored: its Credential Manager
+    /// entry for a token kind, its login volume for `login` (story 6.26).
     pub credential_present: bool,
     pub credential_state: CredentialState,
     pub proxy: Option<ProxyRefusal>,
@@ -216,9 +213,7 @@ pub fn readiness(checks: &WorkshopChecks) -> Vec<Readiness> {
     if checks.reviews_pending >= MAX_PENDING_REVIEWS {
         fail(LaunchRefusal::ReviewsPending, None);
     }
-    if checks.credential_kind == CredentialKind::Login {
-        fail(LaunchRefusal::CredentialMissing, Some(LOGIN_DETAIL));
-    } else if !checks.credential_present || checks.credential_state == CredentialState::Missing {
+    if !checks.credential_present || checks.credential_state == CredentialState::Missing {
         fail(LaunchRefusal::CredentialMissing, None);
     }
     if checks.credential_state.needs_new() {
@@ -872,15 +867,28 @@ pub(crate) mod tests {
         assert_eq!(check_workshop_launch(&passing(), || true), Ok(()));
     }
 
+    /// Story 6.26 AC 2: a `login` floor launches like a token floor, its
+    /// login volume standing for the stored credential.
     #[test]
-    fn a_login_floor_is_credential_missing_until_its_story() {
+    fn a_login_floor_is_missing_only_without_its_volume() {
         let mut checks = passing();
         checks.credential_kind = CredentialKind::Login;
+        assert_eq!(readiness(&checks), vec![]);
+        checks.credential_present = false;
         assert_eq!(
             readiness(&checks),
             vec![Readiness {
                 refusal: LaunchRefusal::CredentialMissing,
-                detail: Some(LOGIN_DETAIL.to_owned()),
+                detail: None,
+            }]
+        );
+        checks.credential_present = true;
+        checks.credential_state = CredentialState::NeedsLogin;
+        assert_eq!(
+            readiness(&checks),
+            vec![Readiness {
+                refusal: LaunchRefusal::CredentialExpired,
+                detail: None,
             }]
         );
     }

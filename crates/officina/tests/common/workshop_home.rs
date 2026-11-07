@@ -22,9 +22,11 @@ use officina_host::spawn::BaseEnv;
 use officina_host::watch::{AUTHOR_WAIT, AuthorCommand, WatchHandle, ask, spawn};
 use officina_host::workshop::battery::{BatteryContext, run_battery};
 use officina_host::workshop::build::{BuildContext, build_images};
+use officina_host::workshop::credential::{JournalStates, StatesRole};
 use officina_host::workshop::launch::{CredentialStateSource, WorkshopRuntime};
 use officina_host::workshop::proxy::{IeProxyConfig, SystemProxyReader, WinHttpReader};
 use officina_host::workshop::threads::{BUILD_THREAD, JobThread};
+use officina_host::workshop::view::EngineReader;
 
 use super::TestEnv;
 use super::workshop::{FakeEngine, SeededStore, battery_sidecar};
@@ -409,6 +411,52 @@ impl Home {
             .workshop_run(id)
             .unwrap()
             .expect("the run's row")
+    }
+
+    /// The floor's key (AD-8).
+    pub fn floor_key(&self) -> String {
+        officina_core::workshop::names::floor_key(&self.env.floor_file().to_string_lossy())
+    }
+
+    /// Puts the floor's login volume, with its labels, in the engine, as
+    /// Log in for the workshop leaves it (D-605).
+    pub fn seed_login_volume(&self) {
+        let key = self.floor_key();
+        self.set_engine_state(
+            "volumes",
+            serde_json::json!([{
+                "name": officina_core::workshop::names::login_volume(&key).as_str(),
+                "labels": officina_core::workshop::launch::login_labels(&key),
+            }]),
+        );
+    }
+
+    /// The window's credential states on this home (D-607), folded from
+    /// its journal now, with `store` for a token's write time.
+    pub fn journal_states(&self, store: SeededStore) -> Arc<JournalStates> {
+        Arc::new(JournalStates::load(
+            self.env.relay_home(),
+            Arc::new(store),
+            StatesRole::Window,
+            super::now_ms,
+        ))
+    }
+
+    /// The Workshop view's reader on this home (AD-121), as the window's
+    /// login commands take it.
+    pub fn engine_reader(
+        &self,
+        states: Arc<dyn CredentialStateSource + Send + Sync>,
+    ) -> EngineReader {
+        EngineReader {
+            relay: self.env.relay_home(),
+            exe_dir: self.exe_dir.clone(),
+            env: base_env(),
+            docker: Ok(self.engine.docker()),
+            store: Arc::new(SeededStore(None)),
+            states,
+            proxy: Arc::clone(&self.reader) as Arc<dyn SystemProxyReader>,
+        }
     }
 }
 

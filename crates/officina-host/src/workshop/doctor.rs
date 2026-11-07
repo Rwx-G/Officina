@@ -76,6 +76,9 @@ pub struct WorkshopFacts {
     pub stop_flags: crate::relay::home::StopFlags,
     /// The runs Stop all kept, with their stop times, from the registry.
     pub kept: Vec<(String, Option<i64>)>,
+    /// The Claude Code managed-settings paths present on this machine,
+    /// presence only (D-614).
+    pub managed_settings: Vec<PathBuf>,
 }
 
 /// The floor's credential as doctor reads it: present or not, never shown.
@@ -86,6 +89,75 @@ pub struct CredentialFacts {
     pub present: bool,
     /// Where the `cmdkey` line is written while the credential is absent.
     pub cmdkey_file: PathBuf,
+    /// The state as the Workshop view shows it (D-607): the journal's,
+    /// then `missing` once the engine's volumes are read for a `login`
+    /// floor.
+    pub state: officina_core::workshop::launch::CredentialState,
+    /// The action the view gives for that state (D-607).
+    pub action: Option<officina_core::workshop::view::CredentialAction>,
+    /// Where a `login` floor's command is written while doctor prints it.
+    pub login_file: PathBuf,
+}
+
+/// `<home>/doctor/workshop-login.txt` (D-605, D-617).
+pub fn login_file(home: &Path) -> PathBuf {
+    home.join("doctor").join("workshop-login.txt")
+}
+
+/// The managed-settings file and folder the Claude Code settings pages
+/// document for Windows, under `%ProgramFiles%\ClaudeCode` (the research
+/// notes' managed-settings entry).
+pub const MANAGED_SETTINGS_NAMES: &[&str] = &["managed-settings.json", "managed-settings.d"];
+
+/// The managed-settings paths present under `program_files`, presence
+/// only: never opened (D-614).
+pub fn managed_settings_present(program_files: Option<&Path>) -> Vec<PathBuf> {
+    let Some(root) = program_files else {
+        return Vec::new();
+    };
+    MANAGED_SETTINGS_NAMES
+        .iter()
+        .map(|name| root.join("ClaudeCode").join(name))
+        .filter(|path| path.exists())
+        .collect()
+}
+
+impl CredentialFacts {
+    /// Settles the state and the action once the engine's volumes are
+    /// read (`None` when it did not answer) and writes a `login` floor's
+    /// command to [`login_file`] while doctor prints it, removing the file
+    /// otherwise (D-605, D-617).
+    pub fn settle(
+        &mut self,
+        volumes: Option<&[ObjectRow]>,
+        routes: &std::collections::BTreeMap<String, String>,
+        home: &Path,
+    ) {
+        let login_seen = volumes.map(|rows| {
+            officina_core::workshop::launch::login_volume_listed(rows, &self.floor_key)
+        });
+        self.state = crate::workshop::view::credential_state(
+            self.kind,
+            self.state,
+            self.present,
+            login_seen,
+        );
+        self.action = officina_core::workshop::view::credential_action(
+            self.kind,
+            self.state,
+            &self.floor_key,
+            routes,
+        );
+        match &self.action {
+            Some(officina_core::workshop::view::CredentialAction::Login { command }) => {
+                let _ = std::fs::create_dir_all(home.join("doctor"));
+                let _ = std::fs::write(&self.login_file, format!("{command}\n"));
+            }
+            _ => {
+                let _ = std::fs::remove_file(&self.login_file);
+            }
+        }
+    }
 }
 
 /// `<home>/doctor/workshop-cmdkey.txt` (D-617).
@@ -115,11 +187,21 @@ pub fn credential_facts(
     } else {
         let _ = std::fs::remove_file(&file);
     }
+    let state = crate::workshop::credential::read_state(
+        &crate::relay::home::RelayHome::new(home, None),
+        store,
+        &context.floor_key,
+        kind,
+        crate::files::now_ms(),
+    );
     Some(CredentialFacts {
         kind,
         floor_key: context.floor_key.clone(),
         present,
         cmdkey_file: file,
+        state,
+        action: None,
+        login_file: login_file(home),
     })
 }
 
@@ -728,6 +810,11 @@ pub fn gather(
         mounts: Vec::new(),
         stop_flags: crate::relay::home::RelayHome::new(home, None).stop_flags(),
         kept: kept_runs(home),
+        managed_settings: if images.is_some() {
+            managed_settings_present(env_value(env, "ProgramFiles").map(Path::new))
+        } else {
+            Vec::new()
+        },
     };
     if let (Some(context), Ok((git, _))) = (images, &facts.git) {
         let workshop_git = crate::workshop::git::ensure_empty_hooks(home)
@@ -769,6 +856,15 @@ pub fn gather(
         if let Some(context) = images {
             facts.batteries = battery_facts(context, home, None);
         }
+    }
+    let routes = facts
+        .proxy
+        .as_ref()
+        .and_then(|proxy| proxy.routes.as_ref().ok())
+        .map(officina_core::workshop::proxy::Routes::gateway_routes)
+        .unwrap_or_default();
+    if let Some(credential) = facts.credential.as_mut() {
+        credential.settle(facts.volumes.as_deref(), &routes, home);
     }
     facts
 }
@@ -954,6 +1050,17 @@ pub fn findings(facts: &WorkshopFacts) -> Vec<Finding> {
             &credential.floor_key,
             &credential.cmdkey_file.to_string_lossy(),
         ));
+        found.extend(officina_core::workshop::doctor::credential_state_finding(
+            credential.kind,
+            credential.state,
+            credential.action.as_ref(),
+            &credential.login_file.to_string_lossy(),
+        ));
+    }
+    for path in &facts.managed_settings {
+        found.push(officina_core::workshop::doctor::managed_settings_finding(
+            &path.to_string_lossy(),
+        ));
     }
     for mount in &facts.mounts {
         found.extend(officina_core::workshop::doctor::mount_findings(mount));
@@ -1022,6 +1129,7 @@ mod tests {
                 workshop: false,
             },
             kept: Vec::new(),
+            managed_settings: Vec::new(),
         }
     }
 
@@ -1712,6 +1820,7 @@ mod tests {
 mod credential_and_mount_tests {
     use super::*;
     use crate::relay::credential::{CredentialStore, Secret, StoreError};
+    use crate::workshop::launch::CredentialStateSource;
     use crate::workshop::launch::tests::{commit, repo};
     use officina_core::workshop::doctor::{CheckLevel, WorkshopCheck, mount_findings};
 
@@ -1783,6 +1892,184 @@ mod credential_and_mount_tests {
         );
         assert_eq!(finding.check, WorkshopCheck::CredentialPresent);
         assert!(!finding.detail.contains("a-value"));
+    }
+
+    /// The test floor with `auth = "login"`.
+    fn login_context(project: &Path) -> ImageContext {
+        let mut context = context(project, ".claude");
+        let text = format!(
+            "schema = 2\n[workshop]\nauth = \"login\"\n\n[[project]]\nname = \"api\"\npath = \"{}\"\n\n[project.workshop]\nmounts = [\".claude\"]\n\n[[template]]\nname = \"bump\"\ndescription = \"d\"\nprojects = [\"api\"]\nprompt = \"Bump.\"\n\n[template.workshop]\nbase = [\"main\"]\n",
+            project.to_string_lossy().replace('\\', "/")
+        );
+        context.canonical = officina_core::relay::catalogue::load(&text, FLOOR_PATH)
+            .unwrap()
+            .canonical;
+        context
+    }
+
+    /// The floor's login volume as a managed `volume ls` lists it.
+    fn login_volume_row(floor_key: &str) -> ObjectRow {
+        ObjectRow {
+            name: officina_core::workshop::names::login_volume(floor_key)
+                .as_str()
+                .to_owned(),
+            labels: officina_core::workshop::launch::login_labels(floor_key),
+        }
+    }
+
+    /// Story 6.26 AC 1 (D-605, D-617): a `login` floor without its login
+    /// volume prints the login command and writes it to its file.
+    #[test]
+    fn a_login_floor_prints_and_writes_the_login_command() {
+        let home = tempfile::tempdir().unwrap();
+        let context = login_context(home.path());
+        let mut facts = credential_facts(&context, home.path(), &Store(None)).unwrap();
+        facts.settle(Some(&[]), &std::collections::BTreeMap::new(), home.path());
+        assert_eq!(
+            facts.state,
+            officina_core::workshop::launch::CredentialState::Missing
+        );
+        let finding = officina_core::workshop::doctor::credential_state_finding(
+            facts.kind,
+            facts.state,
+            facts.action.as_ref(),
+            &facts.login_file.to_string_lossy(),
+        )
+        .unwrap();
+        let command = officina_core::workshop::launch::render_one_line(
+            &officina_core::workshop::launch::login_command(
+                &context.floor_key,
+                officina_core::workshop::image::WORKSHOP_BASE,
+                &std::collections::BTreeMap::new(),
+            ),
+        );
+        assert_eq!(finding.check, WorkshopCheck::CredentialAction);
+        assert_eq!(finding.check.level(), CheckLevel::Fail);
+        assert!(finding.detail.contains(&command), "{}", finding.detail);
+        assert!(finding.detail.contains("workshop-login.txt"));
+        assert_eq!(
+            std::fs::read_to_string(login_file(home.path())).unwrap(),
+            format!("{command}\n")
+        );
+    }
+
+    /// Story 6.26 AC 1: once the login volume exists and nothing is known
+    /// against it, doctor prints no command and the file goes.
+    #[test]
+    fn the_login_file_goes_once_the_state_is_ok() {
+        let home = tempfile::tempdir().unwrap();
+        let context = login_context(home.path());
+        let mut facts = credential_facts(&context, home.path(), &Store(None)).unwrap();
+        facts.settle(Some(&[]), &std::collections::BTreeMap::new(), home.path());
+        assert!(login_file(home.path()).exists());
+        let mut facts = credential_facts(&context, home.path(), &Store(None)).unwrap();
+        facts.settle(
+            Some(&[login_volume_row(&context.floor_key)]),
+            &std::collections::BTreeMap::new(),
+            home.path(),
+        );
+        assert_eq!(facts.action, None);
+        assert!(!login_file(home.path()).exists());
+        let finding = officina_core::workshop::doctor::credential_state_finding(
+            facts.kind,
+            facts.state,
+            None,
+            "",
+        )
+        .unwrap();
+        assert_eq!(finding.check, WorkshopCheck::CredentialState);
+        assert_eq!(finding.detail, "login: unchecked");
+    }
+
+    /// Story 6.26 AC 7 (D-607): each state with an action prints it, from
+    /// the journal's fold: `needs_login` with the login command, a token's
+    /// `needs_new_credential` with `setup-token` and the `cmdkey` line.
+    #[test]
+    fn the_credential_state_prints_its_action() {
+        use officina_core::workshop::credential::CredentialSignal;
+        use officina_core::workshop::floor::CredentialKind;
+        let home = tempfile::tempdir().unwrap();
+        for (context, kind) in [
+            (login_context(home.path()), CredentialKind::Login),
+            (context(home.path(), ".claude"), CredentialKind::OauthToken),
+        ] {
+            crate::workshop::credential::JournalStates::load(
+                crate::relay::home::RelayHome::new(home.path(), None),
+                std::sync::Arc::new(Store(None)),
+                crate::workshop::credential::StatesRole::Window,
+                crate::files::now_ms,
+            )
+            .signal(&context.floor_key, kind, CredentialSignal::RunAuthFailed);
+            let mut facts =
+                credential_facts(&context, home.path(), &Store(Some("a-value"))).unwrap();
+            facts.settle(
+                Some(&[login_volume_row(&context.floor_key)]),
+                &std::collections::BTreeMap::new(),
+                home.path(),
+            );
+            assert!(facts.state.needs_new(), "{kind:?}");
+            let finding = officina_core::workshop::doctor::credential_state_finding(
+                facts.kind,
+                facts.state,
+                facts.action.as_ref(),
+                "",
+            )
+            .unwrap();
+            assert_eq!(finding.check, WorkshopCheck::CredentialAction);
+            assert!(
+                finding.detail.contains(facts.state.code()),
+                "{}",
+                finding.detail
+            );
+            match kind {
+                CredentialKind::Login => assert!(finding.detail.contains("auth login")),
+                _ => {
+                    assert!(
+                        finding
+                            .detail
+                            .contains(officina_core::workshop::view::SETUP_TOKEN_STEP)
+                    );
+                    assert!(
+                        finding
+                            .detail
+                            .contains(&officina_core::workshop::names::cmdkey_line(
+                                &context.floor_key
+                            ))
+                    );
+                }
+            }
+            assert!(!finding.detail.contains("a-value"));
+        }
+    }
+
+    /// Story 6.26 AC 7 (D-614): a managed-settings file or folder under
+    /// `%ProgramFiles%\ClaudeCode` warns by its presence; its content is
+    /// never read, and none present says nothing.
+    #[test]
+    fn a_managed_settings_file_warns_by_presence_only() {
+        let root = tempfile::tempdir().unwrap();
+        assert!(managed_settings_present(Some(root.path())).is_empty());
+        assert!(managed_settings_present(None).is_empty());
+        let dir = root.path().join("ClaudeCode");
+        std::fs::create_dir_all(&dir).unwrap();
+        for name in MANAGED_SETTINGS_NAMES {
+            let path = dir.join(name);
+            if name.ends_with(".json") {
+                std::fs::write(&path, "{\"secret-marker\": true}").unwrap();
+            } else {
+                std::fs::create_dir_all(&path).unwrap();
+            }
+        }
+        let found = managed_settings_present(Some(root.path()));
+        assert_eq!(found.len(), MANAGED_SETTINGS_NAMES.len());
+        for path in &found {
+            let finding =
+                officina_core::workshop::doctor::managed_settings_finding(&path.to_string_lossy());
+            assert_eq!(finding.check, WorkshopCheck::ManagedSettingsPresent);
+            assert_eq!(finding.check.level(), CheckLevel::Warn);
+            assert!(!finding.detail.contains("secret-marker"));
+            assert!(finding.detail.contains("do not apply"));
+        }
     }
 
     fn checks_of(

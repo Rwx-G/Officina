@@ -24,12 +24,13 @@ pub const WORKER_DISALLOWED_TOOLS: &[&str] = &["WebSearch"];
 
 /// The hosts a `login` worker adds to the allow-list (D-606): token
 /// refresh for claude.ai accounts goes to `platform.claude.com`
-/// (`network-config`). Story 6.26 adds what the login entry records.
+/// (`network-config`); the login entry (E99) recorded no other host a
+/// login run needs.
 pub const LOGIN_HOSTS: &[&str] = &["platform.claude.com"];
 
 /// The files a `login` run copies from the floor's login into its own
-/// config dir (D-606). Story 6.26 adds `.claude.json` if the login entry
-/// requires it.
+/// config dir (D-606): the login entry (E99) found `.credentials.json`
+/// alone authenticates a run, so `.claude.json` stays out.
 pub const LOGIN_FILES: &[&str] = &[".credentials.json"];
 
 /// The version of [`RunPlan`]'s JSON; the entry point refuses another.
@@ -59,10 +60,11 @@ pub fn allow_list(kind: CredentialKind, hosts: &[String]) -> Vec<String> {
 
 closed_enum! {
     #[serde(rename_all = "snake_case")]
-    /// What is known of a floor's credential (D-607). This story reads it
-    /// through the host's `CredentialStateSource`, which answers
-    /// `unchecked`; story 6.26 folds the journal into it. `missing` is
-    /// computed, never journaled.
+    /// What is known of a floor's credential (D-607), folded from the
+    /// journal by `workshop::credential`. `missing` is computed from the
+    /// Credential Manager entry or the login volume, and journaled only by
+    /// the auth probe (D-1135, D-1240); nothing moves a state to `ok` in
+    /// v0.6, which reads it as `unchecked`.
     #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
     #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
     pub enum CredentialState {
@@ -546,6 +548,21 @@ pub fn login_labels(floor_key: &str) -> BTreeMap<String, String> {
             crate::workshop::names::LOGIN_ROLE.to_owned(),
         ),
     ])
+}
+
+/// Whether `rows`, a managed `volume ls`, hold the floor's login volume
+/// under its name and every one of its labels (D-605): a volume of that
+/// name without them is not the one Officina created, and a login run is
+/// `credential_missing` (story 6.26).
+pub fn login_volume_listed(rows: &[super::engine::ObjectRow], floor_key: &str) -> bool {
+    let name = crate::workshop::names::login_volume(floor_key);
+    let labels = login_labels(floor_key);
+    rows.iter().any(|row| {
+        row.name == name.as_str()
+            && labels
+                .iter()
+                .all(|(key, value)| row.labels.get(key) == Some(value))
+    })
 }
 
 /// The host whose route the login command follows (D-605): token

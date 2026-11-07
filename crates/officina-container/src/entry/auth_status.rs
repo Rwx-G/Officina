@@ -8,6 +8,7 @@ use std::io::Write;
 use std::os::unix::fs::OpenOptionsExt;
 use std::process::{Command, Stdio};
 
+use officina_core::workshop::credential::{AuthStatusLine, method_is_readable};
 use officina_core::workshop::vector::LOGIN_DIR;
 
 use super::Layout;
@@ -17,9 +18,13 @@ pub const CREDENTIALS_FILE: &str = ".credentials.json";
 /// The most of `claude auth status`'s output read.
 const MAX_OUTPUT_BYTES: usize = 64 * 1024;
 
-/// The one line the probe prints.
+/// The one line the probe prints, core's type, which the host reads.
 pub fn line(logged_in: bool, auth_method: Option<&str>) -> String {
-    serde_json::json!({ "logged_in": logged_in, "auth_method": auth_method }).to_string()
+    AuthStatusLine {
+        logged_in,
+        auth_method: auth_method.map(str::to_owned),
+    }
+    .to_line()
 }
 
 /// Copies the stored credentials into a config dir under `/tmp`, runs
@@ -59,11 +64,7 @@ pub fn auth_status(layout: &Layout) -> i32 {
                         .and_then(|m| m.as_str())
                         .map(str::to_owned)
                 })
-                .filter(|m| {
-                    m.len() <= 64
-                        && m.chars()
-                            .all(|c| c.is_ascii_alphanumeric() || "._-".contains(c))
-                });
+                .filter(|m| method_is_readable(m));
             (out.status.success(), method)
         }
         Err(_) => (false, None),

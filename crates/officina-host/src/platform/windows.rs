@@ -491,6 +491,41 @@ pub fn read_generic_credential(target: &str) -> io::Result<Option<Vec<u8>>> {
     Ok(Some(blob))
 }
 
+/// When the generic credential `target` was last written, in Unix
+/// milliseconds, from its metadata (`CredReadW`'s `LastWritten`); `None`
+/// when no such credential exists. The blob is never copied: the record is
+/// freed with `CredFree` after the one field is read (story 6.26, D-607).
+pub fn generic_credential_written_ms(target: &str) -> io::Result<Option<i64>> {
+    use windows_sys::Win32::Foundation::ERROR_NOT_FOUND;
+    use windows_sys::Win32::Security::Credentials::{
+        CRED_TYPE_GENERIC, CREDENTIALW, CredFree, CredReadW,
+    };
+    /// 100 ns intervals between 1601-01-01 and 1970-01-01.
+    const UNIX_EPOCH_FILETIME: i64 = 116_444_736_000_000_000;
+    let wide: Vec<u16> = target.encode_utf16().chain(std::iter::once(0)).collect();
+    let mut credential: *mut CREDENTIALW = std::ptr::null_mut();
+    // SAFETY: `wide` is a NUL-terminated UTF-16 string that outlives the
+    // call; `credential` is a valid out pointer, set only on success.
+    let ok = unsafe { CredReadW(wide.as_ptr(), CRED_TYPE_GENERIC, 0, &mut credential) };
+    if ok == 0 {
+        let error = io::Error::last_os_error();
+        return match error.raw_os_error() {
+            Some(code) if code == ERROR_NOT_FOUND as i32 => Ok(None),
+            _ => Err(error),
+        };
+    }
+    // SAFETY: on success `credential` points to a CREDENTIALW the system
+    // allocated; only its `LastWritten` field is read, before the free.
+    let written = unsafe {
+        let time = (*credential).LastWritten;
+        (i64::from(time.dwHighDateTime) << 32) | i64::from(time.dwLowDateTime)
+    };
+    // SAFETY: `credential` came from a successful CredReadW and is freed
+    // once, here; nothing reads it afterwards.
+    unsafe { CredFree(credential.cast()) };
+    Ok(Some((written - UNIX_EPOCH_FILETIME) / 10_000))
+}
+
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     EnumWindows, FLASHW_ALL, FLASHW_TIMERNOFG, FLASHWINFO, FlashWindowEx, GW_OWNER,
     GetForegroundWindow, GetWindow, GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId,
@@ -951,6 +986,14 @@ mod tests {
             ),
             WinHttpProxyAnswer::Failed(_)
         ));
+    }
+
+    /// Story 6.26 AC 3: an absent credential has no `LastWritten`, and the
+    /// read is an answer, not an error.
+    #[test]
+    fn an_absent_credential_has_no_write_time() {
+        let target = format!("officina:test-absent-{}", std::process::id());
+        assert_eq!(generic_credential_written_ms(&target).unwrap(), None);
     }
 
     /// Story 6.3 AC 1: the HKLM read the engine and git resolutions use

@@ -318,3 +318,82 @@ fn the_value_is_nowhere_after_a_restart() {
     finish(&home, &id, "src/lib.rs", "pub fn bumped() {}\n");
     nowhere(&home, &again, &id);
 }
+
+/// Story 6.26 AC 6 (D-609): a `login` run, whose credential the host
+/// never holds. The value is planted in the fake engine's stored login
+/// (the scanner's needle) and in the run's stream and gateway lines: after
+/// collection it is in no file under the test home, no journal line, no
+/// registry row, no review view, and never in the engine's call log; no
+/// call carries a credential name.
+#[test]
+fn the_value_is_nowhere_after_a_login_run() {
+    let Some(home) = Home::start(&Options {
+        auth: "login",
+        ..Options::default()
+    }) else {
+        return;
+    };
+    home.seed_login_volume();
+    home.set_engine("scanner_needle", SEEDED.into());
+    let gateway = [GatewayLine::refused(
+        &format!("{SEEDED}.example.com"),
+        443,
+        GatewayRefusal::NotAllowed,
+        None,
+    )
+    .to_line()];
+    let worker = [said(&format!("mid-run, the token is {SEEDED}")), result()];
+    home.set_engine(
+        "follow",
+        serde_json::json!({"worker": {"stdout": worker.join("\n")}, "gateway": {"stdout": gateway.join("\n")}}),
+    );
+    let runtime = home.runtime(common::workshop::SeededStore(None));
+    let card = home.issue(&runtime);
+    home.launch(&card, &runtime);
+    until("the run's output", || {
+        runtime
+            .followed
+            .lock()
+            .unwrap()
+            .get(&card.id)
+            .is_some_and(|f| f.output.gateway.refused == 1 && f.output.stream.result.is_some())
+    });
+    finish(&home, &card.id, "src/lib.rs", "pub fn bumped() {}\n");
+    let found = needles(SEEDED.as_bytes());
+    for file in files_under(home.env.root.path()) {
+        if let Ok(bytes) = std::fs::read(&file) {
+            assert_nowhere(&found, &file.display().to_string(), &bytes);
+        }
+    }
+    if let Ok(view) = officina_host::workshop::review::open_review(
+        home.sender(),
+        &runtime,
+        &home.env.officina_home(),
+        &base_env(),
+        &card.id,
+    ) {
+        assert_nowhere(
+            &found,
+            "the review view",
+            serde_json::to_string(&view).unwrap().as_bytes(),
+        );
+    }
+    let row = home.run(&card.id);
+    assert_nowhere(&found, "the run's row", format!("{row:?}").as_bytes());
+    let names: Vec<&str> = CredentialKind::ALL
+        .iter()
+        .filter_map(|kind| credential_name(*kind))
+        .collect();
+    for line in home.engine.log() {
+        let text = line.to_string();
+        assert_nowhere(&found, "the engine log", text.as_bytes());
+        for name in &names {
+            assert!(!text.contains(name), "{name} in {text}");
+        }
+    }
+    assert!(
+        row.facts.credential_locations.is_some_and(|n| n >= 2),
+        "{:?}",
+        row.facts
+    );
+}

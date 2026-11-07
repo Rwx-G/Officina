@@ -141,6 +141,16 @@ closed_enum! {
         /// The floor's credential is absent: the floor's `cmdkey` line,
         /// also written to a file (D-38, D-617); a launch is refused.
         CredentialAbsent,
+        /// The floor's credential state, when it calls for nothing
+        /// (D-607, story 6.26).
+        CredentialState,
+        /// The floor's credential needs the author: a login missing or
+        /// needed, or a token to renew, with the one action that fixes it;
+        /// nothing retries (D-607); a launch is refused.
+        CredentialAction,
+        /// A Claude Code managed-settings file or folder is present on
+        /// this machine (presence only): workers do not apply it (D-614).
+        ManagedSettingsPresent,
         /// A mount is a folder, git-ignored, holding no tracked file.
         MountReady,
         /// A mount is ignored only by a rule outside the tracked files
@@ -176,6 +186,7 @@ impl WorkshopCheck {
             | WorkshopCheck::CaLabelMismatch
             | WorkshopCheck::HookProgramMissing
             | WorkshopCheck::CredentialAbsent
+            | WorkshopCheck::CredentialAction
             | WorkshopCheck::MountMissing
             | WorkshopCheck::MountNotIgnored
             | WorkshopCheck::MountTracked
@@ -199,6 +210,7 @@ impl WorkshopCheck {
             | WorkshopCheck::SettingsExposed
             | WorkshopCheck::HookScriptCrlf
             | WorkshopCheck::BatteryStale
+            | WorkshopCheck::ManagedSettingsPresent
             | WorkshopCheck::MountPlaceholders => CheckLevel::Warn,
             WorkshopCheck::ProxyRefused => CheckLevel::Fail,
             WorkshopCheck::ProxyRoutes
@@ -217,6 +229,7 @@ impl WorkshopCheck {
             | WorkshopCheck::BatteryLast
             | WorkshopCheck::BatteryClockSkew
             | WorkshopCheck::CredentialPresent
+            | WorkshopCheck::CredentialState
             | WorkshopCheck::MountReady
             | WorkshopCheck::MountIgnoredUntracked => CheckLevel::Inform,
         }
@@ -270,9 +283,11 @@ impl WorkshopCheck {
             }
             WorkshopCheck::BatteryLast | WorkshopCheck::BatteryStale => "workshop battery",
             WorkshopCheck::BatteryClockSkew => "workshop clock",
-            WorkshopCheck::CredentialPresent | WorkshopCheck::CredentialAbsent => {
-                "workshop credential"
-            }
+            WorkshopCheck::CredentialPresent
+            | WorkshopCheck::CredentialAbsent
+            | WorkshopCheck::CredentialState
+            | WorkshopCheck::CredentialAction => "workshop credential",
+            WorkshopCheck::ManagedSettingsPresent => "workshop managed settings",
             WorkshopCheck::MountReady
             | WorkshopCheck::MountIgnoredUntracked
             | WorkshopCheck::MountMissing
@@ -543,6 +558,57 @@ pub fn credential_finding(
             ),
         ),
     }
+}
+
+/// The floor's credential state line (D-607, story 6.26): `state`, as the
+/// Workshop view shows it, and `action`, the one the view gives for it.
+/// A token floor's `missing` is [`credential_finding`]'s line already, so
+/// it gives none here. A `login` floor's command is also in `login_file`.
+pub fn credential_state_finding(
+    kind: super::floor::CredentialKind,
+    state: super::launch::CredentialState,
+    action: Option<&super::view::CredentialAction>,
+    login_file: &str,
+) -> Option<Finding> {
+    use super::floor::CredentialKind;
+    use super::launch::CredentialState;
+    use super::view::CredentialAction;
+    if kind != CredentialKind::Login && state == CredentialState::Missing {
+        return None;
+    }
+    Some(match action {
+        None => Finding::new(
+            WorkshopCheck::CredentialState,
+            format!("{}: {}", kind.code(), state.code()),
+        ),
+        Some(CredentialAction::Login { command }) => Finding::new(
+            WorkshopCheck::CredentialAction,
+            format!(
+                "{}: {}: log in for the workshop from PowerShell or cmd, not Git Bash: `{command}` (also in {login_file}); open the URL it prints on this machine and paste the code; nothing retries",
+                kind.code(),
+                state.code()
+            ),
+        ),
+        Some(CredentialAction::SetupToken { step, cmdkey_line }) => Finding::new(
+            WorkshopCheck::CredentialAction,
+            format!(
+                "{}: {}: run `{step}`, then `{cmdkey_line}` and paste the new token; nothing retries",
+                kind.code(),
+                state.code()
+            ),
+        ),
+    })
+}
+
+/// A managed-settings file or folder found at `path` (D-614): presence
+/// only, never its content; workers do not apply it.
+pub fn managed_settings_finding(path: &str) -> Finding {
+    Finding::new(
+        WorkshopCheck::ManagedSettingsPresent,
+        format!(
+            "{path} is present (not read): workshop workers do not apply it; a company account's rules are its holder's to check"
+        ),
+    )
 }
 
 /// What doctor found of one mount (FR-2, D-231, D-236).

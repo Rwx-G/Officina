@@ -29,6 +29,7 @@ use officina_core::registry::view::{DiscardedSession, RegistryView, SubjectView}
 use officina_core::relay::auto::AutoMode;
 use officina_core::relay::view::RelayView;
 use officina_core::workshop::battery::BatteryAnswer;
+use officina_core::workshop::credential::{CheckLoginAnswer, PrepareLoginAnswer};
 use officina_core::workshop::image::BuildAnswer;
 use officina_core::workshop::review::{
     ApprovalAnswer, DiscardAnswer, DiscardReason, ImportAnswer, ReviewView,
@@ -103,6 +104,10 @@ struct AppState {
     followed: officina_host::workshop::launch::FollowedRuns,
     /// What host git showed of each package (D-239).
     reviews: officina_host::workshop::review::ReviewCache,
+    /// The floors' credential states, folded from the journal at start
+    /// and moved on by the window's signals (D-607).
+    credential_states:
+        Arc<dyn officina_host::workshop::launch::CredentialStateSource + Send + Sync>,
 }
 
 impl AppState {
@@ -119,7 +124,7 @@ impl AppState {
             exe_dir: self.exe_dir.clone().unwrap_or_default(),
             linux_override: std::env::var_os(officina_host::workshop::ENV_LINUX_BIN_DIR),
             store: Arc::new(officina_host::relay::credential::SystemCredentialStore),
-            states: Arc::new(officina_host::workshop::launch::UncheckedStates),
+            states: self.credential_states.clone(),
             reader: Arc::new(officina_host::workshop::proxy::WinHttpReader),
             followed: Arc::clone(&self.followed),
             reviews: Arc::clone(&self.reviews),
@@ -138,7 +143,7 @@ impl AppState {
             env: self.base_env.vars().to_vec(),
             docker: officina_host::workshop::engine::resolve(),
             store: Arc::new(officina_host::relay::credential::SystemCredentialStore),
-            states: Arc::new(officina_host::workshop::launch::UncheckedStates),
+            states: self.credential_states.clone(),
             proxy: Arc::new(officina_host::workshop::proxy::WinHttpReader),
         }
     }
@@ -987,6 +992,41 @@ async fn remove_run(
     .map_err(|e| IpcError::internal(e.to_string()))?
 }
 
+/// Log in for the workshop (D-605, D-28, story 6.26): pointer only, on
+/// thread `workshop`, refused while stopped. Creates the floor's login
+/// volume when absent and answers the command the author runs himself;
+/// Officina never reads what Claude Code writes in it.
+#[tauri::command]
+async fn prepare_login(state: State<'_, AppState>) -> Result<PrepareLoginAnswer, IpcError> {
+    let thread = state.workshop.workshop.clone();
+    let reader = state.engine_reader();
+    let reread = state.workshop_reread.clone();
+    let answer = tauri::async_runtime::spawn_blocking(move || {
+        officina_host::workshop::login::prepare_login(&thread, &reader)
+    })
+    .await
+    .map_err(|e| IpcError::internal(e.to_string()))?;
+    reread.run();
+    Ok(answer)
+}
+
+/// Check login (D-608, D-1240): pointer only, on thread `workshop`,
+/// refused while stopped. Runs the auth probe once and moves the floor's
+/// credential state on its answer.
+#[tauri::command]
+async fn check_login(state: State<'_, AppState>) -> Result<CheckLoginAnswer, IpcError> {
+    let thread = state.workshop.workshop.clone();
+    let reader = state.engine_reader();
+    let reread = state.workshop_reread.clone();
+    let answer = tauri::async_runtime::spawn_blocking(move || {
+        officina_host::workshop::login::check_login(&thread, &reader, true)
+    })
+    .await
+    .map_err(|e| IpcError::internal(e.to_string()))?;
+    reread.run();
+    Ok(answer)
+}
+
 /// Stops or resumes the relay (FR-11, AD-34, D-26). Returns whether the
 /// state changed.
 #[tauri::command]
@@ -1062,6 +1102,7 @@ fn main() {
             );
             let collector_sender = watch.sender.clone();
             let watch_sender = watch.sender.clone();
+            let relay_home_for_states = relay_home.clone();
             app.manage(AppState {
                 board: watch.board,
                 relay: watch.relay,
@@ -1080,6 +1121,14 @@ fn main() {
                 build_busy: Arc::new(std::sync::atomic::AtomicBool::new(false)),
                 followed: Arc::default(),
                 reviews: Arc::default(),
+                credential_states: Arc::new(
+                    officina_host::workshop::credential::JournalStates::load(
+                        relay_home_for_states,
+                        Arc::new(officina_host::relay::credential::SystemCredentialStore),
+                        officina_host::workshop::credential::StatesRole::Window,
+                        now_ms,
+                    ),
+                ),
             });
             // At window start every run not terminal is found again and
             // followed (AD-109), after the engine read queued above.
@@ -1091,6 +1140,12 @@ fn main() {
                 base_env: state.base_env.vars().to_vec(),
             };
             officina_host::workshop::follow::reconcile_on_thread(context.clone());
+            // A `login` floor's auth probe, once at start (D-608, D-1135):
+            // it can find the login missing, never clear a run's evidence.
+            officina_host::workshop::login::probe_at_start(
+                &state.workshop.workshop,
+                &state.engine_reader(),
+            );
             // The hourly pass's engine half: kept containers past 7 days
             // removed on thread `workshop` (AD-116, D-213).
             hourly.set(Box::new(move || {
@@ -1185,7 +1240,9 @@ fn main() {
             discard_package,
             stop_workshop,
             resume_workshop,
-            remove_run
+            remove_run,
+            prepare_login,
+            check_login
         ])
         .build(tauri::generate_context!())
         .expect("failed to build the Officina window")

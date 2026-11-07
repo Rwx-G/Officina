@@ -1054,6 +1054,7 @@ fn record_collected(
             facts.deletions = collected.deletions;
             facts.collect_failed = collected.failure;
             facts.credential_locations = collected.credential_locations;
+            facts.login_without_needles = collected.login_without_needles;
             if let Some(texts) = &collected.texts {
                 row.texts = Some(texts.clone());
             }

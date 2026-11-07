@@ -50,6 +50,8 @@ const COMMANDS: &[&str] = &[
     "resume_workshop",
     "remove_run",
     "get_workshop",
+    "prepare_login",
+    "check_login",
 ];
 
 fn main() {

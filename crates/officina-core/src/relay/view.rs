@@ -821,6 +821,7 @@ fn recent(lines: &[JournalLine], now_ms: i64, rows: &[AutoRow]) -> Vec<RecentEnt
                 | JournalEntry::ReviewDiscarded(_)
                 | JournalEntry::WorkshopStopped(_)
                 | JournalEntry::WorkshopResumed(_)
+                | JournalEntry::WorkshopCredential(_)
                 | JournalEntry::OrchestratorStarted(_)
                 | JournalEntry::MeetingAnswer(_) => return None,
             };
@@ -1421,6 +1422,7 @@ mod tests {
                 | JournalKind::ReviewDiscarded
                 | JournalKind::WorkshopStopped
                 | JournalKind::WorkshopResumed
+                | JournalKind::WorkshopCredential
                 | JournalKind::OrchestratorStarted
                 | JournalKind::MeetingAnswer => continue,
             };

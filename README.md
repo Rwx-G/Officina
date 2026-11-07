@@ -1192,8 +1192,13 @@ you revoke a `setup-token` token is not known yet (research note E98). The
 scan catches careless leaks only: a worker steered to leak can send the
 value through `api.anthropic.com`, which no scan sees. A run kept over a
 credential rotation is searched for the new value only. A `login` run is
-not searched on the host, which never reads the login: until its scanner
-lands, its texts are not kept and its refusals not journaled.
+not searched on the host, which never reads the login: a scanner container
+on the base image, with no network and the login read-only, builds the
+forms from the stored login and answers byte ranges for the run's texts,
+never a value, and the host replaces those ranges as it does its own. A
+stored login with no value long enough to search is noted in the run's
+facts. A token the run refreshed inside its container is not in the
+stored login and is not searched.
 
 The boundary ends at the package: verification proves what the package
 holds and that it reaches no further than the run's branch, not that its
@@ -1381,8 +1386,42 @@ launch for the worker's creation only, set in the environment of that one
 name alone, and turned into the forms the run's texts are later searched
 for, which stay in the window's memory. A process running as you can read
 it back from the engine while the container exists (`docker inspect`):
-that is why containers are removed right after collection. A `login` floor
-is refused until its own launch path lands.
+that is why containers are removed right after collection.
+
+A `login` floor uses the `/login` you make once inside the workshop. **Log
+in for the workshop** (a pointer click; story 6.20 places the button)
+creates the engine volume `officina-login-<floor key>` and shows the
+command to run yourself; doctor prints the same command while the login is
+missing or needed, and writes it to `<home>/doctor/workshop-login.txt`.
+Run it from PowerShell or `cmd`, not Git Bash, open the URL it prints in
+your browser on this machine and paste the code the page shows. Claude
+Code writes its own credentials file in that volume; Officina never reads,
+copies out or shows anything in it, and the host never holds the login's
+tokens. Each run mounts the volume read-only and works on its own copy, so
+no run can change the login the next run uses; a token a run refreshes
+goes with the run. The stored login lives in a volume of your engine,
+which a process running as you can read (R128).
+
+**Login needed** means a run of that floor failed on its credential
+(`auth_failed`): the launch is refused `credential_expired` until you log
+in again and click **Check login**. Nothing retries: no run is relaunched,
+and the auth probe (a container with no network that reads the stored file
+and prints only whether it is logged in and its method) runs once when the
+window starts, once per Check login click, and once after a run ends
+`auth_failed`. The probe reads the stored file only, so it finds a missing
+login, never a revoked one: a login is known to have expired only when a
+run fails on it. A token floor moves the same way: a run failing on its
+credential sets "new credential needed", shown with `claude setup-token`
+and the floor's `cmdkey` line, and storing a new token (its Credential
+Manager entry's write time, read without the value) clears it. These moves
+are journal lines (`workshop_credential`), so the state survives a restart.
+`setup-token` stays the recommended path for unattended workers.
+
+A company account can come with policies: Claude Code's managed settings
+on your machine reach no worker, which reads no host file. Doctor names a
+`managed-settings.json` file or `managed-settings.d` folder under
+`%ProgramFiles%\ClaudeCode` by its presence only, never its content; what
+a company allows for its account is the holder's to check.
 
 ### Checking the engine
 
@@ -1397,7 +1436,10 @@ Officina labelled that no container uses any more, the Linux programs,
 each image matching or the label or measurement that differs, the base's
 Claude Code against your host's, the CA file against the images' label,
 your workers' memory against the engine's, the floor's credential (stored
-or not, never read for display, with its `cmdkey` line when missing), and
+or not, never read for display, with its `cmdkey` line when missing) and
+its state with the one action it calls for (the login command, or `claude
+setup-token` then the `cmdkey` line), a Claude Code managed-settings file
+by its presence, and
 each project's mounts: missing, not git-ignored, ignored only by a rule
 the repository does not carry (`.git/info/exclude`, named), holding files
 the base tracks, a path the engine cannot carry or reached through a

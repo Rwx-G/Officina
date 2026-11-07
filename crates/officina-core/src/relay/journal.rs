@@ -161,6 +161,7 @@ pub enum JournalEntry {
     ReviewDiscarded(ReviewDiscarded),
     WorkshopStopped(WorkshopStopped),
     WorkshopResumed(WorkshopResumed),
+    WorkshopCredential(WorkshopCredential),
 }
 
 closed_enum! {
@@ -205,6 +206,7 @@ closed_enum! {
         ReviewDiscarded,
         WorkshopStopped,
         WorkshopResumed,
+        WorkshopCredential,
     }
 }
 
@@ -248,6 +250,7 @@ impl JournalEntry {
             JournalEntry::ReviewDiscarded(_) => JournalKind::ReviewDiscarded,
             JournalEntry::WorkshopStopped(_) => JournalKind::WorkshopStopped,
             JournalEntry::WorkshopResumed(_) => JournalKind::WorkshopResumed,
+            JournalEntry::WorkshopCredential(_) => JournalKind::WorkshopCredential,
         }
     }
 }
@@ -843,6 +846,18 @@ pub struct WorkshopResumed {
     pub relay_resumed: bool,
 }
 
+/// A move of a floor's credential state (D-607, story 6.26): the floor's
+/// key, the kind the state is about, the new state and the signal that
+/// moved it. Folded by `workshop::credential::fold`; `missing` is written
+/// only by the auth probe (D-1135, D-1240).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkshopCredential {
+    pub floor: String,
+    pub credential_kind: crate::workshop::floor::CredentialKind,
+    pub state: crate::workshop::launch::CredentialState,
+    pub cause: crate::workshop::credential::CredentialCause,
+}
+
 /// A refusal a gateway logged (AD-120): a run's, or a battery's (story
 /// 6.10 writes it first, D-249). The host is worker text, made printable
 /// and cut by the gateway's own line rule.
@@ -1264,6 +1279,14 @@ mod tests {
                 removed: 1,
                 relay_resumed: true,
             }),
+            JournalKind::WorkshopCredential => {
+                JournalEntry::WorkshopCredential(WorkshopCredential {
+                    floor: "0123456789abcdef".into(),
+                    credential_kind: crate::workshop::floor::CredentialKind::Login,
+                    state: crate::workshop::launch::CredentialState::NeedsLogin,
+                    cause: crate::workshop::credential::CredentialCause::RunAuthFailed,
+                })
+            }
             JournalKind::PromptDecided => JournalEntry::PromptDecided(PromptDecided {
                 session_id: "0f1e2d3c-4b5a-4978-8796-a5b4c3d2e1f0".into(),
                 tool_name: None,
@@ -1824,6 +1847,38 @@ mod tests {
                     parse_line(line.trim_end()),
                     ParsedLine::Line(JournalLine::new(4, entry))
                 );
+            }
+        }
+    }
+
+    /// Story 6.26 AC 3 (D-607, D-249): `workshop_credential` reads back for
+    /// every kind, state and cause; 6.26 is its first writer.
+    #[test]
+    fn workshop_credential_round_trips() {
+        use crate::workshop::credential::CredentialCause;
+        use crate::workshop::floor::CredentialKind;
+        use crate::workshop::launch::CredentialState;
+        for kind in CredentialKind::ALL {
+            for state in CredentialState::ALL {
+                for cause in CredentialCause::ALL {
+                    let entry = JournalEntry::WorkshopCredential(WorkshopCredential {
+                        floor: "0123456789abcdef".into(),
+                        credential_kind: *kind,
+                        state: *state,
+                        cause: *cause,
+                    });
+                    let line = JournalLine::new(4, entry.clone()).to_line();
+                    let value: serde_json::Value = serde_json::from_str(&line).unwrap();
+                    assert_eq!(value["kind"], "workshop_credential");
+                    assert_eq!(value["floor"], "0123456789abcdef");
+                    assert_eq!(value["credential_kind"], kind.code());
+                    assert_eq!(value["state"], state.code());
+                    assert_eq!(value["cause"], cause.code());
+                    assert_eq!(
+                        parse_line(line.trim_end()),
+                        ParsedLine::Line(JournalLine::new(4, entry))
+                    );
+                }
             }
         }
     }

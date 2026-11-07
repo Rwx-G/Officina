@@ -4,6 +4,7 @@
 
 pub mod battery;
 pub mod bundle;
+pub mod credential;
 pub mod doctor;
 pub mod engine;
 pub mod floor;

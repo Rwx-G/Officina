@@ -356,6 +356,9 @@ pub struct RunFacts {
     pub deletions: Option<u32>,
     /// Why collection gave nothing to check (AD-110 `collect_failed`).
     pub collect_failed: Option<CollectFailure>,
+    /// A login run whose stored login gave the scanner no needle (D-609):
+    /// its scan searched for nothing, and the review says so.
+    pub login_without_needles: bool,
 }
 
 impl Default for RunFacts {
@@ -376,6 +379,7 @@ impl Default for RunFacts {
             insertions: None,
             deletions: None,
             collect_failed: None,
+            login_without_needles: false,
         }
     }
 }

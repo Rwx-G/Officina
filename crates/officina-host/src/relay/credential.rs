@@ -73,6 +73,14 @@ pub trait CredentialStore {
     fn present(&self, name: &str) -> Result<bool, StoreError> {
         self.read(name).map(|secret| secret.is_some())
     }
+
+    /// When credential `name` was last written, in Unix milliseconds, read
+    /// from its metadata without its value (story 6.26, D-607); `None`
+    /// when the store has no such entry or keeps no such date.
+    fn last_written_ms(&self, name: &str) -> Result<Option<i64>, StoreError> {
+        let _ = name;
+        Ok(None)
+    }
 }
 
 /// A store the window's collector owns and moves to its thread.
@@ -107,6 +115,19 @@ impl CredentialStore for SystemCredentialStore {
                     .map_err(StoreError::Undecodable)
             })
             .transpose()
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = name;
+            Err(StoreError::Unsupported)
+        }
+    }
+
+    fn last_written_ms(&self, name: &str) -> Result<Option<i64>, StoreError> {
+        #[cfg(windows)]
+        {
+            crate::platform::windows::generic_credential_written_ms(&target(name))
+                .map_err(|e| StoreError::Io(e.to_string()))
         }
         #[cfg(not(windows))]
         {

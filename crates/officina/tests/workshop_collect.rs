@@ -975,3 +975,102 @@ fn the_revoke_advice_outlives_the_texts() {
     assert_eq!(inputs.facts.credential_locations, count);
     assert!(inputs.facts.credential_places.is_empty());
 }
+
+// Story 6.26 AC 6 (D-609): a login run's scan, in the scanner.
+
+/// A `login` home whose engine holds the floor's login volume and whose
+/// scanner stands for a stored login holding `needle` (none: a login with
+/// no value long enough to search).
+fn login_home(needle: Option<&str>) -> Option<Home> {
+    let home = home(
+        &Options {
+            auth: "login",
+            ..Options::default()
+        },
+        &[],
+    )?;
+    home.seed_login_volume();
+    if let Some(needle) = needle {
+        home.set_engine("scanner_needle", needle.into());
+    }
+    Some(home)
+}
+
+/// A login run whose worker committed `file` holding `text`, collected.
+fn a_login_package(home: &Home, file: &str, text: &str) -> RunRecord {
+    let run = launch(home, home.runtime(common::workshop::SeededStore(None)));
+    let clone = run.clone();
+    run.commit(&clone, file, text);
+    run.serve(&run.packed_branch(&clone), 0);
+    run.exit(0);
+    run.collected()
+}
+
+/// The scanner's `create` calls since `from`.
+fn scanner_creates(home: &Home, from: usize) -> Vec<Vec<String>> {
+    home.calls(from)
+        .into_iter()
+        .filter(|argv| {
+            argv.first().map(String::as_str) == Some("create")
+                && argv.iter().any(|a| a == "officina.role=scanner")
+        })
+        .collect()
+}
+
+#[test]
+fn a_login_run_is_scanned_in_the_scanner() {
+    let Some(home) = login_home(Some("planted-login-value-0123456789abcdef")) else {
+        return;
+    };
+    let at = home.engine.log().len();
+    let row = a_login_package(&home, "notes.txt", "harmless\n");
+    let scanner = scanner_creates(&home, at);
+    assert_eq!(scanner.len(), 1, "{scanner:?}");
+    let login = officina_core::workshop::names::login_volume(&home.floor_key());
+    assert!(
+        scanner[0]
+            .windows(2)
+            .any(|pair| pair[0] == "--network" && pair[1] == "none")
+    );
+    assert!(
+        scanner[0]
+            .iter()
+            .any(|a| a.contains(login.as_str()) && a.ends_with(",readonly"))
+    );
+    let fed = std::fs::read(home.engine.dir.path().join("fake-docker-scanner.bin")).unwrap();
+    assert!(
+        fed.windows(b"notes.txt".len()).any(|w| w == b"notes.txt"),
+        "the records reach the scanner on stdin"
+    );
+    assert_eq!(row.state, RunState::Review);
+    assert_eq!(row.facts.credential_locations, Some(0));
+    assert!(!row.facts.login_without_needles);
+}
+
+#[test]
+fn scanner_ranges_quarantine_like_host_needles() {
+    let planted = "planted-login-value-0123456789abcdef";
+    let Some(home) = login_home(Some(planted)) else {
+        return;
+    };
+    let row = a_login_package(&home, "leak.txt", &format!("key = {planted}\n"));
+    assert_eq!(row.state, RunState::Quarantined);
+    assert_eq!(quarantined(&row), Some(QuarantineCause::CredentialFound));
+    assert!(
+        places(&row).iter().any(|p| p.starts_with("file leak.txt")),
+        "{:?}",
+        places(&row)
+    );
+    assert!(!stored(&row).contains(planted));
+}
+
+#[test]
+fn a_login_run_with_no_needles_says_so() {
+    let Some(home) = login_home(None) else {
+        return;
+    };
+    let row = a_login_package(&home, "notes.txt", "harmless\n");
+    assert_eq!(row.state, RunState::Review);
+    assert!(row.facts.login_without_needles);
+    assert_eq!(row.facts.credential_locations, Some(0));
+}

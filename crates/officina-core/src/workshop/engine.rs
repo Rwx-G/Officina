@@ -104,14 +104,13 @@ impl EngineCallKind {
 }
 
 /// An attached start's deadline by role (D-205): the packer 120 s, the
-/// inventory 60 s, a battery phase its limit plus 60 s; the other roles
-/// start detached.
+/// inventory 60 s, the auth probe 30 s (D-608), the scanner 120 s (D-609),
+/// a battery phase its limit plus 60 s; the other roles start detached.
 pub const fn attached_deadline_ms(role: ContainerRole, battery_limit_ms: u64) -> Option<u64> {
     match role {
-        ContainerRole::Packer => Some(120_000),
-        ContainerRole::Inventory | ContainerRole::AuthProbe | ContainerRole::Scanner => {
-            Some(60_000)
-        }
+        ContainerRole::Packer | ContainerRole::Scanner => Some(120_000),
+        ContainerRole::Inventory => Some(60_000),
+        ContainerRole::AuthProbe => Some(30_000),
         ContainerRole::Battery => Some(battery_limit_ms.saturating_add(60_000)),
         ContainerRole::Worker
         | ContainerRole::Gateway

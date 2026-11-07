@@ -30,14 +30,27 @@ pub fn credential_store_name(floor_key: &str) -> String {
         .unwrap_or_default()
 }
 
-/// Where a floor's credential state comes from (D-607). This story's
-/// source answers `unchecked`; story 6.26 folds the journal's
-/// `workshop_credential` lines.
+/// Where a floor's credential state comes from (D-607): the window's and
+/// the readers' [`crate::workshop::credential::JournalStates`], folded from
+/// the journal's `workshop_credential` lines.
 pub trait CredentialStateSource {
     fn state(&self, floor_key: &str, kind: CredentialKind) -> CredentialState;
+
+    /// Moves the state on `signal` (D-607) and returns the state after it;
+    /// a source that keeps no history answers its state unchanged.
+    fn signal(
+        &self,
+        floor_key: &str,
+        kind: CredentialKind,
+        signal: officina_core::workshop::credential::CredentialSignal,
+    ) -> CredentialState {
+        let _ = signal;
+        self.state(floor_key, kind)
+    }
 }
 
-/// The source until story 6.26: nothing is known of the credential.
+/// A source that knows nothing of any credential and keeps no history: a
+/// home with no journal reads this way.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct UncheckedStates;
 

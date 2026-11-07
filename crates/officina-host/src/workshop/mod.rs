@@ -58,6 +58,7 @@ pub mod battery;
 pub mod build;
 #[cfg(feature = "window-authority")]
 pub mod collect;
+pub mod credential;
 pub mod doctor;
 pub mod engine;
 pub mod files;
@@ -68,6 +69,8 @@ pub mod git;
 pub mod import;
 pub mod inventory;
 pub mod launch;
+#[cfg(feature = "window-authority")]
+pub mod login;
 pub mod proxy;
 #[cfg(feature = "window-authority")]
 pub mod resume;

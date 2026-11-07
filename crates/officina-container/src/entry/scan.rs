@@ -5,7 +5,10 @@
 
 use std::io::BufRead;
 
-use officina_core::workshop::scan::{Needles, find, login_values, needles};
+use officina_core::workshop::scan::{
+    Needles, find, login_values, needles, scanner_error_line, scanner_hits_line,
+    scanner_no_needles_line,
+};
 use officina_core::workshop::vector::LOGIN_DIR;
 
 use super::Layout;
@@ -28,7 +31,7 @@ pub fn scan_records(input: &mut dyn BufRead, needles: &[Needles]) -> Vec<String>
             Ok(0) => break,
             Ok(_) => {}
             Err(_) => {
-                lines.push(r#"{"error":"unreadable"}"#.to_owned());
+                lines.push(scanner_error_line(None, "unreadable"));
                 break;
             }
         }
@@ -37,17 +40,17 @@ pub fn scan_records(input: &mut dyn BufRead, needles: &[Needles]) -> Vec<String>
             parts.next().and_then(|i| i.parse::<u64>().ok()),
             parts.next().and_then(|n| n.parse::<usize>().ok()),
         ) else {
-            lines.push(r#"{"error":"malformed"}"#.to_owned());
+            lines.push(scanner_error_line(None, "malformed"));
             break;
         };
         total = total.saturating_add(len);
         if len > MAX_RECORD_BYTES || total > MAX_TOTAL_BYTES {
-            lines.push(serde_json::json!({"record": index, "error": "too_large"}).to_string());
+            lines.push(scanner_error_line(Some(index), "too_large"));
             break;
         }
         let mut record = vec![0u8; len];
         if input.read_exact(&mut record).is_err() {
-            lines.push(serde_json::json!({"record": index, "error": "truncated"}).to_string());
+            lines.push(scanner_error_line(Some(index), "truncated"));
             break;
         }
         let mut ranges: Vec<[usize; 2]> = needles
@@ -58,7 +61,7 @@ pub fn scan_records(input: &mut dyn BufRead, needles: &[Needles]) -> Vec<String>
         ranges.sort_unstable();
         ranges.dedup();
         if !ranges.is_empty() {
-            lines.push(serde_json::json!({"record": index, "ranges": ranges}).to_string());
+            lines.push(scanner_hits_line(index, &ranges));
         }
     }
     lines
@@ -75,7 +78,7 @@ pub fn scan(layout: &Layout) -> i32 {
         .filter(|n| !n.is_empty())
         .collect();
     if all.is_empty() {
-        println!(r#"{{"needles":0}}"#);
+        println!("{}", scanner_no_needles_line());
         return 0;
     }
     let stdin = std::io::stdin();

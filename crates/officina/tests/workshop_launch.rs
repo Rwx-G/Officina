@@ -155,10 +155,83 @@ fn two_floors_read_two_targets() {
     );
 }
 
-/// D-621: a `login` floor is refused `credential_missing` (detail
-/// `login`) until story 6.26 merges.
+/// A `login` home whose engine holds the floor's login volume.
+fn login_home() -> Option<Home> {
+    let home = Home::start(&Options {
+        auth: "login",
+        ..Options::default()
+    })?;
+    home.seed_login_volume();
+    Some(home)
+}
+
+/// The argument vectors of the `create` calls naming `prefix`.
+fn creates(home: &Home, from: usize, prefix: &str) -> Vec<Vec<String>> {
+    home.calls(from)
+        .into_iter()
+        .filter(|argv| {
+            argv.first().map(String::as_str) == Some("create")
+                && argv.iter().any(|a| a.starts_with(prefix))
+        })
+        .collect()
+}
+
+/// Story 6.26 AC 2 (D-606): a `login` worker mounts the floor's login
+/// read-only, and the launch starts it.
 #[test]
-fn a_login_floor_is_refused_until_its_story() {
+fn a_login_launch_mounts_the_login_read_only() {
+    let Some(home) = login_home() else {
+        return;
+    };
+    let key = home.floor_key();
+    let runtime = home.seeded();
+    let card = home.issue(&runtime);
+    assert_eq!(card.workshop.clone().unwrap().readiness, vec![]);
+    let at_click = home.engine.log().len();
+    assert_eq!(
+        home.launch(&card, &runtime),
+        LaunchAnswer::Launched(LaunchOutcome::Started)
+    );
+    let worker = creates(&home, at_click, "officina-worker-");
+    assert_eq!(worker.len(), 1);
+    let mount = format!(
+        "type=volume,source={},target={},readonly",
+        officina_core::workshop::names::login_volume(&key).as_str(),
+        officina_core::workshop::vector::LOGIN_DIR
+    );
+    assert!(worker[0].contains(&mount), "{:?}", worker[0]);
+}
+
+/// Story 6.26 AC 2 (D-603): a `login` worker carries no credential name,
+/// in its arguments or in its `create` child's environment, and nothing is
+/// read from the Credential Manager.
+#[test]
+fn a_login_launch_sets_no_credential_name() {
+    let Some(home) = login_home() else {
+        return;
+    };
+    let runtime = home.seeded();
+    let card = home.issue(&runtime);
+    let at_click = home.engine.log().len();
+    home.launch(&card, &runtime);
+    let names: Vec<&str> = officina_core::workshop::floor::CredentialKind::ALL
+        .iter()
+        .filter_map(|kind| officina_core::workshop::vector::credential_name(*kind))
+        .collect();
+    assert!(!names.is_empty());
+    for line in &home.engine.log()[at_click..] {
+        let text = line.to_string();
+        for name in &names {
+            assert!(!text.contains(name), "{name} in {text}");
+        }
+        assert!(!text.contains(common::workshop_home::SEEDED));
+    }
+}
+
+/// Story 6.26 AC 2 (D-603, D-621): without its login volume a `login`
+/// floor is `credential_missing`, and the click creates nothing.
+#[test]
+fn a_login_launch_without_its_volume_is_credential_missing() {
     let Some(home) = Home::start(&Options {
         auth: "login",
         ..Options::default()
@@ -171,8 +244,7 @@ fn a_login_floor_is_refused_until_its_story() {
     assert!(
         readiness
             .iter()
-            .any(|r| r.refusal == LaunchRefusal::CredentialMissing
-                && r.detail.as_deref() == Some("login")),
+            .any(|r| r.refusal == LaunchRefusal::CredentialMissing && r.detail.is_none()),
         "{readiness:?}"
     );
     let at_click = home.engine.log().len();
@@ -181,6 +253,30 @@ fn a_login_floor_is_refused_until_its_story() {
         LaunchAnswer::Refused(LaunchRefusal::CredentialMissing)
     );
     assert_eq!(changes(&home, at_click), 0);
+}
+
+/// Story 6.26 AC 2 (D-606): a `login` run's gateway allows the token
+/// refresh hosts, each from core's list.
+#[test]
+fn a_login_run_allows_the_refresh_host() {
+    let Some(home) = login_home() else {
+        return;
+    };
+    let runtime = home.seeded();
+    let card = home.issue(&runtime);
+    let at_click = home.engine.log().len();
+    home.launch(&card, &runtime);
+    let gateway = creates(&home, at_click, "officina-gateway-");
+    assert_eq!(gateway.len(), 1);
+    for host in officina_core::workshop::launch::LOGIN_HOSTS {
+        assert!(
+            gateway[0]
+                .windows(2)
+                .any(|pair| pair[0] == "--allow" && pair[1] == *host),
+            "{host} not allowed: {:?}",
+            gateway[0]
+        );
+    }
 }
 
 /// AD-107 steps: a failed worker `create` ends the launch `failed`,

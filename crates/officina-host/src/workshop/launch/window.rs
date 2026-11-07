@@ -253,11 +253,17 @@ pub fn gather(ticket: &WorkshopTicket, runtime: &WorkshopRuntime) -> (GatheredFa
         max_workers: ticket.stored.max_workers,
         reviews_pending: ticket.stored.reviews_pending,
         credential_kind: ticket.kind,
-        credential_present: credential_present(
-            runtime.store.as_ref(),
-            ticket.kind,
-            &ticket.floor_key,
-        ),
+        credential_present: match ticket.kind {
+            CredentialKind::Login => {
+                identity.is_some()
+                    && engine
+                        .as_ref()
+                        .is_some_and(|engine| login_volume_present(engine, &ticket.floor_key))
+            }
+            CredentialKind::OauthToken | CredentialKind::ApiKey => {
+                credential_present(runtime.store.as_ref(), ticket.kind, &ticket.floor_key)
+            }
+        },
         credential_state: runtime.states.state(&ticket.floor_key, ticket.kind),
         proxy: routes.as_ref().err().copied(),
         project_exists: dir.is_dir(),
@@ -287,6 +293,29 @@ pub fn gather(ticket: &WorkshopTicket, runtime: &WorkshopRuntime) -> (GatheredFa
         checks,
     };
     (gathered, extras)
+}
+
+/// Whether the floor's login volume exists with its labels (D-605,
+/// story 6.26): a managed `volume ls`; an engine that does not answer
+/// shows none.
+fn login_volume_present(engine: &BatteryEngine, floor_key: &str) -> bool {
+    execute(
+        &engine.docker,
+        &EngineCall::volume_ls(),
+        &engine.base_env,
+        &engine.home,
+        None,
+    )
+    .ok()
+    .filter(crate::workshop::engine::EngineOutcome::succeeded)
+    .is_some_and(|out| {
+        officina_core::workshop::launch::login_volume_listed(
+            &officina_core::workshop::engine::parse_object_rows(&String::from_utf8_lossy(
+                &out.stdout,
+            )),
+            floor_key,
+        )
+    })
 }
 
 /// The image check of story 6.8 for the run's image and the gateway's
@@ -848,13 +877,14 @@ impl Steps<'_> {
 
     /// The worker's `create` (AD-105, D-206): for a token kind the value
     /// read now, set in that one child's environment, never in an
-    /// argument; dropped once the needles are built. A `login` floor is
-    /// refused before (D-621).
+    /// argument; dropped once the needles are built. A `login` worker
+    /// carries no credential name, only its login read-only (D-606), and
+    /// has no needles: its scan is the `Scanner`'s (D-609).
     fn create_worker(&self) -> Result<Option<RunNeedles>, Failed> {
         let create = EngineCall::create(&worker(self.launch));
         let kind = self.launch.credential_kind();
         let Some(name) = credential_name(kind) else {
-            return Err(Failed("the login kind launches from story 6.26".to_owned()));
+            return self.call(&create).map(|()| None);
         };
         let secret = self
             .runtime

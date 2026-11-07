@@ -419,7 +419,7 @@ fn workshop_json() -> ExitCode {
         return ExitCode::FAILURE;
     };
     let reader = officina_host::workshop::view::EngineReader {
-        relay,
+        relay: relay.clone(),
         exe_dir: std::env::current_exe()
             .ok()
             .and_then(|exe| exe.parent().map(std::path::Path::to_path_buf))
@@ -429,7 +429,12 @@ fn workshop_json() -> ExitCode {
             .to_vec(),
         docker: officina_host::workshop::engine::resolve(),
         store: std::sync::Arc::new(officina_host::relay::credential::SystemCredentialStore),
-        states: std::sync::Arc::new(officina_host::workshop::launch::UncheckedStates),
+        states: std::sync::Arc::new(officina_host::workshop::credential::JournalStates::load(
+            relay.clone(),
+            std::sync::Arc::new(officina_host::relay::credential::SystemCredentialStore),
+            officina_host::workshop::credential::StatesRole::Reader,
+            now_ms,
+        )),
         proxy: std::sync::Arc::new(officina_host::workshop::proxy::WinHttpReader),
     };
     match officina_host::workshop::view::cli_view(&reader, now_ms()) {

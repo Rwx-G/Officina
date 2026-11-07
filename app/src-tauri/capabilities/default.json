@@ -53,6 +53,8 @@
     "allow-stop-workshop",
     "allow-resume-workshop",
     "allow-remove-run",
-    "allow-get-workshop"
+    "allow-get-workshop",
+    "allow-prepare-login",
+    "allow-check-login"
   ]
 }

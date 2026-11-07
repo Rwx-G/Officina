@@ -1623,20 +1623,34 @@
       }
     },
     {
-      "name": "a login floor before its story",
+      "name": "a login floor with its login volume",
       "checks": {
         "credential_kind": "login"
       },
       "inventory": true,
+      "expect": "launched"
+    },
+    {
+      "name": "a login floor without its login volume",
+      "checks": {
+        "credential_kind": "login",
+        "credential_present": false
+      },
+      "inventory": true,
       "expect": {
         "refused": "credential_missing"
+      }
+    },
+    {
+      "name": "a login known to be needed",
+      "checks": {
+        "credential_kind": "login",
+        "credential_state": "needs_login"
       },
-      "readiness": [
-        {
-          "refusal": "credential_missing",
-          "detail": "login"
-        }
-      ]
+      "inventory": true,
+      "expect": {
+        "refused": "credential_expired"
+      }
     },
     {
       "name": "a credential known to have expired",

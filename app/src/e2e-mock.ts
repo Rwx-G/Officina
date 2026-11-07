@@ -10,6 +10,8 @@ import type { ApprovalAnswer } from "./lib/generated/ApprovalAnswer";
 import type { DiscardAnswer } from "./lib/generated/DiscardAnswer";
 import type { ImportAnswer } from "./lib/generated/ImportAnswer";
 import type { RemoveRunAnswer } from "./lib/generated/RemoveRunAnswer";
+import type { PrepareLoginAnswer } from "./lib/generated/PrepareLoginAnswer";
+import type { CheckLoginAnswer } from "./lib/generated/CheckLoginAnswer";
 import type { ResumeAnswer } from "./lib/generated/ResumeAnswer";
 import type { ResumeChoice } from "./lib/generated/ResumeChoice";
 import type { StopAnswer } from "./lib/generated/StopAnswer";
@@ -133,6 +135,10 @@ export function installE2eMock(): void {
           return resumeWorkshop((args as { choices: ResumeChoice[] }).choices, (args as { resumeRelay: boolean }).resumeRelay);
         case "remove_run":
           return removeRun();
+        case "prepare_login":
+          return prepareLogin();
+        case "check_login":
+          return checkLogin();
         case "send_answer":
           return answer((args as { proposalId?: string }).proposalId ?? null);
         default:
@@ -373,6 +379,28 @@ function resumeWorkshop(choices: ResumeChoice[], resumeRelay: boolean): Promise<
  *  in `__officinaRemoveRunAnswer`, else two objects removed. */
 function removeRun(): Promise<RemoveRunAnswer> {
   return Promise.resolve(window.__officinaRemoveRunAnswer ?? { status: "removed", detail: 2 });
+}
+
+/** Mirrors the answer to `prepare_login` (D-605): the answer the test sets
+ *  in `__officinaPrepareLoginAnswer`, else a ready command. */
+function prepareLogin(): Promise<PrepareLoginAnswer> {
+  return Promise.resolve(
+    window.__officinaPrepareLoginAnswer ?? {
+      status: "ready",
+      detail: "docker run --rm -it officina-workshop:local auth login",
+    },
+  );
+}
+
+/** Mirrors the answer to `check_login` (D-608): the answer the test sets in
+ *  `__officinaCheckLoginAnswer`, else a logged-in login still unchecked. */
+function checkLogin(): Promise<CheckLoginAnswer> {
+  return Promise.resolve(
+    window.__officinaCheckLoginAnswer ?? {
+      status: "checked",
+      detail: { logged_in: true, auth_method: "claude.ai", unreadable: false, state: "unchecked" },
+    },
+  );
 }
 
 /** Mirrors the answer to `start_orchestrator` (AD-89): the answer the

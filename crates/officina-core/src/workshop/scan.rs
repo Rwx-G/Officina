@@ -183,6 +183,71 @@ impl ScanSource for &Needles {
     }
 }
 
+/// What the `Scanner` answered for a run's records (D-609).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ScannerAnswer {
+    /// The stored login holds no value long enough to search: nothing to
+    /// replace, and the run's facts say so.
+    NoNeedles,
+    /// The ranges found in each record, in the records' order.
+    Ranges(Vec<Vec<Range<usize>>>),
+}
+
+/// The line `officina-entry scan` prints when the stored login gives no
+/// needle; alone on its output.
+pub fn scanner_no_needles_line() -> String {
+    serde_json::json!({ "needles": 0 }).to_string()
+}
+
+/// The line of a record with hits: its index and its byte ranges, never a
+/// value.
+pub fn scanner_hits_line(record: u64, ranges: &[[usize; 2]]) -> String {
+    serde_json::json!({ "record": record, "ranges": ranges }).to_string()
+}
+
+/// The line that ends a scan short (`unreadable`, `malformed`,
+/// `too_large`, `truncated`), with the record it stopped at when known.
+pub fn scanner_error_line(record: Option<u64>, error: &str) -> String {
+    match record {
+        Some(record) => serde_json::json!({ "record": record, "error": error }),
+        None => serde_json::json!({ "error": error }),
+    }
+    .to_string()
+}
+
+/// Reads the `Scanner`'s output for `records` records: `None` when it
+/// ended short, printed a line of no known shape, or named a record it was
+/// not given, so the caller releases nothing (D-1175).
+pub fn scanner_answer(output: &str, records: usize) -> Option<ScannerAnswer> {
+    let lines: Vec<&str> = output.lines().filter(|l| !l.trim().is_empty()).collect();
+    if lines.len() == 1 && lines[0].trim() == scanner_no_needles_line() {
+        return Some(ScannerAnswer::NoNeedles);
+    }
+    let mut ranges: Vec<Vec<Range<usize>>> = vec![Vec::new(); records];
+    for line in lines {
+        let value: serde_json::Value = serde_json::from_str(line.trim()).ok()?;
+        let object = value.as_object()?;
+        if object.len() != 2 {
+            return None;
+        }
+        let record = usize::try_from(object.get("record")?.as_u64()?).ok()?;
+        let found = ranges.get_mut(record)?;
+        for pair in object.get("ranges")?.as_array()? {
+            let pair = pair.as_array()?;
+            let [start, end] = pair.as_slice() else {
+                return None;
+            };
+            let start = usize::try_from(start.as_u64()?).ok()?;
+            let end = usize::try_from(end.as_u64()?).ok()?;
+            if start >= end {
+                return None;
+            }
+            found.push(start..end);
+        }
+    }
+    Some(ScannerAnswer::Ranges(ranges))
+}
+
 /// Where a scanned record came from (AD-112): what a location names,
 /// never the value.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -414,5 +479,48 @@ mod tests {
             r#"{{"a":{{"accessToken":"{long}","email":"user01@example.com{long}","short":"abc","spaced":"{long} {long}"}}}}"#
         );
         assert_eq!(login_values(&json), [long]);
+    }
+
+    /// The lines `officina-entry scan` prints read back as the ranges it
+    /// found; a short or foreign answer reads as no scan (D-1175).
+    #[test]
+    fn the_scanners_lines_read_back() {
+        let output = [
+            scanner_hits_line(0, &[[1, 4], [6, 9]]),
+            scanner_hits_line(2, &[[0, 8]]),
+        ]
+        .join("\n");
+        assert_eq!(
+            scanner_answer(&output, 3),
+            Some(ScannerAnswer::Ranges(vec![
+                vec![1..4, 6..9],
+                vec![],
+                vec![0..8]
+            ]))
+        );
+        assert_eq!(
+            scanner_answer("", 2),
+            Some(ScannerAnswer::Ranges(vec![vec![], vec![]]))
+        );
+        assert_eq!(
+            scanner_answer(&scanner_no_needles_line(), 2),
+            Some(ScannerAnswer::NoNeedles)
+        );
+        for short in [
+            scanner_error_line(None, "malformed"),
+            scanner_error_line(Some(1), "truncated"),
+            format!(
+                "{}\n{}",
+                scanner_hits_line(0, &[[1, 4]]),
+                scanner_error_line(Some(1), "too_large")
+            ),
+            scanner_hits_line(3, &[[1, 4]]),
+            scanner_hits_line(0, &[[4, 4]]),
+            r#"{"record":0,"ranges":[[1,2,3]]}"#.to_owned(),
+            r#"{"record":0,"ranges":[[1,2]],"value":"x"}"#.to_owned(),
+            "not json".to_owned(),
+        ] {
+            assert_eq!(scanner_answer(&short, 3), None, "{short}");
+        }
     }
 }

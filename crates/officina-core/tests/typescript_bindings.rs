@@ -28,6 +28,7 @@ use officina_core::registry::types::Settlement;
 use officina_core::registry::view::{DiscardedSession, RegistryView};
 use officina_core::relay::view::RelayView;
 use officina_core::workshop::battery::BatteryAnswer;
+use officina_core::workshop::credential::{CheckLoginAnswer, PrepareLoginAnswer};
 use officina_core::workshop::image::BuildAnswer;
 use officina_core::workshop::review::{
     ApprovalAnswer, DiscardAnswer, DiscardReason, ImportAnswer, ReviewView,
@@ -89,6 +90,8 @@ fn export(dir: &Path) {
     ResumeChoice::export_all(&cfg).unwrap();
     ResumeAnswer::export_all(&cfg).unwrap();
     RemoveRunAnswer::export_all(&cfg).unwrap();
+    PrepareLoginAnswer::export_all(&cfg).unwrap();
+    CheckLoginAnswer::export_all(&cfg).unwrap();
     WorkshopView::export_all(&cfg).unwrap();
 }
 

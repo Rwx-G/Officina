@@ -4,6 +4,8 @@ import type { ApprovalAnswer } from "./lib/generated/ApprovalAnswer";
 import type { DiscardAnswer } from "./lib/generated/DiscardAnswer";
 import type { ImportAnswer } from "./lib/generated/ImportAnswer";
 import type { RemoveRunAnswer } from "./lib/generated/RemoveRunAnswer";
+import type { PrepareLoginAnswer } from "./lib/generated/PrepareLoginAnswer";
+import type { CheckLoginAnswer } from "./lib/generated/CheckLoginAnswer";
 import type { ResumeChoice } from "./lib/generated/ResumeChoice";
 import type { StopAnswer } from "./lib/generated/StopAnswer";
 import type { BatteryAnswer } from "./lib/generated/BatteryAnswer";
@@ -102,6 +104,8 @@ declare global {
     __officinaResumeCalls?: { choices: ResumeChoice[]; resumeRelay: boolean }[];
     /** What `remove_run` answers (story 6.17); else two objects removed. */
     __officinaRemoveRunAnswer?: RemoveRunAnswer;
+    __officinaPrepareLoginAnswer?: PrepareLoginAnswer;
+    __officinaCheckLoginAnswer?: CheckLoginAnswer;
     /** Holds `start_orchestrator`'s answer until `__officinaReleaseStart`
      *  is called (story 5.16): a Start in flight. */
     __officinaStartHeld?: boolean;

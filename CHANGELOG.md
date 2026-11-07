@@ -8,6 +8,20 @@ project uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- The workshop's login path and credential state (v0.6, story 6.26): a
+  `login` floor now launches. Log in for the workshop creates the floor's
+  login volume and gives the command you run yourself (doctor prints it
+  and writes `<home>/doctor/workshop-login.txt` while the login is missing
+  or needed); each run mounts the login read-only and carries no
+  credential name; a login run's texts are scanned by a scanner container
+  that answers byte ranges, never a value. Each floor's credential state
+  (`unchecked`, `missing`, `needs_login`, `needs_new_credential`) is
+  folded from new `workshop_credential` journal lines: a run ending
+  `auth_failed` refuses the next launch `credential_expired`, the auth
+  probe runs once at window start, per Check login click and after such a
+  run and finds a missing login, and storing a new token clears a token
+  floor. Nothing retries. Doctor shows the state with its one action and
+  names a Claude Code managed-settings file by its presence only.
 - The workshop card, the board's workshop cards and the review panel in
   the window (v0.6, story 6.19): a workshop card shows its base from a
   closed `<select>` (changing it issues a new card), the uncommitted

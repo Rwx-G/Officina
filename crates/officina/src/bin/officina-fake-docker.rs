@@ -30,7 +30,8 @@
 //! engine accepted it, as a slow client does, and `stop_latency_ms` holds a
 //! `stop` that long before it acts (story 6.17); story 6.12's followers
 //! (see [`follow_logs`]); story 6.13's packer copy (see
-//! [`copy_package`]). Any other call is logged
+//! [`copy_package`]); story 6.26's attached auth probe and scanner (see
+//! [`auth_probe_output`], [`scanner_output`]). Any other call is logged
 //! and exits 0. Later stories add theirs.
 
 use std::io::Write;
@@ -519,8 +520,11 @@ fn start_attached(name: &str, sidecar: &serde_json::Value, state: &mut serde_jso
         battery_output(&started, sidecar, state);
     }
     save(state);
-    if role != "inventory" {
-        return 0;
+    match role.as_str() {
+        "auth_probe" => return auth_probe_output(sidecar),
+        "scanner" => return scanner_output(sidecar),
+        "inventory" => {}
+        _ => return 0,
     }
     let mut text = String::new();
     let _ = std::io::Read::read_to_string(&mut std::io::stdin(), &mut text);
@@ -547,6 +551,64 @@ fn start_attached(name: &str, sidecar: &serde_json::Value, state: &mut serde_jso
         }
         result["index"] = index.into();
         println!("{result}");
+    }
+    0
+}
+
+/// Story 6.26's attached auth probe: prints sidecar `auth_probe_line`, by
+/// default a logged-in line.
+fn auth_probe_output(sidecar: &serde_json::Value) -> i32 {
+    let line = sidecar["auth_probe_line"]
+        .as_str()
+        .unwrap_or(r#"{"logged_in":true,"auth_method":"claude.ai"}"#);
+    println!("{line}");
+    0
+}
+
+/// Story 6.26's attached scanner: reads the framed records on stdin
+/// (`<index> <length>` then the bytes), keeps them in
+/// `fake-docker-scanner.bin`, and prints sidecar `scanner_output` when
+/// set; else, standing for a value planted in the stored login, the
+/// ranges of sidecar `scanner_needle` in each record, or `{"needles":0}`
+/// when it is unset.
+fn scanner_output(sidecar: &serde_json::Value) -> i32 {
+    let mut input = Vec::new();
+    let _ = std::io::Read::read_to_end(&mut std::io::stdin(), &mut input);
+    let _ = std::fs::write(beside("fake-docker-scanner.bin"), &input);
+    if let Some(output) = sidecar["scanner_output"].as_str() {
+        print!("{output}");
+        return 0;
+    }
+    let Some(needle) = sidecar["scanner_needle"]
+        .as_str()
+        .map(str::as_bytes)
+        .filter(|n| !n.is_empty())
+    else {
+        println!(r#"{{"needles":0}}"#);
+        return 0;
+    };
+    let mut at = 0usize;
+    while let Some(end) = input[at..].iter().position(|b| *b == b'\n').map(|i| at + i) {
+        let header = String::from_utf8_lossy(&input[at..end]).into_owned();
+        let mut parts = header.split_whitespace();
+        let (Some(index), Some(len)) = (
+            parts.next().and_then(|i| i.parse::<u64>().ok()),
+            parts.next().and_then(|n| n.parse::<usize>().ok()),
+        ) else {
+            break;
+        };
+        let record = &input[end + 1..(end + 1 + len).min(input.len())];
+        let ranges: Vec<[usize; 2]> = (0..record.len().saturating_sub(needle.len() - 1))
+            .filter(|i| record[*i..].starts_with(needle))
+            .map(|i| [i, i + needle.len()])
+            .collect();
+        if !ranges.is_empty() {
+            println!(
+                "{}",
+                serde_json::json!({ "record": index, "ranges": ranges })
+            );
+        }
+        at = end + 1 + len;
     }
     0
 }
