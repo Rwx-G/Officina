@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { expect, type Page } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 import { canvas, fitScale } from "../src/lib/scene/geometry";
 import { VIEW_STORAGE_KEY, defaultViewState, serialiseViewState } from "../src/lib/view.svelte";
 import type { Board } from "../src/lib/generated/Board";
@@ -116,14 +116,65 @@ async function load(
   await stylesheetApplied(page);
 }
 
-/** Waits until the app stylesheet's tokens resolve on the root. Under a
- *  loaded run the window drew before them once: the meeting panel measured
- *  transparent, `--color-surface` empty. Every colour a spec measures goes
- *  through these tokens, so a navigation waits for them first. */
+/** How long a readiness wait polls, in ms. A wait is not an assertion: it
+ *  holds a spec back until the window is ready to be measured, and a
+ *  loaded machine runs transitions and the scene's fit slower than
+ *  `expect`'s default 5 s allows. The condition stays exact; only the
+ *  patience grows, still inside Playwright's per-test budget, so a window
+ *  that never gets ready still fails. */
+export const READINESS_TIMEOUT_MS = 20_000;
+
+/** Whether the app stylesheet's tokens resolve on the root. */
+function tokensResolve(page: Page): Promise<boolean> {
+  return page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue("--color-surface").trim() !== "");
+}
+
+/** What the page knows of each stylesheet link: its URL, how many rules
+ *  its sheet holds (a failed request leaves a sheet whose rules cannot be
+ *  read), and the status its resource entry recorded (a failed request
+ *  leaves no entry). */
+function stylesheetState(page: Page): Promise<string> {
+  return page.evaluate(() =>
+    Array.from(document.querySelectorAll<HTMLLinkElement>('link[rel="stylesheet"]'))
+      .map((link) => {
+        const entry = performance.getEntriesByName(link.href)[0] as (PerformanceResourceTiming & { responseStatus?: number }) | undefined;
+        const status = entry ? String(entry.responseStatus ?? "unknown") : "no entry";
+        let rules: string;
+        try {
+          rules = String(link.sheet?.cssRules.length ?? "no");
+        } catch {
+          rules = "unreadable";
+        }
+        return `${link.href}: ${rules} rules, status ${status}`;
+      })
+      .join("; "),
+  );
+}
+
+/** Waits until the app stylesheet's tokens resolve on the root; every
+ *  colour a spec measures goes through them. `goto` and `reload` return
+ *  on the `load` event, which waits for the stylesheet to load or fail,
+ *  so tokens still empty after a short settle mean its request failed: the
+ *  gates of stories 6.18 and 6.19 each saw it once, the page rendered
+ *  whole and `--color-surface` empty 5 s and then 20 s later. Waiting
+ *  longer cannot bring a failed stylesheet back, so the page is loaded
+ *  once more, the first load's state noted in the test's annotations; a
+ *  second failure fails with both states. */
 export async function stylesheetApplied(page: Page): Promise<void> {
-  await expect
-    .poll(() => page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue("--color-surface").trim()))
-    .not.toBe("");
+  const settled = async () => {
+    try {
+      await expect.poll(() => tokensResolve(page)).toBe(true);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  if (await settled()) return;
+  const first = await stylesheetState(page);
+  test.info().annotations.push({ type: "stylesheet reloaded", description: first });
+  await page.reload();
+  if (await settled()) return;
+  throw new Error(`the app stylesheet did not apply after a reload: ${first}; then ${await stylesheetState(page)}`);
 }
 
 /** Opens the board with `board` as the backend's answer and the clock frozen
@@ -165,8 +216,10 @@ const SETTLE_MAX_MS = 120_000;
  *  passing. */
 export async function sceneSettled(page: Page): Promise<void> {
   const scene = page.getByTestId("scene");
-  await expect(scene).toBeVisible();
-  await expect.poll(async () => (await scene.getAttribute("data-scale")) === (await expectedScale(page))).toBe(true);
+  await expect(scene).toBeVisible({ timeout: READINESS_TIMEOUT_MS });
+  await expect
+    .poll(async () => (await scene.getAttribute("data-scale")) === (await expectedScale(page)), { timeout: READINESS_TIMEOUT_MS })
+    .toBe(true);
   for (let run = 0; run < SETTLE_MAX_MS && (await scene.getAttribute("data-moving")) !== "0"; run += SETTLE_STEP_MS) {
     await page.clock.runFor(SETTLE_STEP_MS);
   }
@@ -202,7 +255,9 @@ export async function openWalkingScene(page: Page, board: Board): Promise<void> 
  *  alone. */
 export async function transitionsDone(page: Page): Promise<void> {
   await expect
-    .poll(() => page.evaluate(() => document.getAnimations().filter((a) => !(a instanceof CSSAnimation) && a.playState === "running").length))
+    .poll(() => page.evaluate(() => document.getAnimations().filter((a) => !(a instanceof CSSAnimation) && a.playState === "running").length), {
+      timeout: READINESS_TIMEOUT_MS,
+    })
     .toBe(0);
 }
 
